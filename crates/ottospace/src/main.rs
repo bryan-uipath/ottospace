@@ -299,6 +299,9 @@ impl Workspace {
                     self.live_since = None;
                     if let Some(hosted) = self.hosted.get_mut(id) {
                         hosted.park(window.scale_factor() as f64);
+                        // Going live activated the app. Take the keyboard back, or keys keep
+                        // going to its off-screen window while the status bar says NORMAL.
+                        cx.activate(true);
                     }
                 }
                 Effect::Live(id) => {
@@ -319,11 +322,11 @@ impl Workspace {
         let calls: Vec<Call> = self.control.iter().flat_map(|rx| rx.try_iter()).collect();
         for Call { request, reply } in calls {
             let quit = matches!(request, Request::Quit);
-            let mut failure = None;
+            let mut failure: Option<String> = None;
             let action = match request {
                 Request::State | Request::Quit => None,
                 Request::OpenApp { name, axis } => {
-                    self.open_app(&name, axis, window, cx);
+                    failure = self.open_app(&name, axis, window, cx).err();
                     None
                 }
                 Request::Split { axis, kind } => {
@@ -336,7 +339,7 @@ impl Workspace {
                 Request::Type { pane, text } => {
                     match pane.or(self.model.focused).and_then(|id| self.terminals.get(&id)) {
                         Some(terminal) => terminal.write(text.into_bytes()),
-                        None => failure = Some("no terminal pane to type into"),
+                        None => failure = Some("no terminal pane to type into".into()),
                     }
                     None
                 }
@@ -349,9 +352,14 @@ impl Workspace {
             if let Some(action) = action {
                 self.dispatch(action, window, cx);
             }
-            let _ = reply.send(failure.map_or_else(|| self.snapshot(), control::error));
+            let _ = reply.send(failure.map_or_else(|| self.snapshot(), |message| control::error(&message)));
             if quit {
-                cx.quit();
+                // Quit a moment later, so the connection thread can write the reply first.
+                cx.spawn(async move |_, cx| {
+                    cx.background_executor().timer(Duration::from_millis(100)).await;
+                    let _ = cx.update(|cx| cx.quit());
+                })
+                .detach();
             }
         }
     }
@@ -380,7 +388,6 @@ impl Workspace {
             "state": self.model,
             "bounds": bounds,
             "terminals": terminals,
-            "error": self.error,
         })
         .to_string()
     }
@@ -400,25 +407,24 @@ impl Workspace {
         }
     }
 
-    fn open_app(&mut self, name: &str, axis: Axis, window: &Window, cx: &mut Context<Self>) {
-        if !self.hosting {
-            self.error = Some("window hosting is off in e2e runs".into());
-            return;
-        }
-        let target = capture::find(name);
-        if let Ok(t) = &target
-            && self.hosted.values().any(|h| h.window_id == t.id)
-        {
-            return; // already hosted
-        }
-        match target.and_then(Hosted::new) {
-            Ok(hosted) => {
-                self.attach(hosted, axis, None, window, cx);
-                self.error = None;
-            }
-            Err(err) => self.error = Some(err),
-        }
+    /// Hosts the app's main window in a pane. The error also shows in the Apps list.
+    fn open_app(&mut self, name: &str, axis: Axis, window: &Window, cx: &mut Context<Self>) -> Result<(), String> {
+        let result = self.try_open_app(name, axis, window, cx);
+        self.error = result.clone().err();
         cx.notify();
+        result
+    }
+
+    fn try_open_app(&mut self, name: &str, axis: Axis, window: &Window, cx: &mut Context<Self>) -> Result<(), String> {
+        if !self.hosting {
+            return Err("window hosting is off in e2e runs".into());
+        }
+        let target = capture::find(name)?;
+        if self.hosted.values().any(|h| h.window_id == target.id) {
+            return Ok(()); // already hosted
+        }
+        self.attach(Hosted::new(target)?, axis, None, window, cx);
+        Ok(())
     }
 
     /// Removes panes whose window is gone (closed by the user or the app).
@@ -583,7 +589,7 @@ impl Workspace {
                     // Fills the focused pane if it is empty. Else splits it: right, or down with shift.
                     .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                         let axis = if e.modifiers().shift { Axis::Down } else { Axis::Right };
-                        this.open_app(&target, axis, window, cx)
+                        let _ = this.open_app(&target, axis, window, cx);
                     }))
             }))
             .children(self.error.clone().map(|e| div().p_2().text_xs().text_color(rgb(0xf38ba8)).child(e)))
@@ -830,16 +836,14 @@ fn ctl(args: &[String]) -> ! {
         eprintln!("usage: ottospace ctl '{{\"cmd\":\"state\"}}'");
         std::process::exit(2);
     };
-    match control::send(&control::path(), request) {
-        Ok(reply) => {
-            println!("{reply}");
-            std::process::exit(0);
-        }
-        Err(err) => {
-            eprintln!("no ottospace at {}: {err}", control::path().display());
-            std::process::exit(1);
-        }
-    }
+    let reply = control::send(&control::path(), request).unwrap_or_else(|err| {
+        eprintln!("no ottospace at {}: {err}", control::path().display());
+        std::process::exit(1);
+    });
+    println!("{reply}");
+    // Exit 0 only when the app accepted the request, so scripts can test the result.
+    let ok = serde_json::from_str::<serde_json::Value>(&reply).is_ok_and(|v| v["ok"] == true);
+    std::process::exit(if ok { 0 } else { 1 });
 }
 
 fn main() {

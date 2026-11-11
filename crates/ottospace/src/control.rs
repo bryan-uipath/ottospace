@@ -6,7 +6,7 @@
 //! user has at the keyboard, and no more than a same-user process already has.
 
 use std::io::{self, BufRead, BufReader, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -77,18 +77,29 @@ pub fn path() -> PathBuf {
 /// Listens on `path()`. Calls arrive on the returned channel; the UI thread polls it.
 pub fn serve() -> io::Result<Receiver<Call>> {
     let path = path();
-    // A running instance answers; a stale file left by a crash does not.
+    // A running instance answers; a stale socket left by a crash does not.
     if UnixStream::connect(&path).is_ok() {
         return Err(io::Error::new(io::ErrorKind::AddrInUse, "another ottospace owns the socket"));
     }
-    let _ = fs::remove_file(&path);
+    // Remove only a stale socket. Never delete some other file the path happens to name.
+    match fs::symlink_metadata(&path) {
+        Ok(meta) if meta.file_type().is_socket() => fs::remove_file(&path)?,
+        Ok(_) => return Err(io::Error::new(io::ErrorKind::AlreadyExists, "socket path is an existing file")),
+        Err(_) => {}
+    }
     let listener = UnixListener::bind(&path)?;
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
     let (calls, receiver) = channel();
     thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            let calls = calls.clone();
-            thread::spawn(move || handle(stream, calls));
+        for stream in listener.incoming() {
+            match stream {
+                Ok(stream) => {
+                    let calls = calls.clone();
+                    thread::spawn(move || handle(stream, calls));
+                }
+                // e.g. out of file descriptors: wait, do not spin.
+                Err(_) => thread::sleep(std::time::Duration::from_millis(100)),
+            }
         }
     });
     Ok(receiver)

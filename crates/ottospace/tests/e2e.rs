@@ -32,6 +32,8 @@ impl Otto {
     /// Sends one raw request line; returns the parsed reply.
     fn raw(&self, line: &str) -> Value {
         let mut stream = UnixStream::connect(&self.socket).expect("connect");
+        // A hung app fails the test instead of hanging it.
+        stream.set_read_timeout(Some(Duration::from_secs(10))).expect("set timeout");
         writeln!(stream, "{line}").expect("send");
         let mut reply = String::new();
         BufReader::new(stream).read_line(&mut reply).expect("reply");
@@ -160,10 +162,42 @@ fn bad_requests_are_refused_and_quit_exits() {
         assert_eq!(reply["ok"], false, "{bad} -> {reply}");
         assert!(reply["error"].is_string());
     }
-    // Hosting is off in e2e: the request is answered, with the reason, and no pane appears.
-    let reply = otto.call(json!({"cmd": "open_app", "name": "Finder"}));
+    // Hosting is off in e2e: the request is refused with the reason, and no pane appears.
+    let reply = otto.raw(r#"{"cmd":"open_app","name":"Finder"}"#);
+    assert_eq!(reply["ok"], false, "{reply}");
     assert!(reply["error"].as_str().is_some_and(|e| e.contains("e2e")), "{reply}");
+    // The failure does not ride on later replies.
+    let reply = otto.call(json!({"cmd": "state"}));
+    assert_eq!(reply.get("error"), None, "{reply}");
     assert_eq!(pane_ids(&reply), [] as [u64; 0]);
+
+    // A second app whose socket path names an ordinary file must leave that file alone.
+    let file = std::env::temp_dir().join(format!("ottospace-e2e-notasocket-{}", std::process::id()));
+    std::fs::write(&file, "keep me").expect("write");
+    let mut other = Command::new(env!("CARGO_BIN_EXE_ottospace"))
+        .env("OTTOSPACE_E2E", "1")
+        .env("OTTOSPACE_SOCKET", &file)
+        .spawn()
+        .expect("launch ottospace");
+    std::thread::sleep(Duration::from_millis(1500));
+    let kept = std::fs::read_to_string(&file);
+    let _ = other.kill();
+    let _ = other.wait();
+    let _ = std::fs::remove_file(&file);
+    assert_eq!(kept.expect("file still exists"), "keep me");
+
+    // `ctl` exits non-zero when the app refuses a request, and zero when it accepts one.
+    let ctl = |request: &str| {
+        Command::new(env!("CARGO_BIN_EXE_ottospace"))
+            .args(["ctl", request])
+            .env("OTTOSPACE_SOCKET", &otto.socket)
+            .output()
+            .expect("run ctl")
+            .status
+            .success()
+    };
+    assert!(ctl(r#"{"cmd":"state"}"#));
+    assert!(!ctl(r#"{"cmd":"nope"}"#));
 
     otto.call(json!({"cmd": "quit"}));
     let start = Instant::now();
