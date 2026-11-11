@@ -42,3 +42,8 @@ permission story is the same Accessibility grant we already need.
 - Coexists with other capture sessions: SCK supports multiple clients. Parked windows show up in
   Zoom's window picker and can still be shared individually.
 - Needs a real test.
+
+## 5. Session restore
+
+Re-host the previous session's windows into panes on launch (reuse `recovery`'s hosted list; also
+write it on clean quit). Today startup only restores leftover windows to their original frames.

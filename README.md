@@ -1,65 +1,134 @@
 # ottospace
 
-A macOS **super agent multiplexer**: agent terminals and the real app windows they work with, tiled in one
-workspace. Agents can open panes with app windows and read/drive them through the accessibility tree
-(see `docs/ideas.md`).
-Rust + [GPUI](https://gpui.rs).
+<img src="docs/ai/1-initial-brainstorm/background/otto-icon-cyan.svg" width="128" alt="ottospace icon">
 
-## Approach
+ottospace is a macOS workspace that tiles terminals and real app windows in one window. It is for
+people who run several coding agents and want them, and the apps around them, in one place.
+Agents and tests can drive it over a local control socket. Rust + [GPUI](https://gpui.rs).
 
-macOS can't reparent another process's window, so ottospace fakes embedding:
+## What it does
 
-- **Visible panes** — the real app window, positioned over its pane via the Accessibility (AX) API
-  (the AeroSpace model). Native input, no capture.
-- **Hidden / covered panes** — a ScreenCaptureKit (SCK) stream of the window, with the real window parked
-  on a 1px off-screen sliver.
-- **Fallback** — park on a private `CGVirtualDisplay` only if sliver-parked windows stop rendering.
+| Capability | State |
+|---|---|
+| Split panes mixing terminals and real app windows | Works today |
+| Key bindings and a status bar showing `NORMAL` / `APP` mode | Works today |
+| Control socket and `ottospace ctl` for agents and tests | Works today |
+| Other key modes: insert, visual, sneak | Designed |
+| Tasks: each owns a workspace (tabs, then splits) with a brief pane and automatic cleanup | Designed |
+| "Pop next": open the next task by priority | Designed |
+| Quick capture (⌘⌘): turn something on screen into a task and dispatch it to an agent | Designed |
+| Focus blocks: hide Slack, with an agent that can break through | Designed |
+| Fast app switcher and sidebar categories | Designed |
+| TypeScript scripting, with contextual quick actions in an action deck (Zoom meeting layout, spin for stand-up) | Designed |
+| Hide private panes while screen sharing | Designed |
+| Session restore | Designed |
 
-## Risks (from Fable + Astra review)
+## Status
 
-- Capturable ≠ still rendering. Apps may throttle parked/occluded windows; must be measured per app.
-- Parked windows must not overlap each other, or they occlude and throttle.
-- AX moves/resizes are synchronous IPC to the target app's main thread: busy apps stall; drag-follow lags.
-- Min-size / non-resizable windows won't fit small panes. Sheets, popovers and child windows escape panes.
-- Z-order: clicking a real window can bury the ottospace window. Fixing that needs private SkyLight APIs.
-- Screen Recording: persistent indicator, periodic re-prompts; DRM / `sharingType = .none` windows capture black.
-- TCC: move to a signed `.app` with a stable identity before step 2 (ad-hoc rebuilds churn grants).
-- N streams cost IOSurface memory (~95 MiB at 4K); capture at pane size, adapt frame rate.
-- Lifecycle: sleep/wake, display hotplug, Spaces, Stage Manager, crashes leaving windows parked.
+Early prototype, macOS only. Today you can split a window into panes, run your shell in a pane,
+host another app's window in a pane, move focus by keyboard, and drive all of it over the control
+socket. Tabs, tasks, session restore and the rest of the design are not built: see the
+[plan](docs/ai/1-initial-brainstorm/plan.md).
 
-## Prototype order
+## Quick start
 
-1. **Sliver parking + one SCK stream** — does it stay live? Test Chrome, an Electron app, a video player. ← **current** (`probe`)
-   - 2026-11-10 Chrome + YouTube (with audio), 5s/phase: ~53 complete fps on-screen and parked. Live.
-   - 2026-11-10 Slack (Electron) + animated GIF, unfocused, 10s/phase: ~51 on-screen, ~50 parked. Live.
-   - 2026-11-10 Chrome + YouTube muted (site + player), 30s/phase: 39 on-screen, 51 parked, 56 restored. Live.
-2. **Real windows over GPUI panes** — swap feel, drag-follow lag, z-order behaviour. ← **current** (`ottospace`)
-   - Input forwarding to parked windows is a dead end: Chrome ignores `CGEventPostToPid` clicks even
-     on-screen (tried window-under-pointer fields, private window-local location, HID-state source).
-     Interaction = place the real window over the pane, then replay the swap click at HID level.
-3. **Virtual display** — only if step 1 fails.
-4. Layout, terminals, multiple windows.
+Requirements:
 
-## Layout
+- macOS 14 or later.
+- A Rust toolchain (edition 2024).
+- Accessibility permission for the terminal that launches ottospace: System Settings > Privacy &
+  Security > Accessibility. The app exits at start without it.
+- Screen Recording permission for the same terminal: System Settings > Privacy & Security > Screen
+  & System Audio Recording. It is requested on first capture of an app window.
 
-- `crates/ottospace-mac` — platform layer: AX window control, display geometry.
-- `crates/probe` — step-1 experiment CLI.
-- `harness/` — local input test page (`python3 -m http.server 8765 -d harness`).
-- `crates/ottospace` — GPUI app.
-- `docs/ideas.md` — feature backlog.
-
-## Run
+Build and run:
 
 ```sh
-# Step 1: play a video / animation in the target app first, then:
-cargo run -p probe -- "Google Chrome" 5
+git clone https://github.com/bryan-uipath/ottospace
+cd ottospace
+cargo run -p ottospace
 ```
 
-Prints frames/sec by SCK status for on-screen → sliver → restored. Live = "complete/s" stays near the
-on-screen rate in the sliver phase. Needs Accessibility + Screen Recording for your terminal.
+A window opens. Press ⌘D to open a terminal pane.
 
-GPUI needs the Metal toolchain: `xcodebuild -downloadComponent MetalToolchain`.
+## Using it
 
-## Prior art
+| Key | Action |
+|---|---|
+| ⌘D | Split right, new terminal |
+| ⌘⇧D | Split down, new terminal |
+| ⌘W | Close the focused pane |
+| ⌘⌥←/→/↑/↓ | Focus the pane in that direction |
 
-AeroSpace (sliver parking, AX), yabai (SkyLight), DeskPad / BetterDisplay (`CGVirtualDisplay`), AltTab (SCK previews).
+Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
+
+A terminal pane runs your shell on a PTY. The pane closes when the shell exits.
+
+To put an app window in a pane, click the app in the sidebar. It fills the focused pane if that is
+empty, otherwise it splits right. Shift-click splits down. New windows of a hosted app get their
+own pane. Original window frames are saved to disk and restored on quit or after a crash.
+
+Click an app pane to give it the keyboard (`APP` mode). ottospace shortcuts do not fire in that
+mode. Click ottospace itself (sidebar, title bar, another pane) to return.
+
+## Driving it from outside
+
+ottospace listens on a Unix socket so tests and agents can inspect and drive it. The socket is mode
+0600, at `$OTTOSPACE_SOCKET` or `$TMPDIR/ottospace.sock`. Send one JSON request per line. The reply
+is one JSON line: the full state (model, mode, pane bounds, terminal grids) or
+`{"ok":false,"error":"..."}`. `ottospace ctl` sends one request and prints the reply.
+
+```sh
+ottospace ctl '{"cmd":"split","axis":"down"}'
+ottospace ctl '{"cmd":"type","text":"ls\r"}'
+ottospace ctl '{"cmd":"open_app","name":"Safari"}'
+ottospace ctl '{"cmd":"state"}'
+```
+
+Commands: `state`, `split`, `type`, `close`, `focus`, `focus_dir`, `open_app`, `enter`, `leave`,
+`quit`. Fields are in `Request` in [`crates/ottospace/src/control.rs`](crates/ottospace/src/control.rs).
+Unknown commands and fields are refused.
+
+## Development
+
+```sh
+cargo test   # core unit tests. No window.
+cargo e2e    # launches the app and drives it over the socket.
+```
+
+`cargo e2e` is an alias in `.cargo/config.toml`. Each test opens a window on a private socket. It
+sets `OTTOSPACE_E2E`, which turns window hosting off, so tests never touch your real windows.
+
+| Path | Role |
+|---|---|
+| `crates/ottospace-core` | State and rules: `Model::update(Action) -> Vec<Effect>`. Split tree, key encoding. No I/O |
+| `crates/ottospace-mac` | macOS calls: AX window control, SCK lookup, display geometry, HID clicks, crash recovery |
+| `crates/ottospace` | The app: GPUI views, terminal, control socket, `ctl` client. Turns input into `Action`s, carries out `Effect`s |
+| `crates/probe` | CLI that measures whether a parked window keeps rendering |
+| `harness/` | Local input test page (`python3 -m http.server 8765 -d harness`) |
+| `docs/` | Design notes |
+
+Architecture rules and the test loops are in [AGENTS.md](AGENTS.md).
+
+## How app windows are hosted
+
+macOS cannot reparent another process's window, so ottospace fakes embedding with the Accessibility
+(AX) API and ScreenCaptureKit (SCK). An inactive app window is parked off-screen with one pixel on
+a display, and its pane shows an SCK stream of it. Clicking the pane moves the real window over it
+and replays the click, so input is native. `crates/probe` measures whether a parked window keeps
+rendering. Measurements and risks: [docs/ai/hosting-windows.md](docs/ai/hosting-windows.md).
+
+## Design docs
+
+[`docs/ai/1-initial-brainstorm/`](docs/ai/1-initial-brainstorm/) holds the AI-derived notes for the
+first brainstorm:
+
+- [plan.md](docs/ai/1-initial-brainstorm/plan.md): model, phases and decisions.
+- [quick-capture.md](docs/ai/1-initial-brainstorm/quick-capture.md): quick capture and task lifecycle.
+- [screen-share-privacy.md](docs/ai/1-initial-brainstorm/screen-share-privacy.md): hiding panes from screen sharing.
+- [scripting.md](docs/ai/1-initial-brainstorm/scripting.md): scripting in TypeScript.
+- [zoom-meeting.md](docs/ai/1-initial-brainstorm/zoom-meeting.md): Zoom meeting layout and participants.
+- `background/`: icon and mockup images.
+
+[`docs/ai/backlog.md`](docs/ai/backlog.md) is an older backlog. `docs/ideas/` holds the owner's own
+notes.
