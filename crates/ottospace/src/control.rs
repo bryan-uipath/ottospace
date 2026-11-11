@@ -42,6 +42,10 @@ pub enum Request {
     FocusDir {
         dir: Dir,
     },
+    /// Next (positive) or previous pane in reading order.
+    FocusCycle {
+        delta: i32,
+    },
     OpenApp {
         name: String,
         #[serde(default)]

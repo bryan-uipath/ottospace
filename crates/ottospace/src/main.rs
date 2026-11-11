@@ -26,6 +26,7 @@ use ottospace_core::{
     Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Pane, PaneId, PickItem, Picker, Section, theme,
 };
 use ottospace_mac::{ax, capture, display, input, recovery};
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use screencapturekit::prelude::*;
 
 mod control;
@@ -248,7 +249,10 @@ fn otto(size: f32, hint: &'static str) -> impl IntoElement {
         .child(div().text_sm().text_color(rgb(theme::MUTED)).child(hint))
 }
 
-actions!(ottospace, [SplitRight, SplitDown, PickPane, ClosePane, FocusLeft, FocusRight, FocusUp, FocusDown]);
+actions!(
+    ottospace,
+    [SplitRight, SplitDown, PickPane, ClosePane, FocusLeft, FocusRight, FocusUp, FocusDown, FocusNext, FocusPrev, Zoom]
+);
 
 struct Workspace {
     model: Model,
@@ -285,18 +289,6 @@ impl Workspace {
                     this.dispatch(Action::Leave, window, cx);
                 }
             }),
-            // Native fullscreen puts ottospace in its own Space, where other apps' windows can't
-            // follow. Swap it for pseudo fullscreen: leave the Space, then fill the screen.
-            cx.observe_window_bounds(window, |_, window, cx| {
-                if window.is_fullscreen() {
-                    window.toggle_fullscreen();
-                    cx.spawn_in(window, async move |_, cx| {
-                        cx.background_executor().timer(Duration::from_millis(800)).await;
-                        let _ = cx.update(|window, _| window.zoom_window());
-                    })
-                    .detach();
-                }
-            }),
             cx.on_app_quit(|this, _| {
                 this.hosted.drain().for_each(|(_, hosted)| hosted.release());
                 if this.control.is_some() {
@@ -329,6 +321,14 @@ impl Workspace {
             }
         })
         .detach();
+
+        // Native fullscreen would move ottospace to its own Space, where other apps' windows
+        // cannot follow. Make the green button zoom instead.
+        if let Ok(handle) = window.window_handle()
+            && let RawWindowHandle::AppKit(appkit) = handle.as_raw()
+        {
+            unsafe { ottospace_mac::window::zoom_instead_of_fullscreen(appkit.ns_view.as_ptr()) };
+        }
 
         let focus = cx.focus_handle();
         window.focus(&focus);
@@ -431,6 +431,7 @@ impl Workspace {
                 Request::Close { pane } => Some(Action::Close { pane }),
                 Request::Focus { pane } => Some(Action::Focus { pane }),
                 Request::FocusDir { dir } => Some(Action::FocusDir { dir }),
+                Request::FocusCycle { delta } => Some(Action::FocusCycle { delta }),
                 Request::Enter { pane } => Some(Action::Enter { pane }),
                 Request::Leave => Some(Action::Leave),
                 Request::Section { section } => Some(Action::ToggleSection { section }),
@@ -1089,7 +1090,9 @@ impl Workspace {
     fn render_status(&self) -> impl IntoElement {
         let color = theme::accent(self.model.mode());
         let (mode, hint) = match self.model.mode() {
-            Mode::Normal => ("NORMAL", "⌘D terminal right · ⌘⇧D down · ⌘E pick · ⌘W close · ⌘⌥arrows focus"),
+            Mode::Normal => {
+                ("NORMAL", "⌘D terminal · ⌘E pick · ⌘W close · ⌘] ⌘[ next/prev pane · ⌘⌥ arrows or hjkl move")
+            }
             Mode::Pick => ("PICK", "type to filter · ↑↓ move · ↵ open · esc close"),
             Mode::App => ("APP", "keys go to the app · click ottospace to return"),
         };
@@ -1169,6 +1172,13 @@ impl Render for Workspace {
                     this.open_picker(Axis::Right, window, cx);
                 }
             }))
+            .on_action(cx.listener(|this, _: &FocusNext, window, cx| {
+                this.dispatch(Action::FocusCycle { delta: 1 }, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &FocusPrev, window, cx| {
+                this.dispatch(Action::FocusCycle { delta: -1 }, window, cx);
+            }))
+            .on_action(cx.listener(|_, _: &Zoom, window, _| window.zoom_window()))
             .on_action(cx.listener(|this, _: &ClosePane, window, cx| {
                 this.dispatch(Action::Close { pane: None }, window, cx);
             }))
@@ -1262,6 +1272,15 @@ fn main() {
             KeyBinding::new("cmd-alt-right", FocusRight, None),
             KeyBinding::new("cmd-alt-up", FocusUp, None),
             KeyBinding::new("cmd-alt-down", FocusDown, None),
+            // The same moves on the home row, and a cycle through every pane.
+            KeyBinding::new("cmd-alt-h", FocusLeft, None),
+            KeyBinding::new("cmd-alt-l", FocusRight, None),
+            KeyBinding::new("cmd-alt-k", FocusUp, None),
+            KeyBinding::new("cmd-alt-j", FocusDown, None),
+            KeyBinding::new("cmd-]", FocusNext, None),
+            KeyBinding::new("cmd-[", FocusPrev, None),
+            // Fill the screen without leaving the Space (see `zoom_instead_of_fullscreen`).
+            KeyBinding::new("cmd-ctrl-f", Zoom, None),
         ]);
         let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
         // Draw under the title bar; the top bar leaves room for the traffic lights.

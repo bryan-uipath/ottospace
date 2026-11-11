@@ -58,8 +58,11 @@ A window opens. Press ⌘D to open a terminal pane.
 |---|---|
 | ⌘D | Split right, new terminal |
 | ⌘⇧D | Split down, new terminal |
+| ⌘E | Pick what goes in a new pane: a terminal or a running app |
 | ⌘W | Close the focused pane |
-| ⌘⌥←/→/↑/↓ | Focus the pane in that direction |
+| ⌘⌥←/→/↑/↓ or ⌘⌥H/L/K/J | Focus the pane in that direction |
+| ⌘] / ⌘[ | Focus the next / previous pane |
+| ⌘⌃F | Zoom the window to fill the screen |
 
 Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
 

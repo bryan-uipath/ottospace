@@ -124,6 +124,10 @@ pub enum Action {
     FocusDir {
         dir: Dir,
     },
+    /// Move focus to the next pane (positive) or the previous one, in reading order. It wraps.
+    FocusCycle {
+        delta: i32,
+    },
     /// Hand the keyboard to an app pane.
     Enter {
         pane: PaneId,
@@ -220,6 +224,7 @@ impl Model {
                 | Action::Close { .. }
                 | Action::Focus { .. }
                 | Action::FocusDir { .. }
+                | Action::FocusCycle { .. }
                 | Action::Enter { .. }
                 | Action::ToggleSection { .. }
                 | Action::CloseSidebar
@@ -258,6 +263,14 @@ impl Model {
                 let to = self.focused.and_then(|from| self.layout.as_ref()?.neighbor(from, dir));
                 if let Some(to) = to {
                     self.focus(to, &mut effects);
+                }
+            }
+            Action::FocusCycle { delta } => {
+                let order = self.layout.as_ref().map(Node::leaves).unwrap_or_default();
+                let at = self.focused.and_then(|f| order.iter().position(|id| *id == f));
+                if let Some(at) = at {
+                    let to = (at as i64 + delta as i64).rem_euclid(order.len() as i64) as usize;
+                    self.focus(order[to], &mut effects);
                 }
             }
             Action::Enter { pane } => {
@@ -653,6 +666,24 @@ mod tests {
         let effects = m.update(Action::OpenPicker { axis: Right, items: vec![PickItem::Terminal] });
         assert_eq!(effects, [Effect::Parked(1)]);
         assert_eq!(m.mode(), Mode::Pick);
+    }
+
+    #[test]
+    fn focus_cycles_through_panes_in_reading_order_and_wraps() {
+        // 1 | 2
+        //   | 3
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Empty });
+        m.update(Action::Split { axis: Right, kind: Kind::Empty });
+        m.update(Action::Split { axis: Down, kind: Kind::Empty });
+        assert_eq!(m.focused, Some(3));
+        m.update(Action::FocusCycle { delta: 1 });
+        assert_eq!(m.focused, Some(1));
+        m.update(Action::FocusCycle { delta: -1 });
+        assert_eq!(m.focused, Some(3));
+        m.update(Action::FocusCycle { delta: -1 });
+        assert_eq!(m.focused, Some(2));
+        assert_eq!(Model::default().update(Action::FocusCycle { delta: 1 }), []);
     }
 
     #[test]

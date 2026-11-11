@@ -7,6 +7,8 @@ publish.workspace = true
 [dependencies]
 ottospace-core = { path = "../ottospace-core" }
 ottospace-mac = { path = "../ottospace-mac" }
+# Same version gpui uses: reaches the native window.
+raw-window-handle = "0.6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # runtime_shaders: compile Metal shaders at launch, so builds don't need the Metal toolchain.

@@ -119,6 +119,8 @@ fn focus_and_close_follow_the_layout() {
     assert_eq!(otto.call(json!({"cmd": "focus_dir", "dir": "left"}))["state"]["focused"], 1);
     assert_eq!(otto.call(json!({"cmd": "focus_dir", "dir": "left"}))["state"]["focused"], 1); // no pane there
     assert_eq!(otto.call(json!({"cmd": "focus", "pane": 3}))["state"]["focused"], 3);
+    assert_eq!(otto.call(json!({"cmd": "focus_cycle", "delta": 1}))["state"]["focused"], 1); // wraps
+    assert_eq!(otto.call(json!({"cmd": "focus_cycle", "delta": -1}))["state"]["focused"], 3);
 
     // Closing 2 lets 3 take the whole right column.
     let before = otto.bounds(&[3])[0];

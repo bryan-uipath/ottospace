@@ -5,3 +5,4 @@ pub mod capture;
 pub mod display;
 pub mod input;
 pub mod recovery;
+pub mod window;

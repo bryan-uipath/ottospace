@@ -3800,6 +3800,7 @@ dependencies = [
  "objc2-core-foundation",
  "ottospace-core",
  "ottospace-mac",
+ "raw-window-handle",
  "screencapturekit 11.1.2",
  "serde",
  "serde_json",
