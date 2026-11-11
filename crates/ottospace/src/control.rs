@@ -1,0 +1,127 @@
+//! Control socket: drives and inspects the running app. One JSON request per line in, one JSON
+//! reply per line out. Used by `ottospace ctl`, the e2e tests, and (later) agents.
+//!
+//! Trust: a Unix socket, mode 0600, in the per-user temp dir. Only the same user can connect.
+//! Requests are a closed set (`Request`). `type` sends keys to a terminal pane: the same power the
+//! user has at the keyboard, and no more than a same-user process already has.
+
+use std::io::{self, BufRead, BufReader, Write};
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::{fs, thread};
+
+use ottospace_core::{Axis, Dir, PaneId};
+use serde::Deserialize;
+
+/// e.g. `{"cmd":"split","axis":"down"}`, `{"cmd":"type","text":"ls\r"}`, `{"cmd":"state"}`.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "cmd", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Request {
+    State,
+    Split {
+        #[serde(default)]
+        axis: Axis,
+        #[serde(default)]
+        kind: PaneKind,
+    },
+    /// Sends `text` to a terminal pane (default: the focused one), as if typed.
+    Type {
+        #[serde(default)]
+        pane: Option<PaneId>,
+        text: String,
+    },
+    Close {
+        #[serde(default)]
+        pane: Option<PaneId>,
+    },
+    Focus {
+        pane: PaneId,
+    },
+    FocusDir {
+        dir: Dir,
+    },
+    OpenApp {
+        name: String,
+        #[serde(default)]
+        axis: Axis,
+    },
+    Enter {
+        pane: PaneId,
+    },
+    Leave,
+    Quit,
+}
+
+/// Pane kinds a client may create. App panes come from `open_app`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneKind {
+    #[default]
+    Terminal,
+    Empty,
+}
+
+/// A request waiting for the UI thread, and where its reply goes.
+pub struct Call {
+    pub request: Request,
+    pub reply: Sender<String>,
+}
+
+/// `$OTTOSPACE_SOCKET`, else `ottospace.sock` in the per-user temp dir.
+pub fn path() -> PathBuf {
+    std::env::var_os("OTTOSPACE_SOCKET").map_or_else(|| std::env::temp_dir().join("ottospace.sock"), PathBuf::from)
+}
+
+/// Listens on `path()`. Calls arrive on the returned channel; the UI thread polls it.
+pub fn serve() -> io::Result<Receiver<Call>> {
+    let path = path();
+    // A running instance answers; a stale file left by a crash does not.
+    if UnixStream::connect(&path).is_ok() {
+        return Err(io::Error::new(io::ErrorKind::AddrInUse, "another ottospace owns the socket"));
+    }
+    let _ = fs::remove_file(&path);
+    let listener = UnixListener::bind(&path)?;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+    let (calls, receiver) = channel();
+    thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let calls = calls.clone();
+            thread::spawn(move || handle(stream, calls));
+        }
+    });
+    Ok(receiver)
+}
+
+fn handle(stream: UnixStream, calls: Sender<Call>) {
+    let Ok(mut out) = stream.try_clone() else { return };
+    for line in BufReader::new(stream).lines().map_while(Result::ok) {
+        let reply = match serde_json::from_str(&line) {
+            Ok(request) => {
+                let (reply, answer) = channel();
+                if calls.send(Call { request, reply }).is_err() {
+                    return;
+                }
+                answer.recv().unwrap_or_else(|_| error("ottospace is closing"))
+            }
+            Err(err) => error(&err.to_string()),
+        };
+        if writeln!(out, "{reply}").is_err() {
+            return;
+        }
+    }
+}
+
+pub fn error(message: &str) -> String {
+    serde_json::json!({ "ok": false, "error": message }).to_string()
+}
+
+/// Client side: sends one request line, returns the reply line.
+pub fn send(path: &Path, request: &str) -> io::Result<String> {
+    let mut stream = UnixStream::connect(path)?;
+    writeln!(stream, "{request}")?;
+    let mut reply = String::new();
+    BufReader::new(stream).read_line(&mut reply)?;
+    Ok(reply.trim_end().to_string())
+}

@@ -1,0 +1,3 @@
+[alias]
+# Outer loop: launches the real app (no window hosting) and drives it over the control socket.
+e2e = "test -p ottospace --test e2e -- --ignored --test-threads=1"

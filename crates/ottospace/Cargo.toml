@@ -5,7 +5,10 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+ottospace-core = { path = "../ottospace-core" }
 ottospace-mac = { path = "../ottospace-mac" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 # runtime_shaders: compile Metal shaders at launch, so builds don't need the Metal toolchain.
 gpui = { version = "0.2", features = ["runtime_shaders"] }
 # macos_14_0: live stream reconfiguration (resize to pane).
@@ -14,3 +17,7 @@ screencapturekit = { version = "11", features = ["macos_14_0"] }
 core-video = "0.4"
 core-foundation = "0.10"
 objc2-core-foundation = { version = "0.3", features = ["CFCGTypes"] }
+alacritty_terminal = "0.26"
+
+[dev-dependencies]
+serde_json = "1"

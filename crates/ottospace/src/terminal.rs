@@ -1,0 +1,270 @@
+//! Shell half of a terminal pane: a PTY running the user's shell, parsed into a grid by
+//! `alacritty_terminal`, and the code that paints that grid.
+
+use std::collections::HashMap;
+use std::io;
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::sync::{Arc, OnceLock};
+
+use alacritty_terminal::event::{Event, EventListener, WindowSize};
+use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
+use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::sync::FairMutex;
+use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::{Config, Term, TermMode};
+use alacritty_terminal::tty;
+use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor};
+use gpui::{
+    App, Bounds, ContentMask, FontStyle, FontWeight, Hsla, Pixels, Size, TextRun, UnderlineStyle, Window, fill, font,
+    point, px, rgb, size,
+};
+use ottospace_core::palette;
+
+const FONT: &str = "Menlo";
+const FONT_SIZE: f32 = 13.;
+const LINE_HEIGHT: f32 = 18.;
+
+/// Size of one character cell: the font's advance by the line height.
+pub fn cell_size(window: &Window) -> Size<Pixels> {
+    let text = window.text_system();
+    let width = text.em_advance(text.resolve_font(&font(FONT)), px(FONT_SIZE)).unwrap_or(px(FONT_SIZE * 0.6));
+    size(width, px(LINE_HEIGHT))
+}
+
+/// State the PTY reader thread shares with the UI thread.
+#[derive(Default)]
+struct Shared {
+    dirty: AtomicBool,
+    exited: AtomicBool,
+    input: OnceLock<EventLoopSender>,
+}
+
+#[derive(Clone)]
+struct Listener(Arc<Shared>);
+
+impl EventListener for Listener {
+    fn send_event(&self, event: Event) {
+        match event {
+            Event::Wakeup => self.0.dirty.store(true, Relaxed),
+            // Answers the terminal owes the program, e.g. a cursor position report.
+            Event::PtyWrite(text) => {
+                if let Some(input) = self.0.input.get() {
+                    let _ = input.send(Msg::Input(text.into_bytes().into()));
+                }
+            }
+            Event::Exit | Event::ChildExit(_) => self.0.exited.store(true, Relaxed),
+            _ => {}
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct Grid {
+    cols: usize,
+    rows: usize,
+}
+
+impl Dimensions for Grid {
+    fn total_lines(&self) -> usize {
+        self.rows
+    }
+    fn screen_lines(&self) -> usize {
+        self.rows
+    }
+    fn columns(&self) -> usize {
+        self.cols
+    }
+}
+
+/// A run of cells on one row that share a style.
+pub struct Span {
+    text: String,
+    fg: u32,
+    bg: Option<u32>,
+    bold: bool,
+    italic: bool,
+    underline: bool,
+}
+
+/// What to paint: styled rows, and the cursor's (row, column) when it is visible.
+pub struct Screen {
+    rows: Vec<Vec<Span>>,
+    cursor: Option<(usize, usize)>,
+}
+
+pub struct Terminal {
+    term: Arc<FairMutex<Term<Listener>>>,
+    shared: Arc<Shared>,
+    input: EventLoopSender,
+    grid: Grid,
+}
+
+impl Terminal {
+    /// Starts the user's default shell in the current directory.
+    pub fn spawn() -> io::Result<Self> {
+        let grid = Grid { cols: 80, rows: 24 };
+        let shared = Arc::new(Shared::default());
+        let listener = Listener(shared.clone());
+        let env = HashMap::from([("TERM".to_string(), "xterm-256color".to_string())]);
+        let options = tty::Options { env, ..Default::default() };
+        let pty = tty::new(&options, window_size(grid, size(px(8.), px(LINE_HEIGHT))), 0)?;
+        let term = Arc::new(FairMutex::new(Term::new(Config::default(), &grid, listener.clone())));
+        let event_loop = EventLoop::new(term.clone(), listener, pty, false, false)?;
+        let input = event_loop.channel();
+        let _ = shared.input.set(input.clone());
+        event_loop.spawn();
+        Ok(Self { term, shared, input, grid })
+    }
+
+    /// Sends bytes to the shell, as if typed.
+    pub fn write(&self, bytes: Vec<u8>) {
+        let _ = self.input.send(Msg::Input(bytes.into()));
+    }
+
+    /// Resizes the grid to fill `area`, if that changes its size.
+    pub fn fit(&mut self, area: Size<Pixels>, cell: Size<Pixels>) {
+        let grid = Grid { cols: (area.width / cell.width) as usize, rows: (area.height / cell.height) as usize };
+        if grid == self.grid || grid.cols < 2 || grid.rows < 1 {
+            return;
+        }
+        self.grid = grid;
+        let _ = self.input.send(Msg::Resize(window_size(grid, cell)));
+        self.term.lock().resize(grid);
+    }
+
+    /// True once since new output arrived.
+    pub fn take_dirty(&self) -> bool {
+        self.shared.dirty.swap(false, Relaxed)
+    }
+
+    pub fn exited(&self) -> bool {
+        self.shared.exited.load(Relaxed)
+    }
+
+    /// True while the program asked for application-cursor arrow keys.
+    pub fn app_cursor(&self) -> bool {
+        self.term.lock().mode().contains(TermMode::APP_CURSOR)
+    }
+
+    pub fn grid_size(&self) -> (usize, usize) {
+        (self.grid.cols, self.grid.rows)
+    }
+
+    /// Visible rows as plain text, trailing spaces removed.
+    pub fn lines(&self) -> Vec<String> {
+        let screen = self.screen();
+        let text = |row: &Vec<Span>| row.iter().map(|s| s.text.as_str()).collect::<String>().trim_end().to_string();
+        screen.rows.iter().map(text).collect()
+    }
+
+    pub fn screen(&self) -> Screen {
+        let term = self.term.lock();
+        let content = term.renderable_content();
+        let mut rows: Vec<Vec<Span>> = (0..self.grid.rows).map(|_| Vec::new()).collect();
+        let offset = content.display_offset as i32;
+        for cell in content.display_iter {
+            let Some(row) = usize::try_from(cell.point.line.0 + offset).ok().and_then(|r| rows.get_mut(r)) else {
+                continue;
+            };
+            if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+                continue; // second half of a wide character
+            }
+            let (mut fg, mut bg) = (colour(cell.fg), colour(cell.bg));
+            if cell.flags.contains(Flags::INVERSE) {
+                (fg, bg) = (bg, fg);
+            }
+            let bg = (bg != palette::BACKGROUND).then_some(bg);
+            let bold = cell.flags.contains(Flags::BOLD);
+            let italic = cell.flags.contains(Flags::ITALIC);
+            let underline = cell.flags.intersects(Flags::ALL_UNDERLINES);
+            let c = if cell.c == '\t' || cell.flags.contains(Flags::HIDDEN) { ' ' } else { cell.c };
+            match row.last_mut() {
+                Some(s) if (s.fg, s.bg, s.bold, s.italic, s.underline) == (fg, bg, bold, italic, underline) => {
+                    s.text.push(c)
+                }
+                _ => row.push(Span { text: c.to_string(), fg, bg, bold, italic, underline }),
+            }
+        }
+        let at = content.cursor.point;
+        let cursor = (content.cursor.shape != CursorShape::Hidden)
+            .then(|| usize::try_from(at.line.0 + offset).ok().map(|row| (row, at.column.0)))
+            .flatten();
+        Screen { rows, cursor }
+    }
+}
+
+impl Drop for Terminal {
+    fn drop(&mut self) {
+        let _ = self.input.send(Msg::Shutdown);
+    }
+}
+
+fn window_size(grid: Grid, cell: Size<Pixels>) -> WindowSize {
+    WindowSize {
+        num_lines: grid.rows as u16,
+        num_cols: grid.cols as u16,
+        cell_width: f32::from(cell.width) as u16,
+        cell_height: f32::from(cell.height) as u16,
+    }
+}
+
+fn colour(color: Color) -> u32 {
+    match color {
+        Color::Spec(c) => (c.r as u32) << 16 | (c.g as u32) << 8 | c.b as u32,
+        Color::Indexed(i) => palette::xterm(i),
+        Color::Named(NamedColor::Background) => palette::BACKGROUND,
+        // The 16 ANSI names are 0-15. The rest (foreground, cursor, dim) draw as foreground.
+        Color::Named(name) => {
+            u8::try_from(name as usize).ok().filter(|i| *i < 16).map_or(palette::FOREGROUND, palette::xterm)
+        }
+    }
+}
+
+/// Paints the grid from the top-left of `bounds`, one shaped line per row.
+pub fn paint(
+    screen: &Screen,
+    bounds: Bounds<Pixels>,
+    cell: Size<Pixels>,
+    focused: bool,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    window.with_content_mask(Some(ContentMask { bounds }), |window| {
+        for (r, spans) in screen.rows.iter().enumerate() {
+            let text: String = spans.iter().map(|s| s.text.as_str()).collect();
+            if text.trim_end().is_empty() && spans.iter().all(|s| s.bg.is_none()) {
+                continue;
+            }
+            let runs: Vec<TextRun> = spans
+                .iter()
+                .map(|s| {
+                    let mut font = font(FONT);
+                    if s.bold {
+                        font.weight = FontWeight::BOLD;
+                    }
+                    if s.italic {
+                        font.style = FontStyle::Italic;
+                    }
+                    TextRun {
+                        len: s.text.len(),
+                        font,
+                        color: rgb(s.fg).into(),
+                        background_color: s.bg.map(|bg| rgb(bg).into()),
+                        underline: s.underline.then(|| UnderlineStyle { thickness: px(1.), color: None, wavy: false }),
+                        strikethrough: None,
+                    }
+                })
+                .collect();
+            let line = window.text_system().shape_line(text.into(), px(FONT_SIZE), &runs, None);
+            let origin = bounds.origin + point(px(0.), cell.height * r as f32);
+            let _ = line.paint_background(origin, cell.height, window, cx);
+            let _ = line.paint(origin, cell.height, window, cx);
+        }
+        if let Some((row, col)) = screen.cursor {
+            let origin = bounds.origin + point(cell.width * col as f32, cell.height * row as f32);
+            let color: Hsla = rgb(palette::FOREGROUND).into();
+            // Solid block when this pane has the keyboard, faint when it does not.
+            window.paint_quad(fill(Bounds { origin, size: cell }, color.opacity(if focused { 0.6 } else { 0.2 })));
+        }
+    });
+}
