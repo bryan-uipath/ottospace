@@ -1,0 +1,11 @@
+[package]
+name = "ottospace-mac"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+objc2-core-foundation = { version = "0.3", features = ["CFString", "CFDictionary", "CFNumber", "CFArray", "CFCGTypes"] }
+objc2-application-services = { version = "0.3", features = ["HIServices", "AXUIElement", "AXError", "AXValue", "AXValueConstants"] }
+screencapturekit = "11"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "libc", "NSRunningApplication"] }

@@ -1,0 +1,76 @@
+<!doctype html>
+<!-- Input-forwarding harness: every interaction logs to the panel on the right. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>ottospace input harness</title>
+<style>
+  body { font: 14px system-ui; margin: 0; display: grid; grid-template-columns: 1fr 340px; height: 100vh; background: #f6f6f8; }
+  main { padding: 16px; overflow: auto; display: grid; gap: 12px; grid-template-columns: 1fr 1fr; align-content: start; }
+  section { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 12px; }
+  h3 { margin: 0 0 8px; font-size: 13px; color: #555; }
+  #log { background: #111; color: #9f9; font: 12px ui-monospace; padding: 8px; overflow: auto; margin: 0; }
+  .zone { height: 60px; border: 2px dashed #aaa; border-radius: 6px; display: grid; place-items: center; user-select: none; }
+  .hover:hover { background: #ffe08a; }
+  .menu { position: absolute; background: #fff; border: 1px solid #ccc; box-shadow: 0 4px 12px #0002; border-radius: 6px; padding: 4px; display: none; z-index: 9; }
+  .menu div { padding: 6px 12px; cursor: pointer; } .menu div:hover { background: #eef; }
+  #scroll { height: 90px; overflow: auto; border: 1px solid #ccc; }
+  #drag { width: 40px; height: 40px; background: #69f; border-radius: 6px; position: relative; cursor: grab; }
+</style>
+</head>
+<body>
+<main>
+  <section><h3>1. Left click</h3><button id="btn">Click me (0)</button></section>
+  <section><h3>2. Double click</h3><div class="zone" id="dbl">double-click here</div></section>
+  <section><h3>3. In-page menu (like Slack's ⋯)</h3>
+    <button id="more">⋯ More actions</button>
+    <div class="menu" id="moremenu"><div data-act="copy-link">Copy link</div><div data-act="edit">Edit</div></div></section>
+  <section><h3>4. Right click (custom menu)</h3><div class="zone" id="ctx">right-click here</div>
+    <div class="menu" id="ctxmenu"><div data-act="ctx-copy">Copy</div><div data-act="ctx-delete">Delete</div></div></section>
+  <section><h3>5. Right click (native menu)</h3><div class="zone" id="native">right-click → native menu</div></section>
+  <section><h3>6. Hover</h3><div class="zone hover" id="hov">hover me</div></section>
+  <section><h3>7. Type + Enter</h3><input id="txt" placeholder="type, press Enter" style="width:100%"></section>
+  <section><h3>8. Shortcuts</h3><div class="zone" id="keys" tabindex="0">click, then ⌘K / ⌘A / ⌘C / arrows</div></section>
+  <section><h3>9. Select + ⌘C</h3><p id="sel">Select this sentence and press ⌘C, then paste into the field above.</p></section>
+  <section><h3>10. Scroll</h3><div id="scroll"></div></section>
+  <section><h3>11. Drag</h3><div style="height:60px"><div id="drag"></div></div></section>
+  <section><h3>12. Native select</h3><select id="pick"><option>one</option><option>two</option><option>three</option></select></section>
+</main>
+<pre id="log"></pre>
+<script>
+  const log = (msg) => { const l = document.getElementById('log'); l.textContent = `${new Date().toLocaleTimeString()} ${msg}\n` + l.textContent; };
+  const $ = (id) => document.getElementById(id);
+  let n = 0;
+  $('btn').onclick = () => { $('btn').textContent = `Click me (${++n})`; log(`✅ left click #${n}`); };
+  $('dbl').ondblclick = () => log('✅ double click');
+  const openMenu = (menu, x, y) => { menu.style.display = 'block'; menu.style.left = x + 'px'; menu.style.top = y + 'px'; };
+  $('more').onclick = (e) => { e.stopPropagation(); const r = e.target.getBoundingClientRect(); openMenu($('moremenu'), r.left, r.bottom + scrollY); log('✅ ⋯ menu opened'); };
+  $('ctx').oncontextmenu = (e) => { e.preventDefault(); openMenu($('ctxmenu'), e.pageX, e.pageY); log('✅ custom context menu'); };
+  $('native').oncontextmenu = () => log('ℹ️ native context menu requested (does it show in the pane?)');
+  document.querySelectorAll('.menu div').forEach((item) => item.onclick = async () => {
+    const act = item.dataset.act;
+    if (act === 'copy-link') { try { await navigator.clipboard.writeText('https://example.com/msg/123'); log('✅ copied link to clipboard'); } catch (err) { log(`❌ clipboard: ${err.message}`); } }
+    else log(`✅ menu item: ${act}`);
+    item.parentElement.style.display = 'none';
+  });
+  document.addEventListener('click', () => document.querySelectorAll('.menu').forEach((m) => m.style.display = 'none'));
+  $('hov').onmouseenter = () => log('✅ hover enter'); $('hov').onmouseleave = () => log('✅ hover leave');
+  $('txt').oninput = (e) => log(`✅ typed: "${e.target.value}"`);
+  $('txt').onkeydown = (e) => { if (e.key === 'Enter') log(`✅ Enter submitted "${e.target.value}"`); };
+  $('keys').onkeydown = (e) => { log(`✅ key ${e.metaKey ? '⌘' : ''}${e.ctrlKey ? '⌃' : ''}${e.altKey ? '⌥' : ''}${e.shiftKey ? '⇧' : ''}${e.key}`); if (e.metaKey && e.key === 'k') e.preventDefault(); };
+  document.addEventListener('copy', () => log(`✅ copy event: "${String(getSelection()).slice(0, 30)}"`));
+  document.addEventListener('paste', (e) => log(`✅ paste: "${e.clipboardData.getData('text').slice(0, 30)}"`));
+  $('scroll').innerHTML = Array.from({ length: 40 }, (_, i) => `<div>row ${i}</div>`).join('');
+  $('scroll').onscroll = (e) => log(`✅ scrolled to ${e.target.scrollTop}`);
+  let dragging = null;
+  $('drag').onmousedown = (e) => { dragging = e.clientX - $('drag').offsetLeft; log('✅ drag start'); };
+  document.onmousemove = (e) => { if (dragging !== null) $('drag').style.left = (e.clientX - dragging) + 'px'; };
+  document.onmouseup = () => { if (dragging !== null) { log(`✅ drag end at ${$('drag').style.left}`); dragging = null; } };
+  $('pick').onchange = (e) => log(`✅ select: ${e.target.value}`);
+  // Catch-alls: show any event that reaches the page at all, even if it misses its target.
+  document.addEventListener('mousedown', (e) => log(`ℹ️ mousedown at ${e.clientX},${e.clientY} trusted=${e.isTrusted}`), true);
+  document.addEventListener('keydown', (e) => log(`ℹ️ keydown ${e.key}`), true);
+  log('harness ready');
+</script>
+</body>
+</html>

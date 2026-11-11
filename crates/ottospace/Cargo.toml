@@ -1,0 +1,16 @@
+[package]
+name = "ottospace"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+ottospace-mac = { path = "../ottospace-mac" }
+# runtime_shaders: compile Metal shaders at launch, so builds don't need the Metal toolchain.
+gpui = { version = "0.2", features = ["runtime_shaders"] }
+# macos_14_0: live stream reconfiguration (resize to pane).
+screencapturekit = { version = "11", features = ["macos_14_0"] }
+# Same versions gpui uses, so our pixel buffers are its `SurfaceSource` type.
+core-video = "0.4"
+core-foundation = "0.10"
+objc2-core-foundation = { version = "0.3", features = ["CFCGTypes"] }
