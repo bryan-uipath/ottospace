@@ -61,6 +61,8 @@ impl PickItem {
 pub struct Picker {
     /// Where the new pane goes relative to the focused one.
     pub axis: Axis,
+    /// Open the pick in a new tab instead of splitting.
+    pub new_tab: bool,
     pub items: Vec<PickItem>,
     pub query: String,
     /// Index into `matches()`.
@@ -139,10 +141,26 @@ pub enum Action {
         section: Section,
     },
     CloseSidebar,
-    /// Open the pane picker. `items` is what the shell can offer right now.
+    /// Open the pane picker. `items` is what the shell can offer right now. With `new_tab`,
+    /// the pick opens in a new tab.
     OpenPicker {
         axis: Axis,
+        new_tab: bool,
         items: Vec<PickItem>,
+    },
+    /// A new, empty tab. It becomes the active tab.
+    NewTab,
+    SelectTab {
+        index: usize,
+    },
+    /// The next (positive) or previous tab. It wraps.
+    CycleTab {
+        delta: i32,
+    },
+    /// Close a tab (default: the active one) and every pane in it. The last tab is replaced by
+    /// an empty one.
+    CloseTab {
+        index: Option<usize>,
     },
     /// Replace the picker's filter text.
     PickerQuery {
@@ -182,12 +200,30 @@ pub enum Effect {
     },
 }
 
-#[derive(Debug, Default, Serialize)]
+/// One tab: its own split tree. Only the active tab is drawn.
+#[derive(Debug, Serialize)]
+pub struct Tab {
+    pub id: u32,
+    pub title: String,
+    /// The tab's tree and focus while it is not the active tab. The active tab's live copies
+    /// are `Model::layout` and `Model::focused`.
+    #[serde(skip)]
+    layout: Option<Node>,
+    #[serde(skip)]
+    focused: Option<PaneId>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct Model {
+    /// Panes of every tab.
     pub panes: Vec<Pane>,
-    /// `None` while there are no panes.
+    /// Never empty.
+    pub tabs: Vec<Tab>,
+    /// Index into `tabs`.
+    pub active: usize,
+    /// The active tab's split tree. `None` while it has no panes.
     pub layout: Option<Node>,
-    /// Pane that splits and shortcuts act on.
+    /// The active tab's pane that splits and shortcuts act on.
     pub focused: Option<PaneId>,
     /// App pane that has the keyboard.
     pub live: Option<PaneId>,
@@ -197,6 +233,27 @@ pub struct Model {
     pub picker: Option<Picker>,
     #[serde(skip)]
     next_id: PaneId,
+    #[serde(skip)]
+    next_tab: u32,
+}
+
+impl Default for Model {
+    fn default() -> Self {
+        let mut model = Self {
+            panes: Vec::new(),
+            tabs: Vec::new(),
+            active: 0,
+            layout: None,
+            focused: None,
+            live: None,
+            sidebar: None,
+            picker: None,
+            next_id: 0,
+            next_tab: 0,
+        };
+        model.push_tab();
+        model
+    }
 }
 
 impl Model {
@@ -228,6 +285,10 @@ impl Model {
                 | Action::Enter { .. }
                 | Action::ToggleSection { .. }
                 | Action::CloseSidebar
+                | Action::NewTab
+                | Action::SelectTab { .. }
+                | Action::CycleTab { .. }
+                | Action::CloseTab { .. }
         );
         if self.picker.is_some() && for_panes {
             return effects;
@@ -240,23 +301,60 @@ impl Model {
             }
             Action::Open { kind, axis, beside } => self.open(kind, axis, beside, &mut effects),
             Action::Adopt { kind, beside } => {
-                let focused = self.focused;
-                let id = self.add(kind, beside, Axis::Right);
-                self.focused = focused.or(Some(id));
+                self.next_id += 1;
+                let id = self.next_id;
+                self.panes.push(Pane { id, kind });
+                // The pane joins the tab that holds `beside`, even if that tab is in the background.
+                let active = self.active;
+                let parked = self.tabs.iter_mut().enumerate().find(|(i, tab)| {
+                    *i != active && beside.is_some_and(|b| tab.layout.as_ref().is_some_and(|l| l.leaves().contains(&b)))
+                });
+                let (layout, focused) = match parked {
+                    Some((_, tab)) => (&mut tab.layout, &mut tab.focused),
+                    None => (&mut self.layout, &mut self.focused),
+                };
+                *layout = Some(match layout.take() {
+                    Some(root) => root.insert(beside, id, Axis::Right),
+                    None => Node::Leaf(id),
+                });
+                *focused = focused.or(Some(id));
                 effects.push(Effect::Opened(id));
             }
             Action::Close { pane } => {
-                let Some(id) = pane.or(self.focused) else { return effects };
-                let Some(i) = self.panes.iter().position(|p| p.id == id) else { return effects };
-                let closed = self.panes.remove(i);
-                self.layout = self.layout.take().and_then(|root| root.remove(id));
-                if self.live == Some(id) {
-                    self.live = None;
+                if let Some(id) = pane.or(self.focused) {
+                    self.close_pane(id, &mut effects);
                 }
-                if self.focused == Some(id) {
-                    self.focused = self.panes.last().map(|p| p.id);
+            }
+            Action::NewTab => {
+                self.leave(&mut effects);
+                self.park_active();
+                self.push_tab();
+            }
+            Action::SelectTab { index } => self.select_tab(index, &mut effects),
+            Action::CycleTab { delta } => {
+                let to = (self.active as i64 + delta as i64).rem_euclid(self.tabs.len() as i64) as usize;
+                self.select_tab(to, &mut effects);
+            }
+            Action::CloseTab { index } => {
+                let index = index.unwrap_or(self.active);
+                if index >= self.tabs.len() {
+                    return effects;
                 }
-                effects.push(Effect::Closed(closed));
+                self.leave(&mut effects);
+                self.park_active();
+                let tab = self.tabs.remove(index);
+                for id in tab.layout.as_ref().map(Node::leaves).unwrap_or_default() {
+                    self.close_pane(id, &mut effects);
+                }
+                if self.tabs.is_empty() {
+                    self.next_tab = 0;
+                    self.push_tab();
+                } else {
+                    // Stay on the same tab; if the closed one was active, show its right neighbour.
+                    let active = if index < self.active { self.active - 1 } else { self.active };
+                    self.active = active.min(self.tabs.len() - 1);
+                    self.unpark_active();
+                }
             }
             Action::Focus { pane } => self.focus(pane, &mut effects),
             Action::FocusDir { dir } => {
@@ -288,9 +386,9 @@ impl Model {
                 self.leave(&mut effects);
                 self.sidebar = (self.sidebar != Some(section)).then_some(section);
             }
-            Action::OpenPicker { axis, items } => {
+            Action::OpenPicker { axis, new_tab, items } => {
                 self.leave(&mut effects);
-                self.picker = Some(Picker { axis, items, query: String::new(), selected: 0 });
+                self.picker = Some(Picker { axis, new_tab, items, query: String::new(), selected: 0 });
             }
             Action::PickerQuery { query } => {
                 if let Some(picker) = &mut self.picker {
@@ -321,7 +419,12 @@ impl Model {
             }
             Action::PickerChoose { index } => {
                 let Some(picker) = self.picker.take() else { return effects };
-                match picker.matches().get(index.unwrap_or(picker.selected)).copied().cloned() {
+                let choice = picker.matches().get(index.unwrap_or(picker.selected)).copied().cloned();
+                if choice.is_some() && picker.new_tab {
+                    self.park_active();
+                    self.push_tab();
+                }
+                match choice {
                     // Same rule as an app: fill the focused pane if it is empty, else split it.
                     Some(PickItem::Terminal) => self.open(Kind::Terminal, picker.axis, None, &mut effects),
                     Some(PickItem::App { name }) => effects.push(Effect::HostApp { name, axis: picker.axis }),
@@ -355,6 +458,60 @@ impl Model {
         effects.push(Effect::Opened(id));
     }
 
+    fn push_tab(&mut self) {
+        self.next_tab += 1;
+        let title = format!("Tab {}", self.next_tab);
+        self.tabs.push(Tab { id: self.next_tab, title, layout: None, focused: None });
+        self.active = self.tabs.len() - 1;
+    }
+
+    /// Stores the active tab's tree and focus in the tab, before another tab takes the stage.
+    fn park_active(&mut self) {
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            tab.layout = self.layout.take();
+            tab.focused = self.focused.take();
+        }
+    }
+
+    fn unpark_active(&mut self) {
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            self.layout = tab.layout.take();
+            self.focused = tab.focused.take();
+        }
+    }
+
+    fn select_tab(&mut self, index: usize, effects: &mut Vec<Effect>) {
+        if index >= self.tabs.len() || index == self.active {
+            return;
+        }
+        // A live app window would stay on screen over the other tab.
+        self.leave(effects);
+        self.park_active();
+        self.active = index;
+        self.unpark_active();
+    }
+
+    /// Removes a pane from whichever tab holds it.
+    fn close_pane(&mut self, id: PaneId, effects: &mut Vec<Effect>) {
+        let Some(i) = self.panes.iter().position(|p| p.id == id) else { return };
+        let closed = self.panes.remove(i);
+        self.layout = self.layout.take().and_then(|root| root.remove(id));
+        for tab in &mut self.tabs {
+            tab.layout = tab.layout.take().and_then(|root| root.remove(id));
+            if tab.focused == Some(id) {
+                tab.focused = tab.layout.as_ref().and_then(|l| l.leaves().into_iter().max());
+            }
+        }
+        if self.live == Some(id) {
+            self.live = None;
+        }
+        if self.focused == Some(id) {
+            // The newest pane left in this tab, not in some other tab.
+            self.focused = self.layout.as_ref().and_then(|l| l.leaves().into_iter().max());
+        }
+        effects.push(Effect::Closed(closed));
+    }
+
     fn add(&mut self, kind: Kind, beside: Option<PaneId>, axis: Axis) -> PaneId {
         self.next_id += 1;
         let id = self.next_id;
@@ -371,6 +528,11 @@ impl Model {
     fn focus(&mut self, id: PaneId, effects: &mut Vec<Effect>) {
         if self.pane(id).is_none() {
             return;
+        }
+        // A pane in a background tab: bring its tab forward first.
+        let holds = |tab: &Tab| tab.layout.as_ref().is_some_and(|l| l.leaves().contains(&id));
+        if let Some(index) = self.tabs.iter().position(holds) {
+            self.select_tab(index, effects);
         }
         if self.live != Some(id) {
             self.leave(effects);
@@ -544,7 +706,7 @@ mod tests {
             PickItem::App { name: "Google Chrome".into() },
             PickItem::App { name: "Google Slides".into() },
         ];
-        m.update(Action::OpenPicker { axis: Down, items });
+        m.update(Action::OpenPicker { axis: Down, new_tab: false, items });
     }
 
     fn labels(m: &Model) -> Vec<&str> {
@@ -663,7 +825,7 @@ mod tests {
         let mut m = Model::default();
         m.update(Action::Open { kind: app(1), axis: Right, beside: None });
         m.update(Action::Enter { pane: 1 });
-        let effects = m.update(Action::OpenPicker { axis: Right, items: vec![PickItem::Terminal] });
+        let effects = m.update(Action::OpenPicker { axis: Right, new_tab: false, items: vec![PickItem::Terminal] });
         assert_eq!(effects, [Effect::Parked(1)]);
         assert_eq!(m.mode(), Mode::Pick);
     }
@@ -684,6 +846,106 @@ mod tests {
         m.update(Action::FocusCycle { delta: -1 });
         assert_eq!(m.focused, Some(2));
         assert_eq!(Model::default().update(Action::FocusCycle { delta: 1 }), []);
+    }
+
+    fn term(m: &mut Model) {
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+    }
+
+    #[test]
+    fn each_tab_keeps_its_own_panes_and_focus() {
+        let mut m = Model::default();
+        assert_eq!((m.tabs.len(), m.active), (1, 0));
+        term(&mut m);
+        term(&mut m);
+        m.update(Action::Focus { pane: 1 });
+        m.update(Action::NewTab);
+        assert_eq!((m.active, m.layout.is_none(), m.focused), (1, true, None));
+        term(&mut m);
+        assert_eq!(m.layout.as_ref().unwrap().leaves(), [3]);
+        m.update(Action::SelectTab { index: 0 });
+        assert_eq!((m.layout.as_ref().unwrap().leaves(), m.focused), (vec![1, 2], Some(1)));
+        m.update(Action::CycleTab { delta: -1 });
+        assert_eq!((m.active, m.focused), (1, Some(3)));
+        assert_eq!(ids(&m), [1, 2, 3]);
+    }
+
+    #[test]
+    fn switching_tabs_parks_the_live_app() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        m.update(Action::Enter { pane: 1 });
+        assert_eq!(m.update(Action::NewTab), [Effect::Parked(1)]);
+        assert_eq!(m.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn closing_a_tab_closes_its_panes_and_keeps_one_tab() {
+        let mut m = Model::default();
+        term(&mut m);
+        m.update(Action::NewTab);
+        term(&mut m);
+        term(&mut m);
+        // Close the background tab: the active tab is untouched.
+        let effects = m.update(Action::CloseTab { index: Some(0) });
+        assert_eq!(effects, [Effect::Closed(Pane { id: 1, kind: Kind::Terminal })]);
+        assert_eq!((m.tabs.len(), m.active, m.focused), (1, 0, Some(3)));
+        // Close the last tab: its panes go, an empty tab remains.
+        assert_eq!(m.update(Action::CloseTab { index: None }).len(), 2);
+        assert_eq!((m.tabs.len(), m.panes.len(), m.layout.is_none()), (1, 0, true));
+        assert_eq!(m.tabs[0].title, "Tab 1");
+    }
+
+    #[test]
+    fn closing_a_pane_moves_focus_within_its_tab() {
+        let mut m = Model::default();
+        term(&mut m);
+        term(&mut m);
+        m.update(Action::NewTab);
+        term(&mut m);
+        m.update(Action::SelectTab { index: 0 });
+        m.update(Action::Close { pane: Some(2) });
+        assert_eq!(m.focused, Some(1)); // not pane 3, which is in the other tab
+        // A pane closed in a background tab leaves that tab's tree.
+        m.update(Action::Close { pane: Some(3) });
+        m.update(Action::SelectTab { index: 1 });
+        assert_eq!((m.layout.is_none(), m.focused), (true, None));
+    }
+
+    #[test]
+    fn focusing_a_pane_in_a_background_tab_brings_that_tab_forward() {
+        let mut m = Model::default();
+        term(&mut m);
+        m.update(Action::NewTab);
+        term(&mut m);
+        m.update(Action::Focus { pane: 1 });
+        assert_eq!((m.active, m.focused), (0, Some(1)));
+    }
+
+    #[test]
+    fn adopt_joins_the_tab_of_its_sibling() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        m.update(Action::NewTab);
+        term(&mut m);
+        // DevTools appears for the app in the background tab.
+        m.update(Action::Adopt { kind: app(9), beside: Some(1) });
+        assert_eq!(m.layout.as_ref().unwrap().leaves(), [2]);
+        m.update(Action::SelectTab { index: 0 });
+        assert_eq!(m.layout.as_ref().unwrap().leaves(), [1, 3]);
+    }
+
+    #[test]
+    fn picking_for_a_new_tab_opens_the_pick_there() {
+        let mut m = Model::default();
+        term(&mut m);
+        m.update(Action::OpenPicker { axis: Right, new_tab: true, items: vec![PickItem::Terminal] });
+        // Closing the picker makes no tab.
+        m.update(Action::ClosePicker);
+        assert_eq!(m.tabs.len(), 1);
+        m.update(Action::OpenPicker { axis: Right, new_tab: true, items: vec![PickItem::Terminal] });
+        assert_eq!(m.update(Action::PickerChoose { index: None }), [Effect::Opened(2)]);
+        assert_eq!((m.tabs.len(), m.active, m.layout.as_ref().unwrap().leaves()), (2, 1, vec![2]));
     }
 
     #[test]

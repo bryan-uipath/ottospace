@@ -63,6 +63,22 @@ pub enum Request {
     Picker {
         #[serde(default)]
         axis: Axis,
+        /// Open the pick in a new tab.
+        #[serde(default)]
+        new_tab: bool,
+    },
+    NewTab,
+    SelectTab {
+        index: usize,
+    },
+    /// Next (positive) or previous tab.
+    CycleTab {
+        delta: i32,
+    },
+    /// Closes a tab (default: the active one) and its panes.
+    CloseTab {
+        #[serde(default)]
+        index: Option<usize>,
     },
     PickerQuery {
         query: String,
