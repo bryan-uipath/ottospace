@@ -13,6 +13,7 @@ pub const TEXT: u32 = 0xfafafa;
 pub const MUTED: u32 = 0x9f9fa9;
 pub const PRIMARY: u32 = 0x00b8db;
 pub const APP: u32 = 0xff8904;
+pub const PICK: u32 = 0x00d492;
 pub const ERROR: u32 = 0xff8484;
 
 /// The one colour that changes with the mode. It marks the status pill and the focused pane.
@@ -20,6 +21,7 @@ pub fn accent(mode: Mode) -> u32 {
     match mode {
         Mode::Normal => PRIMARY,
         Mode::App => APP,
+        Mode::Pick => PICK,
     }
 }
 
@@ -30,5 +32,7 @@ mod tests {
     #[test]
     fn each_mode_has_its_own_accent() {
         assert_ne!(accent(Mode::Normal), accent(Mode::App));
+        assert_ne!(accent(Mode::Normal), accent(Mode::Pick));
+        assert_ne!(accent(Mode::App), accent(Mode::Pick));
     }
 }

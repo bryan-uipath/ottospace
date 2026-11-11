@@ -8,4 +8,4 @@ pub mod palette;
 pub mod theme;
 
 pub use layout::{Axis, Dir, Node, Rect};
-pub use model::{Action, Effect, Kind, Mode, Model, Pane, PaneId, Section};
+pub use model::{Action, Effect, Kind, Mode, Model, Pane, PaneId, PickItem, Picker, Section};

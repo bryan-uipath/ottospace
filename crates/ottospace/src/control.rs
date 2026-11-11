@@ -55,6 +55,23 @@ pub enum Request {
     Section {
         section: Section,
     },
+    /// Opens the pane picker: `{"cmd":"picker","axis":"down"}`.
+    Picker {
+        #[serde(default)]
+        axis: Axis,
+    },
+    PickerQuery {
+        query: String,
+    },
+    PickerMove {
+        delta: i32,
+    },
+    /// Opens the selected match, or the match at `index`.
+    PickerChoose {
+        #[serde(default)]
+        index: Option<usize>,
+    },
+    PickerClose,
     Quit,
 }
 
