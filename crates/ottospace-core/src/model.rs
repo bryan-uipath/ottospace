@@ -107,6 +107,8 @@ impl Model {
                 effects.push(Effect::Opened(id));
             }
             Action::Open { kind, axis, beside } => {
+                // The new pane takes focus, so the live app must give the keyboard back.
+                self.leave(&mut effects);
                 let target = beside.or(self.focused);
                 let empty = target.filter(|t| self.pane(*t).is_some_and(|p| p.kind == Kind::Empty));
                 let id = match empty.and_then(|t| self.panes.iter_mut().find(|p| p.id == t)) {
@@ -279,6 +281,17 @@ mod tests {
         assert_eq!(m.update(Action::Focus { pane: 1 }), []); // still live
         assert_eq!(m.update(Action::FocusDir { dir: Dir::Right }), [Effect::Parked(1)]);
         assert_eq!((m.focused, m.live), (Some(2), None));
+    }
+
+    #[test]
+    fn open_while_an_app_is_live_takes_the_keyboard_back() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        m.update(Action::Enter { pane: 1 });
+        // e.g. DevTools appears while Chrome is live.
+        let effects = m.update(Action::Open { kind: app(2), axis: Right, beside: Some(1) });
+        assert_eq!(effects, [Effect::Parked(1), Effect::Opened(2)]);
+        assert_eq!((m.focused, m.live, m.mode()), (Some(2), None, Mode::Normal));
     }
 
     #[test]
