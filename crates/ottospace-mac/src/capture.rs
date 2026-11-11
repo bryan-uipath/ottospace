@@ -60,3 +60,25 @@ pub fn target(window: ax::Window) -> Result<Target, String> {
         .ok_or("window not shareable")?;
     Ok(Target { window, sc_window, id })
 }
+
+/// The window's corner radius in points, measured from one alpha screenshot.
+/// Along the top pixel row the corner is transparent for `r - √r` pixels (circle of radius r,
+/// row centre at y≈½), so solving the measured run for r gives the radius.
+pub fn corner_radius(window: &SCWindow, scale: f64) -> Option<f64> {
+    use screencapturekit::cm::CMSampleBufferExt;
+    use screencapturekit::screenshot_manager::SCScreenshotManager;
+
+    let filter = SCContentFilter::create().with_window(window).build().ok()?;
+    let frame = window.frame();
+    let config = SCStreamConfiguration::new()
+        .with_width((frame.size.width * scale) as u32)
+        .with_height((frame.size.height * scale) as u32)
+        .with_pixel_format(PixelFormat::BGRA);
+    let sample = SCScreenshotManager::capture_sample_buffer(&filter, &config).ok()?;
+    let buffer = sample.pixel_buffer()?;
+    let guard = buffer.lock_read_only().ok()?;
+    let row = unsafe { std::slice::from_raw_parts(guard.base_address(), guard.bytes_per_row()) };
+    let run = row.chunks_exact(4).take_while(|bgra| bgra[3] < 128).count() as f64;
+    let sqrt_r = (1.0 + (1.0 + 4.0 * run).sqrt()) / 2.0;
+    Some(if run == 0.0 { 0.0 } else { sqrt_r * sqrt_r / scale })
+}

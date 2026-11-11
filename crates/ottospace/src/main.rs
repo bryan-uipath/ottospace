@@ -13,12 +13,16 @@ use std::time::{Duration, Instant};
 use core_foundation::base::TCFType;
 use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 use gpui::{
-    App, Application, Bounds, Context, MouseButton, MouseDownEvent, Pixels, Subscription, Window, WindowBounds,
-    WindowOptions, canvas, div, prelude::*, px, rgb, size, surface,
+    App, Application, BorderStyle, Bounds, ContentMask, Context, MouseButton, MouseDownEvent, Pixels, Subscription,
+    Window, WindowBounds, WindowOptions, canvas, div, point, prelude::*, px, quad, rgb, size, surface,
+    transparent_black,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_mac::{ax, capture, display, input, recovery};
 use screencapturekit::prelude::*;
+
+/// Workspace background; also fills hosted windows' rounded corners.
+const BG: u32 = 0x1e1e2e;
 
 /// Latest captured frame, handed from SCK's queue to the UI thread.
 struct Frame(CVPixelBuffer);
@@ -84,6 +88,8 @@ struct Pane {
     latest: Arc<Latest>,
     stream: SCStream,
     pid: i32,
+    /// Window corner radius in points, for masking the stream's black corners.
+    radius: f64,
     /// Body bounds in window-content coordinates, captured during prepaint.
     bounds: Rc<Cell<Bounds<Pixels>>>,
     /// Size the window was parked at, to re-park only when the pane resizes.
@@ -97,6 +103,8 @@ impl Pane {
         let capture::Target { window, sc_window, id } = target;
         let original = window.frame().ok_or("could not read window frame")?;
         let latest = Arc::new(Latest::default());
+        let radius = capture::corner_radius(&sc_window, 2.0).unwrap_or(0.0);
+        eprintln!("hosting window {id}: corner radius {radius:.1}pt");
         let filter = SCContentFilter::create().with_window(&sc_window).build().map_err(|e| format!("{e:?}"))?;
         // Resized to the pane on park.
         let config = stream_config(original.size, 2.0);
@@ -115,6 +123,7 @@ impl Pane {
             latest,
             stream,
             pid,
+            radius,
             bounds: Rc::default(),
             parked_size: CGSize::ZERO,
             placed: CGRect::default(),
@@ -414,6 +423,7 @@ impl Workspace {
     fn render_pane(&self, pane: &Pane, cx: &mut Context<Self>) -> impl IntoElement {
         let id = pane.id;
         let cell = pane.bounds.clone();
+        let radius = pane.radius;
         // While live, keep showing the last frame under the real window, so any gap during a swap is invisible.
         let content = match pane.frame() {
             Some(buffer) => surface(buffer).size_full().into_any_element(),
@@ -456,6 +466,7 @@ impl Workspace {
             // Record the body's layout bounds so AX can match the real window to it.
             .child(canvas(move |bounds, _, _| cell.set(bounds), |_, _, _, _| {}).absolute().size_full())
             .child(content)
+            .child(canvas(|_, _, _| {}, move |bounds, _, window, _| paint_corner_mask(bounds, radius, window)).absolute().size_full())
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, e: &MouseDownEvent, window, cx| this.go_live(id, e, window, cx)),
@@ -476,6 +487,19 @@ impl Workspace {
     }
 }
 
+/// Covers the window's rounded corners (transparent, so black in the YUV stream) with the
+/// background: a ring whose inner edge is the window's rounded outline, clipped to the pane.
+fn paint_corner_mask(bounds: Bounds<Pixels>, radius: f64, window: &mut Window) {
+    if radius <= 0.0 {
+        return;
+    }
+    let r = px(radius as f32);
+    let ring = Bounds { origin: bounds.origin - point(r, r), size: bounds.size + size(r * 2., r * 2.) };
+    window.with_content_mask(Some(ContentMask { bounds }), |window| {
+        window.paint_quad(quad(ring, r * 2., transparent_black(), r, rgb(BG), BorderStyle::Solid));
+    });
+}
+
 /// Pane body rect in global top-left screen coordinates.
 fn pane_on_screen(pane: &Pane, window: &Window, cx: &App) -> CGRect {
     // gpui window bounds are relative to the window's display; offset by its global origin.
@@ -494,7 +518,7 @@ impl Render for Workspace {
         div()
             .size_full()
             .flex()
-            .bg(rgb(0x1e1e2e))
+            .bg(rgb(BG))
             .text_color(rgb(0xcdd6f4))
             .child(div().h_full().when(self.live.is_some(), |d| d.opacity(0.5)).child(self.render_sidebar(cx)))
             .child(
