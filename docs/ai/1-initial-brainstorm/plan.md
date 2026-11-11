@@ -53,7 +53,8 @@ cheapest daily win. E is the largest value but needs A, B and D.
 
 - **Keys while an app pane is live.** The real app has key focus, so ottospace shortcuts do not
   fire. Accepted (2026-11-11). One global event-tap key returns focus to ottospace, and the
-  status bar shows `APP` mode while an app has the keys. Do this in step A4.
+  status bar shows `APP` mode while an app has the keys. The status bar is done; the global
+  key is the open item of step 3.
 - **Notifications (#1).** ottospace cannot suppress system banners or Dock badges itself. It can:
   not show Slack during a block (parked windows are invisible), cover the Dock, and toggle a macOS
   Focus through Shortcuts. Banner control comes from the macOS Focus, not from us.

@@ -24,10 +24,15 @@ another app's window at all.
 |---|---|---|---|---|
 | A. Curtain | While sharing, ottospace draws a placeholder instead of the pane | Always. The pixels are not there | No | None. Works with every capture method |
 | B. Excluded overlay | The private pane is drawn in a child window with `sharingType = .none`, placed over the pane. The main window shows the curtain underneath | If the OS honours the flag | Yes | Must be tested on this macOS version and with Zoom. Newer capture paths may ignore the flag |
-| C. Both | B on top of A | Always: if B fails, the share shows the curtain | Yes when B works | Most code |
+| C. Both | B on top of A | Only if the OS honours the flag | Yes | Same as B |
 
-Recommended: **C**, built as A first. A is safe on its own; B is an upgrade that cannot leak,
-because the curtain is always what the main window draws.
+B and C are **not** safe by construction. In a whole-screen share, the overlay window is on screen
+above the curtain. If the OS ignores `sharingType = .none`, the share captures the overlay and the
+private content leaks. The curtain underneath does not help, because it is covered.
+
+Recommended: build **A** now. It is the only option that cannot leak. Build B only after the
+tests below show that the flag is honoured for whole-screen and single-window shares, on this
+macOS version and with Zoom. Until then the user cannot see a private pane while sharing.
 
 ## Rules
 
