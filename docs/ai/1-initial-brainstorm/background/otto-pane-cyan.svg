@@ -29,7 +29,7 @@
       <stop stop-color="#18181b"/><stop offset="1" stop-color="#050506"/>
     </radialGradient>
     <radialGradient id="o-pupil" cx=".42" cy=".36" r=".7">
-      <stop stop-color="#9f9fa9"/><stop offset=".5" stop-color="#71717b"/><stop offset="1" stop-color="#52525c"/>
+      <stop stop-color="#ffffff"/><stop offset=".55" stop-color="#e4e4e7"/><stop offset="1" stop-color="#9f9fa9"/>
     </radialGradient>
     <radialGradient id="o-glow" cx=".5" cy=".5" r=".5">
       <stop stop-color="#00b8db" stop-opacity=".07"/><stop offset="1" stop-color="#00b8db" stop-opacity="0"/>
