@@ -324,7 +324,7 @@ impl Workspace {
 
         // Native fullscreen would move ottospace to its own Space, where other apps' windows
         // cannot follow. Make the green button zoom instead.
-        if let Ok(handle) = window.window_handle()
+        if let Ok(handle) = HasWindowHandle::window_handle(window)
             && let RawWindowHandle::AppKit(appkit) = handle.as_raw()
         {
             unsafe { ottospace_mac::window::zoom_instead_of_fullscreen(appkit.ns_view.as_ptr()) };
@@ -1091,7 +1091,7 @@ impl Workspace {
         let color = theme::accent(self.model.mode());
         let (mode, hint) = match self.model.mode() {
             Mode::Normal => {
-                ("NORMAL", "⌘D terminal · ⌘E pick · ⌘W close · ⌘] ⌘[ next/prev pane · ⌘⌥ arrows or hjkl move")
+                ("NORMAL", "⌘D ⌘⇧D terminal right/down · ⌘E pick · ⌘W close · ⌘] ⌘[ next/prev · ⌘⌥ arrows or hjkl move")
             }
             Mode::Pick => ("PICK", "type to filter · ↑↓ move · ↵ open · esc close"),
             Mode::App => ("APP", "keys go to the app · click ottospace to return"),

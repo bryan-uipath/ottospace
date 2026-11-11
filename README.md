@@ -62,7 +62,7 @@ A window opens. Press ⌘D to open a terminal pane.
 | ⌘W | Close the focused pane |
 | ⌘⌥←/→/↑/↓ or ⌘⌥H/L/K/J | Focus the pane in that direction |
 | ⌘] / ⌘[ | Focus the next / previous pane |
-| ⌘⌃F | Zoom the window to fill the screen |
+| ⌘⌃F | Zoom the window to fill the screen; again to restore |
 
 Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
 

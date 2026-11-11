@@ -14,6 +14,9 @@ pub unsafe fn zoom_instead_of_fullscreen(ns_view: *mut c_void) {
     let view = unsafe { &*(ns_view as *const NSView) };
     if let Some(window) = view.window() {
         let behavior = window.collectionBehavior() & !NSWindowCollectionBehavior::FullScreenPrimary;
-        window.setCollectionBehavior(behavior | NSWindowCollectionBehavior::FullScreenNone);
+        // DisallowsTiling: Split View would also put the window in a fullscreen Space.
+        window.setCollectionBehavior(
+            behavior | NSWindowCollectionBehavior::FullScreenNone | NSWindowCollectionBehavior::FullScreenDisallowsTiling,
+        );
     }
 }
