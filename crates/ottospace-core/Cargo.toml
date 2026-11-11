@@ -1,0 +1,9 @@
+[package]
+name = "ottospace-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# Pure logic only: no gpui, no macOS APIs, no I/O.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
