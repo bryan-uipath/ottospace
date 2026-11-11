@@ -59,17 +59,25 @@ impl Otto {
     }
 
     /// Drawn bounds `[x, y, w, h]` of every pane in `ids`, once all are laid out.
+    /// On timeout the panic shows the last state, so a failure explains itself.
     fn bounds(&self, ids: &[u64]) -> Vec<[f64; 4]> {
-        self.wait_for("pane layout", |o| {
-            let state = o.call(json!({"cmd": "state"}));
-            ids.iter()
+        let start = Instant::now();
+        loop {
+            let state = self.call(json!({"cmd": "state"}));
+            let found: Option<Vec<[f64; 4]>> = ids
+                .iter()
                 .map(|id| {
                     let b = state["bounds"][id.to_string()].as_array()?;
                     let b: Vec<f64> = b.iter().filter_map(Value::as_f64).collect();
                     (b.len() == 4 && b[2] > 1.0 && b[3] > 1.0).then(|| [b[0], b[1], b[2], b[3]])
                 })
-                .collect()
-        })
+                .collect();
+            if let Some(found) = found {
+                return found;
+            }
+            assert!(start.elapsed() < Duration::from_secs(10), "no layout for panes {ids:?}; last state: {state}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 }
 
@@ -206,6 +214,40 @@ fn picker_opens_a_terminal_in_the_chosen_direction() {
 
     otto.call(json!({"cmd": "picker"}));
     assert_eq!(otto.call(json!({"cmd": "picker_close"}))["mode"], "normal");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn tabs_keep_their_own_panes() {
+    let otto = Otto::launch("tabs");
+    otto.call(json!({"cmd": "split"})); // pane 1, a terminal, in tab 1
+    let first = otto.bounds(&[1])[0];
+
+    let reply = otto.call(json!({"cmd": "new_tab"}));
+    assert_eq!((reply["state"]["tabs"].as_array().unwrap().len(), reply["state"]["active"].as_u64()), (2, Some(1)));
+    assert!(reply["bounds"].get("1").is_none(), "a background pane reports no bounds: {reply}");
+    assert_eq!(reply["tab_panes"], json!([[1], []]), "the dump says which tab holds each pane");
+    otto.call(json!({"cmd": "split", "kind": "empty"})); // pane 2 in tab 2
+    let second = otto.bounds(&[2])[0];
+    assert!((first[2] - second[2]).abs() < 2.0, "a lone pane fills the canvas in either tab");
+
+    // Back to tab 1: its pane and focus return.
+    let reply = otto.call(json!({"cmd": "select_tab", "index": 0}));
+    assert_eq!(reply["state"]["focused"], 1);
+    otto.bounds(&[1]);
+
+    // The picker can open its pick in a new tab.
+    otto.call(json!({"cmd": "picker", "new_tab": true}));
+    let reply = otto.call(json!({"cmd": "picker_choose"}));
+    assert_eq!((reply["state"]["tabs"].as_array().unwrap().len(), reply["state"]["active"].as_u64()), (3, Some(2)));
+    assert_eq!(reply["state"]["focused"], 3);
+
+    // Closing a tab closes its panes and ends their shells.
+    let reply = otto.call(json!({"cmd": "close_tab"}));
+    assert_eq!(pane_ids(&reply), [1, 2]);
+    assert!(reply["terminals"].get("3").is_none(), "{reply}");
+    let reply = otto.call(json!({"cmd": "cycle_tab", "delta": 1}));
+    assert_eq!(reply["state"]["tabs"].as_array().unwrap().len(), 2);
 }
 
 #[test]

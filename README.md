@@ -18,6 +18,8 @@ Agents and tests can drive it over a local control socket. Rust + [GPUI](https:/
 | "Pop next": open the next task by priority | Designed |
 | Quick capture (⌘⌘): turn something on screen into a task and dispatch it to an agent | Designed |
 | Focus blocks: hide Slack, with an agent that can break through | Designed |
+| Tabs, each with its own split tree | Works today |
+| Pane picker: choose a terminal or a running app for a new pane or tab | Works today |
 | Icon rail with a secondary bar; Apps lists running apps | Works today |
 | Fast app switcher; Workbook, Tasks and Repos sections | Designed |
 | TypeScript scripting, with contextual quick actions in an action deck (Zoom meeting layout, spin for stand-up) | Designed |
@@ -28,7 +30,7 @@ Agents and tests can drive it over a local control socket. Rust + [GPUI](https:/
 
 Early prototype, macOS only. Today you can split a window into panes, run your shell in a pane,
 host another app's window in a pane, move focus by keyboard, and drive all of it over the control
-socket. Tabs, tasks, session restore and the rest of the design are not built: see the
+socket. Tasks, session restore and the rest of the design are not built: see the
 [plan](docs/ai/1-initial-brainstorm/plan.md).
 
 ## Quick start
@@ -63,6 +65,10 @@ A window opens. Press ⌘D to open a terminal pane.
 | ⌘⌥←/→/↑/↓ or ⌘⌥H/L/K/J | Focus the pane in that direction |
 | ⌘] / ⌘[ | Focus the next / previous pane |
 | ⌘⌃F | Zoom the window to fill the screen; again to restore |
+| ⌘T | New tab: pick what opens in it |
+| ⌘1 … ⌘9 | Select a tab |
+| ⌘⇧] / ⌘⇧[ or ⌃Tab / ⌃⇧Tab | Next / previous tab |
+| ⌘⇧W | Close the tab and its panes |
 
 Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
 

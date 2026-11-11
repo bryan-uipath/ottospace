@@ -192,6 +192,7 @@ impl AssetSource for Assets {
             "icons/repos.svg" => Some(include_bytes!("../assets/icons/repos.svg")),
             "icons/split-right.svg" => Some(include_bytes!("../assets/icons/split-right.svg")),
             "icons/split-down.svg" => Some(include_bytes!("../assets/icons/split-down.svg")),
+            "icons/plus.svg" => Some(include_bytes!("../assets/icons/plus.svg")),
             _ => None,
         };
         Ok(bytes.map(Into::into))
@@ -207,9 +208,12 @@ impl AssetSource for Assets {
 const TOP_BAR: f32 = 28.;
 const TRAFFIC_LIGHTS: f32 = 80.;
 
-/// Top-bar split buttons: icon, tooltip, and where the picked pane goes.
-const SPLITS: [(&str, &str, Axis); 2] =
-    [("icons/split-right.svg", "Split right…  ⌘E", Axis::Right), ("icons/split-down.svg", "Split down…", Axis::Down)];
+/// Top-bar buttons: icon, tooltip, split direction, and whether the pick opens in a new tab.
+const SPLITS: [(&str, &str, Axis, bool); 3] = [
+    ("icons/plus.svg", "New tab…  ⌘T", Axis::Right, true),
+    ("icons/split-right.svg", "Split right…  ⌘E", Axis::Right, false),
+    ("icons/split-down.svg", "Split down…", Axis::Down, false),
+];
 
 /// Rail sections in order, with their icon and label.
 const SECTIONS: [(Section, &str, &str); 4] = [
@@ -251,7 +255,10 @@ fn otto(size: f32, hint: &'static str) -> impl IntoElement {
 
 actions!(
     ottospace,
-    [SplitRight, SplitDown, PickPane, ClosePane, FocusLeft, FocusRight, FocusUp, FocusDown, FocusNext, FocusPrev, Zoom]
+    [
+        SplitRight, SplitDown, PickPane, ClosePane, FocusLeft, FocusRight, FocusUp, FocusDown, FocusNext, FocusPrev,
+        Zoom, NewTab, NextTab, PrevTab, CloseTab
+    ]
 );
 
 struct Workspace {
@@ -386,8 +393,8 @@ impl Workspace {
                         }
                     }
                 }
-                Effect::HostApp { name, axis } => {
-                    let _ = self.open_app(name, *axis, window, cx);
+                Effect::HostApp { name, axis, new_tab } => {
+                    let _ = self.open_app(name, *axis, *new_tab, window, cx);
                 }
                 Effect::Live(id) => {
                     self.live_since = Some(Instant::now());
@@ -411,7 +418,7 @@ impl Workspace {
             let action = match request {
                 Request::State | Request::Quit => None,
                 Request::OpenApp { name, axis } => {
-                    failure = self.open_app(&name, axis, window, cx).err();
+                    failure = self.open_app(&name, axis, false, window, cx).err();
                     None
                 }
                 Request::Split { axis, kind } => {
@@ -435,10 +442,14 @@ impl Workspace {
                 Request::Enter { pane } => Some(Action::Enter { pane }),
                 Request::Leave => Some(Action::Leave),
                 Request::Section { section } => Some(Action::ToggleSection { section }),
-                Request::Picker { axis } => {
-                    self.open_picker(axis, window, cx);
+                Request::Picker { axis, new_tab } => {
+                    self.open_picker(axis, new_tab, window, cx);
                     None
                 }
+                Request::NewTab => Some(Action::NewTab),
+                Request::SelectTab { index } => Some(Action::SelectTab { index }),
+                Request::CycleTab { delta } => Some(Action::CycleTab { delta }),
+                Request::CloseTab { index } => Some(Action::CloseTab { index }),
                 Request::PickerQuery { query } => Some(Action::PickerQuery { query }),
                 Request::PickerMove { delta } => Some(Action::PickerMove { delta }),
                 Request::PickerChoose { index } => Some(Action::PickerChoose { index }),
@@ -474,9 +485,12 @@ impl Workspace {
 
     /// State as JSON: the model, plus each pane's drawn bounds `[x, y, w, h]` in window points.
     fn snapshot(&self) -> String {
+        // Only panes of the active tab are drawn; a background pane's last bounds are stale.
+        let drawn = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
         let bounds: BTreeMap<PaneId, [f32; 4]> = self
             .cells
             .iter()
+            .filter(|(id, _)| drawn.contains(id))
             .map(|(id, cell)| {
                 let b = cell.get();
                 (*id, [b.origin.x.into(), b.origin.y.into(), b.size.width.into(), b.size.height.into()])
@@ -495,6 +509,7 @@ impl Workspace {
             "mode": self.model.mode(),
             "state": self.model,
             "bounds": bounds,
+            "tab_panes": self.model.tab_panes(),
             "terminals": terminals,
         })
         .to_string()
@@ -509,28 +524,55 @@ impl Workspace {
         }
         let effects = self.dispatch(action, window, cx);
         if let Some(Effect::Opened(id)) = effects.last() {
+            // A pane in a background tab is not drawn, so the layout sync never parks its
+            // window. Move it off screen now; it is sized when its tab is first shown.
+            let drawn = self.model.layout.as_ref().is_some_and(|l| l.leaves().contains(id));
+            if !drawn {
+                let _ = hosted.window.set_position(display::parking_spot());
+            }
             self.cells.insert(*id, hosted.bounds.clone());
             self.hosted.insert(*id, hosted);
         }
     }
 
     /// Hosts the app's main window in a pane. The error also shows in the Apps list.
-    fn open_app(&mut self, name: &str, axis: Axis, window: &Window, cx: &mut Context<Self>) -> Result<(), String> {
-        let result = self.try_open_app(name, axis, window, cx);
+    fn open_app(
+        &mut self,
+        name: &str,
+        axis: Axis,
+        new_tab: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let result = self.try_open_app(name, axis, new_tab, window, cx);
         self.error = result.clone().err();
         cx.notify();
         result
     }
 
-    fn try_open_app(&mut self, name: &str, axis: Axis, window: &Window, cx: &mut Context<Self>) -> Result<(), String> {
+    fn try_open_app(
+        &mut self,
+        name: &str,
+        axis: Axis,
+        new_tab: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
         if !self.hosting {
             return Err("window hosting is off in e2e runs".into());
         }
         let target = capture::find(name)?;
-        if self.hosted.values().any(|h| h.window_id == target.id) {
-            return Ok(()); // already hosted
+        // Already in a pane: go to it (and its tab) instead of doing nothing.
+        if let Some((pane, _)) = self.hosted.iter().find(|(_, h)| h.window_id == target.id) {
+            let pane = *pane;
+            self.dispatch(Action::Focus { pane }, window, cx);
+            return Ok(());
         }
         let hosted = Hosted::new(target)?;
+        // The window is in hand, so the tab will not be left empty.
+        if new_tab {
+            self.dispatch(Action::NewTab, window, cx);
+        }
         let action = Action::Open { kind: hosted.kind(), axis, beside: None };
         self.attach(hosted, action, window, cx);
         Ok(())
@@ -621,6 +663,15 @@ impl Workspace {
 
     /// Keys go to the focused terminal. ⌘ shortcuts do not encode, so they fall through to bindings.
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // ⌘1..⌘9 select a tab.
+        let key = &event.keystroke;
+        if key.modifiers.platform
+            && let Some(digit) = key.key.parse::<usize>().ok().filter(|d| (1..=9).contains(d))
+        {
+            self.dispatch(Action::SelectTab { index: digit - 1 }, window, cx);
+            cx.stop_propagation();
+            return;
+        }
         if self.model.picker.is_some() {
             self.picker_key(event, window, cx);
             return;
@@ -636,13 +687,13 @@ impl Workspace {
     }
 
     /// Opens the pane picker: a terminal, then each running app.
-    fn open_picker(&mut self, axis: Axis, window: &Window, cx: &mut Context<Self>) {
+    fn open_picker(&mut self, axis: Axis, new_tab: bool, window: &Window, cx: &mut Context<Self>) {
         if self.hosting {
             self.apps = capture::apps();
         }
         let apps = self.apps.iter().map(|name| PickItem::App { name: name.clone() });
         let items = std::iter::once(PickItem::Terminal).chain(apps).collect();
-        self.dispatch(Action::OpenPicker { axis, items }, window, cx);
+        self.dispatch(Action::OpenPicker { axis, new_tab, items }, window, cx);
     }
 
     /// While the picker is open it takes every key: text filters, arrows move, enter opens.
@@ -694,9 +745,10 @@ impl Workspace {
                 }))
         });
         let rows: Vec<_> = rows.collect();
-        let title = match picker.axis {
-            Axis::Right => "Split right with",
-            Axis::Down => "Split down with",
+        let title = match (picker.new_tab, picker.axis) {
+            (true, _) => "New tab with",
+            (false, Axis::Right) => "Split right with",
+            (false, Axis::Down) => "Split down with",
         };
         let query = if picker.query.is_empty() { "type to filter".to_string() } else { picker.query.clone() };
         let panel = div()
@@ -919,7 +971,7 @@ impl Workspace {
                     // Fills the focused pane if it is empty. Else splits it: right, or down with shift.
                     .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                         let axis = if e.modifiers().shift { Axis::Down } else { Axis::Right };
-                        let _ = this.open_app(&target, axis, window, cx);
+                        let _ = this.open_app(&target, axis, false, window, cx);
                     }))
             }))
     }
@@ -1043,7 +1095,8 @@ impl Workspace {
         }
     }
 
-    /// Top bar, drawn where the system title bar was. Tabs will go here.
+    /// Top bar, drawn where the system title bar was: tabs on the left, new-tab and split
+    /// buttons on the right.
     fn render_top(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .h(px(TOP_BAR))
@@ -1064,11 +1117,43 @@ impl Workspace {
                     }
                 }),
             )
-            .child("ottospace")
-            // Split buttons: each opens the picker for that direction.
+            .children(self.model.tabs.iter().enumerate().map(|(index, tab)| {
+                let active = index == self.model.active;
+                div()
+                    .id(("tab", tab.id))
+                    .h_full()
+                    .pl_3()
+                    .pr_1()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .border_r_1()
+                    .border_color(rgb(theme::BORDER))
+                    .cursor_pointer()
+                    .when(active, |d| d.bg(rgb(theme::RAISED)).text_color(rgb(theme::TEXT)))
+                    .hover(|s| s.text_color(rgb(theme::TEXT)))
+                    .child(tab.title.clone())
+                    .child(
+                        div()
+                            .id(("tab-close", tab.id))
+                            .px_1()
+                            .rounded_sm()
+                            .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::ERROR)))
+                            .child("×")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                // Do not also select the tab that is going away.
+                                cx.stop_propagation();
+                                this.dispatch(Action::CloseTab { index: Some(index) }, window, cx);
+                            })),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.dispatch(Action::SelectTab { index }, window, cx);
+                    }))
+            }))
+            // New tab and split buttons: each opens the picker for that target.
             .child(div().ml_auto().mr_2().flex().gap_1().children(SPLITS.iter().enumerate().map(
-                |(i, (icon, tip, axis))| {
-                    let (tip, axis) = (*tip, *axis);
+                |(i, (icon, tip, axis, new_tab))| {
+                    let (tip, axis, new_tab) = (*tip, *axis, *new_tab);
                     div()
                         .id(("split", i))
                         .w(px(28.))
@@ -1081,7 +1166,7 @@ impl Workspace {
                         .hover(|s| s.bg(rgb(theme::SELECTED)))
                         .child(svg().path(*icon).size(px(16.)).text_color(rgb(theme::MUTED)))
                         .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
-                        .on_click(cx.listener(move |this, _, window, cx| this.open_picker(axis, window, cx)))
+                        .on_click(cx.listener(move |this, _, window, cx| this.open_picker(axis, new_tab, window, cx)))
                 },
             )))
     }
@@ -1169,7 +1254,7 @@ impl Render for Workspace {
                 if this.model.picker.is_some() {
                     this.dispatch(Action::ClosePicker, window, cx);
                 } else {
-                    this.open_picker(Axis::Right, window, cx);
+                    this.open_picker(Axis::Right, false, window, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &FocusNext, window, cx| {
@@ -1179,6 +1264,16 @@ impl Render for Workspace {
                 this.dispatch(Action::FocusCycle { delta: -1 }, window, cx);
             }))
             .on_action(cx.listener(|_, _: &Zoom, window, _| window.zoom_window()))
+            .on_action(cx.listener(|this, _: &NewTab, window, cx| this.open_picker(Axis::Right, true, window, cx)))
+            .on_action(cx.listener(|this, _: &NextTab, window, cx| {
+                this.dispatch(Action::CycleTab { delta: 1 }, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &PrevTab, window, cx| {
+                this.dispatch(Action::CycleTab { delta: -1 }, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
+                this.dispatch(Action::CloseTab { index: None }, window, cx);
+            }))
             .on_action(cx.listener(|this, _: &ClosePane, window, cx| {
                 this.dispatch(Action::Close { pane: None }, window, cx);
             }))
@@ -1281,6 +1376,13 @@ fn main() {
             KeyBinding::new("cmd-[", FocusPrev, None),
             // Fill the screen without leaving the Space (see `zoom_instead_of_fullscreen`).
             KeyBinding::new("cmd-ctrl-f", Zoom, None),
+            // Tabs. ⌘1..⌘9 select one (handled in `key_down`).
+            KeyBinding::new("cmd-t", NewTab, None),
+            KeyBinding::new("cmd-}", NextTab, None),
+            KeyBinding::new("cmd-{", PrevTab, None),
+            KeyBinding::new("ctrl-tab", NextTab, None),
+            KeyBinding::new("ctrl-shift-tab", PrevTab, None),
+            KeyBinding::new("cmd-shift-w", CloseTab, None),
         ]);
         let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
         // Draw under the title bar; the top bar leaves room for the traffic lights.
