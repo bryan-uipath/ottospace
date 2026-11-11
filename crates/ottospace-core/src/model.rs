@@ -57,6 +57,12 @@ pub enum Action {
         axis: Axis,
         beside: Option<PaneId>,
     },
+    /// Add a pane for a window the app opened itself (e.g. DevTools), beside `beside`.
+    /// Focus and the keyboard stay where they are: the user did not ask for this pane.
+    Adopt {
+        kind: Kind,
+        beside: Option<PaneId>,
+    },
     /// Close a pane (default: the focused one).
     Close {
         pane: Option<PaneId>,
@@ -138,6 +144,12 @@ impl Model {
                 self.focused = Some(id);
                 effects.push(Effect::Opened(id));
             }
+            Action::Adopt { kind, beside } => {
+                let focused = self.focused;
+                let id = self.add(kind, beside, Axis::Right);
+                self.focused = focused.or(Some(id));
+                effects.push(Effect::Opened(id));
+            }
             Action::Close { pane } => {
                 let Some(id) = pane.or(self.focused) else { return effects };
                 let Some(i) = self.panes.iter().position(|p| p.id == id) else { return effects };
@@ -173,7 +185,10 @@ impl Model {
                 self.leave(&mut effects);
                 self.sidebar = (self.sidebar != Some(section)).then_some(section);
             }
-            Action::CloseSidebar => self.sidebar = None,
+            Action::CloseSidebar => {
+                self.leave(&mut effects);
+                self.sidebar = None;
+            }
         }
         effects
     }
@@ -339,6 +354,25 @@ mod tests {
         m.update(Action::Enter { pane: 1 });
         assert_eq!(m.update(Action::ToggleSection { section: Section::Apps }), [Effect::Parked(1)]);
         assert_eq!(m.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn adopt_adds_a_pane_without_taking_focus_or_the_keyboard() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        m.update(Action::Enter { pane: 1 });
+        // DevTools opens while Chrome is live: the user keeps typing in Chrome.
+        assert_eq!(m.update(Action::Adopt { kind: app(2), beside: Some(1) }), [Effect::Opened(2)]);
+        assert_eq!((m.focused, m.live, m.mode()), (Some(1), Some(1), Mode::App));
+        assert_eq!(m.layout.as_ref().unwrap().neighbor(1, Dir::Right), Some(2));
+    }
+
+    #[test]
+    fn closing_the_bar_takes_the_keyboard_back() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        m.update(Action::Enter { pane: 1 });
+        assert_eq!(m.update(Action::CloseSidebar), [Effect::Parked(1)]);
     }
 
     #[test]

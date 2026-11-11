@@ -14,6 +14,11 @@ unsafe extern "C" {
 }
 
 /// Whether this process (or its parent terminal) has Accessibility access; optionally prompts.
+/// True while the app with this pid is the frontmost app (it has the keyboard).
+pub fn is_active(pid: i32) -> bool {
+    NSRunningApplication::runningApplicationWithProcessIdentifier(pid).is_some_and(|app| app.isActive())
+}
+
 pub fn is_trusted(prompt: bool) -> bool {
     let key = CFString::from_static_str("AXTrustedCheckOptionPrompt");
     let value = CFBoolean::new(prompt);

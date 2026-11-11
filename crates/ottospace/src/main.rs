@@ -31,9 +31,6 @@ mod terminal;
 use control::{Call, PaneKind, Request};
 use terminal::Terminal;
 
-/// Workspace background; also fills hosted windows' rounded corners.
-const BG: u32 = theme::BACKGROUND;
-
 /// Latest captured frame, handed from SCK's queue to the UI thread.
 struct Frame(CVPixelBuffer);
 // CVPixelBuffer is a CF object; retain/release are thread-safe.
@@ -140,6 +137,10 @@ impl Hosted {
         })
     }
 
+    fn kind(&self) -> Kind {
+        Kind::App { window: self.window_id, title: self.title.clone() }
+    }
+
     /// Stops capture and puts the window back where we found it.
     fn release(self) {
         let _ = self.stream.stop_capture();
@@ -196,9 +197,10 @@ impl AssetSource for Assets {
     }
 }
 
-/// Height of the top bar, and the width it keeps clear on the left for the traffic lights.
-const TOP_BAR: f32 = 36.;
-const TRAFFIC_LIGHTS: f32 = 88.;
+/// Height of the top bar (the native title strip, so all of it drags the window), and the width
+/// it keeps clear on the left for the traffic lights.
+const TOP_BAR: f32 = 28.;
+const TRAFFIC_LIGHTS: f32 = 80.;
 
 /// Rail sections in order, with their icon and label.
 const SECTIONS: [(Section, &str, &str); 4] = [
@@ -368,9 +370,12 @@ impl Workspace {
                     self.live_since = None;
                     if let Some(hosted) = self.hosted.get_mut(id) {
                         hosted.park(window.scale_factor() as f64);
-                        // Going live activated the app. Take the keyboard back, or keys keep
-                        // going to its off-screen window while the status bar says NORMAL.
-                        cx.activate(true);
+                        // Going live activated the app. If it still has the keyboard, take it
+                        // back, or keys keep going to its off-screen window while the status
+                        // bar says NORMAL. If the user moved to a third app, leave them there.
+                        if ax::is_active(hosted.pid) {
+                            cx.activate(true);
+                        }
                     }
                 }
                 Effect::Live(id) => {
@@ -420,7 +425,18 @@ impl Workspace {
                 Request::Section { section } => Some(Action::ToggleSection { section }),
             };
             if let Some(action) = action {
-                self.dispatch(action, window, cx);
+                let effects = self.dispatch(action, window, cx);
+                // A terminal pane with no shell behind it: say so instead of replying ok.
+                let dead = effects.iter().any(|e| match e {
+                    Effect::Opened(id) => {
+                        self.model.pane(*id).is_some_and(|p| p.kind == Kind::Terminal)
+                            && !self.terminals.contains_key(id)
+                    }
+                    _ => false,
+                });
+                if dead {
+                    failure = self.error.clone().or(Some("the shell did not start".into()));
+                }
             }
             let _ = reply.send(failure.map_or_else(|| self.snapshot(), |message| control::error(&message)));
             if quit {
@@ -463,14 +479,13 @@ impl Workspace {
     }
 
     /// Adds an app pane for an already-captured window.
-    fn attach(&mut self, hosted: Hosted, axis: Axis, beside: Option<PaneId>, window: &Window, cx: &mut Context<Self>) {
+    fn attach(&mut self, hosted: Hosted, action: Action, window: &Window, cx: &mut Context<Self>) {
         let pid = hosted.pid;
         if !self.known.iter().any(|(p, _)| *p == pid) {
             let ids = ax::Window::standard_of(pid).iter().filter_map(ax::Window::id).collect();
             self.known.push((pid, ids));
         }
-        let kind = Kind::App { window: hosted.window_id, title: hosted.title.clone() };
-        let effects = self.dispatch(Action::Open { kind, axis, beside }, window, cx);
+        let effects = self.dispatch(action, window, cx);
         if let Some(Effect::Opened(id)) = effects.last() {
             self.cells.insert(*id, hosted.bounds.clone());
             self.hosted.insert(*id, hosted);
@@ -493,7 +508,9 @@ impl Workspace {
         if self.hosted.values().any(|h| h.window_id == target.id) {
             return Ok(()); // already hosted
         }
-        self.attach(Hosted::new(target)?, axis, None, window, cx);
+        let hosted = Hosted::new(target)?;
+        let action = Action::Open { kind: hosted.kind(), axis, beside: None };
+        self.attach(hosted, action, window, cx);
         Ok(())
     }
 
@@ -507,6 +524,10 @@ impl Workspace {
             if let Some(hosted) = self.hosted.remove(&id) {
                 let _ = hosted.stream.stop_capture();
                 recovery::forget(hosted.window_id);
+                // Its app may still be frontmost with no window here: take the keyboard back.
+                if self.model.live == Some(id) && ax::is_active(hosted.pid) {
+                    cx.activate(true);
+                }
             }
             self.dispatch(Action::Close { pane: Some(id) }, window, cx);
         }
@@ -528,7 +549,8 @@ impl Workspace {
         for ax_window in fresh {
             if let Ok(hosted) = capture::target(ax_window).and_then(Hosted::new) {
                 let beside = self.hosted.iter().filter(|(_, h)| h.pid == hosted.pid).map(|(id, _)| *id).max();
-                self.attach(hosted, Axis::Right, beside, window, cx);
+                let action = Action::Adopt { kind: hosted.kind(), beside };
+                self.attach(hosted, action, window, cx);
             }
         }
     }
@@ -753,7 +775,6 @@ impl Workspace {
                         let _ = this.open_app(&target, axis, window, cx);
                     }))
             }))
-            .children(self.error.clone().map(|e| div().p_2().text_xs().text_color(rgb(theme::ERROR)).child(e)))
     }
 
     fn render_pane(&self, pane: &Pane, cx: &mut Context<Self>) -> impl IntoElement {
@@ -888,8 +909,12 @@ impl Workspace {
             .text_color(rgb(theme::MUTED))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
+                cx.listener(|this, e: &MouseDownEvent, window, cx| {
                     this.dispatch(Action::Leave, window, cx);
+                    // With a custom title bar, the system no longer zooms on double-click.
+                    if e.click_count == 2 {
+                        window.titlebar_double_click();
+                    }
                 }),
             )
             .child("ottospace")
@@ -922,6 +947,8 @@ impl Workspace {
             .child(div().px_2().rounded_sm().bg(rgb(color)).text_color(rgb(theme::BACKGROUND)).child(mode))
             .child(focused)
             .child(hint)
+            // Shown here, not in the Apps list, so it is visible whichever section is open.
+            .children(self.error.clone().map(|e| div().ml_auto().text_color(rgb(theme::ERROR)).child(e)))
     }
 }
 
@@ -934,7 +961,7 @@ fn paint_corner_mask(bounds: Bounds<Pixels>, radius: f64, window: &mut Window) {
     let r = px(radius as f32);
     let ring = Bounds { origin: bounds.origin - point(r, r), size: bounds.size + size(r * 2., r * 2.) };
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
-        window.paint_quad(quad(ring, r * 2., transparent_black(), r, rgb(BG), BorderStyle::Solid));
+        window.paint_quad(quad(ring, r * 2., transparent_black(), r, rgb(theme::BACKGROUND), BorderStyle::Solid));
     });
 }
 
@@ -959,7 +986,7 @@ impl Render for Workspace {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(BG))
+            .bg(rgb(theme::BACKGROUND))
             .text_color(rgb(theme::TEXT))
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key_down))
@@ -1066,7 +1093,7 @@ fn main() {
         let titlebar = TitlebarOptions {
             title: Some("ottospace".into()),
             appears_transparent: true,
-            traffic_light_position: Some(point(px(12.), px(11.))),
+            traffic_light_position: Some(point(px(10.), px(7.))),
         };
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -1080,4 +1107,17 @@ fn main() {
             cx.activate(true);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A missing asset draws as nothing, with no error. Catch a renamed file here.
+    #[test]
+    fn every_rail_icon_and_otto_is_embedded() {
+        for path in SECTIONS.iter().map(|(_, icon, _)| *icon).chain(["otto.svg"]) {
+            assert!(Assets.load(path).unwrap().is_some(), "{path} is not in Assets::load");
+        }
+    }
 }
