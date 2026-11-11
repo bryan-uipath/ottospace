@@ -22,7 +22,9 @@ use gpui::{
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::keys::{self, Mods};
-use ottospace_core::{Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Pane, PaneId, Section, theme};
+use ottospace_core::{
+    Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Pane, PaneId, PickItem, Picker, Section, theme,
+};
 use ottospace_mac::{ax, capture, display, input, recovery};
 use screencapturekit::prelude::*;
 
@@ -187,6 +189,8 @@ impl AssetSource for Assets {
             "icons/workbook.svg" => Some(include_bytes!("../assets/icons/workbook.svg")),
             "icons/tasks.svg" => Some(include_bytes!("../assets/icons/tasks.svg")),
             "icons/repos.svg" => Some(include_bytes!("../assets/icons/repos.svg")),
+            "icons/split-right.svg" => Some(include_bytes!("../assets/icons/split-right.svg")),
+            "icons/split-down.svg" => Some(include_bytes!("../assets/icons/split-down.svg")),
             _ => None,
         };
         Ok(bytes.map(Into::into))
@@ -201,6 +205,10 @@ impl AssetSource for Assets {
 /// it keeps clear on the left for the traffic lights.
 const TOP_BAR: f32 = 28.;
 const TRAFFIC_LIGHTS: f32 = 80.;
+
+/// Top-bar split buttons: icon, tooltip, and where the picked pane goes.
+const SPLITS: [(&str, &str, Axis); 2] =
+    [("icons/split-right.svg", "Split right…  ⌘E", Axis::Right), ("icons/split-down.svg", "Split down…", Axis::Down)];
 
 /// Rail sections in order, with their icon and label.
 const SECTIONS: [(Section, &str, &str); 4] = [
@@ -240,7 +248,7 @@ fn otto(size: f32, hint: &'static str) -> impl IntoElement {
         .child(div().text_sm().text_color(rgb(theme::MUTED)).child(hint))
 }
 
-actions!(ottospace, [SplitRight, SplitDown, ClosePane, FocusLeft, FocusRight, FocusUp, FocusDown]);
+actions!(ottospace, [SplitRight, SplitDown, PickPane, ClosePane, FocusLeft, FocusRight, FocusUp, FocusDown]);
 
 struct Workspace {
     model: Model,
@@ -378,6 +386,9 @@ impl Workspace {
                         }
                     }
                 }
+                Effect::HostApp { name, axis } => {
+                    let _ = self.open_app(name, *axis, window, cx);
+                }
                 Effect::Live(id) => {
                     self.live_since = Some(Instant::now());
                     if let Some(hosted) = self.hosted.get_mut(id) {
@@ -423,6 +434,14 @@ impl Workspace {
                 Request::Enter { pane } => Some(Action::Enter { pane }),
                 Request::Leave => Some(Action::Leave),
                 Request::Section { section } => Some(Action::ToggleSection { section }),
+                Request::Picker { axis } => {
+                    self.open_picker(axis, window, cx);
+                    None
+                }
+                Request::PickerQuery { query } => Some(Action::PickerQuery { query }),
+                Request::PickerMove { delta } => Some(Action::PickerMove { delta }),
+                Request::PickerChoose => Some(Action::PickerChoose),
+                Request::PickerClose => Some(Action::ClosePicker),
             };
             if let Some(action) = action {
                 let effects = self.dispatch(action, window, cx);
@@ -598,7 +617,11 @@ impl Workspace {
     }
 
     /// Keys go to the focused terminal. ⌘ shortcuts do not encode, so they fall through to bindings.
-    fn key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.model.picker.is_some() {
+            self.picker_key(event, window, cx);
+            return;
+        }
         let Some(terminal) = self.model.focused.and_then(|id| self.terminals.get(&id)) else { return };
         let key = &event.keystroke;
         let m = key.modifiers;
@@ -607,6 +630,134 @@ impl Workspace {
             terminal.write(bytes);
             cx.stop_propagation();
         }
+    }
+
+    /// Opens the pane picker: a terminal, then each running app.
+    fn open_picker(&mut self, axis: Axis, window: &Window, cx: &mut Context<Self>) {
+        if self.hosting {
+            self.apps = capture::apps();
+        }
+        let apps =
+            self.apps.iter().filter(|name| *name != "ottospace").map(|name| PickItem::App { name: name.clone() });
+        let items = std::iter::once(PickItem::Terminal).chain(apps).collect();
+        self.dispatch(Action::OpenPicker { axis, items }, window, cx);
+    }
+
+    /// While the picker is open it takes every key: text filters, arrows move, enter opens.
+    fn picker_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
+        let Some(picker) = &self.model.picker else { return };
+        let key = &event.keystroke;
+        let m = key.modifiers;
+        let action = match key.key.as_str() {
+            _ if m.platform => return, // ⌘ shortcuts still reach their bindings
+            "escape" => Action::ClosePicker,
+            "enter" => Action::PickerChoose,
+            "down" | "tab" => Action::PickerMove { delta: 1 },
+            "up" => Action::PickerMove { delta: -1 },
+            "n" if m.control => Action::PickerMove { delta: 1 },
+            "p" if m.control => Action::PickerMove { delta: -1 },
+            "backspace" => {
+                let mut query = picker.query.clone();
+                query.pop();
+                Action::PickerQuery { query }
+            }
+            _ => match key.key_char.as_deref().filter(|_| !m.control) {
+                Some(text) if !text.chars().any(char::is_control) => {
+                    Action::PickerQuery { query: format!("{}{text}", picker.query) }
+                }
+                _ => return,
+            },
+        };
+        self.dispatch(action, window, cx);
+        cx.stop_propagation();
+    }
+
+    /// The picker dropdown, under the split buttons. A click outside it closes it.
+    fn render_picker(&self, picker: &Picker, cx: &mut Context<Self>) -> impl IntoElement {
+        let selected = picker.selected;
+        let rows = picker.matches().into_iter().enumerate().map(|(i, item)| {
+            let (tag, color) = match item {
+                PickItem::Terminal => ("TERM", theme::PRIMARY),
+                PickItem::App { .. } => ("APP", theme::APP),
+            };
+            div()
+                .id(("pick", i))
+                .h(px(30.))
+                .px_3()
+                .flex()
+                .items_center()
+                .gap_3()
+                .text_sm()
+                .cursor_pointer()
+                .when(i == selected, |d| d.bg(rgb(theme::SELECTED)))
+                .hover(|s| s.bg(rgb(theme::SELECTED)))
+                .child(div().w(px(36.)).text_xs().text_color(rgb(color)).child(tag))
+                .child(item.label().to_string())
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.dispatch(Action::PickerMove { delta: i as i32 - selected as i32 }, window, cx);
+                    this.dispatch(Action::PickerChoose, window, cx);
+                }))
+        });
+        let rows: Vec<_> = rows.collect();
+        let title = match picker.axis {
+            Axis::Right => "Split right with",
+            Axis::Down => "Split down with",
+        };
+        let query = if picker.query.is_empty() { "type to filter".to_string() } else { picker.query.clone() };
+        let panel = div()
+            .absolute()
+            .top(px(TOP_BAR + 6.))
+            .right(px(8.))
+            .w(px(320.))
+            .max_h(px(420.))
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .rounded_lg()
+            .bg(rgb(theme::RAISED))
+            .border_1()
+            .border_color(rgb(theme::BORDER_STRONG))
+            .shadow(vec![BoxShadow {
+                color: black().opacity(0.7),
+                offset: point(px(0.), px(12.)),
+                blur_radius: px(32.),
+                spread_radius: px(0.),
+            }])
+            // A click inside the panel must not reach the backdrop, which closes the picker.
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .h(px(34.))
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .border_b_1()
+                    .border_color(rgb(theme::BORDER))
+                    .text_xs()
+                    .child(div().text_color(rgb(theme::PICK)).child(title))
+                    .child(
+                        div()
+                            .text_color(rgb(if picker.query.is_empty() { theme::MUTED } else { theme::TEXT }))
+                            .child(query),
+                    ),
+            )
+            .when(rows.is_empty(), |d| d.child(div().p_3().text_xs().text_color(rgb(theme::MUTED)).child("No match")))
+            .children(rows);
+        div()
+            .id("picker-backdrop")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .occlude()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.dispatch(Action::ClosePicker, window, cx);
+                }),
+            )
+            .child(panel)
     }
 
     /// A click on a pane body. An app pane goes live, then the click is replayed so it lands in
@@ -837,7 +988,7 @@ impl Workspace {
                 Kind::Terminal => {
                     div().text_sm().text_color(rgb(theme::ERROR)).child("the shell did not start").into_any_element()
                 }
-                _ => otto(110., "Pick an app, or ⌘D for a terminal").into_any_element(),
+                _ => otto(110., "⌘E to pick what goes here").into_any_element(),
             }
         };
         let radius = self.hosted.get(&id).map_or(0.0, |h| h.radius);
@@ -918,13 +1069,33 @@ impl Workspace {
                 }),
             )
             .child("ottospace")
+            // Split buttons: each opens the picker for that direction.
+            .child(div().ml_auto().mr_2().flex().gap_1().children(SPLITS.iter().enumerate().map(
+                |(i, (icon, tip, axis))| {
+                    let (tip, axis) = (*tip, *axis);
+                    div()
+                        .id(("split", i))
+                        .w(px(28.))
+                        .h(px(22.))
+                        .rounded_md()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(rgb(theme::SELECTED)))
+                        .child(svg().path(*icon).size(px(16.)).text_color(rgb(theme::MUTED)))
+                        .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
+                        .on_click(cx.listener(move |this, _, window, cx| this.open_picker(axis, window, cx)))
+                },
+            )))
     }
 
     /// Bottom bar: who has the keyboard, and the focused pane.
     fn render_status(&self) -> impl IntoElement {
         let color = theme::accent(self.model.mode());
         let (mode, hint) = match self.model.mode() {
-            Mode::Normal => ("NORMAL", "⌘D split right · ⌘⇧D split down · ⌘W close · ⌘⌥arrows focus"),
+            Mode::Normal => ("NORMAL", "⌘D terminal right · ⌘⇧D down · ⌘E pick · ⌘W close · ⌘⌥arrows focus"),
+            Mode::Pick => ("PICK", "type to filter · ↑↓ move · ↵ open · esc close"),
             Mode::App => ("APP", "keys go to the app · click ottospace to return"),
         };
         let focused = match self.model.focused.and_then(|id| self.model.pane(id)).map(|p| &p.kind) {
@@ -996,6 +1167,13 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &SplitDown, window, cx| {
                 this.dispatch(Action::Split { axis: Axis::Down, kind: Kind::Terminal }, window, cx);
             }))
+            .on_action(cx.listener(|this, _: &PickPane, window, cx| {
+                if this.model.picker.is_some() {
+                    this.dispatch(Action::ClosePicker, window, cx);
+                } else {
+                    this.open_picker(Axis::Right, window, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &ClosePane, window, cx| {
                 this.dispatch(Action::Close { pane: None }, window, cx);
             }))
@@ -1035,12 +1213,13 @@ impl Render for Workspace {
                             .when(tree.is_none(), |d| {
                                 d.items_center()
                                     .justify_center()
-                                    .child(otto(220., "⌘D for a terminal, or pick an app from the rail"))
+                                    .child(otto(220., "⌘E to open a pane · ⌘D for a terminal"))
                             })
                             .children(tree),
                     ),
             )
             .child(self.render_status())
+            .children(self.model.picker.as_ref().map(|picker| self.render_picker(picker, cx)))
     }
 }
 
@@ -1082,6 +1261,7 @@ fn main() {
         cx.bind_keys([
             KeyBinding::new("cmd-d", SplitRight, None),
             KeyBinding::new("cmd-shift-d", SplitDown, None),
+            KeyBinding::new("cmd-e", PickPane, None),
             KeyBinding::new("cmd-w", ClosePane, None),
             KeyBinding::new("cmd-alt-left", FocusLeft, None),
             KeyBinding::new("cmd-alt-right", FocusRight, None),
@@ -1116,7 +1296,8 @@ mod tests {
     /// A missing asset draws as nothing, with no error. Catch a renamed file here.
     #[test]
     fn every_rail_icon_and_otto_is_embedded() {
-        for path in SECTIONS.iter().map(|(_, icon, _)| *icon).chain(["otto.svg"]) {
+        let icons = SECTIONS.iter().map(|(_, icon, _)| *icon).chain(SPLITS.iter().map(|(icon, ..)| *icon));
+        for path in icons.chain(["otto.svg"]) {
             assert!(Assets.load(path).unwrap().is_some(), "{path} is not in Assets::load");
         }
     }

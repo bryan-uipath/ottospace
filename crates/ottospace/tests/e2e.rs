@@ -175,6 +175,31 @@ fn secondary_bar_opens_and_closes_beside_the_panes() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn picker_opens_a_terminal_in_the_chosen_direction() {
+    let otto = Otto::launch("picker");
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+
+    let reply = otto.call(json!({"cmd": "picker", "axis": "down"}));
+    assert_eq!(reply["mode"], "pick");
+    assert_eq!(reply["state"]["picker"]["items"][0]["type"], "terminal");
+
+    // A query with no match keeps the picker open; a matching one opens the pane and closes it.
+    otto.call(json!({"cmd": "picker_query", "query": "zzz"}));
+    assert_eq!(otto.call(json!({"cmd": "picker_choose"}))["mode"], "pick");
+    otto.call(json!({"cmd": "picker_query", "query": "term"}));
+    let reply = otto.call(json!({"cmd": "picker_choose"}));
+    assert_eq!((reply["mode"].as_str(), reply["state"]["picker"].is_null()), (Some("normal"), true));
+    assert_eq!(reply["state"]["panes"][1]["kind"]["type"], "terminal");
+
+    let [first, second] = otto.bounds(&[1, 2])[..] else { panic!("two panes") };
+    assert!(first[1] + first[3] <= second[1], "the picked pane is below: {first:?} {second:?}");
+
+    otto.call(json!({"cmd": "picker"}));
+    assert_eq!(otto.call(json!({"cmd": "picker_close"}))["mode"], "normal");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn bad_requests_are_refused_and_quit_exits() {
     let mut otto = Otto::launch("errors");
     for bad in ["not json", r#"{"cmd":"nope"}"#, r#"{"cmd":"focus"}"#, r#"{"cmd":"split","extra":1}"#] {

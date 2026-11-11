@@ -32,6 +32,57 @@ pub enum Mode {
     Normal,
     /// The live pane's app: ottospace shortcuts do not fire.
     App,
+    /// The pane picker: keys filter and choose.
+    Pick,
+}
+
+/// Something the picker can put in a new pane.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PickItem {
+    Terminal,
+    /// A running app, by name. The shell hosts its main window.
+    App {
+        name: String,
+    },
+}
+
+impl PickItem {
+    pub fn label(&self) -> &str {
+        match self {
+            PickItem::Terminal => "Terminal",
+            PickItem::App { name } => name,
+        }
+    }
+}
+
+/// The open picker: what a new pane can show, narrowed by what the user typed.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Picker {
+    /// Where the new pane goes relative to the focused one.
+    pub axis: Axis,
+    pub items: Vec<PickItem>,
+    pub query: String,
+    /// Index into `matches()`.
+    pub selected: usize,
+}
+
+impl Picker {
+    /// Items whose label contains the query, ignoring case. Labels that start with it come first.
+    pub fn matches(&self) -> Vec<&PickItem> {
+        let query = self.query.to_lowercase();
+        let (mut starts, mut contains) = (Vec::new(), Vec::new());
+        for item in &self.items {
+            let label = item.label().to_lowercase();
+            if label.starts_with(&query) {
+                starts.push(item);
+            } else if label.contains(&query) {
+                contains.push(item);
+            }
+        }
+        starts.extend(contains);
+        starts
+    }
 }
 
 /// A category on the left rail. Its list shows in the secondary bar.
@@ -84,6 +135,22 @@ pub enum Action {
         section: Section,
     },
     CloseSidebar,
+    /// Open the pane picker. `items` is what the shell can offer right now.
+    OpenPicker {
+        axis: Axis,
+        items: Vec<PickItem>,
+    },
+    /// Replace the picker's filter text.
+    PickerQuery {
+        query: String,
+    },
+    /// Move the picker's selection down (positive) or up; it wraps.
+    PickerMove {
+        delta: i32,
+    },
+    /// Open the selected item in a new pane and close the picker.
+    PickerChoose,
+    ClosePicker,
 }
 
 /// What the shell must do after an update.
@@ -95,6 +162,11 @@ pub enum Effect {
     Live(PaneId),
     /// The app pane's real window goes back off screen.
     Parked(PaneId),
+    /// The user picked a running app: host its main window in a new pane.
+    HostApp {
+        name: String,
+        axis: Axis,
+    },
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -108,6 +180,8 @@ pub struct Model {
     pub live: Option<PaneId>,
     /// Rail section shown in the secondary bar. `None`: the bar is closed.
     pub sidebar: Option<Section>,
+    /// The pane picker, while it is open.
+    pub picker: Option<Picker>,
     #[serde(skip)]
     next_id: PaneId,
 }
@@ -118,7 +192,13 @@ impl Model {
     }
 
     pub fn mode(&self) -> Mode {
-        if self.live.is_some() { Mode::App } else { Mode::Normal }
+        if self.picker.is_some() {
+            Mode::Pick
+        } else if self.live.is_some() {
+            Mode::App
+        } else {
+            Mode::Normal
+        }
     }
 
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
@@ -185,6 +265,37 @@ impl Model {
                 self.leave(&mut effects);
                 self.sidebar = (self.sidebar != Some(section)).then_some(section);
             }
+            Action::OpenPicker { axis, items } => {
+                self.leave(&mut effects);
+                self.picker = Some(Picker { axis, items, query: String::new(), selected: 0 });
+            }
+            Action::PickerQuery { query } => {
+                if let Some(picker) = &mut self.picker {
+                    picker.query = query;
+                    picker.selected = 0;
+                }
+            }
+            Action::PickerMove { delta } => {
+                if let Some(picker) = &mut self.picker {
+                    let count = picker.matches().len() as i32;
+                    if count > 0 {
+                        picker.selected = (picker.selected as i32 + delta).rem_euclid(count) as usize;
+                    }
+                }
+            }
+            Action::PickerChoose => {
+                let Some(picker) = self.picker.take() else { return effects };
+                match picker.matches().get(picker.selected).copied().cloned() {
+                    Some(PickItem::Terminal) => {
+                        let id = self.add(Kind::Terminal, self.focused, picker.axis);
+                        effects.push(Effect::Opened(id));
+                    }
+                    Some(PickItem::App { name }) => effects.push(Effect::HostApp { name, axis: picker.axis }),
+                    // Nothing matches: keep the picker open so the user can fix the query.
+                    None => self.picker = Some(picker),
+                }
+            }
+            Action::ClosePicker => self.picker = None,
             Action::CloseSidebar => {
                 self.leave(&mut effects);
                 self.sidebar = None;
@@ -373,6 +484,87 @@ mod tests {
         m.update(Action::Open { kind: app(1), axis: Right, beside: None });
         m.update(Action::Enter { pane: 1 });
         assert_eq!(m.update(Action::CloseSidebar), [Effect::Parked(1)]);
+    }
+
+    fn picker(m: &mut Model) {
+        let items = vec![
+            PickItem::Terminal,
+            PickItem::App { name: "Slack".into() },
+            PickItem::App { name: "Google Chrome".into() },
+            PickItem::App { name: "Google Slides".into() },
+        ];
+        m.update(Action::OpenPicker { axis: Down, items });
+    }
+
+    fn labels(m: &Model) -> Vec<&str> {
+        m.picker.as_ref().unwrap().matches().iter().map(|i| i.label()).collect()
+    }
+
+    #[test]
+    fn picker_filters_by_what_is_typed_with_prefix_matches_first() {
+        let mut m = Model::default();
+        picker(&mut m);
+        assert_eq!(m.mode(), Mode::Pick);
+        assert_eq!(labels(&m), ["Terminal", "Slack", "Google Chrome", "Google Slides"]);
+        m.update(Action::PickerQuery { query: "sl".into() });
+        assert_eq!(labels(&m), ["Slack", "Google Slides"]);
+        m.update(Action::PickerQuery { query: "zzz".into() });
+        assert_eq!(labels(&m), [] as [&str; 0]);
+    }
+
+    #[test]
+    fn picker_selection_wraps_and_resets_when_the_query_changes() {
+        let mut m = Model::default();
+        picker(&mut m);
+        m.update(Action::PickerMove { delta: -1 });
+        assert_eq!(m.picker.as_ref().unwrap().selected, 3);
+        m.update(Action::PickerMove { delta: 1 });
+        assert_eq!(m.picker.as_ref().unwrap().selected, 0);
+        m.update(Action::PickerMove { delta: 2 });
+        m.update(Action::PickerQuery { query: "g".into() });
+        assert_eq!(m.picker.as_ref().unwrap().selected, 0);
+    }
+
+    #[test]
+    fn choosing_terminal_splits_along_the_pickers_axis() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Empty });
+        picker(&mut m);
+        assert_eq!(m.update(Action::PickerChoose), [Effect::Opened(2)]);
+        assert_eq!(m.pane(2).unwrap().kind, Kind::Terminal);
+        assert_eq!(m.layout.as_ref().unwrap().neighbor(1, Dir::Down), Some(2));
+        assert_eq!((m.picker.is_none(), m.mode()), (true, Mode::Normal));
+    }
+
+    #[test]
+    fn choosing_an_app_asks_the_shell_to_host_it() {
+        let mut m = Model::default();
+        picker(&mut m);
+        m.update(Action::PickerQuery { query: "chrome".into() });
+        let effects = m.update(Action::PickerChoose);
+        assert_eq!(effects, [Effect::HostApp { name: "Google Chrome".into(), axis: Down }]);
+        assert!(m.picker.is_none());
+    }
+
+    #[test]
+    fn choosing_with_no_match_keeps_the_picker_open() {
+        let mut m = Model::default();
+        picker(&mut m);
+        m.update(Action::PickerQuery { query: "zzz".into() });
+        assert_eq!(m.update(Action::PickerChoose), []);
+        assert!(m.picker.is_some());
+        m.update(Action::ClosePicker);
+        assert!(m.picker.is_none());
+    }
+
+    #[test]
+    fn opening_the_picker_takes_the_keyboard_back() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        m.update(Action::Enter { pane: 1 });
+        let effects = m.update(Action::OpenPicker { axis: Right, items: vec![PickItem::Terminal] });
+        assert_eq!(effects, [Effect::Parked(1)]);
+        assert_eq!(m.mode(), Mode::Pick);
     }
 
     #[test]
