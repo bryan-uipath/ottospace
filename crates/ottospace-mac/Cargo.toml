@@ -9,4 +9,4 @@ objc2-core-foundation = { version = "0.3", features = ["CFString", "CFDictionary
 objc2-application-services = { version = "0.3", features = ["HIServices", "AXUIElement", "AXError", "AXValue", "AXValueConstants"] }
 # macos_14_0: one-off screenshots (corner radius measurement).
 screencapturekit = { version = "11", features = ["macos_14_0"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "libc", "NSRunningApplication"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "libc", "NSRunningApplication", "NSResponder", "NSView", "NSWindow"] }

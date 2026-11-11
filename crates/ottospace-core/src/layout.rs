@@ -70,6 +70,14 @@ impl Node {
         }
     }
 
+    /// Leaves in reading order: left to right, top to bottom within each split.
+    pub fn leaves(&self) -> Vec<u32> {
+        match self {
+            Node::Leaf(id) => vec![*id],
+            Node::Split { a, b, .. } => [a.leaves(), b.leaves()].concat(),
+        }
+    }
+
     /// Each leaf's rect when the tree fills `area`. Splits are equal halves.
     pub fn rects(&self, area: Rect) -> Vec<(u32, Rect)> {
         match self {
