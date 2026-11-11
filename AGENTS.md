@@ -27,6 +27,8 @@ Rules:
   bounds, key bindings, socket protocol.
 - E2E runs set `OTTOSPACE_E2E`, which turns window hosting off. Tests must never move the
   user's real windows.
+- An e2e window must be at least partly visible: GPUI does not draw a fully covered window, and
+  then the test times out waiting for layout. The timeout prints the last state.
 - A feature is done when both loops cover it. Extend `Request` and the state snapshot when a test
   needs to drive or read something new.
 

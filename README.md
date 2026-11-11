@@ -30,7 +30,7 @@ Agents and tests can drive it over a local control socket. Rust + [GPUI](https:/
 
 Early prototype, macOS only. Today you can split a window into panes, run your shell in a pane,
 host another app's window in a pane, move focus by keyboard, and drive all of it over the control
-socket. Tabs, tasks, session restore and the rest of the design are not built: see the
+socket. Tasks, session restore and the rest of the design are not built: see the
 [plan](docs/ai/1-initial-brainstorm/plan.md).
 
 ## Quick start

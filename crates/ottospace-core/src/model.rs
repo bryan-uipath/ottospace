@@ -194,9 +194,11 @@ pub enum Effect {
     /// The app pane's real window goes back off screen.
     Parked(PaneId),
     /// The user picked a running app: host its main window in a new pane.
+    /// With `new_tab`, in a new tab (send `NewTab` first, once hosting has succeeded).
     HostApp {
         name: String,
         axis: Axis,
+        new_tab: bool,
     },
 }
 
@@ -374,6 +376,8 @@ impl Model {
             Action::Enter { pane } => {
                 let is_app = self.pane(pane).is_some_and(|p| matches!(p.kind, Kind::App { .. }));
                 if is_app && self.live != Some(pane) {
+                    // A live window over a tab that does not show its pane would cover other panes.
+                    self.show_tab_of(pane, &mut effects);
                     self.leave(&mut effects);
                     self.live = Some(pane);
                     self.focused = Some(pane);
@@ -420,14 +424,20 @@ impl Model {
             Action::PickerChoose { index } => {
                 let Some(picker) = self.picker.take() else { return effects };
                 let choice = picker.matches().get(index.unwrap_or(picker.selected)).copied().cloned();
-                if choice.is_some() && picker.new_tab {
-                    self.park_active();
-                    self.push_tab();
-                }
                 match choice {
                     // Same rule as an app: fill the focused pane if it is empty, else split it.
-                    Some(PickItem::Terminal) => self.open(Kind::Terminal, picker.axis, None, &mut effects),
-                    Some(PickItem::App { name }) => effects.push(Effect::HostApp { name, axis: picker.axis }),
+                    Some(PickItem::Terminal) => {
+                        if picker.new_tab {
+                            self.park_active();
+                            self.push_tab();
+                        }
+                        self.open(Kind::Terminal, picker.axis, None, &mut effects)
+                    }
+                    // The shell makes the tab only once the window is in hand, so a failed
+                    // host does not leave an empty tab.
+                    Some(PickItem::App { name }) => {
+                        effects.push(Effect::HostApp { name, axis: picker.axis, new_tab: picker.new_tab })
+                    }
                     // Nothing matches: keep the picker open so the user can fix the query.
                     None => self.picker = Some(picker),
                 }
@@ -480,6 +490,24 @@ impl Model {
         }
     }
 
+    /// Brings forward the tab that holds `id`, if it is a background tab.
+    fn show_tab_of(&mut self, id: PaneId, effects: &mut Vec<Effect>) {
+        let holds = |tab: &Tab| tab.layout.as_ref().is_some_and(|l| l.leaves().contains(&id));
+        if let Some(index) = self.tabs.iter().position(holds) {
+            self.select_tab(index, effects);
+        }
+    }
+
+    /// Pane ids of each tab, in tab order. The state dump uses it to show which tab holds a pane.
+    pub fn tab_panes(&self) -> Vec<Vec<PaneId>> {
+        let leaves = |layout: &Option<Node>| layout.as_ref().map(Node::leaves).unwrap_or_default();
+        self.tabs
+            .iter()
+            .enumerate()
+            .map(|(i, tab)| if i == self.active { leaves(&self.layout) } else { leaves(&tab.layout) })
+            .collect()
+    }
+
     fn select_tab(&mut self, index: usize, effects: &mut Vec<Effect>) {
         if index >= self.tabs.len() || index == self.active {
             return;
@@ -529,11 +557,7 @@ impl Model {
         if self.pane(id).is_none() {
             return;
         }
-        // A pane in a background tab: bring its tab forward first.
-        let holds = |tab: &Tab| tab.layout.as_ref().is_some_and(|l| l.leaves().contains(&id));
-        if let Some(index) = self.tabs.iter().position(holds) {
-            self.select_tab(index, effects);
-        }
+        self.show_tab_of(id, effects);
         if self.live != Some(id) {
             self.leave(effects);
         }
@@ -785,7 +809,7 @@ mod tests {
         assert_eq!(labels(&m), ["Google Chrome", "Google Slides"]);
         // The selection is on row 0; the click is on row 1.
         let effects = m.update(Action::PickerChoose { index: Some(1) });
-        assert_eq!(effects, [Effect::HostApp { name: "Google Slides".into(), axis: Down }]);
+        assert_eq!(effects, [Effect::HostApp { name: "Google Slides".into(), axis: Down, new_tab: false }]);
     }
 
     #[test]
@@ -805,7 +829,7 @@ mod tests {
         picker(&mut m);
         m.update(Action::PickerQuery { query: "chrome".into() });
         let effects = m.update(Action::PickerChoose { index: None });
-        assert_eq!(effects, [Effect::HostApp { name: "Google Chrome".into(), axis: Down }]);
+        assert_eq!(effects, [Effect::HostApp { name: "Google Chrome".into(), axis: Down, new_tab: false }]);
         assert!(m.picker.is_none());
     }
 
@@ -946,6 +970,29 @@ mod tests {
         m.update(Action::OpenPicker { axis: Right, new_tab: true, items: vec![PickItem::Terminal] });
         assert_eq!(m.update(Action::PickerChoose { index: None }), [Effect::Opened(2)]);
         assert_eq!((m.tabs.len(), m.active, m.layout.as_ref().unwrap().leaves()), (2, 1, vec![2]));
+    }
+
+    #[test]
+    fn entering_a_background_app_pane_shows_its_tab() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        m.update(Action::NewTab);
+        term(&mut m);
+        assert_eq!(m.update(Action::Enter { pane: 1 }), [Effect::Live(1)]);
+        assert_eq!((m.active, m.focused, m.live), (0, Some(1), Some(1)));
+        assert_eq!(m.tab_panes(), [vec![1], vec![2]]);
+    }
+
+    #[test]
+    fn picking_an_app_for_a_new_tab_leaves_the_tab_to_the_shell() {
+        let mut m = Model::default();
+        term(&mut m);
+        let items = vec![PickItem::App { name: "Slack".into() }];
+        m.update(Action::OpenPicker { axis: Right, new_tab: true, items });
+        let effects = m.update(Action::PickerChoose { index: None });
+        assert_eq!(effects, [Effect::HostApp { name: "Slack".into(), axis: Right, new_tab: true }]);
+        // No tab yet: if hosting fails, nothing is left behind.
+        assert_eq!(m.tabs.len(), 1);
     }
 
     #[test]

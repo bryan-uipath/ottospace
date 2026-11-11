@@ -226,6 +226,7 @@ fn tabs_keep_their_own_panes() {
     let reply = otto.call(json!({"cmd": "new_tab"}));
     assert_eq!((reply["state"]["tabs"].as_array().unwrap().len(), reply["state"]["active"].as_u64()), (2, Some(1)));
     assert!(reply["bounds"].get("1").is_none(), "a background pane reports no bounds: {reply}");
+    assert_eq!(reply["tab_panes"], json!([[1], []]), "the dump says which tab holds each pane");
     otto.call(json!({"cmd": "split", "kind": "empty"})); // pane 2 in tab 2
     let second = otto.bounds(&[2])[0];
     assert!((first[2] - second[2]).abs() < 2.0, "a lone pane fills the canvas in either tab");

@@ -393,8 +393,8 @@ impl Workspace {
                         }
                     }
                 }
-                Effect::HostApp { name, axis } => {
-                    let _ = self.open_app(name, *axis, window, cx);
+                Effect::HostApp { name, axis, new_tab } => {
+                    let _ = self.open_app(name, *axis, *new_tab, window, cx);
                 }
                 Effect::Live(id) => {
                     self.live_since = Some(Instant::now());
@@ -418,7 +418,7 @@ impl Workspace {
             let action = match request {
                 Request::State | Request::Quit => None,
                 Request::OpenApp { name, axis } => {
-                    failure = self.open_app(&name, axis, window, cx).err();
+                    failure = self.open_app(&name, axis, false, window, cx).err();
                     None
                 }
                 Request::Split { axis, kind } => {
@@ -509,6 +509,7 @@ impl Workspace {
             "mode": self.model.mode(),
             "state": self.model,
             "bounds": bounds,
+            "tab_panes": self.model.tab_panes(),
             "terminals": terminals,
         })
         .to_string()
@@ -523,28 +524,55 @@ impl Workspace {
         }
         let effects = self.dispatch(action, window, cx);
         if let Some(Effect::Opened(id)) = effects.last() {
+            // A pane in a background tab is not drawn, so the layout sync never parks its
+            // window. Move it off screen now; it is sized when its tab is first shown.
+            let drawn = self.model.layout.as_ref().is_some_and(|l| l.leaves().contains(id));
+            if !drawn {
+                let _ = hosted.window.set_position(display::parking_spot());
+            }
             self.cells.insert(*id, hosted.bounds.clone());
             self.hosted.insert(*id, hosted);
         }
     }
 
     /// Hosts the app's main window in a pane. The error also shows in the Apps list.
-    fn open_app(&mut self, name: &str, axis: Axis, window: &Window, cx: &mut Context<Self>) -> Result<(), String> {
-        let result = self.try_open_app(name, axis, window, cx);
+    fn open_app(
+        &mut self,
+        name: &str,
+        axis: Axis,
+        new_tab: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let result = self.try_open_app(name, axis, new_tab, window, cx);
         self.error = result.clone().err();
         cx.notify();
         result
     }
 
-    fn try_open_app(&mut self, name: &str, axis: Axis, window: &Window, cx: &mut Context<Self>) -> Result<(), String> {
+    fn try_open_app(
+        &mut self,
+        name: &str,
+        axis: Axis,
+        new_tab: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
         if !self.hosting {
             return Err("window hosting is off in e2e runs".into());
         }
         let target = capture::find(name)?;
-        if self.hosted.values().any(|h| h.window_id == target.id) {
-            return Ok(()); // already hosted
+        // Already in a pane: go to it (and its tab) instead of doing nothing.
+        if let Some((pane, _)) = self.hosted.iter().find(|(_, h)| h.window_id == target.id) {
+            let pane = *pane;
+            self.dispatch(Action::Focus { pane }, window, cx);
+            return Ok(());
         }
         let hosted = Hosted::new(target)?;
+        // The window is in hand, so the tab will not be left empty.
+        if new_tab {
+            self.dispatch(Action::NewTab, window, cx);
+        }
         let action = Action::Open { kind: hosted.kind(), axis, beside: None };
         self.attach(hosted, action, window, cx);
         Ok(())
@@ -943,7 +971,7 @@ impl Workspace {
                     // Fills the focused pane if it is empty. Else splits it: right, or down with shift.
                     .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                         let axis = if e.modifiers().shift { Axis::Down } else { Axis::Right };
-                        let _ = this.open_app(&target, axis, window, cx);
+                        let _ = this.open_app(&target, axis, false, window, cx);
                     }))
             }))
     }
@@ -1067,7 +1095,8 @@ impl Workspace {
         }
     }
 
-    /// Top bar, drawn where the system title bar was. Tabs will go here.
+    /// Top bar, drawn where the system title bar was: tabs on the left, new-tab and split
+    /// buttons on the right.
     fn render_top(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .h(px(TOP_BAR))
