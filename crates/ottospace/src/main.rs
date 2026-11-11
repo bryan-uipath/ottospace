@@ -1,25 +1,34 @@
-//! Step 2: a sidebar of running apps and a row of panes, each hosting one window. Unfocused, a
-//! pane shows its parked window's SCK stream. Clicking a pane moves its real window over it
-//! ("live") and replays the click; clicking ottospace itself parks it again.
-//! New windows of a hosted app (e.g. undocked DevTools) open in their own pane.
+//! Imperative shell: draws the workspace, hosts other apps' windows in panes, and turns input
+//! (mouse, keys, control socket) into `ottospace_core` actions. State rules live in the core.
+//!
+//! An app pane shows its parked window's SCK stream. Clicking it moves the real window over the
+//! pane ("live") and replays the click; clicking ottospace itself parks it again.
 
 use std::cell::Cell;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
+use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use core_foundation::base::TCFType;
 use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 use gpui::{
-    App, Application, BorderStyle, Bounds, ContentMask, Context, MouseButton, MouseDownEvent, Pixels, Subscription,
-    Window, WindowBounds, WindowOptions, canvas, div, point, prelude::*, px, quad, rgb, size, surface,
-    transparent_black,
+    AnyElement, App, Application, BorderStyle, Bounds, ClickEvent, ContentMask, Context, FocusHandle, KeyBinding,
+    KeyDownEvent, MouseButton, MouseDownEvent, Pixels, Size, Subscription, Window, WindowBounds, WindowOptions,
+    actions, canvas, div, point, prelude::*, px, quad, rgb, size, surface, transparent_black,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+use ottospace_core::keys::{self, Mods};
+use ottospace_core::{Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Pane, PaneId};
 use ottospace_mac::{ax, capture, display, input, recovery};
 use screencapturekit::prelude::*;
+
+mod control;
+mod terminal;
+use control::{Call, PaneKind, Request};
+use terminal::Terminal;
 
 /// Workspace background; also fills hosted windows' rounded corners.
 const BG: u32 = 0x1e1e2e;
@@ -79,9 +88,9 @@ fn to_cg(size: gpui::Size<Pixels>) -> CGSize {
     CGSize::new(f32::from(size.width) as f64, f32::from(size.height) as f64)
 }
 
-/// One hosted window: its stream, input target and parking state.
-struct Pane {
-    id: u32,
+/// Shell half of an app pane: the window, its stream and parking state.
+struct Hosted {
+    window_id: u32,
     title: String,
     window: ax::Window,
     original: CGRect,
@@ -98,7 +107,7 @@ struct Pane {
     placed: CGRect,
 }
 
-impl Pane {
+impl Hosted {
     fn new(target: capture::Target) -> Result<Self, String> {
         let capture::Target { window, sc_window, id } = target;
         let original = window.frame().ok_or("could not read window frame")?;
@@ -116,7 +125,7 @@ impl Pane {
         let pid = window.pid();
         recovery::remember(pid, id, original);
         Ok(Self {
-            id,
+            window_id: id,
             title,
             window,
             original,
@@ -135,7 +144,7 @@ impl Pane {
         let _ = self.stream.stop_capture();
         let _ = self.window.set_size(self.original.size);
         let _ = self.window.set_position(self.original.origin);
-        recovery::forget(self.id);
+        recovery::forget(self.window_id);
     }
 
     /// Sizes the window to the pane (so the stream matches) and parks it on the off-screen sliver.
@@ -165,28 +174,41 @@ impl Pane {
     }
 }
 
+actions!(ottospace, [SplitRight, SplitDown, ClosePane, FocusLeft, FocusRight, FocusUp, FocusDown]);
+
 struct Workspace {
+    model: Model,
+    /// Shell half of each app pane.
+    hosted: HashMap<PaneId, Hosted>,
+    /// Shell half of each terminal pane.
+    terminals: HashMap<PaneId, Terminal>,
+    /// One terminal character cell.
+    cell: Size<Pixels>,
+    /// Each pane's body bounds in window coordinates, recorded during prepaint.
+    cells: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
     apps: Vec<String>,
-    panes: Vec<Pane>,
     /// Window ids seen per hosted pid; anything new that appears later gets its own pane.
     known: Vec<(i32, HashSet<u32>)>,
-    /// Pane (by window id) whose real window sits over it, and when it went live.
-    live: Option<(u32, Instant)>,
+    /// When the live pane went live.
+    live_since: Option<Instant>,
     error: Option<String>,
+    /// False in e2e runs, which must never move the user's real windows.
+    hosting: bool,
+    control: Option<Receiver<Call>>,
+    focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
 impl Workspace {
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(hosting: bool, control: Option<Receiver<Call>>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let subscriptions = vec![
             // Clicking ottospace itself (title bar, empty space) raises it over the live window,
             // so hand that pane back to its stream. Ignore the activation that the swap click
             // itself delivers late (the race that used to bounce windows straight back).
             cx.observe_window_activation(window, |this, window, cx| {
-                let settled = this.live.is_some_and(|(_, at)| at.elapsed() > Duration::from_millis(400));
+                let settled = this.live_since.is_some_and(|at| at.elapsed() > Duration::from_millis(400));
                 if window.is_window_active() && settled {
-                    this.park_live(window);
-                    cx.notify();
+                    this.dispatch(Action::Leave, window, cx);
                 }
             }),
             // Native fullscreen puts ottospace in its own Space, where other apps' windows can't
@@ -202,23 +224,28 @@ impl Workspace {
                 }
             }),
             cx.on_app_quit(|this, _| {
-                this.panes.drain(..).for_each(Pane::release);
+                this.hosted.drain().for_each(|(_, hosted)| hosted.release());
+                if this.control.is_some() {
+                    let _ = std::fs::remove_file(control::path());
+                }
                 async {}
             }),
         ];
 
-        // ~60Hz tick: redraw on new frames and keep windows matched to pane layout.
-        // Every ~500ms, also look for new windows of hosted apps.
+        // ~60Hz tick: answer control calls, redraw on new frames, keep windows matched to panes.
+        // Every ~500ms, also look for new and closed windows of hosted apps.
         cx.spawn_in(window, async move |this, cx| {
             for tick in 0u64.. {
                 cx.background_executor().timer(Duration::from_millis(16)).await;
                 let alive = this.update_in(cx, |this, window, cx| {
+                    this.serve_control(window, cx);
                     if tick % 30 == 0 {
-                        this.adopt_new_windows();
-                        this.drop_closed(cx);
+                        this.adopt_new_windows(window, cx);
+                        this.drop_closed(window, cx);
                     }
                     this.sync_layout(window, cx, tick % 30 == 15);
-                    if this.panes.iter().any(|p| p.latest.dirty.swap(false, Relaxed)) {
+                    this.sync_terminals(window, cx);
+                    if this.hosted.values().any(|h| h.latest.dirty.swap(false, Relaxed)) {
                         cx.notify();
                     }
                 });
@@ -229,78 +256,195 @@ impl Workspace {
         })
         .detach();
 
+        let focus = cx.focus_handle();
+        window.focus(&focus);
         Self {
-            apps: capture::apps(),
-            panes: Vec::new(),
+            model: Model::default(),
+            hosted: HashMap::new(),
+            terminals: HashMap::new(),
+            cell: terminal::cell_size(window),
+            cells: HashMap::new(),
+            apps: if hosting { capture::apps() } else { Vec::new() },
             known: Vec::new(),
-            live: None,
+            live_since: None,
             error: None,
+            hosting,
+            control,
+            focus,
             _subscriptions: subscriptions,
         }
     }
 
-    fn pane(&self, id: u32) -> Option<&Pane> {
-        self.panes.iter().find(|p| p.id == id)
-    }
-
-    fn add(&mut self, target: Result<capture::Target, String>, cx: &mut Context<Self>) {
-        match target.and_then(Pane::new) {
-            Ok(pane) => {
-                let pid = pane.pid;
-                if !self.known.iter().any(|(p, _)| *p == pid) {
-                    let ids = ax::Window::standard_of(pid).iter().filter_map(ax::Window::id).collect();
-                    self.known.push((pid, ids));
+    /// The one path that changes state: updates the model, then carries out its effects.
+    fn dispatch(&mut self, action: Action, window: &Window, cx: &mut Context<Self>) -> Vec<Effect> {
+        let effects = self.model.update(action);
+        for effect in &effects {
+            match effect {
+                Effect::Opened(id) => {
+                    if self.model.pane(*id).is_some_and(|p| p.kind == Kind::Terminal) {
+                        match Terminal::spawn() {
+                            Ok(terminal) => drop(self.terminals.insert(*id, terminal)),
+                            Err(err) => self.error = Some(format!("terminal: {err}")),
+                        }
+                    }
                 }
-                self.panes.push(pane);
-                self.error = None;
+                Effect::Closed(pane) => {
+                    self.cells.remove(&pane.id);
+                    self.terminals.remove(&pane.id); // drop ends its shell
+                    if let Some(hosted) = self.hosted.remove(&pane.id) {
+                        hosted.release();
+                    }
+                }
+                Effect::Parked(id) => {
+                    self.live_since = None;
+                    if let Some(hosted) = self.hosted.get_mut(id) {
+                        hosted.park(window.scale_factor() as f64);
+                        // Going live activated the app. Take the keyboard back, or keys keep
+                        // going to its off-screen window while the status bar says NORMAL.
+                        cx.activate(true);
+                    }
+                }
+                Effect::Live(id) => {
+                    self.live_since = Some(Instant::now());
+                    if let Some(hosted) = self.hosted.get_mut(id) {
+                        hosted.place(on_screen(hosted.bounds.get(), window, cx));
+                        hosted.window.raise();
+                    }
+                }
             }
-            Err(err) => self.error = Some(err),
         }
         cx.notify();
+        effects
     }
 
-    fn select_app(&mut self, name: &str, cx: &mut Context<Self>) {
-        let target = capture::find(name);
-        if let Ok(t) = &target
-            && self.pane(t.id).is_some()
-        {
-            return; // already hosted
+    /// Answers queued control-socket calls. Each reply is the state after the call.
+    fn serve_control(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let calls: Vec<Call> = self.control.iter().flat_map(|rx| rx.try_iter()).collect();
+        for Call { request, reply } in calls {
+            let quit = matches!(request, Request::Quit);
+            let mut failure: Option<String> = None;
+            let action = match request {
+                Request::State | Request::Quit => None,
+                Request::OpenApp { name, axis } => {
+                    failure = self.open_app(&name, axis, window, cx).err();
+                    None
+                }
+                Request::Split { axis, kind } => {
+                    let kind = match kind {
+                        PaneKind::Terminal => Kind::Terminal,
+                        PaneKind::Empty => Kind::Empty,
+                    };
+                    Some(Action::Split { axis, kind })
+                }
+                Request::Type { pane, text } => {
+                    match pane.or(self.model.focused).and_then(|id| self.terminals.get(&id)) {
+                        Some(terminal) => terminal.write(text.into_bytes()),
+                        None => failure = Some("no terminal pane to type into".into()),
+                    }
+                    None
+                }
+                Request::Close { pane } => Some(Action::Close { pane }),
+                Request::Focus { pane } => Some(Action::Focus { pane }),
+                Request::FocusDir { dir } => Some(Action::FocusDir { dir }),
+                Request::Enter { pane } => Some(Action::Enter { pane }),
+                Request::Leave => Some(Action::Leave),
+            };
+            if let Some(action) = action {
+                self.dispatch(action, window, cx);
+            }
+            let _ = reply.send(failure.map_or_else(|| self.snapshot(), |message| control::error(&message)));
+            if quit {
+                // Quit a moment later, so the connection thread can write the reply first.
+                cx.spawn(async move |_, cx| {
+                    cx.background_executor().timer(Duration::from_millis(100)).await;
+                    let _ = cx.update(|cx| cx.quit());
+                })
+                .detach();
+            }
         }
-        self.add(target, cx);
     }
 
-    fn close(&mut self, id: u32, cx: &mut Context<Self>) {
-        if let Some(i) = self.panes.iter().position(|p| p.id == id) {
-            self.panes.remove(i).release();
+    /// State as JSON: the model, plus each pane's drawn bounds `[x, y, w, h]` in window points.
+    fn snapshot(&self) -> String {
+        let bounds: BTreeMap<PaneId, [f32; 4]> = self
+            .cells
+            .iter()
+            .map(|(id, cell)| {
+                let b = cell.get();
+                (*id, [b.origin.x.into(), b.origin.y.into(), b.size.width.into(), b.size.height.into()])
+            })
+            .collect();
+        let terminals: BTreeMap<PaneId, serde_json::Value> = self
+            .terminals
+            .iter()
+            .map(|(id, t)| {
+                let (cols, rows) = t.grid_size();
+                (*id, serde_json::json!({ "cols": cols, "rows": rows, "lines": t.lines() }))
+            })
+            .collect();
+        serde_json::json!({
+            "ok": true,
+            "mode": self.model.mode(),
+            "state": self.model,
+            "bounds": bounds,
+            "terminals": terminals,
+        })
+        .to_string()
+    }
+
+    /// Adds an app pane for an already-captured window.
+    fn attach(&mut self, hosted: Hosted, axis: Axis, beside: Option<PaneId>, window: &Window, cx: &mut Context<Self>) {
+        let pid = hosted.pid;
+        if !self.known.iter().any(|(p, _)| *p == pid) {
+            let ids = ax::Window::standard_of(pid).iter().filter_map(ax::Window::id).collect();
+            self.known.push((pid, ids));
         }
-        if self.live_id() == Some(id) {
-            self.live = None;
+        let kind = Kind::App { window: hosted.window_id, title: hosted.title.clone() };
+        let effects = self.dispatch(Action::Open { kind, axis, beside }, window, cx);
+        if let Some(Effect::Opened(id)) = effects.last() {
+            self.cells.insert(*id, hosted.bounds.clone());
+            self.hosted.insert(*id, hosted);
         }
+    }
+
+    /// Hosts the app's main window in a pane. The error also shows in the Apps list.
+    fn open_app(&mut self, name: &str, axis: Axis, window: &Window, cx: &mut Context<Self>) -> Result<(), String> {
+        let result = self.try_open_app(name, axis, window, cx);
+        self.error = result.clone().err();
         cx.notify();
+        result
     }
 
-    fn live_id(&self) -> Option<u32> {
-        self.live.map(|(id, _)| id)
+    fn try_open_app(&mut self, name: &str, axis: Axis, window: &Window, cx: &mut Context<Self>) -> Result<(), String> {
+        if !self.hosting {
+            return Err("window hosting is off in e2e runs".into());
+        }
+        let target = capture::find(name)?;
+        if self.hosted.values().any(|h| h.window_id == target.id) {
+            return Ok(()); // already hosted
+        }
+        self.attach(Hosted::new(target)?, axis, None, window, cx);
+        Ok(())
     }
 
     /// Removes panes whose window is gone (closed by the user or the app).
-    fn drop_closed(&mut self, cx: &mut Context<Self>) {
-        let gone: Vec<u32> = self.panes.iter().filter(|p| p.window.frame().is_none()).map(|p| p.id).collect();
+    fn drop_closed(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let gone: Vec<PaneId> =
+            self.hosted.iter().filter(|(_, h)| h.window.frame().is_none()).map(|(id, _)| *id).collect();
         for id in gone {
-            eprintln!("window {id} gone (AX frame unreadable); dropping its pane");
-            if let Some(i) = self.panes.iter().position(|p| p.id == id) {
-                let _ = self.panes.remove(i).stream.stop_capture();
-                recovery::forget(id);
+            eprintln!("pane {id}: window gone (AX frame unreadable); closing");
+            // Nothing to put back, so stop the stream here instead of `release` in `dispatch`.
+            if let Some(hosted) = self.hosted.remove(&id) {
+                let _ = hosted.stream.stop_capture();
+                recovery::forget(hosted.window_id);
             }
-            if self.live_id() == Some(id) {
-                self.live = None;
-            }
-            cx.notify();
+            self.dispatch(Action::Close { pane: Some(id) }, window, cx);
         }
     }
 
-    /// Hosts windows that appeared since we started watching their app (e.g. undocked DevTools).
-    fn adopt_new_windows(&mut self) {
+    /// Hosts windows that appeared since we started watching their app (e.g. undocked DevTools),
+    /// each to the right of its app's newest pane.
+    fn adopt_new_windows(&mut self, window: &Window, cx: &mut Context<Self>) {
         let mut fresh = Vec::new();
         for (pid, seen) in &mut self.known {
             for window in ax::Window::standard_of(*pid) {
@@ -311,9 +455,10 @@ impl Workspace {
                 }
             }
         }
-        for window in fresh {
-            if let Ok(pane) = capture::target(window).and_then(Pane::new) {
-                self.panes.push(pane);
+        for ax_window in fresh {
+            if let Ok(hosted) = capture::target(ax_window).and_then(Hosted::new) {
+                let beside = self.hosted.iter().filter(|(_, h)| h.pid == hosted.pid).map(|(id, _)| *id).max();
+                self.attach(hosted, Axis::Right, beside, window, cx);
             }
         }
     }
@@ -322,36 +467,68 @@ impl Workspace {
     /// when the pane moves, and every ~500ms (`check`) if the app or user moved it away.
     fn sync_layout(&mut self, window: &Window, cx: &App, check: bool) {
         let scale = window.scale_factor() as f64;
-        let live = self.live_id();
-        let rects: Vec<CGRect> = self.panes.iter().map(|p| pane_on_screen(p, window, cx)).collect();
-        for (pane, rect) in self.panes.iter_mut().zip(rects) {
+        let live = self.model.live;
+        for (id, hosted) in &mut self.hosted {
+            let rect = on_screen(hosted.bounds.get(), window, cx);
             if rect.size.width < 1.0 {
                 continue; // not laid out yet
             }
-            if live == Some(pane.id) {
-                let drifted = check && pane.window.frame().is_some_and(|f| f.origin != rect.origin);
-                if pane.placed != rect || drifted {
-                    pane.place(rect);
+            if live == Some(*id) {
+                let drifted = check && hosted.window.frame().is_some_and(|f| f.origin != rect.origin);
+                if hosted.placed != rect || drifted {
+                    hosted.place(rect);
                 }
-            } else if pane.parked_size != rect.size {
-                pane.park(scale);
+            } else if hosted.parked_size != rect.size {
+                hosted.park(scale);
             }
         }
     }
 
-    /// Moves the pane's real window over it, then replays the click that triggered the swap so
-    /// it lands in the app (otherwise the first click is spent on the swap).
-    fn go_live(&mut self, id: u32, event: &MouseDownEvent, window: &Window, cx: &mut Context<Self>) {
-        self.park_live(window);
-        let Some(pane) = self.panes.iter_mut().find(|p| p.id == id) else { return };
-        let rect = pane_on_screen(pane, window, cx);
-        pane.place(rect);
-        pane.window.raise();
-        self.live = Some((id, Instant::now()));
-        cx.notify();
+    /// Fits each terminal's grid to its pane, redraws on new output, closes panes whose shell exited.
+    fn sync_terminals(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let mut redraw = false;
+        let mut exited = Vec::new();
+        for (id, terminal) in &mut self.terminals {
+            if let Some(bounds) = self.cells.get(id) {
+                terminal.fit(bounds.get().size, self.cell);
+            }
+            redraw |= terminal.take_dirty();
+            if terminal.exited() {
+                exited.push(*id);
+            }
+        }
+        for id in exited {
+            self.dispatch(Action::Close { pane: Some(id) }, window, cx);
+        }
+        if redraw {
+            cx.notify();
+        }
+    }
 
-        let local = event.position - pane.bounds.get().origin;
-        let at = CGPoint::new(rect.origin.x + f32::from(local.x) as f64, rect.origin.y + f32::from(local.y) as f64);
+    /// Keys go to the focused terminal. ⌘ shortcuts do not encode, so they fall through to bindings.
+    fn key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(terminal) = self.model.focused.and_then(|id| self.terminals.get(&id)) else { return };
+        let key = &event.keystroke;
+        let m = key.modifiers;
+        let mods = Mods { ctrl: m.control, alt: m.alt, shift: m.shift, cmd: m.platform };
+        if let Some(bytes) = keys::encode(&key.key, key.key_char.as_deref(), mods, terminal.app_cursor()) {
+            terminal.write(bytes);
+            cx.stop_propagation();
+        }
+    }
+
+    /// A click on a pane body. An app pane goes live, then the click is replayed so it lands in
+    /// the app (otherwise the first click is spent on the swap). Other panes just take focus.
+    fn click_pane(&mut self, id: PaneId, event: &MouseDownEvent, window: &Window, cx: &mut Context<Self>) {
+        if !self.hosted.contains_key(&id) {
+            self.dispatch(Action::Focus { pane: id }, window, cx);
+            return;
+        }
+        self.dispatch(Action::Enter { pane: id }, window, cx);
+        let Some(hosted) = self.hosted.get(&id) else { return };
+        let local = event.position - hosted.bounds.get().origin;
+        let origin = hosted.placed.origin;
+        let at = CGPoint::new(origin.x + f32::from(local.x) as f64, origin.y + f32::from(local.y) as f64);
         let clicks = event.click_count as i64;
         cx.spawn(async move |_, cx| {
             // Give the window server a moment to put the real window under the cursor.
@@ -359,13 +536,6 @@ impl Workspace {
             input::click(at, clicks);
         })
         .detach();
-    }
-
-    fn park_live(&mut self, window: &Window) {
-        let Some((id, _)) = self.live.take() else { return };
-        if let Some(pane) = self.panes.iter_mut().find(|p| p.id == id) {
-            pane.park(window.scale_factor() as f64);
-        }
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -385,8 +555,7 @@ impl Workspace {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
-                    this.park_live(window);
-                    cx.notify();
+                    this.dispatch(Action::Leave, window, cx);
                 }),
             )
             .child(
@@ -400,7 +569,9 @@ impl Workspace {
                     .hover(|s| s.text_color(rgb(0xcdd6f4)))
                     .child("APPS  ↻")
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.apps = capture::apps();
+                        if this.hosting {
+                            this.apps = capture::apps();
+                        }
                         cx.notify();
                     })),
             )
@@ -415,19 +586,22 @@ impl Workspace {
                     .cursor_pointer()
                     .hover(|s| s.bg(rgb(0x45475a)))
                     .child(name.clone())
-                    .on_click(cx.listener(move |this, _, _, cx| this.select_app(&target, cx)))
+                    // Fills the focused pane if it is empty. Else splits it: right, or down with shift.
+                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                        let axis = if e.modifiers().shift { Axis::Down } else { Axis::Right };
+                        let _ = this.open_app(&target, axis, window, cx);
+                    }))
             }))
             .children(self.error.clone().map(|e| div().p_2().text_xs().text_color(rgb(0xf38ba8)).child(e)))
     }
 
     fn render_pane(&self, pane: &Pane, cx: &mut Context<Self>) -> impl IntoElement {
         let id = pane.id;
-        let cell = pane.bounds.clone();
-        let radius = pane.radius;
-        // While live, keep showing the last frame under the real window, so any gap during a swap is invisible.
-        let content = match pane.frame() {
-            Some(buffer) => surface(buffer).size_full().into_any_element(),
-            None => div().child("waiting for frames…").into_any_element(),
+        let cell = self.cells.get(&id).cloned().unwrap_or_default();
+        let (tag, tag_color, title) = match &pane.kind {
+            Kind::Empty => ("EMPTY", 0x7f849c, String::new()),
+            Kind::Terminal => ("TERM", 0x89b4fa, "shell".into()),
+            Kind::App { title, .. } => ("APP", 0xfab387, title.clone()),
         };
         let header = div()
             .h(px(28.))
@@ -441,12 +615,13 @@ impl Workspace {
             .text_xs()
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
-                    this.park_live(window);
-                    cx.notify();
+                cx.listener(move |this, _, window, cx| {
+                    this.dispatch(Action::Focus { pane: id }, window, cx);
                 }),
             )
-            .child(div().overflow_hidden().child(pane.title.clone()))
+            .child(
+                div().flex().gap_2().overflow_hidden().child(div().text_color(rgb(tag_color)).child(tag)).child(title),
+            )
             .child(
                 div()
                     .id(("close", id))
@@ -454,8 +629,35 @@ impl Workspace {
                     .cursor_pointer()
                     .hover(|s| s.text_color(rgb(0xf38ba8)))
                     .child("×")
-                    .on_click(cx.listener(move |this, _, _, cx| this.close(id, cx))),
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.dispatch(Action::Close { pane: Some(id) }, window, cx);
+                    })),
             );
+        let content = if let Some(hosted) = self.hosted.get(&id) {
+            // While live, keep showing the last frame under the real window, so any gap during a swap is invisible.
+            match hosted.frame() {
+                Some(buffer) => surface(buffer).size_full().into_any_element(),
+                None => div().child("waiting for frames…").into_any_element(),
+            }
+        } else if let Some(terminal) = self.terminals.get(&id) {
+            let screen = terminal.screen();
+            let cell = self.cell;
+            let has_keys = self.model.focused == Some(id) && self.model.live.is_none();
+            canvas(
+                |_, _, _| {},
+                move |bounds, _, window, cx| terminal::paint(&screen, bounds, cell, has_keys, window, cx),
+            )
+            .absolute()
+            .size_full()
+            .into_any_element()
+        } else {
+            let hint = match pane.kind {
+                Kind::Terminal => "the shell did not start",
+                _ => "empty: pick an app, or ⌘D / ⌘⇧D for a terminal",
+            };
+            div().text_sm().text_color(rgb(0x7f849c)).child(hint).into_any_element()
+        };
+        let radius = self.hosted.get(&id).map_or(0.0, |h| h.radius);
         let body = div()
             .id(("pane", id))
             .relative()
@@ -463,27 +665,80 @@ impl Workspace {
             .flex()
             .items_center()
             .justify_center()
-            // Record the body's layout bounds so AX can match the real window to it.
+            // Record the body's layout bounds: AX matches the real window to it; e2e reads it.
             .child(canvas(move |bounds, _, _| cell.set(bounds), |_, _, _, _| {}).absolute().size_full())
             .child(content)
-            .child(canvas(|_, _, _| {}, move |bounds, _, window, _| paint_corner_mask(bounds, radius, window)).absolute().size_full())
+            .child(
+                canvas(|_, _, _| {}, move |bounds, _, window, _| paint_corner_mask(bounds, radius, window))
+                    .absolute()
+                    .size_full(),
+            )
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, e: &MouseDownEvent, window, cx| this.go_live(id, e, window, cx)),
+                cx.listener(move |this, e: &MouseDownEvent, window, cx| this.click_pane(id, e, window, cx)),
             );
 
         // While another pane is live, fade this one: input goes to the live app, not here.
-        let faded = self.live_id().is_some_and(|live| live != id);
+        let faded = self.model.live.is_some_and(|live| live != id);
+        let focused = self.model.focused == Some(id);
         div()
             .flex_1()
-            .h_full()
+            .size_full()
+            .overflow_hidden()
             .flex()
             .flex_col()
-            .border_r_1()
-            .border_color(rgb(0x313244))
+            .border_1()
+            .border_color(rgb(if focused { 0x89b4fa } else { 0x313244 }))
             .when(faded, |d| d.opacity(0.5))
             .child(header)
             .child(body)
+    }
+
+    /// Leaves render as panes; splits as a row (`Right`) or column (`Down`) of two equal halves.
+    fn render_node(&self, node: &Node, cx: &mut Context<Self>) -> AnyElement {
+        match node {
+            Node::Leaf(id) => match self.model.pane(*id) {
+                Some(pane) => self.render_pane(pane, cx).into_any_element(),
+                None => div().into_any_element(),
+            },
+            Node::Split { axis, a, b } => div()
+                .flex_1()
+                .size_full()
+                .overflow_hidden()
+                .flex()
+                .when(*axis == Axis::Down, |d| d.flex_col())
+                .child(self.render_node(a, cx))
+                .child(self.render_node(b, cx))
+                .into_any_element(),
+        }
+    }
+
+    /// Bottom bar: who has the keyboard, and the focused pane.
+    fn render_status(&self) -> impl IntoElement {
+        let (mode, color, hint) = match self.model.mode() {
+            Mode::Normal => ("NORMAL", 0x89b4fa, "⌘D split right · ⌘⇧D split down · ⌘W close · ⌘⌥arrows focus"),
+            Mode::App => ("APP", 0xfab387, "keys go to the app · click ottospace to return"),
+        };
+        let focused = match self.model.focused.and_then(|id| self.model.pane(id)).map(|p| &p.kind) {
+            Some(Kind::App { title, .. }) => title.clone(),
+            Some(Kind::Empty) => "empty pane".into(),
+            Some(Kind::Terminal) => "shell".into(),
+            None => "no pane".into(),
+        };
+        div()
+            .h(px(24.))
+            .px_2()
+            .flex()
+            .items_center()
+            .gap_3()
+            .bg(rgb(0x11111b))
+            .border_t_1()
+            .border_color(rgb(0x313244))
+            .text_xs()
+            .text_color(rgb(0xa6adc8))
+            .child(div().px_2().rounded_sm().bg(rgb(color)).text_color(rgb(0x11111b)).child(mode))
+            .child(focused)
+            .child(hint)
     }
 }
 
@@ -500,13 +755,12 @@ fn paint_corner_mask(bounds: Bounds<Pixels>, radius: f64, window: &mut Window) {
     });
 }
 
-/// Pane body rect in global top-left screen coordinates.
-fn pane_on_screen(pane: &Pane, window: &Window, cx: &App) -> CGRect {
+/// A pane body's rect (window-content coordinates) in global top-left screen coordinates.
+fn on_screen(body: Bounds<Pixels>, window: &Window, cx: &App) -> CGRect {
     // gpui window bounds are relative to the window's display; offset by its global origin.
     let screen = window.display(cx).map_or(CGPoint::ZERO, |d| display::bounds(d.id().into()).origin);
     let frame = window.bounds();
     let titlebar = frame.size.height - window.viewport_size().height;
-    let body = pane.bounds.get();
     let x = screen.x + f32::from(frame.origin.x + body.origin.x) as f64;
     let y = screen.y + f32::from(frame.origin.y + titlebar + body.origin.y) as f64;
     CGRect { origin: CGPoint::new(x, y), size: to_cg(body.size) }
@@ -514,37 +768,119 @@ fn pane_on_screen(pane: &Pane, window: &Window, cx: &App) -> CGRect {
 
 impl Render for Workspace {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let panes: Vec<_> = self.panes.iter().map(|p| self.render_pane(p, cx).into_any_element()).collect();
+        for pane in &self.model.panes {
+            self.cells.entry(pane.id).or_default();
+        }
+        let tree = self.model.layout.as_ref().map(|root| self.render_node(root, cx));
         div()
             .size_full()
             .flex()
+            .flex_col()
             .bg(rgb(BG))
             .text_color(rgb(0xcdd6f4))
-            .child(div().h_full().when(self.live.is_some(), |d| d.opacity(0.5)).child(self.render_sidebar(cx)))
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(Self::key_down))
+            .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
+                this.dispatch(Action::Split { axis: Axis::Right, kind: Kind::Terminal }, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SplitDown, window, cx| {
+                this.dispatch(Action::Split { axis: Axis::Down, kind: Kind::Terminal }, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ClosePane, window, cx| {
+                this.dispatch(Action::Close { pane: None }, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &FocusLeft, window, cx| {
+                this.dispatch(Action::FocusDir { dir: Dir::Left }, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &FocusRight, window, cx| {
+                this.dispatch(Action::FocusDir { dir: Dir::Right }, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &FocusUp, window, cx| {
+                this.dispatch(Action::FocusDir { dir: Dir::Up }, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &FocusDown, window, cx| {
+                this.dispatch(Action::FocusDir { dir: Dir::Down }, window, cx);
+            }))
             .child(
                 div()
                     .flex_1()
-                    .h_full()
+                    .w_full()
+                    .overflow_hidden()
                     .flex()
-                    .when(panes.is_empty(), |d| d.items_center().justify_center().child("pick an app from the sidebar"))
-                    .children(panes),
+                    .child(
+                        div()
+                            .h_full()
+                            .when(self.model.live.is_some(), |d| d.opacity(0.5))
+                            .child(self.render_sidebar(cx)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .h_full()
+                            .flex()
+                            .when(tree.is_none(), |d| {
+                                d.items_center()
+                                    .justify_center()
+                                    .child("⌘D for a pane, or pick an app (shift-click splits down)")
+                            })
+                            .children(tree),
+                    ),
             )
+            .child(self.render_status())
     }
 }
 
-fn main() {
-    capture::init();
-    if !ax::is_trusted(true) {
-        eprintln!("grant Accessibility access to your terminal, then rerun");
+/// `ottospace ctl '<json request>'`: sends one request to the running app, prints the reply.
+fn ctl(args: &[String]) -> ! {
+    let Some(request) = args.first() else {
+        eprintln!("usage: ottospace ctl '{{\"cmd\":\"state\"}}'");
+        std::process::exit(2);
+    };
+    let reply = control::send(&control::path(), request).unwrap_or_else(|err| {
+        eprintln!("no ottospace at {}: {err}", control::path().display());
         std::process::exit(1);
-    }
-    recovery::restore_leftovers();
+    });
+    println!("{reply}");
+    // Exit 0 only when the app accepted the request, so scripts can test the result.
+    let ok = serde_json::from_str::<serde_json::Value>(&reply).is_ok_and(|v| v["ok"] == true);
+    std::process::exit(if ok { 0 } else { 1 });
+}
 
-    Application::new().run(|cx: &mut App| {
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).is_some_and(|a| a == "ctl") {
+        ctl(&args[2..]);
+    }
+
+    // E2E runs get no window hosting, so tests cannot move or strand the user's real windows.
+    let hosting = std::env::var_os("OTTOSPACE_E2E").is_none();
+    if hosting {
+        capture::init();
+        if !ax::is_trusted(true) {
+            eprintln!("grant Accessibility access to your terminal, then rerun");
+            std::process::exit(1);
+        }
+        recovery::restore_leftovers();
+    }
+    let control = control::serve().map_err(|err| eprintln!("control socket off: {err}")).ok();
+
+    Application::new().run(move |cx: &mut App| {
+        cx.bind_keys([
+            KeyBinding::new("cmd-d", SplitRight, None),
+            KeyBinding::new("cmd-shift-d", SplitDown, None),
+            KeyBinding::new("cmd-w", ClosePane, None),
+            KeyBinding::new("cmd-alt-left", FocusLeft, None),
+            KeyBinding::new("cmd-alt-right", FocusRight, None),
+            KeyBinding::new("cmd-alt-up", FocusUp, None),
+            KeyBinding::new("cmd-alt-down", FocusDown, None),
+        ]);
         let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
         let options = WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() };
-        cx.open_window(options, |window, cx| cx.new(|cx| Workspace::new(window, cx))).expect("open window");
+        cx.open_window(options, |window, cx| cx.new(|cx| Workspace::new(hosting, control, window, cx)))
+            .expect("open window");
         cx.on_window_closed(|cx| cx.quit()).detach();
-        cx.activate(true);
+        if hosting {
+            cx.activate(true);
+        }
     });
 }
