@@ -18,7 +18,8 @@ Agents and tests can drive it over a local control socket. Rust + [GPUI](https:/
 | "Pop next": open the next task by priority | Designed |
 | Quick capture (⌘⌘): turn something on screen into a task and dispatch it to an agent | Designed |
 | Focus blocks: hide Slack, with an agent that can break through | Designed |
-| Fast app switcher and sidebar categories | Designed |
+| Icon rail with a secondary bar; Apps lists running apps | Works today |
+| Fast app switcher; Workbook, Tasks and Repos sections | Designed |
 | TypeScript scripting, with contextual quick actions in an action deck (Zoom meeting layout, spin for stand-up) | Designed |
 | Hide private panes while screen sharing | Designed |
 | Session restore | Designed |
@@ -39,7 +40,7 @@ Requirements:
 - Accessibility permission for the terminal that launches ottospace: System Settings > Privacy &
   Security > Accessibility. The app exits at start without it.
 - Screen Recording permission for the same terminal: System Settings > Privacy & Security > Screen
-  & System Audio Recording. It is requested on first capture of an app window.
+  & System Audio Recording. macOS asks for it at launch, when ottospace lists running apps.
 
 Build and run:
 
@@ -64,29 +65,32 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
 
 A terminal pane runs your shell on a PTY. The pane closes when the shell exits.
 
-To put an app window in a pane, click the app in the sidebar. It fills the focused pane if that is
+To put an app window in a pane, open Apps on the left rail and click the app. It fills the focused pane if that is
 empty, otherwise it splits right. Shift-click splits down. New windows of a hosted app get their
 own pane. Original window frames are saved to disk and restored on quit or after a crash.
 
 Click an app pane to give it the keyboard (`APP` mode). ottospace shortcuts do not fire in that
-mode. Click ottospace itself (sidebar, title bar, another pane) to return.
+mode. Click ottospace itself (rail, top bar, another pane) to return.
 
 ## Driving it from outside
 
 ottospace listens on a Unix socket so tests and agents can inspect and drive it. The socket is mode
 0600, at `$OTTOSPACE_SOCKET` or `$TMPDIR/ottospace.sock`. Send one JSON request per line. The reply
 is one JSON line: the full state (model, mode, pane bounds, terminal grids) or
-`{"ok":false,"error":"..."}`. `ottospace ctl` sends one request and prints the reply.
+`{"ok":false,"error":"..."}`. `ottospace ctl` sends one request, prints the reply, and exits non-zero
+if the request was refused. `cargo run` does not put `ottospace` on your `PATH`: use the built binary.
 
 ```sh
+alias ottospace=./target/debug/ottospace
 ottospace ctl '{"cmd":"split","axis":"down"}'
 ottospace ctl '{"cmd":"type","text":"ls\r"}'
 ottospace ctl '{"cmd":"open_app","name":"Safari"}'
+ottospace ctl '{"cmd":"section","section":"apps"}'
 ottospace ctl '{"cmd":"state"}'
 ```
 
 Commands: `state`, `split`, `type`, `close`, `focus`, `focus_dir`, `open_app`, `enter`, `leave`,
-`quit`. Fields are in `Request` in [`crates/ottospace/src/control.rs`](crates/ottospace/src/control.rs).
+`section`, `quit`. Fields are in `Request` in [`crates/ottospace/src/control.rs`](crates/ottospace/src/control.rs).
 Unknown commands and fields are refused.
 
 ## Development
