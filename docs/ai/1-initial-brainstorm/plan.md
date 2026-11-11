@@ -72,6 +72,7 @@ cheapest daily win. E is the largest value but needs A, B and D.
 
 - Quick capture (⌘⌘) and task lifecycle: see `quick-capture.md`.
 - Zoom meeting layout and participants → spinner: see `zoom-meeting.md`.
+- Hiding panes from screen sharing: see `screen-share-privacy.md`.
 - Scripting in TypeScript (replaces "rules before a scripting language"): see `scripting.md`.
 - Look: apollo-ui future dark, one accent per key mode. Otto mark: `background/otto-icon.svg` (app icon) and
   `background/otto-pane.svg` (empty pane). Smooth shaded, mono, cyan eyes, ninja band.
