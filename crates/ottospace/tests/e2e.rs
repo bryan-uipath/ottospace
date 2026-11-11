@@ -155,6 +155,26 @@ fn terminal_runs_a_typed_command() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn secondary_bar_opens_and_closes_beside_the_panes() {
+    let otto = Otto::launch("bar");
+    let reply = otto.call(json!({"cmd": "split", "kind": "empty"}));
+    assert_eq!(reply["state"]["sidebar"], Value::Null, "bar starts closed when hosting is off");
+    let closed = otto.bounds(&[1])[0];
+
+    // The bar takes its width from the pane.
+    assert_eq!(otto.call(json!({"cmd": "section", "section": "tasks"}))["state"]["sidebar"], "tasks");
+    let open =
+        otto.wait_for("the pane to move right", |o| Some(o.bounds(&[1])[0]).filter(|b| b[0] > closed[0] + 200.0));
+    assert!((closed[2] - open[2] - (open[0] - closed[0])).abs() < 2.0, "{closed:?} {open:?}");
+
+    // Another section replaces it; the same section closes it.
+    assert_eq!(otto.call(json!({"cmd": "section", "section": "apps"}))["state"]["sidebar"], "apps");
+    assert_eq!(otto.call(json!({"cmd": "section", "section": "apps"}))["state"]["sidebar"], Value::Null);
+    otto.wait_for("the pane to move back", |o| Some(o.bounds(&[1])[0]).filter(|b| (b[0] - closed[0]).abs() < 2.0));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn bad_requests_are_refused_and_quit_exits() {
     let mut otto = Otto::launch("errors");
     for bad in ["not json", r#"{"cmd":"nope"}"#, r#"{"cmd":"focus"}"#, r#"{"cmd":"split","extra":1}"#] {

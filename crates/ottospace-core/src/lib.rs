@@ -5,6 +5,7 @@ pub mod keys;
 pub mod layout;
 pub mod model;
 pub mod palette;
+pub mod theme;
 
 pub use layout::{Axis, Dir, Node, Rect};
-pub use model::{Action, Effect, Kind, Mode, Model, Pane, PaneId};
+pub use model::{Action, Effect, Kind, Mode, Model, Pane, PaneId, Section};

@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::{fs, thread};
 
-use ottospace_core::{Axis, Dir, PaneId};
+use ottospace_core::{Axis, Dir, PaneId, Section};
 use serde::Deserialize;
 
 /// e.g. `{"cmd":"split","axis":"down"}`, `{"cmd":"type","text":"ls\r"}`, `{"cmd":"state"}`.
@@ -51,6 +51,10 @@ pub enum Request {
         pane: PaneId,
     },
     Leave,
+    /// Toggles a rail section: `{"cmd":"section","section":"apps"}`.
+    Section {
+        section: Section,
+    },
     Quit,
 }
 
@@ -77,8 +81,10 @@ pub fn path() -> PathBuf {
 /// Listens on `path()`. Calls arrive on the returned channel; the UI thread polls it.
 pub fn serve() -> io::Result<Receiver<Call>> {
     let path = path();
-    // A running instance answers; a stale socket left by a crash does not.
-    if UnixStream::connect(&path).is_ok() {
+    // One owner per socket path: a lock file held for the life of the process. It closes the
+    // gap where two instances starting together each take the other's socket for a stale one.
+    let lock = fs::File::create(path.with_extension("lock"))?;
+    if lock.try_lock().is_err() || UnixStream::connect(&path).is_ok() {
         return Err(io::Error::new(io::ErrorKind::AddrInUse, "another ottospace owns the socket"));
     }
     // Remove only a stale socket. Never delete some other file the path happens to name.
@@ -91,6 +97,7 @@ pub fn serve() -> io::Result<Receiver<Call>> {
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
     let (calls, receiver) = channel();
     thread::spawn(move || {
+        let _lock = lock; // held until the process exits
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => {

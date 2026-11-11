@@ -1,12 +1,12 @@
-//! Terminal colours as `0xRRGGBB` (Catppuccin Mocha).
+//! Terminal colours as `0xRRGGBB`, matched to the future-dark UI theme.
 
-pub const FOREGROUND: u32 = 0xcdd6f4;
-pub const BACKGROUND: u32 = 0x1e1e2e;
+pub const FOREGROUND: u32 = crate::theme::TEXT;
+pub const BACKGROUND: u32 = crate::theme::BACKGROUND;
 
 /// The 16 ANSI colours: black, red, green, yellow, blue, magenta, cyan, white, then bright.
 const ANSI: [u32; 16] = [
-    0x45475a, 0xf38ba8, 0xa6e3a1, 0xf9e2af, 0x89b4fa, 0xf5c2e7, 0x94e2d5, 0xbac2de, //
-    0x585b70, 0xf38ba8, 0xa6e3a1, 0xf9e2af, 0x89b4fa, 0xf5c2e7, 0x94e2d5, 0xa6adc8,
+    0x3f3f46, 0xff6467, 0x00d492, 0xffb900, 0x51a2ff, 0xc27aff, 0x00d3f2, 0xd4d4d8, //
+    0x71717b, 0xff8484, 0x5ee9b5, 0xffd230, 0x8ec5ff, 0xdab2ff, 0x53eafd, 0xfafafa,
 ];
 
 /// xterm 256-colour index → colour. 0-15 ANSI, 16-231 a 6×6×6 cube, 232-255 a grey ramp.
