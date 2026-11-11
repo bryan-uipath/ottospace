@@ -66,7 +66,11 @@ pub enum Request {
     PickerMove {
         delta: i32,
     },
-    PickerChoose,
+    /// Opens the selected match, or the match at `index`.
+    PickerChoose {
+        #[serde(default)]
+        index: Option<usize>,
+    },
     PickerClose,
     Quit,
 }

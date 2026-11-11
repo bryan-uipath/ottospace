@@ -440,7 +440,7 @@ impl Workspace {
                 }
                 Request::PickerQuery { query } => Some(Action::PickerQuery { query }),
                 Request::PickerMove { delta } => Some(Action::PickerMove { delta }),
-                Request::PickerChoose => Some(Action::PickerChoose),
+                Request::PickerChoose { index } => Some(Action::PickerChoose { index }),
                 Request::PickerClose => Some(Action::ClosePicker),
             };
             if let Some(action) = action {
@@ -453,7 +453,9 @@ impl Workspace {
                     }
                     _ => false,
                 });
-                if dead {
+                // A picked app that could not be hosted: `open_app` left the reason in `error`.
+                let unhosted = effects.iter().any(|e| matches!(e, Effect::HostApp { .. })) && self.error.is_some();
+                if dead || unhosted {
                     failure = self.error.clone().or(Some("the shell did not start".into()));
                 }
             }
@@ -637,34 +639,27 @@ impl Workspace {
         if self.hosting {
             self.apps = capture::apps();
         }
-        let apps =
-            self.apps.iter().filter(|name| *name != "ottospace").map(|name| PickItem::App { name: name.clone() });
+        let apps = self.apps.iter().map(|name| PickItem::App { name: name.clone() });
         let items = std::iter::once(PickItem::Terminal).chain(apps).collect();
         self.dispatch(Action::OpenPicker { axis, items }, window, cx);
     }
 
     /// While the picker is open it takes every key: text filters, arrows move, enter opens.
     fn picker_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
-        let Some(picker) = &self.model.picker else { return };
         let key = &event.keystroke;
         let m = key.modifiers;
         let action = match key.key.as_str() {
             _ if m.platform => return, // ⌘ shortcuts still reach their bindings
             "escape" => Action::ClosePicker,
-            "enter" => Action::PickerChoose,
+            "enter" => Action::PickerChoose { index: None },
             "down" | "tab" => Action::PickerMove { delta: 1 },
             "up" => Action::PickerMove { delta: -1 },
             "n" if m.control => Action::PickerMove { delta: 1 },
             "p" if m.control => Action::PickerMove { delta: -1 },
-            "backspace" => {
-                let mut query = picker.query.clone();
-                query.pop();
-                Action::PickerQuery { query }
-            }
-            _ => match key.key_char.as_deref().filter(|_| !m.control) {
-                Some(text) if !text.chars().any(char::is_control) => {
-                    Action::PickerQuery { query: format!("{}{text}", picker.query) }
-                }
+            "backspace" => Action::PickerBackspace,
+            // ⌥ composes other characters (⌥B is "∫"); only plain typing filters.
+            _ => match key.key_char.as_deref().filter(|_| !m.control && !m.alt) {
+                Some(text) if !text.chars().any(char::is_control) => Action::PickerType { text: text.into() },
                 _ => return,
             },
         };
@@ -694,8 +689,7 @@ impl Workspace {
                 .child(div().w(px(36.)).text_xs().text_color(rgb(color)).child(tag))
                 .child(item.label().to_string())
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    this.dispatch(Action::PickerMove { delta: i as i32 - selected as i32 }, window, cx);
-                    this.dispatch(Action::PickerChoose, window, cx);
+                    this.dispatch(Action::PickerChoose { index: Some(i) }, window, cx);
                 }))
         });
         let rows: Vec<_> = rows.collect();
@@ -743,7 +737,8 @@ impl Workspace {
                     ),
             )
             .when(rows.is_empty(), |d| d.child(div().p_3().text_xs().text_color(rgb(theme::MUTED)).child("No match")))
-            .children(rows);
+            // Long lists scroll inside the panel.
+            .child(div().id("picker-rows").flex_1().min_h_0().overflow_y_scroll().children(rows));
         div()
             .id("picker-backdrop")
             .absolute()
@@ -975,7 +970,7 @@ impl Workspace {
         } else if let Some(terminal) = self.terminals.get(&id) {
             let screen = terminal.screen();
             let cell = self.cell;
-            let has_keys = self.model.focused == Some(id) && self.model.live.is_none();
+            let has_keys = self.model.focused == Some(id) && self.model.mode() == Mode::Normal;
             canvas(
                 |_, _, _| {},
                 move |bounds, _, window, cx| terminal::paint(&screen, bounds, cell, has_keys, window, cx),

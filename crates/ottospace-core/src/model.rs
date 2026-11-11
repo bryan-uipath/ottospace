@@ -148,8 +148,17 @@ pub enum Action {
     PickerMove {
         delta: i32,
     },
-    /// Open the selected item in a new pane and close the picker.
-    PickerChoose,
+    /// Add typed text to the picker's filter.
+    PickerType {
+        text: String,
+    },
+    /// Remove the last character of the picker's filter.
+    PickerBackspace,
+    /// Open an item (default: the selected one) and close the picker. `index` is into the
+    /// current matches, so a click opens the row it landed on.
+    PickerChoose {
+        index: Option<usize>,
+    },
     ClosePicker,
 }
 
@@ -203,27 +212,28 @@ impl Model {
 
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
         let mut effects = Vec::new();
+        // The picker has the keyboard. Pane and bar actions wait until it closes, so a
+        // shortcut cannot change what is behind it (e.g. ⌘W closing the pane it splits).
+        let for_panes = matches!(
+            action,
+            Action::Split { .. }
+                | Action::Close { .. }
+                | Action::Focus { .. }
+                | Action::FocusDir { .. }
+                | Action::Enter { .. }
+                | Action::ToggleSection { .. }
+                | Action::CloseSidebar
+        );
+        if self.picker.is_some() && for_panes {
+            return effects;
+        }
         match action {
             Action::Split { axis, kind } => {
                 self.leave(&mut effects);
                 let id = self.add(kind, self.focused, axis);
                 effects.push(Effect::Opened(id));
             }
-            Action::Open { kind, axis, beside } => {
-                // The new pane takes focus, so the live app must give the keyboard back.
-                self.leave(&mut effects);
-                let target = beside.or(self.focused);
-                let empty = target.filter(|t| self.pane(*t).is_some_and(|p| p.kind == Kind::Empty));
-                let id = match empty.and_then(|t| self.panes.iter_mut().find(|p| p.id == t)) {
-                    Some(pane) => {
-                        pane.kind = kind;
-                        pane.id
-                    }
-                    None => self.add(kind, target, axis),
-                };
-                self.focused = Some(id);
-                effects.push(Effect::Opened(id));
-            }
+            Action::Open { kind, axis, beside } => self.open(kind, axis, beside, &mut effects),
             Action::Adopt { kind, beside } => {
                 let focused = self.focused;
                 let id = self.add(kind, beside, Axis::Right);
@@ -277,19 +287,30 @@ impl Model {
             }
             Action::PickerMove { delta } => {
                 if let Some(picker) = &mut self.picker {
-                    let count = picker.matches().len() as i32;
+                    let count = picker.matches().len();
                     if count > 0 {
-                        picker.selected = (picker.selected as i32 + delta).rem_euclid(count) as usize;
+                        // i64: `delta` comes from the socket and may be any i32.
+                        picker.selected = (picker.selected as i64 + delta as i64).rem_euclid(count as i64) as usize;
                     }
                 }
             }
-            Action::PickerChoose => {
+            Action::PickerType { text } => {
+                if let Some(picker) = &mut self.picker {
+                    picker.query.push_str(&text);
+                    picker.selected = 0;
+                }
+            }
+            Action::PickerBackspace => {
+                if let Some(picker) = &mut self.picker {
+                    picker.query.pop();
+                    picker.selected = 0;
+                }
+            }
+            Action::PickerChoose { index } => {
                 let Some(picker) = self.picker.take() else { return effects };
-                match picker.matches().get(picker.selected).copied().cloned() {
-                    Some(PickItem::Terminal) => {
-                        let id = self.add(Kind::Terminal, self.focused, picker.axis);
-                        effects.push(Effect::Opened(id));
-                    }
+                match picker.matches().get(index.unwrap_or(picker.selected)).copied().cloned() {
+                    // Same rule as an app: fill the focused pane if it is empty, else split it.
+                    Some(PickItem::Terminal) => self.open(Kind::Terminal, picker.axis, None, &mut effects),
                     Some(PickItem::App { name }) => effects.push(Effect::HostApp { name, axis: picker.axis }),
                     // Nothing matches: keep the picker open so the user can fix the query.
                     None => self.picker = Some(picker),
@@ -302,6 +323,23 @@ impl Model {
             }
         }
         effects
+    }
+
+    /// Shows `kind` in `beside` (default: the focused pane) if that pane is empty; else splits it.
+    fn open(&mut self, kind: Kind, axis: Axis, beside: Option<PaneId>, effects: &mut Vec<Effect>) {
+        // The new pane takes focus, so the live app must give the keyboard back.
+        self.leave(effects);
+        let target = beside.or(self.focused);
+        let empty = target.filter(|t| self.pane(*t).is_some_and(|p| p.kind == Kind::Empty));
+        let id = match empty.and_then(|t| self.panes.iter_mut().find(|p| p.id == t)) {
+            Some(pane) => {
+                pane.kind = kind;
+                pane.id
+            }
+            None => self.add(kind, target, axis),
+        };
+        self.focused = Some(id);
+        effects.push(Effect::Opened(id));
     }
 
     fn add(&mut self, kind: Kind, beside: Option<PaneId>, axis: Axis) -> PaneId {
@@ -526,11 +564,61 @@ mod tests {
     }
 
     #[test]
-    fn choosing_terminal_splits_along_the_pickers_axis() {
+    fn choosing_terminal_fills_an_empty_pane_like_an_app_does() {
         let mut m = Model::default();
         m.update(Action::Split { axis: Right, kind: Kind::Empty });
         picker(&mut m);
-        assert_eq!(m.update(Action::PickerChoose), [Effect::Opened(2)]);
+        assert_eq!(m.update(Action::PickerChoose { index: None }), [Effect::Opened(1)]);
+        assert_eq!(m.panes, [Pane { id: 1, kind: Kind::Terminal }]);
+    }
+
+    #[test]
+    fn picker_move_survives_any_delta() {
+        let mut m = Model::default();
+        picker(&mut m);
+        m.update(Action::PickerMove { delta: 1 });
+        m.update(Action::PickerMove { delta: i32::MAX });
+        m.update(Action::PickerMove { delta: i32::MIN });
+        assert!(m.picker.as_ref().unwrap().selected < 4);
+    }
+
+    #[test]
+    fn pane_actions_wait_while_the_picker_is_open() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        picker(&mut m);
+        for action in [
+            Action::Close { pane: None },
+            Action::Split { axis: Right, kind: Kind::Terminal },
+            Action::FocusDir { dir: Dir::Left },
+            Action::Enter { pane: 1 },
+            Action::ToggleSection { section: Section::Apps },
+        ] {
+            assert_eq!(m.update(action), []);
+        }
+        assert_eq!((ids(&m), m.focused, m.live, m.sidebar, m.mode()), (vec![1, 2], Some(2), None, None, Mode::Pick));
+    }
+
+    #[test]
+    fn typing_edits_the_filter_and_a_click_opens_its_own_row() {
+        let mut m = Model::default();
+        picker(&mut m);
+        m.update(Action::PickerType { text: "g".into() });
+        m.update(Action::PickerType { text: "x".into() });
+        m.update(Action::PickerBackspace);
+        assert_eq!(labels(&m), ["Google Chrome", "Google Slides"]);
+        // The selection is on row 0; the click is on row 1.
+        let effects = m.update(Action::PickerChoose { index: Some(1) });
+        assert_eq!(effects, [Effect::HostApp { name: "Google Slides".into(), axis: Down }]);
+    }
+
+    #[test]
+    fn choosing_terminal_splits_along_the_pickers_axis() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        picker(&mut m);
+        assert_eq!(m.update(Action::PickerChoose { index: None }), [Effect::Opened(2)]);
         assert_eq!(m.pane(2).unwrap().kind, Kind::Terminal);
         assert_eq!(m.layout.as_ref().unwrap().neighbor(1, Dir::Down), Some(2));
         assert_eq!((m.picker.is_none(), m.mode()), (true, Mode::Normal));
@@ -541,7 +629,7 @@ mod tests {
         let mut m = Model::default();
         picker(&mut m);
         m.update(Action::PickerQuery { query: "chrome".into() });
-        let effects = m.update(Action::PickerChoose);
+        let effects = m.update(Action::PickerChoose { index: None });
         assert_eq!(effects, [Effect::HostApp { name: "Google Chrome".into(), axis: Down }]);
         assert!(m.picker.is_none());
     }
@@ -551,7 +639,7 @@ mod tests {
         let mut m = Model::default();
         picker(&mut m);
         m.update(Action::PickerQuery { query: "zzz".into() });
-        assert_eq!(m.update(Action::PickerChoose), []);
+        assert_eq!(m.update(Action::PickerChoose { index: None }), []);
         assert!(m.picker.is_some());
         m.update(Action::ClosePicker);
         assert!(m.picker.is_none());

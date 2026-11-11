@@ -177,13 +177,21 @@ fn secondary_bar_opens_and_closes_beside_the_panes() {
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn picker_opens_a_terminal_in_the_chosen_direction() {
     let otto = Otto::launch("picker");
+    // An empty pane is filled by the pick, not split.
     otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "picker"}));
+    let reply = otto.call(json!({"cmd": "picker_choose"}));
+    assert_eq!(pane_ids(&reply), [1]);
+    assert_eq!(reply["state"]["panes"][0]["kind"]["type"], "terminal");
 
     let reply = otto.call(json!({"cmd": "picker", "axis": "down"}));
     assert_eq!(reply["mode"], "pick");
     assert_eq!(reply["state"]["picker"]["items"][0]["type"], "terminal");
 
     // A query with no match keeps the picker open; a matching one opens the pane and closes it.
+    // Pane requests wait while the picker is open; any move delta is safe.
+    assert_eq!(pane_ids(&otto.call(json!({"cmd": "close"}))), [1]);
+    otto.call(json!({"cmd": "picker_move", "delta": 2147483647}));
     otto.call(json!({"cmd": "picker_query", "query": "zzz"}));
     assert_eq!(otto.call(json!({"cmd": "picker_choose"}))["mode"], "pick");
     otto.call(json!({"cmd": "picker_query", "query": "term"}));
