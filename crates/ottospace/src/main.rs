@@ -234,7 +234,7 @@ fn otto(size: f32, hint: &'static str) -> impl IntoElement {
         .items_center()
         .gap_3()
         // Name the source kind: a bare "otto.svg" parses as a URL and is fetched over HTTP.
-        .child(img(ImageSource::Resource(Resource::Embedded("otto.svg".into()))).size(px(size)).opacity(0.85))
+        .child(img(ImageSource::Resource(Resource::Embedded("otto.svg".into()))).size(px(size)).opacity(0.3))
         .child(div().text_sm().text_color(rgb(theme::MUTED)).child(hint))
 }
 
