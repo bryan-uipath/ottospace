@@ -15,13 +15,14 @@ use std::time::{Duration, Instant};
 use core_foundation::base::TCFType;
 use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 use gpui::{
-    AnyElement, App, Application, BorderStyle, Bounds, ClickEvent, ContentMask, Context, FocusHandle, KeyBinding,
-    KeyDownEvent, MouseButton, MouseDownEvent, Pixels, Size, Subscription, Window, WindowBounds, WindowOptions,
-    actions, canvas, div, point, prelude::*, px, quad, rgb, size, surface, transparent_black,
+    AnyElement, AnyView, App, Application, AssetSource, BorderStyle, Bounds, BoxShadow, ClickEvent, ContentMask,
+    Context, FocusHandle, ImageSource, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, Pixels, Resource,
+    SharedString, Size, Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions, actions, black, canvas,
+    div, img, point, prelude::*, px, quad, rgb, size, surface, svg, transparent_black,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::keys::{self, Mods};
-use ottospace_core::{Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Pane, PaneId};
+use ottospace_core::{Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Pane, PaneId, Section, theme};
 use ottospace_mac::{ax, capture, display, input, recovery};
 use screencapturekit::prelude::*;
 
@@ -31,7 +32,7 @@ use control::{Call, PaneKind, Request};
 use terminal::Terminal;
 
 /// Workspace background; also fills hosted windows' rounded corners.
-const BG: u32 = 0x1e1e2e;
+const BG: u32 = theme::BACKGROUND;
 
 /// Latest captured frame, handed from SCK's queue to the UI thread.
 struct Frame(CVPixelBuffer);
@@ -174,6 +175,69 @@ impl Hosted {
     }
 }
 
+/// Icons and images, compiled into the binary.
+struct Assets;
+
+impl AssetSource for Assets {
+    fn load(&self, path: &str) -> gpui::Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        let bytes: Option<&'static [u8]> = match path {
+            "otto.svg" => Some(include_bytes!("../assets/otto.svg")),
+            "icons/apps.svg" => Some(include_bytes!("../assets/icons/apps.svg")),
+            "icons/workbook.svg" => Some(include_bytes!("../assets/icons/workbook.svg")),
+            "icons/tasks.svg" => Some(include_bytes!("../assets/icons/tasks.svg")),
+            "icons/repos.svg" => Some(include_bytes!("../assets/icons/repos.svg")),
+            _ => None,
+        };
+        Ok(bytes.map(Into::into))
+    }
+
+    fn list(&self, _: &str) -> gpui::Result<Vec<SharedString>> {
+        Ok(Vec::new())
+    }
+}
+
+/// Height of the top bar, and the width it keeps clear on the left for the traffic lights.
+const TOP_BAR: f32 = 36.;
+const TRAFFIC_LIGHTS: f32 = 88.;
+
+/// Rail sections in order, with their icon and label.
+const SECTIONS: [(Section, &str, &str); 4] = [
+    (Section::Apps, "icons/apps.svg", "Apps"),
+    (Section::Workbook, "icons/workbook.svg", "Workbook"),
+    (Section::Tasks, "icons/tasks.svg", "Tasks"),
+    (Section::Repos, "icons/repos.svg", "Repos"),
+];
+
+/// A small label shown when the pointer rests on a rail icon.
+struct Tooltip(SharedString);
+
+impl Render for Tooltip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .bg(rgb(theme::SELECTED))
+            .border_1()
+            .border_color(rgb(theme::BORDER_STRONG))
+            .text_xs()
+            .text_color(rgb(theme::TEXT))
+            .child(self.0.clone())
+    }
+}
+
+/// Otto with a hint under it: what an empty pane or an empty workspace shows.
+fn otto(size: f32, hint: &'static str) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap_3()
+        // Name the source kind: a bare "otto.svg" parses as a URL and is fetched over HTTP.
+        .child(img(ImageSource::Resource(Resource::Embedded("otto.svg".into()))).size(px(size)).opacity(0.85))
+        .child(div().text_sm().text_color(rgb(theme::MUTED)).child(hint))
+}
+
 actions!(ottospace, [SplitRight, SplitDown, ClosePane, FocusLeft, FocusRight, FocusUp, FocusDown]);
 
 struct Workspace {
@@ -258,8 +322,13 @@ impl Workspace {
 
         let focus = cx.focus_handle();
         window.focus(&focus);
+        let mut model = Model::default();
+        if hosting {
+            // Apps is the way in while there are no panes.
+            model.update(Action::ToggleSection { section: Section::Apps });
+        }
         Self {
-            model: Model::default(),
+            model,
             hosted: HashMap::new(),
             terminals: HashMap::new(),
             cell: terminal::cell_size(window),
@@ -348,6 +417,7 @@ impl Workspace {
                 Request::FocusDir { dir } => Some(Action::FocusDir { dir }),
                 Request::Enter { pane } => Some(Action::Enter { pane }),
                 Request::Leave => Some(Action::Leave),
+                Request::Section { section } => Some(Action::ToggleSection { section }),
             };
             if let Some(action) = action {
                 self.dispatch(action, window, cx);
@@ -538,19 +608,96 @@ impl Workspace {
         .detach();
     }
 
-    fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Left rail: one icon per section. The open section's icon is raised.
+    fn render_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .id("sidebar")
-            .w(px(220.))
+            .id("rail")
+            .w(px(56.))
             .h_full()
             .flex()
             .flex_col()
+            .items_center()
             .gap_1()
-            .p_2()
-            .bg(rgb(0x181825))
+            .py_2()
             .border_r_1()
-            .border_color(rgb(0x313244))
-            .overflow_y_scroll()
+            .border_color(rgb(theme::BORDER))
+            .children(SECTIONS.iter().enumerate().map(|(i, (section, icon, label))| {
+                let (section, label) = (*section, *label);
+                let active = self.model.sidebar == Some(section);
+                div()
+                    .id(("rail", i))
+                    .size(px(44.))
+                    .rounded_lg()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(rgb(theme::SELECTED)))
+                    .when(active, |d| {
+                        d.bg(rgb(theme::SELECTED)).shadow(vec![BoxShadow {
+                            color: black().opacity(0.7),
+                            offset: point(px(0.), px(3.)),
+                            blur_radius: px(10.),
+                            spread_radius: px(0.),
+                        }])
+                    })
+                    .child(svg().path(*icon).size(px(20.)).text_color(rgb(if active {
+                        theme::TEXT
+                    } else {
+                        theme::MUTED
+                    })))
+                    .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(label.into()))))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.dispatch(Action::ToggleSection { section }, window, cx);
+                    }))
+            }))
+    }
+
+    /// Secondary bar: the open section's list. Closable.
+    fn render_bar(&self, section: Section, cx: &mut Context<Self>) -> impl IntoElement {
+        let title = SECTIONS.iter().find(|(s, ..)| *s == section).map_or("", |(_, _, label)| label);
+        let header = div()
+            .h(px(40.))
+            .pl_3()
+            .pr_1()
+            .flex()
+            .items_center()
+            .justify_between()
+            .border_b_1()
+            .border_color(rgb(theme::BORDER))
+            .text_xs()
+            .text_color(rgb(theme::MUTED))
+            .child(title.to_uppercase())
+            .child(
+                div()
+                    .id("bar-close")
+                    .size(px(28.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
+                    .child("×")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.dispatch(Action::CloseSidebar, window, cx);
+                    })),
+            );
+        let body = match section {
+            Section::Apps => self.render_apps(cx).into_any_element(),
+            _ => {
+                div().p_3().text_xs().text_color(rgb(theme::MUTED)).child("Designed, not built yet.").into_any_element()
+            }
+        };
+        div()
+            .id("bar")
+            .w(px(260.))
+            .h_full()
+            .flex()
+            .flex_col()
+            .bg(rgb(theme::RAISED))
+            .border_r_1()
+            .border_color(rgb(theme::BORDER))
             // Clicking ottospace's own UI hands the live pane back to its stream.
             .on_mouse_down(
                 MouseButton::Left,
@@ -558,16 +705,30 @@ impl Workspace {
                     this.dispatch(Action::Leave, window, cx);
                 }),
             )
+            .child(header)
+            .child(body)
+    }
+
+    /// Running apps. A click hosts the app's main window in a pane.
+    fn render_apps(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("apps")
+            .flex_1()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .p_2()
+            .overflow_y_scroll()
             .child(
                 div()
                     .id("refresh")
                     .px_2()
                     .py_1()
                     .text_xs()
-                    .text_color(rgb(0x7f849c))
+                    .text_color(rgb(theme::MUTED))
                     .cursor_pointer()
-                    .hover(|s| s.text_color(rgb(0xcdd6f4)))
-                    .child("APPS  ↻")
+                    .hover(|s| s.text_color(rgb(theme::TEXT)))
+                    .child("Running  ↻")
                     .on_click(cx.listener(|this, _, _, cx| {
                         if this.hosting {
                             this.apps = capture::apps();
@@ -584,7 +745,7 @@ impl Workspace {
                     .rounded_md()
                     .text_sm()
                     .cursor_pointer()
-                    .hover(|s| s.bg(rgb(0x45475a)))
+                    .hover(|s| s.bg(rgb(theme::SELECTED)))
                     .child(name.clone())
                     // Fills the focused pane if it is empty. Else splits it: right, or down with shift.
                     .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
@@ -592,16 +753,16 @@ impl Workspace {
                         let _ = this.open_app(&target, axis, window, cx);
                     }))
             }))
-            .children(self.error.clone().map(|e| div().p_2().text_xs().text_color(rgb(0xf38ba8)).child(e)))
+            .children(self.error.clone().map(|e| div().p_2().text_xs().text_color(rgb(theme::ERROR)).child(e)))
     }
 
     fn render_pane(&self, pane: &Pane, cx: &mut Context<Self>) -> impl IntoElement {
         let id = pane.id;
         let cell = self.cells.get(&id).cloned().unwrap_or_default();
         let (tag, tag_color, title) = match &pane.kind {
-            Kind::Empty => ("EMPTY", 0x7f849c, String::new()),
-            Kind::Terminal => ("TERM", 0x89b4fa, "shell".into()),
-            Kind::App { title, .. } => ("APP", 0xfab387, title.clone()),
+            Kind::Empty => ("EMPTY", theme::MUTED, String::new()),
+            Kind::Terminal => ("TERM", theme::PRIMARY, "shell".into()),
+            Kind::App { title, .. } => ("APP", theme::APP, title.clone()),
         };
         let header = div()
             .h(px(28.))
@@ -609,9 +770,9 @@ impl Workspace {
             .flex()
             .items_center()
             .justify_between()
-            .bg(rgb(0x181825))
+            .bg(rgb(theme::RAISED))
             .border_b_1()
-            .border_color(rgb(0x313244))
+            .border_color(rgb(theme::BORDER))
             .text_xs()
             .on_mouse_down(
                 MouseButton::Left,
@@ -627,7 +788,7 @@ impl Workspace {
                     .id(("close", id))
                     .px_1()
                     .cursor_pointer()
-                    .hover(|s| s.text_color(rgb(0xf38ba8)))
+                    .hover(|s| s.text_color(rgb(theme::ERROR)))
                     .child("×")
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.dispatch(Action::Close { pane: Some(id) }, window, cx);
@@ -651,11 +812,12 @@ impl Workspace {
             .size_full()
             .into_any_element()
         } else {
-            let hint = match pane.kind {
-                Kind::Terminal => "the shell did not start",
-                _ => "empty: pick an app, or ⌘D / ⌘⇧D for a terminal",
-            };
-            div().text_sm().text_color(rgb(0x7f849c)).child(hint).into_any_element()
+            match pane.kind {
+                Kind::Terminal => {
+                    div().text_sm().text_color(rgb(theme::ERROR)).child("the shell did not start").into_any_element()
+                }
+                _ => otto(110., "Pick an app, or ⌘D for a terminal").into_any_element(),
+            }
         };
         let radius = self.hosted.get(&id).map_or(0.0, |h| h.radius);
         let body = div()
@@ -688,7 +850,7 @@ impl Workspace {
             .flex()
             .flex_col()
             .border_1()
-            .border_color(rgb(if focused { 0x89b4fa } else { 0x313244 }))
+            .border_color(rgb(if focused { theme::accent(self.model.mode()) } else { theme::BORDER }))
             .when(faded, |d| d.opacity(0.5))
             .child(header)
             .child(body)
@@ -713,11 +875,32 @@ impl Workspace {
         }
     }
 
+    /// Top bar, drawn where the system title bar was. Tabs will go here.
+    fn render_top(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .h(px(TOP_BAR))
+            .pl(px(TRAFFIC_LIGHTS))
+            .flex()
+            .items_center()
+            .border_b_1()
+            .border_color(rgb(theme::BORDER))
+            .text_xs()
+            .text_color(rgb(theme::MUTED))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.dispatch(Action::Leave, window, cx);
+                }),
+            )
+            .child("ottospace")
+    }
+
     /// Bottom bar: who has the keyboard, and the focused pane.
     fn render_status(&self) -> impl IntoElement {
-        let (mode, color, hint) = match self.model.mode() {
-            Mode::Normal => ("NORMAL", 0x89b4fa, "⌘D split right · ⌘⇧D split down · ⌘W close · ⌘⌥arrows focus"),
-            Mode::App => ("APP", 0xfab387, "keys go to the app · click ottospace to return"),
+        let color = theme::accent(self.model.mode());
+        let (mode, hint) = match self.model.mode() {
+            Mode::Normal => ("NORMAL", "⌘D split right · ⌘⇧D split down · ⌘W close · ⌘⌥arrows focus"),
+            Mode::App => ("APP", "keys go to the app · click ottospace to return"),
         };
         let focused = match self.model.focused.and_then(|id| self.model.pane(id)).map(|p| &p.kind) {
             Some(Kind::App { title, .. }) => title.clone(),
@@ -731,12 +914,12 @@ impl Workspace {
             .flex()
             .items_center()
             .gap_3()
-            .bg(rgb(0x11111b))
+            .bg(rgb(theme::BACKGROUND))
             .border_t_1()
-            .border_color(rgb(0x313244))
+            .border_color(rgb(theme::BORDER))
             .text_xs()
-            .text_color(rgb(0xa6adc8))
-            .child(div().px_2().rounded_sm().bg(rgb(color)).text_color(rgb(0x11111b)).child(mode))
+            .text_color(rgb(theme::MUTED))
+            .child(div().px_2().rounded_sm().bg(rgb(color)).text_color(rgb(theme::BACKGROUND)).child(mode))
             .child(focused)
             .child(hint)
     }
@@ -777,7 +960,7 @@ impl Render for Workspace {
             .flex()
             .flex_col()
             .bg(rgb(BG))
-            .text_color(rgb(0xcdd6f4))
+            .text_color(rgb(theme::TEXT))
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key_down))
             .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
@@ -801,17 +984,21 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &FocusDown, window, cx| {
                 this.dispatch(Action::FocusDir { dir: Dir::Down }, window, cx);
             }))
+            .child(self.render_top(cx))
             .child(
                 div()
                     .flex_1()
                     .w_full()
                     .overflow_hidden()
                     .flex()
+                    // While an app has the keyboard, fade ottospace's own chrome.
                     .child(
                         div()
                             .h_full()
+                            .flex()
                             .when(self.model.live.is_some(), |d| d.opacity(0.5))
-                            .child(self.render_sidebar(cx)),
+                            .child(self.render_rail(cx))
+                            .children(self.model.sidebar.map(|section| self.render_bar(section, cx))),
                     )
                     .child(
                         div()
@@ -821,7 +1008,7 @@ impl Render for Workspace {
                             .when(tree.is_none(), |d| {
                                 d.items_center()
                                     .justify_center()
-                                    .child("⌘D for a pane, or pick an app (shift-click splits down)")
+                                    .child(otto(220., "⌘D for a terminal, or pick an app from the rail"))
                             })
                             .children(tree),
                     ),
@@ -864,7 +1051,7 @@ fn main() {
     }
     let control = control::serve().map_err(|err| eprintln!("control socket off: {err}")).ok();
 
-    Application::new().run(move |cx: &mut App| {
+    Application::new().with_assets(Assets).run(move |cx: &mut App| {
         cx.bind_keys([
             KeyBinding::new("cmd-d", SplitRight, None),
             KeyBinding::new("cmd-shift-d", SplitDown, None),
@@ -875,7 +1062,17 @@ fn main() {
             KeyBinding::new("cmd-alt-down", FocusDown, None),
         ]);
         let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
-        let options = WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() };
+        // Draw under the title bar; the top bar leaves room for the traffic lights.
+        let titlebar = TitlebarOptions {
+            title: Some("ottospace".into()),
+            appears_transparent: true,
+            traffic_light_position: Some(point(px(12.), px(11.))),
+        };
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            titlebar: Some(titlebar),
+            ..Default::default()
+        };
         cx.open_window(options, |window, cx| cx.new(|cx| Workspace::new(hosting, control, window, cx)))
             .expect("open window");
         cx.on_window_closed(|cx| cx.quit()).detach();

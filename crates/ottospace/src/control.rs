@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::{fs, thread};
 
-use ottospace_core::{Axis, Dir, PaneId};
+use ottospace_core::{Axis, Dir, PaneId, Section};
 use serde::Deserialize;
 
 /// e.g. `{"cmd":"split","axis":"down"}`, `{"cmd":"type","text":"ls\r"}`, `{"cmd":"state"}`.
@@ -51,6 +51,10 @@ pub enum Request {
         pane: PaneId,
     },
     Leave,
+    /// Toggles a rail section: `{"cmd":"section","section":"apps"}`.
+    Section {
+        section: Section,
+    },
     Quit,
 }
 

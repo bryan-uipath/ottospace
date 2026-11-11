@@ -34,6 +34,16 @@ pub enum Mode {
     App,
 }
 
+/// A category on the left rail. Its list shows in the secondary bar.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Section {
+    Apps,
+    Workbook,
+    Tasks,
+    Repos,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     /// Split the focused pane; the new half shows `kind`.
@@ -63,6 +73,11 @@ pub enum Action {
     },
     /// Take the keyboard back.
     Leave,
+    /// Open a rail section in the secondary bar. The open section's own button closes the bar.
+    ToggleSection {
+        section: Section,
+    },
+    CloseSidebar,
 }
 
 /// What the shell must do after an update.
@@ -85,6 +100,8 @@ pub struct Model {
     pub focused: Option<PaneId>,
     /// App pane that has the keyboard.
     pub live: Option<PaneId>,
+    /// Rail section shown in the secondary bar. `None`: the bar is closed.
+    pub sidebar: Option<Section>,
     #[serde(skip)]
     next_id: PaneId,
 }
@@ -151,6 +168,12 @@ impl Model {
                 }
             }
             Action::Leave => self.leave(&mut effects),
+            // The bar is ottospace's own UI, so using it takes the keyboard back.
+            Action::ToggleSection { section } => {
+                self.leave(&mut effects);
+                self.sidebar = (self.sidebar != Some(section)).then_some(section);
+            }
+            Action::CloseSidebar => self.sidebar = None,
         }
         effects
     }
@@ -292,6 +315,30 @@ mod tests {
         let effects = m.update(Action::Open { kind: app(2), axis: Right, beside: Some(1) });
         assert_eq!(effects, [Effect::Parked(1), Effect::Opened(2)]);
         assert_eq!((m.focused, m.live, m.mode()), (Some(2), None, Mode::Normal));
+    }
+
+    #[test]
+    fn rail_buttons_switch_sections_and_the_open_one_closes_the_bar() {
+        let mut m = Model::default();
+        assert_eq!(m.sidebar, None);
+        m.update(Action::ToggleSection { section: Section::Apps });
+        assert_eq!(m.sidebar, Some(Section::Apps));
+        m.update(Action::ToggleSection { section: Section::Tasks });
+        assert_eq!(m.sidebar, Some(Section::Tasks));
+        m.update(Action::ToggleSection { section: Section::Tasks });
+        assert_eq!(m.sidebar, None);
+        m.update(Action::ToggleSection { section: Section::Repos });
+        m.update(Action::CloseSidebar);
+        assert_eq!(m.sidebar, None);
+    }
+
+    #[test]
+    fn opening_a_section_takes_the_keyboard_back() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        m.update(Action::Enter { pane: 1 });
+        assert_eq!(m.update(Action::ToggleSection { section: Section::Apps }), [Effect::Parked(1)]);
+        assert_eq!(m.mode(), Mode::Normal);
     }
 
     #[test]
