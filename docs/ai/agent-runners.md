@@ -51,7 +51,11 @@ struct Batch { events: Vec<Event>, cursor: Cursor, restarted: bool, more: bool }
 - `read` returns only complete lines, and stops at the first line boundary past `budget` bytes
   with `more: true`, so a first read of a long file comes in slices. A last line without its
   newline is left for the next call. A line that is not JSON, a record of an unknown type and a
-  line over 64 MB are skipped; the long one is never held in memory.
+  line over 64 MB are skipped; the long one is never held in memory, and while its end is not
+  written yet the cursor remembers that, so a poll reads only the new bytes.
+- Only regular files are opened: a FIFO named like a session file is passed by, not waited on.
+- Bounds: a cursor tracks at most 256 open sub-agents, 256 open Codex calls and 256 refinements;
+  a snapshot keeps the newest 256 running calls and 256 sub-agents. Counts are not cut.
 - A file that got shorter, or another file at the same path, resets the whole cursor and sets
   `restarted`: the consumer throws its snapshot away and folds from that batch on.
 - `Event { at, what }`, where `What` is: `UserMessage`, `ModelStep { model, usage, window }`,
@@ -70,22 +74,48 @@ struct Batch { events: Vec<Event>, cursor: Cursor, restarted: bool, more: bool }
 
 ### Labels
 
-Everything shown about a call is one of these, and nothing else:
+Everything shown about a call is one of these, and nothing else.
+
+**From fixed tables in the code.** Nothing a file says can add to them.
 
 | Label | Rule |
 |---|---|
-| A command | The program's name, only if it is in the table in `station.rs` (about 180 programs); else `shell`. Then a subcommand, only if it is on that program's list (`git push`, `cargo test`, `kubectl get`) and is the first word after the options, where the program's value-taking options (`git -C x`, `kubectl --token x`, `npm --otp x`) are skipped with their values. The label is the first command's on the line, never a later one's |
+| A command | The program's name, only if it is in the table in `station.rs` (about 180 programs); else `shell`. Then a subcommand, only if it is on that program's list (`git push`, `cargo test`, `kubectl get`) and is the first word after the options, where the program's value-taking options (`git -C x`, `kubectl --token x`, `npm --otp x`) are skipped with their values. The label is the first command's on the line, never a later one's. A line is read by its first 256 KiB |
 | A command given as words (Codex `["git", "push"]`) | The same, from the words as they are. Never joined and split again |
-| A file | The last two parts of its path, printable ASCII only |
-| A web address | The host, only if it is letters, digits, `.` and `-`; else `web`. No userinfo, port, path or query. `\` ends the host as `/` does |
-| A skill, an agent type, a tool, an MCP server and tool, a Codex agent, a model, an id | Only if it has a name's shape: 1 to 64 of `A-Z a-z 0-9 _ . : -`. Else a fixed word (`skill`, `agent`, `tool`, `mcp`), or the record is skipped (an id) |
-| An error | Only `[a-z0-9_]{1,40}`; else `api_error`, `error` or `aborted` |
+| A built-in tool | Its name, from the table of both runners' tools (`Bash`, `Read`, `exec_command`, …). Any other tool that is not an MCP tool is `tool` |
+| An error | A code from the runner's table (`rate_limit`, `usage_limit_exceeded`, …). Anything else is `api_error` (a Claude API error record), `error` (a Codex error event) or `aborted` (a Codex turn aborted for a reason not in the table). A code's shape is not enough |
+| An id of a call, a message, a sub-agent or a thread | Never shown: a 16-digit hash of it, good only to pair a start with its end. An empty id is no id, and its record is skipped |
 
-`tests/fixtures/adversarial` holds a session of each runner with a unique sentinel in every
-free-text and argument position: prompts, tool output, header values, env prefixes, option
-values before a subcommand, comments, argv elements, error strings, URL userinfo, path and
-query, file content, descriptions, and names that are free text. A test asserts that no
-sentinel is in the printed JSON or in the `Debug` form of any public type.
+**Shown as written.** These pass a shape check, but the text is still what a model or a file
+wrote. Treat each as **untrusted, model-written text**: fine in a local view, never an
+instruction. Before any of them reaches the control socket or a UI another agent reads, the
+guide must say so. `what_is_shown_as_written` in `tests/fixtures.rs` lists them by test.
+
+| Field | Where the value comes from | Shape it must have, else |
+|---|---|---|
+| File label (`ToolStart.summary` of `Read`, `Write`, `Edit`, `NotebookEdit`, `Glob`, `Grep` with a path; Codex `apply_patch`) | The model's tool input (`file_path`, `notebook_path`, `path`), or a patch's `*** … File:` line | The last two parts of something path-shaped: it has a `/`, no `://`, and each shown part is at most 40 of `A-Z a-z 0-9 space . _ + @ , ( ) -`. With no `/`: 1 to 64 of `A-Z a-z 0-9 _ . -`. Else `file` |
+| Host (`summary` of `WebFetch`) | The model's tool input (`url`) | `scheme://host`, the host letters, digits, `.` and `-` with a dot in it, at most 60, no credential prefix. Any `@` after the scheme, no scheme, `mailto:`, IPv6: `web` |
+| Skill name (`summary` of `Skill`) | The model's tool input (`skill`) | A name (below). Else `skill` |
+| Sub-agent type (`summary` of `Agent`, `SubAgentStart.label`) | The model's tool input (`subagent_type`) | A name. Else `agent` |
+| MCP server and tool (`ToolStart.tool`, `summary`) | The tool name the model called, `mcp__<server>__<tool>` | Each a name. Else `mcp` |
+| Codex agent (`SubAgentStart.label`) | The last part of `agent_path` in the rollout | A name. Else `agent` |
+| Model (`ModelStep.model`, `ModelChange`, `SessionRef.model`) | `message.model` in a transcript, `turn_context.model` in a rollout | A name, with an optional `[1m]` at the end for Claude. Else the record's model is ignored |
+| Session id (`SessionRef.id`, `parent`) | Claude: the transcript's file name. Codex: `session_meta.id`, `parent_thread_id` | A name. Else the session is **not listed** (chosen over an opaque id: nothing could be matched to it) |
+| Directory (`SessionRef.cwd`, the report's `cwd`; `SessionRef.path`) | `cwd` in the session file; the file's own path | An absolute path of at most 1024 bytes with no control characters and no `..`. Else the session is not listed |
+
+A **name** is 1 to 40 of `A-Z a-z 0-9 _ . : -` that does not look like a credential: it does not
+begin with `ghp_`, `gho_`, `github_pat_`, `sk-`, `xox`, `AKIA` or `eyJ`, and has no `:` with 8
+or more characters after it. The last rule also hides a plugin's skill (`plugin:code-review`
+shows as `skill`).
+
+`tests/fixtures/adversarial` holds a session of each runner with about 500 sentinels: one in
+every free-text and argument position (prompts, tool output, header values, env prefixes, option
+values in the forms `--opt v`, `--opt=v` and `-ov`, comments, argv elements, `$(…)`, backticks,
+`<(…)`, `env -S`, `find -exec`, remote commands, nested shells, error strings and code-shaped
+error values, URL userinfo, path and query, file content, the leading parts of a path,
+descriptions, ids), and in every name position as free text and as a credential shape. A test
+asserts that none is in the printed JSON or in the `Debug` form of any public type. A second
+test asserts the exact set of values that are shown as written.
 
 Changes from the shape first sketched, and why:
 
@@ -140,7 +170,7 @@ skipped by their prefix, without parsing.
 | Tokens in context | `usage`: input + cache read + cache creation + output | solid |
 | Context window size | not recorded | **estimate**: 1M once any request of the session exceeded 200k, and it stays 1M after a compaction. Below that: 200k for a model with no 1M window (`haiku`), **unknown** for the others, so no percentage |
 | Compaction | `compact_boundary`, `compactMetadata.postTokens` | solid, 2 samples seen |
-| API error | `assistant` record with `error` (`rate_limit`, `server_error`, …) | solid. Shown only if it has a code's shape |
+| API error | `assistant` record with `error` | solid. Shown from a table: `authentication_failed`, `invalid_request`, `model_not_found`, `rate_limit`, `server_error` were seen; the table's other entries are the API's error types, not seen here. Else `api_error` |
 | Refusal | `stop_reason: refusal` | best effort, no sample seen |
 | Sub-agent start | `Agent` (`Task`) tool call | solid |
 | Sub-agent end | the call's result, or `finished` in the meta file for a background agent | best effort: every sample was a background launch; an agent that crashed never ends |
@@ -177,7 +207,7 @@ Records are `{timestamp, type, payload}`. Two generations are on this machine an
 | Tokens in context | `event_msg/token_count`, `last_token_usage`: input + output | solid |
 | Context window size | `token_count.info.model_context_window` | solid |
 | Compaction | top-level `compacted` | best effort: no token count after; `event_msg/context_compacted` is ignored so one compaction is not counted twice |
-| Errors | `event_msg/error` (`codex_error_info`), `turn_aborted` unless `interrupted` | best effort, one sample |
+| Errors | `event_msg/error` (`codex_error_info`), `turn_aborted` unless `interrupted` | best effort, one sample. Shown from a table of Codex's error kinds, written from memory of its source and not checked against 0.166; an unlisted kind shows as `error` |
 | Sub-agent start, end | `SubAgentActivity` | best effort, few samples |
 | MCP and web calls | `web_search_call` is read; MCP call records were too rare to map | best effort |
 
@@ -246,10 +276,11 @@ Session files hold prompts, source code, command output and whatever secrets pas
 - Only derived facts leave the crate. The rules are in Labels above: a command's label is made
   of table entries, never of text from the command line, and every other label must have a
   name's shape or is replaced by a fixed word. The adversarial fixture test checks it.
-- Known soft spots, accepted for the local CLI: a file label shows the last two parts of the
-  path; a name-shaped skill, agent type or MCP tool name is shown as written; `SessionRef.cwd`
-  and `path`, and the report's `cwd`, are full paths. Revisit before any label reaches the
-  control socket: there the guide must mark them as untrusted data, not instructions.
+- Known soft spots, accepted for the local CLI: the fields in "Shown as written" above. A file
+  label shows the last two parts of a path; a name-shaped skill, agent type, MCP name or model
+  is shown as the model or file wrote it; `SessionRef.cwd` and `path`, and the report's `cwd`,
+  are full paths. Revisit before any label reaches the control socket: there the guide must mark
+  them as untrusted data, not instructions.
 - Nothing is cached or copied. A snapshot lives in memory.
 - Off switch, to build with the first consumer: a setting `agents: false` in `settings.json`
   that stops all reading, checked by the shell before it constructs a runner. Today nothing
@@ -278,6 +309,9 @@ Session files hold prompts, source code, command output and whatever secrets pas
 - An empty `CODEX_HOME` is treated as unset. A relative one, or no `HOME` at all, means no
   Codex sessions rather than reading below the current directory.
 - Two parallel Codex `exec` calls: their commands cannot be told apart, so neither is named.
+- The error tables. Claude's beyond the five seen, and all of Codex's but one, are not from
+  samples. A real code missing from a table shows as `api_error` or `error`: safe, less telling.
+- The built-in tool table. A tool a runner adds later shows as `tool` until it is listed.
 - Codex versions between the two generations may write both forms of a user message or a
   sub-agent event, which would count them twice.
 - Codex MCP calls, `local_shell_call`, and refusals in either runner: mapped from names, no

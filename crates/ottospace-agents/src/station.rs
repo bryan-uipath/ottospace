@@ -92,42 +92,151 @@ fn describe(commands: &[Cmd]) -> (Station, String) {
     (station, commands.first().map_or(UNKNOWN.to_string(), |c| c.label.clone()))
 }
 
-/// A path's label: its last two parts, e.g. `/Users/me/app/src/main.rs` → `src/main.rs`.
+/// A file's label: the last two parts of its path, e.g. `/Users/me/app/src/main.rs` → `src/main.rs`.
+/// Only for something with a path's shape: it has a `/` and no `://`, and each part shown is at
+/// most 40 of `A-Z a-z 0-9 space . _ + @ , ( ) -`. A string with no `/` is shown if it is a file's
+/// name: 1 to 64 of `A-Z a-z 0-9 _ . -`. Anything else gives `file`.
 pub fn path_label(path: &str) -> String {
+    const FILE: &str = "file";
+    if path.contains("://") {
+        return FILE.to_string();
+    }
+    if !path.contains('/') {
+        let named =
+            (1..=64).contains(&path.len()) && path.chars().all(|c| c.is_ascii_alphanumeric() || "_.-".contains(c));
+        return if named { path } else { FILE }.to_string();
+    }
     let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
-    clean(&parts[parts.len().saturating_sub(2)..].join("/"))
+    let shown = &parts[parts.len().saturating_sub(2)..];
+    let plain =
+        |part: &&str| part.len() <= 40 && part.chars().all(|c| c.is_ascii_alphanumeric() || " ._+@,()-".contains(c));
+    if shown.is_empty() || !shown.iter().all(plain) { FILE.to_string() } else { shown.join("/") }
 }
 
-/// A web address's label: the host alone, e.g. `https://me:pw@example.com:8080/a?b` → `example.com`.
-/// Anything but letters, digits, `.` and `-` in the host (an IPv6 address too) gives `web`.
+/// A web address's label: the host alone, e.g. `https://example.com:8080/a?b` → `example.com`.
+/// Only from `scheme://host`, where the host is letters, digits, `.` and `-` with a dot in it.
+/// An address with an `@` anywhere after the scheme gives `web`: where userinfo ends cannot be
+/// told safely (`https://user:pa/ss@host`). So do an IPv6 address and anything else.
 pub fn host_label(url: &str) -> String {
-    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
-    // Browsers read `\` as `/`, so `https://a.example\@b/` is the host `a.example`.
+    const WEB: &str = "web";
+    let Some((scheme, rest)) = url.split_once("://") else { return WEB.to_string() };
+    let schemed = scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme.chars().all(|c| c.is_ascii_alphanumeric() || "+.-".contains(c));
+    if !schemed || rest.contains('@') {
+        return WEB.to_string();
+    }
+    // Browsers read `\` as `/`.
     let authority = rest.split(['/', '\\', '?', '#']).next().unwrap_or("");
-    let host = authority.rsplit('@').next().unwrap_or("").split(':').next().unwrap_or("");
-    let plain = host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
-    if host.is_empty() || host.len() > 60 || !plain { "web".to_string() } else { host.to_string() }
+    let (host, port) = authority.split_once(':').unwrap_or((authority, ""));
+    let plain = host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        && port.chars().all(|c| c.is_ascii_digit());
+    let shown = plain && host.contains('.') && host.len() <= 60 && !looks_secret(host);
+    if shown { host } else { WEB }.to_string()
 }
 
-/// A label fit to show: printable ASCII only (no control, bidi or zero-width characters), at most 60 characters.
-pub fn clean(label: &str) -> String {
-    label.chars().filter(|c| (' '..='~').contains(c)).take(60).collect()
+/// True for a value shaped like a credential: a well-known token prefix, or a `:` with 8 or more
+/// characters after it (`user:password`).
+fn looks_secret(text: &str) -> bool {
+    const PREFIXES: &[&str] = &["ghp_", "gho_", "github_pat_", "sk-", "xox", "AKIA", "eyJ"];
+    PREFIXES.iter().any(|p| text.starts_with(p)) || text.split_once(':').is_some_and(|(_, after)| after.len() >= 8)
 }
 
-/// `text` if it has the shape of a name: 1 to 64 ASCII letters, digits or `_ . : -`. Else `fallback`.
-/// e.g. `("code-review", "skill")` → `code-review`, `("review my secret", "skill")` → `skill`.
+/// True if `text` has the shape of a name and not of a credential: 1 to 40 ASCII letters, digits
+/// or `_ . : -`, e.g. `code-review`. Not `review my notes`, `ghp_abc`, `me:hunter2hunter2`.
+pub fn is_name(text: &str) -> bool {
+    (1..=40).contains(&text.len())
+        && text.chars().all(|c| c.is_ascii_alphanumeric() || "_.:-".contains(c))
+        && !looks_secret(text)
+}
+
+/// `text` if it is a name (`is_name`), else `fallback`. The text is still what a model or a file
+/// said: a name-shaped value is shown as written.
 pub fn name(text: &str, fallback: &str) -> String {
-    let shaped =
-        (1..=64).contains(&text.len()) && text.chars().all(|c| c.is_ascii_alphanumeric() || "_.:-".contains(c));
-    if shaped { text } else { fallback }.to_string()
+    if is_name(text) { text } else { fallback }.to_string()
 }
 
-/// `text` if it has the shape of an error code: 1 to 40 of `a-z 0-9 _`. Else `fallback`.
-/// e.g. `("rate_limit", "error")` → `rate_limit`, `("Rate limit for key sk-1", "error")` → `error`.
-pub fn code(text: &str, fallback: &str) -> String {
-    let shaped = (1..=40).contains(&text.len())
-        && text.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
-    if shaped { text } else { fallback }.to_string()
+/// `text` if it is one of the `known` error codes, else `fallback`. e.g. `rate_limit` is known;
+/// `rate limit for key sk-1` and `zz_made_up_code` are not.
+pub fn code(text: &str, known: &[&'static str], fallback: &'static str) -> String {
+    known.iter().find(|k| **k == text).copied().unwrap_or(fallback).to_string()
+}
+
+/// The runners' built-in tools. Any other tool that is not an MCP tool is shown as `tool`.
+const TOOLS: &[&str] = &[
+    // Claude Code
+    "Read",
+    "Write",
+    "Edit",
+    "MultiEdit",
+    "NotebookEdit",
+    "Grep",
+    "Glob",
+    "LS",
+    "Bash",
+    "BashOutput",
+    "KillShell",
+    "KillBash",
+    "PowerShell",
+    "Monitor",
+    "WebFetch",
+    "WebSearch",
+    "Agent",
+    "Task",
+    "SendMessage",
+    "TaskStop",
+    "TaskOutput",
+    "TaskCreate",
+    "TaskUpdate",
+    "TaskGet",
+    "TaskList",
+    "Workflow",
+    "Skill",
+    "ToolSearch",
+    "AskUserQuestion",
+    "TodoWrite",
+    "EnterPlanMode",
+    "ExitPlanMode",
+    "EnterWorktree",
+    "ExitWorktree",
+    "Artifact",
+    "ArtifactComments",
+    "ArtifactData",
+    "StructuredOutput",
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "LSP",
+    "ListMcpResourcesTool",
+    "ReadMcpResourceTool",
+    // Codex
+    "exec",
+    "exec_command",
+    "shell",
+    "local_shell_call",
+    "write_stdin",
+    "apply_patch",
+    "view_image",
+    "update_plan",
+    "web_search",
+    "web_search_call",
+    "tool_search_call",
+    "spawn_agent",
+    "send_message",
+    "wait_agent",
+    "close_agent",
+    "sleep",
+];
+
+/// A tool's label: a built-in tool's name from the table; `server/tool` for an MCP tool whose
+/// two names are names (else `mcp`); `tool` for anything else.
+pub fn tool_label(tool: &str) -> String {
+    if let Some(rest) = tool.strip_prefix("mcp__") {
+        return match rest.split_once("__") {
+            Some((server, tool)) if is_name(server) && is_name(tool) => format!("{server}/{tool}"),
+            _ => "mcp".to_string(),
+        };
+    }
+    TOOLS.iter().find(|t| **t == tool).copied().unwrap_or("tool").to_string()
 }
 
 /// One command of a line: its station, and a label made of table entries.
@@ -136,6 +245,9 @@ struct Cmd {
     station: Station,
     label: String,
 }
+
+/// A longer command line is read by its first part only. The label is the first command's anyway.
+const MAX_CHARS: usize = 256 << 10;
 
 /// A shell inside a shell is followed this deep, e.g. `bash -c "sh -c 'curl x'"`.
 const MAX_DEPTH: u8 = 3;
@@ -149,7 +261,7 @@ fn parse(line: &str, depth: u8) -> Vec<Cmd> {
 /// and `$(`, also inside double quotes. Quotes are honoured. Dropped: `# comments`, heredoc bodies
 /// and array values (`A=(x y)`), which are data, not commands.
 fn split(line: &str) -> Vec<Vec<String>> {
-    let chars: Vec<char> = line.chars().collect();
+    let chars: Vec<char> = line.chars().take(MAX_CHARS).collect();
     let mut commands: Vec<Vec<String>> = Vec::new();
     let mut words: Vec<String> = Vec::new();
     let mut word = String::new();
@@ -763,7 +875,7 @@ const PROGRAMS: &[Program] = &[
 /// e.g. `sudo -u deploy <cmd>`, `timeout -s KILL 30 <cmd>`, `xargs -I {} <cmd>`, `if <cmd>`.
 const WRAPPERS: &[(&str, &[&str], usize)] = &[
     ("sudo", &["-u", "-g", "-h", "-p", "-C", "-D", "-R", "-T", "-r", "-t", "-U"], 0),
-    ("env", &["-u", "-C", "-S", "-P"], 0),
+    ("env", &["-u", "-C", "-S", "--split-string", "-P"], 0),
     ("timeout", &["-s", "-k", "--signal", "--kill-after"], 1),
     ("xargs", &["-I", "-n", "-P", "-L", "-s", "-E", "-d", "-a", "-J", "-R"], 0),
     ("nice", &["-n"], 0),
@@ -820,25 +932,32 @@ fn first_plain<'a>(words: &[&'a str], values: &[&str]) -> Option<&'a str> {
 /// The commands one list of words runs: usually one; none for `cd` and the like; several for `bash -c '<line>'`.
 /// e.g. `["sudo", "-u", "deploy", "git", "-C", "x", "push"]` → [(Network, "git push")].
 fn command(words: &[String], depth: u8) -> Vec<Cmd> {
-    let mut rest: Vec<&str> = words.iter().map(String::as_str).filter(|w| !is_redirection(w)).collect();
-    // Skip `A=b` and wrappers, with each wrapper's own options.
+    let all: Vec<&str> = words.iter().map(String::as_str).filter(|w| !is_redirection(w)).collect();
+    // Skip `A=b` and wrappers, with each wrapper's own options. By index: a line may hold very many of them.
+    let mut at = 0;
     loop {
-        let Some(first) = rest.first().copied() else { return Vec::new() };
+        let Some(first) = all.get(at).copied() else { return Vec::new() };
         if is_assignment(first) {
-            rest.remove(0);
-        } else if let Some((_, values, skip)) = WRAPPERS.iter().find(|w| w.0 == first) {
-            rest.remove(0);
-            while rest.first().is_some_and(|w| w.starts_with('-')) {
-                let option = rest.remove(0);
-                if values.contains(&option) && !rest.is_empty() {
-                    rest.remove(0);
+            at += 1;
+        } else if let Some((wrapper, values, skip)) = WRAPPERS.iter().find(|w| w.0 == first) {
+            at += 1;
+            while let Some(option) = all.get(at).copied().filter(|w| w.starts_with('-')) {
+                at += 1;
+                if !values.contains(&option) {
+                    continue;
                 }
+                // `env -S '<line>'` runs the line.
+                if *wrapper == "env" && matches!(option, "-S" | "--split-string") {
+                    return all.get(at).filter(|_| depth < MAX_DEPTH).map_or(Vec::new(), |line| parse(line, depth + 1));
+                }
+                at += 1;
             }
-            rest.drain(..(*skip).min(rest.len()));
+            at += skip;
         } else {
             break;
         }
     }
+    let rest = &all[at..];
     // A program run by its path goes by its name, e.g. `/usr/bin/curl` and `CURL.EXE` are `curl`.
     let program = rest[0].rsplit(['/', '\\']).next().unwrap_or("").to_ascii_lowercase();
     let program = program.strip_suffix(".exe").unwrap_or(&program);
@@ -1039,17 +1158,59 @@ mod tests {
     }
 
     #[test]
-    fn labels_are_names_only() {
-        assert_eq!(path_label("/Users/me/app/src/main.rs"), "src/main.rs");
-        assert_eq!(path_label("main.rs"), "main.rs");
-        assert_eq!(path_label(""), "");
-        assert_eq!(path_label("/a/b\u{202e}c/d\u{200b}e\n.rs"), "bc/de.rs");
+    fn a_file_label_needs_a_paths_shape() {
+        let cases = [
+            ("/Users/me/app/src/main.rs", "src/main.rs"),
+            ("src/main.rs", "src/main.rs"),
+            ("./notes (old)/a+b, v2@home.txt", "notes (old)/a+b, v2@home.txt"),
+            ("main.rs", "main.rs"),
+            ("/main.rs", "main.rs"),
+            // Free text, with and without a slash in it.
+            ("please read the secret plan for acme", "file"),
+            ("the key is hunter2: see notes/2026 & more", "file"),
+            ("/tmp/API_KEY=sk-ant-abcdef.txt", "file"),
+            ("/tmp/a=b/c.txt", "file"),
+            ("https://user:hunter2@example.com/a/b.txt", "file"),
+            ("C:\\Users\\me\\secret.txt", "file"),
+            ("/a/b\u{202e}c/d.rs", "file"),
+            ("/a/b/d\u{200b}e\n.rs", "file"),
+            ("/a/é/b.rs", "file"),
+            ("", "file"),
+            ("/", "file"),
+        ];
+        for (path, label) in cases {
+            assert_eq!(path_label(path), label, "{path}");
+        }
+        assert_eq!(path_label(&format!("/a/{}/b.rs", "x".repeat(41))), "file");
+        assert_eq!(path_label(&format!("/a/{}/b.rs", "x".repeat(40))).len(), 45);
+        assert_eq!(path_label(&"x".repeat(65)), "file");
+    }
+
+    #[test]
+    fn a_host_is_shown_only_from_a_plain_address() {
         let hosts = [
-            ("https://me:pw@example.com:8080/a/b?q=secret#f", "example.com"),
-            ("example.com/path", "example.com"),
-            ("https://x.example\\@evil.example/", "x.example"),
-            ("https://user@evil.example\\@x.example/", "evil.example"),
-            ("https://s3cr3t:pw@/path", "web"),
+            ("https://example.com:8080/a/b?q=secret#f", "example.com"),
+            ("http://sub.example.co.uk", "sub.example.co.uk"),
+            ("https://x.example\\evil/", "x.example"),
+            // Userinfo, wherever it seems to end.
+            ("https://me:pw@example.com:8080/a", "web"),
+            ("https://ZQuser:pa/ss@ZQhost.example/x", "web"),
+            ("https://ZQtok/en@github.com/x", "web"),
+            ("https://ZQuser:p?ss@host", "web"),
+            ("https://ZQuser#x@host", "web"),
+            ("https://x.example\\@evil.example/", "web"),
+            ("https://example.com/a?mail=me@corp.example", "web"),
+            // Not an address.
+            ("ZQbare-token-no-scheme", "web"),
+            ("sk-ant-ZQ03-abcdef", "web"),
+            ("mailto:ZQme@ZQcorp.example", "web"),
+            ("example.com/path", "web"),
+            ("://example.com", "web"),
+            ("1http://example.com", "web"),
+            ("https://localhost/", "web"),
+            ("https://ZQtoken/", "web"),
+            ("https://sk-ant.example/", "web"),
+            ("https://example.com:80a/", "web"),
             ("http://[::1]:8080/a", "web"),
             ("https://exa mple.com/", "web"),
             ("https://ex\u{202e}ample.com/", "web"),
@@ -1059,16 +1220,107 @@ mod tests {
         for (url, host) in hosts {
             assert_eq!(host_label(url), host, "{url}");
         }
-        assert_eq!(clean("a\u{1b}[31mb\nc\u{202e}d\u{200b}é"), "a[31mbcd");
-        assert_eq!(clean(&"x".repeat(200)).len(), 60);
-        assert_eq!(name("code-review", "skill"), "code-review");
-        assert_eq!(name("ns:tool_1.2", "skill"), "ns:tool_1.2");
-        for bad in ["", "review my secret", "a/b", "é", "a\u{200b}b", &"x".repeat(65)] {
+    }
+
+    #[test]
+    fn a_name_is_not_free_text_and_not_a_credential() {
+        for good in ["code-review", "Explore", "ns:tool", "claude-opus-5-5", "gpt-5.4", &"x".repeat(40)] {
+            assert_eq!(name(good, "skill"), good);
+        }
+        let bad = [
+            "",
+            "review my secret",
+            "a/b",
+            "é",
+            "a\u{200b}b",
+            &"x".repeat(41),
+            "ghp_abcdefghijklmnop",
+            "gho_abc",
+            "github_pat_11ABC",
+            "sk-ant-api03-abc",
+            "xoxb-123-abc",
+            "AKIAIOSFODNN7EXAMPLE",
+            "eyJhbGciOiJIUzI1NiJ9",
+            "me:hunter2hunter2",
+            "a:b:12345678",
+            // The price of the `:` rule: a plugin's skill is not named.
+            "my-plugin:code-review",
+        ];
+        for bad in bad {
             assert_eq!(name(bad, "skill"), "skill", "{bad}");
         }
-        assert_eq!(code("rate_limit", "error"), "rate_limit");
-        for bad in ["", "Rate limit", "rate-limit", "key sk-1 is over its limit", &"x".repeat(41)] {
-            assert_eq!(code(bad, "error"), "error", "{bad}");
+    }
+
+    #[test]
+    fn error_codes_and_tools_come_from_tables() {
+        let known = &["rate_limit", "overloaded"];
+        assert_eq!(code("rate_limit", known, "error"), "rate_limit");
+        for bad in ["", "Rate limit", "rate_limit ", "zz_made_up_code", "key sk-1 is over its limit"] {
+            assert_eq!(code(bad, known, "error"), "error", "{bad}");
         }
+        let tools = [
+            ("Bash", "Bash"),
+            ("exec_command", "exec_command"),
+            ("mcp__github__create_issue", "github/create_issue"),
+            ("mcp__my server__x", "mcp"),
+            ("mcp__ghp_abcdef__x", "mcp"),
+            ("mcp____x", "mcp"),
+            ("mcp__server", "mcp"),
+            ("SomethingNew", "tool"),
+            ("zz_made_up_tool", "tool"),
+            ("A private tool name", "tool"),
+            ("", "tool"),
+        ];
+        for (tool, label) in tools {
+            assert_eq!(tool_label(tool), label, "{tool}");
+        }
+    }
+
+    #[test]
+    fn more_command_forms() {
+        let cases: &[(&str, Station, &str)] = &[
+            ("curl --header=X-Key:s3cr3t -us3cr3t:pw https://x", Network, "curl"),
+            ("git --git-dir=s3cr3t -Cs3cr3t status", Shell, "git status"),
+            ("echo $(s3cr3t --x) `s3cr3t2`", Shell, "shell"),
+            ("diff <(curl -s https://x/s3cr3t) <(cat s3cr3t)", Network, "diff"),
+            ("env -S 'curl https://x/s3cr3t' s3cr3t", Network, "curl"),
+            ("env --split-string 's3cr3t run'", Shell, "shell"),
+            ("find s3cr3t -name s3cr3t -exec grep s3cr3t {} \\;", Files, "grep"),
+            ("ssh s3cr3t@s3cr3t.example 'rm -rf s3cr3t; curl s3cr3t'", Network, "ssh"),
+            ("bash -c \"bash -c 'zsh -c \\\"curl s3cr3t\\\"'\"", Network, "curl"),
+            ("bash -c \"bash -c 'zsh -c \\\"sh -c s3cr3t\\\"'\"", Shell, "sh"),
+        ];
+        for (line, station, label) in cases {
+            let got = describe_command(line);
+            assert_eq!(got, (*station, label.to_string()), "{line}");
+            assert!(from_tables(&got.1) && !got.1.contains("s3cr3t"), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_huge_hostile_line_is_classified_quickly() {
+        let mb = 1 << 20;
+        let lines = [
+            "A=1 ".repeat(mb / 4),
+            "sudo -u x ".repeat(mb / 10) + "curl x",
+            "a;".repeat(mb / 2),
+            "$(".repeat(mb / 2),
+            "((((".repeat(mb / 4),
+            "bash -c '".repeat(mb / 9),
+            "\"`".repeat(mb / 2),
+            "<<A\n".repeat(mb / 4),
+            "#\n".repeat(mb / 2),
+            "x".repeat(mb),
+            "'".repeat(mb),
+            "\\".repeat(mb),
+        ];
+        let started = std::time::Instant::now();
+        for line in &lines {
+            assert!(from_tables(&describe_command(line).1));
+            let words: Vec<&str> = line.split(' ').collect();
+            assert!(from_tables(&describe_argv(&words).1));
+        }
+        // Linear work on at most the first 256 KiB of each: well under a second here, even unoptimised.
+        assert!(started.elapsed() < std::time::Duration::from_secs(20), "{:?}", started.elapsed());
     }
 }

@@ -1,6 +1,6 @@
 //! Reading JSON-lines session files a runner may still be writing.
 
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
@@ -9,12 +9,31 @@ use serde_json::Value;
 /// A longer line is skipped without being held in memory.
 pub const MAX_LINE: u64 = 64 << 20;
 
+/// Opens a regular file. A FIFO or device named like a session file is an error, not a read that never returns.
+pub fn open(path: &Path) -> io::Result<File> {
+    let regular = |meta: fs::Metadata| meta.is_file().then_some(()).ok_or(io::ErrorKind::InvalidInput);
+    regular(fs::metadata(path)?)?;
+    let file = File::open(path)?;
+    // And again on what was opened, in case the path changed in between.
+    regular(file.metadata()?)?;
+    Ok(file)
+}
+
 /// Calls `each` with every complete line after byte `offset`, until the end of the file, until
 /// `budget` bytes were read, or until `each` returns true. Returns the new offset and whether
 /// it stopped before the end. A last line without its newline is still being written: it is
 /// left for the next call.
-pub fn lines(file: File, offset: u64, budget: u64, each: impl FnMut(&str) -> bool) -> io::Result<(u64, bool)> {
-    lines_capped(file, offset, budget, MAX_LINE, each)
+///
+/// `skipping` says the bytes at `offset` are the rest of an oversized line; it is set when such
+/// a line has no end yet, so the next call goes on from there and does not scan the line again.
+pub fn lines(
+    file: File,
+    offset: u64,
+    budget: u64,
+    skipping: &mut bool,
+    each: impl FnMut(&str) -> bool,
+) -> io::Result<(u64, bool)> {
+    lines_capped(file, offset, budget, MAX_LINE, skipping, each)
 }
 
 fn lines_capped(
@@ -22,6 +41,7 @@ fn lines_capped(
     offset: u64,
     budget: u64,
     max_line: u64,
+    skipping: &mut bool,
     mut each: impl FnMut(&str) -> bool,
 ) -> io::Result<(u64, bool)> {
     file.seek(SeekFrom::Start(offset))?;
@@ -29,6 +49,15 @@ fn lines_capped(
     let (start, mut offset) = (offset, offset);
     let mut line = Vec::new();
     loop {
+        if *skipping {
+            // Pass over the rest of an oversized line. Without its end yet, stop at what is there.
+            let (skipped, ended) = skip_line(&mut reader)?;
+            offset += skipped;
+            *skipping = !ended;
+            if !ended {
+                return Ok((offset, false));
+            }
+        }
         if offset - start >= budget {
             return Ok((offset, true));
         }
@@ -41,9 +70,7 @@ fn lines_capped(
             if read <= max_line {
                 return Ok((offset, false));
             }
-            // Too long: pass over the rest of it. If it has no end yet, wait like for any half line.
-            let Some(rest) = skip_line(&mut reader)? else { return Ok((offset, false)) };
-            offset += read + rest;
+            (offset, *skipping) = (offset + read, true);
             continue;
         }
         offset += read;
@@ -56,27 +83,27 @@ fn lines_capped(
     }
 }
 
-/// Reads past the next newline and returns how many bytes that was, or `None` if the file ends first.
-fn skip_line(reader: &mut impl BufRead) -> io::Result<Option<u64>> {
+/// Reads up to and past the next newline. Returns how many bytes that was, and whether a newline was there.
+fn skip_line(reader: &mut impl BufRead) -> io::Result<(u64, bool)> {
     let mut skipped = 0;
     loop {
         let buffer = reader.fill_buf()?;
         if buffer.is_empty() {
-            return Ok(None);
+            return Ok((skipped, false));
         }
         let newline = buffer.iter().position(|b| *b == b'\n');
         let used = newline.map_or(buffer.len(), |at| at + 1);
         reader.consume(used);
         skipped += used as u64;
         if newline.is_some() {
-            return Ok(Some(skipped));
+            return Ok((skipped, true));
         }
     }
 }
 
 /// The first complete lines of a file, parsed: at most `max_lines` lines and `max_bytes` bytes.
 pub fn head(path: &Path, max_lines: usize, max_bytes: u64) -> io::Result<Vec<Value>> {
-    let mut reader = BufReader::new(File::open(path)?.take(max_bytes));
+    let mut reader = BufReader::new(open(path)?.take(max_bytes));
     let mut records = Vec::new();
     let mut line = String::new();
     for _ in 0..max_lines {
@@ -92,7 +119,7 @@ pub fn head(path: &Path, max_lines: usize, max_bytes: u64) -> io::Result<Vec<Val
 
 /// The complete lines in the last `max_bytes` of a file, oldest first.
 pub fn tail(path: &Path, max_bytes: u64) -> io::Result<Vec<String>> {
-    let mut file = File::open(path)?;
+    let mut file = open(path)?;
     let len = file.metadata()?.len();
     let start = len.saturating_sub(max_bytes);
     file.seek(SeekFrom::Start(start))?;
@@ -106,6 +133,12 @@ pub fn tail(path: &Path, max_bytes: u64) -> io::Result<Vec<String>> {
         lines.remove(0);
     }
     Ok(lines.into_iter().map(str::to_string).collect())
+}
+
+/// A small regular file's text, e.g. a pid file. Not a pipe or device, and not a huge file.
+pub fn small(path: &Path) -> Option<String> {
+    let meta = fs::metadata(path).ok()?;
+    (meta.is_file() && meta.len() < 65_536).then(|| fs::read_to_string(path).ok()).flatten()
 }
 
 /// An RFC 3339 UTC time in Unix milliseconds, e.g. `2026-11-12T10:44:00.123Z` → 1794480240123.
@@ -140,6 +173,12 @@ pub fn time_of(record: &Value) -> u64 {
 mod tests {
     use super::*;
     use std::io::Cursor;
+    use std::io::Write;
+    use std::path::PathBuf;
+
+    fn temp(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("ottospace-agents-{}-{name}", std::process::id()))
+    }
 
     #[test]
     fn parses_times() {
@@ -166,24 +205,54 @@ mod tests {
 
     #[test]
     fn an_oversized_line_is_skipped_not_held() {
-        let path = std::env::temp_dir().join(format!("ottospace-agents-{}-lines.jsonl", std::process::id()));
+        let path = temp("lines.jsonl");
         let long = "x".repeat(100);
         std::fs::write(&path, format!("one\n{long}\ntwo\n{long}")).unwrap();
         let mut seen = Vec::new();
-        let read = lines_capped(File::open(&path).unwrap(), 0, u64::MAX, 10, |line| {
-            seen.push(line.to_string());
-            false
-        });
-        // The long line in the middle is passed over; the one at the end has no newline yet.
-        assert_eq!(read.unwrap(), (4 + 101 + 4, false));
+        let mut skipping = false;
+        let read = |offset: u64, skipping: &mut bool, seen: &mut Vec<String>| {
+            let file = File::open(&path).unwrap();
+            let each = |line: &str| {
+                seen.push(line.to_string());
+                false
+            };
+            lines_capped(file, offset, u64::MAX, 10, skipping, each).unwrap().0
+        };
+        // The long line in the middle is passed over. The one at the end has no newline yet:
+        // the offset moves past what is there, and the flag says a line is being skipped.
+        let offset = read(0, &mut skipping, &mut seen);
+        assert_eq!((offset, skipping), (4 + 101 + 4 + 100, true));
         assert_eq!(seen, ["one", "two"]);
+        // More of it arrives: only the new bytes are read.
+        let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(b"yyyy").unwrap();
+        let offset = read(offset, &mut skipping, &mut seen);
+        assert_eq!((offset, skipping), (4 + 101 + 4 + 104, true));
+        // Its end arrives, and a line after it.
+        file.write_all(b"zz\nthree\n").unwrap();
+        let offset = read(offset, &mut skipping, &mut seen);
+        assert_eq!((offset, skipping), (4 + 101 + 4 + 107 + 6, false));
+        assert_eq!(seen, ["one", "two", "three"]);
         std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
     fn skips_to_the_end_of_a_line() {
         let mut reader = BufReader::with_capacity(4, Cursor::new(b"abcdefgh\nrest".to_vec()));
-        assert_eq!(skip_line(&mut reader).unwrap(), Some(9));
-        assert_eq!(skip_line(&mut reader).unwrap(), None, "no newline yet");
+        assert_eq!(skip_line(&mut reader).unwrap(), (9, true));
+        assert_eq!(skip_line(&mut reader).unwrap(), (4, false), "no newline yet");
+    }
+
+    #[test]
+    fn only_a_regular_file_is_opened() {
+        // A FIFO with no writer would block `File::open` for good.
+        let path = temp("pipe.jsonl");
+        let _ = std::fs::remove_file(&path);
+        let made = std::process::Command::new("mkfifo").arg(&path).status().is_ok_and(|s| s.success());
+        assert!(made, "mkfifo");
+        assert_eq!(open(&path).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        assert!(head(&path, 1, 100).is_err() && tail(&path, 100).is_err() && small(&path).is_none());
+        assert_eq!(open(&std::env::temp_dir()).unwrap_err().kind(), io::ErrorKind::InvalidInput, "a directory");
+        std::fs::remove_file(&path).unwrap();
     }
 }

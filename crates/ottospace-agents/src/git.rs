@@ -11,8 +11,10 @@ use std::path::{Path, PathBuf};
 /// not there, is an error.
 /// e.g. from `/code/app-wt/src` → `[/code/app, /code/app-wt]`.
 pub fn checkouts(dir: &Path) -> io::Result<Vec<PathBuf>> {
-    crate::absolute(&[dir.to_path_buf()])?;
-    // Runners record the real path, e.g. `/private/tmp/x` for `/tmp/x`.
+    if !dir.is_absolute() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("not an absolute directory: {dir:?}")));
+    }
+    // Runners record the real path, e.g. `/private/tmp/x` for `/tmp/x`. This resolves `..` too.
     let dir = dir.canonicalize()?;
     let alone = vec![dir.clone()];
     let Some(root) = dir.ancestors().find(|d| d.join(".git").exists()) else { return Ok(alone) };

@@ -8,6 +8,10 @@ use crate::{Event, What};
 /// How many finished calls a snapshot keeps.
 const RECENT: usize = 16;
 
+/// How many running calls, and how many sub-agents, a snapshot keeps: the newest. A file that
+/// starts calls and never ends them cannot grow a snapshot without bound.
+pub const MAX_RUNNING: usize = 256;
+
 /// A tool call, running or finished.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Call {
@@ -101,6 +105,9 @@ impl Snapshot {
                     ended: None,
                     failed: false,
                 });
+                if self.running.len() > MAX_RUNNING {
+                    self.running.remove(0);
+                }
             }
             What::ToolEnd { id, failed, station, summary } => {
                 // An end without a start (the reader began mid-session) is dropped.
@@ -130,6 +137,9 @@ impl Snapshot {
             What::SubAgentStart { id, label } => {
                 if !self.subagents.iter().any(|a| a.id == *id) {
                     self.subagents.push(SubAgent { id: id.clone(), label: label.clone(), started: at });
+                }
+                if self.subagents.len() > MAX_RUNNING {
+                    self.subagents.remove(0);
                 }
             }
             What::SubAgentEnd { id } => self.subagents.retain(|a| a.id != *id),
@@ -186,6 +196,18 @@ mod tests {
 
     fn end(time: u64, id: &str, failed: bool) -> Event {
         at(time, What::ToolEnd { id: id.to_string(), failed, station: None, summary: None })
+    }
+
+    #[test]
+    fn running_calls_and_subagents_are_bounded() {
+        let mut s = Snapshot::default();
+        for i in 0..1000 {
+            s.apply(&start(i, &format!("call-{i}"), Station::Shell));
+            s.apply(&at(i, What::SubAgentStart { id: format!("agent-{i}"), label: "agent".into() }));
+        }
+        assert_eq!((s.running.len(), s.subagents.len()), (MAX_RUNNING, MAX_RUNNING));
+        assert_eq!((s.running[0].id.as_str(), s.running[MAX_RUNNING - 1].id.as_str()), ("call-744", "call-999"));
+        assert_eq!(s.counts.get(&Station::Shell), Some(&1000), "the count is not cut");
     }
 
     #[test]

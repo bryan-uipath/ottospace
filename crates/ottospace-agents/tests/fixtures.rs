@@ -430,27 +430,34 @@ fn report_skips_a_session_whose_file_vanished() {
     assert_eq!(report["sessions"].as_array().unwrap().len(), 0);
 }
 
-/// The marker in every free-text and argument position of `tests/fixtures/adversarial`: prompts,
-/// tool output, header values, env prefixes, option values, comments, argv elements, error
-/// strings, URL userinfo, path and query, file content, descriptions, free-text names.
-const SENTINEL: &str = "ZZSENT";
+/// In `tests/fixtures/adversarial`, the marker of a value that must never come out. One is in
+/// every free-text and argument position: prompts, tool output, header values, env prefixes,
+/// option values (`--opt v`, `--opt=v`, `-ov`), comments, argv elements, `$(…)`, backticks,
+/// `<(…)`, `env -S`, `find -exec`, remote commands, nested shells, error strings and codes, URL
+/// userinfo, path and query, file content, the leading parts of a path, descriptions, ids, and
+/// names that are free text or shaped like a credential.
+const HIDDEN: &str = "zzsent";
 
-#[test]
-fn nothing_private_comes_out() {
+/// The marker of a value that is shown as written, by design.
+const SHOWN: &str = "zzshow";
+
+/// Everything the crate gives out about the adversarial sessions, as text: the report's JSON and
+/// the `Debug` form of every public type. With the snapshot of each runner's session.
+fn adversarial() -> (String, Snapshot, Snapshot) {
     let root = fixtures().join("adversarial");
     let (claude, codex) = (Claude::new(vec![root.join("claude")]), Codex::new(root.join("codex")));
     let runners: [&dyn Runner; 2] = [&claude, &codex];
-    let dirs = [PathBuf::from("/work/adv")];
+    let dirs = [PathBuf::from("/work/ZZSHOWcwd")];
 
-    // Everything the crate gives out, as text: the JSON, and the Debug form of every public type.
     let mut out = serde_json::to_string(&report(&runners, &dirs, 0, 10).unwrap()).unwrap();
     let mut snapshots = Vec::new();
     for runner in runners {
+        // One session each: the files with a name or a cwd that is not one are not listed.
         let sessions = runner.sessions(&dirs).unwrap();
-        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions.len(), 1, "{sessions:?}");
         let session = &sessions[0];
-        let source = fs::read_to_string(&session.path).unwrap();
-        assert!(source.matches(SENTINEL).count() > 50, "the fixture is full of sentinels");
+        let source = fs::read_to_string(&session.path).unwrap().to_lowercase();
+        assert!(source.matches(HIDDEN).count() > 80, "the fixture is full of sentinels");
         out += &format!("{session:?} {:?}", runner.model(session));
         // In small slices, so cursors with calls still open are printed too.
         let (mut cursor, mut snapshot) = (Cursor::default(), Snapshot::default());
@@ -465,62 +472,184 @@ fn nothing_private_comes_out() {
         }
         snapshots.push(snapshot);
     }
-    if let Some(at) = out.find(SENTINEL) {
-        let from = out[..at].char_indices().rev().nth(80).map_or(0, |(i, _)| i);
-        panic!("a sentinel came out: …{}", &out[from..(at + 12).min(out.len())]);
+    let codex = snapshots.pop().unwrap();
+    (out, snapshots.pop().unwrap(), codex)
+}
+
+fn labels<'a>(calls: impl Iterator<Item = &'a ottospace_agents::snapshot::Call>) -> Vec<String> {
+    calls.map(|c| format!("{:?} {}: {}", c.station, c.tool, c.summary)).collect()
+}
+
+#[test]
+fn nothing_private_comes_out() {
+    let (out, claude, codex) = adversarial();
+    let lower = out.to_lowercase();
+    if let Some(at) = lower.find(HIDDEN) {
+        let from = lower[..at].char_indices().rev().nth(80).map_or(0, |(i, _)| i);
+        panic!("a sentinel came out: …{}", &lower[from..(at + 12).min(lower.len())]);
     }
 
-    // The calls were read, not dropped: each is there under a name from the tables.
-    let (claude, codex) = (&snapshots[0], &snapshots[1]);
-    let labels = |calls: &mut dyn Iterator<Item = &ottospace_agents::snapshot::Call>| {
-        calls.map(|c| format!("{:?}:{}", c.station, c.summary)).collect::<Vec<_>>()
-    };
-    assert_eq!(labels(&mut claude.recent.iter()), ["Network:git push", "Network:kubectl get"]);
+    // The calls were read, not dropped: each is there, under a name from the tables or a fixed word.
+    assert_eq!(labels(claude.recent.iter()), ["Network Bash: git push", "Files Read: file"]);
     assert_eq!(
-        labels(&mut claude.running.iter()),
+        labels(claude.running.iter()),
         [
-            "Network:curl",
-            "Network:npm publish",
-            "Network:gh",
-            "Shell:shell",
-            "Files:cat",
-            "Network:curl",
-            "Files:ls",
-            "Network:ssh",
-            "Files:adv/notes.txt",
-            "Files:src/lib.rs",
-            "Files:Grep",
-            "Network:example.com",
-            "Network:x.example",
-            "Network:web",
-            "Network:WebSearch",
-            "Skills:skill",
-            "Agents:agent",
-            "Network:mcp",
-            "Other:tool",
+            "Network Bash: curl",
+            "Network Bash: kubectl get",
+            "Network Bash: npm publish",
+            "Network Bash: gh",
+            "Shell Bash: shell",
+            "Files Bash: cat",
+            "Network Bash: curl",
+            "Files Bash: ls",
+            "Network Bash: ssh",
+            "Network Bash: curl",
+            "Shell Bash: shell",
+            "Network Bash: diff",
+            "Network Bash: curl",
+            "Files Bash: grep",
+            "Shell Bash: sh",
+            "Shell Bash: git",
+            "Files Write: ZZSHOWdir/ZZSHOWfile.rs",
+            "Files Edit: file",
+            "Files Read: file",
+            "Files NotebookEdit: file",
+            "Files Glob: file",
+            "Files Grep: Grep",
+            "Network WebFetch: zzshowhost.example",
+            "Network WebFetch: web",
+            "Network WebFetch: web",
+            "Network WebFetch: web",
+            "Network WebFetch: web",
+            "Network WebFetch: web",
+            "Network WebFetch: web",
+            "Network WebSearch: WebSearch",
+            "Skills Skill: ZZSHOWskill",
+            "Skills Skill: skill",
+            "Skills Skill: skill",
+            "Skills Skill: skill",
+            "Skills Skill: skill",
+            "Agents Agent: ZZSHOWagent",
+            "Agents Agent: agent",
+            "Agents Agent: agent",
+            "Network ZZSHOWserver/ZZSHOWtool: ZZSHOWserver/ZZSHOWtool",
+            "Network mcp: mcp",
+            "Network mcp: mcp",
+            "Other tool: tool",
+            "Other tool: tool",
         ]
     );
-    assert_eq!(claude.subagents.iter().map(|a| a.label.as_str()).collect::<Vec<_>>(), ["agent"]);
-    assert_eq!((claude.errors, claude.last_error.as_ref().map(|e| e.1.as_str())), (2, Some("api_error")));
-    assert_eq!(claude.model.as_deref(), Some("claude-opus-5-5"), "a model that is not a name is not a model");
+    assert_eq!(
+        claude.subagents.iter().map(|a| a.label.as_str()).collect::<Vec<_>>(),
+        ["ZZSHOWagent", "agent", "agent"]
+    );
+    // The failed call's label had been rejected: the failure names it `file` too.
+    assert_eq!((claude.errors, claude.last_error.as_ref().map(|e| e.1.as_str())), (3, Some("api_error")));
+    assert!(claude.recent.iter().any(|c| c.failed && c.summary == "file"));
 
     assert_eq!(
-        labels(&mut codex.recent.iter()),
+        labels(codex.recent.iter()),
         [
-            "Network:curl",
-            "Shell:shell",
-            "Network:kubectl get",
-            "Network:gh",
-            "Files:src/lib.rs",
-            "Other:tool",
-            "Agents:spawn_agent",
-            "Network:web_search_call",
+            "Network exec_command: curl",
+            "Shell shell: shell",
+            "Network shell: kubectl get",
+            "Shell shell: git status",
+            "Network shell: curl",
+            "Files shell: grep",
+            "Network shell: ssh",
+            "Network shell: shell",
+            "Files shell: ls",
+            "Network exec: gh",
+            "Files apply_patch: ZZSHOWpdir/ZZSHOWpatch.rs",
+            "Files apply_patch: file",
+            "Other tool: tool",
+            "Other tool: tool",
+            "Agents spawn_agent: spawn_agent",
+            "Network web_search_call: web_search_call",
         ]
     );
-    assert_eq!(labels(&mut codex.running.iter()), ["Shell:shell"]);
-    assert_eq!(codex.subagents.iter().map(|a| a.label.as_str()).collect::<Vec<_>>(), ["agent"]);
-    assert_eq!((codex.errors, codex.last_error.as_ref().map(|e| e.1.as_str())), (3, Some("aborted")));
-    assert_eq!(codex.model.as_deref(), Some("gpt-6-astra"));
+    assert_eq!(labels(codex.running.iter()), ["Shell exec_command: shell"]);
+    assert_eq!(
+        codex.subagents.iter().map(|a| a.label.as_str()).collect::<Vec<_>>(),
+        ["ZZSHOWreviewer", "agent", "agent"]
+    );
+    assert_eq!((codex.errors, codex.last_error.as_ref().map(|e| e.1.as_str())), (5, Some("aborted")));
+}
+
+#[test]
+fn what_is_shown_as_written() {
+    let (out, claude, codex) = adversarial();
+    // Every value with the marker that came out, and nothing else with it.
+    let lower = out.to_lowercase();
+    let mut shown: Vec<&str> = lower
+        .match_indices(SHOWN)
+        .map(|(at, _)| {
+            let rest = &lower[at..];
+            &rest[..rest.find(|c: char| !c.is_ascii_alphanumeric()).unwrap_or(rest.len())]
+        })
+        .collect();
+    shown.sort();
+    shown.dedup();
+    assert_eq!(
+        shown,
+        [
+            "zzshowagent",    // a sub-agent's type, from the model's tool call
+            "zzshowcodex",    // a Codex session id, from the rollout (and its file name)
+            "zzshowcwd",      // a session's directory, from the session file
+            "zzshowdir",      // a file's folder: the path's second-last part, from a tool call
+            "zzshowfile",     // a file's name: the path's last part
+            "zzshowgpt",      // a Codex model, from the rollout
+            "zzshowhost",     // a host, from a URL with no userinfo
+            "zzshowmodel",    // a Claude model, from the transcript
+            "zzshowpatch",    // a file's name, from a Codex patch
+            "zzshowpdir",     // a file's folder, from a Codex patch
+            "zzshowreviewer", // the last part of a Codex agent path
+            "zzshowserver",   // an MCP server's name
+            "zzshowsid",      // a Claude session id: the transcript's file name
+            "zzshowskill",    // a skill's name, from the model's tool call
+            "zzshowtool",     // an MCP tool's name
+        ]
+    );
+    // Where each is.
+    let (claude_runner, codex_runner) = {
+        let root = fixtures().join("adversarial");
+        (Claude::new(vec![root.join("claude")]), Codex::new(root.join("codex")))
+    };
+    let dirs = [PathBuf::from("/work/ZZSHOWcwd")];
+    let session = &claude_runner.sessions(&dirs).unwrap()[0];
+    assert_eq!(session.id, "ZZSHOWsid-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    assert_eq!(session.cwd, Path::new("/work/ZZSHOWcwd"));
+    assert_eq!(claude.model.as_deref(), Some("ZZSHOWmodel-5"), "a later model that is no name changes nothing");
+    assert_eq!(claude_runner.model(session).as_deref(), Some("ZZSHOWmodel-5"));
+    let session = &codex_runner.sessions(&dirs).unwrap()[0];
+    assert_eq!(session.id, "ZZSHOWcodex-0000-4000-8000-0000000000ad");
+    assert_eq!(session.model.as_deref(), Some("ZZSHOWgpt-6"));
+    assert_eq!(codex.model.as_deref(), Some("ZZSHOWgpt-6"));
+    // Known tools are named from a table; ids are hashes.
+    assert!(claude.running.iter().all(|c| c.id.len() == 16 && c.id.chars().all(|c| c.is_ascii_hexdigit())));
+}
+
+#[test]
+fn a_fifo_named_like_a_session_does_not_block() {
+    // Opening a FIFO with no writer never returns. Both runners must pass it by.
+    let root = temp("fifo");
+    let (project, day) = (root.join("claude/projects/-work-pipe"), root.join("codex/sessions/2026/11/12"));
+    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(&day).unwrap();
+    let pipes = [
+        project.join("55555555-5555-4555-8555-555555555555.jsonl"),
+        day.join("rollout-2026-11-12T09-00-00-c0de0007-0000-4000-8000-000000000007.jsonl"),
+    ];
+    for pipe in &pipes {
+        assert!(std::process::Command::new("mkfifo").arg(pipe).status().unwrap().success());
+    }
+    let (claude, codex) = (Claude::new(vec![root.join("claude")]), Codex::new(root.join("codex")));
+    assert!(list(&claude, "/work/pipe").is_empty());
+    assert!(list(&codex, "/work/pipe").is_empty());
+    // And a session whose file became one is an error to read, not a hang.
+    let session = SessionRef { path: pipes[0].clone(), ..find(&self::claude(), "/work/app", CLAUDE_MAIN) };
+    assert_eq!(claude.read(&session, Cursor::default(), ALL).unwrap_err().kind(), ErrorKind::InvalidInput);
+    assert_eq!(claude.model(&session), None);
 }
 
 #[test]

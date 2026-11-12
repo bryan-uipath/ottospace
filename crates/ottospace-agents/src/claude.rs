@@ -2,7 +2,7 @@
 //! Live processes: `<config dir>/sessions/<pid>.json`. Schema seen in Claude Code 2.1.322.
 
 use std::collections::HashMap;
-use std::fs::{self, File};
+use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
@@ -10,7 +10,25 @@ use serde_json::Value;
 
 use crate::cache::Cache;
 use crate::station::{self, Station};
-use crate::{Batch, Cursor, Event, Kind, Runner, SessionRef, Usage, What, jsonl};
+use crate::{Batch, Cursor, Event, Kind, Runner, SessionRef, Usage, What, jsonl, opaque, recorded_cwd, track};
+
+/// The values of an API-error record's `error` field. Seen in transcripts: the first five.
+/// The rest are the API's other error types. Anything else is shown as `api_error`.
+const ERRORS: &[&str] = &[
+    "authentication_failed",
+    "invalid_request",
+    "model_not_found",
+    "rate_limit",
+    "server_error",
+    "billing_error",
+    "overloaded",
+    "permission_denied",
+    "not_found",
+    "request_too_large",
+    "timeout",
+    "max_output_tokens",
+    "unknown",
+];
 
 pub struct Claude {
     config_dirs: Vec<PathBuf>,
@@ -83,26 +101,19 @@ impl Runner for Claude {
                 }
                 let Ok(files) = fs::read_dir(project.path()) else { continue };
                 for path in files.flatten().map(|f| f.path()).filter(|p| p.extension().is_some_and(|e| e == "jsonl")) {
+                    // The id is the file's name. One that is not a name (see `station::is_name`) is not listed.
+                    let Some(id) = path.file_stem().and_then(|s| s.to_str()).filter(|s| station::is_name(s)) else {
+                        continue;
+                    };
                     let Some((head, modified)) = self.heads.get(&path, || head(&path)) else { continue };
                     if !dirs.iter().any(|dir| head.cwd.starts_with(dir)) {
                         continue;
                     }
-                    let Some(id) = path.file_stem().map(|s| station::clean(&s.to_string_lossy())) else { continue };
-                    let (pid, busy) = live.get(&id).map_or((None, None), |(pid, busy)| (Some(*pid), *busy));
-                    let (kind, last_activity) = (Kind::Claude, Some(modified));
+                    let (pid, busy) = live.get(id).map_or((None, None), |(pid, busy)| (Some(*pid), *busy));
+                    let (kind, id, last_activity) = (Kind::Claude, id.to_string(), Some(modified));
                     let (cwd, started) = (head.cwd, head.started);
-                    sessions.push(SessionRef {
-                        kind,
-                        id,
-                        cwd,
-                        path,
-                        started,
-                        last_activity,
-                        model: None,
-                        pid,
-                        busy,
-                        parent: None,
-                    });
+                    let (model, parent) = (None, None);
+                    sessions.push(SessionRef { kind, id, cwd, path, started, last_activity, model, pid, busy, parent });
                 }
             }
         }
@@ -120,7 +131,8 @@ impl Runner for Claude {
     fn read(&self, session: &SessionRef, after: Cursor, budget: u64) -> io::Result<Batch> {
         let (file, mut cursor, restarted) = crate::open(&session.path, after)?;
         let mut events = Vec::new();
-        let (offset, more) = jsonl::lines(file, cursor.offset, budget, |line| {
+        let mut skipping = cursor.skipping;
+        let (offset, more) = jsonl::lines(file, cursor.offset, budget, &mut skipping, |line| {
             // Request logs: most of the file's bytes, nothing a station shows.
             if !line.starts_with(r#"{"type":"api-request"#)
                 && let Ok(record) = serde_json::from_str::<Value>(line)
@@ -129,7 +141,7 @@ impl Runner for Claude {
             }
             false
         })?;
-        cursor.offset = offset;
+        (cursor.offset, cursor.skipping) = (offset, skipping);
         if !more {
             finished_subagents(&session.path, &mut cursor, &mut events);
         }
@@ -143,9 +155,7 @@ fn live(config: &Path) -> HashMap<String, (u32, Option<bool>)> {
     let records = files.flatten().filter(|f| f.path().extension().is_some_and(|e| e == "json"));
     records
         .filter_map(|file| {
-            // A pid file is a few hundred bytes. Not a pipe, not a huge file.
-            file.metadata().ok().filter(|m| m.is_file() && m.len() < 65_536)?;
-            let record: Value = serde_json::from_str(&fs::read_to_string(file.path()).ok()?).ok()?;
+            let record: Value = serde_json::from_str(&jsonl::small(&file.path())?).ok()?;
             let pid = u32::try_from(record["pid"].as_u64()?).ok()?;
             let busy = record["status"].as_str().map(|s| s == "busy");
             Some((record["sessionId"].as_str()?.to_string(), (pid, busy)))
@@ -159,31 +169,31 @@ fn head(path: &Path) -> Option<Head> {
     let head = jsonl::head(path, 40, 1 << 20).ok()?;
     let started = head.iter().map(jsonl::time_of).filter(|t| *t > 0).min();
     if let Some(cwd) = head.iter().find_map(|r| r["cwd"].as_str()) {
-        return Some(Head { cwd: PathBuf::from(cwd), started });
+        return Some(Head { cwd: recorded_cwd(cwd)?, started });
     }
     // Not there, e.g. behind a long request log: look through the whole file, parsing only lines that may have it.
     let mut found = None;
-    jsonl::lines(File::open(path).ok()?, 0, u64::MAX, |line| {
+    jsonl::lines(jsonl::open(path).ok()?, 0, u64::MAX, &mut false, |line| {
         if line.contains(r#""cwd":""#)
             && !line.starts_with(r#"{"type":"api-request"#)
             && let Ok(record) = serde_json::from_str::<Value>(line)
             && let Some(cwd) = record["cwd"].as_str()
         {
-            let started = started.or(Some(jsonl::time_of(&record)).filter(|t| *t > 0));
-            found = Some(Head { cwd: PathBuf::from(cwd), started });
+            found = Some((cwd.to_string(), jsonl::time_of(&record)));
         }
         found.is_some()
     })
     .ok()?;
-    found
+    let (cwd, at) = found?;
+    Some(Head { cwd: recorded_cwd(&cwd)?, started: started.or(Some(at).filter(|t| *t > 0)) })
 }
 
 /// A message's model, if it is a real one with a name's shape.
 fn model_of(message: &Value) -> Option<String> {
     let model = message["model"].as_str().filter(|m| *m != "<synthetic>")?;
-    // `[1m]` marks a 1M-token window, e.g. `claude-opus-5-5[1m]`.
+    // `[1m]` marks a 1M-token window, e.g. `claude-opus-5-5[1m]`. Alone it names no model.
     let bare = model.strip_suffix("[1m]").unwrap_or(model);
-    (station::name(bare, "") == bare).then(|| model.to_string())
+    station::is_name(bare).then(|| model.to_string())
 }
 
 fn record_events(record: &Value, cursor: &mut Cursor, events: &mut Vec<Event>) {
@@ -203,9 +213,9 @@ fn record_events(record: &Value, cursor: &mut Cursor, events: &mut Vec<Event>) {
     }
 }
 
-/// A call or message id, if it has a name's shape. Anything else is not an id.
+/// A call or message id, made opaque. `None` if it is missing or empty.
 fn id_of(value: &Value) -> Option<String> {
-    value.as_str().filter(|id| station::name(id, "") == *id).map(str::to_string)
+    value.as_str().and_then(opaque)
 }
 
 fn user(record: &Value, cursor: &mut Cursor, emit: &mut impl FnMut(What)) {
@@ -232,7 +242,7 @@ fn assistant(record: &Value, cursor: &mut Cursor, emit: &mut impl FnMut(What)) {
     let message = &record["message"];
     // An API failure is written as an assistant record from the model `<synthetic>`.
     if record["isApiErrorMessage"] == true || record["error"].is_string() {
-        emit(What::Error { kind: station::code(record["error"].as_str().unwrap_or(""), "api_error") });
+        emit(What::Error { kind: station::code(record["error"].as_str().unwrap_or(""), ERRORS, "api_error") });
         return;
     }
     let model = model_of(message);
@@ -269,8 +279,8 @@ fn assistant(record: &Value, cursor: &mut Cursor, emit: &mut impl FnMut(What)) {
             continue;
         };
         let (station, summary) = describe(tool, &block["input"]);
-        emit(What::ToolStart { id: id.clone(), tool: station::name(tool, "tool"), station, summary: summary.clone() });
-        if matches!(tool, "Agent" | "Task") && cursor.agents.insert(id.clone()) {
+        emit(What::ToolStart { id: id.clone(), tool: station::tool_label(tool), station, summary: summary.clone() });
+        if matches!(tool, "Agent" | "Task") && track(&mut cursor.agents, id.clone()) {
             emit(What::SubAgentStart { id, label: summary });
         }
     }
@@ -295,9 +305,7 @@ fn describe(tool: &str, input: &Value) -> (Station, String) {
     let path = text("file_path").or(text("notebook_path")).or(text("path"));
     let station = station::classify(tool, text("command").or(path));
     let summary = if tool.starts_with("mcp__") {
-        // `mcp__server__tool` → `server/tool`, if the whole name has a name's shape.
-        let shaped = station::name(tool, "");
-        shaped.strip_prefix("mcp__").map_or("mcp".to_string(), |rest| rest.replacen("__", "/", 1))
+        station::tool_label(tool)
     } else if let Some(command) = text("command") {
         station::describe_command(command).1
     } else if let Some(path) = path.filter(|_| matches!(station, Station::Files | Station::Memory)) {
@@ -308,7 +316,7 @@ fn describe(tool: &str, input: &Value) -> (Station, String) {
             "Skill" => station::name(text("skill").unwrap_or(""), "skill"),
             // The agent's type, not its description: that is free text the model wrote.
             "Agent" | "Task" => station::name(text("subagent_type").unwrap_or(""), "agent"),
-            _ => station::name(tool, "tool"),
+            _ => station::tool_label(tool),
         }
     };
     (station, summary)
@@ -321,16 +329,15 @@ fn finished_subagents(transcript: &Path, cursor: &mut Cursor, events: &mut Vec<E
     }
     let Ok(files) = fs::read_dir(transcript.with_extension("").join("subagents")) else { return };
     for file in files.flatten().filter(|f| f.file_name().to_string_lossy().ends_with(".meta.json")) {
-        let Some(meta) = file.metadata().ok().filter(|m| m.is_file() && m.len() < 65_536) else { continue };
-        let Some(record) = fs::read_to_string(file.path()).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok())
-        else {
+        let Some(record) = jsonl::small(&file.path()).and_then(|t| serde_json::from_str::<Value>(&t).ok()) else {
             continue;
         };
         let done = record["finished"] == true || record["stoppedByUser"] == true;
-        if let Some(id) = record["toolUseId"].as_str().filter(|id| done && cursor.agents.remove(*id)) {
-            let at = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
-            let at = at.map_or(0, |d| d.as_millis() as u64);
-            events.push(Event { at, what: What::SubAgentEnd { id: id.to_string() } });
+        if let Some(id) = id_of(&record["toolUseId"]).filter(|id| done && cursor.agents.remove(id)) {
+            let modified = file.metadata().ok().and_then(|m| m.modified().ok());
+            let at =
+                modified.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as u64);
+            events.push(Event { at, what: What::SubAgentEnd { id } });
         }
     }
 }
@@ -358,8 +365,13 @@ mod tests {
             ),
             ("Bash", r#"{"command":"./run-secret.sh --token abc"}"#, Station::Shell, "shell"),
             ("Read", r#"{"file_path":"/Users/me/app/src/main.rs"}"#, Station::Files, "src/main.rs"),
+            ("Read", r#"{"file_path":"please read the private plan"}"#, Station::Files, "file"),
+            ("Write", r#"{"file_path":"/tmp/API_KEY=sk-abc.txt","content":"x"}"#, Station::Files, "file"),
+            ("Edit", r#"{"file_path":"https://me:pw@example.com/a/b.txt"}"#, Station::Files, "file"),
+            ("NotebookEdit", r#"{"notebook_path":"C:\\Users\\me\\private.ipynb"}"#, Station::Files, "file"),
             ("Write", r#"{"file_path":"/Users/me/app/.env","content":"TOKEN=abc"}"#, Station::Files, "app/.env"),
             ("Grep", r#"{"pattern":"password","path":"/Users/me/app/src"}"#, Station::Files, "app/src"),
+            ("Glob", r#"{"pattern":"**/*.rs","path":"a private note, not a path"}"#, Station::Files, "file"),
             ("Grep", r#"{"pattern":"password"}"#, Station::Files, "Grep"),
             (
                 "WebFetch",
@@ -367,9 +379,11 @@ mod tests {
                 Station::Network,
                 "example.com",
             ),
+            ("WebFetch", r#"{"url":"https://me:pa/ss@example.com/"}"#, Station::Network, "web"),
             ("WebSearch", r#"{"query":"something private"}"#, Station::Network, "WebSearch"),
             ("Skill", r#"{"skill":"review","args":"private"}"#, Station::Skills, "review"),
             ("Skill", r#"{"skill":"review my private notes"}"#, Station::Skills, "skill"),
+            ("Skill", r#"{"skill":"ghp_abcdefghijklmnopqrstuvwxyz"}"#, Station::Skills, "skill"),
             (
                 "Agent",
                 r#"{"description":"Look into it","prompt":"long","subagent_type":"Explore"}"#,
@@ -382,16 +396,23 @@ mod tests {
                 Station::Agents,
                 "agent",
             ),
+            (
+                "Agent",
+                r#"{"description":"Look into it","prompt":"long","subagent_type":"sk-ant-abc"}"#,
+                Station::Agents,
+                "agent",
+            ),
             ("Agent", r#"{"description":"Look into it","prompt":"long"}"#, Station::Agents, "agent"),
             ("mcp__playwright__browser_click", r#"{"ref":"e12"}"#, Station::Browser, "playwright/browser_click"),
             ("mcp__my server__do a private thing", "{}", Station::Network, "mcp"),
             ("TodoWrite", r#"{"todos":[]}"#, Station::Other, "TodoWrite"),
+            ("private_tool_name", "{}", Station::Other, "tool"),
             ("A private tool name", "{}", Station::Other, "tool"),
             ("Bash", "null", Station::Shell, "Bash"),
         ];
         for (tool, input, station, summary) in cases {
             let input: Value = serde_json::from_str(input).unwrap();
-            assert_eq!(describe(tool, &input), (station, summary.to_string()), "{tool}");
+            assert_eq!(describe(tool, &input), (station, summary.to_string()), "{tool} {input}");
         }
     }
 
@@ -423,13 +444,31 @@ mod tests {
     }
 
     #[test]
-    fn models_and_ids_have_a_names_shape() {
+    fn models_ids_and_errors() {
         let message = |model: &str| serde_json::json!({ "model": model });
         assert_eq!(model_of(&message("claude-opus-5-5")).as_deref(), Some("claude-opus-5-5"));
         assert_eq!(model_of(&message("claude-opus-5-5[1m]")).as_deref(), Some("claude-opus-5-5[1m]"));
-        assert_eq!(model_of(&message("<synthetic>")), None);
-        assert_eq!(model_of(&message("a private note")), None);
-        assert_eq!(id_of(&serde_json::json!("toolu_01")).as_deref(), Some("toolu_01"));
-        assert_eq!(id_of(&serde_json::json!("not an id")), None);
+        for bad in ["<synthetic>", "a private note", "[1m]", "", "sk-ant-abc", "eyJhbGciOi"] {
+            assert_eq!(model_of(&message(bad)), None, "{bad}");
+        }
+        assert_eq!(id_of(&serde_json::json!("")), None);
+        assert_eq!(id_of(&serde_json::json!(7)), None);
+        let id = id_of(&serde_json::json!("toolu private text")).unwrap();
+        assert!(!id.contains("private") && id.len() == 16);
+
+        let kind = |error: Value| {
+            let (mut cursor, mut events) = (Cursor::default(), Vec::new());
+            let record =
+                serde_json::json!({ "type": "assistant", "error": error, "isApiErrorMessage": true, "message": {} });
+            record_events(&record, &mut cursor, &mut events);
+            match &events[0].what {
+                What::Error { kind } => kind.clone(),
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(kind(serde_json::json!("rate_limit")), "rate_limit");
+        assert_eq!(kind(serde_json::json!("zz_private_code")), "api_error", "a code's shape is not enough");
+        assert_eq!(kind(serde_json::json!("Key sk-1 is over its limit")), "api_error");
+        assert_eq!(kind(Value::Null), "api_error");
     }
 }

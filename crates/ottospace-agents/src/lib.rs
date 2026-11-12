@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io;
 use std::os::unix::fs::MetadataExt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::Serialize;
 use station::Station;
@@ -34,6 +34,7 @@ pub enum Kind {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionRef {
     pub kind: Kind,
+    /// The runner's own session id, as written: a name (`station::is_name`), usually a UUID.
     pub id: String,
     /// Where the session started. A later `cd` does not change it.
     pub cwd: PathBuf,
@@ -57,18 +58,21 @@ pub struct SessionRef {
 pub struct Cursor {
     /// Byte offset just past the last complete line read.
     offset: u64,
+    /// The bytes at `offset` are the rest of an oversized line whose end is not written yet:
+    /// the next read goes on skipping from there instead of starting the line again.
+    skipping: bool,
     /// The file read so far, as (device, inode): another file at the same path starts over.
     file: Option<(u64, u64)>,
     model: Option<String>,
-    /// Last model request seen, e.g. a Claude message id: one request spans several records.
+    /// Last model request seen (a Claude message id, made opaque): one request spans several records.
     step: Option<String>,
     /// The most tokens one request used so far: Claude's context window is estimated from it.
     peak: u64,
-    /// Sub-agents started and not yet ended, by id.
+    /// Sub-agents started and not yet ended, by opaque id. At most `MAX_OPEN`.
     agents: BTreeSet<String>,
-    /// Codex `exec` calls with no output yet, by call id.
+    /// Codex `exec` calls with no output yet, by opaque call id. At most `MAX_OPEN`.
     open: BTreeSet<String>,
-    /// What a call's command turned out to be, by call id, held until the call's output record.
+    /// What a call's command turned out to be, by opaque call id, held until the call's output record.
     refined: BTreeMap<String, Refined>,
 }
 
@@ -100,8 +104,9 @@ pub struct Event {
     pub what: What,
 }
 
-/// The normalised event set. A summary is a name from a fixed table (`git push`), a file's last
-/// two path parts, a host, or a name-shaped identifier. Never free text.
+/// The normalised event set. An `id` is opaque: a hash of the runner's id, good only for pairing
+/// a start with its end. A `tool`, `summary`, `label`, `kind` or model follows the label rules in
+/// `docs/ai/agent-runners.md`: table entries, a file's last two path parts, a host, or a name.
 #[derive(Clone, Debug, PartialEq)]
 pub enum What {
     UserMessage,
@@ -124,7 +129,7 @@ pub enum What {
         station: Option<Station>,
         summary: Option<String>,
     },
-    /// An API error, a refusal or an aborted turn. `kind` is a code such as `rate_limit`, never a message.
+    /// An API error, a refusal or an aborted turn. `kind` is a code from a fixed table, never a message.
     Error {
         kind: String,
     },
@@ -187,22 +192,87 @@ pub fn read_all(runner: &dyn Runner, session: &SessionRef) -> io::Result<Vec<Eve
     }
 }
 
-/// `dirs` as given, or an error naming the first that is empty or relative.
+/// Calls, sub-agents and refinements a cursor tracks at once. Past it the oldest are dropped,
+/// so a file cannot grow a cursor without bound.
+const MAX_OPEN: usize = 256;
+
+/// An error naming the first of `dirs` that is empty, relative or has a `..` in it.
 fn absolute(dirs: &[PathBuf]) -> io::Result<()> {
-    match dirs.iter().find(|d| !d.is_absolute()) {
+    let bad = |dir: &&PathBuf| !dir.is_absolute() || dir.components().any(|c| c == Component::ParentDir);
+    match dirs.iter().find(bad) {
         Some(dir) => Err(io::Error::new(io::ErrorKind::InvalidInput, format!("not an absolute directory: {dir:?}"))),
         None => Ok(()),
     }
 }
 
+/// A session's recorded cwd as a path, if it can be one: absolute, at most 1024 bytes, no control
+/// characters, no `..`. Rebuilt from its components, so `/a//b/./c/` is `/a/b/c`.
+fn recorded_cwd(text: &str) -> Option<PathBuf> {
+    let path = Path::new(text);
+    let sane = text.len() <= 1024 && !text.chars().any(char::is_control) && path.is_absolute();
+    (sane && !path.components().any(|c| c == Component::ParentDir)).then(|| path.components().collect())
+}
+
+/// An id from a session file, made opaque: 16 hex digits of a hash of it (FNV-1a). Ids only pair
+/// a start with its end, so the text a file put there is never passed on. `None` for an empty id.
+fn opaque(id: &str) -> Option<String> {
+    let step = |hash: u64, byte: u8| (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+    (!id.is_empty()).then(|| format!("{:016x}", id.bytes().fold(0xcbf2_9ce4_8422_2325, step)))
+}
+
+/// Adds `id` to a bounded set of open things. True if it was not there.
+fn track(open: &mut BTreeSet<String>, id: String) -> bool {
+    if open.len() >= MAX_OPEN {
+        open.pop_first();
+    }
+    open.insert(id)
+}
+
 /// Opens a session file where `cursor` stopped. A truncated file, or another file at the same
 /// path, resets the whole cursor: the flag says so.
 fn open(path: &Path, cursor: Cursor) -> io::Result<(File, Cursor, bool)> {
-    let file = File::open(path)?;
+    let file = jsonl::open(path)?;
     let meta = file.metadata()?;
     let id = (meta.dev(), meta.ino());
     let restarted = cursor.file.is_some_and(|seen| seen != id) || meta.len() < cursor.offset;
     let mut cursor = if restarted { Cursor::default() } else { cursor };
     cursor.file = Some(id);
     Ok((file, cursor, restarted))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_recorded_cwd_must_be_a_plain_absolute_path() {
+        assert_eq!(recorded_cwd("/work/app"), Some(PathBuf::from("/work/app")));
+        assert_eq!(recorded_cwd("/work//app/./src/"), Some(PathBuf::from("/work/app/src")));
+        assert!(recorded_cwd("/work/app").unwrap().starts_with("/work/app/"));
+        assert!(!recorded_cwd("/work/app-other").unwrap().starts_with("/work/app"));
+        for bad in ["", "work/app", "/work/app/../../etc", "/work/..", "/work/a\npp", "/work/\u{1b}[31m"] {
+            assert_eq!(recorded_cwd(bad), None, "{bad:?}");
+        }
+        assert_eq!(recorded_cwd(&format!("/{}", "x".repeat(1024))), None);
+        assert!(absolute(&[PathBuf::from("/work/app/../other")]).is_err());
+    }
+
+    #[test]
+    fn ids_are_opaque() {
+        assert_eq!(opaque(""), None);
+        assert_eq!(opaque("toolu_01"), opaque("toolu_01"));
+        assert_ne!(opaque("toolu_01"), opaque("toolu_02"));
+        let id = opaque("an id with a secret in it").unwrap();
+        assert!(id.len() == 16 && id.chars().all(|c| c.is_ascii_hexdigit()), "{id}");
+    }
+
+    #[test]
+    fn open_things_are_bounded() {
+        let mut open = BTreeSet::new();
+        for i in 0..1000 {
+            track(&mut open, format!("{i:04}"));
+        }
+        assert_eq!(open.len(), MAX_OPEN);
+        assert!(open.contains("0999") && !open.contains("0000"));
+    }
 }
