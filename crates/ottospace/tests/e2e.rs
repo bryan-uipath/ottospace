@@ -501,6 +501,9 @@ fn settings_choose_the_font_the_repos_and_the_tasks_folder() {
     // Defaults: Menlo 13, rows 18 points high.
     let plain = Otto::launch("settings-none");
     let state = plain.call(json!({"cmd": "state"}));
+    // The build, as the status bar shows it: "0.1.0 · local" here.
+    let version = state["version"].as_str().unwrap_or_default();
+    assert!(version.starts_with(concat!(env!("CARGO_PKG_VERSION"), " · ")), "{version}");
     assert_eq!(
         (&state["font"], &state["cell"][1], &state["notice"]),
         (&json!({"name": "Menlo", "size": 13.0}), &json!(18.0), &Value::Null)

@@ -1076,6 +1076,8 @@ impl Workspace {
             "parking": [parking.x, parking.y],
             // The registered return key, or null if there is none.
             "return_key": RETURN_KEY.get(),
+            // Which build this is, as the status bar shows it: "0.1.0 · a4a2582".
+            "version": version_tag(env!("CARGO_PKG_VERSION"), option_env!("OTTOSPACE_COMMIT")),
             // The terminal font in use, and the size of one character cell in points.
             "font": terminal::font_in_use(),
             "cell": [f32::from(self.cell.width), f32::from(self.cell.height)],
@@ -2550,8 +2552,9 @@ impl Workspace {
             .text_xs()
             .text_color(rgb(theme::MUTED))
             .child(div().px_2().rounded_sm().bg(rgb(color)).text_color(rgb(theme::BACKGROUND)).child(mode))
-            .child(focused)
-            .child(hint)
+            // Long text gives way, so the build tag on the right stays in view.
+            .child(div().min_w_0().truncate().child(focused))
+            .child(div().flex_none().child(hint))
             // Pushes what follows to the right. An auto margin there closed the gaps on the left.
             .child(div().flex_1())
             // The one thing tasks put here: how many wait for the user.
@@ -2560,7 +2563,14 @@ impl Workspace {
                 div().text_color(rgb(theme::SNEAK)).child(label)
             }))
             // Shown here, not in the Apps list, so it is visible whichever section is open.
-            .children(self.problem().map(|e| div().text_color(rgb(theme::ERROR)).child(e)))
+            .children(self.problem().map(|e| div().min_w_0().truncate().text_color(rgb(theme::ERROR)).child(e)))
+            // Which build this is, last and dim: it matters when something looks wrong.
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(rgb(theme::BORDER_STRONG))
+                    .child(version_tag(env!("CARGO_PKG_VERSION"), option_env!("OTTOSPACE_COMMIT"))),
+            )
     }
 }
 
@@ -2865,6 +2875,15 @@ fn version_line(version: &str, commit: Option<&str>, date: Option<&str>) -> Stri
     }
 }
 
+/// The build, short, for the status bar: `0.1.0 · a4a2582` (seven characters of the commit), or
+/// `0.1.0 · local` for a plain `cargo build`.
+fn version_tag(version: &str, commit: Option<&str>) -> String {
+    match commit.filter(|c| !c.is_empty()) {
+        Some(commit) => format!("{version} · {}", commit.chars().take(7).collect::<String>()),
+        None => format!("{version} · local"),
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).is_some_and(|a| a == "ctl") {
@@ -3010,6 +3029,12 @@ mod tests {
         assert_eq!(version_line("0.1.0", Some("a4a2582c0ffe"), None), "ottospace 0.1.0 (a4a2582c0ffe)");
         assert_eq!(version_line("0.1.0", None, None), "ottospace 0.1.0 (local build)");
         assert_eq!(version_line("0.1.0", Some(""), Some("")), "ottospace 0.1.0 (local build)");
+        // The status bar's short form.
+        assert_eq!(version_tag("0.1.0", Some("a4a2582c0ffe")), "0.1.0 · a4a2582");
+        assert_eq!(
+            (version_tag("0.1.0", None), version_tag("0.1.0", Some(""))),
+            ("0.1.0 · local".into(), "0.1.0 · local".into())
+        );
     }
 
     /// Every `ottospace ctl '<json>'` line in the agent guide must be a request the app accepts,
