@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  TARGET: aarch64-apple-darwin
+
+jobs:
+  release:
+    runs-on: macos-26
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # No build cache: a release builds from scratch, not from cache entries other runs wrote.
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+      # Tag vX.Y.Z must match the version bundle.sh stamps into Info.plist.
+      - name: Check version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="$(cargo pkgid -p ottospace)"
+          version="${version##*[#@]}"
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::Tag $TAG does not match crate version $version. Bump the version in Cargo.toml or tag v$version."
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Build
+        run: scripts/bundle.sh
+      # ditto keeps the bundle layout and its signature intact.
+      - name: Package
+        run: |
+          asset="ottospace-$VERSION-$TARGET.zip"
+          mkdir dist
+          ditto -c -k --keepParent target/release/bundle/ottospace.app "dist/$asset"
+          (cd dist && shasum -a 256 "$asset" > "$asset.sha256")
+          cat "dist/$asset.sha256"
+          ls -l dist
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --title "$TAG" --verify-tag --generate-notes

@@ -37,6 +37,16 @@ Rules:
 - A feature is done when both loops cover it. Extend `Request` and the state snapshot when a test
   needs to drive or read something new.
 
+## CI
+
+- `.github/workflows/ci.yml`, on pull requests and pushes to `main`, macOS arm64:
+  `cargo fmt -p ottospace -p ottospace-core --check`, `cargo clippy` (errors fail, warnings do not),
+  `cargo test --workspace`. `cargo e2e` runs in a separate job that may fail without blocking.
+- Not in CI: `cargo e2e-apps` (needs Accessibility and Screen Recording), rustfmt on
+  `ottospace-mac` and `probe` (not formatted yet), clippy `-D warnings` (main has warnings).
+- `.github/workflows/release.yml`, on a `v*` tag: `scripts/bundle.sh`, zip and checksum, GitHub
+  Release. `install.sh` installs from it.
+
 ## Control socket
 
 Unix socket, mode 0600, at `$OTTOSPACE_SOCKET` or `$TMPDIR/ottospace.sock`. One JSON request per
