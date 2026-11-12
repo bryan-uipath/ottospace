@@ -1428,16 +1428,23 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
         (o.call(json!({"cmd": "state"}))["sessions_bar"]["reads"].as_u64() > Some(reads + 1)).then_some(())
     });
     assert_eq!(task_state(&otto), "running");
-    // Quiet for four minutes, and the Tasks section closed: the task needs you all the same,
-    // and the status bar's count with it. Only the adopted sessions' files were looked at.
+    // The Tasks section closed, then quiet for four minutes: the task needs you all the same,
+    // and the status bar's count with it. Only a look at the adopted sessions' files, after the
+    // section closed, can have seen it: no listing was made.
+    let closed = otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let reads = closed["sessions_bar"]["reads"].clone();
+    let slow = otto.wait_for("a look at the adopted sessions' files", |o| {
+        o.call(json!({"cmd": "state"}))["sessions_bar"]["slow_reads"].as_u64().filter(|n| *n >= 1)
+    });
+    assert_eq!(task_state(&otto), "running", "two minutes idle is not quiet, closed or open");
     changed(240);
-    let reads = otto.call(json!({"cmd": "section", "section": "tasks"}))["sessions_bar"]["reads"].clone();
     let reply = otto.wait_for("the task to follow its quiet session", |o| {
-        Some(o.call(json!({"cmd": "state"}))).filter(|reply| reply["state"]["tasks"]["list"][0]["state"] == "needs_you")
+        let reply = o.call(json!({"cmd": "state"}));
+        let followed = reply["state"]["tasks"]["list"][0]["state"] == "needs_you";
+        (followed && reply["sessions_bar"]["slow_reads"].as_u64() > Some(slow)).then_some(reply)
     });
     assert_eq!((&reply["needs_you"], &reply["sessions_bar"]["count"]), (&json!(1), &json!(0)));
     assert_eq!(reply["sessions_bar"]["reads"], reads, "no listing: {reply}");
-    assert!(reply["sessions_bar"]["slow_reads"].as_u64() >= Some(1), "{reply}");
     drop(otto);
 
     // A new run, the section never opened: the task follows its session again once it works.

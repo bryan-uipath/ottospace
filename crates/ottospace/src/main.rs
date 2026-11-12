@@ -1409,9 +1409,9 @@ impl Workspace {
             self.dispatch(Action::SessionQuiet { ms }, Origin::System, window, cx);
         }
         // Closed, only the sessions that tasks still follow are looked at, and only their files.
-        let adopted = if open { Vec::new() } else { self.model.followed_sessions() };
         let Some(poller) = &mut self.sessions else { return };
-        poller.ask(open, adopted, now);
+        let model = &self.model;
+        poller.ask(open, || model.followed_sessions(), now);
         let (read, stopped) = (poller.take(), poller.stopped());
         let (mut found, mut seen) = (None, None);
         for read in read {

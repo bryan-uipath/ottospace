@@ -195,10 +195,14 @@ included) that no task has adopted: for example a Claude Code you started by han
   it, mark it done), that state stays. Quiet is longer than idle on purpose: a row reads idle
   after 30 seconds, but a build that prints nothing for a minute is not a question for you.
 - **With the Tasks section closed** adopted tasks follow their sessions all the same, so the
-  status bar's count of tasks that need you is right. Every 30 seconds ottospace looks at when
-  the files of those sessions last changed, and at nothing else: no directory is listed and no
-  file is opened. (After a start, a session adopted earlier is found with one listing.) With no
-  adopted task, or with `"sessions": false`, nothing is read.
+  status bar's count of tasks that need you is right. Every 20 seconds ottospace looks at when
+  the files of those sessions last changed (one `stat` each): no directory is listed and no
+  file is opened. The one exception: after a start, where the files of sessions adopted in an
+  earlier run are is not known, so once for all of them the session folders are listed and
+  each session file's first records are read to see which directory it started in. No
+  transcript is read further. A session that this does not find is not looked for again until
+  you open the Tasks section. With no adopted task, or with `"sessions": false`, nothing is
+  read.
 - **Hide** removes the row until ottospace starts again.
 - **A click** focuses the session's pane when the row says "in pane N", and selects the row
   otherwise. "In pane N" shows only when there is no doubt: the session is at work, exactly one

@@ -290,7 +290,7 @@ States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stal
   it has been quiet for 3 minutes (the `session_quiet_minutes` setting; a row reads idle after
   30 seconds, which is not yet quiet), running again when it works again, until the user or an
   agent sets the task's state. It follows with the section closed too: then only when those
-  sessions' files last changed is read, every 30 seconds. `session_hide` stops listing one until the app starts again. `session_click`
+  sessions' files last changed is read, every 20 seconds. `session_hide` stops listing one until the app starts again. `session_click`
   focuses the pane the session runs in if `pane` is set, else selects its row; it is refused
   while the picker, the new-task box, the key reference or visual mode has the keyboard.
   `sessions_older` shows or hides the idle ones older than a day. `runner` and `id` are as a
