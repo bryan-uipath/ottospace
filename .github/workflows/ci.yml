@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A new push to the same PR or branch cancels the run it supersedes.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    # Apple Silicon. The build links macOS frameworks (ScreenCaptureKit, AppKit).
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+          rustc --version
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # ottospace-mac and probe are not rustfmt-clean yet, so check only the crates that are.
+      - name: Format
+        run: cargo fmt -p ottospace -p ottospace-core --check
+      # Fails on errors only: main still has clippy warnings.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked
+      - name: Unit tests
+        run: cargo test --workspace --locked
+
+  e2e:
+    # Needs a window server, which a hosted runner may lack, so it does not block.
+    runs-on: macos-26
+    timeout-minutes: 60
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # Hosting off. Never cargo e2e-apps here: it needs Accessibility and Screen Recording.
+      - name: E2E
+        run: cargo e2e

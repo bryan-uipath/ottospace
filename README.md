@@ -6,6 +6,36 @@ ottospace is a macOS workspace that tiles terminals and real app windows in one 
 people who run several coding agents and want them, and the apps around them, in one place.
 Agents and tests can drive it over a local control socket. Rust + [GPUI](https://gpui.rs).
 
+## Install
+
+Apple Silicon, macOS 14 or later. Works once the repository is public:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/bryan-uipath/ottospace/main/install.sh | sh
+```
+
+The script downloads the latest release, checks its SHA-256, and installs:
+
+- `~/Applications/ottospace.app`, replacing an older copy.
+- `~/.local/bin/ottospace`, a wrapper for the app's binary, so `ottospace ctl ...` works. The script
+  tells you if `~/.local/bin` is not on your `PATH`.
+
+It needs no `sudo` and is safe to run again to update. To pin a version, run
+`... | OTTOSPACE_VERSION=v0.1.0 sh`. Then open the app and grant it Accessibility and Screen
+Recording (see Requirements below; the permissions go to ottospace, not the terminal).
+
+Uninstall:
+
+```sh
+rm -rf ~/Applications/ottospace.app
+rm -f ~/.local/bin/ottospace
+```
+
+Releases are signed ad hoc, not with a Developer ID, and not notarized. A zip downloaded in a
+browser gets a quarantine flag, and Gatekeeper refuses to open the app. A file fetched with `curl`
+carries no such flag, so the install script works without it. Each release is a new identity to
+macOS, so you may have to grant the permissions again after an update.
+
 ## What it does
 
 | Capability | State |
@@ -71,6 +101,15 @@ and its own identity.
 - Opened from Finder or the Dock, terminal panes start in `/`, not your home directory.
 
 `scripts/icon.sh` regenerates the icon from the SVG. It needs Google Chrome.
+
+### Releasing
+
+1. Bump `version` in the workspace `Cargo.toml` and merge it to `main`.
+2. Tag that commit and push the tag: `git tag v0.2.0 && git push origin v0.2.0`.
+
+The release workflow builds the app with `scripts/bundle.sh` and attaches
+`ottospace-<version>-aarch64-apple-darwin.zip` and its `.sha256` to a GitHub Release. It fails if
+the tag does not match the crate version.
 
 ## Using it
 
