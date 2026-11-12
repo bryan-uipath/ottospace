@@ -2932,6 +2932,31 @@ fn ctl(args: &[String]) -> ! {
     std::process::exit(if ok { 0 } else { 1 });
 }
 
+/// `ottospace agents [dir]`: the agent sessions of the directory's repository, worktrees included,
+/// as JSON. Names, counts and times only; see `docs/ai/agent-runners.md`.
+fn agents(dir: Option<&String>) -> ! {
+    use ottospace_agents::{claude::Claude, codex::Codex, git::checkouts, report::report};
+    const USAGE: &str = "usage: ottospace agents [dir]\n\
+        Prints the Claude Code and Codex sessions of the repository at <dir> (an absolute path;\n\
+        default: the current directory) as JSON: names, counts and times only.";
+    if dir.is_some_and(|d| d == "--help" || d == "-h") {
+        println!("{USAGE}");
+        std::process::exit(0);
+    }
+    // No directory, an empty or relative one, or one that is not there: an error, never "all sessions".
+    let dir = dir.map(PathBuf::from).map_or_else(std::env::current_dir, Ok);
+    let (claude, codex) = (Claude::from_env(), Codex::from_env());
+    let report = dir.and_then(|dir| checkouts(&dir)).and_then(|dirs| report(&[&claude, &codex], &dirs, now_ms(), 5));
+    match report {
+        Ok(report) => println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default()),
+        Err(err) => {
+            eprintln!("agents: {err}\n{USAGE}");
+            std::process::exit(2);
+        }
+    }
+    std::process::exit(0);
+}
+
 /// The `--version` line. `scripts/package.sh` passes the commit and its date in at compile time;
 /// a plain `cargo build` has neither.
 fn version_line(version: &str, commit: Option<&str>, date: Option<&str>) -> String {
@@ -2955,6 +2980,10 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).is_some_and(|a| a == "ctl") {
         ctl(&args[2..]);
+    }
+    // Hidden while its output has no stable shape. Reads other programs' session files.
+    if args.get(1).is_some_and(|a| a == "agents") {
+        agents(args.get(2));
     }
     // `ottospace skill` prints the agent guide; `--stub` prints the SKILL.md that points to it.
     if args.get(1).is_some_and(|a| a == "skill") {

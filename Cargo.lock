@@ -3786,11 +3786,20 @@ dependencies = [
  "core-video",
  "gpui",
  "objc2-core-foundation",
+ "ottospace-agents",
  "ottospace-core",
  "ottospace-mac",
  "raw-window-handle",
  "regex",
  "screencapturekit 11.1.2",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ottospace-agents"
+version = "0.1.0"
+dependencies = [
  "serde",
  "serde_json",
 ]
