@@ -3,6 +3,11 @@
 Recommendation: one ottospace window per display, one shared model; a task spans displays and each of its tabs is assigned to a display. Reach it in steps.
 Start with display-aware parking in the core, which fixes gaps that exist today with one window. Do not take ownership of all windows.
 
+**Status: parked.** Bryan, 2026-11-12: multi-window is not important for now. He will use ottospace on the main
+display and keep the second display for things ottospace does not control. One part still matters in that setup:
+`parking_spot()` ignores where ottospace is, so parked windows can sit at a corner of the second display (see the
+first PR below).
+
 Refines #4 in `docs/ideas/1-initial-brainstorm.md` ("second- or third-screen layouts", "display affinity") and Bryan's
 request of 2026-11-11. Not agreed. Nothing here was measured: no multi-display run was made for this note.
 
