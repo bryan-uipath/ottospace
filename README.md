@@ -168,9 +168,22 @@ ottospace ctl '{"cmd":"section","section":"apps"}'
 ottospace ctl '{"cmd":"state"}'
 ```
 
-Commands: `state`, `split`, `type`, `close`, `focus`, `focus_dir`, `open_app`, `enter`, `leave`,
-`section`, `quit`. Fields are in `Request` in [`crates/ottospace/src/control.rs`](crates/ottospace/src/control.rs).
-Unknown commands and fields are refused.
+`ottospace skill` prints every request with an example, and what the state fields mean. Fields are
+in `Request` in [`crates/ottospace/src/control.rs`](crates/ottospace/src/control.rs). Unknown commands and
+fields are refused.
+
+## Agent skill
+
+`ottospace skill` prints a guide for coding agents: the requests, the state fields, and rules for
+using them safely. To make it a Claude Code skill, install the stub that points at it:
+
+```sh
+mkdir -p ~/.claude/skills/ottospace
+ottospace skill --stub > ~/.claude/skills/ottospace/SKILL.md
+```
+
+The stub tells the agent to run `ottospace skill`, so the guide always matches the installed
+version. A test checks that every request shown in the guide is one the app accepts.
 
 ## Development
 

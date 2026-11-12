@@ -58,6 +58,9 @@ ottospace ctl '{"cmd":"type","text":"ls\r"}'
 ottospace ctl '{"cmd":"state"}'
 ```
 
+`crates/ottospace/skill/guide.md` is the agent-facing guide (`ottospace skill` prints it). When
+you add or change a request, update the guide; a unit test parses every example in it.
+
 Agents use the same socket to inspect and drive ottospace. Keep `Request` a closed set, and
 keep the socket same-user only: `type` sends keys to a terminal, which is as strong as a shell.
 

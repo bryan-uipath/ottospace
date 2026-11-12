@@ -207,6 +207,10 @@ impl AssetSource for Assets {
     }
 }
 
+/// What an agent needs to drive ottospace. Compiled in, so the guide matches the binary.
+const SKILL_GUIDE: &str = include_str!("../skill/guide.md");
+const SKILL_STUB: &str = include_str!("../skill/SKILL.md");
+
 /// The return key's name (e.g. "F18") once it is registered. Unset: there is no return key.
 static RETURN_KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
@@ -1536,6 +1540,18 @@ fn main() {
     if args.get(1).is_some_and(|a| a == "ctl") {
         ctl(&args[2..]);
     }
+    // `ottospace skill` prints the agent guide; `--stub` prints the SKILL.md that points to it.
+    if args.get(1).is_some_and(|a| a == "skill") {
+        let stub = args.get(2).is_some_and(|a| a == "--stub");
+        print!("{}", if stub { SKILL_STUB } else { SKILL_GUIDE });
+        return;
+    }
+    // Anything else is a mistake (`ottospace skills`, `--help`). Starting the app for it would
+    // open a second window and restore the running instance's hosted windows.
+    if let Some(unknown) = args.get(1) {
+        eprintln!("unknown command: {unknown}\nusage: ottospace [ctl '<json request>' | skill [--stub]]");
+        std::process::exit(2);
+    }
 
     // E2E runs get no window hosting, so tests cannot move or strand the user's real windows.
     // The exception is `OTTOSPACE_HOST_ONLY=<pid>`: hosting is on for that one process only (the
@@ -1619,6 +1635,34 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every `ottospace ctl '<json>'` line in the agent guide must be a request the app accepts,
+    /// so the guide cannot drift from the socket protocol.
+    #[test]
+    fn every_request_in_the_agent_guide_parses() {
+        let examples: Vec<&str> = SKILL_GUIDE
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("ottospace ctl '"))
+            .filter_map(|rest| rest.split_once('\'').map(|(json, _)| json))
+            .collect();
+        assert!(examples.len() > 20, "found {} examples", examples.len());
+        for json in examples {
+            let parsed: Result<Request, _> = serde_json::from_str(json);
+            assert!(parsed.is_ok(), "the guide shows a request the app refuses: {json}: {:?}", parsed.err());
+        }
+    }
+
+    /// Every request the app accepts must have an example in the guide. The names come from
+    /// serde's own error for an unknown command, so a new `Request` variant fails this test.
+    #[test]
+    fn the_agent_guide_covers_every_request() {
+        let error = serde_json::from_str::<Request>(r#"{"cmd":"?"}"#).expect_err("? is not a command").to_string();
+        let names: Vec<&str> = error.split('`').skip(3).step_by(2).collect();
+        assert!(names.len() > 20, "could not read the command names from: {error}");
+        for name in names {
+            assert!(SKILL_GUIDE.contains(&format!(r#""cmd":"{name}""#)), "the guide has no example of `{name}`");
+        }
+    }
 
     /// A missing asset draws as nothing, with no error. Catch a renamed file here.
     #[test]
