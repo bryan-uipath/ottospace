@@ -31,10 +31,10 @@ pub fn crop(bar: f32, top: f32, limit: f32) -> f32 {
     if top - bar >= limit { bar } else { 0.0 }
 }
 
-/// Top inset of an app pane's content below a `header` pt header, so a raised bar of `bar` pt
-/// covers exactly the header and no more. At least 2pt, so a live window spares the pane border.
-pub fn inset(bar: f32, header: f32) -> f32 {
-    (bar - header).max(2.0)
+/// Height of an app pane's header: the window's title bar if it has one, so the live window's bar
+/// covers the header exactly (ours parked, the app's live); else the `plain` height.
+pub fn header(bar: f32, plain: f32) -> f32 {
+    if bar > 0.0 { bar } else { plain }
 }
 
 #[cfg(test)]
@@ -96,9 +96,8 @@ mod tests {
     }
 
     #[test]
-    fn the_inset_lets_the_bar_cover_the_header_exactly() {
-        assert_eq!(inset(32., 29.), 3.0);
-        assert_eq!(inset(28., 29.), 2.0);
-        assert_eq!(inset(0., 29.), 2.0);
+    fn an_app_header_is_as_tall_as_its_title_bar() {
+        assert_eq!(header(32., 28.), 32.0);
+        assert_eq!(header(0., 28.), 28.0);
     }
 }

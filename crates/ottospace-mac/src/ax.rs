@@ -98,15 +98,15 @@ impl Window {
         frame_of(&element)
     }
 
-    /// Whether a direct child has the role `role` (e.g. "AXToolbar"). None: children unreadable.
+    /// Whether a direct child has the role `role` (e.g. "AXToolbar"). None: a child or role unreadable.
     pub fn has_child(&self, role: &str) -> Option<bool> {
         let children = copy_attr(&self.element, "AXChildren")?.downcast::<CFArray>().ok()?;
         let children = unsafe { CFRetained::cast_unchecked::<CFArray<AXUIElement>>(children) };
-        Some(children.iter().any(|child| {
-            copy_attr(&child, "AXRole")
-                .and_then(|r| r.downcast::<CFString>().ok())
-                .is_some_and(|r| r.to_string() == role)
-        }))
+        let roles: Option<Vec<String>> = children
+            .iter()
+            .map(|child| Some(copy_attr(&child, "AXRole")?.downcast::<CFString>().ok()?.to_string()))
+            .collect();
+        Some(roles?.iter().any(|r| r == role))
     }
 
     /// Moves the window; returns where it actually landed (macOS may clamp).

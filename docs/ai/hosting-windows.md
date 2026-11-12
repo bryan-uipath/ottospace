@@ -42,11 +42,12 @@ Measured 2026-11-11, macOS 26, attributes read with System Events (frames relati
 | VS Code (Electron) | y+9, 16pt | none | no | none |
 | Spotify (CEF) | y+24, 16pt | none | no | none |
 
-Safari and Slack were not running. The pane content sits `bar − 29`pt (at least 2pt) below the
-header, so a raised 32pt bar covers the pane's border and header exactly and no more. A pane
-whose raised window would reach above ottospace's top bar gets no crop (`titlebar::crop`); with
-the inset that cannot happen, and since the top bar is below the menu bar, neither can a raised
-window going under the menu bar. Not hidden: while live, the app's real title bar shows,
+Safari and Slack were not running. An app pane with a bar gets a header as tall as the bar
+(`titlebar::header`), inside the same 2pt gap as the content: the raised live window's bar covers
+it exactly, and the pane's border stays visible on all four sides. The header does not shrink in
+a short pane. A pane whose raised window would reach above ottospace's top bar gets no crop
+(`titlebar::crop`); the layout keeps that from happening, and the top bar is below the menu bar,
+so a raised window cannot go under it either. Not hidden: while live, the app's real title bar shows,
 including the purple pill macOS draws in it while the window is captured.
 
 ## Probe results

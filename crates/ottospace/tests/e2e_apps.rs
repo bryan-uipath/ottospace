@@ -133,6 +133,14 @@ fn a_canary_window_is_hosted_entered_left_and_restored() {
         frame(0).filter(|f| close(f[0], window[0] + body[0]) && close(f[1], window[1] + body[1] - crop))
     });
     assert!(close(live[2], body[2]) && close(live[3], body[3] + crop), "live size {live:?} vs pane {body:?}");
+    // The pane border stays visible: a 2pt gap inside it on all four sides, the top included.
+    let inside = rect(&state()["frames"]["1"]).expect("pane frame");
+    let (left, top) = (window[0] + inside[0], window[1] + inside[1]);
+    let gap = |d: f64| (d - 2.0).abs() <= 0.5;
+    assert!(live[1] >= top && gap(live[1] - top), "top gap: live {live:?}, inside border {inside:?}");
+    assert!(gap(live[0] - left), "left gap: live {live:?}, inside border {inside:?}");
+    assert!(gap(left + inside[2] - live[0] - live[2]), "right gap: live {live:?}, inside border {inside:?}");
+    assert!(gap(top + inside[3] - live[1] - live[3]), "bottom gap: live {live:?}, inside border {inside:?}");
     // The live window in global coordinates, to click the pane at a known screen point below.
     let global = hosted().expect("live window frame");
 
@@ -148,7 +156,12 @@ fn a_canary_window_is_hosted_entered_left_and_restored() {
             let out = Command::new("osascript").args(["-e", script]).output().expect("run osascript");
             String::from_utf8_lossy(&out.stdout).trim() == otto.child.id().to_string()
         };
-        wait_for("ottospace to be frontmost", || front().then_some(()));
+        // Leave reactivates ottospace only if the canary had the keyboard; ask until it holds.
+        let raise = format!("set frontmost of (first process whose unix id is {}) to true", otto.child.id());
+        wait_for("ottospace to be frontmost", || {
+            press(&raise);
+            front().then_some(())
+        });
         let (x, y) = (global[0] + 100.0, global[1] + crop + 60.0);
         let status = Command::new("cliclick").arg(format!("c:{x:.0},{y:.0}")).status().expect("run cliclick");
         assert!(status.success(), "cliclick failed");

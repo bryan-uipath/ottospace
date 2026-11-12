@@ -322,6 +322,8 @@ struct Workspace {
     cell: Size<Pixels>,
     /// Each pane's body bounds in window coordinates, recorded during prepaint.
     cells: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
+    /// Each pane's bounds inside its border, for e2e to check the live window's gap.
+    frames: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
     apps: Vec<String>,
     /// Window ids seen per hosted pid; anything new that appears later gets its own pane.
     known: Vec<(i32, HashSet<u32>)>,
@@ -417,6 +419,7 @@ impl Workspace {
             terminals: HashMap::new(),
             cell: terminal::cell_size(window),
             cells: HashMap::new(),
+            frames: HashMap::new(),
             apps: running_apps(hosting, host_only),
             known: Vec::new(),
             live_since: None,
@@ -444,6 +447,7 @@ impl Workspace {
                 }
                 Effect::Closed(pane) => {
                     self.cells.remove(&pane.id);
+                    self.frames.remove(&pane.id);
                     self.terminals.remove(&pane.id); // drop ends its shell
                     if let Some(hosted) = self.hosted.remove(&pane.id) {
                         hosted.release();
@@ -577,15 +581,17 @@ impl Workspace {
             [frame.origin.x.into(), frame.origin.y.into(), frame.size.width.into(), frame.size.height.into()];
         // Only panes of the active tab are drawn; a background pane's last bounds are stale.
         let drawn = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
-        let bounds: BTreeMap<PaneId, [f32; 4]> = self
-            .cells
-            .iter()
-            .filter(|(id, _)| drawn.contains(id))
-            .map(|(id, cell)| {
-                let b = cell.get();
-                (*id, [b.origin.x.into(), b.origin.y.into(), b.size.width.into(), b.size.height.into()])
-            })
-            .collect();
+        let drawn_rects = |cells: &HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>| -> BTreeMap<PaneId, [f32; 4]> {
+            cells
+                .iter()
+                .filter(|(id, _)| drawn.contains(id))
+                .map(|(id, cell)| {
+                    let b = cell.get();
+                    (*id, [b.origin.x.into(), b.origin.y.into(), b.size.width.into(), b.size.height.into()])
+                })
+                .collect()
+        };
+        let (bounds, frames) = (drawn_rects(&self.cells), drawn_rects(&self.frames));
         let terminals: BTreeMap<PaneId, serde_json::Value> = self
             .terminals
             .iter()
@@ -599,6 +605,8 @@ impl Workspace {
             "mode": self.model.mode(),
             "state": self.model,
             "bounds": bounds,
+            // Each drawn pane's bounds inside its border.
+            "frames": frames,
             "tab_panes": self.model.tab_panes(),
             // ottospace's own window frame, so a test can turn pane bounds into screen positions.
             "window": frame,
@@ -1166,13 +1174,17 @@ impl Workspace {
     fn render_pane(&self, pane: &Pane, cx: &mut Context<Self>) -> impl IntoElement {
         let id = pane.id;
         let cell = self.cells.get(&id).cloned().unwrap_or_default();
+        let frame = self.frames.get(&id).cloned().unwrap_or_default();
+        let bar = self.hosted.get(&id).map_or(0.0, |h| h.bar as f32);
         let (tag, tag_color, title) = match &pane.kind {
             Kind::Empty => ("EMPTY", theme::MUTED, String::new()),
             Kind::Terminal => ("TERM", theme::PRIMARY, "shell".into()),
             Kind::App { title, .. } => ("APP", theme::APP, title.clone()),
         };
+        // flex_none: a short pane must not squeeze the header, or a raised bar would overlap the pane above.
         let header = div()
-            .h(px(PANE_HEADER))
+            .flex_none()
+            .h(px(titlebar::header(bar, PANE_HEADER)))
             .px_2()
             .flex()
             .items_center()
@@ -1249,10 +1261,9 @@ impl Workspace {
             MouseButton::Left,
             cx.listener(move |this, e: &MouseDownEvent, window, cx| this.click_pane(id, e, window, cx)),
         );
-        // A raised live window's title bar covers the pane border and header, and no more.
-        let bar = self.hosted.get(&id).map_or(0.0, |h| h.bar as f32);
-        let top = titlebar::inset(bar, PANE_HEADER + 1.);
-        let body = div().id(("pane", id)).flex_1().min_h_0().p(px(2.)).pt(px(top)).child(inner);
+        // With a title bar, the header sits inside the 2pt gap too, so the raised live window's bar
+        // covers it exactly and the gap stays on all four sides.
+        let body = div().id(("pane", id)).flex_1().min_h_0().when(bar == 0.0, |d| d.p(px(2.))).child(inner);
 
         // While another pane is live, fade this one: input goes to the live app, not here.
         let faded = self.model.live.is_some_and(|live| live != id);
@@ -1266,6 +1277,11 @@ impl Workspace {
             .border_1()
             .border_color(rgb(if focused { theme::accent(self.model.mode()) } else { theme::BORDER }))
             .when(faded, |d| d.opacity(0.5))
+            .relative()
+            .when(bar > 0.0, |d| d.p(px(2.)))
+            .child(
+                canvas(move |bounds, _, _| frame.set(bounds), |_, _, _, _| {}).absolute().top_0().left_0().size_full(),
+            )
             .child(header)
             .child(body)
     }
@@ -1476,6 +1492,7 @@ impl Render for Workspace {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         for pane in &self.model.panes {
             self.cells.entry(pane.id).or_default();
+            self.frames.entry(pane.id).or_default();
         }
         let tree = self.model.layout.as_ref().map(|root| self.render_node(root, cx));
         div()
