@@ -144,10 +144,13 @@ agent CLIs use it.
   when the control is not drawn, and a new control gets none. So a label can only activate a
   control of the last frame, and `Workspace::activate` refuses an id that frame did not draw.
 - A pane's or tab's × (`close:`, `tab-close:`) always has two letters: one stray key closes nothing.
-- What ends the mode: the user's moves only. `Action::by_user` puts every action on one side:
-  news (the clock, a list read again, an agent's task, a window an app opened, a pane closed
-  because its shell or window is gone) never ends it, or the next letter of a label would reach
-  a terminal. A ⌘ shortcut leaves first and then runs. The key that ended the mode types nothing
+- What ends the mode: the user's own moves only. Every action comes with its `Origin` (`User`,
+  `Socket`, `System`): a socket client's request and news (the clock, a list read again, a
+  window an app opened, a pane closed because its shell or window is gone) never end it, or the
+  next letter of a label would reach a terminal. Nor may they take the keyboard from under the
+  labels (`Action::takes_keyboard`, `Model::refusal`): a socket request that would is answered
+  "sneak mode is on". The mode's own actions work from any origin: a label typed with the `key`
+  request is input to it; any other key or pointer request from the socket is refused. A ⌘ shortcut leaves first and then runs. The key that ended the mode types nothing
   while it is held, and the rest of a `key` request is dropped.
 - Shell: `sneak.rs`. Each control has a `controls.mark(id)` line beside its click handler, which
   notes its bounds at prepaint, clipped to what shows. `Workspace::activate` runs what the click

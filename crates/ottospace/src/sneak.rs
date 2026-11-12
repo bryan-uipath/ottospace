@@ -16,13 +16,27 @@ use gpui::{
 };
 use ottospace_core::ax::{Frame, Source, Target};
 use ottospace_core::sneak::{Sneak, SneakKey, sneak_key};
-use ottospace_core::{Action, Axis, PaneId, theme};
+use ottospace_core::{Action, Axis, Origin, PaneId, theme};
 
 use crate::{SECTIONS, SPLITS, Workspace, control};
 
 /// The mode's own shortcut. Not ⌃G alone: that is BEL in a terminal (readline and fzf abort,
 /// vim's file info).
 pub const KEY: &str = "cmd-ctrl-g";
+
+/// What a socket client is told when its request would get in the way of the user's labels.
+pub const ON: &str = "sneak mode is on";
+
+fn is_own(key: &Keystroke) -> bool {
+    Keystroke::parse(KEY).is_ok_and(|own| own.modifiers == key.modifiers && own.key == key.key)
+}
+
+/// Whether sneak mode itself takes the key: a letter, ⌫, Esc, or its own shortcut. The only keys a
+/// socket client may send while the labels are up.
+pub fn takes(key: &Keystroke) -> bool {
+    let plain = !key.modifiers.platform && !key.modifiers.control && !key.modifiers.alt;
+    is_own(key) || (plain && sneak_key(&key.key).is_some())
+}
 
 /// Bounds in window points as the core's plain rect.
 pub fn frame(bounds: Bounds<Pixels>) -> Frame {
@@ -137,7 +151,7 @@ impl Workspace {
     /// ⌘⌃G: labels on the controls of the last painted frame, or out of the mode if it is on.
     pub(crate) fn toggle_sneak(&mut self, window: &Window, cx: &mut Context<Self>) {
         let targets = self.controls.targets();
-        self.dispatch(Action::Sneak { targets }, window, cx);
+        self.dispatch(Action::Sneak { targets }, self.input, window, cx);
     }
 
     /// Tells the core what the last painted frame drew, if a labelled control moved or went:
@@ -145,7 +159,7 @@ impl Workspace {
     pub(crate) fn sync_sneak(&mut self, window: &Window, cx: &mut Context<Self>) {
         let targets = self.controls.targets();
         if self.model.sneak.as_ref().is_some_and(|sneak| sneak.is_stale(&targets)) {
-            self.dispatch(Action::SneakDrawn { targets }, window, cx);
+            self.dispatch(Action::SneakDrawn { targets }, Origin::System, window, cx);
         }
     }
 
@@ -171,7 +185,7 @@ impl Workspace {
                 }
                 // Enter only: if ⌘⌃G or another caller got here first, the mode stays on.
                 let targets = this.controls.targets();
-                this.dispatch(Action::SneakEnter { targets }, window, cx);
+                this.dispatch(Action::SneakEnter { targets }, Origin::Socket, window, cx);
                 this.sync_sneak(window, cx);
                 match this.model.sneak {
                     Some(_) => this.snapshot(window, cx),
@@ -187,9 +201,8 @@ impl Workspace {
 
     /// Before a key's shortcut runs: any ⌘ shortcut but the mode's own leaves sneak mode first.
     pub(crate) fn shortcut_leaves_sneak(&mut self, key: &Keystroke, window: &Window, cx: &mut Context<Self>) {
-        let own = Keystroke::parse(KEY).is_ok_and(|own| own.modifiers == key.modifiers && own.key == key.key);
-        if self.model.sneak.is_some() && key.modifiers.platform && !own {
-            self.dispatch(Action::LeaveSneak, window, cx);
+        if self.model.sneak.is_some() && key.modifiers.platform && !is_own(key) {
+            self.dispatch(Action::LeaveSneak, self.input, window, cx);
         }
     }
 
@@ -209,7 +222,7 @@ impl Workspace {
         };
         // The letter is read against the frame on screen now.
         self.sync_sneak(window, cx);
-        self.dispatch(action, window, cx);
+        self.dispatch(action, self.input, window, cx);
         // If that ended the mode, the key is still down: its repeats are not for the terminal.
         self.sneak_spent = self.model.sneak.is_none();
     }
@@ -217,34 +230,34 @@ impl Workspace {
     /// Selects a tab by its id: its place on the bar, and its label.
     pub(crate) fn select_tab(&mut self, tab: u32, window: &Window, cx: &mut Context<Self>) {
         if let Some(index) = self.model.tabs.iter().position(|t| t.id == tab) {
-            self.dispatch(Action::SelectTab { index }, window, cx);
+            self.dispatch(Action::SelectTab { index }, self.input, window, cx);
         }
     }
 
     /// Closes a tab by its id: its × on the bar, and the ×'s label.
     pub(crate) fn close_tab(&mut self, tab: u32, window: &Window, cx: &mut Context<Self>) {
         if let Some(index) = self.model.tabs.iter().position(|t| t.id == tab) {
-            self.dispatch(Action::CloseTab { index: Some(index) }, window, cx);
+            self.dispatch(Action::CloseTab { index: Some(index) }, self.input, window, cx);
         }
     }
 
     /// Closes a pane: its ×, and the ×'s label.
     pub(crate) fn close_pane(&mut self, pane: PaneId, window: &Window, cx: &mut Context<Self>) {
-        self.dispatch(Action::Close { pane: Some(pane) }, window, cx);
+        self.dispatch(Action::Close { pane: Some(pane) }, self.input, window, cx);
     }
 
     /// What choosing a pane's body does, by a click or by its label: focus, or for an app pane
     /// the keyboard, which raises its window. `true`: an app pane went live just now.
     pub(crate) fn choose_pane(&mut self, pane: PaneId, window: &Window, cx: &mut Context<Self>) -> bool {
         if !self.hosted.contains_key(&pane) {
-            self.dispatch(Action::Focus { pane }, window, cx);
+            self.dispatch(Action::Focus { pane }, self.input, window, cx);
             return false;
         }
         // Already live: the real window is over the pane and takes its own input.
         if self.model.live == Some(pane) {
             return false;
         }
-        self.dispatch(Action::Enter { pane }, window, cx);
+        self.dispatch(Action::Enter { pane }, self.input, window, cx);
         true
     }
 
@@ -299,7 +312,7 @@ impl Workspace {
             }
         };
         if let Some(action) = action {
-            self.dispatch(action, window, cx);
+            self.dispatch(action, self.input, window, cx);
         }
     }
 }

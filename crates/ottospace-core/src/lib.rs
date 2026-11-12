@@ -19,4 +19,4 @@ pub mod theme;
 pub mod titlebar;
 
 pub use layout::{Axis, Dir, Node, Rect, Zone};
-pub use model::{Action, Effect, Kind, Mode, Model, Pane, PaneId, PickItem, Picker, Section, Tab};
+pub use model::{Action, Effect, Envelope, Kind, Mode, Model, Origin, Pane, PaneId, PickItem, Picker, Section, Tab};
