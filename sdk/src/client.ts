@@ -319,7 +319,10 @@ export class Client {
   axOverlay(args: { refresh?: boolean } = {}): Promise<Snapshot> {
     return this.snapshot({ cmd: "ax_overlay", ...args });
   }
-  /** Sneak mode: labels on ottospace's own controls, in `sneak.targets`. Type one with `key`. */
+  /**
+   * Sneak mode: labels on ottospace's own controls, in `sneak.targets`. Type one with `key`.
+   * Already on: it stays on. Rejects if the window is not drawn.
+   */
   sneak(): Promise<Snapshot> {
     return this.snapshot({ cmd: "sneak" });
   }

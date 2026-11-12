@@ -321,16 +321,29 @@ ottospace ctl '{"cmd":"key","keys":"escape"}'
 `sneak` puts a letter label on every control ottospace draws and replies with them in
 `sneak.targets`. Find the control by `source.id`, then send its `label` with `key`, one letter
 per keystroke: the control acts as if clicked and the mode ends. A first letter of a two-letter
-label only narrows; `backspace` takes it back; `escape` leaves with nothing done. Ids: `rail:apps`
+label only narrows; `backspace` takes it back; `escape` leaves with nothing done. So does a letter
+that goes on with no label, and the keys after it in the same `key` request are dropped, as are
+those after a spelled label. Keys that are not letters do nothing. Ids: `rail:apps`
 (`workbook`, `tasks`, `repos`), `bar:refresh`, `bar:close`, `app:<name>`, `repo:<path>`,
 `task:<id>`, `tab:<tab id>`, `tab-close:<tab id>`, `top:new_tab`, `top:split_right`,
 `top:split_down`, `top:task_leave`, `header:<pane>` (focus), `close:<pane>`, `pane:<pane>` (focus;
 an app pane gets the keyboard, as `enter`), `home:new_task`, `home-row:<task>`, `home-node:<task>`.
-Only what is drawn has a label: a background tab's panes do not. Controls inside a hosted app's
-window get none, and nothing is pressed in another app. `sneak` fails unless `mode` is `normal`
-or `list`: send `leave` or close the box first. A request with its own name (`focus`,
-`select_tab`, `section`) is simpler when there is one; `close` and `tab-close` labels end shells,
-as `close` and `close_tab` do.
+A `close:` or `tab-close:` label always has two letters.
+
+The labels are those of a frame painted after the request came. `sneak` fails with "the window
+has not been drawn" if no frame is painted (a hidden or minimised window), and unless `mode` is
+`normal` or `list`: send `leave` or close the box first. If the mode is already on it stays on,
+and the reply has the labels as they are. Starting it hides the accessibility overlay.
+
+Only what is drawn has a label: a background tab's panes do not. While the mode is on the labels
+follow what is drawn: a control that moves keeps its letters, one that is no longer drawn loses
+its label, and a new one gets none. News does not end the mode (an agent's `task_add`, a shell
+that exits); a request that is a move does (`focus`, `split`, `select_tab`). So read
+`sneak.targets` from the latest reply before you type a label.
+
+Controls inside a hosted app's window get no label. Sneak presses no control inside another app and sets no value; entering an app pane raises its window, as a click on the pane does. A request with its own name
+(`focus`, `select_tab`, `section`) is simpler when there is one; `close` and `tab-close` labels end
+shells, as `close` and `close_tab` do.
 
 ## Recipes
 

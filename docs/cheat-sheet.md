@@ -39,7 +39,7 @@ ottospace            # opens on the Repos list
 | Open a section | Click its icon on the rail |
 | Use it from the keyboard | ⌘⇧E, then `j` `k` move · ↵ open · ⇧↵ open below · Tab next section · Esc leave |
 | Read the lists again | ↻ in the bar's header |
-| Click anything without the mouse | ⌘⌃G: every control gets a letter label. Type it · ⌫ takes a letter back · Esc leave |
+| Click anything without the mouse | ⌘⌃G: every control gets a letter label (a × gets two). Type it · ⌫ takes a letter back · Esc or a wrong letter leaves |
 
 The fourth icon, Workbook, is empty for now.
 

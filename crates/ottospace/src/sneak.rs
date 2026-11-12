@@ -1,8 +1,8 @@
 //! Sneak mode in the shell: where ottospace's own controls were drawn, the label pills over them,
 //! and what a typed label does. Labels, keys and leaving are the core's (`ottospace_core::sneak`).
 //!
-//! Only ottospace's own controls. Nothing here reads or presses a hosted app's accessibility
-//! nodes: see `docs/ai/1-initial-brainstorm/accessibility.md`.
+//! Sneak presses no control inside another app and sets no value. Entering an app pane raises its
+//! window, as a click on the pane does: see `docs/ai/1-initial-brainstorm/accessibility.md`.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -11,17 +11,47 @@ use std::sync::mpsc::Sender;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, Bounds, BoxShadow, Context, FontWeight, Hsla, IntoElement, KeyDownEvent, Pixels, Window, black, canvas,
-    div, point, prelude::*, px, rgb,
+    AnyElement, Bounds, BoxShadow, Context, Div, FontWeight, Hsla, IntoElement, KeyDownEvent, Keystroke, Pixels,
+    Window, black, canvas, div, point, prelude::*, px, rgb,
 };
 use ottospace_core::ax::{Frame, Source, Target};
 use ottospace_core::sneak::{Sneak, SneakKey, sneak_key};
-use ottospace_core::{Action, Axis, theme};
+use ottospace_core::{Action, Axis, PaneId, theme};
 
 use crate::{SECTIONS, SPLITS, Workspace, control};
 
-/// The top-bar buttons' names in a control's id, in the order of `SPLITS`. e.g. `top:new_tab`.
-pub const TOP: [&str; 3] = ["new_tab", "split_right", "split_down"];
+/// The mode's own shortcut. Not ⌃G alone: that is BEL in a terminal (readline and fzf abort,
+/// vim's file info).
+pub const KEY: &str = "cmd-ctrl-g";
+
+/// Bounds in window points as the core's plain rect.
+pub fn frame(bounds: Bounds<Pixels>) -> Frame {
+    Frame {
+        x: f32::from(bounds.origin.x).into(),
+        y: f32::from(bounds.origin.y).into(),
+        w: f32::from(bounds.size.width).into(),
+        h: f32::from(bounds.size.height).into(),
+    }
+}
+
+/// A label chip: sneak mode's pills, and the accessibility overlay's.
+pub fn chip() -> Div {
+    div()
+        .flex_none()
+        .px_1()
+        .rounded_sm()
+        .whitespace_nowrap()
+        .bg(rgb(theme::SNEAK))
+        .text_color(rgb(theme::BACKGROUND))
+        .text_xs()
+        // The raised-panel shadow, scaled down for a chip.
+        .shadow(vec![BoxShadow {
+            color: black().opacity(0.7),
+            offset: point(px(0.), px(2.)),
+            blur_radius: px(6.),
+            spread_radius: px(0.),
+        }])
+}
 
 #[derive(Default)]
 struct Painted {
@@ -61,15 +91,13 @@ impl Controls {
         self.0.borrow().frame
     }
 
+    fn drew(&self, id: &str) -> bool {
+        self.0.borrow().controls.contains_key(id)
+    }
+
     fn targets(&self) -> Vec<Target> {
-        let frame = |b: &Bounds<Pixels>| Frame {
-            x: f32::from(b.origin.x).into(),
-            y: f32::from(b.origin.y).into(),
-            w: f32::from(b.size.width).into(),
-            h: f32::from(b.size.height).into(),
-        };
         let target = |(id, bounds): (&String, &Bounds<Pixels>)| Target {
-            frame: frame(bounds),
+            frame: frame(*bounds),
             source: Source::Own { id: id.clone() },
         };
         self.0.borrow().controls.iter().map(target).collect()
@@ -82,23 +110,10 @@ pub fn labels(sneak: &Sneak) -> impl IntoElement + use<> {
     let pills = sneak.visible().map(|t| {
         let f = t.target.frame;
         let (typed, rest) = t.label.split_at(sneak.typed.len().min(t.label.len()));
-        let pill = div()
+        let pill = chip()
             .flex()
-            .flex_none()
-            .px(px(3.))
-            .rounded_sm()
-            .bg(rgb(theme::SNEAK))
-            .text_color(rgb(theme::BACKGROUND))
-            .text_xs()
             .line_height(px(15.))
             .font_weight(FontWeight::BOLD)
-            // The raised-panel shadow, scaled down for a chip.
-            .shadow(vec![BoxShadow {
-                color: black().opacity(0.7),
-                offset: point(px(0.), px(2.)),
-                blur_radius: px(6.),
-                spread_radius: px(0.),
-            }])
             .child(div().text_color(dim).child(typed.to_uppercase()))
             .child(rest.to_uppercase());
         // A pane's label sits in its middle, a small control's on it, a row's or bar's at its left.
@@ -125,22 +140,39 @@ impl Workspace {
         self.dispatch(Action::Sneak { targets }, window, cx);
     }
 
-    /// The `sneak` request: enters the mode (afresh, if it is on) and replies with the state.
+    /// Tells the core what the last painted frame drew, if a labelled control moved or went:
+    /// its label follows it or goes with it. Every tick, and before a key is read as a label.
+    pub(crate) fn sync_sneak(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let targets = self.controls.targets();
+        if self.model.sneak.as_ref().is_some_and(|sneak| sneak.is_stale(&targets)) {
+            self.dispatch(Action::SneakDrawn { targets }, window, cx);
+        }
+    }
+
+    /// The `sneak` request: the mode is on when it replies, with the labels of a frame painted
+    /// after the request came. It never replies with the controls of an earlier frame.
     pub(crate) fn serve_sneak(&mut self, reply: Sender<String>, window: &Window, cx: &mut Context<Self>) {
-        // Labels come from a painted frame, and the request before this one (a split, a section)
-        // may not be painted yet: draw, and wait for that frame.
-        self.dispatch(Action::LeaveSneak, window, cx);
+        // The request before this one (a split, a section) may not be painted yet: draw.
         let seen = self.controls.frame();
+        cx.notify();
         cx.spawn_in(window, async move |this, cx| {
-            // Half a second at most: a window nobody can see is not painted.
-            for _ in 0..60 {
-                if this.update(cx, |this, _| this.controls.frame()).is_ok_and(|frame| frame != seen) {
+            // Two seconds at most: a window nobody can see is not painted.
+            let mut drawn = false;
+            for _ in 0..250 {
+                drawn = this.update(cx, |this, _| this.controls.frame()).is_ok_and(|frame| frame != seen);
+                if drawn {
                     break;
                 }
                 cx.background_executor().timer(Duration::from_millis(8)).await;
             }
             let answer = this.update_in(cx, |this, window, cx| {
-                this.toggle_sneak(window, cx);
+                if !drawn {
+                    return control::error("the window has not been drawn: sneak mode labels what is on screen");
+                }
+                // Enter only: if ⌘⌃G or another caller got here first, the mode stays on.
+                let targets = this.controls.targets();
+                this.dispatch(Action::SneakEnter { targets }, window, cx);
+                this.sync_sneak(window, cx);
                 match this.model.sneak {
                     Some(_) => this.snapshot(window),
                     None => {
@@ -153,12 +185,18 @@ impl Workspace {
         .detach();
     }
 
-    /// Sneak mode takes every key but ⌘ shortcuts: letters type a label, ⌫ takes one back, Esc leaves.
+    /// Before a key's shortcut runs: any ⌘ shortcut but the mode's own leaves sneak mode first.
+    pub(crate) fn shortcut_leaves_sneak(&mut self, key: &Keystroke, window: &Window, cx: &mut Context<Self>) {
+        let own = Keystroke::parse(KEY).is_ok_and(|own| own.modifiers == key.modifiers && own.key == key.key);
+        if self.model.sneak.is_some() && key.modifiers.platform && !own {
+            self.dispatch(Action::LeaveSneak, window, cx);
+        }
+    }
+
+    /// Sneak mode takes every key: a letter types a label or, if no label goes on with it,
+    /// leaves; ⌫ takes one back; Esc leaves. Other keys do nothing. (⌘ shortcuts left already.)
     pub(crate) fn sneak_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
         let key = &event.keystroke;
-        if key.modifiers.platform {
-            return; // ⌘ shortcuts still reach their bindings: each ends the mode and acts
-        }
         // Nothing reaches the terminal under the labels.
         cx.stop_propagation();
         // ⌃A is not `a`. A held key types once.
@@ -169,16 +207,56 @@ impl Workspace {
             Some(SneakKey::Leave) => Action::LeaveSneak,
             None => return,
         };
+        // The letter is read against the frame on screen now.
+        self.sync_sneak(window, cx);
         self.dispatch(action, window, cx);
+        // If that ended the mode, the key is still down: its repeats are not for the terminal.
+        self.sneak_spent = self.model.sneak.is_none();
+    }
+
+    /// Selects a tab by its id: its place on the bar, and its label.
+    pub(crate) fn select_tab(&mut self, tab: u32, window: &Window, cx: &mut Context<Self>) {
+        if let Some(index) = self.model.tabs.iter().position(|t| t.id == tab) {
+            self.dispatch(Action::SelectTab { index }, window, cx);
+        }
+    }
+
+    /// Closes a tab by its id: its × on the bar, and the ×'s label.
+    pub(crate) fn close_tab(&mut self, tab: u32, window: &Window, cx: &mut Context<Self>) {
+        if let Some(index) = self.model.tabs.iter().position(|t| t.id == tab) {
+            self.dispatch(Action::CloseTab { index: Some(index) }, window, cx);
+        }
+    }
+
+    /// Closes a pane: its ×, and the ×'s label.
+    pub(crate) fn close_pane(&mut self, pane: PaneId, window: &Window, cx: &mut Context<Self>) {
+        self.dispatch(Action::Close { pane: Some(pane) }, window, cx);
+    }
+
+    /// What choosing a pane's body does, by a click or by its label: focus, or for an app pane
+    /// the keyboard, which raises its window. `true`: an app pane went live just now.
+    pub(crate) fn choose_pane(&mut self, pane: PaneId, window: &Window, cx: &mut Context<Self>) -> bool {
+        if !self.hosted.contains_key(&pane) {
+            self.dispatch(Action::Focus { pane }, window, cx);
+            return false;
+        }
+        // Already live: the real window is over the pane and takes its own input.
+        if self.model.live == Some(pane) {
+            return false;
+        }
+        self.dispatch(Action::Enter { pane }, window, cx);
+        true
     }
 
     /// Does what a click on the control `id` does: the same `Action` or method its click handler
-    /// runs. No mouse event is made, and no other app's control is pressed.
+    /// runs. No mouse event is made, and no control inside another app is pressed. Only a control
+    /// the last frame drew: an id that is not on screen does nothing.
     pub(crate) fn activate(&mut self, id: &str, window: &Window, cx: &mut Context<Self>) {
+        if !self.controls.drew(id) {
+            return;
+        }
         let (kind, name) = id.split_once(':').unwrap_or((id, ""));
         let number = name.parse::<u32>().ok();
-        // A tab is named by its id; the actions take its place among the tabs.
-        let tab = number.and_then(|id| self.model.tabs.iter().position(|tab| tab.id == id));
         let action = match (kind, name) {
             ("rail", _) => {
                 let section = SECTIONS.iter().find(|(_, _, label)| label.eq_ignore_ascii_case(name));
@@ -200,24 +278,25 @@ impl Workspace {
                 self.new_task(window, cx);
                 None
             }
-            ("tab", _) => tab.map(|index| Action::SelectTab { index }),
-            ("tab-close", _) => tab.map(|index| Action::CloseTab { index: Some(index) }),
             ("top", "task_leave") => Some(Action::TaskLeave),
             ("top", _) => {
-                if let Some((.., axis, new_tab)) = TOP.iter().position(|top| *top == name).and_then(|i| SPLITS.get(i)) {
+                if let Some((.., axis, new_tab)) = SPLITS.iter().find(|(top, ..)| *top == name) {
                     self.open_picker(*axis, *new_tab, window, cx);
                 }
                 None
             }
             ("header", _) => number.map(|pane| Action::Focus { pane }),
-            ("close", _) => number.map(|pane| Action::Close { pane: Some(pane) }),
-            // A click on a pane focuses it. On an app pane it hands the app the keyboard; the
-            // click it also replays into the app has no place here.
-            ("pane", _) => number.map(|pane| match self.hosted.contains_key(&pane) {
-                true => Action::Enter { pane },
-                false => Action::Focus { pane },
-            }),
-            _ => None,
+            _ => {
+                match (kind, number) {
+                    ("tab", Some(tab)) => self.select_tab(tab, window, cx),
+                    ("tab-close", Some(tab)) => self.close_tab(tab, window, cx),
+                    ("close", Some(pane)) => self.close_pane(pane, window, cx),
+                    // The click a mouse also replays into the app has no place here.
+                    ("pane", Some(pane)) => drop(self.choose_pane(pane, window, cx)),
+                    _ => {}
+                }
+                None
+            }
         };
         if let Some(action) = action {
             self.dispatch(action, window, cx);

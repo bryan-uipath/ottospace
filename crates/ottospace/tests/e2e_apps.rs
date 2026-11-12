@@ -247,6 +247,42 @@ fn a_canary_window_is_hosted_entered_left_and_restored() {
     assert_eq!(otto.call(json!({"cmd": "leave"}))["mode"], "normal");
     wait_for("the window to park once more", || hosted().filter(|f| at_spot(f) && close(f[3], body[3] + crop)));
 
+    // Sneak mode. Starting it hides the accessibility overlay: both draw chips from one alphabet.
+    // Every label is on a control of ottospace's own; none is inside the app's window.
+    // The user who types a label is in ottospace: it is the front app.
+    wait_for("ottospace to be frontmost", || {
+        press(&to_front(otto.child.id()));
+        frontmost(otto.child.id()).then_some(())
+    });
+    otto.call(json!({"cmd": "ax_overlay"}));
+    wait_for("the overlay to show", || (!state()["ax_overlay"].is_null()).then_some(()));
+    let labelled = otto.call(json!({"cmd": "sneak"}));
+    assert_eq!((&labelled["mode"], &labelled["ax_overlay"]), (&json!("sneak"), &Value::Null), "{labelled}");
+    let targets = labelled["sneak"]["targets"].as_array().cloned().unwrap_or_default();
+    assert!(targets.iter().all(|t| t["source"]["type"] == "own"), "{targets:?}");
+    // The app pane's label does what a click on the pane does, less the click replayed into the
+    // app: the app gets the keyboard, which raises its window over the pane.
+    let label = targets.iter().find(|t| t["source"]["id"] == "pane:1").and_then(|t| t["label"].as_str());
+    let keys: Vec<String> = label.expect("a label on the app pane").chars().map(String::from).collect();
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": keys.join(" ")}))["mode"], "app");
+    wait_for("the labelled pane's window to cover it", || {
+        frame(0).filter(|f| close(f[0], window[0] + body[0]) && close(f[1], window[1] + body[1] - crop))
+    });
+    assert_eq!(state()["state"]["live"], 1);
+    let front = || {
+        let script = "tell application \"System Events\" to name of first process whose frontmost is true";
+        let out = Command::new("osascript").args(["-e", script]).output().expect("run osascript");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let raised = (0..50).any(|_| {
+        std::thread::sleep(Duration::from_millis(100));
+        frontmost(canary.child.id())
+    });
+    assert!(raised, "the canary is not the front app after its pane's label; in front: {}", front());
+    assert_eq!(canary.call(json!({"cmd": "state"}))["windows"][0]["clicks"], json!([]), "no click is replayed");
+    assert_eq!(otto.call(json!({"cmd": "leave"}))["mode"], "normal");
+    wait_for("the window to park after the label", || hosted().filter(|f| at_spot(f) && close(f[3], body[3] + crop)));
+
     // A real click on the parked pane makes it live and is replayed at the same content point.
     // Needs `cliclick`; clicks only while ottospace is frontmost, so no other app gets it.
     if Command::new("cliclick").arg("-V").output().is_ok() {

@@ -201,11 +201,16 @@ pub fn app_targets(pane: PaneId, root: &Node, window: Frame, crop: f64, content:
         .collect()
 }
 
+/// Top to bottom, then left to right.
+pub fn reading_order(targets: &mut [Target]) {
+    targets.sort_by(|a, b| a.frame.y.total_cmp(&b.frame.y).then(a.frame.x.total_cmp(&b.frame.x)));
+}
+
 /// Labels for targets from any source, in one namespace for the whole window. Reading order (top
 /// to bottom, then left to right) hands them out, so a control keeps its label while the targets
 /// above and left of it stay the same.
 pub fn assign(mut targets: Vec<Target>, alphabet: &str) -> Vec<Labelled> {
-    targets.sort_by(|a, b| a.frame.y.total_cmp(&b.frame.y).then(a.frame.x.total_cmp(&b.frame.x)));
+    reading_order(&mut targets);
     let labels = labels(targets.len(), alphabet);
     targets.into_iter().zip(labels).map(|(target, label)| Labelled { label, target }).collect()
 }

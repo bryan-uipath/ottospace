@@ -261,11 +261,12 @@ const TRAFFIC_LIGHTS: f32 = 80.;
 /// Height of a pane's header (label and close button).
 const PANE_HEADER: f32 = 28.;
 
-/// Top-bar buttons: icon, tooltip, split direction, and whether the pick opens in a new tab.
-const SPLITS: [(&str, &str, Axis, bool); 3] = [
-    ("icons/plus.svg", "New tab…  ⌘T", Axis::Right, true),
-    ("icons/split-right.svg", "Split right…  ⌘E", Axis::Right, false),
-    ("icons/split-down.svg", "Split down…", Axis::Down, false),
+/// Top-bar buttons: the name in the control's id (`top:new_tab`), icon, tooltip, split direction,
+/// and whether the pick opens in a new tab.
+const SPLITS: [(&str, &str, &str, Axis, bool); 3] = [
+    ("new_tab", "icons/plus.svg", "New tab…  ⌘T", Axis::Right, true),
+    ("split_right", "icons/split-right.svg", "Split right…  ⌘E", Axis::Right, false),
+    ("split_down", "icons/split-down.svg", "Split down…", Axis::Down, false),
 ];
 
 /// The key reference, by group: keys and what they do. Keep in step with the bindings in `main`.
@@ -326,8 +327,11 @@ const KEYS_VISUAL: &[(&str, &str)] = &[
     ("Esc", "Leave"),
 ];
 
-const KEYS_SNEAK: &[(&str, &str)] =
-    &[("A S D F …", "Type a label: it does what a click would"), ("⌫", "Take a letter back"), ("Esc", "Leave")];
+const KEYS_SNEAK: &[(&str, &str)] = &[
+    ("A S D F …", "Type a label: it does what a click would"),
+    ("⌫", "Take a letter back"),
+    ("Esc", "Leave; so does a letter of no label"),
+];
 
 /// Rail sections in order, with their icon and label.
 const SECTIONS: [(Section, &str, &str); 4] = [
@@ -390,6 +394,8 @@ struct Workspace {
     home: home::Shared,
     /// ottospace's own controls as last painted: what sneak mode labels.
     controls: sneak::Controls,
+    /// The key that ended sneak mode is still down: its repeats are typed nowhere.
+    sneak_spent: bool,
     apps: Vec<capture::App>,
     /// Apps the settings name that are not running: listed under the running ones.
     closed: Vec<Installed>,
@@ -463,6 +469,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let this = cx.weak_entity();
         let subscriptions = vec![
             // Clicking ottospace itself (title bar, empty space) raises it over the live window,
             // so hand that pane back to its stream. Ignore the activation that the swap click
@@ -472,6 +479,11 @@ impl Workspace {
                 if window.is_window_active() && settled {
                     this.dispatch(Action::Leave, window, cx);
                 }
+            }),
+            // Before the key's binding runs, so every ⌘ shortcut leaves sneak mode and then acts,
+            // also one whose handler changes no state (⌘C, ⌘V).
+            cx.intercept_keystrokes(move |event, window, cx| {
+                let _ = this.update(cx, |this, cx| this.shortcut_leaves_sneak(&event.keystroke, window, cx));
             }),
             cx.on_app_quit(|this, _| {
                 this.hosted.drain().for_each(|(_, hosted)| hosted.release());
@@ -506,6 +518,7 @@ impl Workspace {
                     }
                     this.sync_layout(window, cx, tick % 30 == 15);
                     this.sync_terminals(window, cx);
+                    this.sync_sneak(window, cx);
                     if this.hosted.values().any(|h| h.latest.dirty.swap(false, Relaxed)) {
                         cx.notify();
                     }
@@ -560,6 +573,7 @@ impl Workspace {
             frames: HashMap::new(),
             home: home::Shared::default(),
             controls: sneak::Controls::default(),
+            sneak_spent: false,
             apps: Vec::new(),
             closed: Vec::new(),
             launching: Vec::new(),
@@ -780,6 +794,9 @@ impl Workspace {
                             // handler, then the pane's.
                             if self.model.visual.is_some() {
                                 self.dispatch(Action::LeaveVisual, window, cx);
+                            }
+                            if self.model.sneak.is_some() {
+                                self.dispatch(Action::LeaveSneak, window, cx);
                             }
                             self.terminal_mouse_down(id, &event, cx);
                             self.click_pane(id, &event, window, cx);
@@ -1025,8 +1042,14 @@ impl Workspace {
     fn press(&self, keystrokes: Vec<Keystroke>, reply: Sender<String>, window: &Window, cx: &mut Context<Self>) {
         let this = cx.entity().downgrade();
         window.defer(cx, move |window, cx| {
+            let labelled = |cx: &App| this.read_with(cx, |this, _| this.model.sneak.is_some()).unwrap_or(false);
             for keystroke in keystrokes {
+                let was = labelled(cx);
                 window.dispatch_keystroke(keystroke, cx);
+                // The keys after the one that ended sneak mode were for labels, not a terminal.
+                if was && !labelled(cx) {
+                    break;
+                }
             }
             let state = this.update(cx, |this, _| this.snapshot(window));
             let _ = reply.send(state.unwrap_or_else(|_| control::error("ottospace is closing")));
@@ -1259,7 +1282,8 @@ impl Workspace {
     /// known by its bundle, not its name: `Visual Studio Code` runs as `Code`. It gives up after
     /// a while: some apps open a sign-in window, or none.
     fn host_launched(&mut self, window: &Window, cx: &mut Context<Self>) {
-        if self.launching.is_empty() {
+        // Not under sneak mode's labels: a pane that opens by itself would end the mode mid-label.
+        if self.launching.is_empty() || self.model.sneak.is_some() {
             return;
         }
         // First: an app that now runs leaves the "not running" list, so a window that is not
@@ -1312,8 +1336,9 @@ impl Workspace {
             return;
         }
         // The core would drop the move behind a box or in visual mode. Wait: do not come
-        // forward either, which would only take the app away from the user.
-        if self.model.keys || matches!(self.model.mode(), Mode::Pick | Mode::Compose | Mode::Visual) {
+        // forward either, which would only take the app away from the user. Sneak mode waits
+        // too: the move would end it mid-label.
+        if self.model.keys || matches!(self.model.mode(), Mode::Pick | Mode::Compose | Mode::Visual | Mode::Sneak) {
             return;
         }
         self.wanted = None;
@@ -1419,6 +1444,12 @@ impl Workspace {
     /// Keys go to the focused terminal. ⌘ shortcuts do not encode, so they fall through to bindings.
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = &event.keystroke;
+        // Still held after it ended sneak mode (a wrong letter, say): not typed into the terminal.
+        if self.sneak_spent && event.is_held {
+            cx.stop_propagation();
+            return;
+        }
+        self.sneak_spent = false;
         // The key reference takes the keyboard: Esc closes it, and no other key reaches the
         // terminal or the picker behind it. (⌘ shortcuts go to their bindings; the core ignores
         // pane actions while it is open, and ⌘/ closes it.)
@@ -1967,16 +1998,11 @@ impl Workspace {
     /// A click on a pane body. An app pane goes live, then the click is replayed so it lands in
     /// the app (otherwise the first click is spent on the swap). Other panes just take focus.
     fn click_pane(&mut self, id: PaneId, event: &MouseDownEvent, window: &Window, cx: &mut Context<Self>) {
-        if !self.hosted.contains_key(&id) {
-            self.dispatch(Action::Focus { pane: id }, window, cx);
+        // Nothing to replay unless an app pane went live just now: a click replayed on a window
+        // that was live already would land on ottospace again and loop.
+        if !self.choose_pane(id, window, cx) {
             return;
         }
-        // Already live: the real window takes its own clicks. Replaying one here would land on
-        // ottospace again and loop.
-        if self.model.live == Some(id) {
-            return;
-        }
-        self.dispatch(Action::Enter { pane: id }, window, cx);
         let Some(hosted) = self.hosted.get(&id) else { return };
         let local = event.position - hosted.bounds.get().origin;
         let origin = hosted.placed.origin;
@@ -2339,9 +2365,7 @@ impl Workspace {
                     .hover(|s| s.text_color(rgb(theme::ERROR)))
                     .child("×")
                     .child(self.controls.mark(format!("close:{id}")))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.dispatch(Action::Close { pane: Some(id) }, window, cx);
-                    })),
+                    .on_click(cx.listener(move |this, _, window, cx| this.close_pane(id, window, cx))),
             );
         let content = if let Some(hosted) = self.hosted.get(&id) {
             // While live, keep showing the last frame under the real window, so any gap during a swap is invisible.
@@ -2523,7 +2547,7 @@ impl Workspace {
                     .into_iter()
                     .filter_map(|index| Some((index, self.model.tabs.get(index)?)))
                     .map(|(index, tab)| {
-                        let active = index == self.model.active;
+                        let (active, id) = (index == self.model.active, tab.id);
                         div()
                             .id(("tab", tab.id))
                             .h_full()
@@ -2550,17 +2574,15 @@ impl Workspace {
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         // Do not also select the tab that is going away.
                                         cx.stop_propagation();
-                                        this.dispatch(Action::CloseTab { index: Some(index) }, window, cx);
+                                        this.close_tab(id, window, cx);
                                     })),
                             )
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.dispatch(Action::SelectTab { index }, window, cx);
-                            }))
+                            .on_click(cx.listener(move |this, _, window, cx| this.select_tab(id, window, cx)))
                     }),
             )
             // New tab and split buttons: each opens the picker for that target.
             .child(div().ml_auto().mr_2().flex().gap_1().children(SPLITS.iter().enumerate().map(
-                |(i, (icon, tip, axis, new_tab))| {
+                |(i, (name, icon, tip, axis, new_tab))| {
                     let (tip, axis, new_tab) = (*tip, *axis, *new_tab);
                     div()
                         .id(("split", i))
@@ -2573,7 +2595,7 @@ impl Workspace {
                         .cursor_pointer()
                         .hover(|s| s.bg(rgb(theme::SELECTED)))
                         .child(svg().path(*icon).size(px(16.)).text_color(rgb(theme::MUTED)))
-                        .child(self.controls.mark(format!("top:{}", sneak::TOP[i])))
+                        .child(self.controls.mark(format!("top:{name}")))
                         .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
                         .on_click(cx.listener(move |this, _, window, cx| this.open_picker(axis, new_tab, window, cx)))
                 },
@@ -2597,6 +2619,9 @@ impl Workspace {
             Mode::Visual => ("VISUAL", "esc leaves · ⌘/ keys"),
             Mode::List => ("LIST", "esc leaves · ⌘/ keys"),
             Mode::Compose => ("TASK", ""),
+            Mode::Sneak if self.model.sneak.as_ref().is_some_and(|sneak| sneak.hid_overlay) => {
+                ("SNEAK", "type a label · esc leaves · the accessibility overlay is hidden (⌘⌃A shows it)")
+            }
             Mode::Sneak => ("SNEAK", "type a label · esc leaves"),
         };
         let hint = hint.to_string();
@@ -3135,8 +3160,7 @@ fn main() {
             KeyBinding::new("cmd-v", PasteText, None),
             KeyBinding::new("cmd-shift-c", VisualMode, None),
             KeyBinding::new("cmd-shift-e", ListMode, None),
-            // Not ⌃G alone: that is BEL in a terminal (readline and fzf abort, vim's file info).
-            KeyBinding::new("cmd-ctrl-g", SneakMode, None),
+            KeyBinding::new(sneak::KEY, SneakMode, None),
             KeyBinding::new("cmd-n", NewTask, None),
             KeyBinding::new("cmd-shift-n", NextTask, None),
             KeyBinding::new("cmd-h", Hide, None),
@@ -3265,7 +3289,7 @@ mod tests {
     /// A missing asset draws as nothing, with no error. Catch a renamed file here.
     #[test]
     fn every_rail_icon_is_embedded() {
-        let icons = SECTIONS.iter().map(|(_, icon, _)| *icon).chain(SPLITS.iter().map(|(icon, ..)| *icon));
+        let icons = SECTIONS.iter().map(|(_, icon, _)| *icon).chain(SPLITS.iter().map(|(_, icon, ..)| *icon));
         for path in icons {
             assert!(Assets.load(path).unwrap().is_some(), "{path} is not in Assets::load");
         }

@@ -8,7 +8,7 @@ use crate::home::{self, Home};
 use crate::layout::{Axis, Dir, Node, Rect};
 use crate::list::ListRow;
 use crate::repos::{self, Repo};
-use crate::sneak::Sneak;
+use crate::sneak::{Sneak, Typed};
 use crate::tasks::{MAX_TITLE, State, Task, TaskId, Tasks};
 
 pub type PaneId = u32;
@@ -323,15 +323,109 @@ pub enum Action {
     ListDismiss,
     /// Label ottospace's own controls, as last drawn (`targets`), or leave sneak mode if it is on.
     /// Only from normal and list mode: elsewhere a box covers the controls, or an app has the keys.
+    /// Starting hides the accessibility overlay, whose chips use the same letters.
     Sneak {
         targets: Vec<Target>,
     },
-    /// Letters of a label. A letter no label goes on with is ignored.
+    /// Start sneak mode, as `Sneak` does. If it is on, nothing changes: two callers asking at once
+    /// both find it on.
+    SneakEnter {
+        targets: Vec<Target>,
+    },
+    /// The controls the frame just painted drew. A label follows its control; the label of a
+    /// control that is no longer drawn goes; a new control gets none.
+    SneakDrawn {
+        targets: Vec<Target>,
+    },
+    /// Letters of a label. A letter no label goes on with leaves the mode, and the letters after
+    /// it are dropped.
     SneakType {
         text: String,
     },
     SneakBackspace,
     LeaveSneak,
+}
+
+impl Action {
+    /// Whether the user made this move: a key, a click, a request for something to happen.
+    /// `false`: news that is nobody's move. The clock, a list read again, an agent's report on a
+    /// task, a pane whose shell or window is gone, a window an app opened, a frame drawn.
+    ///
+    /// Sneak mode ends on the user's moves only. News never ends it: the next letter of a label
+    /// would reach a terminal. Every action is named here, so a new one must be put on a side.
+    pub fn by_user(&self) -> bool {
+        match self {
+            Action::Tick { .. }
+            | Action::SetApps { .. }
+            | Action::SetRepos { .. }
+            | Action::RestoreTasks { .. }
+            | Action::TaskAdd { .. }
+            | Action::TaskSetState { .. }
+            | Action::TaskFromLine { .. }
+            | Action::Adopt { .. }
+            // By name: the shell's own close of a dead pane. A click on a × leaves the mode
+            // first, and a label ends it before its control acts.
+            | Action::Close { pane: Some(_) }
+            | Action::SneakEnter { .. }
+            | Action::SneakDrawn { .. } => false,
+            Action::Split { .. }
+            | Action::Open { .. }
+            | Action::Close { pane: None }
+            | Action::Focus { .. }
+            | Action::FocusDir { .. }
+            | Action::FocusCycle { .. }
+            | Action::Resize { .. }
+            | Action::SwapDir { .. }
+            | Action::MovePane { .. }
+            | Action::Equalize
+            | Action::Enter { .. }
+            | Action::Leave
+            | Action::ToggleSection { .. }
+            | Action::CloseSidebar
+            | Action::OpenPicker { .. }
+            | Action::NewTab
+            | Action::SelectTab { .. }
+            | Action::CycleTab { .. }
+            | Action::CloseTab { .. }
+            | Action::PickerQuery { .. }
+            | Action::PickerMove { .. }
+            | Action::PickerType { .. }
+            | Action::PickerBackspace
+            | Action::PickerChoose { .. }
+            | Action::ClosePicker
+            | Action::ToggleKeys
+            | Action::CloseKeys
+            | Action::ToggleVisual
+            | Action::LeaveVisual
+            | Action::ToggleAxOverlay
+            | Action::OpenRepo { .. }
+            | Action::TaskSnooze { .. }
+            | Action::TaskHold { .. }
+            | Action::TaskDismiss { .. }
+            | Action::TaskUndo
+            | Action::TaskOpen { .. }
+            | Action::TaskLeave
+            | Action::SelectVisibleTab { .. }
+            | Action::OpenCompose { .. }
+            | Action::ComposeType { .. }
+            | Action::ComposeBackspace
+            | Action::ComposeComplete
+            | Action::ComposeSubmit
+            | Action::CloseCompose
+            | Action::FocusList
+            | Action::LeaveList
+            | Action::ListMove { .. }
+            | Action::ListSection { .. }
+            | Action::ListChoose { .. }
+            | Action::ListSnooze { .. }
+            | Action::ListHold
+            | Action::ListDismiss
+            | Action::Sneak { .. }
+            | Action::SneakType { .. }
+            | Action::SneakBackspace
+            | Action::LeaveSneak => true,
+        }
+    }
 }
 
 /// What the shell must do after an update.
@@ -356,7 +450,7 @@ pub enum Effect {
         on: bool,
     },
     /// A label was typed: do what a click on that control does. `id` is the shell's own name for
-    /// it (e.g. `rail:apps`).
+    /// it (e.g. `rail:apps`), and the control was in the last frame the shell reported.
     Activate {
         id: String,
     },
@@ -496,20 +590,10 @@ impl Model {
 
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
         let mut effects = Vec::new();
-        // Sneak mode's labels are of one drawn frame. Its own keys keep it, and so does news that
-        // is nobody's move (the clock, a list read again, an agent's report); anything else ends it.
-        let keeps_sneak = matches!(
-            action,
-            Action::Sneak { .. }
-                | Action::SneakType { .. }
-                | Action::SneakBackspace
-                | Action::Tick { .. }
-                | Action::SetApps { .. }
-                | Action::SetRepos { .. }
-                | Action::TaskAdd { .. }
-                | Action::TaskSetState { .. }
-        );
-        if !keeps_sneak {
+        // Any move of the user's ends sneak mode; its own keys say below what they do to it.
+        // News never ends it (see `Action::by_user`): the labels follow what is drawn instead.
+        let own = matches!(action, Action::Sneak { .. } | Action::SneakType { .. } | Action::SneakBackspace);
+        if action.by_user() && !own {
             self.sneak = None;
         }
         // The picker has the keyboard. Pane and bar actions wait until it closes, so a
@@ -969,18 +1053,33 @@ impl Model {
                 self.sidebar = None;
             }
             Action::Sneak { .. } if self.sneak.is_some() => self.sneak = None,
-            Action::Sneak { targets } => {
+            Action::SneakEnter { .. } if self.sneak.is_some() => {}
+            Action::Sneak { targets } | Action::SneakEnter { targets } => {
                 if matches!(self.mode(), Mode::Normal | Mode::List) && !self.keys {
                     self.sneak = Sneak::new(targets);
                 }
+                // Two sets of chips from one alphabet would not say which a letter means.
+                if let Some(sneak) = &mut self.sneak {
+                    sneak.hid_overlay = std::mem::take(&mut self.ax_overlay);
+                }
+            }
+            Action::SneakDrawn { targets } => {
+                if let Some(sneak) = &mut self.sneak {
+                    sneak.redraw(&targets);
+                }
             }
             Action::SneakType { text } => {
-                let mut letters = text.chars().map(|c| c.to_ascii_lowercase());
-                let chosen = self.sneak.as_mut().and_then(|sneak| letters.find_map(|c| sneak.type_letter(c)));
-                // The label is spent: the mode ends before the control acts.
-                if let Some(id) = chosen {
-                    self.sneak = None;
-                    effects.push(Effect::Activate { id });
+                let Some(sneak) = &mut self.sneak else { return };
+                let mut letters = text.chars().map(|c| sneak.type_letter(c.to_ascii_lowercase()));
+                // A letter of no label leaves: the user is not where the labels are.
+                // A spelled label is spent: the mode ends before the control acts.
+                match letters.find(|typed| *typed != Typed::Narrowed) {
+                    Some(Typed::Chosen(id)) => {
+                        self.sneak = None;
+                        effects.push(Effect::Activate { id });
+                    }
+                    Some(Typed::NoLabel) => self.sneak = None,
+                    Some(Typed::Narrowed) | None => {}
                 }
             }
             Action::SneakBackspace => {
@@ -1293,9 +1392,23 @@ mod tests {
         Target { frame, source: crate::ax::Source::Own { id: id.into() } }
     }
 
+    /// `n` controls in a row: `c0`, `c1`, ...
+    fn controls(n: usize) -> Vec<Target> {
+        (0..n).map(|i| control(&format!("c{i}"), i as f64 * 30.)).collect()
+    }
+
     fn sneak(m: &mut Model, n: usize) -> Vec<Effect> {
-        let targets = (0..n).map(|i| control(&format!("c{i}"), i as f64 * 30.)).collect();
-        m.update(Action::Sneak { targets })
+        m.update(Action::Sneak { targets: controls(n) })
+    }
+
+    /// The label on the control `id`, if it has one.
+    fn label_of(m: &Model, id: &str) -> Option<String> {
+        let own = crate::ax::Source::Own { id: id.into() };
+        m.sneak.as_ref()?.targets.iter().find(|t| t.target.source == own).map(|t| t.label.clone())
+    }
+
+    fn typed(m: &Model) -> Option<&str> {
+        m.sneak.as_ref().map(|s| s.typed.as_str())
     }
 
     #[test]
@@ -1305,12 +1418,26 @@ mod tests {
         assert_eq!((sneak(&mut m, 3), m.mode()), (vec![], Mode::Sneak));
         // The terminal does not have the keyboard: ⌘V must not paste under the labels.
         assert_eq!(m.keyboard_terminal(), None);
-        // A key that is no label changes nothing.
-        assert_eq!((m.update(Action::SneakType { text: "z".into() }), m.mode()), (vec![], Mode::Sneak));
         let effects = m.update(Action::SneakType { text: "S".into() });
         assert_eq!((effects, m.mode()), (vec![Effect::Activate { id: "c1".into() }], Mode::Normal));
         // Out of the mode, a letter is no label.
         assert_eq!(m.update(Action::SneakType { text: "a".into() }), []);
+    }
+
+    #[test]
+    fn a_letter_of_no_label_leaves_sneak_and_the_letters_after_it_are_dropped() {
+        let mut m = Model::default();
+        sneak(&mut m, 3);
+        // `z` is no label: the mode ends, and the `a` that came with it activates nothing.
+        assert_eq!((m.update(Action::SneakType { text: "za".into() }), m.mode()), (vec![], Mode::Normal));
+        // After the first letter of a two-letter label too.
+        sneak(&mut m, 30);
+        m.update(Action::SneakType { text: "p".into() });
+        assert_eq!(typed(&m), Some("p"));
+        assert_eq!((m.update(Action::SneakType { text: "z".into() }), m.mode()), (vec![], Mode::Normal));
+        // A spelled label ends the mode: the `d` after it is typed nowhere.
+        sneak(&mut m, 3);
+        assert_eq!(m.update(Action::SneakType { text: "sd".into() }), [Effect::Activate { id: "c1".into() }]);
     }
 
     #[test]
@@ -1320,7 +1447,7 @@ mod tests {
         let two = m.sneak.as_ref().unwrap().targets.iter().find(|t| t.label.len() == 2).unwrap().clone();
         let (first, second) = two.label.split_at(1);
         assert_eq!(m.update(Action::SneakType { text: first.into() }), []);
-        assert_eq!(m.sneak.as_ref().map(|s| s.typed.as_str()), Some(first));
+        assert_eq!(typed(&m), Some(first));
         m.update(Action::SneakBackspace);
         assert_eq!(m.sneak.as_ref().map(|s| (s.typed.as_str(), s.visible().count())), Some(("", 30)));
         m.update(Action::SneakType { text: first.into() });
@@ -1330,7 +1457,7 @@ mod tests {
     }
 
     #[test]
-    fn sneak_ends_on_escape_its_own_key_or_any_move_and_stays_through_news() {
+    fn sneak_ends_on_the_users_moves_and_never_on_news() {
         let mut m = Model::default();
         m.update(Action::Split { axis: Right, kind: Kind::Empty });
         sneak(&mut m, 3);
@@ -1351,14 +1478,183 @@ mod tests {
         }
         assert_eq!((m.panes.len(), m.mode()), (2, Mode::Pick));
         m.update(Action::ClosePicker);
-        // News that is nobody's move does not: the clock, a list read again, an agent's report.
+        // News does not, whatever it changes: the clock, a list read again, an agent's task, a
+        // window an app opened, a shell that exited (the shell closes its pane by name).
         sneak(&mut m, 3);
-        m.update(Action::Tick { now: 1 });
-        m.update(Action::SetApps { names: vec!["Notes".into()] });
-        m.update(Action::SetRepos { repos: Vec::new() });
-        m.update(Action::TaskAdd { title: "t".into(), priority: 3, state: State::Running, tab: None });
-        m.update(Action::TaskSetState { id: 1, state: State::NeedsYou });
-        assert_eq!(m.mode(), Mode::Sneak);
+        for news in [
+            Action::Tick { now: 1 },
+            Action::SetApps { names: vec!["Notes".into()] },
+            Action::SetRepos { repos: Vec::new() },
+            Action::TaskAdd { title: "t".into(), priority: 3, state: State::Running, tab: None },
+            Action::TaskSetState { id: 1, state: State::NeedsYou },
+            Action::TaskFromLine { line: "fix it".into() },
+            Action::Adopt { kind: app(7), beside: None },
+            Action::Close { pane: Some(2) },
+            Action::SneakDrawn { targets: controls(3) },
+        ] {
+            m.update(news.clone());
+            assert_eq!((m.mode(), typed(&m)), (Mode::Sneak, Some("")), "{news:?}");
+        }
+        assert!(m.pane(2).is_none(), "the dead pane is closed all the same");
+        // So the letter after it is still a label's, not a terminal's.
+        assert_eq!(m.update(Action::SneakType { text: "a".into() }), [Effect::Activate { id: "c0".into() }]);
+    }
+
+    /// Every action, on its side. `Action::by_user` names each variant with no catch-all, so a
+    /// new one does not compile until it has a side; this is the list to read.
+    #[test]
+    fn every_action_is_the_users_move_or_news() {
+        let (text, line, title) = (String::new, String::new, String::new);
+        let news = [
+            Action::Tick { now: 0 },
+            Action::SetApps { names: Vec::new() },
+            Action::SetRepos { repos: Vec::new() },
+            Action::RestoreTasks { tasks: Vec::new(), floor: 0 },
+            Action::TaskAdd { title: title(), priority: 3, state: State::Running, tab: None },
+            Action::TaskSetState { id: 1, state: State::Done },
+            Action::TaskFromLine { line: line() },
+            Action::Adopt { kind: app(1), beside: None },
+            Action::Close { pane: Some(1) },
+            Action::SneakEnter { targets: Vec::new() },
+            Action::SneakDrawn { targets: Vec::new() },
+        ];
+        let moves = [
+            Action::Split { axis: Right, kind: Kind::Empty },
+            Action::Open { kind: app(1), axis: Right, beside: None },
+            Action::Close { pane: None },
+            Action::Focus { pane: 1 },
+            Action::FocusDir { dir: Dir::Left },
+            Action::FocusCycle { delta: 1 },
+            Action::Resize { dir: Dir::Left },
+            Action::SwapDir { dir: Dir::Left },
+            Action::MovePane { pane: None, tab: 0 },
+            Action::Equalize,
+            Action::Enter { pane: 1 },
+            Action::Leave,
+            Action::ToggleSection { section: Section::Apps },
+            Action::CloseSidebar,
+            Action::OpenPicker { axis: Right, new_tab: false, items: Vec::new() },
+            Action::NewTab,
+            Action::SelectTab { index: 0 },
+            Action::CycleTab { delta: 1 },
+            Action::CloseTab { index: None },
+            Action::PickerQuery { query: text() },
+            Action::PickerMove { delta: 1 },
+            Action::PickerType { text: text() },
+            Action::PickerBackspace,
+            Action::PickerChoose { index: None },
+            Action::ClosePicker,
+            Action::ToggleKeys,
+            Action::CloseKeys,
+            Action::ToggleVisual,
+            Action::LeaveVisual,
+            Action::ToggleAxOverlay,
+            Action::OpenRepo { path: text(), axis: Right },
+            Action::TaskSnooze { id: 1, until: 0 },
+            Action::TaskHold { id: 1 },
+            Action::TaskDismiss { id: 1 },
+            Action::TaskUndo,
+            Action::TaskOpen { id: None },
+            Action::TaskLeave,
+            Action::SelectVisibleTab { index: 0 },
+            Action::OpenCompose { text: text() },
+            Action::ComposeType { text: text() },
+            Action::ComposeBackspace,
+            Action::ComposeComplete,
+            Action::ComposeSubmit,
+            Action::CloseCompose,
+            Action::FocusList,
+            Action::LeaveList,
+            Action::ListMove { delta: 1 },
+            Action::ListSection { delta: 1 },
+            Action::ListChoose { axis: Right },
+            Action::ListSnooze { until: 0 },
+            Action::ListHold,
+            Action::ListDismiss,
+            Action::Sneak { targets: Vec::new() },
+            Action::SneakType { text: text() },
+            Action::SneakBackspace,
+            Action::LeaveSneak,
+        ];
+        for action in &news {
+            assert!(!action.by_user(), "{action:?} is news");
+        }
+        for action in &moves {
+            assert!(action.by_user(), "{action:?} is the user's move");
+        }
+        // No variant twice, but `Close`: by name it is the shell's, of the focused pane the user's.
+        let kinds: std::collections::HashSet<_> = news.iter().chain(&moves).map(std::mem::discriminant).collect();
+        assert_eq!(kinds.len(), news.len() + moves.len() - 1);
+    }
+
+    /// The tab bar as the shell reports it: each tab and its ×, left to right.
+    fn tab_bar(tabs: &[u32]) -> Vec<Target> {
+        let at = |(i, id): (usize, &u32)| {
+            let x = i as f64 * 100.;
+            [control(&format!("tab:{id}"), x), control(&format!("tab-close:{id}"), x + 80.)]
+        };
+        tabs.iter().enumerate().flat_map(at).collect()
+    }
+
+    /// An agent's `task_add` takes tab 2 off the bar while the labels are up, and tab 3 slides
+    /// under the pill that was on tab 2's ×. Those letters must not close anything.
+    #[test]
+    fn a_label_never_reaches_a_control_that_is_no_longer_drawn_or_the_one_that_took_its_place() {
+        let mut m = Model::default();
+        m.update(Action::NewTab);
+        m.update(Action::NewTab);
+        assert_eq!(m.tabs.iter().map(|t| t.id).collect::<Vec<_>>(), [1, 2, 3]);
+        m.update(Action::Sneak { targets: tab_bar(&[1, 2, 3]) });
+        let second = label_of(&m, "tab-close:2").expect("a label on tab 2's ×");
+        let third = label_of(&m, "tab-close:3").expect("a label on tab 3's ×");
+        assert_eq!((second.len(), third.len()), (2, 2), "a × takes two letters");
+
+        // News: the mode stays on, and tab 2 is the task's, off the bar.
+        m.update(Action::TaskAdd { title: "t".into(), priority: 3, state: State::Running, tab: Some(2) });
+        assert_eq!((m.mode(), m.visible_tabs()), (Mode::Sneak, vec![0, 2]));
+        // The next frame draws tabs 1 and 3: tab 3 where tab 2 was.
+        m.update(Action::SneakDrawn { targets: tab_bar(&[1, 3]) });
+        assert_eq!(label_of(&m, "tab-close:2"), None, "not drawn: no label");
+        assert_eq!(label_of(&m, "tab-close:3"), Some(third.clone()), "the same letters");
+        let moved = m.sneak.as_ref().unwrap().targets.iter().find(|t| t.label == third).unwrap();
+        assert_eq!(moved.target.frame.x, 180., "the pill went with its control");
+
+        // The letters that were on tab 2's × name nothing now: no tab closes, hidden or shown.
+        assert_eq!(m.update(Action::SneakType { text: second }), []);
+        assert_eq!((m.mode(), m.tabs.len()), (Mode::Normal, 3));
+        // A label is only ever of a control in the last frame reported.
+        m.update(Action::Sneak { targets: tab_bar(&[1, 3]) });
+        let third = label_of(&m, "tab-close:3").unwrap();
+        assert_eq!(m.update(Action::SneakType { text: third }), [Effect::Activate { id: "tab-close:3".into() }]);
+    }
+
+    #[test]
+    fn sneak_enter_starts_the_mode_and_changes_nothing_while_it_is_on() {
+        let mut m = Model::default();
+        assert_eq!((m.update(Action::SneakEnter { targets: controls(30) }), m.mode()), (vec![], Mode::Sneak));
+        m.update(Action::SneakType { text: "p".into() });
+        // A second caller, or the user's ⌘⌃G just before: still on, the labels and letters as they were.
+        let before = m.sneak.clone();
+        m.update(Action::SneakEnter { targets: controls(3) });
+        assert_eq!((m.mode(), &m.sneak), (Mode::Sneak, &before));
+        // It starts only where the key does.
+        m.update(Action::OpenPicker { axis: Right, new_tab: false, items: vec![PickItem::Terminal] });
+        assert_eq!((m.update(Action::SneakEnter { targets: controls(3) }), m.mode()), (vec![], Mode::Pick));
+    }
+
+    #[test]
+    fn starting_sneak_hides_the_accessibility_overlay() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        m.update(Action::ToggleAxOverlay);
+        assert!(m.ax_overlay);
+        sneak(&mut m, 3);
+        assert_eq!((m.ax_overlay, m.sneak.as_ref().map(|s| s.hid_overlay)), (false, Some(true)));
+        // It stays hidden after the mode; ⌘⌃A shows it again.
+        m.update(Action::LeaveSneak);
+        assert!(!m.ax_overlay);
+        sneak(&mut m, 3);
+        assert_eq!(m.sneak.as_ref().map(|s| s.hid_overlay), Some(false), "nothing to hide this time");
     }
 
     #[test]

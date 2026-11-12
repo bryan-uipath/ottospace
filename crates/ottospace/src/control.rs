@@ -239,8 +239,9 @@ pub enum Request {
         refresh: bool,
     },
     /// Sneak mode: a letter label on each of ottospace's own controls. They are `sneak.targets` in
-    /// the reply, each with its control's `id` and `frame`; type one with `key`. Fails outside
-    /// normal and list mode.
+    /// the reply, each with its control's `id` and `frame`, as a frame painted after the request
+    /// drew them; type one with `key`. Already on: it stays on. Fails outside normal and list
+    /// mode, and if the window is not drawn.
     Sneak,
     Quit,
 }
