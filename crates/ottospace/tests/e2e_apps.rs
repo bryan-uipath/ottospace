@@ -543,6 +543,21 @@ fn a_hosted_pane_is_dragged_by_its_header() {
         let moves = [step("dd", from), step("dm", via), step("dm", half), step("dm", to), step("du", to)];
         let status = Command::new("cliclick").args(["-w", "120"]).args(&moves).status().expect("run cliclick");
         assert!(status.success(), "cliclick failed");
+        // The release `cliclick` posts is not always taken: about one time in six on a hosted
+        // runner the system goes on reading the button as down (session and HID state both, for
+        // 40 s), and the drag rightly goes on. A finger cannot do that. Release until the
+        // system agrees that the button is up.
+        let released = (0..20).any(|_| {
+            std::thread::sleep(Duration::from_millis(150));
+            if !ottospace_mac::input::left_button_down() {
+                return true;
+            }
+            eprintln!("the system still reads the left button as down: releasing again");
+            let again = Command::new("cliclick").arg(step("du", to)).status().expect("run cliclick");
+            assert!(again.success(), "cliclick failed");
+            false
+        });
+        assert!(released, "the system still reads the left button as down after 20 releases");
         // A press on ottospace brings its window forward, and the pointer is its own until the
         // release: the pane is dropped where the other window was (the centre of 1: a swap), and
         // that window gets nothing.
@@ -554,26 +569,10 @@ fn a_hosted_pane_is_dragged_by_its_header() {
             });
             format!("{held}; {}; canary windows {}", in_front(), canary.call(json!({"cmd": "state"}))["windows"])
         };
-        // Not fatal for now: a real release over another app's window can be lost, on `main` too
-        // (about one run in ten on the hosted runner). The drag then never ends. See #56.
-        let dropped = (0..100).find_map(|_| {
-            std::thread::sleep(Duration::from_millis(100));
-            Some(state()).filter(|s| s["state"]["layout"] == split("right", 1, 2))
-        });
-        match dropped {
-            Some(dropped) => {
-                assert_eq!((dropped["drag"].clone(), dropped["state"]["focused"].clone()), (Value::Null, json!(2)));
-                assert_eq!(canary_window(1)["clicks"], json!([]), "the release did not reach the other window");
-            }
-            None => {
-                eprintln!(
-                    "known: a real release over another app's window can be lost, see #56. No drop in 10 s: {}",
-                    held()
-                );
-                // Esc ends the drag, so the app is not left holding one.
-                otto.call(json!({"cmd": "key", "keys": "escape"}));
-            }
-        }
+        let dropped =
+            wait_or("the drop", held, || Some(state()).filter(|s| s["state"]["layout"] == split("right", 1, 2)));
+        assert_eq!((dropped["drag"].clone(), dropped["state"]["focused"].clone()), (Value::Null, json!(2)));
+        assert_eq!(canary_window(1)["clicks"], json!([]), "the release did not reach the other window");
     } else {
         eprintln!("cliclick not found: a real drag released where another app's window was not checked");
     }

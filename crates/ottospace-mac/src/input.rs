@@ -12,6 +12,15 @@ unsafe extern "C" {
     fn CGEventCreateMouseEvent(source: *const c_void, ty: u32, at: CGPoint, button: u32) -> *mut c_void;
     fn CGEventSetIntegerValueField(event: *mut c_void, field: u32, value: i64);
     fn CGEventPost(tap: u32, event: *mut c_void);
+    fn CGEventSourceButtonState(state: i32, button: u32) -> bool;
+}
+
+/// Whether the system reads the left mouse button as down now, whichever app its press went to.
+/// A test asks, to know that a release it posted was taken.
+pub fn left_button_down() -> bool {
+    const COMBINED_SESSION: i32 = 0;
+    const LEFT: u32 = 0;
+    unsafe { CGEventSourceButtonState(COMBINED_SESSION, LEFT) }
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
