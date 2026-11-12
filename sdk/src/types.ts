@@ -331,6 +331,8 @@ export interface Snapshot {
   tabs: Rect[];
   /** While a pane is dragged: where a drop would land, both null over anything else. */
   drag: { target: PaneId | null; zone: Zone | null } | null;
+  /** Each drawn app pane's preview: the part of the window it shows, where it is drawn. */
+  shown: Record<string, Rect>;
   /** Pane ids of each tab, in tab order. */
   tab_panes: PaneId[][];
   /** ottospace's own window frame. */
@@ -367,6 +369,8 @@ export interface Snapshot {
   ax_overlay: AxOverlay | null;
   /** Null unless `mode` is `sneak`. */
   sneak: Sneak | null;
+  /** Counters for tests, by name (`live`: how often a pane went live). Null outside a test run. */
+  counts: Record<string, number> | null;
 }
 
 export interface TaskReply {

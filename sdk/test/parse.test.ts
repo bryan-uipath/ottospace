@@ -39,6 +39,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     closes: {},
     tabs: [],
     drag: null,
+    shown: {},
     tab_panes: [[]],
     window: [1907, 985, 1400, 900],
     parking: [1919, 1079],
@@ -62,6 +63,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     apps: [],
     ax_overlay: overlay,
     sneak: null,
+    counts: { live: 0 },
   };
 }
 
