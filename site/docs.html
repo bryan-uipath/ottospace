@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ottospace docs</title>
+<meta name="description" content="Quickstart and reference for ottospace.">
+<link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDI0IDEwMjQiIGZpbGw9Im5vbmUiPgogIDxkZWZzPgogICAgPHBhdGggaWQ9Im8tYm9keSIgZD0iTTQzLjk0NCA0OS4yNzUgQzY1LjMwNSAzNi43OTkgODcuMzUxIDM4LjA1NiAxMDMuNjIyIDQ3LjQ1MiBDMTE4LjYwMiA1Ni4wOTUgMTI4LjY4OSA3MS42MzIgMTI4Ljg2MyA4OS43MTQgQzEyOS4yMjQgMTI5LjI5NyA5OC4zNTUgMTQ0LjE4NyA4NC4zNzQgMTQ4LjAwMiBDNzYuNjAyIDE1MC4xMjAgNjEuNjUwIDE1MS4zNDAgNDcuNTU5IDE0NS42MTUgQzM2LjI5MSAxNDEuMDM1IDI1LjU4NSAxMzIuMDI4IDE5LjUzNCAxMTUuNDk2IEwxOS4xMDcgMTE0LjI3MCBDNi42MjkgNzcuNzIyIDM3Ljg4MSA1My4yMDkgMzcuODgxIDUzLjIwOSBDMzkuODk3IDUxLjc3MiA0MS45MjAgNTAuNDYwIDQzLjk0NCA0OS4yNzVaIi8+CiAgICA8Y2xpcFBhdGggaWQ9Im8tY2xpcCI+PHVzZSBocmVmPSIjby1ib2R5Ii8+PC9jbGlwUGF0aD4KICAgIDwhLS0gTGlnaHQgY29tZXMgZnJvbSB0aGUgdXBwZXIgbGVmdC4gLS0+CiAgICA8cmFkaWFsR3JhZGllbnQgaWQ9Im8tc2tpbiIgY3g9IjUyIiBjeT0iNjIiIHI9IjExOCIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPgogICAgICA8c3RvcCBzdG9wLWNvbG9yPSIjNGY2Yjc4Ii8+PHN0b3Agb2Zmc2V0PSIuMzgiIHN0b3AtY29sb3I9IiMzMjUwNWMiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIuNzQiIHN0b3AtY29sb3I9IiMxYzMwMzgiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMwZjFjMjIiLz4KICAgIDwvcmFkaWFsR3JhZGllbnQ+CiAgICA8cmFkaWFsR3JhZGllbnQgaWQ9Im8tc2hlZW4iIGN4PSI1MCIgY3k9IjYwIiByPSI0NiIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPgogICAgICA8c3RvcCBzdG9wLWNvbG9yPSIjZmFmYWZhIiBzdG9wLW9wYWNpdHk9Ii4xNiIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iI2ZhZmFmYSIgc3RvcC1vcGFjaXR5PSIwIi8+CiAgICA8L3JhZGlhbEdyYWRpZW50PgogICAgPHJhZGlhbEdyYWRpZW50IGlkPSJvLXJpbSIgY3g9IjYwIiBjeT0iNzgiIHI9Ijc4IiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+CiAgICAgIDxzdG9wIG9mZnNldD0iLjc4IiBzdG9wLWNvbG9yPSIjMDBiOGRiIiBzdG9wLW9wYWNpdHk9IjAiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMwMGI4ZGIiIHN0b3Atb3BhY2l0eT0iLjM4Ii8+CiAgICA8L3JhZGlhbEdyYWRpZW50PgogICAgPGxpbmVhckdyYWRpZW50IGlkPSJvLWJhbmQiIHgxPSIwIiB5MT0iNjgiIHgyPSIwIiB5Mj0iMTA2IiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+CiAgICAgIDxzdG9wIHN0b3AtY29sb3I9IiMyNzI3MmEiLz48c3RvcCBvZmZzZXQ9Ii4xOCIgc3RvcC1jb2xvcj0iIzBjMGMwZiIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzA5MDkwYiIvPgogICAgPC9saW5lYXJHcmFkaWVudD4KICAgIDxsaW5lYXJHcmFkaWVudCBpZD0iby1tZXRhbCIgeDE9IjEwIiB5MT0iMTIiIHgyPSIxMzYiIHkyPSIzMCIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPgogICAgICA8c3RvcCBzdG9wLWNvbG9yPSIjM2YzZjQ2Ii8+PHN0b3Agb2Zmc2V0PSIuNSIgc3RvcC1jb2xvcj0iIzlmOWZhOSIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzUyNTI1YyIvPgogICAgPC9saW5lYXJHcmFkaWVudD4KICAgIDxsaW5lYXJHcmFkaWVudCBpZD0iby1jYXAiIHgxPSI1NiIgeTE9IjMwIiB4Mj0iODAiIHkyPSI0OCIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPgogICAgICA8c3RvcCBzdG9wLWNvbG9yPSIjNWY3ZDhhIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMWMzMDM4Ii8+CiAgICA8L2xpbmVhckdyYWRpZW50PgogICAgPGxpbmVhckdyYWRpZW50IGlkPSJvLWxpbWIiIHgxPSIwIiB5MT0iMCIgeDI9IjEiIHkyPSIxIj4KICAgICAgPHN0b3Agc3RvcC1jb2xvcj0iIzQ2NjM3MSIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzFjMzAzOCIvPgogICAgPC9saW5lYXJHcmFkaWVudD4KICAgIDxyYWRpYWxHcmFkaWVudCBpZD0iby1zb2NrZXQiIGN4PSIuNSIgY3k9Ii4zNSIgcj0iLjc1Ij4KICAgICAgPHN0b3Agc3RvcC1jb2xvcj0iIzE4MTgxYiIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzA1MDUwNiIvPgogICAgPC9yYWRpYWxHcmFkaWVudD4KICAgIDxyYWRpYWxHcmFkaWVudCBpZD0iby1wdXBpbCIgY3g9Ii40MiIgY3k9Ii4zNiIgcj0iLjciPgogICAgICA8c3RvcCBzdG9wLWNvbG9yPSIjY2ZjZmQ0Ii8+PHN0b3Agb2Zmc2V0PSIuNTUiIHN0b3AtY29sb3I9IiNhYmFiYjEiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiM3OTc5N2YiLz4KICAgIDwvcmFkaWFsR3JhZGllbnQ+CiAgICA8cmFkaWFsR3JhZGllbnQgaWQ9Im8tZ2xvdyIgY3g9Ii41IiBjeT0iLjUiIHI9Ii41Ij4KICAgICAgPHN0b3Agc3RvcC1jb2xvcj0iIzAwYjhkYiIgc3RvcC1vcGFjaXR5PSIuMDciLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMwMGI4ZGIiIHN0b3Atb3BhY2l0eT0iMCIvPgogICAgPC9yYWRpYWxHcmFkaWVudD4KICAgIDxyYWRpYWxHcmFkaWVudCBpZD0iby1zaGFkb3ciIGN4PSIuNSIgY3k9Ii41IiByPSIuNSI+CiAgICAgIDxzdG9wIHN0b3AtY29sb3I9IiMwMDAiIHN0b3Atb3BhY2l0eT0iLjU1Ii8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMDAwIiBzdG9wLW9wYWNpdHk9IjAiLz4KICAgIDwvcmFkaWFsR3JhZGllbnQ+CgogICAgPGxpbmVhckdyYWRpZW50IGlkPSJ0aWxlIiB4MT0iMCIgeTE9IjEwMCIgeDI9IjAiIHkyPSI5MjQiIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIj4KICAgICAgPHN0b3Agc3RvcC1jb2xvcj0iIzI3MjcyYSIvPjxzdG9wIG9mZnNldD0iLjUiIHN0b3AtY29sb3I9IiMxODE4MWIiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMwOTA5MGIiLz4KICAgIDwvbGluZWFyR3JhZGllbnQ+CiAgICA8cmFkaWFsR3JhZGllbnQgaWQ9InRpbGUtZ2xvdyIgY3g9IjUxMiIgY3k9IjU2MCIgcj0iNDIwIiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+CiAgICAgIDxzdG9wIHN0b3AtY29sb3I9IiMwMGI4ZGIiIHN0b3Atb3BhY2l0eT0iLjEwIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMDBiOGRiIiBzdG9wLW9wYWNpdHk9IjAiLz4KICAgIDwvcmFkaWFsR3JhZGllbnQ+CiAgPC9kZWZzPgogIDxyZWN0IHg9IjEwMCIgeT0iMTAwIiB3aWR0aD0iODI0IiBoZWlnaHQ9IjgyNCIgcng9IjE4NiIgZmlsbD0idXJsKCN0aWxlKSIvPgogIDxyZWN0IHg9IjEwMCIgeT0iMTAwIiB3aWR0aD0iODI0IiBoZWlnaHQ9IjgyNCIgcng9IjE4NiIgZmlsbD0idXJsKCN0aWxlLWdsb3cpIi8+CiAgPHJlY3QgeD0iMTAxIiB5PSIxMDEiIHdpZHRoPSI4MjIiIGhlaWdodD0iODIyIiByeD0iMTg1IiBzdHJva2U9IiMzZjNmNDYiIHN0cm9rZS13aWR0aD0iMiIvPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDE3MiAxOTApIHNjYWxlKDQuMTUpIj4KICAgIDxlbGxpcHNlIGN4PSI3NiIgY3k9IjE2MCIgcng9IjYyIiByeT0iOSIgZmlsbD0idXJsKCNvLXNoYWRvdykiLz4KICAgIDwhLS0gbGVmdCBhcm0gc2l0cyBiZWhpbmQgdGhlIGJvZHkgLS0+CiAgICA8IS0tIGhlYWRiYW5kIHRhaWxzIGFuZCBrbm90IC0tPgogICAgPGcgZmlsbD0idXJsKCNvLWJhbmQpIiBzdHJva2U9IiMyNzI3MmEiIHN0cm9rZS13aWR0aD0iLjUiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPgogICAgICA8cGF0aCBkPSJNMTI3IDgwQzEzNiA3NCAxNDcgNzcgMTU4IDY4TDE2MSA3M0MxNTEgODMgMTQwIDgwIDEyOSA4N1oiLz4KICAgICAgPHBhdGggZD0iTTEyOCA4NUMxMzcgODQgMTQ2IDg4IDE1NiA4NEwxNTcgODlDMTQ3IDk0IDEzOCA5MSAxMjkgOTFaIi8+CiAgICA8L2c+CiAgICA8IS0tIHJvdG9yIC0tPgogICAgPHBhdGggZD0iTTM3LjczNiAyNS4zNDEgQzM5LjE3NCAyNS41NjUgNTIuNDIxIDI1Ljk5NCA1Ni40MDMgMjkuNTEzIEM2MC4zODUgMzMuMDMyIDU2Ljk2NiAzNy45MTMgNTYuOTY2IDM3LjkxMyBDNTEuOTIwIDQxLjMwNCA0Ni4xMzYgNDguNzU5IDQ2LjEzNiA0OC43NTkgTDU2LjQ4NyA1MC4xOTBMNjMuMzE2IDQxLjY4MUw3Mi4zOTggMzIuNzMwIEw4OC4wMTAgMjcuOTU4IiBzdHJva2U9IiM1MjUyNWMiIHN0cm9rZS13aWR0aD0iMS42IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz4KICAgIDxwYXRoIGQ9Ik0xMzYuNzI0IDE1LjMxNCBDMTMwLjk1MyAxNC4wMDQgMTIxLjcyNSAxNS40MDQgMTE5LjY2MCAxNS41MTAgQzExNy4zNTQgMTUuNjMxIDkxLjAzNyAyMS43MzIgNzkuOTE4IDIzLjY0NiBDNzYuNzMxIDI0LjE3NyA3My41MDQgMjQuNDM0IDcwLjI3MyAyNC40MTEgQzU4LjMxMSAyNi4zNTkgNDguNDYxIDIzLjc4OSA0OC4wNzIgMjMuODM2IEM0Ny42MjQgMjMuODg1IDEzLjM1NSAxNy43ODEgMTEuMjM2IDE3LjQ2NyBDMTAuMTAwIDE3LjI5OSA5LjEzMyAxNy4zNzEgOS4xNzIgMTcuODUzIEMxMy4xNTkgMTguNzQzIDIyLjEwNiAyMC41NjYgMjkuOTY4IDIxLjg5NyBDMjkuOTY4IDIxLjg5NyA1NS44MzcgMjguNDg0IDU5Ljc5NSAyOC44MzUgQzYzLjc1MiAyOS4xODcgNzkuNTEzIDI5LjI1NSA4OC4wMTAgMjcuOTU4IEM5NC45NDggMjYuOTAwIDEyMi44MjcgMjAuMzM2IDEzMi44MTAgMTcuOTY1IEMxMzQuNjAyIDE3LjEwMyAxMzYuNDc4IDE2LjA1OCAxMzYuNzI0IDE1LjMxNFoiIGZpbGw9InVybCgjby1tZXRhbCkiLz4KICAgIDxwYXRoIGQ9Ik01MS4yOTYgNDcuMjM0IEM1MS41OTQgNDUuOTIxIDUxLjk3NiA0NC42MjkgNTIuNDM3IDQzLjM2NCBDNTYuMjE3IDMzLjAwMyA2NC41NDUgMjguMTI4IDcyLjQyMCAzMC40MjcgQzc5LjcxMCAzMy40NTggODIuMTMzIDM2LjYwNiA4My4xODUgMzguNzUwIEM4My41NzkgMzkuNTAxIDgzLjg0NiA0MC4zMTEgODMuOTc1IDQxLjE0OSBMODAuOTI2IDQ1LjYxMFoiIGZpbGw9InVybCgjby1jYXApIi8+CiAgICA8IS0tIGJvZHk6IHNtb290aCBzaGFkZSwgc29mdCBzaGVlbiwgZmFpbnQgY3lhbiByaW0gb24gdGhlIHNoYWRvdyBzaWRlIC0tPgogICAgPHVzZSBocmVmPSIjby1ib2R5IiBmaWxsPSJ1cmwoI28tc2tpbikiLz4KICAgIDxnIGNsaXAtcGF0aD0idXJsKCNvLWNsaXApIj4KICAgICAgPHJlY3QgeD0iMCIgeT0iMzAiIHdpZHRoPSIxNjAiIGhlaWdodD0iMTMwIiBmaWxsPSJ1cmwoI28tc2hlZW4pIi8+CiAgICAgIDxyZWN0IHg9IjAiIHk9IjMwIiB3aWR0aD0iMTYwIiBoZWlnaHQ9IjEzMCIgZmlsbD0idXJsKCNvLXJpbSkiLz4KICAgICAgPHBhdGggZD0iTTUxLjM2NiA1Ni4zMjAgQzQ5LjcxMSA1Ny4yMjggNDguNTIwIDU4LjQ5OCA0OS4zMzIgNjAuMjUyIEM1MC4zMTUgNjIuMzg3IDUzLjY4NyA2Mi40MDggNTcuMjI1IDYxLjgwOCBDNjIuOTYyIDYwLjg0MCA2OC42NTUgNTkuNzg2IDc0LjQ3MCA1OS4zODQgQzc2LjM2NyA1OS4yMzYgNzguMjcxIDU5LjE5NCA4MC4xNzIgNTkuMjU3IEM4Mi4zMDAgNTkuMzQxIDg0LjM3MiA1OS45MDEgODYuNDU3IDYwLjI5MyBDODkuMDMzIDYwLjc3OCA5MS44NDUgNjAuOTY4IDk0LjI5NyA1OS44NTEgQzk1Ljc4MiA1OS4xOTUgOTYuNDU4IDU3LjQ2MyA5NS44MDkgNTUuOTc1IEM5NS4zNTggNTQuODU4IDkzLjY5NyA1My4zMzYgODYuNTEwIDUyLjI5NyBDODAuMDUxIDUxLjQxMSA3My42MDUgNTEuNjQxIDY3LjM5OCA1Mi4zNTAgQzYzLjU5MSA1Mi43NzIgNTkuODI2IDUzLjUxNiA1Ni4xNDUgNTQuNTc1IEM1NS4wODEgNTQuODg2IDUyLjk5OSA1NS40MzAgNTEuMzY2IDU2LjMyMFoiIGZpbGw9IiNmYWZhZmEiIGZpbGwtb3BhY2l0eT0iLjA3Ii8+CiAgICAgIDxwYXRoIGQ9Ik0wIDczQzQwIDY2IDEwNCA2NiAxNTAgNzVMMTUwIDEwNkMxMDQgOTggNDAgOTggMCAxMDdaIiBmaWxsPSJ1cmwoI28tYmFuZCkiLz4KICAgICAgPGVsbGlwc2UgY3g9IjU0IiBjeT0iOTAiIHJ4PSIxNyIgcnk9IjIwIiBmaWxsPSJ1cmwoI28tZ2xvdykiLz4KICAgICAgPGVsbGlwc2UgY3g9Ijk0IiBjeT0iOTAiIHJ4PSIxNyIgcnk9IjIwIiBmaWxsPSJ1cmwoI28tZ2xvdykiLz4KICAgIDwvZz4KICAgIDxjaXJjbGUgY3g9IjEyOC41IiBjeT0iODUuNSIgcj0iMy40IiBmaWxsPSIjMTgxODFiIiBzdHJva2U9IiMyNzI3MmEiIHN0cm9rZS13aWR0aD0iLjUiLz4KICAgIDwhLS0gZXllcyAtLT4KICAgIDxnIGZpbGw9InVybCgjby1zb2NrZXQpIiBzdHJva2U9IiM1MjUyNWMiIHN0cm9rZS13aWR0aD0iLjYiPgogICAgICA8cGF0aCBkPSJNODMuNzQ1IDg4LjU3MiBDODQuMDU2IDg0LjA5OCA4NC42NTcgNzcuNDkzIDg3LjYyMiA3NS40NzQgQzkwLjU4NiA3My40NTUgOTYuMTU5IDczLjE1MyA5OS4yODggNzUuMTM4IEMxMDAuNjkzIDc2LjAzOSAxMDEuNzc2IDc3LjM2MyAxMDIuMzgxIDc4LjkxOCBDMTAzLjExMCA4MS4wMjYgMTAzLjU2OSA4My43NDcgMTAzLjY2MyA4NC41NjUgQzEwMy45NzQgODcuNDE4IDEwNC40MTIgOTAuMzQyIDEwNC40NDcgOTMuMjQ1IEMxMDQuNDgxIDk2LjA3MCAxMDQuMzI4IDk4LjE3MCAxMDMuMDc1IDEwMC43NDkgQzk5Ljc3NyAxMDcuNTMyIDg3LjQwNCAxMDQuOTA5IDg1LjYyMSAxMDIuMTc3IEM4My44MzggOTkuNDQ2IDgzLjQ0NiA5My4wNDYgODMuNzQ1IDg4LjU3MloiLz48cGF0aCBkPSJNNjQuNzUwIDg4LjU3MyBDNjQuNDQ5IDg0LjA5OSA2My44MzAgNzcuNDk0IDYwLjg3NCA3NS40NzUgQzU3LjkxOCA3My40NTYgNTIuMzM3IDczLjE1NCA0OS4yMDcgNzUuMTM5IEM0Ny44MDIgNzYuMDQwIDQ2LjcxOSA3Ny4zNjQgNDYuMTE1IDc4LjkxOSBDNDUuMzgzIDgxLjAyNyA0NC45MjYgODMuNzQ4IDQ0LjgzMyA4NC41NjYgQzQ0LjUwNiA4Ny40MTkgNDQuMDgzIDkwLjM0MyA0NC4wNDkgOTMuMjQ2IEM0NC4wMTUgOTYuMDgzIDQ0LjE3NiA5OC4xNzEgNDUuNDIxIDEwMC43NTAgQzQ4LjcxOSAxMDcuNTMyIDYxLjA5MiAxMDQuOTEwIDYyLjg3NCAxMDIuMTc4IEM2NC42NTcgOTkuNDQ3IDY1LjA1MiA5My4wNDcgNjQuNzUwIDg4LjU3M1oiLz4KICAgIDwvZz4KICAgIDxwYXRoIGQ9Ik05NS4wNzEgODMuOTg4IEM5Mi41NjggODMuNzMxIDkwLjc3MiA4NC4zMzkgODkuOTA0IDg1LjQ4NyBDODkuMDM2IDg2LjYzNCA4OC43NzYgODguMDcwIDg4LjU4OSA4OS40NjAgQzg4LjQxOCA5MC43MzMgODguMjg4IDkyLjAzOSA4OC41ODkgOTMuMjk3IEM4OC44OTAgOTQuNTU1IDg5LjY0NCA5NS43NzUgOTAuODc3IDk2LjM3MiBDOTEuODQ5IDk2Ljg0MyA5Mi45OTAgOTYuODgyIDk0LjA4NiA5Ni45MDggQzk0Ljg3MyA5Ni45NjEgOTUuNjY1IDk2LjkxNiA5Ni40MzkgOTYuNzczIEM5OC4yNjQgOTYuMzU1IDk5LjYzNiA5NC44NDIgMTAwLjEzOSA5My4xNjggQzEwMC42NDMgOTEuNDk0IDEwMC4zODYgODkuNzAwIDk5LjgyMyA4OC4wNDQgQzk5LjUzMSA4Ny4wNTMgOTkuMDAyIDg2LjEzNCA5OC4yNzcgODUuMzU1IEM5Ny40NzAgODQuNDk2IDk2LjMwMiA4My45OTggOTUuMDcxIDgzLjk4OFoiIGZpbGw9InVybCgjby1wdXBpbCkiLz4KICAgIDxwYXRoIGQ9Ik01My43MzQgODMuOTg4IEM1Ni4yMzggODMuNzMxIDU4LjAzNSA4NC4zMzkgNTguOTA0IDg1LjQ4NyBDNTkuNzcyIDg2LjYzNCA2MC4wMzIgODguMDcwIDYwLjIxOSA4OS40NjAgQzYwLjM5MCA5MC43MzMgNjAuNTM2IDkyLjAzOSA2MC4yMzUgOTMuMjk3IEM1OS45MzQgOTQuNTU1IDU5LjE4MCA5NS43NzUgNTcuOTQ3IDk2LjM3MiBDNTYuOTc0IDk2Ljg0MyA1NS44MzMgOTYuODgyIDU0LjczNiA5Ni45MDggQzUzLjk0OCA5Ni45NjEgNTMuMTU2IDk2LjkxNiA1Mi4zODEgOTYuNzczIEM1MC41NTYgOTYuMzU1IDQ5LjE4MyA5NC44NDIgNDguNjc5IDkzLjE2OCBDNDguMTc1IDkxLjQ5NCA0OC40MzIgODkuNzAwIDQ4Ljk5NiA4OC4wNDQgQzQ5LjI4NyA4Ny4wNTIgNDkuODE2IDg2LjEzMyA1MC41NDMgODUuMzU1IEM1MS4zNDcgODQuNDk5IDUyLjUwOCA4NC4wMDIgNTMuNzM0IDgzLjk4OFoiIGZpbGw9InVybCgjby1wdXBpbCkiLz4KICAgIDxwYXRoIGQ9Ik02MS40MDkgMTE5LjkzMCBDNjEuNDA5IDExOS45MzAgNzAuNTQzIDEzMC4xNTIgODYuMjI5IDEyMC41NTEiIHN0cm9rZT0iIzlmOWZhOSIgc3Ryb2tlLXdpZHRoPSIxLjMiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgZmlsbD0ibm9uZSIvPgogICAgPCEtLSByaWdodCBhcm0gd2F2ZXMgaW4gZnJvbnQgLS0+CiAgPC9nPgo8L3N2Zz4K">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+/* Layout: one left-aligned column, 1120px wide. Real screenshots carry the page; text stays short.
+   The docs page adds a sticky contents column. Dark is the designed look; light is a readable translation. */
+:root {
+  color-scheme: dark;
+  --bg: #09090b; --raised: #18181b; --border: #27272a; --border-strong: #3f3f46;
+  --fg: #fafafa; --muted: #9f9fa9;
+  --primary: #00b8db; --on-primary: #09090b; --app: #ff8904;
+  --code-bg: #0c0c0f; --grid: rgba(0,184,219,.5); --horizon: rgba(83,234,253,.7);
+  --shot-shadow: 0 30px 70px -24px rgba(0,0,0,.7);
+  --sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --bg: #fafafa; --raised: #ffffff; --border: #e4e4e7; --border-strong: #d4d4d8;
+    --fg: #18181b; --muted: #52525c;
+    --primary: #007595; --on-primary: #ffffff; --app: #c2410c;
+    --code-bg: #f4f4f5; --grid: rgba(0,117,149,.35); --horizon: rgba(0,117,149,.6);
+    --shot-shadow: 0 30px 60px -28px rgba(24,24,27,.45);
+  }
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #fafafa; --raised: #ffffff; --border: #e4e4e7; --border-strong: #d4d4d8;
+  --fg: #18181b; --muted: #52525c;
+  --primary: #007595; --on-primary: #ffffff; --app: #c2410c;
+  --code-bg: #f4f4f5; --grid: rgba(0,117,149,.35); --horizon: rgba(0,117,149,.6);
+  --shot-shadow: 0 30px 60px -28px rgba(24,24,27,.45);
+}
+*, *::before, *::after { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 24px; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 400 16px/1.6 var(--sans); -webkit-font-smoothing: antialiased; }
+img { max-width: 100%; }
+.wrap { max-width: 1120px; margin-inline: auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+a { color: var(--primary); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 4px; }
+h1, h2, h3 { text-wrap: balance; margin: 0; letter-spacing: -0.02em; line-height: 1.1; }
+p { margin: 0; }
+code, kbd, pre { font-family: var(--mono); }
+code { font-size: .88em; }
+p code, li code, td code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+kbd { font-size: .8125rem; background: var(--raised); border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; white-space: nowrap; }
+.muted { color: var(--muted); }
+
+.top { display: flex; align-items: center; gap: 24px; padding-block: 18px; }
+.brand { display: flex; align-items: center; gap: 10px; font: 600 1.05rem/1 var(--sans); color: var(--fg); text-decoration: none; letter-spacing: -0.01em; }
+.brand img { width: 34px; height: 34px; display: block; }
+.top nav { margin-left: auto; display: flex; align-items: center; gap: 24px; font-size: .92rem; }
+.top nav a { color: var(--muted); text-decoration: none; }
+.top nav a:hover, .top nav a[aria-current] { color: var(--fg); }
+.top nav .gh { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 6px; }
+.top nav .gh svg { width: 20px; height: 20px; fill: currentColor; display: block; }
+
+.install { display: flex; align-items: stretch; max-width: 820px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--code-bg); overflow: hidden; }
+.install pre { margin: 0; padding: 14px 16px; overflow-x: auto; flex: 1; min-width: 0; font-size: .8rem; line-height: 1.5; white-space: pre; }
+.install pre .p { color: var(--primary); user-select: none; }
+.install button { flex: none; font: 600 .82rem/1 var(--sans); padding: 0 16px; border: 0; border-left: 1px solid var(--border-strong); background: var(--primary); color: var(--on-primary); cursor: pointer; min-width: 76px; }
+.install button:hover { filter: brightness(1.1); }
+
+.shot { margin: 0; }
+.shot img { display: block; width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--border-strong); box-shadow: var(--shot-shadow); }
+
+footer { margin-top: 96px; border-top: 1px solid var(--border); }
+footer .wrap { padding-block: 26px 36px; font-size: .9rem; }
+
+h1 { font-size: clamp(2rem, 4.4vw, 2.9rem); font-weight: 700; letter-spacing: -0.03em; }
+h2 { font-size: 1.7rem; font-weight: 600; padding-top: 56px; margin-top: 56px; border-top: 1px solid var(--border); }
+h3 { font-size: 1.2rem; font-weight: 600; letter-spacing: -0.01em; line-height: 1.3; margin-top: 40px; }
+.part { font: 500 .75rem/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--primary); }
+.docs { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 56px; padding-block: 40px 0; align-items: start; }
+.toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 20px); font-size: .9rem; display: flex; flex-direction: column; gap: 6px; max-height: calc(100vh - 40px); overflow-y: auto; }
+.toc b { font: 500 .72rem/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 14px 0 4px; }
+.toc b:first-child { margin-top: 0; }
+.toc a { color: var(--muted); text-decoration: none; }
+.toc a:hover { color: var(--fg); }
+@media (max-width: 900px) { .docs { grid-template-columns: minmax(0, 1fr); gap: 28px; } .toc { position: static; max-height: none; flex-direction: row; flex-wrap: wrap; gap: 6px 16px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--raised); } .toc b { width: 100%; margin: 6px 0 0; } }
+.doc { min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.doc > p, .doc li { max-width: 70ch; }
+.doc .intro { color: var(--muted); font-size: 1.08rem; }
+.doc ul, .doc ol { margin: 0; padding-left: 1.3em; display: flex; flex-direction: column; gap: 8px; }
+.doc .step { font: 700 .75rem/1 var(--mono); color: var(--primary); margin-right: 8px; }
+pre.block { margin: 0; background: var(--code-bg); border: 1px solid var(--border-strong); border-radius: 8px; padding: 14px 16px; font-size: .8rem; line-height: 1.7; overflow-x: auto; white-space: pre; }
+pre.block .d { color: var(--muted); } pre.block .p { color: var(--primary); user-select: none; }
+.tw { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; font-size: .92rem; }
+th, td { text-align: left; padding: 9px 14px; border-top: 1px solid var(--border); vertical-align: top; }
+th { border-top: 0; font: 500 .72rem/1.4 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); background: var(--raised); }
+td:first-child { white-space: nowrap; }
+td.w { white-space: normal; }
+@media (max-width: 560px) { td:first-child { white-space: normal; } }
+.note { border-left: 2px solid var(--app); padding: 2px 0 2px 14px; color: var(--muted); }
+.note b { color: var(--fg); font-weight: 600; }
+.tag { display: inline-block; font: 500 .68rem/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--app); border: 1px solid var(--app); border-radius: 3px; padding: 3px 6px; white-space: nowrap; }
+.modes { display: flex; gap: 8px; flex-wrap: wrap; }
+.modes span { font: 700 .7rem/1 var(--mono); letter-spacing: .04em; padding: 5px 9px; border-radius: 3px; color: #09090b; }
+</style>
+</head>
+<body>
+<header class="wrap top">
+  <a class="brand" href="index.html"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDI0IDEwMjQiIGZpbGw9Im5vbmUiPgogIDxkZWZzPgogICAgPHBhdGggaWQ9Im8tYm9keSIgZD0iTTQzLjk0NCA0OS4yNzUgQzY1LjMwNSAzNi43OTkgODcuMzUxIDM4LjA1NiAxMDMuNjIyIDQ3LjQ1MiBDMTE4LjYwMiA1Ni4wOTUgMTI4LjY4OSA3MS42MzIgMTI4Ljg2MyA4OS43MTQgQzEyOS4yMjQgMTI5LjI5NyA5OC4zNTUgMTQ0LjE4NyA4NC4zNzQgMTQ4LjAwMiBDNzYuNjAyIDE1MC4xMjAgNjEuNjUwIDE1MS4zNDAgNDcuNTU5IDE0NS42MTUgQzM2LjI5MSAxNDEuMDM1IDI1LjU4NSAxMzIuMDI4IDE5LjUzNCAxMTUuNDk2IEwxOS4xMDcgMTE0LjI3MCBDNi42MjkgNzcuNzIyIDM3Ljg4MSA1My4yMDkgMzcuODgxIDUzLjIwOSBDMzkuODk3IDUxLjc3MiA0MS45MjAgNTAuNDYwIDQzLjk0NCA0OS4yNzVaIi8+CiAgICA8Y2xpcFBhdGggaWQ9Im8tY2xpcCI+PHVzZSBocmVmPSIjby1ib2R5Ii8+PC9jbGlwUGF0aD4KICAgIDwhLS0gTGlnaHQgY29tZXMgZnJvbSB0aGUgdXBwZXIgbGVmdC4gLS0+CiAgICA8cmFkaWFsR3JhZGllbnQgaWQ9Im8tc2tpbiIgY3g9IjUyIiBjeT0iNjIiIHI9IjExOCIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPgogICAgICA8c3RvcCBzdG9wLWNvbG9yPSIjNGY2Yjc4Ii8+PHN0b3Agb2Zmc2V0PSIuMzgiIHN0b3AtY29sb3I9IiMzMjUwNWMiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIuNzQiIHN0b3AtY29sb3I9IiMxYzMwMzgiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMwZjFjMjIiLz4KICAgIDwvcmFkaWFsR3JhZGllbnQ+CiAgICA8cmFkaWFsR3JhZGllbnQgaWQ9Im8tc2hlZW4iIGN4PSI1MCIgY3k9IjYwIiByPSI0NiIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPgogICAgICA8c3RvcCBzdG9wLWNvbG9yPSIjZmFmYWZhIiBzdG9wLW9wYWNpdHk9Ii4xNiIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iI2ZhZmFmYSIgc3RvcC1vcGFjaXR5PSIwIi8+CiAgICA8L3JhZGlhbEdyYWRpZW50PgogICAgPHJhZGlhbEdyYWRpZW50IGlkPSJvLXJpbSIgY3g9IjYwIiBjeT0iNzgiIHI9Ijc4IiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+CiAgICAgIDxzdG9wIG9mZnNldD0iLjc4IiBzdG9wLWNvbG9yPSIjMDBiOGRiIiBzdG9wLW9wYWNpdHk9IjAiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMwMGI4ZGIiIHN0b3Atb3BhY2l0eT0iLjM4Ii8+CiAgICA8L3JhZGlhbEdyYWRpZW50PgogICAgPGxpbmVhckdyYWRpZW50IGlkPSJvLWJhbmQiIHgxPSIwIiB5MT0iNjgiIHgyPSIwIiB5Mj0iMTA2IiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+CiAgICAgIDxzdG9wIHN0b3AtY29sb3I9IiMyNzI3MmEiLz48c3RvcCBvZmZzZXQ9Ii4xOCIgc3RvcC1jb2xvcj0iIzBjMGMwZiIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzA5MDkwYiIvPgogICAgPC9saW5lYXJHcmFkaWVudD4KICAgIDxsaW5lYXJHcmFkaWVudCBpZD0iby1tZXRhbCIgeDE9IjEwIiB5MT0iMTIiIHgyPSIxMzYiIHkyPSIzMCIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPgogICAgICA8c3RvcCBzdG9wLWNvbG9yPSIjM2YzZjQ2Ii8+PHN0b3Agb2Zmc2V0PSIuNSIgc3RvcC1jb2xvcj0iIzlmOWZhOSIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzUyNTI1YyIvPgogICAgPC9saW5lYXJHcmFkaWVudD4KICAgIDxsaW5lYXJHcmFkaWVudCBpZD0iby1jYXAiIHgxPSI1NiIgeTE9IjMwIiB4Mj0iODAiIHkyPSI0OCIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPgogICAgICA8c3RvcCBzdG9wLWNvbG9yPSIjNWY3ZDhhIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMWMzMDM4Ii8+CiAgICA8L2xpbmVhckdyYWRpZW50PgogICAgPGxpbmVhckdyYWRpZW50IGlkPSJvLWxpbWIiIHgxPSIwIiB5MT0iMCIgeDI9IjEiIHkyPSIxIj4KICAgICAgPHN0b3Agc3RvcC1jb2xvcj0iIzQ2NjM3MSIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzFjMzAzOCIvPgogICAgPC9saW5lYXJHcmFkaWVudD4KICAgIDxyYWRpYWxHcmFkaWVudCBpZD0iby1zb2NrZXQiIGN4PSIuNSIgY3k9Ii4zNSIgcj0iLjc1Ij4KICAgICAgPHN0b3Agc3RvcC1jb2xvcj0iIzE4MTgxYiIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzA1MDUwNiIvPgogICAgPC9yYWRpYWxHcmFkaWVudD4KICAgIDxyYWRpYWxHcmFkaWVudCBpZD0iby1wdXBpbCIgY3g9Ii40MiIgY3k9Ii4zNiIgcj0iLjciPgogICAgICA8c3RvcCBzdG9wLWNvbG9yPSIjY2ZjZmQ0Ii8+PHN0b3Agb2Zmc2V0PSIuNTUiIHN0b3AtY29sb3I9IiNhYmFiYjEiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiM3OTc5N2YiLz4KICAgIDwvcmFkaWFsR3JhZGllbnQ+CiAgICA8cmFkaWFsR3JhZGllbnQgaWQ9Im8tZ2xvdyIgY3g9Ii41IiBjeT0iLjUiIHI9Ii41Ij4KICAgICAgPHN0b3Agc3RvcC1jb2xvcj0iIzAwYjhkYiIgc3RvcC1vcGFjaXR5PSIuMDciLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMwMGI4ZGIiIHN0b3Atb3BhY2l0eT0iMCIvPgogICAgPC9yYWRpYWxHcmFkaWVudD4KICAgIDxyYWRpYWxHcmFkaWVudCBpZD0iby1zaGFkb3ciIGN4PSIuNSIgY3k9Ii41IiByPSIuNSI+CiAgICAgIDxzdG9wIHN0b3AtY29sb3I9IiMwMDAiIHN0b3Atb3BhY2l0eT0iLjU1Ii8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMDAwIiBzdG9wLW9wYWNpdHk9IjAiLz4KICAgIDwvcmFkaWFsR3JhZGllbnQ+CgogICAgPGxpbmVhckdyYWRpZW50IGlkPSJ0aWxlIiB4MT0iMCIgeTE9IjEwMCIgeDI9IjAiIHkyPSI5MjQiIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIj4KICAgICAgPHN0b3Agc3RvcC1jb2xvcj0iIzI3MjcyYSIvPjxzdG9wIG9mZnNldD0iLjUiIHN0b3AtY29sb3I9IiMxODE4MWIiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMwOTA5MGIiLz4KICAgIDwvbGluZWFyR3JhZGllbnQ+CiAgICA8cmFkaWFsR3JhZGllbnQgaWQ9InRpbGUtZ2xvdyIgY3g9IjUxMiIgY3k9IjU2MCIgcj0iNDIwIiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+CiAgICAgIDxzdG9wIHN0b3AtY29sb3I9IiMwMGI4ZGIiIHN0b3Atb3BhY2l0eT0iLjEwIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMDBiOGRiIiBzdG9wLW9wYWNpdHk9IjAiLz4KICAgIDwvcmFkaWFsR3JhZGllbnQ+CiAgPC9kZWZzPgogIDxyZWN0IHg9IjEwMCIgeT0iMTAwIiB3aWR0aD0iODI0IiBoZWlnaHQ9IjgyNCIgcng9IjE4NiIgZmlsbD0idXJsKCN0aWxlKSIvPgogIDxyZWN0IHg9IjEwMCIgeT0iMTAwIiB3aWR0aD0iODI0IiBoZWlnaHQ9IjgyNCIgcng9IjE4NiIgZmlsbD0idXJsKCN0aWxlLWdsb3cpIi8+CiAgPHJlY3QgeD0iMTAxIiB5PSIxMDEiIHdpZHRoPSI4MjIiIGhlaWdodD0iODIyIiByeD0iMTg1IiBzdHJva2U9IiMzZjNmNDYiIHN0cm9rZS13aWR0aD0iMiIvPgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDE3MiAxOTApIHNjYWxlKDQuMTUpIj4KICAgIDxlbGxpcHNlIGN4PSI3NiIgY3k9IjE2MCIgcng9IjYyIiByeT0iOSIgZmlsbD0idXJsKCNvLXNoYWRvdykiLz4KICAgIDwhLS0gbGVmdCBhcm0gc2l0cyBiZWhpbmQgdGhlIGJvZHkgLS0+CiAgICA8IS0tIGhlYWRiYW5kIHRhaWxzIGFuZCBrbm90IC0tPgogICAgPGcgZmlsbD0idXJsKCNvLWJhbmQpIiBzdHJva2U9IiMyNzI3MmEiIHN0cm9rZS13aWR0aD0iLjUiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPgogICAgICA8cGF0aCBkPSJNMTI3IDgwQzEzNiA3NCAxNDcgNzcgMTU4IDY4TDE2MSA3M0MxNTEgODMgMTQwIDgwIDEyOSA4N1oiLz4KICAgICAgPHBhdGggZD0iTTEyOCA4NUMxMzcgODQgMTQ2IDg4IDE1NiA4NEwxNTcgODlDMTQ3IDk0IDEzOCA5MSAxMjkgOTFaIi8+CiAgICA8L2c+CiAgICA8IS0tIHJvdG9yIC0tPgogICAgPHBhdGggZD0iTTM3LjczNiAyNS4zNDEgQzM5LjE3NCAyNS41NjUgNTIuNDIxIDI1Ljk5NCA1Ni40MDMgMjkuNTEzIEM2MC4zODUgMzMuMDMyIDU2Ljk2NiAzNy45MTMgNTYuOTY2IDM3LjkxMyBDNTEuOTIwIDQxLjMwNCA0Ni4xMzYgNDguNzU5IDQ2LjEzNiA0OC43NTkgTDU2LjQ4NyA1MC4xOTBMNjMuMzE2IDQxLjY4MUw3Mi4zOTggMzIuNzMwIEw4OC4wMTAgMjcuOTU4IiBzdHJva2U9IiM1MjUyNWMiIHN0cm9rZS13aWR0aD0iMS42IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz4KICAgIDxwYXRoIGQ9Ik0xMzYuNzI0IDE1LjMxNCBDMTMwLjk1MyAxNC4wMDQgMTIxLjcyNSAxNS40MDQgMTE5LjY2MCAxNS41MTAgQzExNy4zNTQgMTUuNjMxIDkxLjAzNyAyMS43MzIgNzkuOTE4IDIzLjY0NiBDNzYuNzMxIDI0LjE3NyA3My41MDQgMjQuNDM0IDcwLjI3MyAyNC40MTEgQzU4LjMxMSAyNi4zNTkgNDguNDYxIDIzLjc4OSA0OC4wNzIgMjMuODM2IEM0Ny42MjQgMjMuODg1IDEzLjM1NSAxNy43ODEgMTEuMjM2IDE3LjQ2NyBDMTAuMTAwIDE3LjI5OSA5LjEzMyAxNy4zNzEgOS4xNzIgMTcuODUzIEMxMy4xNTkgMTguNzQzIDIyLjEwNiAyMC41NjYgMjkuOTY4IDIxLjg5NyBDMjkuOTY4IDIxLjg5NyA1NS44MzcgMjguNDg0IDU5Ljc5NSAyOC44MzUgQzYzLjc1MiAyOS4xODcgNzkuNTEzIDI5LjI1NSA4OC4wMTAgMjcuOTU4IEM5NC45NDggMjYuOTAwIDEyMi44MjcgMjAuMzM2IDEzMi44MTAgMTcuOTY1IEMxMzQuNjAyIDE3LjEwMyAxMzYuNDc4IDE2LjA1OCAxMzYuNzI0IDE1LjMxNFoiIGZpbGw9InVybCgjby1tZXRhbCkiLz4KICAgIDxwYXRoIGQ9Ik01MS4yOTYgNDcuMjM0IEM1MS41OTQgNDUuOTIxIDUxLjk3NiA0NC42MjkgNTIuNDM3IDQzLjM2NCBDNTYuMjE3IDMzLjAwMyA2NC41NDUgMjguMTI4IDcyLjQyMCAzMC40MjcgQzc5LjcxMCAzMy40NTggODIuMTMzIDM2LjYwNiA4My4xODUgMzguNzUwIEM4My41NzkgMzkuNTAxIDgzLjg0NiA0MC4zMTEgODMuOTc1IDQxLjE0OSBMODAuOTI2IDQ1LjYxMFoiIGZpbGw9InVybCgjby1jYXApIi8+CiAgICA8IS0tIGJvZHk6IHNtb290aCBzaGFkZSwgc29mdCBzaGVlbiwgZmFpbnQgY3lhbiByaW0gb24gdGhlIHNoYWRvdyBzaWRlIC0tPgogICAgPHVzZSBocmVmPSIjby1ib2R5IiBmaWxsPSJ1cmwoI28tc2tpbikiLz4KICAgIDxnIGNsaXAtcGF0aD0idXJsKCNvLWNsaXApIj4KICAgICAgPHJlY3QgeD0iMCIgeT0iMzAiIHdpZHRoPSIxNjAiIGhlaWdodD0iMTMwIiBmaWxsPSJ1cmwoI28tc2hlZW4pIi8+CiAgICAgIDxyZWN0IHg9IjAiIHk9IjMwIiB3aWR0aD0iMTYwIiBoZWlnaHQ9IjEzMCIgZmlsbD0idXJsKCNvLXJpbSkiLz4KICAgICAgPHBhdGggZD0iTTUxLjM2NiA1Ni4zMjAgQzQ5LjcxMSA1Ny4yMjggNDguNTIwIDU4LjQ5OCA0OS4zMzIgNjAuMjUyIEM1MC4zMTUgNjIuMzg3IDUzLjY4NyA2Mi40MDggNTcuMjI1IDYxLjgwOCBDNjIuOTYyIDYwLjg0MCA2OC42NTUgNTkuNzg2IDc0LjQ3MCA1OS4zODQgQzc2LjM2NyA1OS4yMzYgNzguMjcxIDU5LjE5NCA4MC4xNzIgNTkuMjU3IEM4Mi4zMDAgNTkuMzQxIDg0LjM3MiA1OS45MDEgODYuNDU3IDYwLjI5MyBDODkuMDMzIDYwLjc3OCA5MS44NDUgNjAuOTY4IDk0LjI5NyA1OS44NTEgQzk1Ljc4MiA1OS4xOTUgOTYuNDU4IDU3LjQ2MyA5NS44MDkgNTUuOTc1IEM5NS4zNTggNTQuODU4IDkzLjY5NyA1My4zMzYgODYuNTEwIDUyLjI5NyBDODAuMDUxIDUxLjQxMSA3My42MDUgNTEuNjQxIDY3LjM5OCA1Mi4zNTAgQzYzLjU5MSA1Mi43NzIgNTkuODI2IDUzLjUxNiA1Ni4xNDUgNTQuNTc1IEM1NS4wODEgNTQuODg2IDUyLjk5OSA1NS40MzAgNTEuMzY2IDU2LjMyMFoiIGZpbGw9IiNmYWZhZmEiIGZpbGwtb3BhY2l0eT0iLjA3Ii8+CiAgICAgIDxwYXRoIGQ9Ik0wIDczQzQwIDY2IDEwNCA2NiAxNTAgNzVMMTUwIDEwNkMxMDQgOTggNDAgOTggMCAxMDdaIiBmaWxsPSJ1cmwoI28tYmFuZCkiLz4KICAgICAgPGVsbGlwc2UgY3g9IjU0IiBjeT0iOTAiIHJ4PSIxNyIgcnk9IjIwIiBmaWxsPSJ1cmwoI28tZ2xvdykiLz4KICAgICAgPGVsbGlwc2UgY3g9Ijk0IiBjeT0iOTAiIHJ4PSIxNyIgcnk9IjIwIiBmaWxsPSJ1cmwoI28tZ2xvdykiLz4KICAgIDwvZz4KICAgIDxjaXJjbGUgY3g9IjEyOC41IiBjeT0iODUuNSIgcj0iMy40IiBmaWxsPSIjMTgxODFiIiBzdHJva2U9IiMyNzI3MmEiIHN0cm9rZS13aWR0aD0iLjUiLz4KICAgIDwhLS0gZXllcyAtLT4KICAgIDxnIGZpbGw9InVybCgjby1zb2NrZXQpIiBzdHJva2U9IiM1MjUyNWMiIHN0cm9rZS13aWR0aD0iLjYiPgogICAgICA8cGF0aCBkPSJNODMuNzQ1IDg4LjU3MiBDODQuMDU2IDg0LjA5OCA4NC42NTcgNzcuNDkzIDg3LjYyMiA3NS40NzQgQzkwLjU4NiA3My40NTUgOTYuMTU5IDczLjE1MyA5OS4yODggNzUuMTM4IEMxMDAuNjkzIDc2LjAzOSAxMDEuNzc2IDc3LjM2MyAxMDIuMzgxIDc4LjkxOCBDMTAzLjExMCA4MS4wMjYgMTAzLjU2OSA4My43NDcgMTAzLjY2MyA4NC41NjUgQzEwMy45NzQgODcuNDE4IDEwNC40MTIgOTAuMzQyIDEwNC40NDcgOTMuMjQ1IEMxMDQuNDgxIDk2LjA3MCAxMDQuMzI4IDk4LjE3MCAxMDMuMDc1IDEwMC43NDkgQzk5Ljc3NyAxMDcuNTMyIDg3LjQwNCAxMDQuOTA5IDg1LjYyMSAxMDIuMTc3IEM4My44MzggOTkuNDQ2IDgzLjQ0NiA5My4wNDYgODMuNzQ1IDg4LjU3MloiLz48cGF0aCBkPSJNNjQuNzUwIDg4LjU3MyBDNjQuNDQ5IDg0LjA5OSA2My44MzAgNzcuNDk0IDYwLjg3NCA3NS40NzUgQzU3LjkxOCA3My40NTYgNTIuMzM3IDczLjE1NCA0OS4yMDcgNzUuMTM5IEM0Ny44MDIgNzYuMDQwIDQ2LjcxOSA3Ny4zNjQgNDYuMTE1IDc4LjkxOSBDNDUuMzgzIDgxLjAyNyA0NC45MjYgODMuNzQ4IDQ0LjgzMyA4NC41NjYgQzQ0LjUwNiA4Ny40MTkgNDQuMDgzIDkwLjM0MyA0NC4wNDkgOTMuMjQ2IEM0NC4wMTUgOTYuMDgzIDQ0LjE3NiA5OC4xNzEgNDUuNDIxIDEwMC43NTAgQzQ4LjcxOSAxMDcuNTMyIDYxLjA5MiAxMDQuOTEwIDYyLjg3NCAxMDIuMTc4IEM2NC42NTcgOTkuNDQ3IDY1LjA1MiA5My4wNDcgNjQuNzUwIDg4LjU3M1oiLz4KICAgIDwvZz4KICAgIDxwYXRoIGQ9Ik05NS4wNzEgODMuOTg4IEM5Mi41NjggODMuNzMxIDkwLjc3MiA4NC4zMzkgODkuOTA0IDg1LjQ4NyBDODkuMDM2IDg2LjYzNCA4OC43NzYgODguMDcwIDg4LjU4OSA4OS40NjAgQzg4LjQxOCA5MC43MzMgODguMjg4IDkyLjAzOSA4OC41ODkgOTMuMjk3IEM4OC44OTAgOTQuNTU1IDg5LjY0NCA5NS43NzUgOTAuODc3IDk2LjM3MiBDOTEuODQ5IDk2Ljg0MyA5Mi45OTAgOTYuODgyIDk0LjA4NiA5Ni45MDggQzk0Ljg3MyA5Ni45NjEgOTUuNjY1IDk2LjkxNiA5Ni40MzkgOTYuNzczIEM5OC4yNjQgOTYuMzU1IDk5LjYzNiA5NC44NDIgMTAwLjEzOSA5My4xNjggQzEwMC42NDMgOTEuNDk0IDEwMC4zODYgODkuNzAwIDk5LjgyMyA4OC4wNDQgQzk5LjUzMSA4Ny4wNTMgOTkuMDAyIDg2LjEzNCA5OC4yNzcgODUuMzU1IEM5Ny40NzAgODQuNDk2IDk2LjMwMiA4My45OTggOTUuMDcxIDgzLjk4OFoiIGZpbGw9InVybCgjby1wdXBpbCkiLz4KICAgIDxwYXRoIGQ9Ik01My43MzQgODMuOTg4IEM1Ni4yMzggODMuNzMxIDU4LjAzNSA4NC4zMzkgNTguOTA0IDg1LjQ4NyBDNTkuNzcyIDg2LjYzNCA2MC4wMzIgODguMDcwIDYwLjIxOSA4OS40NjAgQzYwLjM5MCA5MC43MzMgNjAuNTM2IDkyLjAzOSA2MC4yMzUgOTMuMjk3IEM1OS45MzQgOTQuNTU1IDU5LjE4MCA5NS43NzUgNTcuOTQ3IDk2LjM3MiBDNTYuOTc0IDk2Ljg0MyA1NS44MzMgOTYuODgyIDU0LjczNiA5Ni45MDggQzUzLjk0OCA5Ni45NjEgNTMuMTU2IDk2LjkxNiA1Mi4zODEgOTYuNzczIEM1MC41NTYgOTYuMzU1IDQ5LjE4MyA5NC44NDIgNDguNjc5IDkzLjE2OCBDNDguMTc1IDkxLjQ5NCA0OC40MzIgODkuNzAwIDQ4Ljk5NiA4OC4wNDQgQzQ5LjI4NyA4Ny4wNTIgNDkuODE2IDg2LjEzMyA1MC41NDMgODUuMzU1IEM1MS4zNDcgODQuNDk5IDUyLjUwOCA4NC4wMDIgNTMuNzM0IDgzLjk4OFoiIGZpbGw9InVybCgjby1wdXBpbCkiLz4KICAgIDxwYXRoIGQ9Ik02MS40MDkgMTE5LjkzMCBDNjEuNDA5IDExOS45MzAgNzAuNTQzIDEzMC4xNTIgODYuMjI5IDEyMC41NTEiIHN0cm9rZT0iIzlmOWZhOSIgc3Ryb2tlLXdpZHRoPSIxLjMiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgZmlsbD0ibm9uZSIvPgogICAgPCEtLSByaWdodCBhcm0gd2F2ZXMgaW4gZnJvbnQgLS0+CiAgPC9nPgo8L3N2Zz4K" alt="Otto, the ottospace robot" width="34" height="34">ottospace</a>
+  <nav aria-label="Site">
+    <a href="#top" aria-current="page">Docs</a>
+    <a href="#install">Install</a>
+    <a class="gh" href="https://github.com/bryan-uipath/ottospace" aria-label="ottospace on GitHub" title="ottospace on GitHub"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+  </nav>
+</header>
+<main id="top"><div class="wrap docs">
+<nav class="toc" aria-label="On this page">
+  <b>Quickstart</b>
+  <a href="#install">Install</a><a href="#permissions">Permissions</a><a href="#open-repo">Open a repository</a><a href="#split">Split</a><a href="#host-app">Host an app</a><a href="#file-task">File a task</a>
+  <b>Reference</b>
+  <a href="#keys">Keys</a><a href="#tasks">Tasks</a><a href="#settings">Settings</a><a href="#shell">Drive it from a shell</a><a href="#hosting">How app windows are hosted</a><a href="#limits">Known limits</a><a href="#roadmap">Roadmap</a>
+</nav>
+<article class="doc">
+  <h1>ottospace docs</h1>
+  <p class="intro">Install ottospace, set it up, and look up keys, tasks, settings and the <code>ottospace ctl</code> command. Inside the app, <kbd>⌘/</kbd> shows every key.</p>
+
+  <h2 id="quickstart">Quickstart</h2>
+
+  <h3 id="install"><span class="step">1</span>Install</h3>
+  <p>You need macOS 14 or later on Apple silicon.</p>
+  <div class="install">
+  <pre id="cmd3"><span class="p">$ </span>curl -fsSL https://raw.githubusercontent.com/bryan-uipath/ottospace/main/install.sh | sh</pre>
+  <button type="button" id="copy3" data-copy="cmd3">Copy</button>
+</div>
+  <p>The script installs two commands into <code>~/.local/bin</code>. It needs no <code>sudo</code>, and it tells you if <code>~/.local/bin</code> is not on your <code>PATH</code>.</p>
+  <ul>
+    <li><code>osi</code>, the ottospace installer.</li>
+    <li><code>ottospace</code>, the latest build of <code>main</code>. There is no tagged release yet.</li>
+  </ul>
+  <p><code>osi</code> updates ottospace and switches between builds:</p>
+  <pre class="block"><span class="p">$ </span>osi update<span class="d">           # install the newer build, if there is one</span>
+<span class="p">$ </span>osi update --check<span class="d">   # only say whether there is one</span>
+<span class="p">$ </span>osi current<span class="d">          # what is installed: channel, version, commit, date</span>
+<span class="p">$ </span>osi rollback<span class="d">         # put the previous build back; again to undo</span>
+<span class="p">$ </span>osi install pr 30<span class="d">    # the build of a pull request. Needs gh, signed in</span>
+<span class="p">$ </span>osi uninstall<span class="d">        # remove ottospace and osi; settings and tasks are kept</span></pre>
+  <p>A running ottospace keeps the build it started with. Quit it and start it again to use the new one.</p>
+  <p class="note"><b>What the checksum covers.</b> Every download is checked against the SHA-256 published with it, and a failed check changes nothing. That catches a damaged download. It does not catch a compromised release: whoever can replace the build can replace its checksum. The install script and <code>osi</code> itself come from <code>main</code> over HTTPS with no checksum. A pull request build runs that pull request's code with your terminal's permissions: read the diff first.</p>
+  <p>To also get <code>ottospace.app</code> in <code>~/Applications</code>, with a Dock icon:</p>
+  <pre class="block"><span class="p">$ </span>curl -fsSL https://raw.githubusercontent.com/bryan-uipath/ottospace/main/install.sh | OTTOSPACE_APP=1 sh</pre>
+  <p>To build from source instead, you need a Rust toolchain:</p>
+  <pre class="block"><span class="p">$ </span>git clone https://github.com/bryan-uipath/ottospace
+<span class="p">$ </span>cd ottospace
+<span class="p">$ </span>cargo install --path crates/ottospace --bin ottospace</pre>
+
+  <h3 id="permissions"><span class="step">2</span>Grant two permissions</h3>
+  <p>Run <code>ottospace</code> from a terminal. It uses that terminal's permissions, so grant the terminal two, both in System Settings ▸ Privacy &amp; Security:</p>
+  <ul>
+    <li><b>Accessibility</b>, to move app windows. ottospace does not start without it.</li>
+    <li><b>Screen &amp; System Audio Recording</b>, to show app windows in panes. macOS asks for it at launch, when ottospace lists the running apps.</li>
+  </ul>
+  <p>You grant them once. Updates do not ask again.</p>
+  <p class="note"><b>Builds are not notarized.</b> They are signed ad hoc. <code>ottospace.app</code> has its own identity, so macOS asks for both permissions for the app itself, and each build is a new identity: expect to grant both again after every update. That is why the bare command is the default. A zip downloaded in a browser is quarantined and macOS refuses to open the app; <code>osi</code> downloads with <code>curl</code>, which sets no such flag.</p>
+
+  <h3 id="open-repo"><span class="step">3</span>Open a repository</h3>
+  <p>ottospace opens on the Repos list: your repositories as headings, each checkout and worktree a row. Click a row and a terminal opens in that directory. It fills the pane if the pane is empty; otherwise it splits to the right. Shift-click splits down.</p>
+  <p>Repos looks in <code>~/code</code> and <code>~/notes</code>. To change the folders, see <a href="#settings">Settings</a>.</p>
+
+  <h3 id="split"><span class="step">4</span>Split</h3>
+  <ul>
+    <li><kbd>⌘D</kbd> splits right with a new terminal; <kbd>⌘⇧D</kbd> splits down.</li>
+    <li><kbd>⌘E</kbd> lets you pick what goes in the new pane: a terminal or an app.</li>
+    <li><kbd>⌘T</kbd> opens a new tab. Each tab has its own splits.</li>
+    <li><kbd>⌘⌥←</kbd> <kbd>⌘⌥→</kbd> <kbd>⌘⌥↑</kbd> <kbd>⌘⌥↓</kbd> move between panes.</li>
+  </ul>
+  <p>A terminal pane runs your shell and closes when the shell exits.</p>
+
+  <h3 id="host-app"><span class="step">5</span>Host an app</h3>
+  <p>Open Apps on the rail and click a running app. Its window moves into the focused pane if that is empty; otherwise into a split to the right. Shift-click splits down.</p>
+  <p>Apps you name in the <code>apps</code> <a href="#settings">setting</a> are listed under "Not running" while they are closed. A click starts one in the background and puts its window in a pane. ottospace waits up to 30 seconds for the window.</p>
+  <ul>
+    <li><b>Type in the app:</b> click its pane. The status bar turns <code>APP</code>, and ottospace keys stop.</li>
+    <li><b>Come back:</b> click ottospace itself (the rail, the top bar, another pane), or press the return key.</li>
+    <li><b>Give the window back to macOS:</b> come back to ottospace, then <kbd>⌘W</kbd> on the pane. The window returns to where it was.</li>
+  </ul>
+  <p>The return key is F18, and it works while any app is in front. Most keyboards have no F18, so map Caps Lock to it. This lasts until you restart:</p>
+  <pre class="block"><span class="p">$ </span>hidutil property --set '{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x700000039,"HIDKeyboardModifierMappingDst":0x70000006D}]}'</pre>
+  <p>After this, Caps Lock no longer toggles capitals, and any key mapping you had is replaced. To undo it: <code>hidutil property --set '{"UserKeyMapping":[]}'</code>. To use another key, start ottospace with <code>OTTOSPACE_RETURN_KEY</code> set to one of <code>f13</code> to <code>f20</code>. The status bar names the key in use.</p>
+
+  <h3 id="file-task"><span class="step">6</span>File a task</h3>
+  <p>Press <kbd>⌘N</kbd>, type what needs doing, and press <kbd>↵</kbd>. In the same line you can add:</p>
+  <ul>
+    <li><code>#canvas</code> to tag a project,</li>
+    <li><code>@canvas-app</code> to name a repository or worktree from the Repos list,</li>
+    <li><code>p1</code> to <code>p9</code> to set the priority.</li>
+  </ul>
+  <p><kbd>Tab</kbd> completes <code>#</code> and <code>@</code> names. The task appears in Tasks on the rail, and the status bar shows how many tasks need you.</p>
+  <p>Click the task, or press <kbd>⌘⇧N</kbd> for the next one that needs you. The tab bar then shows only that task's tabs. The other tabs keep running, off the bar.</p>
+
+  <h2 id="reference">Reference</h2>
+
+  <h3 id="keys">Keys</h3>
+  <p>The status bar shows who has the keyboard. Each mode has its own colour:</p>
+  <div class="modes" aria-label="Key modes"><span style="background:#00b8db">NORMAL</span><span style="background:#ff8904">APP</span><span style="background:#00d492">PICK</span><span style="background:#fb64b6">LIST</span><span style="background:#9ae600">TASK</span><span style="background:#a684ff">VISUAL</span></div>
+  <p><b>Panes and tabs</b></p>
+  <div class="tw"><table><thead><tr><th>Key</th><th>Action</th></tr></thead><tbody><tr><td><kbd>⌘D</kbd></td><td>Split right, new terminal</td></tr><tr><td><kbd>⌘⇧D</kbd></td><td>Split down, new terminal</td></tr><tr><td><kbd>⌘E</kbd></td><td>Pick what goes in a new pane: a terminal or an app. Type to filter, ↵ opens</td></tr><tr><td><kbd>⌘W</kbd></td><td>Close the focused pane</td></tr><tr><td><kbd>⌘⌥←/→/↑/↓</kbd> or <kbd>⌘⌥H/L/K/J</kbd></td><td>Focus the pane in that direction</td></tr><tr><td><kbd>⌘]</kbd> / <kbd>⌘[</kbd></td><td>Focus the next / previous pane</td></tr><tr><td><kbd>⌘T</kbd></td><td>New tab: pick what opens in it</td></tr><tr><td><kbd>⌘1</kbd> … <kbd>⌘9</kbd></td><td>Select a tab on the bar</td></tr><tr><td><kbd>⌘⇧]</kbd> / <kbd>⌘⇧[</kbd> or <kbd>⌃Tab</kbd> / <kbd>⌃⇧Tab</kbd></td><td>Next / previous tab</td></tr><tr><td><kbd>⌘⇧W</kbd></td><td>Close the tab and its panes</td></tr><tr><td><kbd>⌘⌃F</kbd></td><td>Zoom the window to fill the screen; again to restore</td></tr><tr><td><kbd>⌘/</kbd></td><td>Show every key</td></tr><tr><td><kbd>F18</kbd></td><td>From any app: take the keyboard back and bring ottospace forward</td></tr></tbody></table></div>
+  <p><b>The bar (Apps, Tasks, Repos)</b></p>
+  <div class="tw"><table><thead><tr><th>Key</th><th>Action</th></tr></thead><tbody><tr><td><kbd>⌘⇧E</kbd></td><td>List mode: the bar takes the keyboard. Esc or ⌘⇧E leaves</td></tr><tr><td><kbd>j</kbd> <kbd>k</kbd> or arrows</td><td>Move</td></tr><tr><td><kbd>↵</kbd> / <kbd>⇧↵</kbd></td><td>Open the row / open it in a split below</td></tr><tr><td><kbd>Tab</kbd></td><td>Next section</td></tr><tr><td><kbd>s</kbd> <kbd>h</kbd> <kbd>x</kbd> <kbd>u</kbd></td><td>On a task: snooze one hour, hold, dismiss, undo</td></tr></tbody></table></div>
+  <p>The fourth rail icon, Workbook, is empty for now.</p>
+  <p><b>Tasks</b></p>
+  <div class="tw"><table><thead><tr><th>Key</th><th>Action</th></tr></thead><tbody><tr><td><kbd>⌘N</kbd></td><td>New task: a box opens over the workspace. ↵ files it, Esc closes</td></tr><tr><td><kbd>⌘⇧N</kbd></td><td>Next task: shows the tabs of the first task that needs you</td></tr></tbody></table></div>
+  <p><b>Terminal text</b></p>
+  <div class="tw"><table><thead><tr><th>Key</th><th>Action</th></tr></thead><tbody><tr><td>Wheel or trackpad</td><td>Scroll back through history (10,000 lines)</td></tr><tr><td><kbd>⇧PageUp</kbd> / <kbd>⇧PageDown</kbd></td><td>Scroll a page</td></tr><tr><td><kbd>⇧Home</kbd> / <kbd>⇧End</kbd></td><td>Top / bottom of the history</td></tr><tr><td>Drag, double-click, triple-click</td><td>Select text, a word, a line</td></tr><tr><td><kbd>⌘C</kbd> / <kbd>⌘V</kbd></td><td>Copy the selection / paste</td></tr><tr><td><kbd>⌘⇧C</kbd></td><td>Visual mode: <code>hjkl</code> or arrows, <code>w b e 0 ^ $</code> and <code>H M L</code> move; <code>v</code> / <code>V</code> select; <code>y</code> or ↵ copies and leaves; Esc leaves</td></tr></tbody></table></div>
+  <p>Other keys go to the focused terminal. Inside full-screen programs (vim, less, htop), scrolling is the program's own.</p>
+
+  <h3 id="tasks">Tasks</h3>
+  <p>The Tasks section is an inbox. It lists tasks in groups, in this order. In a group, priority decides (1 is most urgent), then age.</p>
+  <div class="tw"><table><thead><tr><th>Group</th><th>Holds tasks in state</th></tr></thead><tbody><tr><td>Needs you</td><td><code>needs_you</code>, <code>stale</code></td></tr><tr><td>Running</td><td><code>running</code>, <code>review</code></td></tr><tr><td>Captured</td><td><code>captured</code> (the default), <code>triaged</code></td></tr><tr><td>On hold</td><td><code>parked</code></td></tr><tr><td>Done</td><td><code>done</code>. <code>cleaned</code> tasks are not listed</td></tr></tbody></table></div>
+  <ul>
+    <li><b>Snooze</b> hides a task for one hour. <b>Dismiss</b> removes it from the list. Either comes back when the task moves under Needs you.</li>
+    <li><b>Hold</b> moves the task to On hold. <b>Undo</b> takes back the last snooze, hold or dismiss.</li>
+    <li><b>A task owns its tabs.</b> Open a task (click its row, <kbd>↵</kbd> on it in list mode, or <kbd>⌘⇧N</kbd>) and the tab bar shows only its tabs. The tabs of other tasks keep running, off the bar. <kbd>⌘1</kbd> … <kbd>⌘9</kbd> and tab cycling count the tabs on the bar.</li>
+    <li>The first time you open a task it gets a tab named after it, with a terminal in its repository if it has one. The × beside the task's name on the tab bar goes back to the tabs of no task. The task goes on.</li>
+    <li>Closing a task's tabs does not end the task. It gets a fresh tab the next time you open it.</li>
+    <li>An <code>@name</code> that is not in the Repos list stays in the title.</li>
+    <li>Tasks are kept in <code>~/.ottospace/tasks</code>, one JSON file each, or in the folder the <code>tasks</code> setting names. Change tasks in the app or with <code>ottospace ctl</code>, not by editing the files.</li>
+  </ul>
+
+  <h3 id="settings">Settings</h3>
+  <p>ottospace reads <code>~/.ottospace/settings.json</code> at start, so a change applies the next time you start it. Every key is optional.</p>
+  <pre class="block">{
+  "terminal": { "font": "JetBrains Mono", "font_size": 14 },
+  "repos": ["~/code", "~/notes"],
+  "tasks": "~/notes/tasks",
+  "apps": ["Microsoft Outlook", "Slack"],
+  "windows": [{ "app": "us.zoom.xos", "title": "Zoom Meeting", "do": "ignore" }]
+}</pre>
+  <div class="tw"><table><thead><tr><th>Key</th><th>Meaning</th><th>Default</th></tr></thead><tbody><tr><td><code>terminal.font</code></td><td>The terminal's font, by family name. Use a monospaced one</td><td><code>Menlo</code></td></tr><tr><td><code>terminal.font_size</code></td><td>In points, 6 to 72</td><td><code>13</code></td></tr><tr><td><code>repos</code></td><td>Directories that are repositories or hold them, for the Repos section</td><td><code>~/code</code>, <code>~/notes</code></td></tr><tr><td><code>tasks</code></td><td>Where tasks are kept, one JSON file each. A relative path is inside <code>~/.ottospace</code></td><td><code>tasks</code></td></tr><tr><td><code>windows</code></td><td>Rules for windows ottospace must leave alone. Each rule selects windows by <code>app</code> (name or bundle id), <code>title</code> and <code>subrole</code>; every field given must match, <code>*</code> stands for any text. <code>"do": "ignore"</code>: the window never becomes a pane. <code>"do": "manage"</code> undoes a built-in rule. Your rules come first; rules are read at start</td><td>Only standard windows become panes; Zoom's sharing controls and pop-ups are ignored</td></tr><tr><td><code>apps</code></td><td>Apps to offer while they are not running, by the name Finder shows (<code>Visual Studio Code</code> for <code>Visual Studio Code.app</code>). The app must be in <code>/Applications</code>, <code>~/Applications</code> or <code>/System/Applications</code> (or their <code>Utilities</code>). A name that is not found is left out</td><td>none</td></tr></tbody></table></div>
+  <p class="note"><b>A mistake in the file shows in the status bar</b> (a key that does not exist, a wrong value, a font that is not installed). That key takes its default and the others still apply. If the file is not a JSON object, every default applies.</p>
+  <div class="tw"><table><thead><tr><th>Environment variable</th><th>Meaning</th></tr></thead><tbody><tr><td><code>OTTOSPACE_HOME</code></td><td>Another folder than <code>~/.ottospace</code></td></tr><tr><td><code>OTTOSPACE_REPOS</code></td><td>Directories for Repos, <code>:</code> between them. Wins over <code>repos</code></td></tr><tr><td><code>OTTOSPACE_RETURN_KEY</code></td><td>The return key: <code>f13</code> to <code>f20</code>. Default F18</td></tr><tr><td><code>OTTOSPACE_SHELL</code></td><td>A program to run in terminal panes instead of your login shell</td></tr><tr><td><code>OTTOSPACE_SOCKET</code></td><td>Where the control socket is. Default <code>$TMPDIR/ottospace.sock</code></td></tr></tbody></table></div>
+
+  <h3 id="shell">Drive it from a shell</h3>
+  <p><code>ottospace ctl</code> sends one JSON request to the running app and prints one JSON reply. You, a script or a coding agent can use it. It talks to a Unix socket that only your user can open (mode 0600).</p>
+  <pre class="block"><span class="p">$ </span>ottospace ctl '{"cmd":"state"}'<span class="d">   # everything, as JSON</span></pre>
+  <div class="tw"><table><thead><tr><th>Exit status</th><th>Meaning</th></tr></thead><tbody><tr><td>0</td><td>The request was understood. The reply is usually the full state after it</td></tr><tr><td>1</td><td>The request was refused (<code>{"ok":false,"error":".."}</code>), or no ottospace is running</td></tr><tr><td>2</td><td><code>ottospace</code> was called wrongly</td></tr></tbody></table></div>
+  <p>Unknown commands and unknown fields are refused. Exit 0 does not prove the change happened: a request that names a pane or tab that is gone is ignored without an error, and so are most requests while the picker or the key reference is open. Read the reply.</p>
+  <p><b>Run a command in a new pane and read its output</b></p>
+  <pre class="block"><span class="p">$ </span>ottospace ctl '{"cmd":"split","axis":"down"}'<span class="d">   # reply: state.focused is the new pane, say 3</span>
+<span class="p">$ </span>ottospace ctl '{"cmd":"type","pane":3,"text":"cargo test; echo done-7f3a-$?\r"}'
+<span class="p">$ </span>ottospace ctl '{"cmd":"wait","pane":3,"pattern":"^done-7f3a-[0-9]+$","timeout_ms":600000}'
+<span class="p">$ </span>ottospace ctl '{"cmd":"capture","pane":3,"history":true}'</pre>
+  <p><code>7f3a</code> is a token made up for this run, so <code>wait</code> does not match older output. The number after it is the command's exit status. A shell started by ottospace has <code>$OTTOSPACE_PANE</code> and <code>$OTTOSPACE_TAB</code>.</p>
+  <p><b>Tasks</b></p>
+  <pre class="block"><span class="p">$ </span>ottospace ctl '{"cmd":"task_new","line":"fix zoom flicker #canvas @canvas-app p1"}'
+<span class="p">$ </span>ottospace ctl '{"cmd":"task_add","title":"Review the retry fix","priority":1,"state":"needs_you","tab":2}'
+<span class="p">$ </span>ottospace ctl '{"cmd":"task_set_state","id":1,"state":"needs_you"}'<span class="d">   # running, needs_you, done, ...</span>
+<span class="p">$ </span>ottospace ctl '{"cmd":"task_list"}'
+<span class="p">$ </span>ottospace ctl '{"cmd":"task_pop"}'<span class="d">   # show the tabs of the first task that needs you</span>
+<span class="p">$ </span>ottospace ctl '{"cmd":"task_open","id":1}'<span class="d">   # show the tabs of task 1</span>
+<span class="p">$ </span>ottospace ctl '{"cmd":"task_leave"}'<span class="d">   # back to the tabs of no task</span></pre>
+  <p>An agent reports its own state: <code>running</code> while it works, <code>needs_you</code> when it waits for you. That is what moves a task to the top of the inbox. <code>tab</code> on <code>task_add</code> gives the task an open tab that belongs to no task yet: an agent passes <code>$OTTOSPACE_TAB</code>, so you find its work under the task.</p>
+  <p><b>Requests</b></p>
+  <div class="tw"><table><thead><tr><th>Area</th><th>Requests</th></tr></thead><tbody><tr><td class="w">State</td><td><code>state</code></td></tr><tr><td class="w">Panes</td><td><code>split</code> <code>focus</code> <code>focus_dir</code> <code>focus_cycle</code> <code>close</code></td></tr><tr><td class="w">Tabs</td><td><code>new_tab</code> <code>select_tab</code> <code>cycle_tab</code> <code>close_tab</code></td></tr><tr><td class="w">Terminals</td><td><code>type</code> <code>wait</code> <code>capture</code> <code>scroll</code> <code>mouse_down</code> <code>mouse_drag</code> <code>key</code></td></tr><tr><td class="w">Repositories</td><td><code>repos</code> <code>open_repo</code></td></tr><tr><td class="w">Tasks</td><td><code>task_new</code> <code>compose</code> <code>task_add</code> <code>task_set_state</code> <code>task_list</code> <code>task_pop</code> <code>task_open</code> <code>task_leave</code> <code>task_snooze</code> <code>task_hold</code> <code>task_dismiss</code> <code>task_undo</code></td></tr><tr><td class="w">Apps</td><td><code>open_app</code> <code>enter</code> <code>leave</code> <code>ax_tree</code> <code>ax_overlay</code></td></tr><tr><td class="w">Picker and the rest</td><td><code>picker</code> <code>picker_query</code> <code>picker_move</code> <code>picker_choose</code> <code>picker_close</code> <code>section</code> <code>keys</code> <code>quit</code></td></tr></tbody></table></div>
+  <p><code>ax_tree</code> reads an app pane's accessibility tree: titles, labels and field values. It only reads. No request presses a button or sets a value in another app.</p>
+  <p><b>The full guide, and a skill for coding agents</b></p>
+  <p><code>ottospace skill</code> prints every request with an example, what the state fields mean, and rules for using them safely. It always matches the installed version. To make it a Claude Code skill:</p>
+  <pre class="block"><span class="p">$ </span>mkdir -p ~/.claude/skills/ottospace
+<span class="p">$ </span>ottospace skill --stub &gt; ~/.claude/skills/ottospace/SKILL.md</pre>
+  <p class="note"><b>Treat the socket like a shell.</b> <code>type</code> sends keys to a terminal, so it can run anything you can. Every state reply includes the visible text of every terminal pane. Let an agent use it only as you would let it use your shell.</p>
+
+  <h3 id="hosting">How app windows are hosted</h3>
+  <p>macOS cannot move another app's window inside ottospace's own window. ottospace does the next best thing:</p>
+  <ol>
+    <li><b>The window is parked.</b> An app window that is not in use sits off-screen, with one pixel on a display. ottospace moves it with the Accessibility API.</li>
+    <li><b>The pane shows a live stream.</b> ScreenCaptureKit streams the parked window into its pane.</li>
+    <li><b>A click brings the real window.</b> Click the pane and the real window moves over it, and the click is replayed. Input is native from then on.</li>
+  </ol>
+  <p>This is why ottospace needs Accessibility and Screen Recording. A new window of a hosted app gets its own pane. The original window positions are saved to disk and restored when you quit, or after a crash. The badge on an app in the Apps list is how many windows it has open.</p>
+
+  <h3 id="limits">Known limits</h3>
+  <ul>
+    <li>Quitting loses tabs, splits and terminals. Tasks and settings are kept; tasks come back without their tabs.</li>
+    <li>Filing a task starts nothing: no agent and no worktree. The task gets its first tab when you open it.</li>
+    <li>The new-task box has no paste and no arrow keys.</li>
+    <li>An app that is not running is listed only if the <code>apps</code> setting names it.</li>
+    <li>While an app has the keyboard, ottospace keys do not fire. Use the return key.</li>
+    <li>Opened from Finder or the Dock (<code>ottospace.app</code>), terminal panes start in <code>/</code>, not your home directory.</li>
+  </ul>
+
+  <h3 id="roadmap">Roadmap <span class="tag">Not built</span></h3>
+  <p>These are designed and <b>not built</b>. None of them is in the app today.</p>
+  <div class="tw"><table><thead><tr><th>Planned</th><th>What it will do</th></tr></thead><tbody><tr><td class="w">Task kickoff and cleanup</td><td>A worktree when a task starts, a brief pane, and automatic cleanup when it is done</td></tr><tr><td class="w">Quick capture</td><td>Turn something on screen into a task and dispatch it to an agent</td></tr><tr><td class="w">Session restore</td><td>Bring back tabs, splits and apps after a restart</td></tr><tr><td class="w">Focus blocks</td><td>Hide chat for a set time, with an agent that can break through</td></tr><tr><td class="w">Scripting in TypeScript</td><td>Quick actions that depend on context, in an action deck</td></tr><tr><td class="w">Private panes</td><td>Hide chosen panes while you share your screen</td></tr><tr><td class="w">More key modes</td><td>Insert, and a sneak mode</td></tr><tr><td class="w">App switcher and Workbook</td><td>A fast app switcher, and content for the Workbook section</td></tr></tbody></table></div>
+</article>
+</div></main>
+<footer><div class="wrap"><a href="https://github.com/bryan-uipath/ottospace">github.com/bryan-uipath/ottospace</a></div></footer>
+
+<script>
+document.querySelectorAll('button[data-copy]').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var pre = document.getElementById(b.dataset.copy);
+    var text = pre.textContent.replace(/^\$ /, '');
+    var done = function (label) { b.textContent = label; setTimeout(function () { b.textContent = 'Copy'; }, 1600); };
+    var select = function () { var r = document.createRange(); r.selectNodeContents(pre); var s = getSelection(); s.removeAllRanges(); s.addRange(r); done('Selected'); };
+    try { navigator.clipboard.writeText(text).then(function () { done('Copied'); }, select); } catch (e) { select(); }
+  });
+});
+</script>
+
+</body>
+</html>

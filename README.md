@@ -1,336 +1,99 @@
 # ottospace
 
-<img src="docs/ai/1-initial-brainstorm/background/otto-icon-cyan.svg" width="128" alt="ottospace icon">
+<img src="docs/ai/1-initial-brainstorm/background/otto-icon-cyan.svg" width="96" alt="Otto, the ottospace robot">
 
-ottospace is a macOS workspace that tiles terminals and real app windows in one window. It is for
-people who run several coding agents and want them, and the apps around them, in one place.
-Agents and tests can drive it over a local control socket. Rust + [GPUI](https://gpui.rs).
+**AI-Native Command Center for your Agents and Apps**
+
+ottospace puts your terminals and your Mac apps in one tiled workspace. Your agents work in the
+same workspace and tell you when they need you.
+
+![The ottospace window: a Tasks inbox grouped Needs you, Running, Captured and On hold, beside three terminal panes. The status bar reads 2 tasks need you.](site/shots/tasks.png)
+
+Site: <https://bryan-uipath.github.io/ottospace/>
+
+## All your apps, not just the terminal
+
+Keep a shell next to the browser it serves and the chat where the bug was reported. ottospace
+tiles terminals and your real Mac app windows side by side, in tabs and splits. Click an app and
+use it as you always do.
+
+## Stay organized and on top of your tasks
+
+The inbox puts what needs you first, then what is running and what you saved for later. Press ⌘N
+and capture a task in one line, with a `#project` and an `@repo`. Open a task and the tab bar
+shows only its tabs. Your repositories and their worktrees are one click away.
+
+![The new-task box over the workspace. The typed line reads: fix zoom flicker on the canvas #canvas @canvas-app p1. The Repos list is open on the left.](site/shots/newtask.png)
+
+## Agents are always ready to help
+
+Your agents work in the workspace you see. An agent can open a pane, run a command and check its
+own result, and flag a task when it needs you. It can read what an app pane shows; it does not
+operate your apps.
+
+Agents do this with the built-in `ottospace ctl` command:
+
+```sh
+ottospace ctl '{"cmd":"split","axis":"down"}'
+ottospace ctl '{"cmd":"task_set_state","id":1,"state":"needs_you"}'
+```
 
 ## Install
 
-Apple Silicon, macOS 14 or later:
+macOS 14 or later, on Apple silicon:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/bryan-uipath/ottospace/main/install.sh | sh
 ```
 
-This installs two commands into `~/.local/bin`, with no `sudo`:
-
-- `osi`, the ottospace installer.
-- `ottospace`, the latest build of `main`. There is no tagged release yet.
-
-Then run `ottospace` from a terminal. It uses that terminal's permissions: grant the terminal
-Accessibility and Screen Recording once (see Requirements below), and updates never ask again.
-
-`osi` installs other builds and switches between them:
+This installs two commands into `~/.local/bin`, with no `sudo`: `ottospace` (the latest build of
+`main`; there is no tagged release yet) and `osi`, its installer.
 
 ```sh
-osi install main      # the latest build of main
-osi install pr 30     # the build of a pull request. Needs gh, signed in
-osi install stable    # the latest release; osi install v0.1.0 for one release
-osi current           # what is installed: channel, version, commit, date
-osi update            # install the channel's newer build, if there is one
-osi update --check    # only say whether there is one
-osi rollback          # put the previous build back; again to undo
-osi uninstall         # remove ottospace and osi; settings and tasks are kept
-osi self-update       # replace osi with the one on main
+osi update      # install the newer build, if there is one
+osi rollback    # put the previous build back
+osi uninstall   # remove ottospace and osi; settings and tasks are kept
 ```
 
-- Every download is checked against the SHA-256 published in the same release. A failed check
-  changes nothing. The check catches a damaged or half-published download. It does not catch a
-  compromised release: whoever can replace the build can replace its checksum.
-- `install.sh` and `osi self-update` fetch `osi` from `main` over HTTPS with no checksum at all.
-  You trust this repository and GitHub, as with any `curl | sh`.
-- The new binary replaces the old one by rename. A running ottospace keeps the build it started
-  with: quit it (`ottospace ctl '{"cmd":"quit"}'` puts hosted windows back) and start it again.
-- **A pull request build runs that pull request's code with your terminal's permissions.** `osi`
-  shows the author and the head commit first. It refuses a pull request from a fork unless you
-  pass `--allow-fork` and type the commit. Read the diff before you do.
-- `ottospace --version` prints the version, the commit and the commit's date.
-- `osi` keeps its records in `~/.ottospace/install`.
+Before you run it, know this:
 
-To also get `ottospace.app` in `~/Applications`, add `--app` (with the one-liner:
-`... | OTTOSPACE_APP=1 sh`). The app has a Dock icon and its own identity, so macOS asks for both
-permissions for ottospace itself. Builds are signed ad hoc, not with a Developer ID, and not
-notarized: each build is a new identity, so expect to grant both again after every update. That
-is why the bare command is the default. A zip downloaded in a browser gets a quarantine flag and
-Gatekeeper refuses to open the app; `osi` uses `curl`, which sets no such flag. `osi` will not
-replace an `ottospace.app` it did not install (one from `scripts/bundle.sh`, say) without
-`--force`. Once it has installed the app, `osi update` keeps it at the same build as the command.
+- You trust this repository and GitHub, as with any `curl | sh`. Downloads are checked against a
+  SHA-256, which catches a damaged download, not a compromised release.
+- Builds are signed ad hoc and are not notarized.
 
-How this works and why: [docs/ai/install-and-update.md](docs/ai/install-and-update.md).
+Other builds, the app bundle, and what the checksum does and does not cover:
+[docs/install.md](docs/install.md).
 
-## What it does
+## Setup
 
-| Capability | State |
-|---|---|
-| Split panes mixing terminals and real app windows | Works today |
-| Key bindings and a status bar showing `NORMAL` / `APP` mode | Works today |
-| Control socket and `ottospace ctl` for agents and tests | Works today |
-| Terminal scrollback, mouse selection, copy and paste | Works today |
-| Visual mode: select terminal text with vi keys | Works today |
-| Other key modes: insert, sneak | Designed |
-| Tasks inbox: tasks grouped by what needs you first; snooze, hold, dismiss, undo. Kept in `~/.ottospace/tasks` | Works today |
-| "Pop next" (⌘⇧N): open the next task that needs you | Works today |
-| New task box (⌘N): one line, with `#project` and `@repo` | Works today |
-| Tasks own their tabs: opening a task shows only its tabs; the others keep running off the bar | Works today |
-| Tasks: a worktree at kickoff, a brief pane, automatic cleanup when done | Designed |
-| Quick capture (⌘⌘): turn something on screen into a task and dispatch it to an agent | Designed |
-| Focus blocks: hide Slack, with an agent that can break through | Designed |
-| Tabs, each with its own split tree | Works today |
-| Pane picker: choose a terminal or a running app for a new pane or tab | Works today |
-| Icon rail with a secondary bar; Apps lists running apps with their icons | Works today |
-| Repos: repositories and their worktrees; open a terminal in one | Works today |
-| List mode (⌘⇧E): drive the bar with the keyboard | Works today |
-| `settings.json`: terminal font, repository directories, tasks folder | Works today |
-| Fast app switcher; Workbook section | Designed |
-| TypeScript scripting, with contextual quick actions in an action deck (Zoom meeting layout, spin for stand-up) | Designed |
-| Hide private panes while screen sharing | Designed |
-| Session restore | Designed |
+Run `ottospace` from a terminal. It uses that terminal's permissions, so grant the terminal two,
+once, in System Settings > Privacy & Security:
+
+- **Accessibility**, to move app windows. ottospace exits at start without it.
+- **Screen & System Audio Recording**, to show app windows in panes. macOS asks for it at launch.
+
+A window opens on your repositories. Press ⌘D to split with a new terminal, and ⌘/ to see every key.
+
+Click an app pane and the app has the keyboard. The return key gives it back to ottospace from
+any app. It is F18, which most keyboards lack, so map Caps Lock to it:
+[the return key](docs/reference.md#the-return-key).
+
+## Learn more
+
+- [The site](https://bryan-uipath.github.io/ottospace/): the tour, and a quickstart.
+- [Cheat sheet](docs/cheat-sheet.md): one page for daily use.
+- [Reference](docs/reference.md): every key, terminals and app panes, settings, `ottospace ctl`,
+  how app windows are hosted, the roadmap.
+- [Install and update](docs/install.md): `osi`, other builds, the app bundle.
+- [Development](docs/development.md): build from source, tests, crates, CI, releasing.
+- [Agent guide](crates/ottospace/skill/guide.md): what `ottospace skill` prints for coding
+  agents. [AGENTS.md](AGENTS.md) holds the rules for working on this repository.
+- [Design notes](docs/reference.md#design-docs): the plan and the research behind it.
 
 ## Status
 
-Early prototype, macOS only. Today you can split a window into panes, run your shell in a pane,
-host another app's window in a pane, move focus by keyboard, and drive all of it over the control
-socket. Tasks, session restore and the rest of the design are not built: see the
-[plan](docs/ai/1-initial-brainstorm/plan.md).
-
-## Quick start
-
-Requirements:
-
-- macOS 14 or later.
-- A Rust toolchain (edition 2024).
-- Accessibility permission for the terminal that launches ottospace: System Settings > Privacy &
-  Security > Accessibility. The app exits at start without it.
-- Screen Recording permission for the same terminal: System Settings > Privacy & Security > Screen
-  & System Audio Recording. macOS asks for it at launch, when ottospace lists running apps.
-
-Build and run:
-
-```sh
-git clone https://github.com/bryan-uipath/ottospace
-cd ottospace
-cargo run -p ottospace
-```
-
-A window opens. Press ⌘D to open a terminal pane.
-
-### The `ottospace` command
-
-```sh
-cargo install --path crates/ottospace --bin ottospace
-ottospace
-```
-
-This puts `ottospace` on your `PATH`. It shows the Otto icon in the Dock without an app bundle,
-and uses the permissions of the terminal you run it from.
-
-### Build the app
-
-```sh
-scripts/bundle.sh
-open target/release/bundle/ottospace.app
-```
-
-This builds a release binary and wraps it as `ottospace.app` with the icon, so it has a Dock icon
-and its own identity.
-
-- Permissions attach to the app, not the terminal: macOS asks for Accessibility and Screen
-  Recording for ottospace itself.
-- The signature is ad hoc, so each rebuild is a new identity to macOS and you may have to grant
-  both again. A stable identity needs a signing certificate, which the script does not set up.
-- Opened from Finder or the Dock, terminal panes start in `/`, not your home directory.
-
-`scripts/icon.sh` regenerates the icon from the SVG. It needs Google Chrome.
-
-### Releasing
-
-1. Bump `version` in the workspace `Cargo.toml` and merge it to `main`.
-2. Tag that commit and push the tag: `git tag v0.2.0 && git push origin v0.2.0`.
-
-The release workflow runs `scripts/package.sh` and attaches four files to a GitHub Release:
-`ottospace-aarch64-apple-darwin.tar.gz` (the command), `ottospace-aarch64-apple-darwin.app.zip`
-(the app), `BUILD` (version, commit, date) and `SHA256SUMS`. It fails if the tag does not match
-the crate version. `osi install stable` then installs it.
-
-Every push to `main` publishes the same four files to the `main-latest` prerelease, whose tag
-moves to the new commit (`git fetch --tags` then reports a clobbered tag: use `--force`). Every
-pull request gets them as a workflow artifact, kept 14 days.
-
-## Using it
-
-Short version: [docs/cheat-sheet.md](docs/cheat-sheet.md).
-
-| Key | Action |
-|---|---|
-| ⌘D | Split right, new terminal |
-| ⌘⇧D | Split down, new terminal |
-| ⌘E | Pick what goes in a new pane: a terminal or a running app |
-| ⌘W | Close the focused pane |
-| ⌘⌥←/→/↑/↓ or ⌘⌥H/L/K/J | Focus the pane in that direction |
-| ⌘] / ⌘[ | Focus the next / previous pane |
-| ⌘⌃F | Zoom the window to fill the screen; again to restore |
-| ⌘⌃A | Debug: outline the focused app pane's accessibility targets (parked panes only) |
-| ⌘/ | Show every key |
-| F18 | From any app: take the keyboard back and bring ottospace forward |
-| ⌘T | New tab: pick what opens in it |
-| ⌘1 … ⌘9 | Select a tab on the bar |
-| ⌘⇧] / ⌘⇧[ or ⌃Tab / ⌃⇧Tab | Next / previous tab |
-| ⌘⇧W | Close the tab and its panes |
-| Wheel / trackpad | Scroll a terminal back through its history |
-| ⇧PageUp / ⇧PageDown | Scroll a terminal a page |
-| ⇧Home / ⇧End | Top / bottom of a terminal's history |
-| Drag / double-click / triple-click | Select text / a word / a line in a terminal |
-| ⌘C | Copy the terminal's selection (nothing selected: does nothing) |
-| ⌘V | Paste into the terminal |
-| ⌘N | New task: a box opens over the workspace. Type what needs doing; `#name` tags a project, `@name` names a repository (Tab completes both), `p1` to `p9` sets the priority. ↵ files it and closes the box; Esc closes |
-| ⌘⇧N | Next task: shows the tabs of the first task that needs you |
-| ⌘⇧E | List mode: the bar (Apps, Tasks, Repos) takes the keyboard. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; Esc or ⌘⇧E leaves |
-| ⌘⇧C | Visual mode on the terminal: `hjkl`/arrows, `w b e 0 ^ $`, `H M L` move; `v` / `V` select; `y` or ↵ copies and leaves; Esc leaves |
-
-Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
-
-A terminal pane runs your shell on a PTY. The pane closes when the shell exits. It keeps 10,000
-lines of history. Typing returns to the bottom. In programs that use the mouse or the alternate
-screen (vim, less, htop) the wheel does nothing, and ⇧PageUp and friends go to the program.
-A click on a terminal focuses it and clears its selection; a drag there selects, even in an
-unfocused pane. Paste is bracketed when the program asks for it.
-
-To put an app window in a pane, open Apps on the left rail and click the app. Apps you name in the settings are
-listed there while they are not running: a click starts one (ottospace waits up to 30 seconds for its window). It fills the focused pane if that is
-empty, otherwise it splits right. Shift-click splits down. New windows of a hosted app get their
-own pane. Original window frames are saved to disk and restored on quit or after a crash.
-
-Click an app pane to give it the keyboard (`APP` mode). If you bring a hosted app forward from outside
-(its Dock icon, ⌘Tab) and the window it shows is one ottospace holds, ottospace comes forward on
-that window's pane and gives it the keyboard, within about half a second. While the picker, the
-new-task box or the key reference is open, or in visual mode, it waits until that is closed. ottospace shortcuts do not fire in that
-mode. Press the return key, or click ottospace itself (rail, top bar, another pane), to return.
-
-The return key works while any app is frontmost. It is F18 by default; set `OTTOSPACE_RETURN_KEY`
-to another of `f13`-`f20`. If another program already holds the key, ottospace logs that and runs
-without a return key. Most keyboards have no F18, so map Caps Lock to it (lasts until restart):
-
-```sh
-hidutil property --set '{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x700000039,"HIDKeyboardModifierMappingDst":0x70000006D}]}'
-```
-
-After this, Caps Lock no longer toggles capitals anywhere. The command replaces any key mapping
-you already have. To undo it: `hidutil property --set '{"UserKeyMapping":[]}'`.
-
-## Settings
-
-ottospace keeps its files in `~/.ottospace` (another folder: set `OTTOSPACE_HOME`). It reads
-`settings.json` there at start, so a change applies the next time you start it. Every key is
-optional:
-
-```json
-{
-  "terminal": { "font": "JetBrains Mono", "font_size": 14 },
-  "repos": ["~/code", "~/notes"],
-  "tasks": "~/notes/tasks",
-  "apps": ["Microsoft Outlook", "Slack"],
-  "windows": [{ "app": "us.zoom.xos", "title": "Zoom Meeting", "do": "ignore" }]
-}
-```
-
-| Key | Meaning | Default |
-|---|---|---|
-| `terminal.font` | The terminal's font, by family name. Use a monospaced one | `Menlo` |
-| `terminal.font_size` | In points, 6 to 72 | `13` |
-| `repos` | Directories that are repositories or hold them, for the Repos section. `OTTOSPACE_REPOS` (`:` between directories) wins over it | `~/code`, `~/notes` |
-| `tasks` | Where tasks are kept, one JSON file each. A relative path is inside `~/.ottospace` | `tasks` |
-| `windows` | Rules for windows ottospace must leave alone. Each rule selects windows by `app` (the app's name or bundle id), `title` and `subrole`; every field given must match, `*` stands for any text, and case does not matter. `"do": "ignore"`: the window never becomes a pane, when its app is hosted or when it opens later. `"do": "manage"` undoes a built-in rule. Your rules come first. Name an app by its bundle id to be sure. A window is judged once, when it is first seen, on the title it has then; rules are read at start | Built in: only standard windows are ever put in a pane, and Zoom's sharing controls, annotation layer and pop-ups are ignored |
-| `apps` | Apps to offer while they are not running, by the name of the app as Finder shows it (`Visual Studio Code` for `Visual Studio Code.app`). It must be in `/Applications`, `~/Applications` or `/System/Applications` (or their `Utilities`); a name that is not found is left out. They show under "Not running" in Apps and in the picker; choosing one starts it in the background and puts its window in a pane | none |
-
-A mistake in the file (a key that does not exist, a wrong value, a font that is not installed) is
-shown in the status bar. That key takes its default and the others still apply. If the file is
-not JSON at all, every default applies.
-
-## Driving it from outside
-
-ottospace listens on a Unix socket so tests and agents can inspect and drive it. The socket is mode
-0600, at `$OTTOSPACE_SOCKET` or `$TMPDIR/ottospace.sock`. Send one JSON request per line. The reply
-is one JSON line: the full state (model, mode, pane bounds, terminal grids) or
-`{"ok":false,"error":"..."}`. `ottospace ctl` sends one request, prints the reply, and exits non-zero
-if the request was refused. `cargo run` does not put `ottospace` on your `PATH`: use the built binary.
-
-```sh
-alias ottospace=./target/debug/ottospace
-ottospace ctl '{"cmd":"split","axis":"down"}'
-ottospace ctl '{"cmd":"type","text":"ls\r"}'
-ottospace ctl '{"cmd":"open_app","name":"Safari"}'
-ottospace ctl '{"cmd":"section","section":"apps"}'
-ottospace ctl '{"cmd":"state"}'
-```
-
-`ottospace skill` prints every request with an example, and what the state fields mean. Fields are
-in `Request` in [`crates/ottospace/src/control.rs`](crates/ottospace/src/control.rs). Unknown commands and
-fields are refused.
-
-## Agent skill
-
-`ottospace skill` prints a guide for coding agents: the requests, the state fields, and rules for
-using them safely. To make it a Claude Code skill, install the stub that points at it:
-
-```sh
-mkdir -p ~/.claude/skills/ottospace
-ottospace skill --stub > ~/.claude/skills/ottospace/SKILL.md
-```
-
-The stub tells the agent to run `ottospace skill`, so the guide always matches the installed
-version. A test checks that every request shown in the guide is one the app accepts.
-
-## Development
-
-```sh
-cargo test   # core unit tests. No window.
-cargo e2e    # launches the app and drives it over the socket.
-cargo e2e-apps   # hosts real windows of the canary test app; needs both permissions.
-```
-
-Terminal panes run your login shell. Set `OTTOSPACE_SHELL` to run another program instead (the
-tests use `/bin/sh`). `cargo install` also installs the test app; use `--bin ottospace` to skip it.
-
-`cargo e2e` is an alias in `.cargo/config.toml`. Each test opens a window on a private socket. It
-sets `OTTOSPACE_E2E`, which turns window hosting off, so tests never touch your real windows.
-
-| Path | Role |
-|---|---|
-| `crates/ottospace-core` | State and rules: `Model::update(Action) -> Vec<Effect>`. Split tree, key encoding. No I/O |
-| `crates/ottospace-mac` | macOS calls: AX window control, SCK lookup, display geometry, HID clicks, crash recovery |
-| `crates/ottospace` | The app: GPUI views, terminal, control socket, `ctl` client. Turns input into `Action`s, carries out `Effect`s |
-| `harness/` | Local input test page (`python3 -m http.server 8765 -d harness`) |
-| `docs/` | Design notes |
-
-Architecture rules and the test loops are in [AGENTS.md](AGENTS.md).
-
-## How app windows are hosted
-
-macOS cannot reparent another process's window, so ottospace fakes embedding with the Accessibility
-(AX) API and ScreenCaptureKit (SCK). An inactive app window is parked off-screen with one pixel on
-a display, and its pane shows an SCK stream of it. Clicking the pane moves the real window over it
-and replays the click, so input is native. A pane shows one title bar: the stream leaves out the
-app's own, and the live window's covers the pane header. Measurements and risks: [docs/ai/hosting-windows.md](docs/ai/hosting-windows.md).
-
-## Design docs
-
-[`docs/ai/1-initial-brainstorm/`](docs/ai/1-initial-brainstorm/) holds the AI-derived notes for the
-first brainstorm:
-
-- [plan.md](docs/ai/1-initial-brainstorm/plan.md): model, phases and decisions.
-- [quick-capture.md](docs/ai/1-initial-brainstorm/quick-capture.md): quick capture and task lifecycle.
-- [screen-share-privacy.md](docs/ai/1-initial-brainstorm/screen-share-privacy.md): hiding panes from screen sharing.
-- [scripting.md](docs/ai/1-initial-brainstorm/scripting.md): scripting in TypeScript.
-- [zoom-meeting.md](docs/ai/1-initial-brainstorm/zoom-meeting.md): Zoom meeting layout and participants.
-- [zoom-ax.md](docs/ai/1-initial-brainstorm/zoom-ax.md): what a Zoom meeting exposes through accessibility, measured.
-- [accessibility.md](docs/ai/1-initial-brainstorm/accessibility.md): reading app accessibility trees, toward sneak mode and agent actions.
-- [multi-monitor.md](docs/ai/1-initial-brainstorm/multi-monitor.md): options for more than one display, and a staged recommendation. Nothing measured yet.
-- `background/`: icon and mockup images.
-
-[`docs/ai/backlog.md`](docs/ai/backlog.md) is an older backlog. `docs/ideas/` holds the owner's own
-notes.
+Early software, macOS only, built in the open. What works today and what is designed but not
+built: [the status tables and roadmap](docs/reference.md#roadmap-designed-not-built).
 
 ## License
 
