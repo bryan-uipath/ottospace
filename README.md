@@ -46,14 +46,17 @@ macOS, so you may have to grant the permissions again after an update.
 | Terminal scrollback, mouse selection, copy and paste | Works today |
 | Visual mode: select terminal text with vi keys | Works today |
 | Other key modes: insert, sneak | Designed |
+| Tasks inbox: tasks grouped by what needs you first; snooze, hold, dismiss, undo. Kept in memory only | Works today |
+| "Pop next": open the next task that needs you (socket `task_pop`; no key yet) | Works today |
 | Tasks: each owns a workspace (tabs, then splits) with a brief pane and automatic cleanup | Designed |
-| "Pop next": open the next task by priority | Designed |
 | Quick capture (⌘⌘): turn something on screen into a task and dispatch it to an agent | Designed |
 | Focus blocks: hide Slack, with an agent that can break through | Designed |
 | Tabs, each with its own split tree | Works today |
 | Pane picker: choose a terminal or a running app for a new pane or tab | Works today |
-| Icon rail with a secondary bar; Apps lists running apps | Works today |
-| Fast app switcher; Workbook, Tasks and Repos sections | Designed |
+| Icon rail with a secondary bar; Apps lists running apps with their icons | Works today |
+| Repos: repositories and their worktrees; open a terminal in one | Works today |
+| List mode (⌘⇧E): drive the bar with the keyboard | Works today |
+| Fast app switcher; Workbook section | Designed |
 | TypeScript scripting, with contextual quick actions in an action deck (Zoom meeting layout, spin for stand-up) | Designed |
 | Hide private panes while screen sharing | Designed |
 | Session restore | Designed |
@@ -147,6 +150,7 @@ the tag does not match the crate version.
 | Drag / double-click / triple-click | Select text / a word / a line in a terminal |
 | ⌘C | Copy the terminal's selection (nothing selected: does nothing) |
 | ⌘V | Paste into the terminal |
+| ⌘⇧E | List mode: the bar (Apps, Tasks, Repos) takes the keyboard. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; Esc or ⌘⇧E leaves |
 | ⌘⇧C | Visual mode on the terminal: `hjkl`/arrows, `w b e 0 ^ $`, `H M L` move; `v` / `V` select; `y` or ↵ copies and leaves; Esc leaves |
 
 Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.

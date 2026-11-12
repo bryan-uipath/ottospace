@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::layout::{Axis, Dir, Node};
+use crate::list::ListRow;
 use crate::repos::{self, Repo};
 use crate::tasks::{State, TaskId, Tasks};
 
@@ -41,6 +42,8 @@ pub enum Mode {
     Pick,
     /// A cursor in a terminal's output: keys move it and select text to copy.
     Visual,
+    /// The secondary bar: keys move over its rows and act on the selected one.
+    List,
 }
 
 /// Something the picker can put in a new pane.
@@ -239,6 +242,31 @@ pub enum Action {
     Tick {
         now: u64,
     },
+    /// Replace the Apps list with the apps the shell can host now.
+    SetApps {
+        names: Vec<String>,
+    },
+    /// Give the keyboard to the secondary bar (it opens if it is closed), or take it back.
+    FocusList,
+    LeaveList,
+    /// Move the list selection down (positive) or up. It wraps.
+    ListMove {
+        delta: i32,
+    },
+    /// Show the next (positive) or previous section, with its first row selected.
+    ListSection {
+        delta: i32,
+    },
+    /// Open the selected row: host the app, open the repository, or bring the task's tab forward.
+    ListChoose {
+        axis: Axis,
+    },
+    /// Snooze, hold or dismiss the selected row, if it is a task.
+    ListSnooze {
+        until: u64,
+    },
+    ListHold,
+    ListDismiss,
 }
 
 /// What the shell must do after an update.
@@ -293,6 +321,11 @@ pub struct Model {
     pub live: Option<PaneId>,
     /// Rail section shown in the secondary bar. `None`: the bar is closed.
     pub sidebar: Option<Section>,
+    /// The selected row, while the secondary bar has the keyboard.
+    pub list: Option<usize>,
+    /// The Apps section's list: names of the apps the shell can host.
+    #[serde(skip)]
+    pub apps: Vec<String>,
     /// The Repos section's list, as last read from disk.
     pub repos: Vec<Repo>,
     pub tasks: Tasks,
@@ -320,6 +353,8 @@ impl Default for Model {
             focused: None,
             live: None,
             sidebar: None,
+            list: None,
+            apps: Vec::new(),
             repos: Vec::new(),
             tasks: Tasks::default(),
             picker: None,
@@ -346,6 +381,8 @@ impl Model {
             Mode::App
         } else if self.visual.is_some() {
             Mode::Visual
+        } else if self.list.is_some() {
+            Mode::List
         } else {
             Mode::Normal
         }
@@ -367,6 +404,9 @@ impl Model {
             Action::Split { .. }
                 | Action::OpenRepo { .. }
                 | Action::TaskOpen { .. }
+                | Action::FocusList
+                | Action::ListSection { .. }
+                | Action::ListChoose { .. }
                 | Action::Close { .. }
                 | Action::Focus { .. }
                 | Action::FocusDir { .. }
@@ -390,13 +430,40 @@ impl Model {
         if (self.picker.is_some() && for_panes) || blocked_by_keys || blocked_by_visual {
             return effects;
         }
+        // The keyboard goes to a pane or a tab: the list gives it up.
+        let leaves_list = matches!(
+            action,
+            Action::Split { .. }
+                | Action::Focus { .. }
+                | Action::FocusDir { .. }
+                | Action::FocusCycle { .. }
+                | Action::Enter { .. }
+                | Action::NewTab
+                | Action::SelectTab { .. }
+                | Action::CycleTab { .. }
+                | Action::CloseSidebar
+                | Action::TaskOpen { .. }
+                | Action::ToggleVisual
+                | Action::LeaveList
+        );
+        if leaves_list {
+            self.list = None;
+        }
+        self.act(action, &mut effects);
+        // Rows come and go (a dismissed task, a closed app): the selection stays on a row.
+        let rows = self.list_rows().len();
+        self.list = self.list.filter(|_| self.sidebar.is_some()).map(|i| i.min(rows.saturating_sub(1)));
+        effects
+    }
+
+    fn act(&mut self, action: Action, effects: &mut Vec<Effect>) {
         match action {
             Action::Split { axis, kind } => {
-                self.leave(&mut effects);
+                self.leave(effects);
                 let id = self.add(kind, self.focused, axis);
                 effects.push(Effect::Opened(id));
             }
-            Action::Open { kind, axis, beside } => self.open(kind, axis, beside, &mut effects),
+            Action::Open { kind, axis, beside } => self.open(kind, axis, beside, effects),
             Action::SetRepos { repos } => self.repos = repos::arrange(repos),
             Action::TaskAdd { title, priority, state, tab } => drop(self.tasks.add(title, priority, state, tab)),
             Action::TaskSetState { id, state } => self.tasks.set_state(id, state),
@@ -409,14 +476,14 @@ impl Model {
                 let task = id.map_or_else(|| self.tasks.next(), |id| self.tasks.get(id));
                 let tab = task.and_then(|task| task.tab);
                 if let Some(index) = tab.and_then(|tab| self.tabs.iter().position(|t| t.id == tab)) {
-                    self.select_tab(index, &mut effects);
+                    self.select_tab(index, effects);
                 }
             }
             Action::OpenRepo { path, axis } => {
                 // Only a listed path: the list is what the user sees and can choose from.
                 if let Some(name) = self.repo_name(&path) {
                     let empty_tab = self.layout.is_none();
-                    self.open(Kind::Terminal, axis, None, &mut effects);
+                    self.open(Kind::Terminal, axis, None, effects);
                     if let Some(pane) = self.focused.and_then(|id| self.panes.iter_mut().find(|p| p.id == id)) {
                         pane.cwd = Some(path);
                     }
@@ -447,30 +514,30 @@ impl Model {
             }
             Action::Close { pane } => {
                 if let Some(id) = pane.or(self.focused) {
-                    self.close_pane(id, &mut effects);
+                    self.close_pane(id, effects);
                 }
             }
             Action::NewTab => {
-                self.leave(&mut effects);
+                self.leave(effects);
                 self.park_active();
                 self.push_tab();
             }
-            Action::SelectTab { index } => self.select_tab(index, &mut effects),
+            Action::SelectTab { index } => self.select_tab(index, effects),
             Action::CycleTab { delta } => {
                 let to = (self.active as i64 + delta as i64).rem_euclid(self.tabs.len() as i64) as usize;
-                self.select_tab(to, &mut effects);
+                self.select_tab(to, effects);
             }
             Action::CloseTab { index } => {
                 let index = index.unwrap_or(self.active);
                 if index >= self.tabs.len() {
-                    return effects;
+                    return;
                 }
-                self.leave(&mut effects);
+                self.leave(effects);
                 self.park_active();
                 let tab = self.tabs.remove(index);
                 self.tasks.forget_tab(tab.id);
                 for id in tab.layout.as_ref().map(Node::leaves).unwrap_or_default() {
-                    self.close_pane(id, &mut effects);
+                    self.close_pane(id, effects);
                 }
                 if self.tabs.is_empty() {
                     self.next_tab = 0;
@@ -482,11 +549,11 @@ impl Model {
                     self.unpark_active();
                 }
             }
-            Action::Focus { pane } => self.focus(pane, &mut effects),
+            Action::Focus { pane } => self.focus(pane, effects),
             Action::FocusDir { dir } => {
                 let to = self.focused.and_then(|from| self.layout.as_ref()?.neighbor(from, dir));
                 if let Some(to) = to {
-                    self.focus(to, &mut effects);
+                    self.focus(to, effects);
                 }
             }
             Action::FocusCycle { delta } => {
@@ -494,28 +561,76 @@ impl Model {
                 let at = self.focused.and_then(|f| order.iter().position(|id| *id == f));
                 if let Some(at) = at {
                     let to = (at as i64 + delta as i64).rem_euclid(order.len() as i64) as usize;
-                    self.focus(order[to], &mut effects);
+                    self.focus(order[to], effects);
                 }
             }
             Action::Enter { pane } => {
                 let is_app = self.pane(pane).is_some_and(|p| matches!(p.kind, Kind::App { .. }));
                 if is_app && self.live != Some(pane) {
                     // A live window over a tab that does not show its pane would cover other panes.
-                    self.show_tab_of(pane, &mut effects);
-                    self.leave(&mut effects);
+                    self.show_tab_of(pane, effects);
+                    self.leave(effects);
                     self.live = Some(pane);
                     self.focused = Some(pane);
                     effects.push(Effect::Live(pane));
                 }
             }
-            Action::Leave => self.leave(&mut effects),
+            Action::Leave => self.leave(effects),
             // The bar is ottospace's own UI, so using it takes the keyboard back.
             Action::ToggleSection { section } => {
-                self.leave(&mut effects);
+                self.leave(effects);
                 self.sidebar = (self.sidebar != Some(section)).then_some(section);
+                self.list = self.list.map(|_| 0);
+            }
+            Action::SetApps { names } => self.apps = names,
+            Action::FocusList if self.list.is_some() => self.list = None,
+            Action::FocusList => {
+                self.leave(effects);
+                self.sidebar = self.sidebar.or(Some(Section::Repos));
+                self.list = Some(0);
+            }
+            Action::LeaveList => {}
+            Action::ListMove { delta } => {
+                let rows = self.list_rows().len() as i32;
+                if let Some(at) = self.list.filter(|_| rows > 0) {
+                    self.list = Some((at as i32 + delta).rem_euclid(rows) as usize);
+                }
+            }
+            Action::ListSection { delta } => {
+                const ORDER: [Section; 4] = [Section::Apps, Section::Workbook, Section::Tasks, Section::Repos];
+                let at = ORDER.iter().position(|s| Some(*s) == self.sidebar).unwrap_or(0) as i32;
+                if self.list.is_some() {
+                    self.sidebar = Some(ORDER[(at + delta).rem_euclid(ORDER.len() as i32) as usize]);
+                    self.list = Some(0);
+                }
+            }
+            Action::ListChoose { axis } => match self.list.and_then(|at| self.list_rows().into_iter().nth(at)) {
+                // The shell hosts the window, then opens the pane; the list keeps the keys if it fails.
+                Some(ListRow::App(name)) => effects.push(Effect::HostApp { name, axis, new_tab: false }),
+                Some(ListRow::Repo(path)) => self.act(Action::OpenRepo { path, axis }, effects),
+                Some(ListRow::Task(id)) => {
+                    self.list = None;
+                    self.act(Action::TaskOpen { id: Some(id) }, effects);
+                }
+                None => {}
+            },
+            Action::ListSnooze { until } => {
+                if let Some(id) = self.selected_task() {
+                    self.tasks.snooze(id, until);
+                }
+            }
+            Action::ListHold => {
+                if let Some(id) = self.selected_task() {
+                    self.tasks.hold(id);
+                }
+            }
+            Action::ListDismiss => {
+                if let Some(id) = self.selected_task() {
+                    self.tasks.dismiss(id);
+                }
             }
             Action::OpenPicker { axis, new_tab, items } => {
-                self.leave(&mut effects);
+                self.leave(effects);
                 self.picker = Some(Picker { axis, new_tab, items, query: String::new(), selected: 0 });
             }
             Action::PickerQuery { query } => {
@@ -546,7 +661,7 @@ impl Model {
                 }
             }
             Action::PickerChoose { index } => {
-                let Some(picker) = self.picker.take() else { return effects };
+                let Some(picker) = self.picker.take() else { return };
                 let choice = picker.matches().get(index.unwrap_or(picker.selected)).copied().cloned();
                 match choice {
                     // Same rule as an app: fill the focused pane if it is empty, else split it.
@@ -555,7 +670,7 @@ impl Model {
                             self.park_active();
                             self.push_tab();
                         }
-                        self.open(Kind::Terminal, picker.axis, None, &mut effects)
+                        self.open(Kind::Terminal, picker.axis, None, effects)
                     }
                     // The shell makes the tab only once the window is in hand, so a failed
                     // host does not leave an empty tab.
@@ -573,36 +688,59 @@ impl Model {
                 if self.keys {
                     // One overlay at a time, and the overlay needs the keyboard to be dismissed.
                     self.picker = None;
-                    self.leave(&mut effects);
+                    self.leave(effects);
                 }
             }
             Action::CloseKeys => self.keys = false,
             Action::ToggleVisual => {
                 if self.visual.is_some() {
-                    self.leave_visual(&mut effects);
+                    self.leave_visual(effects);
                 } else if let Some(pane) = self.keyboard_terminal() {
                     self.visual = Some(pane);
                     effects.push(Effect::Visual { pane, on: true });
                 }
             }
-            Action::LeaveVisual => self.leave_visual(&mut effects),
+            Action::LeaveVisual => self.leave_visual(effects),
             // It draws over the parked stream; a live window would cover it.
             Action::ToggleAxOverlay => {
                 self.ax_overlay = !self.ax_overlay;
                 if self.ax_overlay {
-                    self.leave(&mut effects);
+                    self.leave(effects);
                 }
             }
             Action::CloseSidebar => {
-                self.leave(&mut effects);
+                self.leave(effects);
                 self.sidebar = None;
             }
         }
-        effects
     }
 
     /// Shows `kind` in `beside` (default: the focused pane) if that pane is empty; else splits it.
+    /// The rows of the open section, top to bottom, as the secondary bar draws them.
+    pub fn list_rows(&self) -> Vec<ListRow> {
+        match self.sidebar {
+            Some(Section::Apps) => self.apps.iter().cloned().map(ListRow::App).collect(),
+            Some(Section::Repos) => {
+                let paths = self
+                    .repos
+                    .iter()
+                    .flat_map(|r| std::iter::once(r.path.clone()).chain(r.worktrees.iter().map(|w| w.path.clone())));
+                paths.map(ListRow::Repo).collect()
+            }
+            Some(Section::Tasks) => self.tasks.inbox().into_iter().map(|(_, task)| ListRow::Task(task.id)).collect(),
+            Some(Section::Workbook) | None => Vec::new(),
+        }
+    }
+
+    fn selected_task(&self) -> Option<TaskId> {
+        match self.list.and_then(|at| self.list_rows().into_iter().nth(at)) {
+            Some(ListRow::Task(id)) => Some(id),
+            _ => None,
+        }
+    }
+
     fn open(&mut self, kind: Kind, axis: Axis, beside: Option<PaneId>, effects: &mut Vec<Effect>) {
+        self.list = None; // the new pane takes the keyboard
         // The new pane takes focus, so the live app must give the keyboard back, and visual mode ends.
         self.leave(effects);
         self.leave_visual(effects);
@@ -1073,6 +1211,82 @@ mod tests {
         m.update(Action::TaskSetState { id: 1, state: State::Running });
         m.update(Action::TaskOpen { id: None });
         assert_eq!((m.tabs.len(), m.tabs[m.active].id), (1, second));
+    }
+
+    #[test]
+    fn list_mode_moves_over_the_rows_and_opens_one() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        // The bar opens on Repos and takes the keyboard.
+        m.update(Action::FocusList);
+        assert_eq!((m.mode(), m.sidebar, m.list), (Mode::List, Some(Section::Repos), Some(0)));
+        assert_eq!(m.list_rows(), [ListRow::Repo("/code/app".into()), ListRow::Repo("/code/app-2".into())]);
+        m.update(Action::ListMove { delta: -1 }); // wraps to the last row
+        assert_eq!(m.list, Some(1));
+        // Opening the row: a terminal in the worktree, and the keyboard goes to it.
+        assert_eq!(m.update(Action::ListChoose { axis: Down }), [Effect::Opened(1)]);
+        assert_eq!((m.pane(1).unwrap().cwd.as_deref(), m.mode()), (Some("/code/app-2"), Mode::Normal));
+    }
+
+    #[test]
+    fn list_mode_acts_on_the_selected_task() {
+        let mut m = Model::default();
+        m.update(Action::NewTab);
+        let second = m.tabs[1].id;
+        m.update(Action::SelectTab { index: 0 });
+        for (title, tab) in [("a", None), ("b", Some(second)), ("c", None)] {
+            m.update(Action::TaskAdd { title: title.into(), priority: 1, state: State::NeedsYou, tab });
+        }
+        m.update(Action::ToggleSection { section: Section::Tasks });
+        m.update(Action::FocusList);
+        // Dismiss the first: the selection stays at the top, now on the next task.
+        m.update(Action::ListDismiss);
+        assert_eq!((m.list_rows(), m.list), (vec![ListRow::Task(2), ListRow::Task(3)], Some(0)));
+        // Hold the last: it stays listed (On hold); snooze it: one row left, and the selection moves up to it.
+        m.update(Action::ListMove { delta: 1 });
+        m.update(Action::ListHold);
+        m.update(Action::ListSnooze { until: 9 });
+        assert_eq!((m.list_rows(), m.list), (vec![ListRow::Task(2)], Some(0)));
+        m.update(Action::TaskUndo);
+        assert_eq!(m.tasks.get(3).map(|t| (t.state, t.snoozed_until)), Some((State::Parked, None)));
+        // Opening a task brings its tab forward and gives the keyboard back.
+        m.update(Action::ListMove { delta: -1 });
+        m.update(Action::ListMove { delta: 1 });
+        m.update(Action::ListChoose { axis: Right });
+        assert_eq!((m.active, m.mode()), (1, Mode::Normal));
+    }
+
+    #[test]
+    fn list_mode_changes_section_hosts_apps_and_ends_with_the_bar() {
+        let mut m = Model::default();
+        m.update(Action::SetApps { names: vec!["Notes".into(), "Safari".into()] });
+        m.update(Action::ToggleSection { section: Section::Repos });
+        m.update(Action::FocusList);
+        m.update(Action::ListSection { delta: 1 }); // after Repos comes Apps
+        m.update(Action::ListMove { delta: 1 });
+        assert_eq!((m.sidebar, m.list), (Some(Section::Apps), Some(1)));
+        // The shell hosts the app; until it opens a pane, the list keeps the keyboard.
+        let host = Effect::HostApp { name: "Safari".into(), axis: Right, new_tab: false };
+        assert_eq!((m.update(Action::ListChoose { axis: Right }), m.mode()), (vec![host], Mode::List));
+        // An empty section: moving and choosing do nothing.
+        m.update(Action::ListSection { delta: 1 });
+        m.update(Action::ListMove { delta: 1 });
+        assert_eq!(
+            (m.sidebar, m.list, m.update(Action::ListChoose { axis: Right })),
+            (Some(Section::Workbook), Some(0), vec![])
+        );
+        // Closing the bar, or a click on a pane, ends list mode. A second FocusList leaves too.
+        m.update(Action::CloseSidebar);
+        assert_eq!((m.mode(), m.list), (Mode::Normal, None));
+        m.update(Action::FocusList);
+        m.update(Action::FocusList);
+        assert_eq!((m.mode(), m.sidebar), (Mode::Normal, Some(Section::Repos)));
+        // Not behind the picker.
+        m.update(Action::OpenPicker { axis: Right, new_tab: false, items: vec![PickItem::Terminal] });
+        m.update(Action::FocusList);
+        assert_eq!(m.mode(), Mode::Pick);
+        m.update(Action::ClosePicker);
+        assert_eq!(m.list, None);
     }
 
     fn listed() -> Vec<Repo> {

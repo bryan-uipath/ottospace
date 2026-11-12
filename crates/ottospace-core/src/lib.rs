@@ -4,6 +4,7 @@
 pub mod ax;
 pub mod keys;
 pub mod layout;
+pub mod list;
 pub mod model;
 pub mod palette;
 pub mod repos;
