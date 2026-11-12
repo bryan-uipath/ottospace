@@ -105,9 +105,9 @@ A shell started by ottospace has `$OTTOSPACE_PANE` and `$OTTOSPACE_TAB`.
 }
 ```
 
-A mistake in the file (bad JSON, or a key that does not exist) shows in the status bar, and **every** setting
-falls back to its default until you fix the file and restart. That includes where tasks are kept: with a custom
-`tasks` folder, a typo makes the inbox look empty.
+A mistake in a key (one that does not exist, or a wrong value) shows in the status bar: that key
+takes its default and the others still apply. If the file is not a JSON object at all, every
+setting takes its default.
 
 `OTTOSPACE_REPOS` (directories, `:` between them) wins over `repos`. `OTTOSPACE_HOME` names another folder than `~/.ottospace`.
 

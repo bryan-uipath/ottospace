@@ -81,33 +81,35 @@ impl Settings {
 
     /// Reads the file's text, keeping every key that is right. One wrong key must not undo the
     /// others: with a tasks folder of one's own, falling back to every default would show an
-    /// empty inbox. Returns what is wrong, one line a key; a file that is not a JSON object
-    /// gives the defaults and one line.
+    /// empty inbox. Returns what is wrong, one line a key, each starting with the key's name.
+    /// A file that is not a JSON object gives the defaults and one line. Of a key written
+    /// twice, the last one counts.
     pub fn read(text: &str) -> (Self, Vec<String>) {
+        let text = text.trim_start_matches('\u{feff}'); // some editors start a file with this mark
         if text.trim().is_empty() {
             return (Self::default(), Vec::new());
         }
-        let keys = match serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(text) {
-            Ok(keys) => keys,
-            Err(err) => return (Self::default(), vec![err.to_string()]),
+        let mut keys = match serde_json::from_str::<serde_json::Value>(text) {
+            Ok(serde_json::Value::Object(keys)) => keys,
+            Ok(_) => return (Self::default(), vec!["the file must be a JSON object: { ... }".into()]),
+            Err(err) => return (Self::default(), vec![format!("not valid JSON: {err}")]),
         };
-        let (mut settings, mut wrong) = (Self::default(), Vec::new());
-        for (key, value) in keys {
-            // Each key by itself, through the same checks as a whole file.
+        // Each key by itself, through the same checks as a whole file. The position in the
+        // message is in the one-key copy, not the user's file: leave it out.
+        let mut wrong = Vec::new();
+        keys.retain(|key, value| {
             let alone = serde_json::json!({ key.as_str(): value }).to_string();
-            match Self::parse(&alone) {
-                Ok(read) => match key.as_str() {
-                    "terminal" => settings.terminal = read.terminal,
-                    "repos" => settings.repos = read.repos,
-                    "tasks" => settings.tasks = read.tasks,
-                    "apps" => settings.apps = read.apps,
-                    _ => {}
-                },
-                // The position is in the one-key copy, not the user's file: leave it out.
-                Err(err) => wrong.push(err.split(" at line ").next().unwrap_or(&err).to_string()),
-            }
+            let Err(err) = Self::parse(&alone) else { return true };
+            let message = err.rsplit_once(" at line ").map_or(err.as_str(), |(message, _)| message);
+            wrong.push(format!("{key}: {message}"));
+            false
+        });
+        // What is left is right key by key, so this reads it whole, with no list of keys to keep
+        // in step with the struct.
+        match Self::parse(&serde_json::Value::Object(keys).to_string()) {
+            Ok(settings) => (settings, wrong),
+            Err(err) => (Self::default(), vec![err]),
         }
-        (settings, wrong)
     }
 }
 
@@ -199,25 +201,40 @@ mod tests {
         let text =
             r#"{ "tasks": "~/notes/tasks", "terminl": {"font": "Monaco"}, "repos": "~/code", "apps": ["Slack"] }"#;
         let (settings, wrong) = Settings::read(text);
-        // The tasks folder and the apps stand; the misspelt key and the repos that are not a list are named.
+        // The tasks folder and the apps stand; each wrong key is named at the start of its line.
         assert_eq!(
             (settings.tasks.as_deref(), settings.apps.as_slice()),
             (Some("~/notes/tasks"), &["Slack".to_string()][..])
         );
         assert_eq!((settings.repos, settings.terminal), (None, Terminal::default()));
-        assert_eq!(wrong.len(), 2);
+        assert_eq!(wrong.len(), 2, "{wrong:?}");
         assert!(
-            wrong.iter().any(|w| w.contains("terminl")) && wrong.iter().any(|w| w.contains("expected a sequence")),
+            wrong.iter().any(|w| w.starts_with("terminl: ")) && wrong.iter().any(|w| w.starts_with("repos: ")),
             "{wrong:?}"
         );
-        // A wrong key inside `terminal` costs that group only.
+        assert!(wrong.iter().all(|w| !w.contains(" at line ")), "no position in a copy of the file: {wrong:?}");
+        // A wrong key inside `terminal` costs that group only; the folder rule still applies.
         let (settings, wrong) = Settings::read(r#"{"terminal": {"font_family": "Monaco"}, "tasks": "t"}"#);
         assert_eq!((settings.terminal, settings.tasks.as_deref(), wrong.len()), (Terminal::default(), Some("t"), 1));
-        // Nothing wrong, nothing reported; not JSON at all, the defaults and one line.
-        assert_eq!(Settings::read(r#"{"terminal": {"font_size": 15}}"#).1, Vec::<String>::new());
+        assert!(Settings::read(r#"{"tasks": "~"}"#).1[0].starts_with("tasks: "));
+        // Every key the struct has survives a read: none is dropped for want of a mention here.
+        let whole =
+            r#"{"terminal": {"font": "Monaco", "font_size": 15}, "repos": ["~/a"], "tasks": "t", "apps": ["Slack"]}"#;
+        assert_eq!(Settings::read(whole), (Settings::parse(whole).unwrap(), Vec::new()));
+        // Nothing written, a mark some editors add, a file that is no object, a file that is not JSON.
+        assert_eq!(Settings::read("\u{feff}{}"), (Settings::default(), Vec::new()));
         assert_eq!(Settings::read("").0, Settings::default());
+        assert_eq!(
+            Settings::read("[1]"),
+            (Settings::default(), vec!["the file must be a JSON object: { ... }".to_string()])
+        );
         let (settings, wrong) = Settings::read("{ not json");
-        assert_eq!((settings, wrong.len()), (Settings::default(), 1));
+        assert!(
+            settings == Settings::default() && wrong.len() == 1 && wrong[0].starts_with("not valid JSON"),
+            "{wrong:?}"
+        );
+        // Of a key written twice, the last one counts.
+        assert_eq!(Settings::read(r#"{"tasks": "a", "tasks": "b"}"#).0.tasks.as_deref(), Some("b"));
     }
 
     #[test]
