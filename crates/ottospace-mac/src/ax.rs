@@ -89,11 +89,24 @@ impl Window {
     }
 
     pub fn frame(&self) -> Option<CGRect> {
-        let mut origin = CGPoint::ZERO;
-        let mut size = CGSize::ZERO;
-        read_value(&self.element, "AXPosition", AXValueType::CGPoint, &mut origin)?;
-        read_value(&self.element, "AXSize", AXValueType::CGSize, &mut size)?;
-        Some(CGRect { origin, size })
+        frame_of(&self.element)
+    }
+
+    /// Frame of the element the attribute `name` points to, e.g. "AXCloseButton", "AXTitleUIElement".
+    pub fn part(&self, name: &str) -> Option<CGRect> {
+        let element = copy_attr(&self.element, name)?.downcast::<AXUIElement>().ok()?;
+        frame_of(&element)
+    }
+
+    /// Whether a direct child has the role `role` (e.g. "AXToolbar"). None: children unreadable.
+    pub fn has_child(&self, role: &str) -> Option<bool> {
+        let children = copy_attr(&self.element, "AXChildren")?.downcast::<CFArray>().ok()?;
+        let children = unsafe { CFRetained::cast_unchecked::<CFArray<AXUIElement>>(children) };
+        Some(children.iter().any(|child| {
+            copy_attr(&child, "AXRole")
+                .and_then(|r| r.downcast::<CFString>().ok())
+                .is_some_and(|r| r.to_string() == role)
+        }))
     }
 
     /// Moves the window; returns where it actually landed (macOS may clamp).
@@ -101,6 +114,14 @@ impl Window {
         write_value(&self.element, "AXPosition", AXValueType::CGPoint, &mut point)?;
         Ok(self.frame().map_or(point, |f| f.origin))
     }
+}
+
+fn frame_of(element: &AXUIElement) -> Option<CGRect> {
+    let mut origin = CGPoint::ZERO;
+    let mut size = CGSize::ZERO;
+    read_value(element, "AXPosition", AXValueType::CGPoint, &mut origin)?;
+    read_value(element, "AXSize", AXValueType::CGSize, &mut size)?;
+    Some(CGRect { origin, size })
 }
 
 fn copy_attr(element: &AXUIElement, name: &str) -> Option<CFRetained<CFType>> {

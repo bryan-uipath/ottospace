@@ -17,6 +17,38 @@ Input forwarding to parked windows is a dead end: Chrome ignores `CGEventPostToP
 on screen (tried window-under-pointer fields, private window-local location, HID-state source).
 So interaction means: place the real window over the pane, then replay the click at HID level.
 
+## One title bar per pane
+
+An app pane shows one bar. Parked: the stream starts below the app's title bar
+(`SCStreamConfiguration::with_source_rect`), so only ottospace's header shows; the window is
+parked that much taller, so its content is pane-sized. Live: the window is raised by the bar's
+height, so its own bar covers the pane header and its content lines up with the pane's. Apps
+without a plain title bar keep the old behaviour: no crop, no raise.
+
+Rule (`ottospace_core::titlebar::height`): crop only when AX reports a close button and an
+`AXTitleUIElement`, no `AXToolbar` child, a title no taller than the button + 4pt, and the title
+centred in the strip the button implies (bar = 2 × button offset + button height, 16–40pt).
+Any failed read means no crop.
+
+Measured 2026-11-11, macOS 26, attributes read with System Events (frames relative to window top):
+
+| Window | Close button | Title element | Toolbar child | Result |
+|---|---|---|---|---|
+| ottospace-canary (GPUI) | y+8, 16pt | y+8, 16pt | no | crop 32 |
+| Terminal | y+8, 16pt | y+8, 16pt | no | crop 32 |
+| Finder (unified toolbar) | y+18, 16pt | y+0, 52pt | yes, 52pt | none |
+| Activity Monitor (toolbar) | y+18, 16pt | y+0, 52pt | yes, 52pt | none |
+| Chrome (tabs in title bar) | y+12, 16pt | none | no | none |
+| VS Code (Electron) | y+9, 16pt | none | no | none |
+| Spotify (CEF) | y+24, 16pt | none | no | none |
+
+Safari and Slack were not running. The pane content sits `bar − 29`pt (at least 2pt) below the
+header, so a raised 32pt bar covers the pane's border and header exactly and no more. A pane
+whose raised window would reach above ottospace's top bar gets no crop (`titlebar::crop`); with
+the inset that cannot happen, and since the top bar is below the menu bar, neither can a raised
+window going under the menu bar. Not hidden: while live, the app's real title bar shows,
+including the purple pill macOS draws in it while the window is captured.
+
 ## Probe results
 
 `cargo run -p probe -- "Google Chrome" 5` prints frames/sec by SCK status for on-screen → sliver →
