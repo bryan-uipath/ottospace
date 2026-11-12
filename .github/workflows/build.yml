@@ -91,13 +91,16 @@ jobs:
           TAG: main-latest
         run: |
           set -euo pipefail
-          # A run that finishes late must not replace a newer build.
-          tip="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
-          if [ "$tip" != "$GITHUB_SHA" ]; then
-            echo "main is at $tip, this build is $GITHUB_SHA: not publishing."
-            exit 0
+          # A run that finishes late must not replace a newer build: publish only when this
+          # commit is ahead of the published one. No tag yet: the first publish.
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --silent 2>/dev/null; then
+            rel="$(gh api "repos/$GITHUB_REPOSITORY/compare/$TAG...$GITHUB_SHA" --jq .status)"
+            if [ "$rel" != ahead ]; then
+              echo "$GITHUB_SHA is not ahead of $TAG ($rel): not publishing."
+              exit 0
+            fi
           fi
-          notes="Built from main at $GITHUB_SHA. Replaced on every push to main. Install: \`osi install main\` (see the README)."
+          notes="Built from main at $GITHUB_SHA. Replaced on every push to main. Install: \`osi install main\` (see docs/install.md)."
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             # Move the tag, then replace the assets. osi checks every file against SHA256SUMS,
             # so an install during the replacement fails and changes nothing.
