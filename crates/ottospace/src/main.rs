@@ -86,21 +86,18 @@ impl SCStreamOutputTrait for Output {
     }
 }
 
-/// Stream config for a pane of `size` points at `scale` (Retina = 2). Scales the window to fill it.
-/// `crop` > 0: show only the window below its top `crop` points (the title bar), unscaled.
+/// Stream config for a pane of `size` points at `scale` (Retina = 2). Shows the pane-sized part
+/// of the window from its top left, below its top `crop` points (the title bar), never scaled:
+/// a window that refused the pane's size (Outlook's minimum) looks as it does when it is live.
 fn stream_config(size: CGSize, crop: f64, scale: f64) -> SCStreamConfiguration {
     // 420f is the only format gpui's surface renderer accepts.
-    let config = SCStreamConfiguration::new()
+    SCStreamConfiguration::new()
         .with_width((size.width * scale).max(1.0) as u32)
         .with_height((size.height * scale).max(1.0) as u32)
         .with_scales_to_fit(true)
         .with_pixel_format(PixelFormat::YCbCr_420f)
-        .with_fps(60);
-    if crop > 0.0 {
-        config.with_source_rect(screencapturekit::cg::CGRect::new(0.0, crop, size.width, size.height))
-    } else {
-        config
-    }
+        .with_fps(60)
+        .with_source_rect(screencapturekit::cg::CGRect::new(0.0, crop, size.width, size.height))
 }
 
 fn to_cg(size: gpui::Size<Pixels>) -> CGSize {

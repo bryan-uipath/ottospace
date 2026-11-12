@@ -181,19 +181,17 @@ pub struct Labelled {
 
 /// A hosted window's interactive nodes as targets. `window` is its frame (global) when read;
 /// `crop` the title-bar height cut off its stream; `content` the pane area showing the rest, in
-/// ottospace window coordinates. The stream fills the pane, so a window that refused the pane's
-/// size is scaled. Nodes the pane does not show (e.g. traffic lights in a cropped bar) are left out.
+/// ottospace window coordinates. The stream shows the window unscaled from its top left, as the
+/// live window sits, so a window that refused the pane's size is cut off or leaves a gap. Nodes
+/// the pane does not show (e.g. traffic lights in a cropped bar) are left out.
 pub fn app_targets(pane: PaneId, root: &Node, window: Frame, crop: f64, content: Frame) -> Vec<Target> {
     let window = Frame { y: window.y + crop, h: window.h - crop, ..window };
-    let sx = if window.w > 0.0 { content.w / window.w } else { 1.0 };
-    let sy = if window.h > 0.0 { content.h / window.h } else { 1.0 };
     flatten(root)
         .into_iter()
         .filter(|f| is_interactive(f.node))
         .filter_map(|f| {
             let g = f.node.frame?;
-            let (x, y) = (content.x + (g.x - window.x) * sx, content.y + (g.y - window.y) * sy);
-            let frame = Frame { x, y, w: g.w * sx, h: g.h * sy };
+            let frame = Frame { x: content.x + g.x - window.x, y: content.y + g.y - window.y, ..g };
             let source = Source::App { pane, path: f.path, role: f.node.role.clone() };
             // Clipped to the pane, so a partly scrolled-out control is labelled where it shows.
             frame.intersects(&content).then(|| Target { frame: frame.clip(&content), source })
@@ -328,8 +326,8 @@ mod tests {
     }
 
     #[test]
-    fn app_targets_scale_when_the_window_kept_its_own_size() {
-        // A fixed-size 200x150 window streamed into a 400x300 pane: everything doubles.
+    fn a_window_that_kept_its_own_size_is_not_scaled() {
+        // A fixed-size 200x150 window in a 400x300 pane sits at the pane's top left, as it is.
         let tree = node(
             "AXWindow",
             &[],
@@ -343,12 +341,32 @@ mod tests {
             0.,
             Frame { x: 10., y: 0., w: 400., h: 300. },
         );
-        assert_eq!(got[0].frame, Frame { x: 110., y: 40., w: 20., h: 20. });
+        assert_eq!(got[0].frame, Frame { x: 60., y: 20., w: 10., h: 10. });
+    }
+
+    #[test]
+    fn a_window_larger_than_the_pane_is_cut_off_not_shrunk() {
+        // Outlook refuses to be narrower than 800: a 400x300 pane shows its top-left 400x300.
+        let tree = node(
+            "AXWindow",
+            &[],
+            [0., 0., 800., 600.],
+            vec![
+                node("AXButton", &["AXPress"], [50., 20., 10., 10.], vec![]),
+                node("AXButton", &["AXPress"], [390., 20., 20., 10.], vec![]), // crosses the pane's edge
+                node("AXButton", &["AXPress"], [700., 500., 10., 10.], vec![]), // beyond the pane
+            ],
+        );
+        let window = Frame { x: 0., y: 0., w: 800., h: 600. };
+        let got = app_targets(1, &tree, window, 0., Frame { x: 10., y: 0., w: 400., h: 300. });
+        assert_eq!(got.iter().filter_map(app_path).collect::<Vec<_>>(), [[0], [1]]);
+        assert_eq!(got[0].frame, Frame { x: 60., y: 20., w: 10., h: 10. });
+        assert_eq!(got[1].frame, Frame { x: 400., y: 20., w: 10., h: 10. }, "the visible part");
     }
 
     #[test]
     fn a_cropped_title_bar_shifts_targets_up_and_hides_its_own_controls() {
-        // A 200x182 window with a 32pt bar: its 200x150 content fills a 400x300 pane at (60, 30).
+        // A 200x182 window with a 32pt bar: its 200x150 content starts at the pane's top left (60, 30).
         let tree = node(
             "AXWindow",
             &[],
@@ -362,8 +380,8 @@ mod tests {
         let window = Frame { x: 100., y: 50., w: 200., h: 182. };
         let got = app_targets(1, &tree, window, 32., Frame { x: 60., y: 30., w: 400., h: 300. });
         assert_eq!(got.iter().filter_map(app_path).collect::<Vec<_>>(), [[1], [2]]);
-        assert_eq!(got[0].frame, Frame { x: 80., y: 50., w: 20., h: 20. });
-        assert_eq!(got[1].frame, Frame { x: 160., y: 30., w: 20., h: 26. }, "the visible part");
+        assert_eq!(got[0].frame, Frame { x: 70., y: 40., w: 10., h: 10. });
+        assert_eq!(got[1].frame, Frame { x: 110., y: 30., w: 10., h: 13. }, "the visible part");
     }
 
     #[test]
