@@ -291,6 +291,7 @@ const KEYS_DRAG: &[(&str, &str)] = &[
     ("Drag a pane's header", "Onto a pane's edge: split there"),
     ("", "Onto its centre: swap the two"),
     ("", "Onto a tab: move it there · Esc cancels"),
+    ("", "A live app is parked: click it to go back in"),
 ];
 const KEYS_TABS: &[(&str, &str)] = &[
     ("⌘T", "New tab: pick what opens in it"),
@@ -417,9 +418,6 @@ struct Workspace {
     dragging: Option<PaneId>,
     /// During a pane drag: the pane under the pointer and the zone of it a drop would land on.
     drop_at: Option<(PaneId, Zone)>,
-    /// The app pane that was live when a pane drag began. It was parked so its window does not
-    /// cover the drop zones; it goes live again when the drag ends.
-    relive: Option<PaneId>,
     /// The last text copied. E2E runs use it as the clipboard, so tests never touch the user's.
     copied: Option<String>,
     system_clipboard: bool,
@@ -605,7 +603,6 @@ impl Workspace {
             cell: terminal::cell_size(window),
             dragging: None,
             drop_at: None,
-            relive: None,
             copied: None,
             system_clipboard: std::env::var_os("OTTOSPACE_E2E").is_none(),
             cells: HashMap::new(),
@@ -1513,7 +1510,7 @@ impl Workspace {
         // Esc during a pane drag cancels it.
         if key.key == "escape" && cx.has_active_drag() {
             cx.stop_active_drag(window);
-            self.pane_drag_end(window, cx);
+            cx.notify();
             cx.stop_propagation();
             return;
         }
@@ -1606,9 +1603,8 @@ impl Workspace {
 
     /// A pane drag moved: note the drop zone under the pointer, to draw it and to drop there.
     fn pane_drag_move(&mut self, source: PaneId, at: gpui::Point<Pixels>, window: &Window, cx: &mut Context<Self>) {
-        // A live window would cover its pane's drop zones: park it for the length of the drag.
-        if let Some(live) = self.model.live {
-            self.relive = Some(live);
+        // A live window would cover its pane's drop zones: park it. A click makes it live again.
+        if self.model.live.is_some() {
             self.dispatch(Action::Leave, window, cx);
         }
         let drop_at = self.drop_zone(source, at);
@@ -1625,15 +1621,6 @@ impl Workspace {
         let (id, bounds) = drawn.iter().filter(|id| **id != source).find_map(under)?;
         let local = at - bounds.origin;
         Some((id, Zone::at(local.x / bounds.size.width, local.y / bounds.size.height)))
-    }
-
-    /// A pane drag ended, by a drop, a release elsewhere or Esc: the pane parked for it goes live again.
-    fn pane_drag_end(&mut self, window: &Window, cx: &mut Context<Self>) {
-        self.drop_at = None;
-        if let Some(pane) = self.relive.take() {
-            self.dispatch(Action::Enter { pane }, window, cx);
-        }
-        cx.notify();
     }
 
     /// The terminal cell under a window position, from the same bounds the grid is painted in.
@@ -2459,6 +2446,8 @@ impl Workspace {
                     .hover(|s| s.text_color(rgb(theme::ERROR)))
                     .child("×")
                     .child(self.controls.mark(format!("close:{id}")))
+                    // The press must not reach the header: an unsteady click would start a drag.
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _, window, cx| this.close_pane(id, window, cx))),
             );
         let content = if let Some(hosted) = self.hosted.get(&id) {
@@ -2559,7 +2548,6 @@ impl Workspace {
                 if let Some((target, zone)) = zone {
                     this.dispatch(Action::DropPane { source: dragged.0, target, zone }, window, cx);
                 }
-                this.pane_drag_end(window, cx);
             }))
             // The drop indicator: the half an edge drop would take, or the whole pane for a swap.
             .children(self.drop_at.filter(|(target, _)| *target == id && cx.has_active_drag()).map(|(_, zone)| {
@@ -2667,7 +2655,6 @@ impl Workspace {
                             .drag_over::<DraggedPane>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
                             .on_drop(cx.listener(move |this, dragged: &DraggedPane, window, cx| {
                                 this.dispatch(Action::MovePane { pane: Some(dragged.0), tab: place }, window, cx);
-                                this.pane_drag_end(window, cx);
                             }))
                             .h_full()
                             .pl_3()
@@ -2945,6 +2932,11 @@ impl Render for Workspace {
             self.frames.entry(pane.id).or_default();
         }
         self.controls.begin();
+        // The pane drag is over, however it ended (a drop, Esc, a release outside the window):
+        // no drop zone may stay drawn.
+        if !cx.has_active_drag() {
+            self.drop_at = None;
+        }
         let tree = self.model.layout.as_ref().map(|root| self.render_node(root, cx));
         // Only while the tab on show has no panes. Its lines are built once and kept: a frame
         // that moves nothing (a terminal printing in another tab) only paints them again.
@@ -2964,16 +2956,7 @@ impl Render for Workspace {
                 this.pane_drag_move(e.drag(cx).0, e.event.position, window, cx);
             }))
             // A release ends the drag, so a later drag elsewhere does not extend this selection.
-            // A pane released over no pane and no tab goes nowhere.
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
-                    this.dragging = None;
-                    if this.drop_at.is_some() || this.relive.is_some() {
-                        this.pane_drag_end(window, cx);
-                    }
-                }),
-            )
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.dragging = None))
             // Any click leaves visual mode first, before the clicked element acts: visual mode has no
             // backdrop, and e.g. a click on an app pane must go live, not be replayed while blocked.
             .capture_any_mouse_down(cx.listener(|this, _, window, cx| {

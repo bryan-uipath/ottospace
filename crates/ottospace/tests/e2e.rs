@@ -232,8 +232,7 @@ fn a_dropped_pane_splits_or_swaps_where_it_lands() {
     otto.call(json!({"cmd": "split", "kind": "empty"}));
     let reply = otto.call(json!({"cmd": "drop_pane", "source": 1, "target": 4, "zone": "left"}));
     assert_eq!(reply["tab_panes"], json!([[2, 3], [1, 4]]));
-    let [one, four] = otto.bounds(&[1, 4])[..] else { panic!("two panes") };
-    assert!(one[0] + one[2] <= four[0], "1 is left of 4: {one:?} {four:?}");
+    otto.wait_for("1 left of 4", |o| Some(o.bounds(&[1, 4])).filter(|b| b[0][0] + b[0][2] <= b[1][0]));
 
     for bad in [
         r#"{"cmd":"drop_pane","source":1,"target":1,"zone":"left"}"#,

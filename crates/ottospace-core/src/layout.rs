@@ -102,6 +102,20 @@ impl Node {
         }
     }
 
+    /// True if leaf `new` already sits beside leaf `at` as `split(at, new, axis, before)` would
+    /// put it: the two are the halves of one split on `axis`, in that order.
+    pub fn is_split(&self, at: u32, new: u32, axis: Axis, before: bool) -> bool {
+        let (first, second) = if before { (new, at) } else { (at, new) };
+        match self {
+            Node::Leaf(_) => false,
+            Node::Split { axis: on, a, b, .. } => {
+                (*on == axis && **a == Node::Leaf(first) && **b == Node::Leaf(second))
+                    || a.is_split(at, new, axis, before)
+                    || b.is_split(at, new, axis, before)
+            }
+        }
+    }
+
     /// Removes leaf `id`; its sibling takes the parent's place. `None` once the tree is empty.
     pub fn remove(self, id: u32) -> Option<Node> {
         match self {

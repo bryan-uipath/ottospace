@@ -1333,10 +1333,15 @@ impl Model {
                 return self.focus(source, effects);
             }
         };
-        self.detach(source);
-        let trees = std::iter::once(&mut self.layout).chain(self.tabs.iter_mut().map(|tab| &mut tab.layout));
-        for tree in trees.flatten() {
-            tree.split(target, source, axis, before);
+        // Already there: taking it out and putting it back would reset the split's ratio.
+        let here = |tree: &Node| tree.is_split(target, source, axis, before);
+        let parked = self.tabs.iter().filter_map(|tab| tab.layout.as_ref());
+        if !self.layout.iter().chain(parked).any(here) {
+            self.detach(source);
+            let trees = std::iter::once(&mut self.layout).chain(self.tabs.iter_mut().map(|tab| &mut tab.layout));
+            for tree in trees.flatten() {
+                tree.split(target, source, axis, before);
+            }
         }
         self.focus(source, effects);
     }
@@ -2493,6 +2498,21 @@ mod tests {
         m.update(Action::DropPane { source: 9, target: 2, zone: Zone::Center });
         assert_eq!(tree(&m), split("right", leaf(1), split("down", leaf(3), leaf(2))));
         assert_eq!(ids(&m), [1, 2, 3]);
+    }
+
+    #[test]
+    fn a_pane_dropped_where_it_already_is_keeps_the_splits_size() {
+        let mut m = Model::default();
+        term(&mut m);
+        term(&mut m);
+        m.update(Action::Resize { dir: Dir::Left });
+        // 2 is already the right half of the 1|2 split, and 1 the left: only focus moves.
+        m.update(Action::DropPane { source: 2, target: 1, zone: Zone::Right });
+        m.update(Action::DropPane { source: 1, target: 2, zone: Zone::Left });
+        assert_eq!((shares(&m), m.focused), (vec![(1, 45.0), (2, 55.0)], Some(1)));
+        // The other side is a real move: a new split, at equal halves.
+        m.update(Action::DropPane { source: 2, target: 1, zone: Zone::Left });
+        assert_eq!(shares(&m), [(2, 50.0), (1, 50.0)]);
     }
 
     #[test]

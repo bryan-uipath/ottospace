@@ -117,8 +117,12 @@ ottospace ctl '{"cmd":"drop_pane","source":3,"target":1,"zone":"center"}'
   still names the tab its shell started in.
 - `drop_pane` does what dragging pane `source` by its header onto pane `target` does. `zone` is
   `left`, `right`, `top` or `bottom`: `target` is split in two and `source` takes that side. Or
-  `center`: the two trade places. The panes may be in different tabs. `source` takes focus and
-  its tab comes forward. It fails if either pane does not exist or they are the same pane.
+  `center`: the two trade places. `source` takes focus and its tab comes forward. It fails if
+  either pane does not exist or they are the same pane. Unlike `move_pane`, it is not limited to
+  the tabs on the bar: the panes may be in different tabs, also tabs of another task, and then
+  that task's tabs come on show (`state.current_task` changes). A pane dropped where it already
+  is keeps its split's `ratio`. The user's own drag parks a live app; `drop_pane` leaves a live
+  `source` live.
 
 Terminals:
 
