@@ -45,8 +45,9 @@ permission story is the same Accessibility grant we already need.
 
 ## 5. Session restore
 
-Re-host the previous session's windows into panes on launch (reuse `recovery`'s hosted list; also
-write it on clean quit). Today startup only restores leftover windows to their original frames.
+Designed in [session-restore.md](session-restore.md): layout first, then terminal content and
+app windows, then per-app state. Today startup only gives leftover windows their original frames
+back.
 
 ## 6. Routines and agents
 
