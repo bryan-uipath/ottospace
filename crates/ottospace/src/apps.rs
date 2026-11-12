@@ -76,7 +76,7 @@ impl Workspace {
         } else if !known {
             Err(format!("{name} is not an app found on this Mac"))
         } else {
-            self.launch(Installed { name: name.into(), path: path.into() }, axis, new_tab)
+            self.launch(Installed { name: name.into(), path: path.into() }, axis, new_tab, None)
         };
         self.error = started.err();
     }

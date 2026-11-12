@@ -10,7 +10,7 @@ use crate::hosted::{self, Fit, Stuck};
 use crate::keys::Mods;
 use crate::layout::{Axis, Dir, Node, Rect, Zone};
 use crate::list::ListRow;
-use crate::marks::{self, Extra, Field, MarkId, MarkInput, MarkOf, MarkRef, Marks, Need};
+use crate::marks::{self, Extra, MarkId, MarkInput, MarkOf, MarkRef, Marks, Need};
 use crate::repos::{self, Repo};
 use crate::sessions::{self, Found};
 use crate::settings::{Installed, closed_apps};
@@ -635,7 +635,7 @@ pub enum Action {
     /// Start typing a mark's name or letter in its row.
     MarkEdit {
         mark: MarkRef,
-        field: Field,
+        field: marks::Field,
     },
     /// Typed text, for whatever a mark waits for.
     MarkType {
@@ -647,7 +647,7 @@ pub enum Action {
     MarkCancel,
     /// `MarkEdit` for the selected row, if it is a mark.
     ListMarkEdit {
-        field: Field,
+        field: marks::Field,
     },
     /// Move the selected mark down (positive) or up the list. On any other row: `ListMove`.
     ListReorder {
@@ -2993,12 +2993,12 @@ mod tests {
             Action::MarksChecked { missing: Vec::new() },
             Action::Fill { pane: 1, kind: app(1) },
             Action::MarkPrefix,
-            Action::MarkEdit { mark: MarkRef::Place(0), field: Field::Name },
+            Action::MarkEdit { mark: MarkRef::Place(0), field: marks::Field::Name },
             Action::MarkType { text: text() },
             Action::MarkBackspace,
             Action::MarkSubmit,
             Action::MarkCancel,
-            Action::ListMarkEdit { field: Field::Key },
+            Action::ListMarkEdit { field: marks::Field::Key },
             Action::ListReorder { delta: 1 },
         ];
         let mut places: Vec<usize> = samples.iter().map(index).collect();
