@@ -2516,6 +2516,46 @@ mod tests {
     }
 
     #[test]
+    fn a_drop_on_an_empty_pane_splits_or_swaps_it_and_leaves_it_empty() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Empty });
+        term(&mut m);
+        m.update(Action::NewTab);
+        term(&mut m);
+        // An edge of the empty pane 1: 3 lands beside it. It is not put into it, as `Open` would.
+        m.update(Action::DropPane { source: 3, target: 1, zone: Zone::Bottom });
+        assert_eq!(m.tab_panes(), [vec![1, 3, 2], vec![]]);
+        assert_eq!((m.pane(1).map(|p| &p.kind), m.focused), (Some(&Kind::Empty), Some(3)));
+        // The centre: the empty pane trades places like any other, and can be the one dragged.
+        m.update(Action::DropPane { source: 2, target: 1, zone: Zone::Center });
+        m.update(Action::DropPane { source: 1, target: 3, zone: Zone::Left });
+        assert_eq!((m.tab_panes()[0].clone(), m.focused), (vec![2, 1, 3], Some(1)));
+        assert_eq!(ids(&m), [1, 2, 3]);
+    }
+
+    #[test]
+    fn a_drop_leaves_the_home_screen_and_a_tab_it_empties_shows_it() {
+        let mut m = Model::default();
+        term(&mut m);
+        term(&mut m);
+        m.update(Action::NewTab);
+        // The tab on show has no panes: the home screen. A drop between panes of the other tab
+        // (the socket can name them) brings that tab forward.
+        assert!(m.home(&[]).is_some());
+        m.update(Action::DropPane { source: 2, target: 1, zone: Zone::Top });
+        assert_eq!((m.active, m.focused, m.home(&[]).is_none()), (0, Some(2), true));
+        // The only pane of a tab dropped in another tab: the view follows the pane, and the tab
+        // it left is the home screen when it is shown again.
+        m.update(Action::SelectTab { index: 1 });
+        term(&mut m);
+        m.update(Action::DropPane { source: 3, target: 1, zone: Zone::Right });
+        assert_eq!((m.tab_panes(), m.active), (vec![vec![2, 1, 3], vec![]], 0));
+        assert!(m.home(&[]).is_none());
+        m.update(Action::SelectTab { index: 1 });
+        assert!(m.home(&[]).is_some());
+    }
+
+    #[test]
     fn a_pane_dropped_on_the_centre_swaps_and_a_live_app_stays_live() {
         let mut m = Model::default();
         m.update(Action::Open { kind: app(1), axis: Right, beside: None });
