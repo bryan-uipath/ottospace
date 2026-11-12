@@ -46,7 +46,7 @@ macOS, so you may have to grant the permissions again after an update.
 | Terminal scrollback, mouse selection, copy and paste | Works today |
 | Visual mode: select terminal text with vi keys | Works today |
 | Other key modes: insert, sneak | Designed |
-| Tasks inbox: tasks grouped by what needs you first; snooze, hold, dismiss, undo. Kept in memory only | Works today |
+| Tasks inbox: tasks grouped by what needs you first; snooze, hold, dismiss, undo. Kept in `~/.ottospace/tasks` | Works today |
 | "Pop next": open the next task that needs you (socket `task_pop`; no key yet) | Works today |
 | Tasks: each owns a workspace (tabs, then splits) with a brief pane and automatic cleanup | Designed |
 | Quick capture (⌘⌘): turn something on screen into a task and dispatch it to an agent | Designed |
@@ -56,6 +56,7 @@ macOS, so you may have to grant the permissions again after an update.
 | Icon rail with a secondary bar; Apps lists running apps with their icons | Works today |
 | Repos: repositories and their worktrees; open a terminal in one | Works today |
 | List mode (⌘⇧E): drive the bar with the keyboard | Works today |
+| `settings.json`: terminal font, repository directories, tasks folder | Works today |
 | Fast app switcher; Workbook section | Designed |
 | TypeScript scripting, with contextual quick actions in an action deck (Zoom meeting layout, spin for stand-up) | Designed |
 | Hide private panes while screen sharing | Designed |
@@ -178,6 +179,30 @@ hidutil property --set '{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x70
 
 After this, Caps Lock no longer toggles capitals anywhere. The command replaces any key mapping
 you already have. To undo it: `hidutil property --set '{"UserKeyMapping":[]}'`.
+
+## Settings
+
+ottospace keeps its files in `~/.ottospace` (another folder: set `OTTOSPACE_HOME`). It reads
+`settings.json` there at start, so a change applies the next time you start it. Every key is
+optional:
+
+```json
+{
+  "terminal": { "font": "JetBrains Mono", "font_size": 14 },
+  "repos": ["~/code", "~/notes"],
+  "tasks": "~/notes/tasks"
+}
+```
+
+| Key | Meaning | Default |
+|---|---|---|
+| `terminal.font` | The terminal's font, by family name. Use a monospaced one | `Menlo` |
+| `terminal.font_size` | In points, 6 to 72 | `13` |
+| `repos` | Directories that are repositories or hold them, for the Repos section. `OTTOSPACE_REPOS` (`:` between directories) wins over it | `~/code`, `~/notes` |
+| `tasks` | Where tasks are kept, one JSON file each. A relative path is inside `~/.ottospace` | `tasks` |
+
+A mistake in the file (a key that does not exist, bad JSON, a font that is not installed) is shown
+in the status bar, and the default applies.
 
 ## Driving it from outside
 

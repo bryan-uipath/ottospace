@@ -59,6 +59,8 @@ ottospace ctl '{"cmd":"state"}'
 | `state.sidebar` | The open rail section, or null |
 | `terminals.<id>` | `cols`, `rows`, and `lines`: the visible text of that terminal pane. Also `history` (lines scrolled off the top), `display_offset` (how far the view is scrolled back; 0 is the bottom), `selection` (the selected text, or null) and `visual_cursor` |
 | `copied` | The text of the last copy |
+| `font`, `cell` | The terminal font in use (`name`, `size`) and the size of one character cell `[w, h]` in points |
+| `notice` | Null, or the problem the status bar shows (a mistake in the settings, an app that could not be hosted). It is not `error`, which means the request failed |
 | `apps` | Running apps that `open_app` can host: `name`, `windows` (how many it has open) and `icon` (true if its icon was read) |
 | `state.tasks.list` | Every task: `id`, `title`, `state`, `priority`, `snoozed_until`, `dismissed`, `tab` |
 | `inbox`, `needs_you` | The tasks the Tasks section lists, in order, each with its `group`; and how many are under `needs_you` |
@@ -101,7 +103,8 @@ ottospace ctl '{"cmd":"open_repo","path":"/Users/me/code/app-2","axis":"down"}'
 ```
 
 `repos` reads the list from disk again; it is `state.repos` in every reply. It holds the
-repositories in the directories named by `$OTTOSPACE_REPOS` (default `~/code` and `~/notes`), each
+repositories in the directories named by `$OTTOSPACE_REPOS`, else by `repos` in the user's
+`~/.ottospace/settings.json` (default `~/code` and `~/notes`), each
 with its git worktrees. `open_repo` opens a terminal whose shell starts in a repository or
 worktree: it fills the focused pane if that is empty, else splits it. `path` must be a `path` from
 `state.repos`; any other path is refused. A tab with no panes takes the repository's name.
@@ -147,7 +150,9 @@ States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stal
   last of the three, one step, unless the task's state was reported since. A request for a task
   id that does not exist is refused.
 - A task whose tab is closed keeps going without a tab.
-- Tasks are kept in memory only: they are gone when ottospace quits.
+- Tasks are kept on disk (`~/.ottospace/tasks`, one file each) and come back at the next start,
+  without their `tab`. Change tasks through these requests, not by editing the files: the running
+  app does not read them again.
 
 Reading a terminal pane:
 

@@ -34,8 +34,12 @@ impl Otto {
             .env("OTTOSPACE_SHELL", "/bin/sh")
             // Never inherit hosting from the caller's shell: this suite must not move real windows.
             .env_remove("OTTOSPACE_HOST_ONLY")
-            // Never list the user's own repositories unless a test names a directory.
-            .env("OTTOSPACE_REPOS", "")
+            // Never list the user's own repositories unless a test names a directory, here or in
+            // the settings of a folder it made.
+            .env_remove("OTTOSPACE_REPOS")
+            .envs((!env.iter().any(|(name, _)| *name == "OTTOSPACE_HOME")).then_some(("OTTOSPACE_REPOS", "")))
+            // Never read the user's settings or tasks: `OTTOSPACE_E2E` without a folder keeps nothing.
+            .env_remove("OTTOSPACE_HOME")
             .envs(env.iter().copied())
             .spawn()
             .expect("launch ottospace");
@@ -359,6 +363,110 @@ fn list_mode_drives_the_bar_with_the_keyboard() {
     assert_eq!(otto.call(json!({"cmd": "split", "axis": "down"}))["mode"], "normal");
 }
 
+/// A fresh folder to pass as `OTTOSPACE_HOME`, with `settings` as its `settings.json`.
+fn user_folder(name: &str, settings: &str) -> PathBuf {
+    let home = std::env::temp_dir().join(format!("ottospace-e2e-home-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("settings.json"), settings).unwrap();
+    home
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn tasks_are_kept_between_runs() {
+    let home = user_folder("tasks", r#"{"repos": []}"#); // no repositories: not the user's own
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let titles = |o: &Otto| -> Vec<(String, String)> {
+        let rows = o.call(json!({"cmd": "task_list"}))["inbox"].as_array().unwrap().clone();
+        rows.iter().map(|r| (r["group"].as_str().unwrap().into(), r["title"].as_str().unwrap().into())).collect()
+    };
+    let before = {
+        let otto = Otto::launch_with("keep-1", &env);
+        otto.call(json!({"cmd": "task_add", "title": "question", "priority": 1, "state": "needs_you", "tab": 1}));
+        otto.call(json!({"cmd": "task_add", "title": "idea"}));
+        otto.call(json!({"cmd": "task_add", "title": "later", "state": "needs_you"}));
+        otto.call(json!({"cmd": "task_hold", "id": 2}));
+        otto.call(json!({"cmd": "task_snooze", "id": 3, "seconds": 3600}));
+        // One file a task, written as it changes. The tab is not kept: it ends with the run.
+        let file: Value = serde_json::from_str(&std::fs::read_to_string(home.join("tasks/1.json")).unwrap()).unwrap();
+        assert_eq!(
+            (&file["title"], &file["state"], &file["tab"]),
+            (&json!("question"), &json!("needs_you"), &Value::Null)
+        );
+        titles(&otto)
+    }; // the app is killed here, with no chance to save on the way out
+    assert_eq!(before, [("needs_you".into(), "question".into()), ("on_hold".into(), "idea".into())]);
+
+    // Files that are not a task of their number are passed over, and reported: text that is not
+    // a task, a copy of task 1 under another name, and a task file too broken to read.
+    std::fs::write(home.join("tasks/notes.json"), "not a task").unwrap();
+    std::fs::copy(home.join("tasks/1.json"), home.join("tasks/1 copy.json")).unwrap();
+    std::fs::write(home.join("tasks/9.json"), r#"{"id": 9, "title": "half written"#).unwrap();
+    let otto = Otto::launch_with("keep-2", &env);
+    assert_eq!(titles(&otto), before, "the same inbox, snooze and hold included");
+    let state = otto.call(json!({"cmd": "state"}));
+    assert!(state["notice"].as_str().is_some_and(|e| e.contains("could not be read")), "{}", state["notice"]);
+    assert!(state["notice"].as_str().is_some_and(|e| e.contains("3 file(s)")), "{}", state["notice"]);
+    // Ids go on from the highest number in the folder, so the broken 9.json is not overwritten.
+    assert_eq!(otto.call(json!({"cmd": "task_add", "title": "new"}))["task"]["id"], 10);
+    assert!(std::fs::read_to_string(home.join("tasks/9.json")).unwrap().contains("half written"));
+    // The file is the user's alone.
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(std::fs::metadata(home.join("tasks/10.json")).unwrap().permissions().mode() & 0o777, 0o600);
+    // A title too long to read back is refused. The start-up notice outlives a later request.
+    let long = otto.raw(&json!({"cmd": "task_add", "title": "x".repeat(501)}).to_string());
+    assert_eq!(long["ok"], false);
+    assert!(otto.call(json!({"cmd": "state"}))["notice"].as_str().is_some());
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn settings_choose_the_font_the_repos_and_the_tasks_folder() {
+    // Defaults: Menlo 13, rows 18 points high.
+    let plain = Otto::launch("settings-none");
+    let state = plain.call(json!({"cmd": "state"}));
+    assert_eq!(
+        (&state["font"], &state["cell"][1], &state["notice"]),
+        (&json!({"name": "Menlo", "size": 13.0}), &json!(18.0), &Value::Null)
+    );
+    drop(plain);
+
+    let home = user_folder("settings", "");
+    std::fs::create_dir_all(home.join("src/app/.git")).unwrap();
+    std::fs::write(home.join("src/app/.git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    let settings = json!({
+        "terminal": {"font": "Monaco", "font_size": 16},
+        "repos": [home.join("src")],
+        "tasks": "elsewhere",
+    });
+    std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let otto = Otto::launch_with("settings-set", &env);
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!((&state["font"], &state["cell"][1]), (&json!({"name": "Monaco", "size": 16.0}), &json!(22.0)));
+    assert_eq!(state["state"]["repos"][0]["name"], "app");
+    otto.call(json!({"cmd": "task_add", "title": "kept elsewhere"}));
+    assert!(home.join("elsewhere/1.json").is_file(), "a relative tasks folder is inside the user's folder");
+    drop(otto);
+
+    // A mistake in the file: the defaults apply and the status bar says what is wrong.
+    std::fs::write(home.join("settings.json"), r#"{"terminal": {"font_family": "Monaco"}}"#).unwrap();
+    let otto = Otto::launch_with("settings-bad", &env);
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!(state["font"]["name"], "Menlo");
+    assert!(state["notice"].as_str().is_some_and(|e| e.contains("font_family")), "{}", state["notice"]);
+    drop(otto);
+    // A font that is not installed: Menlo, at the size asked for.
+    std::fs::write(home.join("settings.json"), r#"{"terminal": {"font": "No Such Font", "font_size": 15}}"#).unwrap();
+    let otto = Otto::launch_with("settings-font", &env);
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!(state["font"], json!({"name": "Menlo", "size": 15.0}));
+    assert!(state["notice"].as_str().is_some_and(|e| e.contains("not installed")), "{}", state["notice"]);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// Terminal 1's entry in the state dump.
 fn term1(o: &Otto) -> Value {
     o.call(json!({"cmd": "state"}))["terminals"]["1"].clone()
@@ -619,6 +727,8 @@ fn bad_requests_are_refused_and_quit_exits() {
     let mut other = Command::new(env!("CARGO_BIN_EXE_ottospace"))
         .env("OTTOSPACE_E2E", "1")
         .env("OTTOSPACE_SOCKET", &file)
+        .env_remove("OTTOSPACE_HOME") // never the user's settings or tasks
+        .env("OTTOSPACE_REPOS", "")
         .spawn()
         .expect("launch ottospace");
     std::thread::sleep(Duration::from_millis(1500));

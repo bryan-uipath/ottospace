@@ -25,6 +25,8 @@ Rules:
 - **Outer loop:** `cargo e2e`. Launches the real app and drives it over the control socket
   (`crates/ottospace/tests/e2e.rs`). Use it for anything the core cannot prove: drawing, layout
   bounds, key bindings, socket protocol.
+- An E2E run reads no `settings.json` and keeps no tasks on disk, unless the test names its own
+  folder with `OTTOSPACE_HOME`. Tests must never read or write the user's `~/.ottospace`.
 - E2E runs set `OTTOSPACE_E2E`, which turns window hosting off. Tests must never move the
   user's real windows.
 - E2E windows float above other windows, because GPUI does not draw a fully covered window and

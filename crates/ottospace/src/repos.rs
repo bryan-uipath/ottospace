@@ -5,15 +5,9 @@ use std::path::{Path, PathBuf};
 
 use ottospace_core::repos::{Repo, Worktree, branch_of, name_of, worktree_path};
 
-/// Where to look: `$OTTOSPACE_REPOS` (directories, `:` between them), else `~/code` and `~/notes`.
-/// Each directory is a repository itself, or holds repositories one level down.
+/// Where to look. Each directory is a repository itself, or holds repositories one level down.
 pub fn roots() -> Vec<PathBuf> {
-    match std::env::var_os("OTTOSPACE_REPOS") {
-        Some(list) => std::env::split_paths(&list).filter(|p| !p.as_os_str().is_empty()).collect(),
-        None => std::env::var_os("HOME")
-            .map(|home| vec![Path::new(&home).join("code"), Path::new(&home).join("notes")])
-            .unwrap_or_default(),
-    }
+    crate::config::repo_roots()
 }
 
 /// Every repository under `roots()`, unsorted. The core arranges the list.

@@ -5,6 +5,13 @@ use serde::{Deserialize, Serialize};
 
 pub type TaskId = u32;
 
+/// The highest id a kept task may have. A file that claims more is not a task of ours, and
+/// counting on from it would run out of numbers.
+pub const MAX_ID: TaskId = 1_000_000_000;
+
+/// The longest title, in characters. It keeps a task's file small enough to read back.
+pub const MAX_TITLE: usize = 500;
+
 /// Where a task is in its life. See `quick-capture.md` for the full lifecycle.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -43,19 +50,28 @@ impl Group {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+/// Also the shape of a task's file on disk; fields a hand-written file leaves out take a default.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Task {
     pub id: TaskId,
     pub title: String,
     pub state: State,
     /// 1 is most urgent. Shown as P1, P2, ...
+    #[serde(default = "default_priority")]
     pub priority: u8,
     /// Hidden from the inbox until this time (milliseconds since 1970).
+    #[serde(default)]
     pub snoozed_until: Option<u64>,
     /// Taken out of the inbox by the user. The task itself goes on.
+    #[serde(default)]
     pub dismissed: bool,
     /// The `id` of the tab that is this task's workspace, if it has one.
+    #[serde(default)]
     pub tab: Option<u32>,
+}
+
+fn default_priority() -> u8 {
+    3
 }
 
 impl State {
@@ -121,6 +137,20 @@ impl Tasks {
 
     pub fn needs_you(&self) -> usize {
         self.list.iter().filter(|t| t.group() == Some(Group::NeedsYou)).count()
+    }
+
+    /// Starts from the tasks kept on disk. Tabs do not outlive a session, so no task has one;
+    /// of two tasks with one id the first is kept. New ids go on after the highest, and after
+    /// `floor`: the highest id among files that could not be read, so none of them is overwritten.
+    pub fn restore(&mut self, mut tasks: Vec<Task>, floor: TaskId) {
+        tasks.retain(|task| (1..=MAX_ID).contains(&task.id));
+        tasks.sort_by_key(|task| task.id);
+        tasks.dedup_by_key(|task| task.id);
+        for task in &mut tasks {
+            (task.tab, task.priority) = (None, task.priority.clamp(1, 9));
+        }
+        self.next_id = tasks.last().map_or(0, |task| task.id).max(floor.min(MAX_ID));
+        (self.list, self.undo) = (tasks, None);
     }
 
     pub fn add(&mut self, title: String, priority: u8, state: State, tab: Option<u32>) -> TaskId {
@@ -341,6 +371,32 @@ mod tests {
             (tasks.add("a".into(), 1, State::Running, Some(1)), tasks.add("b".into(), 1, State::Running, Some(2)));
         tasks.forget_tab(1);
         assert_eq!((tasks.get(a).and_then(|t| t.tab), tasks.get(b).and_then(|t| t.tab)), (None, Some(2)));
+    }
+
+    #[test]
+    fn restored_tasks_keep_their_place_and_new_ids_go_on() {
+        let task = |id, title: &str, tab| Task {
+            id,
+            title: title.into(),
+            state: State::NeedsYou,
+            priority: 2,
+            snoozed_until: None,
+            dismissed: false,
+            tab,
+        };
+        let mut tasks = Tasks::default();
+        tasks.restore(vec![task(7, "late", Some(3)), task(2, "early", None), task(7, "twin", None)], 0);
+        assert_eq!(titles(&tasks), [(Group::NeedsYou, "early"), (Group::NeedsYou, "late")]);
+        assert_eq!(tasks.get(7).and_then(|t| t.tab), None, "a tab of the last session means nothing now");
+        assert_eq!(tasks.add("new".into(), 3, State::Captured, None), 8);
+        // A file that could not be read keeps its number: new ids go on after it too.
+        tasks.restore(vec![task(2, "early", None), task(0, "no id", None), task(u32::MAX, "not ours", None)], 40);
+        assert_eq!((tasks.list.len(), tasks.add("after".into(), 3, State::Captured, None)), (1, 41));
+        tasks.restore(Vec::new(), u32::MAX);
+        assert_eq!(tasks.add("capped".into(), 3, State::Captured, None), MAX_ID + 1);
+        // A file written by hand may leave fields out.
+        let read: Task = serde_json::from_str(r#"{"id":1,"title":"by hand","state":"captured"}"#).unwrap();
+        assert_eq!((read.priority, read.snoozed_until, read.dismissed), (3, None, false));
     }
 
     #[test]
