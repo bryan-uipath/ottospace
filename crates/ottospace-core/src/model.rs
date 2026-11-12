@@ -143,6 +143,22 @@ pub enum Action {
     FocusCycle {
         delta: i32,
     },
+    /// Move the boundary of the nearest split around the focused pane one step toward `dir`.
+    Resize {
+        dir: Dir,
+    },
+    /// The focused pane trades places with its neighbour on that side. Focus stays on it.
+    SwapDir {
+        dir: Dir,
+    },
+    /// Move a pane (default: the focused one) to the tab at place `tab` on the tab bar, beside
+    /// that tab's focused pane. The tab comes forward with the pane focused.
+    MovePane {
+        pane: Option<PaneId>,
+        tab: usize,
+    },
+    /// Even out the splits of the active tab.
+    Equalize,
     /// Hand the keyboard to an app pane.
     Enter {
         pane: PaneId,
@@ -467,6 +483,10 @@ impl Model {
                 | Action::Focus { .. }
                 | Action::FocusDir { .. }
                 | Action::FocusCycle { .. }
+                | Action::Resize { .. }
+                | Action::SwapDir { .. }
+                | Action::MovePane { .. }
+                | Action::Equalize
                 | Action::Enter { .. }
                 | Action::ToggleSection { .. }
                 | Action::CloseSidebar
@@ -504,6 +524,7 @@ impl Model {
                 | Action::Focus { .. }
                 | Action::FocusDir { .. }
                 | Action::FocusCycle { .. }
+                | Action::MovePane { .. }
                 | Action::Enter { .. }
                 | Action::NewTab
                 | Action::SelectTab { .. }
@@ -702,6 +723,28 @@ impl Model {
                 if let Some(at) = at {
                     let to = (at as i64 + delta as i64).rem_euclid(order.len() as i64) as usize;
                     self.focus(order[to], effects);
+                }
+            }
+            Action::Resize { dir } => {
+                if let (Some(pane), Some(layout)) = (self.focused, &mut self.layout) {
+                    layout.resize(pane, dir);
+                }
+            }
+            Action::SwapDir { dir } => {
+                let to = self.focused.and_then(|from| Some((from, self.layout.as_ref()?.neighbor(from, dir)?)));
+                if let (Some((from, to)), Some(layout)) = (to, &mut self.layout) {
+                    layout.swap(from, to);
+                }
+            }
+            Action::MovePane { pane, tab } => {
+                let to = self.visible_tabs().get(tab).copied();
+                if let (Some(id), Some(to)) = (pane.or(self.focused), to) {
+                    self.move_pane(id, to, effects);
+                }
+            }
+            Action::Equalize => {
+                if let Some(layout) = &mut self.layout {
+                    layout.equalize();
                 }
             }
             Action::Enter { pane } => {
@@ -1080,10 +1123,24 @@ impl Model {
         self.unpark_active();
     }
 
-    /// Removes a pane from whichever tab holds it.
-    fn close_pane(&mut self, id: PaneId, effects: &mut Vec<Effect>) {
-        let Some(i) = self.panes.iter().position(|p| p.id == id) else { return };
-        let closed = self.panes.remove(i);
+    /// Moves a pane to the tab at index `to`, beside that tab's focused pane, and shows it there.
+    fn move_pane(&mut self, id: PaneId, to: usize, effects: &mut Vec<Effect>) {
+        let from = self.tab_panes().iter().position(|panes| panes.contains(&id));
+        if from.is_none() || from == Some(to) {
+            return;
+        }
+        self.detach(id);
+        self.select_tab(to, effects);
+        self.layout = Some(match self.layout.take() {
+            Some(root) => root.insert(self.focused, id, Axis::Right),
+            None => Node::Leaf(id),
+        });
+        // Takes the keyboard back from an app that is live in this tab.
+        self.focus(id, effects);
+    }
+
+    /// Takes a pane out of whichever tab's tree holds it. Focus there goes to the newest pane left.
+    fn detach(&mut self, id: PaneId) {
         self.layout = self.layout.take().and_then(|root| root.remove(id));
         for tab in &mut self.tabs {
             tab.layout = tab.layout.take().and_then(|root| root.remove(id));
@@ -1091,15 +1148,22 @@ impl Model {
                 tab.focused = tab.layout.as_ref().and_then(|l| l.leaves().into_iter().max());
             }
         }
+        if self.focused == Some(id) {
+            // The newest pane left in this tab, not in some other tab.
+            self.focused = self.layout.as_ref().and_then(|l| l.leaves().into_iter().max());
+        }
+    }
+
+    /// Removes a pane from whichever tab holds it.
+    fn close_pane(&mut self, id: PaneId, effects: &mut Vec<Effect>) {
+        let Some(i) = self.panes.iter().position(|p| p.id == id) else { return };
+        let closed = self.panes.remove(i);
+        self.detach(id);
         if self.live == Some(id) {
             self.live = None;
         }
         if self.visual == Some(id) {
             self.visual = None;
-        }
-        if self.focused == Some(id) {
-            // The newest pane left in this tab, not in some other tab.
-            self.focused = self.layout.as_ref().and_then(|l| l.leaves().into_iter().max());
         }
         effects.push(Effect::Closed(closed));
     }
@@ -1803,6 +1867,92 @@ mod tests {
         term(&mut m);
         m.update(Action::Focus { pane: 1 });
         assert_eq!((m.active, m.focused), (0, Some(1)));
+    }
+
+    fn shares(m: &Model) -> Vec<(PaneId, f32)> {
+        let unit = crate::layout::Rect { x: 0.0, y: 0.0, w: 1.0, h: 1.0 };
+        let rects = m.layout.as_ref().map(|l| l.rects(unit)).unwrap_or_default();
+        rects.into_iter().map(|(id, r)| (id, (r.w * 100.0).round())).collect()
+    }
+
+    #[test]
+    fn resize_and_equalize_act_on_the_focused_panes_splits() {
+        let mut m = Model::default();
+        term(&mut m);
+        term(&mut m);
+        m.update(Action::Resize { dir: Dir::Left });
+        assert_eq!(shares(&m), [(1, 45.0), (2, 55.0)]);
+        // Behind the key reference the layout waits, as other pane actions do.
+        m.update(Action::ToggleKeys);
+        m.update(Action::Resize { dir: Dir::Left });
+        m.update(Action::ToggleKeys);
+        assert_eq!(shares(&m), [(1, 45.0), (2, 55.0)]);
+        m.update(Action::Equalize);
+        assert_eq!(shares(&m), [(1, 50.0), (2, 50.0)]);
+    }
+
+    #[test]
+    fn swap_trades_places_with_the_neighbour_and_keeps_focus_and_the_keyboard() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        term(&mut m);
+        m.update(Action::Enter { pane: 1 });
+        // The live app pane moves right; it stays live, so the shell re-places its window.
+        assert_eq!(m.update(Action::SwapDir { dir: Dir::Right }), []);
+        assert_eq!(m.layout.as_ref().unwrap().leaves(), [2, 1]);
+        assert_eq!((m.focused, m.live), (Some(1), Some(1)));
+        // No neighbour on that side: nothing moves.
+        m.update(Action::SwapDir { dir: Dir::Right });
+        assert_eq!(m.layout.as_ref().unwrap().leaves(), [2, 1]);
+    }
+
+    #[test]
+    fn a_pane_moves_to_another_tab_on_the_bar_and_takes_focus_there() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        term(&mut m);
+        m.update(Action::NewTab);
+        term(&mut m);
+        m.update(Action::SelectTab { index: 0 });
+        m.update(Action::Enter { pane: 1 });
+        // The live window is parked before its pane leaves the tab on show.
+        assert_eq!(m.update(Action::MovePane { pane: None, tab: 1 }), [Effect::Parked(1)]);
+        assert_eq!((m.active, m.focused, m.live), (1, Some(1), None));
+        assert_eq!(m.tab_panes(), [vec![2], vec![3, 1]]);
+        // Its own tab, or a place with no tab: nothing happens.
+        m.update(Action::MovePane { pane: None, tab: 1 });
+        m.update(Action::MovePane { pane: None, tab: 7 });
+        assert_eq!(m.tab_panes(), [vec![2], vec![3, 1]]);
+        // A named pane in a background tab comes to the tab on show. The tab it leaves keeps
+        // its place on the bar, empty, as when its last pane is closed.
+        m.update(Action::MovePane { pane: Some(2), tab: 1 });
+        assert_eq!((m.tabs.len(), m.active, m.focused), (2, 1, Some(2)));
+        assert_eq!(m.tab_panes(), [vec![], vec![3, 1, 2]]);
+        m.update(Action::SelectTab { index: 0 });
+        assert_eq!((m.layout.is_none(), m.focused), (true, None));
+        // A pane that arrives beside a live app takes focus, so the app gives the keyboard back.
+        m.update(Action::SelectTab { index: 1 });
+        m.update(Action::NewTab);
+        term(&mut m);
+        m.update(Action::Enter { pane: 1 });
+        assert_eq!(m.update(Action::MovePane { pane: Some(4), tab: 1 }), [Effect::Parked(1)]);
+        assert_eq!((m.active, m.focused, m.live), (1, Some(4), None));
+    }
+
+    #[test]
+    fn a_pane_moves_only_among_the_tabs_of_the_task_on_show() {
+        let mut m = Model::default();
+        term(&mut m);
+        m.update(Action::TaskAdd { title: "fix".into(), priority: 3, state: State::Captured, tab: None });
+        let task = m.tasks.list[0].id;
+        m.update(Action::TaskOpen { id: Some(task) });
+        term(&mut m);
+        m.update(Action::NewTab);
+        term(&mut m);
+        // Place 0 on the bar is the task's first tab, not the tab of no task.
+        m.update(Action::MovePane { pane: None, tab: 0 });
+        assert_eq!(m.tab_panes(), [vec![1], vec![2, 3], vec![]]);
+        assert_eq!((m.active, m.current_task), (1, Some(task)));
     }
 
     #[test]

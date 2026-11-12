@@ -47,6 +47,22 @@ pub enum Request {
     FocusCycle {
         delta: i32,
     },
+    /// Moves the boundary of the nearest split around the focused pane one step toward `dir`.
+    Resize {
+        dir: Dir,
+    },
+    /// The focused pane trades places with its neighbour on that side.
+    Swap {
+        dir: Dir,
+    },
+    /// Moves a pane (default: the focused one) to the tab at place `tab` on the tab bar, from 0.
+    MovePane {
+        #[serde(default)]
+        pane: Option<PaneId>,
+        tab: usize,
+    },
+    /// Evens out the splits of the active tab.
+    Equalize,
     OpenApp {
         name: String,
         #[serde(default)]

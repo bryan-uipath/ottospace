@@ -20,7 +20,8 @@ use gpui::{
     ContentMask, Context, Div, ElementId, FocusHandle, FontWeight, ImageSource, KeyBinding, KeyDownEvent, Keystroke,
     Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Resource, ScrollDelta, ScrollHandle,
     ScrollWheelEvent, SharedString, Size, Stateful, Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions,
-    actions, black, canvas, div, img, point, prelude::*, px, quad, rgb, size, surface, svg, transparent_black,
+    actions, black, canvas, div, img, point, prelude::*, px, quad, relative, rgb, size, surface, svg,
+    transparent_black,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::keys::{self, Mods};
@@ -274,6 +275,12 @@ const KEYS_MOVE: &[(&str, &str)] = &[
     ("⌘⌥ arrows", "Pane in that direction"),
     ("⌘⌥ H J K L", "The same, on the home row"),
 ];
+const KEYS_ARRANGE: &[(&str, &str)] = &[
+    ("⌘⌃ arrows / H J K L", "Resize: move the split that way"),
+    ("⌘⌃=", "Even out the splits"),
+    ("⌘⇧⌥ arrows / H J K L", "Swap with the pane that way"),
+    ("⌘⇧⌥1 … ⌘⇧⌥9", "Move the pane to a tab (US layout)"),
+];
 const KEYS_TABS: &[(&str, &str)] = &[
     ("⌘T", "New tab: pick what opens in it"),
     ("⌘1 … ⌘9", "Go to a tab"),
@@ -372,6 +379,8 @@ actions!(
         Zoom, NewTab, NextTab, PrevTab, CloseTab, ShowKeys, AxOverlay
     ]
 );
+// Pane arrangement.
+actions!(ottospace, [ResizeLeft, ResizeRight, ResizeUp, ResizeDown, SwapLeft, SwapRight, SwapUp, SwapDown, Equalize]);
 // Terminal selection.
 actions!(ottospace, [CopySelection, PasteText, VisualMode, ListMode, NewTask, NextTask]);
 // App menu.
@@ -741,6 +750,18 @@ impl Workspace {
                 Request::Focus { pane } => Some(Action::Focus { pane }),
                 Request::FocusDir { dir } => Some(Action::FocusDir { dir }),
                 Request::FocusCycle { delta } => Some(Action::FocusCycle { delta }),
+                Request::Resize { dir } => Some(Action::Resize { dir }),
+                Request::Swap { dir } => Some(Action::SwapDir { dir }),
+                Request::MovePane { pane: Some(pane), .. } if self.model.pane(pane).is_none() => {
+                    failure = Some(format!("no pane {pane}"));
+                    None
+                }
+                Request::MovePane { tab, .. } if tab >= self.model.visible_tabs().len() => {
+                    failure = Some(format!("no tab at place {tab} on the tab bar"));
+                    None
+                }
+                Request::MovePane { pane, tab } => Some(Action::MovePane { pane, tab }),
+                Request::Equalize => Some(Action::Equalize),
                 Request::Enter { pane } => Some(Action::Enter { pane }),
                 Request::Leave => Some(Action::Leave),
                 Request::Section { section } => Some(Action::ToggleSection { section }),
@@ -1405,6 +1426,16 @@ impl Workspace {
             cx.stop_propagation();
             return;
         }
+        // ⌘⇧⌥1..9 move the focused pane to a tab. GPUI gives no physical key, so the shifted
+        // characters are trusted on a US layout only (see `move_to_tab_key`).
+        let m = key.modifiers;
+        let us_layout = matches!(cx.keyboard_layout().id(), "com.apple.keylayout.US" | "com.apple.keylayout.ABC");
+        let place = keys::move_to_tab_key(&key.key, m.shift, us_layout);
+        if let Some(tab) = place.filter(|_| m.platform && m.alt && !m.control) {
+            self.dispatch(Action::MovePane { pane: None, tab }, window, cx);
+            cx.stop_propagation();
+            return;
+        }
         // ⌘1..⌘9 select a tab.
         if key.modifiers.platform
             && let Some(digit) = key.key.parse::<usize>().ok().filter(|d| (1..=9).contains(d))
@@ -1695,7 +1726,8 @@ impl Workspace {
                     .flex_col()
                     .gap_4()
                     .child(group("PANES", rows(KEYS_PANES)))
-                    .child(group("MOVE", rows(KEYS_MOVE))),
+                    .child(group("MOVE", rows(KEYS_MOVE)))
+                    .child(group("ARRANGE", rows(KEYS_ARRANGE))),
             )
             .child(div().flex().flex_col().gap_4().child(group("TABS", rows(KEYS_TABS))).child(group(
                 "WINDOW",
@@ -2384,22 +2416,29 @@ impl Workspace {
             .child(body)
     }
 
-    /// Leaves render as panes; splits as a row (`Right`) or column (`Down`) of two equal halves.
+    /// Leaves render as panes; splits as a row (`Right`) or column (`Down`), `a` taking `ratio` of it.
     fn render_node(&self, node: &Node, cx: &mut Context<Self>) -> AnyElement {
         match node {
             Node::Leaf(id) => match self.model.pane(*id) {
                 Some(pane) => self.render_pane(pane, cx).into_any_element(),
                 None => div().into_any_element(),
             },
-            Node::Split { axis, a, b } => div()
-                .flex_1()
-                .size_full()
-                .overflow_hidden()
-                .flex()
-                .when(*axis == Axis::Down, |d| d.flex_col())
-                .child(self.render_node(a, cx))
-                .child(self.render_node(b, cx))
-                .into_any_element(),
+            Node::Split { axis, ratio, a, b } => {
+                let down = *axis == Axis::Down;
+                // `a` gets its share of the split; `b` takes what is left.
+                let first = div().flex_none().flex().overflow_hidden();
+                let first = if down { first.w_full().h(relative(*ratio)) } else { first.h_full().w(relative(*ratio)) };
+                let second = div().flex_1().min_w_0().min_h_0().flex().overflow_hidden();
+                div()
+                    .flex_1()
+                    .size_full()
+                    .overflow_hidden()
+                    .flex()
+                    .when(down, |d| d.flex_col())
+                    .child(first.child(self.render_node(a, cx)))
+                    .child(second.child(self.render_node(b, cx)))
+                    .into_any_element()
+            }
         }
     }
 
@@ -2805,6 +2844,33 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &FocusDown, window, cx| {
                 this.dispatch(Action::FocusDir { dir: Dir::Down }, window, cx);
             }))
+            .on_action(cx.listener(|this, _: &ResizeLeft, window, cx| {
+                this.dispatch(Action::Resize { dir: Dir::Left }, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ResizeRight, window, cx| {
+                this.dispatch(Action::Resize { dir: Dir::Right }, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ResizeUp, window, cx| {
+                this.dispatch(Action::Resize { dir: Dir::Up }, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ResizeDown, window, cx| {
+                this.dispatch(Action::Resize { dir: Dir::Down }, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SwapLeft, window, cx| {
+                this.dispatch(Action::SwapDir { dir: Dir::Left }, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SwapRight, window, cx| {
+                this.dispatch(Action::SwapDir { dir: Dir::Right }, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SwapUp, window, cx| {
+                this.dispatch(Action::SwapDir { dir: Dir::Up }, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SwapDown, window, cx| {
+                this.dispatch(Action::SwapDir { dir: Dir::Down }, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &Equalize, window, cx| {
+                this.dispatch(Action::Equalize, window, cx);
+            }))
             .child(self.render_top(cx))
             .child(
                 div()
@@ -2949,6 +3015,25 @@ fn main() {
             KeyBinding::new("cmd-alt-j", FocusDown, None),
             KeyBinding::new("cmd-]", FocusNext, None),
             KeyBinding::new("cmd-[", FocusPrev, None),
+            // Resize the focused pane's split, and even all splits out.
+            KeyBinding::new("cmd-ctrl-left", ResizeLeft, None),
+            KeyBinding::new("cmd-ctrl-right", ResizeRight, None),
+            KeyBinding::new("cmd-ctrl-up", ResizeUp, None),
+            KeyBinding::new("cmd-ctrl-down", ResizeDown, None),
+            KeyBinding::new("cmd-ctrl-h", ResizeLeft, None),
+            KeyBinding::new("cmd-ctrl-l", ResizeRight, None),
+            KeyBinding::new("cmd-ctrl-k", ResizeUp, None),
+            KeyBinding::new("cmd-ctrl-j", ResizeDown, None),
+            KeyBinding::new("cmd-ctrl-=", Equalize, None),
+            // Swap the focused pane with its neighbour. ⌘⇧⌥1..9 move it to a tab (`key_down`).
+            KeyBinding::new("cmd-shift-alt-left", SwapLeft, None),
+            KeyBinding::new("cmd-shift-alt-right", SwapRight, None),
+            KeyBinding::new("cmd-shift-alt-up", SwapUp, None),
+            KeyBinding::new("cmd-shift-alt-down", SwapDown, None),
+            KeyBinding::new("cmd-shift-alt-h", SwapLeft, None),
+            KeyBinding::new("cmd-shift-alt-l", SwapRight, None),
+            KeyBinding::new("cmd-shift-alt-k", SwapUp, None),
+            KeyBinding::new("cmd-shift-alt-j", SwapDown, None),
             // Fill the screen without leaving the Space (see `zoom_instead_of_fullscreen`).
             KeyBinding::new("cmd-ctrl-f", Zoom, None),
             // Debug: outline the focused app pane's accessibility tree.

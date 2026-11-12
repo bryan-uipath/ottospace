@@ -91,6 +91,20 @@ fn named(key: &str, mods: Mods, app_cursor: bool) -> Option<Vec<u8>> {
     Some(meta(mods.alt, text.as_bytes().to_vec()))
 }
 
+/// The tab place (from 0) that ⌘⇧⌥ and a digit-row key ask for. macOS reports the shifted
+/// character with shift taken out, and it differs by layout, so `!@#$%^&*(` counts only on a
+/// US layout (`us_layout`). A digit with shift still reported counts on any: the `key` request
+/// sends that. Anything else is `None`: no move is better than a move to the wrong tab.
+pub fn move_to_tab_key(key: &str, shift: bool, us_layout: bool) -> Option<usize> {
+    let mut chars = key.chars();
+    let (Some(c), None) = (chars.next(), chars.next()) else { return None };
+    match (shift, us_layout) {
+        (true, _) => "123456789".find(c),
+        (false, true) => "!@#$%^&*(".find(c),
+        (false, false) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,5 +181,22 @@ mod tests {
         assert_eq!(enc("d", None, Mods { cmd: true, ..NONE }), None);
         assert_eq!(enc("shift", None, Mods { shift: true, ..NONE }), None);
         assert_eq!(enc("f5", None, NONE), None);
+    }
+
+    #[test]
+    fn the_move_to_tab_key_is_a_shifted_digit_and_never_a_guess() {
+        assert_eq!(move_to_tab_key("1", true, false), Some(0));
+        assert_eq!(move_to_tab_key("9", true, true), Some(8));
+        // What a US keyboard reports for ⌘⇧⌥1 and ⌘⇧⌥9.
+        assert_eq!(move_to_tab_key("!", false, true), Some(0));
+        assert_eq!(move_to_tab_key("(", false, true), Some(8));
+        // German ⌘⇧⌥6 reports `&`, AZERTY ⌘⌥5 reports `(`: not tabs 7 and 9.
+        assert_eq!(move_to_tab_key("&", false, false), None);
+        assert_eq!(move_to_tab_key("(", false, false), None);
+        // A digit without shift is ⌘⌥ and a digit, not this key. `0` and other keys are none.
+        assert_eq!(move_to_tab_key("1", false, true), None);
+        assert_eq!(move_to_tab_key("0", true, true), None);
+        assert_eq!(move_to_tab_key("", true, true), None);
+        assert_eq!(move_to_tab_key("f1", true, true), None);
     }
 }
