@@ -29,14 +29,14 @@
 {"cmd":"scroll","pane":1,"lines":40}
 {"cmd":"repos"}
 {"cmd":"open_repo","path":"/Users/me/code/app","axis":"down"}
-{"cmd":"task_add","title":"Fix the zoom flicker","priority":1,"state":"needs_you","tab":2}
+{"cmd":"task_add","title":"Fix the zoom flicker","priority":1,"state":"needs_you","tab":2,"agent":"codex","paths":["/src/export"],"skills":["code-review"]}
 {"cmd":"task_set_state","id":1,"state":"running"}
 {"cmd":"task_snooze","id":1,"seconds":3600}
 {"cmd":"task_hold","id":1}
 {"cmd":"task_dismiss","id":1}
 {"cmd":"task_undo"}
 {"cmd":"task_list"}
-{"cmd":"task_new","line":"fix zoom flicker #canvas p1"}
+{"cmd":"task_new","line":"fix zoom flicker #canvas >app @claude p1"}
 {"cmd":"compose","text":"a draft"}
 {"cmd":"task_pop"}
 {"cmd":"task_open","id":1}

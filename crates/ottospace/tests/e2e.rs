@@ -407,12 +407,18 @@ fn list_mode_drives_the_bar_with_the_keyboard() {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_new_task_box_files_a_line() {
-    // One repository to name with `@`.
+    // One repository to name with `>`.
     let root = std::env::temp_dir().join(format!("ottospace-e2e-compose-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("flow-app/.git")).unwrap();
     std::fs::write(root.join("flow-app/.git/HEAD"), "ref: refs/heads/main\n").unwrap();
-    let otto = Otto::launch_with("compose", &[("OTTOSPACE_REPOS", root.to_str().unwrap())]);
+    // A path inside it for `/`, and a made-up skill for `$`: never the user's own skill folders.
+    std::fs::create_dir_all(root.join("flow-app/src/export")).unwrap();
+    let skills = root.join("skills");
+    std::fs::create_dir_all(skills.join("code-review")).unwrap();
+    std::fs::write(skills.join("code-review/SKILL.md"), "").unwrap();
+    let env = [("OTTOSPACE_REPOS", root.to_str().unwrap()), ("OTTOSPACE_SKILLS", skills.to_str().unwrap())];
+    let otto = Otto::launch_with("compose", &env);
     let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
     otto.call(json!({"cmd": "split"}));
 
@@ -425,10 +431,10 @@ fn the_new_task_box_files_a_line() {
     assert_eq!(key("escape")["mode"], "normal");
 
     // An agent offers a draft; Tab finishes the repository's name; ↵ files it.
-    otto.call(json!({"cmd": "compose", "text": "fix zoom flicker #canvas p2 @flow"}));
+    otto.call(json!({"cmd": "compose", "text": "fix zoom flicker #canvas p2 >flow"}));
     // A second draft while the first is on screen is refused, not dropped in silence.
     assert_eq!(otto.raw(r#"{"cmd":"compose","text":"another"}"#)["ok"], false);
-    assert_eq!(key("tab")["state"]["compose"], "fix zoom flicker #canvas p2 @flow-app ");
+    assert_eq!(key("tab")["state"]["compose"], "fix zoom flicker #canvas p2 >flow-app ");
     let reply = key("enter");
     let task = &reply["state"]["tasks"]["list"][0];
     assert_eq!((reply["mode"].as_str(), task["title"].as_str()), (Some("normal"), Some("fix zoom flicker")));
@@ -475,6 +481,37 @@ fn the_new_task_box_files_a_line() {
     otto.call(json!({"cmd": "task_add", "title": "waits", "state": "needs_you"}));
     let reply = key("cmd-shift-n");
     assert_eq!(reply["state"]["current_task"], 3);
+    otto.call(json!({"cmd": "task_leave"}));
+
+    // Tab finishes each kind of tag from its own names.
+    let finished =
+        [("a @co", "a @codex "), ("a $code", "a $code-review "), ("a >flow-app /src/ex", "a >flow-app /src/export/")];
+    for (typed, completed) in finished {
+        otto.call(json!({"cmd": "compose", "text": typed}));
+        assert_eq!(key("tab")["state"]["compose"], completed);
+        key("escape");
+    }
+    // Every tag through the box.
+    let line = "review the export PR #canvas >flow-app p2 @codex $code-review /src/export";
+    otto.call(json!({"cmd": "compose", "text": line}));
+    let reply = key("enter");
+    let task = &reply["state"]["tasks"]["list"][3];
+    assert_eq!((task["title"].as_str(), task["project"].as_str()), (Some("review the export PR"), Some("canvas")));
+    assert_eq!((task["repo"].as_str(), task["agent"].as_str()), (repo.to_str(), Some("codex")));
+    assert_eq!((&task["skills"], &task["paths"]), (&json!(["code-review"]), &json!(["/src/export"])));
+    // Names nobody knows, and prose, stay in the title. `@repo` no longer names a repository.
+    let line = "ask @ana if $5 > 3 for @flow-app $nothing /no-such-path-here";
+    let filed = otto.call(json!({"cmd": "task_new", "line": line}));
+    assert_eq!((filed["task"]["title"].as_str(), &filed["task"]["repo"]), (Some(line), &Value::Null));
+    // `task_add` takes them as given.
+    let request =
+        json!({"cmd": "task_add", "title": "t", "agent": "claude", "paths": ["~/notes"], "skills": ["deploy"]});
+    let filed = otto.call(request);
+    let task = &filed["task"];
+    assert_eq!(
+        (&task["agent"], &task["paths"], &task["skills"]),
+        (&json!("claude"), &json!(["~/notes"]), &json!(["deploy"]))
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 

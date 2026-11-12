@@ -364,7 +364,11 @@ impl Workspace {
                     .child("What needs doing?"),
             )
             .child(
-                muted().flex().justify_between().child("#project  @repo  p1–p9").child("click, or ⌘N from anywhere"),
+                muted()
+                    .flex()
+                    .justify_between()
+                    .child("#project  >repo  @agent  /path  $skill  p1–p9")
+                    .child("click, or ⌘N from anywhere"),
             );
 
         let rows: Vec<_> = (home.needs_you.iter().enumerate())
@@ -382,7 +386,7 @@ impl Workspace {
                     .hover(|s| s.bg(rgb(theme::SELECTED)))
                     .on_click(open_task(task.id, cx))
                     .child(dot(theme::task(Group::NeedsYou)))
-                    .children(task_cells(task, 140.))
+                    .children(task_cells(task, self.model.task_tags(task), 140.))
             })
             .collect();
         let needs_you = (!rows.is_empty()).then(|| {

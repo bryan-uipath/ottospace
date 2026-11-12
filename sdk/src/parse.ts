@@ -177,6 +177,9 @@ function task(value: unknown, at: string): Task {
     dismissed: bool(o.dismissed, `${at}.dismissed`),
     project: orNull(str)(o.project, `${at}.project`),
     repo: orNull(str)(o.repo, `${at}.repo`),
+    agent: orNull(str)(o.agent, `${at}.agent`),
+    paths: list(str)(o.paths, `${at}.paths`),
+    skills: list(str)(o.skills, `${at}.skills`),
   };
 }
 

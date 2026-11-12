@@ -143,7 +143,9 @@ Tasks (the inbox in the Tasks section):
 ```sh
 ottospace ctl '{"cmd":"task_add","title":"Fix the zoom flicker"}'
 ottospace ctl '{"cmd":"task_add","title":"Review the retry fix","priority":1,"state":"needs_you","tab":2}'
-ottospace ctl '{"cmd":"task_new","line":"fix zoom flicker #canvas @flow-workbench p1"}'
+ottospace ctl '{"cmd":"task_add","title":"Review the export PR","agent":"codex","paths":["/src/export"],"skills":["code-review"]}'
+ottospace ctl '{"cmd":"task_new","line":"fix zoom flicker #canvas >flow-workbench @claude p1"}'
+ottospace ctl '{"cmd":"task_new","line":"review the export PR >flow-workbench @codex $code-review /src/export"}'
 ottospace ctl '{"cmd":"compose","text":"reply to Ana about the retry bug #support"}'
 ottospace ctl '{"cmd":"task_set_state","id":1,"state":"needs_you"}'
 ottospace ctl '{"cmd":"task_list"}'
@@ -167,11 +169,25 @@ States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stal
 `needs_you`, `stale`), `running` (`running`, `review`), `captured` (`captured`, `triaged`),
 `on_hold` (`parked`), `done`. In a group: priority, then oldest first. `cleaned` tasks are not listed.
 
-- `task_new` files a task from one line, the way the user's new-task box (⌘N) reads it:
-  `#tag` is the project (optional), `@name` is a repository from `state.repos` by name, `p1` to
-  `p9` is the priority, the rest is the title. A `@name` that matches no repository (or
-  worktree) stays in the title where it was typed. It replies like `task_add`. A line with no
-  title, or longer than 500 characters, is refused.
+- `task_new` files a task from one line, the way the user's new-task box (⌘N) reads it. Tags:
+
+  | Tag | Means | Counts when |
+  |---|---|---|
+  | `#project` | the project the task serves | always |
+  | `>repo` | the repository it works in, from `state.repos` by name | the repository (or worktree) is listed |
+  | `@agent` | who works it | `claude`, `codex`, or a file `agents/<name>.md` in the user's folder |
+  | `/path` | a path it is about: a word starting with `/` or `~/` | the file or directory exists, at the root or inside the `>repo` |
+  | `$skill` | a skill to load for it | a skill folder of that name exists (the runners' `skills/`, the repository's `.claude/skills`) |
+  | `p1` to `p9` | the priority | always |
+
+  The rest is the title. A tag whose name is not known stays in the title where it was typed,
+  so `ask @ana`, `costs $5` and `use > 3 workers` are safe. One `#project`, `>repo` and `@agent`
+  per task: the last one counts. Every `/path` and `$skill` is kept. `@name` no longer names a
+  repository. The task keeps them as `repo` (a path), `agent`, `paths`, `skills`. Nothing acts
+  on `agent`, `paths` or `skills` yet: they are stored and shown. It replies like `task_add`.
+  A line with no title, or longer than 500 characters, is refused.
+- `task_add` takes `agent`, `paths` and `skills` as given, without checking them (at most 20 of
+  each, 200 characters each).
 - `compose` opens the new-task box on the user's screen with `text` in it (at most 500
   characters). Nothing is filed until the user presses ↵: use it to offer a draft, and
   `task_new` to file one yourself. It is refused if the box is open already or cannot open

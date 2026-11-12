@@ -63,6 +63,12 @@ export interface Task {
   project: string | null;
   /** A repository path. */
   repo: string | null;
+  /** Who works it: `claude`, `codex`, or a saved agent's name. */
+  agent: string | null;
+  /** Paths the task is about, as typed. */
+  paths: string[];
+  /** Skills to load for it. */
+  skills: string[];
 }
 
 export interface InboxRow extends Task {
@@ -364,6 +370,10 @@ export interface TaskAddArgs {
   state?: TaskState;
   /** The `id` of an open tab of no task, which becomes the task's. */
   tab?: number;
+  /** Kept as given, not checked. */
+  agent?: string;
+  paths?: string[];
+  skills?: string[];
 }
 export interface CaptureArgs {
   pane?: PaneId;

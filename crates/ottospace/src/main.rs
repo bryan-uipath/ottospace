@@ -43,6 +43,7 @@ mod control;
 mod home;
 mod menus;
 mod repos;
+mod tags;
 mod terminal;
 use control::{Call, PaneKind, Request};
 use terminal::Terminal;
@@ -585,7 +586,12 @@ impl Workspace {
         if opens_repos && matches!(action, Action::ToggleSection { section: Section::Repos }) {
             self.model.update(Action::SetRepos { repos: repos::scan() });
         }
+        let line = self.model.compose.clone();
         let effects = self.model.update(action);
+        // The line in the new-task box changed: read again what its tags may name.
+        if let Some(line) = self.model.compose.clone().filter(|now| line.as_ref() != Some(now)) {
+            self.read_known(&line);
+        }
         self.store_tasks();
         let another_goes_live = effects.iter().any(|effect| matches!(effect, Effect::Live(_)));
         for effect in &effects {
@@ -646,6 +652,12 @@ impl Workspace {
         }
         cx.notify();
         effects
+    }
+
+    /// Reads what the tags of `line` may name (agents, skills, paths): the core reads no disk.
+    fn read_known(&mut self, line: &str) {
+        let repo = self.model.draft_repo(line);
+        self.model.update(Action::SetKnown { known: tags::known(line, repo.as_deref()) });
     }
 
     /// The tasks as they are kept on disk.
@@ -813,6 +825,8 @@ impl Workspace {
                 }
                 Request::TaskNew { line } => {
                     let before = self.model.tasks.list.len();
+                    self.model.update(Action::SetRepos { repos: repos::scan() });
+                    self.read_known(&line);
                     self.dispatch(Action::TaskFromLine { line }, window, cx);
                     let filed = self.model.tasks.list.get(before);
                     let message = match filed {
@@ -839,8 +853,11 @@ impl Workspace {
                         Some(format!("tab {tab} belongs to another task; leave out `tab` to file a task without one"));
                     None
                 }
-                Request::TaskAdd { title, priority, state, tab } => {
+                Request::TaskAdd { title, priority, state, tab, agent, paths, skills } => {
                     self.dispatch(Action::TaskAdd { title, priority, state, tab }, window, cx);
+                    if let Some(id) = self.model.tasks.list.last().map(|task| task.id) {
+                        self.dispatch(Action::TaskAssign { id, agent, paths, skills }, window, cx);
+                    }
                     // The new task, so the caller has its id.
                     let task = serde_json::json!(self.model.tasks.list.last());
                     let _ = reply.send(serde_json::json!({ "ok": true, "task": task }).to_string());
@@ -1757,13 +1774,13 @@ impl Workspace {
 
     /// Opens the new-task box: ⌘N, or a click on the home screen's line.
     fn new_task(&mut self, window: &Window, cx: &mut Context<Self>) {
-        // The repositories as they are now, for `@name`.
+        // The repositories as they are now, for `>name`.
         self.model.update(Action::SetRepos { repos: repos::scan() });
         self.dispatch(Action::OpenCompose { text: String::new() }, window, cx);
     }
 
     /// The new-task box, over the workspace: the line, what it will file, and names that finish
-    /// the `#project` or `@repo` being typed. A click outside it closes it.
+    /// the tag being typed. A click outside it closes it.
     fn render_compose(&self, line: &str, cx: &mut Context<Self>) -> impl IntoElement {
         let draft = self.model.draft(line);
         let chip = |label: String, color: u32| {
@@ -1777,10 +1794,13 @@ impl Workspace {
             .gap_2()
             .children(draft.priority.map(|p| chip(format!("P{p}"), theme::TEXT)))
             .children(draft.project.map(|p| chip(format!("#{p}"), theme::COMPOSE)))
-            .children(draft.repo.map(|r| chip(format!("@{r}"), theme::PRIMARY)));
+            .children(draft.repo.map(|r| chip(format!(">{r}"), theme::PRIMARY)))
+            .children(draft.agent.map(|a| chip(format!("@{a}"), theme::VISUAL)))
+            .children(draft.paths.into_iter().map(|path| chip(path, theme::TEXT)))
+            .children(draft.skills.into_iter().map(|s| chip(format!("${s}"), theme::SNEAK)));
         let suggestions = self.model.compose_suggestions();
         let hint = if suggestions.is_empty() {
-            "#project · @repo · p1 to p9 · ↵ file · esc close".to_string()
+            "#project · >repo · @agent · /path · $skill · p1–p9 · tab completes".to_string()
         } else {
             format!("tab: {}  ·  ↵ file · esc close", suggestions.join("  ·  "))
         };
@@ -2161,7 +2181,7 @@ impl Workspace {
             listed += 1;
             rows.push(
                 list_button(("task", id as usize), self.model.list == Some(index))
-                    .children(task_cells(task, 90.))
+                    .children(task_cells(task, self.model.task_tags(task), 90.))
                     .on_click(open_task(id, cx))
                     .into_any_element(),
             );
@@ -2605,17 +2625,16 @@ impl Workspace {
     }
 }
 
-/// What a task's row shows: its priority, its title, and its project (at most `tag` points
-/// wide) if it has one.
-fn task_cells(task: &Task, tag: f32) -> Vec<Div> {
+/// What a task's row shows: its priority, its title, and its tags (`Model::task_tags`, at most
+/// `width` points wide) if it has any.
+fn task_cells(task: &Task, tags: String, width: f32) -> Vec<Div> {
     let urgent = if task.priority == 1 { theme::ERROR } else { theme::MUTED };
     let priority = div().flex_none().text_xs().text_color(rgb(urgent)).child(format!("P{}", task.priority));
     let title = div().flex_1().min_w_0().truncate().child(task.title.clone());
-    let project = task.project.as_ref().map(|project| {
-        let tag = div().flex_none().max_w(px(tag)).truncate().text_xs();
-        tag.text_color(rgb(theme::MUTED)).child(format!("#{project}"))
-    });
-    [priority, title].into_iter().chain(project).collect()
+    let tags = Some(tags)
+        .filter(|tags| !tags.is_empty())
+        .map(|tags| div().flex_none().max_w(px(width)).truncate().text_xs().text_color(rgb(theme::MUTED)).child(tags));
+    [priority, title].into_iter().chain(tags).collect()
 }
 
 /// A click that shows a task's tabs.

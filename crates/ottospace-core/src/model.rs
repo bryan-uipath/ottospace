@@ -241,6 +241,18 @@ pub enum Action {
         state: State,
         tab: Option<u32>,
     },
+    /// Name who works a task, the paths it is about and the skills it loads, as given: the
+    /// socket's `task_add` does not check them.
+    TaskAssign {
+        id: TaskId,
+        agent: Option<String>,
+        paths: Vec<String>,
+        skills: Vec<String>,
+    },
+    /// What the new-task box's tags may name, read by the shell for the line in the box.
+    SetKnown {
+        known: compose::Known,
+    },
     TaskSetState {
         id: TaskId,
         state: State,
@@ -283,12 +295,12 @@ pub enum Action {
         text: String,
     },
     ComposeBackspace,
-    /// Finish the `#project` or `@repo` being typed with the first suggestion.
+    /// Finish the tag being typed with the first suggestion.
     ComposeComplete,
     /// File the line as a task and close the box. A line with no title files nothing.
     ComposeSubmit,
     CloseCompose,
-    /// File a task from one line, as the box does: `fix zoom flicker #canvas @app p1`.
+    /// File a task from one line, as the box does: `fix zoom flicker #canvas >app @claude p1`.
     TaskFromLine {
         line: String,
     },
@@ -389,6 +401,9 @@ pub struct Model {
     /// The Repos section's list, as last read from disk.
     pub repos: Vec<Repo>,
     pub tasks: Tasks,
+    /// What the new-task box's tags may name, as the shell last read it.
+    #[serde(skip)]
+    known: compose::Known,
     /// The pane picker, while it is open.
     pub picker: Option<Picker>,
     /// The key reference overlay is showing.
@@ -418,6 +433,7 @@ impl Default for Model {
             apps: Vec::new(),
             repos: Vec::new(),
             tasks: Tasks::default(),
+            known: compose::Known::default(),
             picker: None,
             keys: false,
             visual: None,
@@ -588,6 +604,8 @@ impl Model {
                     }
                 }
             }
+            Action::TaskAssign { id, agent, paths, skills } => self.tasks.assign(id, agent, paths, skills),
+            Action::SetKnown { known } => self.known = known,
             Action::TaskSetState { id, state } => self.tasks.set_state(id, state),
             Action::TaskSnooze { id, until } => self.tasks.snooze(id, until),
             Action::TaskHold { id } => self.tasks.hold(id),
@@ -929,9 +947,34 @@ impl Model {
         }
     }
 
-    /// What `line` would file: `@name` counts only for a listed repository.
+    /// What `line` would file. A tag counts only if its name is known: `>name` a listed
+    /// repository; `@name`, `$name` and `/path` what the shell last read (`SetKnown`).
     pub fn draft(&self, line: &str) -> compose::Draft {
-        compose::parse(line, |name| self.repo_named(name).is_some())
+        let listed = |names: &[String], name: &str| names.iter().any(|n| n.eq_ignore_ascii_case(name));
+        compose::parse(line, |mark, name| match mark {
+            '>' => self.repo_named(name).is_some(),
+            '@' => listed(&self.known.agents, name),
+            '$' => listed(&self.known.skills, name),
+            _ => self.known.paths.iter().any(|path| path == name),
+        })
+    }
+
+    /// The path of the listed repository `line` names with `>name`, for the shell to look in.
+    pub fn draft_repo(&self, line: &str) -> Option<String> {
+        self.draft(line).repo.and_then(|name| self.repo_named(&name))
+    }
+
+    /// A task's tags as one line: `#canvas · >app · @claude · 2 paths · 1 skill`.
+    pub fn task_tags(&self, task: &Task) -> String {
+        let count = |n: usize, word: &str| (n > 0).then(|| format!("{n} {word}{}", if n == 1 { "" } else { "s" }));
+        let repo = task.repo.as_deref().map(|path| {
+            let name = self.repo_name(path);
+            format!(">{}", name.unwrap_or_else(|| path.rsplit('/').next().unwrap_or(path).to_string()))
+        });
+        let project = task.project.as_ref().map(|project| format!("#{project}"));
+        let agent = task.agent.as_ref().map(|agent| format!("@{agent}"));
+        let tags = [project, repo, agent, count(task.paths.len(), "path"), count(task.skills.len(), "skill")];
+        tags.into_iter().flatten().collect::<Vec<_>>().join(" · ")
     }
 
     /// Files `line` as a captured task. False if it has no title, or one too long to keep:
@@ -942,8 +985,13 @@ impl Model {
             return false;
         }
         let path = draft.repo.as_deref().and_then(|name| self.repo_named(name));
+        // Agents and skills are kept as they are spelled where they were read, not as typed.
+        let spelled = |names: &[String], typed: &String| names.iter().find(|n| n.eq_ignore_ascii_case(typed)).cloned();
+        let agent = draft.agent.as_ref().and_then(|typed| spelled(&self.known.agents, typed));
+        let skills = draft.skills.iter().filter_map(|typed| spelled(&self.known.skills, typed)).collect();
         let id = self.tasks.add(draft.title, draft.priority.unwrap_or(3), State::Captured);
         self.tasks.tag(id, draft.project, path);
+        self.tasks.assign(id, agent, draft.paths, skills);
         true
     }
 
@@ -961,10 +1009,14 @@ impl Model {
         self.repo_names().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, path)| path.to_string())
     }
 
-    /// Names that finish the `#project` or `@repo` being typed in the new-task box.
+    /// Names that finish the tag being typed in the new-task box.
     pub fn compose_suggestions(&self) -> Vec<String> {
         match self.compose.as_deref().and_then(compose::completing) {
-            Some(('@', typed)) => compose::suggest(typed, self.repo_names().map(|(name, _)| name)),
+            Some(('>', typed)) => compose::suggest(typed, self.repo_names().map(|(name, _)| name)),
+            Some(('@', typed)) => compose::suggest(typed, self.known.agents.iter().map(String::as_str)),
+            Some(('$', typed)) => compose::suggest(typed, self.known.skills.iter().map(String::as_str)),
+            // The shell listed them for what is typed.
+            Some(('/', _)) => self.known.entries.iter().take(5).cloned().collect(),
             Some((_, typed)) => compose::suggest(typed, self.tasks.projects()),
             None => Vec::new(),
         }
@@ -1538,7 +1590,7 @@ mod tests {
         m.update(Action::SetRepos { repos: listed() });
         term(&mut m); // pane 1, in a tab of no task
         m.update(Action::TaskFromLine {
-            line: "fix the zoom flicker on the canvas when zooming #canvas @app-2".into(),
+            line: "fix the zoom flicker on the canvas when zooming #canvas >app-2".into(),
         });
         m.update(Action::TaskFromLine { line: "ask Ana about the retry plan before Friday".into() });
         assert_eq!((m.current_task, tab_titles(&m)), (None, vec!["Tab 1"]));
@@ -1743,12 +1795,12 @@ mod tests {
         m.update(Action::ComposeSubmit);
         assert_eq!((m.tasks.list.len(), m.mode()), (0, Mode::Compose));
         // Tab finishes the repository being typed; the name need not match in case.
-        m.update(Action::ComposeType { text: "fix zoom #Canvas @AP".into() });
+        m.update(Action::ComposeType { text: "fix zoom #Canvas >AP".into() });
         assert_eq!(m.compose_suggestions(), ["app", "app-2"], "worktrees too");
         m.update(Action::ComposeComplete);
         m.update(Action::ComposeType { text: "p1x".into() });
         m.update(Action::ComposeBackspace);
-        assert_eq!(m.compose.as_deref(), Some("fix zoom #Canvas @app p1"));
+        assert_eq!(m.compose.as_deref(), Some("fix zoom #Canvas >app p1"));
         m.update(Action::ComposeSubmit);
         let task = &m.tasks.list[0];
         assert_eq!((task.title.as_str(), task.state, task.priority), ("fix zoom", State::Captured, 1));
@@ -1760,7 +1812,7 @@ mod tests {
         m.update(Action::OpenCompose { text: "look #c".into() });
         assert_eq!(m.compose_suggestions(), ["Canvas"]);
         m.update(Action::CloseCompose);
-        m.update(Action::TaskFromLine { line: "ask @ana about @app-2".into() });
+        m.update(Action::TaskFromLine { line: "ask @ana about >app-2".into() });
         assert_eq!(
             (m.tasks.list[1].title.as_str(), m.tasks.list[1].repo.as_deref()),
             ("ask @ana about", Some("/code/app-2"))
@@ -1784,6 +1836,59 @@ mod tests {
         m.update(Action::ToggleKeys);
         m.update(Action::OpenCompose { text: String::new() });
         assert_eq!(m.compose, None);
+    }
+
+    #[test]
+    fn tags_count_only_for_names_the_shell_read() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        let line = "review the export >app @Codex $Code-Review /src/export ~/gone p2";
+        // Nothing read yet: only the repository is known.
+        assert_eq!(m.draft(line).title, "review the export @Codex $Code-Review /src/export ~/gone");
+        assert_eq!(m.draft_repo(line).as_deref(), Some("/code/app"));
+        let names = |list: &[&str]| list.iter().map(|name| name.to_string()).collect::<Vec<_>>();
+        let known = compose::Known {
+            agents: names(&["claude", "codex"]),
+            skills: names(&["code-review", "deploy"]),
+            paths: names(&["/src/export"]),
+            entries: names(&["/src/export/", "/src/extra.rs"]),
+        };
+        m.update(Action::SetKnown { known });
+        // Tab offers each tag's own names.
+        for (typed, offered) in [
+            ("@c", vec!["claude", "codex"]),
+            ("$dep", vec!["deploy"]),
+            ("/src/ex", vec!["/src/export/", "/src/extra.rs"]),
+        ] {
+            m.update(Action::OpenCompose { text: typed.into() });
+            assert_eq!(m.compose_suggestions(), offered, "{typed}");
+            m.update(Action::CloseCompose);
+        }
+        m.update(Action::OpenCompose { text: "see /src/ex".into() });
+        m.update(Action::ComposeComplete);
+        assert_eq!(m.compose.as_deref(), Some("see /src/export/"));
+        m.update(Action::CloseCompose);
+        // Filed: agent and skill as they are spelled where they were read; the unknown path stays in the title.
+        m.update(Action::TaskFromLine { line: line.into() });
+        let task = &m.tasks.list[0];
+        assert_eq!(
+            (task.title.as_str(), task.repo.as_deref(), task.priority),
+            ("review the export ~/gone", Some("/code/app"), 2)
+        );
+        assert_eq!(
+            (task.agent.as_deref(), task.skills.as_slice(), task.paths.as_slice()),
+            (Some("codex"), &["code-review".to_string()][..], &["/src/export".to_string()][..])
+        );
+        assert_eq!(m.task_tags(task), ">app · @codex · 1 path · 1 skill");
+        // The socket's `task_add` names them without a line.
+        m.update(Action::TaskAdd { title: "a".into(), priority: 1, state: State::Running, tab: None });
+        m.update(Action::TaskAssign {
+            id: 2,
+            agent: Some("claude".into()),
+            paths: Vec::new(),
+            skills: names(&["a", "b"]),
+        });
+        assert_eq!(m.task_tags(&m.tasks.list[1]), "@claude · 2 skills");
     }
 
     fn listed() -> Vec<Repo> {

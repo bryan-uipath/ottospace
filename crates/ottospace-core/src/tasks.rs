@@ -68,10 +68,23 @@ pub struct Task {
     /// The project this task serves, from a `#tag`. Many tasks serve none.
     #[serde(default)]
     pub project: Option<String>,
-    /// The path of the repository the work is in, from an `@name`.
+    /// The path of the repository the work is in, from a `>name`.
     #[serde(default)]
     pub repo: Option<String>,
+    /// Who works it, from an `@name`. Stored and shown; nothing acts on it yet.
+    #[serde(default)]
+    pub agent: Option<String>,
+    /// Paths the task is about, from `/path` words, as typed.
+    #[serde(default)]
+    pub paths: Vec<String>,
+    /// Skills to load for it, from `$name` words.
+    #[serde(default)]
+    pub skills: Vec<String>,
 }
+
+/// The longest agent, path or skill name kept, and the most paths or skills on one task.
+pub const MAX_TAG: usize = 200;
+pub const MAX_TAGS: usize = 20;
 
 fn default_priority() -> u8 {
     3
@@ -158,8 +171,10 @@ impl Tasks {
     pub fn add(&mut self, title: String, priority: u8, state: State) -> TaskId {
         self.next_id += 1;
         let priority = priority.clamp(1, 9);
-        let (snoozed_until, dismissed, project, repo) = (None, false, None, None);
-        self.list.push(Task { id: self.next_id, title, state, priority, snoozed_until, dismissed, project, repo });
+        let (id, snoozed_until, dismissed, project, repo) = (self.next_id, None, false, None, None);
+        let (agent, paths, skills) = (None, Vec::new(), Vec::new());
+        let task = Task { id, title, state, priority, snoozed_until, dismissed, project, repo, agent, paths, skills };
+        self.list.push(task);
         self.next_id
     }
 
@@ -167,6 +182,16 @@ impl Tasks {
     pub fn tag(&mut self, id: TaskId, project: Option<String>, repo: Option<String>) {
         if let Some(task) = self.list.iter_mut().find(|t| t.id == id) {
             (task.project, task.repo) = (project, repo);
+        }
+    }
+
+    /// Names who works a task, the paths it is about and the skills it loads. Names too long to
+    /// keep, and those past the twentieth, are dropped.
+    pub fn assign(&mut self, id: TaskId, agent: Option<String>, paths: Vec<String>, skills: Vec<String>) {
+        let fits = |name: &String| !name.is_empty() && name.chars().count() <= MAX_TAG;
+        let kept = |names: Vec<String>| names.into_iter().filter(fits).take(MAX_TAGS).collect();
+        if let Some(task) = self.list.iter_mut().find(|t| t.id == id) {
+            (task.agent, task.paths, task.skills) = (agent.filter(fits), kept(paths), kept(skills));
         }
     }
 
@@ -385,6 +410,9 @@ mod tests {
             dismissed: false,
             project: None,
             repo: None,
+            agent: None,
+            paths: Vec::new(),
+            skills: Vec::new(),
         };
         let mut tasks = Tasks::default();
         tasks.restore(vec![task(7, "late"), task(2, "early"), task(7, "twin")], 0);
@@ -398,6 +426,20 @@ mod tests {
         // A file written by hand may leave fields out.
         let read: Task = serde_json::from_str(r#"{"id":1,"title":"by hand","state":"captured"}"#).unwrap();
         assert_eq!((read.priority, read.snoozed_until, read.dismissed), (3, None, false));
+        assert_eq!((read.agent, read.paths.len(), read.skills.len()), (None, 0, 0));
+    }
+
+    #[test]
+    fn a_task_keeps_its_agent_paths_and_skills_within_limits() {
+        let mut tasks = Tasks::default();
+        let a = tasks.add("a".into(), 1, State::Captured);
+        let many: Vec<String> = (0..30).map(|n| format!("/p{n}")).collect();
+        tasks.assign(a, Some("claude".into()), many, vec!["deploy".into(), String::new(), "x".repeat(MAX_TAG + 1)]);
+        let task = tasks.get(a).unwrap();
+        assert_eq!(
+            (task.agent.as_deref(), task.paths.len(), &task.skills),
+            (Some("claude"), MAX_TAGS, &vec!["deploy".to_string()])
+        );
     }
 
     #[test]
