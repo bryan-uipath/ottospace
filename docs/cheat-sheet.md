@@ -22,7 +22,7 @@ ottospace            # opens on the Repos list
 | Move between panes | ⌘⌥ arrows or ⌘⌥ H J K L · ⌘] ⌘[ cycle |
 | Resize the pane | ⌘⌃ arrows or ⌘⌃ H J K L: the split moves that way · ⌘⌃= evens all out |
 | Swap the pane with its neighbour | ⌘⇧⌥ arrows or ⌘⇧⌥ H J K L |
-| Move the pane to another tab | ⌘⇧⌥1 … ⌘⇧⌥9 |
+| Move the pane to another tab | ⌘⇧⌥1 … ⌘⇧⌥9. US keyboard layout only (US, ABC): on others the keys do nothing |
 | Close the pane | ⌘W |
 | New tab | ⌘T |
 | Hide ottospace | ⌘H |
@@ -72,7 +72,7 @@ From a shell or an agent:
 
 ```sh
 ottospace ctl '{"cmd":"task_new","line":"fix zoom flicker #canvas @flow-workbench p1"}'
-ottospace ctl "{\"cmd\":\"task_add\",\"title\":\"review my PR\",\"state\":\"needs_you\",\"tab\":$OTTOSPACE_TAB}"   # a task tied to this tab
+ottospace ctl "{\"cmd\":\"task_add\",\"title\":\"review my PR\",\"state\":\"needs_you\",\"tab\":$OTTOSPACE_TAB}"   # a task tied to the tab this shell started in
 ottospace ctl '{"cmd":"task_set_state","id":1,"state":"needs_you"}'   # running, needs_you, done, ...
 ottospace ctl '{"cmd":"task_list"}'
 ```
@@ -99,7 +99,12 @@ ottospace ctl '{"cmd":"capture","pane":3,"history":true}'
 ottospace skill                                                    # the full guide for agents
 ```
 
-A shell started by ottospace has `$OTTOSPACE_PANE` and `$OTTOSPACE_TAB`.
+A shell started by ottospace has `$OTTOSPACE_PANE` and `$OTTOSPACE_TAB`: the tab it started in.
+If the pane was moved to another tab since, this gives the tab it is in now:
+
+```sh
+ottospace ctl '{"cmd":"state"}' | jq --argjson pane "$OTTOSPACE_PANE" '.state.tabs[.tab_panes | map(any(. == $pane)) | index(true)].id'
+```
 
 ## Settings
 

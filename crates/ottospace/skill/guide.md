@@ -99,16 +99,17 @@ ottospace ctl '{"cmd":"move_pane","tab":1}'
 ottospace ctl '{"cmd":"move_pane","pane":3,"tab":0}'
 ```
 
-- `resize` moves the boundary of the nearest split around the focused pane, on that axis, 5% of
-  that split toward `dir`. Each side keeps at least 10%. Read the result from `state.layout`
-  (`ratio`) or `bounds`. `equalize` evens out every split of the active tab.
+- `resize` moves one border of the focused pane 5% of its split toward `dir`: the pane's right
+  (or bottom) border, or for the last pane of a row (or column) its left (or top) one. Each side
+  of a split keeps at least 10%; at that limit nothing moves. Read the result from
+  `state.layout` (`ratio`) or `bounds`. `equalize` evens out every split of the active tab.
 - `swap` trades the focused pane with its neighbour on that side (the pane `focus_dir` would go
   to). The pane keeps focus.
 - `move_pane` moves a pane (default: the focused one) to another tab, beside that tab's focused
   pane, and shows that tab with the pane focused. `tab` is the place on the tab bar, from 0: among
   the tabs of `state.current_task` only, so with no task open it equals the index in
-  `state.tabs`. A tab left with no panes stays, empty. A moved terminal keeps the
-  `$OTTOSPACE_TAB` it started with.
+  `state.tabs`. A tab left with no panes stays, empty. `$OTTOSPACE_TAB` in a moved terminal
+  still names the tab its shell started in.
 
 Terminals:
 
@@ -155,8 +156,9 @@ ottospace ctl '{"cmd":"task_undo"}'
 
 A task has a `title`, a `priority` (1 is most urgent, default 3) and a `state`. A task has its
 own tabs: `state.tabs[].task` says which task a tab belongs to. `"tab"` on `task_add` gives the
-task an open tab (a tab `id`; `$OTTOSPACE_TAB` in a shell ottospace started): do that for the tab
-you work in, so the user finds your work under the task. It must be a tab of no task; a tab that
+task an open tab (a tab `id`): do that for the tab you work in, so the user finds your work
+under the task. `$OTTOSPACE_TAB` is the tab your shell started in; the pane may have been moved
+since, so read the tab that holds `$OTTOSPACE_PANE` now (below). It must be a tab of no task; a tab that
 is gone or that another task has is refused. To file a follow-up from inside a task, leave `tab` out.
 States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stale`, `parked`,
 `done`, `cleaned`. The inbox lists tasks in groups, in this order: `needs_you` (states
@@ -224,9 +226,14 @@ span lines. While a full-screen program (vim, less) is up, both requests see onl
 - The command you typed is in the pane too. Anchor the marker with `^` so the echoed command
   line (which starts with the prompt) does not match.
 
-A shell started by ottospace has `OTTOSPACE_PANE` (its pane id) and `OTTOSPACE_TAB` (its tab's
-`id` in `state.tabs`, not the index) in its environment. A program in a pane can use them to
-name its own pane.
+A shell started by ottospace has `OTTOSPACE_PANE` (its pane id) and `OTTOSPACE_TAB` (the `id`,
+not the index, of the tab it started in) in its environment. A program in a pane can use
+`OTTOSPACE_PANE` to name its own pane. A pane can be moved to another tab, so `OTTOSPACE_TAB`
+may be out of date. The `id` of the tab that holds the pane now:
+
+```sh
+ottospace ctl '{"cmd":"state"}' | jq --argjson pane "$OTTOSPACE_PANE" '.state.tabs[.tab_panes | map(any(. == $pane)) | index(true)].id'
+```
 
 Scrolling back and selecting text in a terminal pane:
 

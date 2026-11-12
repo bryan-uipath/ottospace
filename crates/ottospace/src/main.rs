@@ -279,7 +279,7 @@ const KEYS_ARRANGE: &[(&str, &str)] = &[
     ("⌘⌃ arrows / H J K L", "Resize: move the split that way"),
     ("⌘⌃=", "Even out the splits"),
     ("⌘⇧⌥ arrows / H J K L", "Swap with the pane that way"),
-    ("⌘⇧⌥1 … ⌘⇧⌥9", "Move the pane to a tab"),
+    ("⌘⇧⌥1 … ⌘⇧⌥9", "Move the pane to a tab (US layout)"),
 ];
 const KEYS_TABS: &[(&str, &str)] = &[
     ("⌘T", "New tab: pick what opens in it"),
@@ -1426,11 +1426,12 @@ impl Workspace {
             cx.stop_propagation();
             return;
         }
-        // ⌘⇧⌥1..9 move the focused pane to a tab. A real keyboard sends the shifted character
-        // (`!` for 1 on a US layout) with shift taken out; the `key` request sends the digit.
+        // ⌘⇧⌥1..9 move the focused pane to a tab. GPUI gives no physical key, so the shifted
+        // characters are trusted on a US layout only (see `move_to_tab_key`).
         let m = key.modifiers;
-        let place = "123456789".find(&key.key).filter(|_| m.shift).or_else(|| "!@#$%^&*(".find(&key.key));
-        if let Some(tab) = place.filter(|_| m.platform && m.alt && !m.control && key.key.chars().count() == 1) {
+        let us_layout = matches!(cx.keyboard_layout().id(), "com.apple.keylayout.US" | "com.apple.keylayout.ABC");
+        let place = keys::move_to_tab_key(&key.key, m.shift, us_layout);
+        if let Some(tab) = place.filter(|_| m.platform && m.alt && !m.control) {
             self.dispatch(Action::MovePane { pane: None, tab }, window, cx);
             cx.stop_propagation();
             return;

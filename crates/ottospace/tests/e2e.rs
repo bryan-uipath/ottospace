@@ -189,8 +189,7 @@ fn panes_resize_swap_and_change_tab_from_the_keyboard() {
     let reply = otto.call(json!({"cmd": "key", "keys": "cmd-shift-alt-2"}));
     assert_eq!(reply["tab_panes"], json!([[1], [2]]));
     assert_eq!((reply["state"]["active"].as_u64(), reply["state"]["focused"].as_u64()), (Some(1), Some(2)));
-    // The key a US keyboard sends for ⌘⇧⌥1: the shifted character, without shift.
-    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-alt-!"}))["tab_panes"], json!([[1, 2], []]));
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-shift-alt-1"}))["tab_panes"], json!([[1, 2], []]));
     let reply = otto.call(json!({"cmd": "move_pane", "pane": 1, "tab": 1}));
     assert_eq!(reply["tab_panes"], json!([[2], [1]]));
     let full = otto.bounds(&[1])[0];

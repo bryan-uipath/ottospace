@@ -1126,18 +1126,17 @@ impl Model {
     /// Moves a pane to the tab at index `to`, beside that tab's focused pane, and shows it there.
     fn move_pane(&mut self, id: PaneId, to: usize, effects: &mut Vec<Effect>) {
         let from = self.tab_panes().iter().position(|panes| panes.contains(&id));
-        if from.is_none() || from == Some(to) || to >= self.tabs.len() {
+        if from.is_none() || from == Some(to) {
             return;
         }
-        // A live window must not stay over the tab the pane leaves.
-        self.leave(effects);
         self.detach(id);
         self.select_tab(to, effects);
         self.layout = Some(match self.layout.take() {
             Some(root) => root.insert(self.focused, id, Axis::Right),
             None => Node::Leaf(id),
         });
-        self.focused = Some(id);
+        // Takes the keyboard back from an app that is live in this tab.
+        self.focus(id, effects);
     }
 
     /// Takes a pane out of whichever tab's tree holds it. Focus there goes to the newest pane left.
@@ -1931,6 +1930,13 @@ mod tests {
         assert_eq!(m.tab_panes(), [vec![], vec![3, 1, 2]]);
         m.update(Action::SelectTab { index: 0 });
         assert_eq!((m.layout.is_none(), m.focused), (true, None));
+        // A pane that arrives beside a live app takes focus, so the app gives the keyboard back.
+        m.update(Action::SelectTab { index: 1 });
+        m.update(Action::NewTab);
+        term(&mut m);
+        m.update(Action::Enter { pane: 1 });
+        assert_eq!(m.update(Action::MovePane { pane: Some(4), tab: 1 }), [Effect::Parked(1)]);
+        assert_eq!((m.active, m.focused, m.live), (1, Some(4), None));
     }
 
     #[test]

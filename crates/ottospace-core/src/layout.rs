@@ -142,8 +142,10 @@ impl Node {
             .map(|(id, _)| id)
     }
 
-    /// Moves the boundary of the nearest split around `pane` on `dir`'s axis one step toward
-    /// `dir`. Each side keeps `MIN_SHARE` of the split. False if nothing moved.
+    /// Moves one boundary of `pane` on `dir`'s axis a step toward `dir`: its right or bottom
+    /// border (the nearest split that holds it in `a`), else its left or top one. So the border
+    /// that moves does not depend on how the tree is nested. Each side keeps `MIN_SHARE` of the
+    /// split; a border at that limit stays, and no other moves instead. False if nothing moved.
     pub fn resize(&mut self, pane: u32, dir: Dir) -> bool {
         let (axis, step) = match dir {
             Dir::Left => (Axis::Right, -RESIZE_STEP),
@@ -151,22 +153,28 @@ impl Node {
             Dir::Up => (Axis::Down, -RESIZE_STEP),
             Dir::Down => (Axis::Down, RESIZE_STEP),
         };
-        self.nudge(pane, axis, step) == Some(true)
+        let after = self.nudge(pane, axis, step, true).flatten();
+        after.or_else(|| self.nudge(pane, axis, step, false).flatten()) == Some(true)
     }
 
-    /// `None`: `pane` is not under this node. `Some(false)`: it is, and no split has moved yet.
-    fn nudge(&mut self, pane: u32, on: Axis, step: f32) -> Option<bool> {
+    /// Steps the nearest split on `on` that holds `pane` in `a` (`in_a`) or in `b`.
+    /// `None`: `pane` is not under this node. `Some(None)`: it is, with no such split so far.
+    /// `Some(Some(moved))`: the split was found; `moved` is false if it was at its limit.
+    fn nudge(&mut self, pane: u32, on: Axis, step: f32, in_a: bool) -> Option<Option<bool>> {
         match self {
-            Node::Leaf(id) => (*id == pane).then_some(false),
+            Node::Leaf(id) => (*id == pane).then_some(None),
             Node::Split { axis, ratio, a, b } => {
-                let moved = a.nudge(pane, on, step).or_else(|| b.nudge(pane, on, step))?;
-                if moved || *axis != on {
-                    return Some(moved);
+                let (found, first) = match a.nudge(pane, on, step, in_a) {
+                    Some(found) => (found, true),
+                    None => (b.nudge(pane, on, step, in_a)?, false),
+                };
+                if found.is_some() || *axis != on || first != in_a {
+                    return Some(found);
                 }
                 let to = (*ratio + step).clamp(MIN_SHARE, 1.0 - MIN_SHARE);
-                let changed = (to - *ratio).abs() > f32::EPSILON;
+                let moved = (to - *ratio).abs() > f32::EPSILON;
                 *ratio = to;
-                Some(changed)
+                Some(Some(moved))
             }
         }
     }
@@ -268,6 +276,44 @@ mod tests {
         }
         assert_eq!(widths(&tree)[0], (1, 10.0, 100.0));
         assert!(!tree.resize(1, Dir::Left));
+    }
+
+    #[test]
+    fn a_split_at_its_limit_stops_and_its_parent_does_not_move_instead() {
+        // 1 | 2 | 3, nested as 1 | (2 | 3).
+        let mut tree = Leaf(1).insert(Some(1), 2, Right).insert(Some(2), 3, Right);
+        // From 3, only the 2|3 border moves left, until 2 is at its minimum.
+        for _ in 0..8 {
+            assert!(tree.resize(3, Dir::Left));
+        }
+        assert_eq!(widths(&tree), [(1, 50.0, 100.0), (2, 5.0, 100.0), (3, 45.0, 100.0)]);
+        // More presses do nothing: the 1|2 border is not 3's to move.
+        assert!(!tree.resize(3, Dir::Left));
+        assert!(!tree.resize(3, Dir::Left));
+        assert_eq!(widths(&tree), [(1, 50.0, 100.0), (2, 5.0, 100.0), (3, 45.0, 100.0)]);
+    }
+
+    #[test]
+    fn a_middle_pane_moves_its_right_border_however_the_tree_is_nested() {
+        // 1 | 2 | 3 nested as 1 | (2 | 3), and 1 | 3 | 2 nested as (1 | 3) | 2.
+        let right_heavy = Leaf(1).insert(Some(1), 2, Right).insert(Some(2), 3, Right);
+        let left_heavy = Leaf(1).insert(Some(1), 2, Right).insert(Some(1), 3, Right);
+        for (mut tree, middle) in [(right_heavy, 2), (left_heavy, 3)] {
+            let right = |tree: &Node| {
+                let unit = Rect { x: 0.0, y: 0.0, w: 1.0, h: 1.0 };
+                tree.rects(unit).into_iter().map(|(_, r)| r.x + r.w).collect::<Vec<_>>()[1]
+            };
+            let before = right(&tree);
+            assert!(tree.resize(middle, Dir::Right));
+            assert!(right(&tree) > before, "the middle pane's right border moves right");
+            assert!(tree.resize(middle, Dir::Left));
+            assert!(tree.resize(middle, Dir::Left));
+            assert!(right(&tree) < before, "and left");
+        }
+        // The last pane of a row has no right border: its left one moves.
+        let mut tree = Leaf(1).insert(Some(1), 2, Right);
+        assert!(tree.resize(2, Dir::Left));
+        assert_eq!(widths(&tree), [(1, 45.0, 100.0), (2, 55.0, 100.0)]);
     }
 
     #[test]
