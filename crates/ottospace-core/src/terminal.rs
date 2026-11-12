@@ -1,5 +1,5 @@
-//! Terminal pane rules: scrolling back, mouse selection, paste. The shell applies them to its
-//! `alacritty_terminal` grid.
+//! Terminal pane rules: scrolling back, mouse and keyboard selection, paste. The shell applies
+//! them to its `alacritty_terminal` grid.
 
 use crate::keys::Mods;
 
@@ -107,6 +107,70 @@ pub fn paste(text: &str, bracketed: bool) -> Vec<u8> {
     text.replace("\r\n", "\r").replace('\n', "\r").into_bytes()
 }
 
+/// A cursor move in visual mode.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Motion {
+    Left,
+    Down,
+    Up,
+    Right,
+    WordRight,
+    WordLeft,
+    WordEnd,
+    LineStart,
+    LineEnd,
+    FirstOccupied,
+    Top,
+    Middle,
+    Bottom,
+}
+
+/// What a key does in visual mode.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum VisualKey {
+    Move(Motion),
+    /// `v`: start a selection at the cursor, or clear it.
+    Select,
+    /// `V`: start a line selection, or clear it.
+    SelectLines,
+    /// `y` or ↵: copy the selection and leave.
+    Copy,
+    Exit,
+}
+
+/// Visual-mode keys, vi style. `typed` is the key's text, so ⇧H arrives as "H".
+pub fn visual_key(key: &str, typed: Option<&str>) -> Option<VisualKey> {
+    use Motion::*;
+    let action = match key {
+        "escape" => VisualKey::Exit,
+        "enter" => VisualKey::Copy,
+        "left" => VisualKey::Move(Left),
+        "down" => VisualKey::Move(Down),
+        "up" => VisualKey::Move(Up),
+        "right" => VisualKey::Move(Right),
+        _ => VisualKey::Move(match typed? {
+            "h" => Left,
+            "j" => Down,
+            "k" => Up,
+            "l" => Right,
+            "w" => WordRight,
+            "b" => WordLeft,
+            "e" => WordEnd,
+            "0" => LineStart,
+            "$" => LineEnd,
+            "^" => FirstOccupied,
+            "H" => Top,
+            "M" => Middle,
+            "L" => Bottom,
+            "v" => return Some(VisualKey::Select),
+            "V" => return Some(VisualKey::SelectLines),
+            "y" => return Some(VisualKey::Copy),
+            _ => return None,
+        }),
+    };
+    Some(action)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,5 +230,19 @@ mod tests {
         assert_eq!(paste("a\nb", true), b"\x1b[200~a\nb\x1b[201~".to_vec());
         assert_eq!(paste("x\x1b[201~rm", true), b"\x1b[200~x[201~rm\x1b[201~".to_vec(), "no early end");
         assert_eq!(paste("a\nb\r\nc", false), b"a\rb\rc".to_vec());
+    }
+
+    #[test]
+    fn visual_keys_are_vi_keys() {
+        assert_eq!(visual_key("h", Some("h")), Some(VisualKey::Move(Motion::Left)));
+        assert_eq!(visual_key("down", None), Some(VisualKey::Move(Motion::Down)));
+        assert_eq!(visual_key("h", Some("H")), Some(VisualKey::Move(Motion::Top)));
+        assert_eq!(visual_key("4", Some("$")), Some(VisualKey::Move(Motion::LineEnd)));
+        assert_eq!(visual_key("v", Some("v")), Some(VisualKey::Select));
+        assert_eq!(visual_key("v", Some("V")), Some(VisualKey::SelectLines));
+        assert_eq!(visual_key("y", Some("y")), Some(VisualKey::Copy));
+        assert_eq!(visual_key("enter", Some("\n")), Some(VisualKey::Copy));
+        assert_eq!(visual_key("escape", None), Some(VisualKey::Exit));
+        assert_eq!(visual_key("q", Some("q")), None);
     }
 }

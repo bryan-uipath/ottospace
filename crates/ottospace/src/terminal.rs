@@ -15,12 +15,13 @@ use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::tty;
+use alacritty_terminal::vi_mode::ViMotion;
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor};
 use gpui::{
     App, Bounds, ContentMask, FontStyle, FontWeight, Hsla, Pixels, Size, TextRun, UnderlineStyle, Window, fill, font,
     point, px, rgb, size,
 };
-use ottospace_core::terminal::{CellPoint, Scroll, SelectKind, Wheel, paste, wheel_scrolls};
+use ottospace_core::terminal::{CellPoint, Motion, Scroll, SelectKind, Wheel, paste, wheel_scrolls};
 use ottospace_core::{palette, theme};
 
 const FONT: &str = "Menlo";
@@ -194,6 +195,65 @@ impl Terminal {
     /// The selected text, if anything is selected.
     pub fn selected(&self) -> Option<String> {
         self.term.lock().selection_to_string().filter(|s| !s.is_empty())
+    }
+
+    /// Turns visual mode (alacritty's vi mode) on, with its cursor at the terminal cursor, or off.
+    /// Either way the selection clears, so `v` starts a fresh one; leaving returns to the bottom.
+    pub fn set_visual(&self, on: bool) {
+        let mut term = self.term.lock();
+        if term.mode().contains(TermMode::VI) != on {
+            term.toggle_vi_mode();
+        }
+        term.selection = None;
+        if !on {
+            term.scroll_display(GridScroll::Bottom);
+        }
+        self.shared.dirty.store(true, Relaxed);
+    }
+
+    /// Moves the visual-mode cursor, scrolling to keep it in view. A selection follows it.
+    pub fn visual_move(&self, motion: Motion) {
+        let motion = match motion {
+            Motion::Left => ViMotion::Left,
+            Motion::Down => ViMotion::Down,
+            Motion::Up => ViMotion::Up,
+            Motion::Right => ViMotion::Right,
+            Motion::WordRight => ViMotion::SemanticRight,
+            Motion::WordLeft => ViMotion::SemanticLeft,
+            Motion::WordEnd => ViMotion::SemanticRightEnd,
+            Motion::LineStart => ViMotion::First,
+            Motion::LineEnd => ViMotion::Last,
+            Motion::FirstOccupied => ViMotion::FirstOccupied,
+            Motion::Top => ViMotion::High,
+            Motion::Middle => ViMotion::Middle,
+            Motion::Bottom => ViMotion::Low,
+        };
+        let mut term = self.term.lock();
+        term.vi_motion(motion);
+        let point = term.vi_mode_cursor.point;
+        term.scroll_to_point(point);
+        self.shared.dirty.store(true, Relaxed);
+    }
+
+    /// Starts a selection at the visual-mode cursor (whole lines with `lines`), or clears it.
+    pub fn visual_select(&self, lines: bool) {
+        let mut term = self.term.lock();
+        if term.selection.take().is_none() {
+            let ty = if lines { SelectionType::Lines } else { SelectionType::Simple };
+            let mut selection = Selection::new(ty, term.vi_mode_cursor.point, Side::Left);
+            // Covers the cell under the cursor, so the selection is not empty and follows moves.
+            selection.include_all();
+            term.selection = Some(selection);
+        }
+        self.shared.dirty.store(true, Relaxed);
+    }
+
+    /// The visual-mode cursor as (line, column), line 0 the top of the screen and negative in
+    /// history; `None` outside visual mode.
+    pub fn visual_cursor(&self) -> Option<(i32, usize)> {
+        let term = self.term.lock();
+        let point = term.vi_mode_cursor.point;
+        term.mode().contains(TermMode::VI).then_some((point.line.0, point.column.0))
     }
 
     /// Pastes `text`, bracketed if the program asked for it.

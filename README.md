@@ -43,7 +43,9 @@ macOS, so you may have to grant the permissions again after an update.
 | Split panes mixing terminals and real app windows | Works today |
 | Key bindings and a status bar showing `NORMAL` / `APP` mode | Works today |
 | Control socket and `ottospace ctl` for agents and tests | Works today |
-| Other key modes: insert, visual, sneak | Designed |
+| Terminal scrollback, mouse selection, copy and paste | Works today |
+| Visual mode: select terminal text with vi keys | Works today |
+| Other key modes: insert, sneak | Designed |
 | Tasks: each owns a workspace (tabs, then splits) with a brief pane and automatic cleanup | Designed |
 | "Pop next": open the next task by priority | Designed |
 | Quick capture (⌘⌘): turn something on screen into a task and dispatch it to an agent | Designed |
@@ -134,6 +136,7 @@ the tag does not match the crate version.
 | Drag / double-click / triple-click | Select text / a word / a line in a terminal |
 | ⌘C | Copy the terminal's selection (nothing selected: does nothing) |
 | ⌘V | Paste into the terminal |
+| ⌘⇧C | Visual mode on the terminal: `hjkl`/arrows, `w b e 0 ^ $`, `H M L` move; `v` / `V` select; `y` or ↵ copies and leaves; Esc leaves |
 
 Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
 

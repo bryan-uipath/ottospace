@@ -262,6 +262,40 @@ fn mouse_selects_and_copy_paste_use_it() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn visual_mode_selects_with_the_keyboard() {
+    let otto = Otto::launch("visual");
+    otto.call(json!({"cmd": "split"}));
+    otto.bounds(&[1]);
+    otto.call(json!({"cmd": "type", "text": "echo alpha beta\r"}));
+    otto.wait_for("the output", |o| Some(term1(o)).filter(|t| shows(t, "alpha beta")));
+    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+
+    // ⌘⇧C puts a cursor at the terminal cursor and drops any mouse selection; pane actions wait.
+    otto.call(json!({"cmd": "mouse_down", "x": 0.25, "y": 0.5, "clicks": 2}));
+    let reply = key("cmd-shift-c");
+    assert_eq!((reply["mode"].as_str(), reply["state"]["visual"].as_u64()), (Some("visual"), Some(1)));
+    assert_eq!(reply["terminals"]["1"]["selection"], Value::Null);
+    let line = reply["terminals"]["1"]["visual_cursor"][0].as_i64().expect("a cursor");
+    assert_eq!(pane_ids(&otto.call(json!({"cmd": "split"}))), [1]);
+
+    // Up to the output line, to its start, select to the end of the word, copy and leave.
+    let reply = key("k 0 v e");
+    assert_eq!(reply["terminals"]["1"]["visual_cursor"], json!([line - 1, 4]));
+    assert_eq!(reply["terminals"]["1"]["selection"], "alpha");
+    let reply = key("y");
+    assert_eq!((reply["mode"].as_str(), reply["copied"].as_str()), (Some("normal"), Some("alpha")));
+    assert_eq!(reply["terminals"]["1"]["selection"], Value::Null);
+    assert_eq!(reply["terminals"]["1"]["visual_cursor"], Value::Null);
+
+    // Esc leaves without copying; typed keys never reach the shell while in visual mode.
+    let reply = key("cmd-shift-c w v $ escape");
+    assert_eq!((reply["mode"].as_str(), reply["copied"].as_str()), (Some("normal"), Some("alpha")));
+    otto.call(json!({"cmd": "type", "text": "echo done\r"}));
+    otto.wait_for("the shell to be untouched", |o| Some(term1(o)).filter(|t| shows(t, "done")));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn secondary_bar_opens_and_closes_beside_the_panes() {
     let otto = Otto::launch("bar");
     let reply = otto.call(json!({"cmd": "split", "kind": "empty"}));

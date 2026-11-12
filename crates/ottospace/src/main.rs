@@ -23,7 +23,7 @@ use gpui::{
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::keys::{self, Mods};
-use ottospace_core::terminal::{CellPoint, cell_at, scroll_key, select_kind};
+use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, scroll_key, select_kind, visual_key};
 use ottospace_core::{
     Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Pane, PaneId, PickItem, Picker, Rect, Section, theme,
     titlebar::{self, TitleBar},
@@ -279,6 +279,15 @@ const KEYS_TERMINAL: &[(&str, &str)] = &[
     ("Drag / 2× / 3× click", "Select text, a word, a line"),
     ("⌘C", "Copy the selection"),
     ("⌘V", "Paste"),
+    ("⌘⇧C", "Visual mode: select with the keyboard"),
+];
+const KEYS_VISUAL: &[(&str, &str)] = &[
+    ("H J K L / arrows", "Move the cursor"),
+    ("W B E · 0 ^ $", "Word · line start, text, end"),
+    ("⇧H ⇧M ⇧L", "Top, middle, bottom of the screen"),
+    ("V / ⇧V", "Select from here / whole lines; again clears"),
+    ("Y or ↵", "Copy and leave"),
+    ("Esc", "Leave"),
 ];
 
 /// Rail sections in order, with their icon and label.
@@ -336,26 +345,12 @@ fn empty_workspace() -> impl IntoElement {
 actions!(
     ottospace,
     [
-        SplitRight,
-        SplitDown,
-        PickPane,
-        ClosePane,
-        FocusLeft,
-        FocusRight,
-        FocusUp,
-        FocusDown,
-        FocusNext,
-        FocusPrev,
-        Zoom,
-        NewTab,
-        NextTab,
-        PrevTab,
-        CloseTab,
-        ShowKeys,
-        CopySelection,
-        PasteText
+        SplitRight, SplitDown, PickPane, ClosePane, FocusLeft, FocusRight, FocusUp, FocusDown, FocusNext, FocusPrev,
+        Zoom, NewTab, NextTab, PrevTab, CloseTab, ShowKeys
     ]
 );
+// Terminal selection.
+actions!(ottospace, [CopySelection, PasteText, VisualMode]);
 
 struct Workspace {
     model: Model,
@@ -521,6 +516,11 @@ impl Workspace {
                 }
                 Effect::HostApp { name, axis, new_tab } => {
                     let _ = self.open_app(name, *axis, *new_tab, window, cx);
+                }
+                Effect::Visual { pane, on } => {
+                    if let Some(terminal) = self.terminals.get(pane) {
+                        terminal.set_visual(*on);
+                    }
                 }
                 Effect::Live(id) => {
                     self.live_since = Some(Instant::now());
@@ -720,6 +720,7 @@ impl Workspace {
                     "display_offset": display_offset, "history": history,
                     // What ⌘C would copy.
                     "selection": t.selected(),
+                    "visual_cursor": t.visual_cursor(),
                 });
                 (*id, terminal)
             })
@@ -927,6 +928,10 @@ impl Workspace {
             self.picker_key(event, window, cx);
             return;
         }
+        if self.model.mode() == Mode::Visual {
+            self.visual_key(event, window, cx);
+            return;
+        }
         let Some(terminal) = self.model.focused.and_then(|id| self.terminals.get(&id)) else { return };
         let key = &event.keystroke;
         let m = key.modifiers;
@@ -984,10 +989,41 @@ impl Workspace {
         Some(cell_at(local.x.into(), local.y.into(), cell, terminal.grid_size()))
     }
 
+    /// Visual mode takes every key but ⌘ shortcuts: vi keys move, select, copy and leave.
+    fn visual_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
+        let key = &event.keystroke;
+        if key.modifiers.platform {
+            return; // ⌘ shortcuts still reach their bindings; ⌘⇧C leaves
+        }
+        cx.stop_propagation();
+        let Some(id) = self.model.visual else { return };
+        let (Some(terminal), Some(action)) = (self.terminals.get(&id), visual_key(&key.key, key.key_char.as_deref()))
+        else {
+            return;
+        };
+        match action {
+            VisualKey::Move(motion) => terminal.visual_move(motion),
+            VisualKey::Select => terminal.visual_select(false),
+            VisualKey::SelectLines => terminal.visual_select(true),
+            VisualKey::Copy => {
+                if let Some(text) = terminal.selected() {
+                    self.copy_text(text, cx);
+                }
+                self.dispatch(Action::LeaveVisual, window, cx);
+            }
+            VisualKey::Exit => drop(self.dispatch(Action::LeaveVisual, window, cx)),
+        }
+        cx.notify();
+    }
+
     /// ⌘C: copies the focused terminal's selection. With nothing selected it does nothing.
     fn copy(&mut self, cx: &mut Context<Self>) {
         let terminal = self.model.keyboard_terminal().and_then(|id| self.terminals.get(&id));
         let Some(text) = terminal.and_then(Terminal::selected) else { return };
+        self.copy_text(text, cx);
+    }
+
+    fn copy_text(&mut self, text: String, cx: &mut Context<Self>) {
         if self.system_clipboard {
             cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
         }
@@ -1076,8 +1112,7 @@ impl Workspace {
                     .flex_col()
                     .gap_4()
                     .child(group("PANES", rows(KEYS_PANES)))
-                    .child(group("MOVE", rows(KEYS_MOVE)))
-                    .child(group("TERMINAL", rows(KEYS_TERMINAL))),
+                    .child(group("MOVE", rows(KEYS_MOVE))),
             )
             .child(div().flex().flex_col().gap_4().child(group("TABS", rows(KEYS_TABS))).child(group(
                 "WINDOW",
@@ -1086,7 +1121,15 @@ impl Workspace {
                     ("⌘⌃F".into(), "Zoom the window"),
                     ("⌘/".into(), "This list"),
                 ],
-            )));
+            )))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .child(group("TERMINAL", rows(KEYS_TERMINAL)))
+                    .child(group("VISUAL", rows(KEYS_VISUAL))),
+            );
         div()
             .id("keys-backdrop")
             .absolute()
@@ -1418,7 +1461,9 @@ impl Workspace {
         } else if let Some(terminal) = self.terminals.get(&id) {
             let screen = terminal.screen();
             let cell = self.cell;
-            let has_keys = self.model.focused == Some(id) && self.model.mode() == Mode::Normal && !self.model.keys;
+            let mode = self.model.mode();
+            let has_keys =
+                self.model.focused == Some(id) && matches!(mode, Mode::Normal | Mode::Visual) && !self.model.keys;
             let grid = canvas(
                 |_, _, _| {},
                 move |bounds, _, window, cx| terminal::paint(&screen, bounds, cell, has_keys, window, cx),
@@ -1598,6 +1643,7 @@ impl Workspace {
             Mode::Normal => ("NORMAL", "⌘/ keys"),
             Mode::Pick => ("PICK", "type to filter · ↑↓ move · ↵ open · esc close"),
             Mode::App => ("APP", app_hint.as_str()),
+            Mode::Visual => ("VISUAL", "hjkl move · v select · y copy · esc leave"),
         };
         let hint = hint.to_string();
         let focused = match self.model.focused.and_then(|id| self.model.pane(id)).map(|p| &p.kind) {
@@ -1711,6 +1757,9 @@ impl Render for Workspace {
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| this.mouse_move(e, cx)))
             .on_action(cx.listener(|this, _: &CopySelection, _, cx| this.copy(cx)))
             .on_action(cx.listener(|this, _: &PasteText, _, cx| this.paste(cx)))
+            .on_action(cx.listener(|this, _: &VisualMode, window, cx| {
+                this.dispatch(Action::ToggleVisual, window, cx);
+            }))
             .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
                 this.dispatch(Action::Split { axis: Axis::Right, kind: Kind::Terminal }, window, cx);
             }))
@@ -1879,6 +1928,7 @@ fn main() {
             // Terminal selection. ⌘C never sends ^C: that is ⌃C.
             KeyBinding::new("cmd-c", CopySelection, None),
             KeyBinding::new("cmd-v", PasteText, None),
+            KeyBinding::new("cmd-shift-c", VisualMode, None),
         ]);
         let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
         // Draw under the title bar; the top bar leaves room for the traffic lights.

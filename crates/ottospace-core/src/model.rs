@@ -34,6 +34,8 @@ pub enum Mode {
     App,
     /// The pane picker: keys filter and choose.
     Pick,
+    /// A cursor in a terminal's output: keys move it and select text to copy.
+    Visual,
 }
 
 /// Something the picker can put in a new pane.
@@ -185,6 +187,9 @@ pub enum Action {
     /// Show or hide the key reference.
     ToggleKeys,
     CloseKeys,
+    /// Enter visual mode on the focused terminal, or leave it.
+    ToggleVisual,
+    LeaveVisual,
 }
 
 /// What the shell must do after an update.
@@ -202,6 +207,11 @@ pub enum Effect {
         name: String,
         axis: Axis,
         new_tab: bool,
+    },
+    /// The terminal's visual-mode cursor turns on or off.
+    Visual {
+        pane: PaneId,
+        on: bool,
     },
 }
 
@@ -238,6 +248,8 @@ pub struct Model {
     pub picker: Option<Picker>,
     /// The key reference overlay is showing.
     pub keys: bool,
+    /// The terminal pane in visual mode.
+    pub visual: Option<PaneId>,
     #[serde(skip)]
     next_id: PaneId,
     #[serde(skip)]
@@ -256,6 +268,7 @@ impl Default for Model {
             sidebar: None,
             picker: None,
             keys: false,
+            visual: None,
             next_id: 0,
             next_tab: 0,
         };
@@ -274,6 +287,8 @@ impl Model {
             Mode::Pick
         } else if self.live.is_some() {
             Mode::App
+        } else if self.visual.is_some() {
+            Mode::Visual
         } else {
             Mode::Normal
         }
@@ -308,7 +323,9 @@ impl Model {
         // The key reference covers the workspace too, so the same actions wait behind it, and the
         // picker cannot open under it.
         let blocked_by_keys = self.keys && (for_panes || matches!(action, Action::OpenPicker { .. }));
-        if (self.picker.is_some() && for_panes) || blocked_by_keys {
+        // Visual mode holds the keyboard on its terminal the same way.
+        let blocked_by_visual = self.visual.is_some() && (for_panes || matches!(action, Action::OpenPicker { .. }));
+        if (self.picker.is_some() && for_panes) || blocked_by_keys || blocked_by_visual {
             return effects;
         }
         match action {
@@ -469,6 +486,15 @@ impl Model {
                 }
             }
             Action::CloseKeys => self.keys = false,
+            Action::ToggleVisual => {
+                if self.visual.is_some() {
+                    self.leave_visual(&mut effects);
+                } else if let Some(pane) = self.keyboard_terminal() {
+                    self.visual = Some(pane);
+                    effects.push(Effect::Visual { pane, on: true });
+                }
+            }
+            Action::LeaveVisual => self.leave_visual(&mut effects),
             Action::CloseSidebar => {
                 self.leave(&mut effects);
                 self.sidebar = None;
@@ -588,6 +614,12 @@ impl Model {
             self.leave(effects);
         }
         self.focused = Some(id);
+    }
+
+    fn leave_visual(&mut self, effects: &mut Vec<Effect>) {
+        if let Some(pane) = self.visual.take() {
+            effects.push(Effect::Visual { pane, on: false });
+        }
     }
 
     fn leave(&mut self, effects: &mut Vec<Effect>) {
@@ -1069,6 +1101,39 @@ mod tests {
         assert_eq!(m.keyboard_terminal(), None, "an app pane is focused");
         m.update(Action::Focus { pane: 1 });
         assert_eq!(m.keyboard_terminal(), Some(1));
+    }
+
+    #[test]
+    fn visual_mode_starts_on_the_focused_terminal_and_holds_pane_actions() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Empty });
+        assert_eq!(m.update(Action::ToggleVisual), [], "not a terminal");
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        assert_eq!(m.update(Action::ToggleVisual), [Effect::Visual { pane: 2, on: true }]);
+        assert_eq!((m.mode(), m.keyboard_terminal()), (Mode::Visual, None));
+        for action in [
+            Action::Focus { pane: 1 },
+            Action::Close { pane: None },
+            Action::NewTab,
+            Action::OpenPicker { axis: Right, new_tab: false, items: vec![PickItem::Terminal] },
+        ] {
+            assert_eq!(m.update(action), []);
+        }
+        assert_eq!((m.focused, m.picker.is_none(), m.tabs.len()), (Some(2), true, 1));
+        assert_eq!(m.update(Action::ToggleVisual), [Effect::Visual { pane: 2, on: false }]);
+        assert_eq!(m.mode(), Mode::Normal);
+        assert_eq!(m.update(Action::LeaveVisual), []);
+    }
+
+    #[test]
+    fn visual_mode_waits_behind_the_key_reference() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        m.update(Action::ToggleKeys);
+        assert_eq!(m.update(Action::ToggleVisual), []);
+        m.update(Action::CloseKeys);
+        m.update(Action::ToggleVisual);
+        assert_eq!(m.update(Action::LeaveVisual), [Effect::Visual { pane: 1, on: false }]);
     }
 
     #[test]
