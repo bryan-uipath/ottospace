@@ -374,15 +374,14 @@ export interface MouseArgs {
   /** In points from the top-left of ottospace's window, as the state's rects are. */
   x: number;
   y: number;
-  /** Default: left. */
-  button?: "left" | "right";
+  /** At most 3. */
   clicks?: number;
-  modifiers?: Array<"cmd" | "ctrl" | "alt" | "shift" | "fn">;
+  modifiers?: Array<"cmd" | "ctrl" | "alt" | "shift">;
 }
 export interface DragArgs {
   from: [number, number];
   to: [number, number];
-  /** Moves between the press and the release. Default: 8. */
+  /** Moves between the press and the release, 1 to 256. Default: 8. */
   steps?: number;
 }
 export interface ScrollArgs {

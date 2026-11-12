@@ -28,7 +28,7 @@
 {"cmd":"mouse_down","pane":1,"x":2.5,"y":5,"clicks":2}
 {"cmd":"mouse_drag","pane":1,"x":20,"y":5}
 {"cmd":"scroll","pane":1,"lines":40}
-{"cmd":"mouse","action":"down","x":300,"y":60,"button":"left","clicks":1,"modifiers":["shift"]}
+{"cmd":"mouse","action":"down","x":300,"y":60,"clicks":1,"modifiers":["shift"]}
 {"cmd":"drag","from":[300,60],"to":[900,400],"steps":8}
 {"cmd":"repos"}
 {"cmd":"open_repo","path":"/Users/me/code/app","axis":"down"}

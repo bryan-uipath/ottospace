@@ -147,24 +147,24 @@ pub enum Request {
         pane: Option<PaneId>,
         lines: f32,
     },
-    /// One pointer event at `x`, `y`, in points from the top-left of ottospace's window, as the
-    /// state gives rects: `{"cmd":"mouse","action":"down","x":300,"y":60}`. A `move` between a
-    /// `down` and its `up` is a drag. It goes to ottospace's own views only: never to another
-    /// app's window, a live hosted one included, and the real pointer does not move. As on a
-    /// Mac, a left press with `ctrl` is a right press.
+    /// For tests (`pointer_refusal`). One left-button pointer event at `x`, `y`, in points from
+    /// the top-left of ottospace's window, as the state gives rects:
+    /// `{"cmd":"mouse","action":"down","x":300,"y":60}`. A `move` between a `down` and its `up`
+    /// is a drag; every `down` needs its `up`. The event never leaves ottospace: it is not
+    /// posted, the real pointer does not move, and no other app's window gets it. But a click
+    /// does what the control under it does, with the outside effects of `open_app`, `enter`,
+    /// `leave` or `close`: a click on a parked app pane raises that app's window.
     Mouse {
         action: MouseAction,
         x: f32,
         y: f32,
-        #[serde(default)]
-        button: Button,
         #[serde(default = "one")]
         clicks: usize,
         #[serde(default)]
         modifiers: Vec<Modifier>,
     },
     /// A whole left-button drag: a press at `from`, `steps` moves along the line, a release at
-    /// `to`. Same reach as `mouse`.
+    /// `to`. For tests, as `mouse`.
     Drag {
         from: [f32; 2],
         to: [f32; 2],
@@ -301,14 +301,6 @@ pub enum MouseAction {
     Up,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Button {
-    #[default]
-    Left,
-    Right,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Modifier {
@@ -316,7 +308,14 @@ pub enum Modifier {
     Ctrl,
     Alt,
     Shift,
-    Fn,
+}
+
+/// Why a request is refused, if it is: `mouse` and `drag` answer only in a test run (`e2e`:
+/// `OTTOSPACE_E2E` is set). Coordinates would reach every control with no request of its own.
+pub fn pointer_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
+    let pointer = matches!(request, Request::Mouse { .. } | Request::Drag { .. });
+    (pointer && !e2e)
+        .then_some("pointer requests are for tests (OTTOSPACE_E2E); use drop_pane, focus, close, enter and the like")
 }
 
 /// Pane kinds a client may create. App panes come from `open_app`.
@@ -403,4 +402,23 @@ pub fn send(path: &Path, request: &str) -> io::Result<String> {
     let mut reply = String::new();
     BufReader::new(stream).read_line(&mut reply)?;
     Ok(reply.trim_end().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pointer_requests_answer_only_in_a_test_run() {
+        let parse = |line: &str| serde_json::from_str::<Request>(line).expect(line);
+        let mouse = parse(r#"{"cmd":"mouse","action":"down","x":300,"y":60}"#);
+        let drag = parse(r#"{"cmd":"drag","from":[300,60],"to":[900,400]}"#);
+        let drop = parse(r#"{"cmd":"drop_pane","source":3,"target":1,"zone":"left"}"#);
+        for pointer in [&mouse, &drag] {
+            assert!(pointer_refusal(pointer, false).expect("refused").contains("drop_pane"));
+            assert_eq!(pointer_refusal(pointer, true), None);
+        }
+        assert_eq!(pointer_refusal(&drop, false), None);
+        assert_eq!(pointer_refusal(&parse(r#"{"cmd":"state"}"#), false), None);
+    }
 }

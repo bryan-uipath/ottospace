@@ -13,8 +13,6 @@ use objc2_foundation::NSPoint;
 #[derive(Clone, Copy, Debug)]
 pub struct Mouse {
     pub kind: MouseKind,
-    /// The right button, not the left: the one pressed, released, or held during a move.
-    pub right: bool,
     pub x: f64,
     pub y: f64,
     pub clicks: isize,
@@ -22,7 +20,6 @@ pub struct Mouse {
     pub ctrl: bool,
     pub alt: bool,
     pub shift: bool,
-    pub function: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -44,14 +41,11 @@ pub enum MouseKind {
 /// borrow the view's handler takes (for a GPUI view: not inside an `App` update).
 pub unsafe fn send_mouse(ns_view: *mut c_void, mouse: Mouse) {
     let view = unsafe { &*(ns_view as *const NSView) };
-    let kind = match (mouse.kind, mouse.right) {
-        (MouseKind::Down, false) => NSEventType::LeftMouseDown,
-        (MouseKind::Down, true) => NSEventType::RightMouseDown,
-        (MouseKind::Up, false) => NSEventType::LeftMouseUp,
-        (MouseKind::Up, true) => NSEventType::RightMouseUp,
-        (MouseKind::Move, _) => NSEventType::MouseMoved,
-        (MouseKind::Drag, false) => NSEventType::LeftMouseDragged,
-        (MouseKind::Drag, true) => NSEventType::RightMouseDragged,
+    let kind = match mouse.kind {
+        MouseKind::Down => NSEventType::LeftMouseDown,
+        MouseKind::Up => NSEventType::LeftMouseUp,
+        MouseKind::Move => NSEventType::MouseMoved,
+        MouseKind::Drag => NSEventType::LeftMouseDragged,
     };
     let mut flags = NSEventModifierFlags::empty();
     for (held, flag) in [
@@ -59,7 +53,6 @@ pub unsafe fn send_mouse(ns_view: *mut c_void, mouse: Mouse) {
         (mouse.ctrl, NSEventModifierFlags::Control),
         (mouse.alt, NSEventModifierFlags::Option),
         (mouse.shift, NSEventModifierFlags::Shift),
-        (mouse.function, NSEventModifierFlags::Function),
     ] {
         if held {
             flags |= flag;
@@ -72,14 +65,11 @@ pub unsafe fn send_mouse(ns_view: *mut c_void, mouse: Mouse) {
         kind, at, flags, 0.0, number, None, 0, mouse.clicks, 1.0,
     );
     let Some(event) = event else { return };
-    match (mouse.kind, mouse.right) {
-        (MouseKind::Down, false) => view.mouseDown(&event),
-        (MouseKind::Down, true) => view.rightMouseDown(&event),
-        (MouseKind::Up, false) => view.mouseUp(&event),
-        (MouseKind::Up, true) => view.rightMouseUp(&event),
-        (MouseKind::Move, _) => view.mouseMoved(&event),
-        (MouseKind::Drag, false) => view.mouseDragged(&event),
-        (MouseKind::Drag, true) => view.rightMouseDragged(&event),
+    match mouse.kind {
+        MouseKind::Down => view.mouseDown(&event),
+        MouseKind::Up => view.mouseUp(&event),
+        MouseKind::Move => view.mouseMoved(&event),
+        MouseKind::Drag => view.mouseDragged(&event),
     }
 }
 

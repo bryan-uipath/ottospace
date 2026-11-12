@@ -47,7 +47,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.mouseDown({ pane: 1, x: 2.5, y: 5, clicks: 2 }),
   (c) => c.mouseDrag({ pane: 1, x: 20, y: 5 }),
   (c) => c.scroll({ pane: 1, lines: 40 }),
-  (c) => c.mouse({ action: "down", x: 300, y: 60, button: "left", clicks: 1, modifiers: ["shift"] }),
+  (c) => c.mouse({ action: "down", x: 300, y: 60, clicks: 1, modifiers: ["shift"] }),
   (c) => c.drag({ from: [300, 60], to: [900, 400], steps: 8 }),
   (c) => c.repos(),
   (c) => c.openRepo({ path: "/Users/me/code/app", axis: "down" }),

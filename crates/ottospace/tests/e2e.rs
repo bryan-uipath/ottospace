@@ -354,6 +354,33 @@ fn a_header_dragged_with_the_mouse_splits_or_swaps_where_it_is_released() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn a_drag_reports_its_drop_zone_from_the_move_that_starts_it() {
+    let otto = Otto::launch("drag-first-move");
+    for _ in 0..3 {
+        otto.call(json!({"cmd": "split", "kind": "empty"}));
+    }
+    // 1 | 2 | 3. One move from 3's header to the centre of 1 starts the drag and is over 1.
+    let state = otto.drawn();
+    let to = at(rect(&state["frames"]["1"]), 0.5, 0.5);
+    otto.mouse("down", at(rect(&state["headers"]["3"]), 0.5, 0.5));
+    assert_eq!(otto.mouse("move", to)["drag"], json!({"target": 1, "zone": "center"}));
+    assert_eq!(otto.mouse("up", to)["tab_panes"], json!([[3, 2, 1]]));
+    // So does a whole drag of one move.
+    let state = otto.drawn();
+    let from = at(rect(&state["headers"]["1"]), 0.5, 0.5);
+    let reply = otto.call(json!({"cmd": "drag", "from": from, "to": to, "steps": 1}));
+    assert_eq!(reply["tab_panes"], json!([[1, 2, 3]]));
+
+    // The zone of the last drop is not the next drag's: 3 pt along its own header, 2 is over nothing.
+    let from = at(rect(&otto.drawn()["headers"]["2"]), 0.5, 0.5);
+    otto.mouse("down", from);
+    let reply = otto.mouse("move", [from[0] + 3.0, from[1]]);
+    assert_eq!(reply["drag"], json!({"target": null, "zone": null}));
+    otto.mouse("up", [from[0] + 3.0, from[1]]);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn a_header_dragged_onto_a_tab_moves_the_pane_there() {
     let otto = Otto::launch("drag-tabs");
     // Tab 0: 1 | 2. Tab 1: 3.
@@ -435,6 +462,12 @@ fn a_pane_drag_that_ends_nowhere_changes_nothing() {
     let window = rect(&before["window"]);
     same("outside", &otto.drag(from, [window[2] + 60.0, window[3] + 60.0]));
     same("above", &otto.drag(from, [one[0] + 20.0, -40.0]));
+    // A press nobody releases: after 5 s the app lets go, outside the window.
+    otto.mouse("down", from);
+    assert_eq!(otto.mouse("move", at(one, 0.5, 0.9))["drag"], json!({"target": 1, "zone": "bottom"}));
+    std::thread::sleep(Duration::from_millis(5500));
+    same("an abandoned press", &otto.call(json!({"cmd": "state"})));
+    same("a move after it", &otto.mouse("move", at(one, 0.5, 0.1)));
 
     // The pointer is free again: a click focuses, a new drag drops.
     assert_eq!(otto.click(at(rect(&before["bounds"]["1"]), 0.5, 0.5), 1)["state"]["focused"], 1);
@@ -465,6 +498,12 @@ fn a_click_on_a_header_or_its_close_button_is_not_a_drag() {
     let reply = otto.click(header(2), 2);
     unmoved("a double-click", &reply);
     assert_eq!(reply["state"]["focused"], 2);
+    // A double-click on the tab bar zooms or minimises the user's window; an injected one does not.
+    let tab = at(rect(&before["tabs"][0]), 0.5, 0.5);
+    otto.click(tab, 1);
+    otto.click(tab, 2);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(otto.call(json!({"cmd": "state"}))["window"], before["window"], "the window is as it was");
     // A press that moves 2 pt, GPUI's limit, is still a click.
     let p = header(3);
     otto.mouse("down", p);

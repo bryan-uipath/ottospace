@@ -256,11 +256,16 @@ export class Client {
   scroll(args: ScrollArgs): Promise<Snapshot> {
     return this.snapshot({ cmd: "scroll", ...args });
   }
-  /** One pointer event in ottospace's own window. It never reaches another app's window. */
+  /**
+   * For tests: refused unless ottospace runs under `OTTOSPACE_E2E`. One left-button pointer event
+   * in ottospace's own window. The event never leaves ottospace, but a click does what the control
+   * under it does (a click on a parked app pane raises that app's window, as `enter` does).
+   * Every `down` needs its `up`.
+   */
   mouse(args: MouseArgs): Promise<Snapshot> {
     return this.snapshot({ cmd: "mouse", ...args });
   }
-  /** A press at `from`, moves along the line, a release at `to`. Same reach as `mouse`. */
+  /** For tests, as `mouse`: a press at `from`, moves along the line, a release at `to`. */
   drag(args: DragArgs): Promise<Snapshot> {
     return this.snapshot({ cmd: "drag", ...args });
   }

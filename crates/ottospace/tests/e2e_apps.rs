@@ -488,11 +488,14 @@ fn a_hosted_pane_is_dragged_by_its_header() {
     let reply = mouse("up", middle(body));
     assert_eq!((reply["mode"].clone(), reply["state"]["live"].clone()), (json!("app"), json!(1)));
     live("the window to cover the pane's new place");
+    // A replayed click would come 80 ms after the window is live: give it time.
+    std::thread::sleep(Duration::from_millis(300));
     no_clicks("an injected click on an app pane");
 
     // (c) After leaving, the header is ottospace's again: the window is at the corner, and a drag works.
     assert_eq!(otto.call(json!({"cmd": "leave"}))["mode"], "normal");
     parked("the window to park after leaving");
+    no_clicks("after leaving");
     assert_eq!(drag_pane(1, 2, 0.5, 0.5)["state"]["layout"], split("right", 2, 1));
     parked("the window to park after the swap");
 

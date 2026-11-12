@@ -13,7 +13,7 @@ use ottospace_core::home::{HOME, Home, NEAR, View};
 use ottospace_core::tasks::{Group, TaskId};
 use ottospace_core::{PaneId, Rect, theme};
 
-use crate::{Workspace, open_task, task_cells};
+use crate::{Workspace, open_task, rect, task_cells};
 
 /// The patch of lattice in an empty pane: a nearer, smaller view of the same floor.
 const PATCH: View = View { cx: 0.5, horizon: 0.05, fx: 0.58, fy: 0.91, sin: 0.5, cos: 0.866, dist: 3.9, lo: -3, hi: 4 };
@@ -50,10 +50,6 @@ pub struct Drawn {
 }
 
 pub type Shared = Rc<RefCell<Drawn>>;
-
-fn rect(b: Bounds<Pixels>) -> [f32; 4] {
-    [b.origin.x.into(), b.origin.y.into(), b.size.width.into(), b.size.height.into()]
-}
 
 impl Drawn {
     /// Where the text is, with room for a node beside it, in fractions of the area: the core

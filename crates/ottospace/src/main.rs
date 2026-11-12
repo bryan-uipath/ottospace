@@ -414,7 +414,7 @@ fn mark(marks: &Marks, key: Mark) -> impl IntoElement + use<> {
 }
 
 /// `[x, y, w, h]` in window points.
-fn rect(b: Bounds<Pixels>) -> [f32; 4] {
+pub(crate) fn rect(b: Bounds<Pixels>) -> [f32; 4] {
     [b.origin.x.into(), b.origin.y.into(), b.size.width.into(), b.size.height.into()]
 }
 
@@ -444,9 +444,10 @@ struct Workspace {
     dragging: Option<PaneId>,
     /// During a pane drag: the pane under the pointer and the zone of it a drop would land on.
     drop_at: Option<(PaneId, Zone)>,
-    /// A `mouse` request holds a button down (true: the right one): a move before its release
-    /// is a drag.
-    held: Option<bool>,
+    /// A `mouse` request holds the button down: a move before its release is a drag.
+    held: bool,
+    /// Releases a button no request came back for. Replaced, so stopped, by each `mouse` request.
+    abandoned: Option<gpui::Task<()>>,
     /// The pointer event in hand came from a `mouse` or `drag` request, not from the user.
     injected: bool,
     /// Where headers, their × and tabs were last drawn.
@@ -519,6 +520,8 @@ struct Launch {
 
 /// How long to wait for a started app's window before giving up.
 const LAUNCH_WAIT: Duration = Duration::from_secs(30);
+/// How long a `mouse` request's button stays down with no further request.
+const POINTER_IDLE: Duration = Duration::from_secs(5);
 
 /// How much of a test run's window stays on screen, in points, at the corner it sits in.
 const E2E_SLIVER: f32 = 12.;
@@ -636,7 +639,8 @@ impl Workspace {
             cell: terminal::cell_size(window),
             dragging: None,
             drop_at: None,
-            held: None,
+            held: false,
+            abandoned: None,
             injected: false,
             marks: Marks::default(),
             copied: None,
@@ -700,6 +704,9 @@ impl Workspace {
                 Effect::Closed(pane) => {
                     self.cells.remove(&pane.id);
                     self.frames.remove(&pane.id);
+                    self.marks
+                        .borrow_mut()
+                        .retain(|mark, _| ![Mark::Header(pane.id), Mark::Close(pane.id)].contains(mark));
                     self.terminals.remove(&pane.id); // drop ends its shell
                     if let Some(hosted) = self.hosted.remove(&pane.id) {
                         hosted.release();
@@ -800,13 +807,16 @@ impl Workspace {
                 }
                 continue;
             }
+            if let Some(why) = control::pointer_refusal(&request, std::env::var_os("OTTOSPACE_E2E").is_some()) {
+                let _ = reply.send(control::error(why));
+                continue;
+            }
             // So do pointer events, through the window's own handlers: a drag is GPUI's state.
             let events = match &request {
-                Request::Mouse { action, x, y, button, clicks, modifiers } => {
+                Request::Mouse { action, x, y, clicks, modifiers } => {
                     let has = |m: control::Modifier| modifiers.contains(&m);
                     let mouse = Mouse {
                         kind: MouseKind::Move,
-                        right: matches!(button, control::Button::Right),
                         x: f64::from(*x),
                         y: f64::from(*y),
                         clicks: (*clicks).min(3) as isize,
@@ -814,9 +824,10 @@ impl Workspace {
                         ctrl: has(control::Modifier::Ctrl),
                         alt: has(control::Modifier::Alt),
                         shift: has(control::Modifier::Shift),
-                        function: has(control::Modifier::Fn),
                     };
-                    Some(vec![self.pointer(*action, mouse)])
+                    let event = self.pointer(*action, mouse);
+                    self.abandoned = self.held.then(|| self.release_later(window, cx));
+                    Some(vec![event])
                 }
                 Request::Drag { from, to, steps } => {
                     // At most 256 moves: more adds nothing, and each draws a frame.
@@ -824,9 +835,8 @@ impl Workspace {
                     let along = |i: usize| {
                         let t = i as f32 / steps as f32;
                         let (x, y) = (from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t);
-                        let (kind, right, clicks) = (MouseKind::Move, false, 1);
-                        let (cmd, ctrl, alt, shift, function) = (false, false, false, false, false);
-                        Mouse { kind, right, x: x.into(), y: y.into(), clicks, cmd, ctrl, alt, shift, function }
+                        let (cmd, ctrl, alt, shift) = (false, false, false, false);
+                        Mouse { kind: MouseKind::Move, x: x.into(), y: y.into(), clicks: 1, cmd, ctrl, alt, shift }
                     };
                     let mut events = vec![self.pointer(MouseAction::Down, along(0))];
                     events.extend((1..=steps).map(|i| self.pointer(MouseAction::Move, along(i))));
@@ -1179,23 +1189,37 @@ impl Workspace {
         });
     }
 
-    /// `mouse` as the press, release or move `action` asks for. A press holds its button until
-    /// the release, and a move in between is a drag with that button.
+    /// `mouse` as the press, release or move `action` asks for. A press holds the button until
+    /// the release, and a move in between is a drag.
     fn pointer(&mut self, action: MouseAction, mouse: Mouse) -> Mouse {
-        match action {
-            MouseAction::Down => {
-                self.held = Some(mouse.right);
-                Mouse { kind: MouseKind::Down, ..mouse }
-            }
-            MouseAction::Move => match self.held {
-                Some(right) => Mouse { kind: MouseKind::Drag, right, ..mouse },
-                None => Mouse { kind: MouseKind::Move, ..mouse },
-            },
-            MouseAction::Up => {
-                self.held = None;
-                Mouse { kind: MouseKind::Up, ..mouse }
-            }
-        }
+        let kind = match action {
+            MouseAction::Down => MouseKind::Down,
+            MouseAction::Move if self.held => MouseKind::Drag,
+            MouseAction::Move => MouseKind::Move,
+            MouseAction::Up => MouseKind::Up,
+        };
+        self.held = match action {
+            MouseAction::Down => true,
+            MouseAction::Move => self.held,
+            MouseAction::Up => false,
+        };
+        Mouse { kind, ..mouse }
+    }
+
+    /// A client that pressed and went away must not leave the button down: after `POINTER_IDLE`
+    /// with no `mouse` request, releases it outside the window, where nothing is dropped.
+    fn release_later(&self, window: &Window, cx: &mut Context<Self>) -> gpui::Task<()> {
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(POINTER_IDLE).await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                if !std::mem::take(&mut this.held) {
+                    return;
+                }
+                let (kind, clicks, off) = (MouseKind::Up, 1, false);
+                let up = Mouse { kind, x: -1.0, y: -1.0, clicks, cmd: off, ctrl: off, alt: off, shift: off };
+                this.inject(vec![up], std::sync::mpsc::channel().0, window, cx);
+            });
+        })
     }
 
     /// Hands pointer events to the window's own AppKit handlers, as the system does, then replies
@@ -1648,8 +1672,9 @@ impl Workspace {
             cx.stop_propagation();
             return;
         }
-        // Esc during a pane drag cancels it.
+        // Esc during a pane drag cancels it, and a `mouse` request's button is up again.
         if key.key == "escape" && cx.has_active_drag() {
+            self.held = false;
             cx.stop_active_drag(window);
             cx.notify();
             cx.stop_propagation();
@@ -2560,9 +2585,16 @@ impl Workspace {
         // flex_none: a short pane must not squeeze the header, or a raised bar would overlap the pane above.
         let label: SharedString = if title.is_empty() { tag.into() } else { format!("{tag} {title}").into() };
         // The header is the pane's handle: a drag of it carries the pane to a drop zone or a tab.
+        let workspace = cx.weak_entity();
         let header = div()
             .id(("header", id))
-            .on_drag(DraggedPane(id), move |_, offset, _, cx| cx.new(|_| DragChip { label: label.clone(), offset }))
+            .on_drag(DraggedPane(id), move |_, offset, window, cx| {
+                // The move that starts the drag is already over a pane: `on_drag_move` saw it
+                // before the drag began, so note the drop zone here.
+                let at = window.mouse_position();
+                let _ = workspace.update(cx, |this, cx| this.pane_drag_move(id, at, window, cx));
+                cx.new(|_| DragChip { label: label.clone(), offset })
+            })
             .flex_none()
             .h(px(titlebar::header(bar, PANE_HEADER)))
             .px_2()
@@ -2751,8 +2783,9 @@ impl Workspace {
                 MouseButton::Left,
                 cx.listener(|this, e: &MouseDownEvent, window, cx| {
                     this.dispatch(Action::Leave, window, cx);
-                    // With a custom title bar, the system no longer zooms on double-click.
-                    if e.click_count == 2 {
+                    // With a custom title bar, the system no longer zooms on double-click. Not
+                    // for a `mouse` request: it would zoom or minimise the real window.
+                    if e.click_count == 2 && !this.injected {
                         window.titlebar_double_click();
                     }
                 }),
@@ -3104,7 +3137,8 @@ impl Render for Workspace {
                 this.pane_drag_move(e.drag(cx).0, e.event.position, window, cx);
             }))
             // A release ends the drag, so a later drag elsewhere does not extend this selection.
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.dragging = None))
+            // The user's release also ends a `mouse` request's hold.
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| (this.dragging, this.held) = (None, false)))
             // Any click leaves visual mode first, before the clicked element acts: visual mode has no
             // backdrop, and e.g. a click on an app pane must go live, not be replayed while blocked.
             .capture_any_mouse_down(cx.listener(|this, _, window, cx| {
