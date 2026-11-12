@@ -1263,8 +1263,9 @@ impl Workspace {
         if live_pid == Some(pid) {
             return; // its window is the one on screen: ottospace put it there
         }
-        // The window the app brought forward decides the pane. One that is not hosted: nothing to do.
-        let Some(main) = ax::Window::main_of(pid).and_then(|window| window.id()) else { return };
+        // The window the app brought forward decides the pane, among those the rules let
+        // ottospace hold. One that is not hosted: nothing to do.
+        let Some(main) = ax::Window::main_where(pid, window_managed).and_then(|window| window.id()) else { return };
         let Some(pane) = self.hosted.iter().find(|(_, h)| h.window_id == main).map(|(id, _)| *id) else { return };
         // The core would drop the move behind a box or in visual mode. Then do not come forward
         // either: that would only take the app away from the user.
