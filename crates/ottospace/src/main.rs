@@ -275,7 +275,12 @@ fn empty_pane(hint: &'static str) -> impl IntoElement {
         .flex_col()
         .items_center()
         // Name the source kind: a bare "empty-pane.svg" parses as a URL and is fetched over HTTP.
-        .child(img(ImageSource::Resource(Resource::Embedded("empty-pane.svg".into()))).w(px(224.)).h(px(184.)))
+        .child(
+            img(ImageSource::Resource(Resource::Embedded("empty-pane.svg".into())))
+                .w(px(224.))
+                .max_w_full()
+                .h(px(184.)),
+        )
         .child(div().text_sm().text_color(rgb(theme::MUTED)).child(hint))
 }
 
@@ -285,7 +290,7 @@ fn empty_workspace() -> impl IntoElement {
         .flex()
         .flex_col()
         .items_center()
-        .child(img(ImageSource::Resource(Resource::Embedded("empty.svg".into()))).w(px(700.)).h(px(392.)))
+        .child(img(ImageSource::Resource(Resource::Embedded("empty.svg".into()))).w(px(700.)).max_w_full().h(px(392.)))
         .child(div().text_sm().text_color(rgb(theme::MUTED)).child("⌘E to open a pane · ⌘D for a terminal"))
 }
 
@@ -1494,8 +1499,12 @@ impl Render for Workspace {
                     .child(
                         div()
                             .flex_1()
+                            // Let the canvas shrink below its content, so a wide image cannot
+                            // push it past the window; it scales down instead.
+                            .min_w_0()
                             .h_full()
                             .flex()
+                            .overflow_hidden()
                             .when(tree.is_none(), |d| d.items_center().justify_center().child(empty_workspace()))
                             .children(tree),
                     ),
