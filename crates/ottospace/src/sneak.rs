@@ -200,10 +200,12 @@ impl Workspace {
     }
 
     /// Before a key's shortcut runs: any ⌘ shortcut but the mode's own leaves sneak mode first.
-    pub(crate) fn shortcut_leaves_sneak(&mut self, key: &Keystroke, window: &Window, cx: &mut Context<Self>) {
+    /// `false`, always: the key goes on to its binding.
+    pub(crate) fn shortcut_leaves_sneak(&mut self, key: &Keystroke, window: &Window, cx: &mut Context<Self>) -> bool {
         if self.model.sneak.is_some() && key.modifiers.platform && !is_own(key) {
             self.dispatch(Action::LeaveSneak, self.input, window, cx);
         }
+        false
     }
 
     /// Sneak mode takes every key: a letter types a label or, if no label goes on with it,

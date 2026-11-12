@@ -12,7 +12,7 @@ export type Section = "apps" | "workbook" | "tasks" | "repos";
 /** Pane kinds `split` may create. App panes come from `open_app`. */
 export type SplitKind = "terminal" | "empty";
 /** Who has the keyboard. */
-export type Mode = "normal" | "app" | "pick" | "visual" | "list" | "compose" | "sneak";
+export type Mode = "normal" | "app" | "pick" | "visual" | "list" | "compose" | "sneak" | "confirm";
 
 export type TaskState =
   | "captured"
@@ -90,6 +90,20 @@ export interface Picker {
   selected: number;
 }
 
+/** A terminal a quit would end something in. */
+export interface Running {
+  pane: PaneId;
+  /** The program's name, or null when it could not be read. */
+  program: string | null;
+  /** True: a background or stopped job of the shell. False: the program in front of it. */
+  background: boolean;
+}
+
+/** The quit question: the terminals that run something. */
+export interface Confirm {
+  running: Running[];
+}
+
 /** `state` in a reply: the core's model. */
 export interface Model {
   /** Panes of every tab. */
@@ -111,6 +125,8 @@ export interface Model {
   repos: Repo[];
   tasks: { list: Task[] };
   picker: Picker | null;
+  /** The quit question while it is up. */
+  confirm: Confirm | null;
   keys: boolean;
   /** The terminal pane in visual mode. */
   visual: PaneId | null;
