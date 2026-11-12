@@ -74,8 +74,10 @@ release `main-latest`, creating it the first time. Release assets download with 
 ### Pull requests: workflow artifacts
 
 `build.yml`, on `pull_request`: the same files as one artifact, `ottospace-aarch64-apple-darwin`,
-kept 14 days. `osi install pr <n>` asks `gh` for the pull request, finds the successful
-`build.yml` run for its head commit, and downloads the artifact.
+kept 14 days. `osi install pr <n>` asks `gh` for the pull request, finds the
+`build.yml` run for its head commit, and downloads the artifact. A run that is queued or running
+is waited for (state, jobs and time on one line; `--no-wait` stops instead, an hour is the limit);
+a failed one is named with its link.
 
 - Artifacts need a signed-in `gh` even on a public repository. That is acceptable here: someone
   installing a pull request build has `gh`.
@@ -109,6 +111,7 @@ and `codesign` only for `--app`. All ship with macOS except `gh`.
 | Command | Does |
 |---|---|
 | `osi install main` / `stable` / `vX.Y.Z` / `pr <n>` | Installs that build. `--app` adds `~/Applications/ottospace.app` |
+| `osi list` | The main build and each open pull request: commit, build state (ready, queued, running, failed, no build), which is installed |
 | `osi current` | Channel, version, commit, date, when installed, the previous build |
 | `osi update` | Installs the channel's build if its commit differs. `--check` only reports |
 | `osi rollback` | Swaps the installed and the previous build. Twice: back where you were |

@@ -96,8 +96,18 @@ case "$1 $2" in
       if [ "$1" = --commit ]; then sha="$2"; fi
       shift
     done
-    if [ -d "$FAKE_GH_DIR/build-$sha" ]; then echo 4242; fi
+    # run-<sha> holds one answer for each call (the last one repeats); else the build decides.
+    if [ -s "$FAKE_GH_DIR/run-$sha" ]; then
+      head -n 1 "$FAKE_GH_DIR/run-$sha"
+      if [ "$(wc -l <"$FAKE_GH_DIR/run-$sha")" -gt 1 ]; then
+        tail -n +2 "$FAKE_GH_DIR/run-$sha" >"$FAKE_GH_DIR/run-$sha.next" && mv "$FAKE_GH_DIR/run-$sha.next" "$FAKE_GH_DIR/run-$sha"
+      fi
+    elif [ -d "$FAKE_GH_DIR/build-$sha" ]; then
+      printf '4242\tcompleted\tsuccess\n'
+    fi
     ;;
+  "run view") echo "scripts success, build in_progress" ;;
+  "pr list") cat "$FAKE_GH_DIR/prs" 2>/dev/null ;;
   "run download")
     while [ $# -gt 0 ]; do
       if [ "$1" = -D ]; then dir="$2"; fi
@@ -189,7 +199,7 @@ run "$osi" update
 check "pull request unchanged: up to date" says "Up to date"
 make_pr 30 "$(commit f)" bryan-uipath/ottospace false bryan-uipath
 run "$osi" update
-check "new head without a finished build fails" says "no finished build for commit ffffffffffff"
+check "new head without a build fails" says "no build for commit ffffffffffff"
 check "the old binary is still installed" installed_is PR30
 publish_pr "$(commit f)" PR30b
 run "$osi" update
@@ -388,6 +398,38 @@ check "the pull request build installs" installed_is PR30c
 check "gh was called three times" [ "$(wc -l <"$FAKE_GH_DIR/log" | tr -d ' ')" = 3 ]
 check "every call names github.com" [ "$(grep -c -- '-R github.com/bryan-uipath/ottospace' "$FAKE_GH_DIR/log")" = 3 ]
 check "GH_HOST and GH_REPO do not reach gh" eval "! grep -q evil '$FAKE_GH_DIR/log'"
+
+echo "# a build that is not finished"
+make_pr 35 "$(commit 5)" bryan-uipath/ottospace false bryan-uipath
+publish_pr "$(commit 5)" PR35
+printf '77\tqueued\tnone\n77\tin_progress\tnone\n77\tcompleted\tsuccess\n' >"$FAKE_GH_DIR/run-$(commit 5)"
+run env OSI_POLL=0 "$osi" install pr 35
+check "a queued build is waited for and installed" installed_is PR35
+check "it says the build was queued" says "Build queued; waiting"
+check "then that it is running" says "Build running; waiting"
+check "then that it finished" says "Build finished after"
+printf '77\tin_progress\tnone\n' >"$FAKE_GH_DIR/run-$(commit 5)"
+run "$osi" install pr 35 --no-wait
+check "--no-wait stops at a running build" [ "$status" != 0 ]
+check "and says its state with the run" says "is running: https://github.com/bryan-uipath/ottospace/actions/runs/77"
+run env OSI_POLL=0 OSI_WAIT_MAX=2 "$osi" install pr 35
+check "a build that never ends gives up" says "the build is still running after"
+make_pr 36 "$(commit 6)" bryan-uipath/ottospace false bryan-uipath
+printf '78\tcompleted\tfailure\n' >"$FAKE_GH_DIR/run-$(commit 6)"
+run "$osi" install pr 36
+check "a failed build is named with its run" says "failed (failure): https://github.com/bryan-uipath/ottospace/actions/runs/78"
+check "the old binary is still installed" installed_is PR35
+rm -f "$FAKE_GH_DIR/run-$(commit 5)"
+
+echo "# list"
+printf '35\t%s\tfalse\tA title\twith a tab\n36\t%s\tfalse\tFails\n32\t%s\ttrue\tFrom a fork\n' \
+  "$(commit 5)" "$(commit 6)" "$(commit 3)" >"$FAKE_GH_DIR/prs"
+run "$osi" list
+check "list shows main" says "osi install main"
+check "list marks the installed build" says "pr 35     5555555  ready  (installed)"
+check "list shows a failed build" says "pr 36     6666666  failed (failure)"
+check "list marks a fork" says "ready, from a fork"
+check "list shows titles" says "From a fork"
 
 echo "# overrides"
 run env OSI_BIN_DIR="$work/elsewhere/bin" OTTOSPACE_HOME="$work/elsewhere/home" "$osi" install main
