@@ -64,6 +64,13 @@ fn wait_for<T>(what: &str, check: impl Fn() -> Option<T>) -> T {
     }
 }
 
+/// Sends a key press to whichever app is frontmost, as the user's keyboard would.
+fn press(what: &str) {
+    let script = format!("tell application \"System Events\" to {what}");
+    let status = Command::new("osascript").args(["-e", &script]).status().expect("run osascript");
+    assert!(status.success(), "osascript could not send: {what}");
+}
+
 fn rect(value: &Value) -> Option<[f64; 4]> {
     let v: Vec<f64> = value.as_array()?.iter().filter_map(Value::as_f64).collect();
     (v.len() == 4).then(|| [v[0], v[1], v[2], v[3]])
@@ -84,7 +91,12 @@ fn a_canary_window_is_hosted_entered_left_and_restored() {
         env!("CARGO_BIN_EXE_ottospace"),
         "otto",
         "OTTOSPACE_SOCKET",
-        &[("OTTOSPACE_E2E", "1"), ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string())],
+        &[
+            ("OTTOSPACE_E2E", "1"),
+            ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string()),
+            // Not F18: the user's own ottospace may hold that key.
+            ("OTTOSPACE_RETURN_KEY", "f19"),
+        ],
     );
     let state = || otto.call(json!({"cmd": "state"}));
     let pane = |id: u64| rect(&state()["bounds"][id.to_string()]).filter(|b| b[2] > 1.0);
@@ -115,6 +127,20 @@ fn a_canary_window_is_hosted_entered_left_and_restored() {
     // Leave: parked again, mode back to normal.
     assert_eq!(otto.call(json!({"cmd": "leave"}))["mode"], "normal");
     wait_for("the window to park again", || hosted().filter(at_spot));
+
+    // While live, the keyboard belongs to the app: a typed key arrives in the canary.
+    otto.call(json!({"cmd": "enter", "pane": 1}));
+    wait_for("the window to cover its pane", || frame(0).filter(|f| close(f[0], live[0]) && close(f[1], live[1])));
+    press("keystroke \"k\"");
+    wait_for("the key to reach the canary", || {
+        let keys = canary.call(json!({"cmd": "state"}))["windows"][0]["keys"].clone();
+        keys.as_array()?.iter().any(|k| k == "k").then_some(())
+    });
+
+    // The global return key takes the keyboard back from the app, with no click.
+    press("key code 80"); // F19
+    wait_for("the return key to leave app mode", || (state()["mode"] == "normal").then_some(()));
+    wait_for("the window to park after the return key", || hosted().filter(at_spot));
 
     // A window the app opens itself gets its own pane, to the right, without taking focus.
     canary.call(json!({"cmd": "open_window"}));

@@ -25,7 +25,7 @@ use ottospace_core::keys::{self, Mods};
 use ottospace_core::{
     Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Pane, PaneId, PickItem, Picker, Section, theme,
 };
-use ottospace_mac::{ax, capture, display, input, recovery};
+use ottospace_mac::{ax, capture, display, hotkey, input, recovery};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use screencapturekit::prelude::*;
 
@@ -323,6 +323,9 @@ impl Workspace {
                 cx.background_executor().timer(Duration::from_millis(16)).await;
                 let alive = this.update_in(cx, |this, window, cx| {
                     this.serve_control(window, cx);
+                    if hotkey::take_press() {
+                        this.return_to_ottospace(window, cx);
+                    }
                     if tick % 30 == 0 {
                         this.adopt_new_windows(window, cx);
                         this.drop_closed(window, cx);
@@ -424,6 +427,13 @@ impl Workspace {
         }
         cx.notify();
         effects
+    }
+
+    /// The global return key: take the keyboard back from a live app, and bring ottospace to the
+    /// front from wherever the user is.
+    fn return_to_ottospace(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.dispatch(Action::Leave, window, cx);
+        cx.activate(true);
     }
 
     /// Answers queued control-socket calls. Each reply is the state after the call.
@@ -1214,7 +1224,7 @@ impl Workspace {
                 ("NORMAL", "⌘D ⌘⇧D terminal right/down · ⌘E pick · ⌘W close · ⌘] ⌘[ next/prev · ⌘⌥ arrows or hjkl move")
             }
             Mode::Pick => ("PICK", "type to filter · ↑↓ move · ↵ open · esc close"),
-            Mode::App => ("APP", "keys go to the app · click ottospace to return"),
+            Mode::App => ("APP", "keys go to the app · the return key (F18) or a click on ottospace returns"),
         };
         let focused = match self.model.focused.and_then(|id| self.model.pane(id)).map(|p| &p.kind) {
             Some(Kind::App { title, .. }) => title.clone(),
@@ -1454,6 +1464,16 @@ fn main() {
         cx.on_window_closed(|cx| cx.quit()).detach();
         if hosting {
             cx.activate(true);
+            // The return key works from any app, so it is only useful with hosting on.
+            let name = std::env::var("OTTOSPACE_RETURN_KEY").unwrap_or_else(|_| "f18".into());
+            match hotkey::key_code(&name).ok_or_else(|| format!("{name} is not one of f13-f20")) {
+                Ok(code) => {
+                    if let Err(err) = hotkey::register(code) {
+                        eprintln!("return key {name} is off: {err}");
+                    }
+                }
+                Err(err) => eprintln!("return key is off: {err}"),
+            }
         }
     });
 }

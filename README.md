@@ -65,6 +65,7 @@ A window opens. Press ⌘D to open a terminal pane.
 | ⌘⌥←/→/↑/↓ or ⌘⌥H/L/K/J | Focus the pane in that direction |
 | ⌘] / ⌘[ | Focus the next / previous pane |
 | ⌘⌃F | Zoom the window to fill the screen; again to restore |
+| F18 | From any app: take the keyboard back and bring ottospace forward |
 | ⌘T | New tab: pick what opens in it |
 | ⌘1 … ⌘9 | Select a tab |
 | ⌘⇧] / ⌘⇧[ or ⌃Tab / ⌃⇧Tab | Next / previous tab |
@@ -79,7 +80,14 @@ empty, otherwise it splits right. Shift-click splits down. New windows of a host
 own pane. Original window frames are saved to disk and restored on quit or after a crash.
 
 Click an app pane to give it the keyboard (`APP` mode). ottospace shortcuts do not fire in that
-mode. Click ottospace itself (rail, top bar, another pane) to return.
+mode. Press the return key, or click ottospace itself (rail, top bar, another pane), to return.
+
+The return key works while any app is frontmost. It is F18 by default; set `OTTOSPACE_RETURN_KEY`
+to another of `f13`-`f20`. Most keyboards have no F18, so map Caps Lock to it (lasts until restart):
+
+```sh
+hidutil property --set '{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x700000039,"HIDKeyboardModifierMappingDst":0x70000006D}]}'
+```
 
 ## Driving it from outside
 
