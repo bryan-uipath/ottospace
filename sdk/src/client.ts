@@ -197,6 +197,10 @@ export class Client {
   dropPane(args: DropPaneArgs): Promise<Snapshot> {
     return this.snapshot({ cmd: "drop_pane", ...args });
   }
+  /** Moves the splits around an app pane (default: the focused one) so it has its window's size. */
+  fit(args: OptionalPaneArg = {}): Promise<Snapshot> {
+    return this.snapshot({ cmd: "fit", ...args });
+  }
   /** Hosts a running app's main window in a pane. It moves the user's real window. */
   openApp(args: OpenAppArgs): Promise<Snapshot> {
     return this.snapshot({ cmd: "open_app", ...args });

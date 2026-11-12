@@ -248,6 +248,11 @@ impl Workspace {
         self.dispatch(Action::Close { pane: Some(pane) }, self.input, window, cx);
     }
 
+    /// Fits a pane to its app's window: the word `fit` in its header, and the word's label.
+    pub(crate) fn fit_pane(&mut self, pane: PaneId, window: &Window, cx: &mut Context<Self>) {
+        self.dispatch(Action::Fit { pane: Some(pane) }, self.input, window, cx);
+    }
+
     /// What choosing a pane's body does, by a click or by its label: focus, or for an app pane
     /// the keyboard, which raises its window. `true`: an app pane went live just now.
     pub(crate) fn choose_pane(&mut self, pane: PaneId, window: &Window, cx: &mut Context<Self>) -> bool {
@@ -336,6 +341,7 @@ impl Workspace {
                     ("tab", Some(tab)) => self.select_tab(tab, window, cx),
                     ("tab-close", Some(tab)) => self.close_tab(tab, window, cx),
                     ("close", Some(pane)) => self.close_pane(pane, window, cx),
+                    ("fit", Some(pane)) => self.fit_pane(pane, window, cx),
                     // The click a mouse also replays into the app has no place here.
                     ("pane", Some(pane)) => drop(self.choose_pane(pane, window, cx)),
                     _ => {}

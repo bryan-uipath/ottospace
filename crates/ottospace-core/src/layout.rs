@@ -51,7 +51,7 @@ pub struct Rect {
     pub h: f32,
 }
 
-#[derive(Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Node {
     Leaf(u32),
@@ -194,28 +194,68 @@ impl Node {
             Dir::Up => (Axis::Down, -RESIZE_STEP),
             Dir::Down => (Axis::Down, RESIZE_STEP),
         };
-        let after = self.nudge(pane, axis, step, true).flatten();
-        after.or_else(|| self.nudge(pane, axis, step, false).flatten()) == Some(true)
+        let after = self.nudge(pane, axis, step, true);
+        after.or_else(|| self.nudge(pane, axis, step, false)) == Some(true)
     }
 
     /// Steps the nearest split on `on` that holds `pane` in `a` (`in_a`) or in `b`.
-    /// `None`: `pane` is not under this node. `Some(None)`: it is, with no such split so far.
-    /// `Some(Some(moved))`: the split was found; `moved` is false if it was at its limit.
-    fn nudge(&mut self, pane: u32, on: Axis, step: f32, in_a: bool) -> Option<Option<bool>> {
+    /// `None`: there is no such split. Else whether it moved: not if it was at its limit.
+    fn nudge(&mut self, pane: u32, on: Axis, step: f32, in_a: bool) -> Option<bool> {
+        let mut moved = None;
+        self.climb(pane, on, &mut |ratio, first| {
+            if first != in_a {
+                return false;
+            }
+            let to = (*ratio + step).clamp(MIN_SHARE, 1.0 - MIN_SHARE);
+            moved = Some((to - *ratio).abs() > f32::EPSILON);
+            *ratio = to;
+            true
+        });
+        moved
+    }
+
+    /// Scales `pane`'s width (`on` is `Right`) or height by `by`, e.g. 1.2 for a fifth more, by
+    /// moving the nearest split on that axis above it. Each side keeps `MIN_SHARE`; what a split
+    /// at that limit could not give is asked of the next split above on the axis. False if no
+    /// such split holds the pane, or none moved.
+    pub fn scale(&mut self, pane: u32, on: Axis, by: f32) -> bool {
+        let (mut left, mut moved) = (by, false);
+        self.climb(pane, on, &mut |ratio, first| {
+            // The pane's side of the split.
+            let share = if first { *ratio } else { 1.0 - *ratio };
+            let wanted = (share * left).clamp(MIN_SHARE, 1.0 - MIN_SHARE);
+            let to = if first { wanted } else { 1.0 - wanted };
+            moved |= (to - *ratio).abs() > f32::EPSILON;
+            *ratio = to;
+            left *= share / wanted;
+            (left - 1.0).abs() < 1e-4
+        });
+        moved
+    }
+
+    /// What `scale` would do. `None`: no split on that axis holds the pane. Else whether one
+    /// would move.
+    pub fn scalable(&self, pane: u32, on: Axis, by: f32) -> Option<bool> {
+        let (mut copy, mut splits) = (self.clone(), 0);
+        copy.climb(pane, on, &mut |_, _| {
+            splits += 1;
+            false
+        });
+        (splits > 0).then(|| copy.scale(pane, on, by))
+    }
+
+    /// Visits the splits on `on` that hold `pane`, the nearest first, until `visit` says it is
+    /// done. `visit` gets the split's ratio and whether the pane is in its first half.
+    /// `None`: `pane` is not under this node. Else whether `visit` was done.
+    fn climb(&mut self, pane: u32, on: Axis, visit: &mut dyn FnMut(&mut f32, bool) -> bool) -> Option<bool> {
         match self {
-            Node::Leaf(id) => (*id == pane).then_some(None),
+            Node::Leaf(id) => (*id == pane).then_some(false),
             Node::Split { axis, ratio, a, b } => {
-                let (found, first) = match a.nudge(pane, on, step, in_a) {
-                    Some(found) => (found, true),
-                    None => (b.nudge(pane, on, step, in_a)?, false),
+                let (done, first) = match a.climb(pane, on, visit) {
+                    Some(done) => (done, true),
+                    None => (b.climb(pane, on, visit)?, false),
                 };
-                if found.is_some() || *axis != on || first != in_a {
-                    return Some(found);
-                }
-                let to = (*ratio + step).clamp(MIN_SHARE, 1.0 - MIN_SHARE);
-                let moved = (to - *ratio).abs() > f32::EPSILON;
-                *ratio = to;
-                Some(Some(moved))
+                Some(done || (*axis == on && visit(ratio, first)))
             }
         }
     }
@@ -317,6 +357,74 @@ mod tests {
     fn widths(tree: &Node) -> Vec<(u32, f32, f32)> {
         let unit = Rect { x: 0.0, y: 0.0, w: 1.0, h: 1.0 };
         tree.rects(unit).into_iter().map(|(id, r)| (id, (r.w * 100.0).round(), (r.h * 100.0).round())).collect()
+    }
+
+    /// Each leaf's width and height when the tree fills 1000 by 800.
+    fn sizes(tree: &Node) -> Vec<(u32, f32, f32)> {
+        let rects = tree.rects(Rect { x: 0.0, y: 0.0, w: 1000.0, h: 800.0 });
+        rects.into_iter().map(|(id, r)| (id, r.w.round(), r.h.round())).collect()
+    }
+
+    #[test]
+    fn scale_moves_the_nearest_split_on_each_axis() {
+        // 1 | (2 | 3): the inner split moves, and 1 keeps its half.
+        let mut row = Leaf(1).insert(Some(1), 2, Right).insert(Some(2), 3, Right);
+        assert!(row.scale(3, Right, 1.4));
+        assert_eq!(sizes(&row), [(1, 500., 800.), (2, 150., 800.), (3, 350., 800.)]);
+        assert!(row.scale(2, Right, 2.0));
+        assert_eq!(sizes(&row), [(1, 500., 800.), (2, 300., 800.), (3, 200., 800.)]);
+        // (1 over 3) | 2: 3's width is the column's; its height is its own.
+        let mut nested = Leaf(1).insert(Some(1), 2, Right).insert(Some(1), 3, Down);
+        assert!(nested.scale(3, Right, 1.2));
+        assert!(nested.scale(3, Down, 0.5));
+        assert_eq!(sizes(&nested), [(1, 600., 600.), (3, 600., 200.), (2, 400., 800.)]);
+    }
+
+    #[test]
+    fn scale_asks_the_next_split_above_for_what_the_nearest_could_not_give() {
+        // 1 | (2 | 3) in 1000 pt: pane 3 has 250 and wants 600. The inner split stops at 90%
+        // of its half; the outer one gives the rest.
+        let mut row = Leaf(1).insert(Some(1), 2, Right).insert(Some(2), 3, Right);
+        assert!(row.scale(3, Right, 600. / 250.));
+        assert_eq!(sizes(&row), [(1, 333., 800.), (2, 67., 800.), (3, 600., 800.)]);
+        // Shrinking carries too: pane 2 wants 20 of its 67, gets the inner minimum, and the
+        // outer split takes the rest from the pair.
+        assert!(row.scale(2, Right, 20. / 67.));
+        let [(_, one, _), (_, two, _), (_, three, _)] = sizes(&row)[..] else { panic!() };
+        assert!((one + two + three - 1000.).abs() <= 1. && two < 67. && one > 333., "{one} {two} {three}");
+        // A split on the other axis between them is passed over.
+        let mut nested = Leaf(1).insert(Some(1), 2, Right).insert(Some(2), 3, Down).insert(Some(3), 4, Right);
+        assert!(nested.scale(4, Right, 3.0));
+        let width = |tree: &Node, id| sizes(tree).iter().find(|(pane, ..)| *pane == id).map(|s| s.1);
+        assert_eq!(width(&nested, 4), Some(750.), "250 × 3: inner to 90%, the outer split to 833");
+        assert_eq!(width(&nested, 2), Some(833.));
+    }
+
+    #[test]
+    fn scalable_says_what_scale_would_do_and_moves_nothing() {
+        let mut tree = Leaf(1).insert(Some(1), 2, Right);
+        assert_eq!(tree.scalable(2, Right, 1.5), Some(true));
+        assert_eq!(tree.scalable(2, Down, 1.5), None, "the pane spans the tab's height");
+        assert_eq!(tree.scalable(9, Right, 1.5), None, "no such pane");
+        assert_eq!(Leaf(1).scalable(1, Right, 1.5), None, "a single pane");
+        assert_eq!(sizes(&tree), [(1, 500., 800.), (2, 500., 800.)]);
+        tree.scale(2, Right, 5.0);
+        assert_eq!(tree.scalable(2, Right, 1.5), Some(false), "at the limit");
+        assert_eq!(tree.scalable(2, Right, 0.5), Some(true));
+    }
+
+    #[test]
+    fn scale_stops_at_the_minimum_share_and_needs_a_split_on_the_axis() {
+        let mut tree = Leaf(1).insert(Some(1), 2, Right);
+        assert!(tree.scale(2, Right, 5.0));
+        assert_eq!(sizes(&tree), [(1, 100., 800.), (2, 900., 800.)]);
+        assert!(!tree.scale(2, Right, 5.0), "at the limit");
+        assert!(tree.scale(2, Right, 0.01));
+        assert_eq!(sizes(&tree), [(1, 900., 800.), (2, 100., 800.)]);
+        // Both panes span the tab's height: nothing to move.
+        assert!(!tree.scale(2, Down, 0.5));
+        assert!(!tree.scale(9, Right, 0.5), "no such pane");
+        assert_eq!(sizes(&tree), [(1, 900., 800.), (2, 100., 800.)]);
     }
 
     #[test]

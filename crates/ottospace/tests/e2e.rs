@@ -212,6 +212,26 @@ fn panes_resize_swap_and_change_tab_from_the_keyboard() {
     otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-="}));
     otto.wait_for("equal halves", |o| Some(o.bounds(&[1])[0]).filter(|b| (b[2] - one[2]).abs() < 2.0));
 
+    // ⌘⌃0 and `fit` are for an app pane whose window refused its size: these panes stay as they are.
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-0"}));
+    assert_eq!(reply["state"]["layout"]["split"]["ratio"], 0.5, "{reply}");
+    // The socket says why: an empty pane has no window to fit, and a pane must exist.
+    let refused = otto.raw(&json!({"cmd": "fit", "pane": 1}).to_string());
+    assert!(
+        refused["error"].as_str().is_some_and(|e| e.contains("pane 1 is empty: fit is for an app pane")),
+        "{refused}"
+    );
+    let refused = otto.raw(&json!({"cmd": "fit", "pane": 9}).to_string());
+    assert_eq!(refused["error"], "no pane 9", "{refused}");
+    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["layout"]["split"]["ratio"], 0.5);
+    // The header's × stays inside its pane.
+    let state = otto.call(json!({"cmd": "state"}));
+    for id in ["1", "2"] {
+        let (close, frame) = (&state["closes"][id], &state["frames"][id]);
+        let right = |r: &Value| r[0].as_f64().unwrap_or(0.0) + r[2].as_f64().unwrap_or(-1.0);
+        assert!(close[2].as_f64() > Some(1.0) && right(close) <= right(frame), "× {close} in pane {frame}");
+    }
+
     // ⌘⇧⌥H swaps 2 with its left neighbour; 2 keeps focus.
     let reply = otto.call(json!({"cmd": "key", "keys": "cmd-shift-alt-h"}));
     assert_eq!(reply["state"]["focused"], 2);

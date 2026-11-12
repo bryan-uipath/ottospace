@@ -748,3 +748,128 @@ fn a_window_that_refuses_the_pane_size_is_shown_unscaled_at_the_pane_top_left() 
     assert_front(otto.child.id(), "ottospace");
     assert_eq!(clicks().len(), 1, "no click of the two reached the window");
 }
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn a_refused_size_is_named_in_the_pane_header_and_fit_gives_the_window_room() {
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-fit", "CANARY_SOCKET", &[]);
+    wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
+    let otto = Proc::launch(
+        env!("CARGO_BIN_EXE_ottospace"),
+        "otto-fit",
+        "OTTOSPACE_SOCKET",
+        &[
+            ("OTTOSPACE_E2E", "1"),
+            ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string()),
+            ("OTTOSPACE_RETURN_KEY", "f19"),
+        ],
+    );
+    let state = || otto.call(json!({"cmd": "state"}));
+    let of = |field: &str, id: u64| rect(&state()[field][id.to_string()]);
+    let pane = |id: u64| of("bounds", id).filter(|b| b[2] > 1.0);
+    // A pane's `fit`: null when its window has the pane's size.
+    let fit = |id: usize| state()["state"]["panes"][id - 1]["fit"].clone();
+    // A wait that prints the panes when it times out.
+    let held = || {
+        let s = state();
+        json!({"bounds": s["bounds"], "shown": s["shown"], "panes": s["state"]["panes"]}).to_string()
+    };
+    let wait = |what: &str, check: &dyn Fn() -> Option<[f64; 4]>| wait_or(what, held, check);
+    let refused = |request: Value| {
+        let mut stream = UnixStream::connect(&otto.socket).expect("connect");
+        writeln!(stream, "{request}").expect("send");
+        let mut reply = String::new();
+        BufReader::new(stream).read_line(&mut reply).expect("reply");
+        let reply: Value = serde_json::from_str(&reply).expect("reply is JSON");
+        reply["error"].as_str().unwrap_or_else(|| panic!("{request} was not refused: {reply}")).to_string()
+    };
+    let ratio = |path: &[&str]| path.iter().fold(state()["state"]["layout"].clone(), |at, key| at[*key].clone());
+
+    // Three panes side by side, 1 | (2 | 3): ordinary, fixed size, a minimum width.
+    otto.call(json!({"cmd": "open_app", "name": CANARY}));
+    let whole = wait_for("the pane layout", || pane(1));
+    // The fixed window's pane will be about a quarter of the first: on a small screen (a CI
+    // runner's) that is about 170 pt. The window is at least 24 pt narrower, or it would count
+    // as fitting (an app that snaps its size), and wide enough for a header with its ×.
+    let fixed = (whole[2] / 4.0 - 50.0).round().clamp(120.0, 160.0);
+    let fixed_hint = format!("fixed size {fixed}×120");
+    canary.call(json!({"cmd": "open_window", "fixed": [fixed, 120.0]}));
+    wait_for("the fixed window's pane", || (state()["tab_panes"] == json!([[1, 2]])).then_some(()));
+    // A little wider than its quarter: fitted, it must leave pane 2 more than 24 pt wider than
+    // the fixed window, on a small screen too.
+    let min_width = (whole[2] * 0.27).round();
+    canary.call(json!({"cmd": "open_window", "min": [min_width, 200.0]}));
+    wait_for("the minimum-size window's pane", || (state()["tab_panes"] == json!([[1, 2, 3]])).then_some(()));
+    let narrow = wait("three panes", &|| pane(3).filter(|c| c[2] < whole[2] * 0.26));
+    let half = wait("pane 1", &|| pane(1))[2];
+
+    // The hints: what each window kept. The ordinary window took its pane's size: no hint.
+    let more = (min_width - narrow[2]).round();
+    wait("the cut-off window's hint", &|| (fit(3)["hint"] == format!("needs {more} pt more width")).then_some(narrow));
+    let wants = |id: usize| point(&fit(id)["wants"]).expect("wants");
+    assert!(close(wants(3)[0], min_width) && close(wants(3)[1], narrow[3]), "{}", fit(3));
+    wait("the fixed window's hint", &|| (fit(2)["hint"] == fixed_hint.as_str()).then_some(narrow));
+    assert!(close(wants(2)[0], fixed) && close(wants(2)[1], 120.0), "{}", fit(2));
+    assert!(fit(2)["stuck"].is_null(), "its width can be fitted: {}", fit(2));
+    assert!(fit(1).is_null(), "{}", fit(1));
+    assert_eq!(ratio(&["split", "b", "split", "ratio"]), 0.5, "nothing moved by itself");
+
+    // Window frames are read on the half-second check, not on every 16 ms tick: three windows,
+    // two or three checks a second. A read each tick would be over 180 a second.
+    let reads = || state()["counts"]["frame_reads"].as_u64().expect("the count of frame reads");
+    let before = reads();
+    std::thread::sleep(Duration::from_millis(2000));
+    let read = reads() - before;
+    assert!((3..=30).contains(&read), "{read} window frame reads in 2 s");
+
+    // A pane that does not exist, and one whose window fits: said, or nothing to do.
+    assert_eq!(refused(json!({"cmd": "fit", "pane": 9})), "no pane 9");
+    otto.call(json!({"cmd": "fit", "pane": 1}));
+    assert_eq!(ratio(&["split", "ratio"]), 0.5, "a window that fits moves nothing");
+
+    // Fit the cut-off pane: it grows to its window's width, its preview fills it, the hint goes.
+    // Asked twice at once, as a double-click on `fit` would: the second finds no fresh measure
+    // and moves nothing more.
+    otto.call(json!({"cmd": "fit", "pane": 3}));
+    otto.call(json!({"cmd": "fit", "pane": 3}));
+    let grown = wait("pane 3 to have its window's width", &|| pane(3).filter(|b| close(b[2], min_width)));
+    wait("its preview to fill it", &|| of("shown", 3).filter(|s| (0..4).all(|i| close(s[i], grown[i]))));
+    std::thread::sleep(Duration::from_millis(1200));
+    assert!(fit(3).is_null(), "its hint went: {}", fit(3));
+    assert!(close(wait("pane 3", &|| pane(3))[2], min_width), "it kept the window's width: {}", held());
+    assert!(close(wait("pane 1", &|| pane(1))[2], half), "pane 1 kept its half");
+
+    // Fit the fixed-size pane, once it was measured in the new layout: it shrinks to the
+    // window's width. No split is above it on the other axis, so its height stays.
+    wait("the fixed window's hint again", &|| (fit(2)["hint"] == fixed_hint.as_str()).then_some(narrow));
+    otto.call(json!({"cmd": "fit", "pane": 2}));
+    let shrunk = wait("pane 2 to have its window's width", &|| pane(2).filter(|b| close(b[2], fixed)));
+    assert!(close(shrunk[3], narrow[3]), "its height stayed: {shrunk:?}");
+    // The hint stays for the height and says why no `fit` is offered; the socket says it too.
+    wait("the hint to say nothing can move", &|| (fit(2)["stuck"] == "no_split").then_some(shrunk));
+    assert_eq!(fit(2)["hint"], fixed_hint.as_str());
+    assert_eq!(refused(json!({"cmd": "fit", "pane": 2})), "pane 2 cannot be fitted: no split to move");
+    // In a pane that narrow (120 to 160 pt) the header still holds its ×.
+    let s = state();
+    let (x, frame) = (rect(&s["closes"]["2"]).expect("pane 2's ×"), rect(&s["frames"]["2"]).expect("pane 2"));
+    assert!(x[2] > 1.0 && x[0] > frame[0] && x[0] + x[2] <= frame[0] + frame[2], "× {x:?} in pane {frame:?}");
+    // Pane 3 took the room; its window can grow, so it fits still.
+    assert!(fit(3).is_null(), "{}", fit(3));
+
+    // A pane in a background tab is fitted where it is. Its measure is the last one taken while
+    // it was on show: pane 3 is made 100 pt too narrow first.
+    otto.call(json!({"cmd": "focus", "pane": 3}));
+    let before = wait("pane 3", &|| pane(3));
+    otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-l"}));
+    otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-l"}));
+    let cut = wait("pane 3 to be narrower", &|| pane(3).filter(|b| b[2] < before[2] - 20.0));
+    wait("its hint", &|| fit(3)["hint"].as_str().is_some_and(|h| h.starts_with("needs ")).then_some(cut));
+    let inner = ratio(&["split", "b", "split", "ratio"]);
+    otto.call(json!({"cmd": "new_tab"}));
+    assert_eq!(state()["state"]["active"], 1);
+    otto.call(json!({"cmd": "fit", "pane": 3}));
+    assert_eq!(state()["state"]["active"], 1, "its tab stays in the background");
+    otto.call(json!({"cmd": "select_tab", "index": 0}));
+    assert!(ratio(&["split", "b", "split", "ratio"]).as_f64() < inner.as_f64(), "the split moved: was {inner}");
+    wait("pane 3 to have its window's width again", &|| pane(3).filter(|b| close(b[2], min_width)));
+}

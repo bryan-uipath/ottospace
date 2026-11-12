@@ -139,6 +139,8 @@ struct Hosted {
     shown_crop: f64,
     /// The window's content size when `shown` was last worked out, for the corner mask.
     content: CGSize,
+    /// How often `window_frame` read the window's frame.
+    frame_reads: u64,
     /// The last size and crop the stream refused, so the same one is not asked for every check.
     refused: Option<(CGSize, f64)>,
     /// Where the preview was last drawn, in window-content coordinates.
@@ -181,6 +183,7 @@ impl Hosted {
             shown: original.size,
             shown_crop: 0.0,
             content: original.size,
+            frame_reads: 0,
             refused: None,
             preview: Rc::default(),
             placed: CGRect::default(),
@@ -220,19 +223,19 @@ impl Hosted {
     /// Makes the stream show what the pane and the window share now: a window that refused the
     /// pane's size is cut off (larger) or leaves a gap (smaller), never scaled. Reads the window's
     /// real size, so it also follows an app that resized itself. One accessibility read; the
-    /// stream is reconfigured only when the result changed.
-    fn show(&mut self, scale: f64) {
+    /// stream is reconfigured only when the result changed. Returns the window's content size.
+    fn show(&mut self, scale: f64) -> Option<CGSize> {
         let pane = to_cg(self.bounds.get().size);
-        let Some(frame) = self.window.frame().filter(|_| pane.width >= 1.0) else { return };
+        let frame = self.window_frame().filter(|_| pane.width >= 1.0)?;
         let content = CGSize::new(frame.size.width, frame.size.height - self.crop);
         let shown = CGSize::new(pane.width.min(content.width), pane.height.min(content.height));
         let asked = (shown, self.crop);
         if asked == (self.shown, self.shown_crop) {
             self.content = content;
-            return;
+            return Some(content);
         }
         if self.refused == Some(asked) {
-            return;
+            return Some(content);
         }
         let config = stream_config(shown, self.crop, scale);
         // Frames of another size are dropped, so expect the new one only once it is set.
@@ -246,6 +249,14 @@ impl Hosted {
             self.refused = Some(asked);
             eprintln!("window {}: the stream refused {}×{}", self.window_id, shown.width, shown.height);
         }
+        Some(content)
+    }
+
+    /// The window's real frame: a synchronous accessibility call, counted so a test can tell
+    /// a read each check from a read each tick.
+    fn window_frame(&mut self) -> Option<CGRect> {
+        self.frame_reads += 1;
+        self.window.frame()
     }
 
     /// Places the window over pane content `rect`, raised by `crop` so its title bar covers the header.
@@ -306,6 +317,8 @@ const TOP_BAR: f32 = 28.;
 const TRAFFIC_LIGHTS: f32 = 80.;
 /// Height of a pane's header (label and close button).
 const PANE_HEADER: f32 = 28.;
+/// The least width a pane header keeps for its tag and title, e.g. `APP Calc…`.
+const HEADER_TITLE_MIN: f32 = 72.;
 
 /// Top-bar buttons: the name in the control's id (`top:new_tab`), icon, tooltip, split direction,
 /// and whether the pick opens in a new tab.
@@ -330,6 +343,7 @@ const KEYS_MOVE: &[(&str, &str)] = &[
 const KEYS_ARRANGE: &[(&str, &str)] = &[
     ("⌘⌃ arrows / H J K L", "Resize: move the split that way"),
     ("⌘⌃=", "Even out the splits"),
+    ("⌘⌃0", "Fit the pane to its app's window"),
     ("⌘⇧⌥ arrows / H J K L", "Swap with the pane that way"),
     ("⌘⇧⌥1 … ⌘⇧⌥9", "Move the pane to a tab (US layout)"),
 ];
@@ -472,7 +486,10 @@ actions!(
     ]
 );
 // Pane arrangement.
-actions!(ottospace, [ResizeLeft, ResizeRight, ResizeUp, ResizeDown, SwapLeft, SwapRight, SwapUp, SwapDown, Equalize]);
+actions!(
+    ottospace,
+    [ResizeLeft, ResizeRight, ResizeUp, ResizeDown, SwapLeft, SwapRight, SwapUp, SwapDown, Equalize, FitPane]
+);
 // Terminal selection.
 actions!(ottospace, [CopySelection, PasteText, VisualMode, ListMode, SneakMode, NewTask, NextTask]);
 // App menu.
@@ -523,6 +540,10 @@ struct Workspace {
     cells: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
     /// Each pane's bounds inside its border, for e2e to check the live window's gap.
     frames: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
+    /// How often the workspace was rendered, and the count at the last dispatch: pane bounds
+    /// are of the current layout only once it was rendered after that.
+    renders: u64,
+    dispatched_at: u64,
     /// What the home screen last drew, and the lattice lines kept between frames.
     home: home::Shared,
     /// ottospace's own controls as last painted: what sneak mode labels.
@@ -703,7 +724,16 @@ impl Workspace {
                             }
                             this.minute = minute;
                         }
-                        this.sync_layout(window, cx, tick % 30 == 15);
+                        // Tell the core which windows kept another size than their pane's. Not
+                        // before the panes were drawn again after the last change: until then
+                        // the sizes are those of the layout before it.
+                        let drawn = this.renders > this.dispatched_at;
+                        for (pane, content, outer, kept) in this.sync_layout(window, cx, tick % 30 == 15) {
+                            if drawn && this.model.wants_changed(pane, content, outer, kept) {
+                                let wants = Action::PaneWants { pane, content, outer, window: kept };
+                                this.dispatch(wants, Origin::System, window, cx);
+                            }
+                        }
                         this.sync_terminals(window, cx);
                         this.sync_sneak(window, cx);
                     });
@@ -764,6 +794,8 @@ impl Workspace {
             system_clipboard: std::env::var_os("OTTOSPACE_E2E").is_none(),
             cells: HashMap::new(),
             frames: HashMap::new(),
+            renders: 0,
+            dispatched_at: 0,
             home: home::Shared::default(),
             controls: sneak::Controls::default(),
             sneak_spent: false,
@@ -851,6 +883,7 @@ impl Workspace {
             Some(_) => {}
             None => self.tags_repo = None,
         }
+        self.dispatched_at = self.renders;
         self.store_tasks();
         // What an effect dispatches in turn (a picked app's pane, a label's control) has the same sender.
         self.with_origin(origin, |this| this.carry_out(&effects, window, cx));
@@ -1189,6 +1222,10 @@ impl Workspace {
                     None
                 }
                 Request::DropPane { source, target, zone } => Some(Action::DropPane { source, target, zone }),
+                Request::Fit { pane } => {
+                    failure = self.model.fit_refusal(pane);
+                    failure.is_none().then_some(Action::Fit { pane })
+                }
                 Request::Enter { pane } => Some(Action::Enter { pane }),
                 Request::Leave => Some(Action::Leave),
                 Request::Section { section } => Some(Action::ToggleSection { section }),
@@ -1773,8 +1810,12 @@ impl Workspace {
             "ax_overlay": self.ax_overlay.as_ref().filter(|_| self.model.ax_overlay),
             // Sneak mode's labels, each with its control's id and frame, and the letters typed; or null.
             "sneak": self.model.sneak,
-            // Test runs only: `live`, how often a pane went live.
-            "counts": std::env::var_os("OTTOSPACE_E2E").map(|_| serde_json::json!({ "live": self.went_live })),
+            // Test runs only: `live`, how often a pane went live; `frame_reads`, how often the
+            // layout sync read a hosted window's frame over accessibility.
+            "counts": std::env::var_os("OTTOSPACE_E2E").map(|_| serde_json::json!({
+                "live": self.went_live,
+                "frame_reads": self.hosted.values().map(|h| h.frame_reads).sum::<u64>(),
+            })),
         })
         .to_string()
     }
@@ -2035,7 +2076,11 @@ impl Workspace {
     /// Parks panes whose size changed, and keeps the live window glued to its pane: re-places it
     /// when the pane moves, and every ~500ms (`check`) if the app or user moved it away. A check
     /// also reads each window's size, for an app that resized it by itself.
-    fn sync_layout(&mut self, window: &Window, cx: &App, check: bool) {
+    /// On a `check`, returns each settled pane's content size, whole size and window size.
+    fn sync_layout(&mut self, window: &Window, cx: &App, check: bool) -> Vec<(PaneId, [f32; 2], [f32; 2], [f32; 2])> {
+        let mut measured = Vec::new();
+        // Only panes of the active tab are drawn; a background pane's bounds are stale.
+        let drawn = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
         let scale = window.scale_factor() as f64;
         let live = self.model.live;
         let limit = top_limit(window, cx);
@@ -2046,18 +2091,29 @@ impl Workspace {
             }
             let crop = hosted.crop_at(rect, limit);
             if live == Some(*id) {
-                let drifted = check && hosted.window.frame().is_some_and(|f| f.origin != raised(rect, crop).origin);
+                let drifted = check && hosted.window_frame().is_some_and(|f| f.origin != raised(rect, crop).origin);
                 if hosted.placed != rect || drifted {
                     hosted.place(rect, crop);
                 }
             } else if hosted.parked_size != rect.size || hosted.crop != crop {
                 hosted.park(scale, crop);
             }
+            // Only on a check: reading a window's size is a synchronous accessibility call.
             // An app that resized its own window: the preview and the click rule follow it.
-            if check {
-                hosted.show(scale);
+            // The window was asked for the pane's size: what it has now is what it kept.
+            if check
+                && let Some(kept) = hosted.show(scale)
+                && let Some(frame) = self.frames.get(id)
+                && drawn.contains(id)
+            {
+                let content = [rect.size.width as f32, rect.size.height as f32];
+                // The pane's size with its 1pt border.
+                let outer = frame.get().size;
+                let outer = [f32::from(outer.width) + 2.0, f32::from(outer.height) + 2.0];
+                measured.push((*id, content, outer, [kept.width as f32, kept.height as f32]));
             }
         }
+        measured
     }
 
     /// Fits each terminal's grid to its pane, redraws on new output, closes panes whose shell exited.
@@ -3400,6 +3456,24 @@ impl Workspace {
             Kind::Terminal => ("TERM", theme::PRIMARY, "shell".into()),
             Kind::App { title, .. } => ("APP", theme::APP, title.clone()),
         };
+        // The window kept another size than the pane's: say so. In a narrow header the words
+        // give way first: they shrink and are cut with an ellipsis.
+        let hint =
+            pane.fit.as_ref().map(|fit| div().min_w_0().truncate().text_color(rgb(theme::SNEAK)).child(fit.label()));
+        // And offer to fit the pane to it, unless a fit would move nothing (the hint says why).
+        let word = pane.fit.as_ref().filter(|fit| fit.stuck.is_none()).map(|_| {
+            div()
+                .id(("fit", id))
+                .flex_none()
+                .cursor_pointer()
+                .text_color(rgb(theme::MUTED))
+                .hover(|s| s.text_color(rgb(theme::TEXT)))
+                .child("fit")
+                .child(self.controls.mark(format!("fit:{id}")))
+                // The press must not reach the header: an unsteady click would start a drag.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _, window, cx| this.fit_pane(id, window, cx)))
+        });
         // flex_none: a short pane must not squeeze the header, or a raised bar would overlap the pane above.
         let label: SharedString = if title.is_empty() { tag.into() } else { format!("{tag} {title}").into() };
         // The header is the pane's handle: a drag of it carries the pane to a drop zone or a tab.
@@ -3430,22 +3504,35 @@ impl Workspace {
                 }),
             )
             .child(mark(&self.marks, Mark::Header(id)))
-            .child(
-                div().flex().gap_2().overflow_hidden().child(div().text_color(rgb(tag_color)).child(tag)).child(title),
-            )
-            .child(self.controls.mark(format!("header:{id}")))
+            .gap_2()
+            // The tag and the title keep a minimum; past it the title is cut, then the hint.
             .child(
                 div()
-                    .id(("close", id))
-                    .child(mark(&self.marks, Mark::Close(id)))
-                    .px_1()
-                    .cursor_pointer()
-                    .hover(|s| s.text_color(rgb(theme::ERROR)))
-                    .child("×")
-                    .child(self.controls.mark(format!("close:{id}")))
-                    // The press must not reach the header: an unsteady click would start a drag.
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |this, _, window, cx| this.close_pane(id, window, cx))),
+                    .flex()
+                    .flex_1()
+                    .min_w(px(HEADER_TITLE_MIN))
+                    .gap_2()
+                    .overflow_hidden()
+                    .child(div().flex_none().text_color(rgb(tag_color)).child(tag))
+                    .child(div().min_w_0().truncate().child(title)),
+            )
+            .child(self.controls.mark(format!("header:{id}")))
+            // `fit` and × never shrink, so they stay in the header however narrow the pane.
+            .child(
+                div().flex().min_w_0().gap_2().children(hint).children(word).child(
+                    div()
+                        .id(("close", id))
+                        .child(mark(&self.marks, Mark::Close(id)))
+                        .flex_none()
+                        .px_1()
+                        .cursor_pointer()
+                        .hover(|s| s.text_color(rgb(theme::ERROR)))
+                        .child("×")
+                        .child(self.controls.mark(format!("close:{id}")))
+                        // The press must not reach the header: an unsteady click would start a drag.
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(move |this, _, window, cx| this.close_pane(id, window, cx))),
+                ),
             );
         let content = if let Some(hosted) = self.hosted.get(&id) {
             // While live, keep showing the last frame under the real window, so any gap during a swap is invisible.
@@ -3951,6 +4038,7 @@ fn on_screen(body: Bounds<Pixels>, window: &Window, cx: &App) -> CGRect {
 
 impl Render for Workspace {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.renders += 1;
         for pane in &self.model.panes {
             self.cells.entry(pane.id).or_default();
             self.frames.entry(pane.id).or_default();
@@ -4089,6 +4177,9 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &Equalize, window, cx| {
                 this.dispatch(Action::Equalize, this.input, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &FitPane, window, cx| {
+                this.dispatch(Action::Fit { pane: None }, this.input, window, cx);
             }))
             .child(self.render_top(cx))
             .child(
@@ -4276,6 +4367,7 @@ fn main() {
             KeyBinding::new("cmd-ctrl-k", ResizeUp, None),
             KeyBinding::new("cmd-ctrl-j", ResizeDown, None),
             KeyBinding::new("cmd-ctrl-=", Equalize, None),
+            KeyBinding::new("cmd-ctrl-0", FitPane, None),
             // Swap the focused pane with its neighbour. ⌘⇧⌥1..9 move it to a tab (`key_down`).
             KeyBinding::new("cmd-shift-alt-left", SwapLeft, None),
             KeyBinding::new("cmd-shift-alt-right", SwapRight, None),

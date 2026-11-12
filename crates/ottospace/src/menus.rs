@@ -68,6 +68,7 @@ pub fn app_menus() -> Vec<Menu> {
                 item("Resize Up", ResizeUp),
                 item("Resize Down", ResizeDown),
                 item("Even Out the Splits", Equalize),
+                item("Fit to the App's Window", FitPane),
                 MenuItem::separator(),
                 item("Swap Left", SwapLeft),
                 item("Swap Right", SwapRight),
