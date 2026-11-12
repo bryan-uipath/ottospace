@@ -15,6 +15,8 @@ pub const PRIMARY: u32 = 0x00b8db;
 pub const APP: u32 = 0xff8904;
 pub const PICK: u32 = 0x00d492;
 pub const VISUAL: u32 = 0xa684ff;
+/// List mode: the secondary bar has the keyboard.
+pub const LIST: u32 = 0xfb64b6;
 pub const ERROR: u32 = 0xff8484;
 /// Selected terminal text: a muted cyan, dark enough for light text on it.
 pub const SELECTION: u32 = 0x155e75;
@@ -28,6 +30,7 @@ pub fn accent(mode: Mode) -> u32 {
         Mode::App => APP,
         Mode::Pick => PICK,
         Mode::Visual => VISUAL,
+        Mode::List => LIST,
     }
 }
 

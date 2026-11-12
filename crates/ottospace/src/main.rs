@@ -17,12 +17,13 @@ use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 use gpui::{
     AnyElement, AnyView, App, Application, AssetSource, BorderStyle, Bounds, BoxShadow, ClickEvent, ClipboardItem,
     ContentMask, Context, Div, ElementId, FocusHandle, ImageSource, KeyBinding, KeyDownEvent, Keystroke, Modifiers,
-    MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Resource, ScrollDelta, ScrollWheelEvent, SharedString, Size,
-    Stateful, Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions, actions, black, canvas, div, img,
-    point, prelude::*, px, quad, rgb, size, surface, svg, transparent_black,
+    MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Resource, ScrollDelta, ScrollHandle, ScrollWheelEvent,
+    SharedString, Size, Stateful, Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions, actions, black,
+    canvas, div, img, point, prelude::*, px, quad, rgb, size, surface, svg, transparent_black,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::keys::{self, Mods};
+use ottospace_core::list::{ListKey, list_key};
 use ottospace_core::tasks::{Group, Task};
 use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, scroll_key, select_kind, visual_key};
 use ottospace_core::{
@@ -283,6 +284,17 @@ const KEYS_TERMINAL: &[(&str, &str)] = &[
     ("⌘C", "Copy the selection"),
     ("⌘V", "Paste"),
     ("⌘⇧C", "Visual mode: select with the keyboard"),
+    ("⌘⇧E", "List mode: keys for the bar (Apps, Tasks, Repos)"),
+];
+const KEYS_LIST: &[(&str, &str)] = &[
+    ("J K / ↓ ↑", "Move the selection"),
+    ("↵ / ⇧↵", "Open the row / open it below"),
+    ("Tab / ⇧Tab", "Next / previous section"),
+    ("S", "Task: snooze one hour"),
+    ("H", "Task: put on hold"),
+    ("X", "Task: dismiss from the inbox"),
+    ("U", "Task: undo the last of these"),
+    ("Esc", "Leave"),
 ];
 const KEYS_VISUAL: &[(&str, &str)] = &[
     ("H J K L / arrows", "Move the cursor"),
@@ -353,7 +365,7 @@ actions!(
     ]
 );
 // Terminal selection.
-actions!(ottospace, [CopySelection, PasteText, VisualMode]);
+actions!(ottospace, [CopySelection, PasteText, VisualMode, ListMode]);
 
 struct Workspace {
     model: Model,
@@ -375,6 +387,8 @@ struct Workspace {
     apps: Vec<capture::App>,
     /// Icons of apps seen so far, by app name. Kept: an icon is read and encoded once.
     icons: HashMap<String, Arc<gpui::Image>>,
+    /// Scroll position of the bar's list, so list mode can bring the selected row into view.
+    list_scroll: ScrollHandle,
     /// Window ids seen per hosted pid; anything new that appears later gets its own pane.
     known: Vec<(i32, HashSet<u32>)>,
     /// When the live pane went live.
@@ -391,9 +405,13 @@ struct Workspace {
     _subscriptions: Vec<Subscription>,
 }
 
-/// App icons: drawn 18 points wide, read at 2 pixels a point (64 is the nearest size icons ship).
+/// App icons: drawn 18 points wide, read at 32 points (64 pixels on a Retina display), so a
+/// smaller copy is never stretched.
 const ICON_POINTS: f32 = 18.;
-const ICON_PIXELS: f64 = 64.;
+const ICON_READ_POINTS: f64 = 32.;
+
+/// How long the `s` key snoozes a task: one hour.
+const SNOOZE_MS: u64 = 3_600_000;
 
 /// Longest a `wait` request may run: 10 minutes.
 const MAX_WAIT_MS: u64 = 600_000;
@@ -491,6 +509,7 @@ impl Workspace {
             frames: HashMap::new(),
             apps: Vec::new(),
             icons: HashMap::new(),
+            list_scroll: ScrollHandle::new(),
             known: Vec::new(),
             live_since: None,
             error: None,
@@ -1137,6 +1156,10 @@ impl Workspace {
             self.visual_key(event, window, cx);
             return;
         }
+        if self.model.mode() == Mode::List {
+            self.list_key(event, window, cx);
+            return;
+        }
         let Some(terminal) = self.model.focused.and_then(|id| self.terminals.get(&id)) else { return };
         let key = &event.keystroke;
         let m = key.modifiers;
@@ -1192,6 +1215,55 @@ impl Workspace {
         let local = position - bounds.origin;
         let cell = (self.cell.width.into(), self.cell.height.into());
         Some(cell_at(local.x.into(), local.y.into(), cell, terminal.grid_size()))
+    }
+
+    /// List mode takes every key but ⌘ shortcuts: they move over the bar's rows and act on one.
+    fn list_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
+        let key = &event.keystroke;
+        if key.modifiers.platform {
+            return; // ⌘ shortcuts still reach their bindings; ⌘⇧E leaves
+        }
+        cx.stop_propagation();
+        // ⌃X is not `x`. A held key only moves: one press dismisses or opens one row.
+        let pressed = list_key(&key.key, key.modifiers.shift).filter(|_| !key.modifiers.control && !key.modifiers.alt);
+        let action = match pressed.filter(|key| !event.is_held || matches!(key, ListKey::Move(_))) {
+            Some(ListKey::Move(delta)) => Action::ListMove { delta },
+            Some(ListKey::Open { down }) => Action::ListChoose { axis: if down { Axis::Down } else { Axis::Right } },
+            Some(ListKey::Section(delta)) => {
+                self.refresh_lists(); // the section it lands on shows what is there now
+                Action::ListSection { delta }
+            }
+            Some(ListKey::Snooze) => Action::ListSnooze { until: now_ms().saturating_add(SNOOZE_MS) },
+            Some(ListKey::Hold) => Action::ListHold,
+            Some(ListKey::Dismiss) => Action::ListDismiss,
+            Some(ListKey::Undo) => Action::TaskUndo,
+            Some(ListKey::Leave) => Action::LeaveList,
+            None => return,
+        };
+        self.dispatch(action, window, cx);
+        if let Some(child) = self.selected_child() {
+            self.list_scroll.scroll_to_item(child);
+        }
+        cx.notify();
+    }
+
+    /// Where the selected row is among the children of its list, to scroll it into view: each
+    /// list starts with a header line, and Tasks has a heading before each group.
+    fn selected_child(&self) -> Option<usize> {
+        let at = self.model.list?;
+        if self.model.sidebar != Some(Section::Tasks) {
+            return Some(at + 1);
+        }
+        let inbox = self.model.tasks.inbox();
+        let mut groups: Vec<Group> = inbox.iter().take(at + 1).map(|(group, _)| *group).collect();
+        groups.dedup();
+        Some(at + groups.len())
+    }
+
+    /// Reads the Apps and Repos lists again.
+    fn refresh_lists(&mut self) {
+        self.refresh_apps();
+        self.model.update(Action::SetRepos { repos: repos::scan() });
     }
 
     /// Visual mode takes every key but ⌘ shortcuts: vi keys move, select, copy and leave.
@@ -1336,7 +1408,8 @@ impl Workspace {
                     .flex_col()
                     .gap_4()
                     .child(group("TERMINAL", rows(KEYS_TERMINAL)))
-                    .child(group("VISUAL", rows(KEYS_VISUAL))),
+                    .child(group("VISUAL", rows(KEYS_VISUAL)))
+                    .child(group("LIST", rows(KEYS_LIST))),
             );
         div()
             .id("keys-backdrop")
@@ -1585,11 +1658,12 @@ impl Workspace {
     /// Lists the apps that can be hosted now, and reads the icon of each one not seen before.
     fn refresh_apps(&mut self) {
         self.apps = running_apps(self.hosting, self.host_only);
+        self.model.update(Action::SetApps { names: self.apps.iter().map(|app| app.name.clone()).collect() });
         // An app that quit loses its icon: a later app of the same name may have another.
         self.icons.retain(|name, _| self.apps.iter().any(|app| app.name == *name));
         for app in &self.apps {
             if !self.icons.contains_key(&app.name)
-                && let Some(png) = icon::png(app.pid, ICON_PIXELS)
+                && let Some(png) = icon::png(app.pid, ICON_READ_POINTS)
             {
                 let image = gpui::Image::from_bytes(gpui::ImageFormat::Png, png);
                 self.icons.insert(app.name.clone(), Arc::new(image));
@@ -1611,16 +1685,18 @@ impl Workspace {
     fn render_tasks(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut rows: Vec<AnyElement> = Vec::new();
         let mut heading = None;
+        let mut listed = 0; // tasks so far: headings are not rows of the list
         for (group, task) in self.model.tasks.inbox() {
             if heading != Some(group) {
                 heading = Some(group);
                 let color = if group == Group::NeedsYou { theme::SNEAK } else { theme::MUTED };
                 rows.push(div().px_2().pt_2().text_xs().text_color(rgb(color)).child(group.title()).into_any_element());
             }
-            let id = task.id;
+            let (id, index) = (task.id, listed);
+            listed += 1;
             let urgent = if task.priority == 1 { theme::ERROR } else { theme::MUTED };
             rows.push(
-                list_button(("task", id as usize))
+                list_button(("task", id as usize), self.model.list == Some(index))
                     .child(div().flex_none().text_xs().text_color(rgb(urgent)).child(format!("P{}", task.priority)))
                     .child(div().flex_1().min_w_0().truncate().child(task.title.clone()))
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -1634,7 +1710,8 @@ impl Workspace {
             let hint = "No tasks. File one from a shell: ottospace ctl '{\"cmd\":\"task_add\",\"title\":\"...\"}'";
             div().px_2().text_xs().text_color(rgb(theme::MUTED)).child(hint)
         });
-        div().id("tasks").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll().children(empty).children(rows)
+        let list = div().id("tasks").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
+        list.track_scroll(&self.list_scroll).children(empty).children(rows)
     }
 
     /// Repositories, each with its worktrees under it. A click opens a terminal there: it fills
@@ -1642,7 +1719,7 @@ impl Workspace {
     fn render_repos(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let row = |index: usize, name: &str, path: &str, branch: Option<&str>, nested: bool| {
             let target = path.to_string();
-            list_button(("repo", index))
+            list_button(("repo", index), self.model.list == Some(index))
                 .when(nested, |row| row.ml_4())
                 .child(div().flex_1().min_w_0().truncate().child(name.to_string()))
                 .children(branch.map(|branch| {
@@ -1676,6 +1753,7 @@ impl Workspace {
             .gap_1()
             .p_2()
             .overflow_y_scroll()
+            .track_scroll(&self.list_scroll)
             .child(
                 div()
                     .id("refresh-repos")
@@ -1704,6 +1782,7 @@ impl Workspace {
             .gap_1()
             .p_2()
             .overflow_y_scroll()
+            .track_scroll(&self.list_scroll)
             .child(
                 div()
                     .id("refresh")
@@ -1721,7 +1800,7 @@ impl Workspace {
             )
             .children(self.apps.iter().enumerate().map(|(i, app)| {
                 let target = app.name.clone();
-                list_button(("app", i))
+                list_button(("app", i), self.model.list == Some(i))
                     .child(self.app_icon(&app.name))
                     .child(div().flex_1().min_w_0().truncate().child(app.name.clone()))
                     // How many windows the app has open, when more than one.
@@ -1851,7 +1930,12 @@ impl Workspace {
             .flex()
             .flex_col()
             .border_1()
-            .border_color(rgb(if focused { theme::accent(self.model.mode()) } else { theme::BORDER }))
+            // In list mode the bar has the keyboard: the focused pane is only where a row would open.
+            .border_color(rgb(match (focused, self.model.mode()) {
+                (true, Mode::List) => theme::BORDER_STRONG,
+                (true, mode) => theme::accent(mode),
+                (false, _) => theme::BORDER,
+            }))
             .when(faded, |d| d.opacity(0.5))
             .relative()
             .when(bar > 0.0, |d| d.p(px(2.)))
@@ -1971,6 +2055,10 @@ impl Workspace {
             Mode::Pick => ("PICK", "type to filter · ↑↓ move · ↵ open · esc close"),
             Mode::App => ("APP", app_hint.as_str()),
             Mode::Visual => ("VISUAL", "hjkl move · v select · y copy · esc leave"),
+            Mode::List if self.model.sidebar == Some(Section::Tasks) => {
+                ("LIST", "jk move · ↵ open · s snooze 1h · h hold · x dismiss · u undo · tab section · esc leave")
+            }
+            Mode::List => ("LIST", "jk move · ↵ open · ⇧↵ open below · tab section · esc leave"),
         };
         let hint = hint.to_string();
         let focused = match self.model.focused.and_then(|id| self.model.pane(id)).map(|p| &p.kind) {
@@ -2012,7 +2100,8 @@ fn now_ms() -> u64 {
 }
 
 /// A row of a secondary-bar list. A button at rest: its outline shows. Hover lifts it.
-fn list_button(id: impl Into<ElementId>) -> Stateful<Div> {
+/// `selected`: list mode's keys act on this row.
+fn list_button(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
     let lifted = BoxShadow {
         color: black().opacity(0.7),
         offset: point(px(0.), px(3.)),
@@ -2032,6 +2121,7 @@ fn list_button(id: impl Into<ElementId>) -> Stateful<Div> {
         .text_sm()
         .cursor_pointer()
         .hover(|s| s.bg(rgb(theme::SELECTED)).border_color(rgb(theme::BORDER_STRONG)).shadow(vec![lifted]))
+        .when(selected, |row| row.bg(rgb(theme::SELECTED)).border_color(rgb(theme::LIST)))
 }
 
 /// Apps that can be hosted right now. In a test run limited to one app, only that app.
@@ -2133,6 +2223,10 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &PasteText, _, cx| this.paste(cx)))
             .on_action(cx.listener(|this, _: &VisualMode, window, cx| {
                 this.dispatch(Action::ToggleVisual, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ListMode, window, cx| {
+                this.refresh_lists();
+                this.dispatch(Action::FocusList, window, cx);
             }))
             .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
                 this.dispatch(Action::Split { axis: Axis::Right, kind: Kind::Terminal }, window, cx);
@@ -2321,6 +2415,7 @@ fn main() {
             KeyBinding::new("cmd-c", CopySelection, None),
             KeyBinding::new("cmd-v", PasteText, None),
             KeyBinding::new("cmd-shift-c", VisualMode, None),
+            KeyBinding::new("cmd-shift-e", ListMode, None),
         ]);
         let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
         // Draw under the title bar; the top bar leaves room for the traffic lights.

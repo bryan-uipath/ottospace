@@ -317,6 +317,48 @@ fn tasks_are_listed_as_an_inbox_and_pop_opens_the_next() {
     assert_eq!(otto.raw(r#"{"cmd":"task_add","title":"x","state":"sleeping"}"#)["ok"], false, "no such state");
 }
 
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn list_mode_drives_the_bar_with_the_keyboard() {
+    let otto = Otto::launch("list");
+    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+    for (title, state) in [("first", "needs_you"), ("second", "needs_you"), ("third", "running")] {
+        otto.call(json!({"cmd": "task_add", "title": title, "priority": 2, "state": state}));
+    }
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+
+    // ⌘⇧E gives the bar the keyboard, on its first row.
+    let reply = key("cmd-shift-e");
+    assert_eq!((reply["mode"].as_str(), reply["state"]["list"].as_u64()), (Some("list"), Some(0)));
+    // j moves down; x dismisses that task; the selection stays on a row.
+    key("j");
+    let reply = key("x");
+    let titles = |reply: &Value| -> Vec<String> {
+        reply["inbox"].as_array().unwrap().iter().map(|r| r["title"].as_str().unwrap().to_string()).collect()
+    };
+    assert_eq!((titles(&reply), reply["state"]["list"].as_u64()), (vec!["first".into(), "third".into()], Some(1)));
+    // u takes it back; h holds the selected task; s snoozes it.
+    assert_eq!(titles(&key("u")), ["first", "second", "third"]);
+    let reply = key("h");
+    assert_eq!(reply["state"]["tasks"]["list"][1]["state"], "parked");
+    key("u");
+    let reply = key("k s");
+    assert!(reply["state"]["tasks"]["list"][0]["snoozed_until"].as_u64().is_some(), "the first task is snoozed");
+    assert_eq!(titles(&reply), ["second", "third"]);
+
+    // Esc gives the keyboard back. While the bar has it, keys do not reach the terminal.
+    assert_eq!(key("escape")["mode"], "normal");
+    otto.call(json!({"cmd": "split"}));
+    assert_eq!(key("cmd-shift-e")["mode"], "list");
+    key("j k");
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "echo typed-$((1+1))\r"}));
+    otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^typed-2$", "timeout_ms": 40000}));
+    let text = otto.call(json!({"cmd": "capture", "pane": 1}))["text"].as_str().unwrap().to_string();
+    assert!(!text.contains("jk"), "list keys were typed into the shell: {text}");
+    // A split takes the keyboard for its new pane.
+    assert_eq!(otto.call(json!({"cmd": "split", "axis": "down"}))["mode"], "normal");
+}
+
 /// Terminal 1's entry in the state dump.
 fn term1(o: &Otto) -> Value {
     o.call(json!({"cmd": "state"}))["terminals"]["1"].clone()
