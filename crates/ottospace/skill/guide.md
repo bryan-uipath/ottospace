@@ -54,6 +54,7 @@ ottospace ctl '{"cmd":"state"}'
 | `state.current_task` | The task whose tabs are on the user's tab bar, or null for the tabs of no task. Tabs of other tasks keep running, off the bar |
 | `tab_panes` | Pane ids of each tab, in tab order |
 | `state.focused` | The pane that splits and keys act on |
+| `state.layout` | The active tab's split tree, or null: `{"leaf":3}` or `{"split":{"axis":"right","ratio":0.5,"a":..,"b":..}}`. `ratio` is the share of the split that `a` (the left or top side) takes |
 | `state.live` | The app pane that has the keyboard, if any |
 | `state.picker` | Null, or the open picker: `axis`, `new_tab`, `items` (`{"type":"terminal"}` or `{"type":"app","name":"..."}`), `query`, and `selected` (an index into the items that match `query`) |
 | `state.keys` | True while the key reference covers the window |
@@ -87,6 +88,27 @@ ottospace ctl '{"cmd":"close","pane":2}'
 
 `split` puts a new pane beside the focused one: `axis` is `right` (default) or `down`; `kind` is
 `terminal` (default) or `empty`. `dir` is `left`, `right`, `up` or `down`.
+
+Arranging panes:
+
+```sh
+ottospace ctl '{"cmd":"resize","dir":"left"}'
+ottospace ctl '{"cmd":"equalize"}'
+ottospace ctl '{"cmd":"swap","dir":"right"}'
+ottospace ctl '{"cmd":"move_pane","tab":1}'
+ottospace ctl '{"cmd":"move_pane","pane":3,"tab":0}'
+```
+
+- `resize` moves the boundary of the nearest split around the focused pane, on that axis, 5% of
+  that split toward `dir`. Each side keeps at least 10%. Read the result from `state.layout`
+  (`ratio`) or `bounds`. `equalize` evens out every split of the active tab.
+- `swap` trades the focused pane with its neighbour on that side (the pane `focus_dir` would go
+  to). The pane keeps focus.
+- `move_pane` moves a pane (default: the focused one) to another tab, beside that tab's focused
+  pane, and shows that tab with the pane focused. `tab` is the place on the tab bar, from 0: among
+  the tabs of `state.current_task` only, so with no task open it equals the index in
+  `state.tabs`. A tab left with no panes stays, empty. A moved terminal keeps the
+  `$OTTOSPACE_TAB` it started with.
 
 Terminals:
 

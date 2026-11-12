@@ -158,6 +158,48 @@ fn focus_and_close_follow_the_layout() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn panes_resize_swap_and_change_tab_from_the_keyboard() {
+    let otto = Otto::launch("arrange");
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "split", "axis": "right", "kind": "empty"}));
+    let [one, two] = otto.bounds(&[1, 2])[..] else { panic!("two panes") };
+    let total = one[2] + two[2];
+
+    // ⌘⌃← moves the split left: 1 gives 5% of the row to 2. The socket request does the same.
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-left"}));
+    assert_eq!(reply["state"]["layout"]["split"]["ratio"], 0.45, "{reply}");
+    otto.call(json!({"cmd": "resize", "dir": "left"}));
+    let narrow = otto.wait_for("pane 1 to shrink", |o| Some(o.bounds(&[1])[0]).filter(|b| b[2] < one[2] - 10.0));
+    assert!((narrow[2] / total - 0.4).abs() < 0.02, "1 has 40% of the row: {narrow:?} of {total}");
+
+    // ⌘⌃= makes the halves equal again.
+    otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-="}));
+    otto.wait_for("equal halves", |o| Some(o.bounds(&[1])[0]).filter(|b| (b[2] - one[2]).abs() < 2.0));
+
+    // ⌘⇧⌥H swaps 2 with its left neighbour; 2 keeps focus.
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-shift-alt-h"}));
+    assert_eq!(reply["state"]["focused"], 2);
+    assert_eq!(reply["tab_panes"], json!([[2, 1]]));
+    otto.wait_for("2 on the left", |o| Some(o.bounds(&[1, 2])).filter(|b| b[1][0] < b[0][0]));
+    assert_eq!(otto.call(json!({"cmd": "swap", "dir": "right"}))["tab_panes"], json!([[1, 2]]));
+
+    // ⌘⇧⌥2 moves the focused pane to the second tab, which comes forward.
+    otto.call(json!({"cmd": "new_tab"}));
+    otto.call(json!({"cmd": "select_tab", "index": 0}));
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-shift-alt-2"}));
+    assert_eq!(reply["tab_panes"], json!([[1], [2]]));
+    assert_eq!((reply["state"]["active"].as_u64(), reply["state"]["focused"].as_u64()), (Some(1), Some(2)));
+    // The key a US keyboard sends for ⌘⇧⌥1: the shifted character, without shift.
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-alt-!"}))["tab_panes"], json!([[1, 2], []]));
+    let reply = otto.call(json!({"cmd": "move_pane", "pane": 1, "tab": 1}));
+    assert_eq!(reply["tab_panes"], json!([[2], [1]]));
+    let full = otto.bounds(&[1])[0];
+    assert!(full[2] >= total, "1 fills the other tab: {full:?}");
+    assert_eq!(otto.raw(r#"{"cmd":"move_pane","tab":5}"#)["ok"], false);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn terminal_runs_a_typed_command() {
     let otto = Otto::launch("terminal");
     let reply = otto.call(json!({"cmd": "split"}));

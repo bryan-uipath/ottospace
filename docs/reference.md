@@ -72,6 +72,10 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘W | Close the focused pane |
 | ⌘⌥←/→/↑/↓ or ⌘⌥H/L/K/J | Focus the pane in that direction |
 | ⌘] / ⌘[ | Focus the next / previous pane |
+| ⌘⌃←/→/↑/↓ or ⌘⌃H/L/K/J | Resize: move the focused pane's split that way |
+| ⌘⌃= | Even out the splits of the tab |
+| ⌘⇧⌥←/→/↑/↓ or ⌘⇧⌥H/L/K/J | Swap the focused pane with its neighbour on that side |
+| ⌘⇧⌥1 … ⌘⇧⌥9 | Move the focused pane to that tab on the bar. US keyboard layout only |
 | ⌘⌃F | Zoom the window to fill the screen; again to restore |
 | ⌘⌃A | Debug: outline the focused app pane's accessibility targets (parked panes only) |
 | ⌘/ | Show every key |

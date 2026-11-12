@@ -20,6 +20,9 @@ ottospace            # opens on the Repos list
 | Split with a new terminal | ⌘D right · ⌘⇧D down |
 | Choose what goes in a new pane (terminal or app) | ⌘E, type to filter, ↵ |
 | Move between panes | ⌘⌥ arrows or ⌘⌥ H J K L · ⌘] ⌘[ cycle |
+| Resize the pane | ⌘⌃ arrows or ⌘⌃ H J K L: the split moves that way · ⌘⌃= evens all out |
+| Swap the pane with its neighbour | ⌘⇧⌥ arrows or ⌘⇧⌥ H J K L |
+| Move the pane to another tab | ⌘⇧⌥1 … ⌘⇧⌥9 |
 | Close the pane | ⌘W |
 | New tab | ⌘T |
 | Hide ottospace | ⌘H |
