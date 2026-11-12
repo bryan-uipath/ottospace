@@ -86,6 +86,16 @@ cargo run -p ottospace
 
 A window opens. Press ⌘D to open a terminal pane.
 
+### The `ottospace` command
+
+```sh
+cargo install --path crates/ottospace --bin ottospace
+ottospace
+```
+
+This puts `ottospace` on your `PATH`. It shows the Otto icon in the Dock without an app bundle,
+and uses the permissions of the terminal you run it from.
+
 ### Build the app
 
 ```sh
