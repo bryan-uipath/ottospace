@@ -18,5 +18,5 @@ pub mod terminal;
 pub mod theme;
 pub mod titlebar;
 
-pub use layout::{Axis, Dir, Node, Rect};
+pub use layout::{Axis, Dir, Node, Rect, Zone};
 pub use model::{Action, Effect, Kind, Mode, Model, Pane, PaneId, PickItem, Picker, Section, Tab};

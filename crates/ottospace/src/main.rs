@@ -4,7 +4,7 @@
 //! An app pane shows its parked window's SCK stream. Clicking it moves the real window over the
 //! pane ("live") and replays the click; clicking ottospace itself parks it again.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -30,9 +30,10 @@ use ottospace_core::settings::{Installed, closed_apps};
 use ottospace_core::tasks::{Group, MAX_TITLE, Task, TaskId};
 use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, scroll_key, select_kind, visual_key};
 use ottospace_core::{
-    Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Pane, PaneId, PickItem, Picker, Rect, Section, theme,
+    Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Pane, PaneId, PickItem, Picker, Rect, Section, Zone, theme,
     titlebar::{self, TitleBar},
 };
+use ottospace_mac::window::{Mouse, MouseKind};
 use ottospace_mac::{ax, capture, display, hotkey, icon, input, recovery};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use screencapturekit::prelude::*;
@@ -45,7 +46,7 @@ mod menus;
 mod repos;
 mod sneak;
 mod terminal;
-use control::{Call, PaneKind, Request};
+use control::{Call, MouseAction, PaneKind, Request};
 use terminal::Terminal;
 
 /// Latest captured frame, handed from SCK's queue to the UI thread.
@@ -287,6 +288,12 @@ const KEYS_ARRANGE: &[(&str, &str)] = &[
     ("⌘⇧⌥ arrows / H J K L", "Swap with the pane that way"),
     ("⌘⇧⌥1 … ⌘⇧⌥9", "Move the pane to a tab (US layout)"),
 ];
+const KEYS_DRAG: &[(&str, &str)] = &[
+    ("Drag a pane's header", "Onto a pane's edge: split there"),
+    ("", "Onto its centre: swap the two"),
+    ("", "Onto a tab: move it there · Esc cancels"),
+    ("", "A live app is parked: click it to go back in"),
+];
 const KEYS_TABS: &[(&str, &str)] = &[
     ("⌘T", "New tab: pick what opens in it"),
     ("⌘1 … ⌘9", "Go to a tab"),
@@ -359,6 +366,58 @@ impl Render for Tooltip {
     }
 }
 
+/// A pane on its way to another place: the value a drag of its header carries.
+struct DraggedPane(PaneId);
+
+/// What follows the pointer during a pane drag: the pane's label. `offset`: where in the header
+/// the drag began, as GPUI draws the view that far up and left of the pointer.
+struct DragChip {
+    label: SharedString,
+    offset: gpui::Point<Pixels>,
+}
+
+impl Render for DragChip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().pl(self.offset.x + px(8.)).pt(self.offset.y + px(8.)).child(
+            div()
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .bg(rgb(theme::RAISED))
+                .border_1()
+                .border_color(rgb(theme::PRIMARY))
+                .text_xs()
+                .text_color(rgb(theme::TEXT))
+                .child(self.label.clone()),
+        )
+    }
+}
+
+/// A drawn part the state gives a rect for, so a pointer can be aimed at it: a pane's header,
+/// its ×, the tab at a place on the bar.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Mark {
+    Header(PaneId),
+    Close(PaneId),
+    Tab(usize),
+}
+
+type Marks = Rc<RefCell<HashMap<Mark, Bounds<Pixels>>>>;
+
+/// An invisible child that fills its parent and records where it is drawn.
+fn mark(marks: &Marks, key: Mark) -> impl IntoElement + use<> {
+    let marks = marks.clone();
+    let note = move |bounds, _: &mut Window, _: &mut App| {
+        marks.borrow_mut().insert(key, bounds);
+    };
+    canvas(note, |_, _, _, _| {}).absolute().top_0().left_0().size_full()
+}
+
+/// `[x, y, w, h]` in window points.
+pub(crate) fn rect(b: Bounds<Pixels>) -> [f32; 4] {
+    [b.origin.x.into(), b.origin.y.into(), b.size.width.into(), b.size.height.into()]
+}
+
 actions!(
     ottospace,
     [
@@ -383,6 +442,16 @@ struct Workspace {
     cell: Size<Pixels>,
     /// The terminal pane a mouse drag is selecting in.
     dragging: Option<PaneId>,
+    /// During a pane drag: the pane under the pointer and the zone of it a drop would land on.
+    drop_at: Option<(PaneId, Zone)>,
+    /// A `mouse` request holds the button down: a move before its release is a drag.
+    held: bool,
+    /// Releases a button no request came back for. Replaced, so stopped, by each `mouse` request.
+    abandoned: Option<gpui::Task<()>>,
+    /// The pointer event in hand came from a `mouse` or `drag` request, not from the user.
+    injected: bool,
+    /// Where headers, their × and tabs were last drawn.
+    marks: Marks,
     /// The last text copied. E2E runs use it as the clipboard, so tests never touch the user's.
     copied: Option<String>,
     system_clipboard: bool,
@@ -451,6 +520,8 @@ struct Launch {
 
 /// How long to wait for a started app's window before giving up.
 const LAUNCH_WAIT: Duration = Duration::from_secs(30);
+/// How long a `mouse` request's button stays down with no further request.
+const POINTER_IDLE: Duration = Duration::from_secs(5);
 
 /// How much of a test run's window stays on screen, in points, at the corner it sits in.
 const E2E_SLIVER: f32 = 12.;
@@ -567,6 +638,11 @@ impl Workspace {
             terminals: HashMap::new(),
             cell: terminal::cell_size(window),
             dragging: None,
+            drop_at: None,
+            held: false,
+            abandoned: None,
+            injected: false,
+            marks: Marks::default(),
             copied: None,
             system_clipboard: std::env::var_os("OTTOSPACE_E2E").is_none(),
             cells: HashMap::new(),
@@ -628,6 +704,9 @@ impl Workspace {
                 Effect::Closed(pane) => {
                     self.cells.remove(&pane.id);
                     self.frames.remove(&pane.id);
+                    self.marks
+                        .borrow_mut()
+                        .retain(|mark, _| ![Mark::Header(pane.id), Mark::Close(pane.id)].contains(mark));
                     self.terminals.remove(&pane.id); // drop ends its shell
                     if let Some(hosted) = self.hosted.remove(&pane.id) {
                         hosted.release();
@@ -728,6 +807,48 @@ impl Workspace {
                 }
                 continue;
             }
+            if let Some(why) = control::pointer_refusal(&request, std::env::var_os("OTTOSPACE_E2E").is_some()) {
+                let _ = reply.send(control::error(why));
+                continue;
+            }
+            // So do pointer events, through the window's own handlers: a drag is GPUI's state.
+            let events = match &request {
+                Request::Mouse { action, x, y, clicks, modifiers } => {
+                    let has = |m: control::Modifier| modifiers.contains(&m);
+                    let mouse = Mouse {
+                        kind: MouseKind::Move,
+                        x: f64::from(*x),
+                        y: f64::from(*y),
+                        clicks: (*clicks).min(3) as isize,
+                        cmd: has(control::Modifier::Cmd),
+                        ctrl: has(control::Modifier::Ctrl),
+                        alt: has(control::Modifier::Alt),
+                        shift: has(control::Modifier::Shift),
+                    };
+                    let event = self.pointer(*action, mouse);
+                    self.abandoned = self.held.then(|| self.release_later(window, cx));
+                    Some(vec![event])
+                }
+                Request::Drag { from, to, steps } => {
+                    // At most 256 moves: more adds nothing, and each draws a frame.
+                    let steps = (*steps).clamp(1, 256);
+                    let along = |i: usize| {
+                        let t = i as f32 / steps as f32;
+                        let (x, y) = (from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t);
+                        let (cmd, ctrl, alt, shift) = (false, false, false, false);
+                        Mouse { kind: MouseKind::Move, x: x.into(), y: y.into(), clicks: 1, cmd, ctrl, alt, shift }
+                    };
+                    let mut events = vec![self.pointer(MouseAction::Down, along(0))];
+                    events.extend((1..=steps).map(|i| self.pointer(MouseAction::Move, along(i))));
+                    events.push(self.pointer(MouseAction::Up, along(steps)));
+                    Some(events)
+                }
+                _ => None,
+            };
+            if let Some(events) = events {
+                self.inject(events, reply, window, cx);
+                continue;
+            }
             let quit = matches!(request, Request::Quit);
             let mut failure: Option<String> = None;
             let action = match request {
@@ -766,6 +887,17 @@ impl Workspace {
                 }
                 Request::MovePane { pane, tab } => Some(Action::MovePane { pane, tab }),
                 Request::Equalize => Some(Action::Equalize),
+                Request::DropPane { source, target, .. } if source == target => {
+                    failure = Some("a pane cannot be dropped on itself".into());
+                    None
+                }
+                Request::DropPane { source, target, .. }
+                    if self.model.pane(source).is_none() || self.model.pane(target).is_none() =>
+                {
+                    failure = Some(format!("no pane {source} or no pane {target}"));
+                    None
+                }
+                Request::DropPane { source, target, zone } => Some(Action::DropPane { source, target, zone }),
                 Request::Enter { pane } => Some(Action::Enter { pane }),
                 Request::Leave => Some(Action::Leave),
                 Request::Section { section } => Some(Action::ToggleSection { section }),
@@ -782,7 +914,8 @@ impl Workspace {
                 Request::PickerChoose { index } => Some(Action::PickerChoose { index }),
                 Request::PickerClose => Some(Action::ClosePicker),
                 Request::Keys => Some(Action::ToggleKeys),
-                Request::Key { .. } => None, // answered by `press`
+                Request::Key { .. } => None,                          // answered by `press`
+                Request::Mouse { .. } | Request::Drag { .. } => None, // answered by `inject`
                 Request::MouseDown { pane, x, y, clicks } => {
                     match self.cell_position(pane, x, y) {
                         Ok((id, position)) => {
@@ -969,7 +1102,7 @@ impl Workspace {
                     failure = self.error.clone().or(Some("the shell did not start".into()));
                 }
             }
-            let _ = reply.send(failure.map_or_else(|| self.snapshot(window), |message| control::error(&message)));
+            let _ = reply.send(failure.map_or_else(|| self.snapshot(window, cx), |message| control::error(&message)));
             if quit {
                 // Quit a moment later, so the connection thread can write the reply first.
                 cx.spawn(async move |_, cx| {
@@ -1051,13 +1184,74 @@ impl Workspace {
                     break;
                 }
             }
-            let state = this.update(cx, |this, _| this.snapshot(window));
+            let state = this.update(cx, |this, cx| this.snapshot(window, cx));
             let _ = reply.send(state.unwrap_or_else(|_| control::error("ottospace is closing")));
         });
     }
 
+    /// `mouse` as the press, release or move `action` asks for. A press holds the button until
+    /// the release, and a move in between is a drag.
+    fn pointer(&mut self, action: MouseAction, mouse: Mouse) -> Mouse {
+        let kind = match action {
+            MouseAction::Down => MouseKind::Down,
+            MouseAction::Move if self.held => MouseKind::Drag,
+            MouseAction::Move => MouseKind::Move,
+            MouseAction::Up => MouseKind::Up,
+        };
+        self.held = match action {
+            MouseAction::Down => true,
+            MouseAction::Move => self.held,
+            MouseAction::Up => false,
+        };
+        Mouse { kind, ..mouse }
+    }
+
+    /// A client that pressed and went away must not leave the button down: after `POINTER_IDLE`
+    /// with no `mouse` request, releases it outside the window, where nothing is dropped.
+    fn release_later(&self, window: &Window, cx: &mut Context<Self>) -> gpui::Task<()> {
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(POINTER_IDLE).await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                if !std::mem::take(&mut this.held) {
+                    return;
+                }
+                let (kind, clicks, off) = (MouseKind::Up, 1, false);
+                let up = Mouse { kind, x: -1.0, y: -1.0, clicks, cmd: off, ctrl: off, alt: off, shift: off };
+                this.inject(vec![up], std::sync::mpsc::channel().0, window, cx);
+            });
+        })
+    }
+
+    /// Hands pointer events to the window's own AppKit handlers, as the system does, then replies
+    /// with the state. (GPUI's `Window::dispatch_event` cannot be called from here: its return
+    /// type is private.) A frame is drawn before each, as between real events: GPUI finds what
+    /// is under the pointer in the last frame drawn. The events are never posted: no other app's
+    /// window gets them, and the real pointer stays where it is.
+    fn inject(&self, events: Vec<Mouse>, reply: Sender<String>, window: &Window, cx: &mut Context<Self>) {
+        let view = match HasWindowHandle::window_handle(window).map(|handle| handle.as_raw()) {
+            Ok(RawWindowHandle::AppKit(appkit)) => appkit.ns_view.as_ptr(),
+            _ => return drop(reply.send(control::error("no window to send the pointer to"))),
+        };
+        // A task of its own: the handlers update the app, which this update holds.
+        cx.spawn_in(window, async move |this, cx| {
+            let _ = this.update(cx, |this, _| this.injected = true);
+            for event in events {
+                // An error: the window is gone, and `view` with it.
+                if cx.update(|window, cx| window.draw(cx).clear()).is_err() {
+                    break;
+                }
+                unsafe { ottospace_mac::window::send_mouse(view, event) };
+            }
+            let _ = cx.update(|window, cx| window.draw(cx).clear());
+            let _ = this.update(cx, |this, _| this.injected = false);
+            let state = this.update_in(cx, |this, window, cx| this.snapshot(window, cx));
+            let _ = reply.send(state.unwrap_or_else(|_| control::error("ottospace is closing")));
+        })
+        .detach();
+    }
+
     /// State as JSON: the model, plus each pane's drawn bounds `[x, y, w, h]` in window points.
-    fn snapshot(&self, window: &Window) -> String {
+    fn snapshot(&self, window: &Window, cx: &App) -> String {
         let parking = display::parking_spot();
         let hosted: BTreeMap<PaneId, [f64; 4]> = self
             .hosted
@@ -1083,6 +1277,13 @@ impl Workspace {
                 .collect()
         };
         let (bounds, frames) = (drawn_rects(&self.cells), drawn_rects(&self.frames));
+        let marks = self.marks.borrow();
+        let marked = |key: fn(PaneId) -> Mark| -> BTreeMap<PaneId, [f32; 4]> {
+            drawn.iter().filter_map(|id| Some((*id, rect(*marks.get(&key(*id))?)))).collect()
+        };
+        let tabs: Vec<[f32; 4]> = (0..self.model.visible_tabs().len())
+            .filter_map(|place| marks.get(&Mark::Tab(place)).copied().map(rect))
+            .collect();
         let terminals: BTreeMap<PaneId, serde_json::Value> = self
             .terminals
             .iter()
@@ -1107,6 +1308,17 @@ impl Workspace {
             "bounds": bounds,
             // Each drawn pane's bounds inside its border.
             "frames": frames,
+            // Each drawn pane's header (the handle a drag moves it by) and the × in it, and each
+            // tab on the bar by place.
+            "headers": marked(Mark::Header),
+            "closes": marked(Mark::Close),
+            "tabs": tabs,
+            // While a pane is dragged: the pane a drop would land on and the zone of it, both
+            // null over anything else. Null with no drag.
+            "drag": cx.has_active_drag().then(|| serde_json::json!({
+                "target": self.drop_at.map(|(target, _)| target),
+                "zone": self.drop_at.map(|(_, zone)| zone),
+            })),
             "tab_panes": self.model.tab_panes(),
             // ottospace's own window frame, so a test can turn pane bounds into screen positions.
             "window": frame,
@@ -1460,6 +1672,14 @@ impl Workspace {
             cx.stop_propagation();
             return;
         }
+        // Esc during a pane drag cancels it, and a `mouse` request's button is up again.
+        if key.key == "escape" && cx.has_active_drag() {
+            self.held = false;
+            cx.stop_active_drag(window);
+            cx.notify();
+            cx.stop_propagation();
+            return;
+        }
         // ⌘⇧⌥1..9 move the focused pane to a tab. GPUI gives no physical key, so the shifted
         // characters are trusted on a US layout only (see `move_to_tab_key`).
         let m = key.modifiers;
@@ -1545,6 +1765,28 @@ impl Workspace {
             terminal.select_to(at);
             cx.notify();
         }
+    }
+
+    /// A pane drag moved: note the drop zone under the pointer, to draw it and to drop there.
+    fn pane_drag_move(&mut self, source: PaneId, at: gpui::Point<Pixels>, window: &Window, cx: &mut Context<Self>) {
+        // A live window would cover its pane's drop zones: park it. A click makes it live again.
+        if self.model.live.is_some() {
+            self.dispatch(Action::Leave, window, cx);
+        }
+        let drop_at = self.drop_zone(source, at);
+        if drop_at != self.drop_at {
+            self.drop_at = drop_at;
+            cx.notify();
+        }
+    }
+
+    /// The drawn pane under `at`, other than the dragged one, and the zone of it `at` is in.
+    fn drop_zone(&self, source: PaneId, at: gpui::Point<Pixels>) -> Option<(PaneId, Zone)> {
+        let drawn = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
+        let under = |id: &PaneId| Some((*id, self.frames.get(id)?.get())).filter(|(_, b)| b.contains(&at));
+        let (id, bounds) = drawn.iter().filter(|id| **id != source).find_map(under)?;
+        let local = at - bounds.origin;
+        Some((id, Zone::at(local.x / bounds.size.width, local.y / bounds.size.height)))
     }
 
     /// The terminal cell under a window position, from the same bounds the grid is painted in.
@@ -1765,7 +2007,8 @@ impl Workspace {
                     .gap_4()
                     .child(group("PANES", rows(KEYS_PANES)))
                     .child(group("MOVE", rows(KEYS_MOVE)))
-                    .child(group("ARRANGE", rows(KEYS_ARRANGE))),
+                    .child(group("ARRANGE", rows(KEYS_ARRANGE)))
+                    .child(group("MOUSE", rows(KEYS_DRAG))),
             )
             .child(div().flex().flex_col().gap_4().child(group("TABS", rows(KEYS_TABS))).child(group(
                 "WINDOW",
@@ -2001,6 +2244,10 @@ impl Workspace {
         // Nothing to replay unless an app pane went live just now: a click replayed on a window
         // that was live already would land on ottospace again and loop.
         if !self.choose_pane(id, window, cx) {
+            return;
+        }
+        // A `mouse` request stays inside ottospace: it enters the app but does not click in it.
+        if self.injected {
             return;
         }
         let Some(hosted) = self.hosted.get(&id) else { return };
@@ -2336,7 +2583,18 @@ impl Workspace {
             Kind::App { title, .. } => ("APP", theme::APP, title.clone()),
         };
         // flex_none: a short pane must not squeeze the header, or a raised bar would overlap the pane above.
+        let label: SharedString = if title.is_empty() { tag.into() } else { format!("{tag} {title}").into() };
+        // The header is the pane's handle: a drag of it carries the pane to a drop zone or a tab.
+        let workspace = cx.weak_entity();
         let header = div()
+            .id(("header", id))
+            .on_drag(DraggedPane(id), move |_, offset, window, cx| {
+                // The move that starts the drag is already over a pane: `on_drag_move` saw it
+                // before the drag began, so note the drop zone here.
+                let at = window.mouse_position();
+                let _ = workspace.update(cx, |this, cx| this.pane_drag_move(id, at, window, cx));
+                cx.new(|_| DragChip { label: label.clone(), offset })
+            })
             .flex_none()
             .h(px(titlebar::header(bar, PANE_HEADER)))
             .px_2()
@@ -2353,6 +2611,7 @@ impl Workspace {
                     this.dispatch(Action::Focus { pane: id }, window, cx);
                 }),
             )
+            .child(mark(&self.marks, Mark::Header(id)))
             .child(
                 div().flex().gap_2().overflow_hidden().child(div().text_color(rgb(tag_color)).child(tag)).child(title),
             )
@@ -2360,11 +2619,14 @@ impl Workspace {
             .child(
                 div()
                     .id(("close", id))
+                    .child(mark(&self.marks, Mark::Close(id)))
                     .px_1()
                     .cursor_pointer()
                     .hover(|s| s.text_color(rgb(theme::ERROR)))
                     .child("×")
                     .child(self.controls.mark(format!("close:{id}")))
+                    // The press must not reach the header: an unsteady click would start a drag.
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _, window, cx| this.close_pane(id, window, cx))),
             );
         let content = if let Some(hosted) = self.hosted.get(&id) {
@@ -2460,6 +2722,23 @@ impl Workspace {
             )
             .child(header)
             .child(body)
+            .on_drop(cx.listener(move |this, dragged: &DraggedPane, window, cx| {
+                let zone = this.drop_zone(dragged.0, window.mouse_position()).filter(|(target, _)| *target == id);
+                if let Some((target, zone)) = zone {
+                    this.dispatch(Action::DropPane { source: dragged.0, target, zone }, window, cx);
+                }
+            }))
+            // The drop indicator: the half an edge drop would take, or the whole pane for a swap.
+            .children(self.drop_at.filter(|(target, _)| *target == id && cx.has_active_drag()).map(|(_, zone)| {
+                let mark = div().absolute().bg(rgb(theme::PRIMARY)).opacity(0.25);
+                match zone {
+                    Zone::Left => mark.top_0().left_0().h_full().w(relative(0.5)),
+                    Zone::Right => mark.top_0().right_0().h_full().w(relative(0.5)),
+                    Zone::Top => mark.top_0().left_0().w_full().h(relative(0.5)),
+                    Zone::Bottom => mark.bottom_0().left_0().w_full().h(relative(0.5)),
+                    Zone::Center => mark.top_0().left_0().size_full(),
+                }
+            }))
     }
 
     /// Leaves render as panes; splits as a row (`Right`) or column (`Down`), `a` taking `ratio` of it.
@@ -2504,8 +2783,9 @@ impl Workspace {
                 MouseButton::Left,
                 cx.listener(|this, e: &MouseDownEvent, window, cx| {
                     this.dispatch(Action::Leave, window, cx);
-                    // With a custom title bar, the system no longer zooms on double-click.
-                    if e.click_count == 2 {
+                    // With a custom title bar, the system no longer zooms on double-click. Not
+                    // for a `mouse` request: it would zoom or minimise the real window.
+                    if e.click_count == 2 && !this.injected {
                         window.titlebar_double_click();
                     }
                 }),
@@ -2546,10 +2826,16 @@ impl Workspace {
                     .visible_tabs()
                     .into_iter()
                     .filter_map(|index| Some((index, self.model.tabs.get(index)?)))
-                    .map(|(index, tab)| {
+                    .enumerate()
+                    .map(|(place, (index, tab))| {
                         let (active, id) = (index == self.model.active, tab.id);
                         div()
                             .id(("tab", tab.id))
+                            // A pane dropped on a tab moves there.
+                            .drag_over::<DraggedPane>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
+                            .on_drop(cx.listener(move |this, dragged: &DraggedPane, window, cx| {
+                                this.dispatch(Action::MovePane { pane: Some(dragged.0), tab: place }, window, cx);
+                            }))
                             .h_full()
                             .pl_3()
                             .pr_1()
@@ -2561,6 +2847,7 @@ impl Workspace {
                             .cursor_pointer()
                             .when(active, |d| d.bg(rgb(theme::RAISED)).text_color(rgb(theme::TEXT)))
                             .hover(|s| s.text_color(rgb(theme::TEXT)))
+                            .child(mark(&self.marks, Mark::Tab(place)))
                             .child(tab.title.clone())
                             .child(self.controls.mark(format!("tab:{}", tab.id)))
                             .child(
@@ -2826,6 +3113,11 @@ impl Render for Workspace {
             self.frames.entry(pane.id).or_default();
         }
         self.controls.begin();
+        // The pane drag is over, however it ended (a drop, Esc, a release outside the window):
+        // no drop zone may stay drawn.
+        if !cx.has_active_drag() {
+            self.drop_at = None;
+        }
         let tree = self.model.layout.as_ref().map(|root| self.render_node(root, cx));
         // Only while the tab on show has no panes. Its lines are built once and kept: a frame
         // that moves nothing (a terminal printing in another tab) only paints them again.
@@ -2841,8 +3133,12 @@ impl Render for Workspace {
             .on_key_down(cx.listener(Self::key_down))
             // On the root, so a selection drag keeps going over other panes.
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| this.mouse_move(e, cx)))
+            .on_drag_move(cx.listener(|this, e: &gpui::DragMoveEvent<DraggedPane>, window, cx| {
+                this.pane_drag_move(e.drag(cx).0, e.event.position, window, cx);
+            }))
             // A release ends the drag, so a later drag elsewhere does not extend this selection.
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.dragging = None))
+            // The user's release also ends a `mouse` request's hold.
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| (this.dragging, this.held) = (None, false)))
             // Any click leaves visual mode first, before the clicked element acts: visual mode has no
             // backdrop, and e.g. a click on an app pane must go live, not be replayed while blocked.
             .capture_any_mouse_down(cx.listener(|this, _, window, cx| {

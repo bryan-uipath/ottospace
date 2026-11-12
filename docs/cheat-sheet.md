@@ -23,6 +23,7 @@ ottospace            # opens on the Repos list
 | Resize the pane | ⌘⌃ arrows or ⌘⌃ H J K L: the split moves that way · ⌘⌃= evens all out |
 | Swap the pane with its neighbour | ⌘⇧⌥ arrows or ⌘⇧⌥ H J K L |
 | Move the pane to another tab | ⌘⇧⌥1 … ⌘⇧⌥9. US keyboard layout only (US, ABC): on others the keys do nothing |
+| Rearrange with the mouse | Drag a pane by its header: onto another pane's edge to split there, its centre to swap, a tab to move there. Esc cancels. Dragging an app you are in parks it: click it to go back in |
 | Close the pane | ⌘W |
 | New tab | ⌘T |
 | Hide ottospace | ⌘H |

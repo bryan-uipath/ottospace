@@ -78,6 +78,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⌃= | Even out the splits of the tab |
 | ⌘⇧⌥←/→/↑/↓ or ⌘⇧⌥H/L/K/J | Swap the focused pane with its neighbour on that side |
 | ⌘⇧⌥1 … ⌘⇧⌥9 | Move the focused pane to that tab on the bar. US keyboard layout only |
+| Drag a pane's header | Onto another pane's edge: split there. Onto its centre: swap. Onto a tab: move there. Esc cancels. An app you are in is parked: click it to go back in |
 | ⌘⌃F | Zoom the window to fill the screen; again to restore |
 | ⌘⌃A | Debug: outline the focused app pane's accessibility targets (parked panes only) |
 | ⌘/ | Show every key |

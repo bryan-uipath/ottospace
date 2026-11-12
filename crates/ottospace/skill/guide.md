@@ -100,6 +100,8 @@ ottospace ctl '{"cmd":"equalize"}'
 ottospace ctl '{"cmd":"swap","dir":"right"}'
 ottospace ctl '{"cmd":"move_pane","tab":1}'
 ottospace ctl '{"cmd":"move_pane","pane":3,"tab":0}'
+ottospace ctl '{"cmd":"drop_pane","source":3,"target":1,"zone":"left"}'
+ottospace ctl '{"cmd":"drop_pane","source":3,"target":1,"zone":"center"}'
 ```
 
 - `resize` moves one border of the focused pane 5% of its split toward `dir`: the pane's right
@@ -113,6 +115,45 @@ ottospace ctl '{"cmd":"move_pane","pane":3,"tab":0}'
   the tabs of `state.current_task` only, so with no task open it equals the index in
   `state.tabs`. A tab left with no panes stays, empty. `$OTTOSPACE_TAB` in a moved terminal
   still names the tab its shell started in.
+- `drop_pane` does what dragging pane `source` by its header onto pane `target` does. `zone` is
+  `left`, `right`, `top` or `bottom`: `target` is split in two and `source` takes that side. Or
+  `center`: the two trade places. `source` takes focus and its tab comes forward. It fails if
+  either pane does not exist or they are the same pane. Unlike `move_pane`, it is not limited to
+  the tabs on the bar: the panes may be in different tabs, also tabs of another task, and then
+  that task's tabs come on show (`state.current_task` changes). A pane dropped where it already
+  is keeps its split's `ratio`. The user's own drag parks a live app; `drop_pane` leaves a live
+  `source` live.
+
+During a pane drag `drag` in the state is `{"target":1,"zone":"left"}`: where a release would
+drop it, both `null` over anything that is no drop zone. Otherwise `drag` is `null`.
+
+For tests only: the pointer. `mouse` and `drag` answer only when ottospace runs under
+`OTTOSPACE_E2E`; otherwise they are refused. To act, use the requests above (`drop_pane`,
+`focus`, `close`, `enter`).
+
+```sh
+ottospace ctl '{"cmd":"mouse","action":"down","x":300,"y":60}'
+ottospace ctl '{"cmd":"mouse","action":"move","x":600,"y":400}'
+ottospace ctl '{"cmd":"mouse","action":"up","x":600,"y":400}'
+ottospace ctl '{"cmd":"mouse","action":"down","x":300,"y":60,"clicks":2,"modifiers":["shift"]}'
+ottospace ctl '{"cmd":"drag","from":[300,60],"to":[600,400],"steps":8}'
+```
+
+- `mouse` is one left-button pointer event at `x`, `y`: points from the top-left of ottospace's
+  window, the same as every rect in the state (`bounds`, `frames`, `headers`, `closes` and
+  `tabs`: each drawn pane's header and its ×, by pane id, and each tab on the bar, by place).
+  `action` is `down`, `move` or `up`; `modifiers` are `cmd`, `ctrl`, `alt`, `shift`. A `move`
+  between a `down` and its `up` is a drag. `drag` is a press at `from`, `steps` moves (default
+  8) and a release at `to`.
+- Caps: `clicks` is at most 3, `steps` is 1 to 256.
+- A `down` must be followed by an `up`. Esc ends the hold, and so does 5 s with no `mouse`
+  request: the button is released outside the window, which drops nothing.
+- **The event never leaves ottospace.** It is handed to ottospace's window inside the app: it
+  is not posted to the system, the real pointer does not move, and no other app's window gets
+  it, a hosted app that is live over its pane included. But a click does what the control under
+  it does, with the same effects outside ottospace as `open_app`, `enter`, `leave` and `close`:
+  a click on a parked app pane raises that app's window. Only the replay of the click inside
+  the app is left out.
 
 Terminals:
 

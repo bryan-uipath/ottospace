@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::ax::Target;
 use crate::compose;
 use crate::home::{self, Home};
-use crate::layout::{Axis, Dir, Node, Rect};
+use crate::layout::{Axis, Dir, Node, Rect, Zone};
 use crate::list::ListRow;
 use crate::repos::{self, Repo};
 use crate::sneak::{Sneak, Typed};
@@ -164,6 +164,13 @@ pub enum Action {
     },
     /// Even out the splits of the active tab.
     Equalize,
+    /// Drop pane `source` on pane `target`: an edge zone splits `target` and puts `source` on
+    /// that side; the centre swaps the two. `source` takes focus, and its tab comes forward.
+    DropPane {
+        source: PaneId,
+        target: PaneId,
+        zone: Zone,
+    },
     /// Hand the keyboard to an app pane.
     Enter {
         pane: PaneId,
@@ -377,6 +384,7 @@ impl Action {
             | Action::Resize { .. }
             | Action::SwapDir { .. }
             | Action::MovePane { .. }
+            | Action::DropPane { .. }
             | Action::Equalize
             | Action::Enter { .. }
             | Action::Leave
@@ -614,6 +622,7 @@ impl Model {
                 | Action::SwapDir { .. }
                 | Action::MovePane { .. }
                 | Action::Equalize
+                | Action::DropPane { .. }
                 | Action::Enter { .. }
                 | Action::ToggleSection { .. }
                 | Action::CloseSidebar
@@ -652,6 +661,7 @@ impl Model {
                 | Action::FocusDir { .. }
                 | Action::FocusCycle { .. }
                 | Action::MovePane { .. }
+                | Action::DropPane { .. }
                 | Action::Enter { .. }
                 | Action::NewTab
                 | Action::SelectTab { .. }
@@ -859,8 +869,8 @@ impl Model {
             }
             Action::SwapDir { dir } => {
                 let to = self.focused.and_then(|from| Some((from, self.layout.as_ref()?.neighbor(from, dir)?)));
-                if let (Some((from, to)), Some(layout)) = (to, &mut self.layout) {
-                    layout.swap(from, to);
+                if let Some((from, to)) = to {
+                    self.swap_panes(from, to);
                 }
             }
             Action::MovePane { pane, tab } => {
@@ -874,6 +884,7 @@ impl Model {
                     layout.equalize();
                 }
             }
+            Action::DropPane { source, target, zone } => self.drop_pane(source, target, zone, effects),
             Action::Enter { pane } => {
                 let is_app = self.pane(pane).is_some_and(|p| matches!(p.kind, Kind::App { .. }));
                 if is_app && self.live != Some(pane) {
@@ -1306,6 +1317,49 @@ impl Model {
         });
         // Takes the keyboard back from an app that is live in this tab.
         self.focus(id, effects);
+    }
+
+    /// Puts pane `source` where it was dropped on pane `target`, in whichever tabs hold them.
+    fn drop_pane(&mut self, source: PaneId, target: PaneId, zone: Zone, effects: &mut Vec<Effect>) {
+        if source == target || self.pane(source).is_none() || self.pane(target).is_none() {
+            return;
+        }
+        let (axis, before) = match zone {
+            Zone::Left => (Axis::Right, true),
+            Zone::Right => (Axis::Right, false),
+            Zone::Top => (Axis::Down, true),
+            Zone::Bottom => (Axis::Down, false),
+            Zone::Center => {
+                self.swap_panes(source, target);
+                return self.focus(source, effects);
+            }
+        };
+        // Already there: taking it out and putting it back would reset the split's ratio.
+        let here = |tree: &Node| tree.is_split(target, source, axis, before);
+        let parked = self.tabs.iter().filter_map(|tab| tab.layout.as_ref());
+        if !self.layout.iter().chain(parked).any(here) {
+            self.detach(source);
+            let trees = std::iter::once(&mut self.layout).chain(self.tabs.iter_mut().map(|tab| &mut tab.layout));
+            for tree in trees.flatten() {
+                tree.split(target, source, axis, before);
+            }
+        }
+        self.focus(source, effects);
+    }
+
+    /// Two panes trade places, in one tab or across two. A tab whose focused pane left it
+    /// focuses the pane that came instead.
+    fn swap_panes(&mut self, x: PaneId, y: PaneId) {
+        let active = (&mut self.layout, &mut self.focused);
+        let parked = self.tabs.iter_mut().map(|tab| (&mut tab.layout, &mut tab.focused));
+        for (layout, focused) in std::iter::once(active).chain(parked) {
+            let Some(tree) = layout else { continue };
+            tree.swap(x, y);
+            let leaves = tree.leaves();
+            if focused.is_some_and(|f| !leaves.contains(&f)) {
+                *focused = [x, y].into_iter().find(|id| leaves.contains(id));
+            }
+        }
     }
 
     /// Takes a pane out of whichever tab's tree holds it. Focus there goes to the newest pane left.
@@ -2417,6 +2471,126 @@ mod tests {
         m.update(Action::Enter { pane: 1 });
         assert_eq!(m.update(Action::MovePane { pane: Some(4), tab: 1 }), [Effect::Parked(1)]);
         assert_eq!((m.active, m.focused, m.live), (1, Some(4), None));
+    }
+
+    #[test]
+    fn a_pane_dropped_on_an_edge_splits_the_target_on_that_side() {
+        // 1 | 2 | 3
+        let mut m = Model::default();
+        term(&mut m);
+        term(&mut m);
+        term(&mut m);
+        let tree = |m: &Model| serde_json::to_value(&m.layout).unwrap();
+        let leaf = |id: u32| serde_json::json!({ "leaf": id });
+        let split = |axis: &str, a, b| serde_json::json!({ "split": { "axis": axis, "ratio": 0.5, "a": a, "b": b } });
+        // 3 on the top of 1: 3 over 1, then 2.
+        m.update(Action::DropPane { source: 3, target: 1, zone: Zone::Top });
+        assert_eq!(tree(&m), split("right", split("down", leaf(3), leaf(1)), leaf(2)));
+        assert_eq!(m.focused, Some(3));
+        // 1 on the right of 2.
+        m.update(Action::DropPane { source: 1, target: 2, zone: Zone::Right });
+        assert_eq!(tree(&m), split("right", leaf(3), split("right", leaf(2), leaf(1))));
+        m.update(Action::DropPane { source: 1, target: 3, zone: Zone::Left });
+        m.update(Action::DropPane { source: 2, target: 3, zone: Zone::Bottom });
+        assert_eq!(tree(&m), split("right", leaf(1), split("down", leaf(3), leaf(2))));
+        // On itself, or with a pane that is gone: nothing moves.
+        m.update(Action::DropPane { source: 2, target: 2, zone: Zone::Left });
+        m.update(Action::DropPane { source: 2, target: 9, zone: Zone::Left });
+        m.update(Action::DropPane { source: 9, target: 2, zone: Zone::Center });
+        assert_eq!(tree(&m), split("right", leaf(1), split("down", leaf(3), leaf(2))));
+        assert_eq!(ids(&m), [1, 2, 3]);
+    }
+
+    #[test]
+    fn a_pane_dropped_where_it_already_is_keeps_the_splits_size() {
+        let mut m = Model::default();
+        term(&mut m);
+        term(&mut m);
+        m.update(Action::Resize { dir: Dir::Left });
+        // 2 is already the right half of the 1|2 split, and 1 the left: only focus moves.
+        m.update(Action::DropPane { source: 2, target: 1, zone: Zone::Right });
+        m.update(Action::DropPane { source: 1, target: 2, zone: Zone::Left });
+        assert_eq!((shares(&m), m.focused), (vec![(1, 45.0), (2, 55.0)], Some(1)));
+        // The other side is a real move: a new split, at equal halves.
+        m.update(Action::DropPane { source: 2, target: 1, zone: Zone::Left });
+        assert_eq!(shares(&m), [(2, 50.0), (1, 50.0)]);
+    }
+
+    #[test]
+    fn a_drop_on_an_empty_pane_splits_or_swaps_it_and_leaves_it_empty() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Empty });
+        term(&mut m);
+        m.update(Action::NewTab);
+        term(&mut m);
+        // An edge of the empty pane 1: 3 lands beside it. It is not put into it, as `Open` would.
+        m.update(Action::DropPane { source: 3, target: 1, zone: Zone::Bottom });
+        assert_eq!(m.tab_panes(), [vec![1, 3, 2], vec![]]);
+        assert_eq!((m.pane(1).map(|p| &p.kind), m.focused), (Some(&Kind::Empty), Some(3)));
+        // The centre: the empty pane trades places like any other, and can be the one dragged.
+        m.update(Action::DropPane { source: 2, target: 1, zone: Zone::Center });
+        m.update(Action::DropPane { source: 1, target: 3, zone: Zone::Left });
+        assert_eq!((m.tab_panes()[0].clone(), m.focused), (vec![2, 1, 3], Some(1)));
+        assert_eq!(ids(&m), [1, 2, 3]);
+    }
+
+    #[test]
+    fn a_drop_leaves_the_home_screen_and_a_tab_it_empties_shows_it() {
+        let mut m = Model::default();
+        term(&mut m);
+        term(&mut m);
+        m.update(Action::NewTab);
+        // The tab on show has no panes: the home screen. A drop between panes of the other tab
+        // (the socket can name them) brings that tab forward.
+        assert!(m.home(&[]).is_some());
+        m.update(Action::DropPane { source: 2, target: 1, zone: Zone::Top });
+        assert_eq!((m.active, m.focused, m.home(&[]).is_none()), (0, Some(2), true));
+        // The only pane of a tab dropped in another tab: the view follows the pane, and the tab
+        // it left is the home screen when it is shown again.
+        m.update(Action::SelectTab { index: 1 });
+        term(&mut m);
+        m.update(Action::DropPane { source: 3, target: 1, zone: Zone::Right });
+        assert_eq!((m.tab_panes(), m.active), (vec![vec![2, 1, 3], vec![]], 0));
+        assert!(m.home(&[]).is_none());
+        m.update(Action::SelectTab { index: 1 });
+        assert!(m.home(&[]).is_some());
+    }
+
+    #[test]
+    fn a_pane_dropped_on_the_centre_swaps_and_a_live_app_stays_live() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        term(&mut m);
+        m.update(Action::Enter { pane: 1 });
+        // The dragged pane is live: it stays so, and the shell re-places its window.
+        assert_eq!(m.update(Action::DropPane { source: 1, target: 2, zone: Zone::Center }), []);
+        assert_eq!(m.layout.as_ref().unwrap().leaves(), [2, 1]);
+        assert_eq!((m.focused, m.live), (Some(1), Some(1)));
+        // Another pane dropped beside it takes focus, so the app gives the keyboard back.
+        assert_eq!(m.update(Action::DropPane { source: 2, target: 1, zone: Zone::Bottom }), [Effect::Parked(1)]);
+        assert_eq!((m.focused, m.live), (Some(2), None));
+    }
+
+    #[test]
+    fn a_drop_reaches_across_tabs_and_brings_the_panes_tab_forward() {
+        let mut m = Model::default();
+        term(&mut m);
+        term(&mut m);
+        m.update(Action::NewTab);
+        term(&mut m);
+        // 1, focused in the background tab, swaps with 3 of the tab on show: 1 comes to this
+        // tab, and the other tab focuses 3.
+        m.update(Action::Focus { pane: 1 });
+        m.update(Action::SelectTab { index: 1 });
+        m.update(Action::DropPane { source: 1, target: 3, zone: Zone::Center });
+        assert_eq!(m.tab_panes(), [vec![3, 2], vec![1]]);
+        assert_eq!((m.active, m.focused), (1, Some(1)));
+        m.update(Action::SelectTab { index: 0 });
+        assert_eq!(m.focused, Some(3));
+        // 1 lands beside 2 in the tab on show; the tab it left is empty and stays.
+        m.update(Action::DropPane { source: 1, target: 2, zone: Zone::Left });
+        assert_eq!(m.tab_panes(), [vec![3, 1, 2], vec![]]);
+        assert_eq!((m.active, m.focused, m.tabs.len()), (0, Some(1), 2));
     }
 
     #[test]
