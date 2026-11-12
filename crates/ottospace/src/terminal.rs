@@ -120,7 +120,8 @@ impl Terminal {
         let shell = std::env::var("OTTOSPACE_SHELL").ok().map(|program| tty::Shell::new(program, Vec::new()));
         let at_root = std::env::current_dir().is_ok_and(|dir| dir.parent().is_none());
         let home = std::env::var_os("HOME").filter(|_| at_root).map(PathBuf::from);
-        let working_directory = cwd.map(PathBuf::from).or(home).filter(|dir| dir.is_dir());
+        // A `cwd` that is gone falls back too: never to `/`.
+        let working_directory = cwd.map(PathBuf::from).filter(|dir| dir.is_dir()).or(home).filter(|dir| dir.is_dir());
         let options = tty::Options { shell, env, working_directory, ..Default::default() };
         let pty = tty::new(&options, window_size(grid, size(px(8.), px(LINE_HEIGHT))), 0)?;
         let term = Arc::new(FairMutex::new(Term::new(Config::default(), &grid, listener.clone())));

@@ -363,11 +363,7 @@ impl Model {
             Action::SetRepos { repos } => self.repos = repos::arrange(repos),
             Action::OpenRepo { path, axis } => {
                 // Only a listed path: the list is what the user sees and can choose from.
-                let listed = self.repos.iter().flat_map(|r| {
-                    let worktrees = r.worktrees.iter().map(|w| (&w.path, &w.name));
-                    std::iter::once((&r.path, &r.name)).chain(worktrees)
-                });
-                if let Some(name) = listed.into_iter().find(|(p, _)| **p == path).map(|(_, name)| name.clone()) {
+                if let Some(name) = self.repo_name(&path) {
                     let empty_tab = self.layout.is_none();
                     self.open(Kind::Terminal, axis, None, &mut effects);
                     if let Some(pane) = self.focused.and_then(|id| self.panes.iter_mut().find(|p| p.id == id)) {
@@ -609,6 +605,20 @@ impl Model {
             .enumerate()
             .map(|(i, tab)| if i == self.active { leaves(&self.layout) } else { leaves(&tab.layout) })
             .collect()
+    }
+
+    /// The name of the listed repository or worktree at `path`.
+    fn repo_name(&self, path: &str) -> Option<String> {
+        let mut listed = self.repos.iter().flat_map(|r| {
+            let worktrees = r.worktrees.iter().map(|w| (&w.path, &w.name));
+            std::iter::once((&r.path, &r.name)).chain(worktrees)
+        });
+        listed.find(|(p, _)| *p == path).map(|(_, name)| name.clone())
+    }
+
+    /// True if `path` is a repository or worktree in the Repos list.
+    pub fn repo_listed(&self, path: &str) -> bool {
+        self.repo_name(path).is_some()
     }
 
     /// The `id` of the tab that holds `pane`, active tab included.

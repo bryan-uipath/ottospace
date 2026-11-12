@@ -221,6 +221,10 @@ fn repos_are_listed_and_open_a_terminal_there() {
     std::fs::create_dir_all(&admin).unwrap();
     std::fs::create_dir_all(root.join("app-2")).unwrap();
     std::fs::create_dir_all(root.join("plain")).unwrap();
+    std::fs::create_dir_all(root.join("app/.git/worktrees/app-3")).unwrap();
+    std::fs::create_dir_all(root.join("app-3")).unwrap();
+    // As given: on macOS the temp dir is behind a symlink, so this is not the resolved path.
+    let unresolved = root.to_string_lossy().into_owned();
     let root = root.canonicalize().unwrap(); // the path `pwd` prints
     let at = |rest: &str| root.join(rest).to_string_lossy().into_owned();
     std::fs::write(root.join("app/.git/HEAD"), "ref: refs/heads/main\n").unwrap();
@@ -228,22 +232,34 @@ fn repos_are_listed_and_open_a_terminal_there() {
     std::fs::write(root.join("app/.git/worktrees/app-2/gitdir"), format!("{}\n", at("app-2/.git"))).unwrap();
     std::fs::write(root.join("app-2/.git"), format!("gitdir: {}\n", at("app/.git/worktrees/app-2"))).unwrap();
 
-    let otto = Otto::launch_with("repos", &[("OTTOSPACE_REPOS", &at(""))]);
+    // A second worktree linked with relative paths (git's `worktree.useRelativePaths`).
+    std::fs::write(root.join("app/.git/worktrees/app-3/HEAD"), "ref: refs/heads/feat/map\n").unwrap();
+    std::fs::write(root.join("app/.git/worktrees/app-3/gitdir"), "../../../../app-3/.git\n").unwrap();
+    std::fs::write(root.join("app-3/.git"), "gitdir: ../app/.git/worktrees/app-3\n").unwrap();
+
+    let otto = Otto::launch_with("repos", &[("OTTOSPACE_REPOS", &unresolved)]);
     let repos = otto.call(json!({"cmd": "repos"}))["state"]["repos"].clone();
-    // The worktree is under its repository, not listed a second time.
-    let worktree = json!({"name": "app-2", "path": at("app-2"), "branch": "fix/zoom"});
-    assert_eq!(repos, json!([{"name": "app", "path": at("app"), "branch": "main", "worktrees": [worktree]}]));
+    // Each worktree is under its repository, not listed a second time, however it is linked.
+    let worktrees = json!([
+        {"name": "app-2", "path": at("app-2"), "branch": "fix/zoom"},
+        {"name": "app-3", "path": at("app-3"), "branch": "feat/map"},
+    ]);
+    assert_eq!(repos, json!([{"name": "app", "path": at("app"), "branch": "main", "worktrees": worktrees}]));
 
     // Opening the worktree: a terminal whose shell starts there, and the empty tab takes its name.
     let reply = otto.call(json!({"cmd": "open_repo", "path": at("app-2")}));
     assert_eq!(reply["state"]["tabs"][0]["title"], "app-2");
     assert_eq!(reply["state"]["panes"][0]["cwd"], at("app-2"));
     otto.call(json!({"cmd": "type", "pane": 1, "text": "pwd\r"}));
-    let pattern = format!("^{}$", at("app-2"));
+    let pattern = format!("^{}$", regex::escape(&at("app-2")));
     otto.call(json!({"cmd": "wait", "pane": 1, "pattern": pattern, "timeout_ms": 40000}));
 
     // A path that is not in the list is refused: `open_repo` is not "open any directory".
     assert_eq!(otto.raw(&json!({"cmd": "open_repo", "path": at("plain")}).to_string())["ok"], false);
+    // So is a listed directory that has gone since the list was read.
+    std::fs::remove_dir_all(root.join("app-3")).unwrap();
+    let gone = otto.raw(&json!({"cmd": "open_repo", "path": at("app-3")}).to_string());
+    assert!(gone["error"].as_str().is_some_and(|e| e.contains("not a directory")), "{gone}");
     let _ = std::fs::remove_dir_all(&root);
 }
 

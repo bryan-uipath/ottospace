@@ -44,15 +44,20 @@ pub fn name_of(path: &str) -> String {
 }
 
 /// The list as shown: repositories by name, each one's worktrees by name. A directory that is a
-/// worktree of a listed repository is not listed again as a repository.
-pub fn arrange(mut repos: Vec<Repo>) -> Vec<Repo> {
-    let linked: Vec<String> = repos.iter().flat_map(|r| r.worktrees.iter().map(|w| w.path.clone())).collect();
-    repos.retain(|r| !linked.contains(&r.path));
-    for repo in &mut repos {
+/// worktree of a listed repository is not listed again as a repository, and a repository found
+/// twice (overlapping places to look) is listed once. Paths must be in one form: the shell
+/// resolves them before they get here.
+pub fn arrange(found: Vec<Repo>) -> Vec<Repo> {
+    let linked: Vec<String> = found.iter().flat_map(|r| r.worktrees.iter().map(|w| w.path.clone())).collect();
+    let mut repos: Vec<Repo> = Vec::new();
+    for mut repo in found {
+        if linked.contains(&repo.path) || repos.iter().any(|r| r.path == repo.path) {
+            continue;
+        }
         repo.worktrees.sort_by(|a, b| a.name.cmp(&b.name));
+        repos.push(repo);
     }
-    repos.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    repos.dedup_by(|a, b| a.path == b.path);
+    repos.sort_by(|a, b| (a.name.to_lowercase(), &a.path).cmp(&(b.name.to_lowercase(), &b.path)));
     repos
 }
 
@@ -91,5 +96,14 @@ mod tests {
         assert_eq!(names, ["App", "zed"]);
         let worktrees: Vec<&str> = arranged[0].worktrees.iter().map(|w| w.name.as_str()).collect();
         assert_eq!(worktrees, ["app-2", "app-3"]);
+    }
+
+    #[test]
+    fn a_repository_found_twice_is_listed_once() {
+        // Overlapping places to look find `/code/app` twice; `/work/app` is another repository of that name.
+        let other = Repo { path: "/work/app".into(), ..repo("app", &[]) };
+        let arranged = arrange(vec![repo("app", &[]), other, repo("app", &[])]);
+        let paths: Vec<&str> = arranged.iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(paths, ["/code/app", "/work/app"]);
     }
 }
