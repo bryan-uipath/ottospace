@@ -107,6 +107,7 @@ Unknown commands and fields are refused.
 ```sh
 cargo test   # core unit tests. No window.
 cargo e2e    # launches the app and drives it over the socket.
+cargo e2e-apps   # hosts real windows of the canary test app; needs both permissions.
 ```
 
 `cargo e2e` is an alias in `.cargo/config.toml`. Each test opens a window on a private socket. It

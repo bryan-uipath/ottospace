@@ -37,7 +37,10 @@ cheapest daily win. E is the largest value but needs A, B and D.
    Open: draggable dividers, global key to leave `APP` mode.
 4. **Terminal pane.** Done. PTY + `alacritty_terminal` grid, painted in GPUI. Key encoding and
    colours in the core. E2E types a command and reads the grid back.
-   Open: scrollback, selection and copy, mouse reporting, cwd tracking, wide-glyph alignment.
+   Open: scrollback, mouse reporting, cwd tracking, wide-glyph alignment.
+   Open, asked for by Bryan 2026-11-11: selection as in iTerm, two ways. Mouse: drag to select,
+   double-click a word, triple-click a line, copy on ⌘C. Keyboard: a visual mode (the `VISUAL`
+   key mode in the mockup) that moves a cursor through the output and extends a selection.
 5. **Tabs, then tasks.** Model first (core), then shell.
 
 ## Decisions
@@ -75,6 +78,8 @@ cheapest daily win. E is the largest value but needs A, B and D.
 - Zoom meeting layout and participants → spinner: see `zoom-meeting.md`.
 - Hiding panes from screen sharing: see `screen-share-privacy.md`.
 - New or existing app window from the picker, and moving panes: see `app-windows.md`.
+- Tab titles: later, a cheap agent names each tab from what is in it. The model is a setting
+  (Bryan: default haiku / luna). Until then titles are "Tab N".
 - Scripting in TypeScript (replaces "rules before a scripting language"): see `scripting.md`.
 - Look: apollo-ui future dark, one accent per key mode. Otto mark: `background/otto-icon.svg` (app icon) and
   `background/otto-pane.svg` (empty pane). Smooth shaded, mono, cyan eyes, ninja band.

@@ -100,13 +100,16 @@ pub struct Terminal {
 }
 
 impl Terminal {
-    /// Starts the user's default shell in the current directory.
+    /// Starts the user's default shell (or `$OTTOSPACE_SHELL`) in the current directory.
     pub fn spawn() -> io::Result<Self> {
         let grid = Grid { cols: 80, rows: 24 };
         let shared = Arc::new(Shared::default());
         let listener = Listener(shared.clone());
         let env = HashMap::from([("TERM".to_string(), "xterm-256color".to_string())]);
-        let options = tty::Options { env, ..Default::default() };
+        // `$OTTOSPACE_SHELL` replaces the login shell. Tests use it: a login shell with a heavy
+        // profile can take a minute to reach a prompt on a busy machine.
+        let shell = std::env::var("OTTOSPACE_SHELL").ok().map(|program| tty::Shell::new(program, Vec::new()));
+        let options = tty::Options { shell, env, ..Default::default() };
         let pty = tty::new(&options, window_size(grid, size(px(8.), px(LINE_HEIGHT))), 0)?;
         let term = Arc::new(FairMutex::new(Term::new(Config::default(), &grid, listener.clone())));
         let event_loop = EventLoop::new(term.clone(), listener, pty, false, false)?;
