@@ -10,32 +10,50 @@ reply:
 ottospace ctl '{"cmd":"state"}'
 ```
 
-- Exit status 0: the request was accepted, and the reply is the full state.
+- Exit status 0: the request was understood, and the reply is the full state after it.
 - Exit status 1: the request was refused (`{"ok":false,"error":"..."}`), or no ottospace is running.
+- Exit status 2: `ottospace` was called wrongly (for example `ctl` with no request).
 - Unknown commands and unknown fields are refused. Do not guess field names.
+- **Exit 0 does not mean it happened.** A request is ignored, with no error, when it names a pane
+  or tab that no longer exists, or while the picker or the key reference is open
+  (`state.picker` is not null, or `state.keys` is true). Read the reply and check that the state
+  changed the way you meant.
 
 ## Rules
 
 - **Look before you act.** Start with `state`. Pane ids and tab indexes come from it.
 - **`type` is keyboard input to a shell.** It can run anything the user can. Send only commands
   the user asked for, and end a command with `\r` to run it.
+- **Type only into panes you opened, and always name the pane.** Focus is shared with the user,
+  who may click elsewhere between your requests. `type` without `pane` goes to whatever is
+  focused at that instant. `type` also works on panes in background tabs.
+- **Name what you close.** `close` without `pane` closes the focused pane; `close_tab` without
+  `index` closes the tab the user is looking at. Pass the id or index every time.
+- **`focus` and `enter` on a pane in another tab switch the tab the user sees.**
+- **Other panes are not yours to read aloud.** Every reply includes the visible text of every
+  terminal pane, which may show secrets. Use only the lines of panes you opened; do not quote
+  or store the rest.
 - **`open_app` and `enter` move the user's real windows.** Use them only when the user asked to
   bring an app into ottospace.
 - **Do not send `quit`, `close` or `close_tab`** unless the user asked. Closing a terminal pane
   ends its shell; closing a tab closes every pane in it.
 - **Read output by polling `state`.** There is no "wait until done" yet. After `type`, read
-  `terminals.<pane>.lines` until the output you expect appears, with a time limit.
+  `terminals.<pane>.lines` until the output you expect appears, with a time limit. `lines` is
+  the visible screen only: output that scrolled off is gone, so keep commands short or page them.
 
 ## State
 
 | Field | Meaning |
 |---|---|
 | `mode` | `normal`, `app` (a hosted app has the keyboard) or `pick` (the picker is open) |
-| `state.panes` | Every pane: `id` and `kind` (`terminal`, `empty`, or `app` with `title`) |
-| `state.tabs`, `state.active` | The tabs and the index of the one showing |
+| `state.panes` | Every pane of every tab: `id` and `kind`. `kind` is an object: `{"type":"terminal"}`, `{"type":"empty"}` or `{"type":"app","window":N,"title":"..."}` |
+| `state.tabs`, `state.active` | The tabs (`id`, `title`) and the index of the one showing. Requests take the index, not the `id` |
 | `tab_panes` | Pane ids of each tab, in tab order |
 | `state.focused` | The pane that splits and keys act on |
 | `state.live` | The app pane that has the keyboard, if any |
+| `state.picker` | Null, or the open picker: `axis`, `new_tab`, `items` (`{"type":"terminal"}` or `{"type":"app","name":"..."}`), `query`, and `selected` (an index into the items that match `query`) |
+| `state.keys` | True while the key reference covers the window |
+| `state.sidebar` | The open rail section, or null |
 | `terminals.<id>` | `cols`, `rows`, and `lines`: the visible text of that terminal pane |
 | `bounds.<id>` | Where each pane of the active tab is drawn: `[x, y, w, h]` |
 
@@ -62,7 +80,8 @@ ottospace ctl '{"cmd":"type","text":"cargo test\r"}'
 ottospace ctl '{"cmd":"type","pane":3,"text":"q"}'
 ```
 
-`type` goes to the focused pane unless `pane` is given. It fails if that pane is not a terminal.
+`type` goes to the focused pane unless `pane` is given; give it. It fails if that pane is not a
+terminal. Pane ids are never reused.
 
 Tabs:
 
@@ -97,7 +116,8 @@ ottospace ctl '{"cmd":"keys"}'
 ottospace ctl '{"cmd":"quit"}'
 ```
 
-`section` is `apps`, `workbook`, `tasks` or `repos`; the open section's name closes the bar.
+`picker_choose` opens the selected match, or the match at `"index":N`. `section` is `apps`,
+`workbook`, `tasks` or `repos`; the open section's name closes the bar.
 `keys` shows or hides the key reference.
 
 ## Recipes
@@ -105,10 +125,14 @@ ottospace ctl '{"cmd":"quit"}'
 Run a command in a new terminal beside the current pane, and read its output:
 
 ```sh
-ottospace ctl '{"cmd":"split","axis":"right"}'          # reply: state.focused is the new pane
-ottospace ctl '{"cmd":"type","text":"cargo test\r"}'
-ottospace ctl '{"cmd":"state"}'                          # read terminals.<pane>.lines; repeat until done
+ottospace ctl '{"cmd":"state"}'                                    # note the pane ids that exist
+ottospace ctl '{"cmd":"split","axis":"right"}'                    # reply: state.focused is the new pane, say 3
+ottospace ctl '{"cmd":"type","pane":3,"text":"cargo test\r"}'     # name the pane: focus may have moved
+ottospace ctl '{"cmd":"state"}'                                    # read terminals.3.lines; repeat until done
 ```
+
+Check that the id from the split reply was not in the first `state`. If it was, the split was
+ignored (the picker or key reference was open): do not type.
 
 Open a second workspace for a different job:
 

@@ -1,6 +1,6 @@
 ---
 name: ottospace
-description: Drive the ottospace app from the command line: open and arrange terminal panes and tabs, type into terminals, read their output, and bring app windows into panes. Use when the user asks to do something in ottospace, or when a task needs a terminal pane or a tab the user can watch.
+description: "Drive the ottospace app from the command line. Open and arrange terminal panes and tabs, type into terminals, read their output, and bring app windows into panes. Use when the user asks to do something in ottospace, or when a task needs a terminal pane or a tab the user can watch."
 ---
 
 # ottospace

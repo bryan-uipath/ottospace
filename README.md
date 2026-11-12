@@ -168,9 +168,9 @@ ottospace ctl '{"cmd":"section","section":"apps"}'
 ottospace ctl '{"cmd":"state"}'
 ```
 
-Commands: `state`, `split`, `type`, `close`, `focus`, `focus_dir`, `open_app`, `enter`, `leave`,
-`section`, `quit`. Fields are in `Request` in [`crates/ottospace/src/control.rs`](crates/ottospace/src/control.rs).
-Unknown commands and fields are refused.
+`ottospace skill` prints every request with an example, and what the state fields mean. Fields are
+in `Request` in [`crates/ottospace/src/control.rs`](crates/ottospace/src/control.rs). Unknown commands and
+fields are refused.
 
 ## Agent skill
 

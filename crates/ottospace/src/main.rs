@@ -1546,6 +1546,12 @@ fn main() {
         print!("{}", if stub { SKILL_STUB } else { SKILL_GUIDE });
         return;
     }
+    // Anything else is a mistake (`ottospace skills`, `--help`). Starting the app for it would
+    // open a second window and restore the running instance's hosted windows.
+    if let Some(unknown) = args.get(1) {
+        eprintln!("unknown command: {unknown}\nusage: ottospace [ctl '<json request>' | skill [--stub]]");
+        std::process::exit(2);
+    }
 
     // E2E runs get no window hosting, so tests cannot move or strand the user's real windows.
     // The exception is `OTTOSPACE_HOST_ONLY=<pid>`: hosting is on for that one process only (the
@@ -1643,6 +1649,18 @@ mod tests {
         for json in examples {
             let parsed: Result<Request, _> = serde_json::from_str(json);
             assert!(parsed.is_ok(), "the guide shows a request the app refuses: {json}: {:?}", parsed.err());
+        }
+    }
+
+    /// Every request the app accepts must have an example in the guide. The names come from
+    /// serde's own error for an unknown command, so a new `Request` variant fails this test.
+    #[test]
+    fn the_agent_guide_covers_every_request() {
+        let error = serde_json::from_str::<Request>(r#"{"cmd":"?"}"#).expect_err("? is not a command").to_string();
+        let names: Vec<&str> = error.split('`').skip(3).step_by(2).collect();
+        assert!(names.len() > 20, "could not read the command names from: {error}");
+        for name in names {
+            assert!(SKILL_GUIDE.contains(&format!(r#""cmd":"{name}""#)), "the guide has no example of `{name}`");
         }
     }
 
