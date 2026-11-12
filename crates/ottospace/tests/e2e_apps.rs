@@ -76,6 +76,11 @@ fn rect(value: &Value) -> Option<[f64; 4]> {
     (v.len() == 4).then(|| [v[0], v[1], v[2], v[3]])
 }
 
+fn point(value: &Value) -> Option<[f64; 2]> {
+    let v: Vec<f64> = value.as_array()?.iter().filter_map(Value::as_f64).collect();
+    (v.len() == 2).then(|| [v[0], v[1]])
+}
+
 fn close(a: f64, b: f64) -> bool {
     (a - b).abs() <= 2.0
 }
@@ -112,21 +117,63 @@ fn a_canary_window_is_hosted_entered_left_and_restored() {
     // macOS keeps a title bar on screen, so the window stops a title bar's height short of the
     // spot vertically. Horizontally it reaches it: a 1pt sliver stays visible.
     let at_spot = |f: &[f64; 4]| close(f[0], spot[0]) && f[1] <= spot[1] && f[1] > spot[1] - 60.0;
-    wait_for("the window to park at pane size", || {
-        hosted().filter(|f| close(f[2], body[2]) && close(f[3], body[3]) && at_spot(f))
+    // The canary has a plain native title bar (32pt on macOS 26), so it is cropped: the window
+    // parks that much taller, and the stream shows only its content, at pane size.
+    let crop = || state()["crop"]["1"].as_f64().filter(|c| (16.0..=40.0).contains(c));
+    let crop = wait_for("the window to park at pane size plus its title bar", || {
+        let c = crop()?;
+        hosted().filter(|f| close(f[2], body[2]) && close(f[3], body[3] + c) && at_spot(f)).map(|_| c)
     });
 
-    // Enter: the real window sits exactly over the pane.
+    // Enter: the window is raised by its title bar, so its content sits exactly over the pane's
+    // content and its own title bar covers the pane header.
     assert_eq!(otto.call(json!({"cmd": "enter", "pane": 1}))["mode"], "app");
     let window = rect(&state()["window"]).expect("ottospace window frame");
     let live = wait_for("the window to cover its pane", || {
-        frame(0).filter(|f| close(f[0], window[0] + body[0]) && close(f[1], window[1] + body[1]))
+        frame(0).filter(|f| close(f[0], window[0] + body[0]) && close(f[1], window[1] + body[1] - crop))
     });
-    assert!(close(live[2], body[2]) && close(live[3], body[3]), "live size {live:?} vs pane {body:?}");
+    assert!(close(live[2], body[2]) && close(live[3], body[3] + crop), "live size {live:?} vs pane {body:?}");
+    // The pane border stays visible: a 2pt gap inside it on all four sides, the top included.
+    let inside = rect(&state()["frames"]["1"]).expect("pane frame");
+    let (left, top) = (window[0] + inside[0], window[1] + inside[1]);
+    let gap = |d: f64| (d - 2.0).abs() <= 0.5;
+    assert!(live[1] >= top && gap(live[1] - top), "top gap: live {live:?}, inside border {inside:?}");
+    assert!(gap(live[0] - left), "left gap: live {live:?}, inside border {inside:?}");
+    assert!(gap(left + inside[2] - live[0] - live[2]), "right gap: live {live:?}, inside border {inside:?}");
+    assert!(gap(top + inside[3] - live[1] - live[3]), "bottom gap: live {live:?}, inside border {inside:?}");
+    // The live window in global coordinates, to click the pane at a known screen point below.
+    let global = hosted().expect("live window frame");
 
     // Leave: parked again, mode back to normal.
     assert_eq!(otto.call(json!({"cmd": "leave"}))["mode"], "normal");
-    wait_for("the window to park again", || hosted().filter(at_spot));
+    wait_for("the window to park again", || hosted().filter(|f| at_spot(f) && close(f[3], body[3] + crop)));
+
+    // A real click on the parked pane makes it live and is replayed at the same content point.
+    // Needs `cliclick`; clicks only while ottospace is frontmost, so no other app gets it.
+    if Command::new("cliclick").arg("-V").output().is_ok() {
+        let front = || {
+            let script = "tell application \"System Events\" to unix id of first process whose frontmost is true";
+            let out = Command::new("osascript").args(["-e", script]).output().expect("run osascript");
+            String::from_utf8_lossy(&out.stdout).trim() == otto.child.id().to_string()
+        };
+        // Leave reactivates ottospace only if the canary had the keyboard; ask until it holds.
+        let raise = format!("set frontmost of (first process whose unix id is {}) to true", otto.child.id());
+        wait_for("ottospace to be frontmost", || {
+            press(&raise);
+            front().then_some(())
+        });
+        let (x, y) = (global[0] + 100.0, global[1] + crop + 60.0);
+        let status = Command::new("cliclick").arg(format!("c:{x:.0},{y:.0}")).status().expect("run cliclick");
+        assert!(status.success(), "cliclick failed");
+        let clicks = || canary.call(json!({"cmd": "state"}))["windows"][0]["clicks"].as_array().cloned();
+        let click = wait_for("the replayed click", || clicks()?.first().and_then(point));
+        assert!(close(click[0], 100.0) && close(click[1], 60.0), "click landed at {click:?}, not (100, 60)");
+        assert_eq!(state()["mode"], "app");
+        otto.call(json!({"cmd": "leave"}));
+        wait_for("the window to park after the click", || hosted().filter(at_spot));
+    } else {
+        eprintln!("cliclick not found: click replay not checked");
+    }
 
     // While live, the keyboard belongs to the app: a typed key arrives in the canary.
     otto.call(json!({"cmd": "enter", "pane": 1}));

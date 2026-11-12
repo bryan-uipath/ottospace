@@ -23,7 +23,8 @@ use gpui::{
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::keys::{self, Mods};
 use ottospace_core::{
-    Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Pane, PaneId, PickItem, Picker, Section, theme,
+    Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Pane, PaneId, PickItem, Picker, Rect, Section, theme,
+    titlebar::{self, TitleBar},
 };
 use ottospace_mac::{ax, capture, display, hotkey, input, recovery};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -75,14 +76,20 @@ impl SCStreamOutputTrait for Output {
 }
 
 /// Stream config for a pane of `size` points at `scale` (Retina = 2). Scales the window to fill it.
-fn stream_config(size: CGSize, scale: f64) -> SCStreamConfiguration {
+/// `crop` > 0: show only the window below its top `crop` points (the title bar), unscaled.
+fn stream_config(size: CGSize, crop: f64, scale: f64) -> SCStreamConfiguration {
     // 420f is the only format gpui's surface renderer accepts.
-    SCStreamConfiguration::new()
+    let config = SCStreamConfiguration::new()
         .with_width((size.width * scale).max(1.0) as u32)
         .with_height((size.height * scale).max(1.0) as u32)
         .with_scales_to_fit(true)
         .with_pixel_format(PixelFormat::YCbCr_420f)
-        .with_fps(60)
+        .with_fps(60);
+    if crop > 0.0 {
+        config.with_source_rect(screencapturekit::cg::CGRect::new(0.0, crop, size.width, size.height))
+    } else {
+        config
+    }
 }
 
 fn to_cg(size: gpui::Size<Pixels>) -> CGSize {
@@ -100,11 +107,15 @@ struct Hosted {
     pid: i32,
     /// Window corner radius in points, for masking the stream's black corners.
     radius: f64,
+    /// Height of the window's plain native title bar (0: none to crop), measured once.
+    bar: f64,
+    /// Title-bar crop the window was parked and the stream configured with.
+    crop: f64,
     /// Body bounds in window-content coordinates, captured during prepaint.
     bounds: Rc<Cell<Bounds<Pixels>>>,
     /// Size the window was parked at, to re-park only when the pane resizes.
     parked_size: CGSize,
-    /// Last rect the live window was placed at, to re-place only on change.
+    /// Last pane content rect the live window was placed over, to re-place only on change.
     placed: CGRect,
 }
 
@@ -114,10 +125,11 @@ impl Hosted {
         let original = window.frame().ok_or("could not read window frame")?;
         let latest = Arc::new(Latest::default());
         let radius = capture::corner_radius(&sc_window, 2.0).unwrap_or(0.0);
-        eprintln!("hosting window {id}: corner radius {radius:.1}pt");
+        let bar = title_bar(&window);
+        eprintln!("hosting window {id}: corner radius {radius:.1}pt, title bar {bar}pt");
         let filter = SCContentFilter::create().with_window(&sc_window).build().map_err(|e| format!("{e:?}"))?;
         // Resized to the pane on park.
-        let config = stream_config(original.size, 2.0);
+        let config = stream_config(original.size, 0.0, 2.0);
         latest.expect(&config);
         let mut stream = SCStream::new(&filter, &config).map_err(|e| format!("{e:?}"))?;
         stream.add_output_handler(Output(latest.clone()), SCStreamOutputType::Screen).map_err(|e| format!("{e:?}"))?;
@@ -134,6 +146,8 @@ impl Hosted {
             stream,
             pid,
             radius,
+            bar,
+            crop: 0.0,
             bounds: Rc::default(),
             parked_size: CGSize::ZERO,
             placed: CGRect::default(),
@@ -153,28 +167,37 @@ impl Hosted {
     }
 
     /// Sizes the window to the pane (so the stream matches) and parks it on the off-screen sliver.
-    fn park(&mut self, scale: f64) {
+    /// With a `crop`, the window is that much taller and the stream shows only the part below it.
+    fn park(&mut self, scale: f64, crop: f64) {
         let size = to_cg(self.bounds.get().size);
         // Only resize/reconfigure when the pane changed; redoing it on every park flickers.
-        if size != self.parked_size {
+        if size != self.parked_size || crop != self.crop {
             // Move first. Resized where it stood, macOS clamps the window to what fits above the
             // Dock there (a pane 818pt tall parked at 805pt), and the stream no longer matches.
             let _ = self.window.set_position(display::parking_spot());
-            let _ = self.window.set_size(size);
+            let _ = self.window.set_size(CGSize::new(size.width, size.height + crop));
             // Match the stream to the pane so frames aren't letterboxed into a stale-sized buffer.
-            let config = stream_config(size, scale);
+            let config = stream_config(size, crop, scale);
             self.latest.expect(&config);
             let _ = self.stream.update_configuration(&config);
         }
         let _ = self.window.set_position(display::parking_spot());
         self.parked_size = size;
+        self.crop = crop;
         self.placed = CGRect::default();
     }
 
-    fn place(&mut self, rect: CGRect) {
-        let _ = self.window.set_size(rect.size);
-        let _ = self.window.set_position(rect.origin);
+    /// Places the window over pane content `rect`, raised by `crop` so its title bar covers the header.
+    fn place(&mut self, rect: CGRect, crop: f64) {
+        let frame = raised(rect, crop);
+        let _ = self.window.set_size(frame.size);
+        let _ = self.window.set_position(frame.origin);
         self.placed = rect;
+    }
+
+    /// The crop for this window with its pane content at `rect`; see `titlebar::crop`.
+    fn crop_at(&self, rect: CGRect, limit: f64) -> f64 {
+        titlebar::crop(self.bar as f32, rect.origin.y as f32, limit as f32) as f64
     }
 
     fn frame(&self) -> Option<CVPixelBuffer> {
@@ -218,6 +241,8 @@ static RETURN_KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 /// it keeps clear on the left for the traffic lights.
 const TOP_BAR: f32 = 28.;
 const TRAFFIC_LIGHTS: f32 = 80.;
+/// Height of a pane's header (label and close button).
+const PANE_HEADER: f32 = 28.;
 
 /// Top-bar buttons: icon, tooltip, split direction, and whether the pick opens in a new tab.
 const SPLITS: [(&str, &str, Axis, bool); 3] = [
@@ -316,6 +341,8 @@ struct Workspace {
     cell: Size<Pixels>,
     /// Each pane's body bounds in window coordinates, recorded during prepaint.
     cells: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
+    /// Each pane's bounds inside its border, for e2e to check the live window's gap.
+    frames: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
     apps: Vec<String>,
     /// Window ids seen per hosted pid; anything new that appears later gets its own pane.
     known: Vec<(i32, HashSet<u32>)>,
@@ -411,6 +438,7 @@ impl Workspace {
             terminals: HashMap::new(),
             cell: terminal::cell_size(window),
             cells: HashMap::new(),
+            frames: HashMap::new(),
             apps: running_apps(hosting, host_only),
             known: Vec::new(),
             live_since: None,
@@ -438,6 +466,7 @@ impl Workspace {
                 }
                 Effect::Closed(pane) => {
                     self.cells.remove(&pane.id);
+                    self.frames.remove(&pane.id);
                     self.terminals.remove(&pane.id); // drop ends its shell
                     if let Some(hosted) = self.hosted.remove(&pane.id) {
                         hosted.release();
@@ -446,7 +475,8 @@ impl Workspace {
                 Effect::Parked(id) => {
                     self.live_since = None;
                     if let Some(hosted) = self.hosted.get_mut(id) {
-                        hosted.park(window.scale_factor() as f64);
+                        let crop = hosted.crop_at(on_screen(hosted.bounds.get(), window, cx), top_limit(window, cx));
+                        hosted.park(window.scale_factor() as f64, crop);
                         // Going live activated the app. If it still has the keyboard, take it
                         // back, or keys keep going to its off-screen window while the status
                         // bar says NORMAL. If the user moved to a third app, leave them there.
@@ -461,7 +491,8 @@ impl Workspace {
                 Effect::Live(id) => {
                     self.live_since = Some(Instant::now());
                     if let Some(hosted) = self.hosted.get_mut(id) {
-                        hosted.place(on_screen(hosted.bounds.get(), window, cx));
+                        let rect = on_screen(hosted.bounds.get(), window, cx);
+                        hosted.place(rect, hosted.crop_at(rect, top_limit(window, cx)));
                         hosted.window.raise();
                     }
                 }
@@ -563,20 +594,23 @@ impl Workspace {
                 h.window.frame().map(|f| (*id, [f.origin.x, f.origin.y, f.size.width, f.size.height]))
             })
             .collect();
+        let crop: BTreeMap<PaneId, f64> = self.hosted.iter().map(|(id, h)| (*id, h.crop)).collect();
         let frame = window.bounds();
         let frame: [f32; 4] =
             [frame.origin.x.into(), frame.origin.y.into(), frame.size.width.into(), frame.size.height.into()];
         // Only panes of the active tab are drawn; a background pane's last bounds are stale.
         let drawn = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
-        let bounds: BTreeMap<PaneId, [f32; 4]> = self
-            .cells
-            .iter()
-            .filter(|(id, _)| drawn.contains(id))
-            .map(|(id, cell)| {
-                let b = cell.get();
-                (*id, [b.origin.x.into(), b.origin.y.into(), b.size.width.into(), b.size.height.into()])
-            })
-            .collect();
+        let drawn_rects = |cells: &HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>| -> BTreeMap<PaneId, [f32; 4]> {
+            cells
+                .iter()
+                .filter(|(id, _)| drawn.contains(id))
+                .map(|(id, cell)| {
+                    let b = cell.get();
+                    (*id, [b.origin.x.into(), b.origin.y.into(), b.size.width.into(), b.size.height.into()])
+                })
+                .collect()
+        };
+        let (bounds, frames) = (drawn_rects(&self.cells), drawn_rects(&self.frames));
         let terminals: BTreeMap<PaneId, serde_json::Value> = self
             .terminals
             .iter()
@@ -590,6 +624,8 @@ impl Workspace {
             "mode": self.model.mode(),
             "state": self.model,
             "bounds": bounds,
+            // Each drawn pane's bounds inside its border.
+            "frames": frames,
             "tab_panes": self.model.tab_panes(),
             // ottospace's own window frame, so a test can turn pane bounds into screen positions.
             "window": frame,
@@ -599,6 +635,8 @@ impl Workspace {
             "return_key": RETURN_KEY.get(),
             // Each hosted window's real frame, in the same global coordinates as `parking`.
             "hosted": hosted,
+            // Each hosted pane's title-bar crop in points (0: none).
+            "crop": crop,
             "terminals": terminals,
         })
         .to_string()
@@ -718,18 +756,20 @@ impl Workspace {
     fn sync_layout(&mut self, window: &Window, cx: &App, check: bool) {
         let scale = window.scale_factor() as f64;
         let live = self.model.live;
+        let limit = top_limit(window, cx);
         for (id, hosted) in &mut self.hosted {
             let rect = on_screen(hosted.bounds.get(), window, cx);
             if rect.size.width < 1.0 {
                 continue; // not laid out yet
             }
+            let crop = hosted.crop_at(rect, limit);
             if live == Some(*id) {
-                let drifted = check && hosted.window.frame().is_some_and(|f| f.origin != rect.origin);
+                let drifted = check && hosted.window.frame().is_some_and(|f| f.origin != raised(rect, crop).origin);
                 if hosted.placed != rect || drifted {
-                    hosted.place(rect);
+                    hosted.place(rect, crop);
                 }
-            } else if hosted.parked_size != rect.size {
-                hosted.park(scale);
+            } else if hosted.parked_size != rect.size || hosted.crop != crop {
+                hosted.park(scale, crop);
             }
         }
     }
@@ -1153,13 +1193,17 @@ impl Workspace {
     fn render_pane(&self, pane: &Pane, cx: &mut Context<Self>) -> impl IntoElement {
         let id = pane.id;
         let cell = self.cells.get(&id).cloned().unwrap_or_default();
+        let frame = self.frames.get(&id).cloned().unwrap_or_default();
+        let bar = self.hosted.get(&id).map_or(0.0, |h| h.bar as f32);
         let (tag, tag_color, title) = match &pane.kind {
             Kind::Empty => ("EMPTY", theme::MUTED, String::new()),
             Kind::Terminal => ("TERM", theme::PRIMARY, "shell".into()),
             Kind::App { title, .. } => ("APP", theme::APP, title.clone()),
         };
+        // flex_none: a short pane must not squeeze the header, or a raised bar would overlap the pane above.
         let header = div()
-            .h(px(28.))
+            .flex_none()
+            .h(px(titlebar::header(bar, PANE_HEADER)))
             .px_2()
             .flex()
             .items_center()
@@ -1213,7 +1257,7 @@ impl Workspace {
                 _ => empty_pane("⌘E to pick what goes here").into_any_element(),
             }
         };
-        let radius = self.hosted.get(&id).map_or(0.0, |h| h.radius);
+        let (radius, cropped) = self.hosted.get(&id).map_or((0.0, false), |h| (h.radius, h.crop > 0.0));
         // The content sits 2pt inside the pane. A live app window is placed over it, and without
         // the gap that window's own edge covers the pane's accent border.
         let inner = div()
@@ -1226,7 +1270,7 @@ impl Workspace {
             .child(canvas(move |bounds, _, _| cell.set(bounds), |_, _, _, _| {}).absolute().size_full())
             .child(content)
             .child(
-                canvas(|_, _, _| {}, move |bounds, _, window, _| paint_corner_mask(bounds, radius, window))
+                canvas(|_, _, _| {}, move |bounds, _, window, _| paint_corner_mask(bounds, radius, cropped, window))
                     .absolute()
                     .size_full(),
             );
@@ -1236,7 +1280,9 @@ impl Workspace {
             MouseButton::Left,
             cx.listener(move |this, e: &MouseDownEvent, window, cx| this.click_pane(id, e, window, cx)),
         );
-        let body = div().id(("pane", id)).flex_1().min_h_0().p(px(2.)).child(inner);
+        // With a title bar, the header sits inside the 2pt gap too, so the raised live window's bar
+        // covers it exactly and the gap stays on all four sides.
+        let body = div().id(("pane", id)).flex_1().min_h_0().when(bar == 0.0, |d| d.p(px(2.))).child(inner);
 
         // While another pane is live, fade this one: input goes to the live app, not here.
         let faded = self.model.live.is_some_and(|live| live != id);
@@ -1250,6 +1296,11 @@ impl Workspace {
             .border_1()
             .border_color(rgb(if focused { theme::accent(self.model.mode()) } else { theme::BORDER }))
             .when(faded, |d| d.opacity(0.5))
+            .relative()
+            .when(bar > 0.0, |d| d.p(px(2.)))
+            .child(
+                canvas(move |bounds, _, _| frame.set(bounds), |_, _, _, _| {}).absolute().top_0().left_0().size_full(),
+            )
             .child(header)
             .child(body)
     }
@@ -1400,15 +1451,49 @@ fn running_apps(hosting: bool, only: Option<i32>) -> Vec<String> {
 
 /// Covers the window's rounded corners (transparent, so black in the YUV stream) with the
 /// background: a ring whose inner edge is the window's rounded outline, clipped to the pane.
-fn paint_corner_mask(bounds: Bounds<Pixels>, radius: f64, window: &mut Window) {
+/// `cropped`: the top corners went with the title bar, so only the bottom ones are masked.
+fn paint_corner_mask(bounds: Bounds<Pixels>, radius: f64, cropped: bool, window: &mut Window) {
     if radius <= 0.0 {
         return;
     }
     let r = px(radius as f32);
-    let ring = Bounds { origin: bounds.origin - point(r, r), size: bounds.size + size(r * 2., r * 2.) };
+    // Lifting the ring by r puts its rounded top edge above the clip.
+    let lift = if cropped { r } else { px(0.) };
+    let ring = Bounds { origin: bounds.origin - point(r, r + lift), size: bounds.size + size(r * 2., r * 2. + lift) };
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
         window.paint_quad(quad(ring, r * 2., transparent_black(), r, rgb(theme::BACKGROUND), BorderStyle::Solid));
     });
+}
+
+/// Lowest global y a raised live window may reach: the bottom of ottospace's top bar.
+fn top_limit(window: &Window, cx: &App) -> f64 {
+    on_screen(Bounds { origin: point(px(0.), px(TOP_BAR)), size: Size::default() }, window, cx).origin.y
+}
+
+/// The window frame for pane content `rect` with a title bar of `crop` above it.
+fn raised(rect: CGRect, crop: f64) -> CGRect {
+    CGRect {
+        origin: CGPoint::new(rect.origin.x, rect.origin.y - crop),
+        size: CGSize::new(rect.size.width, rect.size.height + crop),
+    }
+}
+
+/// The window's croppable title-bar height from AX (0: none or unreadable); see `titlebar::height`.
+fn title_bar(window: &ax::Window) -> f64 {
+    let rect = |r: CGRect| Rect {
+        x: r.origin.x as f32,
+        y: r.origin.y as f32,
+        w: r.size.width as f32,
+        h: r.size.height as f32,
+    };
+    let Some(frame) = window.frame() else { return 0.0 };
+    let facts = TitleBar {
+        window: rect(frame),
+        close: window.part("AXCloseButton").map(rect),
+        title: window.part("AXTitleUIElement").map(rect),
+        toolbar: window.has_child("AXToolbar").unwrap_or(true),
+    };
+    titlebar::height(&facts) as f64
 }
 
 /// A pane body's rect (window-content coordinates) in global top-left screen coordinates.
@@ -1426,6 +1511,7 @@ impl Render for Workspace {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         for pane in &self.model.panes {
             self.cells.entry(pane.id).or_default();
+            self.frames.entry(pane.id).or_default();
         }
         let tree = self.model.layout.as_ref().map(|root| self.render_node(root, cx));
         div()

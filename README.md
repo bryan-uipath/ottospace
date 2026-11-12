@@ -215,7 +215,8 @@ Architecture rules and the test loops are in [AGENTS.md](AGENTS.md).
 macOS cannot reparent another process's window, so ottospace fakes embedding with the Accessibility
 (AX) API and ScreenCaptureKit (SCK). An inactive app window is parked off-screen with one pixel on
 a display, and its pane shows an SCK stream of it. Clicking the pane moves the real window over it
-and replays the click, so input is native. `crates/probe` measures whether a parked window keeps
+and replays the click, so input is native. A pane shows one title bar: the stream leaves out the
+app's own, and the live window's covers the pane header. `crates/probe` measures whether a parked window keeps
 rendering. Measurements and risks: [docs/ai/hosting-windows.md](docs/ai/hosting-windows.md).
 
 ## Design docs

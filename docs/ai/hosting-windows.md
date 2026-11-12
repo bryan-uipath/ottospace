@@ -17,6 +17,39 @@ Input forwarding to parked windows is a dead end: Chrome ignores `CGEventPostToP
 on screen (tried window-under-pointer fields, private window-local location, HID-state source).
 So interaction means: place the real window over the pane, then replay the click at HID level.
 
+## One title bar per pane
+
+An app pane shows one bar. Parked: the stream starts below the app's title bar
+(`SCStreamConfiguration::with_source_rect`), so only ottospace's header shows; the window is
+parked that much taller, so its content is pane-sized. Live: the window is raised by the bar's
+height, so its own bar covers the pane header and its content lines up with the pane's. Apps
+without a plain title bar keep the old behaviour: no crop, no raise.
+
+Rule (`ottospace_core::titlebar::height`): crop only when AX reports a close button and an
+`AXTitleUIElement`, no `AXToolbar` child, a title no taller than the button + 4pt, and the title
+centred in the strip the button implies (bar = 2 × button offset + button height, 16–40pt).
+Any failed read means no crop.
+
+Measured 2026-11-11, macOS 26, attributes read with System Events (frames relative to window top):
+
+| Window | Close button | Title element | Toolbar child | Result |
+|---|---|---|---|---|
+| ottospace-canary (GPUI) | y+8, 16pt | y+8, 16pt | no | crop 32 |
+| Terminal | y+8, 16pt | y+8, 16pt | no | crop 32 |
+| Finder (unified toolbar) | y+18, 16pt | y+0, 52pt | yes, 52pt | none |
+| Activity Monitor (toolbar) | y+18, 16pt | y+0, 52pt | yes, 52pt | none |
+| Chrome (tabs in title bar) | y+12, 16pt | none | no | none |
+| VS Code (Electron) | y+9, 16pt | none | no | none |
+| Spotify (CEF) | y+24, 16pt | none | no | none |
+
+Safari and Slack were not running. An app pane with a bar gets a header as tall as the bar
+(`titlebar::header`), inside the same 2pt gap as the content: the raised live window's bar covers
+it exactly, and the pane's border stays visible on all four sides. The header does not shrink in
+a short pane. A pane whose raised window would reach above ottospace's top bar gets no crop
+(`titlebar::crop`); the layout keeps that from happening, and the top bar is below the menu bar,
+so a raised window cannot go under it either. Not hidden: while live, the app's real title bar shows,
+including the purple pill macOS draws in it while the window is captured.
+
 ## Probe results
 
 `cargo run -p probe -- "Google Chrome" 5` prints frames/sec by SCK status for on-screen → sliver →
