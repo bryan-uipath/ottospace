@@ -50,8 +50,9 @@ pub struct Target {
     pub id: u32,
 }
 
-/// Finds `app_name`'s main window via AX, plus its matching SCK window. Prompts for Screen Recording on first use.
-pub fn find(app_name: &str) -> Result<Target, String> {
+/// Finds `app_name`'s main window via AX, among the windows `keep` accepts, plus its matching
+/// SCK window. Prompts for Screen Recording on first use.
+pub fn find(app_name: &str, keep: impl Fn(&ax::Window) -> bool) -> Result<Target, String> {
     let content = SCShareableContent::get().map_err(|e| format!("{e:?}"))?;
     let pid = content
         .applications()
@@ -59,12 +60,13 @@ pub fn find(app_name: &str) -> Result<Target, String> {
         .find(|a| a.application_name() == app_name)
         .map(|a| a.process_id())
         .ok_or_else(|| format!("{app_name} is not running"))?;
-    target(ax::Window::main_of(pid).ok_or("no standard main window")?)
+    find_pid(pid, keep)
 }
 
-/// The main window of the process `pid`. Test runs use it to host exactly the app they started.
-pub fn find_pid(pid: i32) -> Result<Target, String> {
-    target(ax::Window::main_of(pid).ok_or("no standard main window")?)
+/// The main window of the process `pid`, among the windows `keep` accepts. Test runs use it to
+/// host exactly the app they started.
+pub fn find_pid(pid: i32, keep: impl Fn(&ax::Window) -> bool) -> Result<Target, String> {
+    target(ax::Window::main_where(pid, keep).ok_or("no window that may be put in a pane")?)
 }
 
 /// The name SCK reports for the process `pid`.

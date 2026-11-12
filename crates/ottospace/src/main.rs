@@ -25,6 +25,7 @@ use gpui::{
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::keys::{self, Mods};
 use ottospace_core::list::{ListKey, list_key};
+use ottospace_core::rules::{self, Facts};
 use ottospace_core::settings::{Installed, closed_apps};
 use ottospace_core::tasks::{Group, MAX_TITLE, Task};
 use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, scroll_key, select_kind, visual_key};
@@ -1168,9 +1169,9 @@ impl Workspace {
         }
         let target = match self.host_only {
             // By pid, not by name: another process may share the canary's name.
-            Some(pid) if capture::name_of(pid).as_deref() == Some(name) => capture::find_pid(pid)?,
+            Some(pid) if capture::name_of(pid).as_deref() == Some(name) => capture::find_pid(pid, window_managed)?,
             Some(_) => return Err("this test run may host only the app it started".into()),
-            None => match capture::find(name) {
+            None => match capture::find(name, window_managed) {
                 Ok(target) => target,
                 // An app from the settings that is not running: start it, and host its window
                 // when it has one.
@@ -1268,8 +1269,10 @@ impl Workspace {
         let mut fresh = Vec::new();
         for (pid, seen) in &mut self.known {
             for window in ax::Window::standard_of(*pid) {
+                // A window the rules leave alone is seen once and never becomes a pane.
                 if let Some(id) = window.id()
                     && seen.insert(id)
+                    && window_managed(&window)
                 {
                     fresh.push(window);
                 }
@@ -2552,6 +2555,15 @@ fn list_button(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
         .cursor_pointer()
         .hover(|s| s.bg(rgb(theme::SELECTED)).border_color(rgb(theme::BORDER_STRONG)).shadow(vec![lifted]))
         .when(selected, |row| row.bg(rgb(theme::SELECTED)).border_color(rgb(theme::LIST)))
+}
+
+/// True if the window rules (the user's, then the built-in ones) let this window be put in a pane.
+fn window_managed(window: &ax::Window) -> bool {
+    let (bundle, name) = ax::app_identity(window.pid());
+    let (title, subrole) = (window.title().unwrap_or_default(), window.subrole().unwrap_or_default());
+    let facts =
+        Facts { app: name.as_deref().unwrap_or_default(), bundle: bundle.as_deref(), title: &title, subrole: &subrole };
+    rules::manages(&config::get().settings.windows, &facts)
 }
 
 /// Apps that can be hosted right now. In a test run limited to one app, only that app.

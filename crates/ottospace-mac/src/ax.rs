@@ -13,6 +13,12 @@ unsafe extern "C" {
     fn _AXUIElementGetWindow(element: &AXUIElement, id: *mut u32) -> AXError;
 }
 
+/// The bundle id (`us.zoom.xos`) and the name (`zoom.us`) of the app with this pid.
+pub fn app_identity(pid: i32) -> (Option<String>, Option<String>) {
+    let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) else { return (None, None) };
+    (app.bundleIdentifier().map(|id| id.to_string()), app.localizedName().map(|name| name.to_string()))
+}
+
 /// Whether this process (or its parent terminal) has Accessibility access; optionally prompts.
 /// True while the app with this pid is the frontmost app (it has the keyboard).
 pub fn is_active(pid: i32) -> bool {
@@ -45,12 +51,17 @@ impl Window {
     /// The app's main window if it's a standard window, else its first standard window.
     /// (Finder's main window is often the desktop, which isn't standard.)
     pub fn main_of(pid: i32) -> Option<Self> {
+        Self::main_where(pid, |_| true)
+    }
+
+    /// As `main_of`, among the standard windows that `keep` accepts.
+    pub fn main_where(pid: i32, keep: impl Fn(&Self) -> bool) -> Option<Self> {
         let app = unsafe { AXUIElement::new_application(pid) };
         copy_attr(&app, "AXMainWindow")
             .and_then(|w| w.downcast::<AXUIElement>().ok())
             .map(|element| Self { element, pid })
-            .filter(Self::is_standard)
-            .or_else(|| Self::standard_of(pid).into_iter().next())
+            .filter(|window| window.is_standard() && keep(window))
+            .or_else(|| Self::standard_of(pid).into_iter().find(|window| keep(window)))
     }
 
     /// The standard window with this window-server id, if `pid` still has it.
