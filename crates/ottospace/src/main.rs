@@ -412,8 +412,8 @@ struct Workspace {
     known: Vec<(i32, HashSet<u32>)>,
     /// When the live pane went live.
     live_since: Option<Instant>,
-    /// When a pane last gave the keyboard back. Its app stays "active" for a moment after.
-    parked_at: Option<Instant>,
+    /// The hosted app that was the front app at the last look, to see one come forward.
+    front_hosted: Option<i32>,
     error: Option<String>,
     /// False in e2e runs, which must never move the user's real windows.
     hosting: bool,
@@ -561,7 +561,7 @@ impl Workspace {
             list_scroll: ScrollHandle::new(),
             known: Vec::new(),
             live_since: None,
-            parked_at: None,
+            front_hosted: None,
             error: None,
             notice,
             keeping,
@@ -613,7 +613,6 @@ impl Workspace {
                 }
                 Effect::Parked(id) => {
                     self.live_since = None;
-                    self.parked_at = Some(Instant::now());
                     if let Some(hosted) = self.hosted.get_mut(id) {
                         let crop = hosted.crop_at(on_screen(hosted.bounds.get(), window, cx), top_limit(window, cx));
                         hosted.park(window.scale_factor() as f64, crop);
@@ -1249,24 +1248,29 @@ impl Workspace {
         cx.notify();
     }
 
-    /// A hosted app came to the front by itself (a click on its Dock icon, ⌘Tab) while its window
-    /// is parked off screen: the user would see nothing happen. Go to its pane and give it the
-    /// keyboard, as a click on the pane does.
+    /// A hosted app came to the front by itself (a click on its Dock icon, ⌘Tab) with a hosted
+    /// window as its main window. That window is parked off screen, so the user would see nothing
+    /// happen: go to its pane and give it the keyboard.
+    ///
+    /// Only at the moment the app comes forward, not for as long as it is in front: the user may
+    /// be in a window of that app that ottospace does not hold, and must be left there.
     fn follow_front_app(&mut self, window: &Window, cx: &mut Context<Self>) {
-        // Just after a pane was left, its app can still read as active: that is not the user.
-        if self.parked_at.is_some_and(|at| at.elapsed() < Duration::from_millis(1000)) {
+        let front = self.hosted.values().map(|hosted| hosted.pid).find(|pid| ax::is_active(*pid));
+        let came_forward = front.filter(|pid| self.front_hosted != Some(*pid));
+        self.front_hosted = front;
+        let Some(pid) = came_forward else { return };
+        let live_pid = self.model.live.and_then(|pane| self.hosted.get(&pane)).map(|hosted| hosted.pid);
+        if live_pid == Some(pid) {
+            return; // its window is the one on screen: ottospace put it there
+        }
+        // The window the app brought forward decides the pane. One that is not hosted: nothing to do.
+        let Some(main) = ax::Window::main_of(pid).and_then(|window| window.id()) else { return };
+        let Some(pane) = self.hosted.iter().find(|(_, h)| h.window_id == main).map(|(id, _)| *id) else { return };
+        // The core would drop the move behind a box or in visual mode. Then do not come forward
+        // either: that would only take the app away from the user.
+        if self.model.keys || matches!(self.model.mode(), Mode::Pick | Mode::Compose | Mode::Visual) {
             return;
         }
-        let live_pid = self.model.live.and_then(|pane| self.hosted.get(&pane)).map(|hosted| hosted.pid);
-        let Some(pid) = self.hosted.values().map(|hosted| hosted.pid).find(|pid| ax::is_active(*pid)) else { return };
-        if live_pid == Some(pid) {
-            return; // its window is the one on screen already
-        }
-        // Of the app's panes: one in the tab on show, else its first.
-        let shown = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
-        let mut panes: Vec<PaneId> = self.hosted.iter().filter(|(_, h)| h.pid == pid).map(|(id, _)| *id).collect();
-        panes.sort_unstable();
-        let Some(pane) = panes.iter().copied().find(|id| shown.contains(id)).or(panes.first().copied()) else { return };
         // ottospace must be on screen under the window it is about to place.
         cx.activate(true);
         self.dispatch(Action::Enter { pane }, window, cx);

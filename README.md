@@ -202,8 +202,9 @@ listed there while they are not running: a click starts one (ottospace waits up 
 empty, otherwise it splits right. Shift-click splits down. New windows of a hosted app get their
 own pane. Original window frames are saved to disk and restored on quit or after a crash.
 
-Click an app pane to give it the keyboard (`APP` mode). Bringing a hosted app forward from outside (its Dock icon, ⌘Tab)
-does the same: ottospace comes forward on that app's pane. ottospace shortcuts do not fire in that
+Click an app pane to give it the keyboard (`APP` mode). If you bring a hosted app forward from outside
+(its Dock icon, ⌘Tab) and the window it shows is one ottospace holds, ottospace comes forward on
+that window's pane and gives it the keyboard, within half a second. ottospace shortcuts do not fire in that
 mode. Press the return key, or click ottospace itself (rail, top bar, another pane), to return.
 
 The return key works while any app is frontmost. It is F18 by default; set `OTTOSPACE_RETURN_KEY`
