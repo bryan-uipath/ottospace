@@ -758,6 +758,108 @@ fn tasks_are_listed_as_an_inbox_and_pop_opens_the_next() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn the_tasks_section_lists_what_needs_you_then_what_is_open() {
+    let otto = Otto::launch("tasks-bar");
+    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+    // The section as drawn: (heading, count, ids of its rows).
+    let bar = |reply: &Value| -> Vec<(String, u64, Vec<u64>)> {
+        let sections = reply["tasks_bar"]["sections"].as_array().unwrap();
+        let ids = |s: &Value| s["rows"].as_array().unwrap().iter().map(|r| r["id"].as_u64().unwrap()).collect();
+        sections
+            .iter()
+            .map(|s| (s["heading"].as_str().unwrap().to_string(), s["count"].as_u64().unwrap(), ids(s)))
+            .collect()
+    };
+    let section = |heading: &str, ids: &[u64]| (heading.to_string(), ids.len() as u64, ids.to_vec());
+
+    // No task: the section says how to add one.
+    let reply = otto.call(json!({"cmd": "section", "section": "tasks"}));
+    assert_eq!((&reply["tasks_bar"]["empty"], bar(&reply).len()), (&json!(true), 0));
+    otto.call(json!({"cmd": "task_add", "title": "ask", "state": "needs_you"}));
+    otto.call(json!({"cmd": "task_add", "title": "build", "state": "running"}));
+    otto.call(json!({"cmd": "task_new", "line": "idea p1"}));
+
+    // ⌘↵ in the new-task box adds the task and starts it: its tab is on show, and it is under Open.
+    otto.call(json!({"cmd": "compose", "text": "fix zoom #canvas"}));
+    let reply = key("cmd-enter");
+    assert_eq!((reply["mode"].as_str(), &reply["state"]["current_task"]), (Some("normal"), &json!(4)));
+    assert_eq!(
+        bar(&reply),
+        [section("needs_you", &[1]), section("open", &[4]), section("running", &[2]), section("captured", &[3])]
+    );
+    assert!(reply["state"]["tasks"]["list"][3]["created"].as_u64().is_some(), "{reply}");
+    // The same from the socket.
+    let filed = otto.call(json!({"cmd": "task_new", "line": "write the notes", "open": true}));
+    assert_eq!((&filed["task"]["id"], &filed["opened"]), (&json!(5), &json!(true)));
+    // A task that needs you stays under Needs you when it is open; its row says what it has open.
+    let reply = otto.call(json!({"cmd": "task_open", "id": 1}));
+    assert_eq!(bar(&reply)[..2], [section("needs_you", &[1]), section("open", &[4, 5])]);
+    let row = &reply["tasks_bar"]["sections"][0]["rows"][0];
+    assert_eq!((&row["tabs"], &row["current"]), (&json!(1), &json!(true)));
+    assert!(row["detail"].as_str().unwrap().starts_with("1 tab, 0 panes"), "{row}");
+
+    // Where a control is drawn: sneak mode's targets give each one's frame. Then a real click
+    // there, through the window's own handlers.
+    let press = |id: &str| -> Value {
+        let reply = otto.call(json!({"cmd": "sneak"}));
+        key("escape");
+        let targets = reply["sneak"]["targets"].as_array().expect("targets");
+        let drawn: Vec<&str> = targets.iter().filter_map(|t| t["source"]["id"].as_str()).collect();
+        let target = targets.iter().find(|t| t["source"]["id"] == id).unwrap_or_else(|| panic!("no {id} in {drawn:?}"));
+        let f = |key: &str| target["frame"][key].as_f64().unwrap();
+        otto.click([f("x") + f("w") / 2.0, f("y") + f("h") / 2.0], 1)
+    };
+    let drawn = |id: &str| -> bool {
+        let reply = otto.call(json!({"cmd": "sneak"}));
+        key("escape");
+        reply["sneak"]["targets"].as_array().unwrap().iter().any(|t| t["source"]["id"] == id)
+    };
+
+    // A folded heading keeps its count and draws no rows. By the socket, then by a click on it.
+    let reply = otto.call(json!({"cmd": "task_group", "heading": "open"}));
+    assert_eq!(bar(&reply)[1], ("open".to_string(), 2, vec![]));
+    let reply = press("task-heading:open");
+    assert_eq!(bar(&reply)[1], section("open", &[4, 5]));
+
+    // The buttons of a row show on the row list mode has selected (and under the pointer).
+    // Rows as list mode walks them: Needs you, 1, Open, 4, 5, Running, 2, Captured, 3.
+    key("cmd-shift-e");
+    let reply = key("j j j j j");
+    assert_eq!(reply["state"]["list"], 6);
+    // A click on Dismiss: the task leaves, and a line at the top offers to take it back.
+    let reply = press("task-dismiss:2");
+    assert_eq!((&reply["tasks_bar"]["undo"], bar(&reply).len()), (&json!("Dismissed"), 3));
+    // A click on that line does what `u` does, and the offer goes.
+    let reply = press("task-undo");
+    assert_eq!((&reply["tasks_bar"]["undo"], bar(&reply)[2].clone()), (&json!(null), section("running", &[2])));
+    // A click on Hold. Left alone, the offer goes after a few seconds; the move stays.
+    let reply = press("task-hold:2");
+    assert_eq!(reply["tasks_bar"]["undo"], "On hold");
+    otto.wait_for("the offer to undo to go", |o| {
+        o.call(json!({"cmd": "state"}))["tasks_bar"]["undo"].is_null().then_some(())
+    });
+    assert_eq!(bar(&otto.call(json!({"cmd": "state"}))).last(), Some(&section("on_hold", &[2])));
+    // On the row of a task on hold there is no Hold button: it would change nothing.
+    // Rows now: Needs you, 1, Open, 4, 5, Captured, 3, On hold, 2. The selection went with its task.
+    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["list"], 8);
+    assert!(drawn("task-dismiss:2") && !drawn("task-hold:2"));
+    // The same moves from the socket (an agent's) offer nothing.
+    assert_eq!(otto.call(json!({"cmd": "task_dismiss", "id": 3}))["tasks_bar"]["undo"], json!(null));
+    // A click on Start shows the task's tabs.
+    let reply = press("task-start:2");
+    assert_eq!(reply["state"]["current_task"], 2);
+
+    // `task_new` with `open` while the new-task box is open: the task is added, the tabs on show
+    // stay, and the reply says so.
+    otto.call(json!({"cmd": "compose", "text": "mine"}));
+    let filed = otto.call(json!({"cmd": "task_new", "line": "theirs", "open": true}));
+    assert_eq!((&filed["opened"], filed["task"]["title"].as_str()), (&json!(false), Some("theirs")));
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!((&state["state"]["current_task"], state["mode"].as_str()), (&json!(2), Some("compose")));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn list_mode_drives_the_bar_with_the_keyboard() {
     let otto = Otto::launch("list");
     let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
@@ -766,16 +868,16 @@ fn list_mode_drives_the_bar_with_the_keyboard() {
     }
     otto.call(json!({"cmd": "section", "section": "tasks"}));
 
-    // ⌘⇧E gives the bar the keyboard, on its first row.
+    // ⌘⇧E gives the bar the keyboard, on its first task: the heading above it is row 0.
     let reply = key("cmd-shift-e");
-    assert_eq!((reply["mode"].as_str(), reply["state"]["list"].as_u64()), (Some("list"), Some(0)));
-    // j moves down; x dismisses that task; the selection stays on a row.
+    assert_eq!((reply["mode"].as_str(), reply["state"]["list"].as_u64()), (Some("list"), Some(1)));
+    // j moves down; x dismisses that task; the selection stays at its place.
     key("j");
     let reply = key("x");
     let titles = |reply: &Value| -> Vec<String> {
         reply["inbox"].as_array().unwrap().iter().map(|r| r["title"].as_str().unwrap().to_string()).collect()
     };
-    assert_eq!((titles(&reply), reply["state"]["list"].as_u64()), (vec!["first".into(), "third".into()], Some(1)));
+    assert_eq!((titles(&reply), reply["state"]["list"].as_u64()), (vec!["first".into(), "third".into()], Some(2)));
     // u takes it back; h holds the selected task; s snoozes it.
     assert_eq!(titles(&key("u")), ["first", "second", "third"]);
     let reply = key("h");
@@ -784,6 +886,12 @@ fn list_mode_drives_the_bar_with_the_keyboard() {
     let reply = key("k s");
     assert!(reply["state"]["tasks"]["list"][0]["snoozed_until"].as_u64().is_some(), "the first task is snoozed");
     assert_eq!(titles(&reply), ["second", "third"]);
+    // A heading is a row: space folds it, ↵ unfolds it, and the selection stays on it.
+    let reply = key("k space");
+    assert_eq!((&reply["state"]["collapsed"], reply["state"]["list"].as_u64()), (&json!(["needs_you"]), Some(0)));
+    assert_eq!(reply["tasks_bar"]["sections"][0]["rows"], json!([]));
+    let reply = key("enter");
+    assert_eq!((&reply["state"]["collapsed"], reply["mode"].as_str()), (&json!([]), Some("list")));
 
     // Esc gives the keyboard back. While the bar has it, keys do not reach the terminal.
     assert_eq!(key("escape")["mode"], "normal");

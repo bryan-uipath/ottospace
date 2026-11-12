@@ -50,6 +50,110 @@ impl Group {
     }
 }
 
+/// A heading of the Tasks section, in the order drawn: what needs the user, the other tasks
+/// with tabs open, then the rest of the inbox's groups.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Heading {
+    NeedsYou,
+    Open,
+    Running,
+    Captured,
+    OnHold,
+    Done,
+}
+
+impl Heading {
+    pub fn title(self) -> &'static str {
+        match self {
+            Heading::Open => "Open",
+            Heading::NeedsYou => Group::NeedsYou.title(),
+            Heading::Running => Group::Running.title(),
+            Heading::Captured => Group::Captured.title(),
+            Heading::OnHold => Group::OnHold.title(),
+            Heading::Done => Group::Done.title(),
+        }
+    }
+}
+
+impl From<Group> for Heading {
+    fn from(group: Group) -> Self {
+        match group {
+            Group::NeedsYou => Heading::NeedsYou,
+            Group::Running => Heading::Running,
+            Group::Captured => Heading::Captured,
+            Group::OnHold => Heading::OnHold,
+            Group::Done => Heading::Done,
+        }
+    }
+}
+
+/// A row of the Tasks section, as drawn.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TaskRow {
+    pub id: TaskId,
+    /// The inbox group, whatever heading the row is under: its dot's colour.
+    pub group: Group,
+    /// Tabs and panes the task has open.
+    pub tabs: usize,
+    pub panes: usize,
+    /// Its tabs are the ones on show.
+    pub current: bool,
+    /// The muted second line: `#canvas · >app · 2 tabs, 3 panes · 3h`.
+    pub detail: String,
+}
+
+/// A heading of the Tasks section with its rows. A collapsed one keeps its count and no rows.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TaskSection {
+    pub heading: Heading,
+    pub count: usize,
+    pub collapsed: bool,
+    pub rows: Vec<TaskRow>,
+}
+
+/// What the user just did to a task with the mouse.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Moved {
+    Snoozed,
+    Held,
+    Dismissed,
+}
+
+impl Moved {
+    pub fn title(self) -> &'static str {
+        match self {
+            Moved::Snoozed => "Snoozed",
+            Moved::Held => "On hold",
+            Moved::Dismissed => "Dismissed",
+        }
+    }
+}
+
+/// The line at the top of the Tasks section that offers to take a mouse move back: a click on a
+/// row's button is easy to get wrong, and `u` is a key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct Notice {
+    pub moved: Moved,
+    /// Shown until this time (milliseconds since 1970).
+    pub until: u64,
+}
+
+/// How long a notice stays.
+pub const NOTICE_MS: u64 = 6_000;
+
+/// How long ago `then` was, in one unit: `now`, `5m`, `3h`, `2d`. Times are milliseconds.
+pub fn age(then: u64, now: u64) -> String {
+    let minutes = now.saturating_sub(then) / 60_000;
+    match minutes {
+        0 => "now".into(),
+        1..60 => format!("{minutes}m"),
+        60..1440 => format!("{}h", minutes / 60),
+        _ => format!("{}d", minutes / 1440),
+    }
+}
+
 /// Also the shape of a task's file on disk; fields a hand-written file leaves out take a default.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Task {
@@ -85,6 +189,9 @@ pub struct Task {
     /// Skills to load for it, from `$name` words.
     #[serde(default)]
     pub skills: Vec<String>,
+    /// When it was filed (milliseconds since 1970). `None`: filed before this was kept.
+    #[serde(default)]
+    pub created: Option<u64>,
 }
 
 /// Who works a task, the paths it is about and the skills it loads.
@@ -204,6 +311,7 @@ impl Tasks {
             paths,
             resolved,
             skills,
+            created: None,
         });
         self.next_id
     }
@@ -236,6 +344,13 @@ impl Tasks {
         }
     }
 
+    /// Notes when a task just filed was filed.
+    pub fn stamp(&mut self, id: TaskId, now: u64) {
+        if let Some(task) = self.list.iter_mut().find(|t| t.id == id) {
+            task.created = Some(now);
+        }
+    }
+
     /// Every project named by a task, once each, by name.
     pub fn projects(&self) -> Vec<&str> {
         let mut names: Vec<&str> = self.list.iter().filter_map(|t| t.project.as_deref()).collect();
@@ -263,15 +378,17 @@ impl Tasks {
         }
     }
 
+    /// A snooze, hold or dismiss that changes nothing is no move: `undo` still takes back the
+    /// one before it.
     pub fn snooze(&mut self, id: TaskId, until: u64) {
-        if let Some(task) = self.list.iter_mut().find(|t| t.id == id) {
+        if let Some(task) = self.list.iter_mut().find(|t| t.id == id).filter(|t| t.snoozed_until != Some(until)) {
             self.undo = Some(Undo::Snooze { id, before: task.snoozed_until.replace(until) });
         }
     }
 
-    /// Pauses a task. Not one that is finished: there is nothing left to pause.
+    /// Pauses a task. Not one that is finished: there is nothing left to pause. Nor one on hold already.
     pub fn hold(&mut self, id: TaskId) {
-        let open = |task: &&mut Task| !matches!(task.state, State::Done | State::Cleaned);
+        let open = |task: &&mut Task| !matches!(task.state, State::Done | State::Cleaned | State::Parked);
         if let Some(task) = self.list.iter_mut().find(|t| t.id == id).filter(open) {
             self.undo = Some(Undo::Hold { id, before: std::mem::replace(&mut task.state, State::Parked) });
         }
@@ -282,6 +399,11 @@ impl Tasks {
             task.dismissed = true;
             self.undo = Some(Undo::Dismiss { id });
         }
+    }
+
+    /// There is a snooze, hold or dismiss that `undo` would take back.
+    pub fn can_undo(&self) -> bool {
+        self.undo.is_some()
     }
 
     /// Takes back the last snooze, hold or dismiss. One step only.
@@ -455,6 +577,7 @@ mod tests {
             paths: Vec::new(),
             resolved: Vec::new(),
             skills: Vec::new(),
+            created: None,
         };
         let mut tasks = Tasks::default();
         tasks.restore(vec![task(7, "late"), task(2, "early"), task(7, "twin")], 0);
@@ -494,6 +617,14 @@ mod tests {
         // Known for some only: not kept, rather than out of step.
         tasks.assign(a, Assign { paths, resolved: list(&["/code/app/a"]), ..Assign::default() });
         assert_eq!((tasks.get(a).unwrap().paths.len(), tasks.get(a).unwrap().resolved.len()), (2, 0));
+    }
+
+    #[test]
+    fn age_is_one_unit() {
+        let minute = 60_000;
+        let ages = [0, 59_999, minute, 59 * minute, 60 * minute, 23 * 60 * minute, 24 * 60 * minute, 9 * 1440 * minute];
+        assert_eq!(ages.map(|ms| age(1_000, 1_000 + ms)), ["now", "now", "1m", "59m", "1h", "23h", "1d", "9d"]);
+        assert_eq!(age(5_000, 1_000), "now", "a clock that went back");
     }
 
     #[test]

@@ -29,7 +29,7 @@ use ottospace_core::list::{ListKey, list_key};
 use ottospace_core::model::CONFIRM_UP;
 use ottospace_core::rules::{self, Facts};
 use ottospace_core::settings::{Installed, closed_apps};
-use ottospace_core::tasks::{Assign, Group, MAX_TITLE, State, Task, TaskId};
+use ottospace_core::tasks::{Assign, Group, Heading, MAX_TITLE, State, Task, TaskId, TaskRow};
 use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, scroll_key, select_kind, visual_key};
 use ottospace_core::{
     Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Origin, Pane, PaneId, PickItem, Picker, Rect, Section, Zone,
@@ -243,6 +243,10 @@ impl AssetSource for Assets {
             "icons/split-right.svg" => Some(include_bytes!("../assets/icons/split-right.svg")),
             "icons/split-down.svg" => Some(include_bytes!("../assets/icons/split-down.svg")),
             "icons/plus.svg" => Some(include_bytes!("../assets/icons/plus.svg")),
+            "icons/start.svg" => Some(include_bytes!("../assets/icons/start.svg")),
+            "icons/snooze.svg" => Some(include_bytes!("../assets/icons/snooze.svg")),
+            "icons/hold.svg" => Some(include_bytes!("../assets/icons/hold.svg")),
+            "icons/dismiss.svg" => Some(include_bytes!("../assets/icons/dismiss.svg")),
             _ => None,
         };
         Ok(bytes.map(Into::into))
@@ -314,7 +318,7 @@ const KEYS_TERMINAL: &[(&str, &str)] = &[
     ("⌘C", "Copy the selection"),
     ("⌘V", "Paste"),
     ("⌘⇧C", "Visual mode: select with the keyboard"),
-    ("⌘⇧E", "List mode: keys for the bar (Apps, Tasks, Repos)"),
+    ("⌘⇧E", "List mode: keys for the bar (Apps, Tasks, Repos). ↵ or space on a heading folds it"),
     ("⌘⌃G", "Sneak mode: a letter label on every control"),
     ("⌘N", "New task: type a line, ↵ files it"),
     ("⌘⇧N", "Next task: show the tabs of the first that needs you"),
@@ -440,10 +444,20 @@ actions!(ottospace, [Quit, Hide]);
 
 /// What a socket call files once its tags are read.
 enum Filing {
-    /// `task_new`: the line the reader was asked about.
-    Line,
+    /// `task_new`: the line the reader was asked about. `open`: also show the task's tabs.
+    Line { open: bool },
     /// `task_add`: its `agent` and `skills` are checked against the names read.
     Task { title: String, priority: u8, state: State, tab: Option<u32>, assign: Assign },
+}
+
+/// What a line in the new-task box may hold, and what its keys do: in the box and where the
+/// Tasks section says how to add a task.
+const TAG_HINT: &str = "#project · >repo · @agent · /path · $skill · p1–p9";
+const KEYS_HINT: &str = "↵ add task · ⌘↵ add and start";
+
+/// A heading's name in a control's id and on the socket: `needs_you`, `open`, ...
+fn heading_name(heading: Heading) -> String {
+    serde_json::json!(heading).as_str().unwrap_or_default().to_string()
 }
 
 struct Workspace {
@@ -500,6 +514,8 @@ struct Workspace {
     stored: Vec<Task>,
     /// Scroll position of the bar's list, so list mode can bring the selected row into view.
     list_scroll: ScrollHandle,
+    /// The minute of the last look at the clock: the Tasks section's ages are drawn again when it changes.
+    minute: u64,
     /// Reads what tags may name, on a thread of its own.
     tags: Option<tags::Reader>,
     /// The repository the agents and skills were last asked for, while the new-task box is open.
@@ -614,12 +630,19 @@ impl Workspace {
                             this.drop_closed(window, cx);
                             this.follow_front_app(window, cx);
                             this.host_launched(window, cx);
-                            // A snoozed task returns when its time comes.
+                            // A snoozed task returns when its time comes, and the offer to undo goes.
                             let now = now_ms();
-                            if this.model.tasks.due(now) {
+                            if this.model.due(now) {
                                 this.dispatch(Action::Tick { now }, Origin::System, window, cx);
                                 cx.notify();
                             }
+                            // An age shown ("5m") changes at most once a minute: draw again then,
+                            // while the Tasks section is open to show one.
+                            let minute = now / 60_000;
+                            if minute != this.minute && this.model.sidebar == Some(Section::Tasks) {
+                                cx.notify();
+                            }
+                            this.minute = minute;
                         }
                         this.sync_layout(window, cx, tick % 30 == 15);
                         this.sync_terminals(window, cx);
@@ -691,6 +714,7 @@ impl Workspace {
             launching: Vec::new(),
             icons: HashMap::new(),
             list_scroll: ScrollHandle::new(),
+            minute: 0,
             tags: tags::Reader::start(),
             tags_repo: None,
             filing: Vec::new(),
@@ -740,6 +764,14 @@ impl Workspace {
             self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
         }
         let line = self.model.compose.clone();
+        // The core has no clock: a task filed now is stamped with the time told here.
+        // So is the notice that offers a mouse move back: it counts its seconds from here.
+        let files =
+            matches!(action, Action::TaskAdd { .. } | Action::TaskFromLine { .. } | Action::ComposeSubmit { .. });
+        let row = matches!(action, Action::RowSnooze { .. } | Action::RowHold { .. } | Action::RowDismiss { .. });
+        if files || row {
+            self.model.update(Action::Tick { now: now_ms() }.sent_by(Origin::System));
+        }
         let effects = self.model.update(action.sent_by(origin));
         // The line in the new-task box changed: ask what its tags may name. The answer comes
         // later (`take_tags`): reading it is disk I/O, never done here.
@@ -852,9 +884,15 @@ impl Workspace {
             let (_, filing, reply) = self.filing.remove(at);
             let known = compose::Known { names: names.unwrap_or_default(), paths, entries: Vec::new() };
             let before = self.model.tasks.list.len();
+            // `task_new` with `open`: whether the task's tabs are now on show. They are not if
+            // the user was in the new-task box, the picker, the key reference or visual mode.
+            let mut opened = None;
             let refused = match filing {
-                Filing::Line => {
-                    self.dispatch(Action::TaskFromLine { line, known }, Origin::Socket, window, cx);
+                Filing::Line { open } => {
+                    self.dispatch(Action::TaskFromLine { line, known, open }, Origin::Socket, window, cx);
+                    opened = open.then(|| {
+                        self.model.tasks.list.get(before).is_some_and(|t| self.model.current_task == Some(t.id))
+                    });
                     "the line has no title".to_string()
                 }
                 Filing::Task { title, priority, state, tab, assign } => {
@@ -884,7 +922,13 @@ impl Workspace {
             };
             // The new task, so the caller has its id.
             let message = match self.model.tasks.list.get(before) {
-                Some(task) => serde_json::json!({ "ok": true, "task": task }).to_string(),
+                Some(task) => {
+                    let mut message = serde_json::json!({ "ok": true, "task": task });
+                    if let Some(opened) = opened {
+                        message["opened"] = serde_json::json!(opened);
+                    }
+                    message.to_string()
+                }
                 None => control::error(&refused),
             };
             let _ = reply.send(message);
@@ -1151,13 +1195,13 @@ impl Workspace {
                     }
                     None
                 }
-                Request::TaskNew { line } if line.chars().count() > MAX_TITLE => {
+                Request::TaskNew { line, .. } if line.chars().count() > MAX_TITLE => {
                     failure = Some(format!("the line is longer than {MAX_TITLE} characters"));
                     None
                 }
-                Request::TaskNew { line } => {
+                Request::TaskNew { line, open } => {
                     self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
-                    self.file_when_read(Filing::Line, line, reply);
+                    self.file_when_read(Filing::Line { open }, line, reply);
                     continue;
                 }
                 Request::TaskAdd { title, .. } if title.chars().count() > MAX_TITLE => {
@@ -1195,6 +1239,7 @@ impl Workspace {
                     continue;
                 }
                 Request::TaskUndo => Some(Action::TaskUndo),
+                Request::TaskGroup { heading } => Some(Action::ToggleGroup { heading }),
                 Request::TaskSetState { id, .. }
                 | Request::TaskSnooze { id, .. }
                 | Request::TaskHold { id }
@@ -1315,6 +1360,12 @@ impl Workspace {
             row
         };
         self.model.tasks.inbox().into_iter().map(row).collect()
+    }
+
+    fn tasks_bar(&self) -> serde_json::Value {
+        let sections = self.model.task_sections(now_ms());
+        let undo = self.model.undo_offer.map(|offer| offer.moved.title());
+        serde_json::json!({ "empty": sections.is_empty(), "undo": undo, "sections": sections })
     }
 
     /// Replies when a line of a terminal pane's text matches `pattern`, or with an error at the
@@ -1558,6 +1609,10 @@ impl Workspace {
             // True once what the tags of the line in the new-task box may name has been read:
             // they are read on another thread, a moment after the line changes.
             "compose_read": self.model.compose_read(),
+            // The Tasks section as drawn: each heading with its count and rows (none while it is
+            // collapsed). `empty`: no task is listed, so the section shows how to file one.
+            // `undo`: the move the line at its top offers to take back ("Dismissed"), while it shows.
+            "tasks_bar": self.tasks_bar(),
             // The home screen, or null while the tab on show has a pane: each task's node (its
             // lane, depth and crossing of the lattice) and the rows under "Needs you".
             "home": self.model.home(&self.home.borrow().keep_out()),
@@ -2018,9 +2073,11 @@ impl Workspace {
         let key = &event.keystroke;
         let m = key.modifiers;
         let action = match key.key.as_str() {
+            // ⌘↵ files the task and shows its tabs.
+            "enter" if m.platform && !event.is_held => Action::ComposeSubmit { open: true },
             _ if m.platform => return, // ⌘ shortcuts still reach their bindings; pane ones wait
             "escape" => Action::CloseCompose,
-            "enter" if !event.is_held => Action::ComposeSubmit,
+            "enter" if !event.is_held => Action::ComposeSubmit { open: false },
             "enter" => return,
             "tab" => Action::ComposeComplete,
             "backspace" => Action::ComposeBackspace,
@@ -2084,10 +2141,8 @@ impl Workspace {
             Some(Section::Apps) => return Some(at + usize::from(at >= self.apps.len())),
             _ => return Some(at),
         }
-        let inbox = self.model.tasks.inbox();
-        let mut groups: Vec<Group> = inbox.iter().take(at + 1).map(|(group, _)| *group).collect();
-        groups.dedup();
-        Some(at + groups.len())
+        // The offer to undo, if it shows; then the headings and rows, which list mode walks alike.
+        Some(usize::from(self.model.undo_offer.is_some()) + at)
     }
 
     /// Reads the Apps and Repos lists again.
@@ -2292,11 +2347,9 @@ impl Workspace {
             .children(draft.paths.into_iter().map(|path| chip(path, theme::TEXT)))
             .children(draft.skills.into_iter().map(|s| chip(format!("${s}"), theme::SNEAK)));
         let suggestions = self.model.compose_suggestions();
-        let hint = if suggestions.is_empty() {
-            "#project · >repo · @agent · /path · $skill · p1–p9 · tab completes".to_string()
-        } else {
-            format!("tab: {}  ·  ↵ file · esc close", suggestions.join("  ·  "))
-        };
+        let hint =
+            if suggestions.is_empty() { TAG_HINT.to_string() } else { format!("tab: {}", suggestions.join("  ·  ")) };
+        let muted = |text: String| div().text_xs().text_color(rgb(theme::MUTED)).child(text);
         let text = div()
             .min_h(px(28.))
             .flex()
@@ -2328,7 +2381,8 @@ impl Workspace {
             .child(div().text_xs().text_color(rgb(theme::COMPOSE)).child("NEW TASK"))
             .child(text)
             .child(reads)
-            .child(div().text_xs().text_color(rgb(theme::MUTED)).child(hint));
+            .child(muted(hint))
+            .child(muted(KEYS_HINT.to_string()));
         div()
             .id("compose-backdrop")
             .absolute()
@@ -2543,7 +2597,29 @@ impl Workspace {
             .text_xs()
             .text_color(rgb(theme::MUTED))
             .child(title.to_uppercase())
+            // How many tasks wait for the user.
+            .children(Some(self.model.tasks.needs_you()).filter(|n| section == Section::Tasks && *n > 0).map(|n| {
+                let badge = div().ml_2().h(px(18.)).min_w(px(18.)).px_1().pt(px(1.)).flex_none().flex();
+                let badge = badge.items_center().justify_center().rounded_full().bg(rgb(theme::SELECTED));
+                badge.line_height(px(16.)).text_color(rgb(theme::task(Group::NeedsYou))).child(n.to_string())
+            }))
             .child(div().flex_1())
+            .children((section == Section::Tasks).then(|| {
+                div()
+                    .id("bar-new-task")
+                    .size(px(28.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(rgb(theme::SELECTED)))
+                    .child(svg().path("icons/plus.svg").size(px(14.)).text_color(rgb(theme::MUTED)))
+                    .tooltip(|_, cx| AnyView::from(cx.new(|_| Tooltip("New task (⌘N)".into()))))
+                    .relative()
+                    .child(self.controls.mark("bar:new_task"))
+                    .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)))
+            }))
             // Reads the section's list again. Tasks and Workbook have nothing to read.
             .children(matches!(section, Section::Apps | Section::Repos).then(|| {
                 div()
@@ -2660,34 +2736,214 @@ impl Workspace {
         }
     }
 
-    /// The inbox: tasks under their group headings, most pressing first. A click brings the
-    /// task's tab forward.
+    /// A click on a heading of the Tasks section folds or unfolds it.
+    pub(crate) fn click_heading(&mut self, heading: Heading, window: &Window, cx: &mut Context<Self>) {
+        self.dispatch(Action::ToggleGroup { heading }, self.input, window, cx);
+        cx.notify();
+    }
+
+    /// A click on a button of a task's row, by the button's name: `task-start`, `task-snooze`,
+    /// `task-hold` or `task-dismiss`. The last three offer to be undone.
+    pub(crate) fn click_row_button(&mut self, button: &str, id: TaskId, window: &Window, cx: &mut Context<Self>) {
+        let action = match button {
+            "task-start" => Action::TaskOpen { id: Some(id) },
+            "task-snooze" => Action::RowSnooze { id, until: now_ms().saturating_add(SNOOZE_MS) },
+            "task-hold" => Action::RowHold { id },
+            "task-dismiss" => Action::RowDismiss { id },
+            _ => return,
+        };
+        self.dispatch(action, self.input, window, cx);
+        cx.notify();
+    }
+
+    /// A click on the notice ("Dismissed · Undo"): what `u` does in list mode.
+    pub(crate) fn click_undo(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.dispatch(Action::TaskUndo, self.input, window, cx);
+        cx.notify();
+    }
+
+    /// The Tasks section: what needs the user, the other tasks with tabs open, then the rest of
+    /// the inbox under its headings. A click on a row shows the task's tabs; a click on a heading
+    /// folds it. After a snooze, hold or dismiss by mouse, a line at the top offers to undo it.
     fn render_tasks(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut rows: Vec<AnyElement> = Vec::new();
-        let mut heading = None;
-        let mut listed = 0; // tasks so far: headings are not rows of the list
-        for (group, task) in self.model.tasks.inbox() {
-            if heading != Some(group) {
-                heading = Some(group);
-                let color = if group == Group::NeedsYou { theme::SNEAK } else { theme::MUTED };
-                rows.push(div().px_2().pt_2().text_xs().text_color(rgb(color)).child(group.title()).into_any_element());
-            }
-            let (id, index) = (task.id, listed);
-            listed += 1;
+        let mut listed = 0; // rows of the list so far: a heading is one, as list mode walks them
+        for section in self.model.task_sections(now_ms()) {
+            let heading = section.heading;
+            let color = match heading {
+                Heading::NeedsYou => theme::task(Group::NeedsYou),
+                Heading::Open => theme::TEXT,
+                _ => theme::MUTED,
+            };
+            let fold = if section.collapsed { "▸" } else { "▾" };
             rows.push(
-                list_button(("task", id as usize), self.model.list == Some(index))
-                    .children(task_cells(task, self.model.task_tags(task), 90.))
-                    .child(self.controls.mark(format!("task:{id}")))
-                    .on_click(open_task(id, cx))
+                div()
+                    .id(("task-heading", heading as usize))
+                    .px_2()
+                    .pt_2()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .text_xs()
+                    .text_color(rgb(color))
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(rgb(theme::TEXT)))
+                    // List mode's selection: ↵ or space folds it.
+                    .when(self.model.list == Some(listed), |d| d.pb_0p5().rounded_md().bg(rgb(theme::SELECTED)))
+                    .child(div().w(px(8.)).text_color(rgb(theme::MUTED)).child(fold))
+                    .child(heading.title())
+                    .child(div().text_color(rgb(theme::MUTED)).child(section.count.to_string()))
+                    .relative()
+                    .child(self.controls.mark(format!("task-heading:{}", heading_name(heading))))
+                    .on_click(cx.listener(move |this, _, window, cx| this.click_heading(heading, window, cx)))
                     .into_any_element(),
             );
+            listed += 1;
+            for row in &section.rows {
+                if let Some(task) = self.model.tasks.get(row.id) {
+                    rows.push(self.task_row(task, row, self.model.list == Some(listed), cx));
+                }
+                listed += 1;
+            }
         }
+        // Nothing listed: how to file a task, the keyboard way first.
         let empty = rows.is_empty().then(|| {
-            let hint = "No tasks. File one from a shell: ottospace ctl '{\"cmd\":\"task_add\",\"title\":\"...\"}'";
-            div().px_2().text_xs().text_color(rgb(theme::MUTED)).child(hint)
+            let title = if self.model.tasks.list.is_empty() { "No tasks yet" } else { "Nothing in the inbox" };
+            let muted = |text: &'static str| div().px_2().text_xs().text_color(rgb(theme::MUTED)).child(text);
+            let plus = svg().path("icons/plus.svg").size(px(14.)).text_color(rgb(theme::TEXT));
+            let new = list_button("task-new", false)
+                .py_1p5()
+                .child(plus)
+                .child(div().flex_1().child("New task"))
+                .child(div().text_xs().text_color(rgb(theme::MUTED)).child("⌘N"))
+                .relative()
+                .child(self.controls.mark("task-new"))
+                .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)));
+            let agents = "Agents: ottospace ctl '{\"cmd\":\"task_new\",\"line\":\"...\"}'";
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(div().px_2().pt_1().text_sm().child(title))
+                .child(new)
+                .child(muted(TAG_HINT))
+                .child(muted(KEYS_HINT))
+                .child(div().px_2().pt_2().text_xs().text_color(rgb(theme::BORDER_STRONG)).child(agents))
+        });
+        let notice = self.model.undo_offer.map(|notice| {
+            div()
+                .id("task-undo")
+                .relative()
+                .child(self.controls.mark("task-undo"))
+                .px_2()
+                .py_1()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .rounded_md()
+                .bg(rgb(theme::SELECTED))
+                .text_xs()
+                .text_color(rgb(theme::MUTED))
+                .cursor_pointer()
+                .child(notice.moved.title())
+                .child("·")
+                .child(div().text_color(rgb(theme::PRIMARY)).child("Undo"))
+                .on_click(cx.listener(|this, _, window, cx| this.click_undo(window, cx)))
         });
         let list = div().id("tasks").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
-        list.track_scroll(&self.list_scroll).children(empty).children(rows)
+        list.track_scroll(&self.list_scroll).children(notice).children(empty).children(rows)
+    }
+
+    /// A task's row: a dot in its state's colour, priority and title, then a muted line of where
+    /// it is filed and how old it is. Hover (or list mode's selection) shows what list mode's
+    /// keys do, as buttons.
+    fn task_row(&self, task: &Task, row: &TaskRow, selected: bool, cx: &mut Context<Self>) -> AnyElement {
+        let id = task.id;
+        let button = |name: &'static str, icon: &'static str, tip: &'static str| {
+            div()
+                .id((name, id as usize))
+                .relative()
+                .child(self.controls.mark(format!("{name}:{id}")))
+                .size(px(20.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_sm()
+                .hover(|s| s.bg(rgb(theme::BORDER_STRONG)))
+                .child(svg().path(icon).size(px(14.)).text_color(rgb(theme::TEXT)))
+                .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation(); // not a click on the row, which opens the task
+                    this.click_row_button(name, id, window, cx);
+                }))
+        };
+        let start = if row.tabs == 0 { "Start (↵)" } else { "Show (↵)" };
+        // Over the end of the muted line, on the row's own colour: hidden, they take no room from it.
+        let actions = div()
+            .absolute()
+            .right(px(6.))
+            .bottom(px(4.))
+            .flex()
+            .gap_0p5()
+            .pl_1()
+            .bg(rgb(theme::SELECTED))
+            .when(!selected, |d| d.invisible().group_hover("task-row", |s| s.visible()))
+            .child(button("task-start", "icons/start.svg", start))
+            .child(button("task-snooze", "icons/snooze.svg", "Snooze 1 hour (S)"))
+            // A finished task cannot be put on hold, and one on hold is there already: no button
+            // for a move that would change nothing.
+            .children(
+                (!matches!(row.group, Group::Done | Group::OnHold))
+                    .then(|| button("task-hold", "icons/hold.svg", "Hold (H)")),
+            )
+            .child(button("task-dismiss", "icons/dismiss.svg", "Dismiss (X)"));
+        // The task on show: a bar at the row's edge, and its title in bold.
+        let bar = div().absolute().left(px(-1.)).top(px(5.)).bottom(px(5.)).w(px(3.)).rounded_full();
+        let detail = div().flex_1().min_w_0().truncate().text_xs().text_color(rgb(theme::MUTED));
+        list_button(("task", id as usize), selected)
+            .group("task-row")
+            .relative()
+            .items_start()
+            .children(row.current.then(|| bar.bg(rgb(theme::PRIMARY))))
+            .child(div().h(px(20.)).flex().items_center().child(home::dot(theme::task(row.group))))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .when(row.current, |d| d.font_weight(FontWeight::SEMIBOLD))
+                            // The tags are on the line below.
+                            .children(task_title_cells(task))
+                            // Under Needs you with its tabs open: said here, as it is not under Open.
+                            .children((matches!(row.group, Group::NeedsYou | Group::Done) && row.tabs > 0).then(
+                                || {
+                                    let mark = div().flex_none().px_1().rounded_sm().bg(rgb(theme::SELECTED));
+                                    mark.text_xs()
+                                        .font_weight(FontWeight::NORMAL)
+                                        .text_color(rgb(theme::MUTED))
+                                        .child("open")
+                                },
+                            )),
+                    )
+                    .child(
+                        div()
+                            .h(px(20.))
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(detail.child(row.detail.clone()))
+                            .child(actions),
+                    ),
+            )
+            .child(self.controls.mark(format!("task:{id}")))
+            .on_click(open_task(id, cx))
+            .into_any_element()
     }
 
     /// Repositories, each with its worktrees under it. A click opens a terminal there: it fills
@@ -3177,16 +3433,17 @@ impl Workspace {
     }
 }
 
-/// What a task's row shows: its priority, its title, and its tags (`Model::task_tags`, at most
-/// `width` points wide) if it has any.
-fn task_cells(task: &Task, tags: String, width: f32) -> Vec<Div> {
+/// A task's priority and title, as cells of a row.
+fn task_title_cells(task: &Task) -> [Div; 2] {
     let urgent = if task.priority == 1 { theme::ERROR } else { theme::MUTED };
     let priority = div().flex_none().text_xs().text_color(rgb(urgent)).child(format!("P{}", task.priority));
-    let title = div().flex_1().min_w_0().truncate().child(task.title.clone());
-    let tags = Some(tags)
-        .filter(|tags| !tags.is_empty())
-        .map(|tags| div().flex_none().max_w(px(width)).truncate().text_xs().text_color(rgb(theme::MUTED)).child(tags));
-    [priority, title].into_iter().chain(tags).collect()
+    [priority, div().flex_1().min_w_0().truncate().child(task.title.clone())]
+}
+
+/// A task's tags as a cell at the end of its row, no wider than `width`. No tags: no cell.
+fn task_tags_cell(tags: String, width: f32) -> Option<Div> {
+    let cell = div().flex_none().max_w(px(width)).truncate().text_xs().text_color(rgb(theme::MUTED));
+    Some(tags).filter(|tags| !tags.is_empty()).map(|tags| cell.child(tags))
 }
 
 /// A click that shows a task's tabs.

@@ -26,6 +26,8 @@ export type TaskState =
   | "cleaned";
 /** A heading of the inbox, in the order shown. */
 export type Group = "needs_you" | "running" | "captured" | "on_hold" | "done";
+/** A heading of the Tasks section, in the order drawn. `open`: tasks with tabs open that do not need the user. */
+export type Heading = "needs_you" | "open" | "running" | "captured" | "on_hold" | "done";
 
 export type PaneKind =
   | { type: "empty" }
@@ -71,6 +73,38 @@ export interface Task {
   resolved: string[];
   /** Skills to load for it. */
   skills: string[];
+  /** When it was filed, in milliseconds since 1970. Null: filed before this was kept. */
+  created: number | null;
+}
+
+/** A row of the Tasks section, as drawn. */
+export interface TaskRow {
+  id: TaskId;
+  group: Group;
+  /** Tabs and panes the task has open. */
+  tabs: number;
+  panes: number;
+  /** Its tabs are the ones on show. */
+  current: boolean;
+  /** The muted line: tags, what is open, age. */
+  detail: string;
+}
+
+export interface TaskSection {
+  heading: Heading;
+  count: number;
+  collapsed: boolean;
+  /** None while collapsed. */
+  rows: TaskRow[];
+}
+
+/** The Tasks section as drawn. */
+export interface TasksBar {
+  /** Nothing is listed: the section shows how to add a task. */
+  empty: boolean;
+  /** The move the line at its top offers to undo (`"Dismissed"`), for a few seconds after a click on a row's button. */
+  undo: string | null;
+  sections: TaskSection[];
 }
 
 export interface InboxRow extends Task {
@@ -132,6 +166,8 @@ export interface Model {
   list: number | null;
   repos: Repo[];
   tasks: { list: Task[] };
+  /** Headings of the Tasks section that are folded. */
+  collapsed: Heading[];
   picker: Picker | null;
   /** The quit question while it is up. */
   confirm: Confirm | null;
@@ -284,6 +320,7 @@ export interface Snapshot {
   needs_you: number;
   /** The tags of the line in the new-task box have been looked up. */
   compose_read: boolean;
+  tasks_bar: TasksBar;
   /** Null while the tab on show has a pane. */
   home: Home | null;
   home_drawn: HomeDrawn;
@@ -297,6 +334,12 @@ export interface Snapshot {
 export interface TaskReply {
   ok: true;
   task: Task;
+}
+
+/** `task_new`'s reply. */
+export interface TaskNewReply extends TaskReply {
+  /** With `open`: whether the task's tabs are now on show. Absent without `open`. */
+  opened?: boolean;
 }
 
 export interface InboxReply {

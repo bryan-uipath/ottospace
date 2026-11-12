@@ -14,6 +14,7 @@ import type {
   Confirm,
   Frame,
   Group,
+  Heading,
   Home,
   HomeDrawn,
   HomeNode,
@@ -36,8 +37,12 @@ import type {
   Tab,
   Task,
   TaskPopReply,
+  TaskNewReply,
   TaskReply,
+  TaskRow,
+  TaskSection,
   TaskState,
+  TasksBar,
   Terminal,
   Truncated,
   WaitReply,
@@ -136,6 +141,41 @@ function group(value: unknown, at: string): Group {
   throw wrong(at, "an inbox group", value);
 }
 
+function heading(value: unknown, at: string): Heading {
+  return value === "open" ? value : group(value, at);
+}
+
+function taskRow(value: unknown, at: string): TaskRow {
+  const o = fields(value, at);
+  return {
+    id: num(o.id, `${at}.id`),
+    group: group(o.group, `${at}.group`),
+    tabs: num(o.tabs, `${at}.tabs`),
+    panes: num(o.panes, `${at}.panes`),
+    current: bool(o.current, `${at}.current`),
+    detail: str(o.detail, `${at}.detail`),
+  };
+}
+
+function taskSection(value: unknown, at: string): TaskSection {
+  const o = fields(value, at);
+  return {
+    heading: heading(o.heading, `${at}.heading`),
+    count: num(o.count, `${at}.count`),
+    collapsed: bool(o.collapsed, `${at}.collapsed`),
+    rows: list(taskRow)(o.rows, `${at}.rows`),
+  };
+}
+
+function tasksBar(value: unknown, at: string): TasksBar {
+  const o = fields(value, at);
+  return {
+    empty: bool(o.empty, `${at}.empty`),
+    undo: orNull(str)(o.undo, `${at}.undo`),
+    sections: list(taskSection)(o.sections, `${at}.sections`),
+  };
+}
+
 function paneKind(value: unknown, at: string): PaneKind {
   const o = fields(value, at);
   if (o.type === "empty") return { type: "empty" };
@@ -187,6 +227,7 @@ function task(value: unknown, at: string): Task {
     paths: list(str)(o.paths, `${at}.paths`),
     resolved: list(str)(o.resolved, `${at}.resolved`),
     skills: list(str)(o.skills, `${at}.skills`),
+    created: orNull(num)(o.created, `${at}.created`),
   };
 }
 
@@ -253,6 +294,7 @@ function model(value: unknown, at: string): Model {
     list: orNull(num)(o.list, `${at}.list`),
     repos: list(repo)(o.repos, `${at}.repos`),
     tasks: { list: list(task)(fields(o.tasks, `${at}.tasks`).list, `${at}.tasks.list`) },
+    collapsed: list(heading)(o.collapsed, `${at}.collapsed`),
     picker: orNull(picker)(o.picker, `${at}.picker`),
     confirm: orNull(confirm)(o.confirm, `${at}.confirm`),
     keys: bool(o.keys, `${at}.keys`),
@@ -423,6 +465,7 @@ export function snapshot(value: unknown): Snapshot {
     inbox: list(inboxRow)(o.inbox, "inbox"),
     needs_you: num(o.needs_you, "needs_you"),
     compose_read: bool(o.compose_read, "compose_read"),
+    tasks_bar: tasksBar(o.tasks_bar, "tasks_bar"),
     home: orNull(home)(o.home, "home"),
     home_drawn: homeDrawn(o.home_drawn, "home_drawn"),
     closed_apps: list(str)(o.closed_apps, "closed_apps"),
@@ -430,6 +473,11 @@ export function snapshot(value: unknown): Snapshot {
     ax_overlay: orNull(axOverlay)(o.ax_overlay, "ax_overlay"),
     sneak: orNull(sneak)(o.sneak, "sneak"),
   };
+}
+
+export function taskNewReply(value: unknown): TaskNewReply {
+  const opened = fields(value, "reply").opened;
+  return { ...taskReply(value), ...(opened === undefined ? {} : { opened: bool(opened, "opened") }) };
 }
 
 export function taskReply(value: unknown): TaskReply {

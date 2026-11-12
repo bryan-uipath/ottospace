@@ -13,7 +13,7 @@ use ottospace_core::home::{HOME, Home, NEAR, View};
 use ottospace_core::tasks::{Group, TaskId};
 use ottospace_core::{PaneId, Rect, theme};
 
-use crate::{Workspace, open_task, rect, task_cells};
+use crate::{Workspace, open_task, rect, task_tags_cell, task_title_cells};
 
 /// The patch of lattice in an empty pane: a nearer, smaller view of the same floor.
 const PATCH: View = View { cx: 0.5, horizon: 0.05, fx: 0.58, fy: 0.91, sin: 0.5, cos: 0.866, dist: 3.9, lo: -3, hi: 4 };
@@ -242,7 +242,7 @@ fn node(view: &View, crossing: (i32, i32), color: u32) -> Div {
 }
 
 /// A coloured dot before a label.
-fn dot(color: u32) -> Div {
+pub fn dot(color: u32) -> Div {
     div().size(px(8.)).flex_none().rounded_full().bg(rgb(color))
 }
 
@@ -385,7 +385,8 @@ impl Workspace {
                     .on_click(open_task(task.id, cx))
                     .child(self.controls.mark(format!("home-row:{}", task.id)))
                     .child(dot(theme::task(Group::NeedsYou)))
-                    .children(task_cells(task, self.model.task_tags(task), 140.))
+                    .children(task_title_cells(task))
+                    .children(task_tags_cell(self.model.task_tags(task), 140.))
             })
             .collect();
         let needs_you = (!rows.is_empty()).then(|| {

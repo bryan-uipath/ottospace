@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::{fs, thread};
 
-use ottospace_core::tasks::{State, TaskId};
+use ottospace_core::tasks::{Heading, State, TaskId};
 use ottospace_core::{Axis, Dir, PaneId, Section, Zone};
 use serde::Deserialize;
 
@@ -223,9 +223,16 @@ pub enum Request {
     TaskList,
     /// Files a task from one line, as the new-task box does: `#project`, `>repo` (a listed
     /// repository), `@agent`, `/path`, `$skill`, `p1`..`p9`; the rest is the title. The reply is
-    /// `{"ok":true,"task":{..}}`.
+    /// `{"ok":true,"task":{..}}`. `open`: also show the task's tabs ("add and start").
     TaskNew {
         line: String,
+        #[serde(default)]
+        open: bool,
+    },
+    /// Collapses or expands a heading of the Tasks section: `needs_you`, `open`, `running`,
+    /// `captured`, `on_hold`, `done`.
+    TaskGroup {
+        heading: Heading,
     },
     /// Opens the new-task box for the user, with `text` in it to edit: a draft, not a filed task.
     Compose {
