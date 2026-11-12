@@ -1502,10 +1502,11 @@ impl Workspace {
             .child(body)
     }
 
-    /// Running apps. A click hosts the app's main window in a pane.
     /// Lists the apps that can be hosted now, and reads the icon of each one not seen before.
     fn refresh_apps(&mut self) {
         self.apps = running_apps(self.hosting, self.host_only);
+        // An app that quit loses its icon: a later app of the same name may have another.
+        self.icons.retain(|name, _| self.apps.iter().any(|app| app.name == *name));
         for app in &self.apps {
             if !self.icons.contains_key(&app.name)
                 && let Some(png) = icon::png(app.pid, ICON_PIXELS)
@@ -1525,6 +1526,7 @@ impl Workspace {
         }
     }
 
+    /// Running apps. A click hosts the app's main window in a pane.
     fn render_apps(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("apps")
