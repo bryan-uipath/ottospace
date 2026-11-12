@@ -1,0 +1,525 @@
+{
+ "window": {
+  "x": 100.0,
+  "y": 50.0,
+  "w": 230.0,
+  "h": 408.0
+ },
+ "tree": {
+  "count": 36,
+  "root": {
+   "actions": [
+    "AXRaise"
+   ],
+   "children": [
+    {
+     "children": [
+      {
+       "children": [
+        {
+         "children": [
+          {
+           "children": [
+            {
+             "actions": [
+              "AXScrollLeftByPage",
+              "AXScrollRightByPage",
+              "AXScrollUpByPage",
+              "AXScrollDownByPage",
+              "Name:Copy\nTarget:0x0\nSelector:(null)"
+             ],
+             "children": [
+              {
+               "enabled": true,
+               "frame": {
+                "h": 26.0,
+                "w": 93.0,
+                "x": 227.0,
+                "y": 109.5
+               },
+               "role": "AXStaticText"
+              }
+             ],
+             "description": "Last Expression",
+             "frame": {
+              "h": 29.0,
+              "w": 210.0,
+              "x": 110.0,
+              "y": 108.0
+             },
+             "role": "AXScrollArea"
+            },
+            {
+             "actions": [
+              "AXScrollLeftByPage",
+              "AXScrollRightByPage",
+              "AXScrollUpByPage",
+              "AXScrollDownByPage",
+              "Name:Copy\nTarget:0x0\nSelector:(null)"
+             ],
+             "children": [
+              {
+               "enabled": true,
+               "frame": {
+                "h": 36.0,
+                "w": 78.0,
+                "x": 242.0,
+                "y": 139.0
+               },
+               "role": "AXStaticText"
+              }
+             ],
+             "description": "Edit field",
+             "frame": {
+              "h": 42.0,
+              "w": 210.0,
+              "x": 110.0,
+              "y": 136.0
+             },
+             "role": "AXScrollArea"
+            },
+            {
+             "actions": [
+              "AXPress"
+             ],
+             "description": "Delete",
+             "enabled": true,
+             "frame": {
+              "h": 48.0,
+              "w": 48.0,
+              "x": 110.0,
+              "y": 183.0
+             },
+             "role": "AXButton"
+            },
+            {
+             "actions": [
+              "AXPress"
+             ],
+             "description": "All Clear",
+             "enabled": true,
+             "frame": {
+              "h": 48.0,
+              "w": 48.0,
+              "x": 164.0,
+              "y": 183.0
+             },
+             "role": "AXButton"
+            },
+            {
+             "actions": [
+              "AXPress"
+             ],
+             "description": "Percent",
+             "enabled": true,
+             "frame": {
+              "h": 48.0,
+              "w": 48.0,
+              "x": 218.0,
+              "y": 183.0
+             },
+             "role": "AXButton"
+            },
+            {
+             "actions": [
+              "AXPress"
+             ],
+             "description": "Divide",
+             "enabled": true,
+             "frame": {
+              "h": 48.0,
+              "w": 48.0,
+              "x": 272.0,
+              "y": 183.0
+             },
+             "role": "AXButton"
+            },
+            {
+             "actions": [
+              "AXPress"
+             ],
+             "description": "7",
+             "enabled": true,
+             "frame": {
+              "h": 48.0,
+              "w": 48.0,
+              "x": 110.0,
+              "y": 237.0
+             },
+             "role": "AXButton"
+            },
+            {
+             "actions": [
+              "AXPress"
+             ],
+             "description": "8",
+             "enabled": true,
+             "frame": {
+              "h": 48.0,
+              "w": 48.0,
+              "x": 164.0,
+              "y": 237.0
+             },
+             "role": "AXButton"
+            },
+            {
+             "actions": [
+              "AXPress"
+             ],
+             "description": "9",
+             "enabled": true,
+             "frame": {
+              "h": 48.0,
+              "w": 48.0,
+              "x": 218.0,
+              "y": 237.0
+             },
+             "role": "AXButton"
+            },
+            {
+             "actions": [
+              "AXPress"
+             ],
+             "description": "Multiply",
+             "enabled": true,
+             "frame": {
+              "h": 48.0,
+              "w": 48.0,
+              "x": 272.0,
+              "y": 237.0
+             },
+             "role": "AXButton"
+            },
+            {
+             "actions": [
+              "AXPress"
+             ],
+             "description": "4",
+             "enabled": true,
+             "frame": {
+              "h": 48.0,
+              "w": 48.0,
+              "x": 110.0,
+              "y": 291.0
+             },
+             "role": "AXButton"
+            },
+            {
+             "actions": [
+              "AXPress"
+             ],
+             "description": "5",
+             "enabled": true,
+             "frame": {
+              "h": 48.0,
+              "w": 48.0,
+              "x": 164.0,
+              "y": 291.0
+             },
+             "role": "AXButton"
+            },
+            {
+             "actions": [
+              "AXPress"
+             ],
+             "description": "6",
+             "enabled": true,
+             "frame": {
+              "h": 48.0,
+              "w": 48.0,
+              "x": 218.0,
+              "y": 291.0
+             },
+             "role": "AXButton"
+            },
+            {
+             "actions": [
+              "AXPress"
+             ],
+             "description": "Subtract",
+             "enabled": true,
+             "frame": {
+              "h": 48.0,
+              "w": 48.0,
+              "x": 272.0,
+              "y": 291.0
+             },
+             "role": "AXButton"
+            },
+            {
+             "actions": [
+              "AXPress"
+             ],
+             "description": "1",
+             "enabled": true,
+             "frame": {
+              "h": 48.0,
+              "w": 48.0,
+              "x": 110.0,
+              "y": 345.0
+             },
+             "role": "AXButton"
+            },
+            {
+             "actions": [
+              "AXPress"
+             ],
+             "description": "2",
+             "enabled": true,
+             "frame": {
+              "h": 48.0,
+              "w": 48.0,
+              "x": 164.0,
+              "y": 345.0
+             },
+             "role": "AXButton"
+            },
+            {
+             "actions": [
+              "AXPress"
+             ],
+             "description": "3",
+             "enabled": true,
+             "frame": {
+              "h": 48.0,
+              "w": 48.0,
+              "x": 218.0,
+              "y": 345.0
+             },
+             "role": "AXButton"
+            },
+            {
+             "actions": [
+              "AXPress"
+             ],
+             "description": "Add",
+             "enabled": true,
+             "frame": {
+              "h": 48.0,
+              "w": 48.0,
+              "x": 272.0,
+              "y": 345.0
+             },
+             "role": "AXButton"
+            },
+            {
+             "actions": [
+              "AXPress"
+             ],
+             "description": "Change Sign",
+             "enabled": true,
+             "frame": {
+              "h": 48.0,
+              "w": 48.0,
+              "x": 110.0,
+              "y": 399.0
+             },
+             "role": "AXButton"
+            },
+            {
+             "actions": [
+              "AXPress"
+             ],
+             "description": "0",
+             "enabled": true,
+             "frame": {
+              "h": 48.0,
+              "w": 48.0,
+              "x": 164.0,
+              "y": 399.0
+             },
+             "role": "AXButton"
+            },
+            {
+             "actions": [
+              "AXPress"
+             ],
+             "description": "Point",
+             "enabled": true,
+             "frame": {
+              "h": 48.0,
+              "w": 48.0,
+              "x": 218.0,
+              "y": 399.0
+             },
+             "role": "AXButton"
+            },
+            {
+             "actions": [
+              "AXPress"
+             ],
+             "description": "Equals",
+             "enabled": true,
+             "frame": {
+              "h": 48.0,
+              "w": 48.0,
+              "x": 272.0,
+              "y": 399.0
+             },
+             "role": "AXButton"
+            }
+           ],
+           "enabled": true,
+           "frame": {
+            "h": 354.0,
+            "w": 230.0,
+            "x": 100.0,
+            "y": 103.0
+           },
+           "role": "AXGroup"
+          }
+         ],
+         "frame": {
+          "h": 408.0,
+          "w": 230.0,
+          "x": 100.0,
+          "y": 50.0
+         },
+         "role": "AXGroup",
+         "subrole": "AXHostingView"
+        }
+       ],
+       "frame": {
+        "h": 408.0,
+        "w": 230.0,
+        "x": 100.0,
+        "y": 50.0
+       },
+       "role": "AXSplitGroup"
+      }
+     ],
+     "frame": {
+      "h": 408.0,
+      "w": 230.0,
+      "x": 100.0,
+      "y": 50.0
+     },
+     "role": "AXGroup",
+     "subrole": "AXHostingView"
+    },
+    {
+     "actions": [
+      "AXShowMenu"
+     ],
+     "children": [
+      {
+       "actions": [
+        "AXIncrement",
+        "AXDecrement",
+        "AXDelete",
+        "AXShowMenu",
+        "AXCancel",
+        "AXPress"
+       ],
+       "description": "Show Sidebar",
+       "enabled": true,
+       "frame": {
+        "h": 52.0,
+        "w": 48.0,
+        "x": 200.0,
+        "y": 50.0
+       },
+       "role": "AXButton"
+      },
+      {
+       "actions": [
+        "AXIncrement",
+        "AXDecrement",
+        "AXDelete",
+        "AXShowMenu",
+        "AXCancel",
+        "AXPress",
+        "Name:Move previous\nTarget:0x0\nSelector:(null)",
+        "Name:Remove from toolbar\nTarget:0x0\nSelector:(null)"
+       ],
+       "description": "Mode",
+       "enabled": true,
+       "frame": {
+        "h": 52.0,
+        "w": 44.0,
+        "x": 282.0,
+        "y": 50.0
+       },
+       "role": "AXButton"
+      }
+     ],
+     "frame": {
+      "h": 52.0,
+      "w": 230.0,
+      "x": 100.0,
+      "y": 50.0
+     },
+     "role": "AXToolbar"
+    },
+    {
+     "actions": [
+      "AXPress"
+     ],
+     "enabled": true,
+     "frame": {
+      "h": 16.0,
+      "w": 16.0,
+      "x": 118.0,
+      "y": 68.0
+     },
+     "role": "AXButton",
+     "subrole": "AXCloseButton"
+    },
+    {
+     "actions": [
+      "AXPress",
+      "AXShowMenu"
+     ],
+     "children": [
+      {
+       "frame": {
+        "h": 14.0,
+        "w": 14.0,
+        "x": 165.0,
+        "y": 69.0
+       },
+       "role": "AXGroup"
+      }
+     ],
+     "enabled": false,
+     "frame": {
+      "h": 16.0,
+      "w": 16.0,
+      "x": 164.0,
+      "y": 68.0
+     },
+     "role": "AXButton",
+     "subrole": "AXZoomButton"
+    },
+    {
+     "actions": [
+      "AXPress"
+     ],
+     "enabled": true,
+     "frame": {
+      "h": 16.0,
+      "w": 16.0,
+      "x": 141.0,
+      "y": 68.0
+     },
+     "role": "AXButton",
+     "subrole": "AXMinimizeButton"
+    }
+   ],
+   "frame": {
+    "h": 408.0,
+    "w": 230.0,
+    "x": 100.0,
+    "y": 50.0
+   },
+   "role": "AXWindow",
+   "subrole": "AXStandardWindow",
+   "title": "Calculator"
+  },
+  "truncated": {
+   "depth": false,
+   "nodes": false,
+   "timeout": false
+  }
+ }
+}

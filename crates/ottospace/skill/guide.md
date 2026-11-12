@@ -33,6 +33,9 @@ ottospace ctl '{"cmd":"state"}'
 - **Other panes are not yours to read aloud.** Every reply includes the visible text of every
   terminal pane, which may show secrets. Use only the lines of panes you opened; do not quote
   or store the rest.
+- **An app's accessibility tree is that app's screen.** `ax_tree` returns titles, labels and
+  field values of whatever the app shows, which may include messages, documents or secrets.
+  Treat it like other panes' text: use only what the user's task needs.
 - **`open_app` and `enter` move the user's real windows.** Use them only when the user asked to
   bring an app into ottospace.
 - **Do not send `quit`, `close` or `close_tab`** unless the user asked. Closing a terminal pane
@@ -56,6 +59,7 @@ ottospace ctl '{"cmd":"state"}'
 | `state.sidebar` | The open rail section, or null |
 | `terminals.<id>` | `cols`, `rows`, and `lines`: the visible text of that terminal pane. Also `history` (lines scrolled off the top), `display_offset` (how far the view is scrolled back; 0 is the bottom), `selection` (the selected text, or null) and `visual_cursor` |
 | `copied` | The text of the last copy |
+| `ax_overlay` | Null, or the accessibility overlay's last read: `pane`, `targets` (`label`, `frame` in window coordinates, `source`), `count`, `truncated`, `millis`, `error` |
 | `bounds.<id>` | Where each pane of the active tab is drawn: `[x, y, w, h]` |
 
 ## Requests
@@ -118,6 +122,24 @@ ottospace ctl '{"cmd":"leave"}'
 
 `open_app` hosts a running app's main window in a pane. `enter` gives that app the keyboard;
 `leave` takes it back.
+
+Reading an app pane's controls (read-only; nothing is pressed):
+
+```sh
+ottospace ctl '{"cmd":"ax_tree","pane":4}'
+ottospace ctl '{"cmd":"ax_tree","pane":4,"depth":20,"nodes":500}'
+ottospace ctl '{"cmd":"ax_overlay"}'
+ottospace ctl '{"cmd":"ax_overlay","refresh":true}'
+```
+
+`ax_tree` replies with the app window's accessibility tree, not the state:
+`{"ok":true,"pane":4,"window":{"x":..,"y":..,"w":..,"h":..},"millis":..,"tree":{"root":{..},"count":N,"truncated":{"depth":false,"nodes":false,"timeout":false}}}`.
+Each node has `role` (e.g. `AXButton`), and when present `subrole`, `title`, `description`,
+`value` (cut to 120 characters), `frame` (global screen points), `enabled`, `actions` and
+`children`. Limits: `depth` (default 40) and `nodes` (default 3000); a slow app ends the read
+early. Any `truncated` flag means the tree is partial. Electron and Chrome apps expose little more
+than their window buttons. `ax_overlay` toggles a debug overlay that labels the focused app
+pane's controls; `refresh` reads again. Both fail on a pane that is not an app.
 
 Picker, bars and the rest:
 

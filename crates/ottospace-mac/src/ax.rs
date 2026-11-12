@@ -53,6 +53,15 @@ impl Window {
             .or_else(|| Self::standard_of(pid).into_iter().next())
     }
 
+    /// The standard window with this window-server id, if `pid` still has it.
+    pub fn find(pid: i32, id: u32) -> Option<Self> {
+        Self::standard_of(pid).into_iter().find(|w| w.id() == Some(id))
+    }
+
+    pub(crate) fn element(&self) -> CFRetained<AXUIElement> {
+        self.element.clone()
+    }
+
     fn is_standard(&self) -> bool {
         self.subrole().as_deref() == Some("AXStandardWindow")
     }

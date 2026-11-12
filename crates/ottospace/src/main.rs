@@ -32,6 +32,7 @@ use ottospace_mac::{ax, capture, display, hotkey, input, recovery};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use screencapturekit::prelude::*;
 
+mod ax_debug;
 mod control;
 mod terminal;
 use control::{Call, PaneKind, Request};
@@ -346,7 +347,7 @@ actions!(
     ottospace,
     [
         SplitRight, SplitDown, PickPane, ClosePane, FocusLeft, FocusRight, FocusUp, FocusDown, FocusNext, FocusPrev,
-        Zoom, NewTab, NextTab, PrevTab, CloseTab, ShowKeys
+        Zoom, NewTab, NextTab, PrevTab, CloseTab, ShowKeys, AxOverlay
     ]
 );
 // Terminal selection.
@@ -380,6 +381,8 @@ struct Workspace {
     /// Test runs: the pid of the one app that may be hosted.
     host_only: Option<i32>,
     control: Option<Receiver<Call>>,
+    /// The accessibility overlay's last read. Drawn while `model.ax_overlay` is on.
+    ax_overlay: Option<ax_debug::Overlay>,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -475,6 +478,7 @@ impl Workspace {
             hosting,
             host_only,
             control,
+            ax_overlay: None,
             focus,
             _subscriptions: subscriptions,
         }
@@ -636,6 +640,15 @@ impl Workspace {
                     }
                     None
                 }
+                Request::AxTree { pane, depth, nodes } => {
+                    let source = self.ax_source(pane.or(self.model.focused));
+                    ax_debug::serve_tree(source, depth, nodes, reply, cx.background_executor());
+                    continue;
+                }
+                Request::AxOverlay { refresh } => {
+                    failure = self.toggle_ax_overlay(refresh, window, cx).err();
+                    None
+                }
             };
             if let Some(action) = action {
                 let effects = self.dispatch(action, window, cx);
@@ -750,8 +763,44 @@ impl Workspace {
             "terminals": terminals,
             // The last text ⌘C copied.
             "copied": self.copied,
+            "ax_overlay": self.ax_overlay.as_ref().filter(|_| self.model.ax_overlay),
         })
         .to_string()
+    }
+
+    /// The hosted window behind `pane`, if it is an app pane.
+    fn ax_source(&self, pane: Option<PaneId>) -> Option<ax_debug::Hosted> {
+        let id = pane?;
+        let h = self.hosted.get(&id)?;
+        Some(ax_debug::Hosted::new(id, h.pid, h.window_id, h.crop, h.bounds.get()))
+    }
+
+    /// Toggles the accessibility overlay, or with `refresh` shows it; either way a shown overlay
+    /// reads the focused app pane's tree again, off the UI thread.
+    fn toggle_ax_overlay(&mut self, refresh: bool, window: &Window, cx: &mut Context<Self>) -> Result<(), String> {
+        let source = self.ax_source(self.model.focused);
+        let showing = self.model.ax_overlay;
+        if (refresh || !showing) && source.is_none() {
+            return Err("the accessibility overlay needs a focused app pane".into());
+        }
+        if !(refresh && showing) {
+            self.dispatch(Action::ToggleAxOverlay, window, cx);
+        }
+        if let Some(source) = source.filter(|_| self.model.ax_overlay) {
+            cx.spawn(async move |this, cx| {
+                let overlay = cx.background_executor().spawn(async move { ax_debug::Overlay::load(source) }).await;
+                let _ = this.update(cx, |this, cx| {
+                    // A slow read may land after focus moved; keep only the focused pane's.
+                    if this.model.focused != Some(overlay.pane) {
+                        return;
+                    }
+                    this.ax_overlay = Some(overlay);
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        Ok(())
     }
 
     /// Adds an app pane for an already-captured window.
@@ -1125,6 +1174,7 @@ impl Workspace {
                 vec![
                     (return_key, "From any app: back to ottospace"),
                     ("⌘⌃F".into(), "Zoom the window"),
+                    ("⌘⌃A".into(), "Accessibility overlay (debug)"),
                     ("⌘/".into(), "This list"),
                 ],
             )))
@@ -1798,6 +1848,12 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ShowKeys, window, cx| {
                 this.dispatch(Action::ToggleKeys, window, cx);
             }))
+            .on_action(cx.listener(|this, _: &AxOverlay, window, cx| {
+                if let Err(err) = this.toggle_ax_overlay(false, window, cx) {
+                    this.error = Some(err);
+                    cx.notify();
+                }
+            }))
             .on_action(cx.listener(|this, _: &NewTab, window, cx| this.open_picker(Axis::Right, true, window, cx)))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| {
                 this.dispatch(Action::CycleTab { delta: 1 }, window, cx);
@@ -1853,6 +1909,14 @@ impl Render for Workspace {
                     ),
             )
             .child(self.render_status())
+            // Only over a parked, drawn pane: a live window sits above ottospace and would cover it.
+            .children(
+                self.ax_overlay
+                    .as_ref()
+                    .filter(|o| self.model.ax_overlay && self.model.live != Some(o.pane))
+                    .filter(|o| self.model.layout.as_ref().is_some_and(|l| l.leaves().contains(&o.pane)))
+                    .map(ax_debug::Overlay::render),
+            )
             .children(self.model.picker.as_ref().map(|picker| self.render_picker(picker, cx)))
             .when(self.model.keys, |d| d.child(self.render_keys(cx)))
     }
@@ -1933,6 +1997,8 @@ fn main() {
             KeyBinding::new("cmd-[", FocusPrev, None),
             // Fill the screen without leaving the Space (see `zoom_instead_of_fullscreen`).
             KeyBinding::new("cmd-ctrl-f", Zoom, None),
+            // Debug: outline the focused app pane's accessibility tree.
+            KeyBinding::new("cmd-ctrl-a", AxOverlay, None),
             // Tabs. ⌘1..⌘9 select one (handled in `key_down`).
             KeyBinding::new("cmd-t", NewTab, None),
             KeyBinding::new("cmd-}", NextTab, None),

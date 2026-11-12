@@ -123,6 +123,22 @@ pub enum Request {
         pane: Option<PaneId>,
         lines: f32,
     },
+    /// An app pane's accessibility tree (default: the focused pane). Read-only. The reply is
+    /// `{"ok":true,"pane":1,"window":{..},"millis":..,"tree":{..}}`, not the state.
+    AxTree {
+        #[serde(default)]
+        pane: Option<PaneId>,
+        #[serde(default)]
+        depth: Option<usize>,
+        #[serde(default)]
+        nodes: Option<usize>,
+    },
+    /// Shows or hides the accessibility overlay on the focused app pane. `refresh`: show it and
+    /// read the tree again.
+    AxOverlay {
+        #[serde(default)]
+        refresh: bool,
+    },
     Quit,
 }
 
