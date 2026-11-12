@@ -2944,11 +2944,11 @@ fn ctl(args: &[String]) -> ! {
     std::process::exit(if ok { 0 } else { 1 });
 }
 
-/// `ottospace agents [dir]`: the agent sessions of the directory's repository, worktrees included,
-/// as JSON. Names, counts and times only; see `docs/ai/agent-runners.md`.
-fn agents(dir: Option<&String>) -> ! {
-    use ottospace_agents::{claude::Claude, codex::Codex, git::checkouts, report::report};
-    const USAGE: &str = "usage: ottospace agents [dir]\n\
+/// `ottospace sessions [dir]`: the agent sessions of the directory's repository, worktrees included,
+/// as JSON. Names, counts and times only; see `docs/ai/sessions.md`.
+fn sessions(dir: Option<&String>) -> ! {
+    use ottospace_sessions::{claude::Claude, codex::Codex, git::checkouts, report::report};
+    const USAGE: &str = "usage: ottospace sessions [dir]\n\
         Prints the Claude Code and Codex sessions of the repository at <dir> (an absolute path;\n\
         default: the current directory) as JSON: names, counts and times only.";
     if dir.is_some_and(|d| d == "--help" || d == "-h") {
@@ -2994,8 +2994,8 @@ fn main() {
         ctl(&args[2..]);
     }
     // Hidden while its output has no stable shape. Reads other programs' session files.
-    if args.get(1).is_some_and(|a| a == "agents") {
-        agents(args.get(2));
+    if args.get(1).is_some_and(|a| a == "sessions") {
+        sessions(args.get(2));
     }
     // `ottospace skill` prints the agent guide; `--stub` prints the SKILL.md that points to it.
     if args.get(1).is_some_and(|a| a == "skill") {

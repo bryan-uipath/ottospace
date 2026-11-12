@@ -22,7 +22,7 @@ included. Nothing here was run or measured: the stages are a plan.
 | Word | Meaning |
 |---|---|
 | **Agent** | A named harness: instructions + runner + model + permissions. Static. A file |
-| **Session** | One live or past conversation of a runner (Claude Code, Codex). What `ottospace-agents` reads |
+| **Session** | One live or past conversation of a runner (Claude Code, Codex). What `ottospace-sessions` reads |
 | **Routine** | An agent + a trigger. Fires by itself. An ottobot "skill" file is one |
 | **Run** | One firing of a routine: one runner process, one report, one verdict |
 | **Task** | ottospace's unit of work: state, priority, tabs. A run can be shown as one |
@@ -117,7 +117,7 @@ file may ask for more; the row and the start show what it asks for.
   `agent:` only once the daemon does that: an ottobot change, or stage 3.
 
 **Agent and session.** The definition is the static half; a session is the live half.
-`crates/ottospace-agents` (branch `agent-runners`, PR #53, open) reads the runners' session
+`crates/ottospace-sessions` (branch `agent-runners`, PR #53, open) reads the runners' session
 files: which sessions exist for a directory and what each is doing. It knows nothing of
 definitions. A pane that ottospace started from an agent links both: the pane records the agent's
 name and the session id. The launcher picks the id (`claude --session-id <uuid>`; Codex not
@@ -129,7 +129,7 @@ checked): the interactive CLI reports none, and PR #53's pane link is not built.
 |---|---|
 | An agent | Name, runner and model, its runner's tightest quota window (`63% left`), last run |
 | Under it | Its running sessions: task title and pane. ↵ focuses that pane |
-| "Other sessions" | Sessions `ottospace-agents` finds that no agent started (a plain `claude` in a terminal) |
+| "Other sessions" | Sessions `ottospace-sessions` finds that no agent started (a plain `claude` in a terminal) |
 
 The session rows need PR #53's pane link and core wiring (its stages 3 to 5). Until then the
 section lists agents only. A row marks an agent file changed since its last run (see Trust).
@@ -413,7 +413,7 @@ About 4,050 lines and 38 unit tests move into the library. What must change on t
 | `proto::COMMIT` is a build-script env var of the binary | Passed in by the caller |
 | `store.rs` mixes persistence with report HTML (about 300 of 694 lines) | Split out `report.rs`; keeps `pulldown-cmark` out of readers |
 | Edition 2021 → 2024, this repo's `rustfmt.toml`, clippy | Mechanical |
-| `Runner` names a trait in both ottobot and `ottospace-agents` | Rename one: see Overlaps |
+| `Runner` names a trait in both ottobot and `ottospace-sessions` | Rename one: see Overlaps |
 
 The engine needs tokio (`full`); ottospace has no async runtime beyond GPUI's. So the engine runs
 only in the daemon process: `ottospace daemon`, the same binary in another mode, no window, no
@@ -503,10 +503,10 @@ its own process. ottobot's tray keeps working beside all of this until it is ret
 
 | Overlap | ottobot | ottospace | Reconcile |
 |---|---|---|---|
-| Runners | `runner/`: **launches** an agent CLI, parses its stream, reads quota | `crates/ottospace-agents` (branch `agent-runners`, PR #53): **reads** sessions from the runners' own files. Read-only; only derived facts leave it | Two halves, one per runner. Keep two crates until stage 3, then one module per runner with `launch`, `usage`, `sessions`. Both have a trait named `Runner`: rename ottobot's to `Launcher` when it moves. Quota has one owner: the engine |
+| Runners | `runner/`: **launches** an agent CLI, parses its stream, reads quota | `crates/ottospace-sessions` (branch `agent-runners`, PR #53): **reads** sessions from the runners' own files. Read-only; only derived facts leave it | Two halves, one per runner. Keep two crates until stage 3, then one module per runner with `launch`, `usage`, `sessions`. Both have a trait named `Runner`: rename ottobot's to `Launcher` when it moves. Quota has one owner: the engine |
 | Socket | `~/.ottobot/otto.sock`. `{"type":"Snapshot"}`, PascalCase, typed replies, unversioned | `$TMPDIR/ottospace.sock`. `{"cmd":"state"}`, snake_case, unknown fields refused, the reply is the full state | Keep two sockets: two processes, two powers (one starts unattended agents, one types into terminals). ottospace's `Request` gains `routines`, `routine_run`, `routine_dismiss`, which the shell forwards. `routine_run` lets any socket client start an unattended run (Trust). Do not expose the daemon's protocol through ottospace's socket wholesale: `Request` stays a closed set |
 | Folders | `~/.ottobot`: `config.json`, `skills/`, `projects/<root>/…`, `otto.sock`, `daemon.json`, `daemon.lock` | `~/.ottospace`: `settings.json`, `tasks/`, `install` | Stage 1–2: each keeps its own. Agents go in `~/.ottospace/agents/`. Stage 3: `~/.ottospace/routines/` after an explicit migration. ottobot's `config.json` keys (`skills_root`, `runner`, `tick`, `models`) become `routines.*` in `settings.json`, with `config.json` still read |
-| The word "agents" | — | PR #53 uses it for live sessions: the crate `ottospace-agents`, `ottospace agents [dir]`, the setting `agents: false`. Here an agent is a definition and a session is the live half | One word, one meaning: open question 8 |
+| The word "agents" | — | PR #53 uses it for live sessions: the crate `ottospace-sessions`, `ottospace sessions [dir]`, the setting `agents: false`. Here an agent is a definition and a session is the live half | One word, one meaning: open question 8 |
 | Session restore | — | `session-restore.md`: `session.json`, scrollback files, a "Terminal agent" hook that types `claude --resume <id>` | Viewer panes and run panes are not saved in `session.json`, their scrollback is not kept, and a run is never resumed by restore. A pane the user started from an agent comes back as a shell; resuming is the user's move |
 | Tasks vs runs | Run history and alerts, per skill | Tasks, one JSON file each | A task records `routine` and `run` ids. Run history stays in the engine's store; tasks do not copy it |
 | Linux | Runs on Linux | macOS only | The engine crate stays portable: no GPUI, no `ottospace-mac`, no `ottospace-core` dependency. macOS-only parts are already gated (`caffeinate`, `pmset`, launchd install, the keychain token). CI gains a Linux `cargo test -p ottospace-routines` job; without it portability rots unseen |
@@ -571,7 +571,7 @@ What ottospace must not weaken:
   cannot start an agent by filing tasks.
 - **Redaction stays, and is finished.** ottobot masks credential-looking words in the stderr tail
   it keeps in metadata and reports. `Events` and `runs/<id>.jsonl` hold raw stderr, so
-  `routine-tail` masks before it prints. `ottospace-agents` lets only derived facts out. Neither
+  `routine-tail` masks before it prints. `ottospace-sessions` lets only derived facts out. Neither
   rule is relaxed where the two meet.
 - **Restore does not resume a run** (Overlaps, Session restore).
 
@@ -592,9 +592,8 @@ One line each.
 6. Tray now, or after stage 2? (Proposed: after stage 1; it needs the hide-on-close change.)
 7. `routine_run` on the ottospace socket: acceptable, and may `skill/guide.md` teach it to agents?
    (Proposed: on the socket, yes; out of the guide until decided.)
-8. Who owns the word "agents": definitions (this note) or live sessions (PR #53: the crate, the
-   `ottospace agents` subcommand, the `agents` setting)? (Proposed: definitions; PR #53's become
-   "sessions".)
+8. DECIDED: "agents" are definitions (this note). Live ones are "sessions": the crate is
+   `ottospace-sessions`, the subcommand `ottospace sessions`, the setting `sessions`.
 9. Two rail entries (Routines, Agents) or one with two groups? (Proposed: two.)
 10. Sigils: `@agent` and `/repo`, changing `@repo` now? (Proposed: yes.) Or `~repo`?
 11. Does assigning an agent start it at once, or when the task is opened? (Proposed: when opened.)

@@ -1,4 +1,8 @@
-# Agent runners: what the agents in the panes are doing
+# Sessions: what the agents in the panes are doing
+
+Words: an **agent** is a saved definition (instructions, skills, runner, model: see `routines.md`).
+A **session** is one running or finished conversation of a runner (Claude Code, Codex). This note,
+the crate `ottospace-sessions` and `ottospace sessions` are about sessions.
 
 One Rust abstraction over Claude Code, Codex and later runners. It answers, for a directory:
 which agent sessions exist, is each active, what tool call runs now and of what kind, what ran
@@ -17,13 +21,13 @@ documents these files as a stable interface.
 
 | Question | Decision |
 |---|---|
-| Where it lives | A new crate, `crates/ottospace-agents`: std, serde, serde_json. No network, no async, no writes |
+| Where it lives | A new crate, `crates/ottospace-sessions`: std, serde, serde_json. No network, no async, no writes |
 | Source of truth | The runner's own session files, read incrementally |
 | Live updates | Tail the files first. Hooks later, for the pane link and for what files lack |
 | What leaves the crate | Names, counts, times. A command's label is built only from fixed tables. Never prompts, file contents, command lines or outputs |
 | Session ↔ directory | The cwd recorded in the session is the directory or below it. Worktrees: pass every checkout in one call |
 | Session ↔ pane | Not built. Plan: runner pid → the pane's shell is an ancestor. Fallback: a hook reports `OTTOSPACE_PANE` |
-| Wiring | None in this slice: no UI, no model, no socket. A hidden `ottospace agents [dir]` prints JSON |
+| Wiring | None in this slice: no UI, no model, no socket. A hidden `ottospace sessions [dir]` prints JSON |
 
 ## The abstraction
 
@@ -240,7 +244,7 @@ its sessions were written, submodules, bare repositories.
 3. **cwd and recency.** The pane's cwd equals the session's cwd and the session is the newest
    active one there. Wrong when two agents share a directory.
 
-The CLI is strict about its directory: `ottospace agents` takes an absolute path that exists
+The CLI is strict about its directory: `ottospace sessions` takes an absolute path that exists
 (default: the current directory) and fails otherwise. It never falls back to "every session".
 
 ## Live updates
@@ -282,9 +286,9 @@ Session files hold prompts, source code, command output and whatever secrets pas
   are full paths. Revisit before any label reaches the control socket: there the guide must mark
   them as untrusted data, not instructions.
 - Nothing is cached or copied. A snapshot lives in memory.
-- Off switch, to build with the first consumer: a setting `agents: false` in `settings.json`
+- Off switch, to build with the first consumer: a setting `sessions: false` in `settings.json`
   that stops all reading, checked by the shell before it constructs a runner. Today nothing
-  reads unless someone runs `ottospace agents`.
+  reads unless someone runs `ottospace sessions`.
 - Tests read only `tests/fixtures`: hand-written records with made-up content.
 
 ## Unknown or unverified
@@ -320,11 +324,11 @@ Session files hold prompts, source code, command output and whatever secrets pas
 
 ## Staged plan
 
-1. **This slice.** The crate, both runners, stations, snapshot, fixtures, `ottospace agents`.
+1. **This slice.** The crate, both runners, stations, snapshot, fixtures, `ottospace sessions`.
 2. **Measure.** Watch a live Codex session to settle the flush question; decide the poll interval.
 3. **Pane link.** Parent-pid lookup in `ottospace-mac`; pane → Claude session by process tree.
 4. **Core.** `Action::AgentsChanged { … }` carrying snapshots, so the model owns what is shown.
-   The shell polls off the main thread and dispatches. The `agents` setting and its off switch.
+   The shell polls off the main thread and dispatches. The `sessions` setting and its off switch.
 5. **Markers.** Active, waiting, failed per pane and per repository row. Snapshot in the control
    socket's state, so E2E can read it.
 6. **Radial view.** Stations, running calls, sub-agents, context ring.

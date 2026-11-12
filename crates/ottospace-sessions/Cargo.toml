@@ -1,5 +1,5 @@
 [package]
-name = "ottospace-agents"
+name = "ottospace-sessions"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
