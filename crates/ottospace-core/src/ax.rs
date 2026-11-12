@@ -186,6 +186,7 @@ pub struct Labelled {
 /// the pane does not show (e.g. traffic lights in a cropped bar) are left out.
 pub fn app_targets(pane: PaneId, root: &Node, window: Frame, crop: f64, content: Frame) -> Vec<Target> {
     let window = Frame { y: window.y + crop, h: window.h - crop, ..window };
+    let shown = Frame { w: content.w.min(window.w), h: content.h.min(window.h), ..content };
     flatten(root)
         .into_iter()
         .filter(|f| is_interactive(f.node))
@@ -193,8 +194,9 @@ pub fn app_targets(pane: PaneId, root: &Node, window: Frame, crop: f64, content:
             let g = f.node.frame?;
             let frame = Frame { x: content.x + g.x - window.x, y: content.y + g.y - window.y, ..g };
             let source = Source::App { pane, path: f.path, role: f.node.role.clone() };
-            // Clipped to the pane, so a partly scrolled-out control is labelled where it shows.
-            frame.intersects(&content).then(|| Target { frame: frame.clip(&content), source })
+            // Clipped to what shows (the pane, and no more than the window), so a partly
+            // scrolled-out control is labelled where it shows.
+            frame.intersects(&shown).then(|| Target { frame: frame.clip(&shown), source })
         })
         .collect()
 }
@@ -342,6 +344,18 @@ mod tests {
             Frame { x: 10., y: 0., w: 400., h: 300. },
         );
         assert_eq!(got[0].frame, Frame { x: 60., y: 20., w: 10., h: 10. });
+    }
+
+    #[test]
+    fn a_node_outside_a_window_smaller_than_the_pane_gets_no_label() {
+        let tree = node(
+            "AXWindow",
+            &[],
+            [0., 0., 200., 150.],
+            vec![node("AXButton", &["AXPress"], [10., 200., 20., 20.], vec![])], // scrolled below the window
+        );
+        let window = Frame { x: 0., y: 0., w: 200., h: 150. };
+        assert!(app_targets(1, &tree, window, 0., Frame { x: 0., y: 0., w: 400., h: 300. }).is_empty());
     }
 
     #[test]
