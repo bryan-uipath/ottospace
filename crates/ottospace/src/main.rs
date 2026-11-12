@@ -24,6 +24,7 @@ use gpui::{
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::keys::{self, Mods};
 use ottospace_core::list::{ListKey, list_key};
+use ottospace_core::settings::closed_apps;
 use ottospace_core::tasks::{Group, MAX_TITLE, Task};
 use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, scroll_key, select_kind, visual_key};
 use ottospace_core::{
@@ -388,6 +389,10 @@ struct Workspace {
     /// Each pane's bounds inside its border, for e2e to check the live window's gap.
     frames: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
     apps: Vec<capture::App>,
+    /// Apps the settings name that are not running: listed under the running ones.
+    closed: Vec<String>,
+    /// An app that was started from the list, and where its window goes once it has one.
+    launching: Option<Launch>,
     /// Icons of apps seen so far, by app name. Kept: an icon is read and encoded once.
     icons: HashMap<String, Arc<gpui::Image>>,
     /// A problem found at start (settings, font, tasks folder). It stays: unlike `error`, no
@@ -421,6 +426,17 @@ struct Workspace {
 /// and an even half on others. Scaling 64 pixels down to 36 in the shell made them rough.
 const ICON_POINTS: f32 = 24.;
 const ICON_PIXELS: u8 = 48;
+
+/// An app started from the list, waiting for its first window.
+struct Launch {
+    name: String,
+    axis: Axis,
+    new_tab: bool,
+    since: Instant,
+}
+
+/// How long to wait for a started app's window before giving up.
+const LAUNCH_WAIT: Duration = Duration::from_secs(30);
 
 /// How much of a test run's window stays on screen, in points, at the corner it sits in.
 const E2E_SLIVER: f32 = 12.;
@@ -471,6 +487,7 @@ impl Workspace {
                     if tick % 30 == 0 {
                         this.adopt_new_windows(window, cx);
                         this.drop_closed(window, cx);
+                        this.host_launched(window, cx);
                         // A snoozed task returns when its time comes.
                         let now = now_ms();
                         if this.model.tasks.due(now) {
@@ -533,6 +550,8 @@ impl Workspace {
             cells: HashMap::new(),
             frames: HashMap::new(),
             apps: Vec::new(),
+            closed: Vec::new(),
+            launching: None,
             icons: HashMap::new(),
             list_scroll: ScrollHandle::new(),
             known: Vec::new(),
@@ -1032,6 +1051,8 @@ impl Workspace {
             // Tasks as the Tasks section lists them, and how many need the user.
             "inbox": self.inbox(),
             "needs_you": self.model.tasks.needs_you(),
+            // Apps from the settings that are not running: `open_app` starts one.
+            "closed_apps": self.closed,
             // The Apps list: what can be hosted now. `icon`: its icon was read.
             "apps": self.apps.iter().map(|app| serde_json::json!({
                 "name": app.name, "windows": app.windows, "icon": self.icons.contains_key(&app.name),
@@ -1126,7 +1147,13 @@ impl Workspace {
             // By pid, not by name: another process may share the canary's name.
             Some(pid) if capture::name_of(pid).as_deref() == Some(name) => capture::find_pid(pid)?,
             Some(_) => return Err("this test run may host only the app it started".into()),
-            None => capture::find(name)?,
+            None => match capture::find(name) {
+                Ok(target) => target,
+                // An app from the settings that is not running: start it, and host its window
+                // when it has one.
+                Err(_) if self.closed.iter().any(|closed| closed == name) => return self.launch(name, axis, new_tab),
+                Err(err) => return Err(err),
+            },
         };
         // Already in a pane: go to it (and its tab) instead of doing nothing.
         if let Some((pane, _)) = self.hosted.iter().find(|(_, h)| h.window_id == target.id) {
@@ -1142,6 +1169,35 @@ impl Workspace {
         let action = Action::Open { kind: hosted.kind(), axis, beside: None };
         self.attach(hosted, action, window, cx);
         Ok(())
+    }
+
+    /// Starts an app that is not running, in the background: its window is wanted in a pane, not
+    /// in front of ottospace.
+    fn launch(&mut self, name: &str, axis: Axis, new_tab: bool) -> Result<(), String> {
+        let started = std::process::Command::new("open").args(["-g", "-a", name]).status();
+        match started {
+            Ok(status) if status.success() => {
+                self.launching = Some(Launch { name: name.to_string(), axis, new_tab, since: Instant::now() });
+                Ok(())
+            }
+            Ok(_) => Err(format!("{name} could not be opened: is it installed under that name?")),
+            Err(err) => Err(format!("{name} could not be opened: {err}")),
+        }
+    }
+
+    /// Hosts the window of an app started from the list, once it has one. Gives up after a while:
+    /// some apps open a sign-in window, or none.
+    fn host_launched(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let Some(launch) = self.launching.take() else { return };
+        if capture::apps().iter().any(|app| app.name == launch.name) {
+            self.refresh_apps();
+            let _ = self.open_app(&launch.name, launch.axis, launch.new_tab, window, cx);
+        } else if launch.since.elapsed() > LAUNCH_WAIT {
+            self.error = Some(format!("{} did not open a window in {} seconds", launch.name, LAUNCH_WAIT.as_secs()));
+            cx.notify();
+        } else {
+            self.launching = Some(launch);
+        }
     }
 
     /// Removes panes whose window is gone (closed by the user or the app).
@@ -1390,6 +1446,8 @@ impl Workspace {
                 });
                 return Some(at + headings.count());
             }
+            // A "Not running" heading before the apps that are not.
+            Some(Section::Apps) => return Some(at + usize::from(at >= self.apps.len())),
             _ => return Some(at),
         }
         let inbox = self.model.tasks.inbox();
@@ -1462,7 +1520,8 @@ impl Workspace {
     /// Opens the pane picker: a terminal, then each running app.
     fn open_picker(&mut self, axis: Axis, new_tab: bool, window: &Window, cx: &mut Context<Self>) {
         self.refresh_apps();
-        let apps = self.apps.iter().map(|app| PickItem::App { name: app.name.clone() });
+        let names = self.apps.iter().map(|app| &app.name).chain(&self.closed);
+        let apps = names.map(|name| PickItem::App { name: name.clone() });
         let items = std::iter::once(PickItem::Terminal).chain(apps).collect();
         self.dispatch(Action::OpenPicker { axis, new_tab, items }, window, cx);
     }
@@ -1890,15 +1949,29 @@ impl Workspace {
     /// Lists the apps that can be hosted now, and reads the icon of each one not seen before.
     fn refresh_apps(&mut self) {
         self.apps = running_apps(self.hosting, self.host_only);
-        self.model.update(Action::SetApps { names: self.apps.iter().map(|app| app.name.clone()).collect() });
+        let running: Vec<String> = self.apps.iter().map(|app| app.name.clone()).collect();
+        // Never in a test run: choosing one starts a real app.
+        let offer = self.hosting && self.host_only.is_none();
+        let wanted = if offer { config::get().settings.apps.as_slice() } else { &[] };
+        self.closed = closed_apps(wanted, &running);
+        // The list as list mode walks it: running apps, then the others.
+        let names = running.iter().chain(&self.closed).cloned().collect();
+        self.model.update(Action::SetApps { names });
         // An app that quit loses its icon: a later app of the same name may have another.
-        self.icons.retain(|name, _| self.apps.iter().any(|app| app.name == *name));
+        self.icons.retain(|name, _| running.contains(name) || self.closed.contains(name));
+        let image = |png: Vec<u8>| Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png));
         for app in &self.apps {
             if !self.icons.contains_key(&app.name)
                 && let Some(png) = icon::png(app.pid, ICON_PIXELS)
             {
-                let image = gpui::Image::from_bytes(gpui::ImageFormat::Png, png);
-                self.icons.insert(app.name.clone(), Arc::new(image));
+                self.icons.insert(app.name.clone(), image(png));
+            }
+        }
+        for name in &self.closed {
+            if !self.icons.contains_key(name)
+                && let Some(png) = icon::png_of_app(name, ICON_PIXELS)
+            {
+                self.icons.insert(name.clone(), image(png));
             }
         }
     }
@@ -2021,6 +2094,26 @@ impl Workspace {
                         row.child(badge.child(app.windows.to_string()))
                     })
                     // Fills the focused pane if it is empty. Else splits it: right, or down with shift.
+                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                        let axis = if e.modifiers().shift { Axis::Down } else { Axis::Right };
+                        let _ = this.open_app(&target, axis, false, window, cx);
+                    }))
+            }))
+            // Apps the settings name that are not running. A click starts one and hosts its window.
+            .children(
+                (!self.closed.is_empty())
+                    .then(|| div().px_2().pt_2().text_xs().text_color(rgb(theme::MUTED)).child("Not running")),
+            )
+            .children(self.closed.iter().enumerate().map(|(i, name)| {
+                let (target, row) = (name.clone(), self.apps.len() + i);
+                let waiting = self.launching.as_ref().is_some_and(|launch| launch.name == *name);
+                list_button(("closed-app", i), self.model.list == Some(row))
+                    .py_1p5()
+                    .gap_3()
+                    .text_color(rgb(theme::MUTED))
+                    .child(self.app_icon(name))
+                    .child(div().flex_1().min_w_0().truncate().child(name.clone()))
+                    .when(waiting, |row| row.child(div().flex_none().text_xs().child("opening…")))
                     .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                         let axis = if e.modifiers().shift { Axis::Down } else { Axis::Right };
                         let _ = this.open_app(&target, axis, false, window, cx);

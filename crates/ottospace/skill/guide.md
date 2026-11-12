@@ -61,6 +61,7 @@ ottospace ctl '{"cmd":"state"}'
 | `copied` | The text of the last copy |
 | `font`, `cell` | The terminal font in use (`name`, `size`) and the size of one character cell `[w, h]` in points |
 | `notice` | Null, or the problem the status bar shows (a mistake in the settings, an app that could not be hosted). It is not `error`, which means the request failed |
+| `closed_apps` | Apps the user's settings name that are not running. `open_app` starts one |
 | `apps` | Running apps that `open_app` can host: `name`, `windows` (how many it has open) and `icon` (true if its icon was read) |
 | `state.tasks.list` | Every task: `id`, `title`, `state`, `priority`, `snoozed_until`, `dismissed`, `tab`, `project` (from a `#tag`, or null) and `repo` (a repository path, or null) |
 | `state.compose` | Null, or the text in the new-task box while it is open |
@@ -225,7 +226,9 @@ ottospace ctl '{"cmd":"enter","pane":4}'
 ottospace ctl '{"cmd":"leave"}'
 ```
 
-`open_app` hosts a running app's main window in a pane. `enter` gives that app the keyboard;
+`open_app` hosts a running app's main window in a pane. For an app in `closed_apps` it starts
+the app first and hosts the window when it appears, so the reply comes before the pane exists:
+read `state` again. `enter` gives that app the keyboard;
 `leave` takes it back.
 
 Reading an app pane's controls (read-only; nothing is pressed):

@@ -21,6 +21,10 @@ pub struct Settings {
     /// The directory tasks are kept in. Default: `tasks` beside the settings file.
     #[serde(default)]
     pub tasks: Option<String>,
+    /// Apps to offer when they are not running, by name: `["Microsoft Outlook", "Slack"]`.
+    /// Choosing one starts it.
+    #[serde(default)]
+    pub apps: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -76,6 +80,19 @@ impl Settings {
     }
 }
 
+/// The apps to list as not running: the ones the settings name, less those that run now
+/// (whatever the case of the letters), each once, in the order given.
+pub fn closed_apps(wanted: &[String], running: &[String]) -> Vec<String> {
+    let same = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
+    let mut closed: Vec<String> = Vec::new();
+    for name in wanted.iter().map(|name| name.trim()).filter(|name| !name.is_empty()) {
+        if !running.iter().any(|r| same(r, name)) && !closed.iter().any(|c| same(c, name)) {
+            closed.push(name.to_string());
+        }
+    }
+    closed
+}
+
 /// A path as the user wrote it → a real one: `~/code` → `/Users/me/code`. Other paths pass.
 pub fn expand_home(path: &str, home: &str) -> String {
     match path.strip_prefix('~') {
@@ -123,6 +140,14 @@ mod tests {
             Terminal { font: "Menlo".into(), font_size: 6. }
         );
         assert_eq!(size(r#"{"terminal":{"font_size":16}}"#).line_height(), 22.);
+    }
+
+    #[test]
+    fn apps_named_in_the_settings_are_listed_while_they_do_not_run() {
+        let settings = Settings::parse(r#"{"apps": ["Microsoft Outlook", "slack", " ", "Slack", "Notes"]}"#).unwrap();
+        let running = vec!["Finder".to_string(), "Slack".to_string()];
+        assert_eq!(closed_apps(&settings.apps, &running), ["Microsoft Outlook", "Notes"]);
+        assert!(closed_apps(&Settings::default().apps, &running).is_empty());
     }
 
     #[test]

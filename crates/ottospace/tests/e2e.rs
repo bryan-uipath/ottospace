@@ -485,6 +485,8 @@ fn settings_choose_the_font_the_repos_and_the_tasks_folder() {
     std::fs::create_dir_all(home.join("src/app/.git")).unwrap();
     std::fs::write(home.join("src/app/.git/HEAD"), "ref: refs/heads/main\n").unwrap();
     let settings = json!({
+        // A test run never offers to start an app, whatever the settings say.
+        "apps": ["Calculator"],
         "terminal": {"font": "Monaco", "font_size": 16},
         "repos": [home.join("src")],
         "tasks": "elsewhere",
@@ -495,6 +497,7 @@ fn settings_choose_the_font_the_repos_and_the_tasks_folder() {
     let state = otto.call(json!({"cmd": "state"}));
     assert_eq!((&state["font"], &state["cell"][1]), (&json!({"name": "Monaco", "size": 16.0}), &json!(22.0)));
     assert_eq!(state["state"]["repos"][0]["name"], "app");
+    assert_eq!((&state["closed_apps"], &state["notice"]), (&json!([]), &Value::Null));
     otto.call(json!({"cmd": "task_add", "title": "kept elsewhere"}));
     assert!(home.join("elsewhere/1.json").is_file(), "a relative tasks folder is inside the user's folder");
     drop(otto);
