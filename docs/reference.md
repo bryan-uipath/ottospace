@@ -181,6 +181,8 @@ ottospace ctl '{"cmd":"state"}'
 in `Request` in [`crates/ottospace/src/control.rs`](../crates/ottospace/src/control.rs). Unknown commands and
 fields are refused.
 
+A typed TypeScript client for this socket is in [`sdk/`](../sdk/README.md) (early).
+
 The `alias` above is for a source build. An installed `ottospace` is on your `PATH` already.
 
 ## Agent skill

@@ -327,6 +327,7 @@ export function snapshot(value: unknown): Snapshot {
     window: rect(o.window, "window"),
     parking: pair(o.parking, "parking"),
     return_key: orNull(str)(o.return_key, "return_key"),
+    version: str(o.version, "version"),
     font: { name: str(fields(o.font, "font").name, "font.name"), size: num(fields(o.font, "font").size, "font.size") },
     cell: pair(o.cell, "cell"),
     notice: orNull(str)(o.notice, "notice"),

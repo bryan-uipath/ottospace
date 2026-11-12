@@ -37,6 +37,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     window: [1907, 985, 1400, 900],
     parking: [1919, 1079],
     return_key: null,
+    version: "0.1.0 · local",
     font: { name: "Menlo", size: 13 },
     cell: [7.82666015625, 18],
     notice: null,

@@ -192,6 +192,8 @@ export interface Snapshot {
   /** Where parked windows go: `[x, y]`. */
   parking: [number, number];
   return_key: string | null;
+  /** The build, as the status bar shows it: `0.1.0 · a4a2582`, or `0.1.0 · local`. */
+  version: string;
   font: { name: string; size: number };
   /** One character cell: `[w, h]` in points. */
   cell: [number, number];

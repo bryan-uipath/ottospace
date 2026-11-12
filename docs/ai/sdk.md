@@ -65,7 +65,8 @@ approval before it runs is open question 2.
 Today: one JSON request per line, one JSON reply per line, answered in order on a connection.
 That stays, byte for byte. Three additions.
 
-**a. A protocol number.** Every state reply gains `"protocol": 1`. It goes up when a reply
+**a. A protocol number.** Every state reply gains `"protocol": 1`, beside `version` (the
+build, which is there today). It goes up when a reply
 loses or changes a field. The SDK refuses to run against a number it does not know.
 
 **b. `subscribe`.** A new request. Its connection becomes a stream:
@@ -153,7 +154,7 @@ declare const otto: Otto;
 
 interface Otto {
   state(): Promise<Snapshot>;                                  // [socket]
-  version(): Promise<{ app: string; protocol: number }>;       // [request] protocol in the state
+  version(): Promise<{ app: string; protocol: number }>;       // [socket] app: `version` in the state. [request] protocol
   notify(text: string): Promise<void>;                         // [request] a status-bar notice
   open(target: string, options?: OpenOptions): Promise<Pane>;  // [request][app] a URL or an app, by bundle id
 

@@ -25,6 +25,7 @@ test("state: the typed snapshot is the whole reply", async () => {
     assert.deepEqual(start.state.tabs, [{ id: 1, title: "Tab 1", task: null }]);
     assert.equal(start.state.current_task, null);
     assert.equal(start.notice, null);
+    assert.match(start.version, /^\d+\.\d+\.\d+ · \w+$/);
     await exactState(client);
 
     // With a split tree, a terminal, a task, an inbox row and the picker in it.
