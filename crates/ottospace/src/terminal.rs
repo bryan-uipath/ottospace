@@ -105,12 +105,14 @@ pub struct Terminal {
 }
 
 impl Terminal {
-    /// Starts the user's default shell (or `$OTTOSPACE_SHELL`) in the current directory.
-    pub fn spawn() -> io::Result<Self> {
+    /// Starts the user's default shell (or `$OTTOSPACE_SHELL`) in the current directory, with
+    /// `vars` added to its environment, e.g. `[("OTTOSPACE_PANE", "3")]`.
+    pub fn spawn(vars: &[(&str, String)]) -> io::Result<Self> {
         let grid = Grid { cols: 80, rows: 24 };
         let shared = Arc::new(Shared::default());
         let listener = Listener(shared.clone());
-        let env = HashMap::from([("TERM".to_string(), "xterm-256color".to_string())]);
+        let mut env = HashMap::from([("TERM".to_string(), "xterm-256color".to_string())]);
+        env.extend(vars.iter().map(|(name, value)| (name.to_string(), value.clone())));
         // `$OTTOSPACE_SHELL` replaces the login shell. Tests use it: a login shell with a heavy
         // profile can take a minute to reach a prompt on a busy machine.
         let shell = std::env::var("OTTOSPACE_SHELL").ok().map(|program| tty::Shell::new(program, Vec::new()));
@@ -296,6 +298,15 @@ impl Terminal {
         let screen = self.screen();
         let text = |row: &Vec<Span>| row.iter().map(|s| s.text.as_str()).collect::<String>().trim_end().to_string();
         screen.rows.iter().map(text).collect()
+    }
+
+    /// The bottom screen as plain text, with everything scrolled off above it if `history`.
+    /// A wrapped line is one line. Trailing spaces and blank lines are removed.
+    pub fn text(&self, history: bool) -> String {
+        let term = self.term.lock();
+        let top = if history { term.topmost_line() } else { Line(0) };
+        let (start, end) = (Point::new(top, Column(0)), Point::new(term.bottommost_line(), term.last_column()));
+        term.bounds_to_string(start, end).trim_end().to_string()
     }
 
     pub fn screen(&self) -> Screen {
