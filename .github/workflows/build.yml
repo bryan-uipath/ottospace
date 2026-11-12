@@ -12,7 +12,7 @@ on:
 permissions: {}
 
 # A new push to a pull request cancels its older build. A build of main that has started
-# finishes; one still waiting is replaced by a newer push. publish-main publishes only the tip.
+# finishes; one still waiting is replaced by a newer push. publish-main publishes only a commit ahead of main-latest.
 concurrency:
   group: build-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -91,23 +91,26 @@ jobs:
           TAG: main-latest
         run: |
           set -euo pipefail
-          # A run that finishes late must not replace a newer build: publish only when this
-          # commit is ahead of the published one. No tag yet: the first publish.
-          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --silent 2>/dev/null; then
-            rel="$(gh api "repos/$GITHUB_REPOSITORY/compare/$TAG...$GITHUB_SHA" --jq .status)"
-            if [ "$rel" != ahead ]; then
-              echo "$GITHUB_SHA is not ahead of $TAG ($rel): not publishing."
-              exit 0
-            fi
-          fi
-          notes="Built from main at $GITHUB_SHA. Replaced on every push to main. Install: \`osi install main\` (see docs/install.md)."
+          notes="Built from main at $GITHUB_SHA. Replaced on every push to main. Install: \`osi install main\` (see the README)."
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # A run that finishes late must not replace a newer build. Publish when this commit
+            # is ahead of the published one, or is the same one (a re-run after a failed upload).
+            # After a rewrite of main neither holds: then only the tip publishes.
+            rel="$(gh api "repos/$GITHUB_REPOSITORY/compare/$TAG...$GITHUB_SHA" --jq .status)"
+            if [ "$rel" != ahead ] && [ "$rel" != identical ]; then
+              tip="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
+              if [ "$rel" = behind ] || [ "$tip" != "$GITHUB_SHA" ]; then
+                echo "$GITHUB_SHA is $rel $TAG, main is at $tip: not publishing."
+                exit 0
+              fi
+            fi
             # Move the tag, then replace the assets. osi checks every file against SHA256SUMS,
             # so an install during the replacement fails and changes nothing.
             gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" -f sha="$GITHUB_SHA" -F force=true --silent
             gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease --notes "$notes"
           else
+            # No release yet (a failed lookup lands here too, and the create then fails).
             # A prerelease is never "latest", so `osi install stable` does not see it.
             gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
               --prerelease --title "main (rolling build)" --notes "$notes"
