@@ -8,24 +8,44 @@ repository; this note has structure only.
 
 ## Answer first: can we read all participants?
 
+**Yes, while the participants panel is open.** With it closed, only the count and the people on
+the visible gallery page.
+
 | What | Readable? | How |
 |---|---|---|
-| How many participants | Yes, always | The toolbar button's description: `Open participants panel, closed, 10 participants` |
-| Names of the people on screen | Yes | Each video tile is a `tab group` whose description is `<name>, Computer audio muted\|unmuted, Video on\|off` |
-| Names of everyone | Not without acting | The gallery showed 4 tiles a page (`Next page. Currently on page 1, there are 4 pages in total`). The rest are on other pages |
-| Names from the participants panel | Not measured | The panel stayed closed for the whole recording |
-| Who is muted, whose video is off | Yes, for visible tiles | Same description string |
+| How many participants | Yes, always | The toolbar button's description: `Open participants panel, closed, 10 participants`. With the panel open, also its heading: `Participants (11)` |
+| Everyone's name | Yes, with the panel open | The panel is an `outline` with one `row` a participant. All 11 rows gave a name, in about 1 second |
+| Names with the panel closed | Only the visible gallery page | Each video tile is a `tab group` whose description is `<name>, Computer audio muted\|unmuted, Video on\|off`. The gallery showed 4 tiles a page, of 4 pages |
+| Who is muted, whose video is off | Yes | Panel: the row's images, described `Computer audio muted` / `unmuted`, `Video on` / `off`. Tiles: the same words in the description |
 
-So a read-only pass gives the count and the visible page. The whole list needs one of:
+Reading is all it takes once the panel is open: nothing in Zoom is pressed. Opening the panel
+for the user would be a press in another app, which is the "agents press controls" trust
+decision in `accessibility.md`. So the first version asks the user to open it.
 
-1. The participants panel open (by the user, or by pressing `Open participants panel`), then
-   reading its rows. Expected to work, not measured.
-2. Paging the gallery (pressing `Next page`) and reading each page's tiles. It changes what the
-   user sees.
-3. A gallery large enough to show everyone on one page.
+### The participants panel
 
-Options 1 and 2 press a control in another app. That is the "agents press controls" trust
-decision in `accessibility.md`, not a read.
+```
+window "Zoom Meeting" (the main one)
+  static text "Participants (11)"
+  scroll area
+    outline
+      row            AXRow, subrole AXTableRow, about 339 × 48 points
+        cell         AXCell, no description, no value
+          static text    the name, e.g. "Ana Example" or "Ana Example (me)"
+          menu button
+          image ...      "Computer audio muted", "Video off", ...
+```
+
+- **The cell's children are made on request.** A whole-window read (`entire contents`) returned
+  the rows and cells but nothing inside the cells, except for one row. Asking each cell for its
+  children returned them. A reader must walk row by row; the bounded tree reader in
+  `ottospace-mac` asks for children at each node, so it should see them (not run against Zoom).
+- **The name is the static text's value.** Row and cell have no title or description.
+- **Suffixes seen:** `(me)` on the user's own row. `(Host)`, `(Co-host)`, `(Guest)` were not seen
+  in this meeting; cleaning must still expect them.
+- **Not every row is a person.** One row was a meeting-room system, with a longer name made of
+  several words and numbers. The spinner should let the user drop rows.
+- The panel sits inside the main window (beside or above chat). A popped-out panel was not seen.
 
 ## Windows
 
@@ -48,8 +68,22 @@ Positions are left out; sizes are in points.
 - **Sharing changes the set.** The main window is gone from the list while sharing,
   and four system dialogs appear. `zoom-meeting.md` guessed this; it is confirmed.
 - **Only standard windows can be hosted** today, so while sharing there is one hostable window.
-  The share toolbar, the status bar and the annotation layer must be left alone: they are
-  Zoom's own floating chrome, and the annotation layer covers the display.
+
+### Windows to leave alone
+
+Bryan, 2026-11-12: the share window and the floating toolbar are things "we would want to
+ignore / not manage". The rule, from what was measured:
+
+| Window | Why |
+|---|---|
+| `zoom share statusbar window`, `zoom share toolbar window`, `zoom annotation entrypoint` | Zoom's floating controls while sharing. Moving them breaks the share controls |
+| `Annotation - Zoom` | A layer over the whole shared display |
+| `Reactions` and other `AXUnknown` windows | Short-lived pop-ups |
+| `Meeting chat` (while sharing) | A system dialog, not a standard window; it goes back into the main window when sharing ends |
+
+All of these have a subrole other than `AXStandardWindow`, so "host standard windows only"
+already skips them. The rule set should still name them, so a later change to what is hosted
+does not pick them up, and so a new-window watcher does not open panes for them.
 - Idle Zoom (no meeting) has one window, `Zoom Workplace`, `AXStandardWindow` (2026-11-11).
 
 ## Main window
@@ -87,16 +121,17 @@ The participant count is not in this toolbar's descriptions.
   main window, and a separate `Meeting chat` window only while sharing.
 - **A "sharing" state is needed**, as guessed: detect it by the `zoom share toolbar window`
   appearing, and stand the layout down (or keep only the one standard window).
-- **Spinner feed:** the count is free. Names need the panel open or the gallery paged. The
-  simplest honest flow: the user opens the participants panel once, ottospace reads the rows
-  and offers "Spin". No press in Zoom, no trust decision.
-- **Cleaning names** (strip `(Host, me)` and the like) is still needed for the panel; tile
-  descriptions carry the plain name followed by the audio and video state.
+- **Spinner feed:** measured to work with the panel open. Flow: the user opens the participants
+  panel, ottospace reads the rows (about a second for 11) and offers "Spin". No press in Zoom,
+  no trust decision. With the panel closed ottospace can still show the count and say "open
+  the participants panel to spin".
+- **Cleaning names:** strip `(me)` and expect `(Host)`, `(Co-host)`, `(Guest)`; let the user drop
+  rows that are rooms, not people.
 
 ## Not measured
 
-1. The participants panel: its element tree, whether rows exist only while it is open, how
-   names and roles are written, and what a popped-out panel's window is called.
+1. A popped-out participants panel (its window's title and subrole), and how host, co-host and
+   guest are written in the rows.
 2. Whether a parked Zoom window keeps rendering video.
 3. Minimum sizes of the two `Zoom Meeting` windows.
 4. Waiting room, breakout rooms, a webinar, a one-to-one call (the tiles may differ).

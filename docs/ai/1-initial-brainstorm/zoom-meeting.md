@@ -15,9 +15,8 @@ Refines a scenario Bryan gave in conversation on 2026-11-11 (extends #5 window r
 - Zoom idle (no meeting) has one window: `Zoom Workplace`, `AXStandardWindow`. Read through
   accessibility on 2026-11-11.
 - **Measured in a real meeting on 2026-11-12: see `zoom-ax.md`.** In short: two standard windows
-  share the title `Zoom Meeting`; sharing replaces the main one with four system dialogs; the
-  participant count and the names on the visible gallery page are readable, the whole list is
-  not without opening the panel or paging. Items below marked (?) were written before that.
+  share the title `Zoom Meeting`; sharing replaces the main one with four system dialogs; every
+  participant's name is readable while the participants panel is open (the count always is). Items below marked (?) were written before that.
 - `~/code/spinner` keeps names only in `localStorage`. It has no way to take names from outside.
 
 ## 1. Meeting layout
