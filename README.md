@@ -54,6 +54,23 @@ cargo run -p ottospace
 
 A window opens. Press ⌘D to open a terminal pane.
 
+### Build the app
+
+```sh
+scripts/bundle.sh
+open target/release/bundle/ottospace.app
+```
+
+This builds a release binary and wraps it as `ottospace.app` with the icon, so it has a Dock icon
+and its own identity.
+
+- Permissions attach to the app, not the terminal: macOS asks for Accessibility and Screen
+  Recording for ottospace itself.
+- The signature is ad hoc, so each rebuild is a new identity to macOS and you may have to grant
+  both again. A stable identity needs a signing certificate, which the script does not set up.
+
+`scripts/icon.sh` regenerates the icon from the SVG. It needs Google Chrome.
+
 ## Using it
 
 | Key | Action |
