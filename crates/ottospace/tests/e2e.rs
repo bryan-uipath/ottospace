@@ -346,10 +346,15 @@ fn list_mode_drives_the_bar_with_the_keyboard() {
     assert!(reply["state"]["tasks"]["list"][0]["snoozed_until"].as_u64().is_some(), "the first task is snoozed");
     assert_eq!(titles(&reply), ["second", "third"]);
 
-    // Keys do not reach a terminal while the bar has them, and Esc gives the keyboard back.
+    // Esc gives the keyboard back. While the bar has it, keys do not reach the terminal.
     assert_eq!(key("escape")["mode"], "normal");
     otto.call(json!({"cmd": "split"}));
     assert_eq!(key("cmd-shift-e")["mode"], "list");
+    key("j k");
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "echo typed-$((1+1))\r"}));
+    otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^typed-2$", "timeout_ms": 40000}));
+    let text = otto.call(json!({"cmd": "capture", "pane": 1}))["text"].as_str().unwrap().to_string();
+    assert!(!text.contains("jk"), "list keys were typed into the shell: {text}");
     // A split takes the keyboard for its new pane.
     assert_eq!(otto.call(json!({"cmd": "split", "axis": "down"}))["mode"], "normal");
 }

@@ -48,7 +48,7 @@ ottospace ctl '{"cmd":"state"}'
 | Field | Meaning |
 |---|---|
 | `mode` | `normal`, `app` (a hosted app has the keyboard), `pick` (the picker is open), `visual` (selecting terminal text with the keyboard) or `list` (the secondary bar has the keyboard) |
-| `state.list` | Null, or the index of the selected row of the open section while `mode` is `list` |
+| `state.list` | Null, or the index of the selected row of the open section: the secondary bar has the keyboard (`mode` is `list`, or `pick` while the picker is open over it) |
 | `state.panes` | Every pane of every tab: `id`, `kind`, and `cwd` for a terminal opened by `open_repo`. `kind` is an object: `{"type":"terminal"}`, `{"type":"empty"}` or `{"type":"app","window":N,"title":"..."}` |
 | `state.tabs`, `state.active` | The tabs (`id`, `title`) and the index of the one showing. Requests take the index, not the `id` |
 | `tab_panes` | Pane ids of each tab, in tab order |

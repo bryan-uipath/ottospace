@@ -449,10 +449,27 @@ impl Model {
         if leaves_list {
             self.list = None;
         }
+        // The user's own move in the list keeps the selection where it is, so the next row comes
+        // under it (hold one task, then the next). Any other change (an agent files a task, a
+        // snooze runs out) must not slide a different row under the selection: it follows its row.
+        let own_move = matches!(
+            action,
+            Action::ListMove { .. }
+                | Action::ListSection { .. }
+                | Action::ListSnooze { .. }
+                | Action::ListHold
+                | Action::ListDismiss
+                | Action::TaskUndo
+                | Action::ToggleSection { .. }
+                | Action::FocusList
+        );
+        let selected = self.list.and_then(|at| self.list_rows().into_iter().nth(at)).filter(|_| !own_move);
         self.act(action, &mut effects);
-        // Rows come and go (a dismissed task, a closed app): the selection stays on a row.
-        let rows = self.list_rows().len();
-        self.list = self.list.filter(|_| self.sidebar.is_some()).map(|i| i.min(rows.saturating_sub(1)));
+        let rows = self.list_rows();
+        let followed = selected.and_then(|row| rows.iter().position(|r| *r == row));
+        // Its row is gone, or the move was the user's: stay at the same place, on a row.
+        let stay = |at: usize| at.min(rows.len().saturating_sub(1));
+        self.list = self.list.filter(|_| self.sidebar.is_some()).map(|at| followed.unwrap_or_else(|| stay(at)));
         effects
     }
 
@@ -597,7 +614,8 @@ impl Model {
                 }
             }
             Action::ListSection { delta } => {
-                const ORDER: [Section; 4] = [Section::Apps, Section::Workbook, Section::Tasks, Section::Repos];
+                // Workbook has no rows yet, so the keys pass over it.
+                const ORDER: [Section; 3] = [Section::Apps, Section::Tasks, Section::Repos];
                 let at = ORDER.iter().position(|s| Some(*s) == self.sidebar).unwrap_or(0) as i32;
                 if self.list.is_some() {
                     self.sidebar = Some(ORDER[(at + delta).rem_euclid(ORDER.len() as i32) as usize]);
@@ -609,7 +627,11 @@ impl Model {
                 Some(ListRow::App(name)) => effects.push(Effect::HostApp { name, axis, new_tab: false }),
                 Some(ListRow::Repo(path)) => self.act(Action::OpenRepo { path, axis }, effects),
                 Some(ListRow::Task(id)) => {
-                    self.list = None;
+                    // A task with no tab opens nothing: the list keeps the keyboard.
+                    let tab = self.tasks.get(id).and_then(|task| task.tab);
+                    if self.tabs.iter().any(|t| Some(t.id) == tab) {
+                        self.list = None;
+                    }
                     self.act(Action::TaskOpen { id: Some(id) }, effects);
                 }
                 None => {}
@@ -715,7 +737,6 @@ impl Model {
         }
     }
 
-    /// Shows `kind` in `beside` (default: the focused pane) if that pane is empty; else splits it.
     /// The rows of the open section, top to bottom, as the secondary bar draws them.
     pub fn list_rows(&self) -> Vec<ListRow> {
         match self.sidebar {
@@ -739,6 +760,7 @@ impl Model {
         }
     }
 
+    /// Shows `kind` in `beside` (default: the focused pane) if that pane is empty; else splits it.
     fn open(&mut self, kind: Kind, axis: Axis, beside: Option<PaneId>, effects: &mut Vec<Effect>) {
         self.list = None; // the new pane takes the keyboard
         // The new pane takes focus, so the live app must give the keyboard back, and visual mode ends.
@@ -1257,6 +1279,31 @@ mod tests {
     }
 
     #[test]
+    fn the_selection_follows_its_task_when_others_change_the_inbox() {
+        let mut m = Model::default();
+        for title in ["a", "b", "c"] {
+            m.update(Action::TaskAdd { title: title.into(), priority: 2, state: State::NeedsYou, tab: None });
+        }
+        m.update(Action::ToggleSection { section: Section::Tasks });
+        m.update(Action::FocusList);
+        m.update(Action::ListMove { delta: 1 }); // on b
+        // An agent files a more urgent task above, and another task leaves: still on b.
+        m.update(Action::TaskAdd { title: "urgent".into(), priority: 1, state: State::NeedsYou, tab: None });
+        assert_eq!((m.list, m.list_rows()[2].clone()), (Some(2), ListRow::Task(2)));
+        m.update(Action::TaskSetState { id: 1, state: State::Cleaned });
+        assert_eq!(m.list, Some(1));
+        // The user's own hold keeps the place: the next task (c) comes under the selection.
+        m.update(Action::ListHold);
+        assert_eq!((m.list, m.list_rows()[1].clone()), (Some(1), ListRow::Task(3)));
+        // The selected task is taken away by someone else: the selection stays on a row.
+        m.update(Action::TaskSetState { id: 3, state: State::Cleaned });
+        assert_eq!((m.list, m.list_rows().len()), (Some(1), 2));
+        // ↵ on a task with no tab opens nothing, so the list keeps the keyboard.
+        m.update(Action::ListChoose { axis: Right });
+        assert_eq!(m.mode(), Mode::List);
+    }
+
+    #[test]
     fn list_mode_changes_section_hosts_apps_and_ends_with_the_bar() {
         let mut m = Model::default();
         m.update(Action::SetApps { names: vec!["Notes".into(), "Safari".into()] });
@@ -1268,12 +1315,12 @@ mod tests {
         // The shell hosts the app; until it opens a pane, the list keeps the keyboard.
         let host = Effect::HostApp { name: "Safari".into(), axis: Right, new_tab: false };
         assert_eq!((m.update(Action::ListChoose { axis: Right }), m.mode()), (vec![host], Mode::List));
-        // An empty section: moving and choosing do nothing.
+        // Tab passes over Workbook, which has no rows: Apps, then Tasks. Nothing to move to or open there.
         m.update(Action::ListSection { delta: 1 });
         m.update(Action::ListMove { delta: 1 });
         assert_eq!(
             (m.sidebar, m.list, m.update(Action::ListChoose { axis: Right })),
-            (Some(Section::Workbook), Some(0), vec![])
+            (Some(Section::Tasks), Some(0), vec![])
         );
         // Closing the bar, or a click on a pane, ends list mode. A second FocusList leaves too.
         m.update(Action::CloseSidebar);

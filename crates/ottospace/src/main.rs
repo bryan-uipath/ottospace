@@ -17,9 +17,9 @@ use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 use gpui::{
     AnyElement, AnyView, App, Application, AssetSource, BorderStyle, Bounds, BoxShadow, ClickEvent, ClipboardItem,
     ContentMask, Context, Div, ElementId, FocusHandle, ImageSource, KeyBinding, KeyDownEvent, Keystroke, Modifiers,
-    MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Resource, ScrollDelta, ScrollWheelEvent, SharedString, Size,
-    Stateful, Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions, actions, black, canvas, div, img,
-    point, prelude::*, px, quad, rgb, size, surface, svg, transparent_black,
+    MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Resource, ScrollDelta, ScrollHandle, ScrollWheelEvent,
+    SharedString, Size, Stateful, Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions, actions, black,
+    canvas, div, img, point, prelude::*, px, quad, rgb, size, surface, svg, transparent_black,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::keys::{self, Mods};
@@ -286,6 +286,16 @@ const KEYS_TERMINAL: &[(&str, &str)] = &[
     ("⌘⇧C", "Visual mode: select with the keyboard"),
     ("⌘⇧E", "List mode: keys for the bar (Apps, Tasks, Repos)"),
 ];
+const KEYS_LIST: &[(&str, &str)] = &[
+    ("J K / ↓ ↑", "Move the selection"),
+    ("↵ / ⇧↵", "Open the row / open it below"),
+    ("Tab / ⇧Tab", "Next / previous section"),
+    ("S", "Task: snooze one hour"),
+    ("H", "Task: put on hold"),
+    ("X", "Task: dismiss from the inbox"),
+    ("U", "Task: undo the last of these"),
+    ("Esc", "Leave"),
+];
 const KEYS_VISUAL: &[(&str, &str)] = &[
     ("H J K L / arrows", "Move the cursor"),
     ("W B E · 0 ^ $", "Word · line start, text, end"),
@@ -377,6 +387,8 @@ struct Workspace {
     apps: Vec<capture::App>,
     /// Icons of apps seen so far, by app name. Kept: an icon is read and encoded once.
     icons: HashMap<String, Arc<gpui::Image>>,
+    /// Scroll position of the bar's list, so list mode can bring the selected row into view.
+    list_scroll: ScrollHandle,
     /// Window ids seen per hosted pid; anything new that appears later gets its own pane.
     known: Vec<(i32, HashSet<u32>)>,
     /// When the live pane went live.
@@ -497,6 +509,7 @@ impl Workspace {
             frames: HashMap::new(),
             apps: Vec::new(),
             icons: HashMap::new(),
+            list_scroll: ScrollHandle::new(),
             known: Vec::new(),
             live_since: None,
             error: None,
@@ -1211,7 +1224,9 @@ impl Workspace {
             return; // ⌘ shortcuts still reach their bindings; ⌘⇧E leaves
         }
         cx.stop_propagation();
-        let action = match list_key(&key.key, key.modifiers.shift) {
+        // ⌃X is not `x`. A held key only moves: one press dismisses or opens one row.
+        let pressed = list_key(&key.key, key.modifiers.shift).filter(|_| !key.modifiers.control && !key.modifiers.alt);
+        let action = match pressed.filter(|key| !event.is_held || matches!(key, ListKey::Move(_))) {
             Some(ListKey::Move(delta)) => Action::ListMove { delta },
             Some(ListKey::Open { down }) => Action::ListChoose { axis: if down { Axis::Down } else { Axis::Right } },
             Some(ListKey::Section(delta)) => {
@@ -1226,7 +1241,23 @@ impl Workspace {
             None => return,
         };
         self.dispatch(action, window, cx);
+        if let Some(child) = self.selected_child() {
+            self.list_scroll.scroll_to_item(child);
+        }
         cx.notify();
+    }
+
+    /// Where the selected row is among the children of its list, to scroll it into view: each
+    /// list starts with a header line, and Tasks has a heading before each group.
+    fn selected_child(&self) -> Option<usize> {
+        let at = self.model.list?;
+        if self.model.sidebar != Some(Section::Tasks) {
+            return Some(at + 1);
+        }
+        let inbox = self.model.tasks.inbox();
+        let mut groups: Vec<Group> = inbox.iter().take(at + 1).map(|(group, _)| *group).collect();
+        groups.dedup();
+        Some(at + groups.len())
     }
 
     /// Reads the Apps and Repos lists again.
@@ -1377,7 +1408,8 @@ impl Workspace {
                     .flex_col()
                     .gap_4()
                     .child(group("TERMINAL", rows(KEYS_TERMINAL)))
-                    .child(group("VISUAL", rows(KEYS_VISUAL))),
+                    .child(group("VISUAL", rows(KEYS_VISUAL)))
+                    .child(group("LIST", rows(KEYS_LIST))),
             );
         div()
             .id("keys-backdrop")
@@ -1678,7 +1710,8 @@ impl Workspace {
             let hint = "No tasks. File one from a shell: ottospace ctl '{\"cmd\":\"task_add\",\"title\":\"...\"}'";
             div().px_2().text_xs().text_color(rgb(theme::MUTED)).child(hint)
         });
-        div().id("tasks").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll().children(empty).children(rows)
+        let list = div().id("tasks").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
+        list.track_scroll(&self.list_scroll).children(empty).children(rows)
     }
 
     /// Repositories, each with its worktrees under it. A click opens a terminal there: it fills
@@ -1720,6 +1753,7 @@ impl Workspace {
             .gap_1()
             .p_2()
             .overflow_y_scroll()
+            .track_scroll(&self.list_scroll)
             .child(
                 div()
                     .id("refresh-repos")
@@ -1748,6 +1782,7 @@ impl Workspace {
             .gap_1()
             .p_2()
             .overflow_y_scroll()
+            .track_scroll(&self.list_scroll)
             .child(
                 div()
                     .id("refresh")
