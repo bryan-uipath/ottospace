@@ -33,6 +33,7 @@ it over the control socket. Session restore and the rest of the design are not b
 | Icon rail with a secondary bar; Apps lists running apps with their icons | Works today |
 | Repos: repositories and their worktrees; open a terminal in one | Works today |
 | List mode (⌘⇧E): drive the bar with the keyboard | Works today |
+| Sneak mode (⌘⌃G): a letter label on each of ottospace's own controls; typing it clicks the control | Works today |
 | `settings.json`: terminal font, repository directories, tasks folder, apps to offer, window rules | Works today |
 
 ### Roadmap: designed, not built
@@ -41,7 +42,7 @@ None of these is in the app today.
 
 | Capability | State |
 |---|---|
-| Other key modes: insert, sneak | Designed |
+| Other key modes: insert; sneak labels inside a hosted app's window | Designed |
 | Tasks: a worktree at kickoff, a brief pane, automatic cleanup when done | Designed |
 | Quick capture (⌘⌘): turn something on screen into a task and dispatch it to an agent | Designed |
 | Focus blocks: hide Slack, with an agent that can break through | Designed |
@@ -77,6 +78,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⌃= | Even out the splits of the tab |
 | ⌘⇧⌥←/→/↑/↓ or ⌘⇧⌥H/L/K/J | Swap the focused pane with its neighbour on that side |
 | ⌘⇧⌥1 … ⌘⇧⌥9 | Move the focused pane to that tab on the bar. US keyboard layout only |
+| Drag a pane's header | Onto another pane's edge: split there. Onto its centre: swap. Onto a tab: move there. Esc cancels. An app you are in is parked: click it to go back in |
 | ⌘⌃F | Zoom the window to fill the screen; again to restore |
 | ⌘⌃A | Debug: outline the focused app pane's accessibility targets (parked panes only) |
 | ⌘/ | Show every key |
@@ -94,6 +96,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘N | New task: a box opens over the workspace. Type what needs doing, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1` to `p9` (Tab completes the one being typed). ↵ files it and closes the box; Esc closes |
 | ⌘⇧N | Next task: shows the tabs of the first task that needs you |
 | ⌘⇧E | List mode: the bar (Apps, Tasks, Repos) takes the keyboard. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; Esc or ⌘⇧E leaves |
+| ⌘⌃G | Sneak mode: every control ottospace draws (rail icons, bar rows, tabs and their ×, top-bar buttons, pane headers and their ×, each pane, the home screen's line, rows and nodes) gets a short label, home-row letters first. Type a label and the control does what a click does; a pane's label focuses it, or gives an app pane the keyboard. A × (pane or tab) always has a two-letter label. Two-letter labels narrow on the first letter; ⌫ takes it back. Esc, a click, a letter that goes on with no label, or any ⌘ shortcut leaves; the shortcut then runs (⌘C copies, ⌘V pastes). Other keys do nothing. The labels follow what is drawn: if a control moves its label moves, and if it goes its label goes. What happens by itself (a shell exits, an agent files a task) does not end the mode. Starting it hides the accessibility overlay (⌘⌃A). Not ⌃G alone: a terminal needs that key. On a keyboard layout with no Latin letters, the keys type the letters they have under ⌘. From `APP` mode return first. Controls inside a hosted app's window get no label. Sneak presses no control inside another app and sets no value; entering an app pane raises its window, as a click on the pane does |
 | ⌘⇧C | Visual mode on the terminal: `hjkl`/arrows, `w b e 0 ^ $`, `H M L` move; `v` / `V` select; `y` or ↵ copies and leaves; Esc leaves |
 
 Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
@@ -222,6 +225,8 @@ ottospace ctl '{"cmd":"split","axis":"down"}'
 ottospace ctl '{"cmd":"type","text":"ls\r"}'
 ottospace ctl '{"cmd":"open_app","name":"Safari"}'
 ottospace ctl '{"cmd":"section","section":"apps"}'
+ottospace ctl '{"cmd":"sneak"}'                      # labels on ottospace's controls: `sneak.targets`
+ottospace ctl '{"cmd":"key","keys":"a"}'             # type a label: that control acts as if clicked
 ottospace ctl '{"cmd":"state"}'
 ```
 

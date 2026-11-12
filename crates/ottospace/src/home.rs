@@ -13,7 +13,7 @@ use ottospace_core::home::{HOME, Home, NEAR, View};
 use ottospace_core::tasks::{Group, TaskId};
 use ottospace_core::{PaneId, Rect, theme};
 
-use crate::{Workspace, open_task, task_cells};
+use crate::{Workspace, open_task, rect, task_cells};
 
 /// The patch of lattice in an empty pane: a nearer, smaller view of the same floor.
 const PATCH: View = View { cx: 0.5, horizon: 0.05, fx: 0.58, fy: 0.91, sin: 0.5, cos: 0.866, dist: 3.9, lo: -3, hi: 4 };
@@ -50,10 +50,6 @@ pub struct Drawn {
 }
 
 pub type Shared = Rc<RefCell<Drawn>>;
-
-fn rect(b: Bounds<Pixels>) -> [f32; 4] {
-    [b.origin.x.into(), b.origin.y.into(), b.size.width.into(), b.size.height.into()]
-}
 
 impl Drawn {
     /// Where the text is, with room for a node beside it, in fractions of the area: the core
@@ -324,6 +320,7 @@ impl Workspace {
                     .size(px(TARGET * 2.))
                     .cursor_pointer()
                     .on_click(open_task(id, cx))
+                    .child(self.controls.mark(format!("home-node:{id}")))
                     .child(measure(drawn, view, move |drawn, bounds| {
                         drawn.nodes.push((id, bounds));
                         false
@@ -354,6 +351,7 @@ impl Workspace {
             .cursor_pointer()
             .hover(|s| s.border_color(rgb(theme::COMPOSE)))
             .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)))
+            .child(self.controls.mark("home:new_task"))
             .child(
                 div()
                     .min_h(px(28.))
@@ -385,6 +383,7 @@ impl Workspace {
                     .cursor_pointer()
                     .hover(|s| s.bg(rgb(theme::SELECTED)))
                     .on_click(open_task(task.id, cx))
+                    .child(self.controls.mark(format!("home-row:{}", task.id)))
                     .child(dot(theme::task(Group::NeedsYou)))
                     .children(task_cells(task, self.model.task_tags(task), 140.))
             })

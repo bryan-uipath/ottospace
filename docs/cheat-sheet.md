@@ -10,7 +10,7 @@ ottospace            # opens on the Repos list
 
 - First run: grant your terminal Accessibility (ottospace will not start without it) and Screen Recording (for app panes), in System Settings ▸ Privacy & Security.
 - Click a repository or worktree: a terminal opens there, in the empty pane or else in a split to the right (⇧-click: below).
-- The status bar (bottom left) shows who has the keyboard: `NORMAL`, `APP`, `PICK`, `LIST`, `TASK`, `VISUAL`.
+- The status bar (bottom left) shows who has the keyboard: `NORMAL`, `APP`, `PICK`, `LIST`, `TASK`, `VISUAL`, `SNEAK`.
 - Stuck in an app? Click ottospace's rail or top bar. Or press the return key: F18, which most keyboards lack, so map Caps Lock to it (see [the return key](reference.md#the-return-key)) or start with `OTTOSPACE_RETURN_KEY=f13` (f13 to f20). The status bar names the key in use.
 
 ## Panes and tabs
@@ -23,6 +23,7 @@ ottospace            # opens on the Repos list
 | Resize the pane | ⌘⌃ arrows or ⌘⌃ H J K L: the split moves that way · ⌘⌃= evens all out |
 | Swap the pane with its neighbour | ⌘⇧⌥ arrows or ⌘⇧⌥ H J K L |
 | Move the pane to another tab | ⌘⇧⌥1 … ⌘⇧⌥9. US keyboard layout only (US, ABC): on others the keys do nothing |
+| Rearrange with the mouse | Drag a pane by its header: onto another pane's edge to split there, its centre to swap, a tab to move there. Esc cancels. Dragging an app you are in parks it: click it to go back in |
 | Close the pane | ⌘W |
 | New tab | ⌘T |
 | Hide ottospace | ⌘H |
@@ -39,6 +40,7 @@ ottospace            # opens on the Repos list
 | Open a section | Click its icon on the rail |
 | Use it from the keyboard | ⌘⇧E, then `j` `k` move · ↵ open · ⇧↵ open below · Tab next section · Esc leave |
 | Read the lists again | ↻ in the bar's header |
+| Click anything without the mouse | ⌘⌃G: every control gets a letter label (a × gets two). Type it · ⌫ takes a letter back · Esc or a wrong letter leaves |
 
 The fourth icon, Workbook, is empty for now.
 

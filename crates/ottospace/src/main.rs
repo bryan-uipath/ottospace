@@ -4,7 +4,7 @@
 //! An app pane shows its parked window's SCK stream. Clicking it moves the real window over the
 //! pane ("live") and replays the click; clicking ottospace itself parks it again.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -31,9 +31,10 @@ use ottospace_core::settings::{Installed, closed_apps};
 use ottospace_core::tasks::{Assign, Group, MAX_TITLE, State, Task, TaskId};
 use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, scroll_key, select_kind, visual_key};
 use ottospace_core::{
-    Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Pane, PaneId, PickItem, Picker, Rect, Section, theme,
+    Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Pane, PaneId, PickItem, Picker, Rect, Section, Zone, theme,
     titlebar::{self, TitleBar},
 };
+use ottospace_mac::window::{Mouse, MouseKind};
 use ottospace_mac::{ax, capture, display, hotkey, icon, input, recovery};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use screencapturekit::prelude::*;
@@ -44,9 +45,10 @@ mod control;
 mod home;
 mod menus;
 mod repos;
+mod sneak;
 mod tags;
 mod terminal;
-use control::{Call, PaneKind, Request};
+use control::{Call, MouseAction, PaneKind, Request};
 use terminal::Terminal;
 
 /// Latest captured frame, handed from SCK's queue to the UI thread.
@@ -262,11 +264,12 @@ const TRAFFIC_LIGHTS: f32 = 80.;
 /// Height of a pane's header (label and close button).
 const PANE_HEADER: f32 = 28.;
 
-/// Top-bar buttons: icon, tooltip, split direction, and whether the pick opens in a new tab.
-const SPLITS: [(&str, &str, Axis, bool); 3] = [
-    ("icons/plus.svg", "New tab…  ⌘T", Axis::Right, true),
-    ("icons/split-right.svg", "Split right…  ⌘E", Axis::Right, false),
-    ("icons/split-down.svg", "Split down…", Axis::Down, false),
+/// Top-bar buttons: the name in the control's id (`top:new_tab`), icon, tooltip, split direction,
+/// and whether the pick opens in a new tab.
+const SPLITS: [(&str, &str, &str, Axis, bool); 3] = [
+    ("new_tab", "icons/plus.svg", "New tab…  ⌘T", Axis::Right, true),
+    ("split_right", "icons/split-right.svg", "Split right…  ⌘E", Axis::Right, false),
+    ("split_down", "icons/split-down.svg", "Split down…", Axis::Down, false),
 ];
 
 /// The key reference, by group: keys and what they do. Keep in step with the bindings in `main`.
@@ -287,6 +290,12 @@ const KEYS_ARRANGE: &[(&str, &str)] = &[
     ("⌘⇧⌥ arrows / H J K L", "Swap with the pane that way"),
     ("⌘⇧⌥1 … ⌘⇧⌥9", "Move the pane to a tab (US layout)"),
 ];
+const KEYS_DRAG: &[(&str, &str)] = &[
+    ("Drag a pane's header", "Onto a pane's edge: split there"),
+    ("", "Onto its centre: swap the two"),
+    ("", "Onto a tab: move it there · Esc cancels"),
+    ("", "A live app is parked: click it to go back in"),
+];
 const KEYS_TABS: &[(&str, &str)] = &[
     ("⌘T", "New tab: pick what opens in it"),
     ("⌘1 … ⌘9", "Go to a tab"),
@@ -303,6 +312,7 @@ const KEYS_TERMINAL: &[(&str, &str)] = &[
     ("⌘V", "Paste"),
     ("⌘⇧C", "Visual mode: select with the keyboard"),
     ("⌘⇧E", "List mode: keys for the bar (Apps, Tasks, Repos)"),
+    ("⌘⌃G", "Sneak mode: a letter label on every control"),
     ("⌘N", "New task: type a line, ↵ files it"),
     ("⌘⇧N", "Next task: show the tabs of the first that needs you"),
     ("⌘H", "Hide ottospace"),
@@ -324,6 +334,12 @@ const KEYS_VISUAL: &[(&str, &str)] = &[
     ("V / ⇧V", "Select from here / whole lines; again clears"),
     ("Y or ↵", "Copy and leave"),
     ("Esc", "Leave"),
+];
+
+const KEYS_SNEAK: &[(&str, &str)] = &[
+    ("A S D F …", "Type a label: it does what a click would"),
+    ("⌫", "Take a letter back"),
+    ("Esc", "Leave; so does a letter of no label"),
 ];
 
 /// Rail sections in order, with their icon and label.
@@ -352,6 +368,58 @@ impl Render for Tooltip {
     }
 }
 
+/// A pane on its way to another place: the value a drag of its header carries.
+struct DraggedPane(PaneId);
+
+/// What follows the pointer during a pane drag: the pane's label. `offset`: where in the header
+/// the drag began, as GPUI draws the view that far up and left of the pointer.
+struct DragChip {
+    label: SharedString,
+    offset: gpui::Point<Pixels>,
+}
+
+impl Render for DragChip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().pl(self.offset.x + px(8.)).pt(self.offset.y + px(8.)).child(
+            div()
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .bg(rgb(theme::RAISED))
+                .border_1()
+                .border_color(rgb(theme::PRIMARY))
+                .text_xs()
+                .text_color(rgb(theme::TEXT))
+                .child(self.label.clone()),
+        )
+    }
+}
+
+/// A drawn part the state gives a rect for, so a pointer can be aimed at it: a pane's header,
+/// its ×, the tab at a place on the bar.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Mark {
+    Header(PaneId),
+    Close(PaneId),
+    Tab(usize),
+}
+
+type Marks = Rc<RefCell<HashMap<Mark, Bounds<Pixels>>>>;
+
+/// An invisible child that fills its parent and records where it is drawn.
+fn mark(marks: &Marks, key: Mark) -> impl IntoElement + use<> {
+    let marks = marks.clone();
+    let note = move |bounds, _: &mut Window, _: &mut App| {
+        marks.borrow_mut().insert(key, bounds);
+    };
+    canvas(note, |_, _, _, _| {}).absolute().top_0().left_0().size_full()
+}
+
+/// `[x, y, w, h]` in window points.
+pub(crate) fn rect(b: Bounds<Pixels>) -> [f32; 4] {
+    [b.origin.x.into(), b.origin.y.into(), b.size.width.into(), b.size.height.into()]
+}
+
 actions!(
     ottospace,
     [
@@ -362,7 +430,7 @@ actions!(
 // Pane arrangement.
 actions!(ottospace, [ResizeLeft, ResizeRight, ResizeUp, ResizeDown, SwapLeft, SwapRight, SwapUp, SwapDown, Equalize]);
 // Terminal selection.
-actions!(ottospace, [CopySelection, PasteText, VisualMode, ListMode, NewTask, NextTask]);
+actions!(ottospace, [CopySelection, PasteText, VisualMode, ListMode, SneakMode, NewTask, NextTask]);
 // App menu.
 actions!(ottospace, [Quit, Hide]);
 
@@ -384,6 +452,16 @@ struct Workspace {
     cell: Size<Pixels>,
     /// The terminal pane a mouse drag is selecting in.
     dragging: Option<PaneId>,
+    /// During a pane drag: the pane under the pointer and the zone of it a drop would land on.
+    drop_at: Option<(PaneId, Zone)>,
+    /// A `mouse` request holds the button down: a move before its release is a drag.
+    held: bool,
+    /// Releases a button no request came back for. Replaced, so stopped, by each `mouse` request.
+    abandoned: Option<gpui::Task<()>>,
+    /// The pointer event in hand came from a `mouse` or `drag` request, not from the user.
+    injected: bool,
+    /// Where headers, their × and tabs were last drawn.
+    marks: Marks,
     /// The last text copied. E2E runs use it as the clipboard, so tests never touch the user's.
     copied: Option<String>,
     system_clipboard: bool,
@@ -393,6 +471,10 @@ struct Workspace {
     frames: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
     /// What the home screen last drew, and the lattice lines kept between frames.
     home: home::Shared,
+    /// ottospace's own controls as last painted: what sneak mode labels.
+    controls: sneak::Controls,
+    /// The key that ended sneak mode is still down: its repeats are typed nowhere.
+    sneak_spent: bool,
     apps: Vec<capture::App>,
     /// Apps the settings name that are not running: listed under the running ones.
     closed: Vec<Installed>,
@@ -456,6 +538,8 @@ struct Launch {
 
 /// How long to wait for a started app's window before giving up.
 const LAUNCH_WAIT: Duration = Duration::from_secs(30);
+/// How long a `mouse` request's button stays down with no further request.
+const POINTER_IDLE: Duration = Duration::from_secs(5);
 
 /// How much of a test run's window stays on screen, in points, at the corner it sits in.
 const E2E_SLIVER: f32 = 12.;
@@ -474,6 +558,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let this = cx.weak_entity();
         let subscriptions = vec![
             // Clicking ottospace itself (title bar, empty space) raises it over the live window,
             // so hand that pane back to its stream. Ignore the activation that the swap click
@@ -483,6 +568,11 @@ impl Workspace {
                 if window.is_window_active() && settled {
                     this.dispatch(Action::Leave, window, cx);
                 }
+            }),
+            // Before the key's binding runs, so every ⌘ shortcut leaves sneak mode and then acts,
+            // also one whose handler changes no state (⌘C, ⌘V).
+            cx.intercept_keystrokes(move |event, window, cx| {
+                let _ = this.update(cx, |this, cx| this.shortcut_leaves_sneak(&event.keystroke, window, cx));
             }),
             cx.on_app_quit(|this, _| {
                 this.hosted.drain().for_each(|(_, hosted)| hosted.release());
@@ -518,6 +608,7 @@ impl Workspace {
                     }
                     this.sync_layout(window, cx, tick % 30 == 15);
                     this.sync_terminals(window, cx);
+                    this.sync_sneak(window, cx);
                     if this.hosted.values().any(|h| h.latest.dirty.swap(false, Relaxed)) {
                         cx.notify();
                     }
@@ -566,11 +657,18 @@ impl Workspace {
             terminals: HashMap::new(),
             cell: terminal::cell_size(window),
             dragging: None,
+            drop_at: None,
+            held: false,
+            abandoned: None,
+            injected: false,
+            marks: Marks::default(),
             copied: None,
             system_clipboard: std::env::var_os("OTTOSPACE_E2E").is_none(),
             cells: HashMap::new(),
             frames: HashMap::new(),
             home: home::Shared::default(),
+            controls: sneak::Controls::default(),
+            sneak_spent: false,
             apps: Vec::new(),
             closed: Vec::new(),
             launching: Vec::new(),
@@ -637,6 +735,9 @@ impl Workspace {
                 Effect::Closed(pane) => {
                     self.cells.remove(&pane.id);
                     self.frames.remove(&pane.id);
+                    self.marks
+                        .borrow_mut()
+                        .retain(|mark, _| ![Mark::Header(pane.id), Mark::Close(pane.id)].contains(mark));
                     self.terminals.remove(&pane.id); // drop ends its shell
                     if let Some(hosted) = self.hosted.remove(&pane.id) {
                         hosted.release();
@@ -665,6 +766,7 @@ impl Workspace {
                         terminal.set_visual(*on);
                     }
                 }
+                Effect::Activate { id } => self.activate(id, window, cx),
                 Effect::Live(id) => {
                     self.live_since = Some(Instant::now());
                     if let Some(hosted) = self.hosted.get_mut(id) {
@@ -808,6 +910,48 @@ impl Workspace {
                 }
                 continue;
             }
+            if let Some(why) = control::pointer_refusal(&request, std::env::var_os("OTTOSPACE_E2E").is_some()) {
+                let _ = reply.send(control::error(why));
+                continue;
+            }
+            // So do pointer events, through the window's own handlers: a drag is GPUI's state.
+            let events = match &request {
+                Request::Mouse { action, x, y, clicks, modifiers } => {
+                    let has = |m: control::Modifier| modifiers.contains(&m);
+                    let mouse = Mouse {
+                        kind: MouseKind::Move,
+                        x: f64::from(*x),
+                        y: f64::from(*y),
+                        clicks: (*clicks).min(3) as isize,
+                        cmd: has(control::Modifier::Cmd),
+                        ctrl: has(control::Modifier::Ctrl),
+                        alt: has(control::Modifier::Alt),
+                        shift: has(control::Modifier::Shift),
+                    };
+                    let event = self.pointer(*action, mouse);
+                    self.abandoned = self.held.then(|| self.release_later(window, cx));
+                    Some(vec![event])
+                }
+                Request::Drag { from, to, steps } => {
+                    // At most 256 moves: more adds nothing, and each draws a frame.
+                    let steps = (*steps).clamp(1, 256);
+                    let along = |i: usize| {
+                        let t = i as f32 / steps as f32;
+                        let (x, y) = (from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t);
+                        let (cmd, ctrl, alt, shift) = (false, false, false, false);
+                        Mouse { kind: MouseKind::Move, x: x.into(), y: y.into(), clicks: 1, cmd, ctrl, alt, shift }
+                    };
+                    let mut events = vec![self.pointer(MouseAction::Down, along(0))];
+                    events.extend((1..=steps).map(|i| self.pointer(MouseAction::Move, along(i))));
+                    events.push(self.pointer(MouseAction::Up, along(steps)));
+                    Some(events)
+                }
+                _ => None,
+            };
+            if let Some(events) = events {
+                self.inject(events, reply, window, cx);
+                continue;
+            }
             let quit = matches!(request, Request::Quit);
             let mut failure: Option<String> = None;
             let action = match request {
@@ -846,6 +990,17 @@ impl Workspace {
                 }
                 Request::MovePane { pane, tab } => Some(Action::MovePane { pane, tab }),
                 Request::Equalize => Some(Action::Equalize),
+                Request::DropPane { source, target, .. } if source == target => {
+                    failure = Some("a pane cannot be dropped on itself".into());
+                    None
+                }
+                Request::DropPane { source, target, .. }
+                    if self.model.pane(source).is_none() || self.model.pane(target).is_none() =>
+                {
+                    failure = Some(format!("no pane {source} or no pane {target}"));
+                    None
+                }
+                Request::DropPane { source, target, zone } => Some(Action::DropPane { source, target, zone }),
                 Request::Enter { pane } => Some(Action::Enter { pane }),
                 Request::Leave => Some(Action::Leave),
                 Request::Section { section } => Some(Action::ToggleSection { section }),
@@ -862,7 +1017,8 @@ impl Workspace {
                 Request::PickerChoose { index } => Some(Action::PickerChoose { index }),
                 Request::PickerClose => Some(Action::ClosePicker),
                 Request::Keys => Some(Action::ToggleKeys),
-                Request::Key { .. } => None, // answered by `press`
+                Request::Key { .. } => None,                          // answered by `press`
+                Request::Mouse { .. } | Request::Drag { .. } => None, // answered by `inject`
                 Request::MouseDown { pane, x, y, clicks } => {
                     match self.cell_position(pane, x, y) {
                         Ok((id, position)) => {
@@ -874,6 +1030,9 @@ impl Workspace {
                             // handler, then the pane's.
                             if self.model.visual.is_some() {
                                 self.dispatch(Action::LeaveVisual, window, cx);
+                            }
+                            if self.model.sneak.is_some() {
+                                self.dispatch(Action::LeaveSneak, window, cx);
                             }
                             self.terminal_mouse_down(id, &event, cx);
                             self.click_pane(id, &event, window, cx);
@@ -1024,6 +1183,10 @@ impl Workspace {
                     failure = self.toggle_ax_overlay(refresh, window, cx).err();
                     None
                 }
+                Request::Sneak => {
+                    self.serve_sneak(reply, window, cx);
+                    continue;
+                }
             };
             if let Some(action) = action {
                 let effects = self.dispatch(action, window, cx);
@@ -1041,7 +1204,7 @@ impl Workspace {
                     failure = self.error.clone().or(Some("the shell did not start".into()));
                 }
             }
-            let _ = reply.send(failure.map_or_else(|| self.snapshot(window), |message| control::error(&message)));
+            let _ = reply.send(failure.map_or_else(|| self.snapshot(window, cx), |message| control::error(&message)));
             if quit {
                 // Quit a moment later, so the connection thread can write the reply first.
                 cx.spawn(async move |_, cx| {
@@ -1114,16 +1277,83 @@ impl Workspace {
     fn press(&self, keystrokes: Vec<Keystroke>, reply: Sender<String>, window: &Window, cx: &mut Context<Self>) {
         let this = cx.entity().downgrade();
         window.defer(cx, move |window, cx| {
+            let labelled = |cx: &App| this.read_with(cx, |this, _| this.model.sneak.is_some()).unwrap_or(false);
             for keystroke in keystrokes {
+                let was = labelled(cx);
                 window.dispatch_keystroke(keystroke, cx);
+                // The keys after the one that ended sneak mode were for labels, not a terminal.
+                if was && !labelled(cx) {
+                    break;
+                }
             }
-            let state = this.update(cx, |this, _| this.snapshot(window));
+            let state = this.update(cx, |this, cx| this.snapshot(window, cx));
             let _ = reply.send(state.unwrap_or_else(|_| control::error("ottospace is closing")));
         });
     }
 
+    /// `mouse` as the press, release or move `action` asks for. A press holds the button until
+    /// the release, and a move in between is a drag.
+    fn pointer(&mut self, action: MouseAction, mouse: Mouse) -> Mouse {
+        let kind = match action {
+            MouseAction::Down => MouseKind::Down,
+            MouseAction::Move if self.held => MouseKind::Drag,
+            MouseAction::Move => MouseKind::Move,
+            MouseAction::Up => MouseKind::Up,
+        };
+        self.held = match action {
+            MouseAction::Down => true,
+            MouseAction::Move => self.held,
+            MouseAction::Up => false,
+        };
+        Mouse { kind, ..mouse }
+    }
+
+    /// A client that pressed and went away must not leave the button down: after `POINTER_IDLE`
+    /// with no `mouse` request, releases it outside the window, where nothing is dropped.
+    fn release_later(&self, window: &Window, cx: &mut Context<Self>) -> gpui::Task<()> {
+        cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(POINTER_IDLE).await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                if !std::mem::take(&mut this.held) {
+                    return;
+                }
+                let (kind, clicks, off) = (MouseKind::Up, 1, false);
+                let up = Mouse { kind, x: -1.0, y: -1.0, clicks, cmd: off, ctrl: off, alt: off, shift: off };
+                this.inject(vec![up], std::sync::mpsc::channel().0, window, cx);
+            });
+        })
+    }
+
+    /// Hands pointer events to the window's own AppKit handlers, as the system does, then replies
+    /// with the state. (GPUI's `Window::dispatch_event` cannot be called from here: its return
+    /// type is private.) A frame is drawn before each, as between real events: GPUI finds what
+    /// is under the pointer in the last frame drawn. The events are never posted: no other app's
+    /// window gets them, and the real pointer stays where it is.
+    fn inject(&self, events: Vec<Mouse>, reply: Sender<String>, window: &Window, cx: &mut Context<Self>) {
+        let view = match HasWindowHandle::window_handle(window).map(|handle| handle.as_raw()) {
+            Ok(RawWindowHandle::AppKit(appkit)) => appkit.ns_view.as_ptr(),
+            _ => return drop(reply.send(control::error("no window to send the pointer to"))),
+        };
+        // A task of its own: the handlers update the app, which this update holds.
+        cx.spawn_in(window, async move |this, cx| {
+            let _ = this.update(cx, |this, _| this.injected = true);
+            for event in events {
+                // An error: the window is gone, and `view` with it.
+                if cx.update(|window, cx| window.draw(cx).clear()).is_err() {
+                    break;
+                }
+                unsafe { ottospace_mac::window::send_mouse(view, event) };
+            }
+            let _ = cx.update(|window, cx| window.draw(cx).clear());
+            let _ = this.update(cx, |this, _| this.injected = false);
+            let state = this.update_in(cx, |this, window, cx| this.snapshot(window, cx));
+            let _ = reply.send(state.unwrap_or_else(|_| control::error("ottospace is closing")));
+        })
+        .detach();
+    }
+
     /// State as JSON: the model, plus each pane's drawn bounds `[x, y, w, h]` in window points.
-    fn snapshot(&self, window: &Window) -> String {
+    fn snapshot(&self, window: &Window, cx: &App) -> String {
         let parking = display::parking_spot();
         let hosted: BTreeMap<PaneId, [f64; 4]> = self
             .hosted
@@ -1149,6 +1379,13 @@ impl Workspace {
                 .collect()
         };
         let (bounds, frames) = (drawn_rects(&self.cells), drawn_rects(&self.frames));
+        let marks = self.marks.borrow();
+        let marked = |key: fn(PaneId) -> Mark| -> BTreeMap<PaneId, [f32; 4]> {
+            drawn.iter().filter_map(|id| Some((*id, rect(*marks.get(&key(*id))?)))).collect()
+        };
+        let tabs: Vec<[f32; 4]> = (0..self.model.visible_tabs().len())
+            .filter_map(|place| marks.get(&Mark::Tab(place)).copied().map(rect))
+            .collect();
         let terminals: BTreeMap<PaneId, serde_json::Value> = self
             .terminals
             .iter()
@@ -1173,6 +1410,17 @@ impl Workspace {
             "bounds": bounds,
             // Each drawn pane's bounds inside its border.
             "frames": frames,
+            // Each drawn pane's header (the handle a drag moves it by) and the × in it, and each
+            // tab on the bar by place.
+            "headers": marked(Mark::Header),
+            "closes": marked(Mark::Close),
+            "tabs": tabs,
+            // While a pane is dragged: the pane a drop would land on and the zone of it, both
+            // null over anything else. Null with no drag.
+            "drag": cx.has_active_drag().then(|| serde_json::json!({
+                "target": self.drop_at.map(|(target, _)| target),
+                "zone": self.drop_at.map(|(_, zone)| zone),
+            })),
             "tab_panes": self.model.tab_panes(),
             // ottospace's own window frame, so a test can turn pane bounds into screen positions.
             "window": frame,
@@ -1214,6 +1462,8 @@ impl Workspace {
                 "name": app.name, "windows": app.windows, "icon": self.icons.contains_key(&app.name),
             })).collect::<Vec<_>>(),
             "ax_overlay": self.ax_overlay.as_ref().filter(|_| self.model.ax_overlay),
+            // Sneak mode's labels, each with its control's id and frame, and the letters typed; or null.
+            "sneak": self.model.sneak,
         })
         .to_string()
     }
@@ -1349,7 +1599,8 @@ impl Workspace {
     /// known by its bundle, not its name: `Visual Studio Code` runs as `Code`. It gives up after
     /// a while: some apps open a sign-in window, or none.
     fn host_launched(&mut self, window: &Window, cx: &mut Context<Self>) {
-        if self.launching.is_empty() {
+        // Not under sneak mode's labels: a pane that opens by itself would end the mode mid-label.
+        if self.launching.is_empty() || self.model.sneak.is_some() {
             return;
         }
         // First: an app that now runs leaves the "not running" list, so a window that is not
@@ -1402,8 +1653,9 @@ impl Workspace {
             return;
         }
         // The core would drop the move behind a box or in visual mode. Wait: do not come
-        // forward either, which would only take the app away from the user.
-        if self.model.keys || matches!(self.model.mode(), Mode::Pick | Mode::Compose | Mode::Visual) {
+        // forward either, which would only take the app away from the user. Sneak mode waits
+        // too: the move would end it mid-label.
+        if self.model.keys || matches!(self.model.mode(), Mode::Pick | Mode::Compose | Mode::Visual | Mode::Sneak) {
             return;
         }
         self.wanted = None;
@@ -1509,6 +1761,12 @@ impl Workspace {
     /// Keys go to the focused terminal. ⌘ shortcuts do not encode, so they fall through to bindings.
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = &event.keystroke;
+        // Still held after it ended sneak mode (a wrong letter, say): not typed into the terminal.
+        if self.sneak_spent && event.is_held {
+            cx.stop_propagation();
+            return;
+        }
+        self.sneak_spent = false;
         // The key reference takes the keyboard: Esc closes it, and no other key reaches the
         // terminal or the picker behind it. (⌘ shortcuts go to their bindings; the core ignores
         // pane actions while it is open, and ⌘/ closes it.)
@@ -1516,6 +1774,14 @@ impl Workspace {
             if key.key == "escape" {
                 self.dispatch(Action::CloseKeys, window, cx);
             }
+            cx.stop_propagation();
+            return;
+        }
+        // Esc during a pane drag cancels it, and a `mouse` request's button is up again.
+        if key.key == "escape" && cx.has_active_drag() {
+            self.held = false;
+            cx.stop_active_drag(window);
+            cx.notify();
             cx.stop_propagation();
             return;
         }
@@ -1535,6 +1801,10 @@ impl Workspace {
         {
             self.dispatch(Action::SelectVisibleTab { index: digit - 1 }, window, cx);
             cx.stop_propagation();
+            return;
+        }
+        if self.model.sneak.is_some() {
+            self.sneak_key(event, window, cx);
             return;
         }
         if self.model.picker.is_some() {
@@ -1600,6 +1870,28 @@ impl Workspace {
             terminal.select_to(at);
             cx.notify();
         }
+    }
+
+    /// A pane drag moved: note the drop zone under the pointer, to draw it and to drop there.
+    fn pane_drag_move(&mut self, source: PaneId, at: gpui::Point<Pixels>, window: &Window, cx: &mut Context<Self>) {
+        // A live window would cover its pane's drop zones: park it. A click makes it live again.
+        if self.model.live.is_some() {
+            self.dispatch(Action::Leave, window, cx);
+        }
+        let drop_at = self.drop_zone(source, at);
+        if drop_at != self.drop_at {
+            self.drop_at = drop_at;
+            cx.notify();
+        }
+    }
+
+    /// The drawn pane under `at`, other than the dragged one, and the zone of it `at` is in.
+    fn drop_zone(&self, source: PaneId, at: gpui::Point<Pixels>) -> Option<(PaneId, Zone)> {
+        let drawn = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
+        let under = |id: &PaneId| Some((*id, self.frames.get(id)?.get())).filter(|(_, b)| b.contains(&at));
+        let (id, bounds) = drawn.iter().filter(|id| **id != source).find_map(under)?;
+        let local = at - bounds.origin;
+        Some((id, Zone::at(local.x / bounds.size.width, local.y / bounds.size.height)))
     }
 
     /// The terminal cell under a window position, from the same bounds the grid is painted in.
@@ -1820,7 +2112,8 @@ impl Workspace {
                     .gap_4()
                     .child(group("PANES", rows(KEYS_PANES)))
                     .child(group("MOVE", rows(KEYS_MOVE)))
-                    .child(group("ARRANGE", rows(KEYS_ARRANGE))),
+                    .child(group("ARRANGE", rows(KEYS_ARRANGE)))
+                    .child(group("MOUSE", rows(KEYS_DRAG))),
             )
             .child(div().flex().flex_col().gap_4().child(group("TABS", rows(KEYS_TABS))).child(group(
                 "WINDOW",
@@ -1838,7 +2131,8 @@ impl Workspace {
                     .gap_4()
                     .child(group("TERMINAL", rows(KEYS_TERMINAL)))
                     .child(group("VISUAL", rows(KEYS_VISUAL)))
-                    .child(group("LIST", rows(KEYS_LIST))),
+                    .child(group("LIST", rows(KEYS_LIST)))
+                    .child(group("SNEAK", rows(KEYS_SNEAK))),
             );
         div()
             .id("keys-backdrop")
@@ -2055,16 +2349,15 @@ impl Workspace {
     /// A click on a pane body. An app pane goes live, then the click is replayed so it lands in
     /// the app (otherwise the first click is spent on the swap). Other panes just take focus.
     fn click_pane(&mut self, id: PaneId, event: &MouseDownEvent, window: &Window, cx: &mut Context<Self>) {
-        if !self.hosted.contains_key(&id) {
-            self.dispatch(Action::Focus { pane: id }, window, cx);
+        // Nothing to replay unless an app pane went live just now: a click replayed on a window
+        // that was live already would land on ottospace again and loop.
+        if !self.choose_pane(id, window, cx) {
             return;
         }
-        // Already live: the real window takes its own clicks. Replaying one here would land on
-        // ottospace again and loop.
-        if self.model.live == Some(id) {
+        // A `mouse` request stays inside ottospace: it enters the app but does not click in it.
+        if self.injected {
             return;
         }
-        self.dispatch(Action::Enter { pane: id }, window, cx);
         let Some(hosted) = self.hosted.get(&id) else { return };
         let local = event.position - hosted.bounds.get().origin;
         let origin = hosted.placed.origin;
@@ -2117,6 +2410,7 @@ impl Workspace {
                         theme::MUTED
                     })))
                     .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(label.into()))))
+                    .child(self.controls.mark(format!("rail:{}", label.to_lowercase())))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.dispatch(Action::ToggleSection { section }, window, cx);
                     }))
@@ -2151,6 +2445,7 @@ impl Workspace {
                     .cursor_pointer()
                     .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
                     .child("↻")
+                    .child(self.controls.mark("bar:refresh"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.refresh_lists();
                         cx.notify();
@@ -2167,6 +2462,7 @@ impl Workspace {
                     .cursor_pointer()
                     .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
                     .child("×")
+                    .child(self.controls.mark("bar:close"))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.dispatch(Action::CloseSidebar, window, cx);
                     })),
@@ -2270,6 +2566,7 @@ impl Workspace {
             rows.push(
                 list_button(("task", id as usize), self.model.list == Some(index))
                     .children(task_cells(task, self.model.task_tags(task), 90.))
+                    .child(self.controls.mark(format!("task:{id}")))
                     .on_click(open_task(id, cx))
                     .into_any_element(),
             );
@@ -2294,6 +2591,7 @@ impl Workspace {
                 .children(directory.map(|name| {
                     div().max_w(px(110.)).truncate().text_xs().text_color(rgb(theme::MUTED)).child(name.to_string())
                 }))
+                .child(self.controls.mark(format!("repo:{path}")))
                 .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                     let axis = if e.modifiers().shift { Axis::Down } else { Axis::Right };
                     this.dispatch(Action::OpenRepo { path: target.clone(), axis }, window, cx);
@@ -2342,6 +2640,7 @@ impl Workspace {
                     .py_1p5()
                     .gap_3()
                     .child(self.app_icon(&app.name))
+                    .child(self.controls.mark(format!("app:{target}")))
                     .child(div().flex_1().min_w_0().truncate().child(app.name.clone()))
                     // How many windows the app has open, when more than one.
                     .when(app.windows > 1, |row| {
@@ -2371,6 +2670,7 @@ impl Workspace {
                     .gap_3()
                     .text_color(rgb(theme::MUTED))
                     .child(self.app_icon(name))
+                    .child(self.controls.mark(format!("app:{target}")))
                     .child(div().flex_1().min_w_0().truncate().child(name.clone()))
                     .when(waiting, |row| row.child(div().flex_none().text_xs().child("opening…")))
                     .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
@@ -2391,7 +2691,18 @@ impl Workspace {
             Kind::App { title, .. } => ("APP", theme::APP, title.clone()),
         };
         // flex_none: a short pane must not squeeze the header, or a raised bar would overlap the pane above.
+        let label: SharedString = if title.is_empty() { tag.into() } else { format!("{tag} {title}").into() };
+        // The header is the pane's handle: a drag of it carries the pane to a drop zone or a tab.
+        let workspace = cx.weak_entity();
         let header = div()
+            .id(("header", id))
+            .on_drag(DraggedPane(id), move |_, offset, window, cx| {
+                // The move that starts the drag is already over a pane: `on_drag_move` saw it
+                // before the drag began, so note the drop zone here.
+                let at = window.mouse_position();
+                let _ = workspace.update(cx, |this, cx| this.pane_drag_move(id, at, window, cx));
+                cx.new(|_| DragChip { label: label.clone(), offset })
+            })
             .flex_none()
             .h(px(titlebar::header(bar, PANE_HEADER)))
             .px_2()
@@ -2408,19 +2719,23 @@ impl Workspace {
                     this.dispatch(Action::Focus { pane: id }, window, cx);
                 }),
             )
+            .child(mark(&self.marks, Mark::Header(id)))
             .child(
                 div().flex().gap_2().overflow_hidden().child(div().text_color(rgb(tag_color)).child(tag)).child(title),
             )
+            .child(self.controls.mark(format!("header:{id}")))
             .child(
                 div()
                     .id(("close", id))
+                    .child(mark(&self.marks, Mark::Close(id)))
                     .px_1()
                     .cursor_pointer()
                     .hover(|s| s.text_color(rgb(theme::ERROR)))
                     .child("×")
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.dispatch(Action::Close { pane: Some(id) }, window, cx);
-                    })),
+                    .child(self.controls.mark(format!("close:{id}")))
+                    // The press must not reach the header: an unsteady click would start a drag.
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, _, window, cx| this.close_pane(id, window, cx))),
             );
         let content = if let Some(hosted) = self.hosted.get(&id) {
             // While live, keep showing the last frame under the real window, so any gap during a swap is invisible.
@@ -2474,6 +2789,7 @@ impl Workspace {
             .justify_center()
             // Record the content's layout bounds: AX matches the real window to it; e2e reads it.
             .child(canvas(move |bounds, _, _| cell.set(bounds), |_, _, _, _| {}).absolute().size_full())
+            .child(self.controls.mark(format!("pane:{id}")))
             .child(content)
             .child(
                 canvas(|_, _, _| {}, move |bounds, _, window, _| paint_corner_mask(bounds, radius, cropped, window))
@@ -2514,6 +2830,23 @@ impl Workspace {
             )
             .child(header)
             .child(body)
+            .on_drop(cx.listener(move |this, dragged: &DraggedPane, window, cx| {
+                let zone = this.drop_zone(dragged.0, window.mouse_position()).filter(|(target, _)| *target == id);
+                if let Some((target, zone)) = zone {
+                    this.dispatch(Action::DropPane { source: dragged.0, target, zone }, window, cx);
+                }
+            }))
+            // The drop indicator: the half an edge drop would take, or the whole pane for a swap.
+            .children(self.drop_at.filter(|(target, _)| *target == id && cx.has_active_drag()).map(|(_, zone)| {
+                let mark = div().absolute().bg(rgb(theme::PRIMARY)).opacity(0.25);
+                match zone {
+                    Zone::Left => mark.top_0().left_0().h_full().w(relative(0.5)),
+                    Zone::Right => mark.top_0().right_0().h_full().w(relative(0.5)),
+                    Zone::Top => mark.top_0().left_0().w_full().h(relative(0.5)),
+                    Zone::Bottom => mark.bottom_0().left_0().w_full().h(relative(0.5)),
+                    Zone::Center => mark.top_0().left_0().size_full(),
+                }
+            }))
     }
 
     /// Leaves render as panes; splits as a row (`Right`) or column (`Down`), `a` taking `ratio` of it.
@@ -2558,8 +2891,9 @@ impl Workspace {
                 MouseButton::Left,
                 cx.listener(|this, e: &MouseDownEvent, window, cx| {
                     this.dispatch(Action::Leave, window, cx);
-                    // With a custom title bar, the system no longer zooms on double-click.
-                    if e.click_count == 2 {
+                    // With a custom title bar, the system no longer zooms on double-click. Not
+                    // for a `mouse` request: it would zoom or minimise the real window.
+                    if e.click_count == 2 && !this.injected {
                         window.titlebar_double_click();
                     }
                 }),
@@ -2588,6 +2922,7 @@ impl Workspace {
                             .text_color(rgb(theme::MUTED))
                             .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
                             .child("×")
+                            .child(self.controls.mark("top:task_leave"))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.dispatch(Action::TaskLeave, window, cx);
                             })),
@@ -2599,10 +2934,16 @@ impl Workspace {
                     .visible_tabs()
                     .into_iter()
                     .filter_map(|index| Some((index, self.model.tabs.get(index)?)))
-                    .map(|(index, tab)| {
-                        let active = index == self.model.active;
+                    .enumerate()
+                    .map(|(place, (index, tab))| {
+                        let (active, id) = (index == self.model.active, tab.id);
                         div()
                             .id(("tab", tab.id))
+                            // A pane dropped on a tab moves there.
+                            .drag_over::<DraggedPane>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
+                            .on_drop(cx.listener(move |this, dragged: &DraggedPane, window, cx| {
+                                this.dispatch(Action::MovePane { pane: Some(dragged.0), tab: place }, window, cx);
+                            }))
                             .h_full()
                             .pl_3()
                             .pr_1()
@@ -2614,7 +2955,9 @@ impl Workspace {
                             .cursor_pointer()
                             .when(active, |d| d.bg(rgb(theme::RAISED)).text_color(rgb(theme::TEXT)))
                             .hover(|s| s.text_color(rgb(theme::TEXT)))
+                            .child(mark(&self.marks, Mark::Tab(place)))
                             .child(tab.title.clone())
+                            .child(self.controls.mark(format!("tab:{}", tab.id)))
                             .child(
                                 div()
                                     .id(("tab-close", tab.id))
@@ -2622,20 +2965,19 @@ impl Workspace {
                                     .rounded_sm()
                                     .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::ERROR)))
                                     .child("×")
+                                    .child(self.controls.mark(format!("tab-close:{}", tab.id)))
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         // Do not also select the tab that is going away.
                                         cx.stop_propagation();
-                                        this.dispatch(Action::CloseTab { index: Some(index) }, window, cx);
+                                        this.close_tab(id, window, cx);
                                     })),
                             )
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.dispatch(Action::SelectTab { index }, window, cx);
-                            }))
+                            .on_click(cx.listener(move |this, _, window, cx| this.select_tab(id, window, cx)))
                     }),
             )
             // New tab and split buttons: each opens the picker for that target.
             .child(div().ml_auto().mr_2().flex().gap_1().children(SPLITS.iter().enumerate().map(
-                |(i, (icon, tip, axis, new_tab))| {
+                |(i, (name, icon, tip, axis, new_tab))| {
                     let (tip, axis, new_tab) = (*tip, *axis, *new_tab);
                     div()
                         .id(("split", i))
@@ -2648,6 +2990,7 @@ impl Workspace {
                         .cursor_pointer()
                         .hover(|s| s.bg(rgb(theme::SELECTED)))
                         .child(svg().path(*icon).size(px(16.)).text_color(rgb(theme::MUTED)))
+                        .child(self.controls.mark(format!("top:{name}")))
                         .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
                         .on_click(cx.listener(move |this, _, window, cx| this.open_picker(axis, new_tab, window, cx)))
                 },
@@ -2671,6 +3014,10 @@ impl Workspace {
             Mode::Visual => ("VISUAL", "esc leaves · ⌘/ keys"),
             Mode::List => ("LIST", "esc leaves · ⌘/ keys"),
             Mode::Compose => ("TASK", ""),
+            Mode::Sneak if self.model.sneak.as_ref().is_some_and(|sneak| sneak.hid_overlay) => {
+                ("SNEAK", "type a label · esc leaves · the accessibility overlay is hidden (⌘⌃A shows it)")
+            }
+            Mode::Sneak => ("SNEAK", "type a label · esc leaves"),
         };
         let hint = hint.to_string();
         let focused = match self.model.focused.and_then(|id| self.model.pane(id)).map(|p| &p.kind) {
@@ -2872,6 +3219,12 @@ impl Render for Workspace {
             self.cells.entry(pane.id).or_default();
             self.frames.entry(pane.id).or_default();
         }
+        self.controls.begin();
+        // The pane drag is over, however it ended (a drop, Esc, a release outside the window):
+        // no drop zone may stay drawn.
+        if !cx.has_active_drag() {
+            self.drop_at = None;
+        }
         let tree = self.model.layout.as_ref().map(|root| self.render_node(root, cx));
         // Only while the tab on show has no panes. Its lines are built once and kept: a frame
         // that moves nothing (a terminal printing in another tab) only paints them again.
@@ -2887,13 +3240,21 @@ impl Render for Workspace {
             .on_key_down(cx.listener(Self::key_down))
             // On the root, so a selection drag keeps going over other panes.
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| this.mouse_move(e, cx)))
+            .on_drag_move(cx.listener(|this, e: &gpui::DragMoveEvent<DraggedPane>, window, cx| {
+                this.pane_drag_move(e.drag(cx).0, e.event.position, window, cx);
+            }))
             // A release ends the drag, so a later drag elsewhere does not extend this selection.
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.dragging = None))
+            // The user's release also ends a `mouse` request's hold.
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| (this.dragging, this.held) = (None, false)))
             // Any click leaves visual mode first, before the clicked element acts: visual mode has no
             // backdrop, and e.g. a click on an app pane must go live, not be replayed while blocked.
             .capture_any_mouse_down(cx.listener(|this, _, window, cx| {
                 if this.model.visual.is_some() {
                     this.dispatch(Action::LeaveVisual, window, cx);
+                }
+                // The same for sneak mode: the click is the choice.
+                if this.model.sneak.is_some() {
+                    this.dispatch(Action::LeaveSneak, window, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &CopySelection, _, cx| this.copy(cx)))
@@ -2905,6 +3266,7 @@ impl Render for Workspace {
                 this.refresh_lists();
                 this.dispatch(Action::FocusList, window, cx);
             }))
+            .on_action(cx.listener(|this, _: &SneakMode, window, cx| this.toggle_sneak(window, cx)))
             .on_action(cx.listener(|this, _: &NewTask, window, cx| this.new_task(window, cx)))
             .on_action(cx.listener(|this, _: &NextTask, window, cx| {
                 this.dispatch(Action::Tick { now: now_ms() }, window, cx);
@@ -3029,6 +3391,8 @@ impl Render for Workspace {
                     .filter(|o| self.model.layout.as_ref().is_some_and(|l| l.leaves().contains(&o.pane)))
                     .map(ax_debug::Overlay::render),
             )
+            // Over everything of ottospace's own. It is never on while an app's window is.
+            .children(self.model.sneak.as_ref().map(sneak::labels))
             .children(self.model.picker.as_ref().map(|picker| self.render_picker(picker, cx)))
             .children(self.model.compose.as_ref().map(|line| self.render_compose(line, cx)))
             .when(self.model.keys, |d| d.child(self.render_keys(cx)))
@@ -3199,6 +3563,7 @@ fn main() {
             KeyBinding::new("cmd-v", PasteText, None),
             KeyBinding::new("cmd-shift-c", VisualMode, None),
             KeyBinding::new("cmd-shift-e", ListMode, None),
+            KeyBinding::new(sneak::KEY, SneakMode, None),
             KeyBinding::new("cmd-n", NewTask, None),
             KeyBinding::new("cmd-shift-n", NextTask, None),
             KeyBinding::new("cmd-h", Hide, None),
@@ -3327,7 +3692,7 @@ mod tests {
     /// A missing asset draws as nothing, with no error. Catch a renamed file here.
     #[test]
     fn every_rail_icon_is_embedded() {
-        let icons = SECTIONS.iter().map(|(_, icon, _)| *icon).chain(SPLITS.iter().map(|(icon, ..)| *icon));
+        let icons = SECTIONS.iter().map(|(_, icon, _)| *icon).chain(SPLITS.iter().map(|(_, icon, ..)| *icon));
         for path in icons {
             assert!(Assets.load(path).unwrap().is_some(), "{path} is not in Assets::load");
         }

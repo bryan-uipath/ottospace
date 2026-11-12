@@ -4,7 +4,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
@@ -108,6 +108,12 @@ impl Drop for Otto {
     }
 }
 
+/// A made-up repository at `at`: a folder whose `.git` names the branch `main`.
+fn fake_repo(at: &Path) {
+    std::fs::create_dir_all(at.join(".git")).unwrap();
+    std::fs::write(at.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+}
+
 fn pane_ids(reply: &Value) -> Vec<u64> {
     reply["state"]["panes"].as_array().unwrap().iter().map(|p| p["id"].as_u64().unwrap()).collect()
 }
@@ -199,6 +205,364 @@ fn panes_resize_swap_and_change_tab_from_the_keyboard() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn a_dropped_pane_splits_or_swaps_where_it_lands() {
+    let otto = Otto::launch("drop");
+    // 1 | 2 | 3
+    for _ in 0..3 {
+        otto.call(json!({"cmd": "split", "kind": "empty"}));
+    }
+    let wide = otto.bounds(&[1])[0];
+
+    // 3 on the top of 1: 3 is drawn over 1, in 1's old column, and has focus.
+    let reply = otto.call(json!({"cmd": "drop_pane", "source": 3, "target": 1, "zone": "top"}));
+    assert_eq!((reply["tab_panes"].clone(), reply["state"]["focused"].as_u64()), (json!([[3, 1, 2]]), Some(3)));
+    let [one, three] = otto.wait_for("3 over 1", |o| {
+        let b = o.bounds(&[1, 3]);
+        (b[1][1] + b[1][3] <= b[0][1]).then_some([b[0], b[1]])
+    });
+    assert_eq!((one[0], three[0]), (wide[0], wide[0]), "both in the left column: {one:?} {three:?}");
+
+    // The centre swaps: 2 takes 3's place at the top left.
+    let reply = otto.call(json!({"cmd": "drop_pane", "source": 2, "target": 3, "zone": "center"}));
+    assert_eq!((reply["tab_panes"].clone(), reply["state"]["focused"].as_u64()), (json!([[2, 1, 3]]), Some(2)));
+    otto.wait_for("2 at the top left", |o| Some(o.bounds(&[2])[0]).filter(|b| b[0] == three[0] && b[1] == three[1]));
+
+    // A pane of a background tab lands in the tab on show.
+    otto.call(json!({"cmd": "new_tab"}));
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    let reply = otto.call(json!({"cmd": "drop_pane", "source": 1, "target": 4, "zone": "left"}));
+    assert_eq!(reply["tab_panes"], json!([[2, 3], [1, 4]]));
+    otto.wait_for("1 left of 4", |o| Some(o.bounds(&[1, 4])).filter(|b| b[0][0] + b[0][2] <= b[1][0]));
+
+    for bad in [
+        r#"{"cmd":"drop_pane","source":1,"target":1,"zone":"left"}"#,
+        r#"{"cmd":"drop_pane","source":1,"target":9,"zone":"left"}"#,
+        r#"{"cmd":"drop_pane","source":1,"target":4,"zone":"middle"}"#,
+    ] {
+        assert_eq!(otto.raw(bad)["ok"], false, "{bad}");
+    }
+}
+
+/// A rect `[x, y, w, h]` of a reply: `rect(&reply["headers"]["2"])`.
+fn rect(value: &Value) -> [f64; 4] {
+    let r: Vec<f64> =
+        value.as_array().unwrap_or_else(|| panic!("no rect: {value}")).iter().filter_map(Value::as_f64).collect();
+    [r[0], r[1], r[2], r[3]]
+}
+
+/// The point at fractions `fx`, `fy` of a rect.
+fn at(r: [f64; 4], fx: f64, fy: f64) -> [f64; 2] {
+    [r[0] + r[2] * fx, r[1] + r[3] * fy]
+}
+
+impl Otto {
+    /// One pointer event through the window's own handlers. The reply is drawn state.
+    fn mouse(&self, action: &str, p: [f64; 2]) -> Value {
+        self.call(json!({"cmd": "mouse", "action": action, "x": p[0], "y": p[1]}))
+    }
+
+    /// The state after a fresh frame: a pointer move outside the window draws one first.
+    fn drawn(&self) -> Value {
+        self.mouse("move", [-50.0, -50.0])
+    }
+
+    /// A whole drag: press, eight moves, release.
+    fn drag(&self, from: [f64; 2], to: [f64; 2]) -> Value {
+        self.call(json!({"cmd": "drag", "from": from, "to": to}))
+    }
+
+    /// Drags pane `source` by the middle of its header to fractions `fx`, `fy` of pane `target`.
+    fn drag_pane(&self, source: u64, target: u64, fx: f64, fy: f64) -> Value {
+        let state = self.drawn();
+        let from = at(rect(&state["headers"][source.to_string()]), 0.5, 0.5);
+        self.drag(from, at(rect(&state["frames"][target.to_string()]), fx, fy))
+    }
+
+    /// A press and a release at `p`.
+    fn click(&self, p: [f64; 2], clicks: u32) -> Value {
+        self.call(json!({"cmd": "mouse", "action": "down", "x": p[0], "y": p[1], "clicks": clicks}));
+        self.call(json!({"cmd": "mouse", "action": "up", "x": p[0], "y": p[1], "clicks": clicks}))
+    }
+}
+
+fn leaf(id: u64) -> Value {
+    json!({"leaf": id})
+}
+
+fn split(axis: &str, ratio: &Value, a: Value, b: Value) -> Value {
+    json!({"split": {"axis": axis, "ratio": ratio, "a": a, "b": b}})
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_header_dragged_with_the_mouse_splits_or_swaps_where_it_is_released() {
+    let otto = Otto::launch("drag-zones");
+    // 1 | 2 | 3, the outer split off centre, so a ratio that is kept can be told from a new one.
+    for _ in 0..3 {
+        otto.call(json!({"cmd": "split", "kind": "empty"}));
+    }
+    otto.call(json!({"cmd": "focus", "pane": 1}));
+    let reply = otto.call(json!({"cmd": "resize", "dir": "right"}));
+    let outer = reply["state"]["layout"]["split"]["ratio"].clone();
+    let half = json!(0.5);
+    assert_ne!(outer, half);
+    assert_eq!(reply["drag"], Value::Null);
+    let layout = |reply: &Value| reply["state"]["layout"].clone();
+
+    // The left edge of 1. Step by step, to see the drop zone on the way.
+    let state = otto.drawn();
+    let (from, to) = (at(rect(&state["headers"]["3"]), 0.5, 0.5), at(rect(&state["frames"]["1"]), 0.1, 0.5));
+    assert_eq!(otto.mouse("down", from)["drag"], Value::Null, "a press alone is no drag");
+    let reply = otto.mouse("move", [from[0] - 1.0, from[1]]);
+    assert_eq!(reply["drag"], Value::Null, "nor is a move of 1 pt");
+    // Over itself there is nowhere to drop.
+    let reply = otto.mouse("move", [from[0] - 10.0, from[1]]);
+    assert_eq!(reply["drag"], json!({"target": null, "zone": null}), "{reply}");
+    let reply = otto.mouse("move", at(rect(&state["headers"]["2"]), 0.5, 0.5));
+    assert_eq!(reply["drag"], json!({"target": 2, "zone": "top"}), "over 2's header: {reply}");
+    assert_eq!(otto.mouse("move", to)["drag"], json!({"target": 1, "zone": "left"}));
+    let reply = otto.mouse("move", at(rect(&state["frames"]["1"]), 0.5, 0.5));
+    assert_eq!(reply["drag"], json!({"target": 1, "zone": "center"}));
+    let reply = otto.mouse("move", at(rect(&state["frames"]["3"]), 0.5, 0.5));
+    assert_eq!(reply["drag"], json!({"target": null, "zone": null}));
+    otto.mouse("move", to);
+    let reply = otto.mouse("up", to);
+    assert_eq!(reply["drag"], Value::Null);
+    let inner = |a, b| split("right", &half, leaf(a), leaf(b));
+    assert_eq!(layout(&reply), split("right", &outer, inner(3, 1), leaf(2)));
+    assert_eq!((reply["state"]["focused"].as_u64(), reply["tab_panes"].clone()), (Some(3), json!([[3, 1, 2]])));
+    // Drawn there too: 3, 1, 2 from the left.
+    let b = otto.bounds(&[3, 1, 2]);
+    assert!(b[0][0] < b[1][0] && b[1][0] < b[2][0], "{b:?}");
+
+    // Where it already is: nothing moves.
+    assert_eq!(layout(&otto.drag_pane(3, 1, 0.1, 0.5)), split("right", &outer, inner(3, 1), leaf(2)));
+
+    // The right, top and bottom edges.
+    assert_eq!(layout(&otto.drag_pane(3, 1, 0.9, 0.5)), split("right", &outer, inner(1, 3), leaf(2)));
+    let over = |a, b| split("down", &half, leaf(a), leaf(b));
+    assert_eq!(layout(&otto.drag_pane(3, 2, 0.5, 0.1)), split("right", &outer, leaf(1), over(3, 2)));
+    let reply = otto.drag_pane(3, 1, 0.5, 0.9);
+    assert_eq!(layout(&reply), split("right", &outer, over(1, 3), leaf(2)));
+    assert_eq!(reply["state"]["focused"], 3);
+
+    // The centre swaps the two.
+    let reply = otto.drag_pane(2, 3, 0.5, 0.5);
+    assert_eq!(layout(&reply), split("right", &outer, over(1, 2), leaf(3)));
+    assert_eq!((reply["state"]["focused"].as_u64(), reply["drag"].clone()), (Some(2), Value::Null));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_drag_reports_its_drop_zone_from_the_move_that_starts_it() {
+    let otto = Otto::launch("drag-first-move");
+    for _ in 0..3 {
+        otto.call(json!({"cmd": "split", "kind": "empty"}));
+    }
+    // 1 | 2 | 3. One move from 3's header to the centre of 1 starts the drag and is over 1.
+    let state = otto.drawn();
+    let to = at(rect(&state["frames"]["1"]), 0.5, 0.5);
+    otto.mouse("down", at(rect(&state["headers"]["3"]), 0.5, 0.5));
+    assert_eq!(otto.mouse("move", to)["drag"], json!({"target": 1, "zone": "center"}));
+    assert_eq!(otto.mouse("up", to)["tab_panes"], json!([[3, 2, 1]]));
+    // So does a whole drag of one move.
+    let state = otto.drawn();
+    let from = at(rect(&state["headers"]["1"]), 0.5, 0.5);
+    let reply = otto.call(json!({"cmd": "drag", "from": from, "to": to, "steps": 1}));
+    assert_eq!(reply["tab_panes"], json!([[1, 2, 3]]));
+
+    // The zone of the last drop is not the next drag's: 3 pt along its own header, 2 is over nothing.
+    let from = at(rect(&otto.drawn()["headers"]["2"]), 0.5, 0.5);
+    otto.mouse("down", from);
+    let reply = otto.mouse("move", [from[0] + 3.0, from[1]]);
+    assert_eq!(reply["drag"], json!({"target": null, "zone": null}));
+    otto.mouse("up", [from[0] + 3.0, from[1]]);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_header_dragged_onto_a_tab_moves_the_pane_there() {
+    let otto = Otto::launch("drag-tabs");
+    // Tab 0: 1 | 2. Tab 1: 3.
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "new_tab"}));
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "select_tab", "index": 0}));
+    let to_tab = |pane: u64, tab: usize| {
+        let state = otto.drawn();
+        assert_eq!(state["tabs"].as_array().map(Vec::len), Some(2), "{}", state["tabs"]);
+        otto.drag(at(rect(&state["headers"][pane.to_string()]), 0.5, 0.5), at(rect(&state["tabs"][tab]), 0.5, 0.5))
+    };
+    let sorted = |reply: &Value| -> Vec<Vec<u64>> {
+        let tabs = reply["tab_panes"].as_array().expect("tab_panes").iter();
+        tabs.map(|t| {
+            let mut ids: Vec<u64> = t.as_array().expect("tab").iter().filter_map(Value::as_u64).collect();
+            ids.sort_unstable();
+            ids
+        })
+        .collect()
+    };
+
+    // Its own tab: nothing moves.
+    let before = otto.call(json!({"cmd": "state"}));
+    let reply = to_tab(2, 0);
+    assert_eq!((&reply["state"]["layout"], &reply["tab_panes"]), (&before["state"]["layout"], &before["tab_panes"]));
+    assert_eq!(reply["drag"], Value::Null);
+
+    // Another tab: the pane goes there, and that tab comes forward, as with ⌘⇧⌥1..9.
+    let reply = to_tab(2, 1);
+    assert_eq!(sorted(&reply), [vec![1], vec![2, 3]]);
+    assert_eq!((reply["state"]["active"].as_u64(), reply["state"]["focused"].as_u64()), (Some(1), Some(2)));
+    assert_eq!(reply["drag"], Value::Null);
+    otto.wait_for("2 and 3 drawn", |o| Some(o.call(json!({"cmd": "state"}))).filter(|s| s["headers"]["2"].is_array()));
+
+    // The only pane of a tab: the tab stays, empty, and shows the home screen.
+    otto.call(json!({"cmd": "select_tab", "index": 0}));
+    let reply = to_tab(1, 1);
+    assert_eq!(sorted(&reply), [vec![], vec![1, 2, 3]]);
+    assert_eq!((reply["state"]["active"].as_u64(), reply["drag"].clone()), (Some(1), Value::Null));
+    let reply = otto.call(json!({"cmd": "select_tab", "index": 0}));
+    assert_eq!(reply["state"]["layout"], Value::Null);
+    assert_ne!(reply["home"], Value::Null, "the home screen");
+    assert_eq!(otto.drawn()["headers"], json!({}));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_pane_drag_that_ends_nowhere_changes_nothing() {
+    let otto = Otto::launch("drag-cancel");
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    let before = otto.drawn();
+    let same = |what: &str, reply: &Value| {
+        assert_eq!(reply["drag"], Value::Null, "{what}: no drop zone is left");
+        assert_eq!(reply["state"]["layout"], before["state"]["layout"], "{what}");
+        assert_eq!(reply["tab_panes"], before["tab_panes"], "{what}");
+    };
+    let (one, two) = (rect(&before["frames"]["1"]), rect(&before["frames"]["2"]));
+    let from = at(rect(&before["headers"]["2"]), 0.5, 0.5);
+
+    // Esc, then the release.
+    otto.mouse("down", from);
+    otto.mouse("move", at(two, 0.2, 0.3));
+    assert_eq!(otto.mouse("move", at(one, 0.5, 0.9))["drag"], json!({"target": 1, "zone": "bottom"}));
+    same("esc", &otto.call(json!({"cmd": "key", "keys": "escape"})));
+    same("a move after esc", &otto.mouse("move", at(one, 0.5, 0.1)));
+    same("the release after esc", &otto.mouse("up", at(one, 0.5, 0.1)));
+
+    // The sidebar, left of the panes.
+    assert!(one[0] > 40.0, "a sidebar left of pane 1: {one:?}");
+    same("the sidebar", &otto.drag(from, [one[0] / 2.0, one[1] + one[3] / 2.0]));
+    // The gap between the two panes.
+    let gap = (one[0] + one[2] + two[0]) / 2.0;
+    assert!(one[0] + one[2] < gap && gap < two[0], "a gap: {one:?} {two:?}");
+    same("the gap", &otto.drag(from, [gap, one[1] + one[3] / 2.0]));
+    // Outside the window.
+    let window = rect(&before["window"]);
+    same("outside", &otto.drag(from, [window[2] + 60.0, window[3] + 60.0]));
+    same("above", &otto.drag(from, [one[0] + 20.0, -40.0]));
+    // A press nobody releases: after 5 s the app lets go, outside the window.
+    otto.mouse("down", from);
+    assert_eq!(otto.mouse("move", at(one, 0.5, 0.9))["drag"], json!({"target": 1, "zone": "bottom"}));
+    std::thread::sleep(Duration::from_millis(5500));
+    same("an abandoned press", &otto.call(json!({"cmd": "state"})));
+    same("a move after it", &otto.mouse("move", at(one, 0.5, 0.1)));
+
+    // The pointer is free again: a click focuses, a new drag drops.
+    assert_eq!(otto.click(at(rect(&before["bounds"]["1"]), 0.5, 0.5), 1)["state"]["focused"], 1);
+    assert_eq!(otto.drag_pane(2, 1, 0.1, 0.5)["tab_panes"], json!([[2, 1]]));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_click_on_a_header_or_its_close_button_is_not_a_drag() {
+    let otto = Otto::launch("drag-clicks");
+    for _ in 0..3 {
+        otto.call(json!({"cmd": "split", "kind": "empty"}));
+    }
+    let before = otto.drawn();
+    assert_eq!(before["state"]["focused"], 3);
+    let unmoved = |what: &str, reply: &Value| {
+        assert_eq!(reply["drag"], Value::Null, "{what}");
+        assert_eq!(reply["state"]["layout"], before["state"]["layout"], "{what}");
+    };
+    let header = |id: u64| at(rect(&before["headers"][id.to_string()]), 0.3, 0.5);
+
+    // A click focuses.
+    let reply = otto.click(header(1), 1);
+    unmoved("a click", &reply);
+    assert_eq!(reply["state"]["focused"], 1);
+    // So does a double-click.
+    otto.click(header(2), 1);
+    let reply = otto.click(header(2), 2);
+    unmoved("a double-click", &reply);
+    assert_eq!(reply["state"]["focused"], 2);
+    // A double-click on the tab bar zooms or minimises the user's window; an injected one does not.
+    let tab = at(rect(&before["tabs"][0]), 0.5, 0.5);
+    otto.click(tab, 1);
+    otto.click(tab, 2);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(otto.call(json!({"cmd": "state"}))["window"], before["window"], "the window is as it was");
+    // A press that moves 2 pt, GPUI's limit, is still a click.
+    let p = header(3);
+    otto.mouse("down", p);
+    unmoved("2 pt", &otto.mouse("move", [p[0] + 2.0, p[1]]));
+    let reply = otto.mouse("up", [p[0] + 2.0, p[1]]);
+    unmoved("2 pt, released", &reply);
+    assert_eq!(reply["state"]["focused"], 3);
+
+    // A press on × that moves 5 pt inside it closes the pane; no drag starts.
+    let close = rect(&before["closes"]["2"]);
+    assert!(close[2] >= 8.0 && close[3] >= 4.0, "×: {close:?}");
+    let (down, up) = ([close[0] + 1.5, close[1] + close[3] / 2.0], [close[0] + 6.5, close[1] + close[3] / 2.0]);
+    otto.mouse("down", down);
+    assert_eq!(otto.mouse("move", up)["drag"], Value::Null);
+    let reply = otto.mouse("up", up);
+    assert_eq!((reply["drag"].clone(), reply["tab_panes"].clone()), (Value::Null, json!([[1, 3]])));
+
+    // A press on × that leaves it, over another pane: no close, no drag, no drop.
+    let state = otto.drawn();
+    let close = at(rect(&state["closes"]["3"]), 0.5, 0.5);
+    let far = at(rect(&state["frames"]["1"]), 0.5, 0.5);
+    otto.mouse("down", close);
+    assert_eq!(otto.mouse("move", far)["drag"], Value::Null);
+    let reply = otto.mouse("up", far);
+    assert_eq!((reply["drag"].clone(), reply["tab_panes"].clone()), (Value::Null, json!([[1, 3]])));
+    assert_eq!(reply["state"]["layout"], state["state"]["layout"]);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_selection_drag_across_a_header_moves_no_pane() {
+    let otto = Otto::launch("drag-select");
+    // 1 over 2, both terminals.
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "split", "axis": "down"}));
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "echo alpha beta\r"}));
+    otto.wait_for("the output", |o| Some(term1(o)).filter(|t| shows(t, "alpha beta")));
+    let before = otto.drawn();
+    let (cells, header, below) =
+        (rect(&before["bounds"]["1"]), rect(&before["headers"]["2"]), rect(&before["bounds"]["2"]));
+    assert!(cells[1] < header[1] && header[1] < below[1], "1 over 2: {before}");
+
+    // From the top-left cell of 1, down over 2's header, into 2.
+    otto.mouse("down", [cells[0] + 2.0, cells[1] + 2.0]);
+    for p in [at(cells, 0.5, 0.5), at(header, 0.5, 0.5), at(header, 0.2, 0.5), at(below, 0.5, 0.5)] {
+        let reply = otto.mouse("move", p);
+        assert_eq!(reply["drag"], Value::Null, "at {p:?}");
+        assert_eq!(reply["state"]["layout"], before["state"]["layout"]);
+    }
+    let reply = otto.mouse("up", at(below, 0.5, 0.5));
+    assert_eq!((reply["drag"].clone(), reply["tab_panes"].clone()), (Value::Null, json!([[1, 2]])));
+    assert_eq!(reply["state"]["layout"], before["state"]["layout"]);
+    let selected = reply["terminals"]["1"]["selection"].as_str().unwrap_or_default();
+    assert!(selected.contains("alpha beta"), "the drag selected text in 1: {selected:?}");
+    assert_eq!(reply["terminals"]["2"]["selection"], Value::Null);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn terminal_runs_a_typed_command() {
     let otto = Otto::launch("terminal");
     let reply = otto.call(json!({"cmd": "split"}));
@@ -262,6 +626,7 @@ fn repos_are_listed_and_open_a_terminal_there() {
     // A repository with one linked worktree, written the way git lays them out, and a plain directory.
     let root = std::env::temp_dir().join(format!("ottospace-e2e-repos-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
+    fake_repo(&root.join("app"));
     let admin = root.join("app/.git/worktrees/app-2");
     std::fs::create_dir_all(&admin).unwrap();
     std::fs::create_dir_all(root.join("app-2")).unwrap();
@@ -272,7 +637,6 @@ fn repos_are_listed_and_open_a_terminal_there() {
     let unresolved = root.to_string_lossy().into_owned();
     let root = root.canonicalize().unwrap(); // the path `pwd` prints
     let at = |rest: &str| root.join(rest).to_string_lossy().into_owned();
-    std::fs::write(root.join("app/.git/HEAD"), "ref: refs/heads/main\n").unwrap();
     std::fs::write(root.join("app/.git/worktrees/app-2/HEAD"), "ref: refs/heads/fix/zoom\n").unwrap();
     std::fs::write(root.join("app/.git/worktrees/app-2/gitdir"), format!("{}\n", at("app-2/.git"))).unwrap();
     std::fs::write(root.join("app-2/.git"), format!("gitdir: {}\n", at("app/.git/worktrees/app-2"))).unwrap();
@@ -733,8 +1097,7 @@ fn settings_choose_the_font_the_repos_and_the_tasks_folder() {
     drop(plain);
 
     let home = user_folder("settings", "");
-    std::fs::create_dir_all(home.join("src/app/.git")).unwrap();
-    std::fs::write(home.join("src/app/.git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    fake_repo(&home.join("src/app"));
     let settings = json!({
         // A test run never offers to start an app, whatever the settings say.
         "apps": ["Calculator"],
@@ -1060,4 +1423,274 @@ fn bad_requests_are_refused_and_quit_exits() {
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(!otto.socket.exists(), "socket file is removed on quit");
+}
+
+type Labels = std::collections::BTreeMap<String, String>;
+
+/// Each labelled control's label, by the control's id, in a reply taken in sneak mode.
+fn sneak_labels(reply: &Value) -> Labels {
+    assert_eq!(reply["mode"], "sneak", "{reply}");
+    let targets = reply["sneak"]["targets"].as_array().expect("targets");
+    let label = |t: &Value| Some((t["source"]["id"].as_str()?.to_string(), t["label"].as_str()?.to_string()));
+    targets.iter().map(|t| label(t).expect("an id and a label")).collect()
+}
+
+/// Enters sneak mode: the reply, and each control's label by the control's id.
+fn sneak(o: &Otto) -> (Value, Labels) {
+    let reply = o.call(json!({"cmd": "sneak"}));
+    let labels = sneak_labels(&reply);
+    (reply, labels)
+}
+
+/// A label as `key` takes it: a keystroke a letter.
+fn letters(label: &str) -> String {
+    label.chars().map(String::from).collect::<Vec<_>>().join(" ")
+}
+
+/// Enters sneak mode and types the label of the control `id`, a key at a time.
+fn sneak_to(o: &Otto, id: &str) -> Value {
+    let (_, labels) = sneak(o);
+    let label = labels.get(id).unwrap_or_else(|| panic!("no label for {id}: {labels:?}"));
+    o.call(json!({"cmd": "key", "keys": letters(label)}))
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
+    let root = std::env::temp_dir().join(format!("ottospace-e2e-sneak-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    fake_repo(&root.join("app"));
+    let repo = root.canonicalize().unwrap().join("app").to_string_lossy().into_owned();
+    let otto = Otto::launch_with("sneak", &[("OTTOSPACE_REPOS", &root.to_string_lossy())]);
+    otto.call(json!({"cmd": "task_add", "title": "review the fix", "state": "needs_you"}));
+
+    // The home screen with the Repos bar open: every control drawn has a label, and one each.
+    otto.call(json!({"cmd": "section", "section": "repos"}));
+    let (reply, labels) = sneak(&otto);
+    let ids: Vec<&str> = labels.keys().map(String::as_str).collect();
+    let row = format!("repo:{repo}");
+    for id in ["rail:apps", "rail:workbook", "rail:tasks", "rail:repos", "bar:refresh", "bar:close", row.as_str()] {
+        assert!(ids.contains(&id), "no label for {id}: {ids:?}");
+    }
+    for id in ["tab:1", "tab-close:1", "top:new_tab", "top:split_right", "top:split_down"] {
+        assert!(ids.contains(&id), "no label for {id}: {ids:?}");
+    }
+    for id in ["home:new_task", "home-row:1", "home-node:1"] {
+        assert!(ids.contains(&id), "no label for {id}: {ids:?}");
+    }
+    let mut unique: Vec<&String> = labels.values().collect();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), labels.len(), "a label names one control: {labels:?}");
+    // Each label is on its control, inside the window.
+    let window = reply["window"].as_array().expect("window");
+    for t in reply["sneak"]["targets"].as_array().unwrap() {
+        let f = &t["frame"];
+        let (x, y, w, h) = (f["x"].as_f64(), f["y"].as_f64(), f["w"].as_f64(), f["h"].as_f64());
+        let (Some(x), Some(y), Some(w), Some(h)) = (x, y, w, h) else { panic!("frame of {t}") };
+        assert!(x >= 0.0 && y >= 0.0 && w > 1.0 && h > 1.0, "{t}");
+        assert!(x + w <= window[2].as_f64().unwrap() + 1.0 && y + h <= window[3].as_f64().unwrap() + 1.0, "{t}");
+    }
+
+    // A × never has a one-letter label: one stray key closes nothing.
+    assert_eq!(labels["tab-close:1"].len(), 2, "{labels:?}");
+    // Keys that are not letters do nothing. Esc leaves, and nothing has changed.
+    let before = otto.call(json!({"cmd": "key", "keys": "1 left enter tab"}));
+    assert_eq!((&before["mode"], &before["sneak"]["typed"]), (&json!("sneak"), &json!("")), "not letters");
+    // Asking again while it is on changes nothing: the same labels.
+    assert_eq!(sneak(&otto).1, labels);
+    let after = otto.call(json!({"cmd": "key", "keys": "escape"}));
+    assert_eq!((&after["mode"], &after["sneak"], &after["state"]), (&json!("normal"), &Value::Null, &before["state"]));
+    // A letter of no label leaves too, and nothing has changed.
+    sneak(&otto);
+    let after = otto.call(json!({"cmd": "key", "keys": "z"}));
+    assert_eq!((&after["mode"], &after["sneak"], &after["state"]), (&json!("normal"), &Value::Null, &before["state"]));
+    // Any ⌘ shortcut leaves and then runs, also one that changes no state (copy).
+    sneak(&otto);
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-c"}))["mode"], "normal");
+    sneak(&otto);
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-/"}));
+    assert_eq!(
+        (&reply["mode"], &reply["sneak"], &reply["state"]["keys"]),
+        (&json!("normal"), &Value::Null, &json!(true))
+    );
+    otto.call(json!({"cmd": "key", "keys": "escape"}));
+    // The mode's own key enters, and leaves.
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-g"}))["mode"], "sneak");
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-g"}))["mode"], "normal");
+
+    // A rail icon opens its section, where the task has a row; the bar's × closes it.
+    let reply = sneak_to(&otto, "rail:tasks");
+    assert_eq!((&reply["mode"], &reply["state"]["sidebar"]), (&json!("normal"), &json!("tasks")), "{reply}");
+    assert!(sneak(&otto).1.contains_key("task:1"));
+    assert_eq!(sneak_to(&otto, "bar:close")["state"]["sidebar"], Value::Null);
+
+    // The task's row on the home screen shows its tabs; the chip's × goes back. Its node does the same.
+    assert_eq!(sneak_to(&otto, "home-row:1")["state"]["current_task"], 1);
+    assert_eq!(sneak_to(&otto, "top:task_leave")["state"]["current_task"], Value::Null);
+    assert_eq!(sneak_to(&otto, "home-node:1")["state"]["current_task"], 1);
+    otto.call(json!({"cmd": "task_leave"}));
+    // The new-task line opens the box, a top-bar button the picker. Neither lets sneak mode start.
+    assert_eq!(sneak_to(&otto, "home:new_task")["mode"], "compose");
+    let refused = otto.raw(r#"{"cmd":"sneak"}"#);
+    assert!(refused["error"].as_str().is_some_and(|e| e.contains("normal or list")), "{refused}");
+    otto.call(json!({"cmd": "key", "keys": "escape"}));
+    assert_eq!(sneak_to(&otto, "top:split_down")["state"]["picker"]["axis"], "down");
+    assert_eq!(otto.raw(r#"{"cmd":"sneak"}"#)["ok"], false);
+    otto.call(json!({"cmd": "picker_close"}));
+
+    // A repository's row opens a terminal there.
+    otto.call(json!({"cmd": "section", "section": "repos"}));
+    assert_eq!(sneak_to(&otto, &row)["state"]["panes"][0]["cwd"], repo);
+    otto.call(json!({"cmd": "section", "section": "repos"}));
+
+    // 1 | 2    and a second tab.
+    //   | 3
+    otto.call(json!({"cmd": "split", "axis": "right", "kind": "empty"}));
+    otto.call(json!({"cmd": "split", "axis": "down", "kind": "empty"}));
+    // The task has a tab too, off the bar: the new tab is the last of three.
+    let tabs = otto.call(json!({"cmd": "new_tab"}))["state"]["tabs"].clone();
+    let (place, tab) = (tabs.as_array().unwrap().len() - 1, tabs.as_array().unwrap().last().unwrap()["id"].clone());
+    let (tab, tab_close) = (format!("tab:{tab}"), format!("tab-close:{tab}"));
+    otto.call(json!({"cmd": "select_tab", "index": 0}));
+    let drawn = otto.bounds(&[1, 2, 3]);
+    let (reply, labels) = sneak(&otto);
+    for id in ["header:1", "close:1", "pane:1", "header:3", "close:3", "pane:3", tab.as_str(), tab_close.as_str()] {
+        assert!(labels.contains_key(id), "no label for {id}: {labels:?}");
+    }
+    assert!(!labels.contains_key("home:new_task"), "the home screen is gone: {labels:?}");
+    // A pane's own label covers its body.
+    let body = reply["sneak"]["targets"].as_array().unwrap().iter().find(|t| t["source"]["id"] == "pane:2").unwrap();
+    assert!((body["frame"]["x"].as_f64().unwrap() - drawn[1][0]).abs() < 1.0, "{body} {drawn:?}");
+    assert!((body["frame"]["w"].as_f64().unwrap() - drawn[1][2]).abs() < 1.0, "{body} {drawn:?}");
+    otto.call(json!({"cmd": "key", "keys": "escape"}));
+
+    // A pane's label, or its header's, moves focus there. Its × closes it.
+    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["focused"], 3);
+    assert_eq!(sneak_to(&otto, "pane:1")["state"]["focused"], 1);
+    assert_eq!(sneak_to(&otto, "header:2")["state"]["focused"], 2);
+    let reply = sneak_to(&otto, "close:3");
+    assert_eq!((pane_ids(&reply), &reply["mode"]), (vec![1, 2], &json!("normal")));
+    // A tab's label selects it; its × closes it.
+    assert_eq!(sneak_to(&otto, &tab)["state"]["active"], place);
+    let reply = sneak_to(&otto, &tab_close);
+    assert_eq!((reply["state"]["tabs"].as_array().unwrap().len(), pane_ids(&reply)), (place, vec![1, 2]));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_two_letter_sneak_label_narrows_then_activates() {
+    let otto = Otto::launch("sneak-two");
+    // Three panes, two tabs and the bar: more controls than the alphabet has letters.
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "split", "axis": "right", "kind": "empty"}));
+    otto.call(json!({"cmd": "split", "axis": "down", "kind": "empty"}));
+    otto.call(json!({"cmd": "new_tab"}));
+    otto.call(json!({"cmd": "select_tab", "index": 0}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.bounds(&[1, 2, 3]);
+    otto.call(json!({"cmd": "focus", "pane": 1}));
+
+    let (_, labels) = sneak(&otto);
+    assert!(labels.len() > 19, "{labels:?}");
+    assert!(labels.values().any(|l| l.len() == 1) && labels.values().all(|l| l.len() <= 2), "{labels:?}");
+    for (a, b) in labels.values().flat_map(|a| labels.values().map(move |b| (a, b))) {
+        assert!(a == b || !b.starts_with(a.as_str()), "{a} is a prefix of {b}");
+    }
+    // Each × has two letters, however many one-letter labels are left over; no other control does here.
+    for (id, label) in &labels {
+        let destructive = id.starts_with("close:") || id.starts_with("tab-close:");
+        assert_eq!(label.len(), if destructive { 2 } else { 1 }, "{id} in {labels:?}");
+    }
+    let (first, second) = labels["close:3"].split_at(1);
+
+    // The first letter narrows and waits; ⌫ takes it back.
+    let reply = otto.call(json!({"cmd": "key", "keys": first}));
+    let narrowed = (&reply["mode"], &reply["sneak"]["typed"], pane_ids(&reply));
+    assert_eq!(narrowed, (&json!("sneak"), &json!(first), vec![1, 2, 3]));
+    let reply = otto.call(json!({"cmd": "key", "keys": "backspace"}));
+    assert_eq!((&reply["mode"], &reply["sneak"]["typed"]), (&json!("sneak"), &json!("")));
+    // The second letter activates.
+    let reply = otto.call(json!({"cmd": "key", "keys": format!("{first} {second}")}));
+    assert_eq!((&reply["mode"], &reply["sneak"], pane_ids(&reply)), (&json!("normal"), &Value::Null, vec![1, 2]));
+}
+
+/// Where the labelled control `id` is: its frame's left edge.
+fn label_x(reply: &Value, id: &str) -> Option<f64> {
+    reply["sneak"]["targets"].as_array()?.iter().find(|t| t["source"]["id"] == id)?["frame"]["x"].as_f64()
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_sneak_label_follows_its_control_and_never_reaches_the_one_that_took_its_place() {
+    let otto = Otto::launch("sneak-drawn");
+    // Three tabs of no task; the second has a pane to lose.
+    otto.call(json!({"cmd": "new_tab"}));
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    let state = otto.call(json!({"cmd": "new_tab"}));
+    let ids: Vec<u64> = state["state"]["tabs"].as_array().unwrap().iter().filter_map(|t| t["id"].as_u64()).collect();
+    let [_, second, third] = ids[..] else { panic!("three tabs: {ids:?}") };
+    let (second_close, third_close) = (format!("tab-close:{second}"), format!("tab-close:{third}"));
+
+    let (before, labels) = sneak(&otto);
+    let (gone, kept) = (labels[&second_close].clone(), labels[&third_close].clone());
+    assert_eq!((gone.len(), kept.len()), (2, 2), "a × has two letters: {labels:?}");
+
+    // An agent files a task with the second tab: news, so the mode stays on. The tab leaves the
+    // bar, and the third slides under the pill that was on the second's ×.
+    otto.call(json!({"cmd": "task_add", "title": "an agent's task", "tab": second}));
+    let after = otto.wait_for("the labels to follow the new frame", |o| {
+        let reply = o.call(json!({"cmd": "state"}));
+        (!sneak_labels(&reply).contains_key(&second_close)).then_some(reply)
+    });
+    let now = sneak_labels(&after);
+    assert_eq!(now.get(&third_close), Some(&kept), "the same letters on the same control");
+    let (was, is) = (label_x(&before, &third_close).unwrap(), label_x(&after, &third_close).unwrap());
+    assert!(is < was - 10.0, "its pill moved left with it: {was} -> {is}");
+    assert!(now.len() < labels.len() && now.iter().all(|(id, label)| labels.get(id) == Some(label)), "{now:?}");
+
+    // The letters that were on the second tab's × close nothing: not the hidden tab, not the
+    // third. They are no label now, so the mode ends.
+    let reply = otto.call(json!({"cmd": "key", "keys": letters(&gone)}));
+    assert_eq!((&reply["mode"], &reply["sneak"]), (&json!("normal"), &Value::Null));
+    assert_eq!((&reply["state"]["tabs"], pane_ids(&reply)), (&after["state"]["tabs"], vec![1]), "{reply}");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn news_does_not_end_sneak_mode_and_no_key_of_a_label_reaches_the_terminal() {
+    let otto = Otto::launch("sneak-news");
+    let wait = |pattern: &str| otto.call(json!({"cmd": "wait", "pane": 2, "pattern": pattern, "timeout_ms": 40000}));
+    // 1 | 2    two shells; the second has the keyboard.
+    otto.call(json!({"cmd": "split", "kind": "terminal"}));
+    otto.call(json!({"cmd": "split", "axis": "right", "kind": "terminal"}));
+    otto.bounds(&[1, 2]);
+    otto.call(json!({"cmd": "type", "pane": 2, "text": "echo ready-$((40+2))\r"}));
+    wait("^ready-42$");
+
+    // The first shell exits by itself while the labels are up: its pane closes, the mode stays.
+    let (_, labels) = sneak(&otto);
+    assert!(labels.contains_key("pane:1") && labels.contains_key("close:1"), "{labels:?}");
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "exit\r"}));
+    let after = otto.wait_for("the exited shell's labels to go", |o| {
+        let reply = o.call(json!({"cmd": "state"}));
+        (pane_ids(&reply) == [2] && !sneak_labels(&reply).contains_key("pane:1")).then_some(reply)
+    });
+    let now = sneak_labels(&after);
+    assert!(now.iter().all(|(id, label)| labels.get(id) == Some(label)), "no label changed its letters: {now:?}");
+    assert!(!["pane:1", "header:1", "close:1"].iter().any(|id| now.contains_key(*id)), "{now:?}");
+
+    // So the next letters are still a label's: the Tasks icon opens its section.
+    let reply = otto.call(json!({"cmd": "key", "keys": letters(&now["rail:tasks"])}));
+    assert_eq!((&reply["mode"], &reply["state"]["sidebar"]), (&json!("normal"), &json!("tasks")));
+
+    // A letter of no label ends the mode, and the keys sent with it are dropped: none is typed
+    // into the shell that has the keyboard again.
+    sneak(&otto);
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "z x x x"}))["mode"], "normal");
+    otto.call(json!({"cmd": "type", "pane": 2, "text": "echo clean-$((40+2))\r"}));
+    wait("^clean-42$");
+    let text = otto.call(json!({"cmd": "capture", "pane": 2}))["text"].as_str().unwrap().to_string();
+    assert!(!text.contains("xxx"), "{text}");
 }

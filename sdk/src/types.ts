@@ -12,7 +12,7 @@ export type Section = "apps" | "workbook" | "tasks" | "repos";
 /** Pane kinds `split` may create. App panes come from `open_app`. */
 export type SplitKind = "terminal" | "empty";
 /** Who has the keyboard. */
-export type Mode = "normal" | "app" | "pick" | "visual" | "list" | "compose";
+export type Mode = "normal" | "app" | "pick" | "visual" | "list" | "compose" | "sneak";
 
 export type TaskState =
   | "captured"
@@ -168,6 +168,13 @@ export interface AxTarget {
   source: AxSource;
 }
 
+/** Sneak mode's labels on ottospace's own controls. Every `source` is `own`. */
+export interface Sneak {
+  targets: AxTarget[];
+  /** The letters typed so far: labels that start with them are on show. */
+  typed: string;
+}
+
 export interface AxOverlay {
   pane: PaneId;
   targets: AxTarget[];
@@ -228,6 +235,13 @@ export interface Snapshot {
   bounds: Record<string, Rect>;
   /** The same panes, inside their borders. */
   frames: Record<string, Rect>;
+  /** Each drawn pane's header, the handle a drag moves it by, and the × in it. */
+  headers: Record<string, Rect>;
+  closes: Record<string, Rect>;
+  /** Each tab on the bar, by place. */
+  tabs: Rect[];
+  /** While a pane is dragged: where a drop would land, both null over anything else. */
+  drag: { target: PaneId | null; zone: Zone | null } | null;
   /** Pane ids of each tab, in tab order. */
   tab_panes: PaneId[][];
   /** ottospace's own window frame. */
@@ -260,6 +274,8 @@ export interface Snapshot {
   closed_apps: string[];
   apps: AppEntry[];
   ax_overlay: AxOverlay | null;
+  /** Null unless `mode` is `sneak`. */
+  sneak: Sneak | null;
 }
 
 export interface TaskReply {
@@ -332,11 +348,18 @@ export interface PaneArg {
 export interface OptionalPaneArg {
   pane?: PaneId;
 }
+/** Where on a pane another is dropped: an edge splits it there, the centre swaps the two. */
+export type Zone = "left" | "right" | "top" | "bottom" | "center";
 export interface MovePaneArgs {
   /** Default: the focused pane. */
   pane?: PaneId;
   /** The tab's place on the tab bar, from 0. */
   tab: number;
+}
+export interface DropPaneArgs {
+  source: PaneId;
+  target: PaneId;
+  zone: Zone;
 }
 export interface OpenAppArgs {
   name: string;
@@ -355,6 +378,21 @@ export interface CellArgs {
 export interface MouseDownArgs extends CellArgs {
   /** 2 selects a word, 3 a line. */
   clicks?: number;
+}
+export interface MouseArgs {
+  action: "down" | "move" | "up";
+  /** In points from the top-left of ottospace's window, as the state's rects are. */
+  x: number;
+  y: number;
+  /** At most 3. */
+  clicks?: number;
+  modifiers?: Array<"cmd" | "ctrl" | "alt" | "shift">;
+}
+export interface DragArgs {
+  from: [number, number];
+  to: [number, number];
+  /** Moves between the press and the release, 1 to 256. Default: 8. */
+  steps?: number;
 }
 export interface ScrollArgs {
   pane?: PaneId;

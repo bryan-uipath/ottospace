@@ -13,7 +13,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::{fs, thread};
 
 use ottospace_core::tasks::{State, TaskId};
-use ottospace_core::{Axis, Dir, PaneId, Section};
+use ottospace_core::{Axis, Dir, PaneId, Section, Zone};
 use serde::Deserialize;
 
 /// e.g. `{"cmd":"split","axis":"down"}`, `{"cmd":"type","text":"ls\r"}`, `{"cmd":"state"}`.
@@ -63,6 +63,13 @@ pub enum Request {
     },
     /// Evens out the splits of the active tab.
     Equalize,
+    /// Drops pane `source` on pane `target`, as a mouse drag does. `zone`: `left`, `right`, `top`
+    /// or `bottom` splits `target` and puts `source` on that side; `center` swaps the two.
+    DropPane {
+        source: PaneId,
+        target: PaneId,
+        zone: Zone,
+    },
     OpenApp {
         name: String,
         #[serde(default)]
@@ -139,6 +146,30 @@ pub enum Request {
         #[serde(default)]
         pane: Option<PaneId>,
         lines: f32,
+    },
+    /// For tests (`pointer_refusal`). One left-button pointer event at `x`, `y`, in points from
+    /// the top-left of ottospace's window, as the state gives rects:
+    /// `{"cmd":"mouse","action":"down","x":300,"y":60}`. A `move` between a `down` and its `up`
+    /// is a drag; every `down` needs its `up`. The event never leaves ottospace: it is not
+    /// posted, the real pointer does not move, and no other app's window gets it. But a click
+    /// does what the control under it does, with the outside effects of `open_app`, `enter`,
+    /// `leave` or `close`: a click on a parked app pane raises that app's window.
+    Mouse {
+        action: MouseAction,
+        x: f32,
+        y: f32,
+        #[serde(default = "one")]
+        clicks: usize,
+        #[serde(default)]
+        modifiers: Vec<Modifier>,
+    },
+    /// A whole left-button drag: a press at `from`, `steps` moves along the line, a release at
+    /// `to`. For tests, as `mouse`.
+    Drag {
+        from: [f32; 2],
+        to: [f32; 2],
+        #[serde(default = "eight")]
+        steps: usize,
     },
     /// Reads the repository list from disk again. It is `state.repos` in the reply.
     Repos,
@@ -246,11 +277,20 @@ pub enum Request {
         #[serde(default)]
         refresh: bool,
     },
+    /// Sneak mode: a letter label on each of ottospace's own controls. They are `sneak.targets` in
+    /// the reply, each with its control's `id` and `frame`, as a frame painted after the request
+    /// drew them; type one with `key`. Already on: it stays on. Fails outside normal and list
+    /// mode, and if the window is not drawn.
+    Sneak,
     Quit,
 }
 
 fn one() -> usize {
     1
+}
+
+fn eight() -> usize {
+    8
 }
 
 fn three() -> u8 {
@@ -259,6 +299,31 @@ fn three() -> u8 {
 
 fn captured() -> State {
     State::Captured
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MouseAction {
+    Down,
+    Move,
+    Up,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Modifier {
+    Cmd,
+    Ctrl,
+    Alt,
+    Shift,
+}
+
+/// Why a request is refused, if it is: `mouse` and `drag` answer only in a test run (`e2e`:
+/// `OTTOSPACE_E2E` is set). Coordinates would reach every control with no request of its own.
+pub fn pointer_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
+    let pointer = matches!(request, Request::Mouse { .. } | Request::Drag { .. });
+    (pointer && !e2e)
+        .then_some("pointer requests are for tests (OTTOSPACE_E2E); use drop_pane, focus, close, enter and the like")
 }
 
 /// Pane kinds a client may create. App panes come from `open_app`.
@@ -345,4 +410,23 @@ pub fn send(path: &Path, request: &str) -> io::Result<String> {
     let mut reply = String::new();
     BufReader::new(stream).read_line(&mut reply)?;
     Ok(reply.trim_end().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pointer_requests_answer_only_in_a_test_run() {
+        let parse = |line: &str| serde_json::from_str::<Request>(line).expect(line);
+        let mouse = parse(r#"{"cmd":"mouse","action":"down","x":300,"y":60}"#);
+        let drag = parse(r#"{"cmd":"drag","from":[300,60],"to":[900,400]}"#);
+        let drop = parse(r#"{"cmd":"drop_pane","source":3,"target":1,"zone":"left"}"#);
+        for pointer in [&mouse, &drag] {
+            assert!(pointer_refusal(pointer, false).expect("refused").contains("drop_pane"));
+            assert_eq!(pointer_refusal(pointer, true), None);
+        }
+        assert_eq!(pointer_refusal(&drop, false), None);
+        assert_eq!(pointer_refusal(&parse(r#"{"cmd":"state"}"#), false), None);
+    }
 }

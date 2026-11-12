@@ -19,6 +19,30 @@ pub enum Dir {
     Down,
 }
 
+/// Where on a pane another pane is dropped: an edge splits it there, the centre swaps the two.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Zone {
+    Left,
+    Right,
+    Top,
+    Bottom,
+    Center,
+}
+
+impl Zone {
+    /// The zone under a point of a pane, as fractions of its width and height from the top-left:
+    /// the middle (30% to 70% both ways) is the centre, else the nearest edge.
+    pub fn at(x: f32, y: f32) -> Zone {
+        let middle = 0.3..=0.7;
+        if middle.contains(&x) && middle.contains(&y) {
+            return Zone::Center;
+        }
+        let edges = [(x, Zone::Left), (1.0 - x, Zone::Right), (y, Zone::Top), (1.0 - y, Zone::Bottom)];
+        edges.into_iter().min_by(|a, b| a.0.total_cmp(&b.0)).map_or(Zone::Center, |(_, zone)| zone)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
     pub x: f32,
@@ -58,20 +82,37 @@ impl Node {
     /// Adds `new` after leaf `beside`, splitting it along `axis`. With no such leaf, splits the root.
     pub fn insert(self, beside: Option<u32>, new: u32, axis: Axis) -> Node {
         let mut root = self;
-        if beside.is_some_and(|at| root.split(at, new, axis)) {
+        if beside.is_some_and(|at| root.split(at, new, axis, false)) {
             return root;
         }
         Node::pair(axis, root, Node::Leaf(new))
     }
 
-    fn split(&mut self, at: u32, new: u32, axis: Axis) -> bool {
+    /// Splits leaf `at` along `axis`; `new` takes the half after it, or with `before` the half
+    /// before it (left or top). False if there is no such leaf.
+    pub fn split(&mut self, at: u32, new: u32, axis: Axis, before: bool) -> bool {
         match self {
             Node::Leaf(id) if *id == at => {
-                *self = Node::pair(axis, Node::Leaf(at), Node::Leaf(new));
+                let (first, second) = if before { (new, at) } else { (at, new) };
+                *self = Node::pair(axis, Node::Leaf(first), Node::Leaf(second));
                 true
             }
             Node::Leaf(_) => false,
-            Node::Split { a, b, .. } => a.split(at, new, axis) || b.split(at, new, axis),
+            Node::Split { a, b, .. } => a.split(at, new, axis, before) || b.split(at, new, axis, before),
+        }
+    }
+
+    /// True if leaf `new` already sits beside leaf `at` as `split(at, new, axis, before)` would
+    /// put it: the two are the halves of one split on `axis`, in that order.
+    pub fn is_split(&self, at: u32, new: u32, axis: Axis, before: bool) -> bool {
+        let (first, second) = if before { (new, at) } else { (at, new) };
+        match self {
+            Node::Leaf(_) => false,
+            Node::Split { axis: on, a, b, .. } => {
+                (*on == axis && **a == Node::Leaf(first) && **b == Node::Leaf(second))
+                    || a.is_split(at, new, axis, before)
+                    || b.is_split(at, new, axis, before)
+            }
         }
     }
 
@@ -215,7 +256,28 @@ impl Node {
 
 #[cfg(test)]
 mod tests {
-    use super::{Axis::*, Dir, Node, Node::Leaf, Rect};
+    use super::{Axis::*, Dir, Node, Node::Leaf, Rect, Zone};
+
+    #[test]
+    fn a_drop_zone_is_the_centre_or_the_nearest_edge() {
+        assert_eq!(Zone::at(0.5, 0.5), Zone::Center);
+        assert_eq!(Zone::at(0.35, 0.65), Zone::Center);
+        assert_eq!(Zone::at(0.1, 0.5), Zone::Left);
+        assert_eq!(Zone::at(0.9, 0.5), Zone::Right);
+        assert_eq!(Zone::at(0.5, 0.05), Zone::Top);
+        assert_eq!(Zone::at(0.5, 0.95), Zone::Bottom);
+        // A corner goes to the nearer edge.
+        assert_eq!(Zone::at(0.1, 0.2), Zone::Left);
+        assert_eq!(Zone::at(0.8, 0.9), Zone::Bottom);
+    }
+
+    #[test]
+    fn split_can_put_the_new_leaf_first() {
+        let mut tree = Leaf(1).insert(Some(1), 2, Right);
+        assert!(tree.split(2, 3, Down, true));
+        assert_eq!(tree, Node::pair(Right, Leaf(1), Node::pair(Down, Leaf(3), Leaf(2))));
+        assert!(!tree.split(9, 4, Down, true));
+    }
 
     #[test]
     fn insert_splits_the_given_leaf() {

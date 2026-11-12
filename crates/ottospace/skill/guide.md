@@ -47,7 +47,7 @@ ottospace ctl '{"cmd":"state"}'
 
 | Field | Meaning |
 |---|---|
-| `mode` | `normal`, `app` (a hosted app has the keyboard), `pick` (the picker is open), `visual` (selecting terminal text with the keyboard), `list` (the secondary bar has the keyboard) or `compose` (the new-task box is open) |
+| `mode` | `normal`, `app` (a hosted app has the keyboard), `pick` (the picker is open), `visual` (selecting terminal text with the keyboard), `list` (the secondary bar has the keyboard), `compose` (the new-task box is open) or `sneak` (labels are on ottospace's controls; a typed label activates one) |
 | `state.list` | Null, or the index of the selected row of the open section: the secondary bar has the keyboard (`mode` is `list`, or `pick` while the picker is open over it) |
 | `state.panes` | Every pane of every tab: `id`, `kind`, and `cwd` for a terminal opened by `open_repo`. `kind` is an object: `{"type":"terminal"}`, `{"type":"empty"}` or `{"type":"app","window":N,"title":"..."}` |
 | `state.tabs`, `state.active` | Every tab (`id`, `title`, and `task`: the id of the task it belongs to, or null) and the index of the one showing. Requests take the index, not the `id` |
@@ -74,6 +74,7 @@ ottospace ctl '{"cmd":"state"}'
 | `home_drawn` | What the home screen drew, in window points: `area`, `panel` (the new-task line with its list) and `nodes` (each node's click target `[x, y, w, h]` by task id). `lattice_builds` and `lattice_paints` count how often lattice lines were built and painted; a frame that moves nothing paints without building |
 | `state.repos` | Repositories found on disk: `name`, `path`, `branch`, and `worktrees` (each `name`, `path`, `branch`) |
 | `ax_overlay` | Null, or the accessibility overlay's last read: `pane`, `targets` (`label`, `frame` in window coordinates, `source`), `count`, `truncated`, `millis`, `error` |
+| `sneak` | Null, or sneak mode's labels: `typed` (the letters so far) and `targets`, each `label`, `frame` (`x`, `y`, `w`, `h` in window points) and `source` (`{"type":"own","id":"rail:tasks"}`) |
 | `bounds.<id>` | Where each pane of the active tab is drawn: `[x, y, w, h]` |
 
 ## Requests
@@ -100,6 +101,8 @@ ottospace ctl '{"cmd":"equalize"}'
 ottospace ctl '{"cmd":"swap","dir":"right"}'
 ottospace ctl '{"cmd":"move_pane","tab":1}'
 ottospace ctl '{"cmd":"move_pane","pane":3,"tab":0}'
+ottospace ctl '{"cmd":"drop_pane","source":3,"target":1,"zone":"left"}'
+ottospace ctl '{"cmd":"drop_pane","source":3,"target":1,"zone":"center"}'
 ```
 
 - `resize` moves one border of the focused pane 5% of its split toward `dir`: the pane's right
@@ -113,6 +116,45 @@ ottospace ctl '{"cmd":"move_pane","pane":3,"tab":0}'
   the tabs of `state.current_task` only, so with no task open it equals the index in
   `state.tabs`. A tab left with no panes stays, empty. `$OTTOSPACE_TAB` in a moved terminal
   still names the tab its shell started in.
+- `drop_pane` does what dragging pane `source` by its header onto pane `target` does. `zone` is
+  `left`, `right`, `top` or `bottom`: `target` is split in two and `source` takes that side. Or
+  `center`: the two trade places. `source` takes focus and its tab comes forward. It fails if
+  either pane does not exist or they are the same pane. Unlike `move_pane`, it is not limited to
+  the tabs on the bar: the panes may be in different tabs, also tabs of another task, and then
+  that task's tabs come on show (`state.current_task` changes). A pane dropped where it already
+  is keeps its split's `ratio`. The user's own drag parks a live app; `drop_pane` leaves a live
+  `source` live.
+
+During a pane drag `drag` in the state is `{"target":1,"zone":"left"}`: where a release would
+drop it, both `null` over anything that is no drop zone. Otherwise `drag` is `null`.
+
+For tests only: the pointer. `mouse` and `drag` answer only when ottospace runs under
+`OTTOSPACE_E2E`; otherwise they are refused. To act, use the requests above (`drop_pane`,
+`focus`, `close`, `enter`).
+
+```sh
+ottospace ctl '{"cmd":"mouse","action":"down","x":300,"y":60}'
+ottospace ctl '{"cmd":"mouse","action":"move","x":600,"y":400}'
+ottospace ctl '{"cmd":"mouse","action":"up","x":600,"y":400}'
+ottospace ctl '{"cmd":"mouse","action":"down","x":300,"y":60,"clicks":2,"modifiers":["shift"]}'
+ottospace ctl '{"cmd":"drag","from":[300,60],"to":[600,400],"steps":8}'
+```
+
+- `mouse` is one left-button pointer event at `x`, `y`: points from the top-left of ottospace's
+  window, the same as every rect in the state (`bounds`, `frames`, `headers`, `closes` and
+  `tabs`: each drawn pane's header and its ×, by pane id, and each tab on the bar, by place).
+  `action` is `down`, `move` or `up`; `modifiers` are `cmd`, `ctrl`, `alt`, `shift`. A `move`
+  between a `down` and its `up` is a drag. `drag` is a press at `from`, `steps` moves (default
+  8) and a release at `to`.
+- Caps: `clicks` is at most 3, `steps` is 1 to 256.
+- A `down` must be followed by an `up`. Esc ends the hold, and so does 5 s with no `mouse`
+  request: the button is released outside the window, which drops nothing.
+- **The event never leaves ottospace.** It is handed to ottospace's window inside the app: it
+  is not posted to the system, the real pointer does not move, and no other app's window gets
+  it, a hosted app that is live over its pane included. But a click does what the control under
+  it does, with the same effects outside ottospace as `open_app`, `enter`, `leave` and `close`:
+  a click on a parked app pane raises that app's window. Only the replay of the click inside
+  the app is left out.
 
 Terminals:
 
@@ -330,6 +372,41 @@ ottospace ctl '{"cmd":"quit"}'
 `picker_choose` opens the selected match, or the match at `"index":N`. `section` is `apps`,
 `workbook`, `tasks` or `repos`; the open section's name closes the bar.
 `keys` shows or hides the key reference.
+
+Sneak mode: acting on ottospace's own controls as a click would, by a typed label.
+
+```sh
+ottospace ctl '{"cmd":"sneak"}'
+ottospace ctl '{"cmd":"key","keys":"a s"}'
+ottospace ctl '{"cmd":"key","keys":"escape"}'
+```
+
+`sneak` puts a letter label on every control ottospace draws and replies with them in
+`sneak.targets`. Find the control by `source.id`, then send its `label` with `key`, one letter
+per keystroke: the control acts as if clicked and the mode ends. A first letter of a two-letter
+label only narrows; `backspace` takes it back; `escape` leaves with nothing done. So does a letter
+that goes on with no label, and the keys after it in the same `key` request are dropped, as are
+those after a spelled label. Keys that are not letters do nothing. Ids: `rail:apps`
+(`workbook`, `tasks`, `repos`), `bar:refresh`, `bar:close`, `app:<name>`, `repo:<path>`,
+`task:<id>`, `tab:<tab id>`, `tab-close:<tab id>`, `top:new_tab`, `top:split_right`,
+`top:split_down`, `top:task_leave`, `header:<pane>` (focus), `close:<pane>`, `pane:<pane>` (focus;
+an app pane gets the keyboard, as `enter`), `home:new_task`, `home-row:<task>`, `home-node:<task>`.
+A `close:` or `tab-close:` label always has two letters.
+
+The labels are those of a frame painted after the request came. `sneak` fails with "the window
+has not been drawn" if no frame is painted (a hidden or minimised window), and unless `mode` is
+`normal` or `list`: send `leave` or close the box first. If the mode is already on it stays on,
+and the reply has the labels as they are. Starting it hides the accessibility overlay.
+
+Only what is drawn has a label: a background tab's panes do not. While the mode is on the labels
+follow what is drawn: a control that moves keeps its letters, one that is no longer drawn loses
+its label, and a new one gets none. News does not end the mode (an agent's `task_add`, a shell
+that exits); a request that is a move does (`focus`, `split`, `select_tab`). So read
+`sneak.targets` from the latest reply before you type a label.
+
+Controls inside a hosted app's window get no label. Sneak presses no control inside another app and sets no value; entering an app pane raises its window, as a click on the pane does. A request with its own name
+(`focus`, `select_tab`, `section`) is simpler when there is one; `close` and `tab-close` labels end
+shells, as `close` and `close_tab` do.
 
 ## Recipes
 

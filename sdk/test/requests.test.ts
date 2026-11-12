@@ -28,6 +28,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.swap({ dir: "right" }),
   (c) => c.movePane({ pane: 3, tab: 0 }),
   (c) => c.equalize(),
+  (c) => c.dropPane({ source: 3, target: 1, zone: "left" }),
   (c) => c.openApp({ name: "Safari", axis: "right" }),
   (c) => c.enter({ pane: 1 }),
   (c) => c.leave(),
@@ -46,6 +47,8 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.mouseDown({ pane: 1, x: 2.5, y: 5, clicks: 2 }),
   (c) => c.mouseDrag({ pane: 1, x: 20, y: 5 }),
   (c) => c.scroll({ pane: 1, lines: 40 }),
+  (c) => c.mouse({ action: "down", x: 300, y: 60, clicks: 1, modifiers: ["shift"] }),
+  (c) => c.drag({ from: [300, 60], to: [900, 400], steps: 8 }),
   (c) => c.repos(),
   (c) => c.openRepo({ path: "/Users/me/code/app", axis: "down" }),
   (c) =>
@@ -73,6 +76,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.wait({ pane: 1, pattern: "^done$", timeout_ms: 1000 }),
   (c) => c.axTree({ pane: 1, depth: 20, nodes: 500 }),
   (c) => c.axOverlay({ refresh: true }),
+  (c) => c.sneak(),
   (c) => c.quit(),
 ];
 

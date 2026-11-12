@@ -12,10 +12,11 @@ pub mod palette;
 pub mod repos;
 pub mod rules;
 pub mod settings;
+pub mod sneak;
 pub mod tasks;
 pub mod terminal;
 pub mod theme;
 pub mod titlebar;
 
-pub use layout::{Axis, Dir, Node, Rect};
+pub use layout::{Axis, Dir, Node, Rect, Zone};
 pub use model::{Action, Effect, Kind, Mode, Model, Pane, PaneId, PickItem, Picker, Section, Tab};

@@ -13,7 +13,10 @@ import type {
   CaptureReply,
   CellArgs,
   Dir,
+  DragArgs,
+  DropPaneArgs,
   InboxReply,
+  MouseArgs,
   MouseDownArgs,
   MovePaneArgs,
   OpenAppArgs,
@@ -187,6 +190,10 @@ export class Client {
   equalize(): Promise<Snapshot> {
     return this.snapshot({ cmd: "equalize" });
   }
+  /** What dragging `source` by its header onto `target` does: an edge splits, `center` swaps. */
+  dropPane(args: DropPaneArgs): Promise<Snapshot> {
+    return this.snapshot({ cmd: "drop_pane", ...args });
+  }
   /** Hosts a running app's main window in a pane. It moves the user's real window. */
   openApp(args: OpenAppArgs): Promise<Snapshot> {
     return this.snapshot({ cmd: "open_app", ...args });
@@ -248,6 +255,19 @@ export class Client {
   }
   scroll(args: ScrollArgs): Promise<Snapshot> {
     return this.snapshot({ cmd: "scroll", ...args });
+  }
+  /**
+   * For tests: refused unless ottospace runs under `OTTOSPACE_E2E`. One left-button pointer event
+   * in ottospace's own window. The event never leaves ottospace, but a click does what the control
+   * under it does (a click on a parked app pane raises that app's window, as `enter` does).
+   * Every `down` needs its `up`.
+   */
+  mouse(args: MouseArgs): Promise<Snapshot> {
+    return this.snapshot({ cmd: "mouse", ...args });
+  }
+  /** For tests, as `mouse`: a press at `from`, moves along the line, a release at `to`. */
+  drag(args: DragArgs): Promise<Snapshot> {
+    return this.snapshot({ cmd: "drag", ...args });
   }
   /** Reads the repository list from disk again: `state.repos` in the reply. */
   repos(): Promise<Snapshot> {
@@ -318,6 +338,13 @@ export class Client {
   }
   axOverlay(args: { refresh?: boolean } = {}): Promise<Snapshot> {
     return this.snapshot({ cmd: "ax_overlay", ...args });
+  }
+  /**
+   * Sneak mode: labels on ottospace's own controls, in `sneak.targets`. Type one with `key`.
+   * Already on: it stays on. Rejects if the window is not drawn.
+   */
+  sneak(): Promise<Snapshot> {
+    return this.snapshot({ cmd: "sneak" });
   }
   /** Quits the app. */
   quit(): Promise<Snapshot> {

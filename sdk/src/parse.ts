@@ -22,12 +22,14 @@ import type {
   Mode,
   Model,
   Pane,
+  PaneId,
   PaneKind,
   PickItem,
   Picker,
   Rect,
   Repo,
   Section,
+  Sneak,
   Snapshot,
   Tab,
   Task,
@@ -38,6 +40,7 @@ import type {
   Truncated,
   WaitReply,
   Worktree,
+  Zone,
 } from "./types.ts";
 
 type Fields = Record<string, unknown>;
@@ -108,7 +111,7 @@ function axis(value: unknown, at: string): Axis {
 
 function mode(value: unknown, at: string): Mode {
   if (value === "normal" || value === "app" || value === "pick") return value;
-  if (value === "visual" || value === "list" || value === "compose") return value;
+  if (value === "visual" || value === "list" || value === "compose" || value === "sneak") return value;
   throw wrong(at, "a mode", value);
 }
 
@@ -291,6 +294,11 @@ function axTarget(value: unknown, at: string): AxTarget {
   };
 }
 
+function sneak(value: unknown, at: string): Sneak {
+  const o = fields(value, at);
+  return { targets: list(axTarget)(o.targets, `${at}.targets`), typed: str(o.typed, `${at}.typed`) };
+}
+
 function axOverlay(value: unknown, at: string): AxOverlay {
   const o = fields(value, at);
   return {
@@ -361,6 +369,16 @@ function axNode(value: unknown, at: string): AxNode {
   return node;
 }
 
+function zone(value: unknown, at: string): Zone {
+  if (value === "left" || value === "right" || value === "top" || value === "bottom" || value === "center") return value;
+  throw wrong(at, "a zone", value);
+}
+
+function drag(value: unknown, at: string): { target: PaneId | null; zone: Zone | null } {
+  const o = fields(value, at);
+  return { target: orNull(num)(o.target, `${at}.target`), zone: orNull(zone)(o.zone, `${at}.zone`) };
+}
+
 export function snapshot(value: unknown): Snapshot {
   const o = fields(value, "reply");
   return {
@@ -369,6 +387,10 @@ export function snapshot(value: unknown): Snapshot {
     state: model(o.state, "state"),
     bounds: map(rect)(o.bounds, "bounds"),
     frames: map(rect)(o.frames, "frames"),
+    headers: map(rect)(o.headers, "headers"),
+    closes: map(rect)(o.closes, "closes"),
+    tabs: list(rect)(o.tabs, "tabs"),
+    drag: orNull(drag)(o.drag, "drag"),
     tab_panes: list(list(num))(o.tab_panes, "tab_panes"),
     window: rect(o.window, "window"),
     parking: pair(o.parking, "parking"),
@@ -389,6 +411,7 @@ export function snapshot(value: unknown): Snapshot {
     closed_apps: list(str)(o.closed_apps, "closed_apps"),
     apps: list(appEntry)(o.apps, "apps"),
     ax_overlay: orNull(axOverlay)(o.ax_overlay, "ax_overlay"),
+    sneak: orNull(sneak)(o.sneak, "sneak"),
   };
 }
 
