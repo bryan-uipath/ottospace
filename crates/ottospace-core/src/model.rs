@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::layout::{Axis, Dir, Node};
+use crate::repos::{self, Repo};
 
 pub type PaneId = u32;
 
@@ -22,6 +23,9 @@ pub enum Kind {
 pub struct Pane {
     pub id: PaneId,
     pub kind: Kind,
+    /// Where a terminal pane's shell starts, when it was opened for a repository.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 /// Who gets the keyboard.
@@ -192,6 +196,15 @@ pub enum Action {
     LeaveVisual,
     /// Show or hide the accessibility debug overlay on the focused app pane.
     ToggleAxOverlay,
+    /// Replace the Repos list with what the shell found on disk.
+    SetRepos {
+        repos: Vec<Repo>,
+    },
+    /// Open a terminal in a listed repository or worktree, by its path. An empty tab takes its name.
+    OpenRepo {
+        path: String,
+        axis: Axis,
+    },
 }
 
 /// What the shell must do after an update.
@@ -246,6 +259,8 @@ pub struct Model {
     pub live: Option<PaneId>,
     /// Rail section shown in the secondary bar. `None`: the bar is closed.
     pub sidebar: Option<Section>,
+    /// The Repos section's list, as last read from disk.
+    pub repos: Vec<Repo>,
     /// The pane picker, while it is open.
     pub picker: Option<Picker>,
     /// The key reference overlay is showing.
@@ -270,6 +285,7 @@ impl Default for Model {
             focused: None,
             live: None,
             sidebar: None,
+            repos: Vec::new(),
             picker: None,
             keys: false,
             visual: None,
@@ -313,6 +329,7 @@ impl Model {
         let for_panes = matches!(
             action,
             Action::Split { .. }
+                | Action::OpenRepo { .. }
                 | Action::Close { .. }
                 | Action::Focus { .. }
                 | Action::FocusDir { .. }
@@ -343,10 +360,24 @@ impl Model {
                 effects.push(Effect::Opened(id));
             }
             Action::Open { kind, axis, beside } => self.open(kind, axis, beside, &mut effects),
+            Action::SetRepos { repos } => self.repos = repos::arrange(repos),
+            Action::OpenRepo { path, axis } => {
+                // Only a listed path: the list is what the user sees and can choose from.
+                if let Some(name) = self.repo_name(&path) {
+                    let empty_tab = self.layout.is_none();
+                    self.open(Kind::Terminal, axis, None, &mut effects);
+                    if let Some(pane) = self.focused.and_then(|id| self.panes.iter_mut().find(|p| p.id == id)) {
+                        pane.cwd = Some(path);
+                    }
+                    if let Some(tab) = self.tabs.get_mut(self.active).filter(|_| empty_tab) {
+                        tab.title = name;
+                    }
+                }
+            }
             Action::Adopt { kind, beside } => {
                 self.next_id += 1;
                 let id = self.next_id;
-                self.panes.push(Pane { id, kind });
+                self.panes.push(Pane { id, kind, cwd: None });
                 // The pane joins the tab that holds `beside`, even if that tab is in the background.
                 let active = self.active;
                 let parked = self.tabs.iter_mut().enumerate().find(|(i, tab)| {
@@ -576,6 +607,20 @@ impl Model {
             .collect()
     }
 
+    /// The name of the listed repository or worktree at `path`.
+    fn repo_name(&self, path: &str) -> Option<String> {
+        let mut listed = self.repos.iter().flat_map(|r| {
+            let worktrees = r.worktrees.iter().map(|w| (&w.path, &w.name));
+            std::iter::once((&r.path, &r.name)).chain(worktrees)
+        });
+        listed.find(|(p, _)| *p == path).map(|(_, name)| name.clone())
+    }
+
+    /// True if `path` is a repository or worktree in the Repos list.
+    pub fn repo_listed(&self, path: &str) -> bool {
+        self.repo_name(path).is_some()
+    }
+
     /// The `id` of the tab that holds `pane`, active tab included.
     pub fn tab_of(&self, pane: PaneId) -> Option<u32> {
         let index = self.tab_panes().iter().position(|panes| panes.contains(&pane))?;
@@ -624,7 +669,7 @@ impl Model {
             Some(root) => root.insert(beside, id, axis),
             None => Node::Leaf(id),
         });
-        self.panes.push(Pane { id, kind });
+        self.panes.push(Pane { id, kind, cwd: None });
         self.focused = Some(id);
         id
     }
@@ -712,7 +757,7 @@ mod tests {
         m.update(Action::Split { axis: Right, kind: Kind::Empty });
         m.update(Action::Split { axis: Right, kind: Kind::Empty });
         let effects = m.update(Action::Close { pane: None });
-        assert_eq!(effects, [Effect::Closed(Pane { id: 2, kind: Kind::Empty })]);
+        assert_eq!(effects, [Effect::Closed(Pane { id: 2, kind: Kind::Empty, cwd: None })]);
         assert_eq!(m.focused, Some(1));
         m.update(Action::Close { pane: None });
         assert_eq!((m.layout.is_none(), m.focused), (true, None));
@@ -851,7 +896,7 @@ mod tests {
         m.update(Action::Split { axis: Right, kind: Kind::Empty });
         picker(&mut m);
         assert_eq!(m.update(Action::PickerChoose { index: None }), [Effect::Opened(1)]);
-        assert_eq!(m.panes, [Pane { id: 1, kind: Kind::Terminal }]);
+        assert_eq!(m.panes, [Pane { id: 1, kind: Kind::Terminal, cwd: None }]);
     }
 
     #[test]
@@ -955,6 +1000,37 @@ mod tests {
         assert_eq!(Model::default().update(Action::FocusCycle { delta: 1 }), []);
     }
 
+    fn listed() -> Vec<Repo> {
+        let worktree = repos::Worktree { name: "app-2".into(), path: "/code/app-2".into(), branch: None };
+        vec![Repo { name: "app".into(), path: "/code/app".into(), branch: None, worktrees: vec![worktree] }]
+    }
+
+    #[test]
+    fn opening_a_repo_starts_a_terminal_there_and_names_an_empty_tab() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        assert_eq!(m.update(Action::OpenRepo { path: "/code/app-2".into(), axis: Right }), [Effect::Opened(1)]);
+        let pane = m.pane(1).unwrap();
+        assert_eq!((&pane.kind, pane.cwd.as_deref()), (&Kind::Terminal, Some("/code/app-2")));
+        assert_eq!(m.tabs[0].title, "app-2");
+        // A second repo splits the tab, which keeps its name.
+        assert_eq!(m.update(Action::OpenRepo { path: "/code/app".into(), axis: Down }), [Effect::Opened(2)]);
+        assert_eq!((m.pane(2).unwrap().cwd.as_deref(), m.tabs[0].title.as_str()), (Some("/code/app"), "app-2"));
+        assert_eq!(m.layout.as_ref().unwrap().neighbor(1, Dir::Down), Some(2));
+    }
+
+    #[test]
+    fn a_path_that_is_not_listed_opens_nothing() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        assert_eq!(m.update(Action::OpenRepo { path: "/etc".into(), axis: Right }), []);
+        assert!(m.panes.is_empty());
+        // An empty pane takes the repo, as it takes anything opened.
+        m.update(Action::Split { axis: Right, kind: Kind::Empty });
+        assert_eq!(m.update(Action::OpenRepo { path: "/code/app".into(), axis: Right }), [Effect::Opened(1)]);
+        assert_eq!((m.panes.len(), m.tabs[0].title.as_str()), (1, "Tab 1"));
+    }
+
     fn term(m: &mut Model) {
         m.update(Action::Split { axis: Right, kind: Kind::Terminal });
     }
@@ -995,7 +1071,7 @@ mod tests {
         term(&mut m);
         // Close the background tab: the active tab is untouched.
         let effects = m.update(Action::CloseTab { index: Some(0) });
-        assert_eq!(effects, [Effect::Closed(Pane { id: 1, kind: Kind::Terminal })]);
+        assert_eq!(effects, [Effect::Closed(Pane { id: 1, kind: Kind::Terminal, cwd: None })]);
         assert_eq!((m.tabs.len(), m.active, m.focused), (1, 0, Some(3)));
         // Close the last tab: its panes go, an empty tab remains.
         assert_eq!(m.update(Action::CloseTab { index: None }).len(), 2);
@@ -1170,7 +1246,10 @@ mod tests {
         m.update(Action::Split { axis: Right, kind: Kind::Terminal });
         m.update(Action::ToggleVisual);
         // e.g. a hosted window closed: its pane goes, visual mode stays on its own terminal.
-        assert_eq!(m.update(Action::Close { pane: Some(1) }), [Effect::Closed(Pane { id: 1, kind: Kind::Terminal })]);
+        assert_eq!(
+            m.update(Action::Close { pane: Some(1) }),
+            [Effect::Closed(Pane { id: 1, kind: Kind::Terminal, cwd: None })]
+        );
         assert_eq!(m.mode(), Mode::Visual);
         // The visual terminal's shell exited.
         m.update(Action::Close { pane: Some(2) });

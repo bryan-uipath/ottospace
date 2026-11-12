@@ -16,10 +16,10 @@ use core_foundation::base::TCFType;
 use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 use gpui::{
     AnyElement, AnyView, App, Application, AssetSource, BorderStyle, Bounds, BoxShadow, ClickEvent, ClipboardItem,
-    ContentMask, Context, FocusHandle, ImageSource, KeyBinding, KeyDownEvent, Keystroke, Modifiers, MouseButton,
-    MouseDownEvent, MouseMoveEvent, Pixels, Resource, ScrollDelta, ScrollWheelEvent, SharedString, Size, Subscription,
-    TitlebarOptions, Window, WindowBounds, WindowOptions, actions, black, canvas, div, img, point, prelude::*, px,
-    quad, rgb, size, surface, svg, transparent_black,
+    ContentMask, Context, Div, ElementId, FocusHandle, ImageSource, KeyBinding, KeyDownEvent, Keystroke, Modifiers,
+    MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Resource, ScrollDelta, ScrollWheelEvent, SharedString, Size,
+    Stateful, Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions, actions, black, canvas, div, img,
+    point, prelude::*, px, quad, rgb, size, surface, svg, transparent_black,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::keys::{self, Mods};
@@ -34,6 +34,7 @@ use screencapturekit::prelude::*;
 
 mod ax_debug;
 mod control;
+mod repos;
 mod terminal;
 use control::{Call, PaneKind, Request};
 use terminal::Terminal;
@@ -466,9 +467,10 @@ impl Workspace {
         let focus = cx.focus_handle();
         window.focus(&focus);
         let mut model = Model::default();
+        model.update(Action::SetRepos { repos: repos::scan() });
         if hosting {
-            // Apps is the way in while there are no panes.
-            model.update(Action::ToggleSection { section: Section::Apps });
+            // Repos is the way in while there are no panes: most work starts in a repository.
+            model.update(Action::ToggleSection { section: Section::Repos });
         }
         let mut this = Self {
             model,
@@ -498,6 +500,11 @@ impl Workspace {
 
     /// The one path that changes state: updates the model, then carries out its effects.
     fn dispatch(&mut self, action: Action, window: &Window, cx: &mut Context<Self>) -> Vec<Effect> {
+        // Opening the Repos section reads the list again: repositories come and go on disk.
+        let opens_repos = self.model.sidebar != Some(Section::Repos);
+        if opens_repos && matches!(action, Action::ToggleSection { section: Section::Repos }) {
+            self.model.update(Action::SetRepos { repos: repos::scan() });
+        }
         let effects = self.model.update(action);
         for effect in &effects {
             match effect {
@@ -507,7 +514,8 @@ impl Workspace {
                         let tab = self.model.tab_of(*id);
                         let mut vars = vec![("OTTOSPACE_PANE", id.to_string())];
                         vars.extend(tab.map(|tab| ("OTTOSPACE_TAB", tab.to_string())));
-                        match Terminal::spawn(&vars) {
+                        let cwd = self.model.pane(*id).and_then(|pane| pane.cwd.as_deref());
+                        match Terminal::spawn(&vars, cwd) {
                             Ok(terminal) => drop(self.terminals.insert(*id, terminal)),
                             Err(err) => self.error = Some(format!("terminal: {err}")),
                         }
@@ -656,6 +664,17 @@ impl Workspace {
                     }
                     None
                 }
+                Request::Repos => Some(Action::SetRepos { repos: repos::scan() }),
+                Request::OpenRepo { path, .. } if !self.model.repo_listed(&path) => {
+                    failure = Some("no listed repository at that path".into());
+                    None
+                }
+                // Deleted or moved since the list was read: do not open a shell somewhere else.
+                Request::OpenRepo { path, .. } if !std::path::Path::new(&path).is_dir() => {
+                    failure = Some(format!("{path} is not a directory any more"));
+                    None
+                }
+                Request::OpenRepo { path, axis } => Some(Action::OpenRepo { path, axis }),
                 Request::Capture { pane, history } => {
                     let id = pane.or(self.model.focused);
                     let message = match id.and_then(|id| self.terminals.get(&id).map(|t| (id, t))) {
@@ -1478,6 +1497,7 @@ impl Workspace {
             );
         let body = match section {
             Section::Apps => self.render_apps(cx).into_any_element(),
+            Section::Repos => self.render_repos(cx).into_any_element(),
             _ => {
                 div().p_3().text_xs().text_color(rgb(theme::MUTED)).child("Designed, not built yet.").into_any_element()
             }
@@ -1526,6 +1546,63 @@ impl Workspace {
         }
     }
 
+    /// Repositories, each with its worktrees under it. A click opens a terminal there: it fills
+    /// the focused pane if that is empty, else splits it (right, or down with shift).
+    fn render_repos(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let row = |index: usize, name: &str, path: &str, branch: Option<&str>, nested: bool| {
+            let target = path.to_string();
+            list_button(("repo", index))
+                .when(nested, |row| row.ml_4())
+                .child(div().flex_1().min_w_0().truncate().child(name.to_string()))
+                .children(branch.map(|branch| {
+                    div().max_w(px(110.)).truncate().text_xs().text_color(rgb(theme::MUTED)).child(branch.to_string())
+                }))
+                .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                    let axis = if e.modifiers().shift { Axis::Down } else { Axis::Right };
+                    this.dispatch(Action::OpenRepo { path: target.clone(), axis }, window, cx);
+                }))
+        };
+        let mut rows = Vec::new();
+        for repo in &self.model.repos {
+            rows.push(row(rows.len(), &repo.name, &repo.path, repo.branch.as_deref(), false));
+            for worktree in &repo.worktrees {
+                rows.push(row(rows.len(), &worktree.name, &worktree.path, worktree.branch.as_deref(), true));
+            }
+        }
+        let empty = self.model.repos.is_empty().then(|| {
+            let roots: Vec<String> = repos::roots().iter().map(|root| root.display().to_string()).collect();
+            let hint = format!(
+                "No repositories in: {}. Set OTTOSPACE_REPOS to the directories that hold yours.",
+                if roots.is_empty() { "(no directories)".to_string() } else { roots.join(", ") }
+            );
+            div().px_2().text_xs().text_color(rgb(theme::MUTED)).child(hint)
+        });
+        div()
+            .id("repos")
+            .flex_1()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .p_2()
+            .overflow_y_scroll()
+            .child(
+                div()
+                    .id("refresh-repos")
+                    .px_2()
+                    .py_1()
+                    .text_xs()
+                    .text_color(rgb(theme::MUTED))
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(rgb(theme::TEXT)))
+                    .child("Repositories  ↻")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.dispatch(Action::SetRepos { repos: repos::scan() }, window, cx);
+                    })),
+            )
+            .children(empty)
+            .children(rows)
+    }
+
     /// Running apps. A click hosts the app's main window in a pane.
     fn render_apps(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -1553,27 +1630,7 @@ impl Workspace {
             )
             .children(self.apps.iter().enumerate().map(|(i, app)| {
                 let target = app.name.clone();
-                div()
-                    .id(("app", i))
-                    .px_2()
-                    .py_1()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .rounded_md()
-                    // A button at rest: its outline shows. Hover lifts it.
-                    .border_1()
-                    .border_color(rgb(theme::BORDER))
-                    .text_sm()
-                    .cursor_pointer()
-                    .hover(|s| {
-                        s.bg(rgb(theme::SELECTED)).border_color(rgb(theme::BORDER_STRONG)).shadow(vec![BoxShadow {
-                            color: black().opacity(0.7),
-                            offset: point(px(0.), px(3.)),
-                            blur_radius: px(10.),
-                            spread_radius: px(0.),
-                        }])
-                    })
+                list_button(("app", i))
                     .child(self.app_icon(&app.name))
                     .child(div().flex_1().min_w_0().truncate().child(app.name.clone()))
                     // How many windows the app has open, when more than one.
@@ -1848,6 +1905,29 @@ impl Workspace {
             // Shown here, not in the Apps list, so it is visible whichever section is open.
             .children(self.error.clone().map(|e| div().ml_auto().text_color(rgb(theme::ERROR)).child(e)))
     }
+}
+
+/// A row of a secondary-bar list. A button at rest: its outline shows. Hover lifts it.
+fn list_button(id: impl Into<ElementId>) -> Stateful<Div> {
+    let lifted = BoxShadow {
+        color: black().opacity(0.7),
+        offset: point(px(0.), px(3.)),
+        blur_radius: px(10.),
+        spread_radius: px(0.),
+    };
+    div()
+        .id(id)
+        .px_2()
+        .py_1()
+        .flex()
+        .items_center()
+        .gap_2()
+        .rounded_md()
+        .border_1()
+        .border_color(rgb(theme::BORDER))
+        .text_sm()
+        .cursor_pointer()
+        .hover(|s| s.bg(rgb(theme::SELECTED)).border_color(rgb(theme::BORDER_STRONG)).shadow(vec![lifted]))
 }
 
 /// Apps that can be hosted right now. In a test run limited to one app, only that app.
