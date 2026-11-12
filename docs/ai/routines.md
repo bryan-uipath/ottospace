@@ -314,8 +314,9 @@ Missing. None blocks stage 1; the workaround is in the last column.
 ### Stage 2a: agents
 
 Section 2. Independent of ottobot: no scheduler, no daemon. The launcher (agent definition →
-command line, env, cwd → a terminal pane) is the piece stage 2b's gated option reuses. The runner's quota for the
-Agents section comes from the ottobot daemon when it runs (`runner_usage`), else it is not shown.
+command line, env, cwd → a terminal pane) is the piece stage 2b's gated option reuses. The
+runner's quota for the Agents section comes from the ottobot daemon when it runs (`runner_usage`),
+else it is not shown.
 
 ### Stage 2b: runs in view
 
