@@ -129,7 +129,23 @@ body (to focus it). All of them share one namespace with the hosted app's nodes 
   (as the debug overlay does) and labels it over its stream; leaving sneak mode by pressing a
   label in that app makes it live again only if the target needs typing.
 
-## Next step 1: sneak mode
+## Built: sneak over ottospace's own UI
+
+⌘⌃G (`{"cmd":"sneak"}`). Not ⌃G alone: that is BEL in a terminal, and readline, fzf, vim and
+agent CLIs use it.
+
+- Core: `sneak.rs` (`Sneak`: labels by `assign`, `typed`, narrowing), `Mode::Sneak`, actions
+  `Sneak { targets }`, `SneakType`, `SneakBackspace`, `LeaveSneak`, and `Effect::Activate { id }`.
+  A letter no label goes on with is ignored, not a cancel: a slip should not cost the mode.
+- Shell: `sneak.rs`. Each control has a `controls.mark(id)` line beside its click handler, which
+  notes its bounds at prepaint, clipped to what shows. `Workspace::activate` maps an id to the
+  `Action` or method the click handler runs. No mouse event is made.
+- Starts from normal and list mode only. A live app has the keyboard, so no label is ever under
+  a real window; the picker, the new-task box and the key reference cover the controls.
+- Not built: labels inside a hosted app (`Source::App` targets are dropped by `Sneak::new`), and
+  any AX action. What follows is still the plan for those.
+
+## Next step 1: sneak mode in hosted apps
 
 1. **Core.** `Mode::Sneak { targets, typed }`. Actions `Sneak { targets }` (the shell passes the
    read-in targets), `SneakType { key }`, `SneakCancel`. Typing narrows by prefix; a full label

@@ -43,6 +43,7 @@ mod control;
 mod home;
 mod menus;
 mod repos;
+mod sneak;
 mod terminal;
 use control::{Call, PaneKind, Request};
 use terminal::Terminal;
@@ -301,6 +302,7 @@ const KEYS_TERMINAL: &[(&str, &str)] = &[
     ("⌘V", "Paste"),
     ("⌘⇧C", "Visual mode: select with the keyboard"),
     ("⌘⇧E", "List mode: keys for the bar (Apps, Tasks, Repos)"),
+    ("⌘⌃G", "Sneak mode: a letter label on every control"),
     ("⌘N", "New task: type a line, ↵ files it"),
     ("⌘⇧N", "Next task: show the tabs of the first that needs you"),
     ("⌘H", "Hide ottospace"),
@@ -323,6 +325,9 @@ const KEYS_VISUAL: &[(&str, &str)] = &[
     ("Y or ↵", "Copy and leave"),
     ("Esc", "Leave"),
 ];
+
+const KEYS_SNEAK: &[(&str, &str)] =
+    &[("A S D F …", "Type a label: it does what a click would"), ("⌫", "Take a letter back"), ("Esc", "Leave")];
 
 /// Rail sections in order, with their icon and label.
 const SECTIONS: [(Section, &str, &str); 4] = [
@@ -360,7 +365,7 @@ actions!(
 // Pane arrangement.
 actions!(ottospace, [ResizeLeft, ResizeRight, ResizeUp, ResizeDown, SwapLeft, SwapRight, SwapUp, SwapDown, Equalize]);
 // Terminal selection.
-actions!(ottospace, [CopySelection, PasteText, VisualMode, ListMode, NewTask, NextTask]);
+actions!(ottospace, [CopySelection, PasteText, VisualMode, ListMode, SneakMode, NewTask, NextTask]);
 // App menu.
 actions!(ottospace, [Quit, Hide]);
 
@@ -383,6 +388,8 @@ struct Workspace {
     frames: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
     /// What the home screen last drew, and the lattice lines kept between frames.
     home: home::Shared,
+    /// ottospace's own controls as last painted: what sneak mode labels.
+    controls: sneak::Controls,
     apps: Vec<capture::App>,
     /// Apps the settings name that are not running: listed under the running ones.
     closed: Vec<Installed>,
@@ -552,6 +559,7 @@ impl Workspace {
             cells: HashMap::new(),
             frames: HashMap::new(),
             home: home::Shared::default(),
+            controls: sneak::Controls::default(),
             apps: Vec::new(),
             closed: Vec::new(),
             launching: Vec::new(),
@@ -634,6 +642,7 @@ impl Workspace {
                         terminal.set_visual(*on);
                     }
                 }
+                Effect::Activate { id } => self.activate(id, window, cx),
                 Effect::Live(id) => {
                     self.live_since = Some(Instant::now());
                     if let Some(hosted) = self.hosted.get_mut(id) {
@@ -922,6 +931,10 @@ impl Workspace {
                     failure = self.toggle_ax_overlay(refresh, window, cx).err();
                     None
                 }
+                Request::Sneak => {
+                    self.serve_sneak(reply, window, cx);
+                    continue;
+                }
             };
             if let Some(action) = action {
                 let effects = self.dispatch(action, window, cx);
@@ -1109,6 +1122,8 @@ impl Workspace {
                 "name": app.name, "windows": app.windows, "icon": self.icons.contains_key(&app.name),
             })).collect::<Vec<_>>(),
             "ax_overlay": self.ax_overlay.as_ref().filter(|_| self.model.ax_overlay),
+            // Sneak mode's labels, each with its control's id and frame, and the letters typed; or null.
+            "sneak": self.model.sneak,
         })
         .to_string()
     }
@@ -1432,6 +1447,10 @@ impl Workspace {
             cx.stop_propagation();
             return;
         }
+        if self.model.sneak.is_some() {
+            self.sneak_key(event, window, cx);
+            return;
+        }
         if self.model.picker.is_some() {
             self.picker_key(event, window, cx);
             return;
@@ -1733,7 +1752,8 @@ impl Workspace {
                     .gap_4()
                     .child(group("TERMINAL", rows(KEYS_TERMINAL)))
                     .child(group("VISUAL", rows(KEYS_VISUAL)))
-                    .child(group("LIST", rows(KEYS_LIST))),
+                    .child(group("LIST", rows(KEYS_LIST)))
+                    .child(group("SNEAK", rows(KEYS_SNEAK))),
             );
         div()
             .id("keys-backdrop")
@@ -2009,6 +2029,7 @@ impl Workspace {
                         theme::MUTED
                     })))
                     .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(label.into()))))
+                    .child(self.controls.mark(format!("rail:{}", label.to_lowercase())))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.dispatch(Action::ToggleSection { section }, window, cx);
                     }))
@@ -2043,6 +2064,7 @@ impl Workspace {
                     .cursor_pointer()
                     .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
                     .child("↻")
+                    .child(self.controls.mark("bar:refresh"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.refresh_lists();
                         cx.notify();
@@ -2059,6 +2081,7 @@ impl Workspace {
                     .cursor_pointer()
                     .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
                     .child("×")
+                    .child(self.controls.mark("bar:close"))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.dispatch(Action::CloseSidebar, window, cx);
                     })),
@@ -2162,6 +2185,7 @@ impl Workspace {
             rows.push(
                 list_button(("task", id as usize), self.model.list == Some(index))
                     .children(task_cells(task, 90.))
+                    .child(self.controls.mark(format!("task:{id}")))
                     .on_click(open_task(id, cx))
                     .into_any_element(),
             );
@@ -2186,6 +2210,7 @@ impl Workspace {
                 .children(directory.map(|name| {
                     div().max_w(px(110.)).truncate().text_xs().text_color(rgb(theme::MUTED)).child(name.to_string())
                 }))
+                .child(self.controls.mark(format!("repo:{path}")))
                 .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                     let axis = if e.modifiers().shift { Axis::Down } else { Axis::Right };
                     this.dispatch(Action::OpenRepo { path: target.clone(), axis }, window, cx);
@@ -2234,6 +2259,7 @@ impl Workspace {
                     .py_1p5()
                     .gap_3()
                     .child(self.app_icon(&app.name))
+                    .child(self.controls.mark(format!("app:{target}")))
                     .child(div().flex_1().min_w_0().truncate().child(app.name.clone()))
                     // How many windows the app has open, when more than one.
                     .when(app.windows > 1, |row| {
@@ -2263,6 +2289,7 @@ impl Workspace {
                     .gap_3()
                     .text_color(rgb(theme::MUTED))
                     .child(self.app_icon(name))
+                    .child(self.controls.mark(format!("app:{target}")))
                     .child(div().flex_1().min_w_0().truncate().child(name.clone()))
                     .when(waiting, |row| row.child(div().flex_none().text_xs().child("opening…")))
                     .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
@@ -2303,6 +2330,7 @@ impl Workspace {
             .child(
                 div().flex().gap_2().overflow_hidden().child(div().text_color(rgb(tag_color)).child(tag)).child(title),
             )
+            .child(self.controls.mark(format!("header:{id}")))
             .child(
                 div()
                     .id(("close", id))
@@ -2310,6 +2338,7 @@ impl Workspace {
                     .cursor_pointer()
                     .hover(|s| s.text_color(rgb(theme::ERROR)))
                     .child("×")
+                    .child(self.controls.mark(format!("close:{id}")))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.dispatch(Action::Close { pane: Some(id) }, window, cx);
                     })),
@@ -2366,6 +2395,7 @@ impl Workspace {
             .justify_center()
             // Record the content's layout bounds: AX matches the real window to it; e2e reads it.
             .child(canvas(move |bounds, _, _| cell.set(bounds), |_, _, _, _| {}).absolute().size_full())
+            .child(self.controls.mark(format!("pane:{id}")))
             .child(content)
             .child(
                 canvas(|_, _, _| {}, move |bounds, _, window, _| paint_corner_mask(bounds, radius, cropped, window))
@@ -2480,6 +2510,7 @@ impl Workspace {
                             .text_color(rgb(theme::MUTED))
                             .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
                             .child("×")
+                            .child(self.controls.mark("top:task_leave"))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.dispatch(Action::TaskLeave, window, cx);
                             })),
@@ -2507,6 +2538,7 @@ impl Workspace {
                             .when(active, |d| d.bg(rgb(theme::RAISED)).text_color(rgb(theme::TEXT)))
                             .hover(|s| s.text_color(rgb(theme::TEXT)))
                             .child(tab.title.clone())
+                            .child(self.controls.mark(format!("tab:{}", tab.id)))
                             .child(
                                 div()
                                     .id(("tab-close", tab.id))
@@ -2514,6 +2546,7 @@ impl Workspace {
                                     .rounded_sm()
                                     .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::ERROR)))
                                     .child("×")
+                                    .child(self.controls.mark(format!("tab-close:{}", tab.id)))
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         // Do not also select the tab that is going away.
                                         cx.stop_propagation();
@@ -2540,6 +2573,7 @@ impl Workspace {
                         .cursor_pointer()
                         .hover(|s| s.bg(rgb(theme::SELECTED)))
                         .child(svg().path(*icon).size(px(16.)).text_color(rgb(theme::MUTED)))
+                        .child(self.controls.mark(format!("top:{}", sneak::TOP[i])))
                         .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
                         .on_click(cx.listener(move |this, _, window, cx| this.open_picker(axis, new_tab, window, cx)))
                 },
@@ -2563,6 +2597,7 @@ impl Workspace {
             Mode::Visual => ("VISUAL", "esc leaves · ⌘/ keys"),
             Mode::List => ("LIST", "esc leaves · ⌘/ keys"),
             Mode::Compose => ("TASK", ""),
+            Mode::Sneak => ("SNEAK", "type a label · esc leaves"),
         };
         let hint = hint.to_string();
         let focused = match self.model.focused.and_then(|id| self.model.pane(id)).map(|p| &p.kind) {
@@ -2765,6 +2800,7 @@ impl Render for Workspace {
             self.cells.entry(pane.id).or_default();
             self.frames.entry(pane.id).or_default();
         }
+        self.controls.begin();
         let tree = self.model.layout.as_ref().map(|root| self.render_node(root, cx));
         // Only while the tab on show has no panes. Its lines are built once and kept: a frame
         // that moves nothing (a terminal printing in another tab) only paints them again.
@@ -2788,6 +2824,10 @@ impl Render for Workspace {
                 if this.model.visual.is_some() {
                     this.dispatch(Action::LeaveVisual, window, cx);
                 }
+                // The same for sneak mode: the click is the choice.
+                if this.model.sneak.is_some() {
+                    this.dispatch(Action::LeaveSneak, window, cx);
+                }
             }))
             .on_action(cx.listener(|this, _: &CopySelection, _, cx| this.copy(cx)))
             .on_action(cx.listener(|this, _: &PasteText, _, cx| this.paste(cx)))
@@ -2798,6 +2838,7 @@ impl Render for Workspace {
                 this.refresh_lists();
                 this.dispatch(Action::FocusList, window, cx);
             }))
+            .on_action(cx.listener(|this, _: &SneakMode, window, cx| this.toggle_sneak(window, cx)))
             .on_action(cx.listener(|this, _: &NewTask, window, cx| this.new_task(window, cx)))
             .on_action(cx.listener(|this, _: &NextTask, window, cx| {
                 this.dispatch(Action::Tick { now: now_ms() }, window, cx);
@@ -2922,6 +2963,8 @@ impl Render for Workspace {
                     .filter(|o| self.model.layout.as_ref().is_some_and(|l| l.leaves().contains(&o.pane)))
                     .map(ax_debug::Overlay::render),
             )
+            // Over everything of ottospace's own. It is never on while an app's window is.
+            .children(self.model.sneak.as_ref().map(sneak::labels))
             .children(self.model.picker.as_ref().map(|picker| self.render_picker(picker, cx)))
             .children(self.model.compose.as_ref().map(|line| self.render_compose(line, cx)))
             .when(self.model.keys, |d| d.child(self.render_keys(cx)))
@@ -3092,6 +3135,8 @@ fn main() {
             KeyBinding::new("cmd-v", PasteText, None),
             KeyBinding::new("cmd-shift-c", VisualMode, None),
             KeyBinding::new("cmd-shift-e", ListMode, None),
+            // Not ⌃G alone: that is BEL in a terminal (readline and fzf abort, vim's file info).
+            KeyBinding::new("cmd-ctrl-g", SneakMode, None),
             KeyBinding::new("cmd-n", NewTask, None),
             KeyBinding::new("cmd-shift-n", NextTask, None),
             KeyBinding::new("cmd-h", Hide, None),

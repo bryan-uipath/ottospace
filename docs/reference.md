@@ -33,6 +33,7 @@ it over the control socket. Session restore and the rest of the design are not b
 | Icon rail with a secondary bar; Apps lists running apps with their icons | Works today |
 | Repos: repositories and their worktrees; open a terminal in one | Works today |
 | List mode (⌘⇧E): drive the bar with the keyboard | Works today |
+| Sneak mode (⌘⌃G): a letter label on each of ottospace's own controls; typing it clicks the control | Works today |
 | `settings.json`: terminal font, repository directories, tasks folder, apps to offer, window rules | Works today |
 
 ### Roadmap: designed, not built
@@ -41,7 +42,7 @@ None of these is in the app today.
 
 | Capability | State |
 |---|---|
-| Other key modes: insert, sneak | Designed |
+| Other key modes: insert; sneak labels inside a hosted app's window | Designed |
 | Tasks: a worktree at kickoff, a brief pane, automatic cleanup when done | Designed |
 | Quick capture (⌘⌘): turn something on screen into a task and dispatch it to an agent | Designed |
 | Focus blocks: hide Slack, with an agent that can break through | Designed |
@@ -94,6 +95,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘N | New task: a box opens over the workspace. Type what needs doing; `#name` tags a project, `@name` names a repository (Tab completes both), `p1` to `p9` sets the priority. ↵ files it and closes the box; Esc closes |
 | ⌘⇧N | Next task: shows the tabs of the first task that needs you |
 | ⌘⇧E | List mode: the bar (Apps, Tasks, Repos) takes the keyboard. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; Esc or ⌘⇧E leaves |
+| ⌘⌃G | Sneak mode: every control ottospace draws (rail icons, bar rows, tabs and their ×, top-bar buttons, pane headers and their ×, each pane, the home screen's line, rows and nodes) gets a short label, home-row letters first. Type a label and the control does what a click does; a pane's label focuses it, or gives an app pane the keyboard. Two-letter labels narrow on the first letter; ⌫ takes it back; Esc, a click or any ⌘ shortcut leaves. Not ⌃G alone: a terminal needs that key. From `APP` mode return first. Controls inside a hosted app's window get no label |
 | ⌘⇧C | Visual mode on the terminal: `hjkl`/arrows, `w b e 0 ^ $`, `H M L` move; `v` / `V` select; `y` or ↵ copies and leaves; Esc leaves |
 
 Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
@@ -174,6 +176,8 @@ ottospace ctl '{"cmd":"split","axis":"down"}'
 ottospace ctl '{"cmd":"type","text":"ls\r"}'
 ottospace ctl '{"cmd":"open_app","name":"Safari"}'
 ottospace ctl '{"cmd":"section","section":"apps"}'
+ottospace ctl '{"cmd":"sneak"}'                      # labels on ottospace's controls: `sneak.targets`
+ottospace ctl '{"cmd":"key","keys":"a"}'             # type a label: that control acts as if clicked
 ottospace ctl '{"cmd":"state"}'
 ```
 

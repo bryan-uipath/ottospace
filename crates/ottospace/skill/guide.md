@@ -47,7 +47,7 @@ ottospace ctl '{"cmd":"state"}'
 
 | Field | Meaning |
 |---|---|
-| `mode` | `normal`, `app` (a hosted app has the keyboard), `pick` (the picker is open), `visual` (selecting terminal text with the keyboard), `list` (the secondary bar has the keyboard) or `compose` (the new-task box is open) |
+| `mode` | `normal`, `app` (a hosted app has the keyboard), `pick` (the picker is open), `visual` (selecting terminal text with the keyboard), `list` (the secondary bar has the keyboard), `compose` (the new-task box is open) or `sneak` (labels are on ottospace's controls; a typed label activates one) |
 | `state.list` | Null, or the index of the selected row of the open section: the secondary bar has the keyboard (`mode` is `list`, or `pick` while the picker is open over it) |
 | `state.panes` | Every pane of every tab: `id`, `kind`, and `cwd` for a terminal opened by `open_repo`. `kind` is an object: `{"type":"terminal"}`, `{"type":"empty"}` or `{"type":"app","window":N,"title":"..."}` |
 | `state.tabs`, `state.active` | Every tab (`id`, `title`, and `task`: the id of the task it belongs to, or null) and the index of the one showing. Requests take the index, not the `id` |
@@ -73,6 +73,7 @@ ottospace ctl '{"cmd":"state"}'
 | `home_drawn` | What the home screen drew, in window points: `area`, `panel` (the new-task line with its list) and `nodes` (each node's click target `[x, y, w, h]` by task id). `lattice_builds` and `lattice_paints` count how often lattice lines were built and painted; a frame that moves nothing paints without building |
 | `state.repos` | Repositories found on disk: `name`, `path`, `branch`, and `worktrees` (each `name`, `path`, `branch`) |
 | `ax_overlay` | Null, or the accessibility overlay's last read: `pane`, `targets` (`label`, `frame` in window coordinates, `source`), `count`, `truncated`, `millis`, `error` |
+| `sneak` | Null, or sneak mode's labels: `typed` (the letters so far) and `targets`, each `label`, `frame` (`x`, `y`, `w`, `h` in window points) and `source` (`{"type":"own","id":"rail:tasks"}`) |
 | `bounds.<id>` | Where each pane of the active tab is drawn: `[x, y, w, h]` |
 
 ## Requests
@@ -308,6 +309,28 @@ ottospace ctl '{"cmd":"quit"}'
 `picker_choose` opens the selected match, or the match at `"index":N`. `section` is `apps`,
 `workbook`, `tasks` or `repos`; the open section's name closes the bar.
 `keys` shows or hides the key reference.
+
+Sneak mode: acting on ottospace's own controls as a click would, by a typed label.
+
+```sh
+ottospace ctl '{"cmd":"sneak"}'
+ottospace ctl '{"cmd":"key","keys":"a s"}'
+ottospace ctl '{"cmd":"key","keys":"escape"}'
+```
+
+`sneak` puts a letter label on every control ottospace draws and replies with them in
+`sneak.targets`. Find the control by `source.id`, then send its `label` with `key`, one letter
+per keystroke: the control acts as if clicked and the mode ends. A first letter of a two-letter
+label only narrows; `backspace` takes it back; `escape` leaves with nothing done. Ids: `rail:apps`
+(`workbook`, `tasks`, `repos`), `bar:refresh`, `bar:close`, `app:<name>`, `repo:<path>`,
+`task:<id>`, `tab:<tab id>`, `tab-close:<tab id>`, `top:new_tab`, `top:split_right`,
+`top:split_down`, `top:task_leave`, `header:<pane>` (focus), `close:<pane>`, `pane:<pane>` (focus;
+an app pane gets the keyboard, as `enter`), `home:new_task`, `home-row:<task>`, `home-node:<task>`.
+Only what is drawn has a label: a background tab's panes do not. Controls inside a hosted app's
+window get none, and nothing is pressed in another app. `sneak` fails unless `mode` is `normal`
+or `list`: send `leave` or close the box first. A request with its own name (`focus`,
+`select_tab`, `section`) is simpler when there is one; `close` and `tab-close` labels end shells,
+as `close` and `close_tab` do.
 
 ## Recipes
 

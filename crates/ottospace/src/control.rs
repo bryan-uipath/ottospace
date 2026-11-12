@@ -238,6 +238,10 @@ pub enum Request {
         #[serde(default)]
         refresh: bool,
     },
+    /// Sneak mode: a letter label on each of ottospace's own controls. They are `sneak.targets` in
+    /// the reply, each with its control's `id` and `frame`; type one with `key`. Fails outside
+    /// normal and list mode.
+    Sneak,
     Quit,
 }
 

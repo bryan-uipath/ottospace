@@ -984,3 +984,165 @@ fn bad_requests_are_refused_and_quit_exits() {
     }
     assert!(!otto.socket.exists(), "socket file is removed on quit");
 }
+
+/// Enters sneak mode: the reply, and each control's label by the control's id.
+fn sneak(o: &Otto) -> (Value, std::collections::BTreeMap<String, String>) {
+    let reply = o.call(json!({"cmd": "sneak"}));
+    assert_eq!(reply["mode"], "sneak", "{reply}");
+    let targets = reply["sneak"]["targets"].as_array().expect("targets");
+    let label = |t: &Value| Some((t["source"]["id"].as_str()?.to_string(), t["label"].as_str()?.to_string()));
+    let labels = targets.iter().map(|t| label(t).expect("an id and a label")).collect();
+    (reply, labels)
+}
+
+/// Enters sneak mode and types the label of the control `id`, a key at a time.
+fn sneak_to(o: &Otto, id: &str) -> Value {
+    let (_, labels) = sneak(o);
+    let label = labels.get(id).unwrap_or_else(|| panic!("no label for {id}: {labels:?}"));
+    let keys: Vec<String> = label.chars().map(String::from).collect();
+    o.call(json!({"cmd": "key", "keys": keys.join(" ")}))
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
+    let root = std::env::temp_dir().join(format!("ottospace-e2e-sneak-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("app/.git")).unwrap();
+    std::fs::write(root.join("app/.git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    let repo = root.canonicalize().unwrap().join("app").to_string_lossy().into_owned();
+    let otto = Otto::launch_with("sneak", &[("OTTOSPACE_REPOS", &root.to_string_lossy())]);
+    otto.call(json!({"cmd": "task_add", "title": "review the fix", "state": "needs_you"}));
+
+    // The home screen with the Repos bar open: every control drawn has a label, and one each.
+    otto.call(json!({"cmd": "section", "section": "repos"}));
+    let (reply, labels) = sneak(&otto);
+    let ids: Vec<&str> = labels.keys().map(String::as_str).collect();
+    let row = format!("repo:{repo}");
+    for id in ["rail:apps", "rail:workbook", "rail:tasks", "rail:repos", "bar:refresh", "bar:close", row.as_str()] {
+        assert!(ids.contains(&id), "no label for {id}: {ids:?}");
+    }
+    for id in ["tab:1", "tab-close:1", "top:new_tab", "top:split_right", "top:split_down"] {
+        assert!(ids.contains(&id), "no label for {id}: {ids:?}");
+    }
+    for id in ["home:new_task", "home-row:1", "home-node:1"] {
+        assert!(ids.contains(&id), "no label for {id}: {ids:?}");
+    }
+    let mut unique: Vec<&String> = labels.values().collect();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), labels.len(), "a label names one control: {labels:?}");
+    // Each label is on its control, inside the window.
+    let window = reply["window"].as_array().expect("window");
+    for t in reply["sneak"]["targets"].as_array().unwrap() {
+        let f = &t["frame"];
+        let (x, y, w, h) = (f["x"].as_f64(), f["y"].as_f64(), f["w"].as_f64(), f["h"].as_f64());
+        let (Some(x), Some(y), Some(w), Some(h)) = (x, y, w, h) else { panic!("frame of {t}") };
+        assert!(x >= 0.0 && y >= 0.0 && w > 1.0 && h > 1.0, "{t}");
+        assert!(x + w <= window[2].as_f64().unwrap() + 1.0 && y + h <= window[3].as_f64().unwrap() + 1.0, "{t}");
+    }
+
+    // A key that is no label changes nothing. Esc leaves, and nothing has changed.
+    let before = otto.call(json!({"cmd": "key", "keys": "z"}));
+    assert_eq!((&before["mode"], &before["sneak"]["typed"]), (&json!("sneak"), &json!("")), "z is no label");
+    let after = otto.call(json!({"cmd": "key", "keys": "escape"}));
+    assert_eq!((&after["mode"], &after["sneak"], &after["state"]), (&json!("normal"), &Value::Null, &before["state"]));
+    // The mode's own key enters, and leaves.
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-g"}))["mode"], "sneak");
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-g"}))["mode"], "normal");
+
+    // A rail icon opens its section, where the task has a row; the bar's × closes it.
+    let reply = sneak_to(&otto, "rail:tasks");
+    assert_eq!((&reply["mode"], &reply["state"]["sidebar"]), (&json!("normal"), &json!("tasks")), "{reply}");
+    assert!(sneak(&otto).1.contains_key("task:1"));
+    assert_eq!(sneak_to(&otto, "bar:close")["state"]["sidebar"], Value::Null);
+
+    // The task's row on the home screen shows its tabs; the chip's × goes back. Its node does the same.
+    assert_eq!(sneak_to(&otto, "home-row:1")["state"]["current_task"], 1);
+    assert_eq!(sneak_to(&otto, "top:task_leave")["state"]["current_task"], Value::Null);
+    assert_eq!(sneak_to(&otto, "home-node:1")["state"]["current_task"], 1);
+    otto.call(json!({"cmd": "task_leave"}));
+    // The new-task line opens the box, a top-bar button the picker. Neither lets sneak mode start.
+    assert_eq!(sneak_to(&otto, "home:new_task")["mode"], "compose");
+    let refused = otto.raw(r#"{"cmd":"sneak"}"#);
+    assert!(refused["error"].as_str().is_some_and(|e| e.contains("normal or list")), "{refused}");
+    otto.call(json!({"cmd": "key", "keys": "escape"}));
+    assert_eq!(sneak_to(&otto, "top:split_down")["state"]["picker"]["axis"], "down");
+    assert_eq!(otto.raw(r#"{"cmd":"sneak"}"#)["ok"], false);
+    otto.call(json!({"cmd": "picker_close"}));
+
+    // A repository's row opens a terminal there.
+    otto.call(json!({"cmd": "section", "section": "repos"}));
+    assert_eq!(sneak_to(&otto, &row)["state"]["panes"][0]["cwd"], repo);
+    otto.call(json!({"cmd": "section", "section": "repos"}));
+
+    // 1 | 2    and a second tab.
+    //   | 3
+    otto.call(json!({"cmd": "split", "axis": "right", "kind": "empty"}));
+    otto.call(json!({"cmd": "split", "axis": "down", "kind": "empty"}));
+    // The task has a tab too, off the bar: the new tab is the last of three.
+    let tabs = otto.call(json!({"cmd": "new_tab"}))["state"]["tabs"].clone();
+    let (place, tab) = (tabs.as_array().unwrap().len() - 1, tabs.as_array().unwrap().last().unwrap()["id"].clone());
+    let (tab, tab_close) = (format!("tab:{tab}"), format!("tab-close:{tab}"));
+    otto.call(json!({"cmd": "select_tab", "index": 0}));
+    let drawn = otto.bounds(&[1, 2, 3]);
+    let (reply, labels) = sneak(&otto);
+    for id in ["header:1", "close:1", "pane:1", "header:3", "close:3", "pane:3", tab.as_str(), tab_close.as_str()] {
+        assert!(labels.contains_key(id), "no label for {id}: {labels:?}");
+    }
+    assert!(!labels.contains_key("home:new_task"), "the home screen is gone: {labels:?}");
+    // A pane's own label covers its body.
+    let body = reply["sneak"]["targets"].as_array().unwrap().iter().find(|t| t["source"]["id"] == "pane:2").unwrap();
+    assert!((body["frame"]["x"].as_f64().unwrap() - drawn[1][0]).abs() < 1.0, "{body} {drawn:?}");
+    assert!((body["frame"]["w"].as_f64().unwrap() - drawn[1][2]).abs() < 1.0, "{body} {drawn:?}");
+    otto.call(json!({"cmd": "key", "keys": "escape"}));
+
+    // A pane's label, or its header's, moves focus there. Its × closes it.
+    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["focused"], 3);
+    assert_eq!(sneak_to(&otto, "pane:1")["state"]["focused"], 1);
+    assert_eq!(sneak_to(&otto, "header:2")["state"]["focused"], 2);
+    let reply = sneak_to(&otto, "close:3");
+    assert_eq!((pane_ids(&reply), &reply["mode"]), (vec![1, 2], &json!("normal")));
+    // A tab's label selects it; its × closes it.
+    assert_eq!(sneak_to(&otto, &tab)["state"]["active"], place);
+    let reply = sneak_to(&otto, &tab_close);
+    assert_eq!((reply["state"]["tabs"].as_array().unwrap().len(), pane_ids(&reply)), (place, vec![1, 2]));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_two_letter_sneak_label_narrows_then_activates() {
+    let otto = Otto::launch("sneak-two");
+    // Three panes, two tabs and the bar: more controls than the alphabet has letters.
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "split", "axis": "right", "kind": "empty"}));
+    otto.call(json!({"cmd": "split", "axis": "down", "kind": "empty"}));
+    otto.call(json!({"cmd": "new_tab"}));
+    otto.call(json!({"cmd": "select_tab", "index": 0}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.bounds(&[1, 2, 3]);
+    otto.call(json!({"cmd": "focus", "pane": 1}));
+
+    let (_, labels) = sneak(&otto);
+    assert!(labels.len() > 19, "{labels:?}");
+    assert!(labels.values().any(|l| l.len() == 1) && labels.values().all(|l| l.len() <= 2), "{labels:?}");
+    for (a, b) in labels.values().flat_map(|a| labels.values().map(move |b| (a, b))) {
+        assert!(a == b || !b.starts_with(a.as_str()), "{a} is a prefix of {b}");
+    }
+    // The last controls in reading order have the two-letter labels: pane 3 is at the bottom.
+    let label = &labels["pane:3"];
+    assert_eq!(label.len(), 2, "{labels:?}");
+    let (first, second) = label.split_at(1);
+
+    // The first letter narrows and waits; ⌫ takes it back.
+    let reply = otto.call(json!({"cmd": "key", "keys": first}));
+    let narrowed = (&reply["mode"], &reply["sneak"]["typed"], &reply["state"]["focused"]);
+    assert_eq!(narrowed, (&json!("sneak"), &json!(first), &json!(1)));
+    let reply = otto.call(json!({"cmd": "key", "keys": "backspace"}));
+    assert_eq!((&reply["mode"], &reply["sneak"]["typed"]), (&json!("sneak"), &json!("")));
+    // The second letter activates.
+    let reply = otto.call(json!({"cmd": "key", "keys": format!("{first} {second}")}));
+    let chosen = (&reply["mode"], &reply["sneak"], &reply["state"]["focused"]);
+    assert_eq!(chosen, (&json!("normal"), &Value::Null, &json!(3)));
+}

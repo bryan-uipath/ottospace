@@ -2,11 +2,13 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::ax::Target;
 use crate::compose;
 use crate::home::{self, Home};
 use crate::layout::{Axis, Dir, Node, Rect};
 use crate::list::ListRow;
 use crate::repos::{self, Repo};
+use crate::sneak::Sneak;
 use crate::tasks::{MAX_TITLE, State, Task, TaskId, Tasks};
 
 pub type PaneId = u32;
@@ -48,6 +50,8 @@ pub enum Mode {
     List,
     /// The new-task box: keys type a line that becomes a task.
     Compose,
+    /// Labels on ottospace's own controls: keys type a label, which does what a click would.
+    Sneak,
 }
 
 /// Something the picker can put in a new pane.
@@ -317,6 +321,17 @@ pub enum Action {
     },
     ListHold,
     ListDismiss,
+    /// Label ottospace's own controls, as last drawn (`targets`), or leave sneak mode if it is on.
+    /// Only from normal and list mode: elsewhere a box covers the controls, or an app has the keys.
+    Sneak {
+        targets: Vec<Target>,
+    },
+    /// Letters of a label. A letter no label goes on with is ignored.
+    SneakType {
+        text: String,
+    },
+    SneakBackspace,
+    LeaveSneak,
 }
 
 /// What the shell must do after an update.
@@ -339,6 +354,11 @@ pub enum Effect {
     Visual {
         pane: PaneId,
         on: bool,
+    },
+    /// A label was typed: do what a click on that control does. `id` is the shell's own name for
+    /// it (e.g. `rail:apps`).
+    Activate {
+        id: String,
     },
 }
 
@@ -397,6 +417,9 @@ pub struct Model {
     pub visual: Option<PaneId>,
     /// The accessibility debug overlay is showing.
     pub ax_overlay: bool,
+    /// Sneak mode's labels, while it is on.
+    #[serde(skip)]
+    pub sneak: Option<Sneak>,
     #[serde(skip)]
     next_id: PaneId,
     #[serde(skip)]
@@ -422,6 +445,7 @@ impl Default for Model {
             keys: false,
             visual: None,
             ax_overlay: false,
+            sneak: None,
             next_id: 0,
             current_task: None,
             last_tab: Vec::new(),
@@ -446,7 +470,9 @@ impl Model {
     }
 
     pub fn mode(&self) -> Mode {
-        if self.picker.is_some() {
+        if self.sneak.is_some() {
+            Mode::Sneak
+        } else if self.picker.is_some() {
             Mode::Pick
         } else if self.compose.is_some() {
             Mode::Compose
@@ -470,6 +496,22 @@ impl Model {
 
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
         let mut effects = Vec::new();
+        // Sneak mode's labels are of one drawn frame. Its own keys keep it, and so does news that
+        // is nobody's move (the clock, a list read again, an agent's report); anything else ends it.
+        let keeps_sneak = matches!(
+            action,
+            Action::Sneak { .. }
+                | Action::SneakType { .. }
+                | Action::SneakBackspace
+                | Action::Tick { .. }
+                | Action::SetApps { .. }
+                | Action::SetRepos { .. }
+                | Action::TaskAdd { .. }
+                | Action::TaskSetState { .. }
+        );
+        if !keeps_sneak {
+            self.sneak = None;
+        }
         // The picker has the keyboard. Pane and bar actions wait until it closes, so a
         // shortcut cannot change what is behind it (e.g. ⌘W closing the pane it splits).
         let for_panes = matches!(
@@ -926,6 +968,27 @@ impl Model {
                 self.leave(effects);
                 self.sidebar = None;
             }
+            Action::Sneak { .. } if self.sneak.is_some() => self.sneak = None,
+            Action::Sneak { targets } => {
+                if matches!(self.mode(), Mode::Normal | Mode::List) && !self.keys {
+                    self.sneak = Sneak::new(targets);
+                }
+            }
+            Action::SneakType { text } => {
+                let mut letters = text.chars().map(|c| c.to_ascii_lowercase());
+                let chosen = self.sneak.as_mut().and_then(|sneak| letters.find_map(|c| sneak.type_letter(c)));
+                // The label is spent: the mode ends before the control acts.
+                if let Some(id) = chosen {
+                    self.sneak = None;
+                    effects.push(Effect::Activate { id });
+                }
+            }
+            Action::SneakBackspace => {
+                if let Some(sneak) = &mut self.sneak {
+                    sneak.backspace();
+                }
+            }
+            Action::LeaveSneak => {}
         }
     }
 
@@ -1223,6 +1286,105 @@ mod tests {
 
     fn ids(model: &Model) -> Vec<PaneId> {
         model.panes.iter().map(|p| p.id).collect()
+    }
+
+    fn control(id: &str, x: f64) -> Target {
+        let frame = crate::ax::Frame { x, y: 0., w: 20., h: 20. };
+        Target { frame, source: crate::ax::Source::Own { id: id.into() } }
+    }
+
+    fn sneak(m: &mut Model, n: usize) -> Vec<Effect> {
+        let targets = (0..n).map(|i| control(&format!("c{i}"), i as f64 * 30.)).collect();
+        m.update(Action::Sneak { targets })
+    }
+
+    #[test]
+    fn sneak_labels_the_controls_and_a_typed_label_activates_one() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        assert_eq!((sneak(&mut m, 3), m.mode()), (vec![], Mode::Sneak));
+        // The terminal does not have the keyboard: ⌘V must not paste under the labels.
+        assert_eq!(m.keyboard_terminal(), None);
+        // A key that is no label changes nothing.
+        assert_eq!((m.update(Action::SneakType { text: "z".into() }), m.mode()), (vec![], Mode::Sneak));
+        let effects = m.update(Action::SneakType { text: "S".into() });
+        assert_eq!((effects, m.mode()), (vec![Effect::Activate { id: "c1".into() }], Mode::Normal));
+        // Out of the mode, a letter is no label.
+        assert_eq!(m.update(Action::SneakType { text: "a".into() }), []);
+    }
+
+    #[test]
+    fn a_two_letter_sneak_label_narrows_then_activates_and_backspace_takes_a_letter_back() {
+        let mut m = Model::default();
+        sneak(&mut m, 30);
+        let two = m.sneak.as_ref().unwrap().targets.iter().find(|t| t.label.len() == 2).unwrap().clone();
+        let (first, second) = two.label.split_at(1);
+        assert_eq!(m.update(Action::SneakType { text: first.into() }), []);
+        assert_eq!(m.sneak.as_ref().map(|s| s.typed.as_str()), Some(first));
+        m.update(Action::SneakBackspace);
+        assert_eq!(m.sneak.as_ref().map(|s| (s.typed.as_str(), s.visible().count())), Some(("", 30)));
+        m.update(Action::SneakType { text: first.into() });
+        let crate::ax::Source::Own { id } = two.target.source else { panic!("own") };
+        assert_eq!(m.update(Action::SneakType { text: second.into() }), [Effect::Activate { id }]);
+        assert_eq!(m.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn sneak_ends_on_escape_its_own_key_or_any_move_and_stays_through_news() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Empty });
+        sneak(&mut m, 3);
+        assert_eq!((m.update(Action::LeaveSneak), m.mode(), m.focused), (vec![], Mode::Normal, Some(1)));
+        // Its own key again leaves.
+        sneak(&mut m, 3);
+        assert_eq!((sneak(&mut m, 3), m.mode()), (vec![], Mode::Normal));
+        // A move ends it, and still happens: a click's `Focus`, a split, the picker.
+        for action in [
+            Action::Focus { pane: 1 },
+            Action::Split { axis: Right, kind: Kind::Empty },
+            Action::OpenPicker { axis: Right, new_tab: false, items: vec![PickItem::Terminal] },
+        ] {
+            sneak(&mut m, 3);
+            assert_eq!(m.mode(), Mode::Sneak);
+            m.update(action);
+            assert!(m.sneak.is_none());
+        }
+        assert_eq!((m.panes.len(), m.mode()), (2, Mode::Pick));
+        m.update(Action::ClosePicker);
+        // News that is nobody's move does not: the clock, a list read again, an agent's report.
+        sneak(&mut m, 3);
+        m.update(Action::Tick { now: 1 });
+        m.update(Action::SetApps { names: vec!["Notes".into()] });
+        m.update(Action::SetRepos { repos: Vec::new() });
+        m.update(Action::TaskAdd { title: "t".into(), priority: 3, state: State::Running, tab: None });
+        m.update(Action::TaskSetState { id: 1, state: State::NeedsYou });
+        assert_eq!(m.mode(), Mode::Sneak);
+    }
+
+    #[test]
+    fn sneak_starts_only_where_ottospace_has_the_keyboard_and_its_controls_show() {
+        let mut m = Model::default();
+        assert_eq!((sneak(&mut m, 0), m.mode()), (vec![], Mode::Normal), "nothing to label");
+        // An app has the keyboard: the user returns first.
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        m.update(Action::Enter { pane: 1 });
+        assert_eq!((sneak(&mut m, 3), m.mode(), m.live), (vec![], Mode::App, Some(1)));
+        m.update(Action::Leave);
+        // The picker, the new-task box and the key reference cover the controls.
+        m.update(Action::OpenPicker { axis: Right, new_tab: false, items: vec![PickItem::Terminal] });
+        assert_eq!((sneak(&mut m, 3), m.mode()), (vec![], Mode::Pick));
+        m.update(Action::ClosePicker);
+        m.update(Action::OpenCompose { text: String::new() });
+        assert_eq!((sneak(&mut m, 3), m.mode()), (vec![], Mode::Compose));
+        m.update(Action::CloseCompose);
+        m.update(Action::ToggleKeys);
+        assert_eq!((sneak(&mut m, 3), m.sneak.is_none()), (vec![], true));
+        m.update(Action::CloseKeys);
+        // From list mode it starts, and Esc gives the list its keys back.
+        m.update(Action::FocusList);
+        assert_eq!((sneak(&mut m, 3), m.mode()), (vec![], Mode::Sneak));
+        m.update(Action::LeaveSneak);
+        assert_eq!(m.mode(), Mode::List);
     }
 
     #[test]

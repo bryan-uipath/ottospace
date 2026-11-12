@@ -42,6 +42,7 @@ pub fn app_menus() -> Vec<Menu> {
             name: "View".into(),
             items: vec![
                 item("Drive the Bar with the Keyboard", ListMode),
+                item("Label the Controls", SneakMode),
                 item("Fill the Screen", Zoom),
                 MenuItem::separator(),
                 item("Next Tab", NextTab),

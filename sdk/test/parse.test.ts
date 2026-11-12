@@ -52,6 +52,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     closed_apps: [],
     apps: [],
     ax_overlay: overlay,
+    sneak: null,
   };
 }
 
