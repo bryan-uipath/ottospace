@@ -204,7 +204,8 @@ own pane. Original window frames are saved to disk and restored on quit or after
 
 Click an app pane to give it the keyboard (`APP` mode). If you bring a hosted app forward from outside
 (its Dock icon, ⌘Tab) and the window it shows is one ottospace holds, ottospace comes forward on
-that window's pane and gives it the keyboard, within half a second. ottospace shortcuts do not fire in that
+that window's pane and gives it the keyboard, within about half a second. While the picker, the
+new-task box or the key reference is open, or in visual mode, it waits until that is closed. ottospace shortcuts do not fire in that
 mode. Press the return key, or click ottospace itself (rail, top bar, another pane), to return.
 
 The return key works while any app is frontmost. It is F18 by default; set `OTTOSPACE_RETURN_KEY`

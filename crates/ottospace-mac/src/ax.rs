@@ -62,6 +62,14 @@ impl Window {
         Self::main_where(pid, |_| true)
     }
 
+    /// The window-server id of the window the app says is its main one, whatever kind it is.
+    /// `None` if it has none. No stand-in: this is "which window does the app show now".
+    pub fn main_id(pid: i32) -> Option<u32> {
+        let app = unsafe { AXUIElement::new_application(pid) };
+        let element = copy_attr(&app, "AXMainWindow")?.downcast::<AXUIElement>().ok()?;
+        Self { element, pid }.id()
+    }
+
     /// As `main_of`, among the standard windows that `keep` accepts.
     pub fn main_where(pid: i32, keep: impl Fn(&Self) -> bool) -> Option<Self> {
         let app = unsafe { AXUIElement::new_application(pid) };
