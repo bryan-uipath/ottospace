@@ -51,6 +51,11 @@ ottospace ctl '{"cmd":"state"}'
 Agents use the same socket to inspect and drive ottospace. Keep `Request` a closed set, and
 keep the socket same-user only: `type` sends keys to a terminal, which is as strong as a shell.
 
+## App bundle
+
+- `scripts/bundle.sh` builds `target/release/bundle/ottospace.app`. Ship only the `ottospace` binary in it, never `ottospace-canary`.
+- `crates/ottospace/assets/ottospace.icns` is generated: change the SVG and run `scripts/icon.sh`, do not edit it.
+
 ## Docs
 
 - `docs/ideas/<n>-<name>.md` — Bryan's own notes. **Never edit, move or reformat.** Read-only input.
