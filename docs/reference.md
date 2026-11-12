@@ -25,7 +25,7 @@ it over the control socket. Session restore and the rest of the design are not b
 | Visual mode: select terminal text with vi keys | Works today |
 | Tasks inbox: tasks grouped by what needs you first; snooze, hold, dismiss, undo. Kept in `~/.ottospace/tasks` | Works today |
 | "Pop next" (⌘⇧N): open the next task that needs you | Works today |
-| New task box (⌘N): one line, with `#project` and `@repo` | Works today |
+| New task box (⌘N): one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`. `@agent`, `/path` and `$skill` are stored and shown; nothing acts on them yet | Works today |
 | Home screen: a tab with no panes shows the new-task line, the tasks that need you, and each listed task as a node on a lattice (left to right by project; within a project the older task is farther). A click on a node or a row opens the task | Works today |
 | Tasks own their tabs: opening a task shows only its tabs; the others keep running off the bar | Works today |
 | Tabs, each with its own split tree | Works today |
@@ -91,12 +91,46 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | Drag / double-click / triple-click | Select text / a word / a line in a terminal |
 | ⌘C | Copy the terminal's selection (nothing selected: does nothing) |
 | ⌘V | Paste into the terminal |
-| ⌘N | New task: a box opens over the workspace. Type what needs doing; `#name` tags a project, `@name` names a repository (Tab completes both), `p1` to `p9` sets the priority. ↵ files it and closes the box; Esc closes |
+| ⌘N | New task: a box opens over the workspace. Type what needs doing, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1` to `p9` (Tab completes the one being typed). ↵ files it and closes the box; Esc closes |
 | ⌘⇧N | Next task: shows the tabs of the first task that needs you |
 | ⌘⇧E | List mode: the bar (Apps, Tasks, Repos) takes the keyboard. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; Esc or ⌘⇧E leaves |
 | ⌘⇧C | Visual mode on the terminal: `hjkl`/arrows, `w b e 0 ^ $`, `H M L` move; `v` / `V` select; `y` or ↵ copies and leaves; Esc leaves |
 
 Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
+
+## Tags
+
+One line in the new-task box (⌘N), or in `task_new`, becomes a task. Words with a tag mark are
+read out of the line; the rest is the title.
+
+| Tag | Means | Tab completes from |
+|---|---|---|
+| `#project` | The project the task serves | Projects other tasks name |
+| `>repo` | The repository the task works in | The Repos list (repositories and worktrees) |
+| `@agent` | Who works it | `claude` and `codex`, then each `~/.ottospace/agents/<name>.md` if that folder exists |
+| `/path` | A path the task is about: a word that starts with `/` or `~/` | The files and directories under what is typed |
+| `$skill` | A skill to load for the task | Skill folders (those with a `SKILL.md`) in `~/.claude/skills`, `$CLAUDE_CONFIG_DIR/skills`, `~/.codex/skills`, and the `.claude/skills` of the task's `>repo` |
+| `p1` to `p9` | The priority. 1 is most urgent; 3 when none is given | |
+
+```
+fix zoom flicker #canvas >canvas-app @claude p2
+review the export PR >canvas-app @codex $code-review /src/export
+```
+
+- **A tag counts only if its name is known.** A `>word`, `@word` or `$word` that names nothing
+  stays in the title where it was typed, and so does a `/word` that is not a file or directory.
+  `ask @ana`, `costs $5` and `use > 3 workers` are safe. A name starts with a letter, so `#123`,
+  `>3` and `$5` are never tags. `#project` always counts: a new name is a new project.
+- **A `/path`** is looked for at the root of the disk, then inside the task's `>repo`:
+  `/src/export` with `>canvas-app` is `src/export` in that repository. It is kept as typed.
+- **How many.** One `#project`, one `>repo`, one `@agent`, one priority: of two, the last one
+  counts. Every `/path` and `$skill` is kept, each once (at most 20 of each).
+- **What they do today.** `#project` and `>repo` are used: the home screen groups by project, and
+  a task opens a terminal in its repository. `@agent`, `/path` and `$skill` are stored on the
+  task and shown on its row. Nothing starts an agent or loads a skill yet.
+- `OTTOSPACE_SKILLS` (directories, `:` between them) replaces the runners' skill folders.
+- `@name` named a repository before. It does not now. Titles of tasks already filed are not read
+  again.
 
 ## Terminal panes
 

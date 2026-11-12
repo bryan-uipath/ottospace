@@ -171,9 +171,14 @@ Recommended: **(a) now**, (b) when worktree-at-kickoff exists, behind an explici
 
 ### Nomenclature in the new-task box
 
-Today (`crates/ottospace-core/src/compose.rs`): `#project`, `@repo`, `p1`–`p9`. An `@name` counts
-only if a listed repository has that name; any other stays in the title. Bryan's "@ projects" is
-today's `#`.
+**Decided** (Bryan): `@agent`, `>repo`, `/path`, `$skill`; `#project` and `p1`–`p9` stay. Built
+in the `task-tags` PR; the table of record is "Tags" in `docs/reference.md`. `@agent`, `/path` and
+`$skill` are stored and shown; nothing acts on them yet. The options below are the record of how
+it was weighed: none of them was taken as written.
+
+Before (`crates/ottospace-core/src/compose.rs`): `#project`, `@repo`, `p1`–`p9`. An `@name` counted
+only if a listed repository had that name; any other stayed in the title. Bryan's "@ projects" is
+`#`.
 
 `@` conventionally means "who". That fits an agent, not a repository.
 
@@ -184,7 +189,8 @@ today's `#`.
 | (b) keep `@repo`; `>agent` or `!agent` | `fix zoom flicker #canvas @flow-app >reviewer p1` | No change to what exists | `@` stays "where", against habit. `>` reads as redirect, `!` as urgent or shell history |
 | (c) one `@` for both; completion shows the kind | `fix zoom flicker #canvas @flow-app @reviewer p1` | One sigil to learn | "The last `@` wins" no longer holds. A repo and an agent with one name collide. The line no longer says which is which |
 
-Recommended: **(a)**, `@agent` and `/repo`.
+Recommended then: **(a)**, `@agent` and `/repo`. Decided instead: `@agent` and `>repo`, which
+leaves `/` for paths.
 
 Checked against `compose.rs`: one rule to add, one collision to accept.
 
@@ -595,7 +601,7 @@ One line each.
 8. DECIDED: "agents" are definitions (this note). Live ones are "sessions": the crate is
    `ottospace-sessions`, the subcommand `ottospace sessions`, the setting `sessions`.
 9. Two rail entries (Routines, Agents) or one with two groups? (Proposed: two.)
-10. Sigils: `@agent` and `/repo`, changing `@repo` now? (Proposed: yes.) Or `~repo`?
+10. Sigils: decided. `@agent`, `>repo`, `/path`, `$skill`; `@repo` is gone.
 11. Does assigning an agent start it at once, or when the task is opened? (Proposed: when opened.)
 12. Hide-on-close: are hosted windows given back while the window is hidden, and taken again when
     it returns? (Proposed: yes, with session restore's re-attach.)

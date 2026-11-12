@@ -20,7 +20,7 @@ use it as you always do.
 ## Stay organized and on top of your tasks
 
 The inbox puts what needs you first, then what is running and what you saved for later. Press ⌘N
-and capture a task in one line, with a `#project` and an `@repo`. Open a task and the tab bar
+and capture a task in one line, with a `#project`, a `>repo` and an `@agent`. Open a task and the tab bar
 shows only its tabs. Your repositories and their worktrees are one click away.
 
 ![The new-task box over the workspace. The typed line reads: fix zoom flicker on the canvas #canvas @canvas-app p1. The Repos list is open on the left.](site/shots/newtask.png)

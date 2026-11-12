@@ -59,7 +59,7 @@ The badge on an app is how many windows it has open. A new window of a hosted ap
 | I want to | Do |
 |---|---|
 | File a task | ⌘N, type a line, ↵ |
-| Tag a project, name a repository, set priority | In that line: `#canvas` · `@flow-workbench` · `p1` … `p9`. Tab completes `#` and `@` |
+| Tag the task | In that line: `#project` · `>repo` · `@agent` · `/path` · `$skill` · `p1` … `p9`. Tab completes the tag being typed. [All tags](reference.md#tags) |
 | Open a task: the tab bar shows only its tabs | Click it in Tasks. The first time, it gets a tab named after it. × beside its name on the tab bar goes back |
 | Open the next task that needs me | ⌘⇧N |
 | See what needs me at a glance | A tab with no panes is the home screen: the new-task line (click it, or ⌘N), up to three tasks under Needs you, and a node for each of the first 12 listed tasks. Left to right is the project; within a project the older task is farther; the colour is the state. No node sits under the text, so a small window shows fewer. Hover a node for its title; click a node or a row to open the task |
@@ -67,12 +67,12 @@ The badge on an app is how many windows it has open. A new window of a hosted ap
 | Snooze 1 hour / hold / dismiss / undo | ⌘⇧E on Tasks, then `s` / `h` / `x` / `u` |
 
 The status bar shows how many tasks need you. Tasks are kept in `~/.ottospace/tasks`, or the `tasks` setting.
-`@name` must be a repository or worktree in the Repos list; any other `@word` stays in the title.
+A tag counts only if its name is known (`>repo` in the Repos list, `@claude` or `@codex`, a skill that is installed, a path that exists); any other word stays in the title.
 
 From a shell or an agent:
 
 ```sh
-ottospace ctl '{"cmd":"task_new","line":"fix zoom flicker #canvas @flow-workbench p1"}'
+ottospace ctl '{"cmd":"task_new","line":"fix zoom flicker #canvas >flow-workbench @claude p1"}'
 ottospace ctl "{\"cmd\":\"task_add\",\"title\":\"review my PR\",\"state\":\"needs_you\",\"tab\":$OTTOSPACE_TAB}"   # a task tied to the tab this shell started in
 ottospace ctl '{"cmd":"task_set_state","id":1,"state":"needs_you"}'   # running, needs_you, done, ...
 ottospace ctl '{"cmd":"task_list"}'
