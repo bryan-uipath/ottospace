@@ -349,7 +349,8 @@ ottospace ctl '{"cmd":"quit"}'
 
 `picker_choose` opens the selected match, or the match at `"index":N`. `section` is `apps`,
 `workbook`, `tasks` or `repos`; the open section's name closes the bar.
-`keys` shows or hides the key reference.
+`keys` shows or hides the key reference; it fails while the picker or the new-task box is open,
+which it would close. `picker_choose` fails if the picker is not open.
 
 Sneak mode: acting on ottospace's own controls as a click would, by a typed label.
 
@@ -364,7 +365,7 @@ ottospace ctl '{"cmd":"key","keys":"escape"}'
 per keystroke: the control acts as if clicked and the mode ends. A first letter of a two-letter
 label only narrows; `backspace` takes it back; `escape` leaves with nothing done. So does a letter
 that goes on with no label, and the keys after it in the same `key` request are dropped, as are
-those after a spelled label. Keys that are not letters do nothing. Ids: `rail:apps`
+those after a spelled label. Ids: `rail:apps`
 (`workbook`, `tasks`, `repos`), `bar:refresh`, `bar:close`, `app:<name>`, `repo:<path>`,
 `task:<id>`, `tab:<tab id>`, `tab-close:<tab id>`, `top:new_tab`, `top:split_right`,
 `top:split_down`, `top:task_leave`, `header:<pane>` (focus), `close:<pane>`, `pane:<pane>` (focus;
@@ -378,9 +379,20 @@ and the reply has the labels as they are. Starting it hides the accessibility ov
 
 Only what is drawn has a label: a background tab's panes do not. While the mode is on the labels
 follow what is drawn: a control that moves keeps its letters, one that is no longer drawn loses
-its label, and a new one gets none. News does not end the mode (an agent's `task_add`, a shell
-that exits); a request that is a move does (`focus`, `split`, `select_tab`). So read
-`sneak.targets` from the latest reply before you type a label.
+its label, and a new one gets none. So read `sneak.targets` from the latest reply before you
+type a label.
+
+The mode may be the user's own (⌘⌃G), with them about to type a letter. What the socket can do
+while `mode` is `sneak`:
+
+- `key` with letters, `backspace`, `escape` or `cmd-ctrl-g`: input to the mode, as above.
+- Any other `key` (a number, an arrow, `enter`, every `cmd-` or `ctrl-` shortcut) and the
+  pointer requests (`mouse_down`, `mouse_drag`, `mouse`, `drag`) fail with "sneak mode is on" and
+  change nothing.
+- `enter`, `picker`, `keys`, `ax_overlay` and `compose` fail the same way: they would take the
+  keyboard from under the labels.
+- Every other request runs and does not end the mode (`split`, `focus`, `close`, `task_add`,
+  `type`): the labels follow. Only the user's own keys and clicks end it, or `key` as above.
 
 Controls inside a hosted app's window get no label. Sneak presses no control inside another app and sets no value; entering an app pane raises its window, as a click on the pane does. A request with its own name
 (`focus`, `select_tab`, `section`) is simpler when there is one; `close` and `tab-close` labels end

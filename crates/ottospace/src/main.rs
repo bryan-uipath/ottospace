@@ -30,7 +30,8 @@ use ottospace_core::settings::{Installed, closed_apps};
 use ottospace_core::tasks::{Group, MAX_TITLE, Task, TaskId};
 use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, scroll_key, select_kind, visual_key};
 use ottospace_core::{
-    Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Pane, PaneId, PickItem, Picker, Rect, Section, Zone, theme,
+    Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Origin, Pane, PaneId, PickItem, Picker, Rect, Section, Zone,
+    theme,
     titlebar::{self, TitleBar},
 };
 use ottospace_mac::window::{Mouse, MouseKind};
@@ -465,6 +466,9 @@ struct Workspace {
     controls: sneak::Controls,
     /// The key that ended sneak mode is still down: its repeats are typed nowhere.
     sneak_spent: bool,
+    /// Whose key, click or request is being handled now: the person's, unless the control socket
+    /// is being served (also a key or click it injects) or the tick is doing its own work.
+    input: Origin,
     apps: Vec<capture::App>,
     /// Apps the settings name that are not running: listed under the running ones.
     closed: Vec<Installed>,
@@ -548,7 +552,7 @@ impl Workspace {
             cx.observe_window_activation(window, |this, window, cx| {
                 let settled = this.live_since.is_some_and(|at| at.elapsed() > Duration::from_millis(400));
                 if window.is_window_active() && settled {
-                    this.dispatch(Action::Leave, window, cx);
+                    this.dispatch(Action::Leave, this.input, window, cx);
                 }
             }),
             // Before the key's binding runs, so every ⌘ shortcut leaves sneak mode and then acts,
@@ -575,21 +579,23 @@ impl Workspace {
                     if hotkey::take_press() {
                         this.return_to_ottospace(window, cx);
                     }
-                    if tick % 30 == 0 {
-                        this.adopt_new_windows(window, cx);
-                        this.drop_closed(window, cx);
-                        this.follow_front_app(window, cx);
-                        this.host_launched(window, cx);
-                        // A snoozed task returns when its time comes.
-                        let now = now_ms();
-                        if this.model.tasks.due(now) {
-                            this.dispatch(Action::Tick { now }, window, cx);
-                            cx.notify();
+                    this.with_origin(Origin::System, |this| {
+                        if tick % 30 == 0 {
+                            this.adopt_new_windows(window, cx);
+                            this.drop_closed(window, cx);
+                            this.follow_front_app(window, cx);
+                            this.host_launched(window, cx);
+                            // A snoozed task returns when its time comes.
+                            let now = now_ms();
+                            if this.model.tasks.due(now) {
+                                this.dispatch(Action::Tick { now }, Origin::System, window, cx);
+                                cx.notify();
+                            }
                         }
-                    }
-                    this.sync_layout(window, cx, tick % 30 == 15);
-                    this.sync_terminals(window, cx);
-                    this.sync_sneak(window, cx);
+                        this.sync_layout(window, cx, tick % 30 == 15);
+                        this.sync_terminals(window, cx);
+                        this.sync_sneak(window, cx);
+                    });
                     if this.hosted.values().any(|h| h.latest.dirty.swap(false, Relaxed)) {
                         cx.notify();
                     }
@@ -619,18 +625,18 @@ impl Workspace {
         let focus = cx.focus_handle();
         window.focus(&focus);
         let mut model = Model::default();
-        model.update(Action::SetRepos { repos: repos::scan() });
+        model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
         let kept = config::load_tasks();
         let unread = kept.unread;
         // A folder that could not be listed is left alone: writing could replace tasks it holds.
         let keeping = kept.error.is_none();
-        model.update(Action::RestoreTasks { tasks: kept.tasks, floor: kept.highest });
+        model.update(Action::RestoreTasks { tasks: kept.tasks, floor: kept.highest }.sent_by(Origin::System));
         // The first problem found at start, for the status bar: settings, the font, then tasks.
         let unread = (unread > 0).then(|| format!("tasks: {unread} file(s) in the tasks folder could not be read"));
         let notice = config::get().error.clone().or(terminal::choose_font(window)).or(kept.error).or(unread);
         if hosting {
             // Repos is the way in while there are no panes: most work starts in a repository.
-            model.update(Action::ToggleSection { section: Section::Repos });
+            model.update(Action::ToggleSection { section: Section::Repos }.sent_by(Origin::System));
         }
         let mut this = Self {
             model,
@@ -650,6 +656,7 @@ impl Workspace {
             home: home::Shared::default(),
             controls: sneak::Controls::default(),
             sneak_spent: false,
+            input: Origin::User,
             apps: Vec::new(),
             closed: Vec::new(),
             launching: Vec::new(),
@@ -676,17 +683,40 @@ impl Workspace {
         this
     }
 
+    /// Makes `origin` the sender of what is handled from now on. Returns the one before, to put
+    /// back. For where the handlers run outside any one call (an injected key or pointer event);
+    /// everywhere else `with_origin`.
+    fn swap_origin(&mut self, origin: Origin) -> Origin {
+        std::mem::replace(&mut self.input, origin)
+    }
+
+    /// Runs `f` with `origin` as the sender, then puts the previous sender back.
+    fn with_origin<R>(&mut self, origin: Origin, f: impl FnOnce(&mut Self) -> R) -> R {
+        let before = self.swap_origin(origin);
+        let result = f(self);
+        self.input = before;
+        result
+    }
+
     /// The one path that changes state: updates the model, then carries out its effects.
-    fn dispatch(&mut self, action: Action, window: &Window, cx: &mut Context<Self>) -> Vec<Effect> {
+    /// `origin`: who sent the action. The person's own keys and clicks pass `self.input`.
+    fn dispatch(&mut self, action: Action, origin: Origin, window: &Window, cx: &mut Context<Self>) -> Vec<Effect> {
         // Opening the Repos section reads the list again: repositories come and go on disk.
         let opens_repos = self.model.sidebar != Some(Section::Repos);
         if opens_repos && matches!(action, Action::ToggleSection { section: Section::Repos }) {
-            self.model.update(Action::SetRepos { repos: repos::scan() });
+            self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
         }
-        let effects = self.model.update(action);
+        let effects = self.model.update(action.sent_by(origin));
         self.store_tasks();
+        // What an effect dispatches in turn (a picked app's pane, a label's control) has the same sender.
+        self.with_origin(origin, |this| this.carry_out(&effects, window, cx));
+        cx.notify();
+        effects
+    }
+
+    fn carry_out(&mut self, effects: &[Effect], window: &Window, cx: &mut Context<Self>) {
         let another_goes_live = effects.iter().any(|effect| matches!(effect, Effect::Live(_)));
-        for effect in &effects {
+        for effect in effects {
             match effect {
                 Effect::Opened(id) => {
                     if self.model.pane(*id).is_some_and(|p| p.kind == Kind::Terminal) {
@@ -746,8 +776,6 @@ impl Workspace {
                 }
             }
         }
-        cx.notify();
-        effects
     }
 
     /// The tasks as they are kept on disk.
@@ -790,12 +818,17 @@ impl Workspace {
     /// The global return key: take the keyboard back from a live app, and bring ottospace to the
     /// front from wherever the user is.
     fn return_to_ottospace(&mut self, window: &Window, cx: &mut Context<Self>) {
-        self.dispatch(Action::Leave, window, cx);
+        self.dispatch(Action::Leave, self.input, window, cx);
         cx.activate(true);
     }
 
     /// Answers queued control-socket calls. Each reply is the state after the call.
     fn serve_control(&mut self, window: &Window, cx: &mut Context<Self>) {
+        // What a request reaches through a shared method (`open_app`, a click) is the client's too.
+        self.with_origin(Origin::Socket, |this| this.serve_calls(window, cx));
+    }
+
+    fn serve_calls(&mut self, window: &Window, cx: &mut Context<Self>) {
         let calls: Vec<Call> = self.control.iter().flat_map(|rx| rx.try_iter()).collect();
         for Call { request, reply } in calls {
             // Keys go through GPUI's own dispatch, after this update: their handlers update `self`.
@@ -805,6 +838,14 @@ impl Workspace {
                     Ok(keystrokes) => self.press(keystrokes, reply, window, cx),
                     Err(err) => drop(reply.send(control::error(&err.to_string()))),
                 }
+                continue;
+            }
+            let pointer = matches!(
+                request,
+                Request::Mouse { .. } | Request::Drag { .. } | Request::MouseDown { .. } | Request::MouseDrag { .. }
+            );
+            if pointer && self.model.sneak.is_some() {
+                let _ = reply.send(control::error(sneak::ON));
                 continue;
             }
             if let Some(why) = control::pointer_refusal(&request, std::env::var_os("OTTOSPACE_E2E").is_some()) {
@@ -901,6 +942,11 @@ impl Workspace {
                 Request::Enter { pane } => Some(Action::Enter { pane }),
                 Request::Leave => Some(Action::Leave),
                 Request::Section { section } => Some(Action::ToggleSection { section }),
+                // They would open over the labels: the core drops them, so say why.
+                Request::Picker { .. } | Request::AxOverlay { .. } if self.model.sneak.is_some() => {
+                    failure = Some(sneak::ON.into());
+                    None
+                }
                 Request::Picker { axis, new_tab } => {
                     self.open_picker(axis, new_tab, window, cx);
                     None
@@ -911,6 +957,10 @@ impl Workspace {
                 Request::CloseTab { index } => Some(Action::CloseTab { index }),
                 Request::PickerQuery { query } => Some(Action::PickerQuery { query }),
                 Request::PickerMove { delta } => Some(Action::PickerMove { delta }),
+                Request::PickerChoose { .. } if self.model.picker.is_none() => {
+                    failure = Some("the picker is not open".into());
+                    None
+                }
                 Request::PickerChoose { index } => Some(Action::PickerChoose { index }),
                 Request::PickerClose => Some(Action::ClosePicker),
                 Request::Keys => Some(Action::ToggleKeys),
@@ -926,10 +976,7 @@ impl Workspace {
                             // In the order GPUI calls them: the root's capture, the terminal's
                             // handler, then the pane's.
                             if self.model.visual.is_some() {
-                                self.dispatch(Action::LeaveVisual, window, cx);
-                            }
-                            if self.model.sneak.is_some() {
-                                self.dispatch(Action::LeaveSneak, window, cx);
+                                self.dispatch(Action::LeaveVisual, Origin::Socket, window, cx);
                             }
                             self.terminal_mouse_down(id, &event, cx);
                             self.click_pane(id, &event, window, cx);
@@ -957,12 +1004,12 @@ impl Workspace {
                     None
                 }
                 Request::Compose { text } => {
-                    self.model.update(Action::SetRepos { repos: repos::scan() });
+                    self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
                     let was_open = self.model.compose.is_some();
-                    self.dispatch(Action::OpenCompose { text }, window, cx);
+                    self.dispatch(Action::OpenCompose { text }, Origin::Socket, window, cx);
                     // A draft that did not reach the user must not look delivered.
                     if was_open || self.model.compose.is_none() {
-                        failure = Some("the box did not open: it is open already, or the picker, the key reference or visual mode is in the way".into());
+                        failure = Some("the box did not open: it is open already, or the picker, the key reference, visual mode or sneak mode is in the way".into());
                     }
                     None
                 }
@@ -972,7 +1019,7 @@ impl Workspace {
                 }
                 Request::TaskNew { line } => {
                     let before = self.model.tasks.list.len();
-                    self.dispatch(Action::TaskFromLine { line }, window, cx);
+                    self.dispatch(Action::TaskFromLine { line }, Origin::Socket, window, cx);
                     let filed = self.model.tasks.list.get(before);
                     let message = match filed {
                         Some(task) => serde_json::json!({ "ok": true, "task": task }).to_string(),
@@ -999,7 +1046,7 @@ impl Workspace {
                     None
                 }
                 Request::TaskAdd { title, priority, state, tab } => {
-                    self.dispatch(Action::TaskAdd { title, priority, state, tab }, window, cx);
+                    self.dispatch(Action::TaskAdd { title, priority, state, tab }, Origin::Socket, window, cx);
                     // The new task, so the caller has its id.
                     let task = serde_json::json!(self.model.tasks.list.last());
                     let _ = reply.send(serde_json::json!({ "ok": true, "task": task }).to_string());
@@ -1022,15 +1069,15 @@ impl Workspace {
                 Request::TaskHold { id } => Some(Action::TaskHold { id }),
                 Request::TaskDismiss { id } => Some(Action::TaskDismiss { id }),
                 Request::TaskList => {
-                    self.dispatch(Action::Tick { now: now_ms() }, window, cx);
+                    self.dispatch(Action::Tick { now: now_ms() }, Origin::Socket, window, cx);
                     let _ = reply.send(serde_json::json!({ "ok": true, "inbox": self.inbox() }).to_string());
                     continue;
                 }
                 Request::TaskPop => {
-                    self.dispatch(Action::Tick { now: now_ms() }, window, cx);
+                    self.dispatch(Action::Tick { now: now_ms() }, Origin::Socket, window, cx);
                     let next = self.model.tasks.next().map(|task| task.id);
                     let task = serde_json::json!(self.model.tasks.next());
-                    self.dispatch(Action::TaskOpen { id: None }, window, cx);
+                    self.dispatch(Action::TaskOpen { id: None }, Origin::Socket, window, cx);
                     // False: the picker or the key reference is in the way, so the view stayed.
                     let opened = next.is_some() && self.model.current_task == next;
                     let _ = reply.send(serde_json::json!({ "ok": true, "task": task, "opened": opened }).to_string());
@@ -1042,7 +1089,7 @@ impl Workspace {
                 }
                 Request::TaskOpen { id } => {
                     // Its repository as it is now, for the terminal a first opening starts.
-                    self.model.update(Action::SetRepos { repos: repos::scan() });
+                    self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
                     Some(Action::TaskOpen { id: Some(id) })
                 }
                 Request::TaskLeave => Some(Action::TaskLeave),
@@ -1086,8 +1133,12 @@ impl Workspace {
                     continue;
                 }
             };
-            if let Some(action) = action {
-                let effects = self.dispatch(action, window, cx);
+            // What the core would drop because a client sent it is an error, not a silent ok.
+            let refused = action.as_ref().and_then(|action| self.model.refusal(action, Origin::Socket));
+            if let Some(why) = refused {
+                failure = Some(why.into());
+            } else if let Some(action) = action {
+                let effects = self.dispatch(action, Origin::Socket, window, cx);
                 // A terminal pane with no shell behind it: say so instead of replying ok.
                 let dead = effects.iter().any(|e| match e {
                     Effect::Opened(id) => {
@@ -1176,15 +1227,27 @@ impl Workspace {
         let this = cx.entity().downgrade();
         window.defer(cx, move |window, cx| {
             let labelled = |cx: &App| this.read_with(cx, |this, _| this.model.sneak.is_some()).unwrap_or(false);
+            // The key handlers run as for a real key, outside this call, but the client presses.
+            let before = this.update(cx, |this, _| this.swap_origin(Origin::Socket));
+            let mut refused = false;
             for keystroke in keystrokes {
                 let was = labelled(cx);
+                // Under the user's labels a client types a label or leaves, and nothing else:
+                // its ⌘ shortcut would end the mode, and the user's next letter reach a terminal.
+                refused = was && !sneak::takes(&keystroke);
+                if refused {
+                    break;
+                }
                 window.dispatch_keystroke(keystroke, cx);
                 // The keys after the one that ended sneak mode were for labels, not a terminal.
                 if was && !labelled(cx) {
                     break;
                 }
             }
-            let state = this.update(cx, |this, cx| this.snapshot(window, cx));
+            let state = this.update(cx, |this, cx| {
+                this.input = before.unwrap_or(Origin::User);
+                if refused { control::error(sneak::ON) } else { this.snapshot(window, cx) }
+            });
             let _ = reply.send(state.unwrap_or_else(|_| control::error("ottospace is closing")));
         });
     }
@@ -1234,7 +1297,11 @@ impl Workspace {
         };
         // A task of its own: the handlers update the app, which this update holds.
         cx.spawn_in(window, async move |this, cx| {
-            let _ = this.update(cx, |this, _| this.injected = true);
+            // The handlers run outside any call of ours: the client is the sender until the last one.
+            let before = this.update(cx, |this, _| {
+                this.injected = true;
+                this.swap_origin(Origin::Socket)
+            });
             for event in events {
                 // An error: the window is gone, and `view` with it.
                 if cx.update(|window, cx| window.draw(cx).clear()).is_err() {
@@ -1243,7 +1310,10 @@ impl Workspace {
                 unsafe { ottospace_mac::window::send_mouse(view, event) };
             }
             let _ = cx.update(|window, cx| window.draw(cx).clear());
-            let _ = this.update(cx, |this, _| this.injected = false);
+            let _ = this.update(cx, |this, _| {
+                this.injected = false;
+                this.input = before.unwrap_or(Origin::User);
+            });
             let state = this.update_in(cx, |this, window, cx| this.snapshot(window, cx));
             let _ = reply.send(state.unwrap_or_else(|_| control::error("ottospace is closing")));
         })
@@ -1379,7 +1449,7 @@ impl Workspace {
             return Err("the accessibility overlay needs a focused app pane".into());
         }
         if !(refresh && showing) {
-            self.dispatch(Action::ToggleAxOverlay, window, cx);
+            self.dispatch(Action::ToggleAxOverlay, self.input, window, cx);
         }
         if let Some(source) = source.filter(|_| self.model.ax_overlay) {
             cx.spawn(async move |this, cx| {
@@ -1405,7 +1475,7 @@ impl Workspace {
             let ids = ax::Window::standard_of(pid).iter().filter_map(ax::Window::id).collect();
             self.known.push((pid, ids));
         }
-        let effects = self.dispatch(action, window, cx);
+        let effects = self.dispatch(action, self.input, window, cx);
         if let Some(Effect::Opened(id)) = effects.last() {
             // A pane in a background tab is not drawn, so the layout sync never parks its
             // window. Move it off screen now; it is sized when its tab is first shown.
@@ -1461,13 +1531,13 @@ impl Workspace {
         // Already in a pane: go to it (and its tab) instead of doing nothing.
         if let Some((pane, _)) = self.hosted.iter().find(|(_, h)| h.window_id == target.id) {
             let pane = *pane;
-            self.dispatch(Action::Focus { pane }, window, cx);
+            self.dispatch(Action::Focus { pane }, self.input, window, cx);
             return Ok(());
         }
         let hosted = Hosted::new(target)?;
         // The window is in hand, so the tab will not be left empty.
         if new_tab {
-            self.dispatch(Action::NewTab, window, cx);
+            self.dispatch(Action::NewTab, self.input, window, cx);
         }
         let action = Action::Open { kind: hosted.kind(), axis, beside: None };
         self.attach(hosted, action, window, cx);
@@ -1494,8 +1564,7 @@ impl Workspace {
     /// known by its bundle, not its name: `Visual Studio Code` runs as `Code`. It gives up after
     /// a while: some apps open a sign-in window, or none.
     fn host_launched(&mut self, window: &Window, cx: &mut Context<Self>) {
-        // Not under sneak mode's labels: a pane that opens by itself would end the mode mid-label.
-        if self.launching.is_empty() || self.model.sneak.is_some() {
+        if self.launching.is_empty() {
             return;
         }
         // First: an app that now runs leaves the "not running" list, so a window that is not
@@ -1549,7 +1618,7 @@ impl Workspace {
         }
         // The core would drop the move behind a box or in visual mode. Wait: do not come
         // forward either, which would only take the app away from the user. Sneak mode waits
-        // too: the move would end it mid-label.
+        // too: the core keeps the keyboard under the labels.
         if self.model.keys || matches!(self.model.mode(), Mode::Pick | Mode::Compose | Mode::Visual | Mode::Sneak) {
             return;
         }
@@ -1562,7 +1631,7 @@ impl Workspace {
         {
             unsafe { ottospace_mac::window::order_front(appkit.ns_view.as_ptr()) };
         }
-        self.dispatch(Action::Enter { pane }, window, cx);
+        self.dispatch(Action::Enter { pane }, Origin::System, window, cx);
         cx.notify();
     }
 
@@ -1581,7 +1650,7 @@ impl Workspace {
                     cx.activate(true);
                 }
             }
-            self.dispatch(Action::Close { pane: Some(id) }, window, cx);
+            self.dispatch(Action::Close { pane: Some(id) }, Origin::System, window, cx);
         }
     }
 
@@ -1646,7 +1715,7 @@ impl Workspace {
             }
         }
         for id in exited {
-            self.dispatch(Action::Close { pane: Some(id) }, window, cx);
+            self.dispatch(Action::Close { pane: Some(id) }, Origin::System, window, cx);
         }
         if redraw {
             cx.notify();
@@ -1667,7 +1736,7 @@ impl Workspace {
         // pane actions while it is open, and ⌘/ closes it.)
         if self.model.keys {
             if key.key == "escape" {
-                self.dispatch(Action::CloseKeys, window, cx);
+                self.dispatch(Action::CloseKeys, self.input, window, cx);
             }
             cx.stop_propagation();
             return;
@@ -1686,7 +1755,7 @@ impl Workspace {
         let us_layout = matches!(cx.keyboard_layout().id(), "com.apple.keylayout.US" | "com.apple.keylayout.ABC");
         let place = keys::move_to_tab_key(&key.key, m.shift, us_layout);
         if let Some(tab) = place.filter(|_| m.platform && m.alt && !m.control) {
-            self.dispatch(Action::MovePane { pane: None, tab }, window, cx);
+            self.dispatch(Action::MovePane { pane: None, tab }, self.input, window, cx);
             cx.stop_propagation();
             return;
         }
@@ -1694,7 +1763,7 @@ impl Workspace {
         if key.modifiers.platform
             && let Some(digit) = key.key.parse::<usize>().ok().filter(|d| (1..=9).contains(d))
         {
-            self.dispatch(Action::SelectVisibleTab { index: digit - 1 }, window, cx);
+            self.dispatch(Action::SelectVisibleTab { index: digit - 1 }, self.input, window, cx);
             cx.stop_propagation();
             return;
         }
@@ -1771,7 +1840,7 @@ impl Workspace {
     fn pane_drag_move(&mut self, source: PaneId, at: gpui::Point<Pixels>, window: &Window, cx: &mut Context<Self>) {
         // A live window would cover its pane's drop zones: park it. A click makes it live again.
         if self.model.live.is_some() {
-            self.dispatch(Action::Leave, window, cx);
+            self.dispatch(Action::Leave, self.input, window, cx);
         }
         let drop_at = self.drop_zone(source, at);
         if drop_at != self.drop_at {
@@ -1814,7 +1883,7 @@ impl Workspace {
                 _ => return,
             },
         };
-        self.dispatch(action, window, cx);
+        self.dispatch(action, self.input, window, cx);
         cx.stop_propagation();
     }
 
@@ -1841,7 +1910,7 @@ impl Workspace {
             Some(ListKey::Leave) => Action::LeaveList,
             None => return,
         };
-        self.dispatch(action, window, cx);
+        self.dispatch(action, self.input, window, cx);
         if let Some(child) = self.selected_child() {
             self.list_scroll.scroll_to_item(child);
         }
@@ -1877,7 +1946,7 @@ impl Workspace {
     /// Reads the Apps and Repos lists again.
     fn refresh_lists(&mut self) {
         self.refresh_apps();
-        self.model.update(Action::SetRepos { repos: repos::scan() });
+        self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
     }
 
     /// Visual mode takes every key but ⌘ shortcuts: vi keys move, select, copy and leave.
@@ -1900,9 +1969,9 @@ impl Workspace {
                 if let Some(text) = terminal.selected() {
                     self.copy_text(text, cx);
                 }
-                self.dispatch(Action::LeaveVisual, window, cx);
+                self.dispatch(Action::LeaveVisual, self.input, window, cx);
             }
-            VisualKey::Exit => drop(self.dispatch(Action::LeaveVisual, window, cx)),
+            VisualKey::Exit => drop(self.dispatch(Action::LeaveVisual, self.input, window, cx)),
         }
         cx.notify();
     }
@@ -1941,7 +2010,7 @@ impl Workspace {
         // What `refresh_apps` just listed: running apps, then those that are not.
         let apps = self.model.apps.iter().map(|name| PickItem::App { name: name.clone() });
         let items = std::iter::once(PickItem::Terminal).chain(apps).collect();
-        self.dispatch(Action::OpenPicker { axis, new_tab, items }, window, cx);
+        self.dispatch(Action::OpenPicker { axis, new_tab, items }, self.input, window, cx);
     }
 
     /// While the picker is open it takes every key: text filters, arrows move, enter opens.
@@ -1963,7 +2032,7 @@ impl Workspace {
                 _ => return,
             },
         };
-        self.dispatch(action, window, cx);
+        self.dispatch(action, self.input, window, cx);
         cx.stop_propagation();
     }
 
@@ -2043,7 +2112,7 @@ impl Workspace {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
-                    this.dispatch(Action::CloseKeys, window, cx);
+                    this.dispatch(Action::CloseKeys, this.input, window, cx);
                 }),
             )
             .child(panel)
@@ -2052,8 +2121,8 @@ impl Workspace {
     /// Opens the new-task box: ⌘N, or a click on the home screen's line.
     fn new_task(&mut self, window: &Window, cx: &mut Context<Self>) {
         // The repositories as they are now, for `@name`.
-        self.model.update(Action::SetRepos { repos: repos::scan() });
-        self.dispatch(Action::OpenCompose { text: String::new() }, window, cx);
+        self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
+        self.dispatch(Action::OpenCompose { text: String::new() }, self.input, window, cx);
     }
 
     /// The new-task box, over the workspace: the line, what it will file, and names that finish
@@ -2126,7 +2195,7 @@ impl Workspace {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
-                    this.dispatch(Action::CloseCompose, window, cx);
+                    this.dispatch(Action::CloseCompose, this.input, window, cx);
                 }),
             )
             .child(panel)
@@ -2160,7 +2229,7 @@ impl Workspace {
                 })
                 .child(item.label().to_string())
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    this.dispatch(Action::PickerChoose { index: Some(i) }, window, cx);
+                    this.dispatch(Action::PickerChoose { index: Some(i) }, this.input, window, cx);
                 }))
         });
         let rows: Vec<_> = rows.collect();
@@ -2232,7 +2301,7 @@ impl Workspace {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
-                    this.dispatch(Action::ClosePicker, window, cx);
+                    this.dispatch(Action::ClosePicker, this.input, window, cx);
                 }),
             )
             .child(panel)
@@ -2304,7 +2373,7 @@ impl Workspace {
                     .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(label.into()))))
                     .child(self.controls.mark(format!("rail:{}", label.to_lowercase())))
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.dispatch(Action::ToggleSection { section }, window, cx);
+                        this.dispatch(Action::ToggleSection { section }, this.input, window, cx);
                     }))
             }))
     }
@@ -2356,7 +2425,7 @@ impl Workspace {
                     .child("×")
                     .child(self.controls.mark("bar:close"))
                     .on_click(cx.listener(|this, _, window, cx| {
-                        this.dispatch(Action::CloseSidebar, window, cx);
+                        this.dispatch(Action::CloseSidebar, this.input, window, cx);
                     })),
             );
         let body = match section {
@@ -2380,7 +2449,7 @@ impl Workspace {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
-                    this.dispatch(Action::Leave, window, cx);
+                    this.dispatch(Action::Leave, this.input, window, cx);
                 }),
             )
             .child(header)
@@ -2412,7 +2481,7 @@ impl Workspace {
         self.closed = closed_apps(&wanted, &bundles);
         // The list as list mode walks it: running apps, then the others.
         let names = running.iter().cloned().chain(self.closed.iter().map(|app| app.name.clone())).collect();
-        self.model.update(Action::SetApps { names });
+        self.model.update(Action::SetApps { names }.sent_by(Origin::System));
         // An app that quit loses its icon: a later app of the same name may have another.
         self.icons.retain(|name, _| running.contains(name) || self.closed.iter().any(|app| app.name == *name));
         let image = |png: Vec<u8>| Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png));
@@ -2486,7 +2555,7 @@ impl Workspace {
                 .child(self.controls.mark(format!("repo:{path}")))
                 .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                     let axis = if e.modifiers().shift { Axis::Down } else { Axis::Right };
-                    this.dispatch(Action::OpenRepo { path: target.clone(), axis }, window, cx);
+                    this.dispatch(Action::OpenRepo { path: target.clone(), axis }, this.input, window, cx);
                 }))
         };
         // The repository's name as a heading, then its checkouts: its own directory first.
@@ -2608,7 +2677,7 @@ impl Workspace {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, window, cx| {
-                    this.dispatch(Action::Focus { pane: id }, window, cx);
+                    this.dispatch(Action::Focus { pane: id }, this.input, window, cx);
                 }),
             )
             .child(mark(&self.marks, Mark::Header(id)))
@@ -2725,7 +2794,7 @@ impl Workspace {
             .on_drop(cx.listener(move |this, dragged: &DraggedPane, window, cx| {
                 let zone = this.drop_zone(dragged.0, window.mouse_position()).filter(|(target, _)| *target == id);
                 if let Some((target, zone)) = zone {
-                    this.dispatch(Action::DropPane { source: dragged.0, target, zone }, window, cx);
+                    this.dispatch(Action::DropPane { source: dragged.0, target, zone }, this.input, window, cx);
                 }
             }))
             // The drop indicator: the half an edge drop would take, or the whole pane for a swap.
@@ -2782,7 +2851,7 @@ impl Workspace {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, e: &MouseDownEvent, window, cx| {
-                    this.dispatch(Action::Leave, window, cx);
+                    this.dispatch(Action::Leave, this.input, window, cx);
                     // With a custom title bar, the system no longer zooms on double-click. Not
                     // for a `mouse` request: it would zoom or minimise the real window.
                     if e.click_count == 2 && !this.injected {
@@ -2816,7 +2885,7 @@ impl Workspace {
                             .child("×")
                             .child(self.controls.mark("top:task_leave"))
                             .on_click(cx.listener(|this, _, window, cx| {
-                                this.dispatch(Action::TaskLeave, window, cx);
+                                this.dispatch(Action::TaskLeave, this.input, window, cx);
                             })),
                     )
             }))
@@ -2834,7 +2903,12 @@ impl Workspace {
                             // A pane dropped on a tab moves there.
                             .drag_over::<DraggedPane>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
                             .on_drop(cx.listener(move |this, dragged: &DraggedPane, window, cx| {
-                                this.dispatch(Action::MovePane { pane: Some(dragged.0), tab: place }, window, cx);
+                                this.dispatch(
+                                    Action::MovePane { pane: Some(dragged.0), tab: place },
+                                    this.input,
+                                    window,
+                                    cx,
+                                );
                             }))
                             .h_full()
                             .pl_3()
@@ -2968,7 +3042,7 @@ fn task_cells(task: &Task, tag: f32) -> Vec<Div> {
 /// A click that shows a task's tabs.
 fn open_task(id: TaskId, cx: &mut Context<Workspace>) -> Box<dyn Fn(&ClickEvent, &mut Window, &mut App)> {
     Box::new(cx.listener(move |this, _, window, cx| {
-        this.dispatch(Action::TaskOpen { id: Some(id) }, window, cx);
+        this.dispatch(Action::TaskOpen { id: Some(id) }, this.input, window, cx);
         cx.notify();
     }))
 }
@@ -3143,50 +3217,50 @@ impl Render for Workspace {
             // backdrop, and e.g. a click on an app pane must go live, not be replayed while blocked.
             .capture_any_mouse_down(cx.listener(|this, _, window, cx| {
                 if this.model.visual.is_some() {
-                    this.dispatch(Action::LeaveVisual, window, cx);
+                    this.dispatch(Action::LeaveVisual, this.input, window, cx);
                 }
                 // The same for sneak mode: the click is the choice.
                 if this.model.sneak.is_some() {
-                    this.dispatch(Action::LeaveSneak, window, cx);
+                    this.dispatch(Action::LeaveSneak, this.input, window, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &CopySelection, _, cx| this.copy(cx)))
             .on_action(cx.listener(|this, _: &PasteText, _, cx| this.paste(cx)))
             .on_action(cx.listener(|this, _: &VisualMode, window, cx| {
-                this.dispatch(Action::ToggleVisual, window, cx);
+                this.dispatch(Action::ToggleVisual, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &ListMode, window, cx| {
                 this.refresh_lists();
-                this.dispatch(Action::FocusList, window, cx);
+                this.dispatch(Action::FocusList, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &SneakMode, window, cx| this.toggle_sneak(window, cx)))
             .on_action(cx.listener(|this, _: &NewTask, window, cx| this.new_task(window, cx)))
             .on_action(cx.listener(|this, _: &NextTask, window, cx| {
-                this.dispatch(Action::Tick { now: now_ms() }, window, cx);
-                this.dispatch(Action::TaskOpen { id: None }, window, cx);
+                this.dispatch(Action::Tick { now: now_ms() }, this.input, window, cx);
+                this.dispatch(Action::TaskOpen { id: None }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
-                this.dispatch(Action::Split { axis: Axis::Right, kind: Kind::Terminal }, window, cx);
+                this.dispatch(Action::Split { axis: Axis::Right, kind: Kind::Terminal }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &SplitDown, window, cx| {
-                this.dispatch(Action::Split { axis: Axis::Down, kind: Kind::Terminal }, window, cx);
+                this.dispatch(Action::Split { axis: Axis::Down, kind: Kind::Terminal }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &PickPane, window, cx| {
                 if this.model.picker.is_some() {
-                    this.dispatch(Action::ClosePicker, window, cx);
+                    this.dispatch(Action::ClosePicker, this.input, window, cx);
                 } else {
                     this.open_picker(Axis::Right, false, window, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &FocusNext, window, cx| {
-                this.dispatch(Action::FocusCycle { delta: 1 }, window, cx);
+                this.dispatch(Action::FocusCycle { delta: 1 }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &FocusPrev, window, cx| {
-                this.dispatch(Action::FocusCycle { delta: -1 }, window, cx);
+                this.dispatch(Action::FocusCycle { delta: -1 }, this.input, window, cx);
             }))
             .on_action(cx.listener(|_, _: &Zoom, window, _| window.zoom_window()))
             .on_action(cx.listener(|this, _: &ShowKeys, window, cx| {
-                this.dispatch(Action::ToggleKeys, window, cx);
+                this.dispatch(Action::ToggleKeys, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &AxOverlay, window, cx| {
                 if let Err(err) = this.toggle_ax_overlay(false, window, cx) {
@@ -3196,55 +3270,55 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &NewTab, window, cx| this.open_picker(Axis::Right, true, window, cx)))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| {
-                this.dispatch(Action::CycleTab { delta: 1 }, window, cx);
+                this.dispatch(Action::CycleTab { delta: 1 }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &PrevTab, window, cx| {
-                this.dispatch(Action::CycleTab { delta: -1 }, window, cx);
+                this.dispatch(Action::CycleTab { delta: -1 }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
-                this.dispatch(Action::CloseTab { index: None }, window, cx);
+                this.dispatch(Action::CloseTab { index: None }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &ClosePane, window, cx| {
-                this.dispatch(Action::Close { pane: None }, window, cx);
+                this.dispatch(Action::Close { pane: None }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &FocusLeft, window, cx| {
-                this.dispatch(Action::FocusDir { dir: Dir::Left }, window, cx);
+                this.dispatch(Action::FocusDir { dir: Dir::Left }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &FocusRight, window, cx| {
-                this.dispatch(Action::FocusDir { dir: Dir::Right }, window, cx);
+                this.dispatch(Action::FocusDir { dir: Dir::Right }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &FocusUp, window, cx| {
-                this.dispatch(Action::FocusDir { dir: Dir::Up }, window, cx);
+                this.dispatch(Action::FocusDir { dir: Dir::Up }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &FocusDown, window, cx| {
-                this.dispatch(Action::FocusDir { dir: Dir::Down }, window, cx);
+                this.dispatch(Action::FocusDir { dir: Dir::Down }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &ResizeLeft, window, cx| {
-                this.dispatch(Action::Resize { dir: Dir::Left }, window, cx);
+                this.dispatch(Action::Resize { dir: Dir::Left }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &ResizeRight, window, cx| {
-                this.dispatch(Action::Resize { dir: Dir::Right }, window, cx);
+                this.dispatch(Action::Resize { dir: Dir::Right }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &ResizeUp, window, cx| {
-                this.dispatch(Action::Resize { dir: Dir::Up }, window, cx);
+                this.dispatch(Action::Resize { dir: Dir::Up }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &ResizeDown, window, cx| {
-                this.dispatch(Action::Resize { dir: Dir::Down }, window, cx);
+                this.dispatch(Action::Resize { dir: Dir::Down }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &SwapLeft, window, cx| {
-                this.dispatch(Action::SwapDir { dir: Dir::Left }, window, cx);
+                this.dispatch(Action::SwapDir { dir: Dir::Left }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &SwapRight, window, cx| {
-                this.dispatch(Action::SwapDir { dir: Dir::Right }, window, cx);
+                this.dispatch(Action::SwapDir { dir: Dir::Right }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &SwapUp, window, cx| {
-                this.dispatch(Action::SwapDir { dir: Dir::Up }, window, cx);
+                this.dispatch(Action::SwapDir { dir: Dir::Up }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &SwapDown, window, cx| {
-                this.dispatch(Action::SwapDir { dir: Dir::Down }, window, cx);
+                this.dispatch(Action::SwapDir { dir: Dir::Down }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &Equalize, window, cx| {
-                this.dispatch(Action::Equalize, window, cx);
+                this.dispatch(Action::Equalize, this.input, window, cx);
             }))
             .child(self.render_top(cx))
             .child(

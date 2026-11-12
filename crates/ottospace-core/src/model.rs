@@ -353,44 +353,55 @@ pub enum Action {
     LeaveSneak,
 }
 
+/// Who sent an action.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Origin {
+    /// The person: their own keys, clicks and menu items, and what a label they typed activates.
+    User,
+    /// A client of the control socket, also for a key or click it injects.
+    Socket,
+    /// Nobody's move: a timer, a shell that exited, a list read again, an app that came forward.
+    System,
+}
+
+/// An action and who sent it: what `Model::update` takes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Envelope {
+    pub action: Action,
+    pub origin: Origin,
+}
+
 impl Action {
-    /// Whether the user made this move: a key, a click, a request for something to happen.
-    /// `false`: news that is nobody's move. The clock, a list read again, an agent's report on a
-    /// task, a pane whose shell or window is gone, a window an app opened, a frame drawn.
-    ///
-    /// Sneak mode ends on the user's moves only. News never ends it: the next letter of a label
-    /// would reach a terminal. Every action is named here, so a new one must be put on a side.
-    pub fn by_user(&self) -> bool {
+    pub fn sent_by(self, origin: Origin) -> Envelope {
+        Envelope { action: self, origin }
+    }
+
+    /// Whether the action takes the keyboard for a box, an app or another mode. Sneak mode lets
+    /// only the user do that under its labels (`Model::refusal`). Every action is named, with no
+    /// catch-all: a new one must be put on a side.
+    pub fn takes_keyboard(&self) -> bool {
         match self {
-            Action::Tick { .. }
-            | Action::SetApps { .. }
-            | Action::SetRepos { .. }
-            | Action::RestoreTasks { .. }
-            | Action::TaskAdd { .. }
-            | Action::TaskSetState { .. }
-            | Action::TaskFromLine { .. }
-            | Action::Adopt { .. }
-            // By name: the shell's own close of a dead pane. A click on a × leaves the mode
-            // first, and a label ends it before its control acts.
-            | Action::Close { pane: Some(_) }
-            | Action::SneakEnter { .. }
-            | Action::SneakDrawn { .. } => false,
+            Action::Enter { .. }
+            | Action::OpenPicker { .. }
+            | Action::OpenCompose { .. }
+            | Action::ToggleKeys
+            | Action::ToggleVisual
+            | Action::ToggleAxOverlay => true,
             Action::Split { .. }
             | Action::Open { .. }
-            | Action::Close { pane: None }
+            | Action::Adopt { .. }
+            | Action::Close { .. }
             | Action::Focus { .. }
             | Action::FocusDir { .. }
             | Action::FocusCycle { .. }
             | Action::Resize { .. }
             | Action::SwapDir { .. }
             | Action::MovePane { .. }
-            | Action::DropPane { .. }
             | Action::Equalize
-            | Action::Enter { .. }
+            | Action::DropPane { .. }
             | Action::Leave
             | Action::ToggleSection { .. }
             | Action::CloseSidebar
-            | Action::OpenPicker { .. }
             | Action::NewTab
             | Action::SelectTab { .. }
             | Action::CycleTab { .. }
@@ -401,12 +412,13 @@ impl Action {
             | Action::PickerBackspace
             | Action::PickerChoose { .. }
             | Action::ClosePicker
-            | Action::ToggleKeys
             | Action::CloseKeys
-            | Action::ToggleVisual
             | Action::LeaveVisual
-            | Action::ToggleAxOverlay
+            | Action::SetRepos { .. }
             | Action::OpenRepo { .. }
+            | Action::RestoreTasks { .. }
+            | Action::TaskAdd { .. }
+            | Action::TaskSetState { .. }
             | Action::TaskSnooze { .. }
             | Action::TaskHold { .. }
             | Action::TaskDismiss { .. }
@@ -414,12 +426,14 @@ impl Action {
             | Action::TaskOpen { .. }
             | Action::TaskLeave
             | Action::SelectVisibleTab { .. }
-            | Action::OpenCompose { .. }
+            | Action::Tick { .. }
             | Action::ComposeType { .. }
             | Action::ComposeBackspace
             | Action::ComposeComplete
             | Action::ComposeSubmit
             | Action::CloseCompose
+            | Action::TaskFromLine { .. }
+            | Action::SetApps { .. }
             | Action::FocusList
             | Action::LeaveList
             | Action::ListMove { .. }
@@ -429,10 +443,20 @@ impl Action {
             | Action::ListHold
             | Action::ListDismiss
             | Action::Sneak { .. }
+            | Action::SneakEnter { .. }
+            | Action::SneakDrawn { .. }
             | Action::SneakType { .. }
             | Action::SneakBackspace
-            | Action::LeaveSneak => true,
+            | Action::LeaveSneak => false,
         }
+    }
+}
+
+/// In this crate's tests an action alone is the user's.
+#[cfg(test)]
+impl From<Action> for Envelope {
+    fn from(action: Action) -> Self {
+        action.sent_by(Origin::User)
     }
 }
 
@@ -596,13 +620,41 @@ impl Model {
         self.pane(id).filter(|p| p.kind == Kind::Terminal).map(|p| p.id)
     }
 
-    pub fn update(&mut self, action: Action) -> Vec<Effect> {
+    /// Why an action does nothing because of who sent it. Only the user may take the keyboard
+    /// from under sneak mode's labels, or close the picker by opening the key reference.
+    /// `None`: the origin does not stop it. The shell answers a socket request with the reason.
+    pub fn refusal(&self, action: &Action, origin: Origin) -> Option<&'static str> {
+        let boxed = self.picker.is_some() || self.compose.is_some();
+        match action {
+            _ if origin == Origin::User => None,
+            action if self.sneak.is_some() && action.takes_keyboard() => Some("sneak mode is on"),
+            Action::ToggleKeys if boxed && !self.keys => Some("the picker or the new-task box is open"),
+            _ => None,
+        }
+    }
+
+    pub fn update(&mut self, sent: impl Into<Envelope>) -> Vec<Effect> {
+        let Envelope { action, origin } = sent.into();
+        let user = origin == Origin::User;
         let mut effects = Vec::new();
-        // Any move of the user's ends sneak mode; its own keys say below what they do to it.
-        // News never ends it (see `Action::by_user`): the labels follow what is drawn instead.
-        let own = matches!(action, Action::Sneak { .. } | Action::SneakType { .. } | Action::SneakBackspace);
-        if action.by_user() && !own {
+        // Sneak mode ends on the user's own moves. A socket client's request and news never end
+        // it, or the next letter of a label would reach a terminal: the labels follow what is
+        // drawn instead. Its own actions say below what they do to it, whoever sent them: a
+        // letter typed through the socket is input to the mode.
+        let own = matches!(
+            action,
+            Action::Sneak { .. }
+                | Action::SneakEnter { .. }
+                | Action::SneakDrawn { .. }
+                | Action::SneakType { .. }
+                | Action::SneakBackspace
+                | Action::LeaveSneak
+        );
+        if user && !own {
             self.sneak = None;
+        }
+        if self.refusal(&action, origin).is_some() {
+            return effects;
         }
         // The picker has the keyboard. Pane and bar actions wait until it closes, so a
         // shortcut cannot change what is behind it (e.g. ⌘W closing the pane it splits).
@@ -1098,7 +1150,7 @@ impl Model {
                     sneak.backspace();
                 }
             }
-            Action::LeaveSneak => {}
+            Action::LeaveSneak => self.sneak = None,
         }
     }
 
@@ -1539,14 +1591,11 @@ mod tests {
             Action::Tick { now: 1 },
             Action::SetApps { names: vec!["Notes".into()] },
             Action::SetRepos { repos: Vec::new() },
-            Action::TaskAdd { title: "t".into(), priority: 3, state: State::Running, tab: None },
-            Action::TaskSetState { id: 1, state: State::NeedsYou },
-            Action::TaskFromLine { line: "fix it".into() },
             Action::Adopt { kind: app(7), beside: None },
             Action::Close { pane: Some(2) },
             Action::SneakDrawn { targets: controls(3) },
         ] {
-            m.update(news.clone());
+            m.update(news.clone().sent_by(Origin::System));
             assert_eq!((m.mode(), typed(&m)), (Mode::Sneak, Some("")), "{news:?}");
         }
         assert!(m.pane(2).is_none(), "the dead pane is closed all the same");
@@ -1554,27 +1603,207 @@ mod tests {
         assert_eq!(m.update(Action::SneakType { text: "a".into() }), [Effect::Activate { id: "c0".into() }]);
     }
 
-    /// Every action, on its side. `Action::by_user` names each variant with no catch-all, so a
-    /// new one does not compile until it has a side; this is the list to read.
     #[test]
-    fn every_action_is_the_users_move_or_news() {
-        let (text, line, title) = (String::new, String::new, String::new);
-        let news = [
-            Action::Tick { now: 0 },
-            Action::SetApps { names: Vec::new() },
-            Action::SetRepos { repos: Vec::new() },
-            Action::RestoreTasks { tasks: Vec::new(), floor: 0 },
-            Action::TaskAdd { title: title(), priority: 3, state: State::Running, tab: None },
-            Action::TaskSetState { id: 1, state: State::Done },
-            Action::TaskFromLine { line: line() },
-            Action::Adopt { kind: app(1), beside: None },
-            Action::Close { pane: Some(1) },
-            Action::SneakEnter { targets: Vec::new() },
-            Action::SneakDrawn { targets: Vec::new() },
-        ];
-        let moves = [
+    fn a_socket_clients_request_runs_without_ending_sneak_and_the_labels_follow() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Empty });
+        m.update(Action::Sneak { targets: vec![control("pane:1", 0.), control("rail:tasks", 300.)] });
+        // An agent splits, moves focus and files a task while the user reads the labels.
+        for request in [
+            Action::Split { axis: Right, kind: Kind::Empty },
+            Action::Focus { pane: 1 },
+            Action::TaskAdd { title: "t".into(), priority: 3, state: State::Running, tab: None },
+        ] {
+            m.update(request.clone().sent_by(Origin::Socket));
+            assert_eq!(m.mode(), Mode::Sneak, "{request:?}");
+        }
+        assert_eq!((ids(&m), m.focused, m.tasks.list.len()), (vec![1, 2], Some(1), 1), "each request ran");
+        // The frame after: pane 1 is narrower, pane 2 is new and has no label.
+        let drawn = vec![control("pane:1", 0.), control("pane:2", 150.), control("rail:tasks", 300.)];
+        m.update(Action::SneakDrawn { targets: drawn }.sent_by(Origin::System));
+        assert_eq!((label_of(&m, "pane:1"), label_of(&m, "pane:2")), (Some("a".into()), None));
+        // The same move by the user ends the mode, and runs.
+        m.update(Action::Focus { pane: 2 });
+        assert_eq!((m.mode(), m.focused), (Mode::Normal, Some(2)));
+        // A pane closed by name: the shell's own, for a dead pane, keeps the mode; a click on its × ends it.
+        sneak(&mut m, 3);
+        m.update(Action::Close { pane: Some(2) }.sent_by(Origin::System));
+        assert_eq!((m.mode(), ids(&m)), (Mode::Sneak, vec![1]));
+        m.update(Action::Close { pane: Some(1) });
+        assert_eq!((m.mode(), ids(&m)), (Mode::Normal, vec![]));
+    }
+
+    #[test]
+    fn a_label_typed_through_the_socket_is_input_to_sneak_mode() {
+        let socket = |action: Action| action.sent_by(Origin::Socket);
+        let mut m = Model::default();
+        // The `key` request: the mode's own key, letters, ⌫ and Esc, as from the keyboard.
+        m.update(socket(Action::Sneak { targets: controls(30) }));
+        assert_eq!(m.mode(), Mode::Sneak);
+        m.update(socket(Action::SneakType { text: "p".into() }));
+        assert_eq!(typed(&m), Some("p"));
+        m.update(socket(Action::SneakBackspace));
+        assert_eq!(typed(&m), Some(""));
+        let effects = m.update(socket(Action::SneakType { text: "s".into() }));
+        assert_eq!((effects, m.mode()), (vec![Effect::Activate { id: "c1".into() }], Mode::Normal));
+        // Esc, the mode's key again, and a letter of no label leave.
+        for leave in
+            [Action::LeaveSneak, Action::Sneak { targets: controls(3) }, Action::SneakType { text: "z".into() }]
+        {
+            sneak(&mut m, 3);
+            assert_eq!((m.update(socket(leave)), m.mode()), (vec![], Mode::Normal));
+        }
+    }
+
+    #[test]
+    fn under_sneak_a_client_or_news_cannot_take_the_keyboard_away() {
+        let takers = || {
+            [
+                Action::Enter { pane: 1 },
+                Action::OpenPicker { axis: Right, new_tab: false, items: vec![PickItem::Terminal] },
+                Action::OpenCompose { text: "a draft".into() },
+                Action::ToggleKeys,
+                Action::ToggleVisual,
+                Action::ToggleAxOverlay,
+            ]
+        };
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        sneak(&mut m, 3);
+        let taken =
+            |m: &Model| (m.mode(), m.picker.is_some(), m.compose.is_some(), m.keys, m.visual, m.ax_overlay, m.live);
+        let before = taken(&m);
+        assert_eq!(before.0, Mode::Sneak);
+        for origin in [Origin::Socket, Origin::System] {
+            for action in takers() {
+                assert_eq!(m.update(action.clone().sent_by(origin)), [], "{action:?} from {origin:?}");
+                assert_eq!(taken(&m), before, "{action:?} from {origin:?}");
+            }
+        }
+        // The user's own does both: leaves the mode and acts.
+        assert_eq!((m.update(Action::Enter { pane: 1 }), m.mode()), (vec![Effect::Live(1)], Mode::App));
+    }
+
+    #[test]
+    fn only_the_user_closes_the_picker_by_opening_the_key_reference() {
+        let mut m = Model::default();
+        m.update(Action::OpenPicker { axis: Right, new_tab: false, items: vec![PickItem::Terminal] });
+        for origin in [Origin::Socket, Origin::System] {
+            assert_eq!(m.refusal(&Action::ToggleKeys, origin), Some("the picker or the new-task box is open"));
+            m.update(Action::ToggleKeys.sent_by(origin));
+            assert_eq!((m.mode(), m.keys), (Mode::Pick, false), "{origin:?}");
+        }
+        assert_eq!(m.refusal(&Action::ToggleKeys, Origin::User), None);
+        m.update(Action::ToggleKeys);
+        assert_eq!((m.picker.is_none(), m.keys), (true, true));
+        // A client may still hide a reference that is open: that request is aimed at it.
+        m.update(Action::ToggleKeys.sent_by(Origin::Socket));
+        assert!(!m.keys);
+        // The new-task box is kept the same way.
+        m.update(Action::OpenCompose { text: String::new() });
+        m.update(Action::ToggleKeys.sent_by(Origin::Socket));
+        assert_eq!((m.mode(), m.keys), (Mode::Compose, false));
+    }
+
+    /// Every `Action` variant, once, in the enum's order. `named` is a match with no catch-all:
+    /// a new variant does not compile until it is named here. `COUNT` then grows, and the tests
+    /// over `samples` fail until they have one of it.
+    macro_rules! every_action {
+        ($($variant:pat),* $(,)?) => {
+            const COUNT: usize = [$(stringify!($variant)),*].len();
+
+            /// The variant's place in the list.
+            fn index(action: &Action) -> usize {
+                let listed = [$(matches!(action, $variant)),*];
+                listed.iter().position(|is| *is).unwrap_or(COUNT)
+            }
+
+            #[allow(dead_code)]
+            fn named(action: &Action) {
+                match action {
+                    $($variant => {})*
+                }
+            }
+        };
+    }
+    every_action!(
+        Action::Split { .. },
+        Action::Open { .. },
+        Action::Adopt { .. },
+        Action::Close { .. },
+        Action::Focus { .. },
+        Action::FocusDir { .. },
+        Action::FocusCycle { .. },
+        Action::Resize { .. },
+        Action::SwapDir { .. },
+        Action::MovePane { .. },
+        Action::Equalize,
+        Action::DropPane { .. },
+        Action::Enter { .. },
+        Action::Leave,
+        Action::ToggleSection { .. },
+        Action::CloseSidebar,
+        Action::OpenPicker { .. },
+        Action::NewTab,
+        Action::SelectTab { .. },
+        Action::CycleTab { .. },
+        Action::CloseTab { .. },
+        Action::PickerQuery { .. },
+        Action::PickerMove { .. },
+        Action::PickerType { .. },
+        Action::PickerBackspace,
+        Action::PickerChoose { .. },
+        Action::ClosePicker,
+        Action::ToggleKeys,
+        Action::CloseKeys,
+        Action::ToggleVisual,
+        Action::LeaveVisual,
+        Action::ToggleAxOverlay,
+        Action::SetRepos { .. },
+        Action::OpenRepo { .. },
+        Action::RestoreTasks { .. },
+        Action::TaskAdd { .. },
+        Action::TaskSetState { .. },
+        Action::TaskSnooze { .. },
+        Action::TaskHold { .. },
+        Action::TaskDismiss { .. },
+        Action::TaskUndo,
+        Action::TaskOpen { .. },
+        Action::TaskLeave,
+        Action::SelectVisibleTab { .. },
+        Action::Tick { .. },
+        Action::OpenCompose { .. },
+        Action::ComposeType { .. },
+        Action::ComposeBackspace,
+        Action::ComposeComplete,
+        Action::ComposeSubmit,
+        Action::CloseCompose,
+        Action::TaskFromLine { .. },
+        Action::SetApps { .. },
+        Action::FocusList,
+        Action::LeaveList,
+        Action::ListMove { .. },
+        Action::ListSection { .. },
+        Action::ListChoose { .. },
+        Action::ListSnooze { .. },
+        Action::ListHold,
+        Action::ListDismiss,
+        Action::Sneak { .. },
+        Action::SneakEnter { .. },
+        Action::SneakDrawn { .. },
+        Action::SneakType { .. },
+        Action::SneakBackspace,
+        Action::LeaveSneak
+    );
+
+    /// One of each action.
+    fn samples() -> Vec<Action> {
+        let text = String::new;
+        let samples = vec![
             Action::Split { axis: Right, kind: Kind::Empty },
             Action::Open { kind: app(1), axis: Right, beside: None },
+            Action::Adopt { kind: app(1), beside: None },
+            Action::DropPane { source: 1, target: 1, zone: Zone::Left },
             Action::Close { pane: None },
             Action::Focus { pane: 1 },
             Action::FocusDir { dir: Dir::Left },
@@ -1603,7 +1832,11 @@ mod tests {
             Action::ToggleVisual,
             Action::LeaveVisual,
             Action::ToggleAxOverlay,
+            Action::SetRepos { repos: Vec::new() },
             Action::OpenRepo { path: text(), axis: Right },
+            Action::RestoreTasks { tasks: Vec::new(), floor: 0 },
+            Action::TaskAdd { title: text(), priority: 3, state: State::Running, tab: None },
+            Action::TaskSetState { id: 1, state: State::Done },
             Action::TaskSnooze { id: 1, until: 0 },
             Action::TaskHold { id: 1 },
             Action::TaskDismiss { id: 1 },
@@ -1611,12 +1844,15 @@ mod tests {
             Action::TaskOpen { id: None },
             Action::TaskLeave,
             Action::SelectVisibleTab { index: 0 },
+            Action::Tick { now: 0 },
             Action::OpenCompose { text: text() },
             Action::ComposeType { text: text() },
             Action::ComposeBackspace,
             Action::ComposeComplete,
             Action::ComposeSubmit,
             Action::CloseCompose,
+            Action::TaskFromLine { line: text() },
+            Action::SetApps { names: Vec::new() },
             Action::FocusList,
             Action::LeaveList,
             Action::ListMove { delta: 1 },
@@ -1626,19 +1862,42 @@ mod tests {
             Action::ListHold,
             Action::ListDismiss,
             Action::Sneak { targets: Vec::new() },
+            Action::SneakEnter { targets: Vec::new() },
+            Action::SneakDrawn { targets: controls(3) },
             Action::SneakType { text: text() },
             Action::SneakBackspace,
             Action::LeaveSneak,
         ];
-        for action in &news {
-            assert!(!action.by_user(), "{action:?} is news");
+        let mut places: Vec<usize> = samples.iter().map(index).collect();
+        places.sort_unstable();
+        assert_eq!(places, (0..COUNT).collect::<Vec<_>>(), "one sample of every action");
+        samples
+    }
+
+    /// Every action from every origin. The origin decides, not the action: only the user's own
+    /// move ends sneak mode, and only the user takes the keyboard from under its labels.
+    #[test]
+    fn only_the_users_own_move_ends_sneak_whatever_the_action() {
+        for action in &samples() {
+            for origin in [Origin::User, Origin::Socket, Origin::System] {
+                let mut m = Model::default();
+                m.update(Action::Split { axis: Right, kind: Kind::Empty });
+                sneak(&mut m, 3);
+                let refused = (origin != Origin::User && action.takes_keyboard()).then_some("sneak mode is on");
+                assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");
+                m.update(action.clone().sent_by(origin));
+                let ends = match action {
+                    // The mode's own: its key and Esc leave from anywhere, the rest stay in it.
+                    Action::Sneak { .. } | Action::LeaveSneak => true,
+                    Action::SneakEnter { .. }
+                    | Action::SneakDrawn { .. }
+                    | Action::SneakType { .. }
+                    | Action::SneakBackspace => false,
+                    _ => origin == Origin::User,
+                };
+                assert_eq!(m.sneak.is_none(), ends, "{action:?} from {origin:?}");
+            }
         }
-        for action in &moves {
-            assert!(action.by_user(), "{action:?} is the user's move");
-        }
-        // No variant twice, but `Close`: by name it is the shell's, of the focused pane the user's.
-        let kinds: std::collections::HashSet<_> = news.iter().chain(&moves).map(std::mem::discriminant).collect();
-        assert_eq!(kinds.len(), news.len() + moves.len() - 1);
     }
 
     /// The tab bar as the shell reports it: each tab and its ×, left to right.
@@ -1664,10 +1923,11 @@ mod tests {
         assert_eq!((second.len(), third.len()), (2, 2), "a × takes two letters");
 
         // News: the mode stays on, and tab 2 is the task's, off the bar.
-        m.update(Action::TaskAdd { title: "t".into(), priority: 3, state: State::Running, tab: Some(2) });
+        let add = Action::TaskAdd { title: "t".into(), priority: 3, state: State::Running, tab: Some(2) };
+        m.update(add.sent_by(Origin::Socket));
         assert_eq!((m.mode(), m.visible_tabs()), (Mode::Sneak, vec![0, 2]));
         // The next frame draws tabs 1 and 3: tab 3 where tab 2 was.
-        m.update(Action::SneakDrawn { targets: tab_bar(&[1, 3]) });
+        m.update(Action::SneakDrawn { targets: tab_bar(&[1, 3]) }.sent_by(Origin::System));
         assert_eq!(label_of(&m, "tab-close:2"), None, "not drawn: no label");
         assert_eq!(label_of(&m, "tab-close:3"), Some(third.clone()), "the same letters");
         let moved = m.sneak.as_ref().unwrap().targets.iter().find(|t| t.label == third).unwrap();

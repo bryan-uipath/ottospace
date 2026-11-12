@@ -1416,9 +1416,22 @@ fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
 
     // A × never has a one-letter label: one stray key closes nothing.
     assert_eq!(labels["tab-close:1"].len(), 2, "{labels:?}");
-    // Keys that are not letters do nothing. Esc leaves, and nothing has changed.
-    let before = otto.call(json!({"cmd": "key", "keys": "1 left enter tab"}));
-    assert_eq!((&before["mode"], &before["sneak"]["typed"]), (&json!("sneak"), &json!("")), "not letters");
+    // While the labels are up, a client may type a label, ⌫, Esc or the mode's key. Any other
+    // key, a ⌘ shortcut too, and the pointer are refused and change nothing: they would end the
+    // user's mode, or do something under it.
+    let refused = |request: Value| {
+        let reply = otto.raw(&request.to_string());
+        assert_eq!((&reply["ok"], &reply["error"]), (&json!(false), &json!("sneak mode is on")), "{request}");
+    };
+    for keys in ["1", "left", "enter tab", "cmd-c", "cmd-/", "cmd-w", "ctrl-a"] {
+        refused(json!({"cmd": "key", "keys": keys}));
+    }
+    refused(json!({"cmd": "mouse_down", "x": 1, "y": 1}));
+    refused(json!({"cmd": "mouse", "action": "down", "x": 5, "y": 5}));
+    refused(json!({"cmd": "drag", "from": [5, 5], "to": [50, 50]}));
+    let before = otto.call(json!({"cmd": "state"}));
+    assert_eq!((&before["mode"], &before["sneak"]["typed"]), (&json!("sneak"), &json!("")));
+    assert_eq!((&before["state"]["keys"], sneak_labels(&before)), (&json!(false), labels.clone()));
     // Asking again while it is on changes nothing: the same labels.
     assert_eq!(sneak(&otto).1, labels);
     let after = otto.call(json!({"cmd": "key", "keys": "escape"}));
@@ -1427,16 +1440,6 @@ fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
     sneak(&otto);
     let after = otto.call(json!({"cmd": "key", "keys": "z"}));
     assert_eq!((&after["mode"], &after["sneak"], &after["state"]), (&json!("normal"), &Value::Null, &before["state"]));
-    // Any ⌘ shortcut leaves and then runs, also one that changes no state (copy).
-    sneak(&otto);
-    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-c"}))["mode"], "normal");
-    sneak(&otto);
-    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-/"}));
-    assert_eq!(
-        (&reply["mode"], &reply["sneak"], &reply["state"]["keys"]),
-        (&json!("normal"), &Value::Null, &json!(true))
-    );
-    otto.call(json!({"cmd": "key", "keys": "escape"}));
     // The mode's own key enters, and leaves.
     assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-g"}))["mode"], "sneak");
     assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-g"}))["mode"], "normal");
@@ -1538,9 +1541,9 @@ fn a_two_letter_sneak_label_narrows_then_activates() {
     assert_eq!((&reply["mode"], &reply["sneak"], pane_ids(&reply)), (&json!("normal"), &Value::Null, vec![1, 2]));
 }
 
-/// Where the labelled control `id` is: its frame's left edge.
-fn label_x(reply: &Value, id: &str) -> Option<f64> {
-    reply["sneak"]["targets"].as_array()?.iter().find(|t| t["source"]["id"] == id)?["frame"]["x"].as_f64()
+/// One side of the labelled control `id`'s frame: `x`, `y`, `w` or `h`.
+fn label_frame(reply: &Value, id: &str, side: &str) -> Option<f64> {
+    reply["sneak"]["targets"].as_array()?.iter().find(|t| t["source"]["id"] == id)?["frame"][side].as_f64()
 }
 
 #[test]
@@ -1568,7 +1571,8 @@ fn a_sneak_label_follows_its_control_and_never_reaches_the_one_that_took_its_pla
     });
     let now = sneak_labels(&after);
     assert_eq!(now.get(&third_close), Some(&kept), "the same letters on the same control");
-    let (was, is) = (label_x(&before, &third_close).unwrap(), label_x(&after, &third_close).unwrap());
+    let x = |reply: &Value| label_frame(reply, &third_close, "x").unwrap();
+    let (was, is) = (x(&before), x(&after));
     assert!(is < was - 10.0, "its pill moved left with it: {was} -> {is}");
     assert!(now.len() < labels.len() && now.iter().all(|(id, label)| labels.get(id) == Some(label)), "{now:?}");
 
@@ -1615,4 +1619,49 @@ fn news_does_not_end_sneak_mode_and_no_key_of_a_label_reaches_the_terminal() {
     wait("^clean-42$");
     let text = otto.call(json!({"cmd": "capture", "pane": 2}))["text"].as_str().unwrap().to_string();
     assert!(!text.contains("xxx"), "{text}");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_request_from_the_socket_does_not_end_sneak_mode() {
+    let otto = Otto::launch("sneak-socket");
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.bounds(&[1]);
+    let (before, labels) = sneak(&otto);
+
+    // An agent's requests run, and the user's labels stay up.
+    let reply = otto.call(json!({"cmd": "split", "axis": "right", "kind": "empty"}));
+    assert_eq!((&reply["mode"], pane_ids(&reply)), (&json!("sneak"), vec![1, 2]));
+    let reply = otto.call(json!({"cmd": "focus", "pane": 1}));
+    assert_eq!((&reply["mode"], &reply["state"]["focused"]), (&json!("sneak"), &json!(1)));
+    otto.call(json!({"cmd": "task_add", "title": "an agent's task"}));
+    // One that would take the keyboard from under the labels is refused, and says why.
+    for request in [json!({"cmd": "picker"}), json!({"cmd": "keys"}), json!({"cmd": "enter", "pane": 1})] {
+        let reply = otto.raw(&request.to_string());
+        assert_eq!((&reply["ok"], &reply["error"]), (&json!(false), &json!("sneak mode is on")), "{request}");
+    }
+    assert_eq!(otto.raw(r#"{"cmd":"compose","text":"a draft"}"#)["ok"], false);
+    // No picker opened, so there is nothing to choose from: that fails too, it does not pass in silence.
+    assert_eq!(otto.raw(r#"{"cmd":"picker_choose"}"#)["error"], "the picker is not open");
+    let reply = otto.call(json!({"cmd": "state"}));
+    let untouched = (&reply["mode"], &reply["state"]["picker"], &reply["state"]["keys"], &reply["state"]["compose"]);
+    assert_eq!(untouched, (&json!("sneak"), &Value::Null, &json!(false), &Value::Null));
+
+    // The labels follow the new frame: pane 1 is half as wide and keeps its letters; pane 2 has none.
+    let was = label_frame(&before, "pane:1", "w").unwrap();
+    let after = otto.wait_for("the labels to follow the split", |o| {
+        let reply = o.call(json!({"cmd": "state"}));
+        label_frame(&reply, "pane:1", "w").is_some_and(|now| now < was * 0.7).then_some(reply)
+    });
+    let now = sneak_labels(&after);
+    assert_eq!(now.get("pane:1"), labels.get("pane:1"));
+    assert!(!now.contains_key("pane:2") && now.iter().all(|(id, label)| labels.get(id) == Some(label)), "{now:?}");
+
+    // A label typed with `key` is input to the mode: it activates, and the mode ends.
+    let reply = otto.call(json!({"cmd": "key", "keys": letters(&now["rail:tasks"])}));
+    let chosen = (&reply["mode"], &reply["sneak"], &reply["state"]["sidebar"]);
+    assert_eq!(chosen, (&json!("normal"), &Value::Null, &json!("tasks")));
+    let (_, labels) = sneak(&otto);
+    let reply = otto.call(json!({"cmd": "key", "keys": letters(&labels["close:2"])}));
+    assert_eq!((&reply["mode"], pane_ids(&reply)), (&json!("normal"), vec![1]));
 }
