@@ -24,6 +24,7 @@ use gpui::{
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::compose;
+use ottospace_core::edit::{self, Edit};
 use ottospace_core::hosted::{self as hosting, Click};
 use ottospace_core::keys::{self, Mods};
 use ottospace_core::list::{ListKey, list_key};
@@ -43,13 +44,17 @@ use ottospace_mac::{ax, capture, display, hotkey, icon, input, recovery};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use screencapturekit::prelude::*;
 
+mod apps;
 mod ax_debug;
 mod config;
 mod confirm;
 mod control;
+mod dialog;
+mod field;
 mod home;
 mod marks;
 mod menus;
+mod new_task;
 mod repos;
 mod sessions;
 mod sneak;
@@ -386,7 +391,7 @@ const KEYS_TERMINAL: &[(&str, &str)] = &[
     ("⌘⇧C", "Visual mode: select with the keyboard"),
     ("⌘⇧E", "List mode: keys for the bar (Apps, Tasks, Repos, Marks). ↵ or space on a heading folds it"),
     ("⌘⌃G", "Sneak mode: a letter label on every control"),
-    ("⌘N", "New task: type a line, ↵ files it"),
+    ("⌘N", "New task: type a line, ↵ adds it"),
     ("⌘⇧N", "Next task: show the tabs of the first that needs you"),
     ("⌘H", "Hide ottospace"),
     ("⌘Q", "Quit: asks first while a terminal runs"),
@@ -410,6 +415,16 @@ const KEYS_VISUAL: &[(&str, &str)] = &[
     ("V / ⇧V", "Select from here / whole lines; again clears"),
     ("Y or ↵", "Copy and leave"),
     ("Esc", "Leave"),
+];
+
+/// The new-task line and the picker's filter.
+const KEYS_FIELD: &[(&str, &str)] = &[
+    ("⌥←/→ · ⌘←/→", "Move by word / to the line's ends"),
+    ("⇧ + a move · ⌘A", "Select / select all"),
+    ("⌥⌫ · ⌘⌫", "Delete a word / to the start"),
+    ("⌘C ⌘X ⌘V", "Copy, cut, paste"),
+    ("⌘Z / ⇧⌘Z", "Undo / redo"),
+    ("Drag / 2× / 3× click", "Select text, a word, the line"),
 ];
 
 const KEYS_SNEAK: &[(&str, &str)] = &[
@@ -510,6 +525,8 @@ actions!(
     [ResizeLeft, ResizeRight, ResizeUp, ResizeDown, SwapLeft, SwapRight, SwapUp, SwapDown, Equalize, FitPane]
 );
 // Terminal selection.
+// The Edit menu items for a text field.
+actions!(ottospace, [Cut, SelectAll, Undo, Redo]);
 actions!(ottospace, [CopySelection, PasteText, VisualMode, ListMode, SneakMode, NewTask, NextTask]);
 // Marks: mark the focused pane or the tab on show, and the jump prefix.
 actions!(ottospace, [MarkPane, MarkTab, MarkJump]);
@@ -556,6 +573,8 @@ struct Workspace {
     marks: Marks,
     /// The last text copied. E2E runs use it as the clipboard, so tests never touch the user's.
     copied: Option<String>,
+    /// The open text field as last drawn.
+    field: field::Shared,
     system_clipboard: bool,
     /// Each pane's body bounds in window coordinates, recorded during prepaint.
     cells: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
@@ -579,6 +598,8 @@ struct Workspace {
     closed: Vec<Installed>,
     /// Apps started from the list, and where each one's window goes once it has one.
     launching: Vec<Launch>,
+    /// The apps found installed, for the picker.
+    installed: apps::Scan,
     /// Icons of apps seen so far, by app name. Kept: an icon is read and encoded once.
     icons: HashMap<String, Arc<gpui::Image>>,
     /// A problem found at start (settings, font, tasks folder). It stays: unlike `error`, no
@@ -823,6 +844,7 @@ impl Workspace {
             injected: false,
             marks: Marks::default(),
             copied: None,
+            field: field::Shared::default(),
             system_clipboard: std::env::var_os("OTTOSPACE_E2E").is_none(),
             cells: HashMap::new(),
             frames: HashMap::new(),
@@ -835,6 +857,7 @@ impl Workspace {
             apps: Vec::new(),
             closed: Vec::new(),
             launching: Vec::new(),
+            installed: apps::Scan::default(),
             icons: HashMap::new(),
             list_scroll: ScrollHandle::new(),
             minute: 0,
@@ -895,7 +918,8 @@ impl Workspace {
         if opens_repos && matches!(action, Action::ToggleSection { section: Section::Repos }) {
             self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
         }
-        let line = self.model.compose.clone();
+        let line = self.model.compose_line().cloned();
+        let field = self.model.field().map(|(of, _)| of);
         // The core has no clock: a task filed now is stamped with the time told here.
         // So is the notice that offers a mouse move back: it counts its seconds from here.
         let files = matches!(
@@ -912,9 +936,12 @@ impl Workspace {
             self.model.update(Action::Tick { now: now_ms() }.sent_by(Origin::System));
         }
         let effects = self.model.update(action.sent_by(origin));
+        if self.model.field().map(|(of, _)| of) != field {
+            self.field_changed_hands();
+        }
         // The line in the new-task box changed: ask what its tags may name. The answer comes
         // later (`take_tags`): reading it is disk I/O, never done here.
-        match self.model.compose.clone() {
+        match self.model.compose_line().cloned() {
             Some(now) if line.as_ref() != Some(&now) => self.ask_tags(now),
             Some(_) => {}
             None => self.tags_repo = None,
@@ -979,6 +1006,7 @@ impl Workspace {
                 Effect::HostApp { name, axis, new_tab } => {
                     let _ = self.open_app(name, *axis, *new_tab, window, cx);
                 }
+                Effect::LaunchApp { name, path, axis, new_tab } => self.launch_picked(name, path, *axis, *new_tab),
                 Effect::Visual { pane, on } => {
                     if let Some(terminal) = self.terminals.get(pane) {
                         terminal.set_visual(*on);
@@ -1580,7 +1608,8 @@ impl Workspace {
                     _ => false,
                 });
                 // A picked app that could not be hosted: `open_app` left the reason in `error`.
-                let unhosted = effects.iter().any(|e| matches!(e, Effect::HostApp { .. })) && self.error.is_some();
+                let picked = |e: &Effect| matches!(e, Effect::HostApp { .. } | Effect::LaunchApp { .. });
+                let unhosted = effects.iter().any(picked) && self.error.is_some();
                 if dead || unhosted {
                     failure = self.error.clone().or(Some("the shell did not start".into()));
                 }
@@ -1910,6 +1939,12 @@ impl Workspace {
             "terminals": terminals,
             // The last text ⌘C copied.
             "copied": self.copied,
+            // The picker's rows as drawn, or null: `state.picker.items` narrowed by its filter,
+            // then, once something is typed, the installed apps that are not running (`closed`).
+            "picker_rows": self.model.picker.as_ref().map(Picker::matches),
+            // The text field that has the keyboard (the new-task box's line or the picker's
+            // filter), or null: its text, cursor and selection.
+            "field": self.field_snapshot(),
             // Tasks as the Tasks section lists them, and how many need the user.
             "inbox": self.inbox(),
             "needs_you": self.model.tasks.needs_you(),
@@ -2083,6 +2118,11 @@ impl Workspace {
         let on_its_way = self.launching.iter().any(|launch| launch.app.path == app.path);
         if on_its_way && wanted.is_none() {
             return Ok(());
+        }
+        // Running, with no window to host (minimised, on another Space): `open` would only
+        // bring it to the front. A mark still asks: it waits for the window it wants.
+        if wanted.is_none() && apps::running_bundles().contains(&app.path) {
+            return Err(format!("{} is running but has no window on this Space", app.name));
         }
         if !on_its_way {
             match std::process::Command::new("open").arg("-g").arg(&app.path).status() {
@@ -2457,29 +2497,6 @@ impl Workspace {
         Some(cell_at(local.x.into(), local.y.into(), cell, terminal.grid_size()))
     }
 
-    /// The new-task box takes every key but ⌘ shortcuts: text types, ↵ files, Tab completes.
-    fn compose_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
-        let key = &event.keystroke;
-        let m = key.modifiers;
-        let action = match key.key.as_str() {
-            // ⌘↵ files the task and shows its tabs.
-            "enter" if m.platform && !event.is_held => Action::ComposeSubmit { open: true },
-            _ if m.platform => return, // ⌘ shortcuts still reach their bindings; pane ones wait
-            "escape" => Action::CloseCompose,
-            "enter" if !event.is_held => Action::ComposeSubmit { open: false },
-            "enter" => return,
-            "tab" => Action::ComposeComplete,
-            "backspace" => Action::ComposeBackspace,
-            // Whatever the key types, ⌥ included: on some layouts `@` and `#` need it.
-            _ => match key.key_char.as_deref().filter(|_| !m.control) {
-                Some(text) if !text.chars().any(char::is_control) => Action::ComposeType { text: text.into() },
-                _ => return,
-            },
-        };
-        self.dispatch(action, self.input, window, cx);
-        cx.stop_propagation();
-    }
-
     /// List mode takes every key but ⌘ shortcuts: they move over the bar's rows and act on one.
     fn list_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
         let key = &event.keystroke;
@@ -2583,9 +2600,12 @@ impl Workspace {
         cx.notify();
     }
 
-    /// ⌘C: copies the focused terminal's selection, in visual mode too. With nothing selected it
+    /// ⌘C: copies the open text field's selection, else the focused terminal's, in visual mode too. With nothing selected it
     /// does nothing.
-    fn copy(&mut self, cx: &mut Context<Self>) {
+    fn copy(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.field_copy(false, window, cx) {
+            return;
+        }
         let pane = self.model.visual.or_else(|| self.model.keyboard_terminal());
         let terminal = pane.and_then(|id| self.terminals.get(&id));
         let Some(text) = terminal.and_then(Terminal::selected) else { return };
@@ -2599,45 +2619,55 @@ impl Workspace {
         self.copied = Some(text);
     }
 
-    /// ⌘V: pastes the clipboard's text into the focused terminal.
-    fn paste(&mut self, cx: &mut Context<Self>) {
+    /// ⌘V: pastes the clipboard's text into the open text field, else the focused terminal.
+    fn paste(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.field_paste(window, cx) {
+            return;
+        }
         let Some(terminal) = self.model.keyboard_terminal().and_then(|id| self.terminals.get(&id)) else { return };
-        let text = match self.system_clipboard {
+        if let Some(text) = self.clipboard_text(cx) {
+            terminal.paste(&text);
+        }
+    }
+
+    /// The clipboard's text. An E2E run's clipboard is `copied`, never the user's.
+    fn clipboard_text(&self, cx: &App) -> Option<String> {
+        match self.system_clipboard {
             true => cx.read_from_clipboard().and_then(|item| item.text()),
             false => self.copied.clone(),
-        };
-        if let Some(text) = text {
-            terminal.paste(&text);
         }
     }
 
     /// Opens the pane picker: a terminal, then each running app.
     fn open_picker(&mut self, axis: Axis, new_tab: bool, window: &Window, cx: &mut Context<Self>) {
         self.refresh_apps();
-        // What `refresh_apps` just listed: running apps, then those that are not.
-        let apps = self.model.apps.iter().map(|name| PickItem::App { name: name.clone() });
-        let items = std::iter::once(PickItem::Terminal).chain(apps).collect();
+        // What `refresh_apps` just listed: running apps, then those of the settings that are not.
+        let apps = self.apps.iter().map(|app| PickItem::App { name: app.name.clone() });
+        let closed = self.closed.iter().map(|app| PickItem::Closed { name: app.name.clone(), path: app.path.clone() });
+        let items = std::iter::once(PickItem::Terminal).chain(apps).chain(closed).collect();
+        self.offer_installed(cx);
         self.dispatch(Action::OpenPicker { axis, new_tab, items }, self.input, window, cx);
     }
 
-    /// While the picker is open it takes every key: text filters, arrows move, enter opens.
+    /// While the picker is open it takes every key: text edits the filter, ↑↓ move, enter opens.
+    /// ⌘ shortcuts the filter does not use still reach their bindings.
     fn picker_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
         let key = &event.keystroke;
         let m = key.modifiers;
         let action = match key.key.as_str() {
-            _ if m.platform => return, // ⌘ shortcuts still reach their bindings
             "escape" => Action::ClosePicker,
             "enter" => Action::PickerChoose { index: None },
             "down" | "tab" => Action::PickerMove { delta: 1 },
             "up" => Action::PickerMove { delta: -1 },
             "n" if m.control => Action::PickerMove { delta: 1 },
             "p" if m.control => Action::PickerMove { delta: -1 },
-            "backspace" => Action::PickerBackspace,
-            // ⌥ composes other characters (⌥B is "∫"); only plain typing filters.
-            _ => match key.key_char.as_deref().filter(|_| !m.control && !m.alt) {
-                Some(text) if !text.chars().any(char::is_control) => Action::PickerType { text: text.into() },
-                _ => return,
-            },
+            // The filter is a text field: it edits, and what types text goes to the input method.
+            _ => {
+                if self.field_key(event, window, cx) {
+                    cx.stop_propagation();
+                }
+                return;
+            }
         };
         self.dispatch(action, self.input, window, cx);
         cx.stop_propagation();
@@ -2662,20 +2692,10 @@ impl Workspace {
                 }))
         };
         let rows = |list: &[(&str, &'static str)]| list.iter().map(|(k, w)| (k.to_string(), *w)).collect::<Vec<_>>();
-        let panel = div()
+        let panel = dialog::panel(theme::BORDER_STRONG)
             .p_4()
             .flex()
             .gap_8()
-            .rounded_lg()
-            .bg(rgb(theme::RAISED))
-            .border_1()
-            .border_color(rgb(theme::BORDER_STRONG))
-            .shadow(vec![BoxShadow {
-                color: black().opacity(0.7),
-                offset: point(px(0.), px(12.)),
-                blur_radius: px(32.),
-                spread_radius: px(0.),
-            }])
             .child(
                 div()
                     .flex()
@@ -2701,7 +2721,8 @@ impl Workspace {
                             ("⌘⌃A".into(), "Accessibility overlay (debug)"),
                             ("⌘/".into(), "This list"),
                         ],
-                    )),
+                    ))
+                    .child(group("TEXT FIELDS", rows(KEYS_FIELD))),
             )
             .child(
                 div()
@@ -2740,84 +2761,6 @@ impl Workspace {
         self.dispatch(Action::OpenCompose { text: String::new() }, self.input, window, cx);
     }
 
-    /// The new-task box, over the workspace: the line, what it will file, and names that finish
-    /// the tag being typed. A click outside it closes it.
-    fn render_compose(&self, line: &str, cx: &mut Context<Self>) -> impl IntoElement {
-        let draft = self.model.draft(line);
-        let chip = |label: String, color: u32| {
-            div().px_1p5().rounded_sm().bg(rgb(theme::SELECTED)).text_xs().text_color(rgb(color)).child(label)
-        };
-        // What ↵ would file.
-        let reads = div()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap_2()
-            .children(draft.priority.map(|p| chip(format!("P{p}"), theme::TEXT)))
-            .children(draft.project.map(|p| chip(format!("#{p}"), theme::COMPOSE)))
-            .children(draft.repo.map(|r| chip(format!(">{r}"), theme::PRIMARY)))
-            .children(draft.agent.map(|a| chip(format!("@{a}"), theme::VISUAL)))
-            .children(draft.paths.into_iter().map(|path| chip(path, theme::TEXT)))
-            .children(draft.skills.into_iter().map(|s| chip(format!("${s}"), theme::SNEAK)));
-        let suggestions = self.model.compose_suggestions();
-        let hint =
-            if suggestions.is_empty() { TAG_HINT.to_string() } else { format!("tab: {}", suggestions.join("  ·  ")) };
-        let muted = |text: String| div().text_xs().text_color(rgb(theme::MUTED)).child(text);
-        let text = div()
-            .min_h(px(28.))
-            .flex()
-            .items_center()
-            .text_base()
-            .when(line.is_empty(), |d| d.text_color(rgb(theme::MUTED)).child("What needs doing?"))
-            .when(!line.is_empty(), |d| d.child(line.to_string()))
-            // The caret: there is no cursor movement, so it is always at the end.
-            .child(div().ml(px(1.)).w(px(2.)).h(px(18.)).bg(rgb(theme::COMPOSE)));
-        let panel = div()
-            .w(px(560.))
-            .max_w_full()
-            .p_3()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .rounded_lg()
-            .bg(rgb(theme::RAISED))
-            .border_1()
-            .border_color(rgb(theme::COMPOSE))
-            .shadow(vec![BoxShadow {
-                color: black().opacity(0.7),
-                offset: point(px(0.), px(12.)),
-                blur_radius: px(32.),
-                spread_radius: px(0.),
-            }])
-            // A click inside the box must not reach the backdrop, which closes it.
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(div().text_xs().text_color(rgb(theme::COMPOSE)).child("NEW TASK"))
-            .child(text)
-            .child(reads)
-            .child(muted(hint))
-            .child(muted(KEYS_HINT.to_string()));
-        div()
-            .id("compose-backdrop")
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .flex()
-            .justify_center()
-            .items_start() // the box is as tall as its lines, not the window
-            .pt(px(120.))
-            .px_4()
-            .bg(black().opacity(0.4))
-            .occlude()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
-                    this.dispatch(Action::CloseCompose, this.input, window, cx);
-                }),
-            )
-            .child(panel)
-    }
-
     /// The picker dropdown, under the split buttons. A click outside it closes it.
     fn render_picker(&self, picker: &Picker, cx: &mut Context<Self>) -> impl IntoElement {
         let selected = picker.selected;
@@ -2825,6 +2768,7 @@ impl Workspace {
             let (tag, color) = match item {
                 PickItem::Terminal => ("TERM", theme::PRIMARY),
                 PickItem::App { .. } => ("APP", theme::APP),
+                PickItem::Closed { .. } => ("APP", theme::MUTED),
             };
             div()
                 .id(("pick", i))
@@ -2839,7 +2783,7 @@ impl Workspace {
                 .hover(|s| s.bg(rgb(theme::SELECTED)))
                 .child(match item {
                     // An app shows its icon where the tag would be.
-                    PickItem::App { name } if self.icons.contains_key(name) => {
+                    PickItem::App { name } | PickItem::Closed { name, .. } if self.icons.contains_key(name) => {
                         div().w(px(36.)).child(self.app_icon(name))
                     }
                     _ => div().w(px(36.)).text_xs().text_color(rgb(color)).child(tag),
@@ -2849,14 +2793,19 @@ impl Workspace {
                     this.dispatch(Action::PickerChoose { index: Some(i) }, this.input, window, cx);
                 }))
         });
-        let rows: Vec<_> = rows.collect();
+        let mut rows: Vec<AnyElement> = rows.map(IntoElement::into_any_element).collect();
+        // Once something is typed, the apps that are not running come under a heading.
+        let closed = |item: &&PickItem| matches!(item, PickItem::Closed { .. });
+        if let Some(at) = picker.matches().iter().position(closed).filter(|_| !picker.query.text().is_empty()) {
+            let heading = div().px_3().pt_2().pb_1().text_xs().text_color(rgb(theme::MUTED)).child("NOT RUNNING");
+            rows.insert(at, heading.into_any_element());
+        }
         let title = match (picker.new_tab, picker.axis) {
             (true, _) => "New tab with",
             (false, Axis::Right) => "Split right with",
             (false, Axis::Down) => "Split down with",
         };
-        let query = if picker.query.is_empty() { "type to filter".to_string() } else { picker.query.clone() };
-        let panel = div()
+        let panel = dialog::panel(theme::BORDER_STRONG)
             .absolute()
             .top(px(TOP_BAR + 6.))
             .right(px(8.))
@@ -2865,16 +2814,6 @@ impl Workspace {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .rounded_lg()
-            .bg(rgb(theme::RAISED))
-            .border_1()
-            .border_color(rgb(theme::BORDER_STRONG))
-            .shadow(vec![BoxShadow {
-                color: black().opacity(0.7),
-                offset: point(px(0.), px(12.)),
-                blur_radius: px(32.),
-                spread_radius: px(0.),
-            }])
             // A click inside the panel must not reach the backdrop, which closes the picker.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
@@ -2888,11 +2827,7 @@ impl Workspace {
                     .border_color(rgb(theme::BORDER))
                     .text_xs()
                     .child(div().text_color(rgb(theme::PICK)).child(title))
-                    .child(
-                        div()
-                            .text_color(rgb(if picker.query.is_empty() { theme::MUTED } else { theme::TEXT }))
-                            .child(query),
-                    ),
+                    .child(self.render_field("type to filter", cx)),
             )
             .when(rows.is_empty(), |d| d.child(div().p_3().text_xs().text_color(rgb(theme::MUTED)).child("No match")))
             // Long lists scroll inside the panel.
@@ -2914,6 +2849,7 @@ impl Workspace {
             .top_0()
             .left_0()
             .size_full()
+            .bg(black().opacity(0.25))
             .occlude()
             .on_mouse_down(
                 MouseButton::Left,
@@ -3142,12 +3078,7 @@ impl Workspace {
                 Some(Installed { name: name.trim().to_string(), path })
             })
             .collect();
-        let bundles: Vec<String> = if wanted.is_empty() {
-            Vec::new()
-        } else {
-            let bundle = |app: &capture::App| icon::bundle_of(app.pid).map(|path| path.to_string_lossy().into_owned());
-            self.apps.iter().filter_map(bundle).collect()
-        };
+        let bundles: Vec<String> = if wanted.is_empty() { Vec::new() } else { apps::running_bundles() };
         self.closed = closed_apps(&wanted, &bundles);
         // The list as list mode walks it: running apps, then the others.
         let names = running.iter().cloned().chain(self.closed.iter().map(|app| app.name.clone())).collect();
@@ -4302,8 +4233,18 @@ impl Render for Workspace {
                     this.dispatch(Action::MarkCancel, this.input, window, cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &CopySelection, _, cx| this.copy(cx)))
-            .on_action(cx.listener(|this, _: &PasteText, _, cx| this.paste(cx)))
+            .on_action(cx.listener(|this, _: &CopySelection, window, cx| this.copy(window, cx)))
+            .on_action(cx.listener(|this, _: &PasteText, window, cx| this.paste(window, cx)))
+            .on_action(cx.listener(|this, _: &Cut, window, cx| this.field_menu(edit::Key::Cut, window, cx)))
+            .on_action(cx.listener(|this, _: &SelectAll, window, cx| {
+                this.field_menu(edit::Key::Edit(Edit::SelectAll), window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &Undo, window, cx| this.field_menu(edit::Key::Edit(Edit::Undo), window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &Redo, window, cx| this.field_menu(edit::Key::Edit(Edit::Redo), window, cx)),
+            )
             .on_action(cx.listener(|this, _: &VisualMode, window, cx| {
                 this.dispatch(Action::ToggleVisual, this.input, window, cx);
             }))
@@ -4448,7 +4389,7 @@ impl Render for Workspace {
             // Over everything of ottospace's own. It is never on while an app's window is.
             .children(self.model.sneak.as_ref().map(sneak::labels))
             .children(self.model.picker.as_ref().map(|picker| self.render_picker(picker, cx)))
-            .children(self.model.compose.as_ref().map(|line| self.render_compose(line, cx)))
+            .children(self.model.compose.as_ref().map(|_| self.render_compose(cx)))
             .when(self.model.keys, |d| d.child(self.render_keys(cx)))
             .children(self.model.confirm.as_ref().map(|confirm| self.render_confirm(confirm, cx)))
     }
@@ -4617,6 +4558,11 @@ fn main() {
             // Terminal selection. ⌘C never sends ^C: that is ⌃C.
             KeyBinding::new("cmd-c", CopySelection, None),
             KeyBinding::new("cmd-v", PasteText, None),
+            // A text field takes these keys itself; bound so the Edit menu shows them.
+            KeyBinding::new("cmd-x", Cut, None),
+            KeyBinding::new("cmd-a", SelectAll, None),
+            KeyBinding::new("cmd-z", Undo, None),
+            KeyBinding::new("cmd-shift-z", Redo, None),
             KeyBinding::new("cmd-shift-c", VisualMode, None),
             KeyBinding::new("cmd-shift-e", ListMode, None),
             KeyBinding::new(sneak::KEY, SneakMode, None),

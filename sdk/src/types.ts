@@ -169,7 +169,29 @@ export interface Repo extends Worktree {
   worktrees: Worktree[];
 }
 
-export type PickItem = { type: "terminal" } | { type: "app"; name: string };
+export type PickItem =
+  | { type: "terminal" }
+  | { type: "app"; name: string }
+  /** An installed app that is not running, by its bundle's path. Choosing it starts it. */
+  | { type: "closed"; name: string; path: string };
+
+/** The text field that has the keyboard. Offsets are UTF-16 units: JavaScript string indexes. */
+export interface Field {
+  /** Whose it is: the new-task box's line or the picker's filter. */
+  of: "compose" | "picker";
+  text: string;
+  cursor: number;
+  /** Start and end, in text order. Equal: only a cursor. */
+  selection: [number, number];
+  /** `text` between the two: what a copy takes. */
+  selected: string;
+  /** The input method's composition in progress, or null. */
+  marked: [number, number] | null;
+  /** As last drawn, in window points. */
+  bounds: Rect;
+  /** The caret's x as last drawn, in window points. */
+  cursor_x: number;
+}
 
 export interface Picker {
   axis: Axis;
@@ -398,6 +420,10 @@ export interface Snapshot {
   terminals: Record<string, Terminal>;
   /** The text of the last copy. */
   copied: string | null;
+  /** The picker's rows as drawn, or null: its items narrowed by the filter, then, once something is typed, the installed apps that are not running. */
+  picker_rows: PickItem[] | null;
+  /** The open text field, or null. `state.compose` and `state.picker.query` stay its text. */
+  field: Field | null;
   inbox: InboxRow[];
   needs_you: number;
   /** The tags of the line in the new-task box have been looked up. */

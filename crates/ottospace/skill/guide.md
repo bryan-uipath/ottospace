@@ -56,7 +56,9 @@ ottospace ctl '{"cmd":"state"}'
 | `state.focused` | The pane that splits and keys act on |
 | `state.layout` | The active tab's split tree, or null: `{"leaf":3}` or `{"split":{"axis":"right","ratio":0.5,"a":..,"b":..}}`. `ratio` is the share of the split that `a` (the left or top side) takes |
 | `state.live` | The app pane that has the keyboard, if any |
-| `state.picker` | Null, or the open picker: `axis`, `new_tab`, `items` (`{"type":"terminal"}` or `{"type":"app","name":"..."}`), `query`, and `selected` (an index into the items that match `query`) |
+| `state.picker` | Null, or the open picker: `axis`, `new_tab`, `items` (`{"type":"terminal"}`, `{"type":"app","name":"..."}` for a running app, or `{"type":"closed","name":"...","path":"..."}` for an app of the `apps` setting that is not running), `query` (the filter's text), and `selected` (an index into `picker_rows`) |
+| `picker_rows` | Null, or the open picker's rows as drawn: `items` narrowed by the filter, then, once something is typed, every installed app that is not running and matches, as `closed` items. Choosing a `closed` row starts that app on the user's Mac: leave those to the user |
+| `field` | Null, or the text field that has the keyboard: `of` (`compose` or `picker`), `text`, `cursor` and `selection` (`[start, end]`) in UTF-16 units, `selected` (the selected text), `marked` (an input method's composition, or null), and `bounds` and `cursor_x` as last drawn |
 | `state.confirm` | Null, or the quit question the user raised (⌘Q, the menu's Quit, the window's close button): `running`, the terminals a quit would end something in, each `pane`, `program` (its name, or null) and `background` (false: the program in front of the shell; true: a background or stopped job of the shell). It is the user's to answer: only the user's own keys and clicks cancel it. From the socket, while it is up: `key` with `enter` or `q` quits and `key` with `escape` cancels; any other `key` (also `cmd-q`), every pointer request (`mouse_down`, `mouse_drag`, `mouse`, `drag`) and every request that would take the keyboard (`enter`, `picker`, `compose`, `keys`, `ax_overlay`) fails with `the quit question is up` and changes nothing. Every other request runs underneath and leaves it up, e.g. `split`, `focus`, `close`, `new_tab`, `type`, `scroll`. A pane that closes leaves `running`; when it empties the question goes away, and ottospace does not quit. `quit` never asks, and quits under the question too |
 | `state.keys` | True while the key reference covers the window |
 | `state.sidebar` | The open rail section, or null |
@@ -269,7 +271,8 @@ States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stal
   characters). Nothing is filed until the user presses ↵: use it to offer a draft, and
   `task_new` to file one yourself. It is refused if the box is open already or cannot open
   (the picker, the key reference or visual mode is in the way): the draft was not shown.
-  While the box is open `mode` is `compose` and `state.compose` is its text.
+  While the box is open `mode` is `compose` and `state.compose` is its text; `field` has its
+  cursor and selection. `key` edits it as the user's keys do (`alt-backspace`, `cmd-a`, `cmd-z`).
 - `task_add` replies `{"ok":true,"task":{..}}`, not the state: the new task, with its `id`.
   Priorities outside 1 to 9 are moved into that range.
 - **Report your own state.** If the user gave you a task id, send `task_set_state` with `running`

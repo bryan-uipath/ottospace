@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, Bounds, BoxShadow, Context, Div, EntityId, FontWeight, Hsla, Path, PathBuilder, Pixels, Point,
-    SharedString, Window, black, canvas, div, point, prelude::*, px, relative, rgb,
+    AnyElement, App, Bounds, Context, Div, EntityId, FontWeight, Hsla, Path, PathBuilder, Pixels, Point, SharedString,
+    Window, canvas, div, point, prelude::*, px, relative, rgb,
 };
 use ottospace_core::home::{HOME, Home, NEAR, View};
 use ottospace_core::tasks::{Group, TaskId};
@@ -331,23 +331,13 @@ impl Workspace {
             .collect();
 
         // `occlude`: a click on the text must not reach anything under it.
-        let line = div()
+        let line = crate::dialog::panel(theme::BORDER_STRONG)
             .id("home-new-task")
             .occlude()
             .p_3()
             .flex()
             .flex_col()
             .gap_2()
-            .rounded_lg()
-            .bg(rgb(theme::RAISED))
-            .border_1()
-            .border_color(rgb(theme::BORDER_STRONG))
-            .shadow(vec![BoxShadow {
-                color: black().opacity(0.7),
-                offset: point(px(0.), px(12.)),
-                blur_radius: px(32.),
-                spread_radius: px(0.),
-            }])
             .cursor_pointer()
             .hover(|s| s.border_color(rgb(theme::COMPOSE)))
             .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)))

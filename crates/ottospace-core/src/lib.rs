@@ -3,6 +3,7 @@
 
 pub mod ax;
 pub mod compose;
+pub mod edit;
 pub mod home;
 pub mod hosted;
 pub mod keys;

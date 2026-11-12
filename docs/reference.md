@@ -30,7 +30,7 @@ it over the control socket. Session restore and the rest of the design are not b
 | Home screen: a tab with no panes shows the new-task line, the tasks that need you, and each listed task as a node on a lattice (left to right by project; within a project the older task is farther). A click on a node or a row opens the task | Works today |
 | Tasks own their tabs: opening a task shows only its tabs; the others keep running off the bar | Works today |
 | Tabs, each with its own split tree | Works today |
-| Pane picker: choose a terminal or a running app for a new pane or tab | Works today |
+| Pane picker: choose a terminal, a running app, or (once you type) any installed app for a new pane or tab | Works today |
 | Icon rail with a secondary bar; Apps lists running apps with their icons | Works today |
 | Repos: repositories and their worktrees; open a terminal in one | Works today |
 | List mode (⌘⇧E): drive the bar with the keyboard | Works today |
@@ -72,7 +72,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 |---|---|
 | ⌘D | Split right, new terminal |
 | ⌘⇧D | Split down, new terminal |
-| ⌘E | Pick what goes in a new pane: a terminal or a running app |
+| ⌘E | Pick what goes in a new pane: a terminal or a running app. Type to filter: then every installed app that matches is offered too, under "Not running" (those of the `apps` setting first); choosing one starts it in the background. ↑/↓ or ⌃N/⌃P move, ↵ opens, Esc closes |
 | ⌘W | Close the focused pane |
 | ⌘⌥←/→/↑/↓ or ⌘⌥H/L/K/J | Focus the pane in that direction |
 | ⌘] / ⌘[ | Focus the next / previous pane |
@@ -95,8 +95,8 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⇧PageUp / ⇧PageDown | Scroll a terminal a page |
 | ⇧Home / ⇧End | Top / bottom of a terminal's history |
 | Drag / double-click / triple-click | Select text / a word / a line in a terminal |
-| ⌘C | Copy the terminal's selection (nothing selected: does nothing) |
-| ⌘V | Paste into the terminal |
+| ⌘C | Copy the terminal's selection (nothing selected: does nothing). In a [text field](#keys): its selection |
+| ⌘V | Paste into the terminal, or into the open text field |
 | ⌘N | New task: a box opens over the workspace. Type what needs doing, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1` to `p9` (Tab completes the one being typed). ↵ adds the task and closes the box; ⌘↵ adds it and starts it (shows its tabs); Esc closes |
 | ⌘⇧N | Next task: shows the tabs of the first task that needs you |
 | ⌘B / ⌘⇧B | Mark the focused pane / the tab on show; on one that is marked, take the mark off (the Marks section offers it back for six seconds, and ⌘B again within them puts the same mark back). The mark is named for the app, the terminal's directory or the tab's title. It records what to open, not a window or a process: a terminal's directory as it is then, an app's bundle id, name and window title, a tab's title, task and split tree. A marked pane or tab shows ◆ and its letter |
@@ -105,6 +105,24 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⇧E | List mode: the bar (Apps, Tasks, Repos, Marks) takes the keyboard. On a mark `x` removes it, `r` renames it, `m` gives it a letter, ⇧J / ⇧K move it down / up, and `u` puts the last removed mark back. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); in Tasks a heading is a row too, and ↵ or space on it folds or unfolds it; Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; Esc or ⌘⇧E leaves |
 | ⌘⌃G | Sneak mode: every control ottospace draws (rail icons, bar rows, tabs and their ×, top-bar buttons, pane headers and their ×, each pane, the home screen's line, rows and nodes) gets a short label, home-row letters first. Type a label and the control does what a click does; a pane's label focuses it, or gives an app pane the keyboard. A × (pane or tab) always has a two-letter label. Two-letter labels narrow on the first letter; ⌫ takes it back. Esc, a click, a letter that goes on with no label, or any ⌘ shortcut leaves; the shortcut then runs (⌘C copies, ⌘V pastes). Other keys do nothing. The labels follow what is drawn: if a control moves its label moves, and if it goes its label goes. What happens by itself (a shell exits, an agent files a task) does not end the mode. Starting it hides the accessibility overlay (⌘⌃A). Not ⌃G alone: a terminal needs that key. On a keyboard layout with no Latin letters, the keys type the letters they have under ⌘. From `APP` mode return first. Controls inside a hosted app's window get no label. Sneak presses no control inside another app and sets no value; entering an app pane raises its window, as a click on the pane does |
 | ⌘⇧C | Visual mode on the terminal: `hjkl`/arrows, `w b e 0 ^ $`, `H M L` move; `v` / `V` select; `y` or ↵ copies and leaves; Esc leaves |
+
+**Text fields.** The new-task box's line and the picker's filter are the same field, with the
+keys of a macOS text field:
+
+| Key | Action |
+|---|---|
+| ←/→ · ⌥←/→ · ⌘←/→ | Move by character, by word, to the start or end of the line. Also Home/End, ⌃A/⌃E, ⌃B/⌃F. With ⇧: select |
+| ⌘A | Select everything |
+| ⌫/⌦ · ⌥⌫/⌥⌦ · ⌘⌫/⌘⌦ | Delete a character, a word, to the start or end of the line. Also ⌃H, ⌃D, ⌃W, ⌃U, ⌃K |
+| ⌘C / ⌘X / ⌘V | Copy, cut, paste. A pasted line break becomes a space |
+| ⌘Z / ⇧⌘Z | Undo, redo: typing a word at a time, up to 100 steps |
+| Edit menu | Undo, Redo, Cut, Copy, Paste and Select All act on the field while it has the keyboard |
+| Mouse | A click places the cursor (⇧-click selects to it), a drag selects, a double click takes a word, a triple click the line |
+
+Typed text replaces the selection. Movement and deletion go by whole characters as you see them
+(an emoji, a letter with its accent). Input methods and dead keys compose in place, underlined.
+A line wider than the field scrolls with the cursor. The picker's filter holds 200 characters.
+While the quit question is over a field, nothing edits it.
 
 **The quit question.** ⌘Q, Quit in the menu and the window's red close button all ask the same
 question (status chip `QUIT?`). A quit ends every terminal and what runs in it, so it asks when:
@@ -298,7 +316,7 @@ optional:
 | `session_dirs` | Where the runners keep their sessions: `claude` is a list of Claude Code config directories (one for each account), `codex` is Codex's home. A runner left out keeps its default. An app started from the Dock does not see `CLAUDE_CONFIG_DIR` or `CODEX_HOME`: name other directories here | `~/.claude`, `~/.codex` |
 | `session_quiet_minutes` | A task adopted from a session moves to Needs you once the session has been quiet this many minutes. `0`: a quiet session never moves its task | `3` |
 | `windows` | Rules for windows ottospace must leave alone. Each rule selects windows by `app` (the app's name or bundle id), `title` and `subrole`; every field given must match, `*` stands for any text, and case does not matter. `"do": "ignore"`: the window never becomes a pane, when its app is hosted or when it opens later. `"do": "manage"` undoes a built-in rule. Your rules come first. Name an app by its bundle id to be sure. A window is judged once, when it is first seen, on the title it has then; rules are read at start | Built in: only standard windows are ever put in a pane, and Zoom's sharing controls, annotation layer and pop-ups are ignored |
-| `apps` | Apps to offer while they are not running, by the name of the app as Finder shows it (`Visual Studio Code` for `Visual Studio Code.app`). It must be in `/Applications`, `~/Applications` or `/System/Applications` (or their `Utilities`); a name that is not found is left out. They show under "Not running" in Apps and in the picker; choosing one starts it in the background and puts its window in a pane | none |
+| `apps` | Apps to offer while they are not running, by the name of the app as Finder shows it (`Visual Studio Code` for `Visual Studio Code.app`). It must be in `/Applications`, `~/Applications` or `/System/Applications` (or their `Utilities`); a name that is not found is left out. They show under "Not running" in Apps, and in the picker before anything is typed; choosing one starts it in the background and puts its window in a pane. (Once you type in the picker it offers every installed app in those folders, these first) | none |
 
 A mistake in the file (a key that does not exist, a wrong value, a font that is not installed) is
 shown in the status bar. That key takes its default and the others still apply. If the file is

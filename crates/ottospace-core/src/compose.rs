@@ -226,14 +226,43 @@ pub fn suggest<'a>(typed: &str, names: impl IntoIterator<Item = &'a str>) -> Vec
 /// after a directory (`/src/`): the path goes on. A space in a path gets a backslash, so the
 /// path stays one word: `~/Library/Application\ Support/`.
 pub fn complete(line: &str, name: &str) -> String {
-    let (Some(word), Some((mark, _))) = (typing(line), completing(line)) else { return line.to_string() };
-    let before = &line[..line.len() - word.len()];
-    if mark == '/' {
-        let space = if name.ends_with('/') { "" } else { " " };
-        format!("{before}{}{space}", escape(name))
-    } else {
-        format!("{before}{mark}{name} ")
+    let (word, name) = completion(line, name);
+    format!("{}{name}{}", &line[..word.start], &line[word.end..])
+}
+
+/// As `complete`, for a caller that edits in place: the bytes of the word being typed at the
+/// end of `line`, and what replaces them.
+pub fn completion(line: &str, name: &str) -> (std::ops::Range<usize>, String) {
+    let (Some(word), Some((mark, _))) = (typing(line), completing(line)) else {
+        return (line.len()..line.len(), String::new());
+    };
+    let name = match mark {
+        '/' if name.ends_with('/') => escape(name),
+        '/' => format!("{} ", escape(name)),
+        _ => format!("{mark}{name} "),
+    };
+    (line.len() - word.len()..line.len(), name)
+}
+
+/// As `completion`, for a cursor anywhere in `line`: the whole word under the cursor is
+/// replaced, so `fix >a|pp` becomes `fix >app `, not `fix >app pp`. No second space where one
+/// follows the word already.
+pub fn completion_at(line: &str, cursor: usize, name: &str) -> (std::ops::Range<usize>, String) {
+    let (word, mut name) = completion(&line[..cursor], name);
+    if word.is_empty() {
+        return (word, name);
     }
+    let mut escaped = line[..cursor].ends_with('\\');
+    let rest = line[cursor..].char_indices().find(|(_, c)| {
+        let ends = c.is_whitespace() && !(escaped && *c == ' ');
+        escaped = *c == '\\' && !escaped;
+        ends
+    });
+    let end = rest.map_or(line.len(), |(at, _)| cursor + at);
+    if end < line.len() && name.ends_with(' ') {
+        name.pop();
+    }
+    (word.start..end, name)
 }
 
 #[cfg(test)]
@@ -392,5 +421,10 @@ mod tests {
         // A path replaces its whole word. A directory takes no space: the path goes on.
         assert_eq!(complete("see /src/ex", "/src/export/"), "see /src/export/");
         assert_eq!(complete("see ~/no", "~/notes.md"), "see ~/notes.md ");
+        // In place, the word under the cursor goes whole, with the spaces it keeps.
+        assert_eq!(completion_at("fix >app", 6, "app"), (4..8, ">app ".to_string()));
+        assert_eq!(completion_at("fix >app now", 6, "apollo"), (4..8, ">apollo".to_string()));
+        assert_eq!(completion_at(r"see ~/My\ Notes now", 8, "~/My Notes/"), (4..15, r"~/My\ Notes/".to_string()));
+        assert_eq!(completion_at("fix it", 6, "app"), (6..6, String::new()));
     }
 }
