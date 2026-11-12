@@ -79,7 +79,6 @@ cheapest daily win. E is the largest value but needs A, B and D.
 - Hiding panes from screen sharing: see `screen-share-privacy.md`.
 - New or existing app window from the picker, and moving panes: see `app-windows.md`.
 - Tasks as an inbox (snooze, hold, dismiss, pop next, text capture): see `tasks-inbox.md`.
-- Peers, and what to bring back from them: see `competitive-analysis.md`.
 - Return key: built. F18 through a system hot key; `OTTOSPACE_RETURN_KEY` picks another.
   The Caps Lock remap is a `hidutil` command in the README, not applied by the app.
 - Backlog, from Bryan 2026-11-11:
