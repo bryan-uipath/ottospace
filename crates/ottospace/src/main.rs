@@ -500,7 +500,9 @@ impl Workspace {
             // A run with hosting off never activates the app, so keep its window visible another
             // way. Not with hosting on: a floating ottospace would cover the live app window.
             if !hosting {
-                unsafe { ottospace_mac::window::keep_on_top(appkit.ns_view.as_ptr()) };
+                // Tests use the socket, not the mouse. A window put on show can be clicked.
+                let click_through = std::env::var_os("OTTOSPACE_E2E_SHOW").is_none();
+                unsafe { ottospace_mac::window::keep_on_top(appkit.ns_view.as_ptr(), click_through) };
             }
         }
 

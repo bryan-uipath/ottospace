@@ -30,11 +30,13 @@ Rules:
 - E2E runs set `OTTOSPACE_E2E`, which turns window hosting off. Tests must never move the
   user's real windows.
 - A `cargo e2e` run stays out of the user's way: the app is a background app (no Dock icon,
-  never frontmost, never takes the keyboard), and its window sits at a free corner of the
-  screens with a 12-point sliver showing. The sliver floats above other windows, because GPUI
-  does not draw a window with nothing showing and a test waiting for layout would time out.
-  A layout timeout prints the last state. To look at the window, set `OTTOSPACE_E2E_SHOW`:
-  it opens in the middle of the screen, still without taking the keyboard.
+  it does not come to the front or take the keyboard by itself), and its window sits at a free
+  corner of the screens with a sliver showing (about 12 points wide, as tall as the title bar).
+  The sliver floats above other windows on every Space and lets clicks through. It is there
+  because GPUI does not draw a window that nobody can see, and a test waiting for layout would
+  time out. A layout timeout prints the last state. To look at the window, set
+  `OTTOSPACE_E2E_SHOW`: it opens in the middle of the screen and takes clicks, still without
+  taking the keyboard by itself.
 - **App-window loop:** `cargo e2e-apps`. Hosts real windows of `ottospace-canary`, a test app
   built from this package (`src/bin`). `OTTOSPACE_HOST_ONLY=<pid>` limits hosting to that process, and turns the recovery file off.
   The run takes keyboard focus while it lasts. Needs
