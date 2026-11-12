@@ -22,8 +22,9 @@ ottospace            # opens on the Repos list
 | Move between panes | ⌘⌥ arrows or ⌘⌥ H J K L · ⌘] ⌘[ cycle |
 | Close the pane | ⌘W |
 | New tab | ⌘T |
-| Hide ottospace · quit | ⌘H · ⌘Q |
-| Find an action by name | The menu bar: File, Edit, View, Pane, Tasks, Help |
+| Hide ottospace | ⌘H |
+| Quit | ottospace ▸ Quit ottospace (no key: it would end every shell) |
+| Find an action by name | The menu bar |
 | Switch tab | ⌘1 … ⌘9 · ⌘⇧] ⌘⇧[ · ⌃Tab |
 | Close the tab and its panes | ⌘⇧W |
 | Fill the screen | ⌘⌃F (again to restore) |

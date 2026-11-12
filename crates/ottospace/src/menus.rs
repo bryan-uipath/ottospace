@@ -16,7 +16,6 @@ pub fn app_menus() -> Vec<Menu> {
                 MenuItem::os_submenu("Services", SystemMenuType::Services),
                 MenuItem::separator(),
                 item("Hide ottospace", Hide),
-                item("Hide Others", HideOthers),
                 MenuItem::separator(),
                 item("Quit ottospace", Quit),
             ],
@@ -52,8 +51,8 @@ pub fn app_menus() -> Vec<Menu> {
         Menu {
             name: "Pane".into(),
             items: vec![
-                item("Split Right", SplitRight),
-                item("Split Down", SplitDown),
+                item("Terminal Right", SplitRight),
+                item("Terminal Below", SplitDown),
                 item("New Pane…", PickPane),
                 MenuItem::separator(),
                 item("Focus Left", FocusLeft),
