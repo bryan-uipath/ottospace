@@ -12,11 +12,14 @@ The Tasks rail section opens the inbox in the secondary bar. Tasks are grouped, 
 
 | Group | Holds | Lifecycle states |
 |---|---|---|
-| **Needs you** | An agent waits for an answer, an approval or a review | `needs-you`, `review` with open comments or failing checks |
-| **Running** | An agent is working | `running`, `triaged` |
-| **Captured** | Offloaded, not looked at yet | `captured` |
+| **Needs you** | An agent waits for an answer, an approval or a review; or a task went stale and needs a keep / hold / drop decision | `needs-you`; `review` with open comments or failing checks; `stale` |
+| **Running** | An agent is working, or a PR is open with nothing for you to do | `running`; `review` with checks passing and no comments |
+| **Captured** | Offloaded, no agent started yet | `captured`, `triaged` |
 | **On hold** | Paused on purpose | `parked` |
-| **Done** | Finished, waiting for cleanup | `done` |
+| **Done** | Finished; cleanup is running or was refused | `done` |
+
+`cleaned` tasks are not listed. This grouping replaces the line in `quick-capture.md` that puts a
+new capture under "Running" or "Needs you".
 
 Within a group: priority first, then oldest first.
 
@@ -33,8 +36,10 @@ Keys on the selected row:
 - **Pop next** (a global key, and an action-deck tile): opens the first task under Needs you.
   Snoozed and dismissed tasks are skipped.
 - **Status bar:** the Needs-you count. Nothing else from tasks is shown there.
-- **A snoozed task comes back** on its own when its time arrives, or at once if its state changes
-  to Needs you for a new reason.
+- **A snoozed task comes back** when its time arrives (the shell runs a timer and sends an action
+  with the time), or at once if its state changes to Needs you for a new reason.
+- **Cleanup** is automatic on `done`, as in `quick-capture.md`. A Done row stays only while
+  cleanup runs, or if it was refused (uncommitted or unpushed work), with the reason.
 - **Text capture.** The picker (⌘T / ⌘E) gets a "New task" entry: type one line, ↵ files it as
   `captured` and returns focus, ⌘↵ also opens it. It is quick capture without the screenshot.
 
@@ -54,6 +59,8 @@ Task { id, title, state, priority, snoozed_until, dismissed, tab }
 Core `Task` list, ordering and the five actions; socket calls `task_add`, `task_set_state`,
 `task_list`, `task_pop`; a read-only Tasks section that draws the groups. No worktrees, no agents
 yet: tasks are added and moved through the socket, which is enough to test the inbox itself.
+`task_set_state` is for tests and agents reporting their own state; `done` is still detected
+(PR merged or closed), as `quick-capture.md` says.
 
 ## Later, in this order
 
@@ -67,5 +74,4 @@ yet: tasks are added and moved through the socket, which is enough to test the i
 ## Open questions
 
 1. Snooze choices: are "1 hour" and "tomorrow morning" enough?
-2. Should Done tasks clean up on their own after a delay, or wait for a key?
-3. Where do tasks persist? (Still open from the plan: `~/notes` files or ottospace's own state.)
+2. Where do tasks persist? (Still open from the plan: `~/notes` files or ottospace's own state.)

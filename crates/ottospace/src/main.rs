@@ -739,9 +739,13 @@ impl Workspace {
     /// Keys go to the focused terminal. ⌘ shortcuts do not encode, so they fall through to bindings.
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = &event.keystroke;
-        // Esc closes the key reference.
-        if self.model.keys && key.key == "escape" {
-            self.dispatch(Action::CloseKeys, window, cx);
+        // The key reference takes the keyboard: Esc closes it, and no other key reaches the
+        // terminal or the picker behind it. (⌘ shortcuts go to their bindings; the core ignores
+        // pane actions while it is open, and ⌘/ closes it.)
+        if self.model.keys {
+            if key.key == "escape" {
+                self.dispatch(Action::CloseKeys, window, cx);
+            }
             cx.stop_propagation();
             return;
         }
@@ -963,6 +967,11 @@ impl Workspace {
             self.dispatch(Action::Focus { pane: id }, window, cx);
             return;
         }
+        // Already live: the real window takes its own clicks. Replaying one here would land on
+        // ottospace again and loop.
+        if self.model.live == Some(id) {
+            return;
+        }
         self.dispatch(Action::Enter { pane: id }, window, cx);
         let Some(hosted) = self.hosted.get(&id) else { return };
         let local = event.position - hosted.bounds.get().origin;
@@ -1169,7 +1178,7 @@ impl Workspace {
         } else if let Some(terminal) = self.terminals.get(&id) {
             let screen = terminal.screen();
             let cell = self.cell;
-            let has_keys = self.model.focused == Some(id) && self.model.mode() == Mode::Normal;
+            let has_keys = self.model.focused == Some(id) && self.model.mode() == Mode::Normal && !self.model.keys;
             canvas(
                 |_, _, _| {},
                 move |bounds, _, window, cx| terminal::paint(&screen, bounds, cell, has_keys, window, cx),
@@ -1202,10 +1211,13 @@ impl Workspace {
                     .absolute()
                     .size_full(),
             );
-        let body = div().id(("pane", id)).flex_1().min_h_0().p(px(2.)).child(inner).on_mouse_down(
+        // The click handler is on the content, not the padded body: a click in the 2pt gap would be
+        // replayed at a point the app window does not cover, land on ottospace again, and loop.
+        let inner = inner.on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, e: &MouseDownEvent, window, cx| this.click_pane(id, e, window, cx)),
         );
+        let body = div().id(("pane", id)).flex_1().min_h_0().p(px(2.)).child(inner);
 
         // While another pane is live, fade this one: input goes to the live app, not here.
         let faded = self.model.live.is_some_and(|live| live != id);

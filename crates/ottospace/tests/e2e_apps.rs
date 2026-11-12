@@ -131,8 +131,11 @@ fn a_canary_window_is_hosted_entered_left_and_restored() {
     // While live, the keyboard belongs to the app: a typed key arrives in the canary.
     otto.call(json!({"cmd": "enter", "pane": 1}));
     wait_for("the window to cover its pane", || frame(0).filter(|f| close(f[0], live[0]) && close(f[1], live[1])));
-    // Typed keys go to whichever app is frontmost, so wait until that is the canary.
+    // Typed keys go to whichever app is frontmost. macOS may refuse the app's own request to come
+    // forward while the user works elsewhere, so ask through System Events until it holds.
+    let front = format!("set frontmost of (first process whose unix id is {}) to true", canary.child.id());
     wait_for("the canary to have the keyboard", || {
+        press(&front);
         (canary.call(json!({"cmd": "state"}))["windows"][0]["active"] == true).then_some(())
     });
     press("keystroke \"k\"");

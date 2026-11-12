@@ -298,7 +298,10 @@ impl Model {
                 | Action::CycleTab { .. }
                 | Action::CloseTab { .. }
         );
-        if self.picker.is_some() && for_panes {
+        // The key reference covers the workspace too, so the same actions wait behind it, and the
+        // picker cannot open under it.
+        let blocked_by_keys = self.keys && (for_panes || matches!(action, Action::OpenPicker { .. }));
+        if (self.picker.is_some() && for_panes) || blocked_by_keys {
             return effects;
         }
         match action {
@@ -451,8 +454,12 @@ impl Model {
             Action::ClosePicker => self.picker = None,
             // The overlay is ottospace's own UI: it needs the keyboard back to be dismissed.
             Action::ToggleKeys => {
-                self.leave(&mut effects);
                 self.keys = !self.keys;
+                if self.keys {
+                    // One overlay at a time, and the overlay needs the keyboard to be dismissed.
+                    self.picker = None;
+                    self.leave(&mut effects);
+                }
             }
             Action::CloseKeys => self.keys = false,
             Action::CloseSidebar => {
@@ -1019,6 +1026,24 @@ mod tests {
         m.update(Action::ToggleKeys);
         m.update(Action::CloseKeys);
         assert!(!m.keys);
+    }
+
+    #[test]
+    fn pane_actions_and_the_picker_wait_while_the_key_reference_is_open() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        picker(&mut m);
+        m.update(Action::ToggleKeys);
+        assert!(m.picker.is_none(), "opening the reference closes the picker");
+        for action in [
+            Action::Close { pane: None },
+            Action::Split { axis: Right, kind: Kind::Terminal },
+            Action::NewTab,
+            Action::OpenPicker { axis: Right, new_tab: false, items: vec![PickItem::Terminal] },
+        ] {
+            assert_eq!(m.update(action), []);
+        }
+        assert_eq!((ids(&m), m.tabs.len(), m.picker.is_none()), (vec![1], 1, true));
     }
 
     #[test]
