@@ -47,3 +47,7 @@ permission story is the same Accessibility grant we already need.
 
 Re-host the previous session's windows into panes on launch (reuse `recovery`'s hosted list; also
 write it on clean quit). Today startup only restores leftover windows to their original frames.
+
+## 6. Routines and agents
+
+ottobot's routines, an Agents section and a menu-bar item, in stages: see [routines.md](routines.md).
