@@ -15,6 +15,7 @@ import type {
   Dir,
   InboxReply,
   MouseDownArgs,
+  MovePaneArgs,
   OpenAppArgs,
   OpenRepoArgs,
   OptionalPaneArg,
@@ -169,6 +170,22 @@ export class Client {
   /** Next (positive) or previous pane in reading order. */
   focusCycle(args: { delta: number }): Promise<Snapshot> {
     return this.snapshot({ cmd: "focus_cycle", ...args });
+  }
+  /** Moves the boundary of the nearest split around the focused pane one step toward `dir`. */
+  resize(args: { dir: Dir }): Promise<Snapshot> {
+    return this.snapshot({ cmd: "resize", ...args });
+  }
+  /** The focused pane trades places with its neighbour on that side. */
+  swap(args: { dir: Dir }): Promise<Snapshot> {
+    return this.snapshot({ cmd: "swap", ...args });
+  }
+  /** Moves a pane (default: the focused one) to the tab at place `tab` on the tab bar. */
+  movePane(args: MovePaneArgs): Promise<Snapshot> {
+    return this.snapshot({ cmd: "move_pane", ...args });
+  }
+  /** Evens out the splits of the active tab. */
+  equalize(): Promise<Snapshot> {
+    return this.snapshot({ cmd: "equalize" });
   }
   /** Hosts a running app's main window in a pane. It moves the user's real window. */
   openApp(args: OpenAppArgs): Promise<Snapshot> {

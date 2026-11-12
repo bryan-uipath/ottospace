@@ -156,6 +156,7 @@ function layout(value: unknown, at: string): Layout {
   return {
     split: {
       axis: axis(split.axis, `${at}.split.axis`),
+      ratio: num(split.ratio, `${at}.split.ratio`),
       a: layout(split.a, `${at}.split.a`),
       b: layout(split.b, `${at}.split.b`),
     },

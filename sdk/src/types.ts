@@ -48,8 +48,8 @@ export interface Tab {
   task: TaskId | null;
 }
 
-/** The active tab's split tree. */
-export type Layout = { leaf: PaneId } | { split: { axis: Axis; a: Layout; b: Layout } };
+/** The active tab's split tree. `ratio`: the share of the split that `a` (left or top) takes. */
+export type Layout = { leaf: PaneId } | { split: { axis: Axis; ratio: number; a: Layout; b: Layout } };
 
 export interface Task {
   id: TaskId;
@@ -283,6 +283,12 @@ export interface PaneArg {
 }
 export interface OptionalPaneArg {
   pane?: PaneId;
+}
+export interface MovePaneArgs {
+  /** Default: the focused pane. */
+  pane?: PaneId;
+  /** The tab's place on the tab bar, from 0. */
+  tab: number;
 }
 export interface OpenAppArgs {
   name: string;

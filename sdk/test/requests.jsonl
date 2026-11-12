@@ -5,6 +5,10 @@
 {"cmd":"focus","pane":1}
 {"cmd":"focus_dir","dir":"left"}
 {"cmd":"focus_cycle","delta":-1}
+{"cmd":"resize","dir":"left"}
+{"cmd":"swap","dir":"right"}
+{"cmd":"move_pane","pane":3,"tab":0}
+{"cmd":"equalize"}
 {"cmd":"open_app","name":"Safari","axis":"right"}
 {"cmd":"enter","pane":1}
 {"cmd":"leave"}

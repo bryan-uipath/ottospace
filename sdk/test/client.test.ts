@@ -9,7 +9,14 @@ import { connect } from "../src/client.ts";
 import type { Client } from "../src/client.ts";
 import { Otto } from "../src/otto.ts";
 import { snapshot } from "../src/parse.ts";
+import type { Snapshot } from "../src/types.ts";
 import { withOttospace } from "./harness.ts";
+
+/** The root split's ratio, or null for a single pane or none. */
+function layoutRatio(snapshot: Snapshot): number | null {
+  const layout = snapshot.state.layout;
+  return layout !== null && "split" in layout ? layout.split.ratio : null;
+}
 
 /** The typed snapshot holds every key of the real reply and nothing else: the types are true. */
 async function exactState(client: Client): Promise<void> {
@@ -45,12 +52,31 @@ test("split and close", async () => {
     const two = await client.split({ axis: "down", kind: "empty" });
     assert.deepEqual(two.state.panes.map((pane) => pane.id), [1, 2]);
     assert.equal(two.state.focused, 2);
-    assert.deepEqual(two.state.layout, { split: { axis: "down", a: { leaf: 1 }, b: { leaf: 2 } } });
+    assert.deepEqual(two.state.layout, { split: { axis: "down", ratio: 0.5, a: { leaf: 1 }, b: { leaf: 2 } } });
     assert.deepEqual(two.tab_panes, [[1, 2]]);
 
     const one = await client.close({ pane: 1 });
     assert.deepEqual(one.state.panes, [{ id: 2, kind: { type: "empty" } }]);
     assert.deepEqual(one.state.layout, { leaf: 2 });
+  });
+});
+
+test("resize, equalize, swap and move_pane", async () => {
+  await withOttospace(async (client) => {
+    await client.split({ kind: "empty" });
+    await client.split({ axis: "right", kind: "empty" }); // 1 | 2, focus on 2
+    const narrower = await client.resize({ dir: "right" });
+    assert.notEqual(layoutRatio(narrower), 0.5, "the border moved");
+    assert.equal(layoutRatio(await client.equalize()), 0.5);
+
+    const swapped = await client.swap({ dir: "left" });
+    assert.deepEqual(swapped.state.layout, { split: { axis: "right", ratio: 0.5, a: { leaf: 2 }, b: { leaf: 1 } } });
+
+    await client.newTab();
+    await client.selectTab({ index: 0 });
+    const moved = await client.movePane({ pane: 2, tab: 1 });
+    assert.deepEqual(moved.tab_panes.map((panes) => panes.toSorted()), [[1], [2]]);
+    await exactState(client);
   });
 });
 
