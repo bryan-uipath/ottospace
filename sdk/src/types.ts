@@ -110,6 +110,8 @@ export interface SessionsBar {
   enabled: boolean;
   /** How many times the sessions were read since the app started. */
   reads: number;
+  /** How many times only the files of adopted sessions were looked at, with the section closed. */
+  slow_reads: number;
 }
 
 /** A row of the Tasks section, as drawn. */

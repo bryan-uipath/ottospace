@@ -268,6 +268,7 @@ function sessionsBar(value: unknown, at: string): SessionsBar {
     older_open: bool(o.older_open, `${at}.older_open`),
     enabled: bool(o.enabled, `${at}.enabled`),
     reads: num(o.reads, `${at}.reads`),
+    slow_reads: num(o.slow_reads, `${at}.slow_reads`),
   };
 }
 

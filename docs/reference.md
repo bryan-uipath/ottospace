@@ -190,9 +190,19 @@ included) that no task has adopted: for example a Claude Code you started by han
   that task's from then on and leaves the group. Rename the task later. The task keeps the
   session's runner and id, and no path from the session's file.
 - **An adopted task follows its session.** While the session works, the task is Running. When
-  the session goes quiet, the task moves to Needs you, once. When it works again, Running
-  again. If you or an agent set the task's state (hold it, mark it done), that state stays.
-  The task follows only while the Tasks section is open, when sessions are read.
+  the session has been quiet for 3 minutes (`session_quiet_minutes`), the task moves to Needs
+  you, once. When it works again, Running again. If you or an agent set the task's state (hold
+  it, mark it done), that state stays. Quiet is longer than idle on purpose: a row reads idle
+  after 30 seconds, but a build that prints nothing for a minute is not a question for you.
+- **With the Tasks section closed** adopted tasks follow their sessions all the same, so the
+  status bar's count of tasks that need you is right. Every 20 seconds ottospace looks at when
+  the files of those sessions last changed (one `stat` each): no directory is listed and no
+  file is opened. The one exception: after a start, where the files of sessions adopted in an
+  earlier run are is not known, so once for all of them the session folders are listed and
+  each session file's first records are read to see which directory it started in. No
+  transcript is read further. A session that this does not find is not looked for again until
+  you open the Tasks section. With no adopted task, or with `"sessions": false`, nothing is
+  read.
 - **Hide** removes the row until ottospace starts again.
 - **A click** focuses the session's pane when the row says "in pane N", and selects the row
   otherwise. "In pane N" shows only when there is no doubt: the session is at work, exactly one
@@ -253,6 +263,7 @@ optional:
   "tasks": "~/notes/tasks",
   "sessions": true,
   "session_dirs": { "claude": ["~/.claude"], "codex": "~/.codex" },
+  "session_quiet_minutes": 3,
   "apps": ["Microsoft Outlook", "Slack"],
   "windows": [{ "app": "us.zoom.xos", "title": "Zoom Meeting", "do": "ignore" }]
 }
@@ -266,6 +277,7 @@ optional:
 | `tasks` | Where tasks are kept, one JSON file each. A relative path is inside `~/.ottospace` | `tasks` |
 | `sessions` | List agent sessions that are no task's under Sessions in the Tasks section. `false`: no session file is ever read | `true` |
 | `session_dirs` | Where the runners keep their sessions: `claude` is a list of Claude Code config directories (one for each account), `codex` is Codex's home. A runner left out keeps its default. An app started from the Dock does not see `CLAUDE_CONFIG_DIR` or `CODEX_HOME`: name other directories here | `~/.claude`, `~/.codex` |
+| `session_quiet_minutes` | A task adopted from a session moves to Needs you once the session has been quiet this many minutes. `0`: a quiet session never moves its task | `3` |
 | `windows` | Rules for windows ottospace must leave alone. Each rule selects windows by `app` (the app's name or bundle id), `title` and `subrole`; every field given must match, `*` stands for any text, and case does not matter. `"do": "ignore"`: the window never becomes a pane, when its app is hosted or when it opens later. `"do": "manage"` undoes a built-in rule. Your rules come first. Name an app by its bundle id to be sure. A window is judged once, when it is first seen, on the title it has then; rules are read at start | Built in: only standard windows are ever put in a pane, and Zoom's sharing controls, annotation layer and pop-ups are ignored |
 | `apps` | Apps to offer while they are not running, by the name of the app as Finder shows it (`Visual Studio Code` for `Visual Studio Code.app`). It must be in `/Applications`, `~/Applications` or `/System/Applications` (or their `Utilities`); a name that is not found is left out. They show under "Not running" in Apps and in the picker; choosing one starts it in the background and puts its window in a pane | none |
 
