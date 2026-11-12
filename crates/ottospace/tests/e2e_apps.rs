@@ -90,6 +90,49 @@ fn close(a: f64, b: f64) -> bool {
 
 #[test]
 #[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn a_window_the_rules_ignore_never_becomes_a_pane() {
+    // A folder of the test's own, with one rule: leave the canary's second window alone.
+    let home = std::env::temp_dir().join(format!("otto-apps-rules-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).expect("make the folder");
+    let settings = json!({"windows": [{"app": CANARY, "title": "Canary 2", "do": "ignore"}]});
+    std::fs::write(home.join("settings.json"), settings.to_string()).expect("write settings");
+
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-rules", "CANARY_SOCKET", &[]);
+    wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
+    let otto = Proc::launch(
+        env!("CARGO_BIN_EXE_ottospace"),
+        "otto-rules",
+        "OTTOSPACE_SOCKET",
+        &[
+            ("OTTOSPACE_E2E", "1"),
+            ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string()),
+            ("OTTOSPACE_RETURN_KEY", "f19"),
+            ("OTTOSPACE_HOME", home.to_str().expect("a plain path")),
+        ],
+    );
+    let titles = || -> Vec<String> {
+        let state = otto.call(json!({"cmd": "state"}));
+        let panes = state["state"]["panes"].as_array().cloned().unwrap_or_default();
+        panes.iter().filter_map(|p| p["kind"]["title"].as_str().map(str::to_string)).collect()
+    };
+    otto.call(json!({"cmd": "open_app", "name": CANARY}));
+    assert_eq!(titles(), ["Canary 1"]);
+
+    // The app opens two more windows. The third gets a pane; the second, which the rule names, does not.
+    canary.call(json!({"cmd": "open_window"}));
+    canary.call(json!({"cmd": "open_window"}));
+    wait_for("the third window's pane", || titles().contains(&"Canary 3".to_string()).then_some(()));
+    assert_eq!(titles(), ["Canary 1", "Canary 3"]);
+    // It was left where the app put it. A window in a pane is parked at the far corner of the
+    // screens; the hosted frames show the two panes' windows there and no third.
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!(state["hosted"].as_object().map(|hosted| hosted.len()), Some(2), "{}", state["hosted"]);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
 fn a_canary_window_is_hosted_entered_left_and_restored() {
     let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary", "CANARY_SOCKET", &[]);
     let frame = |index: usize| rect(&canary.call(json!({"cmd": "state"}))["windows"][index]["bounds"]);

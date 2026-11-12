@@ -21,6 +21,10 @@ pub struct Settings {
     /// The directory tasks are kept in. Default: `tasks` beside the settings file.
     #[serde(default)]
     pub tasks: Option<String>,
+    /// Windows to leave alone: `[{ "app": "us.zoom.xos", "title": "zoom share*", "do": "ignore" }]`.
+    /// See `rules`. They come before the rules that ship with ottospace.
+    #[serde(default)]
+    pub windows: Vec<crate::rules::Rule>,
     /// Apps to offer when they are not running, by name: `["Microsoft Outlook", "Slack"]`.
     /// Choosing one starts it.
     #[serde(default)]
