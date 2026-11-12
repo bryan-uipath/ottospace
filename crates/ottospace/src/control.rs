@@ -123,6 +123,14 @@ pub enum Request {
         pane: Option<PaneId>,
         lines: f32,
     },
+    /// Reads the repository list from disk again. It is `state.repos` in the reply.
+    Repos,
+    /// Opens a terminal in a listed repository or worktree, by its `path` from `state.repos`.
+    OpenRepo {
+        path: String,
+        #[serde(default)]
+        axis: Axis,
+    },
     /// A terminal pane's text (default: the focused one): the bottom screen, and with `history`
     /// everything scrolled off above it. The reply is `{"ok":true,"pane":3,"text":".."}`, not the state.
     Capture {

@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::io;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::{Arc, OnceLock};
 
@@ -105,9 +106,10 @@ pub struct Terminal {
 }
 
 impl Terminal {
-    /// Starts the user's default shell (or `$OTTOSPACE_SHELL`) in the current directory, with
-    /// `vars` added to its environment, e.g. `[("OTTOSPACE_PANE", "3")]`.
-    pub fn spawn(vars: &[(&str, String)]) -> io::Result<Self> {
+    /// Starts the user's default shell (or `$OTTOSPACE_SHELL`) in `cwd`, with `vars` added to its
+    /// environment, e.g. `[("OTTOSPACE_PANE", "3")]`. Without `cwd`: the current directory, or
+    /// the home directory when that is `/` (an app started from Finder or the Dock).
+    pub fn spawn(vars: &[(&str, String)], cwd: Option<&str>) -> io::Result<Self> {
         let grid = Grid { cols: 80, rows: 24 };
         let shared = Arc::new(Shared::default());
         let listener = Listener(shared.clone());
@@ -116,7 +118,10 @@ impl Terminal {
         // `$OTTOSPACE_SHELL` replaces the login shell. Tests use it: a login shell with a heavy
         // profile can take a minute to reach a prompt on a busy machine.
         let shell = std::env::var("OTTOSPACE_SHELL").ok().map(|program| tty::Shell::new(program, Vec::new()));
-        let options = tty::Options { shell, env, ..Default::default() };
+        let at_root = std::env::current_dir().is_ok_and(|dir| dir.parent().is_none());
+        let home = std::env::var_os("HOME").filter(|_| at_root).map(PathBuf::from);
+        let working_directory = cwd.map(PathBuf::from).or(home).filter(|dir| dir.is_dir());
+        let options = tty::Options { shell, env, working_directory, ..Default::default() };
         let pty = tty::new(&options, window_size(grid, size(px(8.), px(LINE_HEIGHT))), 0)?;
         let term = Arc::new(FairMutex::new(Term::new(Config::default(), &grid, listener.clone())));
         let event_loop = EventLoop::new(term.clone(), listener, pty, false, false)?;

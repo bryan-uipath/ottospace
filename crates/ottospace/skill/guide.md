@@ -48,7 +48,7 @@ ottospace ctl '{"cmd":"state"}'
 | Field | Meaning |
 |---|---|
 | `mode` | `normal`, `app` (a hosted app has the keyboard), `pick` (the picker is open) or `visual` (selecting terminal text with the keyboard) |
-| `state.panes` | Every pane of every tab: `id` and `kind`. `kind` is an object: `{"type":"terminal"}`, `{"type":"empty"}` or `{"type":"app","window":N,"title":"..."}` |
+| `state.panes` | Every pane of every tab: `id`, `kind`, and `cwd` for a terminal opened by `open_repo`. `kind` is an object: `{"type":"terminal"}`, `{"type":"empty"}` or `{"type":"app","window":N,"title":"..."}` |
 | `state.tabs`, `state.active` | The tabs (`id`, `title`) and the index of the one showing. Requests take the index, not the `id` |
 | `tab_panes` | Pane ids of each tab, in tab order |
 | `state.focused` | The pane that splits and keys act on |
@@ -59,6 +59,7 @@ ottospace ctl '{"cmd":"state"}'
 | `terminals.<id>` | `cols`, `rows`, and `lines`: the visible text of that terminal pane. Also `history` (lines scrolled off the top), `display_offset` (how far the view is scrolled back; 0 is the bottom), `selection` (the selected text, or null) and `visual_cursor` |
 | `copied` | The text of the last copy |
 | `apps` | Running apps that `open_app` can host: `name`, `windows` (how many it has open) and `icon` (true if its icon was read) |
+| `state.repos` | Repositories found on disk: `name`, `path`, `branch`, and `worktrees` (each `name`, `path`, `branch`) |
 | `ax_overlay` | Null, or the accessibility overlay's last read: `pane`, `targets` (`label`, `frame` in window coordinates, `source`), `count`, `truncated`, `millis`, `error` |
 | `bounds.<id>` | Where each pane of the active tab is drawn: `[x, y, w, h]` |
 
@@ -87,6 +88,20 @@ ottospace ctl '{"cmd":"type","pane":3,"text":"q"}'
 
 `type` goes to the focused pane unless `pane` is given; give it. It fails if that pane is not a
 terminal. Pane ids are never reused.
+
+Repositories:
+
+```sh
+ottospace ctl '{"cmd":"repos"}'
+ottospace ctl '{"cmd":"open_repo","path":"/Users/me/code/app"}'
+ottospace ctl '{"cmd":"open_repo","path":"/Users/me/code/app-2","axis":"down"}'
+```
+
+`repos` reads the list from disk again; it is `state.repos` in every reply. It holds the
+repositories in the directories named by `$OTTOSPACE_REPOS` (default `~/code` and `~/notes`), each
+with its git worktrees. `open_repo` opens a terminal whose shell starts in a repository or
+worktree: it fills the focused pane if that is empty, else splits it. `path` must be a `path` from
+`state.repos`; any other path is refused. A tab with no panes takes the repository's name.
 
 Reading a terminal pane:
 

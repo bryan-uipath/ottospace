@@ -6,6 +6,7 @@ pub mod keys;
 pub mod layout;
 pub mod model;
 pub mod palette;
+pub mod repos;
 pub mod terminal;
 pub mod theme;
 pub mod titlebar;

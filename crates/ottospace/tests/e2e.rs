@@ -21,6 +21,11 @@ struct Otto {
 
 impl Otto {
     fn launch(name: &str) -> Self {
+        Self::launch_with(name, &[])
+    }
+
+    /// Launches with extra environment, e.g. `[("OTTOSPACE_REPOS", "/tmp/repos")]`.
+    fn launch_with(name: &str, env: &[(&str, &str)]) -> Self {
         let socket = std::env::temp_dir().join(format!("ottospace-e2e-{name}-{}.sock", std::process::id()));
         let child = Command::new(env!("CARGO_BIN_EXE_ottospace"))
             .env("OTTOSPACE_E2E", "1")
@@ -29,6 +34,9 @@ impl Otto {
             .env("OTTOSPACE_SHELL", "/bin/sh")
             // Never inherit hosting from the caller's shell: this suite must not move real windows.
             .env_remove("OTTOSPACE_HOST_ONLY")
+            // Never list the user's own repositories unless a test names a directory.
+            .env("OTTOSPACE_REPOS", "")
+            .envs(env.iter().copied())
             .spawn()
             .expect("launch ottospace");
         let otto = Self { child, socket };
@@ -201,6 +209,42 @@ fn capture_and_wait_read_one_pane() {
     assert!(late["error"].as_str().unwrap().contains("200 ms"), "{late}");
     assert_eq!(otto.raw(r#"{"cmd":"wait","pane":1,"pattern":"("}"#)["ok"], false);
     assert_eq!(otto.raw(r#"{"cmd":"capture","pane":9}"#)["ok"], false);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn repos_are_listed_and_open_a_terminal_there() {
+    // A repository with one linked worktree, written the way git lays them out, and a plain directory.
+    let root = std::env::temp_dir().join(format!("ottospace-e2e-repos-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let admin = root.join("app/.git/worktrees/app-2");
+    std::fs::create_dir_all(&admin).unwrap();
+    std::fs::create_dir_all(root.join("app-2")).unwrap();
+    std::fs::create_dir_all(root.join("plain")).unwrap();
+    let root = root.canonicalize().unwrap(); // the path `pwd` prints
+    let at = |rest: &str| root.join(rest).to_string_lossy().into_owned();
+    std::fs::write(root.join("app/.git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::write(root.join("app/.git/worktrees/app-2/HEAD"), "ref: refs/heads/fix/zoom\n").unwrap();
+    std::fs::write(root.join("app/.git/worktrees/app-2/gitdir"), format!("{}\n", at("app-2/.git"))).unwrap();
+    std::fs::write(root.join("app-2/.git"), format!("gitdir: {}\n", at("app/.git/worktrees/app-2"))).unwrap();
+
+    let otto = Otto::launch_with("repos", &[("OTTOSPACE_REPOS", &at(""))]);
+    let repos = otto.call(json!({"cmd": "repos"}))["state"]["repos"].clone();
+    // The worktree is under its repository, not listed a second time.
+    let worktree = json!({"name": "app-2", "path": at("app-2"), "branch": "fix/zoom"});
+    assert_eq!(repos, json!([{"name": "app", "path": at("app"), "branch": "main", "worktrees": [worktree]}]));
+
+    // Opening the worktree: a terminal whose shell starts there, and the empty tab takes its name.
+    let reply = otto.call(json!({"cmd": "open_repo", "path": at("app-2")}));
+    assert_eq!(reply["state"]["tabs"][0]["title"], "app-2");
+    assert_eq!(reply["state"]["panes"][0]["cwd"], at("app-2"));
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "pwd\r"}));
+    let pattern = format!("^{}$", at("app-2"));
+    otto.call(json!({"cmd": "wait", "pane": 1, "pattern": pattern, "timeout_ms": 40000}));
+
+    // A path that is not in the list is refused: `open_repo` is not "open any directory".
+    assert_eq!(otto.raw(&json!({"cmd": "open_repo", "path": at("plain")}).to_string())["ok"], false);
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 /// Terminal 1's entry in the state dump.
