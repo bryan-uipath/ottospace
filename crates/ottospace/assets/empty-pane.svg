@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="440 240 560 460" width="560" height="460" fill="none">
+  <defs>
+    <path id="o-body" d="M43.944 49.275 C65.305 36.799 87.351 38.056 103.622 47.452 C118.602 56.095 128.689 71.632 128.863 89.714 C129.224 129.297 98.355 144.187 84.374 148.002 C76.602 150.120 61.650 151.340 47.559 145.615 C36.291 141.035 25.585 132.028 19.534 115.496 L19.107 114.270 C6.629 77.722 37.881 53.209 37.881 53.209 C39.897 51.772 41.920 50.460 43.944 49.275Z"/>
+    <clipPath id="o-clip"><use href="#o-body"/></clipPath>
+    <!-- Light comes from the upper left. -->
+    <radialGradient id="o-skin" cx="52" cy="62" r="118" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4f6b78"/><stop offset=".38" stop-color="#32505c"/>
+      <stop offset=".74" stop-color="#1c3038"/><stop offset="1" stop-color="#0f1c22"/>
+    </radialGradient>
+    <radialGradient id="o-sheen" cx="50" cy="60" r="46" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fafafa" stop-opacity=".16"/><stop offset="1" stop-color="#fafafa" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="o-rim" cx="60" cy="78" r="78" gradientUnits="userSpaceOnUse">
+      <stop offset=".78" stop-color="#00b8db" stop-opacity="0"/><stop offset="1" stop-color="#00b8db" stop-opacity=".38"/>
+    </radialGradient>
+    <linearGradient id="o-band" x1="0" y1="68" x2="0" y2="106" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#27272a"/><stop offset=".18" stop-color="#0c0c0f"/><stop offset="1" stop-color="#09090b"/>
+    </linearGradient>
+    <linearGradient id="o-metal" x1="10" y1="12" x2="136" y2="30" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#3f3f46"/><stop offset=".5" stop-color="#9f9fa9"/><stop offset="1" stop-color="#52525c"/>
+    </linearGradient>
+    <linearGradient id="o-cap" x1="56" y1="30" x2="80" y2="48" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5f7d8a"/><stop offset="1" stop-color="#1c3038"/>
+    </linearGradient>
+    <radialGradient id="o-socket" cx=".5" cy=".35" r=".75">
+      <stop stop-color="#18181b"/><stop offset="1" stop-color="#050506"/>
+    </radialGradient>
+    <radialGradient id="o-pupil" cx=".42" cy=".36" r=".7">
+      <stop stop-color="#cfcfd4"/><stop offset=".55" stop-color="#ababb1"/><stop offset="1" stop-color="#79797f"/>
+    </radialGradient>
+    <radialGradient id="o-glow" cx=".5" cy=".5" r=".5">
+      <stop stop-color="#00b8db" stop-opacity=".07"/><stop offset="1" stop-color="#00b8db" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="o-shadow" cx=".5" cy=".5" r=".5">
+      <stop stop-color="#000" stop-opacity=".55"/><stop offset="1" stop-color="#000" stop-opacity="0"/>
+    </radialGradient>
+
+      
+    <radialGradient id="pfade" cx="280.0" cy="20" r="280.0" gradientUnits="userSpaceOnUse" gradientTransform="translate(0 20) scale(1 0.7) translate(0 -20)">
+      <stop stop-color="#fff"/><stop offset=".55" stop-color="#fff" stop-opacity=".45"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+    <mask id="pmask"><rect width="560" height="200" fill="url(#pfade)"/></mask>
+    <linearGradient id="pglow" x1="0" y1="2" x2="0" y2="60" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#00b8db" stop-opacity="0"/><stop offset=".45" stop-color="#00b8db" stop-opacity=".22"/><stop offset="1" stop-color="#00b8db" stop-opacity="0"/>
+    </linearGradient><radialGradient id="pool" cx="720" cy="520" r="210" gradientUnits="userSpaceOnUse" gradientTransform="translate(0 520) scale(1 .28) translate(0 -520)">
+      <stop stop-color="#00b8db" stop-opacity=".28"/><stop offset="1" stop-color="#00b8db" stop-opacity="0"/></radialGradient></defs>
+  <g transform="translate(440 490)"><g mask="url(#pmask)">
+      <rect y="2" width="560" height="58" fill="url(#pglow)"/>
+      <g stroke="#00b8db" stroke-opacity="0.6" stroke-width="1"><path d="M172.0 20L-920.0 200"/><path d="M182.8 20L-800.0 200"/><path d="M193.6 20L-680.0 200"/><path d="M204.4 20L-560.0 200"/><path d="M215.2 20L-440.0 200"/><path d="M226.0 20L-320.0 200"/><path d="M236.8 20L-200.0 200"/><path d="M247.6 20L-80.0 200"/><path d="M258.4 20L40.0 200"/><path d="M269.2 20L160.0 200"/><path d="M280.0 20L280.0 200"/><path d="M290.8 20L400.0 200"/><path d="M301.6 20L520.0 200"/><path d="M312.4 20L640.0 200"/><path d="M323.2 20L760.0 200"/><path d="M334.0 20L880.0 200"/><path d="M344.8 20L1000.0 200"/><path d="M355.6 20L1120.0 200"/><path d="M366.4 20L1240.0 200"/><path d="M377.2 20L1360.0 200"/><path d="M388.0 20L1480.0 200"/><path d="M0 22.2H560"/><path d="M0 28.9H560"/><path d="M0 40.0H560"/><path d="M0 55.6H560"/><path d="M0 75.6H560"/><path d="M0 100.0H560"/><path d="M0 128.9H560"/><path d="M0 162.2H560"/><path d="M0 200.0H560"/></g>
+      <path d="M0 20H560" stroke="#53eafd" stroke-opacity=".7" stroke-width="1.2"/>
+    </g></g>
+  <ellipse cx="720" cy="520" rx="210" ry="60" fill="url(#pool)"/>
+  <g transform="translate(590 250) scale(1.55)"><use href="#o-body" fill="#09090b"/></g>
+  <g transform="translate(590 250) scale(1.55)" opacity="0.5">
+    <ellipse cx="76" cy="160" rx="62" ry="9" fill="url(#o-shadow)"/>
+    <!-- headband tails and knot -->
+    <g fill="url(#o-band)" stroke="#27272a" stroke-width=".5" stroke-linejoin="round">
+      <path d="M127 80C136 74 147 77 158 68L161 73C151 83 140 80 129 87Z"/>
+      <path d="M128 85C137 84 146 88 156 84L157 89C147 94 138 91 129 91Z"/>
+    </g>
+    <!-- rotor -->
+    <path d="M37.736 25.341 C39.174 25.565 52.421 25.994 56.403 29.513 C60.385 33.032 56.966 37.913 56.966 37.913 C51.920 41.304 46.136 48.759 46.136 48.759 L56.487 50.190L63.316 41.681L72.398 32.730 L88.010 27.958" stroke="#52525c" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M136.724 15.314 C130.953 14.004 121.725 15.404 119.660 15.510 C117.354 15.631 91.037 21.732 79.918 23.646 C76.731 24.177 73.504 24.434 70.273 24.411 C58.311 26.359 48.461 23.789 48.072 23.836 C47.624 23.885 13.355 17.781 11.236 17.467 C10.100 17.299 9.133 17.371 9.172 17.853 C13.159 18.743 22.106 20.566 29.968 21.897 C29.968 21.897 55.837 28.484 59.795 28.835 C63.752 29.187 79.513 29.255 88.010 27.958 C94.948 26.900 122.827 20.336 132.810 17.965 C134.602 17.103 136.478 16.058 136.724 15.314Z" fill="url(#o-metal)"/>
+    <path d="M51.296 47.234 C51.594 45.921 51.976 44.629 52.437 43.364 C56.217 33.003 64.545 28.128 72.420 30.427 C79.710 33.458 82.133 36.606 83.185 38.750 C83.579 39.501 83.846 40.311 83.975 41.149 L80.926 45.610Z" fill="url(#o-cap)"/>
+    <!-- body: smooth shade, soft sheen, faint cyan rim on the shadow side -->
+    <use href="#o-body" fill="url(#o-skin)"/>
+    <g clip-path="url(#o-clip)">
+      <rect x="0" y="30" width="160" height="130" fill="url(#o-sheen)"/>
+      <rect x="0" y="30" width="160" height="130" fill="url(#o-rim)"/>
+      <path d="M51.366 56.320 C49.711 57.228 48.520 58.498 49.332 60.252 C50.315 62.387 53.687 62.408 57.225 61.808 C62.962 60.840 68.655 59.786 74.470 59.384 C76.367 59.236 78.271 59.194 80.172 59.257 C82.300 59.341 84.372 59.901 86.457 60.293 C89.033 60.778 91.845 60.968 94.297 59.851 C95.782 59.195 96.458 57.463 95.809 55.975 C95.358 54.858 93.697 53.336 86.510 52.297 C80.051 51.411 73.605 51.641 67.398 52.350 C63.591 52.772 59.826 53.516 56.145 54.575 C55.081 54.886 52.999 55.430 51.366 56.320Z" fill="#fafafa" fill-opacity=".07"/>
+      <path d="M0 73C40 66 104 66 150 75L150 106C104 98 40 98 0 107Z" fill="url(#o-band)"/>
+      <ellipse cx="54" cy="90" rx="17" ry="20" fill="url(#o-glow)"/>
+      <ellipse cx="94" cy="90" rx="17" ry="20" fill="url(#o-glow)"/>
+    </g>
+    <circle cx="128.5" cy="85.5" r="3.4" fill="#18181b" stroke="#27272a" stroke-width=".5"/>
+    <!-- eyes -->
+    <g fill="url(#o-socket)" stroke="#52525c" stroke-width=".6">
+      <path d="M83.745 88.572 C84.056 84.098 84.657 77.493 87.622 75.474 C90.586 73.455 96.159 73.153 99.288 75.138 C100.693 76.039 101.776 77.363 102.381 78.918 C103.110 81.026 103.569 83.747 103.663 84.565 C103.974 87.418 104.412 90.342 104.447 93.245 C104.481 96.070 104.328 98.170 103.075 100.749 C99.777 107.532 87.404 104.909 85.621 102.177 C83.838 99.446 83.446 93.046 83.745 88.572Z"/><path d="M64.750 88.573 C64.449 84.099 63.830 77.494 60.874 75.475 C57.918 73.456 52.337 73.154 49.207 75.139 C47.802 76.040 46.719 77.364 46.115 78.919 C45.383 81.027 44.926 83.748 44.833 84.566 C44.506 87.419 44.083 90.343 44.049 93.246 C44.015 96.083 44.176 98.171 45.421 100.750 C48.719 107.532 61.092 104.910 62.874 102.178 C64.657 99.447 65.052 93.047 64.750 88.573Z"/>
+    </g>
+    <path d="M95.071 83.988 C92.568 83.731 90.772 84.339 89.904 85.487 C89.036 86.634 88.776 88.070 88.589 89.460 C88.418 90.733 88.288 92.039 88.589 93.297 C88.890 94.555 89.644 95.775 90.877 96.372 C91.849 96.843 92.990 96.882 94.086 96.908 C94.873 96.961 95.665 96.916 96.439 96.773 C98.264 96.355 99.636 94.842 100.139 93.168 C100.643 91.494 100.386 89.700 99.823 88.044 C99.531 87.053 99.002 86.134 98.277 85.355 C97.470 84.496 96.302 83.998 95.071 83.988Z" fill="url(#o-pupil)"/>
+    <path d="M53.734 83.988 C56.238 83.731 58.035 84.339 58.904 85.487 C59.772 86.634 60.032 88.070 60.219 89.460 C60.390 90.733 60.536 92.039 60.235 93.297 C59.934 94.555 59.180 95.775 57.947 96.372 C56.974 96.843 55.833 96.882 54.736 96.908 C53.948 96.961 53.156 96.916 52.381 96.773 C50.556 96.355 49.183 94.842 48.679 93.168 C48.175 91.494 48.432 89.700 48.996 88.044 C49.287 87.052 49.816 86.133 50.543 85.355 C51.347 84.499 52.508 84.002 53.734 83.988Z" fill="url(#o-pupil)"/>
+    <path d="M61.409 119.930 C61.409 119.930 70.543 130.152 86.229 120.551" stroke="#9f9fa9" stroke-width="1.3" stroke-linecap="round" fill="none"/>
+  </g>
+</svg>
