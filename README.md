@@ -210,8 +210,9 @@ optional:
 | `tasks` | Where tasks are kept, one JSON file each. A relative path is inside `~/.ottospace` | `tasks` |
 | `apps` | Apps to offer while they are not running, by the name of the app as Finder shows it (`Visual Studio Code` for `Visual Studio Code.app`). It must be in `/Applications`, `~/Applications` or `/System/Applications` (or their `Utilities`); a name that is not found is left out. They show under "Not running" in Apps and in the picker; choosing one starts it in the background and puts its window in a pane | none |
 
-A mistake in the file (a key that does not exist, bad JSON, a font that is not installed) is shown
-in the status bar, and the default applies.
+A mistake in the file (a key that does not exist, a wrong value, a font that is not installed) is
+shown in the status bar. That key takes its default and the others still apply. If the file is
+not JSON at all, every default applies.
 
 ## Driving it from outside
 

@@ -13,7 +13,8 @@ pub struct Config {
     /// `None`: a test run that named no folder. It reads no settings and keeps nothing on disk,
     /// so a test cannot read or change the user's own.
     pub home: Option<PathBuf>,
-    /// What was wrong with `settings.json`, to show the user. The defaults apply.
+    /// What was wrong with `settings.json`, to show the user. A wrong key takes its default;
+    /// the others apply.
     pub error: Option<String>,
 }
 
@@ -32,10 +33,11 @@ fn load() -> Config {
     let home = named.or_else(|| (!test_run).then(|| Path::new(&user_home()).join(".ottospace")));
     let file = home.as_ref().map(|home| home.join("settings.json"));
     let (settings, error) = match file.as_ref().map(fs::read_to_string) {
-        Some(Ok(text)) => match Settings::parse(&text) {
-            Ok(settings) => (settings, None),
-            Err(err) => (Settings::default(), Some(format!("settings.json: {err}"))),
-        },
+        // Every key that is right is kept; what is wrong is named.
+        Some(Ok(text)) => {
+            let (settings, wrong) = Settings::read(&text);
+            (settings, (!wrong.is_empty()).then(|| format!("settings.json: {}", wrong.join("; "))))
+        }
         // No file is the usual case: the defaults.
         Some(Err(err)) if err.kind() != io::ErrorKind::NotFound => {
             (Settings::default(), Some(format!("settings.json: {err}")))
