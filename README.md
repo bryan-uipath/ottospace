@@ -319,6 +319,7 @@ first brainstorm:
 - [screen-share-privacy.md](docs/ai/1-initial-brainstorm/screen-share-privacy.md): hiding panes from screen sharing.
 - [scripting.md](docs/ai/1-initial-brainstorm/scripting.md): scripting in TypeScript.
 - [zoom-meeting.md](docs/ai/1-initial-brainstorm/zoom-meeting.md): Zoom meeting layout and participants.
+- [zoom-ax.md](docs/ai/1-initial-brainstorm/zoom-ax.md): what a Zoom meeting exposes through accessibility, measured.
 - [accessibility.md](docs/ai/1-initial-brainstorm/accessibility.md): reading app accessibility trees, toward sneak mode and agent actions.
 - [multi-monitor.md](docs/ai/1-initial-brainstorm/multi-monitor.md): options for more than one display, and a staged recommendation. Nothing measured yet.
 - `background/`: icon and mockup images.
