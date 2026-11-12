@@ -10,6 +10,7 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin
 export PATH
 
 repo="bryan-uipath/ottospace"
+# Asset name must match release.yml: ottospace-<version>-<target>.zip.
 target="aarch64-apple-darwin"
 # Marks the wrapper as ours, so a second run may replace it.
 marker="# Installed by ottospace install.sh"
@@ -44,7 +45,7 @@ check_tag() {
     *) die "bad version '$1' (expected vX.Y.Z)" ;;
   esac
   case "$1" in
-    *[!0-9A-Za-z.-]*) die "bad version '$1' (expected vX.Y.Z)" ;;
+    *[!0-9A-Za-z.+-]*) die "bad version '$1' (expected vX.Y.Z)" ;;
   esac
 }
 

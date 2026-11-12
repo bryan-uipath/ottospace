@@ -12,6 +12,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Asset name must match install.sh: ottospace-<version>-<target>.zip.
   TARGET: aarch64-apple-darwin
 
 jobs:

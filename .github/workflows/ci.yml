@@ -57,4 +57,4 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # Hosting off. Never cargo e2e-apps here: it needs Accessibility and Screen Recording.
       - name: E2E
-        run: cargo e2e --locked
+        run: cargo e2e
