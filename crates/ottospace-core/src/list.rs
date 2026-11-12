@@ -12,6 +12,10 @@ pub enum ListRow {
     Task(TaskId),
     /// A heading of the Tasks section. Opening it folds or unfolds it.
     Heading(Heading),
+    /// A session no task has adopted, by runner and id.
+    Session(String, String),
+    /// "N older" under Sessions. Opening it shows or hides the older sessions.
+    OlderSessions,
 }
 
 /// What a key does in list mode.

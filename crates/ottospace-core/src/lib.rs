@@ -11,6 +11,7 @@ pub mod model;
 pub mod palette;
 pub mod repos;
 pub mod rules;
+pub mod sessions;
 pub mod settings;
 pub mod sneak;
 pub mod tasks;

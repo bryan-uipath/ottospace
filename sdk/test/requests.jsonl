@@ -41,6 +41,10 @@
 {"cmd":"task_list"}
 {"cmd":"task_new","line":"fix zoom flicker #canvas >app @claude p1"}
 {"cmd":"task_group","heading":"open"}
+{"cmd":"session_adopt","runner":"claude","id":"11111111-1111-4111-8111-111111111111"}
+{"cmd":"session_hide","runner":"codex","id":"c0de0001-0000-4000-8000-000000000001"}
+{"cmd":"session_click","runner":"claude","id":"11111111-1111-4111-8111-111111111111"}
+{"cmd":"sessions_older"}
 {"cmd":"compose","text":"a draft"}
 {"cmd":"task_pop"}
 {"cmd":"task_open","id":1}

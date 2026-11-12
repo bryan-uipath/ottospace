@@ -230,10 +230,30 @@ pub enum Request {
         open: bool,
     },
     /// Collapses or expands a heading of the Tasks section: `needs_you`, `open`, `running`,
-    /// `captured`, `on_hold`, `done`.
+    /// `captured`, `on_hold`, `done`, `sessions`.
     TaskGroup {
         heading: Heading,
     },
+    /// Makes a task of a session the Tasks section lists under Sessions: `runner` is `claude` or
+    /// `codex`, `id` the session's id, both as `sessions_bar.rows` gives them. The task is named
+    /// after the session's repository, works in its directory, and the session leaves the group.
+    SessionAdopt {
+        runner: String,
+        id: String,
+    },
+    /// Stops listing a session until the app starts again.
+    SessionHide {
+        runner: String,
+        id: String,
+    },
+    /// A click on a session's row: focuses the pane it runs in if that is known, else selects
+    /// the row. Nothing is ever sent to the session.
+    SessionClick {
+        runner: String,
+        id: String,
+    },
+    /// Shows or hides the idle sessions older than a day ("N older").
+    SessionsOlder,
     /// Opens the new-task box for the user, with `text` in it to edit: a draft, not a filed task.
     Compose {
         #[serde(default)]

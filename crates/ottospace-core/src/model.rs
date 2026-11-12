@@ -9,6 +9,7 @@ use crate::keys::Mods;
 use crate::layout::{Axis, Dir, Node, Rect, Zone};
 use crate::list::ListRow;
 use crate::repos::{self, Repo};
+use crate::sessions::{self, Found};
 use crate::sneak::{Sneak, Typed};
 use crate::tasks::{
     self, Assign, Heading, MAX_TITLE, Moved, NOTICE_MS, Notice, State, Task, TaskId, TaskRow, TaskSection, Tasks,
@@ -348,7 +349,7 @@ pub enum Action {
     TaskUndo,
     /// Snooze, hold or dismiss a task with the buttons on its row (the mouse). As `TaskSnooze`
     /// and the others; the Tasks section then offers to take it back for a few seconds
-    /// (`Model::notice`), counted from the last `Tick`.
+    /// (`Model::undo_offer`), counted from the last `Tick`.
     RowSnooze {
         id: TaskId,
         until: u64,
@@ -403,6 +404,28 @@ pub enum Action {
     ToggleGroup {
         heading: Heading,
     },
+    /// Replace the sessions the shell found on this machine for the listed repositories.
+    SetSessions {
+        found: Vec<Found>,
+    },
+    /// Make a task of a session: named after its repository, in its directory, worked by its
+    /// runner, and linked to it, so the session is listed as that task from now on.
+    SessionAdopt {
+        runner: String,
+        id: String,
+    },
+    /// Stop listing a session, until the app starts again.
+    SessionHide {
+        runner: String,
+        id: String,
+    },
+    /// A click on a session's row: focus the pane it runs in, if that is known; else select the row.
+    SessionClick {
+        runner: String,
+        id: String,
+    },
+    /// Show or hide the idle sessions older than a day.
+    ToggleOlderSessions,
     /// Replace the Apps list with the apps the shell can host now.
     SetApps {
         names: Vec<String>,
@@ -545,6 +568,11 @@ impl Action {
             | Action::ComposeComplete
             | Action::ComposeSubmit { .. }
             | Action::ToggleGroup { .. }
+            | Action::SetSessions { .. }
+            | Action::SessionAdopt { .. }
+            | Action::SessionHide { .. }
+            | Action::SessionClick { .. }
+            | Action::ToggleOlderSessions
             | Action::RowSnooze { .. }
             | Action::RowHold { .. }
             | Action::RowDismiss { .. }
@@ -679,6 +707,15 @@ pub struct Model {
     /// In the snapshot it is `tasks_bar.undo`: `notice` there is the status bar's.
     #[serde(skip)]
     pub undo_offer: Option<Notice>,
+    /// Sessions the shell found, in the order listed. Shown through `sessions_bar` only.
+    #[serde(skip)]
+    found: Vec<Found>,
+    /// Sessions the user hid, as (runner, id). Not kept between runs.
+    #[serde(skip)]
+    hidden: Vec<(String, String)>,
+    /// The idle sessions older than a day are shown.
+    #[serde(skip)]
+    older_sessions: bool,
     /// The time of the last `Tick`: when a task filed now was filed. 0: never told.
     #[serde(skip)]
     now: u64,
@@ -720,6 +757,9 @@ impl Default for Model {
             known_line: None,
             collapsed: Vec::new(),
             undo_offer: None,
+            found: Vec::new(),
+            hidden: Vec::new(),
+            older_sessions: false,
             now: 0,
             picker: None,
             confirm: None,
@@ -795,6 +835,10 @@ impl Model {
             action if self.sneak.is_some() && action.takes_keyboard() => Some("sneak mode is on"),
             action if self.confirm.is_some() && action.takes_keyboard() => Some(CONFIRM_UP),
             Action::ToggleKeys if boxed && !self.keys => Some("the picker or the new-task box is open"),
+            // For the user it waits, as every pane action does. A client is told why.
+            Action::SessionClick { .. } if boxed || self.keys || self.visual.is_some() => {
+                Some("the picker, the new-task box, the key reference or visual mode has the keyboard")
+            }
             _ => None,
         }
     }
@@ -841,6 +885,7 @@ impl Model {
                 | Action::FocusList
                 | Action::ListSection { .. }
                 | Action::ListChoose { .. }
+                | Action::SessionClick { .. }
                 | Action::Close { .. }
                 | Action::Focus { .. }
                 | Action::FocusDir { .. }
@@ -936,6 +981,7 @@ impl Model {
                 | Action::TaskUndo
                 | Action::ToggleSection { .. }
                 | Action::FocusList
+                | Action::SessionClick { .. }
         );
         let selected = self.list.and_then(|at| self.list_rows().into_iter().nth(at)).filter(|_| !own_move);
         // The notice offers back one move. Another move, by key or socket, is not the one it names.
@@ -1225,6 +1271,55 @@ impl Model {
                     self.start(id, open, effects);
                 }
             }
+            Action::SetSessions { found } => {
+                self.found = sessions::kept(found);
+                // A task adopted from a session follows it: see `Found::follow`.
+                let follows = |task: &Task| {
+                    let link = task.session.as_ref()?;
+                    let session = self.found.iter().find(|s| (&s.runner, &s.id) == (&link.runner, &link.id))?;
+                    Some((task.id, session.follow(link.state, task.state)?))
+                };
+                let moves: Vec<(TaskId, State)> = self.tasks.list.iter().filter_map(follows).collect();
+                for (id, state) in moves {
+                    self.tasks.set_state(id, state);
+                    self.tasks.followed(id, state);
+                }
+            }
+            Action::SessionAdopt { runner, id } => {
+                if let Some(session) = self.session(&runner, &id).cloned() {
+                    // A session at work is a task that runs; an idle one is one saved for later.
+                    let state = if session.active { State::Running } else { State::Captured };
+                    let task = self.file(self.session_name(&session), 3, state);
+                    // The listed checkout, not where in it the session started: a task opens a
+                    // terminal in its repository, and its tag names it.
+                    self.tasks.tag(task, None, Some(session.repo));
+                    self.tasks.assign(task, Assign { agent: Some(runner.clone()), ..Assign::default() });
+                    self.tasks.link(task, sessions::Link { runner, id, state: Some(state) });
+                }
+            }
+            Action::SessionHide { runner, id } => {
+                if self.session(&runner, &id).is_some() {
+                    self.hidden.push((runner, id));
+                }
+            }
+            Action::SessionClick { runner, id } => {
+                let row =
+                    self.list_rows().into_iter().position(|row| row == ListRow::Session(runner.clone(), id.clone()));
+                let pane = self.session(&runner, &id).and_then(|s| self.session_pane(s));
+                match (pane, row) {
+                    (Some(pane), _) => {
+                        self.list = None;
+                        self.focus(pane, effects);
+                    }
+                    // Nothing to show: the row is selected, as list mode would.
+                    (None, Some(row)) => {
+                        self.leave(effects);
+                        self.list = Some(row);
+                    }
+                    (None, None) => {}
+                }
+            }
+            Action::ToggleOlderSessions => self.older_sessions = !self.older_sessions,
             Action::ToggleGroup { heading } => {
                 let open = !self.collapsed.contains(&heading);
                 self.collapsed.retain(|h| *h != heading);
@@ -1266,6 +1361,13 @@ impl Model {
                 }
                 // The selection stays on the heading: the same key unfolds it again.
                 Some(ListRow::Heading(heading)) => self.act(Action::ToggleGroup { heading }, effects),
+                // As a click: the pane it runs in, if that is known. Nothing else is done to a session.
+                Some(ListRow::Session(runner, id)) => {
+                    if self.session(&runner, &id).is_some_and(|s| self.session_pane(s).is_some()) {
+                        self.act(Action::SessionClick { runner, id }, effects);
+                    }
+                }
+                Some(ListRow::OlderSessions) => self.act(Action::ToggleOlderSessions, effects),
                 None => {}
             },
             Action::ListSnooze { until } => {
@@ -1551,6 +1653,65 @@ impl Model {
         sections
     }
 
+    /// The sessions that are no task's and not hidden, in the order listed. At most `MAX_FOUND`.
+    fn unadopted(&self) -> impl Iterator<Item = &Found> {
+        let hidden = |s: &&Found| self.hidden.iter().any(|(runner, id)| (runner, id) == (&s.runner, &s.id));
+        let listed = self.found.iter().filter(move |s| !hidden(s) && !self.tasks.adopted(&s.runner, &s.id));
+        listed.take(sessions::MAX_FOUND)
+    }
+
+    /// A listed session, by runner and id: one that is no task's and not hidden.
+    fn session(&self, runner: &str, id: &str) -> Option<&Found> {
+        self.unadopted().find(|s| s.runner == runner && s.id == id)
+    }
+
+    /// The name of the listed repository or worktree a session runs in: as the Repos section
+    /// names it, else the last part of its path.
+    fn session_name(&self, session: &Found) -> String {
+        self.repo_name(&session.repo).unwrap_or_else(|| repos::name_of(&session.repo))
+    }
+
+    /// The terminal pane a session runs in, when there is no doubt: the session is at work, one
+    /// terminal of the tab on show was opened in its directory, and no other listed session at
+    /// work started there. A past session in the same directory, a hidden one or a task's does
+    /// not count. (A shell that has since changed directory, or a session started elsewhere in
+    /// a pane, is not told: the core knows a pane's first directory only.)
+    fn session_pane(&self, session: &Found) -> Option<PaneId> {
+        let shown = self.layout.as_ref().map(Node::leaves).unwrap_or_default();
+        let there = |pane: &&Pane| {
+            pane.kind == Kind::Terminal && shown.contains(&pane.id) && pane.cwd.as_deref() == Some(session.cwd.as_str())
+        };
+        let mut panes = self.panes.iter().filter(there);
+        let (pane, another) = (panes.next()?, panes.next());
+        let at_work = self.unadopted().filter(|s| s.active && s.cwd == session.cwd).count();
+        (another.is_none() && session.active && at_work == 1).then_some(pane.id)
+    }
+
+    /// The Sessions group as drawn, at the time of the last `Tick`: sessions found that are no
+    /// task's, active first. Idle ones older than a day are counted behind "N older" until shown.
+    pub fn sessions_bar(&self) -> sessions::Bar {
+        let (recent, old): (Vec<&Found>, Vec<&Found>) = self.unadopted().partition(|s| !s.old(self.now));
+        let collapsed = self.collapsed.contains(&Heading::Sessions);
+        let drawn = recent.iter().chain(old.iter().filter(|_| self.older_sessions)).filter(|_| !collapsed);
+        let row = |s: &&Found| sessions::Row {
+            runner: s.runner.clone(),
+            id: s.id.clone(),
+            name: self.session_name(s),
+            active: s.active,
+            doing: s.doing(),
+            age: s.last_activity.map(|at| tasks::age(at, self.now)),
+            pane: self.session_pane(s),
+        };
+        let rows = drawn.map(row).collect();
+        sessions::Bar {
+            count: recent.len() + old.len(),
+            collapsed,
+            rows,
+            older: old.len(),
+            older_open: self.older_sessions,
+        }
+    }
+
     /// Every listed repository and worktree, as (name, path).
     fn repo_names(&self) -> impl Iterator<Item = (&str, &str)> {
         self.repos.iter().flat_map(|r| {
@@ -1600,6 +1761,19 @@ impl Model {
                     if !self.collapsed.contains(&place.heading) {
                         rows.push(ListRow::Task(place.task.id));
                     }
+                }
+                // Then the sessions that are no task's, as drawn: the heading, those of the last
+                // day, "N older", and the older ones while they are shown.
+                let bar = self.sessions_bar();
+                if bar.count > 0 {
+                    rows.push(ListRow::Heading(Heading::Sessions));
+                    let session = |row: &sessions::Row| ListRow::Session(row.runner.clone(), row.id.clone());
+                    let (recent, old) = bar.rows.split_at(bar.recent());
+                    rows.extend(recent.iter().map(session));
+                    if bar.older > 0 && !bar.collapsed {
+                        rows.push(ListRow::OlderSessions);
+                    }
+                    rows.extend(old.iter().map(session));
                 }
                 rows
             }
@@ -2186,6 +2360,11 @@ mod tests {
         Action::CloseCompose,
         Action::TaskFromLine { .. },
         Action::ToggleGroup { .. },
+        Action::SetSessions { .. },
+        Action::SessionAdopt { .. },
+        Action::SessionHide { .. },
+        Action::SessionClick { .. },
+        Action::ToggleOlderSessions,
         Action::SetApps { .. },
         Action::FocusList,
         Action::LeaveList,
@@ -2264,6 +2443,11 @@ mod tests {
             Action::ComposeSubmit { open: false },
             Action::CloseCompose,
             Action::ToggleGroup { heading: Heading::Done },
+            Action::SetSessions { found: Vec::new() },
+            Action::SessionAdopt { runner: text(), id: text() },
+            Action::SessionHide { runner: text(), id: text() },
+            Action::SessionClick { runner: text(), id: text() },
+            Action::ToggleOlderSessions,
             Action::RowSnooze { id: 1, until: 0 },
             Action::RowHold { id: 1 },
             Action::RowDismiss { id: 1 },
@@ -3228,6 +3412,276 @@ mod tests {
         assert_eq!(m.collapsed.as_slice(), &[Heading::NeedsYou, Heading::Running]);
         m.update(Action::ToggleGroup { heading: Heading::NeedsYou });
         assert_eq!((sections(&m)[0].2.len(), m.collapsed.len()), (2, 1));
+    }
+
+    fn session(runner: &str, id: &str, cwd: &str, active: bool, at: u64) -> Found {
+        let (runner, id, cwd, repo) = (runner.to_string(), id.to_string(), cwd.to_string(), cwd.to_string());
+        Found { runner, id, cwd, repo, started: None, last_activity: Some(at), active, station: None, label: None }
+    }
+
+    /// The Sessions group as (count, ids of the rows drawn, how many are older).
+    fn session_rows(m: &Model) -> (usize, Vec<String>, usize) {
+        let bar = m.sessions_bar();
+        (bar.count, bar.rows.into_iter().map(|row| row.id).collect(), bar.older)
+    }
+
+    #[test]
+    fn sessions_that_are_no_tasks_are_listed_active_first_and_old_ones_wait() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        let now = 10 * sessions::OLD_MS;
+        m.update(Action::Tick { now });
+        let mut busy = session("claude", "busy", "/code/app/crates", true, now - 2_000);
+        (busy.repo, busy.station, busy.label) = ("/code/app".into(), Some("shell".into()), Some("cargo test".into()));
+        m.update(Action::SetSessions {
+            found: vec![
+                session("codex", "old", "/code/app", false, now - 3 * sessions::OLD_MS),
+                session("codex", "idle", "/code/app-2", false, now - 3 * 3_600_000),
+                busy,
+            ],
+        });
+        assert_eq!(session_rows(&m), (3, vec!["busy".into(), "idle".into()], 1));
+        let rows = m.sessions_bar().rows;
+        // Named after the listed repository or worktree, wherever below it the session started.
+        assert_eq!(
+            (
+                rows[0].runner.as_str(),
+                rows[0].name.as_str(),
+                rows[0].active,
+                rows[0].doing.as_deref(),
+                rows[0].age.as_deref()
+            ),
+            ("claude", "app", true, Some("shell · cargo test"), Some("now"))
+        );
+        assert_eq!(
+            (
+                rows[1].runner.as_str(),
+                rows[1].name.as_str(),
+                rows[1].active,
+                rows[1].doing.as_deref(),
+                rows[1].age.as_deref()
+            ),
+            ("codex", "app-2", false, None, Some("3h"))
+        );
+        // "1 older" shows the rest, after the others; the heading folds like any other.
+        m.update(Action::ToggleOlderSessions);
+        assert_eq!(session_rows(&m), (3, vec!["busy".into(), "idle".into(), "old".into()], 1));
+        m.update(Action::ToggleGroup { heading: Heading::Sessions });
+        assert_eq!(session_rows(&m), (3, vec![], 1));
+        m.update(Action::ToggleGroup { heading: Heading::Sessions });
+        m.update(Action::ToggleOlderSessions);
+        // List mode walks the tasks, then the sessions as drawn: their heading, the rows, "1 older".
+        m.update(Action::TaskAdd {
+            title: "a".into(),
+            priority: 2,
+            state: State::Captured,
+            tab: None,
+            assign: Assign::default(),
+        });
+        m.update(Action::ToggleSection { section: Section::Tasks });
+        let row = |id: &str, runner: &str| ListRow::Session(runner.into(), id.into());
+        let tasks = [ListRow::Heading(Heading::Captured), ListRow::Task(1), ListRow::Heading(Heading::Sessions)];
+        let sessions = [row("busy", "claude"), row("idle", "codex"), ListRow::OlderSessions];
+        assert_eq!(m.list_rows(), [&tasks[..], &sessions[..]].concat());
+        // ↵ on "1 older" shows the older ones after it; ↵ on the heading folds the group.
+        m.update(Action::FocusList);
+        m.update(Action::ListMove { delta: 4 });
+        m.update(Action::ListChoose { axis: Right });
+        assert_eq!((m.list_rows().len(), m.list_rows()[6].clone(), m.list), (7, row("old", "codex"), Some(5)));
+        m.update(Action::ListChoose { axis: Right });
+        m.update(Action::ListMove { delta: -3 });
+        m.update(Action::ListChoose { axis: Right });
+        assert_eq!((m.list_rows(), m.list), (tasks.to_vec(), Some(2)));
+        m.update(Action::ListChoose { axis: Right });
+        m.update(Action::LeaveList);
+        // Hidden: gone for this run, whatever the shell finds again. The group goes with its last row.
+        m.update(Action::SessionHide { runner: "claude".into(), id: "busy".into() });
+        m.update(Action::SetSessions { found: vec![session("claude", "busy", "/code/app", true, now)] });
+        assert_eq!(session_rows(&m), (0, vec![], 0));
+    }
+
+    #[test]
+    fn adopting_a_session_makes_it_a_task() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        m.update(Action::Tick { now: 5_000 });
+        m.update(Action::SetSessions {
+            found: vec![
+                session("claude", "s1", "/code/app-2", true, 4_000),
+                session("codex", "s2", "/code/app", false, 1_000),
+            ],
+        });
+        m.update(Action::SessionAdopt { runner: "claude".into(), id: "s1".into() });
+        let task = &m.tasks.list[0];
+        assert_eq!((task.title.as_str(), task.state, task.created), ("app-2", State::Running, Some(5_000)));
+        assert_eq!((task.repo.as_deref(), task.agent.as_deref()), (Some("/code/app-2"), Some("claude")));
+        let link = sessions::Link { runner: "claude".into(), id: "s1".into(), state: Some(State::Running) };
+        assert_eq!(task.session, Some(link));
+        assert_eq!(m.task_tags(task), ">app-2 · @claude");
+        // It left the Sessions group, and stays out when the shell finds it again or the task is dismissed.
+        assert_eq!(session_rows(&m), (1, vec!["s2".into()], 0));
+        m.update(Action::SessionAdopt { runner: "claude".into(), id: "s1".into() });
+        m.update(Action::TaskDismiss { id: 1 });
+        m.update(Action::SetSessions {
+            found: vec![
+                session("claude", "s1", "/code/app-2", true, 4_500),
+                session("codex", "s2", "/code/app", false, 1_000),
+            ],
+        });
+        assert_eq!((session_rows(&m), m.tasks.list.len()), ((1, vec!["s2".into()], 0), 1));
+        // One that started below a listed repository is that repository's task: the tag names
+        // it, and opening the task opens a terminal there. Where below is not kept.
+        let mut below = session("claude", "s3", "/code/app/crates/core", true, 4_800);
+        below.repo = "/code/app".into();
+        m.update(Action::SetSessions { found: vec![below, session("codex", "s2", "/code/app", false, 1_000)] });
+        m.update(Action::SessionAdopt { runner: "claude".into(), id: "s3".into() });
+        let task = m.tasks.list.last().unwrap().clone();
+        assert_eq!(
+            (task.title.as_str(), task.repo.as_deref(), m.task_tags(&task)),
+            ("app", Some("/code/app"), ">app · @claude".into())
+        );
+        assert!(!serde_json::to_string(&task).unwrap().contains("crates"), "no path from the session is kept");
+        assert_eq!(m.update(Action::TaskOpen { id: Some(task.id) }).len(), 1, "a terminal opens");
+        assert_eq!(m.pane(1).and_then(|pane| pane.cwd.as_deref()), Some("/code/app"));
+        m.update(Action::TaskLeave);
+        m.update(Action::TaskSetState { id: task.id, state: State::Cleaned });
+        // An idle one is saved for later. One that is not listed is not adopted.
+        m.update(Action::SessionAdopt { runner: "codex".into(), id: "s2".into() });
+        m.update(Action::SessionAdopt { runner: "codex".into(), id: "nope".into() });
+        assert_eq!(
+            (m.tasks.list.len() - 1, m.tasks.list[2].state, m.tasks.list[2].agent.as_deref()),
+            (2, State::Captured, Some("codex"))
+        );
+    }
+
+    #[test]
+    fn an_adopted_task_follows_its_session() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        let found = |active: bool| Action::SetSessions { found: vec![session("claude", "s1", "/code/app", active, 9)] };
+        let state = |m: &Model| (m.tasks.list[0].state, m.tasks.list[0].session.as_ref().and_then(|link| link.state));
+        m.update(found(true).sent_by(Origin::System));
+        m.update(Action::SessionAdopt { runner: "claude".into(), id: "s1".into() });
+        assert_eq!(state(&m), (State::Running, Some(State::Running)));
+        // The session goes quiet: the task needs you, once. It works again: the task runs.
+        m.update(found(false).sent_by(Origin::System));
+        assert_eq!((state(&m), m.tasks.needs_you()), ((State::NeedsYou, Some(State::NeedsYou)), 1));
+        m.update(found(false).sent_by(Origin::System));
+        m.update(found(true).sent_by(Origin::System));
+        assert_eq!(state(&m), (State::Running, Some(State::Running)));
+        // The user puts it on hold: it is theirs now, whatever the session does.
+        m.update(Action::TaskHold { id: 1 });
+        m.update(found(false).sent_by(Origin::System));
+        m.update(found(true).sent_by(Origin::System));
+        assert_eq!(state(&m), (State::Parked, Some(State::Running)));
+        // Back to the state it took from the session (undo), it follows again.
+        m.update(Action::TaskUndo);
+        m.update(found(false).sent_by(Origin::System));
+        assert_eq!(state(&m).0, State::NeedsYou);
+        // An agent's report is kept too. A session that is not found says nothing.
+        m.update(Action::TaskSetState { id: 1, state: State::Done }.sent_by(Origin::Socket));
+        m.update(found(true).sent_by(Origin::System));
+        m.update(Action::SetSessions { found: Vec::new() }.sent_by(Origin::System));
+        assert_eq!(state(&m).0, State::Done);
+    }
+
+    #[test]
+    fn the_cap_on_sessions_listed_counts_those_that_can_be_listed() {
+        let mut m = Model::default();
+        let found: Vec<Found> = (0..sessions::MAX_FOUND + 5)
+            .map(|n| session("claude", &format!("s{n:04}"), "/code/app", true, 9))
+            .collect();
+        m.update(Action::SetSessions { found });
+        assert_eq!(m.sessions_bar().count, sessions::MAX_FOUND);
+        // Hiding some makes room for those behind them.
+        for n in 0..5 {
+            m.update(Action::SessionHide { runner: "claude".into(), id: format!("s{n:04}") });
+        }
+        let bar = m.sessions_bar();
+        assert_eq!((bar.count, bar.rows.last().map(|row| row.id.as_str())), (sessions::MAX_FOUND, Some("s0204")));
+    }
+
+    #[test]
+    fn a_click_on_a_session_focuses_its_pane_only_when_there_is_no_doubt() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        term(&mut m); // pane 1, opened nowhere in particular
+        m.update(Action::OpenRepo { path: "/code/app".into(), axis: Right }); // pane 2, in /code/app
+        m.update(Action::Focus { pane: 1 });
+        let click = |m: &mut Model, id: &str| m.update(Action::SessionClick { runner: "claude".into(), id: id.into() });
+        m.update(Action::SetSessions {
+            found: vec![
+                session("claude", "here", "/code/app", true, 9),
+                session("claude", "there", "/code/app-2", true, 8),
+            ],
+        });
+        assert_eq!(m.sessions_bar().rows.iter().map(|row| row.pane).collect::<Vec<_>>(), [Some(2), None]);
+        click(&mut m, "here");
+        assert_eq!((m.focused, m.mode()), (Some(2), Mode::Normal));
+        // No pane to show: the row is selected, and nothing else happens to the session.
+        m.update(Action::ToggleSection { section: Section::Tasks });
+        assert_eq!(click(&mut m, "there"), []);
+        assert_eq!((m.list, m.mode(), m.focused), (Some(2), Mode::List, Some(2)), "after the heading and the first");
+        m.update(Action::ListChoose { axis: Right });
+        assert_eq!((m.list, m.panes.len()), (Some(2), 2), "choosing it opens nothing");
+        m.update(Action::LeaveList);
+        // A click on one row, then on another: the selection is on the one clicked last.
+        m.update(Action::SetSessions {
+            found: vec![
+                session("claude", "one", "/code/app-2", true, 9),
+                session("claude", "two", "/code/app-2", true, 8),
+            ],
+        });
+        click(&mut m, "one");
+        assert_eq!(m.list_rows()[m.list.unwrap()], ListRow::Session("claude".into(), "one".into()));
+        click(&mut m, "two");
+        assert_eq!(m.list_rows()[m.list.unwrap()], ListRow::Session("claude".into(), "two".into()));
+        m.update(Action::LeaveList);
+        // Two sessions at work started there, or two panes opened there: which is which is not known.
+        m.update(Action::SetSessions {
+            found: vec![session("claude", "here", "/code/app", true, 9), session("codex", "too", "/code/app", true, 8)],
+        });
+        assert_eq!(m.sessions_bar().rows.iter().map(|row| row.pane).collect::<Vec<_>>(), [None, None]);
+        // A past session in the same directory is no doubt: nor one hidden, nor one that is a task's.
+        let found = || {
+            vec![
+                session("claude", "here", "/code/app", true, 9),
+                session("codex", "past", "/code/app", false, 1),
+                session("codex", "hidden", "/code/app", true, 8),
+                session("codex", "adopted", "/code/app", true, 7),
+            ]
+        };
+        m.update(Action::SetSessions { found: found() });
+        m.update(Action::SessionHide { runner: "codex".into(), id: "hidden".into() });
+        m.update(Action::SessionAdopt { runner: "codex".into(), id: "adopted".into() });
+        let panes = |m: &Model| m.sessions_bar().rows.iter().map(|row| (row.id.clone(), row.pane)).collect::<Vec<_>>();
+        assert_eq!(panes(&m), [("here".to_string(), Some(2)), ("past".to_string(), None)], "an idle one is in no pane");
+        // The picker, the new-task box, the key reference and visual mode keep the focus where it
+        // is: the user's click waits like any pane action, and a client's is refused with the reason.
+        m.update(Action::Focus { pane: 1 });
+        let holds: [(Action, Action); 4] = [
+            (Action::OpenPicker { axis: Right, new_tab: false, items: Vec::new() }, Action::ClosePicker),
+            (Action::OpenCompose { text: String::new() }, Action::CloseCompose),
+            (Action::ToggleKeys, Action::CloseKeys),
+            (Action::ToggleVisual, Action::LeaveVisual),
+        ];
+        for (hold, release) in holds {
+            m.update(hold.clone());
+            let click = Action::SessionClick { runner: "claude".into(), id: "here".into() };
+            assert!(m.refusal(&click, Origin::Socket).is_some_and(|why| why.contains("has the keyboard")), "{hold:?}");
+            for origin in [Origin::User, Origin::Socket] {
+                assert_eq!(m.update(click.clone().sent_by(origin)), [], "{hold:?} {origin:?}");
+                assert_eq!(
+                    (m.focused, m.visual.is_none() || m.visual == Some(1)),
+                    (Some(1), true),
+                    "{hold:?} {origin:?}"
+                );
+            }
+            m.update(release);
+        }
+        m.update(Action::SetSessions { found: vec![session("claude", "here", "/code/app", true, 9)] });
+        m.update(Action::OpenRepo { path: "/code/app".into(), axis: Right });
+        assert_eq!(m.sessions_bar().rows[0].pane, None);
     }
 
     #[test]

@@ -25,6 +25,7 @@ it over the control socket. Session restore and the rest of the design are not b
 | Visual mode: select terminal text with vi keys | Works today |
 | Tasks inbox: what needs you first, then the other tasks with tabs open (Open), then Running, Captured, On hold, Done. Headings fold (click, or ↵ or space in list mode). A task that is done stays under Done with its tabs open. Each row shows its tags, what it has open and its age; hover it for start, snooze, hold and dismiss buttons. After one of those by mouse, a line at the top offers Undo for 6 seconds. Kept in `~/.ottospace/tasks` | Works today |
 | "Pop next" (⌘⇧N): open the next task that needs you | Works today |
+| Sessions in the Tasks section: the Claude Code and Codex sessions of the listed repositories that are no task's (one you started by hand in a terminal). Each row shows the runner, the repository, active or idle, what it does now, and when it was last active. Adopt makes a task of one; Hide removes it until the next start. Read-only: nothing is sent to a session | Works today |
 | New task box (⌘N): one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`. `@agent`, `/path` and `$skill` are stored and shown; nothing acts on them yet | Works today |
 | Home screen: a tab with no panes shows the new-task line, the tasks that need you, and each listed task as a node on a lattice (left to right by project; within a project the older task is farther). A click on a node or a row opens the task | Works today |
 | Tasks own their tabs: opening a task shows only its tabs; the others keep running off the bar | Works today |
@@ -172,6 +173,40 @@ review the export PR >canvas-app @codex $code-review /src/export
 - `@name` named a repository before. It does not now. Titles of tasks already filed are not read
   again.
 
+## Sessions
+
+An agent is a saved definition. A session is one running conversation of Claude Code or Codex.
+The Tasks section lists, under **Sessions**, the sessions of your listed repositories (worktrees
+included) that no task has adopted: for example a Claude Code you started by hand in a terminal.
+
+- **What a row shows.** The runner (`claude` or `codex`), the repository or worktree, a dot that
+  is lit while the session is active (its file changed in the last 30 seconds), what it does now
+  (`shell · cargo test`, `network · git push`, `files · src/main.rs`), and when it was last
+  active. Idle sessions older than a day are behind "N older".
+- **Order.** Sessions at work come first, in the order they started, so a row does not move
+  while you reach for it. Then the idle ones, the most recently active first.
+- **Adopt** makes a task of the session: named after the repository, with `>repo` set to that
+  repository (wherever in it the session started) and `@agent` to its runner. The session is
+  that task's from then on and leaves the group. Rename the task later. The task keeps the
+  session's runner and id, and no path from the session's file.
+- **An adopted task follows its session.** While the session works, the task is Running. When
+  the session goes quiet, the task moves to Needs you, once. When it works again, Running
+  again. If you or an agent set the task's state (hold it, mark it done), that state stays.
+  The task follows only while the Tasks section is open, when sessions are read.
+- **Hide** removes the row until ottospace starts again.
+- **A click** focuses the session's pane when the row says "in pane N", and selects the row
+  otherwise. "In pane N" shows only when there is no doubt: the session is at work, exactly one
+  terminal on the tab on show was opened in its directory, and no other listed session at work
+  started there.
+- **Fresh or not shown.** The list is emptied when the Tasks section closes and read again when
+  it opens, so nothing shows what a session did a while ago. If the reader stops, the status
+  bar says so once.
+- **Read-only.** ottospace reads the runners' own session files, every 5 seconds while the Tasks
+  section is open and never while it is closed. It does not attach to a session, type into it or
+  signal it. Only derived facts are shown: names from fixed tables, counts and times. Never a
+  prompt, a file's contents or a command line. Design: [sessions.md](ai/sessions.md).
+- Turn it off with `"sessions": false`. See [Settings](#settings) for where sessions are read from.
+
 ## Terminal panes
 
 A terminal pane runs your shell on a PTY. The pane closes when the shell exits. It keeps 10,000
@@ -216,6 +251,8 @@ optional:
   "terminal": { "font": "JetBrains Mono", "font_size": 14 },
   "repos": ["~/code", "~/notes"],
   "tasks": "~/notes/tasks",
+  "sessions": true,
+  "session_dirs": { "claude": ["~/.claude"], "codex": "~/.codex" },
   "apps": ["Microsoft Outlook", "Slack"],
   "windows": [{ "app": "us.zoom.xos", "title": "Zoom Meeting", "do": "ignore" }]
 }
@@ -227,6 +264,8 @@ optional:
 | `terminal.font_size` | In points, 6 to 72 | `13` |
 | `repos` | Directories that are repositories or hold them, for the Repos section. `OTTOSPACE_REPOS` (`:` between directories) wins over it | `~/code`, `~/notes` |
 | `tasks` | Where tasks are kept, one JSON file each. A relative path is inside `~/.ottospace` | `tasks` |
+| `sessions` | List agent sessions that are no task's under Sessions in the Tasks section. `false`: no session file is ever read | `true` |
+| `session_dirs` | Where the runners keep their sessions: `claude` is a list of Claude Code config directories (one for each account), `codex` is Codex's home. A runner left out keeps its default. An app started from the Dock does not see `CLAUDE_CONFIG_DIR` or `CODEX_HOME`: name other directories here | `~/.claude`, `~/.codex` |
 | `windows` | Rules for windows ottospace must leave alone. Each rule selects windows by `app` (the app's name or bundle id), `title` and `subrole`; every field given must match, `*` stands for any text, and case does not matter. `"do": "ignore"`: the window never becomes a pane, when its app is hosted or when it opens later. `"do": "manage"` undoes a built-in rule. Your rules come first. Name an app by its bundle id to be sure. A window is judged once, when it is first seen, on the title it has then; rules are read at start | Built in: only standard windows are ever put in a pane, and Zoom's sharing controls, annotation layer and pop-ups are ignored |
 | `apps` | Apps to offer while they are not running, by the name of the app as Finder shows it (`Visual Studio Code` for `Visual Studio Code.app`). It must be in `/Applications`, `~/Applications` or `/System/Applications` (or their `Utilities`); a name that is not found is left out. They show under "Not running" in Apps and in the picker; choosing one starts it in the background and puts its window in a pane | none |
 

@@ -32,6 +32,9 @@ import type {
   Repo,
   Running,
   Section,
+  SessionRow,
+  SessionRunner,
+  SessionsBar,
   Sneak,
   Snapshot,
   Tab,
@@ -142,7 +145,7 @@ function group(value: unknown, at: string): Group {
 }
 
 function heading(value: unknown, at: string): Heading {
-  return value === "open" ? value : group(value, at);
+  return value === "open" || value === "sessions" ? value : group(value, at);
 }
 
 function taskRow(value: unknown, at: string): TaskRow {
@@ -228,6 +231,43 @@ function task(value: unknown, at: string): Task {
     resolved: list(str)(o.resolved, `${at}.resolved`),
     skills: list(str)(o.skills, `${at}.skills`),
     created: orNull(num)(o.created, `${at}.created`),
+    session: orNull(sessionLink)(o.session, `${at}.session`),
+  };
+}
+
+function sessionLink(value: unknown, at: string): { runner: string; id: string } {
+  const o = fields(value, at);
+  return { runner: str(o.runner, `${at}.runner`), id: str(o.id, `${at}.id`) };
+}
+
+function sessionRunner(value: unknown, at: string): SessionRunner {
+  if (value === "claude" || value === "codex") return value;
+  throw wrong(at, "a session runner", value);
+}
+
+function sessionRow(value: unknown, at: string): SessionRow {
+  const o = fields(value, at);
+  return {
+    runner: sessionRunner(o.runner, `${at}.runner`),
+    id: str(o.id, `${at}.id`),
+    name: str(o.name, `${at}.name`),
+    active: bool(o.active, `${at}.active`),
+    doing: orNull(str)(o.doing, `${at}.doing`),
+    age: orNull(str)(o.age, `${at}.age`),
+    pane: orNull(num)(o.pane, `${at}.pane`),
+  };
+}
+
+function sessionsBar(value: unknown, at: string): SessionsBar {
+  const o = fields(value, at);
+  return {
+    count: num(o.count, `${at}.count`),
+    collapsed: bool(o.collapsed, `${at}.collapsed`),
+    rows: list(sessionRow)(o.rows, `${at}.rows`),
+    older: num(o.older, `${at}.older`),
+    older_open: bool(o.older_open, `${at}.older_open`),
+    enabled: bool(o.enabled, `${at}.enabled`),
+    reads: num(o.reads, `${at}.reads`),
   };
 }
 
@@ -466,6 +506,7 @@ export function snapshot(value: unknown): Snapshot {
     needs_you: num(o.needs_you, "needs_you"),
     compose_read: bool(o.compose_read, "compose_read"),
     tasks_bar: tasksBar(o.tasks_bar, "tasks_bar"),
+    sessions_bar: sessionsBar(o.sessions_bar, "sessions_bar"),
     home: orNull(home)(o.home, "home"),
     home_drawn: homeDrawn(o.home_drawn, "home_drawn"),
     closed_apps: list(str)(o.closed_apps, "closed_apps"),
