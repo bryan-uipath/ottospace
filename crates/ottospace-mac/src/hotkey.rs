@@ -25,7 +25,7 @@ unsafe extern "C" {
     fn InstallEventHandler(
         target: *mut c_void,
         handler: extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> i32,
-        count: u32,
+        count: usize, // ItemCount is `unsigned long`
         types: *const EventTypeSpec,
         user_data: *mut c_void,
         out_handler: *mut *mut c_void,
@@ -45,8 +45,8 @@ extern "C" fn on_hot_key(_: *mut c_void, _: *mut c_void, _: *mut c_void) -> i32 
     0
 }
 
-/// Virtual key code for a function-key name, e.g. `"f18"` → 79. Only F13-F20: keys no app uses,
-/// so taking one system-wide breaks nothing.
+/// Virtual key code for a function-key name, e.g. `"f18"` → 79. Only F13-F20: keys that most
+/// keyboards lack and apps rarely bind. (Key remappers such as Karabiner do use them.)
 pub fn key_code(name: &str) -> Option<u32> {
     Some(match name.to_ascii_lowercase().as_str() {
         "f13" => 105,
@@ -61,8 +61,9 @@ pub fn key_code(name: &str) -> Option<u32> {
     })
 }
 
-/// Registers `key_code` (no modifiers) as the hot key. Call once, on the main thread, after the
-/// app has started. Errors if another app, or another ottospace, already holds the key.
+/// Registers `key_code` (no modifiers) as the hot key, exclusively. Call once, on the main
+/// thread, after the app has started. Errors if any other process has registered the key:
+/// without "exclusive", two ottospace instances would both answer one press.
 pub fn register(key_code: u32) -> Result<(), String> {
     // 'keyb' / kEventHotKeyPressed
     let pressed = EventTypeSpec { class: 0x6b65_7962, kind: 5 };
@@ -75,7 +76,8 @@ pub fn register(key_code: u32) -> Result<(), String> {
         }
         let id = EventHotKeyId { signature: 0x6f74_746f, id: 1 }; // 'otto'
         let mut hot_key = std::ptr::null_mut();
-        let status = RegisterEventHotKey(key_code, 0, id, target, 0, &mut hot_key);
+        const EXCLUSIVE: u32 = 1; // kEventHotKeyExclusive
+        let status = RegisterEventHotKey(key_code, 0, id, target, EXCLUSIVE, &mut hot_key);
         if status != 0 {
             return Err(format!("the key is taken by another app (status {status})"));
         }

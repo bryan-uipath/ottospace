@@ -94,7 +94,7 @@ fn a_canary_window_is_hosted_entered_left_and_restored() {
         &[
             ("OTTOSPACE_E2E", "1"),
             ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string()),
-            // Not F18: the user's own ottospace may hold that key.
+            // Not F18: the user's own ottospace may hold that key, and registration is exclusive.
             ("OTTOSPACE_RETURN_KEY", "f19"),
         ],
     );
@@ -131,6 +131,10 @@ fn a_canary_window_is_hosted_entered_left_and_restored() {
     // While live, the keyboard belongs to the app: a typed key arrives in the canary.
     otto.call(json!({"cmd": "enter", "pane": 1}));
     wait_for("the window to cover its pane", || frame(0).filter(|f| close(f[0], live[0]) && close(f[1], live[1])));
+    // Typed keys go to whichever app is frontmost, so wait until that is the canary.
+    wait_for("the canary to have the keyboard", || {
+        (canary.call(json!({"cmd": "state"}))["windows"][0]["active"] == true).then_some(())
+    });
     press("keystroke \"k\"");
     wait_for("the key to reach the canary", || {
         let keys = canary.call(json!({"cmd": "state"}))["windows"][0]["keys"].clone();
@@ -138,6 +142,7 @@ fn a_canary_window_is_hosted_entered_left_and_restored() {
     });
 
     // The global return key takes the keyboard back from the app, with no click.
+    assert_eq!(state()["return_key"], "F19", "the return key is registered");
     press("key code 80"); // F19
     wait_for("the return key to leave app mode", || (state()["mode"] == "normal").then_some(()));
     wait_for("the window to park after the return key", || hosted().filter(at_spot));

@@ -206,6 +206,9 @@ impl AssetSource for Assets {
     }
 }
 
+/// The return key's name (e.g. "F18") once it is registered. Unset: there is no return key.
+static RETURN_KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 /// Height of the top bar (the native title strip, so all of it drags the window), and the width
 /// it keeps clear on the left for the traffic lights.
 const TOP_BAR: f32 = 28.;
@@ -552,6 +555,8 @@ impl Workspace {
             "window": frame,
             // Where parked windows go, so a test can tell "parked" from "moved somewhere".
             "parking": [parking.x, parking.y],
+            // The registered return key, or null if there is none.
+            "return_key": RETURN_KEY.get(),
             // Each hosted window's real frame, in the same global coordinates as `parking`.
             "hosted": hosted,
             "terminals": terminals,
@@ -1219,13 +1224,19 @@ impl Workspace {
     /// Bottom bar: who has the keyboard, and the focused pane.
     fn render_status(&self) -> impl IntoElement {
         let color = theme::accent(self.model.mode());
+        // Name the return key only if it works: a wrong hint strands the user in the app.
+        let app_hint = match RETURN_KEY.get() {
+            Some(key) => format!("keys go to the app · {key} or a click on ottospace returns"),
+            None => "keys go to the app · click ottospace to return".to_string(),
+        };
         let (mode, hint) = match self.model.mode() {
             Mode::Normal => {
                 ("NORMAL", "⌘D ⌘⇧D terminal right/down · ⌘E pick · ⌘W close · ⌘] ⌘[ next/prev · ⌘⌥ arrows or hjkl move")
             }
             Mode::Pick => ("PICK", "type to filter · ↑↓ move · ↵ open · esc close"),
-            Mode::App => ("APP", "keys go to the app · the return key (F18) or a click on ottospace returns"),
+            Mode::App => ("APP", app_hint.as_str()),
         };
+        let hint = hint.to_string();
         let focused = match self.model.focused.and_then(|id| self.model.pane(id)).map(|p| &p.kind) {
             Some(Kind::App { title, .. }) => title.clone(),
             Some(Kind::Empty) => "empty pane".into(),
@@ -1466,13 +1477,12 @@ fn main() {
             cx.activate(true);
             // The return key works from any app, so it is only useful with hosting on.
             let name = std::env::var("OTTOSPACE_RETURN_KEY").unwrap_or_else(|_| "f18".into());
-            match hotkey::key_code(&name).ok_or_else(|| format!("{name} is not one of f13-f20")) {
-                Ok(code) => {
-                    if let Err(err) = hotkey::register(code) {
-                        eprintln!("return key {name} is off: {err}");
-                    }
-                }
-                Err(err) => eprintln!("return key is off: {err}"),
+            let registered = hotkey::key_code(&name)
+                .ok_or_else(|| "it is not one of f13-f20".to_string())
+                .and_then(hotkey::register);
+            match registered {
+                Ok(()) => drop(RETURN_KEY.set(name.to_uppercase())),
+                Err(err) => eprintln!("return key {name} is off: {err}"),
             }
         }
     });

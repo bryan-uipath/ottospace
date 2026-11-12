@@ -83,11 +83,15 @@ Click an app pane to give it the keyboard (`APP` mode). ottospace shortcuts do n
 mode. Press the return key, or click ottospace itself (rail, top bar, another pane), to return.
 
 The return key works while any app is frontmost. It is F18 by default; set `OTTOSPACE_RETURN_KEY`
-to another of `f13`-`f20`. Most keyboards have no F18, so map Caps Lock to it (lasts until restart):
+to another of `f13`-`f20`. If another program already holds the key, ottospace logs that and runs
+without a return key. Most keyboards have no F18, so map Caps Lock to it (lasts until restart):
 
 ```sh
 hidutil property --set '{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x700000039,"HIDKeyboardModifierMappingDst":0x70000006D}]}'
 ```
+
+After this, Caps Lock no longer toggles capitals anywhere. The command replaces any key mapping
+you already have. To undo it: `hidutil property --set '{"UserKeyMapping":[]}'`.
 
 ## Driving it from outside
 

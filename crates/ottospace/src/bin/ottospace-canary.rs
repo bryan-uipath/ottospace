@@ -100,7 +100,9 @@ fn state(windows: &Windows, cx: &mut App) -> String {
         let entry = handle.update(cx, |canary, window, _| {
             let b = window.bounds();
             let frame: [f32; 4] = [b.origin.x.into(), b.origin.y.into(), b.size.width.into(), b.size.height.into()];
-            json!({ "title": canary.title, "keys": canary.keys, "clicks": canary.clicks, "bounds": frame })
+            // `active`: this window has the keyboard. A test waits for it before typing.
+            let active = window.is_window_active();
+            json!({ "title": canary.title, "keys": canary.keys, "clicks": canary.clicks, "bounds": frame, "active": active })
         });
         entry.map(|entry| open_windows.push(entry)).is_ok()
     });
