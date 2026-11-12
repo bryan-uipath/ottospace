@@ -6,7 +6,7 @@ macOS agent multiplexer: terminals and real app windows tiled in one workspace. 
 
 | Crate | Role | May use |
 |---|---|---|
-| `ottospace-core` | State and rules. `Model::update(Action) -> Vec<Effect>` | std, serde. No I/O, UI, clock, threads |
+| `ottospace-core` | State and rules. `Model::update(Envelope { action, origin }) -> Vec<Effect>` | std, serde. No I/O, UI, clock, threads |
 | `ottospace-mac` | macOS calls: AX, ScreenCaptureKit, displays, input | system APIs |
 | `ottospace-sessions` | Reads Claude Code and Codex session files: sessions of a directory, events, snapshot | std, serde, read-only files. No network, clock, writes |
 | `ottospace` | Shell: GPUI views, control socket. Turns input into `Action`s, carries out `Effect`s | everything |
@@ -19,6 +19,10 @@ Rules:
   changes go through `Workspace::dispatch`. No second copy of model state in the shell.
 - **New behaviour starts as a core test.** Add the `Action`/`Effect`, test it, then wire the shell.
 - **Core stays pure.** If the core needs time, randomness or system data, pass it in the `Action`.
+- **Every action says who sent it.** `Workspace::dispatch(action, origin, ..)`: `Origin::User` (the
+  person's keys, clicks and menu items: pass `self.input`), `Socket` (a control-socket request, also
+  a key or click it injects) or `System` (timers, a shell that exited, lists read again). A rule
+  about what may interrupt the user asks the origin, not the action.
 
 ## Tests
 
