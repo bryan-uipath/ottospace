@@ -25,7 +25,7 @@ osi install pr 30     # the build of a pull request. Needs gh, signed in. Waits 
 osi list              # builds you can install: main, and each open pull request with its state
 osi install stable    # the latest release; osi install v0.1.0 for one release
 osi current           # what is installed: channel, version, commit, date
-osi update            # install the channel's newer build, if there is one
+osi update            # install the channel's newer build, if there is one (waits like install)
 osi update --check    # only say whether there is one
 osi rollback          # put the previous build back; again to undo
 osi uninstall         # remove ottospace and osi; settings and tasks are kept

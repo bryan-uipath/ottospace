@@ -94,8 +94,15 @@ case "$1 $2" in
   "run list")
     while [ $# -gt 0 ]; do
       if [ "$1" = --commit ]; then sha="$2"; fi
+      if [ "$1" = --status ]; then only="$2"; fi
       shift
     done
+    if [ "${only:-}" = success ] && [ -s "$FAKE_GH_DIR/run-$sha" ]; then
+      case "$(head -n 1 "$FAKE_GH_DIR/run-$sha")" in
+        *completed*success*) head -n 1 "$FAKE_GH_DIR/run-$sha" ;;
+      esac
+      exit 0
+    fi
     # run-<sha> holds one answer for each call (the last one repeats); else the build decides.
     if [ -s "$FAKE_GH_DIR/run-$sha" ]; then
       head -n 1 "$FAKE_GH_DIR/run-$sha"
@@ -417,6 +424,11 @@ check "a build that never ends gives up" says "the build is still running after"
 make_pr 36 "$(commit 6)" bryan-uipath/ottospace false bryan-uipath
 printf '78\tcompleted\tfailure\n' >"$FAKE_GH_DIR/run-$(commit 6)"
 run "$osi" install pr 36
+printf '79\tcompleted\tcancelled\n' >"$FAKE_GH_DIR/run-$(commit 6)"
+run "$osi" install pr 36
+check "a cancelled build says a newer push replaces it" says "was cancelled (a newer push replaces it"
+printf '78\tcompleted\tfailure\n' >"$FAKE_GH_DIR/run-$(commit 6)"
+run "$osi" install pr 36
 check "a failed build is named with its run" says "failed (failure): https://github.com/bryan-uipath/ottospace/actions/runs/78"
 check "the old binary is still installed" installed_is PR35
 rm -f "$FAKE_GH_DIR/run-$(commit 5)"
@@ -430,6 +442,15 @@ check "list marks the installed build" says "pr 35     5555555  ready  (installe
 check "list shows a failed build" says "pr 36     6666666  failed (failure)"
 check "list marks a fork" says "ready, from a fork"
 check "list shows titles" says "From a fork"
+printf '40\t%s\tfalse\tBad \033[31m\302\233title \342\200\256x\n' "$(commit 6)" >"$FAKE_GH_DIR/prs"
+out="$("$osi" list 2>&1)" || true
+only_plain() { ! printf '%s' "$out" | LC_ALL=C grep -q '[^[:print:][:space:]]'; }
+check "a title cannot send escape, C1 or bidi bytes to the terminal" only_plain
+make_pr 35 "$(commit 7)" bryan-uipath/ottospace false bryan-uipath
+printf '77\tin_progress\tnone\n' >"$FAKE_GH_DIR/run-$(commit 7)"
+run "$osi" update --no-wait
+check "update takes --no-wait" says "is running: https://github.com/bryan-uipath/ottospace/actions/runs/77"
+check "and installs nothing" installed_is PR35
 
 echo "# overrides"
 run env OSI_BIN_DIR="$work/elsewhere/bin" OTTOSPACE_HOME="$work/elsewhere/home" "$osi" install main
