@@ -3,6 +3,7 @@ name = "ottospace"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 # The package also builds `ottospace-canary`, a test app (src/bin).
 default-run = "ottospace"
 

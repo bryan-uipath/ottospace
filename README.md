@@ -325,3 +325,7 @@ first brainstorm:
 
 [`docs/ai/backlog.md`](docs/ai/backlog.md) is an older backlog. `docs/ideas/` holds the owner's own
 notes.
+
+## License
+
+[MIT](LICENSE).
