@@ -1,7 +1,7 @@
 //! Agent runners (Claude Code, Codex): which sessions exist for a directory and what each is
 //! doing. Reads the runners' own session files, read-only. Only derived facts leave this crate:
 //! names from fixed tables, counts, times. Never prompts, file contents or command lines.
-//! Design: `docs/ai/agent-runners.md`.
+//! Design: `docs/ai/sessions.md`.
 
 mod cache;
 pub mod claude;
@@ -106,7 +106,7 @@ pub struct Event {
 
 /// The normalised event set. An `id` is opaque: a hash of the runner's id, good only for pairing
 /// a start with its end. A `tool`, `summary`, `label`, `kind` or model follows the label rules in
-/// `docs/ai/agent-runners.md`: table entries, a file's last two path parts, a host, or a name.
+/// `docs/ai/sessions.md`: table entries, a file's last two path parts, a host, or a name.
 #[derive(Clone, Debug, PartialEq)]
 pub enum What {
     UserMessage,

@@ -5,13 +5,13 @@ use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
-use ottospace_agents::claude::Claude;
-use ottospace_agents::codex::Codex;
-use ottospace_agents::git::checkouts;
-use ottospace_agents::report::report;
-use ottospace_agents::snapshot::Snapshot;
-use ottospace_agents::station::Station;
-use ottospace_agents::{Cursor, Kind, Runner, SessionRef, What, read_all};
+use ottospace_sessions::claude::Claude;
+use ottospace_sessions::codex::Codex;
+use ottospace_sessions::git::checkouts;
+use ottospace_sessions::report::report;
+use ottospace_sessions::snapshot::Snapshot;
+use ottospace_sessions::station::Station;
+use ottospace_sessions::{Cursor, Kind, Runner, SessionRef, What, read_all};
 
 const CLAUDE_MAIN: &str = "11111111-1111-4111-8111-111111111111";
 const CLAUDE_WORKTREE: &str = "22222222-2222-4222-8222-222222222222";
@@ -37,7 +37,7 @@ fn codex() -> Codex {
 
 /// A fresh folder under the system temp dir, as a resolved path.
 fn temp(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("ottospace-agents-{}-{name}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("ottospace-sessions-{}-{name}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     dir.canonicalize().unwrap()
@@ -375,7 +375,7 @@ fn report_lists_each_session_once() {
         .max();
     // The same runner twice: a file is still one session.
     let report = report(&[&claude, &codex, &claude], &dirs, newest.unwrap() + 1000, 10).unwrap();
-    // `cargo test -p ottospace-agents -- --nocapture report_lists` shows it.
+    // `cargo test -p ottospace-sessions -- --nocapture report_lists` shows it.
     println!("{}", serde_json::to_string_pretty(&report).unwrap());
 
     let sessions = report["sessions"].as_array().unwrap();
@@ -413,7 +413,7 @@ impl Runner for Vanishing {
         sessions.iter().for_each(|s| fs::remove_file(&s.path).unwrap());
         Ok(sessions)
     }
-    fn read(&self, session: &SessionRef, after: Cursor, budget: u64) -> std::io::Result<ottospace_agents::Batch> {
+    fn read(&self, session: &SessionRef, after: Cursor, budget: u64) -> std::io::Result<ottospace_sessions::Batch> {
         self.0.read(session, after, budget)
     }
 }
@@ -476,7 +476,7 @@ fn adversarial() -> (String, Snapshot, Snapshot) {
     (out, snapshots.pop().unwrap(), codex)
 }
 
-fn labels<'a>(calls: impl Iterator<Item = &'a ottospace_agents::snapshot::Call>) -> Vec<String> {
+fn labels<'a>(calls: impl Iterator<Item = &'a ottospace_sessions::snapshot::Call>) -> Vec<String> {
     calls.map(|c| format!("{:?} {}: {}", c.station, c.tool, c.summary)).collect()
 }
 

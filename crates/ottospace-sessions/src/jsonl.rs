@@ -177,7 +177,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn temp(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("ottospace-agents-{}-{name}", std::process::id()))
+        std::env::temp_dir().join(format!("ottospace-sessions-{}-{name}", std::process::id()))
     }
 
     #[test]

@@ -8,7 +8,7 @@ macOS agent multiplexer: terminals and real app windows tiled in one workspace. 
 |---|---|---|
 | `ottospace-core` | State and rules. `Model::update(Action) -> Vec<Effect>` | std, serde. No I/O, UI, clock, threads |
 | `ottospace-mac` | macOS calls: AX, ScreenCaptureKit, displays, input | system APIs |
-| `ottospace-agents` | Reads Claude Code and Codex session files: sessions of a directory, events, snapshot | std, serde, read-only files. No network, clock, writes |
+| `ottospace-sessions` | Reads Claude Code and Codex session files: sessions of a directory, events, snapshot | std, serde, read-only files. No network, clock, writes |
 | `ottospace` | Shell: GPUI views, control socket. Turns input into `Action`s, carries out `Effect`s | everything |
 
 Rules:
@@ -49,7 +49,7 @@ Rules:
 ## CI
 
 - `.github/workflows/ci.yml`, on pull requests and pushes to `main`, macOS arm64:
-  `cargo fmt -p ottospace -p ottospace-core -p ottospace-agents --check`, `cargo clippy` (errors
+  `cargo fmt -p ottospace -p ottospace-core -p ottospace-sessions --check`, `cargo clippy` (errors
   fail, warnings do not), `cargo test --workspace`, and the SDK's type check and request-fixture
   tests (`sdk/`, Node). `cargo e2e` runs in a separate job that may fail without blocking; the
   same job then runs the SDK's tests against a private instance.
