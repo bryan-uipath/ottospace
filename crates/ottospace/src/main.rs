@@ -2440,6 +2440,16 @@ fn ctl(args: &[String]) -> ! {
     std::process::exit(if ok { 0 } else { 1 });
 }
 
+/// The `--version` line. `scripts/package.sh` passes the commit and its date in at compile time;
+/// a plain `cargo build` has neither.
+fn version_line(version: &str, commit: Option<&str>, date: Option<&str>) -> String {
+    match (commit.filter(|c| !c.is_empty()), date.filter(|d| !d.is_empty())) {
+        (Some(commit), Some(date)) => format!("ottospace {version} ({commit}, {date})"),
+        (Some(commit), None) => format!("ottospace {version} ({commit})"),
+        _ => format!("ottospace {version} (local build)"),
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).is_some_and(|a| a == "ctl") {
@@ -2451,10 +2461,16 @@ fn main() {
         print!("{}", if stub { SKILL_STUB } else { SKILL_GUIDE });
         return;
     }
+    // Which build this is, e.g. "ottospace 0.1.0 (a4a2582c0ffe, 2026-11-12T08:09:00Z)".
+    if args.get(1).is_some_and(|a| a == "--version" || a == "-V") {
+        let (commit, date) = (option_env!("OTTOSPACE_COMMIT"), option_env!("OTTOSPACE_BUILD_DATE"));
+        println!("{}", version_line(env!("CARGO_PKG_VERSION"), commit, date));
+        return;
+    }
     // Anything else is a mistake (`ottospace skills`, `--help`). Starting the app for it would
     // open a second window and restore the running instance's hosted windows.
     if let Some(unknown) = args.get(1) {
-        eprintln!("unknown command: {unknown}\nusage: ottospace [ctl '<json request>' | skill [--stub]]");
+        eprintln!("unknown command: {unknown}\nusage: ottospace [ctl '<json request>' | skill [--stub] | --version]");
         std::process::exit(2);
     }
 
@@ -2549,6 +2565,17 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_line_names_the_commit_when_the_build_was_given_one() {
+        assert_eq!(
+            version_line("0.1.0", Some("a4a2582c0ffe"), Some("2026-11-12T08:09:00Z")),
+            "ottospace 0.1.0 (a4a2582c0ffe, 2026-11-12T08:09:00Z)"
+        );
+        assert_eq!(version_line("0.1.0", Some("a4a2582c0ffe"), None), "ottospace 0.1.0 (a4a2582c0ffe)");
+        assert_eq!(version_line("0.1.0", None, None), "ottospace 0.1.0 (local build)");
+        assert_eq!(version_line("0.1.0", Some(""), Some("")), "ottospace 0.1.0 (local build)");
+    }
 
     /// Every `ottospace ctl '<json>'` line in the agent guide must be a request the app accepts,
     /// so the guide cannot drift from the socket protocol.
