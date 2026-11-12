@@ -228,7 +228,6 @@ sets `OTTOSPACE_E2E`, which turns window hosting off, so tests never touch your 
 | `crates/ottospace-core` | State and rules: `Model::update(Action) -> Vec<Effect>`. Split tree, key encoding. No I/O |
 | `crates/ottospace-mac` | macOS calls: AX window control, SCK lookup, display geometry, HID clicks, crash recovery |
 | `crates/ottospace` | The app: GPUI views, terminal, control socket, `ctl` client. Turns input into `Action`s, carries out `Effect`s |
-| `crates/probe` | CLI that measures whether a parked window keeps rendering |
 | `harness/` | Local input test page (`python3 -m http.server 8765 -d harness`) |
 | `docs/` | Design notes |
 
@@ -240,8 +239,7 @@ macOS cannot reparent another process's window, so ottospace fakes embedding wit
 (AX) API and ScreenCaptureKit (SCK). An inactive app window is parked off-screen with one pixel on
 a display, and its pane shows an SCK stream of it. Clicking the pane moves the real window over it
 and replays the click, so input is native. A pane shows one title bar: the stream leaves out the
-app's own, and the live window's covers the pane header. `crates/probe` measures whether a parked window keeps
-rendering. Measurements and risks: [docs/ai/hosting-windows.md](docs/ai/hosting-windows.md).
+app's own, and the live window's covers the pane header. Measurements and risks: [docs/ai/hosting-windows.md](docs/ai/hosting-windows.md).
 
 ## Design docs
 

@@ -43,7 +43,7 @@ Rules:
   `cargo fmt -p ottospace -p ottospace-core --check`, `cargo clippy` (errors fail, warnings do not),
   `cargo test --workspace`. `cargo e2e` runs in a separate job that may fail without blocking.
 - Not in CI: `cargo e2e-apps` (needs Accessibility and Screen Recording), rustfmt on
-  `ottospace-mac` and `probe` (not formatted yet), clippy `-D warnings` (main has warnings).
+  `ottospace-mac` (not formatted yet), clippy `-D warnings` (main has warnings).
 - `.github/workflows/release.yml`, on a `v*` tag: `scripts/bundle.sh`, zip and checksum, GitHub
   Release. `install.sh` installs from it.
 
