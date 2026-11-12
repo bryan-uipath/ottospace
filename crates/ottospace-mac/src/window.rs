@@ -3,7 +3,7 @@
 use std::ffi::c_void;
 
 use objc2::{AnyThread, MainThreadMarker};
-use objc2_app_kit::{NSApplication, NSImage, NSFloatingWindowLevel, NSView, NSWindowCollectionBehavior};
+use objc2_app_kit::{NSApplication, NSImage, NSFloatingWindowLevel, NSView, NSWindowCollectionBehavior, NSApplicationActivationPolicy};
 
 /// Makes the green button zoom the window instead of entering native fullscreen.
 /// Native fullscreen moves the window to its own Space, where other apps' windows cannot follow,
@@ -32,6 +32,13 @@ pub unsafe fn keep_on_top(ns_view: *mut c_void) {
     if let Some(window) = view.window() {
         window.setLevel(NSFloatingWindowLevel);
     }
+}
+
+/// Makes this process a background app: no Dock icon, no place in the app switcher, and it does
+/// not come to the front when it starts. For test runs, which must not take the user's keyboard.
+pub fn stay_in_background() {
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    NSApplication::sharedApplication(mtm).setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 }
 
 /// Shows `icon` (the bytes of an .icns or image file) in the Dock and the app switcher.
