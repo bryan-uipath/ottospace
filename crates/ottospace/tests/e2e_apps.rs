@@ -164,9 +164,10 @@ fn a_canary_window_is_hosted_entered_left_and_restored() {
     // frame is relative to its own display and cannot be compared with the parking spot.
     let spot = rect(&json!([state()["parking"][0], state()["parking"][1], 0, 0])).expect("parking spot");
     let hosted = || rect(&state()["hosted"]["1"]);
-    // macOS keeps a title bar on screen, so the window stops a title bar's height short of the
-    // spot vertically. Horizontally it reaches it: a 1pt sliver stays visible.
-    let at_spot = |f: &[f64; 4]| close(f[0], spot[0]) && f[1] <= spot[1] && f[1] > spot[1] - 60.0;
+    // macOS keeps a title bar on screen and above the Dock, so the window stops a title bar's
+    // height (plus the Dock's, if it shows at the bottom) short of the spot vertically.
+    // Horizontally it reaches it: a 1pt sliver stays visible.
+    let at_spot = |f: &[f64; 4]| close(f[0], spot[0]) && f[1] <= spot[1] && f[1] > spot[1] - 200.0;
     // The canary has a plain native title bar (32pt on macOS 26), so it is cropped: the window
     // parks that much taller, and the stream shows only its content, at pane size.
     let crop = || state()["crop"]["1"].as_f64().filter(|c| (16.0..=40.0).contains(c));
@@ -217,6 +218,34 @@ fn a_canary_window_is_hosted_entered_left_and_restored() {
     // Leave: parked again, mode back to normal.
     assert_eq!(otto.call(json!({"cmd": "leave"}))["mode"], "normal");
     wait_for("the window to park again", || hosted().filter(|f| at_spot(f) && close(f[3], body[3] + crop)));
+
+    // The app comes to the front by itself, as on a click on its Dock icon. Its window is off
+    // screen, so ottospace goes to its pane and gives it the keyboard.
+    let frontmost = |pid: u32| {
+        let script = "tell application \"System Events\" to unix id of first process whose frontmost is true";
+        let out = Command::new("osascript").args(["-e", script]).output().expect("run osascript");
+        String::from_utf8_lossy(&out.stdout).trim() == pid.to_string()
+    };
+    // First the user is elsewhere: ottospace in front, long enough for it to see that the app
+    // is not. It acts when an app comes forward, not while one stays in front.
+    let to_front = |pid: u32| format!("set frontmost of (first process whose unix id is {pid}) to true");
+    wait_for("ottospace to be frontmost", || {
+        press(&to_front(otto.child.id()));
+        frontmost(otto.child.id()).then_some(())
+    });
+    std::thread::sleep(Duration::from_millis(1200));
+    assert_eq!(state()["mode"], "normal", "nothing happens while the app is not in front");
+    press(&to_front(canary.child.id()));
+    wait_for("the activated app's pane to go live", || (state()["mode"] == "app").then_some(()));
+    wait_for("its window to cover the pane", || {
+        frame(0).filter(|f| close(f[0], window[0] + body[0]) && close(f[1], window[1] + body[1] - crop))
+    });
+    // It stays so: the pane does not bounce back, and the app keeps the keyboard.
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(state()["mode"], "app", "still live after a moment");
+    assert!(frontmost(canary.child.id()), "the canary is the front app");
+    assert_eq!(otto.call(json!({"cmd": "leave"}))["mode"], "normal");
+    wait_for("the window to park once more", || hosted().filter(|f| at_spot(f) && close(f[3], body[3] + crop)));
 
     // A real click on the parked pane makes it live and is replayed at the same content point.
     // Needs `cliclick`; clicks only while ottospace is frontmost, so no other app gets it.

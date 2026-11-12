@@ -412,6 +412,12 @@ struct Workspace {
     known: Vec<(i32, HashSet<u32>)>,
     /// When the live pane went live.
     live_since: Option<Instant>,
+    /// The hosted app that was the front app at the last look, and the window it showed, to see
+    /// one come forward or change window.
+    front_hosted: Option<(i32, Option<u32>)>,
+    /// The pane to give the keyboard to because its app brought its window forward, kept until
+    /// that can be done.
+    wanted: Option<PaneId>,
     error: Option<String>,
     /// False in e2e runs, which must never move the user's real windows.
     hosting: bool,
@@ -489,6 +495,7 @@ impl Workspace {
                     if tick % 30 == 0 {
                         this.adopt_new_windows(window, cx);
                         this.drop_closed(window, cx);
+                        this.follow_front_app(window, cx);
                         this.host_launched(window, cx);
                         // A snoozed task returns when its time comes.
                         let now = now_ms();
@@ -558,6 +565,8 @@ impl Workspace {
             list_scroll: ScrollHandle::new(),
             known: Vec::new(),
             live_since: None,
+            front_hosted: None,
+            wanted: None,
             error: None,
             notice,
             keeping,
@@ -584,6 +593,7 @@ impl Workspace {
         }
         let effects = self.model.update(action);
         self.store_tasks();
+        let another_goes_live = effects.iter().any(|effect| matches!(effect, Effect::Live(_)));
         for effect in &effects {
             match effect {
                 Effect::Opened(id) => {
@@ -615,7 +625,9 @@ impl Workspace {
                         // Going live activated the app. If it still has the keyboard, take it
                         // back, or keys keep going to its off-screen window while the status
                         // bar says NORMAL. If the user moved to a third app, leave them there.
-                        if ax::is_active(hosted.pid) {
+                        // Not when another pane goes live in this same step: that pane's app is
+                        // taking the keyboard, and ottospace must not race it.
+                        if !another_goes_live && ax::is_frontmost(hosted.pid) {
                             cx.activate(true);
                         }
                     }
@@ -1244,6 +1256,49 @@ impl Workspace {
         cx.notify();
     }
 
+    /// A hosted app came to the front by itself (a click on its Dock icon, ⌘Tab) showing a
+    /// window ottospace holds. That window is parked off screen, so the user would see nothing
+    /// happen: go to its pane and give it the keyboard.
+    ///
+    /// It acts when the app comes forward or shows another window, not for as long as it is in
+    /// front: the user may be in a window of that app that ottospace does not hold, and must be
+    /// left there. A move that cannot be made yet (a box is open) is kept and made when it can.
+    fn follow_front_app(&mut self, window: &Window, cx: &mut Context<Self>) {
+        // One question an app, not a pane. An app that is in front is asked which window it shows.
+        let mut pids: Vec<i32> = self.hosted.values().map(|hosted| hosted.pid).collect();
+        pids.sort_unstable();
+        pids.dedup();
+        let front = pids.into_iter().find(|pid| ax::is_frontmost(*pid)).map(|pid| (pid, ax::Window::main_id(pid)));
+        if front != self.front_hosted {
+            self.front_hosted = front;
+            // The pane of the window it shows, if ottospace holds that window. No stand-in: a
+            // window ottospace does not hold, or may not hold, is the user's business.
+            let shown = front.and_then(|(_, window)| window);
+            self.wanted = self.hosted.iter().find(|(_, h)| Some(h.window_id) == shown).map(|(id, _)| *id);
+        }
+        let Some(pane) = self.wanted else { return };
+        if self.model.live == Some(pane) {
+            self.wanted = None; // already the one on screen
+            return;
+        }
+        // The core would drop the move behind a box or in visual mode. Wait: do not come
+        // forward either, which would only take the app away from the user.
+        if self.model.keys || matches!(self.model.mode(), Mode::Pick | Mode::Compose | Mode::Visual) {
+            return;
+        }
+        self.wanted = None;
+        // ottospace must be on screen under the window it is about to place. In front, but not
+        // the front app: activating ottospace here would race the app's own activation and
+        // could win, leaving the keys with ottospace while the status bar says APP.
+        if let Ok(handle) = HasWindowHandle::window_handle(window)
+            && let RawWindowHandle::AppKit(appkit) = handle.as_raw()
+        {
+            unsafe { ottospace_mac::window::order_front(appkit.ns_view.as_ptr()) };
+        }
+        self.dispatch(Action::Enter { pane }, window, cx);
+        cx.notify();
+    }
+
     /// Removes panes whose window is gone (closed by the user or the app).
     fn drop_closed(&mut self, window: &Window, cx: &mut Context<Self>) {
         let gone: Vec<PaneId> =
@@ -1255,7 +1310,7 @@ impl Workspace {
                 let _ = hosted.stream.stop_capture();
                 recovery::forget(hosted.window_id);
                 // Its app may still be frontmost with no window here: take the keyboard back.
-                if self.model.live == Some(id) && ax::is_active(hosted.pid) {
+                if self.model.live == Some(id) && ax::is_frontmost(hosted.pid) {
                     cx.activate(true);
                 }
             }
