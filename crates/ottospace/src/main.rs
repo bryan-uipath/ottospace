@@ -40,6 +40,7 @@ use screencapturekit::prelude::*;
 mod ax_debug;
 mod config;
 mod control;
+mod menus;
 mod repos;
 mod terminal;
 use control::{Call, PaneKind, Request};
@@ -291,6 +292,7 @@ const KEYS_TERMINAL: &[(&str, &str)] = &[
     ("⌘⇧E", "List mode: keys for the bar (Apps, Tasks, Repos)"),
     ("⌘N", "New task: type a line, ↵ files it"),
     ("⌘⇧N", "Next task: show the tabs of the first that needs you"),
+    ("⌘H", "Hide ottospace"),
 ];
 const KEYS_LIST: &[(&str, &str)] = &[
     ("J K / ↓ ↑", "Move the selection"),
@@ -372,6 +374,8 @@ actions!(
 );
 // Terminal selection.
 actions!(ottospace, [CopySelection, PasteText, VisualMode, ListMode, NewTask, NextTask]);
+// App menu.
+actions!(ottospace, [Quit, Hide]);
 
 struct Workspace {
     model: Model,
@@ -2944,7 +2948,12 @@ fn main() {
             KeyBinding::new("cmd-shift-e", ListMode, None),
             KeyBinding::new("cmd-n", NewTask, None),
             KeyBinding::new("cmd-shift-n", NextTask, None),
+            KeyBinding::new("cmd-h", Hide, None),
         ]);
+        // The menu bar lists the same actions; the app-level ones are handled here.
+        cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.on_action(|_: &Hide, cx| cx.hide());
+        cx.set_menus(menus::app_menus());
         let mut bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
         // A test run stays out of the user's way: a background app that never takes the keyboard,
         // with its window at a free corner of the screens, all but a sliver of it off screen.
