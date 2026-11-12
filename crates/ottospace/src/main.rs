@@ -2262,16 +2262,14 @@ impl Workspace {
             None => "keys go to the app · click ottospace to return".to_string(),
         };
         let (mode, hint) = match self.model.mode() {
-            // One hint, not the whole key list: ⌘/ shows the rest.
+            // One hint, not the key list: ⌘/ shows the keys of every mode. A mode you can be in
+            // by accident also says how to leave. The picker and the new-task box carry their own.
             Mode::Normal => ("NORMAL", "⌘/ keys"),
-            Mode::Pick => ("PICK", "type to filter · ↑↓ move · ↵ open · esc close"),
+            Mode::Pick => ("PICK", ""),
             Mode::App => ("APP", app_hint.as_str()),
-            Mode::Visual => ("VISUAL", "hjkl move · v select · y copy · esc leave"),
-            Mode::List if self.model.sidebar == Some(Section::Tasks) => {
-                ("LIST", "jk move · ↵ open · s snooze 1h · h hold · x dismiss · u undo · tab section · esc leave")
-            }
-            Mode::List => ("LIST", "jk move · ↵ open · ⇧↵ open below · tab section · esc leave"),
-            Mode::Compose => ("TASK", "type the task · tab completes #project and @repo · ↵ file · esc close"),
+            Mode::Visual => ("VISUAL", "esc leaves · ⌘/ keys"),
+            Mode::List => ("LIST", "esc leaves · ⌘/ keys"),
+            Mode::Compose => ("TASK", ""),
         };
         let hint = hint.to_string();
         let focused = match self.model.focused.and_then(|id| self.model.pane(id)).map(|p| &p.kind) {
