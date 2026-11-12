@@ -221,6 +221,26 @@ const SPLITS: [(&str, &str, Axis, bool); 3] = [
     ("icons/split-down.svg", "Split down…", Axis::Down, false),
 ];
 
+/// The key reference, by group: keys and what they do. Keep in step with the bindings in `main`.
+const KEYS_PANES: &[(&str, &str)] = &[
+    ("⌘E", "Pick what opens in a new pane"),
+    ("⌘D", "Terminal to the right"),
+    ("⌘⇧D", "Terminal below"),
+    ("⌘W", "Close the pane"),
+];
+const KEYS_MOVE: &[(&str, &str)] = &[
+    ("⌘] / ⌘[", "Next / previous pane"),
+    ("⌘⌥ arrows", "Pane in that direction"),
+    ("⌘⌥ H J K L", "The same, on the home row"),
+];
+const KEYS_TABS: &[(&str, &str)] = &[
+    ("⌘T", "New tab: pick what opens in it"),
+    ("⌘1 … ⌘9", "Go to a tab"),
+    ("⌘⇧] / ⌘⇧[", "Next / previous tab"),
+    ("⌃Tab / ⌃⇧Tab", "Next / previous tab"),
+    ("⌘⇧W", "Close the tab and its panes"),
+];
+
 /// Rail sections in order, with their icon and label.
 const SECTIONS: [(Section, &str, &str); 4] = [
     (Section::Apps, "icons/apps.svg", "Apps"),
@@ -263,7 +283,7 @@ actions!(
     ottospace,
     [
         SplitRight, SplitDown, PickPane, ClosePane, FocusLeft, FocusRight, FocusUp, FocusDown, FocusNext, FocusPrev,
-        Zoom, NewTab, NextTab, PrevTab, CloseTab
+        Zoom, NewTab, NextTab, PrevTab, CloseTab, ShowKeys
     ]
 );
 
@@ -484,6 +504,7 @@ impl Workspace {
                 Request::PickerMove { delta } => Some(Action::PickerMove { delta }),
                 Request::PickerChoose { index } => Some(Action::PickerChoose { index }),
                 Request::PickerClose => Some(Action::ClosePicker),
+                Request::Keys => Some(Action::ToggleKeys),
             };
             if let Some(action) = action {
                 let effects = self.dispatch(action, window, cx);
@@ -717,8 +738,18 @@ impl Workspace {
 
     /// Keys go to the focused terminal. ⌘ shortcuts do not encode, so they fall through to bindings.
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        // ⌘1..⌘9 select a tab.
         let key = &event.keystroke;
+        // The key reference takes the keyboard: Esc closes it, and no other key reaches the
+        // terminal or the picker behind it. (⌘ shortcuts go to their bindings; the core ignores
+        // pane actions while it is open, and ⌘/ closes it.)
+        if self.model.keys {
+            if key.key == "escape" {
+                self.dispatch(Action::CloseKeys, window, cx);
+            }
+            cx.stop_propagation();
+            return;
+        }
+        // ⌘1..⌘9 select a tab.
         if key.modifiers.platform
             && let Some(digit) = key.key.parse::<usize>().ok().filter(|d| (1..=9).contains(d))
         {
@@ -769,6 +800,75 @@ impl Workspace {
         };
         self.dispatch(action, window, cx);
         cx.stop_propagation();
+    }
+
+    /// The key reference: every shortcut, grouped. ⌘/ or Esc or a click closes it.
+    fn render_keys(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let return_key = RETURN_KEY.get().cloned().unwrap_or_else(|| "off".into());
+        let group = |title: &'static str, rows: Vec<(String, &'static str)>| {
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(div().text_xs().text_color(rgb(theme::PRIMARY)).child(title))
+                .children(rows.into_iter().map(|(keys, what)| {
+                    div()
+                        .flex()
+                        .gap_3()
+                        .text_sm()
+                        .child(div().w(px(150.)).text_color(rgb(theme::TEXT)).child(keys))
+                        .child(div().text_color(rgb(theme::MUTED)).child(what))
+                }))
+        };
+        let rows = |list: &[(&str, &'static str)]| list.iter().map(|(k, w)| (k.to_string(), *w)).collect::<Vec<_>>();
+        let panel = div()
+            .p_4()
+            .flex()
+            .gap_8()
+            .rounded_lg()
+            .bg(rgb(theme::RAISED))
+            .border_1()
+            .border_color(rgb(theme::BORDER_STRONG))
+            .shadow(vec![BoxShadow {
+                color: black().opacity(0.7),
+                offset: point(px(0.), px(12.)),
+                blur_radius: px(32.),
+                spread_radius: px(0.),
+            }])
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .child(group("PANES", rows(KEYS_PANES)))
+                    .child(group("MOVE", rows(KEYS_MOVE))),
+            )
+            .child(div().flex().flex_col().gap_4().child(group("TABS", rows(KEYS_TABS))).child(group(
+                "WINDOW",
+                vec![
+                    (return_key, "From any app: back to ottospace"),
+                    ("⌘⌃F".into(), "Zoom the window"),
+                    ("⌘/".into(), "This list"),
+                ],
+            )));
+        div()
+            .id("keys-backdrop")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(black().opacity(0.5))
+            .occlude()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.dispatch(Action::CloseKeys, window, cx);
+                }),
+            )
+            .child(panel)
     }
 
     /// The picker dropdown, under the split buttons. A click outside it closes it.
@@ -865,6 +965,11 @@ impl Workspace {
     fn click_pane(&mut self, id: PaneId, event: &MouseDownEvent, window: &Window, cx: &mut Context<Self>) {
         if !self.hosted.contains_key(&id) {
             self.dispatch(Action::Focus { pane: id }, window, cx);
+            return;
+        }
+        // Already live: the real window takes its own clicks. Replaying one here would land on
+        // ottospace again and loop.
+        if self.model.live == Some(id) {
             return;
         }
         self.dispatch(Action::Enter { pane: id }, window, cx);
@@ -1073,7 +1178,7 @@ impl Workspace {
         } else if let Some(terminal) = self.terminals.get(&id) {
             let screen = terminal.screen();
             let cell = self.cell;
-            let has_keys = self.model.focused == Some(id) && self.model.mode() == Mode::Normal;
+            let has_keys = self.model.focused == Some(id) && self.model.mode() == Mode::Normal && !self.model.keys;
             canvas(
                 |_, _, _| {},
                 move |bounds, _, window, cx| terminal::paint(&screen, bounds, cell, has_keys, window, cx),
@@ -1090,25 +1195,29 @@ impl Workspace {
             }
         };
         let radius = self.hosted.get(&id).map_or(0.0, |h| h.radius);
-        let body = div()
-            .id(("pane", id))
+        // The content sits 2pt inside the pane. A live app window is placed over it, and without
+        // the gap that window's own edge covers the pane's accent border.
+        let inner = div()
             .relative()
-            .flex_1()
+            .size_full()
             .flex()
             .items_center()
             .justify_center()
-            // Record the body's layout bounds: AX matches the real window to it; e2e reads it.
+            // Record the content's layout bounds: AX matches the real window to it; e2e reads it.
             .child(canvas(move |bounds, _, _| cell.set(bounds), |_, _, _, _| {}).absolute().size_full())
             .child(content)
             .child(
                 canvas(|_, _, _| {}, move |bounds, _, window, _| paint_corner_mask(bounds, radius, window))
                     .absolute()
                     .size_full(),
-            )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, e: &MouseDownEvent, window, cx| this.click_pane(id, e, window, cx)),
             );
+        // The click handler is on the content, not the padded body: a click in the 2pt gap would be
+        // replayed at a point the app window does not cover, land on ottospace again, and loop.
+        let inner = inner.on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, e: &MouseDownEvent, window, cx| this.click_pane(id, e, window, cx)),
+        );
+        let body = div().id(("pane", id)).flex_1().min_h_0().p(px(2.)).child(inner);
 
         // While another pane is live, fade this one: input goes to the live app, not here.
         let faded = self.model.live.is_some_and(|live| live != id);
@@ -1230,9 +1339,8 @@ impl Workspace {
             None => "keys go to the app · click ottospace to return".to_string(),
         };
         let (mode, hint) = match self.model.mode() {
-            Mode::Normal => {
-                ("NORMAL", "⌘D ⌘⇧D terminal right/down · ⌘E pick · ⌘W close · ⌘] ⌘[ next/prev · ⌘⌥ arrows or hjkl move")
-            }
+            // One hint, not the whole key list: ⌘/ shows the rest.
+            Mode::Normal => ("NORMAL", "⌘/ keys"),
             Mode::Pick => ("PICK", "type to filter · ↑↓ move · ↵ open · esc close"),
             Mode::App => ("APP", app_hint.as_str()),
         };
@@ -1329,6 +1437,9 @@ impl Render for Workspace {
                 this.dispatch(Action::FocusCycle { delta: -1 }, window, cx);
             }))
             .on_action(cx.listener(|_, _: &Zoom, window, _| window.zoom_window()))
+            .on_action(cx.listener(|this, _: &ShowKeys, window, cx| {
+                this.dispatch(Action::ToggleKeys, window, cx);
+            }))
             .on_action(cx.listener(|this, _: &NewTab, window, cx| this.open_picker(Axis::Right, true, window, cx)))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| {
                 this.dispatch(Action::CycleTab { delta: 1 }, window, cx);
@@ -1385,6 +1496,7 @@ impl Render for Workspace {
             )
             .child(self.render_status())
             .children(self.model.picker.as_ref().map(|picker| self.render_picker(picker, cx)))
+            .when(self.model.keys, |d| d.child(self.render_keys(cx)))
     }
 }
 
@@ -1436,6 +1548,7 @@ fn main() {
             KeyBinding::new("cmd-d", SplitRight, None),
             KeyBinding::new("cmd-shift-d", SplitDown, None),
             KeyBinding::new("cmd-e", PickPane, None),
+            KeyBinding::new("cmd-/", ShowKeys, None),
             KeyBinding::new("cmd-w", ClosePane, None),
             KeyBinding::new("cmd-alt-left", FocusLeft, None),
             KeyBinding::new("cmd-alt-right", FocusRight, None),

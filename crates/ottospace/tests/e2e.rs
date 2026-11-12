@@ -221,6 +221,10 @@ fn picker_opens_a_terminal_in_the_chosen_direction() {
 
     otto.call(json!({"cmd": "picker"}));
     assert_eq!(otto.call(json!({"cmd": "picker_close"}))["mode"], "normal");
+
+    // The key reference shows and hides.
+    assert_eq!(otto.call(json!({"cmd": "keys"}))["state"]["keys"], true);
+    assert_eq!(otto.call(json!({"cmd": "keys"}))["state"]["keys"], false);
 }
 
 #[test]

@@ -182,6 +182,9 @@ pub enum Action {
         index: Option<usize>,
     },
     ClosePicker,
+    /// Show or hide the key reference.
+    ToggleKeys,
+    CloseKeys,
 }
 
 /// What the shell must do after an update.
@@ -233,6 +236,8 @@ pub struct Model {
     pub sidebar: Option<Section>,
     /// The pane picker, while it is open.
     pub picker: Option<Picker>,
+    /// The key reference overlay is showing.
+    pub keys: bool,
     #[serde(skip)]
     next_id: PaneId,
     #[serde(skip)]
@@ -250,6 +255,7 @@ impl Default for Model {
             live: None,
             sidebar: None,
             picker: None,
+            keys: false,
             next_id: 0,
             next_tab: 0,
         };
@@ -292,7 +298,10 @@ impl Model {
                 | Action::CycleTab { .. }
                 | Action::CloseTab { .. }
         );
-        if self.picker.is_some() && for_panes {
+        // The key reference covers the workspace too, so the same actions wait behind it, and the
+        // picker cannot open under it.
+        let blocked_by_keys = self.keys && (for_panes || matches!(action, Action::OpenPicker { .. }));
+        if (self.picker.is_some() && for_panes) || blocked_by_keys {
             return effects;
         }
         match action {
@@ -443,6 +452,16 @@ impl Model {
                 }
             }
             Action::ClosePicker => self.picker = None,
+            // The overlay is ottospace's own UI: it needs the keyboard back to be dismissed.
+            Action::ToggleKeys => {
+                self.keys = !self.keys;
+                if self.keys {
+                    // One overlay at a time, and the overlay needs the keyboard to be dismissed.
+                    self.picker = None;
+                    self.leave(&mut effects);
+                }
+            }
+            Action::CloseKeys => self.keys = false,
             Action::CloseSidebar => {
                 self.leave(&mut effects);
                 self.sidebar = None;
@@ -993,6 +1012,38 @@ mod tests {
         assert_eq!(effects, [Effect::HostApp { name: "Slack".into(), axis: Right, new_tab: true }]);
         // No tab yet: if hosting fails, nothing is left behind.
         assert_eq!(m.tabs.len(), 1);
+    }
+
+    #[test]
+    fn the_key_reference_toggles_and_takes_the_keyboard_back() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        m.update(Action::Enter { pane: 1 });
+        assert_eq!(m.update(Action::ToggleKeys), [Effect::Parked(1)]);
+        assert!(m.keys);
+        m.update(Action::ToggleKeys);
+        assert!(!m.keys);
+        m.update(Action::ToggleKeys);
+        m.update(Action::CloseKeys);
+        assert!(!m.keys);
+    }
+
+    #[test]
+    fn pane_actions_and_the_picker_wait_while_the_key_reference_is_open() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        picker(&mut m);
+        m.update(Action::ToggleKeys);
+        assert!(m.picker.is_none(), "opening the reference closes the picker");
+        for action in [
+            Action::Close { pane: None },
+            Action::Split { axis: Right, kind: Kind::Terminal },
+            Action::NewTab,
+            Action::OpenPicker { axis: Right, new_tab: false, items: vec![PickItem::Terminal] },
+        ] {
+            assert_eq!(m.update(action), []);
+        }
+        assert_eq!((ids(&m), m.tabs.len(), m.picker.is_none()), (vec![1], 1, true));
     }
 
     #[test]

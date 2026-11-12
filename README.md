@@ -65,6 +65,7 @@ A window opens. Press ⌘D to open a terminal pane.
 | ⌘⌥←/→/↑/↓ or ⌘⌥H/L/K/J | Focus the pane in that direction |
 | ⌘] / ⌘[ | Focus the next / previous pane |
 | ⌘⌃F | Zoom the window to fill the screen; again to restore |
+| ⌘/ | Show every key |
 | F18 | From any app: take the keyboard back and bring ottospace forward |
 | ⌘T | New tab: pick what opens in it |
 | ⌘1 … ⌘9 | Select a tab |
