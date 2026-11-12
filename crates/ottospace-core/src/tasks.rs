@@ -65,9 +65,6 @@ pub struct Task {
     /// Taken out of the inbox by the user. The task itself goes on.
     #[serde(default)]
     pub dismissed: bool,
-    /// The `id` of the tab that is this task's workspace, if it has one.
-    #[serde(default)]
-    pub tab: Option<u32>,
     /// The project this task serves, from a `#tag`. Many tasks serve none.
     #[serde(default)]
     pub project: Option<String>,
@@ -145,25 +142,24 @@ impl Tasks {
         self.list.iter().filter(|t| t.group() == Some(Group::NeedsYou)).count()
     }
 
-    /// Starts from the tasks kept on disk. Tabs do not outlive a session, so no task has one;
-    /// of two tasks with one id the first is kept. New ids go on after the highest, and after
+    /// Starts from the tasks kept on disk. Of two tasks with one id the first is kept. New ids go on after the highest, and after
     /// `floor`: the highest id among files that could not be read, so none of them is overwritten.
     pub fn restore(&mut self, mut tasks: Vec<Task>, floor: TaskId) {
         tasks.retain(|task| (1..=MAX_ID).contains(&task.id));
         tasks.sort_by_key(|task| task.id);
         tasks.dedup_by_key(|task| task.id);
         for task in &mut tasks {
-            (task.tab, task.priority) = (None, task.priority.clamp(1, 9));
+            task.priority = task.priority.clamp(1, 9);
         }
         self.next_id = tasks.last().map_or(0, |task| task.id).max(floor.min(MAX_ID));
         (self.list, self.undo) = (tasks, None);
     }
 
-    pub fn add(&mut self, title: String, priority: u8, state: State, tab: Option<u32>) -> TaskId {
+    pub fn add(&mut self, title: String, priority: u8, state: State) -> TaskId {
         self.next_id += 1;
         let priority = priority.clamp(1, 9);
         let (snoozed_until, dismissed, project, repo) = (None, false, None, None);
-        self.list.push(Task { id: self.next_id, title, state, priority, snoozed_until, dismissed, tab, project, repo });
+        self.list.push(Task { id: self.next_id, title, state, priority, snoozed_until, dismissed, project, repo });
         self.next_id
     }
 
@@ -247,13 +243,6 @@ impl Tasks {
             }
         }
     }
-
-    /// A closed tab is no task's workspace any more. Tab ids can be used again.
-    pub fn forget_tab(&mut self, tab: u32) {
-        for task in self.list.iter_mut().filter(|t| t.tab == Some(tab)) {
-            task.tab = None;
-        }
-    }
 }
 
 #[cfg(test)]
@@ -267,16 +256,16 @@ mod tests {
     #[test]
     fn inbox_is_grouped_then_by_priority_then_oldest_first() {
         let mut tasks = Tasks::default();
-        tasks.add("build".into(), 2, State::Running, None);
-        tasks.add("old question".into(), 2, State::NeedsYou, None);
-        tasks.add("idea".into(), 3, State::Captured, None);
-        tasks.add("urgent question".into(), 1, State::NeedsYou, None);
-        tasks.add("new question".into(), 2, State::NeedsYou, None);
-        tasks.add("open pr".into(), 1, State::Review, None);
-        tasks.add("paused".into(), 1, State::Parked, None);
-        tasks.add("forgotten".into(), 3, State::Stale, None);
-        tasks.add("merged".into(), 1, State::Done, None);
-        tasks.add("gone".into(), 1, State::Cleaned, None);
+        tasks.add("build".into(), 2, State::Running);
+        tasks.add("old question".into(), 2, State::NeedsYou);
+        tasks.add("idea".into(), 3, State::Captured);
+        tasks.add("urgent question".into(), 1, State::NeedsYou);
+        tasks.add("new question".into(), 2, State::NeedsYou);
+        tasks.add("open pr".into(), 1, State::Review);
+        tasks.add("paused".into(), 1, State::Parked);
+        tasks.add("forgotten".into(), 3, State::Stale);
+        tasks.add("merged".into(), 1, State::Done);
+        tasks.add("gone".into(), 1, State::Cleaned);
         assert_eq!(
             titles(&tasks),
             [
@@ -297,8 +286,8 @@ mod tests {
     #[test]
     fn a_snoozed_task_is_hidden_until_its_time() {
         let mut tasks = Tasks::default();
-        let a = tasks.add("a".into(), 1, State::NeedsYou, None);
-        tasks.add("b".into(), 2, State::NeedsYou, None);
+        let a = tasks.add("a".into(), 1, State::NeedsYou);
+        tasks.add("b".into(), 2, State::NeedsYou);
         tasks.snooze(a, 1_000);
         assert_eq!(tasks.next().map(|t| t.title.as_str()), Some("b"), "pop skips the snoozed task");
         tasks.tick(999);
@@ -310,8 +299,8 @@ mod tests {
     #[test]
     fn needing_the_user_again_brings_a_hidden_task_back() {
         let mut tasks = Tasks::default();
-        let a = tasks.add("a".into(), 1, State::Running, None);
-        let b = tasks.add("b".into(), 1, State::Running, None);
+        let a = tasks.add("a".into(), 1, State::Running);
+        let b = tasks.add("b".into(), 1, State::Running);
         tasks.snooze(a, 1_000);
         tasks.dismiss(b);
         assert!(tasks.inbox().is_empty());
@@ -326,7 +315,7 @@ mod tests {
     #[test]
     fn hold_and_dismiss_move_a_task_and_undo_takes_one_step_back() {
         let mut tasks = Tasks::default();
-        let a = tasks.add("a".into(), 1, State::NeedsYou, Some(4));
+        let a = tasks.add("a".into(), 1, State::NeedsYou);
         tasks.hold(a);
         assert_eq!(titles(&tasks), [(Group::OnHold, "a")]);
         tasks.undo();
@@ -335,7 +324,7 @@ mod tests {
         assert_eq!((tasks.inbox().len(), tasks.get(a).map(|t| t.state)), (0, Some(State::NeedsYou)));
         tasks.undo();
         tasks.undo(); // nothing left to take back
-        assert_eq!((titles(&tasks), tasks.get(a).and_then(|t| t.tab)), (vec![(Group::NeedsYou, "a")], Some(4)));
+        assert_eq!(titles(&tasks), [(Group::NeedsYou, "a")]);
         // An unknown id changes nothing, and does not replace what undo holds.
         tasks.snooze(a, 5);
         tasks.hold(99);
@@ -346,7 +335,7 @@ mod tests {
     #[test]
     fn undo_does_not_take_back_what_an_agent_reported_since() {
         let mut tasks = Tasks::default();
-        let a = tasks.add("a".into(), 1, State::Running, None);
+        let a = tasks.add("a".into(), 1, State::Running);
         tasks.dismiss(a);
         tasks.set_state(a, State::NeedsYou);
         tasks.undo();
@@ -356,7 +345,7 @@ mod tests {
         tasks.undo();
         assert_eq!(tasks.get(a).map(|t| t.state), Some(State::Done));
         // Undo puts back only what the move changed.
-        let b = tasks.add("b".into(), 1, State::Running, None);
+        let b = tasks.add("b".into(), 1, State::Running);
         tasks.snooze(b, 10);
         tasks.snooze(b, 20);
         tasks.undo();
@@ -366,8 +355,7 @@ mod tests {
     #[test]
     fn a_finished_task_cannot_be_put_on_hold() {
         let mut tasks = Tasks::default();
-        let (done, cleaned) =
-            (tasks.add("a".into(), 1, State::Done, None), tasks.add("b".into(), 1, State::Cleaned, None));
+        let (done, cleaned) = (tasks.add("a".into(), 1, State::Done), tasks.add("b".into(), 1, State::Cleaned));
         tasks.hold(done);
         tasks.hold(cleaned);
         assert_eq!(titles(&tasks), [(Group::Done, "a")]);
@@ -376,7 +364,7 @@ mod tests {
     #[test]
     fn a_task_that_goes_stale_comes_back_but_a_repeated_report_does_not() {
         let mut tasks = Tasks::default();
-        let a = tasks.add("a".into(), 1, State::Parked, None);
+        let a = tasks.add("a".into(), 1, State::Parked);
         tasks.dismiss(a);
         tasks.set_state(a, State::Stale);
         assert_eq!(titles(&tasks), [(Group::NeedsYou, "a")]);
@@ -387,37 +375,26 @@ mod tests {
     }
 
     #[test]
-    fn a_closed_tab_is_forgotten() {
-        let mut tasks = Tasks::default();
-        let (a, b) =
-            (tasks.add("a".into(), 1, State::Running, Some(1)), tasks.add("b".into(), 1, State::Running, Some(2)));
-        tasks.forget_tab(1);
-        assert_eq!((tasks.get(a).and_then(|t| t.tab), tasks.get(b).and_then(|t| t.tab)), (None, Some(2)));
-    }
-
-    #[test]
     fn restored_tasks_keep_their_place_and_new_ids_go_on() {
-        let task = |id, title: &str, tab| Task {
+        let task = |id, title: &str| Task {
             id,
             title: title.into(),
             state: State::NeedsYou,
             priority: 2,
             snoozed_until: None,
             dismissed: false,
-            tab,
             project: None,
             repo: None,
         };
         let mut tasks = Tasks::default();
-        tasks.restore(vec![task(7, "late", Some(3)), task(2, "early", None), task(7, "twin", None)], 0);
+        tasks.restore(vec![task(7, "late"), task(2, "early"), task(7, "twin")], 0);
         assert_eq!(titles(&tasks), [(Group::NeedsYou, "early"), (Group::NeedsYou, "late")]);
-        assert_eq!(tasks.get(7).and_then(|t| t.tab), None, "a tab of the last session means nothing now");
-        assert_eq!(tasks.add("new".into(), 3, State::Captured, None), 8);
+        assert_eq!(tasks.add("new".into(), 3, State::Captured), 8);
         // A file that could not be read keeps its number: new ids go on after it too.
-        tasks.restore(vec![task(2, "early", None), task(0, "no id", None), task(u32::MAX, "not ours", None)], 40);
-        assert_eq!((tasks.list.len(), tasks.add("after".into(), 3, State::Captured, None)), (1, 41));
+        tasks.restore(vec![task(2, "early"), task(0, "no id"), task(u32::MAX, "not ours")], 40);
+        assert_eq!((tasks.list.len(), tasks.add("after".into(), 3, State::Captured)), (1, 41));
         tasks.restore(Vec::new(), u32::MAX);
-        assert_eq!(tasks.add("capped".into(), 3, State::Captured, None), MAX_ID + 1);
+        assert_eq!(tasks.add("capped".into(), 3, State::Captured), MAX_ID + 1);
         // A file written by hand may leave fields out.
         let read: Task = serde_json::from_str(r#"{"id":1,"title":"by hand","state":"captured"}"#).unwrap();
         assert_eq!((read.priority, read.snoozed_until, read.dismissed), (3, None, false));
@@ -426,8 +403,7 @@ mod tests {
     #[test]
     fn priority_stays_in_range() {
         let mut tasks = Tasks::default();
-        let (low, high) =
-            (tasks.add("a".into(), 0, State::Captured, None), tasks.add("b".into(), 200, State::Captured, None));
+        let (low, high) = (tasks.add("a".into(), 0, State::Captured), tasks.add("b".into(), 200, State::Captured));
         assert_eq!((tasks.get(low).map(|t| t.priority), tasks.get(high).map(|t| t.priority)), (Some(1), Some(9)));
     }
 }

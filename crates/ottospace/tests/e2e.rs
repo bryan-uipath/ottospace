@@ -312,11 +312,11 @@ fn tasks_are_listed_as_an_inbox_and_pop_opens_the_next() {
     otto.call(json!({"cmd": "task_dismiss", "id": 1}));
     otto.call(json!({"cmd": "task_set_state", "id": 2, "state": "needs_you"}));
     assert_eq!(inbox(&otto), [row("needs_you", "build"), row("on_hold", "question")]);
-    // A dismissed task that starts to need the user comes back. It has no tab: nothing opens.
+    // A dismissed task that starts to need the user comes back. It had no tab: opening it gives it one.
     otto.call(json!({"cmd": "task_set_state", "id": 2, "state": "done"}));
     otto.call(json!({"cmd": "task_set_state", "id": 1, "state": "needs_you"}));
     let popped = otto.call(json!({"cmd": "task_pop"}));
-    assert_eq!((&popped["task"]["title"], &popped["opened"]), (&json!("idea"), &json!(false)));
+    assert_eq!((&popped["task"]["title"], &popped["opened"]), (&json!("idea"), &json!(true)));
     assert_eq!(otto.raw(r#"{"cmd":"task_hold","id":9}"#)["ok"], false, "no such task");
     assert_eq!(otto.raw(r#"{"cmd":"task_add","title":"x","state":"sleeping"}"#)["ok"], false, "no such state");
 }
@@ -403,11 +403,37 @@ fn the_new_task_box_files_a_line() {
     assert_eq!((filed["task"]["id"].as_u64(), filed["task"]["project"].as_str()), (Some(2), Some("support")));
     assert_eq!(otto.raw(r##"{"cmd":"task_new","line":"#support p1"}"##)["ok"], false);
 
-    // ⌘⇧N brings forward the tab of the task that needs the user.
-    otto.call(json!({"cmd": "new_tab"}));
-    let first = otto.call(json!({"cmd": "state"}))["state"]["tabs"][0]["id"].clone();
-    otto.call(json!({"cmd": "task_add", "title": "waits", "state": "needs_you", "tab": first}));
-    assert_eq!(key("cmd-shift-n")["state"]["active"], 0);
+    // Opening the task the first time: its own tab, named after its repository, with a shell there.
+    let reply = otto.call(json!({"cmd": "task_open", "id": 1}));
+    let state = &reply["state"];
+    assert_eq!(
+        (&state["current_task"], &state["tabs"][1]["task"], &state["tabs"][1]["title"]),
+        (&json!(1), &json!(1), &json!("flow-app"))
+    );
+    let pane = state["focused"].as_u64().unwrap();
+    otto.call(json!({"cmd": "type", "pane": pane, "text": "pwd\r"}));
+    let here = format!("^{}$", regex::escape(repo.to_str().unwrap()));
+    otto.call(json!({"cmd": "wait", "pane": pane, "pattern": here, "timeout_ms": 40000}));
+    // A new tab is the task's. ⌘1 and ⌘2 count the task's tabs, not all tabs.
+    let reply = otto.call(json!({"cmd": "new_tab"}));
+    assert_eq!((&reply["state"]["tabs"][2]["task"], &reply["state"]["active"]), (&json!(1), &json!(2)));
+    let reply = key("cmd-1");
+    assert_eq!((&reply["state"]["active"], &reply["state"]["focused"]), (&json!(1), &json!(pane)));
+    assert_eq!(key("cmd-2")["state"]["active"], 2);
+    assert_eq!(key("cmd-3")["state"]["active"], 2, "the task has two tabs: ⌘3 does nothing");
+    // A follow-up filed from the task's tab cannot take the tab; a tab that is gone is refused too.
+    let taken = otto.raw(&json!({"cmd": "task_add", "title": "follow-up", "tab": state["tabs"][1]["id"]}).to_string());
+    assert!(taken["error"].as_str().is_some_and(|e| e.contains("another task")), "{taken}");
+    assert_eq!(otto.raw(r#"{"cmd":"task_add","title":"x","tab":99}"#)["ok"], false);
+    // Leaving shows the tabs of no task again; the task's shell goes on.
+    let reply = otto.call(json!({"cmd": "task_leave"}));
+    assert_eq!((&reply["state"]["current_task"], &reply["state"]["active"]), (&Value::Null, &json!(0)));
+    assert!(reply["terminals"][pane.to_string()].is_object(), "the task's terminal is still there");
+
+    // ⌘⇧N shows the tabs of the task that needs the user. It had none: it gets one.
+    otto.call(json!({"cmd": "task_add", "title": "waits", "state": "needs_you"}));
+    let reply = key("cmd-shift-n");
+    assert_eq!(reply["state"]["current_task"], 3);
     let _ = std::fs::remove_dir_all(&root);
 }
 

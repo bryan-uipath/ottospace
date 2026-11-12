@@ -289,7 +289,7 @@ const KEYS_TERMINAL: &[(&str, &str)] = &[
     ("⌘⇧C", "Visual mode: select with the keyboard"),
     ("⌘⇧E", "List mode: keys for the bar (Apps, Tasks, Repos)"),
     ("⌘N", "New task: type a line, ↵ files it"),
-    ("⌘⇧N", "Next task: open the first one that needs you"),
+    ("⌘⇧N", "Next task: show the tabs of the first that needs you"),
 ];
 const KEYS_LIST: &[(&str, &str)] = &[
     ("J K / ↓ ↑", "Move the selection"),
@@ -641,9 +641,9 @@ impl Workspace {
         effects
     }
 
-    /// The tasks as they are kept on disk: without a tab, which ends with the session.
+    /// The tasks as they are kept on disk.
     fn kept_tasks(&self) -> Vec<Task> {
-        self.model.tasks.list.iter().map(|task| Task { tab: None, ..task.clone() }).collect()
+        self.model.tasks.list.clone()
     }
 
     /// Writes the tasks that changed since the last write, one file each. A task that could not
@@ -807,6 +807,19 @@ impl Workspace {
                     failure = Some(format!("the title is longer than {MAX_TITLE} characters"));
                     None
                 }
+                // A tab that is gone, or that another task has, cannot become this task's: say so,
+                // or the caller believes its work is filed under the task.
+                Request::TaskAdd { tab: Some(tab), .. } if self.model.tabs.iter().all(|t| t.id != tab) => {
+                    failure = Some(format!("no tab with id {tab}"));
+                    None
+                }
+                Request::TaskAdd { tab: Some(tab), .. }
+                    if self.model.tabs.iter().any(|t| t.id == tab && t.task.is_some()) =>
+                {
+                    failure =
+                        Some(format!("tab {tab} belongs to another task; leave out `tab` to file a task without one"));
+                    None
+                }
                 Request::TaskAdd { title, priority, state, tab } => {
                     self.dispatch(Action::TaskAdd { title, priority, state, tab }, window, cx);
                     // The new task, so the caller has its id.
@@ -837,15 +850,24 @@ impl Workspace {
                 }
                 Request::TaskPop => {
                     self.dispatch(Action::Tick { now: now_ms() }, window, cx);
-                    let tab = self.model.tasks.next().and_then(|task| task.tab);
+                    let next = self.model.tasks.next().map(|task| task.id);
                     let task = serde_json::json!(self.model.tasks.next());
                     self.dispatch(Action::TaskOpen { id: None }, window, cx);
-                    // False: the task has no tab, or the picker or key reference is in the way.
-                    let active = self.model.tabs.get(self.model.active).map(|t| t.id);
-                    let opened = tab.is_some() && tab == active;
+                    // False: the picker or the key reference is in the way, so the view stayed.
+                    let opened = next.is_some() && self.model.current_task == next;
                     let _ = reply.send(serde_json::json!({ "ok": true, "task": task, "opened": opened }).to_string());
                     continue;
                 }
+                Request::TaskOpen { id } if self.model.tasks.get(id).is_none() => {
+                    failure = Some(format!("no task {id}"));
+                    None
+                }
+                Request::TaskOpen { id } => {
+                    // Its repository as it is now, for the terminal a first opening starts.
+                    self.model.update(Action::SetRepos { repos: repos::scan() });
+                    Some(Action::TaskOpen { id: Some(id) })
+                }
+                Request::TaskLeave => Some(Action::TaskLeave),
                 Request::Repos => Some(Action::SetRepos { repos: repos::scan() }),
                 Request::OpenRepo { path, .. } if !self.model.repo_listed(&path) => {
                     failure = Some("no listed repository at that path".into());
@@ -1323,7 +1345,7 @@ impl Workspace {
         if key.modifiers.platform
             && let Some(digit) = key.key.parse::<usize>().ok().filter(|d| (1..=9).contains(d))
         {
-            self.dispatch(Action::SelectTab { index: digit - 1 }, window, cx);
+            self.dispatch(Action::SelectVisibleTab { index: digit - 1 }, window, cx);
             cx.stop_propagation();
             return;
         }
@@ -2328,10 +2350,10 @@ impl Workspace {
                     }
                 }),
             )
-            .children(self.model.tabs.iter().enumerate().map(|(index, tab)| {
-                let active = index == self.model.active;
+            // The task whose tabs these are. × goes back to the tabs of no task; the task goes on.
+            .children(self.model.current_task.and_then(|id| self.model.tasks.get(id)).map(|task| {
                 div()
-                    .id(("tab", tab.id))
+                    .id("task-chip")
                     .h_full()
                     .pl_3()
                     .pr_1()
@@ -2340,27 +2362,63 @@ impl Workspace {
                     .gap_2()
                     .border_r_1()
                     .border_color(rgb(theme::BORDER))
-                    .cursor_pointer()
-                    .when(active, |d| d.bg(rgb(theme::RAISED)).text_color(rgb(theme::TEXT)))
-                    .hover(|s| s.text_color(rgb(theme::TEXT)))
-                    .child(tab.title.clone())
+                    .text_xs()
+                    .text_color(rgb(theme::COMPOSE))
+                    .child(div().max_w(px(220.)).truncate().child(task.title.to_uppercase()))
                     .child(
                         div()
-                            .id(("tab-close", tab.id))
+                            .id("task-leave")
                             .px_1()
                             .rounded_sm()
-                            .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::ERROR)))
+                            .cursor_pointer()
+                            .text_color(rgb(theme::MUTED))
+                            .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
                             .child("×")
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                // Do not also select the tab that is going away.
-                                cx.stop_propagation();
-                                this.dispatch(Action::CloseTab { index: Some(index) }, window, cx);
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.dispatch(Action::TaskLeave, window, cx);
                             })),
                     )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.dispatch(Action::SelectTab { index }, window, cx);
-                    }))
             }))
+            // Only the current task's tabs (or those of no task) are on the bar.
+            .children(
+                self.model
+                    .visible_tabs()
+                    .into_iter()
+                    .filter_map(|index| Some((index, self.model.tabs.get(index)?)))
+                    .map(|(index, tab)| {
+                        let active = index == self.model.active;
+                        div()
+                            .id(("tab", tab.id))
+                            .h_full()
+                            .pl_3()
+                            .pr_1()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .border_r_1()
+                            .border_color(rgb(theme::BORDER))
+                            .cursor_pointer()
+                            .when(active, |d| d.bg(rgb(theme::RAISED)).text_color(rgb(theme::TEXT)))
+                            .hover(|s| s.text_color(rgb(theme::TEXT)))
+                            .child(tab.title.clone())
+                            .child(
+                                div()
+                                    .id(("tab-close", tab.id))
+                                    .px_1()
+                                    .rounded_sm()
+                                    .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::ERROR)))
+                                    .child("×")
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        // Do not also select the tab that is going away.
+                                        cx.stop_propagation();
+                                        this.dispatch(Action::CloseTab { index: Some(index) }, window, cx);
+                                    })),
+                            )
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.dispatch(Action::SelectTab { index }, window, cx);
+                            }))
+                    }),
+            )
             // New tab and split buttons: each opens the picker for that target.
             .child(div().ml_auto().mr_2().flex().gap_1().children(SPLITS.iter().enumerate().map(
                 |(i, (icon, tip, axis, new_tab))| {

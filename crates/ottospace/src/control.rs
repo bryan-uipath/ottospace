@@ -72,7 +72,7 @@ pub enum Request {
     SelectTab {
         index: usize,
     },
-    /// Next (positive) or previous tab.
+    /// Next (positive) or previous tab on the bar: the tabs of the task on show.
     CycleTab {
         delta: i32,
     },
@@ -133,8 +133,8 @@ pub enum Request {
         axis: Axis,
     },
     /// Files a task: `{"cmd":"task_add","title":"Fix the zoom flicker","priority":2}`. `priority`:
-    /// 1 (most urgent) to 9, default 3. `state`: default `captured`. `tab`: the `id` of the tab
-    /// that is the task's workspace (`$OTTOSPACE_TAB` in a shell). The reply is
+    /// 1 (most urgent) to 9, default 3. `state`: default `captured`. `tab`: the `id` of an open
+    /// tab that becomes the task's (`$OTTOSPACE_TAB` in a shell). The reply is
     /// `{"ok":true,"task":{..}}`: the new task, with its `id`.
     TaskAdd {
         title: String,
@@ -177,10 +177,17 @@ pub enum Request {
         #[serde(default)]
         text: String,
     },
-    /// Brings forward the tab of the first task that needs the user. The reply is
+    /// Shows the tabs of the first task that needs the user. The reply is
     /// `{"ok":true,"task":{..},"opened":true}`; `"task":null` if nothing needs the user, and
-    /// `"opened":false` if no tab came forward.
+    /// `"opened":false` if the view could not change (the picker or key reference is open).
     TaskPop,
+    /// Shows a task's tabs. A task opened for the first time gets a tab, with a terminal in its
+    /// repository if it names one.
+    TaskOpen {
+        id: TaskId,
+    },
+    /// Shows the tabs of no task again. The task goes on.
+    TaskLeave,
     /// A terminal pane's text (default: the focused one): the bottom screen, and with `history`
     /// everything scrolled off above it. The reply is `{"ok":true,"pane":3,"text":".."}`, not the state.
     Capture {

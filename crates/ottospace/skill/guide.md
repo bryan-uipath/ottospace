@@ -50,7 +50,8 @@ ottospace ctl '{"cmd":"state"}'
 | `mode` | `normal`, `app` (a hosted app has the keyboard), `pick` (the picker is open), `visual` (selecting terminal text with the keyboard), `list` (the secondary bar has the keyboard) or `compose` (the new-task box is open) |
 | `state.list` | Null, or the index of the selected row of the open section: the secondary bar has the keyboard (`mode` is `list`, or `pick` while the picker is open over it) |
 | `state.panes` | Every pane of every tab: `id`, `kind`, and `cwd` for a terminal opened by `open_repo`. `kind` is an object: `{"type":"terminal"}`, `{"type":"empty"}` or `{"type":"app","window":N,"title":"..."}` |
-| `state.tabs`, `state.active` | The tabs (`id`, `title`) and the index of the one showing. Requests take the index, not the `id` |
+| `state.tabs`, `state.active` | Every tab (`id`, `title`, and `task`: the id of the task it belongs to, or null) and the index of the one showing. Requests take the index, not the `id` |
+| `state.current_task` | The task whose tabs are on the user's tab bar, or null for the tabs of no task. Tabs of other tasks keep running, off the bar |
 | `tab_panes` | Pane ids of each tab, in tab order |
 | `state.focused` | The pane that splits and keys act on |
 | `state.live` | The app pane that has the keyboard, if any |
@@ -63,7 +64,7 @@ ottospace ctl '{"cmd":"state"}'
 | `notice` | Null, or the problem the status bar shows (a mistake in the settings, an app that could not be hosted). It is not `error`, which means the request failed |
 | `closed_apps` | Apps the user's settings name that are not running. `open_app` starts one |
 | `apps` | Running apps that `open_app` can host: `name`, `windows` (how many it has open) and `icon` (true if its icon was read) |
-| `state.tasks.list` | Every task: `id`, `title`, `state`, `priority`, `snoozed_until`, `dismissed`, `tab`, `project` (from a `#tag`, or null) and `repo` (a repository path, or null) |
+| `state.tasks.list` | Every task: `id`, `title`, `state`, `priority`, `snoozed_until`, `dismissed`, `project` (from a `#tag`, or null) and `repo` (a repository path, or null) |
 | `state.compose` | Null, or the text in the new-task box while it is open |
 | `inbox`, `needs_you` | The tasks the Tasks section lists, in order, each with its `group`; and how many are under `needs_you` |
 | `state.repos` | Repositories found on disk: `name`, `path`, `branch`, and `worktrees` (each `name`, `path`, `branch`) |
@@ -121,14 +122,19 @@ ottospace ctl '{"cmd":"compose","text":"reply to Ana about the retry bug #suppor
 ottospace ctl '{"cmd":"task_set_state","id":1,"state":"needs_you"}'
 ottospace ctl '{"cmd":"task_list"}'
 ottospace ctl '{"cmd":"task_pop"}'
+ottospace ctl '{"cmd":"task_open","id":1}'
+ottospace ctl '{"cmd":"task_leave"}'
 ottospace ctl '{"cmd":"task_snooze","id":1,"seconds":3600}'
 ottospace ctl '{"cmd":"task_hold","id":1}'
 ottospace ctl '{"cmd":"task_dismiss","id":1}'
 ottospace ctl '{"cmd":"task_undo"}'
 ```
 
-A task has a `title`, a `priority` (1 is most urgent, default 3), a `state` and, if you give one,
-the `tab` that is its workspace (a tab `id`; `$OTTOSPACE_TAB` in a shell ottospace started).
+A task has a `title`, a `priority` (1 is most urgent, default 3) and a `state`. A task has its
+own tabs: `state.tabs[].task` says which task a tab belongs to. `"tab"` on `task_add` gives the
+task an open tab (a tab `id`; `$OTTOSPACE_TAB` in a shell ottospace started): do that for the tab
+you work in, so the user finds your work under the task. It must be a tab of no task; a tab that
+is gone or that another task has is refused. To file a follow-up from inside a task, leave `tab` out.
 States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stale`, `parked`,
 `done`, `cleaned`. The inbox lists tasks in groups, in this order: `needs_you` (states
 `needs_you`, `stale`), `running` (`running`, `review`), `captured` (`captured`, `triaged`),
@@ -153,19 +159,24 @@ States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stal
   when you start again, so the next `needs_you` is news.
 - `task_list` replies `{"ok":true,"inbox":[..]}`: each row is a task plus its `group`. The same
   rows are `inbox` in the state, with the count `needs_you`.
-- `task_pop` replies `{"ok":true,"task":{..},"opened":true}` for the first task under
-  `needs_you`, and brings its tab forward, which switches the tab the user sees. `"task":null`:
-  nothing needs the user. `"opened":false`: no tab came forward (the task has no tab, its tab
-  was closed, or the picker or key reference is open).
+- `task_open` puts a task's tabs on the user's tab bar; `task_leave` shows the tabs of no task
+  again. Both change what the user sees: send them only when asked. The first time a task is
+  opened it gets a tab named after it, with a terminal in its `repo` if it has one. `select_tab`
+  on a tab of another task also brings that task's tabs to the bar.
+- `task_pop` is `task_open` for the first task under `needs_you`. It replies
+  `{"ok":true,"task":{..},"opened":true}`. `"task":null`: nothing needs the user.
+  `"opened":false`: the view did not change (the picker, the new-task box or the key reference
+  is open, or the user is in visual mode).
 - `task_snooze`, `task_hold` and `task_dismiss` are the user's moves; send them only when asked.
   A snoozed or dismissed task leaves the inbox. A snoozed task returns when its time is up;
   a dismissed task does not. Either returns when it moves under `needs_you`. `task_hold` sets
   the state to `parked`; a `done` or `cleaned` task cannot be held. `task_undo` takes back the
   last of the three, one step, unless the task's state was reported since. A request for a task
   id that does not exist is refused.
-- A task whose tab is closed keeps going without a tab.
+- A task is not ended by closing its tabs. If all of them are closed, it gets a fresh first tab
+  the next time it is opened.
 - Tasks are kept on disk (`~/.ottospace/tasks`, one file each) and come back at the next start,
-  without their `tab`. Change tasks through these requests, not by editing the files: the running
+  without their tabs. Change tasks through these requests, not by editing the files: the running
   app does not read them again.
 
 Reading a terminal pane:
