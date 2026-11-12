@@ -100,7 +100,7 @@ separate trust decision: see `docs/ai/1-initial-brainstorm/accessibility.md`.
 ## App bundle
 
 - `scripts/bundle.sh` builds `target/release/bundle/ottospace.app`. Ship only the `ottospace` binary in it, never `ottospace-canary`.
-- `crates/ottospace/assets/ottospace.icns` is generated: change the SVG and run `scripts/icon.sh`, do not edit it.
+- `crates/ottospace/assets/ottospace.icns` is generated: change `assets/icon.svg` (and `icon-small.svg`, the 16 and 32 pixel sizes) and run `scripts/icon.sh`, do not edit it.
 
 ## Docs
 

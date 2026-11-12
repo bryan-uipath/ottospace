@@ -478,6 +478,59 @@ fn the_new_task_box_files_a_line() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_home_screen_shows_tasks_as_nodes_until_a_pane_opens() {
+    let otto = Otto::launch("home");
+    let home = |o: &Otto| o.call(json!({"cmd": "state"}))["home"].clone();
+    assert_eq!((&home(&otto)["nodes"], &home(&otto)["needs_you"]), (&json!([]), &json!([])), "no tasks, no nodes");
+
+    for line in ["review the fix #canvas p1", "port the job #billing", "ask Ana #support p2", "tidy up"] {
+        otto.call(json!({"cmd": "task_new", "line": line}));
+    }
+    for (id, state) in [(1, "needs_you"), (2, "running"), (3, "needs_you"), (4, "done")] {
+        otto.call(json!({"cmd": "task_set_state", "id": id, "state": state}));
+    }
+    // Lanes are the projects by name, then the tasks of none. Depth 0 is the newest task.
+    let shown = home(&otto);
+    let mut nodes: Vec<Value> = shown["nodes"].as_array().expect("nodes").clone();
+    nodes.sort_by_key(|n| n["task"].as_u64());
+    let facts: Vec<Value> = nodes.iter().map(|n| json!([n["task"], n["lane"], n["depth"], n["group"]])).collect();
+    assert_eq!(
+        json!(facts),
+        json!([[1, 1, 3, "needs_you"], [2, 0, 2, "running"], [3, 2, 1, "needs_you"], [4, 3, 0, "done"]])
+    );
+    let mut crossings: Vec<String> = nodes.iter().map(|n| n["crossing"].to_string()).collect();
+    crossings.sort();
+    crossings.dedup();
+    assert_eq!(crossings.len(), 4, "each node has its own crossing: {shown}");
+    // "Needs you": most urgent first, with what its row shows.
+    let rows: Vec<Value> = shown["needs_you"].as_array().expect("rows").clone();
+    let row = |r: &Value| json!([r["id"], r["priority"], r["title"], r["project"]]);
+    assert_eq!(
+        json!(rows.iter().map(row).collect::<Vec<_>>()),
+        json!([[1, 1, "review the fix", "canvas"], [3, 2, "ask Ana", "support"]])
+    );
+    assert_eq!(
+        (&shown["counts"]["needs_you"], &shown["counts"]["running"], &shown["counts"]["done"]),
+        (&json!(2), &json!(1), &json!(1))
+    );
+    // A hidden task loses its node.
+    otto.call(json!({"cmd": "task_dismiss", "id": 4}));
+    assert_eq!(home(&otto)["nodes"].as_array().map(Vec::len), Some(3));
+
+    // A click on a node or a row opens the task (the same action as `task_open`). Its new tab
+    // has no pane yet, so the home screen stays until one opens.
+    let reply = otto.call(json!({"cmd": "task_open", "id": 3}));
+    assert_eq!(reply["state"]["current_task"], 3);
+    assert!(reply["home"].is_object(), "an empty tab shows the home screen: {reply}");
+    let reply = otto.call(json!({"cmd": "split", "kind": "empty"}));
+    assert!(reply["home"].is_null(), "a pane takes the home screen's place");
+    otto.bounds(&pane_ids(&reply));
+    // The tab of no task is still empty.
+    assert!(otto.call(json!({"cmd": "task_leave"}))["home"].is_object());
+}
+
 /// A fresh folder to pass as `OTTOSPACE_HOME`, with `settings` as its `settings.json`.
 fn user_folder(name: &str, settings: &str) -> PathBuf {
     let home = std::env::temp_dir().join(format!("ottospace-e2e-home-{name}-{}", std::process::id()));

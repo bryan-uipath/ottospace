@@ -26,6 +26,7 @@ it over the control socket. Session restore and the rest of the design are not b
 | Tasks inbox: tasks grouped by what needs you first; snooze, hold, dismiss, undo. Kept in `~/.ottospace/tasks` | Works today |
 | "Pop next" (⌘⇧N): open the next task that needs you | Works today |
 | New task box (⌘N): one line, with `#project` and `@repo` | Works today |
+| Home screen: a tab with no panes shows the new-task line, the tasks that need you, and each listed task as a node on a lattice (left to right by project; within a project the older task is farther). A click on a node or a row opens the task | Works today |
 | Tasks own their tabs: opening a task shows only its tabs; the others keep running off the bar | Works today |
 | Tabs, each with its own split tree | Works today |
 | Pane picker: choose a terminal or a running app for a new pane or tab | Works today |
@@ -218,7 +219,7 @@ first brainstorm:
 - [zoom-ax.md](ai/1-initial-brainstorm/zoom-ax.md): what a Zoom meeting exposes through accessibility, measured.
 - [accessibility.md](ai/1-initial-brainstorm/accessibility.md): reading app accessibility trees, toward sneak mode and agent actions.
 - [multi-monitor.md](ai/1-initial-brainstorm/multi-monitor.md): options for more than one display, and a staged recommendation. Nothing measured yet.
-- `background/`: icon and mockup images.
+- `background/`: mockup images.
 
 [routines.md](ai/routines.md): routines and agents from ottobot, in stages, toward ottospace subsuming it.
 

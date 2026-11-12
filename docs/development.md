@@ -28,7 +28,7 @@ cargo install --path crates/ottospace --bin ottospace
 ottospace
 ```
 
-This puts `ottospace` on your `PATH`. It shows the Otto icon in the Dock without an app bundle,
+This puts `ottospace` on your `PATH`. It shows its icon in the Dock without an app bundle,
 and uses the permissions of the terminal you run it from.
 
 ## Build the app
@@ -47,7 +47,8 @@ and its own identity.
   both again. A stable identity needs a signing certificate, which the script does not set up.
 - Opened from Finder or the Dock, terminal panes start in `/`, not your home directory.
 
-`scripts/icon.sh` regenerates the icon from the SVG. It needs Google Chrome.
+`scripts/icon.sh` regenerates the icon from `crates/ottospace/assets/icon.svg`, and from
+`icon-small.svg` (heavier lines) for the 16 and 32 pixel sizes. It needs Google Chrome.
 
 ## Tests
 

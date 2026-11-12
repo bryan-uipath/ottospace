@@ -69,6 +69,7 @@ ottospace ctl '{"cmd":"state"}'
 | `state.tasks.list` | Every task: `id`, `title`, `state`, `priority`, `snoozed_until`, `dismissed`, `project` (from a `#tag`, or null) and `repo` (a repository path, or null) |
 | `state.compose` | Null, or the text in the new-task box while it is open |
 | `inbox`, `needs_you` | The tasks the Tasks section lists, in order, each with its `group`; and how many are under `needs_you` |
+| `home` | Null while the tab on show has a pane. Else the home screen: `nodes` (one for each of the first 12 inbox tasks: `task`, `group`, `lane` (its project, by name; tasks of no project share the last), `depth` (0 is the newest task) and `crossing`, the `[x, z]` of the lattice it is drawn on), `needs_you` (up to 3 tasks) and `counts` for each group |
 | `state.repos` | Repositories found on disk: `name`, `path`, `branch`, and `worktrees` (each `name`, `path`, `branch`) |
 | `ax_overlay` | Null, or the accessibility overlay's last read: `pane`, `targets` (`label`, `frame` in window coordinates, `source`), `count`, `truncated`, `millis`, `error` |
 | `bounds.<id>` | Where each pane of the active tab is drawn: `[x, y, w, h]` |

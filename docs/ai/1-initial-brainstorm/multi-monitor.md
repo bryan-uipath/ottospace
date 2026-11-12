@@ -54,7 +54,7 @@ must then read the hot key's id (today it sets one flag for any key).
 | Variant | User sees | Notes |
 |---|---|---|
 | B1. Thin bar window on displays that have no ottospace window | Task name, tab names, "needs you" count. Click or key brings ottospace to that display | macOS has no public way to reserve a screen edge. Other apps' windows go under or over the bar. It must float above them, and it then covers their content |
-| B2. Menu bar item | Otto icon with the "needs you" count. Menu: tasks and tabs; choosing one brings it forward | Costs no screen space. With "Displays have separate Spaces" on, each display has a menu bar. With it off, only the primary has one. GPUI support for a status item: not verified; may need `objc2` code in `ottospace-mac` |
+| B2. Menu bar item | The app icon with the "needs you" count. Menu: tasks and tabs; choosing one brings it forward | Costs no screen space. With "Displays have separate Spaces" on, each display has a menu bar. With it off, only the primary has one. GPUI support for a status item: not verified; may need `objc2` code in `ottospace-mac` |
 
 - Core: none beyond what the bar reads. It is a second view of `tabs`, `tasks.needs_you()` and, later, the views. One action: `Summon { display }` (A1's move).
 - Hosting: nothing changes. The bar hosts no windows.
