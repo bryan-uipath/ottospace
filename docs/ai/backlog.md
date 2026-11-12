@@ -48,3 +48,7 @@ permission story is the same Accessibility grant we already need.
 Designed in [session-restore.md](session-restore.md): layout first, then terminal content and
 app windows, then per-app state. Today startup only gives leftover windows their original frames
 back.
+
+## 6. Routines and agents
+
+ottobot's routines, an Agents section and a menu-bar item, in stages: see [routines.md](routines.md).

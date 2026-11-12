@@ -216,5 +216,7 @@ first brainstorm:
 - [multi-monitor.md](ai/1-initial-brainstorm/multi-monitor.md): options for more than one display, and a staged recommendation. Nothing measured yet.
 - `background/`: icon and mockup images.
 
+[routines.md](ai/routines.md): routines and agents from ottobot, in stages, toward ottospace subsuming it.
+
 [`docs/ai/backlog.md`](ai/backlog.md) is an older backlog. `docs/ideas/` holds the owner's own
 notes.
