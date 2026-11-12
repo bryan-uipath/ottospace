@@ -12,23 +12,36 @@ pub fn init() {
     unsafe { sc_initialize_core_graphics() };
 }
 
-/// Names of running apps that have a sizeable normal-layer on-screen window, sorted. Excludes this process.
-pub fn apps() -> Vec<String> {
+/// A running app that can be hosted, and how many of its windows qualify.
+#[derive(Clone, Debug, PartialEq)]
+pub struct App {
+    pub name: String,
+    pub pid: i32,
+    pub windows: usize,
+}
+
+/// Running apps that have a sizeable normal-layer on-screen window, sorted by name. Excludes this
+/// process. Processes that share a name are one entry, with the first pid.
+pub fn apps() -> Vec<App> {
     let Some(snapshot) = SCShareableContent::get().ok().and_then(|c| c.snapshot()) else {
         return Vec::new();
     };
     let me = std::process::id() as i32;
-    let mut names: Vec<String> = snapshot
+    let mut apps: Vec<App> = Vec::new();
+    let owners = snapshot
         .windows
         .iter()
         .filter(|w| w.window_layer == 0 && w.is_on_screen && w.frame.size.width > 200.0 && w.frame.size.height > 200.0)
         .filter_map(|w| snapshot.applications.get(w.owning_app_index?))
-        .filter(|a| a.process_id != me && !a.application_name.is_empty())
-        .map(|a| a.application_name.clone())
-        .collect();
-    names.sort();
-    names.dedup();
-    names
+        .filter(|a| a.process_id != me && !a.application_name.is_empty());
+    for owner in owners {
+        match apps.iter_mut().find(|app| app.name == owner.application_name) {
+            Some(app) => app.windows += 1,
+            None => apps.push(App { name: owner.application_name.clone(), pid: owner.process_id, windows: 1 }),
+        }
+    }
+    apps.sort_by(|a, b| a.name.cmp(&b.name));
+    apps
 }
 
 pub struct Target {

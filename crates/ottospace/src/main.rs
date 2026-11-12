@@ -28,7 +28,7 @@ use ottospace_core::{
     Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Pane, PaneId, PickItem, Picker, Rect, Section, theme,
     titlebar::{self, TitleBar},
 };
-use ottospace_mac::{ax, capture, display, hotkey, input, recovery};
+use ottospace_mac::{ax, capture, display, hotkey, icon, input, recovery};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use screencapturekit::prelude::*;
 
@@ -370,7 +370,9 @@ struct Workspace {
     cells: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
     /// Each pane's bounds inside its border, for e2e to check the live window's gap.
     frames: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
-    apps: Vec<String>,
+    apps: Vec<capture::App>,
+    /// Icons of apps seen so far, by app name. Kept: an icon is read and encoded once.
+    icons: HashMap<String, Arc<gpui::Image>>,
     /// Window ids seen per hosted pid; anything new that appears later gets its own pane.
     known: Vec<(i32, HashSet<u32>)>,
     /// When the live pane went live.
@@ -386,6 +388,10 @@ struct Workspace {
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
+
+/// App icons: drawn 18 points wide, read at 2 pixels a point (64 is the nearest size icons ship).
+const ICON_POINTS: f32 = 18.;
+const ICON_PIXELS: f64 = 64.;
 
 /// Longest a `wait` request may run: 10 minutes.
 const MAX_WAIT_MS: u64 = 600_000;
@@ -464,7 +470,7 @@ impl Workspace {
             // Apps is the way in while there are no panes.
             model.update(Action::ToggleSection { section: Section::Apps });
         }
-        Self {
+        let mut this = Self {
             model,
             hosted: HashMap::new(),
             terminals: HashMap::new(),
@@ -474,7 +480,8 @@ impl Workspace {
             system_clipboard: std::env::var_os("OTTOSPACE_E2E").is_none(),
             cells: HashMap::new(),
             frames: HashMap::new(),
-            apps: running_apps(hosting, host_only),
+            apps: Vec::new(),
+            icons: HashMap::new(),
             known: Vec::new(),
             live_since: None,
             error: None,
@@ -484,7 +491,9 @@ impl Workspace {
             ax_overlay: None,
             focus,
             _subscriptions: subscriptions,
-        }
+        };
+        this.refresh_apps();
+        this
     }
 
     /// The one path that changes state: updates the model, then carries out its effects.
@@ -824,6 +833,10 @@ impl Workspace {
             "terminals": terminals,
             // The last text ⌘C copied.
             "copied": self.copied,
+            // The Apps list: what can be hosted now. `icon`: its icon was read.
+            "apps": self.apps.iter().map(|app| serde_json::json!({
+                "name": app.name, "windows": app.windows, "icon": self.icons.contains_key(&app.name),
+            })).collect::<Vec<_>>(),
             "ax_overlay": self.ax_overlay.as_ref().filter(|_| self.model.ax_overlay),
         })
         .to_string()
@@ -1160,8 +1173,8 @@ impl Workspace {
 
     /// Opens the pane picker: a terminal, then each running app.
     fn open_picker(&mut self, axis: Axis, new_tab: bool, window: &Window, cx: &mut Context<Self>) {
-        self.apps = running_apps(self.hosting, self.host_only);
-        let apps = self.apps.iter().map(|name| PickItem::App { name: name.clone() });
+        self.refresh_apps();
+        let apps = self.apps.iter().map(|app| PickItem::App { name: app.name.clone() });
         let items = std::iter::once(PickItem::Terminal).chain(apps).collect();
         self.dispatch(Action::OpenPicker { axis, new_tab, items }, window, cx);
     }
@@ -1286,7 +1299,13 @@ impl Workspace {
                 .cursor_pointer()
                 .when(i == selected, |d| d.bg(rgb(theme::SELECTED)))
                 .hover(|s| s.bg(rgb(theme::SELECTED)))
-                .child(div().w(px(36.)).text_xs().text_color(rgb(color)).child(tag))
+                .child(match item {
+                    // An app shows its icon where the tag would be.
+                    PickItem::App { name } if self.icons.contains_key(name) => {
+                        div().w(px(36.)).child(self.app_icon(name))
+                    }
+                    _ => div().w(px(36.)).text_xs().text_color(rgb(color)).child(tag),
+                })
                 .child(item.label().to_string())
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.dispatch(Action::PickerChoose { index: Some(i) }, window, cx);
@@ -1484,6 +1503,28 @@ impl Workspace {
     }
 
     /// Running apps. A click hosts the app's main window in a pane.
+    /// Lists the apps that can be hosted now, and reads the icon of each one not seen before.
+    fn refresh_apps(&mut self) {
+        self.apps = running_apps(self.hosting, self.host_only);
+        for app in &self.apps {
+            if !self.icons.contains_key(&app.name)
+                && let Some(png) = icon::png(app.pid, ICON_PIXELS)
+            {
+                let image = gpui::Image::from_bytes(gpui::ImageFormat::Png, png);
+                self.icons.insert(app.name.clone(), Arc::new(image));
+            }
+        }
+    }
+
+    /// An app's icon, or an empty box of the same size so names stay in line.
+    fn app_icon(&self, name: &str) -> AnyElement {
+        let side = px(ICON_POINTS);
+        match self.icons.get(name) {
+            Some(icon) => img(icon.clone()).size(side).flex_none().into_any_element(),
+            None => div().size(side).flex_none().into_any_element(),
+        }
+    }
+
     fn render_apps(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("apps")
@@ -1504,21 +1545,40 @@ impl Workspace {
                     .hover(|s| s.text_color(rgb(theme::TEXT)))
                     .child("Running  ↻")
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.apps = running_apps(this.hosting, this.host_only);
+                        this.refresh_apps();
                         cx.notify();
                     })),
             )
-            .children(self.apps.iter().enumerate().map(|(i, name)| {
-                let target = name.clone();
+            .children(self.apps.iter().enumerate().map(|(i, app)| {
+                let target = app.name.clone();
                 div()
                     .id(("app", i))
                     .px_2()
                     .py_1()
+                    .flex()
+                    .items_center()
+                    .gap_2()
                     .rounded_md()
+                    // A button at rest: its outline shows. Hover lifts it.
+                    .border_1()
+                    .border_color(rgb(theme::BORDER))
                     .text_sm()
                     .cursor_pointer()
-                    .hover(|s| s.bg(rgb(theme::SELECTED)))
-                    .child(name.clone())
+                    .hover(|s| {
+                        s.bg(rgb(theme::SELECTED)).border_color(rgb(theme::BORDER_STRONG)).shadow(vec![BoxShadow {
+                            color: black().opacity(0.7),
+                            offset: point(px(0.), px(3.)),
+                            blur_radius: px(10.),
+                            spread_radius: px(0.),
+                        }])
+                    })
+                    .child(self.app_icon(&app.name))
+                    .child(div().flex_1().min_w_0().truncate().child(app.name.clone()))
+                    // How many windows the app has open, when more than one.
+                    .when(app.windows > 1, |row| {
+                        let badge = div().px_1p5().rounded_full().bg(rgb(theme::SELECTED)).text_xs();
+                        row.child(badge.text_color(rgb(theme::MUTED)).child(app.windows.to_string()))
+                    })
                     // Fills the focused pane if it is empty. Else splits it: right, or down with shift.
                     .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                         let axis = if e.modifiers().shift { Axis::Down } else { Axis::Right };
@@ -1789,10 +1849,12 @@ impl Workspace {
 }
 
 /// Apps that can be hosted right now. In a test run limited to one app, only that app.
-fn running_apps(hosting: bool, only: Option<i32>) -> Vec<String> {
+fn running_apps(hosting: bool, only: Option<i32>) -> Vec<capture::App> {
     match (hosting, only) {
         (false, _) => Vec::new(),
-        (true, Some(pid)) => capture::name_of(pid).into_iter().collect(),
+        (true, Some(pid)) => {
+            capture::name_of(pid).map(|name| capture::App { name, pid, windows: 1 }).into_iter().collect()
+        }
         (true, None) => capture::apps(),
     }
 }
