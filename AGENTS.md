@@ -60,7 +60,10 @@ Rules:
 - A change that touches only `docs/`, `site/`, `README.md`, `AGENTS.md` or `LICENSE` runs neither
   workflow: macOS runners are scarce. Such a pull request has no checks to wait for, and
   after such a push `main-latest` trails `main` by docs commits.
-- Not in CI: `cargo e2e-apps` (needs Accessibility and Screen Recording), rustfmt on
+- `.github/workflows/app-windows.yml`, on pull requests and pushes to `main`: `cargo e2e-apps` on a
+  hosted runner, whose image grants bash Accessibility and Screen Recording. Not a required check.
+  Prefer it to a local run, which takes the keyboard.
+- Not in CI: rustfmt on
   `ottospace-mac` (not formatted yet), clippy `-D warnings` (main has warnings).
 - `.github/workflows/build.yml`, on pull requests and pushes to `main`: `scripts/test-osi.sh`, and
   `scripts/package.sh` (release binary, `.app` zip, `BUILD`, `SHA256SUMS`) uploaded as a workflow
