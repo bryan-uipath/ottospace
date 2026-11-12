@@ -49,7 +49,8 @@ macOS, so you may have to grant the permissions again after an update.
 | Tasks inbox: tasks grouped by what needs you first; snooze, hold, dismiss, undo. Kept in `~/.ottospace/tasks` | Works today |
 | "Pop next" (⌘⇧N): open the next task that needs you | Works today |
 | New task box (⌘N): one line, with `#project` and `@repo` | Works today |
-| Tasks: each owns a workspace (tabs, then splits) with a brief pane and automatic cleanup | Designed |
+| Tasks own their tabs: opening a task shows only its tabs; the others keep running off the bar | Works today |
+| Tasks: a worktree at kickoff, a brief pane, automatic cleanup when done | Designed |
 | Quick capture (⌘⌘): turn something on screen into a task and dispatch it to an agent | Designed |
 | Focus blocks: hide Slack, with an agent that can break through | Designed |
 | Tabs, each with its own split tree | Works today |
@@ -143,7 +144,7 @@ the tag does not match the crate version.
 | ⌘/ | Show every key |
 | F18 | From any app: take the keyboard back and bring ottospace forward |
 | ⌘T | New tab: pick what opens in it |
-| ⌘1 … ⌘9 | Select a tab |
+| ⌘1 … ⌘9 | Select a tab on the bar |
 | ⌘⇧] / ⌘⇧[ or ⌃Tab / ⌃⇧Tab | Next / previous tab |
 | ⌘⇧W | Close the tab and its panes |
 | Wheel / trackpad | Scroll a terminal back through its history |
@@ -153,7 +154,7 @@ the tag does not match the crate version.
 | ⌘C | Copy the terminal's selection (nothing selected: does nothing) |
 | ⌘V | Paste into the terminal |
 | ⌘N | New task: a box opens over the workspace. Type what needs doing; `#name` tags a project, `@name` names a repository (Tab completes both), `p1` to `p9` sets the priority. ↵ files it and closes the box; Esc closes |
-| ⌘⇧N | Next task: brings forward the tab of the first task that needs you |
+| ⌘⇧N | Next task: shows the tabs of the first task that needs you |
 | ⌘⇧E | List mode: the bar (Apps, Tasks, Repos) takes the keyboard. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; Esc or ⌘⇧E leaves |
 | ⌘⇧C | Visual mode on the terminal: `hjkl`/arrows, `w b e 0 ^ $`, `H M L` move; `v` / `V` select; `y` or ↵ copies and leaves; Esc leaves |
 

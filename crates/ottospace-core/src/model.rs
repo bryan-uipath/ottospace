@@ -217,7 +217,7 @@ pub enum Action {
         tasks: Vec<Task>,
         floor: TaskId,
     },
-    /// File a task. `tab`: the `id` of the tab that is its workspace.
+    /// File a task. `tab`: the `id` of an open tab that becomes the task's (its first tab).
     TaskAdd {
         title: String,
         priority: u8,
@@ -242,9 +242,17 @@ pub enum Action {
     },
     /// Take back the last snooze, hold or dismiss.
     TaskUndo,
-    /// Bring a task's tab forward (default: the first task that needs the user, "pop next").
+    /// Show a task's tabs (default: the first task that needs the user, "pop next"). A task
+    /// opened for the first time gets a tab: a terminal in its repository, named after it, or
+    /// an empty tab named after the task.
     TaskOpen {
         id: Option<TaskId>,
+    },
+    /// Show the tabs of no task again.
+    TaskLeave,
+    /// Select a tab by its place on the tab bar, which shows the current task's tabs only.
+    SelectVisibleTab {
+        index: usize,
     },
     /// The time now, in milliseconds since 1970: snoozed tasks whose time has come return.
     Tick {
@@ -322,6 +330,8 @@ pub enum Effect {
 pub struct Tab {
     pub id: u32,
     pub title: String,
+    /// The task this tab belongs to. `None`: a tab of no task.
+    pub task: Option<TaskId>,
     /// The tab's tree and focus while it is not the active tab. The active tab's live copies
     /// are `Model::layout` and `Model::focused`.
     #[serde(skip)]
@@ -344,6 +354,12 @@ pub struct Model {
     pub focused: Option<PaneId>,
     /// App pane that has the keyboard.
     pub live: Option<PaneId>,
+    /// The task whose tabs are on show. `None`: the tabs of no task. Tabs of other tasks keep
+    /// their panes and go on running; they are only off the tab bar.
+    pub current_task: Option<TaskId>,
+    /// The tab each task (or no task) showed last, to come back to it.
+    #[serde(skip)]
+    last_tab: Vec<(Option<TaskId>, u32)>,
     /// Rail section shown in the secondary bar. `None`: the bar is closed.
     pub sidebar: Option<Section>,
     /// The text in the new-task box, while it is open.
@@ -390,10 +406,20 @@ impl Default for Model {
             visual: None,
             ax_overlay: false,
             next_id: 0,
+            current_task: None,
+            last_tab: Vec::new(),
             next_tab: 0,
         };
         model.push_tab();
         model
+    }
+}
+
+/// A task's title as a tab's: at most 24 characters.
+fn short_title(title: &str) -> String {
+    match title.char_indices().nth(24) {
+        Some((cut, _)) => format!("{}…", title[..cut].trim_end()),
+        None => title.to_string(),
     }
 }
 
@@ -446,6 +472,8 @@ impl Model {
                 | Action::CloseSidebar
                 | Action::NewTab
                 | Action::SelectTab { .. }
+                | Action::SelectVisibleTab { .. }
+                | Action::TaskLeave
                 | Action::CycleTab { .. }
                 | Action::CloseTab { .. }
         );
@@ -479,6 +507,8 @@ impl Model {
                 | Action::Enter { .. }
                 | Action::NewTab
                 | Action::SelectTab { .. }
+                | Action::SelectVisibleTab { .. }
+                | Action::TaskLeave
                 | Action::CycleTab { .. }
                 | Action::CloseSidebar
                 | Action::TaskOpen { .. }
@@ -522,7 +552,17 @@ impl Model {
             Action::Open { kind, axis, beside } => self.open(kind, axis, beside, effects),
             Action::SetRepos { repos } => self.repos = repos::arrange(repos),
             Action::RestoreTasks { tasks, floor } => self.tasks.restore(tasks, floor),
-            Action::TaskAdd { title, priority, state, tab } => drop(self.tasks.add(title, priority, state, tab)),
+            Action::TaskAdd { title, priority, state, tab } => {
+                let id = self.tasks.add(title, priority, state);
+                // The tab named becomes the task's. If it is the one on show, the view is now the task's.
+                if let Some(index) = tab.and_then(|tab| self.tabs.iter().position(|t| t.id == tab)) {
+                    self.tabs[index].task = Some(id);
+                    if index == self.active {
+                        self.remember_tab();
+                        self.current_task = Some(id);
+                    }
+                }
+            }
             Action::TaskSetState { id, state } => self.tasks.set_state(id, state),
             Action::TaskSnooze { id, until } => self.tasks.snooze(id, until),
             Action::TaskHold { id } => self.tasks.hold(id),
@@ -531,9 +571,29 @@ impl Model {
             Action::Tick { now } => self.tasks.tick(now),
             Action::TaskOpen { id } => {
                 let task = id.map_or_else(|| self.tasks.next(), |id| self.tasks.get(id));
-                let tab = task.and_then(|task| task.tab);
-                if let Some(index) = tab.and_then(|tab| self.tabs.iter().position(|t| t.id == tab)) {
-                    self.select_tab(index, effects);
+                if let Some((id, title, repo)) = task.map(|t| (t.id, t.title.clone(), t.repo.clone())) {
+                    let first_time = !self.tabs.iter().any(|tab| tab.task == Some(id));
+                    self.show_tabs_of(Some(id), effects);
+                    if first_time {
+                        // The bar already names the task: the tab is named for where it works.
+                        let place = repo.as_deref().and_then(|path| self.repo_name(path));
+                        if let Some(tab) = self.tabs.get_mut(self.active) {
+                            tab.title = place.unwrap_or_else(|| short_title(&title));
+                        }
+                        // The task's repository is where its work starts.
+                        if let Some(path) = repo.filter(|path| self.repo_listed(path)) {
+                            self.open(Kind::Terminal, Axis::Right, None, effects);
+                            if let Some(pane) = self.focused.and_then(|id| self.panes.iter_mut().find(|p| p.id == id)) {
+                                pane.cwd = Some(path);
+                            }
+                        }
+                    }
+                }
+            }
+            Action::TaskLeave => self.show_tabs_of(None, effects),
+            Action::SelectVisibleTab { index } => {
+                if let Some(real) = self.visible_tabs().get(index).copied() {
+                    self.select_tab(real, effects);
                 }
             }
             Action::OpenRepo { path, axis } => {
@@ -581,8 +641,12 @@ impl Model {
             }
             Action::SelectTab { index } => self.select_tab(index, effects),
             Action::CycleTab { delta } => {
-                let to = (self.active as i64 + delta as i64).rem_euclid(self.tabs.len() as i64) as usize;
-                self.select_tab(to, effects);
+                // Among the tabs on the bar: those of the current task.
+                let visible = self.visible_tabs();
+                if let Some(at) = visible.iter().position(|index| *index == self.active) {
+                    let to = (at as i64 + delta as i64).rem_euclid(visible.len() as i64) as usize;
+                    self.select_tab(visible[to], effects);
+                }
             }
             Action::CloseTab { index } => {
                 let index = index.unwrap_or(self.active);
@@ -591,19 +655,35 @@ impl Model {
                 }
                 self.leave(effects);
                 self.park_active();
+                let was_on_show = index == self.active;
                 let tab = self.tabs.remove(index);
-                self.tasks.forget_tab(tab.id);
+                self.last_tab.retain(|(_, id)| *id != tab.id);
                 for id in tab.layout.as_ref().map(Node::leaves).unwrap_or_default() {
                     self.close_pane(id, effects);
                 }
-                if self.tabs.is_empty() {
-                    self.next_tab = 0;
-                    self.push_tab();
-                } else {
-                    // Stay on the same tab; if the closed one was active, show its right neighbour.
-                    let active = if index < self.active { self.active - 1 } else { self.active };
-                    self.active = active.min(self.tabs.len() - 1);
+                if !was_on_show {
+                    // The tab on show stays; it may have moved one place left.
+                    self.active -= usize::from(index < self.active);
                     self.unpark_active();
+                    return;
+                }
+                // Its right neighbour in the same task takes its place, else the left one. A task
+                // (or no task) left with no tab gets an empty one, so there is always a tab on show.
+                let scope = self.current_task;
+                let mine = |(i, t): (usize, &Tab)| (t.task == scope).then_some(i);
+                let right = self.tabs.iter().enumerate().skip(index).find_map(mine);
+                let left = self.tabs.iter().enumerate().take(index).filter_map(mine).last();
+                match right.or(left) {
+                    Some(next) => {
+                        self.active = next;
+                        self.unpark_active();
+                    }
+                    None => {
+                        if self.tabs.is_empty() {
+                            self.next_tab = 0;
+                        }
+                        self.push_tab();
+                    }
                 }
             }
             Action::Focus { pane } => self.focus(pane, effects),
@@ -696,11 +776,7 @@ impl Model {
                 Some(ListRow::App(name)) => effects.push(Effect::HostApp { name, axis, new_tab: false }),
                 Some(ListRow::Repo(path)) => self.act(Action::OpenRepo { path, axis }, effects),
                 Some(ListRow::Task(id)) => {
-                    // A task with no tab opens nothing: the list keeps the keyboard.
-                    let tab = self.tasks.get(id).and_then(|task| task.tab);
-                    if self.tabs.iter().any(|t| Some(t.id) == tab) {
-                        self.list = None;
-                    }
+                    self.list = None;
                     self.act(Action::TaskOpen { id: Some(id) }, effects);
                 }
                 None => {}
@@ -819,7 +895,7 @@ impl Model {
             return false;
         }
         let path = draft.repo.as_deref().and_then(|name| self.repo_named(name));
-        let id = self.tasks.add(draft.title, draft.priority.unwrap_or(3), State::Captured, None);
+        let id = self.tasks.add(draft.title, draft.priority.unwrap_or(3), State::Captured);
         self.tasks.tag(id, draft.project, path);
         true
     }
@@ -892,8 +968,46 @@ impl Model {
     fn push_tab(&mut self) {
         self.next_tab += 1;
         let title = format!("Tab {}", self.next_tab);
-        self.tabs.push(Tab { id: self.next_tab, title, layout: None, focused: None });
+        self.tabs.push(Tab { id: self.next_tab, title, task: self.current_task, layout: None, focused: None });
         self.active = self.tabs.len() - 1;
+    }
+
+    /// Places on the tab bar → indexes into `tabs`: the tabs of the current task, or of no task.
+    pub fn visible_tabs(&self) -> Vec<usize> {
+        let on_show = |(i, tab): (usize, &Tab)| (tab.task == self.current_task).then_some(i);
+        self.tabs.iter().enumerate().filter_map(on_show).collect()
+    }
+
+    /// Notes which tab the current task (or no task) has on show, to come back to it.
+    fn remember_tab(&mut self) {
+        if let Some(tab) = self.tabs.get(self.active) {
+            let scope = self.current_task;
+            self.last_tab.retain(|(task, _)| *task != scope);
+            self.last_tab.push((scope, tab.id));
+        }
+    }
+
+    /// Puts the tabs of `scope` (a task, or no task) on the bar: the one it showed last, else its
+    /// first, else a new empty one.
+    fn show_tabs_of(&mut self, scope: Option<TaskId>, effects: &mut Vec<Effect>) {
+        if scope == self.current_task {
+            return;
+        }
+        self.remember_tab();
+        let last = self.last_tab.iter().find(|(task, _)| *task == scope).map(|(_, tab)| *tab);
+        let last = last.and_then(|id| self.tabs.iter().position(|tab| tab.id == id && tab.task == scope));
+        let index = last.or_else(|| self.tabs.iter().position(|tab| tab.task == scope));
+        // A live app window would stay on screen over the other tabs.
+        self.leave(effects);
+        self.park_active();
+        self.current_task = scope;
+        match index {
+            Some(index) => {
+                self.active = index;
+                self.unpark_active();
+            }
+            None => self.push_tab(),
+        }
     }
 
     /// Stores the active tab's tree and focus in the tab, before another tab takes the stage.
@@ -955,8 +1069,11 @@ impl Model {
         }
         // A live app window would stay on screen over the other tab.
         self.leave(effects);
+        self.remember_tab();
         self.park_active();
         self.active = index;
+        // A tab of another task brings that task's tabs with it.
+        self.current_task = self.tabs[index].task;
         self.unpark_active();
     }
 
@@ -1322,27 +1439,100 @@ mod tests {
         assert_eq!(Model::default().update(Action::FocusCycle { delta: 1 }), []);
     }
 
+    fn tab_titles(m: &Model) -> Vec<&str> {
+        m.visible_tabs().into_iter().map(|i| m.tabs[i].title.as_str()).collect()
+    }
+
     #[test]
-    fn opening_a_task_brings_its_tab_forward() {
+    fn a_task_has_its_own_tabs_and_opening_it_puts_them_on_the_bar() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        term(&mut m); // pane 1, in a tab of no task
+        m.update(Action::TaskFromLine {
+            line: "fix the zoom flicker on the canvas when zooming #canvas @app-2".into(),
+        });
+        m.update(Action::TaskFromLine { line: "ask Ana about the retry plan before Friday".into() });
+        assert_eq!((m.current_task, tab_titles(&m)), (None, vec!["Tab 1"]));
+
+        // The first time: the task gets a tab named after it, with a terminal in its repository.
+        assert_eq!(m.update(Action::TaskOpen { id: Some(1) }), [Effect::Opened(2)]);
+        assert_eq!((m.current_task, tab_titles(&m)), (Some(1), vec!["app-2"]));
+        assert_eq!((m.focused, m.pane(2).and_then(|p| p.cwd.as_deref())), (Some(2), Some("/code/app-2")));
+        // New tabs are the task's. The bar counts only them: ⌘1 is the task's first tab.
+        m.update(Action::NewTab);
+        assert_eq!((m.tabs.len(), tab_titles(&m).len(), m.tabs[m.active].task), (3, 2, Some(1)));
+        m.update(Action::SelectVisibleTab { index: 0 });
+        assert_eq!(m.focused, Some(2));
+        m.update(Action::CycleTab { delta: 1 });
+        m.update(Action::CycleTab { delta: 1 });
+        assert_eq!(m.focused, Some(2), "cycling stays inside the task");
+
+        // A task with no repository gets an empty tab. The first task's panes go on, off the bar.
+        assert_eq!(m.update(Action::TaskOpen { id: Some(2) }), []);
+        assert_eq!(
+            (m.current_task, tab_titles(&m), m.focused, m.panes.len()),
+            (Some(2), vec!["ask Ana about the retry…"], None, 2)
+        );
+        // Coming back: the tab it showed last, not a new one.
+        m.update(Action::TaskOpen { id: Some(1) });
+        assert_eq!((m.focused, m.tabs.len()), (Some(2), 4));
+        // Leaving the task shows the tabs of no task again.
+        m.update(Action::TaskLeave);
+        assert_eq!((m.current_task, tab_titles(&m), m.focused), (None, vec!["Tab 1"], Some(1)));
+        // Selecting a tab by its index among all tabs (the socket does) brings its task along.
+        m.update(Action::SelectTab { index: 3 });
+        assert_eq!(m.current_task, Some(2));
+    }
+
+    #[test]
+    fn pop_next_opens_the_task_that_needs_the_user() {
+        let mut m = Model::default();
+        m.update(Action::TaskAdd { title: "runs".into(), priority: 1, state: State::Running, tab: None });
+        m.update(Action::TaskAdd { title: "waits".into(), priority: 2, state: State::NeedsYou, tab: None });
+        // Not the more urgent one that is only running.
+        m.update(Action::TaskOpen { id: None });
+        assert_eq!((m.current_task, tab_titles(&m)), (Some(2), vec!["waits"]));
+        // Nothing needs the user: the view stays.
+        m.update(Action::TaskSetState { id: 2, state: State::Running });
+        m.update(Action::TaskLeave);
+        m.update(Action::TaskOpen { id: None });
+        assert_eq!(m.current_task, None);
+    }
+
+    #[test]
+    fn a_tab_named_when_a_task_is_filed_becomes_the_tasks() {
         let mut m = Model::default();
         term(&mut m);
         m.update(Action::NewTab);
         let (first, second) = (m.tabs[0].id, m.tabs[1].id);
-        m.update(Action::TaskAdd { title: "waits".into(), priority: 2, state: State::NeedsYou, tab: Some(first) });
-        m.update(Action::TaskAdd { title: "runs".into(), priority: 1, state: State::Running, tab: Some(second) });
-        m.update(Action::TaskAdd { title: "no tab".into(), priority: 1, state: State::Captured, tab: None });
-        // Pop next: the task that needs the user, not the more urgent one that is only running.
-        m.update(Action::TaskOpen { id: None });
-        assert_eq!(m.active, 0);
-        m.update(Action::TaskOpen { id: Some(2) });
-        assert_eq!(m.active, 1);
-        // No tab, a closed tab, or nothing that needs the user: the view stays.
-        m.update(Action::TaskOpen { id: Some(3) });
-        m.update(Action::CloseTab { index: Some(0) });
+        // A background tab: the view stays where it is.
+        m.update(Action::TaskAdd { title: "a".into(), priority: 1, state: State::Running, tab: Some(first) });
+        assert_eq!((m.current_task, m.tabs[0].task, tab_titles(&m).len()), (None, Some(1), 1));
+        // The tab on show: the view is now the task's.
+        m.update(Action::TaskAdd { title: "b".into(), priority: 1, state: State::Running, tab: Some(second) });
+        assert_eq!((m.current_task, tab_titles(&m).len()), (Some(2), 1));
+        // Opening the first task shows the tab it was given, with its pane.
         m.update(Action::TaskOpen { id: Some(1) });
-        m.update(Action::TaskSetState { id: 1, state: State::Running });
-        m.update(Action::TaskOpen { id: None });
-        assert_eq!((m.tabs.len(), m.tabs[m.active].id), (1, second));
+        assert_eq!((m.active, m.focused), (0, Some(1)));
+    }
+
+    #[test]
+    fn closing_a_tasks_last_tab_leaves_it_an_empty_one() {
+        let mut m = Model::default();
+        term(&mut m);
+        m.update(Action::TaskAdd { title: "a".into(), priority: 1, state: State::Running, tab: None });
+        m.update(Action::TaskOpen { id: Some(1) });
+        m.update(Action::NewTab);
+        term(&mut m); // pane 2, in the task's second tab
+        // The task's other tab takes its place, not the tab of no task beside it.
+        m.update(Action::CloseTab { index: None });
+        assert_eq!((m.current_task, tab_titles(&m), m.panes.len()), (Some(1), vec!["a"], 1));
+        // Its last tab: the task keeps the bar, with a new empty tab.
+        m.update(Action::CloseTab { index: None });
+        assert_eq!((m.current_task, m.visible_tabs().len(), m.tabs.len(), m.focused), (Some(1), 1, 2, None));
+        // A background tab closed by index: the tab on show stays.
+        m.update(Action::CloseTab { index: Some(0) });
+        assert_eq!((m.current_task, m.tabs.len(), m.panes.len()), (Some(1), 1, 0));
     }
 
     #[test]
@@ -1408,9 +1598,9 @@ mod tests {
         // The selected task is taken away by someone else: the selection stays on a row.
         m.update(Action::TaskSetState { id: 3, state: State::Cleaned });
         assert_eq!((m.list, m.list_rows().len()), (Some(1), 2));
-        // ↵ on a task with no tab opens nothing, so the list keeps the keyboard.
+        // ↵ opens the task: its tabs are on the bar, and the keyboard goes back to the panes.
         m.update(Action::ListChoose { axis: Right });
-        assert_eq!(m.mode(), Mode::List);
+        assert_eq!((m.mode(), m.current_task), (Mode::Normal, Some(2)));
     }
 
     #[test]
