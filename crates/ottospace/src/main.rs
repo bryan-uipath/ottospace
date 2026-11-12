@@ -8,20 +8,22 @@ use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use core_foundation::base::TCFType;
 use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 use gpui::{
-    AnyElement, AnyView, App, Application, AssetSource, BorderStyle, Bounds, BoxShadow, ClickEvent, ContentMask,
-    Context, FocusHandle, ImageSource, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, Pixels, Resource,
-    SharedString, Size, Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions, actions, black, canvas,
-    div, img, point, prelude::*, px, quad, rgb, size, surface, svg, transparent_black,
+    AnyElement, AnyView, App, Application, AssetSource, BorderStyle, Bounds, BoxShadow, ClickEvent, ClipboardItem,
+    ContentMask, Context, FocusHandle, ImageSource, KeyBinding, KeyDownEvent, Keystroke, Modifiers, MouseButton,
+    MouseDownEvent, MouseMoveEvent, Pixels, Resource, ScrollDelta, ScrollWheelEvent, SharedString, Size, Subscription,
+    TitlebarOptions, Window, WindowBounds, WindowOptions, actions, black, canvas, div, img, point, prelude::*, px,
+    quad, rgb, size, surface, svg, transparent_black,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::keys::{self, Mods};
+use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, scroll_key, select_kind, visual_key};
 use ottospace_core::{
     Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Pane, PaneId, PickItem, Picker, Rect, Section, theme,
     titlebar::{self, TitleBar},
@@ -270,6 +272,23 @@ const KEYS_TABS: &[(&str, &str)] = &[
     ("⌃Tab / ⌃⇧Tab", "Next / previous tab"),
     ("⌘⇧W", "Close the tab and its panes"),
 ];
+const KEYS_TERMINAL: &[(&str, &str)] = &[
+    ("Wheel / trackpad", "Scroll back through history"),
+    ("⇧PageUp / ⇧PageDown", "Scroll a page"),
+    ("⇧Home / ⇧End", "Top / bottom of history"),
+    ("Drag / 2× / 3× click", "Select text, a word, a line"),
+    ("⌘C", "Copy the selection"),
+    ("⌘V", "Paste"),
+    ("⌘⇧C", "Visual mode: select with the keyboard"),
+];
+const KEYS_VISUAL: &[(&str, &str)] = &[
+    ("H J K L / arrows", "Move the cursor"),
+    ("W B E · 0 ^ $", "Word · line start, text, end"),
+    ("⇧H ⇧M ⇧L", "Top, middle, bottom of the screen"),
+    ("V / ⇧V", "Select from here / whole lines; again clears"),
+    ("Y or ↵", "Copy and leave"),
+    ("Esc", "Leave"),
+];
 
 /// Rail sections in order, with their icon and label.
 const SECTIONS: [(Section, &str, &str); 4] = [
@@ -330,6 +349,8 @@ actions!(
         Zoom, NewTab, NextTab, PrevTab, CloseTab, ShowKeys
     ]
 );
+// Terminal selection.
+actions!(ottospace, [CopySelection, PasteText, VisualMode]);
 
 struct Workspace {
     model: Model,
@@ -339,6 +360,11 @@ struct Workspace {
     terminals: HashMap<PaneId, Terminal>,
     /// One terminal character cell.
     cell: Size<Pixels>,
+    /// The terminal pane a mouse drag is selecting in.
+    dragging: Option<PaneId>,
+    /// The last text copied. E2E runs use it as the clipboard, so tests never touch the user's.
+    copied: Option<String>,
+    system_clipboard: bool,
     /// Each pane's body bounds in window coordinates, recorded during prepaint.
     cells: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
     /// Each pane's bounds inside its border, for e2e to check the live window's gap.
@@ -437,6 +463,9 @@ impl Workspace {
             hosted: HashMap::new(),
             terminals: HashMap::new(),
             cell: terminal::cell_size(window),
+            dragging: None,
+            copied: None,
+            system_clipboard: std::env::var_os("OTTOSPACE_E2E").is_none(),
             cells: HashMap::new(),
             frames: HashMap::new(),
             apps: running_apps(hosting, host_only),
@@ -488,6 +517,11 @@ impl Workspace {
                 Effect::HostApp { name, axis, new_tab } => {
                     let _ = self.open_app(name, *axis, *new_tab, window, cx);
                 }
+                Effect::Visual { pane, on } => {
+                    if let Some(terminal) = self.terminals.get(pane) {
+                        terminal.set_visual(*on);
+                    }
+                }
                 Effect::Live(id) => {
                     self.live_since = Some(Instant::now());
                     if let Some(hosted) = self.hosted.get_mut(id) {
@@ -513,6 +547,15 @@ impl Workspace {
     fn serve_control(&mut self, window: &Window, cx: &mut Context<Self>) {
         let calls: Vec<Call> = self.control.iter().flat_map(|rx| rx.try_iter()).collect();
         for Call { request, reply } in calls {
+            // Keys go through GPUI's own dispatch, after this update: their handlers update `self`.
+            if let Request::Key { keys } = &request {
+                let parsed: Result<Vec<Keystroke>, _> = keys.split_whitespace().map(Keystroke::parse).collect();
+                match parsed {
+                    Ok(keystrokes) => self.press(keystrokes, reply, window, cx),
+                    Err(err) => drop(reply.send(control::error(&err.to_string()))),
+                }
+                continue;
+            }
             let quit = matches!(request, Request::Quit);
             let mut failure: Option<String> = None;
             let action = match request {
@@ -555,6 +598,44 @@ impl Workspace {
                 Request::PickerChoose { index } => Some(Action::PickerChoose { index }),
                 Request::PickerClose => Some(Action::ClosePicker),
                 Request::Keys => Some(Action::ToggleKeys),
+                Request::Key { .. } => None, // answered by `press`
+                Request::MouseDown { pane, x, y, clicks } => {
+                    match self.cell_position(pane, x, y) {
+                        Ok((id, position)) => {
+                            let modifiers = Modifiers::default();
+                            let (button, first_mouse) = (MouseButton::Left, false);
+                            let event =
+                                MouseDownEvent { button, position, modifiers, click_count: clicks, first_mouse };
+                            // In the order GPUI calls them: the root's capture, the terminal's
+                            // handler, then the pane's.
+                            if self.model.visual.is_some() {
+                                self.dispatch(Action::LeaveVisual, window, cx);
+                            }
+                            self.terminal_mouse_down(id, &event, cx);
+                            self.click_pane(id, &event, window, cx);
+                        }
+                        Err(err) => failure = Some(err),
+                    }
+                    None
+                }
+                Request::MouseDrag { pane, x, y } => {
+                    match self.cell_position(pane, x, y) {
+                        Ok((_, position)) => {
+                            let pressed_button = Some(MouseButton::Left);
+                            let event = MouseMoveEvent { position, pressed_button, modifiers: Modifiers::default() };
+                            self.mouse_move(&event, cx);
+                        }
+                        Err(err) => failure = Some(err),
+                    }
+                    None
+                }
+                Request::Scroll { pane, lines } => {
+                    match pane.or(self.model.focused).filter(|id| self.terminals.contains_key(id)) {
+                        Some(id) => self.wheel(id, ScrollDelta::Lines(point(0., lines)), cx),
+                        None => failure = Some("no terminal pane to scroll".into()),
+                    }
+                    None
+                }
             };
             if let Some(action) = action {
                 let effects = self.dispatch(action, window, cx);
@@ -582,6 +663,26 @@ impl Workspace {
                 .detach();
             }
         }
+    }
+
+    /// A point in a terminal pane (default: the focused one), given in cells from its top-left, in
+    /// window points.
+    fn cell_position(&self, pane: Option<PaneId>, x: f32, y: f32) -> Result<(PaneId, gpui::Point<Pixels>), String> {
+        let id = pane.or(self.model.focused).filter(|id| self.terminals.contains_key(id)).ok_or("no terminal pane")?;
+        let bounds = self.cells.get(&id).map(|c| c.get()).filter(|b| b.size.width > px(1.)).ok_or("not laid out")?;
+        Ok((id, bounds.origin + point(self.cell.width * x, self.cell.height * y)))
+    }
+
+    /// Presses `keystrokes` as if typed, once this update is done, then replies with the state.
+    fn press(&self, keystrokes: Vec<Keystroke>, reply: Sender<String>, window: &Window, cx: &mut Context<Self>) {
+        let this = cx.entity().downgrade();
+        window.defer(cx, move |window, cx| {
+            for keystroke in keystrokes {
+                window.dispatch_keystroke(keystroke, cx);
+            }
+            let state = this.update(cx, |this, _| this.snapshot(window));
+            let _ = reply.send(state.unwrap_or_else(|_| control::error("ottospace is closing")));
+        });
     }
 
     /// State as JSON: the model, plus each pane's drawn bounds `[x, y, w, h]` in window points.
@@ -616,7 +717,16 @@ impl Workspace {
             .iter()
             .map(|(id, t)| {
                 let (cols, rows) = t.grid_size();
-                (*id, serde_json::json!({ "cols": cols, "rows": rows, "lines": t.lines() }))
+                let (display_offset, history) = t.scrollback();
+                let terminal = serde_json::json!({
+                    "cols": cols, "rows": rows, "lines": t.lines(),
+                    // Lines scrolled back from the bottom, and lines of history kept.
+                    "display_offset": display_offset, "history": history,
+                    // What ⌘C would copy.
+                    "selection": t.selected(),
+                    "visual_cursor": t.visual_cursor(),
+                });
+                (*id, terminal)
             })
             .collect();
         serde_json::json!({
@@ -638,6 +748,8 @@ impl Workspace {
             // Each hosted pane's title-bar crop in points (0: none).
             "crop": crop,
             "terminals": terminals,
+            // The last text ⌘C copied.
+            "copied": self.copied,
         })
         .to_string()
     }
@@ -820,13 +932,119 @@ impl Workspace {
             self.picker_key(event, window, cx);
             return;
         }
+        if self.model.mode() == Mode::Visual {
+            self.visual_key(event, window, cx);
+            return;
+        }
         let Some(terminal) = self.model.focused.and_then(|id| self.terminals.get(&id)) else { return };
         let key = &event.keystroke;
         let m = key.modifiers;
         let mods = Mods { ctrl: m.control, alt: m.alt, shift: m.shift, cmd: m.platform };
+        if let Some(scroll) = scroll_key(&key.key, mods, terminal.alt_screen()) {
+            terminal.scroll(scroll);
+            cx.notify();
+            cx.stop_propagation();
+            return;
+        }
         if let Some(bytes) = keys::encode(&key.key, key.key_char.as_deref(), mods, terminal.app_cursor()) {
             terminal.write(bytes);
             cx.stop_propagation();
+        }
+    }
+
+    /// The wheel or trackpad over a terminal pane.
+    fn wheel(&mut self, id: PaneId, delta: ScrollDelta, cx: &mut Context<Self>) {
+        let height = self.cell.height;
+        if let Some(terminal) = self.terminals.get_mut(&id) {
+            terminal.wheel(delta.pixel_delta(height).y.into(), height.into());
+            cx.notify();
+        }
+    }
+
+    /// A press on a terminal starts a selection there: a drag, or a word or line by click count.
+    /// It also focuses the pane (`click_pane`), so the first click on an unfocused pane selects too.
+    fn terminal_mouse_down(&mut self, id: PaneId, event: &MouseDownEvent, cx: &mut Context<Self>) {
+        let Some(at) = self.cell_under(id, event.position) else { return };
+        if let Some(terminal) = self.terminals.get(&id) {
+            terminal.select_start(at, select_kind(event.click_count));
+            self.dragging = Some(id);
+            cx.notify();
+        }
+    }
+
+    /// A drag extends the selection, even past the pane's edge. Released anywhere, it ends.
+    fn mouse_move(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        let Some(id) = self.dragging else { return };
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.dragging = None;
+            return;
+        }
+        if let (Some(at), Some(terminal)) = (self.cell_under(id, event.position), self.terminals.get(&id)) {
+            terminal.select_to(at);
+            cx.notify();
+        }
+    }
+
+    /// The terminal cell under a window position, from the same bounds the grid is painted in.
+    fn cell_under(&self, id: PaneId, position: gpui::Point<Pixels>) -> Option<CellPoint> {
+        let (bounds, terminal) = (self.cells.get(&id)?.get(), self.terminals.get(&id)?);
+        let local = position - bounds.origin;
+        let cell = (self.cell.width.into(), self.cell.height.into());
+        Some(cell_at(local.x.into(), local.y.into(), cell, terminal.grid_size()))
+    }
+
+    /// Visual mode takes every key but ⌘ shortcuts: vi keys move, select, copy and leave.
+    fn visual_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
+        let key = &event.keystroke;
+        if key.modifiers.platform {
+            return; // ⌘ shortcuts still reach their bindings; ⌘⇧C leaves
+        }
+        cx.stop_propagation();
+        let Some(id) = self.model.visual else { return };
+        let (Some(terminal), Some(action)) = (self.terminals.get(&id), visual_key(&key.key, key.key_char.as_deref()))
+        else {
+            return;
+        };
+        match action {
+            VisualKey::Move(motion) => terminal.visual_move(motion),
+            VisualKey::Select => terminal.visual_select(false),
+            VisualKey::SelectLines => terminal.visual_select(true),
+            VisualKey::Copy => {
+                if let Some(text) = terminal.selected() {
+                    self.copy_text(text, cx);
+                }
+                self.dispatch(Action::LeaveVisual, window, cx);
+            }
+            VisualKey::Exit => drop(self.dispatch(Action::LeaveVisual, window, cx)),
+        }
+        cx.notify();
+    }
+
+    /// ⌘C: copies the focused terminal's selection, in visual mode too. With nothing selected it
+    /// does nothing.
+    fn copy(&mut self, cx: &mut Context<Self>) {
+        let pane = self.model.visual.or_else(|| self.model.keyboard_terminal());
+        let terminal = pane.and_then(|id| self.terminals.get(&id));
+        let Some(text) = terminal.and_then(Terminal::selected) else { return };
+        self.copy_text(text, cx);
+    }
+
+    fn copy_text(&mut self, text: String, cx: &mut Context<Self>) {
+        if self.system_clipboard {
+            cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+        }
+        self.copied = Some(text);
+    }
+
+    /// ⌘V: pastes the clipboard's text into the focused terminal.
+    fn paste(&mut self, cx: &mut Context<Self>) {
+        let Some(terminal) = self.model.keyboard_terminal().and_then(|id| self.terminals.get(&id)) else { return };
+        let text = match self.system_clipboard {
+            true => cx.read_from_clipboard().and_then(|item| item.text()),
+            false => self.copied.clone(),
+        };
+        if let Some(text) = text {
+            terminal.paste(&text);
         }
     }
 
@@ -909,7 +1127,15 @@ impl Workspace {
                     ("⌘⌃F".into(), "Zoom the window"),
                     ("⌘/".into(), "This list"),
                 ],
-            )));
+            )))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .child(group("TERMINAL", rows(KEYS_TERMINAL)))
+                    .child(group("VISUAL", rows(KEYS_VISUAL))),
+            );
         div()
             .id("keys-backdrop")
             .absolute()
@@ -1241,14 +1467,24 @@ impl Workspace {
         } else if let Some(terminal) = self.terminals.get(&id) {
             let screen = terminal.screen();
             let cell = self.cell;
-            let has_keys = self.model.focused == Some(id) && self.model.mode() == Mode::Normal && !self.model.keys;
-            canvas(
+            let mode = self.model.mode();
+            let has_keys =
+                self.model.focused == Some(id) && matches!(mode, Mode::Normal | Mode::Visual) && !self.model.keys;
+            let grid = canvas(
                 |_, _, _| {},
                 move |bounds, _, window, cx| terminal::paint(&screen, bounds, cell, has_keys, window, cx),
             )
-            .absolute()
-            .size_full()
-            .into_any_element()
+            .size_full();
+            div()
+                .absolute()
+                .size_full()
+                .on_scroll_wheel(cx.listener(move |this, e: &ScrollWheelEvent, _, cx| this.wheel(id, e.delta, cx)))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, e: &MouseDownEvent, _, cx| this.terminal_mouse_down(id, e, cx)),
+                )
+                .child(grid)
+                .into_any_element()
         } else {
             match pane.kind {
                 Kind::Terminal => {
@@ -1413,6 +1649,7 @@ impl Workspace {
             Mode::Normal => ("NORMAL", "⌘/ keys"),
             Mode::Pick => ("PICK", "type to filter · ↑↓ move · ↵ open · esc close"),
             Mode::App => ("APP", app_hint.as_str()),
+            Mode::Visual => ("VISUAL", "hjkl move · v select · y copy · esc leave"),
         };
         let hint = hint.to_string();
         let focused = match self.model.focused.and_then(|id| self.model.pane(id)).map(|p| &p.kind) {
@@ -1522,6 +1759,22 @@ impl Render for Workspace {
             .text_color(rgb(theme::TEXT))
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key_down))
+            // On the root, so a selection drag keeps going over other panes.
+            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| this.mouse_move(e, cx)))
+            // A release ends the drag, so a later drag elsewhere does not extend this selection.
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.dragging = None))
+            // Any click leaves visual mode first, before the clicked element acts: visual mode has no
+            // backdrop, and e.g. a click on an app pane must go live, not be replayed while blocked.
+            .capture_any_mouse_down(cx.listener(|this, _, window, cx| {
+                if this.model.visual.is_some() {
+                    this.dispatch(Action::LeaveVisual, window, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &CopySelection, _, cx| this.copy(cx)))
+            .on_action(cx.listener(|this, _: &PasteText, _, cx| this.paste(cx)))
+            .on_action(cx.listener(|this, _: &VisualMode, window, cx| {
+                this.dispatch(Action::ToggleVisual, window, cx);
+            }))
             .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
                 this.dispatch(Action::Split { axis: Axis::Right, kind: Kind::Terminal }, window, cx);
             }))
@@ -1687,6 +1940,10 @@ fn main() {
             KeyBinding::new("ctrl-tab", NextTab, None),
             KeyBinding::new("ctrl-shift-tab", PrevTab, None),
             KeyBinding::new("cmd-shift-w", CloseTab, None),
+            // Terminal selection. ⌘C never sends ^C: that is ⌃C.
+            KeyBinding::new("cmd-c", CopySelection, None),
+            KeyBinding::new("cmd-v", PasteText, None),
+            KeyBinding::new("cmd-shift-c", VisualMode, None),
         ]);
         let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
         // Draw under the title bar; the top bar leaves room for the traffic lights.

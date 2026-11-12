@@ -8,17 +8,21 @@ use std::sync::{Arc, OnceLock};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
-use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::grid::{Dimensions, Scroll as GridScroll};
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::tty;
+use alacritty_terminal::vi_mode::ViMotion;
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor};
 use gpui::{
     App, Bounds, ContentMask, FontStyle, FontWeight, Hsla, Pixels, Size, TextRun, UnderlineStyle, Window, fill, font,
     point, px, rgb, size,
 };
-use ottospace_core::palette;
+use ottospace_core::terminal::{CellPoint, Motion, Scroll, SelectKind, Wheel, paste, wheel_scrolls};
+use ottospace_core::{palette, theme};
 
 const FONT: &str = "Menlo";
 const FONT_SIZE: f32 = 13.;
@@ -97,6 +101,7 @@ pub struct Terminal {
     shared: Arc<Shared>,
     input: EventLoopSender,
     grid: Grid,
+    wheel: Wheel,
 }
 
 impl Terminal {
@@ -116,12 +121,145 @@ impl Terminal {
         let input = event_loop.channel();
         let _ = shared.input.set(input.clone());
         event_loop.spawn();
-        Ok(Self { term, shared, input, grid })
+        Ok(Self { term, shared, input, grid, wheel: Wheel::default() })
     }
 
-    /// Sends bytes to the shell, as if typed.
+    /// Sends bytes to the shell, as if typed. Typing while scrolled back returns to the bottom.
     pub fn write(&self, bytes: Vec<u8>) {
+        self.scroll(Scroll::Bottom);
         let _ = self.input.send(Msg::Input(bytes.into()));
+    }
+
+    /// Moves the view through the scrollback.
+    pub fn scroll(&self, scroll: Scroll) {
+        let mut term = self.term.lock();
+        let scroll = match scroll {
+            Scroll::Lines(n) => GridScroll::Delta(n),
+            Scroll::PageUp => GridScroll::PageUp,
+            Scroll::PageDown => GridScroll::PageDown,
+            Scroll::Top => GridScroll::Top,
+            Scroll::Bottom if term.grid().display_offset() == 0 => return,
+            Scroll::Bottom => GridScroll::Bottom,
+        };
+        term.scroll_display(scroll);
+        self.shared.dirty.store(true, Relaxed);
+    }
+
+    /// A wheel or trackpad move of `dy` pixels. Ignored while the program owns the wheel.
+    pub fn wheel(&mut self, dy: f32, line_height: f32) {
+        let mode = *self.term.lock().mode();
+        if !wheel_scrolls(mode.intersects(TermMode::MOUSE_MODE), mode.contains(TermMode::ALT_SCREEN)) {
+            return;
+        }
+        let lines = self.wheel.lines(dy, line_height);
+        if lines != 0 {
+            self.scroll(Scroll::Lines(lines));
+        }
+    }
+
+    /// True while the program shows the alternate screen (vim, less), which has no history.
+    pub fn alt_screen(&self) -> bool {
+        self.term.lock().mode().contains(TermMode::ALT_SCREEN)
+    }
+
+    /// Lines scrolled back from the bottom, and lines of history kept.
+    pub fn scrollback(&self) -> (usize, usize) {
+        let term = self.term.lock();
+        (term.grid().display_offset(), term.grid().history_size())
+    }
+
+    /// Starts a selection at a visible cell, replacing any other. A click that never drags leaves
+    /// an empty selection, which selects nothing.
+    pub fn select_start(&self, at: CellPoint, kind: SelectKind) {
+        let mut term = self.term.lock();
+        let (point, side) = grid_point(&term, at);
+        let ty = match kind {
+            SelectKind::Simple => SelectionType::Simple,
+            SelectKind::Word => SelectionType::Semantic,
+            SelectKind::Line => SelectionType::Lines,
+        };
+        term.selection = Some(Selection::new(ty, point, side));
+        self.shared.dirty.store(true, Relaxed);
+    }
+
+    /// Moves the selection's far end to a visible cell, as a drag does.
+    pub fn select_to(&self, at: CellPoint) {
+        let mut term = self.term.lock();
+        let (point, side) = grid_point(&term, at);
+        if let Some(selection) = term.selection.as_mut() {
+            selection.update(point, side);
+            self.shared.dirty.store(true, Relaxed);
+        }
+    }
+
+    /// The selected text, if anything is selected.
+    pub fn selected(&self) -> Option<String> {
+        self.term.lock().selection_to_string().filter(|s| !s.is_empty())
+    }
+
+    /// Turns visual mode (alacritty's vi mode) on, with its cursor at the terminal cursor, or off.
+    /// Either way the selection clears, so `v` starts a fresh one; leaving returns to the bottom.
+    pub fn set_visual(&self, on: bool) {
+        let mut term = self.term.lock();
+        if term.mode().contains(TermMode::VI) != on {
+            term.toggle_vi_mode();
+        }
+        term.selection = None;
+        if !on {
+            term.scroll_display(GridScroll::Bottom);
+        }
+        self.shared.dirty.store(true, Relaxed);
+    }
+
+    /// Moves the visual-mode cursor, scrolling to keep it in view. A selection follows it.
+    pub fn visual_move(&self, motion: Motion) {
+        let motion = match motion {
+            Motion::Left => ViMotion::Left,
+            Motion::Down => ViMotion::Down,
+            Motion::Up => ViMotion::Up,
+            Motion::Right => ViMotion::Right,
+            Motion::WordRight => ViMotion::SemanticRight,
+            Motion::WordLeft => ViMotion::SemanticLeft,
+            Motion::WordEnd => ViMotion::SemanticRightEnd,
+            Motion::LineStart => ViMotion::First,
+            Motion::LineEnd => ViMotion::Last,
+            Motion::FirstOccupied => ViMotion::FirstOccupied,
+            Motion::Top => ViMotion::High,
+            Motion::Middle => ViMotion::Middle,
+            Motion::Bottom => ViMotion::Low,
+        };
+        let mut term = self.term.lock();
+        term.vi_motion(motion);
+        let point = term.vi_mode_cursor.point;
+        term.scroll_to_point(point);
+        self.shared.dirty.store(true, Relaxed);
+    }
+
+    /// Starts a selection at the visual-mode cursor (whole lines with `lines`), or clears it.
+    pub fn visual_select(&self, lines: bool) {
+        let mut term = self.term.lock();
+        if term.selection.take().is_none() {
+            let ty = if lines { SelectionType::Lines } else { SelectionType::Simple };
+            let mut selection = Selection::new(ty, term.vi_mode_cursor.point, Side::Left);
+            // Covers the cell under the cursor, so the selection is not empty and follows moves.
+            selection.include_all();
+            term.selection = Some(selection);
+        }
+        self.shared.dirty.store(true, Relaxed);
+    }
+
+    /// The visual-mode cursor as (line, column), line 0 the top of the screen and negative in
+    /// history; `None` outside visual mode.
+    pub fn visual_cursor(&self) -> Option<(i32, usize)> {
+        let term = self.term.lock();
+        let point = term.vi_mode_cursor.point;
+        term.mode().contains(TermMode::VI).then_some((point.line.0, point.column.0))
+    }
+
+    /// Pastes `text`, bracketed if the program asked for it.
+    pub fn paste(&self, text: &str) {
+        let bracketed = self.term.lock().mode().contains(TermMode::BRACKETED_PASTE);
+        self.write(paste(text, bracketed));
     }
 
     /// Resizes the grid to fill `area`, if that changes its size.
@@ -165,6 +303,7 @@ impl Terminal {
         let content = term.renderable_content();
         let mut rows: Vec<Vec<Span>> = (0..self.grid.rows).map(|_| Vec::new()).collect();
         let offset = content.display_offset as i32;
+        let selection = content.selection;
         for cell in content.display_iter {
             let Some(row) = usize::try_from(cell.point.line.0 + offset).ok().and_then(|r| rows.get_mut(r)) else {
                 continue;
@@ -176,7 +315,8 @@ impl Terminal {
             if cell.flags.contains(Flags::INVERSE) {
                 (fg, bg) = (bg, fg);
             }
-            let bg = (bg != palette::BACKGROUND).then_some(bg);
+            let selected = selection.is_some_and(|s| s.contains(cell.point));
+            let bg = if selected { Some(theme::SELECTION) } else { (bg != palette::BACKGROUND).then_some(bg) };
             let bold = cell.flags.contains(Flags::BOLD);
             let italic = cell.flags.contains(Flags::ITALIC);
             let underline = cell.flags.intersects(Flags::ALL_UNDERLINES);
@@ -191,7 +331,8 @@ impl Terminal {
         let at = content.cursor.point;
         let cursor = (content.cursor.shape != CursorShape::Hidden)
             .then(|| usize::try_from(at.line.0 + offset).ok().map(|row| (row, at.column.0)))
-            .flatten();
+            .flatten()
+            .filter(|(row, _)| *row < self.grid.rows); // scrolled back past it
         Screen { rows, cursor }
     }
 }
@@ -200,6 +341,12 @@ impl Drop for Terminal {
     fn drop(&mut self) {
         let _ = self.input.send(Msg::Shutdown);
     }
+}
+
+/// A visible cell as a point in the grid, history included, and the side of the cell.
+fn grid_point(term: &Term<Listener>, at: CellPoint) -> (Point, Side) {
+    let line = Line(at.row as i32 - term.grid().display_offset() as i32);
+    (Point::new(line, Column(at.col)), if at.right { Side::Right } else { Side::Left })
 }
 
 fn window_size(grid: Grid, cell: Size<Pixels>) -> WindowSize {

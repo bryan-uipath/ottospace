@@ -94,7 +94,40 @@ pub enum Request {
     PickerClose,
     /// Shows or hides the key reference.
     Keys,
+    /// Presses keys as if typed, through the key bindings: `{"cmd":"key","keys":"shift-pageup"}`.
+    /// Space-separated keystrokes in GPUI's syntax.
+    Key {
+        keys: String,
+    },
+    /// Presses the mouse on a terminal pane (default: the focused one) at `x`, `y` in cells from its
+    /// top-left. A fraction picks a side of a cell. `clicks`: 2 selects a word, 3 a line.
+    MouseDown {
+        #[serde(default)]
+        pane: Option<PaneId>,
+        x: f32,
+        y: f32,
+        #[serde(default = "one")]
+        clicks: usize,
+    },
+    /// Drags the pressed mouse to `x`, `y` in cells, measured in that pane.
+    MouseDrag {
+        #[serde(default)]
+        pane: Option<PaneId>,
+        x: f32,
+        y: f32,
+    },
+    /// Turns the scroll wheel over a terminal pane (default: the focused one). Positive `lines`
+    /// scrolls back.
+    Scroll {
+        #[serde(default)]
+        pane: Option<PaneId>,
+        lines: f32,
+    },
     Quit,
+}
+
+fn one() -> usize {
+    1
 }
 
 /// Pane kinds a client may create. App panes come from `open_app`.

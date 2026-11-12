@@ -39,13 +39,13 @@ ottospace ctl '{"cmd":"state"}'
   ends its shell; closing a tab closes every pane in it.
 - **Read output by polling `state`.** There is no "wait until done" yet. After `type`, read
   `terminals.<pane>.lines` until the output you expect appears, with a time limit. `lines` is
-  the visible screen only: output that scrolled off is gone, so keep commands short or page them.
+  the visible screen only; use `scroll` to read output that left it.
 
 ## State
 
 | Field | Meaning |
 |---|---|
-| `mode` | `normal`, `app` (a hosted app has the keyboard) or `pick` (the picker is open) |
+| `mode` | `normal`, `app` (a hosted app has the keyboard), `pick` (the picker is open) or `visual` (selecting terminal text with the keyboard) |
 | `state.panes` | Every pane of every tab: `id` and `kind`. `kind` is an object: `{"type":"terminal"}`, `{"type":"empty"}` or `{"type":"app","window":N,"title":"..."}` |
 | `state.tabs`, `state.active` | The tabs (`id`, `title`) and the index of the one showing. Requests take the index, not the `id` |
 | `tab_panes` | Pane ids of each tab, in tab order |
@@ -54,7 +54,8 @@ ottospace ctl '{"cmd":"state"}'
 | `state.picker` | Null, or the open picker: `axis`, `new_tab`, `items` (`{"type":"terminal"}` or `{"type":"app","name":"..."}`), `query`, and `selected` (an index into the items that match `query`) |
 | `state.keys` | True while the key reference covers the window |
 | `state.sidebar` | The open rail section, or null |
-| `terminals.<id>` | `cols`, `rows`, and `lines`: the visible text of that terminal pane |
+| `terminals.<id>` | `cols`, `rows`, and `lines`: the visible text of that terminal pane. Also `history` (lines scrolled off the top), `display_offset` (how far the view is scrolled back; 0 is the bottom), `selection` (the selected text, or null) and `visual_cursor` |
+| `copied` | The text of the last copy |
 | `bounds.<id>` | Where each pane of the active tab is drawn: `[x, y, w, h]` |
 
 ## Requests
@@ -82,6 +83,21 @@ ottospace ctl '{"cmd":"type","pane":3,"text":"q"}'
 
 `type` goes to the focused pane unless `pane` is given; give it. It fails if that pane is not a
 terminal. Pane ids are never reused.
+
+Scrolling back and selecting text in a terminal pane:
+
+```sh
+ottospace ctl '{"cmd":"scroll","pane":3,"lines":40}'
+ottospace ctl '{"cmd":"mouse_down","pane":3,"x":2,"y":5,"clicks":2}'
+ottospace ctl '{"cmd":"mouse_drag","pane":3,"x":20,"y":5}'
+ottospace ctl '{"cmd":"key","keys":"cmd-c"}'
+```
+
+`scroll` turns the wheel: positive `lines` scrolls back into `history`, so output that left the
+screen can be read from `lines` again. `mouse_down` presses at a cell (`x`, `y` from the pane's
+top-left; `clicks` 2 selects a word, 3 a line) and `mouse_drag` extends the selection; read it
+from `terminals.<id>.selection`. `key` presses a key combination as the keyboard would, through
+the app's own bindings, so it acts on the focused pane: check `state.focused` first.
 
 Tabs:
 

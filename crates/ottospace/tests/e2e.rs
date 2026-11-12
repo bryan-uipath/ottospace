@@ -170,6 +170,139 @@ fn terminal_runs_a_typed_command() {
     assert_eq!(otto.raw(r#"{"cmd":"type","text":"x"}"#)["ok"], false, "no terminal is left");
 }
 
+/// Terminal 1's entry in the state dump.
+fn term1(o: &Otto) -> Value {
+    o.call(json!({"cmd": "state"}))["terminals"]["1"].clone()
+}
+
+fn shows(terminal: &Value, text: &str) -> bool {
+    terminal["lines"].as_array().is_some_and(|lines| lines.iter().any(|l| l.as_str() == Some(text)))
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn terminal_scrolls_back_and_typing_returns_to_the_bottom() {
+    let otto = Otto::launch("scroll");
+    otto.call(json!({"cmd": "split"}));
+    otto.bounds(&[1]);
+    otto.call(json!({"cmd": "type", "text": "i=1; while [ $i -le 200 ]; do echo line-$i; i=$((i+1)); done\r"}));
+    let t = otto.wait_for("200 lines", |o| Some(term1(o)).filter(|t| shows(t, "line-200")));
+    let rows = t["rows"].as_u64().expect("rows");
+    assert!(t["history"].as_u64() > Some(100), "history is kept: {t}");
+    assert_eq!(t["display_offset"], 0);
+
+    // The wheel scrolls back; an early line comes into view.
+    let t = otto.call(json!({"cmd": "scroll", "lines": 150}))["terminals"]["1"].clone();
+    let offset = t["display_offset"].as_u64().expect("offset");
+    assert_eq!(offset, 150, "{t}");
+    assert!(shows(&t, "line-50") && !shows(&t, "line-200"), "{t}");
+
+    // ⇧End, ⇧Home, ⇧PageDown move the view; the keys do not reach the shell.
+    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}))["terminals"]["1"].clone();
+    // A huge delta stops at the top instead of overflowing alacritty's offset.
+    let t = otto.call(json!({"cmd": "scroll", "lines": 3e9}))["terminals"]["1"].clone();
+    assert_eq!(t["display_offset"], t["history"]);
+    assert_eq!(key("shift-end")["display_offset"], 0);
+    let top = key("shift-home");
+    assert_eq!(top["display_offset"], top["history"]);
+    assert!(shows(&top, "line-1"), "{top}");
+    let history = top["history"].as_u64().expect("history");
+    assert_eq!(key("shift-pagedown")["display_offset"].as_u64(), Some(history - rows));
+
+    // Typing jumps back to the bottom; new output while at the bottom stays there.
+    let t = key("x");
+    assert_eq!(t["display_offset"], 0, "{t}");
+    otto.call(json!({"cmd": "type", "text": "\recho done\r"}));
+    let t = otto.wait_for("output", |o| Some(term1(o)).filter(|t| shows(t, "done")));
+    assert_eq!(t["display_offset"], 0, "{t}");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn mouse_selects_and_copy_paste_use_it() {
+    let otto = Otto::launch("select");
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "split"})); // pane 2 has focus
+    otto.bounds(&[1, 2]);
+    // Fill the screen first, so the next output scrolls it.
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "i=1; while [ $i -le 100 ]; do echo $i; i=$((i+1)); done\r"}));
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "echo alpha beta gamma\r"}));
+    let t = otto.wait_for("the output", |o| Some(term1(o)).filter(|t| shows(t, "alpha beta gamma")));
+    let lines = t["lines"].as_array().expect("lines");
+    let row = lines.iter().position(|l| l.as_str() == Some("alpha beta gamma")).expect("row") as f32 + 0.5;
+
+    // A double-click selects a word, and focuses the pane it lands on.
+    let down =
+        |x: f32, clicks: u32| otto.call(json!({"cmd": "mouse_down", "pane": 1, "x": x, "y": row, "clicks": clicks}));
+    let reply = down(7.5, 2);
+    assert_eq!(reply["state"]["focused"], 1);
+    assert_eq!(reply["terminals"]["1"]["selection"], "beta");
+    assert_eq!(down(7.5, 3)["terminals"]["1"]["selection"], "alpha beta gamma\n", "a triple-click selects the line");
+
+    // A drag selects from the press to the cell under the pointer; a click alone clears it.
+    down(0.25, 1);
+    let reply = otto.call(json!({"cmd": "mouse_drag", "pane": 1, "x": 9.75, "y": row}));
+    assert_eq!(reply["terminals"]["1"]["selection"], "alpha beta");
+    assert_eq!(down(3.5, 1)["terminals"]["1"]["selection"], Value::Null);
+
+    // ⌘C with nothing selected copies nothing.
+    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+    assert_eq!(key("cmd-c")["copied"], Value::Null);
+
+    // The selection follows its text as new output scrolls the screen.
+    down(7.5, 2);
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "echo one; echo two\r"}));
+    let t = otto.wait_for("more output", |o| Some(term1(o)).filter(|t| shows(t, "two")));
+    assert_eq!(t["selection"], "beta", "{t}");
+
+    // ⌘C copies it; ⌘V pastes it at the prompt (e2e runs use a private clipboard).
+    assert_eq!(key("cmd-c")["copied"], "beta");
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "echo pasted-"}));
+    key("cmd-v");
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "\r"}));
+    otto.wait_for("the pasted command's output", |o| Some(term1(o)).filter(|t| shows(t, "pasted-beta")));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn visual_mode_selects_with_the_keyboard() {
+    let otto = Otto::launch("visual");
+    otto.call(json!({"cmd": "split"}));
+    otto.bounds(&[1]);
+    otto.call(json!({"cmd": "type", "text": "echo alpha beta\r"}));
+    otto.wait_for("the output", |o| Some(term1(o)).filter(|t| shows(t, "alpha beta")));
+    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+
+    // ⌘⇧C puts a cursor at the terminal cursor and drops any mouse selection; pane actions wait.
+    otto.call(json!({"cmd": "mouse_down", "x": 0.25, "y": 0.5, "clicks": 2}));
+    let reply = key("cmd-shift-c");
+    assert_eq!((reply["mode"].as_str(), reply["state"]["visual"].as_u64()), (Some("visual"), Some(1)));
+    assert_eq!(reply["terminals"]["1"]["selection"], Value::Null);
+    let line = reply["terminals"]["1"]["visual_cursor"][0].as_i64().expect("a cursor");
+    assert_eq!(pane_ids(&otto.call(json!({"cmd": "split"}))), [1]);
+
+    // Up to the output line, to its start, select to the end of the word, copy and leave.
+    let reply = key("k 0 v e");
+    assert_eq!(reply["terminals"]["1"]["visual_cursor"], json!([line - 1, 4]));
+    assert_eq!(reply["terminals"]["1"]["selection"], "alpha");
+    let reply = key("y");
+    assert_eq!((reply["mode"].as_str(), reply["copied"].as_str()), (Some("normal"), Some("alpha")));
+    assert_eq!(reply["terminals"]["1"]["selection"], Value::Null);
+    assert_eq!(reply["terminals"]["1"]["visual_cursor"], Value::Null);
+
+    // ⌘C copies in visual mode too, and stays in it. A click leaves it.
+    let reply = key("cmd-shift-c k 0 w v e cmd-c");
+    assert_eq!((reply["mode"].as_str(), reply["copied"].as_str()), (Some("visual"), Some("beta")));
+    let reply = otto.call(json!({"cmd": "mouse_down", "x": 0.25, "y": 0.5}));
+    assert_eq!((reply["mode"].as_str(), reply["state"]["visual"].as_u64()), (Some("normal"), None));
+
+    // Esc leaves without copying; typed keys never reach the shell while in visual mode.
+    let reply = key("cmd-shift-c w v $ escape");
+    assert_eq!((reply["mode"].as_str(), reply["copied"].as_str()), (Some("normal"), Some("beta")));
+    otto.call(json!({"cmd": "type", "text": "echo done\r"}));
+    otto.wait_for("the shell to be untouched", |o| Some(term1(o)).filter(|t| shows(t, "done")));
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn secondary_bar_opens_and_closes_beside_the_panes() {

@@ -43,7 +43,9 @@ macOS, so you may have to grant the permissions again after an update.
 | Split panes mixing terminals and real app windows | Works today |
 | Key bindings and a status bar showing `NORMAL` / `APP` mode | Works today |
 | Control socket and `ottospace ctl` for agents and tests | Works today |
-| Other key modes: insert, visual, sneak | Designed |
+| Terminal scrollback, mouse selection, copy and paste | Works today |
+| Visual mode: select terminal text with vi keys | Works today |
+| Other key modes: insert, sneak | Designed |
 | Tasks: each owns a workspace (tabs, then splits) with a brief pane and automatic cleanup | Designed |
 | "Pop next": open the next task by priority | Designed |
 | Quick capture (⌘⌘): turn something on screen into a task and dispatch it to an agent | Designed |
@@ -128,10 +130,21 @@ the tag does not match the crate version.
 | ⌘1 … ⌘9 | Select a tab |
 | ⌘⇧] / ⌘⇧[ or ⌃Tab / ⌃⇧Tab | Next / previous tab |
 | ⌘⇧W | Close the tab and its panes |
+| Wheel / trackpad | Scroll a terminal back through its history |
+| ⇧PageUp / ⇧PageDown | Scroll a terminal a page |
+| ⇧Home / ⇧End | Top / bottom of a terminal's history |
+| Drag / double-click / triple-click | Select text / a word / a line in a terminal |
+| ⌘C | Copy the terminal's selection (nothing selected: does nothing) |
+| ⌘V | Paste into the terminal |
+| ⌘⇧C | Visual mode on the terminal: `hjkl`/arrows, `w b e 0 ^ $`, `H M L` move; `v` / `V` select; `y` or ↵ copies and leaves; Esc leaves |
 
 Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
 
-A terminal pane runs your shell on a PTY. The pane closes when the shell exits.
+A terminal pane runs your shell on a PTY. The pane closes when the shell exits. It keeps 10,000
+lines of history. Typing returns to the bottom. In programs that use the mouse or the alternate
+screen (vim, less, htop) the wheel does nothing, and ⇧PageUp and friends go to the program.
+A click on a terminal focuses it and clears its selection; a drag there selects, even in an
+unfocused pane. Paste is bracketed when the program asks for it.
 
 To put an app window in a pane, open Apps on the left rail and click the app. It fills the focused pane if that is
 empty, otherwise it splits right. Shift-click splits down. New windows of a hosted app get their

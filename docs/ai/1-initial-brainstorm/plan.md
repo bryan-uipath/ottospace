@@ -37,10 +37,11 @@ cheapest daily win. E is the largest value but needs A, B and D.
    Open: draggable dividers, global key to leave `APP` mode.
 4. **Terminal pane.** Done. PTY + `alacritty_terminal` grid, painted in GPUI. Key encoding and
    colours in the core. E2E types a command and reads the grid back.
-   Open: scrollback, mouse reporting, cwd tracking, wide-glyph alignment.
-   Open, asked for by Bryan 2026-11-11: selection as in iTerm, two ways. Mouse: drag to select,
-   double-click a word, triple-click a line, copy on ⌘C. Keyboard: a visual mode (the `VISUAL`
-   key mode in the mockup) that moves a cursor through the output and extends a selection.
+   Done: scrollback (wheel, ⇧PageUp/⇧PageDown, ⇧Home/⇧End); selection as in iTerm (drag, double-click
+   a word, triple-click a line, ⌘C copy, ⌘V paste, bracketed when asked); a `VISUAL` key mode (⌘⇧C)
+   on alacritty's vi mode: vi keys move a cursor through the output, `v` selects, `y` copies.
+   Open: mouse reporting (the wheel and clicks do not reach vim or htop), cwd tracking, wide-glyph
+   alignment, IME.
 5. **Tabs, then tasks.** Model first (core), then shell.
 
 ## Decisions

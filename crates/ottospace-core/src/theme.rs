@@ -14,7 +14,10 @@ pub const MUTED: u32 = 0x9f9fa9;
 pub const PRIMARY: u32 = 0x00b8db;
 pub const APP: u32 = 0xff8904;
 pub const PICK: u32 = 0x00d492;
+pub const VISUAL: u32 = 0xa684ff;
 pub const ERROR: u32 = 0xff8484;
+/// Selected terminal text: a muted cyan, dark enough for light text on it.
+pub const SELECTION: u32 = 0x155e75;
 
 /// The one colour that changes with the mode. It marks the status pill and the focused pane.
 pub fn accent(mode: Mode) -> u32 {
@@ -22,6 +25,7 @@ pub fn accent(mode: Mode) -> u32 {
         Mode::Normal => PRIMARY,
         Mode::App => APP,
         Mode::Pick => PICK,
+        Mode::Visual => VISUAL,
     }
 }
 
@@ -34,5 +38,7 @@ mod tests {
         assert_ne!(accent(Mode::Normal), accent(Mode::App));
         assert_ne!(accent(Mode::Normal), accent(Mode::Pick));
         assert_ne!(accent(Mode::App), accent(Mode::Pick));
+        let others = [Mode::Normal, Mode::App, Mode::Pick].map(accent);
+        assert!(!others.contains(&accent(Mode::Visual)));
     }
 }
