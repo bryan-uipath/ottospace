@@ -60,8 +60,7 @@ impl Codex {
 
     /// `$CODEX_HOME` if set and not empty, or `~/.codex`.
     pub fn from_env() -> Self {
-        let set = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from);
-        Self::new(set("CODEX_HOME").or(set("HOME").map(|h| h.join(".codex"))).unwrap_or_default())
+        Self::new(crate::config_dirs().codex.unwrap_or_default())
     }
 }
 

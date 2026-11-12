@@ -67,7 +67,8 @@ ottospace ctl '{"cmd":"state"}'
 | `notice` | Null, or the problem the status bar shows (a mistake in the settings, an app that could not be hosted). It is not `error`, which means the request failed |
 | `closed_apps` | Apps the user's settings name that are not running. `open_app` starts one |
 | `apps` | Running apps that `open_app` can host: `name`, `windows` (how many it has open) and `icon` (true if its icon was read) |
-| `state.tasks.list` | Every task: `id`, `title`, `state`, `priority`, `snoozed_until`, `dismissed`, `project` (from a `#tag`, or null) and `repo` (a repository path, or null) |
+| `state.tasks.list` | Every task: `id`, `title`, `state`, `priority`, `snoozed_until`, `dismissed`, `project` (from a `#tag`, or null), `repo` (a repository path, or null), `agent`, `paths`, `resolved` and `skills` |
+| `compose_read` | True once the tags of the line in the new-task box have been looked up (names and paths are read on another thread, a moment after the line changes). Wait for it before pressing ↵ for the user |
 | `state.compose` | Null, or the text in the new-task box while it is open |
 | `inbox`, `needs_you` | The tasks the Tasks section lists, in order, each with its `group`; and how many are under `needs_you` |
 | `home` | Null while the tab on show has a pane. Else the home screen: `nodes` (one for each of the first 12 inbox tasks: `task`, `group`, `lane` (its project, by name; tasks of no project share the last), `depth` (0 is the newest task; in a lane the older task is drawn farther) and `crossing`, the `[x, z]` of the lattice it is drawn on; no node is under the text, so a small window has fewer), `needs_you` (up to 3 tasks) and `counts` for each group |
@@ -186,7 +187,9 @@ Tasks (the inbox in the Tasks section):
 ```sh
 ottospace ctl '{"cmd":"task_add","title":"Fix the zoom flicker"}'
 ottospace ctl '{"cmd":"task_add","title":"Review the retry fix","priority":1,"state":"needs_you","tab":2}'
-ottospace ctl '{"cmd":"task_new","line":"fix zoom flicker #canvas @flow-workbench p1"}'
+ottospace ctl '{"cmd":"task_add","title":"Review the export PR","agent":"codex","paths":["/src/export"],"skills":["code-review"]}'
+ottospace ctl '{"cmd":"task_new","line":"fix zoom flicker #canvas >flow-workbench @claude p1"}'
+ottospace ctl '{"cmd":"task_new","line":"review the export PR >flow-workbench @codex $code-review /src/export"}'
 ottospace ctl '{"cmd":"compose","text":"reply to Ana about the retry bug #support"}'
 ottospace ctl '{"cmd":"task_set_state","id":1,"state":"needs_you"}'
 ottospace ctl '{"cmd":"task_list"}'
@@ -210,11 +213,30 @@ States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stal
 `needs_you`, `stale`), `running` (`running`, `review`), `captured` (`captured`, `triaged`),
 `on_hold` (`parked`), `done`. In a group: priority, then oldest first. `cleaned` tasks are not listed.
 
-- `task_new` files a task from one line, the way the user's new-task box (⌘N) reads it:
-  `#tag` is the project (optional), `@name` is a repository from `state.repos` by name, `p1` to
-  `p9` is the priority, the rest is the title. A `@name` that matches no repository (or
-  worktree) stays in the title where it was typed. It replies like `task_add`. A line with no
-  title, or longer than 500 characters, is refused.
+- `task_new` files a task from one line, the way the user's new-task box (⌘N) reads it. Tags:
+
+  | Tag | Means | Counts when |
+  |---|---|---|
+  | `#project` | the project the task serves | always |
+  | `>repo` | the repository it works in, from `state.repos` by name | the repository (or worktree) is listed |
+  | `@agent` | who works it | `claude`, `codex`, or a file `agents/<name>.md` in the user's folder |
+  | `/path` | a path it is about: a word starting with `/` or `~/` | the file or directory exists, at the root or inside the `>repo` |
+  | `$skill` | a skill to load for it | a skill folder of that name exists (the runners' `skills/`, the repository's `.claude/skills`) |
+  | `p1` to `p9` | the priority | always |
+
+  The rest is the title. A tag whose name is not known stays in the title where it was typed,
+  so `ask @ana`, `costs $5` and `use > 3 workers` are safe. One `#project`, `>repo` and `@agent`
+  per task: the last one counts. Every `/path` and `$skill` is kept. `@name` no longer names a
+  repository. The task keeps them as `repo` (a path), `agent`, `paths`, `skills`. Nothing acts
+  on `agent`, `paths` or `skills` yet: they are stored and shown. It replies like `task_add`.
+  A line with no title, or longer than 500 characters, is refused.
+- `task_add` takes `agent` and `skills` only if `task_new` would know the names (`claude`,
+  `codex`, a saved agent; an installed skill): any other is refused, and the error names it.
+  They are kept as their file or folder spells them. `paths` are kept as given, without
+  checking them (at most 20 of each, 200 characters each).
+- A task's `paths` are as typed. `resolved` holds, in the same order, the absolute path each
+  was found at when `task_new` or the box filed it (empty from `task_add`). Nothing has checked
+  either since: treat both as text, not as places safe to read or write.
 - `compose` opens the new-task box on the user's screen with `text` in it (at most 500
   characters). Nothing is filed until the user presses ↵: use it to offer a draft, and
   `task_new` to file one yourself. It is refused if the box is open already or cannot open

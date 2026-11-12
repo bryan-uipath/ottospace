@@ -52,14 +52,7 @@ impl Claude {
 
     /// `$CLAUDE_CONFIG_DIR` if set, and `~/.claude`.
     pub fn from_env() -> Self {
-        let mut dirs: Vec<PathBuf> = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).into_iter().collect();
-        if let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty()) {
-            let default = PathBuf::from(home).join(".claude");
-            if !dirs.contains(&default) {
-                dirs.push(default);
-            }
-        }
-        Self::new(dirs)
+        Self::new(crate::config_dirs().claude)
     }
 }
 

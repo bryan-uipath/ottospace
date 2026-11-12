@@ -191,6 +191,14 @@ pub enum Request {
         state: State,
         #[serde(default)]
         tab: Option<u32>,
+        /// Who works it and the skills it loads: names `task_new` would know (`@agent`, `$skill`),
+        /// else the request is refused. `paths`: what it is about, kept as given, not checked.
+        #[serde(default)]
+        agent: Option<String>,
+        #[serde(default)]
+        paths: Vec<String>,
+        #[serde(default)]
+        skills: Vec<String>,
     },
     /// An agent reports where its task is: `running`, `needs_you`, `done`, ...
     TaskSetState {
@@ -213,8 +221,8 @@ pub enum Request {
     TaskUndo,
     /// The inbox, in order: `{"ok":true,"inbox":[{"group":"needs_you","id":1,..}]}`, not the state.
     TaskList,
-    /// Files a task from one line, as the new-task box does: `#tag` is the project, `@name` a
-    /// listed repository, `p1`..`p9` the priority, the rest the title. The reply is
+    /// Files a task from one line, as the new-task box does: `#project`, `>repo` (a listed
+    /// repository), `@agent`, `/path`, `$skill`, `p1`..`p9`; the rest is the title. The reply is
     /// `{"ok":true,"task":{..}}`.
     TaskNew {
         line: String,

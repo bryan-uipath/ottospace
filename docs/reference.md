@@ -25,7 +25,7 @@ it over the control socket. Session restore and the rest of the design are not b
 | Visual mode: select terminal text with vi keys | Works today |
 | Tasks inbox: tasks grouped by what needs you first; snooze, hold, dismiss, undo. Kept in `~/.ottospace/tasks` | Works today |
 | "Pop next" (⌘⇧N): open the next task that needs you | Works today |
-| New task box (⌘N): one line, with `#project` and `@repo` | Works today |
+| New task box (⌘N): one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`. `@agent`, `/path` and `$skill` are stored and shown; nothing acts on them yet | Works today |
 | Home screen: a tab with no panes shows the new-task line, the tasks that need you, and each listed task as a node on a lattice (left to right by project; within a project the older task is farther). A click on a node or a row opens the task | Works today |
 | Tasks own their tabs: opening a task shows only its tabs; the others keep running off the bar | Works today |
 | Tabs, each with its own split tree | Works today |
@@ -94,7 +94,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | Drag / double-click / triple-click | Select text / a word / a line in a terminal |
 | ⌘C | Copy the terminal's selection (nothing selected: does nothing) |
 | ⌘V | Paste into the terminal |
-| ⌘N | New task: a box opens over the workspace. Type what needs doing; `#name` tags a project, `@name` names a repository (Tab completes both), `p1` to `p9` sets the priority. ↵ files it and closes the box; Esc closes |
+| ⌘N | New task: a box opens over the workspace. Type what needs doing, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1` to `p9` (Tab completes the one being typed). ↵ files it and closes the box; Esc closes |
 | ⌘⇧N | Next task: shows the tabs of the first task that needs you |
 | ⌘⇧E | List mode: the bar (Apps, Tasks, Repos) takes the keyboard. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; Esc or ⌘⇧E leaves |
 | ⌘⌃G | Sneak mode: every control ottospace draws (rail icons, bar rows, tabs and their ×, top-bar buttons, pane headers and their ×, each pane, the home screen's line, rows and nodes) gets a short label, home-row letters first. Type a label and the control does what a click does; a pane's label focuses it, or gives an app pane the keyboard. A × (pane or tab) always has a two-letter label. Two-letter labels narrow on the first letter; ⌫ takes it back. Esc, a click, a letter that goes on with no label, or any ⌘ shortcut leaves; the shortcut then runs (⌘C copies, ⌘V pastes). Other keys do nothing. The labels follow what is drawn: if a control moves its label moves, and if it goes its label goes. What happens by itself (a shell exits, an agent files a task) does not end the mode. Starting it hides the accessibility overlay (⌘⌃A). Not ⌃G alone: a terminal needs that key. On a keyboard layout with no Latin letters, the keys type the letters they have under ⌘. From `APP` mode return first. Controls inside a hosted app's window get no label. Sneak presses no control inside another app and sets no value; entering an app pane raises its window, as a click on the pane does |
@@ -123,6 +123,54 @@ question (status chip `QUIT?`). A quit ends every terminal and what runs in it, 
 - A shell whose prompt keeps a helper process as its child is asked about every time.
 
 Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
+
+## Tags
+
+One line in the new-task box (⌘N), or in `task_new`, becomes a task. Words with a tag mark are
+read out of the line; the rest is the title.
+
+| Tag | Means | Tab completes from |
+|---|---|---|
+| `#project` | The project the task serves | Projects other tasks name |
+| `>repo` | The repository the task works in | The Repos list (repositories and worktrees) |
+| `@agent` | Who works it | `claude` and `codex`, then each `~/.ottospace/agents/<name>.md` if that folder exists |
+| `/path` | A path the task is about: a word that starts with `/` or `~/` | The files and directories under what is typed |
+| `$skill` | A skill to load for the task | Skill folders (those with a `SKILL.md`) in `~/.claude/skills`, `$CLAUDE_CONFIG_DIR/skills`, `~/.codex/skills` (or `$CODEX_HOME/skills` if that is set), and the `.claude/skills` of the task's `>repo` |
+| `p1` to `p9` | The priority. 1 is most urgent; 3 when none is given | |
+
+```
+fix zoom flicker #canvas >canvas-app @claude p2
+review the export PR >canvas-app @codex $code-review /src/export
+```
+
+- **A tag counts only if its name is known.** A `>word`, `@word` or `$word` that names nothing
+  stays in the title where it was typed, and so does a `/word` that is not a file or directory.
+  `ask @ana`, `costs $5` and `use > 3 workers` are safe. A name starts with a letter, so `#123`,
+  `>3` and `$5` are never tags. `#project` always counts: a new name is a new project. A name
+  longer than 200 characters is no tag either: it stays in the title.
+- **A `/path`** is under the home folder (`~/notes.md`), or, when the line names a `>repo`,
+  inside that repository: `/src/export` with `>canvas-app` is `src/export` in it. If nothing is
+  there (or no repository is named), it is absolute: `/Users/me/notes.md`. So with a `>repo` the
+  repository is looked in first, then the root of the disk; Tab lists the repository's entries
+  before the root's. It counts if a file or directory is there. The task keeps the word as typed
+  (`paths`) and, beside it, the absolute path that was found (`resolved`).
+- **Punctuation and spaces.** A comma or full stop after a tag is not part of it: `#canvas,`
+  and `p1,` work. For a path the word as typed is tried first, so a file named `v1.` is found,
+  then the word without the punctuation. A space in a path is written with a backslash before
+  it, `~/My\ Notes`; Tab writes it for you. The task keeps the path without the backslash.
+- **How many.** One `#project`, one `>repo`, one `@agent`, one priority: of two, the last one
+  counts. Every `/path` and `$skill` is kept, each once (at most 20 of each). `@agent` and
+  `$skill` are kept as their file or folder spells them, whatever the case typed.
+- **What they do today.** `#project` and `>repo` are used: the home screen groups by project, and
+  a task opens a terminal in its repository. `@agent`, `/path` and `$skill` are stored on the
+  task and shown on its row. Nothing starts an agent or loads a skill yet. What must be
+  checked before anything does: [routines.md](ai/routines.md#6-trust-and-safety).
+- **Reading is off the window's thread.** Names and paths are looked up on another thread, so a
+  slow disk does not stop typing. A tag's chip shows a moment after the word is typed; ↵ files
+  the line with the tags that have shown.
+- `OTTOSPACE_SKILLS` (directories, `:` between them) replaces the runners' skill folders.
+- `@name` named a repository before. It does not now. Titles of tasks already filed are not read
+  again.
 
 ## Terminal panes
 

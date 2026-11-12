@@ -177,6 +177,10 @@ test("tasks: add, list, open, leave", async () => {
       dismissed: false,
       project: null,
       repo: null,
+      agent: null,
+      paths: [],
+      resolved: [],
+      skills: [],
     });
     const urgent = await otto.tasks.add("Review the client", { priority: 1, state: "needs_you" });
     const filed = (await client.taskNew({ line: "fix the flicker #canvas p2" })).task;

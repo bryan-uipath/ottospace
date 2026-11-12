@@ -121,7 +121,7 @@ td.w { white-space: normal; }
   <b>Quickstart</b>
   <a href="#install">Install</a><a href="#permissions">Permissions</a><a href="#open-repo">Open a repository</a><a href="#split">Split</a><a href="#host-app">Host an app</a><a href="#file-task">File a task</a>
   <b>Reference</b>
-  <a href="#keys">Keys</a><a href="#tasks">Tasks</a><a href="#settings">Settings</a><a href="#shell">Drive it from a shell</a><a href="#hosting">How app windows are hosted</a><a href="#limits">Known limits</a><a href="#roadmap">Roadmap</a>
+  <a href="#keys">Keys</a><a href="#tasks">Tasks</a><a href="#tags">Tags</a><a href="#settings">Settings</a><a href="#shell">Drive it from a shell</a><a href="#hosting">How app windows are hosted</a><a href="#limits">Known limits</a><a href="#roadmap">Roadmap</a>
 </nav>
 <article class="doc">
   <h1>ottospace docs</h1>
@@ -195,10 +195,11 @@ td.w { white-space: normal; }
   <p>Press <kbd>⌘N</kbd>, type what needs doing, and press <kbd>↵</kbd>. In the same line you can add:</p>
   <ul>
     <li><code>#canvas</code> to tag a project,</li>
-    <li><code>@canvas-app</code> to name a repository or worktree from the Repos list,</li>
+    <li><code>&gt;canvas-app</code> to name a repository or worktree from the Repos list,</li>
+    <li><code>@claude</code> or <code>@codex</code> to say who works it,</li>
     <li><code>p1</code> to <code>p9</code> to set the priority.</li>
   </ul>
-  <p><kbd>Tab</kbd> completes <code>#</code> and <code>@</code> names. The task appears in Tasks on the rail, and the status bar shows how many tasks need you.</p>
+  <p><kbd>Tab</kbd> completes the tag being typed. <a href="#tags">Every tag</a> is in the reference. The task appears in Tasks on the rail, and the status bar shows how many tasks need you.</p>
   <p>Click the task, or press <kbd>⌘⇧N</kbd> for the next one that needs you. The tab bar then shows only that task's tabs. The other tabs keep running, off the bar.</p>
 
   <h2 id="reference">Reference</h2>
@@ -226,8 +227,22 @@ td.w { white-space: normal; }
     <li><b>A task owns its tabs.</b> Open a task (click its row, <kbd>↵</kbd> on it in list mode, or <kbd>⌘⇧N</kbd>) and the tab bar shows only its tabs. The tabs of other tasks keep running, off the bar. <kbd>⌘1</kbd> … <kbd>⌘9</kbd> and tab cycling count the tabs on the bar.</li>
     <li>The first time you open a task it gets a tab named after it, with a terminal in its repository if it has one. The × beside the task's name on the tab bar goes back to the tabs of no task. The task goes on.</li>
     <li>Closing a task's tabs does not end the task. It gets a fresh tab the next time you open it.</li>
-    <li>An <code>@name</code> that is not in the Repos list stays in the title.</li>
     <li>Tasks are kept in <code>~/.ottospace/tasks</code>, one JSON file each, or in the folder the <code>tasks</code> setting names. Change tasks in the app or with <code>ottospace ctl</code>, not by editing the files.</li>
+  </ul>
+
+  <h3 id="tags">Tags</h3>
+  <p>One line in the new-task box (<kbd>⌘N</kbd>), or in <code>task_new</code>, becomes a task. Words with a tag mark are read out of the line; the rest is the title.</p>
+  <div class="tw"><table><thead><tr><th>Tag</th><th>Means</th><th>Tab completes from</th></tr></thead><tbody><tr><td><code>#project</code></td><td>The project the task serves</td><td>Projects other tasks name</td></tr><tr><td><code>&gt;repo</code></td><td>The repository the task works in</td><td>The Repos list (repositories and worktrees)</td></tr><tr><td><code>@agent</code></td><td>Who works it</td><td><code>claude</code> and <code>codex</code>, then each <code>~/.ottospace/agents/&lt;name&gt;.md</code> if that folder exists</td></tr><tr><td><code>/path</code></td><td>A path the task is about: a word that starts with <code>/</code> or <code>~/</code></td><td>The files and directories under what is typed</td></tr><tr><td><code>$skill</code></td><td>A skill to load for the task</td><td>Skill folders (those with a <code>SKILL.md</code>) in <code>~/.claude/skills</code>, <code>$CLAUDE_CONFIG_DIR/skills</code>, <code>~/.codex/skills</code>, and the <code>.claude/skills</code> of the task's <code>&gt;repo</code></td></tr><tr><td><code>p1</code> to <code>p9</code></td><td>The priority. 1 is most urgent; 3 when none is given</td><td></td></tr></tbody></table></div>
+  <pre class="block">fix zoom flicker #canvas &gt;canvas-app @claude p2
+review the export PR &gt;canvas-app @codex $code-review /src/export</pre>
+  <ul>
+    <li><b>A tag counts only if its name is known.</b> A <code>&gt;word</code>, <code>@word</code> or <code>$word</code> that names nothing stays in the title where it was typed, and so does a <code>/word</code> that is not a file or directory. <code>ask @ana</code>, <code>costs $5</code> and <code>use &gt; 3 workers</code> are safe. A name starts with a letter, so <code>#123</code>, <code>&gt;3</code> and <code>$5</code> are never tags. <code>#project</code> always counts: a new name is a new project.</li>
+    <li><b>A <code>/path</code></b> is under the home folder (<code>~/notes.md</code>), or, when the line names a <code>&gt;repo</code>, inside that repository: <code>/src/export</code> with <code>&gt;canvas-app</code> is <code>src/export</code> in it. If nothing is there, or no repository is named, it is absolute: <code>/Users/me/notes.md</code>. The repository is looked in first, then the root of the disk. The task keeps the word as typed and, beside it, the absolute path that was found.</li>
+    <li><b>Punctuation and spaces.</b> A comma or full stop after a tag is not part of it. A space in a path is written with a backslash before it, <code>~/My\ Notes</code>; Tab writes it for you.</li>
+    <li><b>Skills</b> are the folders with a <code>SKILL.md</code> in <code>~/.claude/skills</code>, <code>$CLAUDE_CONFIG_DIR/skills</code>, <code>~/.codex/skills</code> (or <code>$CODEX_HOME/skills</code>) and the <code>.claude/skills</code> of the task's <code>&gt;repo</code>. <code>OTTOSPACE_SKILLS</code> (directories, <code>:</code> between them) replaces the runners' folders.</li>
+    <li><b>How many.</b> One <code>#project</code>, one <code>&gt;repo</code>, one <code>@agent</code>, one priority: of two, the last one counts. Every <code>/path</code> and <code>$skill</code> is kept, each once (at most 20 of each).</li>
+    <li><b>What they do today.</b> <code>#project</code> and <code>&gt;repo</code> are used: the home screen groups by project, and a task opens a terminal in its repository. <code>@agent</code>, <code>/path</code> and <code>$skill</code> are stored on the task and shown on its row. Nothing starts an agent or loads a skill yet.</li>
+    <li><code>@name</code> named a repository before. It does not now.</li>
   </ul>
 
   <h3 id="settings">Settings</h3>
@@ -255,7 +270,7 @@ td.w { white-space: normal; }
 <span class="p">$ </span>ottospace ctl '{"cmd":"capture","pane":3,"history":true}'</pre>
   <p><code>7f3a</code> is a token made up for this run, so <code>wait</code> does not match older output. The number after it is the command's exit status. A shell started by ottospace has <code>$OTTOSPACE_PANE</code> and <code>$OTTOSPACE_TAB</code>.</p>
   <p><b>Tasks</b></p>
-  <pre class="block"><span class="p">$ </span>ottospace ctl '{"cmd":"task_new","line":"fix zoom flicker #canvas @canvas-app p1"}'
+  <pre class="block"><span class="p">$ </span>ottospace ctl '{"cmd":"task_new","line":"fix zoom flicker #canvas &gt;canvas-app @claude p1"}'
 <span class="p">$ </span>ottospace ctl '{"cmd":"task_add","title":"Review the retry fix","priority":1,"state":"needs_you","tab":2}'
 <span class="p">$ </span>ottospace ctl '{"cmd":"task_set_state","id":1,"state":"needs_you"}'<span class="d">   # running, needs_you, done, ...</span>
 <span class="p">$ </span>ottospace ctl '{"cmd":"task_list"}'

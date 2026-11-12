@@ -3,14 +3,14 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ax::Target;
-use crate::compose;
+use crate::compose::{self, Draft};
 use crate::home::{self, Home};
 use crate::keys::Mods;
 use crate::layout::{Axis, Dir, Node, Rect, Zone};
 use crate::list::ListRow;
 use crate::repos::{self, Repo};
 use crate::sneak::{Sneak, Typed};
-use crate::tasks::{MAX_TITLE, State, Task, TaskId, Tasks};
+use crate::tasks::{Assign, MAX_TITLE, State, Task, TaskId, Tasks};
 
 pub type PaneId = u32;
 
@@ -309,11 +309,22 @@ pub enum Action {
         floor: TaskId,
     },
     /// File a task. `tab`: the `id` of an open tab of no task, which becomes the task's first tab.
+    /// `assign`: who works it, the paths it is about and the skills it loads, kept as given.
     TaskAdd {
         title: String,
         priority: u8,
         state: State,
         tab: Option<u32>,
+        assign: Assign,
+    },
+    /// What the shell read for `line` in the new-task box. `names`: the agents and skills a tag
+    /// may name, when they were read again. `paths` and `entries` count only while the box
+    /// still holds `line`: an answer for a line since changed is dropped.
+    SetKnown {
+        line: String,
+        names: Option<compose::Names>,
+        paths: Vec<compose::PathFound>,
+        entries: Vec<String>,
     },
     TaskSetState {
         id: TaskId,
@@ -357,14 +368,16 @@ pub enum Action {
         text: String,
     },
     ComposeBackspace,
-    /// Finish the `#project` or `@repo` being typed with the first suggestion.
+    /// Finish the tag being typed with the first suggestion.
     ComposeComplete,
     /// File the line as a task and close the box. A line with no title files nothing.
     ComposeSubmit,
     CloseCompose,
-    /// File a task from one line, as the box does: `fix zoom flicker #canvas @app p1`.
+    /// File a task from one line, as the box does: `fix zoom flicker #canvas >app @claude p1`.
+    /// `known`: what the shell read for this line. The new-task box's own is left alone.
     TaskFromLine {
         line: String,
+        known: compose::Known,
     },
     /// Replace the Apps list with the apps the shell can host now.
     SetApps {
@@ -493,6 +506,7 @@ impl Action {
             | Action::OpenRepo { .. }
             | Action::RestoreTasks { .. }
             | Action::TaskAdd { .. }
+            | Action::SetKnown { .. }
             | Action::TaskSetState { .. }
             | Action::TaskSnooze { .. }
             | Action::TaskHold { .. }
@@ -615,6 +629,12 @@ pub struct Model {
     /// The Repos section's list, as last read from disk.
     pub repos: Vec<Repo>,
     pub tasks: Tasks,
+    /// What the new-task box's tags may name, as the shell last read it.
+    #[serde(skip)]
+    known: compose::Known,
+    /// The line `known`'s paths were read for.
+    #[serde(skip)]
+    known_line: Option<String>,
     /// The pane picker, while it is open.
     pub picker: Option<Picker>,
     /// The quit question, while it is up.
@@ -649,6 +669,8 @@ impl Default for Model {
             apps: Vec::new(),
             repos: Vec::new(),
             tasks: Tasks::default(),
+            known: compose::Known::default(),
+            known_line: None,
             picker: None,
             confirm: None,
             keys: false,
@@ -878,8 +900,9 @@ impl Model {
             Action::Open { kind, axis, beside } => self.open(kind, axis, beside, effects),
             Action::SetRepos { repos } => self.repos = repos::arrange(repos),
             Action::RestoreTasks { tasks, floor } => self.tasks.restore(tasks, floor),
-            Action::TaskAdd { title, priority, state, tab } => {
+            Action::TaskAdd { title, priority, state, tab, assign } => {
                 let id = self.tasks.add(title, priority, state);
+                self.tasks.assign(id, assign);
                 // The tab named becomes the task's, unless another task has it: an agent that
                 // files a follow-up from a task's tab must not take the tab away. If it is the one
                 // on show, the view is now the task's.
@@ -890,6 +913,14 @@ impl Model {
                         self.remember_tab();
                         self.current_task = Some(id);
                     }
+                }
+            }
+            Action::SetKnown { line, names, paths, entries } => {
+                if let Some(names) = names {
+                    self.known.names = names;
+                }
+                if self.compose.as_ref() == Some(&line) {
+                    (self.known.paths, self.known.entries, self.known_line) = (paths, entries, Some(line));
                 }
             }
             Action::TaskSetState { id, state } => self.tasks.set_state(id, state),
@@ -1074,6 +1105,8 @@ impl Model {
             Action::OpenCompose { text } => {
                 self.leave(effects);
                 self.compose = Some(text.chars().take(MAX_TITLE).collect());
+                // Paths read for another line say nothing of this one.
+                (self.known.paths, self.known.entries, self.known_line) = (Vec::new(), Vec::new(), None);
             }
             Action::ComposeType { text } => {
                 // No longer than a task's title may be: a longer one could not be kept.
@@ -1094,12 +1127,12 @@ impl Model {
             }
             Action::ComposeSubmit => {
                 let line = self.compose.clone().unwrap_or_default();
-                if self.file_line(&line) {
+                if self.file_line(&line, None) {
                     self.compose = None;
                 }
             }
             Action::CloseCompose => self.compose = None,
-            Action::TaskFromLine { line } => drop(self.file_line(&line)),
+            Action::TaskFromLine { line, known } => drop(self.file_line(&line, Some(known))),
             Action::SetApps { names } => self.apps = names,
             Action::FocusList if self.list.is_some() => self.list = None,
             Action::FocusList => {
@@ -1279,21 +1312,56 @@ impl Model {
         }
     }
 
-    /// What `line` would file: `@name` counts only for a listed repository.
-    pub fn draft(&self, line: &str) -> compose::Draft {
-        compose::parse(line, |name| self.repo_named(name).is_some())
+    /// What `line` would file. A tag counts only if its name is known: `>name` a listed
+    /// repository; `@name`, `$name` and `/path` what the shell last read (`SetKnown`).
+    pub fn draft(&self, line: &str) -> Draft {
+        self.draft_knowing(line, &self.known)
+    }
+
+    /// What `line` would file, given what was read for it.
+    fn draft_knowing(&self, line: &str, known: &compose::Known) -> Draft {
+        compose::read(line, |name| self.repo_named(name).is_some(), known)
+    }
+
+    /// The shell has read what the tags of the line in the new-task box may name: what `draft`
+    /// says of it will not change by itself.
+    pub fn compose_read(&self) -> bool {
+        self.compose.is_some() && self.compose == self.known_line
+    }
+
+    /// The path of the listed repository `line` names with `>name`, for the shell to look in.
+    pub fn draft_repo(&self, line: &str) -> Option<String> {
+        self.draft(line).repo.and_then(|name| self.repo_named(&name))
+    }
+
+    /// A task's tags as one line: `#canvas · >app · @claude · 2 paths · 1 skill`.
+    pub fn task_tags(&self, task: &Task) -> String {
+        let count = |n: usize, word: &str| (n > 0).then(|| format!("{n} {word}{}", if n == 1 { "" } else { "s" }));
+        let repo = task.repo.as_deref().map(|path| {
+            let name = self.repo_name(path);
+            format!(">{}", name.unwrap_or_else(|| path.rsplit('/').next().unwrap_or(path).to_string()))
+        });
+        let project = task.project.as_ref().map(|project| format!("#{project}"));
+        let agent = task.agent.as_ref().map(|agent| format!("@{agent}"));
+        let tags = [project, repo, agent, count(task.paths.len(), "path"), count(task.skills.len(), "skill")];
+        tags.into_iter().flatten().collect::<Vec<_>>().join(" · ")
     }
 
     /// Files `line` as a captured task. False if it has no title, or one too long to keep:
     /// nothing is filed.
-    fn file_line(&mut self, line: &str) -> bool {
-        let draft = self.draft(line);
+    fn file_line(&mut self, line: &str, known: Option<compose::Known>) -> bool {
+        let draft = match &known {
+            Some(known) => self.draft_knowing(line, known),
+            None => self.draft(line),
+        };
         if draft.title.is_empty() || draft.title.chars().count() > MAX_TITLE {
             return false;
         }
         let path = draft.repo.as_deref().and_then(|name| self.repo_named(name));
         let id = self.tasks.add(draft.title, draft.priority.unwrap_or(3), State::Captured);
         self.tasks.tag(id, draft.project, path);
+        let Draft { agent, paths, resolved, skills, .. } = draft;
+        self.tasks.assign(id, Assign { agent, paths, resolved, skills });
         true
     }
 
@@ -1311,11 +1379,15 @@ impl Model {
         self.repo_names().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, path)| path.to_string())
     }
 
-    /// Names that finish the `#project` or `@repo` being typed in the new-task box.
+    /// Names that finish the tag being typed in the new-task box.
     pub fn compose_suggestions(&self) -> Vec<String> {
         match self.compose.as_deref().and_then(compose::completing) {
-            Some(('@', typed)) => compose::suggest(typed, self.repo_names().map(|(name, _)| name)),
-            Some((_, typed)) => compose::suggest(typed, self.tasks.projects()),
+            Some(('>', typed)) => compose::suggest(&typed, self.repo_names().map(|(name, _)| name)),
+            Some(('@', typed)) => compose::suggest(&typed, self.known.names.agents.iter().map(String::as_str)),
+            Some(('$', typed)) => compose::suggest(&typed, self.known.names.skills.iter().map(String::as_str)),
+            // The shell listed them for what is typed.
+            Some(('/', _)) => self.known.entries.iter().take(compose::MAX_SUGGESTIONS).cloned().collect(),
+            Some((_, typed)) => compose::suggest(&typed, self.tasks.projects()),
             None => Vec::new(),
         }
     }
@@ -1737,7 +1809,13 @@ mod tests {
         for request in [
             Action::Split { axis: Right, kind: Kind::Empty },
             Action::Focus { pane: 1 },
-            Action::TaskAdd { title: "t".into(), priority: 3, state: State::Running, tab: None },
+            Action::TaskAdd {
+                title: "t".into(),
+                priority: 3,
+                state: State::Running,
+                tab: None,
+                assign: Assign::default(),
+            },
         ] {
             m.update(request.clone().sent_by(Origin::Socket));
             assert_eq!(m.mode(), Mode::Sneak, "{request:?}");
@@ -1888,6 +1966,7 @@ mod tests {
         Action::OpenRepo { .. },
         Action::RestoreTasks { .. },
         Action::TaskAdd { .. },
+        Action::SetKnown { .. },
         Action::TaskSetState { .. },
         Action::TaskSnooze { .. },
         Action::TaskHold { .. },
@@ -1964,7 +2043,8 @@ mod tests {
             Action::SetRepos { repos: Vec::new() },
             Action::OpenRepo { path: text(), axis: Right },
             Action::RestoreTasks { tasks: Vec::new(), floor: 0 },
-            Action::TaskAdd { title: text(), priority: 3, state: State::Running, tab: None },
+            Action::TaskAdd { title: text(), priority: 3, state: State::Running, tab: None, assign: Assign::default() },
+            Action::SetKnown { line: text(), names: None, paths: Vec::new(), entries: Vec::new() },
             Action::TaskSetState { id: 1, state: State::Done },
             Action::TaskSnooze { id: 1, until: 0 },
             Action::TaskHold { id: 1 },
@@ -1980,7 +2060,7 @@ mod tests {
             Action::ComposeComplete,
             Action::ComposeSubmit,
             Action::CloseCompose,
-            Action::TaskFromLine { line: text() },
+            Action::TaskFromLine { line: text(), known: Default::default() },
             Action::SetApps { names: Vec::new() },
             Action::FocusList,
             Action::LeaveList,
@@ -2056,7 +2136,13 @@ mod tests {
         assert_eq!((second.len(), third.len()), (2, 2), "a × takes two letters");
 
         // News: the mode stays on, and tab 2 is the task's, off the bar.
-        let add = Action::TaskAdd { title: "t".into(), priority: 3, state: State::Running, tab: Some(2) };
+        let add = Action::TaskAdd {
+            title: "t".into(),
+            priority: 3,
+            state: State::Running,
+            tab: Some(2),
+            assign: Assign::default(),
+        };
         m.update(add.sent_by(Origin::Socket));
         assert_eq!((m.mode(), m.visible_tabs()), (Mode::Sneak, vec![0, 2]));
         // The next frame draws tabs 1 and 3: tab 3 where tab 2 was.
@@ -2143,7 +2229,13 @@ mod tests {
     #[test]
     fn the_home_screen_shows_while_the_tab_on_show_has_no_panes() {
         let mut m = Model::default();
-        m.update(Action::TaskAdd { title: "ask".into(), priority: 1, state: State::NeedsYou, tab: None });
+        m.update(Action::TaskAdd {
+            title: "ask".into(),
+            priority: 1,
+            state: State::NeedsYou,
+            tab: None,
+            assign: Assign::default(),
+        });
         let home = m.home(&[]).expect("no panes: the home screen");
         assert_eq!((home.nodes.len(), home.needs_you.len()), (1, 1));
         m.update(Action::Split { axis: Right, kind: Kind::Empty });
@@ -2443,9 +2535,13 @@ mod tests {
         m.update(Action::SetRepos { repos: listed() });
         term(&mut m); // pane 1, in a tab of no task
         m.update(Action::TaskFromLine {
-            line: "fix the zoom flicker on the canvas when zooming #canvas @app-2".into(),
+            line: "fix the zoom flicker on the canvas when zooming #canvas >app-2".into(),
+            known: Default::default(),
         });
-        m.update(Action::TaskFromLine { line: "ask Ana about the retry plan before Friday".into() });
+        m.update(Action::TaskFromLine {
+            line: "ask Ana about the retry plan before Friday".into(),
+            known: Default::default(),
+        });
         assert_eq!((m.current_task, tab_titles(&m)), (None, vec!["Tab 1"]));
 
         // The first time: the task gets a tab named after it, with a terminal in its repository.
@@ -2481,8 +2577,20 @@ mod tests {
     #[test]
     fn pop_next_opens_the_task_that_needs_the_user() {
         let mut m = Model::default();
-        m.update(Action::TaskAdd { title: "runs".into(), priority: 1, state: State::Running, tab: None });
-        m.update(Action::TaskAdd { title: "waits".into(), priority: 2, state: State::NeedsYou, tab: None });
+        m.update(Action::TaskAdd {
+            title: "runs".into(),
+            priority: 1,
+            state: State::Running,
+            tab: None,
+            assign: Assign::default(),
+        });
+        m.update(Action::TaskAdd {
+            title: "waits".into(),
+            priority: 2,
+            state: State::NeedsYou,
+            tab: None,
+            assign: Assign::default(),
+        });
         // Not the more urgent one that is only running.
         m.update(Action::TaskOpen { id: None });
         assert_eq!((m.current_task, tab_titles(&m)), (Some(2), vec!["waits"]));
@@ -2500,16 +2608,34 @@ mod tests {
         m.update(Action::NewTab);
         let (first, second) = (m.tabs[0].id, m.tabs[1].id);
         // A background tab: the view stays where it is.
-        m.update(Action::TaskAdd { title: "a".into(), priority: 1, state: State::Running, tab: Some(first) });
+        m.update(Action::TaskAdd {
+            title: "a".into(),
+            priority: 1,
+            state: State::Running,
+            tab: Some(first),
+            assign: Assign::default(),
+        });
         assert_eq!((m.current_task, m.tabs[0].task, tab_titles(&m).len()), (None, Some(1), 1));
         // The tab on show: the view is now the task's.
-        m.update(Action::TaskAdd { title: "b".into(), priority: 1, state: State::Running, tab: Some(second) });
+        m.update(Action::TaskAdd {
+            title: "b".into(),
+            priority: 1,
+            state: State::Running,
+            tab: Some(second),
+            assign: Assign::default(),
+        });
         assert_eq!((m.current_task, tab_titles(&m).len()), (Some(2), 1));
         // Opening the first task shows the tab it was given, with its pane.
         m.update(Action::TaskOpen { id: Some(1) });
         assert_eq!((m.active, m.focused), (0, Some(1)));
         // A follow-up filed from that tab does not take it from the task that has it.
-        m.update(Action::TaskAdd { title: "c".into(), priority: 1, state: State::Captured, tab: Some(first) });
+        m.update(Action::TaskAdd {
+            title: "c".into(),
+            priority: 1,
+            state: State::Captured,
+            tab: Some(first),
+            assign: Assign::default(),
+        });
         assert_eq!((m.current_task, m.tabs[0].task), (Some(1), Some(1)));
     }
 
@@ -2517,7 +2643,13 @@ mod tests {
     fn closing_a_tasks_last_tab_leaves_it_an_empty_one() {
         let mut m = Model::default();
         term(&mut m);
-        m.update(Action::TaskAdd { title: "a".into(), priority: 1, state: State::Running, tab: None });
+        m.update(Action::TaskAdd {
+            title: "a".into(),
+            priority: 1,
+            state: State::Running,
+            tab: None,
+            assign: Assign::default(),
+        });
         m.update(Action::TaskOpen { id: Some(1) });
         m.update(Action::NewTab);
         term(&mut m); // pane 2, in the task's second tab
@@ -2554,7 +2686,13 @@ mod tests {
         let second = m.tabs[1].id;
         m.update(Action::SelectTab { index: 0 });
         for (title, tab) in [("a", None), ("b", Some(second)), ("c", None)] {
-            m.update(Action::TaskAdd { title: title.into(), priority: 1, state: State::NeedsYou, tab });
+            m.update(Action::TaskAdd {
+                title: title.into(),
+                priority: 1,
+                state: State::NeedsYou,
+                tab,
+                assign: Assign::default(),
+            });
         }
         m.update(Action::ToggleSection { section: Section::Tasks });
         m.update(Action::FocusList);
@@ -2579,13 +2717,25 @@ mod tests {
     fn the_selection_follows_its_task_when_others_change_the_inbox() {
         let mut m = Model::default();
         for title in ["a", "b", "c"] {
-            m.update(Action::TaskAdd { title: title.into(), priority: 2, state: State::NeedsYou, tab: None });
+            m.update(Action::TaskAdd {
+                title: title.into(),
+                priority: 2,
+                state: State::NeedsYou,
+                tab: None,
+                assign: Assign::default(),
+            });
         }
         m.update(Action::ToggleSection { section: Section::Tasks });
         m.update(Action::FocusList);
         m.update(Action::ListMove { delta: 1 }); // on b
         // An agent files a more urgent task above, and another task leaves: still on b.
-        m.update(Action::TaskAdd { title: "urgent".into(), priority: 1, state: State::NeedsYou, tab: None });
+        m.update(Action::TaskAdd {
+            title: "urgent".into(),
+            priority: 1,
+            state: State::NeedsYou,
+            tab: None,
+            assign: Assign::default(),
+        });
         assert_eq!((m.list, m.list_rows()[2].clone()), (Some(2), ListRow::Task(2)));
         m.update(Action::TaskSetState { id: 1, state: State::Cleaned });
         assert_eq!(m.list, Some(1));
@@ -2648,12 +2798,12 @@ mod tests {
         m.update(Action::ComposeSubmit);
         assert_eq!((m.tasks.list.len(), m.mode()), (0, Mode::Compose));
         // Tab finishes the repository being typed; the name need not match in case.
-        m.update(Action::ComposeType { text: "fix zoom #Canvas @AP".into() });
+        m.update(Action::ComposeType { text: "fix zoom #Canvas >AP".into() });
         assert_eq!(m.compose_suggestions(), ["app", "app-2"], "worktrees too");
         m.update(Action::ComposeComplete);
         m.update(Action::ComposeType { text: "p1x".into() });
         m.update(Action::ComposeBackspace);
-        assert_eq!(m.compose.as_deref(), Some("fix zoom #Canvas @app p1"));
+        assert_eq!(m.compose.as_deref(), Some("fix zoom #Canvas >app p1"));
         m.update(Action::ComposeSubmit);
         let task = &m.tasks.list[0];
         assert_eq!((task.title.as_str(), task.state, task.priority), ("fix zoom", State::Captured, 1));
@@ -2665,7 +2815,7 @@ mod tests {
         m.update(Action::OpenCompose { text: "look #c".into() });
         assert_eq!(m.compose_suggestions(), ["Canvas"]);
         m.update(Action::CloseCompose);
-        m.update(Action::TaskFromLine { line: "ask @ana about @app-2".into() });
+        m.update(Action::TaskFromLine { line: "ask @ana about >app-2".into(), known: Default::default() });
         assert_eq!(
             (m.tasks.list[1].title.as_str(), m.tasks.list[1].repo.as_deref()),
             ("ask @ana about", Some("/code/app-2"))
@@ -2675,7 +2825,7 @@ mod tests {
         m.update(Action::ComposeType { text: "yz".into() });
         assert_eq!(m.compose.as_ref().map(|line| line.chars().count()), Some(MAX_TITLE));
         m.update(Action::CloseCompose);
-        m.update(Action::TaskFromLine { line: "x".repeat(MAX_TITLE + 1) });
+        m.update(Action::TaskFromLine { line: "x".repeat(MAX_TITLE + 1), known: Default::default() });
         assert_eq!(m.tasks.list.len(), 2);
         // The picker may open again over itself, but not over the box; a dead pane closes behind either.
         m.update(Action::OpenPicker { axis: Right, new_tab: false, items: vec![PickItem::Terminal] });
@@ -2689,6 +2839,82 @@ mod tests {
         m.update(Action::ToggleKeys);
         m.update(Action::OpenCompose { text: String::new() });
         assert_eq!(m.compose, None);
+    }
+
+    #[test]
+    fn tags_count_only_for_names_the_shell_read() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        let line = "review the export >app @Codex $Code-Review $code-review /src/export ~/gone p2";
+        // Nothing read yet: only the repository is known.
+        assert_eq!(m.draft(line).title, "review the export @Codex $Code-Review $code-review /src/export ~/gone");
+        assert_eq!(m.draft_repo(line).as_deref(), Some("/code/app"));
+        let list = |list: &[&str]| list.iter().map(|name| name.to_string()).collect::<Vec<_>>();
+        let names = compose::Names { agents: list(&["claude", "codex"]), skills: list(&["code-review", "deploy"]) };
+        let found = compose::PathFound { typed: "/src/export".into(), resolved: "/code/app/src/export".into() };
+        // What the shell read for a line counts for that line only: an answer that comes after
+        // the line has changed is dropped. The names are good for any line.
+        m.update(Action::OpenCompose { text: "see /src/ex".into() });
+        assert!(!m.compose_read());
+        let stale = Action::SetKnown {
+            line: "see /src/e".into(),
+            names: Some(names.clone()),
+            paths: vec![found.clone()],
+            entries: list(&["/src/elsewhere/"]),
+        };
+        m.update(stale);
+        assert_eq!((m.compose_suggestions(), m.compose_read()), (vec![], false));
+        m.update(Action::SetKnown {
+            line: "see /src/ex".into(),
+            names: None,
+            paths: Vec::new(),
+            entries: list(&["/src/export/", "/src/extra.rs"]),
+        });
+        assert_eq!((m.compose_suggestions(), m.compose_read()), (list(&["/src/export/", "/src/extra.rs"]), true));
+        m.update(Action::ComposeComplete);
+        assert_eq!((m.compose.as_deref(), m.compose_read()), (Some("see /src/export/"), false));
+        m.update(Action::CloseCompose);
+        // Tab offers each tag's own names.
+        for (typed, offered) in [("@c", vec!["claude", "codex"]), ("$dep", vec!["deploy"])] {
+            m.update(Action::OpenCompose { text: typed.into() });
+            assert_eq!(m.compose_suggestions(), offered, "{typed}");
+            m.update(Action::CloseCompose);
+        }
+        // Filed from the box: agent and skill as they are spelled where they were read, the skill
+        // once; the path with where it was found; the unknown path stays in the title.
+        m.update(Action::OpenCompose { text: line.into() });
+        m.update(Action::SetKnown { line: line.into(), names: None, paths: vec![found.clone()], entries: Vec::new() });
+        m.update(Action::ComposeSubmit);
+        let task = &m.tasks.list[0];
+        assert_eq!(
+            (task.title.as_str(), task.repo.as_deref(), task.priority),
+            ("review the export ~/gone", Some("/code/app"), 2)
+        );
+        assert_eq!((task.agent.as_deref(), task.skills.as_slice()), (Some("codex"), &list(&["code-review"])[..]));
+        assert_eq!(
+            (task.paths.as_slice(), task.resolved.as_slice()),
+            (&list(&["/src/export"])[..], &list(&["/code/app/src/export"])[..])
+        );
+        assert_eq!(m.task_tags(task), ">app · @codex · 1 path · 1 skill");
+        // A line filed from outside brings what was read for it, and leaves what the box knows
+        // alone: the line the user is typing keeps its tags.
+        m.update(Action::OpenCompose { text: "mine $deploy".into() });
+        let theirs = compose::Known {
+            names: compose::Names { agents: list(&["ana"]), skills: Vec::new() },
+            ..Default::default()
+        };
+        m.update(Action::TaskFromLine { line: "ask @ana $deploy".into(), known: theirs });
+        assert_eq!((m.tasks.list[1].title.as_str(), m.tasks.list[1].agent.as_deref()), ("ask $deploy", Some("ana")));
+        assert_eq!(m.draft("mine $deploy").skills, list(&["deploy"]));
+        m.update(Action::ComposeSubmit);
+        assert_eq!(
+            (m.tasks.list[2].title.as_str(), m.tasks.list[2].skills.as_slice()),
+            ("mine", &list(&["deploy"])[..])
+        );
+        // The socket's `task_add` names them without a line, in the same step.
+        let assign = Assign { agent: Some("claude".into()), skills: list(&["a", "b"]), ..Assign::default() };
+        m.update(Action::TaskAdd { title: "a".into(), priority: 1, state: State::Running, tab: None, assign });
+        assert_eq!(m.task_tags(&m.tasks.list[3]), "@claude · 2 skills");
     }
 
     fn listed() -> Vec<Repo> {
@@ -2990,7 +3216,13 @@ mod tests {
     fn a_pane_moves_only_among_the_tabs_of_the_task_on_show() {
         let mut m = Model::default();
         term(&mut m);
-        m.update(Action::TaskAdd { title: "fix".into(), priority: 3, state: State::Captured, tab: None });
+        m.update(Action::TaskAdd {
+            title: "fix".into(),
+            priority: 3,
+            state: State::Captured,
+            tab: None,
+            assign: Assign::default(),
+        });
         let task = m.tasks.list[0].id;
         m.update(Action::TaskOpen { id: Some(task) });
         term(&mut m);

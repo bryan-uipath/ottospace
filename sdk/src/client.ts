@@ -298,7 +298,7 @@ export class Client {
   async taskList(): Promise<InboxReply> {
     return inboxReply(await this.send({ cmd: "task_list" }));
   }
-  /** Files a task from one line: `"fix zoom flicker #canvas @repo p1"`. */
+  /** Files a task from one line: `"fix zoom flicker #canvas >repo @claude p1"`. */
   async taskNew(args: { line: string }): Promise<TaskReply> {
     return taskReply(await this.send({ cmd: "task_new", ...args }));
   }

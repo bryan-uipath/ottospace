@@ -183,6 +183,10 @@ function task(value: unknown, at: string): Task {
     dismissed: bool(o.dismissed, `${at}.dismissed`),
     project: orNull(str)(o.project, `${at}.project`),
     repo: orNull(str)(o.repo, `${at}.repo`),
+    agent: orNull(str)(o.agent, `${at}.agent`),
+    paths: list(str)(o.paths, `${at}.paths`),
+    resolved: list(str)(o.resolved, `${at}.resolved`),
+    skills: list(str)(o.skills, `${at}.skills`),
   };
 }
 
@@ -418,6 +422,7 @@ export function snapshot(value: unknown): Snapshot {
     copied: orNull(str)(o.copied, "copied"),
     inbox: list(inboxRow)(o.inbox, "inbox"),
     needs_you: num(o.needs_you, "needs_you"),
+    compose_read: bool(o.compose_read, "compose_read"),
     home: orNull(home)(o.home, "home"),
     home_drawn: homeDrawn(o.home_drawn, "home_drawn"),
     closed_apps: list(str)(o.closed_apps, "closed_apps"),

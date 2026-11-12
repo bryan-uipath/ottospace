@@ -21,6 +21,26 @@ use std::path::{Component, Path, PathBuf};
 use serde::Serialize;
 use station::Station;
 
+/// Where the runners keep their files on this machine, by the environment.
+pub struct ConfigDirs {
+    /// Claude Code: `$CLAUDE_CONFIG_DIR` if set and not empty, and `~/.claude`.
+    pub claude: Vec<PathBuf>,
+    /// Codex: `$CODEX_HOME` if set and not empty, or `~/.codex`.
+    pub codex: Option<PathBuf>,
+}
+
+/// The one place that says where the runners' folders are: sessions are under them, and so are
+/// their skills.
+pub fn config_dirs() -> ConfigDirs {
+    let set = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty()).map(PathBuf::from);
+    let home = set("HOME");
+    let mut claude: Vec<PathBuf> = set("CLAUDE_CONFIG_DIR").into_iter().collect();
+    if let Some(default) = home.as_ref().map(|home| home.join(".claude")).filter(|dir| !claude.contains(dir)) {
+        claude.push(default);
+    }
+    ConfigDirs { claude, codex: set("CODEX_HOME").or(home.map(|home| home.join(".codex"))) }
+}
+
 /// Which program ran the session.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

@@ -63,6 +63,14 @@ export interface Task {
   project: string | null;
   /** A repository path. */
   repo: string | null;
+  /** Who works it: `claude`, `codex`, or a saved agent's name. */
+  agent: string | null;
+  /** Paths the task is about, as typed. */
+  paths: string[];
+  /** Where each of `paths` was found when the task was filed, in the same order; or empty. */
+  resolved: string[];
+  /** Skills to load for it. */
+  skills: string[];
 }
 
 export interface InboxRow extends Task {
@@ -274,6 +282,8 @@ export interface Snapshot {
   copied: string | null;
   inbox: InboxRow[];
   needs_you: number;
+  /** The tags of the line in the new-task box have been looked up. */
+  compose_read: boolean;
   /** Null while the tab on show has a pane. */
   home: Home | null;
   home_drawn: HomeDrawn;
@@ -418,6 +428,12 @@ export interface TaskAddArgs {
   state?: TaskState;
   /** The `id` of an open tab of no task, which becomes the task's. */
   tab?: number;
+  /** A name `task_new` would know: `claude`, `codex` or a saved agent. Any other is refused. */
+  agent?: string;
+  /** Kept as given, not checked. */
+  paths?: string[];
+  /** Installed skills, by name. An unknown one is refused. */
+  skills?: string[];
 }
 export interface CaptureArgs {
   pane?: PaneId;

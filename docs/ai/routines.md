@@ -171,9 +171,14 @@ Recommended: **(a) now**, (b) when worktree-at-kickoff exists, behind an explici
 
 ### Nomenclature in the new-task box
 
-Today (`crates/ottospace-core/src/compose.rs`): `#project`, `@repo`, `p1`–`p9`. An `@name` counts
-only if a listed repository has that name; any other stays in the title. Bryan's "@ projects" is
-today's `#`.
+**Decided** (Bryan): `@agent`, `>repo`, `/path`, `$skill`; `#project` and `p1`–`p9` stay. Built
+in the `task-tags` PR; the table of record is "Tags" in `docs/reference.md`. `@agent`, `/path` and
+`$skill` are stored and shown; nothing acts on them yet. The options below are the record of how
+it was weighed: none of them was taken as written.
+
+Before (`crates/ottospace-core/src/compose.rs`): `#project`, `@repo`, `p1`–`p9`. An `@name` counted
+only if a listed repository had that name; any other stayed in the title. Bryan's "@ projects" is
+`#`.
 
 `@` conventionally means "who". That fits an agent, not a repository.
 
@@ -184,7 +189,8 @@ today's `#`.
 | (b) keep `@repo`; `>agent` or `!agent` | `fix zoom flicker #canvas @flow-app >reviewer p1` | No change to what exists | `@` stays "where", against habit. `>` reads as redirect, `!` as urgent or shell history |
 | (c) one `@` for both; completion shows the kind | `fix zoom flicker #canvas @flow-app @reviewer p1` | One sigil to learn | "The last `@` wins" no longer holds. A repo and an agent with one name collide. The line no longer says which is which |
 
-Recommended: **(a)**, `@agent` and `/repo`.
+Recommended then: **(a)**, `@agent` and `/repo`. Decided instead: `@agent` and `>repo`, which
+leaves `/` for paths.
 
 Checked against `compose.rs`: one rule to add, one collision to accept.
 
@@ -569,6 +575,22 @@ What ottospace must not weaken:
   notifications as plain strings: no markup, no shell, no links made from them.
 - **Assigning an agent to a task does not start it** (section 2, option (a)), so a socket client
   cannot start an agent by filing tasks.
+- **A task's `agent`, `skills`, `paths` and `resolved` are text until checked.** They come from a
+  line anyone can type or send, and from task files anyone with the folder can edit. Today they
+  are stored and shown, nothing more. Before anything acts on them (starts an agent, loads a
+  skill, opens or passes a path), at the moment of acting and not only when the task was filed:
+  - `agent` must be a built-in (`claude`, `codex`) or a name read from the agents folder by a
+    scan. Look the name up in that list; never join it into a path as given.
+  - Each skill must be a single path component (no `/`, no `..`) that the skill scan found. Use
+    the scan's own path for it, not one built from the name.
+  - Each path is resolved again against the task's repository, canonicalised, and checked to be
+    inside that repository (or the home folder for `~/`). `resolved` on the task is a record of
+    where it was found once, not a permission: a symlink may have changed since.
+  - Reject any value with a control character or a leading `-`.
+  - Pass values to a program as separate arguments (argv), never as shell text.
+  `task_new` and the box keep an `agent` or `skill` only if the scan knows the name, and
+  `task_add` refuses an unknown one. That narrows what is stored; it does not replace the checks
+  above.
 - **Redaction stays, and is finished.** ottobot masks credential-looking words in the stderr tail
   it keeps in metadata and reports. `Events` and `runs/<id>.jsonl` hold raw stderr, so
   `routine-tail` masks before it prints. `ottospace-sessions` lets only derived facts out. Neither
@@ -595,7 +617,7 @@ One line each.
 8. DECIDED: "agents" are definitions (this note). Live ones are "sessions": the crate is
    `ottospace-sessions`, the subcommand `ottospace sessions`, the setting `sessions`.
 9. Two rail entries (Routines, Agents) or one with two groups? (Proposed: two.)
-10. Sigils: `@agent` and `/repo`, changing `@repo` now? (Proposed: yes.) Or `~repo`?
+10. Sigils: decided. `@agent`, `>repo`, `/path`, `$skill`; `@repo` is gone.
 11. Does assigning an agent start it at once, or when the task is opened? (Proposed: when opened.)
 12. Hide-on-close: are hosted windows given back while the window is hidden, and taken again when
     it returns? (Proposed: yes, with session restore's re-attach.)
