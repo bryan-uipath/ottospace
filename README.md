@@ -47,7 +47,8 @@ macOS, so you may have to grant the permissions again after an update.
 | Visual mode: select terminal text with vi keys | Works today |
 | Other key modes: insert, sneak | Designed |
 | Tasks inbox: tasks grouped by what needs you first; snooze, hold, dismiss, undo. Kept in `~/.ottospace/tasks` | Works today |
-| "Pop next": open the next task that needs you (socket `task_pop`; no key yet) | Works today |
+| "Pop next" (⌘⇧N): open the next task that needs you | Works today |
+| New task box (⌘N): one line, with `#project` and `@repo` | Works today |
 | Tasks: each owns a workspace (tabs, then splits) with a brief pane and automatic cleanup | Designed |
 | Quick capture (⌘⌘): turn something on screen into a task and dispatch it to an agent | Designed |
 | Focus blocks: hide Slack, with an agent that can break through | Designed |
@@ -151,6 +152,8 @@ the tag does not match the crate version.
 | Drag / double-click / triple-click | Select text / a word / a line in a terminal |
 | ⌘C | Copy the terminal's selection (nothing selected: does nothing) |
 | ⌘V | Paste into the terminal |
+| ⌘N | New task: a box opens over the workspace. Type what needs doing; `#name` tags a project, `@name` names a repository (Tab completes both), `p1` to `p9` sets the priority. ↵ files it and closes the box; Esc closes |
+| ⌘⇧N | Next task: brings forward the tab of the first task that needs you |
 | ⌘⇧E | List mode: the bar (Apps, Tasks, Repos) takes the keyboard. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; Esc or ⌘⇧E leaves |
 | ⌘⇧C | Visual mode on the terminal: `hjkl`/arrows, `w b e 0 ^ $`, `H M L` move; `v` / `V` select; `y` or ↵ copies and leaves; Esc leaves |
 

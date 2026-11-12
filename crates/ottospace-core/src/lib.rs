@@ -2,6 +2,7 @@
 //! The shell (`ottospace`) turns input into [`Action`]s and carries out the [`Effect`]s.
 
 pub mod ax;
+pub mod compose;
 pub mod keys;
 pub mod layout;
 pub mod list;

@@ -15,6 +15,8 @@ pub const PRIMARY: u32 = 0x00b8db;
 pub const APP: u32 = 0xff8904;
 pub const PICK: u32 = 0x00d492;
 pub const VISUAL: u32 = 0xa684ff;
+/// The new-task box is open.
+pub const COMPOSE: u32 = 0x9ae600;
 /// List mode: the secondary bar has the keyboard.
 pub const LIST: u32 = 0xfb64b6;
 pub const ERROR: u32 = 0xff8484;
@@ -31,6 +33,7 @@ pub fn accent(mode: Mode) -> u32 {
         Mode::Pick => PICK,
         Mode::Visual => VISUAL,
         Mode::List => LIST,
+        Mode::Compose => COMPOSE,
     }
 }
 

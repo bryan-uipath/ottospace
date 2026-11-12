@@ -166,6 +166,17 @@ pub enum Request {
     TaskUndo,
     /// The inbox, in order: `{"ok":true,"inbox":[{"group":"needs_you","id":1,..}]}`, not the state.
     TaskList,
+    /// Files a task from one line, as the new-task box does: `#tag` is the project, `@name` a
+    /// listed repository, `p1`..`p9` the priority, the rest the title. The reply is
+    /// `{"ok":true,"task":{..}}`.
+    TaskNew {
+        line: String,
+    },
+    /// Opens the new-task box for the user, with `text` in it to edit: a draft, not a filed task.
+    Compose {
+        #[serde(default)]
+        text: String,
+    },
     /// Brings forward the tab of the first task that needs the user. The reply is
     /// `{"ok":true,"task":{..},"opened":true}`; `"task":null` if nothing needs the user, and
     /// `"opened":false` if no tab came forward.
