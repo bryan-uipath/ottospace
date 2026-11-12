@@ -87,21 +87,18 @@ impl SCStreamOutputTrait for Output {
     }
 }
 
-/// Stream config for a pane of `size` points at `scale` (Retina = 2). Scales the window to fill it.
-/// `crop` > 0: show only the window below its top `crop` points (the title bar), unscaled.
+/// Stream config showing `size` points of the window at `scale` (Retina = 2), from its top left
+/// below its top `crop` points (the title bar), never scaled: a window that refused the pane's
+/// size (Outlook's minimum) looks as it does when it is live.
 fn stream_config(size: CGSize, crop: f64, scale: f64) -> SCStreamConfiguration {
     // 420f is the only format gpui's surface renderer accepts.
-    let config = SCStreamConfiguration::new()
+    SCStreamConfiguration::new()
         .with_width((size.width * scale).max(1.0) as u32)
         .with_height((size.height * scale).max(1.0) as u32)
         .with_scales_to_fit(true)
         .with_pixel_format(PixelFormat::YCbCr_420f)
-        .with_fps(60);
-    if crop > 0.0 {
-        config.with_source_rect(screencapturekit::cg::CGRect::new(0.0, crop, size.width, size.height))
-    } else {
-        config
-    }
+        .with_fps(60)
+        .with_source_rect(screencapturekit::cg::CGRect::new(0.0, crop, size.width, size.height))
 }
 
 fn to_cg(size: gpui::Size<Pixels>) -> CGSize {
@@ -127,6 +124,8 @@ struct Hosted {
     bounds: Rc<Cell<Bounds<Pixels>>>,
     /// Size the window was parked at, to re-park only when the pane resizes.
     parked_size: CGSize,
+    /// The part of the window the stream shows, in points: no larger than the pane or the window.
+    shown: CGSize,
     /// Last pane content rect the live window was placed over, to re-place only on change.
     placed: CGRect,
 }
@@ -162,6 +161,7 @@ impl Hosted {
             crop: 0.0,
             bounds: Rc::default(),
             parked_size: CGSize::ZERO,
+            shown: original.size,
             placed: CGRect::default(),
         })
     }
@@ -188,10 +188,16 @@ impl Hosted {
             // Dock there (a pane 818pt tall parked at 805pt), and the stream no longer matches.
             let _ = self.window.set_position(display::parking_spot());
             let _ = self.window.set_size(CGSize::new(size.width, size.height + crop));
-            // Match the stream to the pane so frames aren't letterboxed into a stale-sized buffer.
-            let config = stream_config(size, crop, scale);
-            self.latest.expect(&config);
-            let _ = self.stream.update_configuration(&config);
+            // Show what the pane and the window share: a window that refused the size is cut off
+            // (larger) or leaves a gap (smaller), never scaled.
+            let window = self.window.frame().map_or(size, |f| CGSize::new(f.size.width, f.size.height - crop));
+            let shown = CGSize::new(size.width.min(window.width), size.height.min(window.height));
+            let config = stream_config(shown, crop, scale);
+            // Frames of another size are dropped, so expect the new one only once it is set.
+            if self.stream.update_configuration(&config).is_ok() {
+                self.latest.expect(&config);
+                self.shown = shown;
+            }
         }
         let _ = self.window.set_position(display::parking_spot());
         self.parked_size = size;
@@ -2311,7 +2317,13 @@ impl Workspace {
         let content = if let Some(hosted) = self.hosted.get(&id) {
             // While live, keep showing the last frame under the real window, so any gap during a swap is invisible.
             match hosted.frame() {
-                Some(buffer) => surface(buffer).size_full().into_any_element(),
+                Some(buffer) => {
+                    // At its own size from the top left: a window smaller than the pane is not stretched.
+                    surface(buffer)
+                        .w(px(hosted.shown.width as f32))
+                        .h(px(hosted.shown.height as f32))
+                        .into_any_element()
+                }
                 None => div().child("waiting for frames…").into_any_element(),
             }
         } else if let Some(terminal) = self.terminals.get(&id) {

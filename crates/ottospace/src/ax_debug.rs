@@ -120,7 +120,7 @@ impl Overlay {
     }
 
     /// Outlines and label chips over the whole window, plus a line saying what was read. A parked
-    /// window is sized to its pane and fills it, so its frames map 1:1 into the pane.
+    /// window is shown unscaled from the pane's top left, so its frames map 1:1 into the pane.
     pub fn render(&self) -> impl IntoElement {
         let boxes = self.targets.iter().map(|t| {
             let f = t.target.frame;
