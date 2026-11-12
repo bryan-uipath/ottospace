@@ -3180,6 +3180,25 @@ mod tests {
         }
     }
 
+    /// The TypeScript client (`sdk/`) writes one line per method to this file, as it sends it. Each
+    /// must parse, and every request must be there: a new `Request` variant with no client method
+    /// fails here, and so does a field the client names wrongly.
+    #[test]
+    fn the_sdk_fixture_holds_every_request() {
+        let fixture = include_str!("../../../sdk/test/requests.jsonl");
+        for json in fixture.lines() {
+            let parsed: Result<Request, _> = serde_json::from_str(json);
+            assert!(parsed.is_ok(), "the SDK sends a request the app refuses: {json}: {:?}", parsed.err());
+        }
+        let error = serde_json::from_str::<Request>(r#"{"cmd":"?"}"#).expect_err("? is not a command").to_string();
+        let names: Vec<&str> = error.split('`').skip(3).step_by(2).collect();
+        assert!(names.len() > 20, "could not read the command names from: {error}");
+        for name in names {
+            let sent = fixture.lines().any(|line| line.starts_with(&format!(r#"{{"cmd":"{name}""#)));
+            assert!(sent, "the SDK has no method for `{name}`: add one to sdk/src/client.ts (see sdk/README.md)");
+        }
+    }
+
     /// A missing asset draws as nothing, with no error. Catch a renamed file here.
     #[test]
     fn every_rail_icon_is_embedded() {

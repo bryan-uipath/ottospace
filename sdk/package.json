@@ -1,0 +1,25 @@
+{
+  "name": "ottospace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Typed client for ottospace's control socket",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/otto.ts",
+    "./client": "./src/client.ts",
+    "./types": "./src/types.ts"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "test:bun": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "typescript": "6.0.3"
+  }
+}

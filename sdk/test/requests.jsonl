@@ -1,0 +1,44 @@
+{"cmd":"state"}
+{"cmd":"split","axis":"down","kind":"empty"}
+{"cmd":"type","pane":1,"text":"ls\r"}
+{"cmd":"close","pane":1}
+{"cmd":"focus","pane":1}
+{"cmd":"focus_dir","dir":"left"}
+{"cmd":"focus_cycle","delta":-1}
+{"cmd":"open_app","name":"Safari","axis":"right"}
+{"cmd":"enter","pane":1}
+{"cmd":"leave"}
+{"cmd":"section","section":"tasks"}
+{"cmd":"picker","axis":"down","new_tab":true}
+{"cmd":"new_tab"}
+{"cmd":"select_tab","index":0}
+{"cmd":"cycle_tab","delta":1}
+{"cmd":"close_tab","index":1}
+{"cmd":"picker_query","query":"term"}
+{"cmd":"picker_move","delta":1}
+{"cmd":"picker_choose","index":0}
+{"cmd":"picker_close"}
+{"cmd":"keys"}
+{"cmd":"key","keys":"cmd-c"}
+{"cmd":"mouse_down","pane":1,"x":2.5,"y":5,"clicks":2}
+{"cmd":"mouse_drag","pane":1,"x":20,"y":5}
+{"cmd":"scroll","pane":1,"lines":40}
+{"cmd":"repos"}
+{"cmd":"open_repo","path":"/Users/me/code/app","axis":"down"}
+{"cmd":"task_add","title":"Fix the zoom flicker","priority":1,"state":"needs_you","tab":2}
+{"cmd":"task_set_state","id":1,"state":"running"}
+{"cmd":"task_snooze","id":1,"seconds":3600}
+{"cmd":"task_hold","id":1}
+{"cmd":"task_dismiss","id":1}
+{"cmd":"task_undo"}
+{"cmd":"task_list"}
+{"cmd":"task_new","line":"fix zoom flicker #canvas p1"}
+{"cmd":"compose","text":"a draft"}
+{"cmd":"task_pop"}
+{"cmd":"task_open","id":1}
+{"cmd":"task_leave"}
+{"cmd":"capture","pane":1,"history":true}
+{"cmd":"wait","pane":1,"pattern":"^done$","timeout_ms":1000}
+{"cmd":"ax_tree","pane":1,"depth":20,"nodes":500}
+{"cmd":"ax_overlay","refresh":true}
+{"cmd":"quit"}
