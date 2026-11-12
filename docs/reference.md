@@ -121,8 +121,10 @@ review the export PR >canvas-app @codex $code-review /src/export
   stays in the title where it was typed, and so does a `/word` that is not a file or directory.
   `ask @ana`, `costs $5` and `use > 3 workers` are safe. A name starts with a letter, so `#123`,
   `>3` and `$5` are never tags. `#project` always counts: a new name is a new project.
-- **A `/path`** is looked for at the root of the disk, then inside the task's `>repo`:
-  `/src/export` with `>canvas-app` is `src/export` in that repository. It is kept as typed.
+- **A `/path`** is absolute (`/Users/me/notes.md`), under the home folder (`~/notes.md`), or, when
+  the line names a `>repo`, relative to that repository: `/src/export` with `>canvas-app` is
+  `src/export` in it. It counts if a file or directory is there. The task keeps the word as
+  typed, not the place it was found.
 - **How many.** One `#project`, one `>repo`, one `@agent`, one priority: of two, the last one
   counts. Every `/path` and `$skill` is kept, each once (at most 20 of each).
 - **What they do today.** `#project` and `>repo` are used: the home screen groups by project, and
