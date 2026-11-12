@@ -57,6 +57,8 @@ Rules:
   artifact. On `main` a third job, the only one with a write token, replaces the assets of the
   `main-latest` prerelease and moves its tag. Not a required check.
 - `.github/workflows/release.yml`, on a `v*` tag: `scripts/package.sh`, GitHub Release.
+- `.github/workflows/pages.yml`, on pushes to `main` that touch `site/**`: deploys `site/` to GitHub
+  Pages. Never on pull requests. Only its deploy job has `pages: write` and `id-token: write`.
 - Workflows use `pull_request`, never `pull_request_target`, and name their `permissions:`. Pin
   actions by commit.
 
@@ -99,6 +101,14 @@ separate trust decision: see `docs/ai/1-initial-brainstorm/accessibility.md`.
 
 ## Docs
 
+- `README.md` is the front page: the pitch, install, setup and links. Keep it short. Detail lives in
+  `docs/reference.md` (status tables and roadmap, keys, panes, settings, `ottospace ctl`, hosting, the list
+  of design docs), `docs/install.md` (`osi`, other builds, the app bundle) and `docs/development.md`
+  (building, tests, crates, CI, releasing). A new key, setting or capability goes in `docs/reference.md`.
+- `site/` is the static site (`index.html`, `docs.html`, `shots/`), deployed to GitHub Pages by
+  `.github/workflows/pages.yml`. Keep it in step with README's claims: when one changes, change the
+  other, and `site/docs.html` in step with `docs/reference.md`. Neither presents a roadmap item as
+  available.
 - `docs/cheat-sheet.md` — one page for daily use. Update it when a key, a section or a setting changes.
 - `docs/ideas/<n>-<name>.md` — Bryan's own notes. **Never edit, move or reformat.** Read-only input.
 - `docs/ai/<n>-<name>/` — AI-derived output for that note: plans, refinements, research.

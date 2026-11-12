@@ -91,7 +91,7 @@ jobs:
           TAG: main-latest
         run: |
           set -euo pipefail
-          notes="Built from main at $GITHUB_SHA. Replaced on every push to main. Install: \`osi install main\` (see the README)."
+          notes="Built from main at $GITHUB_SHA. Replaced on every push to main. Install: \`osi install main\` (see docs/install.md)."
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             # A run that finishes late must not replace a newer build. Publish when this commit
             # is ahead of the published one, or is the same one (a re-run after a failed upload).

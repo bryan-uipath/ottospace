@@ -81,7 +81,7 @@ cheapest daily win. E is the largest value but needs A, B and D.
 - New or existing app window from the picker, and moving panes: see `app-windows.md`.
 - Tasks as an inbox (snooze, hold, dismiss, pop next, text capture): see `tasks-inbox.md`.
 - Return key: built. F18 through a system hot key; `OTTOSPACE_RETURN_KEY` picks another.
-  The Caps Lock remap is a `hidutil` command in the README, not applied by the app.
+  The Caps Lock remap is a `hidutil` command in `docs/reference.md`, not applied by the app.
 - Backlog, from Bryan 2026-11-11:
   - **Coach.** Count how often each shortcut is used, tier the shortcuts, and show hints or
     achievements. Shares its data with the usage metrics for the weekly review (#1a).

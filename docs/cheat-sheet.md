@@ -1,6 +1,6 @@
 # ottospace cheat sheet
 
-One page for daily use. ⌘/ shows the keys inside the app. Full detail: [README](../README.md).
+One page for daily use. ⌘/ shows the keys inside the app. Full detail: [reference.md](reference.md). Install and update: [install.md](install.md).
 
 ## Start
 
@@ -11,7 +11,7 @@ ottospace            # opens on the Repos list
 - First run: grant your terminal Accessibility (ottospace will not start without it) and Screen Recording (for app panes), in System Settings ▸ Privacy & Security.
 - Click a repository or worktree: a terminal opens there, in the empty pane or else in a split to the right (⇧-click: below).
 - The status bar (bottom left) shows who has the keyboard: `NORMAL`, `APP`, `PICK`, `LIST`, `TASK`, `VISUAL`.
-- Stuck in an app? Click ottospace's rail or top bar. Or press the return key: F18, which most keyboards lack, so map Caps Lock to it (see README) or start with `OTTOSPACE_RETURN_KEY=f13` (f13 to f20). The status bar names the key in use.
+- Stuck in an app? Click ottospace's rail or top bar. Or press the return key: F18, which most keyboards lack, so map Caps Lock to it (see [the return key](reference.md#the-return-key)) or start with `OTTOSPACE_RETURN_KEY=f13` (f13 to f20). The status bar names the key in use.
 
 ## Panes and tabs
 
@@ -44,6 +44,7 @@ The fourth icon, Workbook, is empty for now.
 | I want to | Do |
 |---|---|
 | Put a running app's window in a pane | Apps, click the app (⇧-click: split down). Or ⌘E and pick it |
+| Start an app that is not running | Name it in the `apps` setting. It is listed under "Not running": click it |
 | Type in the app | Click its pane. The status bar turns `APP`; ottospace keys stop |
 | Come back | Click ottospace itself, or the return key |
 | Give the window back to macOS | Come back to ottospace first, then ⌘W on its pane: the window returns to where it was |
@@ -56,7 +57,8 @@ The badge on an app is how many windows it has open. A new window of a hosted ap
 |---|---|
 | File a task | ⌘N, type a line, ↵ |
 | Tag a project, name a repository, set priority | In that line: `#canvas` · `@flow-workbench` · `p1` … `p9`. Tab completes `#` and `@` |
-| Go to the tab of the next task that needs me | ⌘⇧N. Only for a task that has a tab: one an agent filed with `tab`. Tasks from ⌘N have none yet, so for them nothing happens |
+| Open a task: the tab bar shows only its tabs | Click it in Tasks. The first time, it gets a tab named after it. × beside its name on the tab bar goes back |
+| Open the next task that needs me | ⌘⇧N |
 | See the inbox | Tasks on the rail: Needs you, Running, Captured, On hold, Done |
 | Snooze 1 hour / hold / dismiss / undo | ⌘⇧E on Tasks, then `s` / `h` / `x` / `u` |
 
@@ -104,7 +106,9 @@ A shell started by ottospace has `$OTTOSPACE_PANE` and `$OTTOSPACE_TAB`.
 {
   "terminal": { "font": "JetBrains Mono", "font_size": 14 },
   "repos": ["~/code", "~/notes"],
-  "tasks": "~/notes/tasks"
+  "tasks": "~/notes/tasks",
+  "apps": ["Microsoft Outlook", "Slack"],
+  "windows": [{ "app": "us.zoom.xos", "title": "Zoom Meeting", "do": "ignore" }]
 }
 ```
 
@@ -112,11 +116,13 @@ A mistake in a key (one that does not exist, or a wrong value) shows in the stat
 takes its default and the others still apply. If the file is not a JSON object at all, every
 setting takes its default.
 
+`windows` rules name windows ottospace leaves alone, by `app`, `title` and `subrole`: [reference](reference.md#settings).
+
 `OTTOSPACE_REPOS` (directories, `:` between them) wins over `repos`. `OTTOSPACE_HOME` names another folder than `~/.ottospace`.
 
 ## Not there yet
 
 - Quitting loses tabs, splits and terminals (tasks and settings are kept).
-- A task filed with ⌘N owns no tab and no worktree; filing one starts nothing. (An agent can attach a tab: `task_add` with `tab`.)
+- Filing a task starts nothing: no agent and no worktree. The task gets its first tab when you open it.
 - No paste or arrow keys in the new-task box.
-- Apps that are not running are not listed.
+- An app that is not running is listed only if the `apps` setting names it.
