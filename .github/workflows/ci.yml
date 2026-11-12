@@ -2,8 +2,12 @@ name: CI
 
 on:
   pull_request:
+    # Text nobody compiles: no macOS runner for it. (`crates/**/*.md` is compiled in: not listed.)
+    paths-ignore: ['docs/**', 'site/**', 'README.md', 'AGENTS.md', 'CLAUDE.md', 'LICENSE']
   push:
     branches: [main]
+    # Text nobody compiles: no macOS runner for it. (`crates/**/*.md` is compiled in: not listed.)
+    paths-ignore: ['docs/**', 'site/**', 'README.md', 'AGENTS.md', 'CLAUDE.md', 'LICENSE']
 
 permissions:
   contents: read
