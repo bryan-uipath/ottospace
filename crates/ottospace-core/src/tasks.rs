@@ -21,7 +21,7 @@ pub enum State {
 }
 
 /// A heading of the inbox, in the order shown.
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Group {
     NeedsYou,
@@ -58,13 +58,10 @@ pub struct Task {
     pub tab: Option<u32>,
 }
 
-impl Task {
-    /// The inbox heading for this task. `None`: not listed (cleaned, snoozed or dismissed).
-    pub fn group(&self) -> Option<Group> {
-        if self.dismissed || self.snoozed_until.is_some() {
-            return None;
-        }
-        match self.state {
+impl State {
+    /// The inbox heading for a task in this state. `None`: cleaned tasks are not listed.
+    pub fn group(self) -> Option<Group> {
+        match self {
             State::NeedsYou | State::Stale => Some(Group::NeedsYou),
             // A PR in review needs nothing from the user until checks or comments say so
             // (not read yet), so it sits with the running tasks.
@@ -77,13 +74,29 @@ impl Task {
     }
 }
 
+impl Task {
+    /// The inbox heading for this task. `None`: not listed (cleaned, snoozed or dismissed).
+    pub fn group(&self) -> Option<Group> {
+        self.state.group().filter(|_| !self.dismissed && self.snoozed_until.is_none())
+    }
+}
+
+/// What `undo` puts back: only the field the user's move changed, so a state an agent reported
+/// since then is not lost.
+#[derive(Debug)]
+enum Undo {
+    Snooze { id: TaskId, before: Option<u64> },
+    Hold { id: TaskId, before: State },
+    Dismiss { id: TaskId },
+}
+
 /// The task list, and the one step that `undo` takes back.
 #[derive(Debug, Default, Serialize)]
 pub struct Tasks {
     pub list: Vec<Task>,
-    /// The task as it was before the last snooze, hold or dismiss.
+    /// The last snooze, hold or dismiss, until it is taken back or the task's state changes.
     #[serde(skip)]
-    undo: Option<Task>,
+    undo: Option<Undo>,
     #[serde(skip)]
     next_id: TaskId,
 }
@@ -96,10 +109,8 @@ impl Tasks {
     /// The inbox: listed tasks by group, then most urgent first, then oldest first.
     pub fn inbox(&self) -> Vec<(Group, &Task)> {
         let mut rows: Vec<(Group, &Task)> = self.list.iter().filter_map(|t| Some((t.group()?, t))).collect();
-        // Ids rise with age, so the id is the "oldest first" tie-break. Groups never compare unordered.
-        rows.sort_by(|(ga, a), (gb, b)| {
-            ga.partial_cmp(gb).unwrap_or(std::cmp::Ordering::Equal).then((a.priority, a.id).cmp(&(b.priority, b.id)))
-        });
+        // Ids rise with age, so the id is the "oldest first" tie-break.
+        rows.sort_by_key(|(group, task)| (*group, task.priority, task.id));
         rows
     }
 
@@ -119,35 +130,61 @@ impl Tasks {
         self.next_id
     }
 
-    /// A task that starts to need the user comes back into the inbox, snoozed or dismissed or not.
+    /// A task that moves under Needs you comes back into the inbox, snoozed or dismissed or not.
+    /// A report of the state it already has is not news: it stays hidden.
     pub fn set_state(&mut self, id: TaskId, state: State) {
         if let Some(task) = self.list.iter_mut().find(|t| t.id == id) {
-            if state == State::NeedsYou && task.state != State::NeedsYou {
+            let needs_you = |state: State| state.group() == Some(Group::NeedsYou);
+            if needs_you(state) && !needs_you(task.state) {
                 (task.snoozed_until, task.dismissed) = (None, false);
             }
             task.state = state;
+            // The report is newer than the user's last move on this task: undo must not hide it.
+            let undone = self.undo.as_ref().map(|u| match u {
+                Undo::Snooze { id, .. } | Undo::Hold { id, .. } | Undo::Dismiss { id } => *id,
+            });
+            if undone == Some(id) {
+                self.undo = None;
+            }
         }
     }
 
     pub fn snooze(&mut self, id: TaskId, until: u64) {
-        self.change(id, |task| task.snoozed_until = Some(until));
+        if let Some(task) = self.list.iter_mut().find(|t| t.id == id) {
+            self.undo = Some(Undo::Snooze { id, before: task.snoozed_until.replace(until) });
+        }
     }
 
+    /// Pauses a task. Not one that is finished: there is nothing left to pause.
     pub fn hold(&mut self, id: TaskId) {
-        self.change(id, |task| task.state = State::Parked);
+        let open = |task: &&mut Task| !matches!(task.state, State::Done | State::Cleaned);
+        if let Some(task) = self.list.iter_mut().find(|t| t.id == id).filter(open) {
+            self.undo = Some(Undo::Hold { id, before: std::mem::replace(&mut task.state, State::Parked) });
+        }
     }
 
     pub fn dismiss(&mut self, id: TaskId) {
-        self.change(id, |task| task.dismissed = true);
+        if let Some(task) = self.list.iter_mut().find(|t| t.id == id).filter(|t| !t.dismissed) {
+            task.dismissed = true;
+            self.undo = Some(Undo::Dismiss { id });
+        }
     }
 
     /// Takes back the last snooze, hold or dismiss. One step only.
     pub fn undo(&mut self) {
-        if let Some(before) = self.undo.take()
-            && let Some(task) = self.list.iter_mut().find(|t| t.id == before.id)
-        {
-            *task = before;
+        let Some(undo) = self.undo.take() else { return };
+        let (Undo::Snooze { id, .. } | Undo::Hold { id, .. } | Undo::Dismiss { id }) = undo;
+        let Some(task) = self.list.iter_mut().find(|t| t.id == id) else { return };
+        match undo {
+            Undo::Snooze { before, .. } => task.snoozed_until = before,
+            Undo::Hold { before, .. } => task.state = before,
+            Undo::Dismiss { .. } => task.dismissed = false,
         }
+    }
+
+    /// True if a snoozed task's time has come, so `tick` would change the inbox.
+    pub fn due(&self, now: u64) -> bool {
+        self.list.iter().any(|t| t.snoozed_until.is_some_and(|until| until <= now))
     }
 
     /// Snoozed tasks whose time has come are listed again.
@@ -159,10 +196,10 @@ impl Tasks {
         }
     }
 
-    fn change(&mut self, id: TaskId, edit: impl FnOnce(&mut Task)) {
-        if let Some(task) = self.list.iter_mut().find(|t| t.id == id) {
-            self.undo = Some(task.clone());
-            edit(task);
+    /// A closed tab is no task's workspace any more. Tab ids can be used again.
+    pub fn forget_tab(&mut self, tab: u32) {
+        for task in self.list.iter_mut().filter(|t| t.tab == Some(tab)) {
+            task.tab = None;
         }
     }
 }
@@ -252,6 +289,58 @@ mod tests {
         tasks.hold(99);
         tasks.undo();
         assert_eq!(tasks.get(a).and_then(|t| t.snoozed_until), None);
+    }
+
+    #[test]
+    fn undo_does_not_take_back_what_an_agent_reported_since() {
+        let mut tasks = Tasks::default();
+        let a = tasks.add("a".into(), 1, State::Running, None);
+        tasks.dismiss(a);
+        tasks.set_state(a, State::NeedsYou);
+        tasks.undo();
+        assert_eq!(titles(&tasks), [(Group::NeedsYou, "a")], "the report stands");
+        tasks.hold(a);
+        tasks.set_state(a, State::Done);
+        tasks.undo();
+        assert_eq!(tasks.get(a).map(|t| t.state), Some(State::Done));
+        // Undo puts back only what the move changed.
+        let b = tasks.add("b".into(), 1, State::Running, None);
+        tasks.snooze(b, 10);
+        tasks.snooze(b, 20);
+        tasks.undo();
+        assert_eq!(tasks.get(b).and_then(|t| t.snoozed_until), Some(10));
+    }
+
+    #[test]
+    fn a_finished_task_cannot_be_put_on_hold() {
+        let mut tasks = Tasks::default();
+        let (done, cleaned) =
+            (tasks.add("a".into(), 1, State::Done, None), tasks.add("b".into(), 1, State::Cleaned, None));
+        tasks.hold(done);
+        tasks.hold(cleaned);
+        assert_eq!(titles(&tasks), [(Group::Done, "a")]);
+    }
+
+    #[test]
+    fn a_task_that_goes_stale_comes_back_but_a_repeated_report_does_not() {
+        let mut tasks = Tasks::default();
+        let a = tasks.add("a".into(), 1, State::Parked, None);
+        tasks.dismiss(a);
+        tasks.set_state(a, State::Stale);
+        assert_eq!(titles(&tasks), [(Group::NeedsYou, "a")]);
+        // Snoozed while it waits: the same report again is not news.
+        tasks.snooze(a, 1_000);
+        tasks.set_state(a, State::NeedsYou);
+        assert!(tasks.inbox().is_empty() && tasks.due(1_000) && !tasks.due(999));
+    }
+
+    #[test]
+    fn a_closed_tab_is_forgotten() {
+        let mut tasks = Tasks::default();
+        let (a, b) =
+            (tasks.add("a".into(), 1, State::Running, Some(1)), tasks.add("b".into(), 1, State::Running, Some(2)));
+        tasks.forget_tab(1);
+        assert_eq!((tasks.get(a).and_then(|t| t.tab), tasks.get(b).and_then(|t| t.tab)), (None, Some(2)));
     }
 
     #[test]

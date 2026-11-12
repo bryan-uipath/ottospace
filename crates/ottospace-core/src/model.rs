@@ -468,6 +468,7 @@ impl Model {
                 self.leave(&mut effects);
                 self.park_active();
                 let tab = self.tabs.remove(index);
+                self.tasks.forget_tab(tab.id);
                 for id in tab.layout.as_ref().map(Node::leaves).unwrap_or_default() {
                     self.close_pane(id, &mut effects);
                 }
