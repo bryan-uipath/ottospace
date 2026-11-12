@@ -205,7 +205,7 @@ optional:
 | `terminal.font_size` | In points, 6 to 72 | `13` |
 | `repos` | Directories that are repositories or hold them, for the Repos section. `OTTOSPACE_REPOS` (`:` between directories) wins over it | `~/code`, `~/notes` |
 | `tasks` | Where tasks are kept, one JSON file each. A relative path is inside `~/.ottospace` | `tasks` |
-| `apps` | Apps to offer while they are not running, by the name of the app (`Slack` for `Slack.app`). They show under "Not running" in Apps and in the picker; choosing one starts it in the background and puts its window in a pane | none |
+| `apps` | Apps to offer while they are not running, by the name of the app as Finder shows it (`Visual Studio Code` for `Visual Studio Code.app`). It must be in `/Applications`, `~/Applications` or `/System/Applications` (or their `Utilities`); a name that is not found is left out. They show under "Not running" in Apps and in the picker; choosing one starts it in the background and puts its window in a pane | none |
 
 A mistake in the file (a key that does not exist, bad JSON, a font that is not installed) is shown
 in the status bar, and the default applies.

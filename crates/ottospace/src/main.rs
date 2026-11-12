@@ -6,6 +6,7 @@
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::mpsc::{Receiver, Sender};
@@ -24,7 +25,7 @@ use gpui::{
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::keys::{self, Mods};
 use ottospace_core::list::{ListKey, list_key};
-use ottospace_core::settings::closed_apps;
+use ottospace_core::settings::{Installed, closed_apps};
 use ottospace_core::tasks::{Group, MAX_TITLE, Task};
 use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, scroll_key, select_kind, visual_key};
 use ottospace_core::{
@@ -390,9 +391,9 @@ struct Workspace {
     frames: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
     apps: Vec<capture::App>,
     /// Apps the settings name that are not running: listed under the running ones.
-    closed: Vec<String>,
-    /// An app that was started from the list, and where its window goes once it has one.
-    launching: Option<Launch>,
+    closed: Vec<Installed>,
+    /// Apps started from the list, and where each one's window goes once it has one.
+    launching: Vec<Launch>,
     /// Icons of apps seen so far, by app name. Kept: an icon is read and encoded once.
     icons: HashMap<String, Arc<gpui::Image>>,
     /// A problem found at start (settings, font, tasks folder). It stays: unlike `error`, no
@@ -429,7 +430,7 @@ const ICON_PIXELS: u8 = 48;
 
 /// An app started from the list, waiting for its first window.
 struct Launch {
-    name: String,
+    app: Installed,
     axis: Axis,
     new_tab: bool,
     since: Instant,
@@ -551,7 +552,7 @@ impl Workspace {
             frames: HashMap::new(),
             apps: Vec::new(),
             closed: Vec::new(),
-            launching: None,
+            launching: Vec::new(),
             icons: HashMap::new(),
             list_scroll: ScrollHandle::new(),
             known: Vec::new(),
@@ -1052,7 +1053,7 @@ impl Workspace {
             "inbox": self.inbox(),
             "needs_you": self.model.tasks.needs_you(),
             // Apps from the settings that are not running: `open_app` starts one.
-            "closed_apps": self.closed,
+            "closed_apps": self.closed.iter().map(|app| &app.name).collect::<Vec<_>>(),
             // The Apps list: what can be hosted now. `icon`: its icon was read.
             "apps": self.apps.iter().map(|app| serde_json::json!({
                 "name": app.name, "windows": app.windows, "icon": self.icons.contains_key(&app.name),
@@ -1151,8 +1152,10 @@ impl Workspace {
                 Ok(target) => target,
                 // An app from the settings that is not running: start it, and host its window
                 // when it has one.
-                Err(_) if self.closed.iter().any(|closed| closed == name) => return self.launch(name, axis, new_tab),
-                Err(err) => return Err(err),
+                Err(err) => match self.closed.iter().find(|closed| closed.name == name).cloned() {
+                    Some(app) => return self.launch(app, axis, new_tab),
+                    None => return Err(err),
+                },
             },
         };
         // Already in a pane: go to it (and its tab) instead of doing nothing.
@@ -1172,32 +1175,50 @@ impl Workspace {
     }
 
     /// Starts an app that is not running, in the background: its window is wanted in a pane, not
-    /// in front of ottospace.
-    fn launch(&mut self, name: &str, axis: Axis, new_tab: bool) -> Result<(), String> {
-        let started = std::process::Command::new("open").args(["-g", "-a", name]).status();
-        match started {
+    /// in front of ottospace. By the path it was found at, so nothing but that app can start.
+    fn launch(&mut self, app: Installed, axis: Axis, new_tab: bool) -> Result<(), String> {
+        if self.launching.iter().any(|launch| launch.app.path == app.path) {
+            return Ok(()); // already on its way
+        }
+        match std::process::Command::new("open").arg("-g").arg(&app.path).status() {
             Ok(status) if status.success() => {
-                self.launching = Some(Launch { name: name.to_string(), axis, new_tab, since: Instant::now() });
+                self.launching.push(Launch { app, axis, new_tab, since: Instant::now() });
                 Ok(())
             }
-            Ok(_) => Err(format!("{name} could not be opened: is it installed under that name?")),
-            Err(err) => Err(format!("{name} could not be opened: {err}")),
+            Ok(_) => Err(format!("{} could not be opened", app.name)),
+            Err(err) => Err(format!("{} could not be opened: {err}", app.name)),
         }
     }
 
-    /// Hosts the window of an app started from the list, once it has one. Gives up after a while:
-    /// some apps open a sign-in window, or none.
+    /// Hosts the window of each app started from the list, once it has one. A started app is
+    /// known by its bundle, not its name: `Visual Studio Code` runs as `Code`. It gives up after
+    /// a while: some apps open a sign-in window, or none.
     fn host_launched(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let Some(launch) = self.launching.take() else { return };
-        if capture::apps().iter().any(|app| app.name == launch.name) {
-            self.refresh_apps();
-            let _ = self.open_app(&launch.name, launch.axis, launch.new_tab, window, cx);
-        } else if launch.since.elapsed() > LAUNCH_WAIT {
-            self.error = Some(format!("{} did not open a window in {} seconds", launch.name, LAUNCH_WAIT.as_secs()));
-            cx.notify();
-        } else {
-            self.launching = Some(launch);
+        if self.launching.is_empty() {
+            return;
         }
+        // First: an app that now runs leaves the "not running" list, so a window that is not
+        // ready yet is tried again here, not started a second time by `open_app`.
+        self.refresh_apps();
+        let running = self.apps.clone();
+        for launch in std::mem::take(&mut self.launching) {
+            let bundle = Some(PathBuf::from(&launch.app.path));
+            let app = running.iter().find(|app| icon::bundle_of(app.pid) == bundle);
+            // Listed, but its main window may not be ready yet: try again until the time is up.
+            let hosted =
+                app.is_some_and(|app| self.open_app(&app.name, launch.axis, launch.new_tab, window, cx).is_ok());
+            if hosted {
+                continue;
+            }
+            if launch.since.elapsed() > LAUNCH_WAIT {
+                let seconds = LAUNCH_WAIT.as_secs();
+                self.error = Some(format!("{} did not open a window in {seconds} seconds", launch.app.name));
+            } else {
+                self.error = None; // a try that was too early is not a failure yet
+                self.launching.push(launch);
+            }
+        }
+        cx.notify();
     }
 
     /// Removes panes whose window is gone (closed by the user or the app).
@@ -1520,8 +1541,8 @@ impl Workspace {
     /// Opens the pane picker: a terminal, then each running app.
     fn open_picker(&mut self, axis: Axis, new_tab: bool, window: &Window, cx: &mut Context<Self>) {
         self.refresh_apps();
-        let names = self.apps.iter().map(|app| &app.name).chain(&self.closed);
-        let apps = names.map(|name| PickItem::App { name: name.clone() });
+        // What `refresh_apps` just listed: running apps, then those that are not.
+        let apps = self.model.apps.iter().map(|name| PickItem::App { name: name.clone() });
         let items = std::iter::once(PickItem::Terminal).chain(apps).collect();
         self.dispatch(Action::OpenPicker { axis, new_tab, items }, window, cx);
     }
@@ -1952,13 +1973,28 @@ impl Workspace {
         let running: Vec<String> = self.apps.iter().map(|app| app.name.clone()).collect();
         // Never in a test run: choosing one starts a real app.
         let offer = self.hosting && self.host_only.is_none();
-        let wanted = if offer { config::get().settings.apps.as_slice() } else { &[] };
-        self.closed = closed_apps(wanted, &running);
+        let wanted: Vec<Installed> = config::get()
+            .settings
+            .apps
+            .iter()
+            .filter(|_| offer)
+            .filter_map(|name| {
+                let path = icon::app_path(name.trim())?.to_string_lossy().into_owned();
+                Some(Installed { name: name.trim().to_string(), path })
+            })
+            .collect();
+        let bundles: Vec<String> = if wanted.is_empty() {
+            Vec::new()
+        } else {
+            let bundle = |app: &capture::App| icon::bundle_of(app.pid).map(|path| path.to_string_lossy().into_owned());
+            self.apps.iter().filter_map(bundle).collect()
+        };
+        self.closed = closed_apps(&wanted, &bundles);
         // The list as list mode walks it: running apps, then the others.
-        let names = running.iter().chain(&self.closed).cloned().collect();
+        let names = running.iter().cloned().chain(self.closed.iter().map(|app| app.name.clone())).collect();
         self.model.update(Action::SetApps { names });
         // An app that quit loses its icon: a later app of the same name may have another.
-        self.icons.retain(|name, _| running.contains(name) || self.closed.contains(name));
+        self.icons.retain(|name, _| running.contains(name) || self.closed.iter().any(|app| app.name == *name));
         let image = |png: Vec<u8>| Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png));
         for app in &self.apps {
             if !self.icons.contains_key(&app.name)
@@ -1967,11 +2003,11 @@ impl Workspace {
                 self.icons.insert(app.name.clone(), image(png));
             }
         }
-        for name in &self.closed {
-            if !self.icons.contains_key(name)
-                && let Some(png) = icon::png_of_app(name, ICON_PIXELS)
+        for app in &self.closed {
+            if !self.icons.contains_key(&app.name)
+                && let Some(png) = icon::png_of_app(Path::new(&app.path), ICON_PIXELS)
             {
-                self.icons.insert(name.clone(), image(png));
+                self.icons.insert(app.name.clone(), image(png));
             }
         }
     }
@@ -2104,9 +2140,9 @@ impl Workspace {
                 (!self.closed.is_empty())
                     .then(|| div().px_2().pt_2().text_xs().text_color(rgb(theme::MUTED)).child("Not running")),
             )
-            .children(self.closed.iter().enumerate().map(|(i, name)| {
-                let (target, row) = (name.clone(), self.apps.len() + i);
-                let waiting = self.launching.as_ref().is_some_and(|launch| launch.name == *name);
+            .children(self.closed.iter().enumerate().map(|(i, app)| {
+                let (name, target, row) = (&app.name, app.name.clone(), self.apps.len() + i);
+                let waiting = self.launching.iter().any(|launch| launch.app.path == app.path);
                 list_button(("closed-app", i), self.model.list == Some(row))
                     .py_1p5()
                     .gap_3()

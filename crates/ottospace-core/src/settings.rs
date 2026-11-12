@@ -80,14 +80,23 @@ impl Settings {
     }
 }
 
-/// The apps to list as not running: the ones the settings name, less those that run now
-/// (whatever the case of the letters), each once, in the order given.
-pub fn closed_apps(wanted: &[String], running: &[String]) -> Vec<String> {
-    let same = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
-    let mut closed: Vec<String> = Vec::new();
-    for name in wanted.iter().map(|name| name.trim()).filter(|name| !name.is_empty()) {
-        if !running.iter().any(|r| same(r, name)) && !closed.iter().any(|c| same(c, name)) {
-            closed.push(name.to_string());
+/// An app the settings name, found on disk.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Installed {
+    /// As written in the settings: `Visual Studio Code`.
+    pub name: String,
+    /// Where it is: `/Applications/Visual Studio Code.app`.
+    pub path: String,
+}
+
+/// The apps to list as not running: those the settings name, less those whose bundle runs now,
+/// each once, in the order given. An app is told by where it is installed, not by its name: the
+/// name of a running process often differs (`Visual Studio Code` runs as `Code`).
+pub fn closed_apps(wanted: &[Installed], running_bundles: &[String]) -> Vec<Installed> {
+    let mut closed: Vec<Installed> = Vec::new();
+    for app in wanted {
+        if !running_bundles.contains(&app.path) && !closed.iter().any(|c| c.path == app.path) {
+            closed.push(app.clone());
         }
     }
     closed
@@ -144,10 +153,14 @@ mod tests {
 
     #[test]
     fn apps_named_in_the_settings_are_listed_while_they_do_not_run() {
-        let settings = Settings::parse(r#"{"apps": ["Microsoft Outlook", "slack", " ", "Slack", "Notes"]}"#).unwrap();
-        let running = vec!["Finder".to_string(), "Slack".to_string()];
-        assert_eq!(closed_apps(&settings.apps, &running), ["Microsoft Outlook", "Notes"]);
-        assert!(closed_apps(&Settings::default().apps, &running).is_empty());
+        let settings = Settings::parse(r#"{"apps": ["Visual Studio Code", "Slack"]}"#).unwrap();
+        assert_eq!(settings.apps, ["Visual Studio Code", "Slack"]);
+        let app = |name: &str| Installed { name: name.into(), path: format!("/Applications/{name}.app") };
+        // Code runs (under the process name "Code"); Slack was named twice.
+        let wanted = [app("Visual Studio Code"), app("Slack"), app("Notes"), app("Slack")];
+        let running = vec!["/Applications/Visual Studio Code.app".to_string(), "/System/Finder.app".to_string()];
+        assert_eq!(closed_apps(&wanted, &running), [app("Slack"), app("Notes")]);
+        assert!(closed_apps(&[], &running).is_empty());
     }
 
     #[test]

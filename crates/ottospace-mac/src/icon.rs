@@ -1,6 +1,6 @@
 //! App icons, as PNG bytes the shell can draw.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use objc2::AnyThread;
 use objc2_app_kit::{
@@ -17,14 +17,14 @@ pub fn png(pid: i32, pixels: u8) -> Option<Vec<u8>> {
     draw(&icon, pixels)
 }
 
-/// The icon of an installed app that may not be running, by its name ("Microsoft Outlook").
-/// `None` if no app of that name is in the usual folders.
-pub fn png_of_app(name: &str, pixels: u8) -> Option<Vec<u8>> {
-    let path = app_path(name)?;
+/// The icon of the app bundle at `path` (an installed app that need not be running).
+pub fn png_of_app(path: &Path, pixels: u8) -> Option<Vec<u8>> {
+    path.is_dir().then(|| ())?;
     draw(&NSWorkspace::sharedWorkspace().iconForFile(&NSString::from_str(&path.to_string_lossy())), pixels)
 }
 
-/// Where the app called `name` is installed, looking where apps usually are.
+/// Where the app called `name` is installed, looking where apps usually are; resolved, so it
+/// compares equal to `bundle_of` for the same app whatever the case of the letters typed.
 pub fn app_path(name: &str) -> Option<PathBuf> {
     // A name, not a path: it must not walk out of the folders below.
     if name.is_empty() || name.contains('/') || name.starts_with('.') {
@@ -38,7 +38,14 @@ pub fn app_path(name: &str) -> Option<PathBuf> {
         PathBuf::from("/Applications/Utilities"),
         PathBuf::from("/System/Applications/Utilities"),
     ];
-    folders.iter().map(|folder| folder.join(format!("{name}.app"))).find(|app| app.is_dir())
+    let found = folders.iter().map(|folder| folder.join(format!("{name}.app"))).find(|app| app.is_dir())?;
+    found.canonicalize().ok()
+}
+
+/// The app bundle the process `pid` runs from, resolved. `None` for a bare executable.
+pub fn bundle_of(pid: i32) -> Option<PathBuf> {
+    let url = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)?.bundleURL()?;
+    PathBuf::from(url.path()?.to_string()).canonicalize().ok()
 }
 
 fn draw(icon: &NSImage, pixels: u8) -> Option<Vec<u8>> {
@@ -76,9 +83,15 @@ mod tests {
         assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
         // Width and height from the PNG header: the size asked for, whatever the display's scale.
         assert_eq!((&png[16..20], &png[20..24]), (&[0, 0, 0, 48][..], &[0, 0, 0, 48][..]));
-        // An installed app that need not be running. A name is not a path.
-        assert_eq!(super::app_path("Calculator"), Some("/System/Applications/Calculator.app".into()));
-        assert!(super::png_of_app("Calculator", 48).is_some_and(|png| png.starts_with(b"\x89PNG")));
+    }
+
+    #[test]
+    fn an_installed_app_is_found_by_name_whether_or_not_it_runs() {
+        // A name is not a path, and its letters may be typed in any case.
+        let calculator = super::app_path("calculator").expect("Calculator is part of macOS");
+        assert_eq!(calculator.file_name().and_then(|name| name.to_str()), Some("Calculator.app"));
+        assert!(super::png_of_app(&calculator, 48).is_some_and(|png| png.starts_with(b"\x89PNG")));
         assert_eq!((super::app_path("../Calculator"), super::app_path("No Such App 9")), (None, None));
+        assert_eq!(super::bundle_of(-1), None);
     }
 }
