@@ -23,7 +23,7 @@ The inbox puts what needs you first, then what is running and what you saved for
 and capture a task in one line, with a `#project`, a `>repo` and an `@agent`. Open a task and the tab bar
 shows only its tabs. Your repositories and their worktrees are one click away.
 
-![The new-task box over the workspace. The typed line reads: fix zoom flicker on the canvas #canvas @canvas-app p1. The Repos list is open on the left.](site/shots/newtask.png)
+![The new-task box over the workspace, as it looked before tags changed: the typed line names its repository with an @ (it is > now, and @ names an agent). The Repos list is open on the left.](site/shots/newtask.png)
 
 ## Agents are always ready to help
 

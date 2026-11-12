@@ -109,7 +109,7 @@ read out of the line; the rest is the title.
 | `>repo` | The repository the task works in | The Repos list (repositories and worktrees) |
 | `@agent` | Who works it | `claude` and `codex`, then each `~/.ottospace/agents/<name>.md` if that folder exists |
 | `/path` | A path the task is about: a word that starts with `/` or `~/` | The files and directories under what is typed |
-| `$skill` | A skill to load for the task | Skill folders (those with a `SKILL.md`) in `~/.claude/skills`, `$CLAUDE_CONFIG_DIR/skills`, `~/.codex/skills`, and the `.claude/skills` of the task's `>repo` |
+| `$skill` | A skill to load for the task | Skill folders (those with a `SKILL.md`) in `~/.claude/skills`, `$CLAUDE_CONFIG_DIR/skills`, `~/.codex/skills` (or `$CODEX_HOME/skills` if that is set), and the `.claude/skills` of the task's `>repo` |
 | `p1` to `p9` | The priority. 1 is most urgent; 3 when none is given | |
 
 ```
@@ -120,16 +120,28 @@ review the export PR >canvas-app @codex $code-review /src/export
 - **A tag counts only if its name is known.** A `>word`, `@word` or `$word` that names nothing
   stays in the title where it was typed, and so does a `/word` that is not a file or directory.
   `ask @ana`, `costs $5` and `use > 3 workers` are safe. A name starts with a letter, so `#123`,
-  `>3` and `$5` are never tags. `#project` always counts: a new name is a new project.
-- **A `/path`** is absolute (`/Users/me/notes.md`), under the home folder (`~/notes.md`), or, when
-  the line names a `>repo`, relative to that repository: `/src/export` with `>canvas-app` is
-  `src/export` in it. It counts if a file or directory is there. The task keeps the word as
-  typed, not the place it was found.
+  `>3` and `$5` are never tags. `#project` always counts: a new name is a new project. A name
+  longer than 200 characters is no tag either: it stays in the title.
+- **A `/path`** is under the home folder (`~/notes.md`), or, when the line names a `>repo`,
+  inside that repository: `/src/export` with `>canvas-app` is `src/export` in it. If nothing is
+  there (or no repository is named), it is absolute: `/Users/me/notes.md`. So with a `>repo` the
+  repository is looked in first, then the root of the disk; Tab lists the repository's entries
+  before the root's. It counts if a file or directory is there. The task keeps the word as typed
+  (`paths`) and, beside it, the absolute path that was found (`resolved`).
+- **Punctuation and spaces.** A comma or full stop after a tag is not part of it: `#canvas,`
+  and `p1,` work. For a path the word as typed is tried first, so a file named `v1.` is found,
+  then the word without the punctuation. A space in a path is written with a backslash before
+  it, `~/My\ Notes`; Tab writes it for you. The task keeps the path without the backslash.
 - **How many.** One `#project`, one `>repo`, one `@agent`, one priority: of two, the last one
-  counts. Every `/path` and `$skill` is kept, each once (at most 20 of each).
+  counts. Every `/path` and `$skill` is kept, each once (at most 20 of each). `@agent` and
+  `$skill` are kept as their file or folder spells them, whatever the case typed.
 - **What they do today.** `#project` and `>repo` are used: the home screen groups by project, and
   a task opens a terminal in its repository. `@agent`, `/path` and `$skill` are stored on the
-  task and shown on its row. Nothing starts an agent or loads a skill yet.
+  task and shown on its row. Nothing starts an agent or loads a skill yet. What must be
+  checked before anything does: [routines.md](ai/routines.md#6-trust-and-safety).
+- **Reading is off the window's thread.** Names and paths are looked up on another thread, so a
+  slow disk does not stop typing. A tag's chip shows a moment after the word is typed; ↵ files
+  the line with the tags that have shown.
 - `OTTOSPACE_SKILLS` (directories, `:` between them) replaces the runners' skill folders.
 - `@name` named a repository before. It does not now. Titles of tasks already filed are not read
   again.

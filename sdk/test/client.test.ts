@@ -179,6 +179,7 @@ test("tasks: add, list, open, leave", async () => {
       repo: null,
       agent: null,
       paths: [],
+      resolved: [],
       skills: [],
     });
     const urgent = await otto.tasks.add("Review the client", { priority: 1, state: "needs_you" });

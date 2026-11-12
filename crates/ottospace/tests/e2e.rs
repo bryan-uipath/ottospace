@@ -483,35 +483,75 @@ fn the_new_task_box_files_a_line() {
     assert_eq!(reply["state"]["current_task"], 3);
     otto.call(json!({"cmd": "task_leave"}));
 
-    // Tab finishes each kind of tag from its own names.
-    let finished =
-        [("a @co", "a @codex "), ("a $code", "a $code-review "), ("a >flow-app /src/ex", "a >flow-app /src/export/")];
+    // What a line's tags may name is read off the window's thread: the box says when it is in.
+    let compose = |text: &str| {
+        otto.call(json!({"cmd": "compose", "text": text}));
+        otto.wait_for("the line's tags to be read", |o| {
+            (o.call(json!({"cmd": "state"}))["compose_read"] == true).then_some(())
+        });
+    };
+    // Tab finishes each kind of tag from its own names. A space in a path gets a backslash.
+    std::fs::create_dir_all(root.join("flow-app/My Notes")).unwrap();
+    let finished = [
+        ("a @co", "a @codex "),
+        ("a $code", "a $code-review "),
+        ("a >flow-app /src/ex", "a >flow-app /src/export/"),
+        ("a >flow-app /My", r"a >flow-app /My\ Notes/"),
+    ];
     for (typed, completed) in finished {
-        otto.call(json!({"cmd": "compose", "text": typed}));
-        assert_eq!(key("tab")["state"]["compose"], completed);
+        compose(typed);
+        assert_eq!(key("tab")["state"]["compose"], completed, "{typed}");
         key("escape");
     }
-    // Every tag through the box.
-    let line = "review the export PR #canvas >flow-app p2 @codex $code-review /src/export";
-    otto.call(json!({"cmd": "compose", "text": line}));
+    // An amount of money is no skill being typed: Tab leaves the line alone.
+    compose("costs $5");
+    assert_eq!(key("tab")["state"]["compose"], "costs $5");
+    key("escape");
+    // Every tag through the box. The skill is spelled as its folder is, once; the path is kept
+    // as typed, with where it was found: inside the repository.
+    let line = r"review the export PR #canvas >flow-app p2, @codex $Code-Review $code-review /src/export, /My\ Notes";
+    compose(line);
     let reply = key("enter");
     let task = &reply["state"]["tasks"]["list"][3];
     assert_eq!((task["title"].as_str(), task["project"].as_str()), (Some("review the export PR"), Some("canvas")));
-    assert_eq!((task["repo"].as_str(), task["agent"].as_str()), (repo.to_str(), Some("codex")));
-    assert_eq!((&task["skills"], &task["paths"]), (&json!(["code-review"]), &json!(["/src/export"])));
+    assert_eq!(
+        (task["repo"].as_str(), task["agent"].as_str(), task["priority"].as_u64()),
+        (repo.to_str(), Some("codex"), Some(2))
+    );
+    assert_eq!((&task["skills"], &task["paths"]), (&json!(["code-review"]), &json!(["/src/export", "/My Notes"])));
+    assert_eq!(task["resolved"], json!([repo.join("src/export"), repo.join("My Notes")]));
+    // A socket call while the box is open reads its own line's tags: the user's line keeps its own.
+    compose("mine $code-review");
+    let theirs = otto.call(json!({"cmd": "task_new", "line": "theirs /no-such-path-here"}));
+    assert_eq!(theirs["task"]["title"], "theirs /no-such-path-here");
+    let reply = key("enter");
+    let mine = reply["state"]["tasks"]["list"].as_array().unwrap().last().unwrap().clone();
+    assert_eq!((&mine["title"], &mine["skills"]), (&json!("mine"), &json!(["code-review"])));
     // Names nobody knows, and prose, stay in the title. `@repo` no longer names a repository.
     let line = "ask @ana if $5 > 3 for @flow-app $nothing /no-such-path-here";
     let filed = otto.call(json!({"cmd": "task_new", "line": line}));
     assert_eq!((filed["task"]["title"].as_str(), &filed["task"]["repo"]), (Some(line), &Value::Null));
-    // `task_add` takes them as given.
+    // `task_add` takes an agent and skills that `task_new` would know, spelled as they are
+    // read, and refuses any other by name. Paths are kept as given.
     let request =
-        json!({"cmd": "task_add", "title": "t", "agent": "claude", "paths": ["~/notes"], "skills": ["deploy"]});
+        json!({"cmd": "task_add", "title": "t", "agent": "Claude", "paths": ["~/notes"], "skills": ["CODE-review"]});
     let filed = otto.call(request);
     let task = &filed["task"];
     assert_eq!(
-        (&task["agent"], &task["paths"], &task["skills"]),
-        (&json!("claude"), &json!(["~/notes"]), &json!(["deploy"]))
+        (&task["agent"], &task["paths"], &task["skills"], &task["resolved"]),
+        (&json!("claude"), &json!(["~/notes"]), &json!(["code-review"]), &json!([]))
     );
+    let before = otto.call(json!({"cmd": "state"}))["state"]["tasks"]["list"].as_array().unwrap().len();
+    for unknown in [json!({"agent": "../../etc"}), json!({"skills": ["code-review", "deploy"]})] {
+        let mut request = json!({"cmd": "task_add", "title": "t"});
+        request.as_object_mut().unwrap().extend(unknown.as_object().unwrap().clone());
+        let refused = otto.raw(&request.to_string());
+        assert!(
+            refused["ok"] == false && refused["error"].as_str().unwrap().contains("not an agent or a skill"),
+            "{refused}"
+        );
+    }
+    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["tasks"]["list"].as_array().unwrap().len(), before);
     let _ = std::fs::remove_dir_all(&root);
 }
 

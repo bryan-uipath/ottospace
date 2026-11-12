@@ -77,10 +77,28 @@ pub struct Task {
     /// Paths the task is about, from `/path` words, as typed.
     #[serde(default)]
     pub paths: Vec<String>,
+    /// Where each of `paths` was found when the task was filed, as an absolute path, in the same
+    /// order. Empty: not known (the paths were given outright, or the task is from before this
+    /// was kept). Not checked since: validate before anything acts on it.
+    #[serde(default)]
+    pub resolved: Vec<String>,
     /// Skills to load for it, from `$name` words.
     #[serde(default)]
     pub skills: Vec<String>,
 }
+
+/// Who works a task, the paths it is about and the skills it loads.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Assign {
+    pub agent: Option<String>,
+    pub paths: Vec<String>,
+    /// Where each path was found, in the same order; or empty.
+    pub resolved: Vec<String>,
+    pub skills: Vec<String>,
+}
+
+/// The longest resolved path kept.
+pub const MAX_RESOLVED: usize = 1024;
 
 /// The longest agent, path or skill name kept, and the most paths or skills on one task.
 pub const MAX_TAG: usize = 200;
@@ -172,9 +190,21 @@ impl Tasks {
         self.next_id += 1;
         let priority = priority.clamp(1, 9);
         let (id, snoozed_until, dismissed, project, repo) = (self.next_id, None, false, None, None);
-        let (agent, paths, skills) = (None, Vec::new(), Vec::new());
-        let task = Task { id, title, state, priority, snoozed_until, dismissed, project, repo, agent, paths, skills };
-        self.list.push(task);
+        let Assign { agent, paths, resolved, skills } = Assign::default();
+        self.list.push(Task {
+            id,
+            title,
+            state,
+            priority,
+            snoozed_until,
+            dismissed,
+            project,
+            repo,
+            agent,
+            paths,
+            resolved,
+            skills,
+        });
         self.next_id
     }
 
@@ -186,12 +216,23 @@ impl Tasks {
     }
 
     /// Names who works a task, the paths it is about and the skills it loads. Names too long to
-    /// keep, and those past the twentieth, are dropped.
-    pub fn assign(&mut self, id: TaskId, agent: Option<String>, paths: Vec<String>, skills: Vec<String>) {
+    /// keep, and those past the twentieth, are dropped. Where the paths were found is kept only
+    /// if it is known for every one of them.
+    pub fn assign(&mut self, id: TaskId, assign: Assign) {
+        let Assign { agent, paths, resolved, skills } = assign;
         let fits = |name: &String| !name.is_empty() && name.chars().count() <= MAX_TAG;
         let kept = |names: Vec<String>| names.into_iter().filter(fits).take(MAX_TAGS).collect();
+        let found = |path: &String| path.starts_with('/') && path.chars().count() <= MAX_RESOLVED;
+        let places: Vec<Option<String>> = if resolved.len() == paths.len() && resolved.iter().all(found) {
+            resolved.into_iter().map(Some).collect()
+        } else {
+            paths.iter().map(|_| None).collect()
+        };
+        let pairs = paths.into_iter().zip(places).filter(|(path, _)| fits(path)).take(MAX_TAGS);
+        let (paths, places): (Vec<String>, Vec<Option<String>>) = pairs.unzip();
         if let Some(task) = self.list.iter_mut().find(|t| t.id == id) {
-            (task.agent, task.paths, task.skills) = (agent.filter(fits), kept(paths), kept(skills));
+            (task.agent, task.paths, task.skills) = (agent.filter(fits), paths, kept(skills));
+            task.resolved = places.into_iter().flatten().collect();
         }
     }
 
@@ -412,6 +453,7 @@ mod tests {
             repo: None,
             agent: None,
             paths: Vec::new(),
+            resolved: Vec::new(),
             skills: Vec::new(),
         };
         let mut tasks = Tasks::default();
@@ -434,12 +476,24 @@ mod tests {
         let mut tasks = Tasks::default();
         let a = tasks.add("a".into(), 1, State::Captured);
         let many: Vec<String> = (0..30).map(|n| format!("/p{n}")).collect();
-        tasks.assign(a, Some("claude".into()), many, vec!["deploy".into(), String::new(), "x".repeat(MAX_TAG + 1)]);
+        let skills = vec!["deploy".into(), String::new(), "x".repeat(MAX_TAG + 1)];
+        let assign = Assign { agent: Some("claude".into()), paths: many, resolved: Vec::new(), skills };
+        tasks.assign(a, assign);
         let task = tasks.get(a).unwrap();
         assert_eq!(
-            (task.agent.as_deref(), task.paths.len(), &task.skills),
-            (Some("claude"), MAX_TAGS, &vec!["deploy".to_string()])
+            (task.agent.as_deref(), task.paths.len(), &task.skills, task.resolved.len()),
+            (Some("claude"), MAX_TAGS, &vec!["deploy".to_string()], 0)
         );
+        // Where the paths were found stays in step with them: a path dropped takes its place with it.
+        let list = |list: &[&str]| list.iter().map(|name| name.to_string()).collect::<Vec<_>>();
+        let paths = vec!["/a".to_string(), "x".repeat(MAX_TAG + 1), "~/c".into()];
+        let resolved = list(&["/code/app/a", "/long", "/Users/me/c"]);
+        tasks.assign(a, Assign { paths: paths.clone(), resolved, ..Assign::default() });
+        let task = tasks.get(a).unwrap();
+        assert_eq!((&task.paths, &task.resolved), (&list(&["/a", "~/c"]), &list(&["/code/app/a", "/Users/me/c"])));
+        // Known for some only: not kept, rather than out of step.
+        tasks.assign(a, Assign { paths, resolved: list(&["/code/app/a"]), ..Assign::default() });
+        assert_eq!((tasks.get(a).unwrap().paths.len(), tasks.get(a).unwrap().resolved.len()), (2, 0));
     }
 
     #[test]

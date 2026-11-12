@@ -23,11 +23,12 @@ use gpui::{
     img, point, prelude::*, px, quad, relative, rgb, size, surface, svg, transparent_black,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+use ottospace_core::compose;
 use ottospace_core::keys::{self, Mods};
 use ottospace_core::list::{ListKey, list_key};
 use ottospace_core::rules::{self, Facts};
 use ottospace_core::settings::{Installed, closed_apps};
-use ottospace_core::tasks::{Group, MAX_TITLE, Task, TaskId};
+use ottospace_core::tasks::{Assign, Group, MAX_TITLE, State, Task, TaskId};
 use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, scroll_key, select_kind, visual_key};
 use ottospace_core::{
     Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Pane, PaneId, PickItem, Picker, Rect, Section, theme,
@@ -365,6 +366,14 @@ actions!(ottospace, [CopySelection, PasteText, VisualMode, ListMode, NewTask, Ne
 // App menu.
 actions!(ottospace, [Quit, Hide]);
 
+/// What a socket call files once its tags are read.
+enum Filing {
+    /// `task_new`: the line the reader was asked about.
+    Line,
+    /// `task_add`: its `agent` and `skills` are checked against the names read.
+    Task { title: String, priority: u8, state: State, tab: Option<u32>, assign: Assign },
+}
+
 struct Workspace {
     model: Model,
     /// Shell half of each app pane.
@@ -402,6 +411,14 @@ struct Workspace {
     stored: Vec<Task>,
     /// Scroll position of the bar's list, so list mode can bring the selected row into view.
     list_scroll: ScrollHandle,
+    /// Reads what tags may name, on a thread of its own.
+    tags: Option<tags::Reader>,
+    /// The repository the agents and skills were last asked for, while the new-task box is open.
+    tags_repo: Option<Option<String>>,
+    /// Socket calls that file a task and wait for the reader: (the call's number, what to file, where to reply).
+    filing: Vec<(u64, Filing, Sender<String>)>,
+    /// How many such calls there were: each has its own number.
+    calls: u64,
     /// Window ids seen per hosted pid; anything new that appears later gets its own pane.
     known: Vec<(i32, HashSet<u32>)>,
     /// When the live pane went live.
@@ -483,6 +500,7 @@ impl Workspace {
                 cx.background_executor().timer(Duration::from_millis(16)).await;
                 let alive = this.update_in(cx, |this, window, cx| {
                     this.serve_control(window, cx);
+                    this.take_tags(window, cx);
                     if hotkey::take_press() {
                         this.return_to_ottospace(window, cx);
                     }
@@ -558,6 +576,10 @@ impl Workspace {
             launching: Vec::new(),
             icons: HashMap::new(),
             list_scroll: ScrollHandle::new(),
+            tags: tags::Reader::start(),
+            tags_repo: None,
+            filing: Vec::new(),
+            calls: 0,
             known: Vec::new(),
             live_since: None,
             front_hosted: None,
@@ -588,9 +610,12 @@ impl Workspace {
         }
         let line = self.model.compose.clone();
         let effects = self.model.update(action);
-        // The line in the new-task box changed: read again what its tags may name.
-        if let Some(line) = self.model.compose.clone().filter(|now| line.as_ref() != Some(now)) {
-            self.read_known(&line);
+        // The line in the new-task box changed: ask what its tags may name. The answer comes
+        // later (`take_tags`): reading it is disk I/O, never done here.
+        match self.model.compose.clone() {
+            Some(now) if line.as_ref() != Some(&now) => self.ask_tags(now),
+            Some(_) => {}
+            None => self.tags_repo = None,
         }
         self.store_tasks();
         let another_goes_live = effects.iter().any(|effect| matches!(effect, Effect::Live(_)));
@@ -654,10 +679,76 @@ impl Workspace {
         effects
     }
 
-    /// Reads what the tags of `line` may name (agents, skills, paths): the core reads no disk.
-    fn read_known(&mut self, line: &str) {
-        let repo = self.model.draft_repo(line);
-        self.model.update(Action::SetKnown { known: tags::known(line, repo.as_deref()) });
+    /// Asks the reader what the tags of the line in the new-task box may name. Agents and skills
+    /// are read when the box opens and when the line's `>repo` changes; paths for every line.
+    fn ask_tags(&mut self, line: String) {
+        let repo = self.model.draft_repo(&line);
+        let names = self.tags_repo.as_ref() != Some(&repo);
+        self.tags_repo = Some(repo.clone());
+        if let Some(reader) = &self.tags {
+            reader.ask(tags::Job { call: 0, line, repo, names });
+        }
+    }
+
+    /// Takes in what the reader has read since: for the box (the core drops an answer for a line
+    /// that has changed since), and for the socket calls that waited for it.
+    fn take_tags(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let read = self.tags.as_ref().map(tags::Reader::take).unwrap_or_default();
+        for tags::Read { call, line, names, paths, entries } in read {
+            if call == 0 {
+                self.dispatch(Action::SetKnown { line, names, paths, entries }, window, cx);
+                cx.notify();
+                continue;
+            }
+            let Some(at) = self.filing.iter().position(|(number, _, _)| *number == call) else { continue };
+            let (_, filing, reply) = self.filing.remove(at);
+            let known = compose::Known { names: names.unwrap_or_default(), paths, entries: Vec::new() };
+            let before = self.model.tasks.list.len();
+            let refused = match filing {
+                Filing::Line => {
+                    self.dispatch(Action::TaskFromLine { line, known }, window, cx);
+                    "the line has no title".to_string()
+                }
+                Filing::Task { title, priority, state, tab, assign } => {
+                    match compose::unknown(&known.names, assign.agent.as_deref(), &assign.skills) {
+                        Some(name) => format!(
+                            "`{name}` is not an agent or a skill this ottospace knows; `agent` and `skills` take the names `task_new` completes"
+                        ),
+                        None => {
+                            // As they are spelled where they were read, as `task_new` keeps them.
+                            let spell = |names: &[String], given: String| {
+                                compose::spelled(names, &given).cloned().unwrap_or(given)
+                            };
+                            let agent = assign.agent.map(|agent| spell(&known.names.agents, agent));
+                            let skills =
+                                assign.skills.into_iter().map(|skill| spell(&known.names.skills, skill)).collect();
+                            let assign = Assign { agent, skills, ..assign };
+                            self.dispatch(Action::TaskAdd { title, priority, state, tab, assign }, window, cx);
+                            String::new()
+                        }
+                    }
+                }
+            };
+            // The new task, so the caller has its id.
+            let message = match self.model.tasks.list.get(before) {
+                Some(task) => serde_json::json!({ "ok": true, "task": task }).to_string(),
+                None => control::error(&refused),
+            };
+            let _ = reply.send(message);
+            cx.notify();
+        }
+    }
+
+    /// Files a task for a socket call once the reader has read what its tags may name: the
+    /// reply waits for that, the window does not.
+    fn file_when_read(&mut self, filing: Filing, line: String, reply: Sender<String>) {
+        let Some(reader) = &self.tags else {
+            return drop(reply.send(control::error("tags cannot be read: the reader did not start")));
+        };
+        self.calls += 1;
+        let repo = self.model.draft_repo(&line);
+        reader.ask(tags::Job { call: self.calls, line, repo, names: true });
+        self.filing.push((self.calls, filing, reply));
     }
 
     /// The tasks as they are kept on disk.
@@ -824,16 +915,8 @@ impl Workspace {
                     None
                 }
                 Request::TaskNew { line } => {
-                    let before = self.model.tasks.list.len();
                     self.model.update(Action::SetRepos { repos: repos::scan() });
-                    self.read_known(&line);
-                    self.dispatch(Action::TaskFromLine { line }, window, cx);
-                    let filed = self.model.tasks.list.get(before);
-                    let message = match filed {
-                        Some(task) => serde_json::json!({ "ok": true, "task": task }).to_string(),
-                        None => control::error("the line has no title"),
-                    };
-                    let _ = reply.send(message);
+                    self.file_when_read(Filing::Line, line, reply);
                     continue;
                 }
                 Request::TaskAdd { title, .. } if title.chars().count() > MAX_TITLE => {
@@ -854,13 +937,15 @@ impl Workspace {
                     None
                 }
                 Request::TaskAdd { title, priority, state, tab, agent, paths, skills } => {
-                    self.dispatch(Action::TaskAdd { title, priority, state, tab }, window, cx);
-                    if let Some(id) = self.model.tasks.list.last().map(|task| task.id) {
-                        self.dispatch(Action::TaskAssign { id, agent, paths, skills }, window, cx);
+                    let assign = Assign { agent, paths, skills, resolved: Vec::new() };
+                    if assign.agent.is_none() && assign.skills.is_empty() {
+                        // No name to check: nothing to read.
+                        self.dispatch(Action::TaskAdd { title, priority, state, tab, assign }, window, cx);
+                        let task = serde_json::json!(self.model.tasks.list.last());
+                        let _ = reply.send(serde_json::json!({ "ok": true, "task": task }).to_string());
+                    } else {
+                        self.file_when_read(Filing::Task { title, priority, state, tab, assign }, String::new(), reply);
                     }
-                    // The new task, so the caller has its id.
-                    let task = serde_json::json!(self.model.tasks.list.last());
-                    let _ = reply.send(serde_json::json!({ "ok": true, "task": task }).to_string());
                     continue;
                 }
                 Request::TaskUndo => Some(Action::TaskUndo),
@@ -1112,6 +1197,9 @@ impl Workspace {
             // Tasks as the Tasks section lists them, and how many need the user.
             "inbox": self.inbox(),
             "needs_you": self.model.tasks.needs_you(),
+            // True once what the tags of the line in the new-task box may name has been read:
+            // they are read on another thread, a moment after the line changes.
+            "compose_read": self.model.compose_read(),
             // The home screen, or null while the tab on show has a pane: each task's node (its
             // lane, depth and crossing of the lattice) and the rows under "Needs you".
             "home": self.model.home(&self.home.borrow().keep_out()),

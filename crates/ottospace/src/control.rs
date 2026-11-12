@@ -160,7 +160,8 @@ pub enum Request {
         state: State,
         #[serde(default)]
         tab: Option<u32>,
-        /// Who works it, paths it is about and skills it loads: kept as given, not checked.
+        /// Who works it and the skills it loads: names `task_new` would know (`@agent`, `$skill`),
+        /// else the request is refused. `paths`: what it is about, kept as given, not checked.
         #[serde(default)]
         agent: Option<String>,
         #[serde(default)]

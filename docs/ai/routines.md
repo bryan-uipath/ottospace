@@ -575,6 +575,22 @@ What ottospace must not weaken:
   notifications as plain strings: no markup, no shell, no links made from them.
 - **Assigning an agent to a task does not start it** (section 2, option (a)), so a socket client
   cannot start an agent by filing tasks.
+- **A task's `agent`, `skills`, `paths` and `resolved` are text until checked.** They come from a
+  line anyone can type or send, and from task files anyone with the folder can edit. Today they
+  are stored and shown, nothing more. Before anything acts on them (starts an agent, loads a
+  skill, opens or passes a path), at the moment of acting and not only when the task was filed:
+  - `agent` must be a built-in (`claude`, `codex`) or a name read from the agents folder by a
+    scan. Look the name up in that list; never join it into a path as given.
+  - Each skill must be a single path component (no `/`, no `..`) that the skill scan found. Use
+    the scan's own path for it, not one built from the name.
+  - Each path is resolved again against the task's repository, canonicalised, and checked to be
+    inside that repository (or the home folder for `~/`). `resolved` on the task is a record of
+    where it was found once, not a permission: a symlink may have changed since.
+  - Reject any value with a control character or a leading `-`.
+  - Pass values to a program as separate arguments (argv), never as shell text.
+  `task_new` and the box keep an `agent` or `skill` only if the scan knows the name, and
+  `task_add` refuses an unknown one. That narrows what is stored; it does not replace the checks
+  above.
 - **Redaction stays, and is finished.** ottobot masks credential-looking words in the stderr tail
   it keeps in metadata and reports. `Events` and `runs/<id>.jsonl` hold raw stderr, so
   `routine-tail` masks before it prints. `ottospace-sessions` lets only derived facts out. Neither
