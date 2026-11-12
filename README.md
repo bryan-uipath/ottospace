@@ -165,7 +165,8 @@ screen (vim, less, htop) the wheel does nothing, and ⇧PageUp and friends go to
 A click on a terminal focuses it and clears its selection; a drag there selects, even in an
 unfocused pane. Paste is bracketed when the program asks for it.
 
-To put an app window in a pane, open Apps on the left rail and click the app. It fills the focused pane if that is
+To put an app window in a pane, open Apps on the left rail and click the app. Apps you name in the settings are
+listed there while they are not running: a click starts one (ottospace waits up to 30 seconds for its window). It fills the focused pane if that is
 empty, otherwise it splits right. Shift-click splits down. New windows of a hosted app get their
 own pane. Original window frames are saved to disk and restored on quit or after a crash.
 
@@ -193,7 +194,8 @@ optional:
 {
   "terminal": { "font": "JetBrains Mono", "font_size": 14 },
   "repos": ["~/code", "~/notes"],
-  "tasks": "~/notes/tasks"
+  "tasks": "~/notes/tasks",
+  "apps": ["Microsoft Outlook", "Slack"]
 }
 ```
 
@@ -203,6 +205,7 @@ optional:
 | `terminal.font_size` | In points, 6 to 72 | `13` |
 | `repos` | Directories that are repositories or hold them, for the Repos section. `OTTOSPACE_REPOS` (`:` between directories) wins over it | `~/code`, `~/notes` |
 | `tasks` | Where tasks are kept, one JSON file each. A relative path is inside `~/.ottospace` | `tasks` |
+| `apps` | Apps to offer while they are not running, by the name of the app as Finder shows it (`Visual Studio Code` for `Visual Studio Code.app`). It must be in `/Applications`, `~/Applications` or `/System/Applications` (or their `Utilities`); a name that is not found is left out. They show under "Not running" in Apps and in the picker; choosing one starts it in the background and puts its window in a pane | none |
 
 A mistake in the file (a key that does not exist, bad JSON, a font that is not installed) is shown
 in the status bar, and the default applies.
