@@ -36,6 +36,7 @@ impl Otto {
             .env_remove("OTTOSPACE_HOST_ONLY")
             // Never list the user's own repositories unless a test names a directory, here or in
             // the settings of a folder it made.
+            .env_remove("OTTOSPACE_REPOS")
             .envs((!env.iter().any(|(name, _)| *name == "OTTOSPACE_HOME")).then_some(("OTTOSPACE_REPOS", "")))
             // Never read the user's settings or tasks: `OTTOSPACE_E2E` without a folder keeps nothing.
             .env_remove("OTTOSPACE_HOME")
@@ -374,7 +375,7 @@ fn user_folder(name: &str, settings: &str) -> PathBuf {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn tasks_are_kept_between_runs() {
-    let home = user_folder("tasks", "");
+    let home = user_folder("tasks", r#"{"repos": []}"#); // no repositories: not the user's own
     let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
     let titles = |o: &Otto| -> Vec<(String, String)> {
         let rows = o.call(json!({"cmd": "task_list"}))["inbox"].as_array().unwrap().clone();
@@ -397,14 +398,26 @@ fn tasks_are_kept_between_runs() {
     }; // the app is killed here, with no chance to save on the way out
     assert_eq!(before, [("needs_you".into(), "question".into()), ("on_hold".into(), "idea".into())]);
 
-    // A file that is not a task is passed over, and reported.
+    // Files that are not a task of their number are passed over, and reported: text that is not
+    // a task, a copy of task 1 under another name, and a task file too broken to read.
     std::fs::write(home.join("tasks/notes.json"), "not a task").unwrap();
+    std::fs::copy(home.join("tasks/1.json"), home.join("tasks/1 copy.json")).unwrap();
+    std::fs::write(home.join("tasks/9.json"), r#"{"id": 9, "title": "half written"#).unwrap();
     let otto = Otto::launch_with("keep-2", &env);
     assert_eq!(titles(&otto), before, "the same inbox, snooze and hold included");
     let state = otto.call(json!({"cmd": "state"}));
     assert!(state["notice"].as_str().is_some_and(|e| e.contains("could not be read")), "{}", state["notice"]);
-    // Ids go on from the highest kept.
-    assert_eq!(otto.call(json!({"cmd": "task_add", "title": "new"}))["task"]["id"], 4);
+    assert!(state["notice"].as_str().is_some_and(|e| e.contains("3 file(s)")), "{}", state["notice"]);
+    // Ids go on from the highest number in the folder, so the broken 9.json is not overwritten.
+    assert_eq!(otto.call(json!({"cmd": "task_add", "title": "new"}))["task"]["id"], 10);
+    assert!(std::fs::read_to_string(home.join("tasks/9.json")).unwrap().contains("half written"));
+    // The file is the user's alone.
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(std::fs::metadata(home.join("tasks/10.json")).unwrap().permissions().mode() & 0o777, 0o600);
+    // A title too long to read back is refused. The start-up notice outlives a later request.
+    let long = otto.raw(&json!({"cmd": "task_add", "title": "x".repeat(501)}).to_string());
+    assert_eq!(long["ok"], false);
+    assert!(otto.call(json!({"cmd": "state"}))["notice"].as_str().is_some());
     let _ = std::fs::remove_dir_all(&home);
 }
 
@@ -714,6 +727,8 @@ fn bad_requests_are_refused_and_quit_exits() {
     let mut other = Command::new(env!("CARGO_BIN_EXE_ottospace"))
         .env("OTTOSPACE_E2E", "1")
         .env("OTTOSPACE_SOCKET", &file)
+        .env_remove("OTTOSPACE_HOME") // never the user's settings or tasks
+        .env("OTTOSPACE_REPOS", "")
         .spawn()
         .expect("launch ottospace");
     std::thread::sleep(Duration::from_millis(1500));

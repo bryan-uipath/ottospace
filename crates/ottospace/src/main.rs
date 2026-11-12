@@ -24,7 +24,7 @@ use gpui::{
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::keys::{self, Mods};
 use ottospace_core::list::{ListKey, list_key};
-use ottospace_core::tasks::{Group, Task};
+use ottospace_core::tasks::{Group, MAX_TITLE, Task};
 use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, scroll_key, select_kind, visual_key};
 use ottospace_core::{
     Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Pane, PaneId, PickItem, Picker, Rect, Section, theme,
@@ -388,6 +388,13 @@ struct Workspace {
     apps: Vec<capture::App>,
     /// Icons of apps seen so far, by app name. Kept: an icon is read and encoded once.
     icons: HashMap<String, Arc<gpui::Image>>,
+    /// A problem found at start (settings, font, tasks folder). It stays: unlike `error`, no
+    /// later success makes it untrue.
+    notice: Option<String>,
+    /// False: the tasks folder could not be read, so nothing is written to it.
+    keeping: bool,
+    /// The last task that could not be written, until a write of it succeeds.
+    unsaved: Option<String>,
     /// The tasks as last written to disk, to write only what changes.
     stored: Vec<Task>,
     /// Scroll position of the bar's list, so list mode can bring the selected row into view.
@@ -496,11 +503,14 @@ impl Workspace {
         window.focus(&focus);
         let mut model = Model::default();
         model.update(Action::SetRepos { repos: repos::scan() });
-        let (tasks, unread) = config::load_tasks();
-        model.update(Action::RestoreTasks { tasks });
-        // The first problem found at start, for the status bar: settings, then the font, then tasks.
+        let kept = config::load_tasks();
+        let unread = kept.unread;
+        // A folder that could not be listed is left alone: writing could replace tasks it holds.
+        let keeping = kept.error.is_none();
+        model.update(Action::RestoreTasks { tasks: kept.tasks, floor: kept.highest });
+        // The first problem found at start, for the status bar: settings, the font, then tasks.
         let unread = (unread > 0).then(|| format!("tasks: {unread} file(s) in the tasks folder could not be read"));
-        let error = config::get().error.clone().or(terminal::choose_font(window)).or(unread);
+        let notice = config::get().error.clone().or(terminal::choose_font(window)).or(kept.error).or(unread);
         if hosting {
             // Repos is the way in while there are no panes: most work starts in a repository.
             model.update(Action::ToggleSection { section: Section::Repos });
@@ -520,7 +530,10 @@ impl Workspace {
             list_scroll: ScrollHandle::new(),
             known: Vec::new(),
             live_since: None,
-            error,
+            error: None,
+            notice,
+            keeping,
+            unsaved: None,
             stored: Vec::new(),
             hosting,
             host_only,
@@ -606,18 +619,36 @@ impl Workspace {
         self.model.tasks.list.iter().map(|task| Task { tab: None, ..task.clone() }).collect()
     }
 
-    /// Writes the tasks that changed since the last write, one file each.
+    /// Writes the tasks that changed since the last write, one file each. A task that could not
+    /// be written counts as changed still, so the next change to anything tries it again.
     fn store_tasks(&mut self) {
         let kept = self.kept_tasks();
-        if kept == self.stored {
+        if kept == self.stored || !self.keeping {
             return;
         }
-        for task in kept.iter().filter(|task| !self.stored.contains(task)) {
-            if let Err(err) = config::save_task(task) {
-                self.error = Some(format!("tasks: could not save task {}: {err}", task.id));
+        let mut failed = None;
+        let mut stored = Vec::with_capacity(kept.len());
+        for task in kept {
+            let before = self.stored.iter().find(|t| t.id == task.id);
+            if before == Some(&task) {
+                stored.push(task);
+                continue;
+            }
+            match config::save_task(&task) {
+                Ok(()) => stored.push(task),
+                Err(err) => {
+                    failed = Some(format!("tasks: could not save task {}: {err}", task.id));
+                    stored.extend(before.cloned()); // what the file still holds, if there is one
+                }
             }
         }
-        self.stored = kept;
+        (self.stored, self.unsaved) = (stored, failed);
+    }
+
+    /// What the status bar says is wrong, most pressing first: the last request that failed, a
+    /// task that is not saved, then a problem found at start.
+    fn problem(&self) -> Option<String> {
+        self.error.clone().or(self.unsaved.clone()).or(self.notice.clone())
     }
 
     /// The global return key: take the keyboard back from a live app, and bring ottospace to the
@@ -718,6 +749,10 @@ impl Workspace {
                         Some(id) => self.wheel(id, ScrollDelta::Lines(point(0., lines)), cx),
                         None => failure = Some("no terminal pane to scroll".into()),
                     }
+                    None
+                }
+                Request::TaskAdd { title, .. } if title.chars().count() > MAX_TITLE => {
+                    failure = Some(format!("the title is longer than {MAX_TITLE} characters"));
                     None
                 }
                 Request::TaskAdd { title, priority, state, tab } => {
@@ -954,7 +989,7 @@ impl Workspace {
             "font": terminal::font_in_use(),
             "cell": [f32::from(self.cell.width), f32::from(self.cell.height)],
             // The problem the status bar shows, or null. Not `error`: that key means the request failed.
-            "notice": self.error,
+            "notice": self.problem(),
             // Each hosted window's real frame, in the same global coordinates as `parking`.
             "hosted": hosted,
             // Each hosted pane's title-bar crop in points (0: none).
@@ -2129,7 +2164,7 @@ impl Workspace {
                 div().text_color(rgb(theme::SNEAK)).child(label)
             }))
             // Shown here, not in the Apps list, so it is visible whichever section is open.
-            .children(self.error.clone().map(|e| div().text_color(rgb(theme::ERROR)).child(e)))
+            .children(self.problem().map(|e| div().text_color(rgb(theme::ERROR)).child(e)))
     }
 }
 

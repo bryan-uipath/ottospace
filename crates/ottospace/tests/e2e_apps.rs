@@ -26,7 +26,10 @@ impl Proc {
     fn launch(bin: &str, name: &str, socket_var: &str, env: &[(&str, &str)]) -> Self {
         let socket = std::env::temp_dir().join(format!("otto-apps-{name}-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&socket);
-        let child = Command::new(bin).env(socket_var, &socket).envs(env.iter().copied()).spawn().expect("launch");
+        let mut command = Command::new(bin);
+        // Never the user's settings, tasks or repositories.
+        command.env(socket_var, &socket).env_remove("OTTOSPACE_HOME").env("OTTOSPACE_REPOS", "");
+        let child = command.envs(env.iter().copied()).spawn().expect("launch");
         let proc = Self { child, socket };
         wait_for(&format!("{name}'s socket"), || UnixStream::connect(&proc.socket).ok().map(|_| ()));
         proc

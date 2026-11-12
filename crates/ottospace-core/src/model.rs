@@ -209,9 +209,10 @@ pub enum Action {
         path: String,
         axis: Axis,
     },
-    /// Start from the tasks kept on disk.
+    /// Start from the tasks kept on disk. `floor`: new ids start above it (see `Tasks::restore`).
     RestoreTasks {
         tasks: Vec<Task>,
+        floor: TaskId,
     },
     /// File a task. `tab`: the `id` of the tab that is its workspace.
     TaskAdd {
@@ -486,7 +487,7 @@ impl Model {
             }
             Action::Open { kind, axis, beside } => self.open(kind, axis, beside, effects),
             Action::SetRepos { repos } => self.repos = repos::arrange(repos),
-            Action::RestoreTasks { tasks } => self.tasks.restore(tasks),
+            Action::RestoreTasks { tasks, floor } => self.tasks.restore(tasks, floor),
             Action::TaskAdd { title, priority, state, tab } => drop(self.tasks.add(title, priority, state, tab)),
             Action::TaskSetState { id, state } => self.tasks.set_state(id, state),
             Action::TaskSnooze { id, until } => self.tasks.snooze(id, until),

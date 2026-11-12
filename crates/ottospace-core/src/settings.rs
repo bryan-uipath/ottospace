@@ -68,6 +68,10 @@ impl Settings {
         if settings.terminal.font.trim().is_empty() {
             settings.terminal.font = default_font();
         }
+        // Task files must have a folder of their own: beside other files they are read as tasks.
+        if settings.tasks.as_deref().is_some_and(|dir| matches!(dir.trim().trim_end_matches('/'), "" | "~" | ".")) {
+            return Err("\"tasks\" must name a folder of its own, e.g. \"~/notes/tasks\"".into());
+        }
         Ok(settings)
     }
 }
@@ -109,6 +113,9 @@ mod tests {
         let err = Settings::parse(r#"{ "terminal": { "font_family": "Menlo" } }"#).unwrap_err();
         assert!(err.contains("font_family"), "{err}");
         assert!(Settings::parse("{ not json").is_err());
+        for own_folder in [r#"{"tasks": ""}"#, r#"{"tasks": "~/"}"#, r#"{"tasks": "."}"#] {
+            assert!(Settings::parse(own_folder).unwrap_err().contains("folder of its own"));
+        }
         let size = |text: &str| Settings::parse(text).unwrap().terminal;
         assert_eq!(size(r#"{"terminal":{"font_size":400}}"#).font_size, 72.);
         assert_eq!(
