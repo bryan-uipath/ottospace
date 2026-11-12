@@ -5,8 +5,12 @@ name: Build
 # prerelease (`osi install main`). The file name and the artifact name are read by osi.
 on:
   pull_request:
+    # Text nobody compiles: no macOS runner for it. (`crates/**/*.md` is compiled in: not listed.)
+    paths-ignore: ['docs/**', 'site/**', 'README.md', 'AGENTS.md', 'CLAUDE.md', 'LICENSE']
   push:
     branches: [main]
+    # Text nobody compiles: no macOS runner for it. (`crates/**/*.md` is compiled in: not listed.)
+    paths-ignore: ['docs/**', 'site/**', 'README.md', 'AGENTS.md', 'CLAUDE.md', 'LICENSE']
 
 # pull_request, never pull_request_target: a fork's run gets a read-only token and no secrets.
 permissions: {}
@@ -91,7 +95,7 @@ jobs:
           TAG: main-latest
         run: |
           set -euo pipefail
-          notes="Built from main at $GITHUB_SHA. Replaced on every push to main. Install: \`osi install main\` (see docs/install.md)."
+          notes="Built from main at $GITHUB_SHA. Replaced on every push to main that changes code. Install: \`osi install main\` (see docs/install.md)."
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             # A run that finishes late must not replace a newer build. Publish when this commit
             # is ahead of the published one, or is the same one (a re-run after a failed upload).
