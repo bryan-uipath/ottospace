@@ -412,6 +412,8 @@ struct Workspace {
     known: Vec<(i32, HashSet<u32>)>,
     /// When the live pane went live.
     live_since: Option<Instant>,
+    /// When a pane last gave the keyboard back. Its app stays "active" for a moment after.
+    parked_at: Option<Instant>,
     error: Option<String>,
     /// False in e2e runs, which must never move the user's real windows.
     hosting: bool,
@@ -489,6 +491,7 @@ impl Workspace {
                     if tick % 30 == 0 {
                         this.adopt_new_windows(window, cx);
                         this.drop_closed(window, cx);
+                        this.follow_front_app(window, cx);
                         this.host_launched(window, cx);
                         // A snoozed task returns when its time comes.
                         let now = now_ms();
@@ -558,6 +561,7 @@ impl Workspace {
             list_scroll: ScrollHandle::new(),
             known: Vec::new(),
             live_since: None,
+            parked_at: None,
             error: None,
             notice,
             keeping,
@@ -609,6 +613,7 @@ impl Workspace {
                 }
                 Effect::Parked(id) => {
                     self.live_since = None;
+                    self.parked_at = Some(Instant::now());
                     if let Some(hosted) = self.hosted.get_mut(id) {
                         let crop = hosted.crop_at(on_screen(hosted.bounds.get(), window, cx), top_limit(window, cx));
                         hosted.park(window.scale_factor() as f64, crop);
@@ -1241,6 +1246,30 @@ impl Workspace {
                 self.launching.push(launch);
             }
         }
+        cx.notify();
+    }
+
+    /// A hosted app came to the front by itself (a click on its Dock icon, ⌘Tab) while its window
+    /// is parked off screen: the user would see nothing happen. Go to its pane and give it the
+    /// keyboard, as a click on the pane does.
+    fn follow_front_app(&mut self, window: &Window, cx: &mut Context<Self>) {
+        // Just after a pane was left, its app can still read as active: that is not the user.
+        if self.parked_at.is_some_and(|at| at.elapsed() < Duration::from_millis(1000)) {
+            return;
+        }
+        let live_pid = self.model.live.and_then(|pane| self.hosted.get(&pane)).map(|hosted| hosted.pid);
+        let Some(pid) = self.hosted.values().map(|hosted| hosted.pid).find(|pid| ax::is_active(*pid)) else { return };
+        if live_pid == Some(pid) {
+            return; // its window is the one on screen already
+        }
+        // Of the app's panes: one in the tab on show, else its first.
+        let shown = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
+        let mut panes: Vec<PaneId> = self.hosted.iter().filter(|(_, h)| h.pid == pid).map(|(id, _)| *id).collect();
+        panes.sort_unstable();
+        let Some(pane) = panes.iter().copied().find(|id| shown.contains(id)).or(panes.first().copied()) else { return };
+        // ottospace must be on screen under the window it is about to place.
+        cx.activate(true);
+        self.dispatch(Action::Enter { pane }, window, cx);
         cx.notify();
     }
 
