@@ -43,9 +43,9 @@ The fourth icon, Workbook, is empty for now.
 | Put a running app's window in a pane | Apps, click the app (⇧-click: split down). Or ⌘E and pick it |
 | Type in the app | Click its pane. The status bar turns `APP`; ottospace keys stop |
 | Come back | Click ottospace itself, or the return key |
-| Give the window back to macOS | ⌘W on its pane: it returns to where it was |
+| Give the window back to macOS | Come back to ottospace first, then ⌘W on its pane: the window returns to where it was |
 
-The badge on an app is how many windows it has open.
+The badge on an app is how many windows it has open. A new window of a hosted app gets its own pane.
 
 ## Tasks
 
@@ -53,17 +53,18 @@ The badge on an app is how many windows it has open.
 |---|---|
 | File a task | ⌘N, type a line, ↵ |
 | Tag a project, name a repository, set priority | In that line: `#canvas` · `@flow-workbench` · `p1` … `p9`. Tab completes `#` and `@` |
-| Open the next task that needs me | ⌘⇧N |
+| Go to the tab of the next task that needs me | ⌘⇧N. Only for a task that has a tab: one an agent filed with `tab`. Tasks from ⌘N have none yet, so for them nothing happens |
 | See the inbox | Tasks on the rail: Needs you, Running, Captured, On hold, Done |
 | Snooze 1 hour / hold / dismiss / undo | ⌘⇧E on Tasks, then `s` / `h` / `x` / `u` |
 
-The status bar shows how many tasks need you. Tasks are kept in `~/.ottospace/tasks`.
+The status bar shows how many tasks need you. Tasks are kept in `~/.ottospace/tasks`, or the `tasks` setting.
 `@name` must be a repository or worktree in the Repos list; any other `@word` stays in the title.
 
 From a shell or an agent:
 
 ```sh
 ottospace ctl '{"cmd":"task_new","line":"fix zoom flicker #canvas @flow-workbench p1"}'
+ottospace ctl "{\"cmd\":\"task_add\",\"title\":\"review my PR\",\"state\":\"needs_you\",\"tab\":$OTTOSPACE_TAB}"   # a task tied to this tab
 ottospace ctl '{"cmd":"task_set_state","id":1,"state":"needs_you"}'   # running, needs_you, done, ...
 ottospace ctl '{"cmd":"task_list"}'
 ```
