@@ -2,7 +2,9 @@
 //! `alacritty_terminal`, and the code that paints that grid.
 
 use std::collections::HashMap;
+use std::fs::File;
 use std::io;
+use std::os::fd::AsFd;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::{Arc, OnceLock};
@@ -22,8 +24,11 @@ use gpui::{
     App, Bounds, ContentMask, FontStyle, FontWeight, Hsla, Pixels, Size, TextRun, UnderlineStyle, Window, fill, font,
     point, px, rgb, size,
 };
-use ottospace_core::terminal::{CellPoint, Motion, Scroll, SelectKind, Wheel, paste, wheel_scrolls};
+use ottospace_core::terminal::{
+    CellPoint, Motion, Proc, Processes, Scroll, SelectKind, Wheel, Work, paste, running, wheel_scrolls,
+};
 use ottospace_core::{palette, settings, theme};
+use ottospace_mac::process;
 
 /// The font terminals draw with, once `choose_font` has run. Until then, the default.
 static FONT: OnceLock<settings::Terminal> = OnceLock::new();
@@ -127,6 +132,10 @@ pub struct Terminal {
     input: EventLoopSender,
     grid: Grid,
     wheel: Wheel,
+    /// The process started in the PTY (the shell, or `login` wrapping it), and the PTY's master
+    /// side: to ask what runs besides the shell.
+    child: u32,
+    pty: Option<File>,
 }
 
 impl Terminal {
@@ -148,12 +157,30 @@ impl Terminal {
         let working_directory = cwd.map(PathBuf::from).filter(|dir| dir.is_dir()).or(home).filter(|dir| dir.is_dir());
         let options = tty::Options { shell, env, working_directory, ..Default::default() };
         let pty = tty::new(&options, window_size(grid, size(px(8.), px(terminal_font().line_height()))), 0)?;
+        let (child, master) = (pty.child().id(), pty.file().try_clone().ok());
         let term = Arc::new(FairMutex::new(Term::new(Config::default(), &grid, listener.clone())));
         let event_loop = EventLoop::new(term.clone(), listener, pty, false, false)?;
         let input = event_loop.channel();
         let _ = shared.input.set(input.clone());
         event_loop.spawn();
-        Ok(Self { term, shared, input, grid, wheel: Wheel::default() })
+        Ok(Self { term, shared, input, grid, wheel: Wheel::default(), child, pty: master })
+    }
+
+    /// What quitting would end here: the program in front of the shell, or a job behind it.
+    /// `None`: the shell is at its prompt with no jobs, or gone. The core decides (`running`).
+    pub fn running(&self) -> Option<Work> {
+        if self.shared.exited.load(Relaxed) {
+            return None;
+        }
+        let proc = |pid| Proc { pid, name: process::name(pid) };
+        let foreground = self.pty.as_ref().and_then(|pty| process::foreground(pty.as_fd()));
+        running(&Processes {
+            child: proc(self.child as i32),
+            foreground,
+            leader: foreground.and_then(process::name),
+            leader_parent: foreground.and_then(process::parent),
+            children: foreground.map(process::children).unwrap_or_default().into_iter().map(proc).collect(),
+        })
     }
 
     /// Sends bytes to the shell, as if typed. Typing while scrolled back returns to the bottom.

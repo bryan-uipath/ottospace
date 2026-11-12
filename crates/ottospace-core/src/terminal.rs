@@ -177,9 +177,125 @@ pub fn visual_key(key: &str, typed: Option<&str>) -> Option<VisualKey> {
     Some(action)
 }
 
+/// A process, as the shell crate reads it. `name`: e.g. "zsh"; `None`: it could not be read.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Proc {
+    pub pid: i32,
+    pub name: Option<String>,
+}
+
+/// A terminal's processes, read by the shell crate when the user asks to quit.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Processes {
+    /// The process the terminal started: the shell, or `login` wrapping it (the default on macOS).
+    pub child: Proc,
+    /// The PTY's foreground process group. `None`: it could not be read.
+    pub foreground: Option<i32>,
+    /// The foreground group's leader: its name and its parent.
+    pub leader: Option<String>,
+    pub leader_parent: Option<i32>,
+    /// The leader's children. When the leader is the shell, these are its jobs.
+    pub children: Vec<Proc>,
+}
+
+/// What quitting would end in a terminal.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Work {
+    /// e.g. "cargo". `None`: no name could be read.
+    pub program: Option<String>,
+    /// A background or stopped job of the shell, not the program in front.
+    pub background: bool,
+}
+
+/// What a terminal runs besides its shell; `None` at an idle prompt.
+///
+/// The shell is the foreground group's leader when that is the child itself, or a child of the
+/// child `login`. In front: idle unless it has children (`sleep 100 &`, a stopped vim), which
+/// quitting ends too. Anything else in front is a program. Unknown counts: better to ask than
+/// to lose work.
+pub fn running(p: &Processes) -> Option<Work> {
+    let Some(foreground) = p.foreground else {
+        return Some(Work { program: None, background: false });
+    };
+    let wrapped = p.child.name.as_deref() == Some("login") && p.leader_parent == Some(p.child.pid);
+    if foreground != p.child.pid && !wrapped {
+        return Some(Work { program: p.leader.clone(), background: false });
+    }
+    let job = p.children.first()?;
+    Some(Work { program: job.name.clone(), background: true })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_terminal_runs_something_unless_its_shell_is_in_front_with_no_jobs() {
+        let proc = |pid, name: &str| Proc { pid, name: Some(name.into()) };
+        let work = |program: &str, background| Some(Work { program: Some(program.into()), background });
+        let unnamed = Some(Work { program: None, background: false });
+        // (child, foreground, leader, leader's parent, leader's children) -> what runs
+        type Case = (&'static str, Proc, Option<i32>, Option<&'static str>, Option<i32>, Vec<Proc>, Option<Work>);
+        let cases: Vec<Case> = vec![
+            ("direct shell, idle", proc(40, "sh"), Some(40), Some("sh"), Some(1), vec![], None),
+            ("login-wrapped shell, idle", proc(40, "login"), Some(41), Some("zsh"), Some(40), vec![], None),
+            ("program in front", proc(40, "sh"), Some(50), Some("cargo"), Some(40), vec![], work("cargo", false)),
+            (
+                "program, login-wrapped",
+                proc(40, "login"),
+                Some(50),
+                Some("cargo"),
+                Some(41),
+                vec![],
+                work("cargo", false),
+            ),
+            // A child of the child is the shell only when the child is login.
+            ("child of a shell", proc(40, "zsh"), Some(50), Some("vim"), Some(40), vec![], work("vim", false)),
+            (
+                "background job",
+                proc(40, "sh"),
+                Some(40),
+                Some("sh"),
+                Some(1),
+                vec![proc(60, "sleep")],
+                work("sleep", true),
+            ),
+            (
+                "stopped job, login-wrapped",
+                proc(40, "login"),
+                Some(41),
+                Some("zsh"),
+                Some(40),
+                vec![proc(60, "vim"), proc(61, "sleep")],
+                work("vim", true),
+            ),
+            // The shell has not taken the terminal yet: it is login's child, behind login.
+            (
+                "login in front",
+                proc(40, "login"),
+                Some(40),
+                Some("login"),
+                Some(1),
+                vec![proc(41, "zsh")],
+                work("zsh", true),
+            ),
+            ("foreground unreadable", proc(40, "sh"), None, None, None, vec![], unnamed.clone()),
+            ("leader unreadable", proc(40, "login"), Some(41), None, None, vec![], unnamed),
+            (
+                "child unnamed",
+                Proc { pid: 40, name: None },
+                Some(41),
+                Some("zsh"),
+                Some(40),
+                vec![],
+                work("zsh", false),
+            ),
+        ];
+        for (case, child, foreground, leader, leader_parent, children, expected) in cases {
+            let processes = Processes { child, foreground, leader: leader.map(String::from), leader_parent, children };
+            assert_eq!(running(&processes), expected, "{case}");
+        }
+    }
 
     const SHIFT: Mods = Mods { ctrl: false, alt: false, shift: true, cmd: false };
 

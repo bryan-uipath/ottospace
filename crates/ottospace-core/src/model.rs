@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::ax::Target;
 use crate::compose;
 use crate::home::{self, Home};
+use crate::keys::Mods;
 use crate::layout::{Axis, Dir, Node, Rect, Zone};
 use crate::list::ListRow;
 use crate::repos::{self, Repo};
@@ -52,6 +53,68 @@ pub enum Mode {
     Compose,
     /// Labels on ottospace's own controls: keys type a label, which does what a click would.
     Sneak,
+    /// The quit question: ↵ quits, any other key cancels.
+    Confirm,
+}
+
+/// A terminal that runs something quitting would end.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Running {
+    pub pane: PaneId,
+    /// The program's name, e.g. "cargo". `None`: it could not be read.
+    pub program: Option<String>,
+    /// A background or stopped job of the shell (`sleep 100 &`), not the program in front.
+    pub background: bool,
+}
+
+/// Why a socket client's request is refused under the quit question.
+pub const CONFIRM_UP: &str = "the quit question is up";
+
+/// The quit question: these terminals would lose a running program.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Confirm {
+    pub running: Vec<Running>,
+}
+
+impl Confirm {
+    /// What a key does to the question. The user's: ↵, Q or ⌘Q quits; every other key or
+    /// shortcut cancels, and does nothing else, e.g. ⌘W cancels and closes nothing. A socket
+    /// client's: ↵ or Q quits and Esc cancels, so a test can answer; `None` for any other key,
+    /// which is refused: a client's shortcut must not answer for the user.
+    pub fn answer(key: &str, mods: Mods, origin: Origin) -> Option<Action> {
+        let plain = mods == Mods::default();
+        let cmd = mods == Mods { cmd: true, ..Mods::default() };
+        match (key, origin) {
+            ("enter" | "q", _) if plain => Some(Action::QuitConfirm),
+            ("q", Origin::User) if cmd => Some(Action::QuitConfirm),
+            ("escape", _) if plain => Some(Action::QuitCancel),
+            (_, Origin::User) => Some(Action::QuitCancel),
+            (_, Origin::Socket | Origin::System) => None,
+        }
+    }
+
+    /// "3 terminals are running".
+    pub fn title(&self) -> String {
+        match self.running.len() {
+            1 => "1 terminal is running".into(),
+            n => format!("{n} terminals are running"),
+        }
+    }
+
+    /// One line a terminal, e.g. "pane 2 · cargo" or "pane 3 · sleep (background)": at most 5, then "and 2 more".
+    pub fn lines(&self) -> Vec<String> {
+        let line = |r: &Running| match (&r.program, r.background) {
+            (Some(program), true) => format!("pane {} · {program} (background)", r.pane),
+            (Some(program), false) => format!("pane {} · {program}", r.pane),
+            (None, true) => format!("pane {} · (background)", r.pane),
+            (None, false) => format!("pane {}", r.pane),
+        };
+        let mut lines: Vec<String> = self.running.iter().take(5).map(line).collect();
+        if self.running.len() > 5 {
+            lines.push(format!("and {} more", self.running.len() - 5));
+        }
+        lines
+    }
 }
 
 /// Something the picker can put in a new pane.
@@ -351,6 +414,16 @@ pub enum Action {
     },
     SneakBackspace,
     LeaveSneak,
+    /// ⌘Q. `running`: the terminals with a program in front of their shell, as the shell crate
+    /// sees them now. None: quit. Some: ask first. Asked again while the question is up: quit.
+    QuitAsked {
+        running: Vec<Running>,
+    },
+    /// Answers to the quit question.
+    QuitConfirm,
+    QuitCancel,
+    /// Quit without asking: the socket's `quit`.
+    Quit,
 }
 
 /// Who sent an action.
@@ -377,7 +450,8 @@ impl Action {
     }
 
     /// Whether the action takes the keyboard for a box, an app or another mode. Sneak mode lets
-    /// only the user do that under its labels (`Model::refusal`). Every action is named, with no
+    /// only the user do that under its labels, and the quit question under itself
+    /// (`Model::refusal`). Every action is named, with no
     /// catch-all: a new one must be put on a side.
     pub fn takes_keyboard(&self) -> bool {
         match self {
@@ -386,7 +460,8 @@ impl Action {
             | Action::OpenCompose { .. }
             | Action::ToggleKeys
             | Action::ToggleVisual
-            | Action::ToggleAxOverlay => true,
+            | Action::ToggleAxOverlay
+            | Action::QuitAsked { .. } => true,
             Action::Split { .. }
             | Action::Open { .. }
             | Action::Adopt { .. }
@@ -447,7 +522,10 @@ impl Action {
             | Action::SneakDrawn { .. }
             | Action::SneakType { .. }
             | Action::SneakBackspace
-            | Action::LeaveSneak => false,
+            | Action::LeaveSneak
+            | Action::QuitConfirm
+            | Action::QuitCancel
+            | Action::Quit => false,
         }
     }
 }
@@ -486,6 +564,8 @@ pub enum Effect {
     Activate {
         id: String,
     },
+    /// End the app.
+    Quit,
 }
 
 /// One tab: its own split tree. Only the active tab is drawn.
@@ -537,6 +617,8 @@ pub struct Model {
     pub tasks: Tasks,
     /// The pane picker, while it is open.
     pub picker: Option<Picker>,
+    /// The quit question, while it is up.
+    pub confirm: Option<Confirm>,
     /// The key reference overlay is showing.
     pub keys: bool,
     /// The terminal pane in visual mode.
@@ -568,6 +650,7 @@ impl Default for Model {
             repos: Vec::new(),
             tasks: Tasks::default(),
             picker: None,
+            confirm: None,
             keys: false,
             visual: None,
             ax_overlay: false,
@@ -596,7 +679,9 @@ impl Model {
     }
 
     pub fn mode(&self) -> Mode {
-        if self.sneak.is_some() {
+        if self.confirm.is_some() {
+            Mode::Confirm
+        } else if self.sneak.is_some() {
             Mode::Sneak
         } else if self.picker.is_some() {
             Mode::Pick
@@ -621,13 +706,15 @@ impl Model {
     }
 
     /// Why an action does nothing because of who sent it. Only the user may take the keyboard
-    /// from under sneak mode's labels, or close the picker by opening the key reference.
+    /// from under sneak mode's labels or the quit question, or close the picker by opening the
+    /// key reference.
     /// `None`: the origin does not stop it. The shell answers a socket request with the reason.
     pub fn refusal(&self, action: &Action, origin: Origin) -> Option<&'static str> {
         let boxed = self.picker.is_some() || self.compose.is_some();
         match action {
             _ if origin == Origin::User => None,
             action if self.sneak.is_some() && action.takes_keyboard() => Some("sneak mode is on"),
+            action if self.confirm.is_some() && action.takes_keyboard() => Some(CONFIRM_UP),
             Action::ToggleKeys if boxed && !self.keys => Some("the picker or the new-task box is open"),
             _ => None,
         }
@@ -691,6 +778,26 @@ impl Model {
         // Visual mode holds the keyboard on its terminal the same way. A close of a named pane still
         // runs: the shell sends it when a window or shell is gone, and must not leave a dead pane.
         let named_close = matches!(action, Action::Close { pane: Some(_) });
+        // The quit question has the keyboard: anything else the user does answers no, and is
+        // dropped. e.g. ⌘W cancels the quit and closes nothing. A client's request or news
+        // never answers for the user: it runs underneath (an agent's split, a shell that
+        // exited), or was refused above if it would take the keyboard. `QuitCancel` is an
+        // answer from anyone: Esc through the socket.
+        let cancels = matches!(action, Action::QuitCancel);
+        let answers_no = (for_panes && !named_close)
+            || matches!(
+                action,
+                Action::QuitCancel
+                    | Action::OpenPicker { .. }
+                    | Action::OpenCompose { .. }
+                    | Action::ToggleKeys
+                    | Action::ToggleVisual
+                    | Action::ToggleAxOverlay
+            );
+        if self.confirm.is_some() && (cancels || (user && answers_no)) {
+            self.confirm = None;
+            return effects;
+        }
         let blocked_by_visual =
             self.visual.is_some() && !named_close && (for_panes || matches!(action, Action::OpenPicker { .. }));
         // The new-task box has the keyboard, as the picker does: what is behind it waits, and
@@ -749,6 +856,15 @@ impl Model {
         // Its row is gone, or the move was the user's: stay at the same place, on a row.
         let stay = |at: usize| at.min(rows.len().saturating_sub(1));
         self.list = self.list.filter(|_| self.sidebar.is_some()).map(|at| followed.unwrap_or_else(|| stay(at)));
+        // A pane that closed is not asked about; with none left there is no question. Never a
+        // quit: the user has not answered.
+        let panes = &self.panes;
+        if let Some(confirm) = &mut self.confirm {
+            confirm.running.retain(|r| panes.iter().any(|p| p.id == r.pane));
+            if confirm.running.is_empty() {
+                self.confirm = None;
+            }
+        }
         effects
     }
 
@@ -1151,6 +1267,15 @@ impl Model {
                 }
             }
             Action::LeaveSneak => self.sneak = None,
+            Action::QuitAsked { running } if running.is_empty() || self.confirm.is_some() => effects.push(Effect::Quit),
+            Action::QuitAsked { running } => {
+                // The question is ottospace's own UI: a live window would cover it.
+                self.leave(effects);
+                self.confirm = Some(Confirm { running });
+            }
+            Action::QuitConfirm if self.confirm.is_some() => effects.push(Effect::Quit),
+            Action::QuitConfirm | Action::QuitCancel => {}
+            Action::Quit => effects.push(Effect::Quit),
         }
     }
 
@@ -1793,7 +1918,11 @@ mod tests {
         Action::SneakDrawn { .. },
         Action::SneakType { .. },
         Action::SneakBackspace,
-        Action::LeaveSneak
+        Action::LeaveSneak,
+        Action::QuitAsked { .. },
+        Action::QuitConfirm,
+        Action::QuitCancel,
+        Action::Quit
     );
 
     /// One of each action.
@@ -1867,6 +1996,10 @@ mod tests {
             Action::SneakType { text: text() },
             Action::SneakBackspace,
             Action::LeaveSneak,
+            Action::QuitAsked { running: Vec::new() },
+            Action::QuitConfirm,
+            Action::QuitCancel,
+            Action::Quit,
         ];
         let mut places: Vec<usize> = samples.iter().map(index).collect();
         places.sort_unstable();
@@ -3043,5 +3176,195 @@ mod tests {
         m.update(Action::Enter { pane: 1 });
         m.update(Action::Close { pane: Some(1) });
         assert_eq!(m.mode(), Mode::Normal);
+    }
+
+    fn running(pane: PaneId, program: &str) -> Running {
+        Running { pane, program: Some(program.into()), background: false }
+    }
+
+    #[test]
+    fn quit_is_at_once_when_nothing_runs() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        assert_eq!(m.update(Action::QuitAsked { running: vec![] }), [Effect::Quit]);
+        assert_eq!((m.mode(), &m.confirm), (Mode::Normal, &None));
+    }
+
+    #[test]
+    fn quit_asks_while_a_terminal_runs_and_enter_confirms() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        assert_eq!(m.update(Action::QuitConfirm), [], "no question, no answer");
+        assert_eq!(m.update(Action::QuitAsked { running: vec![running(1, "sleep")] }), []);
+        assert_eq!(m.mode(), Mode::Confirm);
+        assert_eq!(m.confirm, Some(Confirm { running: vec![running(1, "sleep")] }));
+        assert_eq!(m.update(Action::QuitConfirm), [Effect::Quit]);
+    }
+
+    #[test]
+    fn a_second_quit_key_confirms() {
+        let mut m = Model::default();
+        m.update(Action::QuitAsked { running: vec![running(1, "sleep")] });
+        // The program may have ended since: the user has answered all the same.
+        assert_eq!(m.update(Action::QuitAsked { running: vec![] }), [Effect::Quit]);
+    }
+
+    #[test]
+    fn the_quit_question_is_cancelled_by_anything_else_the_user_does() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        let ask = || Action::QuitAsked { running: vec![running(1, "sleep")] };
+        for no in [Action::QuitCancel, Action::Close { pane: None }, Action::ToggleKeys, Action::NewTab] {
+            m.update(ask());
+            assert_eq!(m.update(no.clone()), [], "{no:?}");
+            assert_eq!((m.mode(), ids(&m), m.keys, m.tabs.len()), (Mode::Normal, vec![1, 2], false, 1), "{no:?}");
+        }
+        // What the user did not do leaves the question up: time passes, a shell exits.
+        m.update(ask());
+        m.update(Action::Tick { now: 1 });
+        assert_eq!(m.update(Action::Close { pane: Some(2) }).len(), 1);
+        assert_eq!((m.mode(), ids(&m)), (Mode::Confirm, vec![1]));
+    }
+
+    #[test]
+    fn a_pane_that_closes_leaves_the_quit_question_and_the_last_one_ends_it() {
+        let mut m = Model::default();
+        for _ in 0..4 {
+            m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        }
+        m.update(Action::QuitAsked { running: vec![running(1, "sleep"), running(2, "vim")] });
+        m.update(Action::Close { pane: Some(3) });
+        assert_eq!(m.confirm.as_ref().map(|c| c.running.len()), Some(2), "pane 3 ran nothing");
+        m.update(Action::Close { pane: Some(1) });
+        assert_eq!(m.confirm, Some(Confirm { running: vec![running(2, "vim")] }));
+        // Nothing left to ask about: no question, and no quit either.
+        let effects = m.update(Action::Close { pane: Some(2) });
+        assert!(!effects.contains(&Effect::Quit), "{effects:?}");
+        assert_eq!((m.mode(), &m.confirm, ids(&m)), (Mode::Normal, &None, vec![4]));
+    }
+
+    #[test]
+    fn enter_q_and_cmd_q_answer_yes_and_every_other_key_of_the_users_answers_no() {
+        let cmd = Mods { cmd: true, ..Mods::default() };
+        let shift = Mods { shift: true, ..Mods::default() };
+        let user = |key, mods| Confirm::answer(key, mods, Origin::User);
+        for (key, mods) in [("enter", Mods::default()), ("q", Mods::default()), ("q", cmd)] {
+            assert_eq!(user(key, mods), Some(Action::QuitConfirm), "{key} {mods:?}");
+        }
+        let cmd_ctrl = Mods { ctrl: true, ..cmd };
+        let no = [("escape", Mods::default()), ("x", Mods::default()), ("q", shift), ("enter", cmd)];
+        for (key, mods) in no.into_iter().chain([("v", cmd), ("c", cmd), ("h", cmd), ("w", cmd), ("f", cmd_ctrl)]) {
+            assert_eq!(user(key, mods), Some(Action::QuitCancel), "{key} {mods:?}");
+        }
+    }
+
+    #[test]
+    fn a_socket_key_answers_with_enter_q_or_esc_and_is_refused_otherwise() {
+        let cmd = Mods { cmd: true, ..Mods::default() };
+        let socket = |key, mods| Confirm::answer(key, mods, Origin::Socket);
+        assert_eq!(socket("enter", Mods::default()), Some(Action::QuitConfirm));
+        assert_eq!(socket("q", Mods::default()), Some(Action::QuitConfirm));
+        assert_eq!(socket("escape", Mods::default()), Some(Action::QuitCancel));
+        for (key, mods) in [("x", Mods::default()), ("q", cmd), ("w", cmd), ("v", cmd), ("escape", cmd)] {
+            assert_eq!(socket(key, mods), None, "{key} {mods:?}");
+            assert_eq!(Confirm::answer(key, mods, Origin::System), None, "{key} {mods:?}");
+        }
+    }
+
+    /// Every action from every origin, under the quit question. Only the user's own move
+    /// cancels it; a client's or the system's runs underneath, or is refused if it would take
+    /// the keyboard. Esc (`QuitCancel`) and ↵ (`QuitConfirm`) answer from the socket too.
+    #[test]
+    fn only_the_user_cancels_the_quit_question_whatever_the_action() {
+        for action in &samples() {
+            for origin in [Origin::User, Origin::Socket, Origin::System] {
+                let mut m = Model::default();
+                m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+                m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+                m.update(Action::QuitAsked { running: vec![running(1, "sleep")] });
+                let user = origin == Origin::User;
+                let refused = (!user && action.takes_keyboard()).then_some(CONFIRM_UP);
+                assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");
+                let before = (ids(&m), m.focused, m.tabs.len(), m.keys);
+                let effects = m.update(action.clone().sent_by(origin));
+                let quits = match action {
+                    Action::QuitConfirm | Action::Quit => true,
+                    // ⌘Q again is the user's yes.
+                    Action::QuitAsked { .. } => user,
+                    _ => false,
+                };
+                assert_eq!(effects.contains(&Effect::Quit), quits, "{action:?} from {origin:?}");
+                if refused.is_some() {
+                    assert_eq!((m.mode(), &effects[..]), (Mode::Confirm, &[][..]), "{action:?} from {origin:?}");
+                    assert_eq!(before, (ids(&m), m.focused, m.tabs.len(), m.keys), "{action:?} from {origin:?}");
+                }
+                // Not the user's: the question stays while the pane it lists does.
+                if !user && !matches!(action, Action::QuitCancel) {
+                    assert_eq!(m.confirm.is_some(), m.pane(1).is_some(), "{action:?} from {origin:?}");
+                }
+                if matches!(action, Action::QuitCancel) {
+                    assert_eq!(m.mode(), Mode::Normal, "{action:?} from {origin:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_clients_request_runs_under_the_quit_question_and_the_users_cancels_it() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        let ask = Action::QuitAsked { running: vec![running(1, "sleep"), running(2, "vim")] };
+        m.update(ask.clone());
+        // An agent splits: the pane opens underneath, the question stays.
+        let split = Action::Split { axis: Right, kind: Kind::Terminal };
+        assert_eq!(m.update(split.clone().sent_by(Origin::Socket)), [Effect::Opened(3)]);
+        assert_eq!((m.mode(), ids(&m)), (Mode::Confirm, vec![1, 2, 3]));
+        // An agent closes the focused pane: it goes, and nothing the question lists changed.
+        assert_eq!(m.update(Action::Close { pane: None }.sent_by(Origin::Socket)).len(), 1);
+        assert_eq!((m.mode(), ids(&m)), (Mode::Confirm, vec![1, 2]));
+        // A shell exits: its pane drops off the list.
+        m.update(Action::Close { pane: Some(1) }.sent_by(Origin::System));
+        assert_eq!(m.confirm, Some(Confirm { running: vec![running(2, "vim")] }));
+        // A client may not take the keyboard from under it, nor ask again as the user's yes.
+        for taking in [Action::ToggleKeys, Action::Enter { pane: 2 }, ask.clone()] {
+            assert_eq!(m.refusal(&taking, Origin::Socket), Some(CONFIRM_UP), "{taking:?}");
+            assert_eq!(m.update(taking.sent_by(Origin::Socket)), []);
+            assert_eq!((m.mode(), m.keys), (Mode::Confirm, false));
+        }
+        // The user's split cancels, and opens nothing.
+        assert_eq!(m.update(split), []);
+        assert_eq!((m.mode(), ids(&m)), (Mode::Normal, vec![2]));
+    }
+
+    #[test]
+    fn the_quit_question_takes_the_keyboard_from_a_live_app() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        m.update(Action::Enter { pane: 2 });
+        assert_eq!(m.update(Action::QuitAsked { running: vec![running(1, "vim")] }), [Effect::Parked(2)]);
+        assert_eq!(m.mode(), Mode::Confirm);
+    }
+
+    #[test]
+    fn the_socket_quit_never_asks() {
+        let mut m = Model::default();
+        assert_eq!(m.update(Action::Quit), [Effect::Quit]);
+        m.update(Action::QuitAsked { running: vec![running(1, "sleep")] });
+        assert_eq!(m.update(Action::Quit), [Effect::Quit]);
+    }
+
+    #[test]
+    fn the_quit_question_lists_five_terminals_then_counts_the_rest() {
+        let one = Confirm { running: vec![Running { pane: 4, program: None, background: false }] };
+        assert_eq!((one.title().as_str(), one.lines()), ("1 terminal is running", vec!["pane 4".to_string()]));
+        let job = Confirm { running: vec![Running { pane: 2, program: Some("sleep".into()), background: true }] };
+        assert_eq!(job.lines(), ["pane 2 · sleep (background)"]);
+        let seven = Confirm { running: (1..=7).map(|pane| running(pane, "claude")).collect() };
+        assert_eq!(seven.title(), "7 terminals are running");
+        let lines = seven.lines();
+        assert_eq!((lines.len(), lines[0].as_str(), lines[5].as_str()), (6, "pane 1 · claude", "and 2 more"));
     }
 }

@@ -26,12 +26,33 @@ impl Otto {
 
     /// Launches with extra environment, e.g. `[("OTTOSPACE_REPOS", "/tmp/repos")]`.
     fn launch_with(name: &str, env: &[(&str, &str)]) -> Self {
+        // A plain shell: the test must not depend on the user's shell profile.
+        Self::launch_shell(name, &[&[("OTTOSPACE_SHELL", "/bin/sh")], env].concat())
+    }
+
+    /// Launches the way a user's ottospace starts terminals: no `OTTOSPACE_SHELL`, so each runs
+    /// `/usr/bin/login -flp <user> /bin/zsh -fc "exec -a -<name> $SHELL"`. `$SHELL` is a script
+    /// in `dir` (which the test made) that runs `/bin/sh` with an empty environment and `dir`
+    /// as its home. Nothing of the user's is read: `zsh -f` skips their rc files, and the
+    /// `/bin/sh` is not a login shell and has no `ENV`, so it reads no profile.
+    fn launch_login(name: &str, dir: &Path) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        let shell = dir.join("shell");
+        let home = dir.to_str().expect("utf-8 path");
+        let script =
+            format!("#!/bin/sh\nexec /usr/bin/env -i PATH=/usr/bin:/bin TERM=xterm-256color HOME='{home}' /bin/sh\n");
+        std::fs::write(&shell, script).expect("write the shell script");
+        std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        Self::launch_shell(name, &[("SHELL", shell.to_str().expect("utf-8 path"))])
+    }
+
+    /// Launches with `env`, and without `OTTOSPACE_SHELL` unless `env` names it.
+    fn launch_shell(name: &str, env: &[(&str, &str)]) -> Self {
         let socket = std::env::temp_dir().join(format!("ottospace-e2e-{name}-{}.sock", std::process::id()));
         let child = Command::new(env!("CARGO_BIN_EXE_ottospace"))
             .env("OTTOSPACE_E2E", "1")
             .env("OTTOSPACE_SOCKET", &socket)
-            // A plain shell: the test must not depend on the user's shell profile.
-            .env("OTTOSPACE_SHELL", "/bin/sh")
+            .env_remove("OTTOSPACE_SHELL")
             // Never inherit hosting from the caller's shell: this suite must not move real windows.
             .env_remove("OTTOSPACE_HOST_ONLY")
             // Never list the user's own repositories unless a test names a directory, here or in
@@ -112,6 +133,15 @@ impl Drop for Otto {
 fn fake_repo(at: &Path) {
     std::fs::create_dir_all(at.join(".git")).unwrap();
     std::fs::write(at.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+}
+
+/// Waits for the app's process to end.
+fn exits(otto: &mut Otto) {
+    let start = Instant::now();
+    while otto.child.try_wait().expect("wait").is_none() {
+        assert!(start.elapsed() < Duration::from_secs(5), "quit did not exit the app");
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 fn pane_ids(reply: &Value) -> Vec<u64> {
@@ -1339,12 +1369,135 @@ fn bad_requests_are_refused_and_quit_exits() {
     assert!(!ctl(r#"{"cmd":"nope"}"#));
 
     otto.call(json!({"cmd": "quit"}));
-    let start = Instant::now();
-    while otto.child.try_wait().expect("wait").is_none() {
-        assert!(start.elapsed() < Duration::from_secs(5), "quit did not exit the app");
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    exits(&mut otto);
     assert!(!otto.socket.exists(), "socket file is removed on quit");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn cmd_q_quits_at_once_but_asks_while_a_terminal_runs() {
+    let key = |o: &Otto, keys: &str| o.call(json!({"cmd": "key", "keys": keys}));
+    // Only a shell at its prompt: no question.
+    let mut idle = Otto::launch("quit-idle");
+    idle.call(json!({"cmd": "split"}));
+    idle.call(json!({"cmd": "type", "text": "echo up-$((1+1))\r"}));
+    idle.call(json!({"cmd": "wait", "pattern": "^up-2$", "timeout_ms": 30000}));
+    key(&idle, "cmd-q");
+    exits(&mut idle);
+    assert!(!idle.socket.exists(), "socket file is removed on quit");
+
+    // Pane 1 at its prompt, pane 2 running `sleep`: the question names pane 2 only.
+    let mut otto = Otto::launch("quit-busy");
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "type", "text": "echo up-$((1+1))\r"}));
+    otto.call(json!({"cmd": "wait", "pattern": "^up-2$", "timeout_ms": 30000}));
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "type", "pane": 2, "text": "sh -c 'echo go; exec sleep 30'\r"}));
+    otto.call(json!({"cmd": "wait", "pane": 2, "pattern": "^go$", "timeout_ms": 30000}));
+    let sleep = json!([{"pane": 2, "program": "sleep", "background": false}]);
+    // `go` came from the inner `sh`, which is in front; a moment later it is `sleep`.
+    let asked = asks(&otto, &sleep);
+    assert_eq!(asked["mode"], "confirm", "{asked}");
+
+    // Esc: no quit, nothing closed, and the key did not reach the terminal.
+    let before = otto.call(json!({"cmd": "capture", "pane": 2}))["text"].to_string();
+    let reply = key(&otto, "escape");
+    assert_eq!((&reply["mode"], &reply["state"]["confirm"]), (&json!("normal"), &Value::Null), "{reply}");
+    // The question is the user's. A client's key answers it (↵, Q, Esc) or is refused: not
+    // typed, not pasted, no pane closed, and the question stays. So is a client's click, and
+    // a request that would take the keyboard.
+    assert_eq!(key(&otto, "cmd-q")["state"]["confirm"]["running"], sleep);
+    let refused = |request: Value| {
+        let reply = otto.raw(&request.to_string());
+        assert_eq!(reply["error"], "the quit question is up", "{request}: {reply}");
+        let state = otto.call(json!({"cmd": "state"}));
+        assert_eq!((&state["mode"], &state["state"]["confirm"]["running"]), (&json!("confirm"), &sleep), "{request}");
+        assert_eq!(pane_ids(&state), vec![1, 2], "{request}: {state}");
+    };
+    for other in ["x", "cmd-v", "cmd-c", "cmd-w", "cmd-h", "cmd-ctrl-f", "cmd-shift-q", "shift-enter", "cmd-q"] {
+        refused(json!({"cmd": "key", "keys": other}));
+    }
+    refused(json!({"cmd": "mouse_down", "pane": 2, "x": 1, "y": 1}));
+    refused(json!({"cmd": "keys"}));
+    refused(json!({"cmd": "picker"}));
+    std::thread::sleep(Duration::from_millis(300));
+    let after = otto.call(json!({"cmd": "capture", "pane": 2}))["text"].to_string();
+    assert!(otto.child.try_wait().expect("wait").is_none(), "a refused key quit");
+    assert_eq!(before, after, "a key reached the terminal under the question");
+    // A client's pane request runs underneath, and the question stays.
+    let reply = otto.call(json!({"cmd": "focus", "pane": 1}));
+    assert_eq!((&reply["mode"], &reply["state"]["focused"]), (&json!("confirm"), &json!(1)), "{reply}");
+    assert_eq!(key(&otto, "escape")["mode"], "normal");
+
+    // A background job is ended by a quit too: the shell is in front, and is asked about.
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "sleep 100 &\r"}));
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "echo bg-$((3+3))\r"}));
+    otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^bg-6$", "timeout_ms": 30000}));
+    let both = json!([
+        {"pane": 1, "program": "sleep", "background": true},
+        {"pane": 2, "program": "sleep", "background": false},
+    ]);
+    asks(&otto, &both);
+    // A pane that closes while the question is up is no longer asked about.
+    let reply = otto.call(json!({"cmd": "close", "pane": 1}));
+    assert_eq!((&reply["mode"], &reply["state"]["confirm"]["running"]), (&json!("confirm"), &sleep), "{reply}");
+    // The last one closing ends the question, and does not quit.
+    let reply = otto.call(json!({"cmd": "close", "pane": 2}));
+    assert_eq!((&reply["mode"], &reply["state"]["confirm"]), (&json!("normal"), &Value::Null), "{reply}");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(otto.child.try_wait().expect("wait").is_none(), "the question going away quit");
+
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "type", "text": "sh -c 'echo go; exec sleep 30'\r"}));
+    otto.call(json!({"cmd": "wait", "pattern": "^go$", "timeout_ms": 30000}));
+    asks(&otto, &json!([{"pane": 3, "program": "sleep", "background": false}]));
+    key(&otto, "enter");
+    exits(&mut otto);
+    assert!(!otto.socket.exists(), "socket file is removed on quit");
+}
+
+/// Presses ⌘Q until the question lists exactly `running`, cancelling a question that lists
+/// something else (a program still starting). Something must run already, or this quits.
+fn asks(otto: &Otto, running: &Value) -> Value {
+    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+    otto.wait_for("the quit question", |_| {
+        let reply = key("cmd-q");
+        let found = &reply["state"]["confirm"]["running"] == running;
+        if !found {
+            key("escape");
+        }
+        found.then_some(reply)
+    })
+}
+
+/// The default path: no `OTTOSPACE_SHELL`, so the terminal's child is `login` and the shell is
+/// its child, in its own process group. An idle prompt there must not count as a program.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn cmd_q_knows_an_idle_shell_behind_login() {
+    let dir = std::env::temp_dir().join(format!("ottospace-e2e-login-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("make the home");
+    // Up, and really behind login. The second line is a builtin: when it has printed, `ps` is
+    // gone and the shell is in front again.
+    let ready = |o: &Otto| {
+        o.call(json!({"cmd": "split"}));
+        o.call(json!({"cmd": "type", "text": "ps -o comm= -p $PPID; echo up-$((1+1))\r"}));
+        o.call(json!({"cmd": "wait", "pattern": "^/usr/bin/login$", "timeout_ms": 30000}));
+        o.call(json!({"cmd": "wait", "pattern": "^up-2$", "timeout_ms": 30000}));
+    };
+    let mut idle = Otto::launch_login("quit-login-idle", &dir);
+    ready(&idle);
+    idle.call(json!({"cmd": "key", "keys": "cmd-q"}));
+    exits(&mut idle);
+
+    let mut busy = Otto::launch_login("quit-login-busy", &dir);
+    ready(&busy);
+    busy.call(json!({"cmd": "type", "text": "sh -c 'echo go; exec sleep 30'\r"}));
+    busy.call(json!({"cmd": "wait", "pattern": "^go$", "timeout_ms": 30000}));
+    asks(&busy, &json!([{"pane": 1, "program": "sleep", "background": false}]));
+    busy.call(json!({"cmd": "key", "keys": "enter"}));
+    exits(&mut busy);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 type Labels = std::collections::BTreeMap<String, String>;

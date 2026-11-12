@@ -20,6 +20,8 @@ pub const VISUAL: u32 = 0xa684ff;
 pub const COMPOSE: u32 = 0x9ae600;
 /// List mode: the secondary bar has the keyboard.
 pub const LIST: u32 = 0xfb64b6;
+/// The quit question is up.
+pub const CONFIRM: u32 = 0xff6467;
 pub const ERROR: u32 = 0xff8484;
 /// Selected terminal text: a muted cyan, dark enough for light text on it.
 pub const SELECTION: u32 = 0x155e75;
@@ -47,6 +49,7 @@ pub fn accent(mode: Mode) -> u32 {
         Mode::List => LIST,
         Mode::Compose => COMPOSE,
         Mode::Sneak => SNEAK,
+        Mode::Confirm => CONFIRM,
     }
 }
 
