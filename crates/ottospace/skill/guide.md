@@ -60,6 +60,7 @@ ottospace ctl '{"cmd":"state"}'
 | `state.sidebar` | The open rail section, or null |
 | `terminals.<id>` | `cols`, `rows`, and `lines`: the visible text of that terminal pane. Also `history` (lines scrolled off the top), `display_offset` (how far the view is scrolled back; 0 is the bottom), `selection` (the selected text, or null) and `visual_cursor` |
 | `copied` | The text of the last copy |
+| `version` | The build, as the status bar shows it: version and the first seven characters of the commit (`0.1.0 · a4a2582`), or `0.1.0 · local` for a build from source |
 | `font`, `cell` | The terminal font in use (`name`, `size`) and the size of one character cell `[w, h]` in points |
 | `notice` | Null, or the problem the status bar shows (a mistake in the settings, an app that could not be hosted). It is not `error`, which means the request failed |
 | `closed_apps` | Apps the user's settings name that are not running. `open_app` starts one |
