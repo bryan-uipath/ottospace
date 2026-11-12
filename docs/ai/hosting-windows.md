@@ -52,7 +52,8 @@ including the purple pill macOS draws in it while the window is captured.
 
 ## Probe results
 
-`cargo run -p probe -- "Google Chrome" 5` prints frames/sec by SCK status for on-screen → sliver →
+Measured with `probe`, a CLI since removed (`d483a37:crates/probe` in git history).
+`cargo run -p probe -- "Google Chrome" 5` printed frames/sec by SCK status for on-screen → sliver →
 restored. Play a video or animation in the target app first. Live means "complete/s" stays near
 the on-screen rate while parked.
 

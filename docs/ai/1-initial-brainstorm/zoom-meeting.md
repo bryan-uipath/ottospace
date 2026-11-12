@@ -49,7 +49,7 @@ Risks:
   not `AXStandardWindow` (?). We host only standard windows today. Rule: host what is standard,
   leave the rest floating. Do not fight Zoom for them.
 - **Video while parked.** A parked Zoom window must keep rendering video. Measured for Chrome and
-  Slack, not for Zoom. Run `probe` on it.
+  Slack, not for Zoom. Measure it (the `probe` tool is in git history: `d483a37:crates/probe`).
 - **Minimum sizes.** Zoom windows may refuse small panes. The slot sizes must respect what the
   window accepts; read the size back after placing.
 - **Screen sharing.** Sharing changes Zoom's windows (meeting window hides, toolbar appears) (?).
