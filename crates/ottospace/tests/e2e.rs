@@ -170,6 +170,50 @@ fn terminal_runs_a_typed_command() {
     assert_eq!(otto.raw(r#"{"cmd":"type","text":"x"}"#)["ok"], false, "no terminal is left");
 }
 
+/// Terminal 1's entry in the state dump.
+fn term1(o: &Otto) -> Value {
+    o.call(json!({"cmd": "state"}))["terminals"]["1"].clone()
+}
+
+fn shows(terminal: &Value, text: &str) -> bool {
+    terminal["lines"].as_array().is_some_and(|lines| lines.iter().any(|l| l.as_str() == Some(text)))
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn terminal_scrolls_back_and_typing_returns_to_the_bottom() {
+    let otto = Otto::launch("scroll");
+    otto.call(json!({"cmd": "split"}));
+    otto.bounds(&[1]);
+    otto.call(json!({"cmd": "type", "text": "i=1; while [ $i -le 200 ]; do echo line-$i; i=$((i+1)); done\r"}));
+    let t = otto.wait_for("200 lines", |o| Some(term1(o)).filter(|t| shows(t, "line-200")));
+    let rows = t["rows"].as_u64().expect("rows");
+    assert!(t["history"].as_u64() > Some(100), "history is kept: {t}");
+    assert_eq!(t["display_offset"], 0);
+
+    // The wheel scrolls back; an early line comes into view.
+    let t = otto.call(json!({"cmd": "scroll", "lines": 150}))["terminals"]["1"].clone();
+    let offset = t["display_offset"].as_u64().expect("offset");
+    assert_eq!(offset, 150, "{t}");
+    assert!(shows(&t, "line-50") && !shows(&t, "line-200"), "{t}");
+
+    // ⇧End, ⇧Home, ⇧PageDown move the view; the keys do not reach the shell.
+    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}))["terminals"]["1"].clone();
+    assert_eq!(key("shift-end")["display_offset"], 0);
+    let top = key("shift-home");
+    assert_eq!(top["display_offset"], top["history"]);
+    assert!(shows(&top, "line-1"), "{top}");
+    let history = top["history"].as_u64().expect("history");
+    assert_eq!(key("shift-pagedown")["display_offset"].as_u64(), Some(history - rows));
+
+    // Typing jumps back to the bottom; new output while at the bottom stays there.
+    let t = key("x");
+    assert_eq!(t["display_offset"], 0, "{t}");
+    otto.call(json!({"cmd": "type", "text": "\recho done\r"}));
+    let t = otto.wait_for("output", |o| Some(term1(o)).filter(|t| shows(t, "done")));
+    assert_eq!(t["display_offset"], 0, "{t}");
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn secondary_bar_opens_and_closes_beside_the_panes() {

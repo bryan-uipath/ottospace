@@ -128,10 +128,15 @@ the tag does not match the crate version.
 | ⌘1 … ⌘9 | Select a tab |
 | ⌘⇧] / ⌘⇧[ or ⌃Tab / ⌃⇧Tab | Next / previous tab |
 | ⌘⇧W | Close the tab and its panes |
+| Wheel / trackpad | Scroll a terminal back through its history |
+| ⇧PageUp / ⇧PageDown | Scroll a terminal a page |
+| ⇧Home / ⇧End | Top / bottom of a terminal's history |
 
 Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
 
-A terminal pane runs your shell on a PTY. The pane closes when the shell exits.
+A terminal pane runs your shell on a PTY. The pane closes when the shell exits. It keeps 10,000
+lines of history. Typing returns to the bottom. In programs that use the mouse or the alternate
+screen (vim, less, htop) the wheel does nothing, and ⇧PageUp and friends go to the program.
 
 To put an app window in a pane, open Apps on the left rail and click the app. It fills the focused pane if that is
 empty, otherwise it splits right. Shift-click splits down. New windows of a hosted app get their

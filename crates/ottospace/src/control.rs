@@ -94,6 +94,18 @@ pub enum Request {
     PickerClose,
     /// Shows or hides the key reference.
     Keys,
+    /// Presses keys as if typed, through the key bindings: `{"cmd":"key","keys":"shift-pageup"}`.
+    /// Space-separated keystrokes in GPUI's syntax.
+    Key {
+        keys: String,
+    },
+    /// Turns the scroll wheel over a terminal pane (default: the focused one). Positive `lines`
+    /// scrolls back.
+    Scroll {
+        #[serde(default)]
+        pane: Option<PaneId>,
+        lines: f32,
+    },
     Quit,
 }
 

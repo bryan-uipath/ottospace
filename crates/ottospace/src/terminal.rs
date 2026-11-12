@@ -8,7 +8,7 @@ use std::sync::{Arc, OnceLock};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
-use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::grid::{Dimensions, Scroll as GridScroll};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
@@ -19,6 +19,7 @@ use gpui::{
     point, px, rgb, size,
 };
 use ottospace_core::palette;
+use ottospace_core::terminal::{Scroll, Wheel, wheel_scrolls};
 
 const FONT: &str = "Menlo";
 const FONT_SIZE: f32 = 13.;
@@ -97,6 +98,7 @@ pub struct Terminal {
     shared: Arc<Shared>,
     input: EventLoopSender,
     grid: Grid,
+    wheel: Wheel,
 }
 
 impl Terminal {
@@ -116,12 +118,51 @@ impl Terminal {
         let input = event_loop.channel();
         let _ = shared.input.set(input.clone());
         event_loop.spawn();
-        Ok(Self { term, shared, input, grid })
+        Ok(Self { term, shared, input, grid, wheel: Wheel::default() })
     }
 
-    /// Sends bytes to the shell, as if typed.
+    /// Sends bytes to the shell, as if typed. Typing while scrolled back returns to the bottom.
     pub fn write(&self, bytes: Vec<u8>) {
+        self.scroll(Scroll::Bottom);
         let _ = self.input.send(Msg::Input(bytes.into()));
+    }
+
+    /// Moves the view through the scrollback.
+    pub fn scroll(&self, scroll: Scroll) {
+        let mut term = self.term.lock();
+        let scroll = match scroll {
+            Scroll::Lines(n) => GridScroll::Delta(n),
+            Scroll::PageUp => GridScroll::PageUp,
+            Scroll::PageDown => GridScroll::PageDown,
+            Scroll::Top => GridScroll::Top,
+            Scroll::Bottom if term.grid().display_offset() == 0 => return,
+            Scroll::Bottom => GridScroll::Bottom,
+        };
+        term.scroll_display(scroll);
+        self.shared.dirty.store(true, Relaxed);
+    }
+
+    /// A wheel or trackpad move of `dy` pixels. Ignored while the program owns the wheel.
+    pub fn wheel(&mut self, dy: f32, line_height: f32) {
+        let mode = *self.term.lock().mode();
+        if !wheel_scrolls(mode.intersects(TermMode::MOUSE_MODE), mode.contains(TermMode::ALT_SCREEN)) {
+            return;
+        }
+        let lines = self.wheel.lines(dy, line_height);
+        if lines != 0 {
+            self.scroll(Scroll::Lines(lines));
+        }
+    }
+
+    /// True while the program shows the alternate screen (vim, less), which has no history.
+    pub fn alt_screen(&self) -> bool {
+        self.term.lock().mode().contains(TermMode::ALT_SCREEN)
+    }
+
+    /// Lines scrolled back from the bottom, and lines of history kept.
+    pub fn scrollback(&self) -> (usize, usize) {
+        let term = self.term.lock();
+        (term.grid().display_offset(), term.grid().history_size())
     }
 
     /// Resizes the grid to fill `area`, if that changes its size.
@@ -191,7 +232,8 @@ impl Terminal {
         let at = content.cursor.point;
         let cursor = (content.cursor.shape != CursorShape::Hidden)
             .then(|| usize::try_from(at.line.0 + offset).ok().map(|row| (row, at.column.0)))
-            .flatten();
+            .flatten()
+            .filter(|(row, _)| *row < self.grid.rows); // scrolled back past it
         Screen { rows, cursor }
     }
 }
