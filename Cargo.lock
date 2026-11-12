@@ -3801,6 +3801,7 @@ dependencies = [
  "ottospace-core",
  "ottospace-mac",
  "raw-window-handle",
+ "regex",
  "screencapturekit 11.1.2",
  "serde",
  "serde_json",

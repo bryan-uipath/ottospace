@@ -387,6 +387,9 @@ struct Workspace {
     _subscriptions: Vec<Subscription>,
 }
 
+/// Longest a `wait` request may run: 10 minutes.
+const MAX_WAIT_MS: u64 = 600_000;
+
 impl Workspace {
     fn new(
         hosting: bool,
@@ -491,7 +494,11 @@ impl Workspace {
             match effect {
                 Effect::Opened(id) => {
                     if self.model.pane(*id).is_some_and(|p| p.kind == Kind::Terminal) {
-                        match Terminal::spawn() {
+                        // The shell learns where it runs, so a program in it can name its own pane.
+                        let tab = self.model.tab_of(*id);
+                        let mut vars = vec![("OTTOSPACE_PANE", id.to_string())];
+                        vars.extend(tab.map(|tab| ("OTTOSPACE_TAB", tab.to_string())));
+                        match Terminal::spawn(&vars) {
                             Ok(terminal) => drop(self.terminals.insert(*id, terminal)),
                             Err(err) => self.error = Some(format!("terminal: {err}")),
                         }
@@ -640,6 +647,21 @@ impl Workspace {
                     }
                     None
                 }
+                Request::Capture { pane, history } => {
+                    let id = pane.or(self.model.focused);
+                    let message = match id.and_then(|id| self.terminals.get(&id).map(|t| (id, t))) {
+                        Some((id, t)) => {
+                            serde_json::json!({ "ok": true, "pane": id, "text": t.text(history) }).to_string()
+                        }
+                        None => control::error("no terminal pane to capture"),
+                    };
+                    let _ = reply.send(message);
+                    continue;
+                }
+                Request::Wait { pane, pattern, timeout_ms } => {
+                    self.wait(pane, &pattern, timeout_ms, reply, cx);
+                    continue;
+                }
                 Request::AxTree { pane, depth, nodes } => {
                     let source = self.ax_source(pane.or(self.model.focused));
                     ax_debug::serve_tree(source, depth, nodes, reply, cx.background_executor());
@@ -684,6 +706,45 @@ impl Workspace {
         let id = pane.or(self.model.focused).filter(|id| self.terminals.contains_key(id)).ok_or("no terminal pane")?;
         let bounds = self.cells.get(&id).map(|c| c.get()).filter(|b| b.size.width > px(1.)).ok_or("not laid out")?;
         Ok((id, bounds.origin + point(self.cell.width * x, self.cell.height * y)))
+    }
+
+    /// Replies when a line of a terminal pane's text matches `pattern`, or with an error at the
+    /// time limit. Polls: the terminal has no "new output" event to wait on.
+    fn wait(
+        &self,
+        pane: Option<PaneId>,
+        pattern: &str,
+        timeout_ms: Option<u64>,
+        reply: Sender<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(id) = pane.or(self.model.focused).filter(|id| self.terminals.contains_key(id)) else {
+            return drop(reply.send(control::error("no terminal pane to wait on")));
+        };
+        let regex = match regex::Regex::new(pattern) {
+            Ok(regex) => regex,
+            Err(err) => return drop(reply.send(control::error(&err.to_string()))),
+        };
+        // Capped: nothing tells this task that its client went away.
+        let limit = Duration::from_millis(timeout_ms.unwrap_or(10_000).min(MAX_WAIT_MS));
+        let start = Instant::now();
+        cx.spawn(async move |this, cx| {
+            let message = loop {
+                let text = this.update(cx, |this, _| this.terminals.get(&id).map(|t| t.text(true)));
+                let Ok(text) = text else { break control::error("ottospace is closing") };
+                let Some(text) = text else { break control::error(&format!("pane {id} closed")) };
+                // Line by line, so `^done$` skips the echoed command, which starts with the prompt.
+                if let Some(line) = text.lines().find(|line| regex.is_match(line)) {
+                    break serde_json::json!({ "ok": true, "pane": id, "line": line }).to_string();
+                }
+                if start.elapsed() >= limit {
+                    break control::error(&format!("no match for the pattern in {} ms", limit.as_millis()));
+                }
+                cx.background_executor().timer(Duration::from_millis(50)).await;
+            };
+            let _ = reply.send(message);
+        })
+        .detach();
     }
 
     /// Presses `keystrokes` as if typed, once this update is done, then replies with the state.

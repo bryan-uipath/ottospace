@@ -56,6 +56,8 @@ line, one JSON reply (the full state) per line. See `Request` in `crates/ottospa
 ottospace ctl '{"cmd":"split","axis":"down"}'
 ottospace ctl '{"cmd":"type","text":"ls\r"}'
 ottospace ctl '{"cmd":"state"}'
+ottospace ctl '{"cmd":"capture","pane":1}'                 # one terminal pane's text, not the state
+ottospace ctl '{"cmd":"wait","pane":1,"pattern":"^done$"}'  # replies when a line matches
 ottospace ctl '{"cmd":"ax_tree"}'   # the focused app pane's accessibility tree, not the state
 ```
 

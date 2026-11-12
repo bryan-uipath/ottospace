@@ -170,6 +170,39 @@ fn terminal_runs_a_typed_command() {
     assert_eq!(otto.raw(r#"{"cmd":"type","text":"x"}"#)["ok"], false, "no terminal is left");
 }
 
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn capture_and_wait_read_one_pane() {
+    let otto = Otto::launch("capture");
+    otto.call(json!({"cmd": "split"}));
+
+    // The shell knows its pane and tab. `^` skips the echoed command, which starts with the prompt.
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "echo pane-$OTTOSPACE_PANE-tab-$OTTOSPACE_TAB\r"}));
+    let tab = otto.call(json!({"cmd": "state"}))["state"]["tabs"][0]["id"].as_u64().unwrap();
+    let first = format!("pane-1-tab-{tab}");
+    let found = otto.call(json!({"cmd": "wait", "pane": 1, "pattern": format!("^{first}$"), "timeout_ms": 40000}));
+    assert_eq!(found["line"], first);
+    assert!(found.get("state").is_none(), "wait replies with the line, not the state");
+
+    // Output that left the screen is in the capture only with `history`.
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "seq 1 200; echo end-$((6*7))\r"}));
+    otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^end-42$", "timeout_ms": 40000}));
+    let text = |history: bool| {
+        let reply = otto.call(json!({"cmd": "capture", "pane": 1, "history": history}));
+        reply["text"].as_str().unwrap().to_string()
+    };
+    assert!(text(true).lines().any(|l| *l == first), "history holds the first command's output");
+    assert!(!text(false).lines().any(|l| *l == first), "the screen alone does not");
+    assert!(text(false).lines().any(|l| l == "end-42"));
+
+    // No match: an error at the time limit. A bad pattern or a pane that is no terminal: refused.
+    let late = otto.raw(r#"{"cmd":"wait","pane":1,"pattern":"^never$","timeout_ms":200}"#);
+    assert_eq!(late["ok"], false);
+    assert!(late["error"].as_str().unwrap().contains("200 ms"), "{late}");
+    assert_eq!(otto.raw(r#"{"cmd":"wait","pane":1,"pattern":"("}"#)["ok"], false);
+    assert_eq!(otto.raw(r#"{"cmd":"capture","pane":9}"#)["ok"], false);
+}
+
 /// Terminal 1's entry in the state dump.
 fn term1(o: &Otto) -> Value {
     o.call(json!({"cmd": "state"}))["terminals"]["1"].clone()

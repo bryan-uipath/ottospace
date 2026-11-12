@@ -576,6 +576,12 @@ impl Model {
             .collect()
     }
 
+    /// The `id` of the tab that holds `pane`, active tab included.
+    pub fn tab_of(&self, pane: PaneId) -> Option<u32> {
+        let index = self.tab_panes().iter().position(|panes| panes.contains(&pane))?;
+        self.tabs.get(index).map(|tab| tab.id)
+    }
+
     fn select_tab(&mut self, index: usize, effects: &mut Vec<Effect>) {
         if index >= self.tabs.len() || index == self.active {
             return;
@@ -1058,6 +1064,8 @@ mod tests {
         assert_eq!(m.update(Action::Enter { pane: 1 }), [Effect::Live(1)]);
         assert_eq!((m.active, m.focused, m.live), (0, Some(1), Some(1)));
         assert_eq!(m.tab_panes(), [vec![1], vec![2]]);
+        // Active tab or background tab: each pane names its own tab.
+        assert_eq!((m.tab_of(1), m.tab_of(2), m.tab_of(9)), (Some(m.tabs[0].id), Some(m.tabs[1].id), None));
     }
 
     #[test]

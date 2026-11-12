@@ -40,9 +40,8 @@ ottospace ctl '{"cmd":"state"}'
   bring an app into ottospace.
 - **Do not send `quit`, `close` or `close_tab`** unless the user asked. Closing a terminal pane
   ends its shell; closing a tab closes every pane in it.
-- **Read output by polling `state`.** There is no "wait until done" yet. After `type`, read
-  `terminals.<pane>.lines` until the output you expect appears, with a time limit. `lines` is
-  the visible screen only; use `scroll` to read output that left it.
+- **Read output with `wait` and `capture`.** After `type`, `wait` for a line that marks the end,
+  then `capture` the pane. Both read one pane only, so they do not return other panes' text.
 
 ## State
 
@@ -87,6 +86,32 @@ ottospace ctl '{"cmd":"type","pane":3,"text":"q"}'
 
 `type` goes to the focused pane unless `pane` is given; give it. It fails if that pane is not a
 terminal. Pane ids are never reused.
+
+Reading a terminal pane:
+
+```sh
+ottospace ctl '{"cmd":"capture","pane":3}'
+ottospace ctl '{"cmd":"capture","pane":3,"history":true}'
+ottospace ctl '{"cmd":"wait","pane":3,"pattern":"^done-7f3a$"}'
+ottospace ctl '{"cmd":"wait","pane":3,"pattern":"^done-7f3a-[0-9]+$","timeout_ms":60000}'
+```
+
+Neither replies with the state. `capture` replies `{"ok":true,"pane":3,"text":".."}`: the bottom
+screen, and with `history` everything scrolled off above it too. A wrapped line is one line.
+`wait` replies `{"ok":true,"pane":3,"line":".."}` with the first line that matches the regular
+expression `pattern`, and fails after `timeout_ms` (default 10000, at most 600000) or if the pane
+closes. Each line is matched alone, so `^` and `$` are the ends of a line and a pattern cannot
+span lines. While a full-screen program (vim, less) is up, both requests see only its screen.
+`wait` reads the history too, so:
+
+- Text already in the pane matches at once, also from an earlier run. Put a token you make up
+  for this run in the marker (`7f3a` above), not only a fixed word.
+- The command you typed is in the pane too. Anchor the marker with `^` so the echoed command
+  line (which starts with the prompt) does not match.
+
+A shell started by ottospace has `OTTOSPACE_PANE` (its pane id) and `OTTOSPACE_TAB` (its tab's
+`id` in `state.tabs`, not the index) in its environment. A program in a pane can use them to
+name its own pane.
 
 Scrolling back and selecting text in a terminal pane:
 
@@ -165,9 +190,12 @@ Run a command in a new terminal beside the current pane, and read its output:
 ```sh
 ottospace ctl '{"cmd":"state"}'                                    # note the pane ids that exist
 ottospace ctl '{"cmd":"split","axis":"right"}'                    # reply: state.focused is the new pane, say 3
-ottospace ctl '{"cmd":"type","pane":3,"text":"cargo test\r"}'     # name the pane: focus may have moved
-ottospace ctl '{"cmd":"state"}'                                    # read terminals.3.lines; repeat until done
+ottospace ctl '{"cmd":"type","pane":3,"text":"cargo test; echo done-7f3a-$?\r"}'   # name the pane: focus may have moved
+ottospace ctl '{"cmd":"wait","pane":3,"pattern":"^done-7f3a-[0-9]+$","timeout_ms":600000}'
+ottospace ctl '{"cmd":"capture","pane":3,"history":true}'
 ```
+
+`7f3a` is a token made up for this run; the number after it is the command's exit status.
 
 Check that the id from the split reply was not in the first `state`. If it was, the split was
 ignored (the picker or key reference was open): do not type.

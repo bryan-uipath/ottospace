@@ -123,6 +123,24 @@ pub enum Request {
         pane: Option<PaneId>,
         lines: f32,
     },
+    /// A terminal pane's text (default: the focused one): the bottom screen, and with `history`
+    /// everything scrolled off above it. The reply is `{"ok":true,"pane":3,"text":".."}`, not the state.
+    Capture {
+        #[serde(default)]
+        pane: Option<PaneId>,
+        #[serde(default)]
+        history: bool,
+    },
+    /// Replies when a line of a terminal pane's text (history included) matches the regex
+    /// `pattern`: `{"ok":true,"pane":3,"line":".."}`. Fails after `timeout_ms` (default 10000,
+    /// at most 600000).
+    Wait {
+        #[serde(default)]
+        pane: Option<PaneId>,
+        pattern: String,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+    },
     /// An app pane's accessibility tree (default: the focused pane). Read-only. The reply is
     /// `{"ok":true,"pane":1,"window":{..},"millis":..,"tree":{..}}`, not the state.
     AxTree {
