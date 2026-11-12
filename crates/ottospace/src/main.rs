@@ -24,6 +24,7 @@ use gpui::{
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::compose;
+use ottospace_core::hosted::{self as hosting, Click};
 use ottospace_core::keys::{self, Mods};
 use ottospace_core::list::{ListKey, list_key};
 use ottospace_core::model::CONFIRM_UP;
@@ -134,6 +135,14 @@ struct Hosted {
     parked_size: CGSize,
     /// The part of the window the stream shows, in points: no larger than the pane or the window.
     shown: CGSize,
+    /// The title-bar crop the stream shows it with.
+    shown_crop: f64,
+    /// The window's content size when `shown` was last worked out, for the corner mask.
+    content: CGSize,
+    /// The last size and crop the stream refused, so the same one is not asked for every check.
+    refused: Option<(CGSize, f64)>,
+    /// Where the preview was last drawn, in window-content coordinates.
+    preview: Rc<Cell<Bounds<Pixels>>>,
     /// Last pane content rect the live window was placed over, to re-place only on change.
     placed: CGRect,
 }
@@ -170,6 +179,10 @@ impl Hosted {
             bounds: Rc::default(),
             parked_size: CGSize::ZERO,
             shown: original.size,
+            shown_crop: 0.0,
+            content: original.size,
+            refused: None,
+            preview: Rc::default(),
             placed: CGRect::default(),
         })
     }
@@ -196,21 +209,43 @@ impl Hosted {
             // Dock there (a pane 818pt tall parked at 805pt), and the stream no longer matches.
             let _ = self.window.set_position(display::parking_spot());
             let _ = self.window.set_size(CGSize::new(size.width, size.height + crop));
-            // Show what the pane and the window share: a window that refused the size is cut off
-            // (larger) or leaves a gap (smaller), never scaled.
-            let window = self.window.frame().map_or(size, |f| CGSize::new(f.size.width, f.size.height - crop));
-            let shown = CGSize::new(size.width.min(window.width), size.height.min(window.height));
-            let config = stream_config(shown, crop, scale);
-            // Frames of another size are dropped, so expect the new one only once it is set.
-            if self.stream.update_configuration(&config).is_ok() {
-                self.latest.expect(&config);
-                self.shown = shown;
-            }
         }
-        let _ = self.window.set_position(display::parking_spot());
         self.parked_size = size;
         self.crop = crop;
+        self.show(scale);
+        let _ = self.window.set_position(display::parking_spot());
         self.placed = CGRect::default();
+    }
+
+    /// Makes the stream show what the pane and the window share now: a window that refused the
+    /// pane's size is cut off (larger) or leaves a gap (smaller), never scaled. Reads the window's
+    /// real size, so it also follows an app that resized itself. One accessibility read; the
+    /// stream is reconfigured only when the result changed.
+    fn show(&mut self, scale: f64) {
+        let pane = to_cg(self.bounds.get().size);
+        let Some(frame) = self.window.frame().filter(|_| pane.width >= 1.0) else { return };
+        let content = CGSize::new(frame.size.width, frame.size.height - self.crop);
+        let shown = CGSize::new(pane.width.min(content.width), pane.height.min(content.height));
+        let asked = (shown, self.crop);
+        if asked == (self.shown, self.shown_crop) {
+            self.content = content;
+            return;
+        }
+        if self.refused == Some(asked) {
+            return;
+        }
+        let config = stream_config(shown, self.crop, scale);
+        // Frames of another size are dropped, so expect the new one only once it is set.
+        if self.stream.update_configuration(&config).is_ok() {
+            self.latest.expect(&config);
+            (self.shown, self.shown_crop) = asked;
+            self.content = content;
+            self.refused = None;
+        } else {
+            // `shown` keeps describing what the stream still shows.
+            self.refused = Some(asked);
+            eprintln!("window {}: the stream refused {}×{}", self.window_id, shown.width, shown.height);
+        }
     }
 
     /// Places the window over pane content `rect`, raised by `crop` so its title bar covers the header.
@@ -535,6 +570,12 @@ struct Workspace {
     known: Vec<(i32, HashSet<u32>)>,
     /// When the live pane went live.
     live_since: Option<Instant>,
+    /// The app a click in a live pane's gap took the keyboard from, and when.
+    left_by_click: Option<(i32, Instant)>,
+    /// How often a pane went live, for tests.
+    went_live: u64,
+    /// The pane parked because ottospace became active, until it is no longer active.
+    left_on_activation: Option<PaneId>,
     /// The hosted app that was the front app at the last look, and the window it showed, to see
     /// one come forward or change window.
     front_hosted: Option<(i32, Option<u32>)>,
@@ -594,8 +635,14 @@ impl Workspace {
             // so hand that pane back to its stream. Ignore the activation that the swap click
             // itself delivers late (the race that used to bounce windows straight back).
             cx.observe_window_activation(window, |this, window, cx| {
+                if !window.is_window_active() {
+                    this.left_on_activation = None;
+                    return;
+                }
                 let settled = this.live_since.is_some_and(|at| at.elapsed() > Duration::from_millis(400));
-                if window.is_window_active() && settled {
+                if settled {
+                    // The click that caused this may still be on its way: see `click_pane`.
+                    this.left_on_activation = this.model.live;
                     this.dispatch(Action::Leave, this.input, window, cx);
                 }
             }),
@@ -734,6 +781,9 @@ impl Workspace {
             sessions_stopped: false,
             known: Vec::new(),
             live_since: None,
+            left_by_click: None,
+            went_live: 0,
+            left_on_activation: None,
             front_hosted: None,
             wanted: None,
             error: None,
@@ -867,10 +917,14 @@ impl Workspace {
                 }
                 Effect::Live(id) => {
                     self.live_since = Some(Instant::now());
+                    self.went_live += 1;
                     if let Some(hosted) = self.hosted.get_mut(id) {
                         let rect = on_screen(hosted.bounds.get(), window, cx);
                         hosted.place(rect, hosted.crop_at(rect, top_limit(window, cx)));
                         hosted.window.raise();
+                        // The app may have resized its window since it was parked: a click is
+                        // judged against what the window covers now.
+                        hosted.show(window.scale_factor() as f64);
                     }
                 }
             }
@@ -1605,6 +1659,8 @@ impl Workspace {
         let tabs: Vec<[f32; 4]> = (0..self.model.visible_tabs().len())
             .filter_map(|place| marks.get(&Mark::Tab(place)).copied().map(rect))
             .collect();
+        let previews = self.hosted.iter().map(|(id, h)| (*id, h.preview.clone())).collect();
+        let shown = drawn_rects(&previews);
         let terminals: BTreeMap<PaneId, serde_json::Value> = self
             .terminals
             .iter()
@@ -1640,6 +1696,8 @@ impl Workspace {
                 "target": self.drop_at.map(|(target, _)| target),
                 "zone": self.drop_at.map(|(_, zone)| zone),
             })),
+            // Each drawn app pane's preview: the part of the window it shows, where it is drawn.
+            "shown": shown,
             "tab_panes": self.model.tab_panes(),
             // ottospace's own window frame, so a test can turn pane bounds into screen positions.
             "window": frame,
@@ -1690,6 +1748,8 @@ impl Workspace {
             "ax_overlay": self.ax_overlay.as_ref().filter(|_| self.model.ax_overlay),
             // Sneak mode's labels, each with its control's id and frame, and the letters typed; or null.
             "sneak": self.model.sneak,
+            // Test runs only: `live`, how often a pane went live.
+            "counts": std::env::var_os("OTTOSPACE_E2E").map(|_| serde_json::json!({ "live": self.went_live })),
         })
         .to_string()
     }
@@ -1871,6 +1931,12 @@ impl Workspace {
             // window ottospace does not hold, or may not hold, is the user's business.
             let shown = front.and_then(|(_, window)| window);
             self.wanted = self.hosted.iter().find(|(_, h)| Some(h.window_id) == shown).map(|(id, _)| *id);
+            // An app in front within a second of a click that left it: its own late activation
+            // from going live, not the user's choice.
+            let left = self.left_by_click.filter(|(_, at)| at.elapsed() < Duration::from_secs(1));
+            if left.is_some_and(|(pid, _)| front.is_some_and(|(front, _)| front == pid)) {
+                self.wanted = None;
+            }
         }
         let Some(pane) = self.wanted else { return };
         if self.model.live == Some(pane) {
@@ -1942,7 +2008,8 @@ impl Workspace {
     }
 
     /// Parks panes whose size changed, and keeps the live window glued to its pane: re-places it
-    /// when the pane moves, and every ~500ms (`check`) if the app or user moved it away.
+    /// when the pane moves, and every ~500ms (`check`) if the app or user moved it away. A check
+    /// also reads each window's size, for an app that resized it by itself.
     fn sync_layout(&mut self, window: &Window, cx: &App, check: bool) {
         let scale = window.scale_factor() as f64;
         let live = self.model.live;
@@ -1960,6 +2027,10 @@ impl Workspace {
                 }
             } else if hosted.parked_size != rect.size || hosted.crop != crop {
                 hosted.park(scale, crop);
+            }
+            // An app that resized its own window: the preview and the click rule follow it.
+            if check {
+                hosted.show(scale);
             }
         }
     }
@@ -2576,20 +2647,50 @@ impl Workspace {
 
     /// A click on a pane body. An app pane goes live, then the click is replayed so it lands in
     /// the app (otherwise the first click is spent on the swap). Other panes just take focus.
+    /// What a click on an app pane does is the core's `hosted::click` (`hosting` here).
     fn click_pane(&mut self, id: PaneId, event: &MouseDownEvent, window: &Window, cx: &mut Context<Self>) {
-        // Nothing to replay unless an app pane went live just now: a click replayed on a window
-        // that was live already would land on ottospace again and loop.
-        if !self.choose_pane(id, window, cx) {
-            return;
-        }
-        // A `mouse` request stays inside ottospace: it enters the app but does not click in it.
-        if self.injected {
-            return;
+        let left = self.left_on_activation == Some(id);
+        let live = hosting::was_live(self.model.live == Some(id), left, event.first_mouse);
+        // Choose first: going live reads the window's size, so the click is judged against what
+        // the window covers now. A pane that is no app's only takes focus.
+        if !live {
+            self.choose_pane(id, window, cx);
         }
         let Some(hosted) = self.hosted.get(&id) else { return };
         let local = event.position - hosted.bounds.get().origin;
+        let local = (f32::from(local.x) as f64, f32::from(local.y) as f64);
+        let (x, y) = match hosting::click(live, local, (hosted.shown.width, hosted.shown.height)) {
+            // A `mouse` request stays inside ottospace: it enters the app but does not click in it.
+            Click::Replay(_) if self.injected => return,
+            Click::Replay(at) => at,
+            Click::Leave => {
+                let pid = hosted.pid;
+                // Explicit: the activation observer ignores the first 400 ms after going live.
+                self.dispatch(Action::Leave, self.input, window, cx);
+                // A `mouse` request must not bring ottospace forward either.
+                if self.injected {
+                    return;
+                }
+                // Soon after going live the app's activation may still be on its way.
+                // `follow_front_app` must not enter a pane again for it, and ottospace takes
+                // the keyboard back once it has landed.
+                self.left_by_click = Some((pid, Instant::now()));
+                cx.activate(true);
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(Duration::from_millis(250)).await;
+                    let _ = this.update(cx, |this, cx| {
+                        if this.model.live.is_none() && ax::is_frontmost(pid) {
+                            cx.activate(true);
+                        }
+                    });
+                })
+                .detach();
+                return;
+            }
+            Click::Enter | Click::Nothing => return,
+        };
         let origin = hosted.placed.origin;
-        let at = CGPoint::new(origin.x + f32::from(local.x) as f64, origin.y + f32::from(local.y) as f64);
+        let at = CGPoint::new(origin.x + x, origin.y + y);
         let clicks = event.click_count as i64;
         cx.spawn(async move |_, cx| {
             // Give the window server a moment to put the real window under the cursor.
@@ -3325,10 +3426,34 @@ impl Workspace {
             // While live, keep showing the last frame under the real window, so any gap during a swap is invisible.
             match hosted.frame() {
                 Some(buffer) => {
-                    // At its own size from the top left: a window smaller than the pane is not stretched.
-                    surface(buffer)
+                    // At its own size at the top left, where the live window sits: a window smaller
+                    // than the pane is neither stretched nor centred.
+                    let preview = hosted.preview.clone();
+                    let (radius, cropped) = (hosted.radius, hosted.shown_crop > 0.0);
+                    let content = size(px(hosted.content.width as f32), px(hosted.content.height as f32));
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
                         .w(px(hosted.shown.width as f32))
                         .h(px(hosted.shown.height as f32))
+                        .child(surface(buffer).size_full())
+                        // Record where the preview is drawn (e2e reads it), and mask the window's
+                        // corners there: the ring is the whole window's, clipped to the preview,
+                        // so a window cut off by the pane gets no corners at the cut.
+                        .child(
+                            canvas(
+                                move |bounds, _, _| preview.set(bounds),
+                                move |bounds, _, window, _| {
+                                    let whole = Bounds { origin: bounds.origin, size: content };
+                                    paint_corner_mask(whole, bounds, radius, cropped, window)
+                                },
+                            )
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full(),
+                        )
                         .into_any_element()
                 }
                 None => div().child("waiting for frames…").into_any_element(),
@@ -3362,7 +3487,6 @@ impl Workspace {
                 _ => home::empty_pane("⌘E to pick what goes here", id, &self.home).into_any_element(),
             }
         };
-        let (radius, cropped) = self.hosted.get(&id).map_or((0.0, false), |h| (h.radius, h.crop > 0.0));
         // The content sits 2pt inside the pane. A live app window is placed over it, and without
         // the gap that window's own edge covers the pane's accent border.
         let inner = div()
@@ -3374,12 +3498,7 @@ impl Workspace {
             // Record the content's layout bounds: AX matches the real window to it; e2e reads it.
             .child(canvas(move |bounds, _, _| cell.set(bounds), |_, _, _, _| {}).absolute().size_full())
             .child(self.controls.mark(format!("pane:{id}")))
-            .child(content)
-            .child(
-                canvas(|_, _, _| {}, move |bounds, _, window, _| paint_corner_mask(bounds, radius, cropped, window))
-                    .absolute()
-                    .size_full(),
-            );
+            .child(content);
         // The click handler is on the content, not the padded body: a click in the 2pt gap would be
         // replayed at a point the app window does not cover, land on ottospace again, and loop.
         let inner = inner.on_mouse_down(
@@ -3747,9 +3866,10 @@ fn running_apps(hosting: bool, only: Option<i32>) -> Vec<capture::App> {
 }
 
 /// Covers the window's rounded corners (transparent, so black in the YUV stream) with the
-/// background: a ring whose inner edge is the window's rounded outline, clipped to the pane.
+/// background: a ring whose inner edge is the window's rounded outline (`bounds`), clipped to
+/// the part of it that is drawn (`clip`).
 /// `cropped`: the top corners went with the title bar, so only the bottom ones are masked.
-fn paint_corner_mask(bounds: Bounds<Pixels>, radius: f64, cropped: bool, window: &mut Window) {
+fn paint_corner_mask(bounds: Bounds<Pixels>, clip: Bounds<Pixels>, radius: f64, cropped: bool, window: &mut Window) {
     if radius <= 0.0 {
         return;
     }
@@ -3757,7 +3877,7 @@ fn paint_corner_mask(bounds: Bounds<Pixels>, radius: f64, cropped: bool, window:
     // Lifting the ring by r puts its rounded top edge above the clip.
     let lift = if cropped { r } else { px(0.) };
     let ring = Bounds { origin: bounds.origin - point(r, r + lift), size: bounds.size + size(r * 2., r * 2. + lift) };
-    window.with_content_mask(Some(ContentMask { bounds }), |window| {
+    window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
         window.paint_quad(quad(ring, r * 2., transparent_black(), r, rgb(theme::BACKGROUND), BorderStyle::Solid));
     });
 }

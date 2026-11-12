@@ -490,6 +490,7 @@ export function snapshot(value: unknown): Snapshot {
     closes: map(rect)(o.closes, "closes"),
     tabs: list(rect)(o.tabs, "tabs"),
     drag: orNull(drag)(o.drag, "drag"),
+    shown: map(rect)(o.shown, "shown"),
     tab_panes: list(list(num))(o.tab_panes, "tab_panes"),
     window: rect(o.window, "window"),
     parking: pair(o.parking, "parking"),
@@ -513,6 +514,7 @@ export function snapshot(value: unknown): Snapshot {
     apps: list(appEntry)(o.apps, "apps"),
     ax_overlay: orNull(axOverlay)(o.ax_overlay, "ax_overlay"),
     sneak: orNull(sneak)(o.sneak, "sneak"),
+    counts: orNull(map(num))(o.counts, "counts"),
   };
 }
 

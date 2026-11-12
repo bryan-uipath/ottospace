@@ -227,6 +227,11 @@ outside (its Dock icon, ⌘Tab) and the window it shows is one ottospace holds, 
 forward on that window's pane and gives it the keyboard, within half a second. ottospace shortcuts do not fire in that
 mode. Press the return key, or click ottospace itself (rail, top bar, another pane), to return.
 
+An app that refuses the pane's size is shown at its own size from the pane's top left, parked and
+live: a larger window is cut off, a smaller one leaves a gap. A click in the gap gives the app the
+keyboard; a click there while the app has it returns to ottospace, so a double-click in the gap
+ends in ottospace. The preview follows an app that resizes its own window, within half a second.
+
 ## The return key
 
 The return key works while any app is frontmost. It is F18 by default; set `OTTOSPACE_RETURN_KEY`

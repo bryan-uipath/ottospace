@@ -4,6 +4,8 @@
 //!
 //! One JSON request per line on `$CANARY_SOCKET`, one JSON reply per line:
 //! `{"cmd":"state"}`, `{"cmd":"open_window"}`, `{"cmd":"close_window","index":1}`, `{"cmd":"quit"}`.
+//! A window that refuses a pane's size: `{"cmd":"open_window","min":[900,700]}` cannot be made
+//! smaller than that; `{"cmd":"open_window","fixed":[240,180]}` cannot be resized at all.
 
 use std::cell::RefCell;
 use std::io::{BufRead, BufReader, Write};
@@ -24,8 +26,15 @@ use serde_json::json;
 #[serde(tag = "cmd", rename_all = "snake_case", deny_unknown_fields)]
 enum Request {
     State,
-    OpenWindow,
-    CloseWindow { index: usize },
+    OpenWindow {
+        #[serde(default)]
+        min: Option<[f32; 2]>,
+        #[serde(default)]
+        fixed: Option<[f32; 2]>,
+    },
+    CloseWindow {
+        index: usize,
+    },
     Quit,
 }
 
@@ -68,17 +77,20 @@ impl Render for Canary {
 
 type Windows = Rc<RefCell<Vec<WindowHandle<Canary>>>>;
 
-fn open(windows: &Windows, cx: &mut App) {
+fn open(windows: &Windows, min: Option<[f32; 2]>, fixed: Option<[f32; 2]>, cx: &mut App) {
     let number = windows.borrow().len() + 1;
     let title = format!("Canary {number}");
     // Stagger the windows so each one is partly visible.
     let offset = px(40. * number as f32);
-    let mut bounds = Bounds::centered(None, size(px(640.), px(420.)), cx);
+    let [width, height] = fixed.or(min).unwrap_or([640., 420.]);
+    let mut bounds = Bounds::centered(None, size(px(width), px(height)), cx);
     bounds.origin.x += offset;
     bounds.origin.y += offset;
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions { title: Some(title.clone().into()), ..Default::default() }),
+        is_resizable: fixed.is_none(),
+        window_min_size: min.map(|[width, height]| size(px(width), px(height))),
         ..Default::default()
     };
     let handle = cx.open_window(options, |window, cx| {
@@ -113,7 +125,7 @@ fn serve(calls: &Receiver<(Request, Sender<String>)>, windows: &Windows, cx: &mu
     for (request, reply) in calls.try_iter() {
         match request {
             Request::State => {}
-            Request::OpenWindow => open(windows, cx),
+            Request::OpenWindow { min, fixed } => open(windows, min, fixed, cx),
             Request::CloseWindow { index } => {
                 let handle = windows.borrow().get(index).copied();
                 if let Some(handle) = handle {
@@ -175,7 +187,7 @@ fn main() {
     }
     Application::new().run(move |cx: &mut App| {
         let windows: Windows = Rc::default();
-        open(&windows, cx);
+        open(&windows, None, None, cx);
         cx.spawn(async move |cx| {
             loop {
                 cx.background_executor().timer(Duration::from_millis(16)).await;
