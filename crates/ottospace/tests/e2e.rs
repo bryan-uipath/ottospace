@@ -34,8 +34,11 @@ impl Otto {
             .env("OTTOSPACE_SHELL", "/bin/sh")
             // Never inherit hosting from the caller's shell: this suite must not move real windows.
             .env_remove("OTTOSPACE_HOST_ONLY")
-            // Never list the user's own repositories unless a test names a directory.
-            .env("OTTOSPACE_REPOS", "")
+            // Never list the user's own repositories unless a test names a directory, here or in
+            // the settings of a folder it made.
+            .envs((!env.iter().any(|(name, _)| *name == "OTTOSPACE_HOME")).then_some(("OTTOSPACE_REPOS", "")))
+            // Never read the user's settings or tasks: `OTTOSPACE_E2E` without a folder keeps nothing.
+            .env_remove("OTTOSPACE_HOME")
             .envs(env.iter().copied())
             .spawn()
             .expect("launch ottospace");
@@ -357,6 +360,98 @@ fn list_mode_drives_the_bar_with_the_keyboard() {
     assert!(!text.contains("jk"), "list keys were typed into the shell: {text}");
     // A split takes the keyboard for its new pane.
     assert_eq!(otto.call(json!({"cmd": "split", "axis": "down"}))["mode"], "normal");
+}
+
+/// A fresh folder to pass as `OTTOSPACE_HOME`, with `settings` as its `settings.json`.
+fn user_folder(name: &str, settings: &str) -> PathBuf {
+    let home = std::env::temp_dir().join(format!("ottospace-e2e-home-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("settings.json"), settings).unwrap();
+    home
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn tasks_are_kept_between_runs() {
+    let home = user_folder("tasks", "");
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let titles = |o: &Otto| -> Vec<(String, String)> {
+        let rows = o.call(json!({"cmd": "task_list"}))["inbox"].as_array().unwrap().clone();
+        rows.iter().map(|r| (r["group"].as_str().unwrap().into(), r["title"].as_str().unwrap().into())).collect()
+    };
+    let before = {
+        let otto = Otto::launch_with("keep-1", &env);
+        otto.call(json!({"cmd": "task_add", "title": "question", "priority": 1, "state": "needs_you", "tab": 1}));
+        otto.call(json!({"cmd": "task_add", "title": "idea"}));
+        otto.call(json!({"cmd": "task_add", "title": "later", "state": "needs_you"}));
+        otto.call(json!({"cmd": "task_hold", "id": 2}));
+        otto.call(json!({"cmd": "task_snooze", "id": 3, "seconds": 3600}));
+        // One file a task, written as it changes. The tab is not kept: it ends with the run.
+        let file: Value = serde_json::from_str(&std::fs::read_to_string(home.join("tasks/1.json")).unwrap()).unwrap();
+        assert_eq!(
+            (&file["title"], &file["state"], &file["tab"]),
+            (&json!("question"), &json!("needs_you"), &Value::Null)
+        );
+        titles(&otto)
+    }; // the app is killed here, with no chance to save on the way out
+    assert_eq!(before, [("needs_you".into(), "question".into()), ("on_hold".into(), "idea".into())]);
+
+    // A file that is not a task is passed over, and reported.
+    std::fs::write(home.join("tasks/notes.json"), "not a task").unwrap();
+    let otto = Otto::launch_with("keep-2", &env);
+    assert_eq!(titles(&otto), before, "the same inbox, snooze and hold included");
+    let state = otto.call(json!({"cmd": "state"}));
+    assert!(state["notice"].as_str().is_some_and(|e| e.contains("could not be read")), "{}", state["notice"]);
+    // Ids go on from the highest kept.
+    assert_eq!(otto.call(json!({"cmd": "task_add", "title": "new"}))["task"]["id"], 4);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn settings_choose_the_font_the_repos_and_the_tasks_folder() {
+    // Defaults: Menlo 13, rows 18 points high.
+    let plain = Otto::launch("settings-none");
+    let state = plain.call(json!({"cmd": "state"}));
+    assert_eq!(
+        (&state["font"], &state["cell"][1], &state["notice"]),
+        (&json!({"name": "Menlo", "size": 13.0}), &json!(18.0), &Value::Null)
+    );
+    drop(plain);
+
+    let home = user_folder("settings", "");
+    std::fs::create_dir_all(home.join("src/app/.git")).unwrap();
+    std::fs::write(home.join("src/app/.git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    let settings = json!({
+        "terminal": {"font": "Monaco", "font_size": 16},
+        "repos": [home.join("src")],
+        "tasks": "elsewhere",
+    });
+    std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let otto = Otto::launch_with("settings-set", &env);
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!((&state["font"], &state["cell"][1]), (&json!({"name": "Monaco", "size": 16.0}), &json!(22.0)));
+    assert_eq!(state["state"]["repos"][0]["name"], "app");
+    otto.call(json!({"cmd": "task_add", "title": "kept elsewhere"}));
+    assert!(home.join("elsewhere/1.json").is_file(), "a relative tasks folder is inside the user's folder");
+    drop(otto);
+
+    // A mistake in the file: the defaults apply and the status bar says what is wrong.
+    std::fs::write(home.join("settings.json"), r#"{"terminal": {"font_family": "Monaco"}}"#).unwrap();
+    let otto = Otto::launch_with("settings-bad", &env);
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!(state["font"]["name"], "Menlo");
+    assert!(state["notice"].as_str().is_some_and(|e| e.contains("font_family")), "{}", state["notice"]);
+    drop(otto);
+    // A font that is not installed: Menlo, at the size asked for.
+    std::fs::write(home.join("settings.json"), r#"{"terminal": {"font": "No Such Font", "font_size": 15}}"#).unwrap();
+    let otto = Otto::launch_with("settings-font", &env);
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!(state["font"], json!({"name": "Menlo", "size": 15.0}));
+    assert!(state["notice"].as_str().is_some_and(|e| e.contains("not installed")), "{}", state["notice"]);
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// Terminal 1's entry in the state dump.

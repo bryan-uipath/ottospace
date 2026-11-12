@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::layout::{Axis, Dir, Node};
 use crate::list::ListRow;
 use crate::repos::{self, Repo};
-use crate::tasks::{State, TaskId, Tasks};
+use crate::tasks::{State, Task, TaskId, Tasks};
 
 pub type PaneId = u32;
 
@@ -208,6 +208,10 @@ pub enum Action {
     OpenRepo {
         path: String,
         axis: Axis,
+    },
+    /// Start from the tasks kept on disk.
+    RestoreTasks {
+        tasks: Vec<Task>,
     },
     /// File a task. `tab`: the `id` of the tab that is its workspace.
     TaskAdd {
@@ -482,6 +486,7 @@ impl Model {
             }
             Action::Open { kind, axis, beside } => self.open(kind, axis, beside, effects),
             Action::SetRepos { repos } => self.repos = repos::arrange(repos),
+            Action::RestoreTasks { tasks } => self.tasks.restore(tasks),
             Action::TaskAdd { title, priority, state, tab } => drop(self.tasks.add(title, priority, state, tab)),
             Action::TaskSetState { id, state } => self.tasks.set_state(id, state),
             Action::TaskSnooze { id, until } => self.tasks.snooze(id, until),

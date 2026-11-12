@@ -23,17 +23,41 @@ use gpui::{
     point, px, rgb, size,
 };
 use ottospace_core::terminal::{CellPoint, Motion, Scroll, SelectKind, Wheel, paste, wheel_scrolls};
-use ottospace_core::{palette, theme};
+use ottospace_core::{palette, settings, theme};
 
-const FONT: &str = "Menlo";
-const FONT_SIZE: f32 = 13.;
-const LINE_HEIGHT: f32 = 18.;
+/// The font terminals draw with, once `choose_font` has run. Until then, the default.
+static FONT: OnceLock<settings::Terminal> = OnceLock::new();
+
+fn terminal_font() -> settings::Terminal {
+    FONT.get().cloned().unwrap_or_default()
+}
+
+/// Takes the terminal font from the settings. A font that is not installed would be replaced by
+/// some other one, perhaps not monospaced: the default is used, and the reply says so.
+pub fn choose_font(window: &Window) -> Option<String> {
+    let wanted = &crate::config::get().settings.terminal;
+    let installed = window.text_system().all_font_names().contains(&wanted.font);
+    let font = if installed {
+        wanted.clone()
+    } else {
+        settings::Terminal { font_size: wanted.font_size, ..Default::default() }
+    };
+    let _ = FONT.set(font);
+    (!installed).then(|| format!("settings.json: the font \"{}\" is not installed; using Menlo", wanted.font))
+}
+
+/// The font terminals draw with, for the state dump: `{"name":"Menlo","size":13.0}`.
+pub fn font_in_use() -> serde_json::Value {
+    let font = terminal_font();
+    serde_json::json!({ "name": font.font, "size": font.font_size })
+}
 
 /// Size of one character cell: the font's advance by the line height.
 pub fn cell_size(window: &Window) -> Size<Pixels> {
-    let text = window.text_system();
-    let width = text.em_advance(text.resolve_font(&font(FONT)), px(FONT_SIZE)).unwrap_or(px(FONT_SIZE * 0.6));
-    size(width, px(LINE_HEIGHT))
+    let (text, chosen) = (window.text_system(), terminal_font());
+    let size_px = px(chosen.font_size);
+    let width = text.em_advance(text.resolve_font(&font(chosen.font.clone())), size_px).unwrap_or(size_px * 0.6);
+    size(width, px(chosen.line_height()))
 }
 
 /// State the PTY reader thread shares with the UI thread.
@@ -123,7 +147,7 @@ impl Terminal {
         // A `cwd` that is gone falls back too: never to `/`.
         let working_directory = cwd.map(PathBuf::from).filter(|dir| dir.is_dir()).or(home).filter(|dir| dir.is_dir());
         let options = tty::Options { shell, env, working_directory, ..Default::default() };
-        let pty = tty::new(&options, window_size(grid, size(px(8.), px(LINE_HEIGHT))), 0)?;
+        let pty = tty::new(&options, window_size(grid, size(px(8.), px(terminal_font().line_height()))), 0)?;
         let term = Arc::new(FairMutex::new(Term::new(Config::default(), &grid, listener.clone())));
         let event_loop = EventLoop::new(term.clone(), listener, pty, false, false)?;
         let input = event_loop.channel();
@@ -399,6 +423,7 @@ pub fn paint(
     window: &mut Window,
     cx: &mut App,
 ) {
+    let chosen = terminal_font();
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
         for (r, spans) in screen.rows.iter().enumerate() {
             let text: String = spans.iter().map(|s| s.text.as_str()).collect();
@@ -408,7 +433,7 @@ pub fn paint(
             let runs: Vec<TextRun> = spans
                 .iter()
                 .map(|s| {
-                    let mut font = font(FONT);
+                    let mut font = font(chosen.font.clone());
                     if s.bold {
                         font.weight = FontWeight::BOLD;
                     }
@@ -425,7 +450,7 @@ pub fn paint(
                     }
                 })
                 .collect();
-            let line = window.text_system().shape_line(text.into(), px(FONT_SIZE), &runs, None);
+            let line = window.text_system().shape_line(text.into(), px(chosen.font_size), &runs, None);
             let origin = bounds.origin + point(px(0.), cell.height * r as f32);
             let _ = line.paint_background(origin, cell.height, window, cx);
             let _ = line.paint(origin, cell.height, window, cx);

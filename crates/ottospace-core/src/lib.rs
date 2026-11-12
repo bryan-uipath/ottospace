@@ -8,6 +8,7 @@ pub mod list;
 pub mod model;
 pub mod palette;
 pub mod repos;
+pub mod settings;
 pub mod tasks;
 pub mod terminal;
 pub mod theme;

@@ -35,6 +35,7 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use screencapturekit::prelude::*;
 
 mod ax_debug;
+mod config;
 mod control;
 mod repos;
 mod terminal;
@@ -387,6 +388,8 @@ struct Workspace {
     apps: Vec<capture::App>,
     /// Icons of apps seen so far, by app name. Kept: an icon is read and encoded once.
     icons: HashMap<String, Arc<gpui::Image>>,
+    /// The tasks as last written to disk, to write only what changes.
+    stored: Vec<Task>,
     /// Scroll position of the bar's list, so list mode can bring the selected row into view.
     list_scroll: ScrollHandle,
     /// Window ids seen per hosted pid; anything new that appears later gets its own pane.
@@ -493,6 +496,11 @@ impl Workspace {
         window.focus(&focus);
         let mut model = Model::default();
         model.update(Action::SetRepos { repos: repos::scan() });
+        let (tasks, unread) = config::load_tasks();
+        model.update(Action::RestoreTasks { tasks });
+        // The first problem found at start, for the status bar: settings, then the font, then tasks.
+        let unread = (unread > 0).then(|| format!("tasks: {unread} file(s) in the tasks folder could not be read"));
+        let error = config::get().error.clone().or(terminal::choose_font(window)).or(unread);
         if hosting {
             // Repos is the way in while there are no panes: most work starts in a repository.
             model.update(Action::ToggleSection { section: Section::Repos });
@@ -512,7 +520,8 @@ impl Workspace {
             list_scroll: ScrollHandle::new(),
             known: Vec::new(),
             live_since: None,
-            error: None,
+            error,
+            stored: Vec::new(),
             hosting,
             host_only,
             control,
@@ -521,6 +530,7 @@ impl Workspace {
             _subscriptions: subscriptions,
         };
         this.refresh_apps();
+        this.stored = this.kept_tasks(); // what was read needs no writing back
         this
     }
 
@@ -532,6 +542,7 @@ impl Workspace {
             self.model.update(Action::SetRepos { repos: repos::scan() });
         }
         let effects = self.model.update(action);
+        self.store_tasks();
         for effect in &effects {
             match effect {
                 Effect::Opened(id) => {
@@ -588,6 +599,25 @@ impl Workspace {
         }
         cx.notify();
         effects
+    }
+
+    /// The tasks as they are kept on disk: without a tab, which ends with the session.
+    fn kept_tasks(&self) -> Vec<Task> {
+        self.model.tasks.list.iter().map(|task| Task { tab: None, ..task.clone() }).collect()
+    }
+
+    /// Writes the tasks that changed since the last write, one file each.
+    fn store_tasks(&mut self) {
+        let kept = self.kept_tasks();
+        if kept == self.stored {
+            return;
+        }
+        for task in kept.iter().filter(|task| !self.stored.contains(task)) {
+            if let Err(err) = config::save_task(task) {
+                self.error = Some(format!("tasks: could not save task {}: {err}", task.id));
+            }
+        }
+        self.stored = kept;
     }
 
     /// The global return key: take the keyboard back from a live app, and bring ottospace to the
@@ -920,6 +950,11 @@ impl Workspace {
             "parking": [parking.x, parking.y],
             // The registered return key, or null if there is none.
             "return_key": RETURN_KEY.get(),
+            // The terminal font in use, and the size of one character cell in points.
+            "font": terminal::font_in_use(),
+            "cell": [f32::from(self.cell.width), f32::from(self.cell.height)],
+            // The problem the status bar shows, or null. Not `error`: that key means the request failed.
+            "notice": self.error,
             // Each hosted window's real frame, in the same global coordinates as `parking`.
             "hosted": hosted,
             // Each hosted pane's title-bar crop in points (0: none).
