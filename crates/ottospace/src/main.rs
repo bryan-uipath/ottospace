@@ -439,9 +439,9 @@ impl Workspace {
                         this.adopt_new_windows(window, cx);
                         this.drop_closed(window, cx);
                         // A snoozed task returns when its time comes.
-                        if this.model.tasks.list.iter().any(|t| t.snoozed_until.is_some_and(|until| until <= now_ms()))
-                        {
-                            this.dispatch(Action::Tick { now: now_ms() }, window, cx);
+                        let now = now_ms();
+                        if this.model.tasks.due(now) {
+                            this.dispatch(Action::Tick { now }, window, cx);
                             cx.notify();
                         }
                     }
@@ -672,7 +672,11 @@ impl Workspace {
                     None
                 }
                 Request::TaskAdd { title, priority, state, tab } => {
-                    Some(Action::TaskAdd { title, priority, state, tab })
+                    self.dispatch(Action::TaskAdd { title, priority, state, tab }, window, cx);
+                    // The new task, so the caller has its id.
+                    let task = serde_json::json!(self.model.tasks.list.last());
+                    let _ = reply.send(serde_json::json!({ "ok": true, "task": task }).to_string());
+                    continue;
                 }
                 Request::TaskUndo => Some(Action::TaskUndo),
                 Request::TaskSetState { id, .. }
@@ -697,9 +701,13 @@ impl Workspace {
                 }
                 Request::TaskPop => {
                     self.dispatch(Action::Tick { now: now_ms() }, window, cx);
+                    let tab = self.model.tasks.next().and_then(|task| task.tab);
                     let task = serde_json::json!(self.model.tasks.next());
                     self.dispatch(Action::TaskOpen { id: None }, window, cx);
-                    let _ = reply.send(serde_json::json!({ "ok": true, "task": task }).to_string());
+                    // False: the task has no tab, or the picker or key reference is in the way.
+                    let active = self.model.tabs.get(self.model.active).map(|t| t.id);
+                    let opened = tab.is_some() && tab == active;
+                    let _ = reply.send(serde_json::json!({ "ok": true, "task": task, "opened": opened }).to_string());
                     continue;
                 }
                 Request::Repos => Some(Action::SetRepos { repos: repos::scan() }),

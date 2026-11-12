@@ -126,16 +126,26 @@ States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stal
 `needs_you`, `stale`), `running` (`running`, `review`), `captured` (`captured`, `triaged`),
 `on_hold` (`parked`), `done`. In a group: priority, then oldest first. `cleaned` tasks are not listed.
 
+- `task_add` replies `{"ok":true,"task":{..}}`, not the state: the new task, with its `id`.
+  Priorities outside 1 to 9 are moved into that range.
 - **Report your own state.** If the user gave you a task id, send `task_set_state` with `running`
   while you work and `needs_you` when you wait for the user. Do not set the state of other tasks.
+  A task hidden by the user comes back only when it moves under `needs_you` from another group.
+  Sending `needs_you` again for a task that already waits changes nothing: report `running`
+  when you start again, so the next `needs_you` is news.
 - `task_list` replies `{"ok":true,"inbox":[..]}`: each row is a task plus its `group`. The same
   rows are `inbox` in the state, with the count `needs_you`.
-- `task_pop` brings forward the tab of the first task under `needs_you` and replies
-  `{"ok":true,"task":{..}}`, or `"task":null` if there is none. It switches the tab the user sees.
+- `task_pop` replies `{"ok":true,"task":{..},"opened":true}` for the first task under
+  `needs_you`, and brings its tab forward, which switches the tab the user sees. `"task":null`:
+  nothing needs the user. `"opened":false`: no tab came forward (the task has no tab, its tab
+  was closed, or the picker or key reference is open).
 - `task_snooze`, `task_hold` and `task_dismiss` are the user's moves; send them only when asked.
-  A snoozed or dismissed task leaves the inbox; it returns when its time is up or when its state
-  changes to `needs_you`. `task_hold` sets the state to `parked`. `task_undo` takes back the last
-  of the three, one step. A request for a task id that does not exist is refused.
+  A snoozed or dismissed task leaves the inbox. A snoozed task returns when its time is up;
+  a dismissed task does not. Either returns when it moves under `needs_you`. `task_hold` sets
+  the state to `parked`; a `done` or `cleaned` task cannot be held. `task_undo` takes back the
+  last of the three, one step, unless the task's state was reported since. A request for a task
+  id that does not exist is refused.
+- A task whose tab is closed keeps going without a tab.
 - Tasks are kept in memory only: they are gone when ottospace quits.
 
 Reading a terminal pane:

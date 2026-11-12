@@ -272,7 +272,7 @@ fn tasks_are_listed_as_an_inbox_and_pop_opens_the_next() {
     let tabs = otto.call(json!({"cmd": "state"}))["state"]["tabs"].clone();
     let (first, second) = (tabs[0]["id"].clone(), tabs[1]["id"].clone());
 
-    otto.call(json!({"cmd": "task_add", "title": "idea"}));
+    assert_eq!(otto.call(json!({"cmd": "task_add", "title": "idea"}))["task"]["id"], 1);
     otto.call(json!({"cmd": "task_add", "title": "build", "state": "running", "tab": second}));
     otto.call(json!({"cmd": "task_add", "title": "question", "priority": 1, "state": "needs_you", "tab": first}));
     let inbox = |o: &Otto| -> Vec<(String, String)> {
@@ -286,13 +286,14 @@ fn tasks_are_listed_as_an_inbox_and_pop_opens_the_next() {
     // Pop next: the tab of the task that needs the user comes forward.
     assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["active"], 1);
     let popped = otto.call(json!({"cmd": "task_pop"}));
-    assert_eq!(popped["task"]["title"], "question");
+    assert_eq!((&popped["task"]["title"], &popped["opened"]), (&json!("question"), &json!(true)));
     assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["active"], 0);
 
-    // Snoozed: out of the inbox, and pop finds nothing. An agent that needs the user again brings it back.
+    // Snoozed: out of the inbox, and pop finds nothing. Undo brings it back.
     otto.call(json!({"cmd": "task_snooze", "id": 3, "seconds": 3600}));
     assert_eq!(inbox(&otto), [row("running", "build"), row("captured", "idea")]);
-    assert!(otto.call(json!({"cmd": "task_pop"}))["task"].is_null());
+    let none = otto.call(json!({"cmd": "task_pop"}));
+    assert!(none["task"].is_null() && none["opened"] == false, "{none}");
     otto.call(json!({"cmd": "task_undo"}));
     assert_eq!(inbox(&otto)[0], row("needs_you", "question"));
 
@@ -307,6 +308,11 @@ fn tasks_are_listed_as_an_inbox_and_pop_opens_the_next() {
     otto.call(json!({"cmd": "task_dismiss", "id": 1}));
     otto.call(json!({"cmd": "task_set_state", "id": 2, "state": "needs_you"}));
     assert_eq!(inbox(&otto), [row("needs_you", "build"), row("on_hold", "question")]);
+    // A dismissed task that starts to need the user comes back. It has no tab: nothing opens.
+    otto.call(json!({"cmd": "task_set_state", "id": 2, "state": "done"}));
+    otto.call(json!({"cmd": "task_set_state", "id": 1, "state": "needs_you"}));
+    let popped = otto.call(json!({"cmd": "task_pop"}));
+    assert_eq!((&popped["task"]["title"], &popped["opened"]), (&json!("idea"), &json!(false)));
     assert_eq!(otto.raw(r#"{"cmd":"task_hold","id":9}"#)["ok"], false, "no such task");
     assert_eq!(otto.raw(r#"{"cmd":"task_add","title":"x","state":"sleeping"}"#)["ok"], false, "no such state");
 }

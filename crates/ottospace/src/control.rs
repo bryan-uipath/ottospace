@@ -134,7 +134,8 @@ pub enum Request {
     },
     /// Files a task: `{"cmd":"task_add","title":"Fix the zoom flicker","priority":2}`. `priority`:
     /// 1 (most urgent) to 9, default 3. `state`: default `captured`. `tab`: the `id` of the tab
-    /// that is the task's workspace (`$OTTOSPACE_TAB` in a shell).
+    /// that is the task's workspace (`$OTTOSPACE_TAB` in a shell). The reply is
+    /// `{"ok":true,"task":{..}}`: the new task, with its `id`.
     TaskAdd {
         title: String,
         #[serde(default = "three")]
@@ -166,7 +167,8 @@ pub enum Request {
     /// The inbox, in order: `{"ok":true,"inbox":[{"group":"needs_you","id":1,..}]}`, not the state.
     TaskList,
     /// Brings forward the tab of the first task that needs the user. The reply is
-    /// `{"ok":true,"task":{..}}`, or `"task":null` if nothing needs the user.
+    /// `{"ok":true,"task":{..},"opened":true}`; `"task":null` if nothing needs the user, and
+    /// `"opened":false` if no tab came forward.
     TaskPop,
     /// A terminal pane's text (default: the focused one): the bottom screen, and with `history`
     /// everything scrolled off above it. The reply is `{"ok":true,"pane":3,"text":".."}`, not the state.
