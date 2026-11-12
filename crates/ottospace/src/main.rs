@@ -422,6 +422,9 @@ struct Workspace {
 const ICON_POINTS: f32 = 24.;
 const ICON_PIXELS: u8 = 48;
 
+/// How much of a test run's window stays on screen, in points, at the corner it sits in.
+const E2E_SLIVER: f32 = 12.;
+
 /// How long the `s` key snoozes a task: one hour.
 const SNOOZE_MS: u64 = 3_600_000;
 
@@ -497,7 +500,9 @@ impl Workspace {
             // A run with hosting off never activates the app, so keep its window visible another
             // way. Not with hosting on: a floating ottospace would cover the live app window.
             if !hosting {
-                unsafe { ottospace_mac::window::keep_on_top(appkit.ns_view.as_ptr()) };
+                // Tests use the socket, not the mouse. A window put on show can be clicked.
+                let click_through = std::env::var_os("OTTOSPACE_E2E_SHOW").is_none();
+                unsafe { ottospace_mac::window::keep_on_top(appkit.ns_view.as_ptr(), click_through) };
             }
         }
 
@@ -2661,7 +2666,19 @@ fn main() {
             KeyBinding::new("cmd-n", NewTask, None),
             KeyBinding::new("cmd-shift-n", NextTask, None),
         ]);
-        let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
+        let mut bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
+        // A test run stays out of the user's way: a background app that never takes the keyboard,
+        // with its window at a free corner of the screens, all but a sliver of it off screen.
+        // (A sliver, because a window with nothing showing is not drawn, and tests wait on layout.)
+        // `OTTOSPACE_E2E_SHOW` keeps the window where it can be looked at.
+        let quiet = !hosting;
+        if quiet {
+            ottospace_mac::window::stay_in_background();
+            if std::env::var_os("OTTOSPACE_E2E_SHOW").is_none() {
+                let corner = display::parking_spot();
+                bounds.origin = point(px(corner.x as f32 - E2E_SLIVER), px(corner.y as f32 - E2E_SLIVER));
+            }
+        }
         // Draw under the title bar; the top bar leaves room for the traffic lights.
         let titlebar = TitlebarOptions {
             title: Some("ottospace".into()),
@@ -2671,6 +2688,7 @@ fn main() {
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(titlebar),
+            focus: !quiet,
             ..Default::default()
         };
         cx.open_window(options, |window, cx| cx.new(|cx| Workspace::new(hosting, host_only, control, window, cx)))
