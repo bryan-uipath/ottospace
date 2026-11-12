@@ -1978,6 +1978,8 @@ fn main() {
     let control = control::serve().map_err(|err| eprintln!("control socket off: {err}")).ok();
 
     Application::new().with_assets(Assets).run(move |cx: &mut App| {
+        // Run as a bare binary (`ottospace`, `cargo run`) there is no bundle to supply the icon.
+        ottospace_mac::window::set_dock_icon(include_bytes!("../assets/ottospace.icns"));
         cx.bind_keys([
             KeyBinding::new("cmd-d", SplitRight, None),
             KeyBinding::new("cmd-shift-d", SplitDown, None),
