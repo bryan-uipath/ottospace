@@ -67,7 +67,9 @@ release `main-latest`, creating it the first time. Release assets download with 
 - The release is edited, not deleted and made again: watchers are notified once, not per push.
 - Assets are replaced one at a time. An install in that window gets files from two builds; the
   checksum fails, osi changes nothing and says to try again.
-- A run that finishes after a newer commit landed on `main` does not publish.
+- A run publishes only when its commit is ahead of the published one. A run that finishes late
+  does not replace a newer build; one that a newer push overtook still publishes until the newer
+  build lands.
 
 ### Pull requests: workflow artifacts
 
