@@ -30,7 +30,8 @@ Rules:
 - E2E windows float above other windows, because GPUI does not draw a fully covered window and
   a test waiting for layout would time out. A layout timeout prints the last state.
 - **App-window loop:** `cargo e2e-apps`. Hosts real windows of `ottospace-canary`, a test app
-  built from this package (`src/bin`). `OTTOSPACE_HOST_ONLY` limits hosting to that app. Needs
+  built from this package (`src/bin`). `OTTOSPACE_HOST_ONLY=<pid>` limits hosting to that process, and turns the recovery file off.
+  The run takes keyboard focus while it lasts. Needs
   Accessibility and Screen Recording for the terminal. Use it for anything that moves, parks,
   adopts or restores a real window.
 - A feature is done when both loops cover it. Extend `Request` and the state snapshot when a test

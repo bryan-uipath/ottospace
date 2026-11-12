@@ -1,6 +1,7 @@
 //! App-window loop: hosts real windows of the canary app. Run with `cargo e2e-apps`.
 //! Needs Accessibility and Screen Recording permission for the terminal that runs it.
-//! `OTTOSPACE_HOST_ONLY` limits hosting to the canary, so no other window is ever moved.
+//! `OTTOSPACE_HOST_ONLY=<canary pid>` limits hosting to that process, so no other window is moved.
+//! The run takes keyboard focus while it lasts.
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -33,7 +34,7 @@ impl Proc {
 
     fn call(&self, request: Value) -> Value {
         let mut stream = UnixStream::connect(&self.socket).expect("connect");
-        stream.set_read_timeout(Some(Duration::from_secs(10))).expect("set timeout");
+        stream.set_read_timeout(Some(TIMEOUT)).expect("set timeout");
         writeln!(stream, "{request}").expect("send");
         let mut reply = String::new();
         BufReader::new(stream).read_line(&mut reply).expect("reply");
@@ -83,7 +84,7 @@ fn a_canary_window_is_hosted_entered_left_and_restored() {
         env!("CARGO_BIN_EXE_ottospace"),
         "otto",
         "OTTOSPACE_SOCKET",
-        &[("OTTOSPACE_E2E", "1"), ("OTTOSPACE_HOST_ONLY", CANARY)],
+        &[("OTTOSPACE_E2E", "1"), ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string())],
     );
     let state = || otto.call(json!({"cmd": "state"}));
     let pane = |id: u64| rect(&state()["bounds"][id.to_string()]).filter(|b| b[2] > 1.0);
@@ -92,8 +93,15 @@ fn a_canary_window_is_hosted_entered_left_and_restored() {
     let reply = otto.call(json!({"cmd": "open_app", "name": CANARY}));
     assert_eq!(reply["state"]["panes"][0]["kind"]["type"], "app", "{reply}");
     let body = wait_for("the pane layout", || pane(1));
-    let parked = wait_for("the window to park at pane size", || {
-        frame(0).filter(|f| close(f[2], body[2]) && close(f[3], body[3]) && !close(f[0], original[0]))
+    // Checked in ottospace's own global coordinates: with two displays, each app's window
+    // frame is relative to its own display and cannot be compared with the parking spot.
+    let spot = rect(&json!([state()["parking"][0], state()["parking"][1], 0, 0])).expect("parking spot");
+    let hosted = || rect(&state()["hosted"]["1"]);
+    // macOS keeps a title bar on screen, so the window stops a title bar's height short of the
+    // spot vertically. Horizontally it reaches it: a 1pt sliver stays visible.
+    let at_spot = |f: &[f64; 4]| close(f[0], spot[0]) && f[1] <= spot[1] && f[1] > spot[1] - 60.0;
+    wait_for("the window to park at pane size", || {
+        hosted().filter(|f| close(f[2], body[2]) && close(f[3], body[3]) && at_spot(f))
     });
 
     // Enter: the real window sits exactly over the pane.
@@ -106,7 +114,7 @@ fn a_canary_window_is_hosted_entered_left_and_restored() {
 
     // Leave: parked again, mode back to normal.
     assert_eq!(otto.call(json!({"cmd": "leave"}))["mode"], "normal");
-    wait_for("the window to park again", || frame(0).filter(|f| close(f[0], parked[0]) && close(f[1], parked[1])));
+    wait_for("the window to park again", || hosted().filter(at_spot));
 
     // A window the app opens itself gets its own pane, to the right, without taking focus.
     canary.call(json!({"cmd": "open_window"}));
@@ -121,7 +129,5 @@ fn a_canary_window_is_hosted_entered_left_and_restored() {
 
     // Quit: the window goes back where it was.
     otto.call(json!({"cmd": "quit"}));
-    wait_for("the window to return to its frame", || {
-        frame(0).filter(|f| close(f[0], original[0]) && close(f[1], original[1]) && close(f[2], original[2]))
-    });
+    wait_for("the window to return to its frame", || frame(0).filter(|f| (0..4).all(|i| close(f[i], original[i]))));
 }

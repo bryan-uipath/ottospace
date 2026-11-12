@@ -282,8 +282,8 @@ struct Workspace {
     error: Option<String>,
     /// False in e2e runs, which must never move the user's real windows.
     hosting: bool,
-    /// Test runs: the one app that may be hosted.
-    host_only: Option<String>,
+    /// Test runs: the pid of the one app that may be hosted.
+    host_only: Option<i32>,
     control: Option<Receiver<Call>>,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
@@ -292,7 +292,7 @@ struct Workspace {
 impl Workspace {
     fn new(
         hosting: bool,
-        host_only: Option<String>,
+        host_only: Option<i32>,
         control: Option<Receiver<Call>>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -346,8 +346,9 @@ impl Workspace {
             && let RawWindowHandle::AppKit(appkit) = handle.as_raw()
         {
             unsafe { ottospace_mac::window::zoom_instead_of_fullscreen(appkit.ns_view.as_ptr()) };
-            // Test runs never activate the app, so keep the window visible another way.
-            if std::env::var_os("OTTOSPACE_E2E").is_some() {
+            // A run with hosting off never activates the app, so keep its window visible another
+            // way. Not with hosting on: a floating ottospace would cover the live app window.
+            if !hosting {
                 unsafe { ottospace_mac::window::keep_on_top(appkit.ns_view.as_ptr()) };
             }
         }
@@ -365,7 +366,7 @@ impl Workspace {
             terminals: HashMap::new(),
             cell: terminal::cell_size(window),
             cells: HashMap::new(),
-            apps: running_apps(hosting, &host_only),
+            apps: running_apps(hosting, host_only),
             known: Vec::new(),
             live_since: None,
             error: None,
@@ -501,6 +502,14 @@ impl Workspace {
 
     /// State as JSON: the model, plus each pane's drawn bounds `[x, y, w, h]` in window points.
     fn snapshot(&self, window: &Window) -> String {
+        let parking = display::parking_spot();
+        let hosted: BTreeMap<PaneId, [f64; 4]> = self
+            .hosted
+            .iter()
+            .filter_map(|(id, h)| {
+                h.window.frame().map(|f| (*id, [f.origin.x, f.origin.y, f.size.width, f.size.height]))
+            })
+            .collect();
         let frame = window.bounds();
         let frame: [f32; 4] =
             [frame.origin.x.into(), frame.origin.y.into(), frame.size.width.into(), frame.size.height.into()];
@@ -531,6 +540,10 @@ impl Workspace {
             "tab_panes": self.model.tab_panes(),
             // ottospace's own window frame, so a test can turn pane bounds into screen positions.
             "window": frame,
+            // Where parked windows go, so a test can tell "parked" from "moved somewhere".
+            "parking": [parking.x, parking.y],
+            // Each hosted window's real frame, in the same global coordinates as `parking`.
+            "hosted": hosted,
             "terminals": terminals,
         })
         .to_string()
@@ -582,10 +595,12 @@ impl Workspace {
         if !self.hosting {
             return Err("window hosting is off in e2e runs".into());
         }
-        if self.host_only.as_deref().is_some_and(|only| only != name) {
-            return Err(format!("this test run may host only {}", self.host_only.as_deref().unwrap_or_default()));
-        }
-        let target = capture::find(name)?;
+        let target = match self.host_only {
+            // By pid, not by name: another process may share the canary's name.
+            Some(pid) if capture::name_of(pid).as_deref() == Some(name) => capture::find_pid(pid)?,
+            Some(_) => return Err("this test run may host only the app it started".into()),
+            None => capture::find(name)?,
+        };
         // Already in a pane: go to it (and its tab) instead of doing nothing.
         if let Some((pane, _)) = self.hosted.iter().find(|(_, h)| h.window_id == target.id) {
             let pane = *pane;
@@ -712,7 +727,7 @@ impl Workspace {
 
     /// Opens the pane picker: a terminal, then each running app.
     fn open_picker(&mut self, axis: Axis, new_tab: bool, window: &Window, cx: &mut Context<Self>) {
-        self.apps = running_apps(self.hosting, &self.host_only);
+        self.apps = running_apps(self.hosting, self.host_only);
         let apps = self.apps.iter().map(|name| PickItem::App { name: name.clone() });
         let items = std::iter::once(PickItem::Terminal).chain(apps).collect();
         self.dispatch(Action::OpenPicker { axis, new_tab, items }, window, cx);
@@ -973,7 +988,7 @@ impl Workspace {
                     .hover(|s| s.text_color(rgb(theme::TEXT)))
                     .child("Running  ↻")
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.apps = running_apps(this.hosting, &this.host_only);
+                        this.apps = running_apps(this.hosting, this.host_only);
                         cx.notify();
                     })),
             )
@@ -1227,15 +1242,12 @@ impl Workspace {
 }
 
 /// Apps that can be hosted right now. In a test run limited to one app, only that app.
-fn running_apps(hosting: bool, only: &Option<String>) -> Vec<String> {
-    if !hosting {
-        return Vec::new();
+fn running_apps(hosting: bool, only: Option<i32>) -> Vec<String> {
+    match (hosting, only) {
+        (false, _) => Vec::new(),
+        (true, Some(pid)) => capture::name_of(pid).into_iter().collect(),
+        (true, None) => capture::apps(),
     }
-    let mut apps = capture::apps();
-    if let Some(only) = only {
-        apps.retain(|name| name == only);
-    }
-    apps
 }
 
 /// Covers the window's rounded corners (transparent, so black in the YUV stream) with the
@@ -1378,9 +1390,9 @@ fn main() {
     }
 
     // E2E runs get no window hosting, so tests cannot move or strand the user's real windows.
-    // The exception is `OTTOSPACE_HOST_ONLY=<app name>`: hosting is on for that one app only
-    // (the canary), which lets tests cover real window handling.
-    let host_only = std::env::var("OTTOSPACE_HOST_ONLY").ok();
+    // The exception is `OTTOSPACE_HOST_ONLY=<pid>`: hosting is on for that one process only (the
+    // canary the test started), which lets tests cover real window handling.
+    let host_only: Option<i32> = std::env::var("OTTOSPACE_HOST_ONLY").ok().and_then(|pid| pid.parse().ok());
     let hosting = std::env::var_os("OTTOSPACE_E2E").is_none() || host_only.is_some();
     if hosting {
         capture::init();
@@ -1389,9 +1401,11 @@ fn main() {
             eprintln!("grant Accessibility access to your terminal, then rerun");
             std::process::exit(1);
         }
-        // Leftovers belong to the user's real session; a test run must not move them.
-        if host_only.is_none() {
-            recovery::restore_leftovers();
+        // The recovery file belongs to the user's real session. A test run must not move its
+        // leftovers, nor write to it.
+        match host_only {
+            None => recovery::restore_leftovers(),
+            Some(_) => recovery::disable(),
         }
     }
     let control = control::serve().map_err(|err| eprintln!("control socket off: {err}")).ok();

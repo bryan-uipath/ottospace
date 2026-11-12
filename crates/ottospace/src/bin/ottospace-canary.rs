@@ -7,6 +7,7 @@
 
 use std::cell::RefCell;
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -119,7 +120,12 @@ fn serve(calls: &Receiver<(Request, Sender<String>)>, windows: &Windows, cx: &mu
             }
             Request::Quit => {
                 let _ = reply.send(json!({ "ok": true }).to_string());
-                cx.quit();
+                // Quit a moment later, so the connection thread can write the reply first.
+                cx.spawn(async move |cx| {
+                    cx.background_executor().timer(Duration::from_millis(100)).await;
+                    let _ = cx.update(|cx| cx.quit());
+                })
+                .detach();
                 return;
             }
         }
@@ -128,7 +134,10 @@ fn serve(calls: &Receiver<(Request, Sender<String>)>, windows: &Windows, cx: &mu
 }
 
 fn listen(path: String, calls: Sender<(Request, Sender<String>)>) {
-    let _ = std::fs::remove_file(&path);
+    // Remove only a stale socket, never some other file the path names.
+    if std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_socket()) {
+        let _ = std::fs::remove_file(&path);
+    }
     let listener = UnixListener::bind(&path).expect("bind $CANARY_SOCKET");
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
