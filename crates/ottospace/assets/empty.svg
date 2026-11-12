@@ -39,26 +39,18 @@
     </radialGradient>
 
       
-    <radialGradient id="bfade" cx="500.0" cy="24" r="500.0" gradientUnits="userSpaceOnUse" gradientTransform="translate(0 24) scale(1 0.62) translate(0 -24)">
+    <radialGradient id="wfade" cx="500.0" cy="24" r="500.0" gradientUnits="userSpaceOnUse" gradientTransform="translate(0 24) scale(1 0.62) translate(0 -24)">
       <stop stop-color="#fff"/><stop offset=".55" stop-color="#fff" stop-opacity=".45"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
     </radialGradient>
-    <mask id="bmask"><rect width="1000" height="300" fill="url(#bfade)"/></mask>
-    <linearGradient id="bglow" x1="0" y1="6" x2="0" y2="64" gradientUnits="userSpaceOnUse">
+    <mask id="wmask"><rect width="1000" height="300" fill="url(#wfade)"/></mask>
+    <linearGradient id="wglow" x1="0" y1="6" x2="0" y2="64" gradientUnits="userSpaceOnUse">
       <stop stop-color="#00b8db" stop-opacity="0"/><stop offset=".45" stop-color="#00b8db" stop-opacity=".22"/><stop offset="1" stop-color="#00b8db" stop-opacity="0"/>
-    </linearGradient>
-    <linearGradient id="sun" x1="0" y1="344" x2="0" y2="494" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#53eafd" stop-opacity=".30"/><stop offset="1" stop-color="#00b8db" stop-opacity=".10"/>
-    </linearGradient>
-    <clipPath id="sun-clip"><rect x="570" y="344" width="300" height="150"/></clipPath></defs>
-  
-  <g clip-path="url(#sun-clip)"><circle cx="720" cy="494" r="150" fill="url(#sun)"/><rect x="570" y="389.0" width="300" height="11" fill="#09090b"/><rect x="570" y="416.0" width="300" height="9" fill="#09090b"/><rect x="570" y="443.0" width="300" height="7" fill="#09090b"/><rect x="570" y="470.0" width="300" height="5" fill="#09090b"/></g>
-  <g transform="translate(220 470)"><g mask="url(#bmask)">
-      <rect y="6" width="1000" height="58" fill="url(#bglow)"/>
-      <g stroke="#00b8db" stroke-opacity="0.45" stroke-width="1"><path d="M311.0 24L-1600.0 300"/><path d="M324.5 24L-1450.0 300"/><path d="M338.0 24L-1300.0 300"/><path d="M351.5 24L-1150.0 300"/><path d="M365.0 24L-1000.0 300"/><path d="M378.5 24L-850.0 300"/><path d="M392.0 24L-700.0 300"/><path d="M405.5 24L-550.0 300"/><path d="M419.0 24L-400.0 300"/><path d="M432.5 24L-250.0 300"/><path d="M446.0 24L-100.0 300"/><path d="M459.5 24L50.0 300"/><path d="M473.0 24L200.0 300"/><path d="M486.5 24L350.0 300"/><path d="M500.0 24L500.0 300"/><path d="M513.5 24L650.0 300"/><path d="M527.0 24L800.0 300"/><path d="M540.5 24L950.0 300"/><path d="M554.0 24L1100.0 300"/><path d="M567.5 24L1250.0 300"/><path d="M581.0 24L1400.0 300"/><path d="M594.5 24L1550.0 300"/><path d="M608.0 24L1700.0 300"/><path d="M621.5 24L1850.0 300"/><path d="M635.0 24L2000.0 300"/><path d="M648.5 24L2150.0 300"/><path d="M662.0 24L2300.0 300"/><path d="M675.5 24L2450.0 300"/><path d="M689.0 24L2600.0 300"/><path d="M0 25.4H1000"/><path d="M0 30.5H1000"/><path d="M0 39.8H1000"/><path d="M0 53.8H1000"/><path d="M0 72.7H1000"/><path d="M0 96.7H1000"/><path d="M0 126.1H1000"/><path d="M0 161.0H1000"/><path d="M0 201.5H1000"/><path d="M0 247.8H1000"/><path d="M0 300.0H1000"/></g>
+    </linearGradient></defs>
+  <g transform="translate(220 470)"><g mask="url(#wmask)">
+      <rect y="6" width="1000" height="58" fill="url(#wglow)"/>
+      <g stroke="#00b8db" stroke-opacity="0.5" stroke-width="1"><path d="M311.0 24L-1600.0 300"/><path d="M324.5 24L-1450.0 300"/><path d="M338.0 24L-1300.0 300"/><path d="M351.5 24L-1150.0 300"/><path d="M365.0 24L-1000.0 300"/><path d="M378.5 24L-850.0 300"/><path d="M392.0 24L-700.0 300"/><path d="M405.5 24L-550.0 300"/><path d="M419.0 24L-400.0 300"/><path d="M432.5 24L-250.0 300"/><path d="M446.0 24L-100.0 300"/><path d="M459.5 24L50.0 300"/><path d="M473.0 24L200.0 300"/><path d="M486.5 24L350.0 300"/><path d="M500.0 24L500.0 300"/><path d="M513.5 24L650.0 300"/><path d="M527.0 24L800.0 300"/><path d="M540.5 24L950.0 300"/><path d="M554.0 24L1100.0 300"/><path d="M567.5 24L1250.0 300"/><path d="M581.0 24L1400.0 300"/><path d="M594.5 24L1550.0 300"/><path d="M608.0 24L1700.0 300"/><path d="M621.5 24L1850.0 300"/><path d="M635.0 24L2000.0 300"/><path d="M648.5 24L2150.0 300"/><path d="M662.0 24L2300.0 300"/><path d="M675.5 24L2450.0 300"/><path d="M689.0 24L2600.0 300"/><path d="M0 25.4H1000"/><path d="M0 30.5H1000"/><path d="M0 39.8H1000"/><path d="M0 53.8H1000"/><path d="M0 72.7H1000"/><path d="M0 96.7H1000"/><path d="M0 126.1H1000"/><path d="M0 161.0H1000"/><path d="M0 201.5H1000"/><path d="M0 247.8H1000"/><path d="M0 300.0H1000"/></g>
       <path d="M0 24H1000" stroke="#53eafd" stroke-opacity=".7" stroke-width="1.2"/>
     </g></g>
-  
-  <!-- A solid silhouette first, so the faded Otto does not let the sun show through. -->
   <g transform="translate(590 250) scale(1.55)"><use href="#o-body" fill="#09090b"/></g>
   <g transform="translate(590 250) scale(1.55)" opacity="0.5">
     <ellipse cx="76" cy="160" rx="62" ry="9" fill="url(#o-shadow)"/>

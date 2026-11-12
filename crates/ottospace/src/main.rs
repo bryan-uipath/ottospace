@@ -188,8 +188,8 @@ struct Assets;
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<std::borrow::Cow<'static, [u8]>>> {
         let bytes: Option<&'static [u8]> = match path {
-            "otto.svg" => Some(include_bytes!("../assets/otto.svg")),
             "empty.svg" => Some(include_bytes!("../assets/empty.svg")),
+            "empty-pane.svg" => Some(include_bytes!("../assets/empty-pane.svg")),
             "icons/apps.svg" => Some(include_bytes!("../assets/icons/apps.svg")),
             "icons/workbook.svg" => Some(include_bytes!("../assets/icons/workbook.svg")),
             "icons/tasks.svg" => Some(include_bytes!("../assets/icons/tasks.svg")),
@@ -268,19 +268,18 @@ impl Render for Tooltip {
     }
 }
 
-/// Otto with a hint under it: what an empty pane or an empty workspace shows.
-fn otto(size: f32, hint: &'static str) -> impl IntoElement {
+/// An empty pane: Otto on a small patch of grid, with a hint under it.
+fn empty_pane(hint: &'static str) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
         .items_center()
-        .gap_3()
-        // Name the source kind: a bare "otto.svg" parses as a URL and is fetched over HTTP.
-        .child(img(ImageSource::Resource(Resource::Embedded("otto.svg".into()))).size(px(size)).opacity(0.3))
+        // Name the source kind: a bare "empty-pane.svg" parses as a URL and is fetched over HTTP.
+        .child(img(ImageSource::Resource(Resource::Embedded("empty-pane.svg".into()))).w(px(224.)).h(px(184.)))
         .child(div().text_sm().text_color(rgb(theme::MUTED)).child(hint))
 }
 
-/// The empty workspace: Otto in front of a retro sun, over a faint grid floor.
+/// The empty workspace: Otto over a faint grid floor.
 fn empty_workspace() -> impl IntoElement {
     div()
         .flex()
@@ -1202,7 +1201,7 @@ impl Workspace {
                 Kind::Terminal => {
                     div().text_sm().text_color(rgb(theme::ERROR)).child("the shell did not start").into_any_element()
                 }
-                _ => otto(110., "⌘E to pick what goes here").into_any_element(),
+                _ => empty_pane("⌘E to pick what goes here").into_any_element(),
             }
         };
         let radius = self.hosted.get(&id).map_or(0.0, |h| h.radius);
@@ -1616,7 +1615,7 @@ mod tests {
     #[test]
     fn every_rail_icon_and_otto_is_embedded() {
         let icons = SECTIONS.iter().map(|(_, icon, _)| *icon).chain(SPLITS.iter().map(|(icon, ..)| *icon));
-        for path in icons.chain(["otto.svg", "empty.svg"]) {
+        for path in icons.chain(["empty.svg", "empty-pane.svg"]) {
             assert!(Assets.load(path).unwrap().is_some(), "{path} is not in Assets::load");
         }
     }
