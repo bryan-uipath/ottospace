@@ -243,6 +243,285 @@ fn a_dropped_pane_splits_or_swaps_where_it_lands() {
     }
 }
 
+/// A rect `[x, y, w, h]` of a reply: `rect(&reply["headers"]["2"])`.
+fn rect(value: &Value) -> [f64; 4] {
+    let r: Vec<f64> =
+        value.as_array().unwrap_or_else(|| panic!("no rect: {value}")).iter().filter_map(Value::as_f64).collect();
+    [r[0], r[1], r[2], r[3]]
+}
+
+/// The point at fractions `fx`, `fy` of a rect.
+fn at(r: [f64; 4], fx: f64, fy: f64) -> [f64; 2] {
+    [r[0] + r[2] * fx, r[1] + r[3] * fy]
+}
+
+impl Otto {
+    /// One pointer event through the window's own handlers. The reply is drawn state.
+    fn mouse(&self, action: &str, p: [f64; 2]) -> Value {
+        self.call(json!({"cmd": "mouse", "action": action, "x": p[0], "y": p[1]}))
+    }
+
+    /// The state after a fresh frame: a pointer move outside the window draws one first.
+    fn drawn(&self) -> Value {
+        self.mouse("move", [-50.0, -50.0])
+    }
+
+    /// A whole drag: press, eight moves, release.
+    fn drag(&self, from: [f64; 2], to: [f64; 2]) -> Value {
+        self.call(json!({"cmd": "drag", "from": from, "to": to}))
+    }
+
+    /// Drags pane `source` by the middle of its header to fractions `fx`, `fy` of pane `target`.
+    fn drag_pane(&self, source: u64, target: u64, fx: f64, fy: f64) -> Value {
+        let state = self.drawn();
+        let from = at(rect(&state["headers"][source.to_string()]), 0.5, 0.5);
+        self.drag(from, at(rect(&state["frames"][target.to_string()]), fx, fy))
+    }
+
+    /// A press and a release at `p`.
+    fn click(&self, p: [f64; 2], clicks: u32) -> Value {
+        self.call(json!({"cmd": "mouse", "action": "down", "x": p[0], "y": p[1], "clicks": clicks}));
+        self.call(json!({"cmd": "mouse", "action": "up", "x": p[0], "y": p[1], "clicks": clicks}))
+    }
+}
+
+fn leaf(id: u64) -> Value {
+    json!({"leaf": id})
+}
+
+fn split(axis: &str, ratio: &Value, a: Value, b: Value) -> Value {
+    json!({"split": {"axis": axis, "ratio": ratio, "a": a, "b": b}})
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_header_dragged_with_the_mouse_splits_or_swaps_where_it_is_released() {
+    let otto = Otto::launch("drag-zones");
+    // 1 | 2 | 3, the outer split off centre, so a ratio that is kept can be told from a new one.
+    for _ in 0..3 {
+        otto.call(json!({"cmd": "split", "kind": "empty"}));
+    }
+    otto.call(json!({"cmd": "focus", "pane": 1}));
+    let reply = otto.call(json!({"cmd": "resize", "dir": "right"}));
+    let outer = reply["state"]["layout"]["split"]["ratio"].clone();
+    let half = json!(0.5);
+    assert_ne!(outer, half);
+    assert_eq!(reply["drag"], Value::Null);
+    let layout = |reply: &Value| reply["state"]["layout"].clone();
+
+    // The left edge of 1. Step by step, to see the drop zone on the way.
+    let state = otto.drawn();
+    let (from, to) = (at(rect(&state["headers"]["3"]), 0.5, 0.5), at(rect(&state["frames"]["1"]), 0.1, 0.5));
+    assert_eq!(otto.mouse("down", from)["drag"], Value::Null, "a press alone is no drag");
+    let reply = otto.mouse("move", [from[0] - 1.0, from[1]]);
+    assert_eq!(reply["drag"], Value::Null, "nor is a move of 1 pt");
+    // Over itself there is nowhere to drop.
+    let reply = otto.mouse("move", [from[0] - 10.0, from[1]]);
+    assert_eq!(reply["drag"], json!({"target": null, "zone": null}), "{reply}");
+    let reply = otto.mouse("move", at(rect(&state["headers"]["2"]), 0.5, 0.5));
+    assert_eq!(reply["drag"], json!({"target": 2, "zone": "top"}), "over 2's header: {reply}");
+    assert_eq!(otto.mouse("move", to)["drag"], json!({"target": 1, "zone": "left"}));
+    let reply = otto.mouse("move", at(rect(&state["frames"]["1"]), 0.5, 0.5));
+    assert_eq!(reply["drag"], json!({"target": 1, "zone": "center"}));
+    let reply = otto.mouse("move", at(rect(&state["frames"]["3"]), 0.5, 0.5));
+    assert_eq!(reply["drag"], json!({"target": null, "zone": null}));
+    otto.mouse("move", to);
+    let reply = otto.mouse("up", to);
+    assert_eq!(reply["drag"], Value::Null);
+    let inner = |a, b| split("right", &half, leaf(a), leaf(b));
+    assert_eq!(layout(&reply), split("right", &outer, inner(3, 1), leaf(2)));
+    assert_eq!((reply["state"]["focused"].as_u64(), reply["tab_panes"].clone()), (Some(3), json!([[3, 1, 2]])));
+    // Drawn there too: 3, 1, 2 from the left.
+    let b = otto.bounds(&[3, 1, 2]);
+    assert!(b[0][0] < b[1][0] && b[1][0] < b[2][0], "{b:?}");
+
+    // Where it already is: nothing moves.
+    assert_eq!(layout(&otto.drag_pane(3, 1, 0.1, 0.5)), split("right", &outer, inner(3, 1), leaf(2)));
+
+    // The right, top and bottom edges.
+    assert_eq!(layout(&otto.drag_pane(3, 1, 0.9, 0.5)), split("right", &outer, inner(1, 3), leaf(2)));
+    let over = |a, b| split("down", &half, leaf(a), leaf(b));
+    assert_eq!(layout(&otto.drag_pane(3, 2, 0.5, 0.1)), split("right", &outer, leaf(1), over(3, 2)));
+    let reply = otto.drag_pane(3, 1, 0.5, 0.9);
+    assert_eq!(layout(&reply), split("right", &outer, over(1, 3), leaf(2)));
+    assert_eq!(reply["state"]["focused"], 3);
+
+    // The centre swaps the two.
+    let reply = otto.drag_pane(2, 3, 0.5, 0.5);
+    assert_eq!(layout(&reply), split("right", &outer, over(1, 2), leaf(3)));
+    assert_eq!((reply["state"]["focused"].as_u64(), reply["drag"].clone()), (Some(2), Value::Null));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_header_dragged_onto_a_tab_moves_the_pane_there() {
+    let otto = Otto::launch("drag-tabs");
+    // Tab 0: 1 | 2. Tab 1: 3.
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "new_tab"}));
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "select_tab", "index": 0}));
+    let to_tab = |pane: u64, tab: usize| {
+        let state = otto.drawn();
+        assert_eq!(state["tabs"].as_array().map(Vec::len), Some(2), "{}", state["tabs"]);
+        otto.drag(at(rect(&state["headers"][pane.to_string()]), 0.5, 0.5), at(rect(&state["tabs"][tab]), 0.5, 0.5))
+    };
+    let sorted = |reply: &Value| -> Vec<Vec<u64>> {
+        let tabs = reply["tab_panes"].as_array().expect("tab_panes").iter();
+        tabs.map(|t| {
+            let mut ids: Vec<u64> = t.as_array().expect("tab").iter().filter_map(Value::as_u64).collect();
+            ids.sort_unstable();
+            ids
+        })
+        .collect()
+    };
+
+    // Its own tab: nothing moves.
+    let before = otto.call(json!({"cmd": "state"}));
+    let reply = to_tab(2, 0);
+    assert_eq!((&reply["state"]["layout"], &reply["tab_panes"]), (&before["state"]["layout"], &before["tab_panes"]));
+    assert_eq!(reply["drag"], Value::Null);
+
+    // Another tab: the pane goes there, and that tab comes forward, as with ⌘⇧⌥1..9.
+    let reply = to_tab(2, 1);
+    assert_eq!(sorted(&reply), [vec![1], vec![2, 3]]);
+    assert_eq!((reply["state"]["active"].as_u64(), reply["state"]["focused"].as_u64()), (Some(1), Some(2)));
+    assert_eq!(reply["drag"], Value::Null);
+    otto.wait_for("2 and 3 drawn", |o| Some(o.call(json!({"cmd": "state"}))).filter(|s| s["headers"]["2"].is_array()));
+
+    // The only pane of a tab: the tab stays, empty, and shows the home screen.
+    otto.call(json!({"cmd": "select_tab", "index": 0}));
+    let reply = to_tab(1, 1);
+    assert_eq!(sorted(&reply), [vec![], vec![1, 2, 3]]);
+    assert_eq!((reply["state"]["active"].as_u64(), reply["drag"].clone()), (Some(1), Value::Null));
+    let reply = otto.call(json!({"cmd": "select_tab", "index": 0}));
+    assert_eq!(reply["state"]["layout"], Value::Null);
+    assert_ne!(reply["home"], Value::Null, "the home screen");
+    assert_eq!(otto.drawn()["headers"], json!({}));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_pane_drag_that_ends_nowhere_changes_nothing() {
+    let otto = Otto::launch("drag-cancel");
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    let before = otto.drawn();
+    let same = |what: &str, reply: &Value| {
+        assert_eq!(reply["drag"], Value::Null, "{what}: no drop zone is left");
+        assert_eq!(reply["state"]["layout"], before["state"]["layout"], "{what}");
+        assert_eq!(reply["tab_panes"], before["tab_panes"], "{what}");
+    };
+    let (one, two) = (rect(&before["frames"]["1"]), rect(&before["frames"]["2"]));
+    let from = at(rect(&before["headers"]["2"]), 0.5, 0.5);
+
+    // Esc, then the release.
+    otto.mouse("down", from);
+    otto.mouse("move", at(two, 0.2, 0.3));
+    assert_eq!(otto.mouse("move", at(one, 0.5, 0.9))["drag"], json!({"target": 1, "zone": "bottom"}));
+    same("esc", &otto.call(json!({"cmd": "key", "keys": "escape"})));
+    same("a move after esc", &otto.mouse("move", at(one, 0.5, 0.1)));
+    same("the release after esc", &otto.mouse("up", at(one, 0.5, 0.1)));
+
+    // The sidebar, left of the panes.
+    assert!(one[0] > 40.0, "a sidebar left of pane 1: {one:?}");
+    same("the sidebar", &otto.drag(from, [one[0] / 2.0, one[1] + one[3] / 2.0]));
+    // The gap between the two panes.
+    let gap = (one[0] + one[2] + two[0]) / 2.0;
+    assert!(one[0] + one[2] < gap && gap < two[0], "a gap: {one:?} {two:?}");
+    same("the gap", &otto.drag(from, [gap, one[1] + one[3] / 2.0]));
+    // Outside the window.
+    let window = rect(&before["window"]);
+    same("outside", &otto.drag(from, [window[2] + 60.0, window[3] + 60.0]));
+    same("above", &otto.drag(from, [one[0] + 20.0, -40.0]));
+
+    // The pointer is free again: a click focuses, a new drag drops.
+    assert_eq!(otto.click(at(rect(&before["bounds"]["1"]), 0.5, 0.5), 1)["state"]["focused"], 1);
+    assert_eq!(otto.drag_pane(2, 1, 0.1, 0.5)["tab_panes"], json!([[2, 1]]));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_click_on_a_header_or_its_close_button_is_not_a_drag() {
+    let otto = Otto::launch("drag-clicks");
+    for _ in 0..3 {
+        otto.call(json!({"cmd": "split", "kind": "empty"}));
+    }
+    let before = otto.drawn();
+    assert_eq!(before["state"]["focused"], 3);
+    let unmoved = |what: &str, reply: &Value| {
+        assert_eq!(reply["drag"], Value::Null, "{what}");
+        assert_eq!(reply["state"]["layout"], before["state"]["layout"], "{what}");
+    };
+    let header = |id: u64| at(rect(&before["headers"][id.to_string()]), 0.3, 0.5);
+
+    // A click focuses.
+    let reply = otto.click(header(1), 1);
+    unmoved("a click", &reply);
+    assert_eq!(reply["state"]["focused"], 1);
+    // So does a double-click.
+    otto.click(header(2), 1);
+    let reply = otto.click(header(2), 2);
+    unmoved("a double-click", &reply);
+    assert_eq!(reply["state"]["focused"], 2);
+    // A press that moves 2 pt, GPUI's limit, is still a click.
+    let p = header(3);
+    otto.mouse("down", p);
+    unmoved("2 pt", &otto.mouse("move", [p[0] + 2.0, p[1]]));
+    let reply = otto.mouse("up", [p[0] + 2.0, p[1]]);
+    unmoved("2 pt, released", &reply);
+    assert_eq!(reply["state"]["focused"], 3);
+
+    // A press on × that moves 5 pt inside it closes the pane; no drag starts.
+    let close = rect(&before["closes"]["2"]);
+    assert!(close[2] >= 8.0 && close[3] >= 4.0, "×: {close:?}");
+    let (down, up) = ([close[0] + 1.5, close[1] + close[3] / 2.0], [close[0] + 6.5, close[1] + close[3] / 2.0]);
+    otto.mouse("down", down);
+    assert_eq!(otto.mouse("move", up)["drag"], Value::Null);
+    let reply = otto.mouse("up", up);
+    assert_eq!((reply["drag"].clone(), reply["tab_panes"].clone()), (Value::Null, json!([[1, 3]])));
+
+    // A press on × that leaves it, over another pane: no close, no drag, no drop.
+    let state = otto.drawn();
+    let close = at(rect(&state["closes"]["3"]), 0.5, 0.5);
+    let far = at(rect(&state["frames"]["1"]), 0.5, 0.5);
+    otto.mouse("down", close);
+    assert_eq!(otto.mouse("move", far)["drag"], Value::Null);
+    let reply = otto.mouse("up", far);
+    assert_eq!((reply["drag"].clone(), reply["tab_panes"].clone()), (Value::Null, json!([[1, 3]])));
+    assert_eq!(reply["state"]["layout"], state["state"]["layout"]);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_selection_drag_across_a_header_moves_no_pane() {
+    let otto = Otto::launch("drag-select");
+    // 1 over 2, both terminals.
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "split", "axis": "down"}));
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "echo alpha beta\r"}));
+    otto.wait_for("the output", |o| Some(term1(o)).filter(|t| shows(t, "alpha beta")));
+    let before = otto.drawn();
+    let (cells, header, below) =
+        (rect(&before["bounds"]["1"]), rect(&before["headers"]["2"]), rect(&before["bounds"]["2"]));
+    assert!(cells[1] < header[1] && header[1] < below[1], "1 over 2: {before}");
+
+    // From the top-left cell of 1, down over 2's header, into 2.
+    otto.mouse("down", [cells[0] + 2.0, cells[1] + 2.0]);
+    for p in [at(cells, 0.5, 0.5), at(header, 0.5, 0.5), at(header, 0.2, 0.5), at(below, 0.5, 0.5)] {
+        let reply = otto.mouse("move", p);
+        assert_eq!(reply["drag"], Value::Null, "at {p:?}");
+        assert_eq!(reply["state"]["layout"], before["state"]["layout"]);
+    }
+    let reply = otto.mouse("up", at(below, 0.5, 0.5));
+    assert_eq!((reply["drag"].clone(), reply["tab_panes"].clone()), (Value::Null, json!([[1, 2]])));
+    assert_eq!(reply["state"]["layout"], before["state"]["layout"]);
+    let selected = reply["terminals"]["1"]["selection"].as_str().unwrap_or_default();
+    assert!(selected.contains("alpha beta"), "the drag selected text in 1: {selected:?}");
+    assert_eq!(reply["terminals"]["2"]["selection"], Value::Null);
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn terminal_runs_a_typed_command() {

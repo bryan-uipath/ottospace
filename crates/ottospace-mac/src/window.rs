@@ -4,8 +4,84 @@ use std::ffi::c_void;
 
 use objc2::{AnyThread, MainThreadMarker};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSFloatingWindowLevel, NSImage, NSView, NSWindowCollectionBehavior,
+    NSApplication, NSApplicationActivationPolicy, NSEvent, NSEventModifierFlags, NSEventType, NSFloatingWindowLevel,
+    NSImage, NSView, NSWindowCollectionBehavior,
 };
+use objc2_foundation::NSPoint;
+
+/// One pointer event for `send_mouse`. `x`, `y`: points from the top-left of the view.
+#[derive(Clone, Copy, Debug)]
+pub struct Mouse {
+    pub kind: MouseKind,
+    /// The right button, not the left: the one pressed, released, or held during a move.
+    pub right: bool,
+    pub x: f64,
+    pub y: f64,
+    pub clicks: isize,
+    pub cmd: bool,
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub function: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MouseKind {
+    Down,
+    Up,
+    /// A move with no button held.
+    Move,
+    /// A move with the button held.
+    Drag,
+}
+
+/// Hands the view a pointer event as AppKit would, by calling its own handler (`mouseDown:` and
+/// the like). The event is made here and never posted: the window server, other apps and the
+/// real pointer do not see it. The handler runs before this returns.
+///
+/// # Safety
+/// `ns_view` must point to a live `NSView`, and this must run on the main thread, outside any
+/// borrow the view's handler takes (for a GPUI view: not inside an `App` update).
+pub unsafe fn send_mouse(ns_view: *mut c_void, mouse: Mouse) {
+    let view = unsafe { &*(ns_view as *const NSView) };
+    let kind = match (mouse.kind, mouse.right) {
+        (MouseKind::Down, false) => NSEventType::LeftMouseDown,
+        (MouseKind::Down, true) => NSEventType::RightMouseDown,
+        (MouseKind::Up, false) => NSEventType::LeftMouseUp,
+        (MouseKind::Up, true) => NSEventType::RightMouseUp,
+        (MouseKind::Move, _) => NSEventType::MouseMoved,
+        (MouseKind::Drag, false) => NSEventType::LeftMouseDragged,
+        (MouseKind::Drag, true) => NSEventType::RightMouseDragged,
+    };
+    let mut flags = NSEventModifierFlags::empty();
+    for (held, flag) in [
+        (mouse.cmd, NSEventModifierFlags::Command),
+        (mouse.ctrl, NSEventModifierFlags::Control),
+        (mouse.alt, NSEventModifierFlags::Option),
+        (mouse.shift, NSEventModifierFlags::Shift),
+        (mouse.function, NSEventModifierFlags::Function),
+    ] {
+        if held {
+            flags |= flag;
+        }
+    }
+    // AppKit measures from the bottom-left.
+    let at = NSPoint::new(mouse.x, view.frame().size.height - mouse.y);
+    let number = view.window().map_or(0, |window| window.windowNumber());
+    let event = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+        kind, at, flags, 0.0, number, None, 0, mouse.clicks, 1.0,
+    );
+    let Some(event) = event else { return };
+    match (mouse.kind, mouse.right) {
+        (MouseKind::Down, false) => view.mouseDown(&event),
+        (MouseKind::Down, true) => view.rightMouseDown(&event),
+        (MouseKind::Up, false) => view.mouseUp(&event),
+        (MouseKind::Up, true) => view.rightMouseUp(&event),
+        (MouseKind::Move, _) => view.mouseMoved(&event),
+        (MouseKind::Drag, false) => view.mouseDragged(&event),
+        (MouseKind::Drag, true) => view.rightMouseDragged(&event),
+    }
+}
 
 /// Makes the green button zoom the window instead of entering native fullscreen.
 /// Native fullscreen moves the window to its own Space, where other apps' windows cannot follow,

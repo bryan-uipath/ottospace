@@ -22,6 +22,7 @@ import type {
   Mode,
   Model,
   Pane,
+  PaneId,
   PaneKind,
   PickItem,
   Picker,
@@ -39,6 +40,7 @@ import type {
   Truncated,
   WaitReply,
   Worktree,
+  Zone,
 } from "./types.ts";
 
 type Fields = Record<string, unknown>;
@@ -363,6 +365,16 @@ function axNode(value: unknown, at: string): AxNode {
   return node;
 }
 
+function zone(value: unknown, at: string): Zone {
+  if (value === "left" || value === "right" || value === "top" || value === "bottom" || value === "center") return value;
+  throw wrong(at, "a zone", value);
+}
+
+function drag(value: unknown, at: string): { target: PaneId | null; zone: Zone | null } {
+  const o = fields(value, at);
+  return { target: orNull(num)(o.target, `${at}.target`), zone: orNull(zone)(o.zone, `${at}.zone`) };
+}
+
 export function snapshot(value: unknown): Snapshot {
   const o = fields(value, "reply");
   return {
@@ -371,6 +383,10 @@ export function snapshot(value: unknown): Snapshot {
     state: model(o.state, "state"),
     bounds: map(rect)(o.bounds, "bounds"),
     frames: map(rect)(o.frames, "frames"),
+    headers: map(rect)(o.headers, "headers"),
+    closes: map(rect)(o.closes, "closes"),
+    tabs: list(rect)(o.tabs, "tabs"),
+    drag: orNull(drag)(o.drag, "drag"),
     tab_panes: list(list(num))(o.tab_panes, "tab_panes"),
     window: rect(o.window, "window"),
     parking: pair(o.parking, "parking"),

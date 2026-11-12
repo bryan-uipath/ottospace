@@ -147,6 +147,30 @@ pub enum Request {
         pane: Option<PaneId>,
         lines: f32,
     },
+    /// One pointer event at `x`, `y`, in points from the top-left of ottospace's window, as the
+    /// state gives rects: `{"cmd":"mouse","action":"down","x":300,"y":60}`. A `move` between a
+    /// `down` and its `up` is a drag. It goes to ottospace's own views only: never to another
+    /// app's window, a live hosted one included, and the real pointer does not move. As on a
+    /// Mac, a left press with `ctrl` is a right press.
+    Mouse {
+        action: MouseAction,
+        x: f32,
+        y: f32,
+        #[serde(default)]
+        button: Button,
+        #[serde(default = "one")]
+        clicks: usize,
+        #[serde(default)]
+        modifiers: Vec<Modifier>,
+    },
+    /// A whole left-button drag: a press at `from`, `steps` moves along the line, a release at
+    /// `to`. Same reach as `mouse`.
+    Drag {
+        from: [f32; 2],
+        to: [f32; 2],
+        #[serde(default = "eight")]
+        steps: usize,
+    },
     /// Reads the repository list from disk again. It is `state.repos` in the reply.
     Repos,
     /// Opens a terminal in a listed repository or worktree, by its `path` from `state.repos`.
@@ -257,12 +281,42 @@ fn one() -> usize {
     1
 }
 
+fn eight() -> usize {
+    8
+}
+
 fn three() -> u8 {
     3
 }
 
 fn captured() -> State {
     State::Captured
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MouseAction {
+    Down,
+    Move,
+    Up,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Button {
+    #[default]
+    Left,
+    Right,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Modifier {
+    Cmd,
+    Ctrl,
+    Alt,
+    Shift,
+    Fn,
 }
 
 /// Pane kinds a client may create. App panes come from `open_app`.

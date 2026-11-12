@@ -347,3 +347,192 @@ fn a_canary_window_is_hosted_entered_left_and_restored() {
     otto.call(json!({"cmd": "quit"}));
     wait_for("the window to return to its frame", || frame(0).filter(|f| (0..4).all(|i| close(f[i], original[i]))));
 }
+
+/// The middle of a rect.
+fn middle(r: [f64; 4]) -> [f64; 2] {
+    [r[0] + r[2] / 2.0, r[1] + r[3] / 2.0]
+}
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn a_hosted_pane_is_dragged_by_its_header() {
+    // A folder of the test's own, with one rule: the canary's second window is never a pane.
+    // It is the other app's window over ottospace at the end.
+    let home = std::env::temp_dir().join(format!("otto-apps-drag-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).expect("make the folder");
+    let settings = json!({"windows": [{"app": CANARY, "title": "Canary 2", "do": "ignore"}]});
+    std::fs::write(home.join("settings.json"), settings.to_string()).expect("write settings");
+
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-drag", "CANARY_SOCKET", &[]);
+    let canary_window = |index: usize| canary.call(json!({"cmd": "state"}))["windows"][index].clone();
+    let frame = |index: usize| rect(&canary_window(index)["bounds"]);
+    wait_for("the canary window", || frame(0));
+    let otto = Proc::launch(
+        env!("CARGO_BIN_EXE_ottospace"),
+        "otto-drag",
+        "OTTOSPACE_SOCKET",
+        &[
+            ("OTTOSPACE_E2E", "1"),
+            ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string()),
+            ("OTTOSPACE_RETURN_KEY", "f19"),
+            ("OTTOSPACE_HOME", home.to_str().expect("a plain path")),
+        ],
+    );
+    let state = || otto.call(json!({"cmd": "state"}));
+    let mouse = |action: &str, p: [f64; 2]| otto.call(json!({"cmd": "mouse", "action": action, "x": p[0], "y": p[1]}));
+    // The state after a fresh frame: a pointer move outside the window draws one first.
+    let drawn = || mouse("move", [-50.0, -50.0]);
+    let of = |state: &Value, key: &str, id: u64| rect(&state[key][id.to_string()]).filter(|b| b[2] > 1.0);
+    let part = |r: [f64; 4], fx: f64, fy: f64| [r[0] + r[2] * fx, r[1] + r[3] * fy];
+    // Drags pane `source` by its header to fractions `fx`, `fy` of pane `target`. Injected: see `mouse`.
+    let drag_pane = |source: u64, target: u64, fx: f64, fy: f64| {
+        let state = drawn();
+        let from = middle(of(&state, "headers", source).expect("the header"));
+        let to = part(of(&state, "frames", target).expect("the target"), fx, fy);
+        otto.call(json!({"cmd": "drag", "from": from, "to": to}))
+    };
+    let leaf = |id: u64| json!({"leaf": id});
+    let split = |axis: &str, a: u64, b: u64| json!({"split": {"axis": axis, "ratio": 0.5, "a": leaf(a), "b": leaf(b)}});
+    let spot = point(&state()["parking"]).expect("parking spot");
+    let at_spot = |f: &[f64; 4]| close(f[0], spot[0]) && f[1] <= spot[1] && f[1] > spot[1] - 200.0;
+    let crop = || state()["crop"]["1"].as_f64().filter(|c| (16.0..=40.0).contains(c));
+    // Parked: the real window is at the far corner, as large as the pane's content plus its title
+    // bar. Both ottospace's reading of the window and the canary's own agree on the size.
+    let parked = |what: &str| {
+        wait_for(what, || {
+            let state = state();
+            let (body, c) = (of(&state, "bounds", 1)?, crop()?);
+            let fits = |f: &[f64; 4]| close(f[2], body[2]) && close(f[3], body[3] + c);
+            rect(&state["hosted"]["1"]).filter(|f| fits(f) && at_spot(f))?;
+            frame(0).filter(fits).map(|_| body)
+        })
+    };
+    // Live: the real window is over the pane, its title bar over the header.
+    let live = |what: &str| {
+        wait_for(what, || {
+            let state = state();
+            let (window, body, c) = (rect(&state["window"])?, of(&state, "bounds", 1)?, crop()?);
+            frame(0).filter(|f| close(f[0], window[0] + body[0]) && close(f[1], window[1] + body[1] - c))
+        })
+    };
+    let no_clicks = |what: &str| assert_eq!(canary_window(0)["clicks"], json!([]), "{what}: a click reached the app");
+
+    // 1 (the canary) | 2 (empty).
+    otto.call(json!({"cmd": "open_app", "name": CANARY}));
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    let narrow = parked("the window to park at pane size");
+
+    // (a) Not live. Dropped on the bottom of 2, the pane is as wide as both were, and the real
+    // window is sized again for it, still parked.
+    let reply = drag_pane(1, 2, 0.5, 0.9);
+    assert_eq!(reply["state"]["layout"], split("down", 2, 1), "{reply}");
+    assert_eq!((reply["mode"].clone(), reply["state"]["live"].clone()), (json!("normal"), Value::Null));
+    let wide = parked("the window to park at the new pane's size");
+    assert!(wide[2] > narrow[2] * 1.5 && wide[3] < narrow[3] * 0.7, "{narrow:?} -> {wide:?}");
+    no_clicks("a drag of a parked pane");
+
+    // (c) Live, the app's own title bar covers the pane's header.
+    assert_eq!(otto.call(json!({"cmd": "enter", "pane": 1}))["mode"], "app");
+    let over = live("the window to cover its pane");
+    let before = drawn();
+    let window = rect(&before["window"]).expect("ottospace window frame");
+    let header = of(&before, "headers", 1).expect("the header");
+    let header = [window[0] + header[0], window[1] + header[1], header[2], header[3]];
+    let bar = crop().expect("a title bar");
+    assert!(
+        over[0] <= header[0] + 2.0
+            && over[1] <= header[1] + 2.0
+            && over[0] + over[2] >= header[0] + header[2] - 2.0
+            && over[1] + bar >= header[1] + header[3] - 2.0,
+        "the title bar {over:?} (top {bar}) covers the header {header:?}"
+    );
+    // So the user's press there goes to the app. A real click shows it: ottospace gets nothing
+    // (a click on ottospace would take the keyboard back and park the app). Needs `cliclick`.
+    if Command::new("cliclick").arg("-V").output().is_ok() {
+        let front = format!("set frontmost of (first process whose unix id is {}) to true", canary.child.id());
+        wait_for("the canary to be in front", || {
+            press(&front);
+            (canary_window(0)["active"] == true).then_some(())
+        });
+        let p = middle(header);
+        let status = Command::new("cliclick").arg(format!("c:{:.0},{:.0}", p[0], p[1])).status().expect("cliclick");
+        assert!(status.success(), "cliclick failed");
+        std::thread::sleep(Duration::from_millis(700));
+        let after = state();
+        assert_eq!((after["mode"].clone(), after["state"]["live"].clone()), (json!("app"), json!(1)), "still live");
+        assert_eq!((&after["drag"], &after["state"]["layout"]), (&Value::Null, &before["state"]["layout"]));
+    } else {
+        eprintln!("cliclick not found: a real press on a live app's title bar not checked");
+    }
+
+    // (b) A drag that does start while the app is live (injected: it passes the real window by)
+    // parks the app, and the app stays parked after the drop.
+    let from = middle(of(&before, "headers", 1).expect("the header"));
+    let to = part(of(&before, "frames", 2).expect("pane 2"), 0.1, 0.5);
+    mouse("down", from);
+    mouse("move", [from[0] + 8.0, from[1] + 8.0]);
+    let reply = mouse("move", to);
+    assert_eq!(reply["drag"], json!({"target": 2, "zone": "left"}), "{reply}");
+    assert_eq!((reply["mode"].clone(), reply["state"]["live"].clone()), (json!("normal"), Value::Null), "parked");
+    let reply = mouse("up", to);
+    assert_eq!(reply["state"]["layout"], split("right", 1, 2), "{reply}");
+    assert_eq!((reply["mode"].clone(), reply["state"]["live"].clone()), (json!("normal"), Value::Null));
+    parked("the window to park at the dropped pane's size");
+    std::thread::sleep(Duration::from_millis(800));
+    let after = state();
+    assert_eq!((after["mode"].clone(), after["state"]["live"].clone()), (json!("normal"), Value::Null), "it stays");
+    // One click on the pane goes in again, at its new place. Injected, so nothing is clicked in the app.
+    let body = of(&drawn(), "bounds", 1).expect("pane 1");
+    mouse("down", middle(body));
+    let reply = mouse("up", middle(body));
+    assert_eq!((reply["mode"].clone(), reply["state"]["live"].clone()), (json!("app"), json!(1)));
+    live("the window to cover the pane's new place");
+    no_clicks("an injected click on an app pane");
+
+    // (c) After leaving, the header is ottospace's again: the window is at the corner, and a drag works.
+    assert_eq!(otto.call(json!({"cmd": "leave"}))["mode"], "normal");
+    parked("the window to park after leaving");
+    assert_eq!(drag_pane(1, 2, 0.5, 0.5)["state"]["layout"], split("right", 2, 1));
+    parked("the window to park after the swap");
+
+    // Another app's window over ottospace: the canary's second, which is no pane.
+    canary.call(json!({"cmd": "open_window"}));
+    let other = wait_for("the second canary window", || frame(1));
+    std::thread::sleep(Duration::from_millis(1200));
+    assert_eq!(state()["tab_panes"], json!([[2, 1]]), "the second window is no pane");
+    if Command::new("cliclick").arg("-V").output().is_ok() {
+        let front = format!("set frontmost of (first process whose unix id is {}) to true", canary.child.id());
+        wait_for("the canary to be in front", || {
+            press(&front);
+            (canary_window(0)["active"] == true || canary_window(1)["active"] == true).then_some(())
+        });
+        // The app came forward: ottospace may give it pane 1 (its first window, live). Let that settle.
+        std::thread::sleep(Duration::from_millis(1500));
+        let before = drawn();
+        let window = rect(&before["window"]).expect("ottospace window frame");
+        let on_screen = |p: [f64; 2]| [window[0] + p[0], window[1] + p[1]];
+        let inside = |r: [f64; 4], p: [f64; 2]| r[0] < p[0] && p[0] < r[0] + r[2] && r[1] < p[1] && p[1] < r[1] + r[3];
+        // From 2's header, which the other window leaves free, to a point of pane 1 under it.
+        let from = on_screen(middle(of(&before, "headers", 2).expect("the header")));
+        let target = of(&before, "frames", 1).expect("pane 1");
+        let to = on_screen(part(target, 0.35, 0.5));
+        assert!(!inside(other, from) && inside(other, to), "{other:?} covers {to:?}, not {from:?}");
+        // The one real drag of the suite: the pointer itself, through the window server.
+        let step = |verb: &str, p: [f64; 2]| format!("{verb}:{:.0},{:.0}", p[0], p[1]);
+        let via = [from[0] + 12.0, from[1] + 12.0];
+        let half = [(from[0] + to[0]) / 2.0, (from[1] + to[1]) / 2.0];
+        let moves = [step("dd", from), step("dm", via), step("dm", half), step("dm", to), step("du", to)];
+        let status = Command::new("cliclick").args(["-w", "120"]).args(&moves).status().expect("run cliclick");
+        assert!(status.success(), "cliclick failed");
+        // A press on ottospace brings its window forward, and the pointer is its own until the
+        // release: the pane is dropped where the other window was (the centre of 1: a swap), and
+        // that window gets nothing.
+        let dropped = wait_for("the drop", || Some(state()).filter(|s| s["state"]["layout"] == split("right", 1, 2)));
+        assert_eq!((dropped["drag"].clone(), dropped["state"]["focused"].clone()), (Value::Null, json!(2)));
+        assert_eq!(canary_window(1)["clicks"], json!([]), "the release did not reach the other window");
+    } else {
+        eprintln!("cliclick not found: a real drag released where another app's window was not checked");
+    }
+    let _ = std::fs::remove_dir_all(&home);
+}

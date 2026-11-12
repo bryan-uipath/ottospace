@@ -13,7 +13,10 @@ import type {
   CaptureReply,
   CellArgs,
   Dir,
+  DragArgs,
+  DropPaneArgs,
   InboxReply,
+  MouseArgs,
   MouseDownArgs,
   MovePaneArgs,
   OpenAppArgs,
@@ -187,6 +190,10 @@ export class Client {
   equalize(): Promise<Snapshot> {
     return this.snapshot({ cmd: "equalize" });
   }
+  /** What dragging `source` by its header onto `target` does: an edge splits, `center` swaps. */
+  dropPane(args: DropPaneArgs): Promise<Snapshot> {
+    return this.snapshot({ cmd: "drop_pane", ...args });
+  }
   /** Hosts a running app's main window in a pane. It moves the user's real window. */
   openApp(args: OpenAppArgs): Promise<Snapshot> {
     return this.snapshot({ cmd: "open_app", ...args });
@@ -248,6 +255,14 @@ export class Client {
   }
   scroll(args: ScrollArgs): Promise<Snapshot> {
     return this.snapshot({ cmd: "scroll", ...args });
+  }
+  /** One pointer event in ottospace's own window. It never reaches another app's window. */
+  mouse(args: MouseArgs): Promise<Snapshot> {
+    return this.snapshot({ cmd: "mouse", ...args });
+  }
+  /** A press at `from`, moves along the line, a release at `to`. Same reach as `mouse`. */
+  drag(args: DragArgs): Promise<Snapshot> {
+    return this.snapshot({ cmd: "drag", ...args });
   }
   /** Reads the repository list from disk again: `state.repos` in the reply. */
   repos(): Promise<Snapshot> {
