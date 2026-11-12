@@ -12,8 +12,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # Asset name must match install.sh: ottospace-<version>-<target>.zip.
-  TARGET: aarch64-apple-darwin
 
 jobs:
   release:
@@ -42,18 +40,11 @@ jobs:
             echo "::error::Tag $TAG does not match crate version $version. Bump the version in Cargo.toml or tag v$version."
             exit 1
           fi
-          echo "VERSION=$version" >> "$GITHUB_ENV"
-      - name: Build
-        run: scripts/bundle.sh
-      # ditto keeps the bundle layout and its signature intact.
+      # The same files a build of main publishes: binary, app, BUILD, SHA256SUMS.
       - name: Package
-        run: |
-          asset="ottospace-$VERSION-$TARGET.zip"
-          mkdir dist
-          ditto -c -k --keepParent target/release/bundle/ottospace.app "dist/$asset"
-          (cd dist && shasum -a 256 "$asset" > "$asset.sha256")
-          cat "dist/$asset.sha256"
-          ls -l dist
+        env:
+          OTTOSPACE_COMMIT: ${{ github.sha }}
+        run: scripts/package.sh dist
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}

@@ -1,0 +1,112 @@
+name: Build
+
+# Builds what `scripts/osi` installs. A pull request's build is a workflow artifact
+# (`osi install pr <n>`); a push to main also replaces the assets of the `main-latest`
+# prerelease (`osi install main`). The file name and the artifact name are read by osi.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# pull_request, never pull_request_target: a fork's run gets a read-only token and no secrets.
+permissions: {}
+
+# A new push to a pull request cancels its older build. A build of main that has started
+# finishes; one still waiting is replaced by a newer push. publish-main publishes only the tip.
+concurrency:
+  group: build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  scripts:
+    # install.sh and osi against fixture builds in a temp directory. No network.
+    runs-on: macos-26
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test osi
+        run: scripts/test-osi.sh
+
+  build:
+    runs-on: macos-26
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      # A pull request builds its head commit, not the merge with main: osi shows that commit
+      # before it installs, and checks that the build reports it.
+      COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.COMMIT }}
+          persist-credentials: false
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+      # Only main writes the cache; pull requests read main's. Keeps the cache quota for main.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Package
+        env:
+          OTTOSPACE_COMMIT: ${{ env.COMMIT }}
+        run: scripts/package.sh dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ottospace-aarch64-apple-darwin
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-main:
+    # The only job with a write token. It runs no code from the repository: it uploads what
+    # `build` made.
+    needs: [scripts, build]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: publish-main
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ottospace-aarch64-apple-darwin
+          path: dist
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: main-latest
+        run: |
+          set -euo pipefail
+          # A run that finishes late must not replace a newer build.
+          tip="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
+          if [ "$tip" != "$GITHUB_SHA" ]; then
+            echo "main is at $tip, this build is $GITHUB_SHA: not publishing."
+            exit 0
+          fi
+          notes="Built from main at $GITHUB_SHA. Replaced on every push to main. Install: \`osi install main\` (see the README)."
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # Move the tag, then replace the assets. osi checks every file against SHA256SUMS,
+            # so an install during the replacement fails and changes nothing.
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" -f sha="$GITHUB_SHA" -F force=true --silent
+            gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease --notes "$notes"
+          else
+            # A prerelease is never "latest", so `osi install stable` does not see it.
+            gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --prerelease --title "main (rolling build)" --notes "$notes"
+          fi
+          cat dist/BUILD

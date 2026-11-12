@@ -5,7 +5,7 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 
-cargo build --release -p ottospace --bin ottospace
+cargo build --release --locked -p ottospace --bin ottospace
 
 # Package ID ends in the version, e.g. "path+file:///.../crates/ottospace#0.1.0".
 version="$(cargo pkgid -p ottospace)"

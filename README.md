@@ -8,33 +8,57 @@ Agents and tests can drive it over a local control socket. Rust + [GPUI](https:/
 
 ## Install
 
-Apple Silicon, macOS 14 or later. Works once the repository is public:
+Apple Silicon, macOS 14 or later:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/bryan-uipath/ottospace/main/install.sh | sh
 ```
 
-The script downloads the latest release, checks its SHA-256, and installs:
+This installs two commands into `~/.local/bin`, with no `sudo`:
 
-- `~/Applications/ottospace.app`, replacing an older copy.
-- `~/.local/bin/ottospace`, a wrapper for the app's binary, so `ottospace ctl ...` works. The script
-  tells you if `~/.local/bin` is not on your `PATH`.
+- `osi`, the ottospace installer.
+- `ottospace`, the latest build of `main`. There is no tagged release yet.
 
-It needs no `sudo` and is safe to run again to update. To pin a version, run
-`... | OTTOSPACE_VERSION=v0.1.0 sh`. Then open the app and grant it Accessibility and Screen
-Recording (see Requirements below; the permissions go to ottospace, not the terminal).
+Then run `ottospace` from a terminal. It uses that terminal's permissions: grant the terminal
+Accessibility and Screen Recording once (see Requirements below), and updates never ask again.
 
-Uninstall:
+`osi` installs other builds and switches between them:
 
 ```sh
-rm -rf ~/Applications/ottospace.app
-rm -f ~/.local/bin/ottospace
+osi install main      # the latest build of main
+osi install pr 30     # the build of a pull request. Needs gh, signed in
+osi install stable    # the latest release; osi install v0.1.0 for one release
+osi current           # what is installed: channel, version, commit, date
+osi update            # install the channel's newer build, if there is one
+osi update --check    # only say whether there is one
+osi rollback          # put the previous build back; again to undo
+osi uninstall         # remove ottospace and osi; settings and tasks are kept
+osi self-update       # replace osi with the one on main
 ```
 
-Releases are signed ad hoc, not with a Developer ID, and not notarized. A zip downloaded in a
-browser gets a quarantine flag, and Gatekeeper refuses to open the app. A file fetched with `curl`
-carries no such flag, so the install script works without it. Each release is a new identity to
-macOS, so you may have to grant the permissions again after an update.
+- Every download is checked against the SHA-256 published in the same release. A failed check
+  changes nothing. The check catches a damaged or half-published download. It does not catch a
+  compromised release: whoever can replace the build can replace its checksum.
+- `install.sh` and `osi self-update` fetch `osi` from `main` over HTTPS with no checksum at all.
+  You trust this repository and GitHub, as with any `curl | sh`.
+- The new binary replaces the old one by rename. A running ottospace keeps the build it started
+  with: quit it (`ottospace ctl '{"cmd":"quit"}'` puts hosted windows back) and start it again.
+- **A pull request build runs that pull request's code with your terminal's permissions.** `osi`
+  shows the author and the head commit first. It refuses a pull request from a fork unless you
+  pass `--allow-fork` and type the commit. Read the diff before you do.
+- `ottospace --version` prints the version, the commit and the commit's date.
+- `osi` keeps its records in `~/.ottospace/install`.
+
+To also get `ottospace.app` in `~/Applications`, add `--app` (with the one-liner:
+`... | OTTOSPACE_APP=1 sh`). The app has a Dock icon and its own identity, so macOS asks for both
+permissions for ottospace itself. Builds are signed ad hoc, not with a Developer ID, and not
+notarized: each build is a new identity, so expect to grant both again after every update. That
+is why the bare command is the default. A zip downloaded in a browser gets a quarantine flag and
+Gatekeeper refuses to open the app; `osi` uses `curl`, which sets no such flag. `osi` will not
+replace an `ottospace.app` it did not install (one from `scripts/bundle.sh`, say) without
+`--force`. Once it has installed the app, `osi update` keeps it at the same build as the command.
+
+How this works and why: [docs/ai/install-and-update.md](docs/ai/install-and-update.md).
 
 ## What it does
 
@@ -125,9 +149,14 @@ and its own identity.
 1. Bump `version` in the workspace `Cargo.toml` and merge it to `main`.
 2. Tag that commit and push the tag: `git tag v0.2.0 && git push origin v0.2.0`.
 
-The release workflow builds the app with `scripts/bundle.sh` and attaches
-`ottospace-<version>-aarch64-apple-darwin.zip` and its `.sha256` to a GitHub Release. It fails if
-the tag does not match the crate version.
+The release workflow runs `scripts/package.sh` and attaches four files to a GitHub Release:
+`ottospace-aarch64-apple-darwin.tar.gz` (the command), `ottospace-aarch64-apple-darwin.app.zip`
+(the app), `BUILD` (version, commit, date) and `SHA256SUMS`. It fails if the tag does not match
+the crate version. `osi install stable` then installs it.
+
+Every push to `main` publishes the same four files to the `main-latest` prerelease, whose tag
+moves to the new commit (`git fetch --tags` then reports a clobbered tag: use `--force`). Every
+pull request gets them as a workflow artifact, kept 14 days.
 
 ## Using it
 

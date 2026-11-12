@@ -1,0 +1,614 @@
+#!/bin/sh
+# ottospace-installer
+# osi: installs builds of ottospace and switches between them. No sudo.
+#   osi install main         the latest build of the main branch
+#   osi install pr 30        the build of a pull request (needs gh, signed in)
+#   osi install v0.1.0       a release; `osi install stable` is the latest release
+#   osi current | update | rollback | uninstall | self-update
+# Design and trade-offs: docs/ai/install-and-update.md
+set -eu
+
+# System tools only. The caller's PATH is kept to find gh and to check for the bin directory.
+user_path="${PATH:-}"
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export PATH
+
+repo="bryan-uipath/ottospace"
+# Asset names and the main tag must match scripts/package.sh and .github/workflows/build.yml.
+target="aarch64-apple-darwin"
+tarball="ottospace-$target.tar.gz"
+appzip="ottospace-$target.app.zip"
+artifact="ottospace-$target"
+main_tag="main-latest"
+workflow="build.yml"
+# Second line of this file. install.sh and self-update replace only an osi that carries it.
+marker="# ottospace-installer"
+
+tmp=""
+staged=""
+staged_app=""
+aside_app=""
+app=""
+
+say() { printf '%s\n' "$*"; }
+die() {
+  printf 'osi: %s\n' "$*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'EOF'
+usage: osi <command>
+
+  install main [--app]       the latest build of the main branch
+  install pr <n> [--app]     the build of pull request <n> (needs gh, signed in)
+  install stable [--app]     the latest release
+  install <vX.Y.Z> [--app]   that release
+  current                    what is installed: channel, version, commit, date
+  update [--check]           install the channel's newer build, if there is one
+  rollback                   put the previous build back (again: undo the rollback)
+  uninstall                  remove ottospace and osi; settings and tasks are kept
+  self-update                replace osi with the one on main
+
+  --app          also install ottospace.app into ~/Applications
+  --force        replace an `ottospace` command or app that osi did not install
+  --allow-fork   allow a pull request from a fork (asks you to type its commit)
+
+A pull request build runs that pull request's code with your terminal's permissions.
+EOF
+}
+
+# Runs on any exit: drops temp files and anything staged but not yet moved into place, and
+# puts back an app that was moved aside if its replacement never arrived.
+cleanup() {
+  if [ -n "$staged" ]; then rm -f "$staged"; fi
+  if [ -n "$staged_app" ]; then rm -rf "$staged_app"; fi
+  if [ -n "$aside_app" ] && [ -e "$aside_app" ] && [ ! -e "$app" ]; then mv "$aside_app" "$app"; fi
+  if [ -n "$tmp" ]; then rm -rf "$tmp"; fi
+}
+
+# HTTPS only, also across redirects. file:// is for tests: only an override can name one.
+fetch() {
+  case "$1" in
+    https://*) curl -fsSL --proto '=https' --tlsv1.2 --retry 3 -o "$2" "$1" ;;
+    file://*) curl -fsS --proto '=file' -o "$2" "$1" ;;
+    *) die "refusing to download from $1" ;;
+  esac
+}
+
+# First value of key $1 in the key=value file $2. State and BUILD files are read, never sourced.
+get() {
+  [ -f "$2" ] || return 0
+  sed -n "s/^$1=//p" "$2" | head -n 1
+}
+
+# Values that go into state, messages and paths: no spaces, quotes or shell characters.
+is_safe() {
+  case "$1" in
+    "" | *[!0-9A-Za-z.:+_-]*) return 1 ;;
+  esac
+}
+
+is_sha() {
+  case "$1" in
+    *[!0-9a-f]*) return 1 ;;
+  esac
+  [ "${#1}" -eq "$2" ]
+}
+
+is_number() {
+  case "$1" in
+    "" | *[!0-9]*) return 1 ;;
+  esac
+}
+
+short() { printf '%.12s' "$1"; }
+
+now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+sha256_of() { shasum -a 256 "$1" | awk '{ print $1 }'; }
+
+# Checks file $1 in $dl against its line in $dl/SHA256SUMS.
+verify() {
+  want="$(awk -v name="$1" '$2 == name || $2 == "*" name { print $1; exit }' "$dl/SHA256SUMS")"
+  is_sha "$want" 64 || die "SHA256SUMS has no checksum for $1. Nothing was changed."
+  [ "$(sha256_of "$dl/$1")" = "$want" ] ||
+    die "checksum mismatch for $1: the download is damaged, was changed, or a new build is being published. Nothing was changed. Try again in a minute."
+}
+
+setup() {
+  [ "$(uname -s)" = Darwin ] || die "ottospace runs on macOS only."
+  # hw.optional.arm64 is 1 on Apple Silicon, also under Rosetta where uname -m says x86_64.
+  [ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" = 1 ] ||
+    die "ottospace builds are for Apple Silicon only. Build from source on Intel Macs."
+  case "${HOME:-}" in
+    /*) ;;
+    *) die "HOME must be an absolute path" ;;
+  esac
+  # Every path has an override, so tests never touch the real install.
+  bin_dir="${OSI_BIN_DIR:-$HOME/.local/bin}"
+  app_dir="${OSI_APP_DIR:-$HOME/Applications}"
+  # Inside ottospace's own folder, beside settings.json and tasks/.
+  state_dir="${OTTOSPACE_HOME:-$HOME/.ottospace}/install"
+  releases="${OSI_RELEASES_URL:-https://github.com/$repo/releases}"
+  self_url="${OSI_SELF_URL:-https://raw.githubusercontent.com/$repo/main/scripts/osi}"
+  cmd="$bin_dir/ottospace"
+  app="$app_dir/ottospace.app"
+  trap cleanup EXIT
+  trap 'exit 1' HUP INT TERM
+  tmp="$(mktemp -d)"
+  dl="$tmp/dl"
+  mkdir "$dl"
+}
+
+# Finds gh on the caller's PATH. OSI_GH names another program, for tests.
+gh_find() {
+  gh_cmd="${OSI_GH:-}"
+  if [ -z "$gh_cmd" ]; then
+    gh_cmd="$(PATH="$user_path" command -v gh || true)"
+  fi
+  [ -n "$gh_cmd" ] || die "pull request builds need the GitHub CLI: https://cli.github.com (then: gh auth login)"
+}
+
+# GH_HOST and GH_REPO are dropped, and callers name github.com: no other host can stand in.
+gh_run() { env -u GH_HOST -u GH_REPO PATH="$user_path" "$gh_cmd" "$@"; }
+
+# True when osi has a record of installing the app at $app.
+app_owned() { [ -f "$state_dir/app" ] && [ "$(get path "$state_dir/app")" = "$app" ]; }
+
+# Where a release channel's files are. Sets $base.
+release_base() {
+  case "$1" in
+    main) base="$releases/download/$main_tag" ;;
+    stable) base="$releases/latest/download" ;;
+    version) base="$releases/download/$2" ;;
+  esac
+}
+
+# Reads pull request $1 from GitHub. Sets pr_state, pr_author, pr_sha, pr_head, pr_cross.
+pr_read() {
+  gh_find
+  # Control characters are dropped, so a field cannot write to the terminal. No field may be
+  # empty: `read` would skip it and shift the rest.
+  line="$(gh_run pr view "$1" -R "github.com/$repo" \
+    --json state,author,headRefOid,headRepository,isCrossRepository \
+    --jq '[.state, (.author.login // "unknown"), .headRefOid, (.headRepository.nameWithOwner // "deleted"), (.isCrossRepository | tostring)] | @tsv' |
+    LC_ALL=C tr -d '\000-\010\012-\037\177')" || line=""
+  IFS="$(printf '\t')" read -r pr_state pr_author pr_sha pr_head pr_cross <<EOF
+$line
+EOF
+  is_sha "$pr_sha" 40 || die "could not read pull request $1 of $repo (is gh signed in? gh auth status)"
+}
+
+# Downloads the build of pull request $1 into $dl, after showing whose code it is.
+pr_download() {
+  pr_read "$1"
+  say "Pull request #$1 ($pr_state) by $pr_author"
+  say "  head: $pr_sha"
+  say "  from: $pr_head"
+  if [ "$pr_cross" != false ] || [ "$pr_head" != "$repo" ]; then
+    say ""
+    say "WARNING: this pull request comes from a fork, not from $repo."
+    say "Its build is code that nobody with write access to $repo pushed. Installed, it runs"
+    say "with your terminal's permissions, which include Accessibility and Screen Recording."
+    [ "$allow_fork" = 1 ] ||
+      die "refusing to install a build from a fork. Read the diff first; then: osi install pr $1 --allow-fork"
+    printf 'Type the first 7 characters of the head commit to install it: '
+    read -r typed || typed=""
+    [ "$typed" = "$(printf '%.7s' "$pr_sha")" ] || die "that is not the head commit. Nothing was changed."
+  fi
+
+  run="$(gh_run run list -R "github.com/$repo" --workflow "$workflow" --commit "$pr_sha" --event pull_request \
+    --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')" ||
+    die "could not list the builds of $repo"
+  is_number "$run" ||
+    die "no finished build for commit $(short "$pr_sha"). It may still be running (gh pr checks $1 -R $repo), or it failed, or it is older than 14 days."
+  say "Downloading the build from run $run"
+  gh_run run download "$run" -R "github.com/$repo" -n "$artifact" -D "$dl" || die "could not download the build of run $run"
+  # gh puts a lone artifact straight into the directory; older versions used a subdirectory.
+  if [ ! -f "$dl/BUILD" ] && [ -f "$dl/$artifact/BUILD" ]; then dl="$dl/$artifact"; fi
+  [ -f "$dl/BUILD" ] && [ -f "$dl/SHA256SUMS" ] && [ -f "$dl/$tarball" ] || die "the build of run $run is incomplete"
+}
+
+# Reads and checks $dl/BUILD. Sets b_version, b_commit, b_date.
+build_read() {
+  b_version="$(get version "$dl/BUILD")"
+  b_commit="$(get commit "$dl/BUILD")"
+  b_date="$(get date "$dl/BUILD")"
+  if ! is_safe "$b_version" || ! is_sha "$b_commit" 40 || ! is_safe "$b_date"; then
+    die "the BUILD file is not valid. Nothing was changed."
+  fi
+}
+
+# Writes state file $1 with one key=value per line from the remaining arguments, by rename.
+write_state() {
+  state_file="$1"
+  shift
+  printf '%s\n' "$@" >"$state_file.new"
+  mv -f "$state_file.new" "$state_file"
+}
+
+note_running() {
+  if pgrep -x ottospace >/dev/null 2>&1; then
+    say ""
+    say "ottospace is running and keeps the build it started with. To use this one, quit and start it again:"
+    say "  ottospace ctl '{\"cmd\":\"quit\"}'"
+    say "Quit puts hosted windows back; terminal panes and what runs in them close."
+  fi
+}
+
+# Installs channel $1 (main, stable, version, pr) with ref $2 (a tag or a pull request number).
+install_build() {
+  channel="$1"
+  ref="$2"
+
+  # Never replace an `ottospace` command osi has no record of.
+  if { [ -e "$cmd" ] || [ -L "$cmd" ]; } && [ ! -f "$state_dir/current" ] && [ "$force" != 1 ]; then
+    die "$cmd exists and osi did not install it. Remove it, or run again with --force."
+  fi
+  # The same for the app: one built by hand with scripts/bundle.sh is not osi's to replace.
+  owned=0
+  if app_owned; then owned=1; fi
+  if [ "$want_app" = 1 ] && { [ -e "$app" ] || [ -L "$app" ]; } && [ "$owned" != 1 ] && [ "$force" != 1 ]; then
+    die "$app exists and osi did not install it. Remove it, or run again with --force."
+  fi
+
+  if [ "$channel" = pr ]; then
+    pr_download "$ref"
+  else
+    release_base "$channel" "$ref"
+    say "Downloading $base/$tarball"
+    fetch "$base/BUILD" "$dl/BUILD" || die "no build at $base (download failed)"
+    fetch "$base/SHA256SUMS" "$dl/SHA256SUMS" || die "download failed: $base/SHA256SUMS"
+    fetch "$base/$tarball" "$dl/$tarball" || die "download failed: $base/$tarball"
+    if [ "$want_app" = 1 ]; then
+      fetch "$base/$appzip" "$dl/$appzip" || die "download failed: $base/$appzip"
+    fi
+  fi
+
+  # Everything is checked before anything is changed.
+  verify BUILD
+  verify "$tarball"
+  build_read
+  if [ "$channel" = pr ] && [ "$b_commit" != "$pr_sha" ]; then
+    die "the build is of commit $(short "$b_commit"), not the pull request's head. Nothing was changed."
+  fi
+  mkdir "$tmp/bin"
+  tar -xzf "$dl/$tarball" -C "$tmp/bin" ottospace || die "the download holds no ottospace binary"
+  [ -f "$tmp/bin/ottospace" ] && [ ! -L "$tmp/bin/ottospace" ] && [ -s "$tmp/bin/ottospace" ] ||
+    die "the download holds no ottospace binary"
+  if [ "$want_app" = 1 ]; then
+    [ -f "$dl/$appzip" ] || die "this build has no $appzip"
+    verify "$appzip"
+    ditto -x -k "$dl/$appzip" "$tmp/app"
+    [ -x "$tmp/app/ottospace.app/Contents/MacOS/ottospace" ] || die "the zip holds no ottospace.app"
+    codesign --verify --deep --strict "$tmp/app/ottospace.app" 2>/dev/null || die "the app's signature does not verify"
+  fi
+
+  mkdir -p "$bin_dir" "$state_dir"
+  # Stage beside the destination: the swap is then one rename, and a running ottospace keeps
+  # its old file. Writing over the file in place would get the running process killed.
+  staged="$bin_dir/.ottospace.new.$$"
+  cp "$tmp/bin/ottospace" "$staged"
+  chmod 755 "$staged"
+  if [ "$want_app" = 1 ]; then
+    mkdir -p "$app_dir"
+    staged_app="$app_dir/.ottospace.app.new.$$"
+    rm -rf "$staged_app"
+    ditto "$tmp/app/ottospace.app" "$staged_app"
+  fi
+  # A copy of the build being replaced, for `osi rollback`. It gets its name after the swap.
+  keep=0
+  if [ -f "$cmd" ] && [ -f "$state_dir/current" ]; then
+    cp -p "$cmd" "$state_dir/previous.bin.new"
+    cp "$state_dir/current" "$state_dir/previous.new"
+    keep=1
+  fi
+
+  # Everything is staged: from here on only renames. A failure puts the old app back.
+  if [ "$want_app" = 1 ]; then
+    if [ -e "$app" ] || [ -L "$app" ]; then
+      aside_app="$app_dir/.ottospace.app.old.$$"
+      rm -rf "$aside_app"
+      mv "$app" "$aside_app"
+    fi
+    mv "$staged_app" "$app"
+    staged_app=""
+  fi
+  if ! mv -f "$staged" "$cmd"; then
+    if [ "$want_app" = 1 ]; then rm -rf "$app"; fi
+    die "could not write $cmd. Nothing was changed."
+  fi
+  staged=""
+
+  # The swap is done: now the records.
+  if [ "$keep" = 1 ]; then
+    mv -f "$state_dir/previous.bin.new" "$state_dir/previous.bin"
+    mv -f "$state_dir/previous.new" "$state_dir/previous"
+  fi
+  # previous.app is kept only while it is the app of the previous build.
+  rm -rf "$state_dir/previous.app" "$state_dir/previous.app.record"
+  if [ "$want_app" = 1 ]; then
+    if [ -n "$aside_app" ] && [ "$owned" = 1 ] && [ "$keep" = 1 ]; then
+      mv "$aside_app" "$state_dir/previous.app"
+      cp "$state_dir/app" "$state_dir/previous.app.record"
+    elif [ -n "$aside_app" ]; then
+      # Not osi's (--force), or no previous build to pair it with.
+      rm -rf "$aside_app"
+    fi
+    aside_app=""
+    write_state "$state_dir/app" "path=$app" "version=$b_version" "commit=$b_commit"
+  fi
+  write_state "$state_dir/current" "channel=$channel" "ref=$ref" "version=$b_version" "commit=$b_commit" \
+    "date=$b_date" "binary_sha256=$(sha256_of "$cmd")" "installed=$(now)"
+
+  say ""
+  say "Installed ottospace $b_version ($(short "$b_commit"), $b_date) from $(describe "$channel" "$ref")"
+  say "  command: $cmd"
+  if [ "$want_app" = 1 ]; then
+    say "  app:     $app"
+    say "The app is its own identity to macOS, and a new one with every build: expect to grant"
+    say "Accessibility and Screen Recording again after each update."
+  elif [ "$owned" = 1 ] && [ -e "$app" ]; then
+    say "  $app is build $(short "$(get commit "$state_dir/app")") and was left as it is (add --app to update it)."
+  fi
+  case ":$user_path:" in
+    *":$bin_dir:"*) ;;
+    *) say "  $bin_dir is not on your PATH. Add it, e.g. in ~/.zshrc: export PATH=\"$bin_dir:\$PATH\"" ;;
+  esac
+  say "Run \`ottospace\` from a terminal: it uses that terminal's Accessibility and Screen Recording"
+  say "permissions, so an update does not ask for them again. Undo this install: osi rollback"
+  note_running
+}
+
+describe() {
+  case "$1" in
+    main) printf 'main' ;;
+    stable) printf 'stable (latest release)' ;;
+    pr) printf 'pull request #%s' "$2" ;;
+    *) printf '%s' "$2" ;;
+  esac
+}
+
+# One line for the build in state file $1.
+state_line() {
+  printf '%s  %s  commit %s  %s' "$(describe "$(get channel "$1")" "$(get ref "$1")")" "$(get version "$1")" \
+    "$(short "$(get commit "$1")")" "$(get date "$1")"
+}
+
+cmd_install() {
+  want_app=0
+  force=0
+  allow_fork=0
+  channel=""
+  ref=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --app) want_app=1 ;;
+      --force) force=1 ;;
+      --allow-fork) allow_fork=1 ;;
+      -*) die "unknown option: $1" ;;
+      main | stable)
+        [ -z "$channel" ] || die "name one build to install"
+        channel="$1"
+        ref="$1"
+        ;;
+      pr)
+        [ -z "$channel" ] || die "name one build to install"
+        channel="pr"
+        ref="${2:-}"
+        ref="${ref#\#}"
+        is_number "$ref" || die "usage: osi install pr <number>"
+        shift
+        ;;
+      v[0-9]*)
+        [ -z "$channel" ] || die "name one build to install"
+        is_safe "$1" || die "bad version '$1' (expected vX.Y.Z)"
+        channel=version
+        ref="$1"
+        ;;
+      *) die "unknown build '$1' (expected main, stable, pr <number> or vX.Y.Z)" ;;
+    esac
+    shift
+  done
+  [ -n "$channel" ] || die "usage: osi install main | stable | pr <number> | vX.Y.Z"
+  if [ "$channel" = main ]; then ref="$main_tag"; fi
+  if [ "$channel" = stable ]; then ref=latest; fi
+  setup
+  install_build "$channel" "$ref"
+}
+
+cmd_current() {
+  setup
+  [ -f "$state_dir/current" ] || die "nothing is installed by osi (osi install main)"
+  say "ottospace $(state_line "$state_dir/current")"
+  say "  installed: $(get installed "$state_dir/current")"
+  say "  command:   $cmd"
+  if [ ! -f "$cmd" ]; then
+    say "             missing"
+  elif [ "$(sha256_of "$cmd")" != "$(get binary_sha256 "$state_dir/current")" ]; then
+    say "             changed since osi installed it"
+  fi
+  if app_owned; then
+    say "  app:       $app  commit $(short "$(get commit "$state_dir/app")")"
+  fi
+  if [ -f "$state_dir/previous" ] && [ -f "$state_dir/previous.bin" ]; then
+    say "  previous:  $(state_line "$state_dir/previous")  (osi rollback)"
+  fi
+}
+
+cmd_update() {
+  check=0
+  for arg in "$@"; do
+    case "$arg" in
+      --check) check=1 ;;
+      *) die "unknown option: $arg" ;;
+    esac
+  done
+  setup
+  [ -f "$state_dir/current" ] || die "nothing is installed by osi (osi install main)"
+  channel="$(get channel "$state_dir/current")"
+  ref="$(get ref "$state_dir/current")"
+  have="$(get commit "$state_dir/current")"
+  # An app osi installed is kept at the same build as the command.
+  want_app=0
+  if app_owned; then want_app=1; fi
+  force=0
+  allow_fork=0
+
+  case "$channel" in
+    main | stable)
+      release_base "$channel" "$ref"
+      fetch "$base/BUILD" "$tmp/BUILD.latest" || die "no build at $base (download failed)"
+      latest="$(get commit "$tmp/BUILD.latest")"
+      is_sha "$latest" 40 || die "the BUILD file is not valid"
+      ;;
+    pr)
+      is_number "$ref" || die "the state file is damaged: $state_dir/current"
+      pr_read "$ref"
+      latest="$pr_sha"
+      if [ "$pr_state" = MERGED ]; then say "Pull request #$ref is merged: osi install main"; fi
+      ;;
+    version)
+      say "Pinned to $ref. Follow a channel instead: osi install main, or osi install stable."
+      return 0
+      ;;
+    *) die "the state file is damaged: $state_dir/current" ;;
+  esac
+
+  if [ "$latest" = "$have" ]; then
+    say "Up to date: $(state_line "$state_dir/current")"
+    return 0
+  fi
+  say "$(describe "$channel" "$ref") is at $(short "$latest"); installed is $(short "$have")."
+  if [ "$check" = 1 ]; then
+    say "Run: osi update"
+    return 0
+  fi
+  # An update of a fork's pull request asks again: its head is new code.
+  if [ "$channel" = pr ] && { [ "$pr_cross" != false ] || [ "$pr_head" != "$repo" ]; }; then allow_fork=1; fi
+  install_build "$channel" "$ref"
+}
+
+cmd_rollback() {
+  setup
+  [ -f "$state_dir/previous" ] && [ -f "$state_dir/previous.bin" ] || die "there is no previous build to go back to"
+  [ -f "$state_dir/current" ] || die "the state file is missing: $state_dir/current"
+  mkdir -p "$bin_dir"
+  staged="$bin_dir/.ottospace.new.$$"
+  cp -p "$state_dir/previous.bin" "$staged"
+  chmod 755 "$staged"
+  # The build being left becomes the previous one, so a second rollback undoes the first.
+  keep=0
+  if [ -f "$cmd" ]; then
+    cp -p "$cmd" "$state_dir/previous.bin.new"
+    keep=1
+  fi
+  mv -f "$staged" "$cmd"
+  staged=""
+  cp "$state_dir/current" "$tmp/was-current"
+  mv -f "$state_dir/previous" "$state_dir/current"
+  if [ "$keep" = 1 ]; then
+    mv -f "$state_dir/previous.bin.new" "$state_dir/previous.bin"
+    cp "$tmp/was-current" "$state_dir/previous.new"
+    mv -f "$state_dir/previous.new" "$state_dir/previous"
+  else
+    # The command was missing: there is no build to come back to.
+    rm -f "$state_dir/previous.bin"
+  fi
+
+  # The app follows only when the kept app is of the build rolled back to.
+  target_commit="$(get commit "$state_dir/current")"
+  if app_owned && [ -d "$state_dir/previous.app" ] &&
+    [ "$(get commit "$state_dir/previous.app.record")" = "$target_commit" ]; then
+    if [ -e "$app" ]; then
+      aside_app="$app_dir/.ottospace.app.old.$$"
+      rm -rf "$aside_app"
+      mv "$app" "$aside_app"
+    fi
+    mv "$state_dir/previous.app" "$app"
+    cp "$state_dir/app" "$tmp/app-was-current"
+    mv -f "$state_dir/previous.app.record" "$state_dir/app"
+    if [ -n "$aside_app" ] && [ "$keep" = 1 ]; then
+      mv "$aside_app" "$state_dir/previous.app"
+      cp "$tmp/app-was-current" "$state_dir/previous.app.record"
+    elif [ -n "$aside_app" ]; then
+      rm -rf "$aside_app"
+    fi
+    aside_app=""
+  else
+    rm -rf "$state_dir/previous.app" "$state_dir/previous.app.record"
+    if app_owned && [ "$(get commit "$state_dir/app")" != "$target_commit" ]; then
+      say "$app is build $(short "$(get commit "$state_dir/app")") and was left as it is."
+    fi
+  fi
+
+  say "Rolled back to ottospace $(state_line "$state_dir/current")"
+  say "Undo: osi rollback"
+  note_running
+}
+
+cmd_uninstall() {
+  setup
+  [ -f "$state_dir/current" ] || die "nothing is installed by osi"
+  rm -f "$cmd"
+  say "Removed $cmd"
+  if app_owned && [ -d "$app" ]; then
+    rm -rf "$app"
+    say "Removed $app"
+  fi
+  rm -rf "$state_dir"
+  say "Removed $state_dir"
+  if [ -f "$bin_dir/osi" ] && [ "$(sed -n 2p "$bin_dir/osi")" = "$marker" ]; then
+    rm -f "$bin_dir/osi"
+    say "Removed $bin_dir/osi"
+  fi
+  say "Kept: settings and tasks in $(dirname "$state_dir")."
+  if pgrep -x ottospace >/dev/null 2>&1; then
+    say "ottospace is still running. Quit it: use its window, or the control socket request {\"cmd\":\"quit\"}."
+  fi
+}
+
+cmd_self_update() {
+  setup
+  dest="$bin_dir/osi"
+  if { [ -e "$dest" ] || [ -L "$dest" ]; } && [ "$(sed -n 2p "$dest")" != "$marker" ]; then
+    die "$dest exists and is not osi. Remove it and run again."
+  fi
+  fetch "$self_url" "$tmp/osi" || die "download failed: $self_url"
+  if [ "$(sed -n 1p "$tmp/osi")" != "#!/bin/sh" ] || [ "$(sed -n 2p "$tmp/osi")" != "$marker" ] || ! sh -n "$tmp/osi"; then
+    die "the download is not osi. Nothing was changed."
+  fi
+  mkdir -p "$bin_dir"
+  staged="$bin_dir/.osi.new.$$"
+  cp "$tmp/osi" "$staged"
+  chmod 755 "$staged"
+  mv -f "$staged" "$dest"
+  staged=""
+  say "Updated $dest"
+}
+
+main() {
+  command="${1:-}"
+  if [ $# -gt 0 ]; then shift; fi
+  case "$command" in
+    install) cmd_install "$@" ;;
+    current) cmd_current ;;
+    update) cmd_update "$@" ;;
+    rollback) cmd_rollback ;;
+    uninstall) cmd_uninstall ;;
+    self-update) cmd_self_update ;;
+    help | -h | --help) usage ;;
+    "")
+      usage >&2
+      exit 2
+      ;;
+    *)
+      printf 'osi: unknown command: %s\n\n' "$command" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"
