@@ -2936,16 +2936,22 @@ fn ctl(args: &[String]) -> ! {
 /// as JSON. Names, counts and times only; see `docs/ai/agent-runners.md`.
 fn agents(dir: Option<&String>) -> ! {
     use ottospace_agents::{claude::Claude, codex::Codex, git::checkouts, report::report};
-    let dir = dir.map(PathBuf::from).or_else(|| std::env::current_dir().ok()).unwrap_or_default();
-    // Runners record the real path, e.g. `/private/tmp/x` for `/tmp/x`.
-    let dir = dir.canonicalize().unwrap_or(dir);
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+    const USAGE: &str = "usage: ottospace agents [dir]\n\
+        Prints the Claude Code and Codex sessions of the repository at <dir> (an absolute path;\n\
+        default: the current directory) as JSON: names, counts and times only.";
+    if dir.is_some_and(|d| d == "--help" || d == "-h") {
+        println!("{USAGE}");
+        std::process::exit(0);
+    }
+    // No directory, an empty or relative one, or one that is not there: an error, never "all sessions".
+    let dir = dir.map(PathBuf::from).map_or_else(std::env::current_dir, Ok);
     let (claude, codex) = (Claude::from_env(), Codex::from_env());
-    match report(&[&claude, &codex], &checkouts(&dir), now, 5) {
+    let report = dir.and_then(|dir| checkouts(&dir)).and_then(|dirs| report(&[&claude, &codex], &dirs, now_ms(), 5));
+    match report {
         Ok(report) => println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default()),
         Err(err) => {
-            eprintln!("agents: {err}");
-            std::process::exit(1);
+            eprintln!("agents: {err}\n{USAGE}");
+            std::process::exit(2);
         }
     }
     std::process::exit(0);

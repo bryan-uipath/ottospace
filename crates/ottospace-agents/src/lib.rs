@@ -1,8 +1,9 @@
 //! Agent runners (Claude Code, Codex): which sessions exist for a directory and what each is
 //! doing. Reads the runners' own session files, read-only. Only derived facts leave this crate:
-//! names, counts, times. Never prompts, file contents or command lines.
+//! names from fixed tables, counts, times. Never prompts, file contents or command lines.
 //! Design: `docs/ai/agent-runners.md`.
 
+mod cache;
 pub mod claude;
 pub mod codex;
 pub mod git;
@@ -11,8 +12,10 @@ pub mod report;
 pub mod snapshot;
 pub mod station;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs::File;
 use std::io;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -39,6 +42,7 @@ pub struct SessionRef {
     pub started: Option<u64>,
     /// The session file's modification time.
     pub last_activity: Option<u64>,
+    /// Set when listing knows it for free; else ask `Runner::model`.
     pub model: Option<String>,
     /// The runner's process, when the runner records one. It may have exited: check before trusting.
     pub pid: Option<u32>,
@@ -53,13 +57,19 @@ pub struct SessionRef {
 pub struct Cursor {
     /// Byte offset just past the last complete line read.
     offset: u64,
+    /// The file read so far, as (device, inode): another file at the same path starts over.
+    file: Option<(u64, u64)>,
     model: Option<String>,
     /// Last model request seen, e.g. a Claude message id: one request spans several records.
     step: Option<String>,
+    /// The most tokens one request used so far: Claude's context window is estimated from it.
+    peak: u64,
     /// Sub-agents started and not yet ended, by id.
     agents: BTreeSet<String>,
-    /// What a finished command turned out to be, held until its tool call's output record.
-    refined: Option<Refined>,
+    /// Codex `exec` calls with no output yet, by call id.
+    open: BTreeSet<String>,
+    /// What a call's command turned out to be, by call id, held until the call's output record.
+    refined: BTreeMap<String, Refined>,
 }
 
 impl Cursor {
@@ -70,8 +80,6 @@ impl Cursor {
 
 #[derive(Clone, Debug, PartialEq)]
 struct Refined {
-    /// The call it belongs to, when the record names one; else the next output record's.
-    call: Option<String>,
     station: Station,
     summary: String,
     failed: bool,
@@ -92,7 +100,8 @@ pub struct Event {
     pub what: What,
 }
 
-/// The normalised event set. Summaries are names only, e.g. `git push` or `src/main.rs`.
+/// The normalised event set. A summary is a name from a fixed table (`git push`), a file's last
+/// two path parts, a host, or a name-shaped identifier. Never free text.
 #[derive(Clone, Debug, PartialEq)]
 pub enum What {
     UserMessage,
@@ -135,11 +144,65 @@ pub enum What {
     },
 }
 
+/// What one `Runner::read` call returned.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Batch {
+    pub events: Vec<Event>,
+    pub cursor: Cursor,
+    /// The file was truncated or replaced: reading began again at its start with a fresh cursor.
+    /// Throw away what was folded before and fold from these events.
+    pub restarted: bool,
+    /// The byte budget ran out before the end of the file: call again.
+    pub more: bool,
+}
+
 /// One agent runner's sessions on this machine.
-pub trait Runner {
+pub trait Runner: Send + Sync {
     fn kind(&self) -> Kind;
-    /// Sessions started in `dir` or below it, newest activity first.
-    fn sessions(&self, dir: &Path) -> io::Result<Vec<SessionRef>>;
-    /// Events after `after`. A half-written last line is left for the next call; unknown records are skipped.
-    fn read(&self, session: &SessionRef, after: Cursor) -> io::Result<(Vec<Event>, Cursor)>;
+    /// Sessions started in any of `dirs` or below one, newest activity first. One scan for all of
+    /// them. A relative or empty directory is an error: it would match every session.
+    fn sessions(&self, dirs: &[PathBuf]) -> io::Result<Vec<SessionRef>>;
+    /// The session's current model. May read the end of the session file.
+    fn model(&self, session: &SessionRef) -> Option<String> {
+        session.model.clone()
+    }
+    /// Events after `after`, stopping at the first line boundary past `budget` bytes. A half-written
+    /// last line is left for the next call; unknown records are skipped.
+    fn read(&self, session: &SessionRef, after: Cursor, budget: u64) -> io::Result<Batch>;
+}
+
+/// Every event of a session from its start, read in slices of 8 MB.
+pub fn read_all(runner: &dyn Runner, session: &SessionRef) -> io::Result<Vec<Event>> {
+    let (mut events, mut cursor) = (Vec::new(), Cursor::default());
+    loop {
+        let batch = runner.read(session, cursor, 8 << 20)?;
+        if batch.restarted {
+            events.clear();
+        }
+        events.extend(batch.events);
+        cursor = batch.cursor;
+        if !batch.more {
+            return Ok(events);
+        }
+    }
+}
+
+/// `dirs` as given, or an error naming the first that is empty or relative.
+fn absolute(dirs: &[PathBuf]) -> io::Result<()> {
+    match dirs.iter().find(|d| !d.is_absolute()) {
+        Some(dir) => Err(io::Error::new(io::ErrorKind::InvalidInput, format!("not an absolute directory: {dir:?}"))),
+        None => Ok(()),
+    }
+}
+
+/// Opens a session file where `cursor` stopped. A truncated file, or another file at the same
+/// path, resets the whole cursor: the flag says so.
+fn open(path: &Path, cursor: Cursor) -> io::Result<(File, Cursor, bool)> {
+    let file = File::open(path)?;
+    let meta = file.metadata()?;
+    let id = (meta.dev(), meta.ino());
+    let restarted = cursor.file.is_some_and(|seen| seen != id) || meta.len() < cursor.offset;
+    let mut cursor = if restarted { Cursor::default() } else { cursor };
+    cursor.file = Some(id);
+    Ok((file, cursor, restarted))
 }

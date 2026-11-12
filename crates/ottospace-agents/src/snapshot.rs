@@ -83,7 +83,7 @@ impl Snapshot {
                     self.model = model.clone();
                 }
                 if let Some(usage) = usage {
-                    self.context_tokens = Some(usage.input + usage.output);
+                    self.context_tokens = Some(usage.input.saturating_add(usage.output));
                 }
                 if window.is_some() {
                     self.context_window = *window;
