@@ -1,0 +1,44 @@
+name: App windows
+
+# An experiment: can a hosted runner run `cargo e2e-apps` (real windows of the canary app)?
+# It needs Accessibility and Screen Recording for the process that starts ottospace, and a
+# window server. Run by hand, or when this file changes. Never a required check.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ['.github/workflows/app-windows.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-windows-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  e2e-apps:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # What the runner image grants, read-only: which programs may use Accessibility and
+      # Screen Recording. Tells us why the run below passes or fails.
+      - name: Permissions the runner has
+        run: |
+          for db in "/Library/Application Support/com.apple.TCC/TCC.db" "$HOME/Library/Application Support/com.apple.TCC/TCC.db"; do
+            echo "== $db"
+            sudo sqlite3 "$db" "select service, client, auth_value from access where service in ('kTCCServiceAccessibility','kTCCServiceScreenCapture','kTCCServiceAppleEvents','kTCCServicePostEvent','kTCCServiceListenEvent') order by 1,2" 2>&1 | head -60 || true
+          done
+          echo "parent chain:"; ps -o pid,ppid,comm -p $$ -p $PPID || true
+      - name: App-window tests
+        run: cargo e2e-apps
