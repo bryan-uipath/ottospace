@@ -27,6 +27,8 @@ marker="# ottospace-installer"
 tmp=""
 staged=""
 staged_app=""
+aside_app=""
+app=""
 
 say() { printf '%s\n' "$*"; }
 die() {
@@ -49,17 +51,19 @@ usage: osi <command>
   self-update                replace osi with the one on main
 
   --app          also install ottospace.app into ~/Applications
-  --force        replace an `ottospace` command that osi did not install
+  --force        replace an `ottospace` command or app that osi did not install
   --allow-fork   allow a pull request from a fork (asks you to type its commit)
 
 A pull request build runs that pull request's code with your terminal's permissions.
 EOF
 }
 
-# Runs on any exit: drops temp files and anything staged but not yet moved into place.
+# Runs on any exit: drops temp files and anything staged but not yet moved into place, and
+# puts back an app that was moved aside if its replacement never arrived.
 cleanup() {
   if [ -n "$staged" ]; then rm -f "$staged"; fi
   if [ -n "$staged_app" ]; then rm -rf "$staged_app"; fi
+  if [ -n "$aside_app" ] && [ -e "$aside_app" ] && [ ! -e "$app" ]; then mv "$aside_app" "$app"; fi
   if [ -n "$tmp" ]; then rm -rf "$tmp"; fi
 }
 
@@ -146,7 +150,11 @@ gh_find() {
   [ -n "$gh_cmd" ] || die "pull request builds need the GitHub CLI: https://cli.github.com (then: gh auth login)"
 }
 
-gh_run() { PATH="$user_path" "$gh_cmd" "$@"; }
+# GH_HOST and GH_REPO are dropped, and callers name github.com: no other host can stand in.
+gh_run() { env -u GH_HOST -u GH_REPO PATH="$user_path" "$gh_cmd" "$@"; }
+
+# True when osi has a record of installing the app at $app.
+app_owned() { [ -f "$state_dir/app" ] && [ "$(get path "$state_dir/app")" = "$app" ]; }
 
 # Where a release channel's files are. Sets $base.
 release_base() {
@@ -162,7 +170,7 @@ pr_read() {
   gh_find
   # Control characters are dropped, so a field cannot write to the terminal. No field may be
   # empty: `read` would skip it and shift the rest.
-  line="$(gh_run pr view "$1" -R "$repo" \
+  line="$(gh_run pr view "$1" -R "github.com/$repo" \
     --json state,author,headRefOid,headRepository,isCrossRepository \
     --jq '[.state, (.author.login // "unknown"), .headRefOid, (.headRepository.nameWithOwner // "deleted"), (.isCrossRepository | tostring)] | @tsv' |
     LC_ALL=C tr -d '\000-\010\012-\037\177')" || line=""
@@ -190,13 +198,13 @@ pr_download() {
     [ "$typed" = "$(printf '%.7s' "$pr_sha")" ] || die "that is not the head commit. Nothing was changed."
   fi
 
-  run="$(gh_run run list -R "$repo" --workflow "$workflow" --commit "$pr_sha" --event pull_request \
+  run="$(gh_run run list -R "github.com/$repo" --workflow "$workflow" --commit "$pr_sha" --event pull_request \
     --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')" ||
     die "could not list the builds of $repo"
   is_number "$run" ||
     die "no finished build for commit $(short "$pr_sha"). It may still be running (gh pr checks $1 -R $repo), or it failed, or it is older than 14 days."
   say "Downloading the build from run $run"
-  gh_run run download "$run" -R "$repo" -n "$artifact" -D "$dl" || die "could not download the build of run $run"
+  gh_run run download "$run" -R "github.com/$repo" -n "$artifact" -D "$dl" || die "could not download the build of run $run"
   # gh puts a lone artifact straight into the directory; older versions used a subdirectory.
   if [ ! -f "$dl/BUILD" ] && [ -f "$dl/$artifact/BUILD" ]; then dl="$dl/$artifact"; fi
   [ -f "$dl/BUILD" ] && [ -f "$dl/SHA256SUMS" ] && [ -f "$dl/$tarball" ] || die "the build of run $run is incomplete"
@@ -238,6 +246,12 @@ install_build() {
   if { [ -e "$cmd" ] || [ -L "$cmd" ]; } && [ ! -f "$state_dir/current" ] && [ "$force" != 1 ]; then
     die "$cmd exists and osi did not install it. Remove it, or run again with --force."
   fi
+  # The same for the app: one built by hand with scripts/bundle.sh is not osi's to replace.
+  owned=0
+  if app_owned; then owned=1; fi
+  if [ "$want_app" = 1 ] && { [ -e "$app" ] || [ -L "$app" ]; } && [ "$owned" != 1 ] && [ "$force" != 1 ]; then
+    die "$app exists and osi did not install it. Remove it, or run again with --force."
+  fi
 
   if [ "$channel" = pr ]; then
     pr_download "$ref"
@@ -277,43 +291,66 @@ install_build() {
   staged="$bin_dir/.ottospace.new.$$"
   cp "$tmp/bin/ottospace" "$staged"
   chmod 755 "$staged"
-  # Keep the build being replaced, for `osi rollback`.
-  if [ -f "$cmd" ] && [ -f "$state_dir/current" ]; then
-    cp -p "$cmd" "$state_dir/previous.bin.new"
-    mv -f "$state_dir/previous.bin.new" "$state_dir/previous.bin"
-    cp "$state_dir/current" "$state_dir/previous.new"
-    mv -f "$state_dir/previous.new" "$state_dir/previous"
-  fi
-  mv -f "$staged" "$cmd"
-  staged=""
-
-  app_path=""
   if [ "$want_app" = 1 ]; then
     mkdir -p "$app_dir"
     staged_app="$app_dir/.ottospace.app.new.$$"
     rm -rf "$staged_app"
     ditto "$tmp/app/ottospace.app" "$staged_app"
+  fi
+  # A copy of the build being replaced, for `osi rollback`. It gets its name after the swap.
+  keep=0
+  if [ -f "$cmd" ] && [ -f "$state_dir/current" ]; then
+    cp -p "$cmd" "$state_dir/previous.bin.new"
+    cp "$state_dir/current" "$state_dir/previous.new"
+    keep=1
+  fi
+
+  # Everything is staged: from here on only renames. A failure puts the old app back.
+  if [ "$want_app" = 1 ]; then
     if [ -e "$app" ] || [ -L "$app" ]; then
-      rm -rf "$state_dir/previous.app"
-      mv "$app" "$state_dir/previous.app"
+      aside_app="$app_dir/.ottospace.app.old.$$"
+      rm -rf "$aside_app"
+      mv "$app" "$aside_app"
     fi
     mv "$staged_app" "$app"
     staged_app=""
-    app_path="$app"
   fi
+  if ! mv -f "$staged" "$cmd"; then
+    if [ "$want_app" = 1 ]; then rm -rf "$app"; fi
+    die "could not write $cmd. Nothing was changed."
+  fi
+  staged=""
 
+  # The swap is done: now the records.
+  if [ "$keep" = 1 ]; then
+    mv -f "$state_dir/previous.bin.new" "$state_dir/previous.bin"
+    mv -f "$state_dir/previous.new" "$state_dir/previous"
+  fi
+  # previous.app is kept only while it is the app of the previous build.
+  rm -rf "$state_dir/previous.app" "$state_dir/previous.app.record"
+  if [ "$want_app" = 1 ]; then
+    if [ -n "$aside_app" ] && [ "$owned" = 1 ] && [ "$keep" = 1 ]; then
+      mv "$aside_app" "$state_dir/previous.app"
+      cp "$state_dir/app" "$state_dir/previous.app.record"
+    elif [ -n "$aside_app" ]; then
+      # Not osi's (--force), or no previous build to pair it with.
+      rm -rf "$aside_app"
+    fi
+    aside_app=""
+    write_state "$state_dir/app" "path=$app" "version=$b_version" "commit=$b_commit"
+  fi
   write_state "$state_dir/current" "channel=$channel" "ref=$ref" "version=$b_version" "commit=$b_commit" \
-    "date=$b_date" "binary_sha256=$(sha256_of "$cmd")" "installed=$(now)" "app=$app_path"
+    "date=$b_date" "binary_sha256=$(sha256_of "$cmd")" "installed=$(now)"
 
   say ""
   say "Installed ottospace $b_version ($(short "$b_commit"), $b_date) from $(describe "$channel" "$ref")"
   say "  command: $cmd"
-  if [ -n "$app_path" ]; then
-    say "  app:     $app_path"
+  if [ "$want_app" = 1 ]; then
+    say "  app:     $app"
     say "The app is its own identity to macOS, and a new one with every build: expect to grant"
     say "Accessibility and Screen Recording again after each update."
-  elif [ -e "$app" ]; then
-    say "  $app is from an earlier install and was left as it is (add --app to update it)."
+  elif [ "$owned" = 1 ] && [ -e "$app" ]; then
+    say "  $app is build $(short "$(get commit "$state_dir/app")") and was left as it is (add --app to update it)."
   fi
   case ":$user_path:" in
     *":$bin_dir:"*) ;;
@@ -392,8 +429,9 @@ cmd_current() {
   elif [ "$(sha256_of "$cmd")" != "$(get binary_sha256 "$state_dir/current")" ]; then
     say "             changed since osi installed it"
   fi
-  app_path="$(get app "$state_dir/current")"
-  if [ -n "$app_path" ]; then say "  app:       $app_path"; fi
+  if app_owned; then
+    say "  app:       $app  commit $(short "$(get commit "$state_dir/app")")"
+  fi
   if [ -f "$state_dir/previous" ] && [ -f "$state_dir/previous.bin" ]; then
     say "  previous:  $(state_line "$state_dir/previous")  (osi rollback)"
   fi
@@ -412,8 +450,9 @@ cmd_update() {
   channel="$(get channel "$state_dir/current")"
   ref="$(get ref "$state_dir/current")"
   have="$(get commit "$state_dir/current")"
+  # An app osi installed is kept at the same build as the command.
   want_app=0
-  if [ -n "$(get app "$state_dir/current")" ]; then want_app=1; fi
+  if app_owned; then want_app=1; fi
   force=0
   allow_fork=0
 
@@ -460,28 +499,48 @@ cmd_rollback() {
   cp -p "$state_dir/previous.bin" "$staged"
   chmod 755 "$staged"
   # The build being left becomes the previous one, so a second rollback undoes the first.
+  keep=0
   if [ -f "$cmd" ]; then
     cp -p "$cmd" "$state_dir/previous.bin.new"
-  else
-    rm -f "$state_dir/previous.bin.new"
+    keep=1
   fi
   mv -f "$staged" "$cmd"
   staged=""
-  if [ -f "$state_dir/previous.bin.new" ]; then
-    mv -f "$state_dir/previous.bin.new" "$state_dir/previous.bin"
-  fi
   cp "$state_dir/current" "$tmp/was-current"
   mv -f "$state_dir/previous" "$state_dir/current"
-  cp "$tmp/was-current" "$state_dir/previous.new"
-  mv -f "$state_dir/previous.new" "$state_dir/previous"
+  if [ "$keep" = 1 ]; then
+    mv -f "$state_dir/previous.bin.new" "$state_dir/previous.bin"
+    cp "$tmp/was-current" "$state_dir/previous.new"
+    mv -f "$state_dir/previous.new" "$state_dir/previous"
+  else
+    # The command was missing: there is no build to come back to.
+    rm -f "$state_dir/previous.bin"
+  fi
 
-  # The app follows only when both builds were installed with --app.
-  if [ -n "$(get app "$state_dir/current")" ] && [ -d "$state_dir/previous.app" ]; then
-    if [ -e "$app" ]; then mv "$app" "$tmp/app-was-current"; fi
+  # The app follows only when the kept app is of the build rolled back to.
+  target_commit="$(get commit "$state_dir/current")"
+  if app_owned && [ -d "$state_dir/previous.app" ] &&
+    [ "$(get commit "$state_dir/previous.app.record")" = "$target_commit" ]; then
+    if [ -e "$app" ]; then
+      aside_app="$app_dir/.ottospace.app.old.$$"
+      rm -rf "$aside_app"
+      mv "$app" "$aside_app"
+    fi
     mv "$state_dir/previous.app" "$app"
-    if [ -e "$tmp/app-was-current" ]; then mv "$tmp/app-was-current" "$state_dir/previous.app"; fi
-  elif [ -e "$app" ] && [ -n "$(get app "$state_dir/previous")" ]; then
-    say "$app was left as it is: this build was installed without --app."
+    cp "$state_dir/app" "$tmp/app-was-current"
+    mv -f "$state_dir/previous.app.record" "$state_dir/app"
+    if [ -n "$aside_app" ] && [ "$keep" = 1 ]; then
+      mv "$aside_app" "$state_dir/previous.app"
+      cp "$tmp/app-was-current" "$state_dir/previous.app.record"
+    elif [ -n "$aside_app" ]; then
+      rm -rf "$aside_app"
+    fi
+    aside_app=""
+  else
+    rm -rf "$state_dir/previous.app" "$state_dir/previous.app.record"
+    if app_owned && [ "$(get commit "$state_dir/app")" != "$target_commit" ]; then
+      say "$app is build $(short "$(get commit "$state_dir/app")") and was left as it is."
+    fi
   fi
 
   say "Rolled back to ottospace $(state_line "$state_dir/current")"
@@ -492,10 +551,9 @@ cmd_rollback() {
 cmd_uninstall() {
   setup
   [ -f "$state_dir/current" ] || die "nothing is installed by osi"
-  app_path="$(get app "$state_dir/current")"
   rm -f "$cmd"
   say "Removed $cmd"
-  if [ -n "$app_path" ] && [ "$app_path" = "$app" ] && [ -d "$app" ]; then
+  if app_owned && [ -d "$app" ]; then
     rm -rf "$app"
     say "Removed $app"
   fi

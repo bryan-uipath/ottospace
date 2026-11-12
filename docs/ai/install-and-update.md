@@ -124,7 +124,16 @@ and `codesign` only for `--app`. All ship with macOS except `gh`.
 - **State** is `~/.ottospace/install/current`, lines of `key=value`. It sits beside
   `settings.json` and `tasks/` and collides with neither. `OTTOSPACE_HOME` moves it, as it moves
   the rest.
-- **It will not replace** an `ottospace` in `~/.local/bin` it has no record of, without `--force`.
+- **It will not replace** an `ottospace` in `~/.local/bin`, or an `ottospace.app`, that it has no
+  record of, without `--force`. A hand-built `scripts/bundle.sh` app is safe from `--app`.
+- **The app has its own record**, `~/.ottospace/install/app` (path and commit), apart from
+  `current`. So an install without `--app` leaves the app, osi still knows it owns it, `update`
+  brings it level, and `uninstall` removes it. `previous.app` is kept only while it is the app of
+  the previous build: `rollback` restores it only if its commit is the one rolled back to.
+- **Staged, then swapped.** Binary and app are both staged before either moves. If a rename
+  fails, the old app goes back and `current` still names what is installed.
+- **gh is pinned to github.com**: every call passes `-R github.com/bryan-uipath/ottospace`, and
+  `GH_HOST` and `GH_REPO` are dropped, so an enterprise host cannot stand in for the repository.
 - **Overrides**, for tests: `HOME`, `OSI_BIN_DIR`, `OSI_APP_DIR`, `OTTOSPACE_HOME`,
   `OSI_RELEASES_URL` and `OSI_SELF_URL` (`file://` allowed), `OSI_GH`.
 

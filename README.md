@@ -36,7 +36,11 @@ osi uninstall         # remove ottospace and osi; settings and tasks are kept
 osi self-update       # replace osi with the one on main
 ```
 
-- Every download is checked against the SHA-256 published with it. A failed check changes nothing.
+- Every download is checked against the SHA-256 published in the same release. A failed check
+  changes nothing. The check catches a damaged or half-published download. It does not catch a
+  compromised release: whoever can replace the build can replace its checksum.
+- `install.sh` and `osi self-update` fetch `osi` from `main` over HTTPS with no checksum at all.
+  You trust this repository and GitHub, as with any `curl | sh`.
 - The new binary replaces the old one by rename. A running ottospace keeps the build it started
   with: quit it (`ottospace ctl '{"cmd":"quit"}'` puts hosted windows back) and start it again.
 - **A pull request build runs that pull request's code with your terminal's permissions.** `osi`
@@ -50,7 +54,9 @@ To also get `ottospace.app` in `~/Applications`, add `--app` (with the one-liner
 permissions for ottospace itself. Builds are signed ad hoc, not with a Developer ID, and not
 notarized: each build is a new identity, so expect to grant both again after every update. That
 is why the bare command is the default. A zip downloaded in a browser gets a quarantine flag and
-Gatekeeper refuses to open the app; `osi` uses `curl`, which sets no such flag.
+Gatekeeper refuses to open the app; `osi` uses `curl`, which sets no such flag. `osi` will not
+replace an `ottospace.app` it did not install (one from `scripts/bundle.sh`, say) without
+`--force`. Once it has installed the app, `osi update` keeps it at the same build as the command.
 
 How this works and why: [docs/ai/install-and-update.md](docs/ai/install-and-update.md).
 

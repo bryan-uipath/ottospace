@@ -52,6 +52,7 @@ run() {
 says() { printf '%s' "$out" | grep -qF -- "$1"; }
 installed_is() { [ "$("$bin/ottospace")" = "fake ottospace $1" ]; }
 state_has() { grep -qxF -- "$1" "$state/current"; }
+app_is() { [ "$(cat "$app/Contents/Resources/id")" = "$1" ]; }
 
 # A 40-character commit made of one letter, e.g. `commit a`.
 commit() { printf "%040d" 0 | tr 0 "$1"; }
@@ -71,7 +72,12 @@ make_build() {
   codesign --force --sign - "$stage/ottospace.app" 2>/dev/null
   ditto -c -k --keepParent "$stage/ottospace.app" "$dir/ottospace-$target.app.zip"
   printf 'version=0.1.0\ncommit=%s\ndate=2026-11-12T08:09:00Z\ntarget=%s\n' "$sha" "$target" >"$dir/BUILD"
-  (cd "$dir" && shasum -a 256 "ottospace-$target.tar.gz" "ottospace-$target.app.zip" BUILD >SHA256SUMS)
+  resum "$dir"
+}
+
+# resum <dir>: writes SHA256SUMS for the files as they are now.
+resum() {
+  (cd "$1" && shasum -a 256 "ottospace-$target.tar.gz" "ottospace-$target.app.zip" BUILD >SHA256SUMS)
 }
 
 # make_pr <number> <head commit> <head repo> <is fork: true|false> <author>: what fake gh answers.
@@ -82,6 +88,7 @@ make_pr() {
 # Answers the three gh calls osi makes, from files in $FAKE_GH_DIR.
 cat >"$OSI_GH" <<'EOF'
 #!/bin/sh
+printf '%s|%s|%s\n' "${GH_HOST:-}" "${GH_REPO:-}" "$*" >>"$FAKE_GH_DIR/log"
 case "$1 $2" in
   "pr view") cat "$FAKE_GH_DIR/pr-$3" ;;
   "run list")
@@ -234,16 +241,78 @@ run "$osi" install 'v1;rm'
 check "a bad version is refused" says "bad version"
 
 echo "# --app"
+# The app cannot be staged: nothing may change, the binary included.
+mkdir -p "$HOME/Applications"
+chmod 555 "$HOME/Applications"
 run "$osi" install main --app
-check "installs the app" [ "$(cat "$app/Contents/Resources/id")" = B ]
+chmod 755 "$HOME/Applications"
+check "an app that cannot be staged fails" [ "$status" != 0 ]
+check "the old binary is still installed" installed_is V2
+check "the state is unchanged" state_has "commit=$(commit 5)"
+run "$osi" install main --app
+check "installs the app" app_is B
 check "the app's signature verifies" codesign --verify --deep --strict "$app"
-check "state records the app" state_has "app=$app"
+check "osi records the app" grep -qxF "path=$app" "$state/app"
 make_build "$main_dir" G "$(commit 6)"
 run "$osi" update
-check "update also updates the app" [ "$(cat "$app/Contents/Resources/id")" = G ]
+check "update also updates the app" app_is G
 run "$osi" rollback
-check "rollback also puts the app back" [ "$(cat "$app/Contents/Resources/id")" = B ]
+check "rollback also puts the app back" app_is B
 check "and the binary" installed_is B
+run "$osi" rollback
+check "a second rollback brings the app forward" app_is G
+check "and the binary" installed_is G
+
+echo "# --app, then an install without it"
+make_build "$main_dir" H "$(commit 7)"
+run "$osi" install main --app
+make_build "$main_dir" I "$(commit 8)"
+run "$osi" install main
+check "the app is left as it is" app_is H
+check "osi says which build the app is" says "is build 777777777777 and was left"
+run "$osi" rollback
+check "rollback puts the binary back" installed_is H
+check "the app is that build, not an older one" app_is H
+check "no stale app is kept" [ ! -e "$state/previous.app" ]
+run "$osi" install main
+check "the binary moves on without the app" installed_is I
+
+echo "# bad downloads"
+make_build "$main_dir" J "$(commit 9)"
+echo tampered >>"$main_dir/ottospace-$target.app.zip"
+run "$osi" install main --app
+check "a bad app checksum fails" says "checksum mismatch for ottospace-$target.app.zip"
+check "the old binary is still installed" installed_is I
+check "the old app is still installed" app_is H
+make_build "$main_dir" J "$(commit 9)"
+sed -i '' '/tar\.gz/d' "$main_dir/SHA256SUMS"
+run "$osi" install main
+check "a file missing from SHA256SUMS fails" says "SHA256SUMS has no checksum for ottospace-$target.tar.gz"
+check "the old binary is still installed" installed_is I
+# A hostile archive: `ottospace` is a symlink, and one entry points three directories up,
+# which from osi's unpack directory is $work.
+make_build "$main_dir" J "$(commit 9)"
+mkdir -p "$work/evil/a/b/c" "$work/tmp"
+ln -s /etc/hosts "$work/evil/a/b/c/ottospace"
+echo escaped >"$work/evil/escape-marker"
+tar -czf "$main_dir/ottospace-$target.tar.gz" -C "$work/evil/a/b/c" ottospace ../../../escape-marker
+resum "$main_dir"
+check "the fixture archive holds the escaping entry" eval "tar -tzf '$main_dir/ottospace-$target.tar.gz' | grep -qxF ../../../escape-marker"
+run env TMPDIR="$work/tmp" "$osi" install main
+check "a symlink in place of the binary fails" [ "$status" != 0 ]
+check "the old binary is still installed" installed_is I
+check "the command is not a symlink" [ ! -L "$bin/ottospace" ]
+check "nothing is written outside the unpack directory" [ ! -e "$work/escape-marker" ]
+check "the temp directory is cleaned up" [ -z "$(ls -A "$work/tmp")" ]
+# The same escaping entry beside a real binary: the binary installs, the entry is ignored.
+rm "$work/evil/a/b/c/ottospace"
+printf '#!/bin/sh\necho "fake ottospace J"\n' >"$work/evil/a/b/c/ottospace"
+chmod 755 "$work/evil/a/b/c/ottospace"
+tar -czf "$main_dir/ottospace-$target.tar.gz" -C "$work/evil/a/b/c" ottospace ../../../escape-marker
+resum "$main_dir"
+run env TMPDIR="$work/tmp" "$osi" install main
+check "only the binary is unpacked" installed_is J
+check "the escaping entry is ignored" [ ! -e "$work/escape-marker" ]
 
 echo "# self-update"
 run "$osi" self-update
@@ -259,7 +328,7 @@ mkdir -p "$HOME/.ottospace/tasks"
 run "$osi" uninstall
 check "removes the command" [ ! -e "$bin/ottospace" ]
 check "removes osi" [ ! -e "$bin/osi" ]
-check "removes the app it installed" [ ! -e "$app" ]
+check "removes the app it installed, though the last install had no --app" [ ! -e "$app" ]
 check "removes its state" [ ! -e "$state" ]
 check "keeps settings.json" [ -f "$HOME/.ottospace/settings.json" ]
 check "keeps tasks" [ -d "$HOME/.ottospace/tasks" ]
@@ -272,11 +341,53 @@ chmod 755 "$bin/ottospace"
 run "$osi" install main
 check "is not replaced" [ "$("$bin/ottospace")" = mine ]
 check "osi says why" says "osi did not install it"
+make_build "$main_dir" K "$(commit a)"
 run "$osi" install main --force
-check "--force replaces it" installed_is G
+check "--force replaces it" installed_is K
 printf '#!/bin/sh\necho mine\n' >"$bin/osi"
 run sh "$root/install.sh"
 check "install.sh does not replace another osi" [ "$(sh "$bin/osi")" = mine ]
+rm "$bin/osi"
+
+echo "# an app osi did not install"
+mkdir -p "$app/Contents/Resources"
+printf mine >"$app/Contents/Resources/id"
+make_build "$main_dir" L "$(commit b)"
+run "$osi" install main --app
+check "is not replaced" app_is mine
+check "osi says why" says "ottospace.app exists and osi did not install it"
+check "the binary is not updated either" installed_is K
+run "$osi" update
+check "update leaves it alone" app_is mine
+check "and updates the command" installed_is L
+run "$osi" uninstall
+check "uninstall leaves it alone" app_is mine
+make_build "$main_dir" M "$(commit c)"
+run "$osi" install main --app --force
+check "--force replaces it" app_is M
+run "$osi" uninstall
+check "then it is osi's to remove" [ ! -e "$app" ]
+
+echo "# rollback with the command missing"
+run "$osi" install main
+make_build "$main_dir" N "$(commit d)"
+run "$osi" update
+rm "$bin/ottospace"
+run "$osi" rollback
+check "puts the previous build back" installed_is M
+check "keeps no record of a build it has no copy of" [ ! -e "$state/previous" ]
+check "nor a binary for it" [ ! -e "$state/previous.bin" ]
+run "$osi" rollback
+check "a second rollback has nothing to go back to" says "no previous build"
+
+echo "# gh cannot be pointed at another host"
+publish_pr "$(commit f)" PR30c
+: >"$FAKE_GH_DIR/log"
+run env GH_HOST=evil.example GH_REPO=evil/ottospace "$osi" install pr 30
+check "the pull request build installs" installed_is PR30c
+check "gh was called three times" [ "$(wc -l <"$FAKE_GH_DIR/log" | tr -d ' ')" = 3 ]
+check "every call names github.com" [ "$(grep -c -- '-R github.com/bryan-uipath/ottospace' "$FAKE_GH_DIR/log")" = 3 ]
+check "GH_HOST and GH_REPO do not reach gh" eval "! grep -q evil '$FAKE_GH_DIR/log'"
 
 echo "# overrides"
 run env OSI_BIN_DIR="$work/elsewhere/bin" OTTOSPACE_HOME="$work/elsewhere/home" "$osi" install main

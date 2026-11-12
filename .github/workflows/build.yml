@@ -11,7 +11,8 @@ on:
 # pull_request, never pull_request_target: a fork's run gets a read-only token and no secrets.
 permissions: {}
 
-# A new push to a pull request cancels its older build. Builds of main all finish.
+# A new push to a pull request cancels its older build. A build of main that has started
+# finishes; one still waiting is replaced by a newer push. publish-main publishes only the tip.
 concurrency:
   group: build-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
