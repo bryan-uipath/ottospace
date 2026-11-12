@@ -16,10 +16,10 @@ use core_foundation::base::TCFType;
 use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 use gpui::{
     AnyElement, AnyView, App, Application, AssetSource, BorderStyle, Bounds, BoxShadow, ClickEvent, ClipboardItem,
-    ContentMask, Context, Div, ElementId, FocusHandle, ImageSource, KeyBinding, KeyDownEvent, Keystroke, Modifiers,
-    MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Resource, ScrollDelta, ScrollHandle, ScrollWheelEvent,
-    SharedString, Size, Stateful, Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions, actions, black,
-    canvas, div, img, point, prelude::*, px, quad, rgb, size, surface, svg, transparent_black,
+    ContentMask, Context, Div, ElementId, FocusHandle, FontWeight, ImageSource, KeyBinding, KeyDownEvent, Keystroke,
+    Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Resource, ScrollDelta, ScrollHandle,
+    ScrollWheelEvent, SharedString, Size, Stateful, Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions,
+    actions, black, canvas, div, img, point, prelude::*, px, quad, rgb, size, surface, svg, transparent_black,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::keys::{self, Mods};
@@ -405,10 +405,10 @@ struct Workspace {
     _subscriptions: Vec<Subscription>,
 }
 
-/// App icons: drawn 18 points wide, read at 32 points (64 pixels on a Retina display), so a
-/// smaller copy is never stretched.
-const ICON_POINTS: f32 = 18.;
-const ICON_READ_POINTS: f64 = 32.;
+/// App icons: drawn 24 points wide, read at 48 pixels: pixel for pixel on a Retina display,
+/// and an even half on others. Scaling 64 pixels down to 36 in the shell made them rough.
+const ICON_POINTS: f32 = 24.;
+const ICON_PIXELS: u8 = 48;
 
 /// How long the `s` key snoozes a task: one hour.
 const SNOOZE_MS: u64 = 3_600_000;
@@ -1247,12 +1247,23 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Where the selected row is among the children of its list, to scroll it into view: each
-    /// list starts with a header line, and Tasks has a heading before each group.
+    /// Where the selected row is among the children of its list, to scroll it into view. Tasks
+    /// and Repos have headings between their rows.
     fn selected_child(&self) -> Option<usize> {
         let at = self.model.list?;
-        if self.model.sidebar != Some(Section::Tasks) {
-            return Some(at + 1);
+        match self.model.sidebar {
+            Some(Section::Tasks) => {}
+            // A heading before each repository's rows.
+            Some(Section::Repos) => {
+                let mut rows = 0;
+                let headings = self.model.repos.iter().take_while(|repo| {
+                    let starts_before = rows <= at;
+                    rows += 1 + repo.worktrees.len();
+                    starts_before
+                });
+                return Some(at + headings.count());
+            }
+            _ => return Some(at),
         }
         let inbox = self.model.tasks.inbox();
         let mut groups: Vec<Group> = inbox.iter().take(at + 1).map(|(group, _)| *group).collect();
@@ -1612,6 +1623,24 @@ impl Workspace {
             .text_xs()
             .text_color(rgb(theme::MUTED))
             .child(title.to_uppercase())
+            .child(div().flex_1())
+            // Reads the section's list again. Tasks and Workbook have nothing to read.
+            .children(matches!(section, Section::Apps | Section::Repos).then(|| {
+                div()
+                    .id("bar-refresh")
+                    .size(px(28.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
+                    .child("↻")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.refresh_lists();
+                        cx.notify();
+                    }))
+            }))
             .child(
                 div()
                     .id("bar-close")
@@ -1663,7 +1692,7 @@ impl Workspace {
         self.icons.retain(|name, _| self.apps.iter().any(|app| app.name == *name));
         for app in &self.apps {
             if !self.icons.contains_key(&app.name)
-                && let Some(png) = icon::png(app.pid, ICON_READ_POINTS)
+                && let Some(png) = icon::png(app.pid, ICON_PIXELS)
             {
                 let image = gpui::Image::from_bytes(gpui::ImageFormat::Png, png);
                 self.icons.insert(app.name.clone(), Arc::new(image));
@@ -1717,24 +1746,32 @@ impl Workspace {
     /// Repositories, each with its worktrees under it. A click opens a terminal there: it fills
     /// the focused pane if that is empty, else splits it (right, or down with shift).
     fn render_repos(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let row = |index: usize, name: &str, path: &str, branch: Option<&str>, nested: bool| {
+        // One checkout: the branch it is on, and for a linked worktree its directory's name.
+        let row = |index: usize, path: &str, branch: Option<&str>, directory: Option<&str>| {
             let target = path.to_string();
-            list_button(("repo", index), self.model.list == Some(index))
-                .when(nested, |row| row.ml_4())
-                .child(div().flex_1().min_w_0().truncate().child(name.to_string()))
-                .children(branch.map(|branch| {
-                    div().max_w(px(110.)).truncate().text_xs().text_color(rgb(theme::MUTED)).child(branch.to_string())
+            let branch = branch.unwrap_or("(no branch)").to_string();
+            list_row(("repo", index), self.model.list == Some(index))
+                .child(div().flex_1().min_w_0().truncate().child(branch))
+                .children(directory.map(|name| {
+                    div().max_w(px(110.)).truncate().text_xs().text_color(rgb(theme::MUTED)).child(name.to_string())
                 }))
                 .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                     let axis = if e.modifiers().shift { Axis::Down } else { Axis::Right };
                     this.dispatch(Action::OpenRepo { path: target.clone(), axis }, window, cx);
                 }))
         };
-        let mut rows = Vec::new();
+        // The repository's name as a heading, then its checkouts: its own directory first.
+        let mut items: Vec<AnyElement> = Vec::new();
+        let mut index = 0;
         for repo in &self.model.repos {
-            rows.push(row(rows.len(), &repo.name, &repo.path, repo.branch.as_deref(), false));
+            let name = div().px_2().pt_2().text_sm().font_weight(FontWeight::SEMIBOLD).truncate();
+            items.push(name.child(repo.name.clone()).into_any_element());
+            items.push(row(index, &repo.path, repo.branch.as_deref(), None).into_any_element());
+            index += 1;
             for worktree in &repo.worktrees {
-                rows.push(row(rows.len(), &worktree.name, &worktree.path, worktree.branch.as_deref(), true));
+                let branch = worktree.branch.as_deref();
+                items.push(row(index, &worktree.path, branch, Some(&worktree.name)).into_any_element());
+                index += 1;
             }
         }
         let empty = self.model.repos.is_empty().then(|| {
@@ -1745,31 +1782,8 @@ impl Workspace {
             );
             div().px_2().text_xs().text_color(rgb(theme::MUTED)).child(hint)
         });
-        div()
-            .id("repos")
-            .flex_1()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .p_2()
-            .overflow_y_scroll()
-            .track_scroll(&self.list_scroll)
-            .child(
-                div()
-                    .id("refresh-repos")
-                    .px_2()
-                    .py_1()
-                    .text_xs()
-                    .text_color(rgb(theme::MUTED))
-                    .cursor_pointer()
-                    .hover(|s| s.text_color(rgb(theme::TEXT)))
-                    .child("Repositories  ↻")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.dispatch(Action::SetRepos { repos: repos::scan() }, window, cx);
-                    })),
-            )
-            .children(empty)
-            .children(rows)
+        let list = div().id("repos").flex_1().flex().flex_col().p_2().overflow_y_scroll();
+        list.track_scroll(&self.list_scroll).children(empty).children(items)
     }
 
     /// Running apps. A click hosts the app's main window in a pane.
@@ -1783,30 +1797,21 @@ impl Workspace {
             .p_2()
             .overflow_y_scroll()
             .track_scroll(&self.list_scroll)
-            .child(
-                div()
-                    .id("refresh")
-                    .px_2()
-                    .py_1()
-                    .text_xs()
-                    .text_color(rgb(theme::MUTED))
-                    .cursor_pointer()
-                    .hover(|s| s.text_color(rgb(theme::TEXT)))
-                    .child("Running  ↻")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.refresh_apps();
-                        cx.notify();
-                    })),
-            )
             .children(self.apps.iter().enumerate().map(|(i, app)| {
                 let target = app.name.clone();
                 list_button(("app", i), self.model.list == Some(i))
+                    .py_1p5()
+                    .gap_3()
                     .child(self.app_icon(&app.name))
                     .child(div().flex_1().min_w_0().truncate().child(app.name.clone()))
                     // How many windows the app has open, when more than one.
                     .when(app.windows > 1, |row| {
-                        let badge = div().px_1p5().rounded_full().bg(rgb(theme::SELECTED)).text_xs();
-                        row.child(badge.text_color(rgb(theme::MUTED)).child(app.windows.to_string()))
+                        // A fixed box with the digits centred in it. Digits have no descender, so
+                        // a line centred by its box sits high: one point of padding evens it.
+                        let badge = div().h(px(18.)).min_w(px(18.)).px_1().pt(px(1.)).flex_none().flex();
+                        let badge = badge.items_center().justify_center().rounded_full().bg(rgb(theme::SELECTED));
+                        let badge = badge.text_xs().line_height(px(16.)).text_color(rgb(theme::MUTED));
+                        row.child(badge.child(app.windows.to_string()))
                     })
                     // Fills the focused pane if it is empty. Else splits it: right, or down with shift.
                     .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
@@ -2093,6 +2098,27 @@ impl Workspace {
     }
 }
 
+/// A row under a heading (a repository's checkout): no outline at rest, so a long list stays
+/// quiet. Hover and selection mark it.
+fn list_row(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
+    div()
+        .id(id)
+        .px_2()
+        .py_1()
+        .flex()
+        .items_center()
+        .gap_2()
+        .rounded_md()
+        // Always there, so a row does not shift by a point when it is selected.
+        .border_1()
+        .border_color(transparent_black())
+        .text_sm()
+        .text_color(rgb(theme::MUTED))
+        .cursor_pointer()
+        .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
+        .when(selected, |row| row.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)).border_color(rgb(theme::LIST)))
+}
+
 /// The time now, in milliseconds since 1970. The core has no clock: actions carry this.
 fn now_ms() -> u64 {
     let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
@@ -2128,6 +2154,10 @@ fn list_button(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
 fn running_apps(hosting: bool, only: Option<i32>) -> Vec<capture::App> {
     match (hosting, only) {
         (false, _) => Vec::new(),
+        (true, Some(pid)) if capture::apps().iter().any(|app| app.pid == pid) => {
+            // With its real window count.
+            capture::apps().into_iter().filter(|app| app.pid == pid).collect()
+        }
         (true, Some(pid)) => {
             capture::name_of(pid).map(|name| capture::App { name, pid, windows: 1 }).into_iter().collect()
         }
