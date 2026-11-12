@@ -2493,8 +2493,9 @@ impl Workspace {
             .text_xs()
             .text_color(rgb(theme::MUTED))
             .child(div().px_2().rounded_sm().bg(rgb(color)).text_color(rgb(theme::BACKGROUND)).child(mode))
-            .child(focused)
-            .child(hint)
+            // Long text gives way, so the build tag on the right stays in view.
+            .child(div().min_w_0().truncate().child(focused))
+            .child(div().flex_none().child(hint))
             // Pushes what follows to the right. An auto margin there closed the gaps on the left.
             .child(div().flex_1())
             // The one thing tasks put here: how many wait for the user.
@@ -2503,7 +2504,7 @@ impl Workspace {
                 div().text_color(rgb(theme::SNEAK)).child(label)
             }))
             // Shown here, not in the Apps list, so it is visible whichever section is open.
-            .children(self.problem().map(|e| div().text_color(rgb(theme::ERROR)).child(e)))
+            .children(self.problem().map(|e| div().min_w_0().truncate().text_color(rgb(theme::ERROR)).child(e)))
             // Which build this is, last and dim: it matters when something looks wrong.
             .child(
                 div()
