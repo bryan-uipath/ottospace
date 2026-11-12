@@ -414,11 +414,17 @@ fn the_new_task_box_files_a_line() {
     otto.call(json!({"cmd": "type", "pane": pane, "text": "pwd\r"}));
     let here = format!("^{}$", regex::escape(repo.to_str().unwrap()));
     otto.call(json!({"cmd": "wait", "pane": pane, "pattern": here, "timeout_ms": 40000}));
-    // ⌘T adds a tab to the task; ⌘1 is the task's first tab, not the first tab of all.
-    key("cmd-t");
-    key("escape");
+    // A new tab is the task's. ⌘1 and ⌘2 count the task's tabs, not all tabs.
+    let reply = otto.call(json!({"cmd": "new_tab"}));
+    assert_eq!((&reply["state"]["tabs"][2]["task"], &reply["state"]["active"]), (&json!(1), &json!(2)));
     let reply = key("cmd-1");
     assert_eq!((&reply["state"]["active"], &reply["state"]["focused"]), (&json!(1), &json!(pane)));
+    assert_eq!(key("cmd-2")["state"]["active"], 2);
+    assert_eq!(key("cmd-3")["state"]["active"], 2, "the task has two tabs: ⌘3 does nothing");
+    // A follow-up filed from the task's tab cannot take the tab; a tab that is gone is refused too.
+    let taken = otto.raw(&json!({"cmd": "task_add", "title": "follow-up", "tab": state["tabs"][1]["id"]}).to_string());
+    assert!(taken["error"].as_str().is_some_and(|e| e.contains("another task")), "{taken}");
+    assert_eq!(otto.raw(r#"{"cmd":"task_add","title":"x","tab":99}"#)["ok"], false);
     // Leaving shows the tabs of no task again; the task's shell goes on.
     let reply = otto.call(json!({"cmd": "task_leave"}));
     assert_eq!((&reply["state"]["current_task"], &reply["state"]["active"]), (&Value::Null, &json!(0)));

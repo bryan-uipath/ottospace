@@ -217,7 +217,7 @@ pub enum Action {
         tasks: Vec<Task>,
         floor: TaskId,
     },
-    /// File a task. `tab`: the `id` of an open tab that becomes the task's (its first tab).
+    /// File a task. `tab`: the `id` of an open tab of no task, which becomes the task's first tab.
     TaskAdd {
         title: String,
         priority: u8,
@@ -554,8 +554,11 @@ impl Model {
             Action::RestoreTasks { tasks, floor } => self.tasks.restore(tasks, floor),
             Action::TaskAdd { title, priority, state, tab } => {
                 let id = self.tasks.add(title, priority, state);
-                // The tab named becomes the task's. If it is the one on show, the view is now the task's.
-                if let Some(index) = tab.and_then(|tab| self.tabs.iter().position(|t| t.id == tab)) {
+                // The tab named becomes the task's, unless another task has it: an agent that
+                // files a follow-up from a task's tab must not take the tab away. If it is the one
+                // on show, the view is now the task's.
+                let free = |t: &Tab| Some(t.id) == tab && t.task.is_none();
+                if let Some(index) = self.tabs.iter().position(free) {
                     self.tabs[index].task = Some(id);
                     if index == self.active {
                         self.remember_tab();
@@ -1514,6 +1517,9 @@ mod tests {
         // Opening the first task shows the tab it was given, with its pane.
         m.update(Action::TaskOpen { id: Some(1) });
         assert_eq!((m.active, m.focused), (0, Some(1)));
+        // A follow-up filed from that tab does not take it from the task that has it.
+        m.update(Action::TaskAdd { title: "c".into(), priority: 1, state: State::Captured, tab: Some(first) });
+        assert_eq!((m.current_task, m.tabs[0].task), (Some(1), Some(1)));
     }
 
     #[test]

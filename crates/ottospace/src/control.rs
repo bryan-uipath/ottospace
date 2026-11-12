@@ -72,7 +72,7 @@ pub enum Request {
     SelectTab {
         index: usize,
     },
-    /// Next (positive) or previous tab.
+    /// Next (positive) or previous tab on the bar: the tabs of the task on show.
     CycleTab {
         delta: i32,
     },

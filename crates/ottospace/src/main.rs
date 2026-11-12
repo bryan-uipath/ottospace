@@ -807,6 +807,19 @@ impl Workspace {
                     failure = Some(format!("the title is longer than {MAX_TITLE} characters"));
                     None
                 }
+                // A tab that is gone, or that another task has, cannot become this task's: say so,
+                // or the caller believes its work is filed under the task.
+                Request::TaskAdd { tab: Some(tab), .. } if self.model.tabs.iter().all(|t| t.id != tab) => {
+                    failure = Some(format!("no tab with id {tab}"));
+                    None
+                }
+                Request::TaskAdd { tab: Some(tab), .. }
+                    if self.model.tabs.iter().any(|t| t.id == tab && t.task.is_some()) =>
+                {
+                    failure =
+                        Some(format!("tab {tab} belongs to another task; leave out `tab` to file a task without one"));
+                    None
+                }
                 Request::TaskAdd { title, priority, state, tab } => {
                     self.dispatch(Action::TaskAdd { title, priority, state, tab }, window, cx);
                     // The new task, so the caller has its id.

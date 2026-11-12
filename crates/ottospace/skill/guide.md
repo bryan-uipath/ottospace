@@ -133,7 +133,8 @@ ottospace ctl '{"cmd":"task_undo"}'
 A task has a `title`, a `priority` (1 is most urgent, default 3) and a `state`. A task has its
 own tabs: `state.tabs[].task` says which task a tab belongs to. `"tab"` on `task_add` gives the
 task an open tab (a tab `id`; `$OTTOSPACE_TAB` in a shell ottospace started): do that for the tab
-you work in, so the user finds your work under the task.
+you work in, so the user finds your work under the task. It must be a tab of no task; a tab that
+is gone or that another task has is refused. To file a follow-up from inside a task, leave `tab` out.
 States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stale`, `parked`,
 `done`, `cleaned`. The inbox lists tasks in groups, in this order: `needs_you` (states
 `needs_you`, `stale`), `running` (`running`, `review`), `captured` (`captured`, `triaged`),
@@ -164,14 +165,16 @@ States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stal
   on a tab of another task also brings that task's tabs to the bar.
 - `task_pop` is `task_open` for the first task under `needs_you`. It replies
   `{"ok":true,"task":{..},"opened":true}`. `"task":null`: nothing needs the user.
-  `"opened":false`: the view did not change (the picker or key reference is open).
+  `"opened":false`: the view did not change (the picker, the new-task box or the key reference
+  is open, or the user is in visual mode).
 - `task_snooze`, `task_hold` and `task_dismiss` are the user's moves; send them only when asked.
   A snoozed or dismissed task leaves the inbox. A snoozed task returns when its time is up;
   a dismissed task does not. Either returns when it moves under `needs_you`. `task_hold` sets
   the state to `parked`; a `done` or `cleaned` task cannot be held. `task_undo` takes back the
   last of the three, one step, unless the task's state was reported since. A request for a task
   id that does not exist is refused.
-- Closing a task's last tab leaves it an empty one. A task is not ended by closing its tabs.
+- A task is not ended by closing its tabs. If all of them are closed, it gets a fresh first tab
+  the next time it is opened.
 - Tasks are kept on disk (`~/.ottospace/tasks`, one file each) and come back at the next start,
   without their tabs. Change tasks through these requests, not by editing the files: the running
   app does not read them again.
