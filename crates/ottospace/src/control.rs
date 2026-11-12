@@ -92,6 +92,8 @@ pub enum Request {
         index: Option<usize>,
     },
     PickerClose,
+    /// Shows or hides the key reference.
+    Keys,
     Quit,
 }
 

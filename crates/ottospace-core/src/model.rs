@@ -182,6 +182,9 @@ pub enum Action {
         index: Option<usize>,
     },
     ClosePicker,
+    /// Show or hide the key reference.
+    ToggleKeys,
+    CloseKeys,
 }
 
 /// What the shell must do after an update.
@@ -233,6 +236,8 @@ pub struct Model {
     pub sidebar: Option<Section>,
     /// The pane picker, while it is open.
     pub picker: Option<Picker>,
+    /// The key reference overlay is showing.
+    pub keys: bool,
     #[serde(skip)]
     next_id: PaneId,
     #[serde(skip)]
@@ -250,6 +255,7 @@ impl Default for Model {
             live: None,
             sidebar: None,
             picker: None,
+            keys: false,
             next_id: 0,
             next_tab: 0,
         };
@@ -443,6 +449,12 @@ impl Model {
                 }
             }
             Action::ClosePicker => self.picker = None,
+            // The overlay is ottospace's own UI: it needs the keyboard back to be dismissed.
+            Action::ToggleKeys => {
+                self.leave(&mut effects);
+                self.keys = !self.keys;
+            }
+            Action::CloseKeys => self.keys = false,
             Action::CloseSidebar => {
                 self.leave(&mut effects);
                 self.sidebar = None;
@@ -993,6 +1005,20 @@ mod tests {
         assert_eq!(effects, [Effect::HostApp { name: "Slack".into(), axis: Right, new_tab: true }]);
         // No tab yet: if hosting fails, nothing is left behind.
         assert_eq!(m.tabs.len(), 1);
+    }
+
+    #[test]
+    fn the_key_reference_toggles_and_takes_the_keyboard_back() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        m.update(Action::Enter { pane: 1 });
+        assert_eq!(m.update(Action::ToggleKeys), [Effect::Parked(1)]);
+        assert!(m.keys);
+        m.update(Action::ToggleKeys);
+        assert!(!m.keys);
+        m.update(Action::ToggleKeys);
+        m.update(Action::CloseKeys);
+        assert!(!m.keys);
     }
 
     #[test]
