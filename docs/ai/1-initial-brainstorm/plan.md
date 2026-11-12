@@ -78,6 +78,20 @@ cheapest daily win. E is the largest value but needs A, B and D.
 - Zoom meeting layout and participants → spinner: see `zoom-meeting.md`.
 - Hiding panes from screen sharing: see `screen-share-privacy.md`.
 - New or existing app window from the picker, and moving panes: see `app-windows.md`.
+- Return key: built. F18 through a system hot key; `OTTOSPACE_RETURN_KEY` picks another.
+  The Caps Lock remap is a `hidutil` command in the README, not applied by the app.
+- Backlog, from Bryan 2026-11-11:
+  - **Coach.** Count how often each shortcut is used, tier the shortcuts, and show hints or
+    achievements. Shares its data with the usage metrics for the weekly review (#1a).
+  - **Small delights.** Keep a list as we build. First candidates: Otto reacts to state (a task
+    finishes, a focus block starts).
+  - **Status bar.** Do not list every shortcut. Show mode, focused pane and one hint; put the
+    full key reference in an overlay on `?`.
+  - **One title bar per app pane.** Today the app's title bar shows under our pane header. Either
+    crop it from the stream and, when live, place the app's title bar over our header; or drop
+    our header for app panes. Apps with tabs in the title bar (Chrome) need an exception.
+  - **Border when live.** The live app window covers the pane's accent border. Inset the window.
+  - **A real app.** `ottospace.app` with the Otto icon and a stable identity.
 - Tab titles: later, a cheap agent names each tab from what is in it. The model is a setting
   (Bryan: default haiku / luna). Until then titles are "Tab N".
 - Scripting in TypeScript (replaces "rules before a scripting language"): see `scripting.md`.
