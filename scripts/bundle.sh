@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds target/release/bundle/ottospace.app: release binary, icon, Info.plist, ad hoc signature.
+# Builds <target dir>/release/bundle/ottospace.app: release binary, icon, Info.plist, ad hoc signature.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -11,10 +11,13 @@ cargo build --release -p ottospace --bin ottospace
 version="$(cargo pkgid -p ottospace)"
 version="${version##*[#@]}"
 
-app="$root/target/release/bundle/ottospace.app"
+# Ask cargo where it built: CARGO_TARGET_DIR or cargo config can move it out of ./target.
+target="$(cargo metadata --format-version 1 --no-deps | plutil -extract target_directory raw -)"
+
+app="$target/release/bundle/ottospace.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp target/release/ottospace "$app/Contents/MacOS/ottospace"
+cp "$target/release/ottospace" "$app/Contents/MacOS/ottospace"
 cp crates/ottospace/assets/ottospace.icns "$app/Contents/Resources/ottospace.icns"
 
 # Accessibility and Screen Recording have no usage key. These cover programs run in terminal panes.

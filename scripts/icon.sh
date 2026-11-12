@@ -14,7 +14,9 @@ mkdir "$iconset"
 
 # Headless Chrome keeps the transparent corners; sips and qlmanage can flatten them.
 "$chrome" --headless=new --hide-scrollbars --default-background-color=00000000 \
-  --window-size=1024,1024 --screenshot="$tmp/1024.png" "file://$svg" 2>/dev/null
+  --window-size=1024,1024 --screenshot="$tmp/1024.png" "file://$svg" 2>/dev/null || true
+# Chrome can exit non-zero after writing the file (slow teardown), so check the file instead.
+[ -s "$tmp/1024.png" ] || { echo "No screenshot from $chrome (set CHROME to another path)" >&2; exit 1; }
 
 # iconutil wants each size at 1x and 2x, e.g. icon_16x16.png (16px) and icon_16x16@2x.png (32px).
 for size in 16 32 128 256 512; do

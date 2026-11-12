@@ -68,6 +68,7 @@ and its own identity.
   Recording for ottospace itself.
 - The signature is ad hoc, so each rebuild is a new identity to macOS and you may have to grant
   both again. A stable identity needs a signing certificate, which the script does not set up.
+- Opened from Finder or the Dock, terminal panes start in `/`, not your home directory.
 
 `scripts/icon.sh` regenerates the icon from the SVG. It needs Google Chrome.
 
