@@ -70,6 +70,12 @@ pub enum Request {
         target: PaneId,
         zone: Zone,
     },
+    /// Moves the splits around an app pane (default: the focused one) so the pane has the size
+    /// its window kept; see `state.panes[].fit`.
+    Fit {
+        #[serde(default)]
+        pane: Option<PaneId>,
+    },
     OpenApp {
         name: String,
         #[serde(default)]

@@ -29,6 +29,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.movePane({ pane: 3, tab: 0 }),
   (c) => c.equalize(),
   (c) => c.dropPane({ source: 3, target: 1, zone: "left" }),
+  (c) => c.fit({ pane: 2 }),
   (c) => c.openApp({ name: "Safari", axis: "right" }),
   (c) => c.enter({ pane: 1 }),
   (c) => c.leave(),

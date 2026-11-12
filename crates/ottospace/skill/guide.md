@@ -49,7 +49,7 @@ ottospace ctl '{"cmd":"state"}'
 |---|---|
 | `mode` | `normal`, `app` (a hosted app has the keyboard), `pick` (the picker is open), `visual` (selecting terminal text with the keyboard), `list` (the secondary bar has the keyboard), `compose` (the new-task box is open), `confirm` (the quit question is up) or `sneak` (labels are on ottospace's controls; a typed label activates one) |
 | `state.list` | Null, or the index of the selected row of the open section: the secondary bar has the keyboard (`mode` is `list`, or `pick` while the picker is open over it) |
-| `state.panes` | Every pane of every tab: `id`, `kind`, and `cwd` for a terminal opened by `open_repo`. `kind` is an object: `{"type":"terminal"}`, `{"type":"empty"}` or `{"type":"app","window":N,"title":"..."}` |
+| `state.panes` | Every pane of every tab: `id`, `kind`, `cwd` for a terminal opened by `open_repo`, and `fit` for an app pane whose window kept another size than the pane's: `wants` (`[width, height]` in points, the size the window kept) `hint` (what the pane header says, e.g. `needs 120 pt more width` or `fixed size 232×320`) and, only when a `fit` request would move nothing, `stuck`: `no_split` (the pane spans the tab on that axis) or `at_limit` (the splits are at their 10%). No `fit`: the window has the pane's size, or is less than 24 pt smaller (an app that snaps its size), or the layout changed and the pane has not been measured since (within a second). `kind` is an object: `{"type":"terminal"}`, `{"type":"empty"}` or `{"type":"app","window":N,"title":"..."}` |
 | `state.tabs`, `state.active` | Every tab (`id`, `title`, and `task`: the id of the task it belongs to, or null) and the index of the one showing. Requests take the index, not the `id` |
 | `state.current_task` | The task whose tabs are on the user's tab bar, or null for the tabs of no task. Tabs of other tasks keep running, off the bar |
 | `tab_panes` | Pane ids of each tab, in tab order |
@@ -102,6 +102,7 @@ Arranging panes:
 ```sh
 ottospace ctl '{"cmd":"resize","dir":"left"}'
 ottospace ctl '{"cmd":"equalize"}'
+ottospace ctl '{"cmd":"fit","pane":2}'
 ottospace ctl '{"cmd":"swap","dir":"right"}'
 ottospace ctl '{"cmd":"move_pane","tab":1}'
 ottospace ctl '{"cmd":"move_pane","pane":3,"tab":0}'
@@ -113,6 +114,18 @@ ottospace ctl '{"cmd":"drop_pane","source":3,"target":1,"zone":"center"}'
   (or bottom) border, or for the last pane of a row (or column) its left (or top) one. Each side
   of a split keeps at least 10%; at that limit nothing moves. Read the result from
   `state.layout` (`ratio`) or `bounds`. `equalize` evens out every split of the active tab.
+- `fit` moves the splits around an app pane (default: the focused one) so the pane has the size
+  in its `fit.wants`: larger for a window that is cut off, smaller for one of a fixed size. Only
+  an axis with a split to move changes, and each side of a split keeps at least 10%; what still
+  does not fit stays in `fit`, measured again within a second. A split at its 10% passes the rest
+  to the next split above it on that axis. The pane may be in a background tab: it is fitted
+  there by its last measure, and its tab stays in the background.
+- `fit` acts once on a measure: the measure is dropped when the layout changes, so a second `fit`
+  sent at once does nothing. Wait for `fit` to show again in `state.panes` before the next.
+- `fit` is refused with `no pane N` for a pane that does not exist, `pane N is a terminal: ...`
+  (or `is empty`) for a pane that is not an app's, and `pane N cannot be fitted: no split to move`
+  (or `splits at their limit`) when `fit.stuck` is set. An app pane with no `fit` is not an
+  error: nothing moves.
 - `swap` trades the focused pane with its neighbour on that side (the pane `focus_dir` would go
   to). The pane keeps focus.
 - `move_pane` moves a pane (default: the focused one) to another tab, beside that tab's focused
@@ -422,7 +435,8 @@ that goes on with no label, and the keys after it in the same `key` request are 
 those after a spelled label. Ids: `rail:apps`
 (`workbook`, `tasks`, `repos`), `bar:refresh`, `bar:close`, `app:<name>`, `repo:<path>`,
 `task:<id>`, `tab:<tab id>`, `tab-close:<tab id>`, `top:new_tab`, `top:split_right`,
-`top:split_down`, `top:task_leave`, `header:<pane>` (focus), `close:<pane>`, `pane:<pane>` (focus;
+`top:split_down`, `top:task_leave`, `header:<pane>` (focus), `close:<pane>`, `fit:<pane>` (only
+while the header shows `fit`), `pane:<pane>` (focus;
 an app pane gets the keyboard, as `enter`), `home:new_task`, `home-row:<task>`, `home-node:<task>`.
 A `close:` or `tab-close:` label always has two letters.
 

@@ -193,6 +193,14 @@ function pane(value: unknown, at: string): Pane {
   const o = fields(value, at);
   const pane: Pane = { id: num(o.id, `${at}.id`), kind: paneKind(o.kind, `${at}.kind`) };
   if (o.cwd !== undefined) pane.cwd = str(o.cwd, `${at}.cwd`);
+  if (o.fit !== undefined) {
+    const fit = fields(o.fit, `${at}.fit`);
+    pane.fit = { wants: pair(fit.wants, `${at}.fit.wants`), hint: str(fit.hint, `${at}.fit.hint`) };
+    if (fit.stuck !== undefined) {
+      if (fit.stuck !== "no_split" && fit.stuck !== "at_limit") throw wrong(`${at}.fit.stuck`, "a reason", fit.stuck);
+      pane.fit.stuck = fit.stuck;
+    }
+  }
   return pane;
 }
 

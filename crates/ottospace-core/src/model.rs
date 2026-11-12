@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::ax::Target;
 use crate::compose::{self, Draft};
 use crate::home::{self, Home};
+use crate::hosted::{self, Fit, Stuck};
 use crate::keys::Mods;
 use crate::layout::{Axis, Dir, Node, Rect, Zone};
 use crate::list::ListRow;
@@ -14,6 +15,9 @@ use crate::sneak::{Sneak, Typed};
 use crate::tasks::{
     self, Assign, Heading, MAX_TITLE, Moved, NOTICE_MS, Notice, State, Task, TaskId, TaskRow, TaskSection, Tasks,
 };
+
+/// The axes of a `Fit`'s sizes, in their order: width, height.
+const AXES: [Axis; 2] = [Axis::Right, Axis::Down];
 
 pub type PaneId = u32;
 
@@ -36,6 +40,9 @@ pub struct Pane {
     /// Where a terminal pane's shell starts, when it was opened for a repository.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    /// An app pane whose window kept another size than the pane's; see `hosted::Fit`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fit: Option<Fit>,
 }
 
 /// Who gets the keyboard.
@@ -236,6 +243,20 @@ pub enum Action {
         source: PaneId,
         target: PaneId,
         zone: Zone,
+    },
+    /// The shell measured an app pane after asking its window for the pane's size: the pane's
+    /// `content` and whole (`outer`) size, and the size the `window` has. `[width, height]`, points.
+    PaneWants {
+        pane: PaneId,
+        content: [f32; 2],
+        outer: [f32; 2],
+        window: [f32; 2],
+    },
+    /// Move the splits around a pane (default: the focused one) so it has its window's size, on
+    /// each axis that has a split to move. Only ever on request. The pane may be in a
+    /// background tab. See `Model::fit_refusal` for when it does nothing.
+    Fit {
+        pane: Option<PaneId>,
     },
     /// Hand the keyboard to an app pane.
     Enter {
@@ -544,6 +565,8 @@ impl Action {
             | Action::MovePane { .. }
             | Action::Equalize
             | Action::DropPane { .. }
+            | Action::PaneWants { .. }
+            | Action::Fit { .. }
             | Action::Leave
             | Action::ToggleSection { .. }
             | Action::CloseSidebar
@@ -911,6 +934,7 @@ impl Model {
                 | Action::MovePane { .. }
                 | Action::Equalize
                 | Action::DropPane { .. }
+                | Action::Fit { .. }
                 | Action::Enter { .. }
                 | Action::ToggleSection { .. }
                 | Action::CloseSidebar
@@ -1010,11 +1034,19 @@ impl Model {
                 | Action::ListHold
                 | Action::ListDismiss
         );
+        let trees = self.trees();
         self.act(action, &mut effects);
         // Nor is there one to offer once it is taken back, or an agent's report made it stale.
         if moves || !self.tasks.can_undo() {
             self.undo_offer = None;
         }
+        // A measure is of the layout it was taken in. Once a split of its tab moves or a pane
+        // comes or goes there, it says nothing: a second fit on it would move the splits again (50/50, 38/62,
+        // then 23/77). The shell measures again.
+        let stale = |pane: &Pane| pane.fit.is_some() && !self.tree(pane.id).is_some_and(|tree| trees.contains(tree));
+        let stale: Vec<PaneId> = self.panes.iter().filter(|pane| stale(pane)).map(|pane| pane.id).collect();
+        self.panes.iter_mut().filter(|pane| stale.contains(&pane.id)).for_each(|pane| pane.fit = None);
+        self.mark_stuck();
         let rows = self.list_rows();
         let followed = selected.and_then(|row| rows.iter().position(|r| *r == row));
         // Its row is gone, or the move was the user's: stay at the same place, on a row.
@@ -1121,7 +1153,7 @@ impl Model {
             Action::Adopt { kind, beside } => {
                 self.next_id += 1;
                 let id = self.next_id;
-                self.panes.push(Pane { id, kind, cwd: None });
+                self.panes.push(Pane { id, kind, cwd: None, fit: None });
                 // The pane joins the tab that holds `beside`, even if that tab is in the background.
                 let active = self.active;
                 let parked = self.tabs.iter_mut().enumerate().find(|(i, tab)| {
@@ -1233,6 +1265,23 @@ impl Model {
                 }
             }
             Action::DropPane { source, target, zone } => self.drop_pane(source, target, zone, effects),
+            Action::PaneWants { pane, content, outer, window } => {
+                if let Some(pane) = self.panes.iter_mut().find(|p| p.id == pane) {
+                    pane.fit = hosted::fit(content, outer, window);
+                }
+            }
+            Action::Fit { pane } => {
+                let fit = pane.or(self.focused).and_then(|id| Some((id, self.pane(id)?.fit.clone()?)));
+                if let Some((id, fit)) = fit
+                    && let Some(layout) = self.tree_mut(id)
+                {
+                    for (at, axis) in AXES.into_iter().enumerate() {
+                        if let Some(by) = fit.scale(at) {
+                            layout.scale(id, axis, by);
+                        }
+                    }
+                }
+            }
             Action::Enter { pane } => {
                 let is_app = self.pane(pane).is_some_and(|p| matches!(p.kind, Kind::App { .. }));
                 if is_app && self.live != Some(pane) {
@@ -1905,6 +1954,74 @@ impl Model {
         }
     }
 
+    /// Every tab's tree as it is now.
+    fn trees(&self) -> Vec<Node> {
+        self.layout.iter().chain(self.tabs.iter().filter_map(|tab| tab.layout.as_ref())).cloned().collect()
+    }
+
+    /// The tree that holds `pane`: the active tab's, or a background tab's.
+    fn tree(&self, pane: PaneId) -> Option<&Node> {
+        let holds = |tree: &&Node| tree.leaves().contains(&pane);
+        let background = || self.tabs.iter().filter_map(|tab| tab.layout.as_ref()).find(holds);
+        self.layout.as_ref().filter(holds).or_else(background)
+    }
+
+    fn tree_mut(&mut self, pane: PaneId) -> Option<&mut Node> {
+        if self.layout.as_ref().is_some_and(|tree| tree.leaves().contains(&pane)) {
+            return self.layout.as_mut();
+        }
+        self.tabs.iter_mut().filter_map(|tab| tab.layout.as_mut()).find(|tree| tree.leaves().contains(&pane))
+    }
+
+    /// Notes on each pane's `fit` whether a fit would move nothing, and why: the header then
+    /// offers none. A fit moves something if a split would move on any axis that does not fit.
+    fn mark_stuck(&mut self) {
+        let stuck = |pane: &Pane| {
+            let fit = pane.fit.as_ref()?;
+            let tree = self.tree(pane.id);
+            let would = |(at, axis): (usize, Axis)| tree?.scalable(pane.id, axis, fit.scale(at)?);
+            let found: Vec<bool> = AXES.into_iter().enumerate().filter_map(would).collect();
+            match found.as_slice() {
+                [] => Some(Stuck::NoSplit),
+                moves if moves.contains(&true) => None,
+                _ => Some(Stuck::AtLimit),
+            }
+        };
+        let marks: Vec<Option<Stuck>> = self.panes.iter().map(stuck).collect();
+        for (pane, stuck) in self.panes.iter_mut().zip(marks) {
+            if let Some(fit) = &mut pane.fit {
+                fit.stuck = stuck;
+            }
+        }
+    }
+
+    /// Whether the shell's measure of a pane differs from the one held: it reports only then.
+    pub fn wants_changed(&self, pane: PaneId, content: [f32; 2], outer: [f32; 2], window: [f32; 2]) -> bool {
+        let Some(pane) = self.pane(pane) else { return false };
+        match &pane.fit {
+            Some(fit) => !fit.measured(content, outer, window),
+            None => hosted::fit(content, outer, window).is_some(),
+        }
+    }
+
+    /// Why `Action::Fit` on this pane (default: the focused one) would be refused, for a caller
+    /// that should be told. `None`: it fits the pane, or there is nothing to fit (the window has
+    /// the pane's size, or has not been measured since the layout last changed).
+    pub fn fit_refusal(&self, pane: Option<PaneId>) -> Option<String> {
+        let Some(id) = pane.or(self.focused) else { return Some("no pane to fit".into()) };
+        let Some(pane) = self.pane(id) else { return Some(format!("no pane {id}")) };
+        let kind = match pane.kind {
+            Kind::App { .. } => None,
+            Kind::Terminal => Some("a terminal"),
+            Kind::Empty => Some("empty"),
+        };
+        if let Some(kind) = kind {
+            return Some(format!("pane {id} is {kind}: fit is for an app pane whose window refused the pane's size"));
+        }
+        let stuck = pane.fit.as_ref()?.stuck?;
+        Some(format!("pane {id} cannot be fitted: {}", stuck.why()))
+    }
+
     /// Brings forward the tab that holds `id`, if it is a background tab.
     fn show_tab_of(&mut self, id: PaneId, effects: &mut Vec<Effect>) {
         let holds = |tab: &Tab| tab.layout.as_ref().is_some_and(|l| l.leaves().contains(&id));
@@ -2058,7 +2175,7 @@ impl Model {
             Some(root) => root.insert(beside, id, axis),
             None => Node::Leaf(id),
         });
-        self.panes.push(Pane { id, kind, cwd: None });
+        self.panes.push(Pane { id, kind, cwd: None, fit: None });
         self.focused = Some(id);
         id
     }
@@ -2353,6 +2470,8 @@ mod tests {
         Action::MovePane { .. },
         Action::Equalize,
         Action::DropPane { .. },
+        Action::PaneWants { .. },
+        Action::Fit { .. },
         Action::Enter { .. },
         Action::Leave,
         Action::ToggleSection { .. },
@@ -2434,6 +2553,8 @@ mod tests {
             Action::Open { kind: app(1), axis: Right, beside: None },
             Action::Adopt { kind: app(1), beside: None },
             Action::DropPane { source: 1, target: 1, zone: Zone::Left },
+            Action::PaneWants { pane: 1, content: [400., 600.], outer: [406., 638.], window: [520., 600.] },
+            Action::Fit { pane: None },
             Action::Close { pane: None },
             Action::Focus { pane: 1 },
             Action::FocusDir { dir: Dir::Left },
@@ -2715,7 +2836,7 @@ mod tests {
         m.update(Action::Split { axis: Right, kind: Kind::Empty });
         m.update(Action::Split { axis: Right, kind: Kind::Empty });
         let effects = m.update(Action::Close { pane: None });
-        assert_eq!(effects, [Effect::Closed(Pane { id: 2, kind: Kind::Empty, cwd: None })]);
+        assert_eq!(effects, [Effect::Closed(Pane { id: 2, kind: Kind::Empty, cwd: None, fit: None })]);
         assert_eq!(m.focused, Some(1));
         m.update(Action::Close { pane: None });
         assert_eq!((m.layout.is_none(), m.focused), (true, None));
@@ -2854,7 +2975,7 @@ mod tests {
         m.update(Action::Split { axis: Right, kind: Kind::Empty });
         picker(&mut m);
         assert_eq!(m.update(Action::PickerChoose { index: None }), [Effect::Opened(1)]);
-        assert_eq!(m.panes, [Pane { id: 1, kind: Kind::Terminal, cwd: None }]);
+        assert_eq!(m.panes, [Pane { id: 1, kind: Kind::Terminal, cwd: None, fit: None }]);
     }
 
     #[test]
@@ -3976,7 +4097,7 @@ mod tests {
         term(&mut m);
         // Close the background tab: the active tab is untouched.
         let effects = m.update(Action::CloseTab { index: Some(0) });
-        assert_eq!(effects, [Effect::Closed(Pane { id: 1, kind: Kind::Terminal, cwd: None })]);
+        assert_eq!(effects, [Effect::Closed(Pane { id: 1, kind: Kind::Terminal, cwd: None, fit: None })]);
         assert_eq!((m.tabs.len(), m.active, m.focused), (1, 0, Some(3)));
         // Close the last tab: its panes go, an empty tab remains.
         assert_eq!(m.update(Action::CloseTab { index: None }).len(), 2);
@@ -4030,6 +4151,137 @@ mod tests {
         assert_eq!(shares(&m), [(1, 45.0), (2, 55.0)]);
         m.update(Action::Equalize);
         assert_eq!(shares(&m), [(1, 50.0), (2, 50.0)]);
+    }
+
+    #[test]
+    fn fit_moves_the_splits_so_the_pane_has_its_windows_size_only_on_request() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        m.update(Action::Open { kind: app(2), axis: Right, beside: None });
+        let hint = |m: &Model| m.pane(2).and_then(|p| p.fit.as_ref()).map(|f| f.hint.clone());
+        // In a tab 1000 pt wide, pane 2 is 500 pt and shows 494. Its window kept 614 by 900.
+        let wants = Action::PaneWants { pane: 2, content: [494., 766.], outer: [500., 800.], window: [614., 900.] };
+        m.update(wants);
+        assert_eq!(hint(&m).as_deref(), Some("needs 120×134 pt more"));
+        assert_eq!(shares(&m), [(1, 50.0), (2, 50.0)], "the report alone moves nothing");
+        // Fit: 120 pt more of 1000. No split is above the pane on the other axis: the height stays.
+        m.update(Action::Focus { pane: 1 });
+        m.update(Action::Fit { pane: Some(2) });
+        assert_eq!(shares(&m), [(1, 38.0), (2, 62.0)]);
+        // The shell measures again: the width fits now, the height still does not.
+        m.update(Action::PaneWants { pane: 2, content: [614., 766.], outer: [620., 800.], window: [614., 900.] });
+        assert_eq!(hint(&m).as_deref(), Some("needs 134 pt more height"));
+        m.update(Action::Fit { pane: Some(2) });
+        assert_eq!(shares(&m), [(1, 38.0), (2, 62.0)]);
+        // The window takes the pane's size after all: the hint goes.
+        m.update(Action::PaneWants { pane: 2, content: [614., 766.], outer: [620., 800.], window: [614., 766.] });
+        assert_eq!(hint(&m), None);
+        // A pane that fits, and the focused pane by default.
+        m.update(Action::Fit { pane: None });
+        assert_eq!(shares(&m), [(1, 38.0), (2, 62.0)]);
+        m.update(Action::PaneWants { pane: 1, content: [374., 766.], outer: [380., 800.], window: [232., 320.] });
+        m.update(Action::Fit { pane: None });
+        assert_eq!(shares(&m), [(1, 24.0), (2, 76.0)], "232 + 6 of 1000");
+    }
+
+    #[test]
+    fn a_second_fit_waits_for_a_fresh_measure() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        m.update(Action::Open { kind: app(2), axis: Right, beside: None });
+        let wants = || Action::PaneWants { pane: 2, content: [494., 766.], outer: [500., 766.], window: [614., 766.] };
+        m.update(wants());
+        // A double-click on `fit`, ⌘⌃0 held down, two socket calls: the second does nothing.
+        m.update(Action::Fit { pane: Some(2) });
+        m.update(Action::Fit { pane: Some(2) });
+        m.update(Action::Fit { pane: Some(2) });
+        assert_eq!(shares(&m), [(1, 38.0), (2, 62.0)]);
+        assert_eq!(m.pane(2).and_then(|p| p.fit.as_ref()), None, "the measure went with the layout it was of");
+        // Whatever else moves a split or a pane drops the measures too.
+        let moves = [
+            Action::Resize { dir: Dir::Left },
+            Action::Equalize,
+            Action::SwapDir { dir: Dir::Left },
+            Action::Split { axis: Right, kind: Kind::Empty },
+            Action::MovePane { pane: Some(1), tab: 1 },
+        ];
+        m.update(Action::NewTab);
+        m.update(Action::SelectTab { index: 0 });
+        m.update(Action::Focus { pane: 2 });
+        for action in moves {
+            m.update(wants());
+            assert!(m.pane(2).is_some_and(|p| p.fit.is_some()));
+            let name = format!("{action:?}");
+            m.update(action);
+            assert_eq!(m.pane(2).and_then(|p| p.fit.as_ref()), None, "{name}");
+        }
+        // A change that moves nothing keeps it: focus, another tab.
+        m.update(Action::SelectTab { index: 0 });
+        m.update(wants());
+        m.update(Action::Focus { pane: 2 });
+        m.update(Action::SelectTab { index: 1 });
+        assert!(m.pane(2).is_some_and(|p| p.fit.is_some()));
+    }
+
+    #[test]
+    fn a_fit_that_would_move_nothing_is_marked_and_refused_with_the_reason() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        let small = |pane| Action::PaneWants { pane, content: [494., 766.], outer: [500., 800.], window: [160., 120.] };
+        let stuck = |m: &Model, id| m.pane(id).and_then(|p| p.fit.as_ref()).and_then(|f| f.stuck);
+        // A single pane: no split on either axis.
+        m.update(small(1));
+        assert_eq!(stuck(&m, 1), Some(Stuck::NoSplit));
+        assert_eq!(m.fit_refusal(Some(1)).as_deref(), Some("pane 1 cannot be fitted: no split to move"));
+        assert_eq!(m.fit_refusal(None), m.fit_refusal(Some(1)), "the focused pane by default");
+        // Beside another pane its width can change; its height still spans the tab.
+        m.update(Action::Open { kind: app(2), axis: Right, beside: None });
+        m.update(small(1));
+        assert_eq!((stuck(&m, 1), m.fit_refusal(Some(1))), (None, None));
+        // At the split's limit: fit to 10%, measured again, still too large for the window.
+        m.update(Action::Fit { pane: Some(1) });
+        assert_eq!(shares(&m), [(1, 17.0), (2, 83.0)]);
+        m.update(Action::PaneWants { pane: 1, content: [94., 766.], outer: [100., 800.], window: [20., 766.] });
+        m.update(Action::Fit { pane: Some(1) });
+        assert_eq!(shares(&m), [(1, 10.0), (2, 90.0)]);
+        m.update(Action::PaneWants { pane: 1, content: [94., 766.], outer: [100., 800.], window: [20., 766.] });
+        assert_eq!(stuck(&m, 1), Some(Stuck::AtLimit));
+        assert_eq!(m.fit_refusal(Some(1)).as_deref(), Some("pane 1 cannot be fitted: splits at their limit"));
+        m.update(Action::Fit { pane: Some(1) });
+        assert_eq!(shares(&m), [(1, 10.0), (2, 90.0)]);
+        // The mark follows the layout: the other pane closes, and no split is left.
+        m.update(Action::Close { pane: Some(2) });
+        m.update(small(1));
+        assert_eq!(stuck(&m, 1), Some(Stuck::NoSplit));
+        // Panes that are not for fitting, and a pane with nothing to fit.
+        assert_eq!(m.fit_refusal(Some(9)).as_deref(), Some("no pane 9"));
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        let terminal = m.focused.unwrap();
+        assert!(m.fit_refusal(Some(terminal)).is_some_and(|why| why.contains("is a terminal")));
+        assert_eq!(m.fit_refusal(Some(1)), None, "not measured since the split");
+        assert_eq!(Model::default().fit_refusal(None).as_deref(), Some("no pane to fit"));
+    }
+
+    #[test]
+    fn fit_reaches_a_pane_in_a_background_tab_and_the_shell_reports_only_a_new_measure() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        m.update(Action::Open { kind: app(2), axis: Right, beside: None });
+        let measure = ([494., 766.], [500., 800.], [614., 766.]);
+        assert!(m.wants_changed(2, measure.0, measure.1, measure.2));
+        assert!(!m.wants_changed(1, measure.0, measure.1, [494., 766.]), "a window that fits is no news");
+        m.update(Action::PaneWants { pane: 2, content: measure.0, outer: measure.1, window: measure.2 });
+        assert!(!m.wants_changed(2, measure.0, measure.1, measure.2));
+        assert!(m.wants_changed(2, measure.0, measure.1, [494., 766.]), "it fits now: the hint must go");
+        assert!(!m.wants_changed(9, measure.0, measure.1, measure.2), "no such pane");
+        // Another tab comes forward; the pane is fitted where it is, and its tab stays behind.
+        m.update(Action::NewTab);
+        assert_eq!(m.active, 1);
+        assert_eq!(m.fit_refusal(Some(2)), None);
+        m.update(Action::Fit { pane: Some(2) });
+        assert_eq!(m.active, 1);
+        m.update(Action::SelectTab { index: 0 });
+        assert_eq!(shares(&m), [(1, 38.0), (2, 62.0)]);
     }
 
     #[test]
@@ -4365,7 +4617,7 @@ mod tests {
         // e.g. a hosted window closed: its pane goes, visual mode stays on its own terminal.
         assert_eq!(
             m.update(Action::Close { pane: Some(1) }),
-            [Effect::Closed(Pane { id: 1, kind: Kind::Terminal, cwd: None })]
+            [Effect::Closed(Pane { id: 1, kind: Kind::Terminal, cwd: None, fit: None })]
         );
         assert_eq!(m.mode(), Mode::Visual);
         // The visual terminal's shell exited.
@@ -4445,6 +4697,29 @@ mod tests {
         m.update(Action::Tick { now: 1 });
         assert_eq!(m.update(Action::Close { pane: Some(2) }).len(), 1);
         assert_eq!((m.mode(), ids(&m)), (Mode::Confirm, vec![1]));
+    }
+
+    #[test]
+    fn under_the_quit_question_a_measure_is_taken_and_the_users_fit_answers_no() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        m.update(Action::Open { kind: app(2), axis: Right, beside: None });
+        m.update(Action::QuitAsked { running: vec![running(1, "sleep")] });
+        // The shell's measure is nobody's answer: it lands, and the question stays.
+        let wants = Action::PaneWants { pane: 2, content: [494., 766.], outer: [500., 766.], window: [614., 766.] };
+        m.update(wants.sent_by(Origin::System));
+        assert!(m.pane(2).is_some_and(|p| p.fit.is_some()));
+        assert_eq!(m.mode(), Mode::Confirm);
+        // A client's fit runs underneath; the user's is an answer, and moves nothing.
+        m.update(Action::Fit { pane: Some(2) }.sent_by(Origin::Socket));
+        assert_eq!((m.mode(), shares(&m)), (Mode::Confirm, vec![(1, 38.0), (2, 62.0)]));
+        m.update(Action::Equalize.sent_by(Origin::Socket));
+        m.update(
+            Action::PaneWants { pane: 2, content: [494., 766.], outer: [500., 766.], window: [614., 766.] }
+                .sent_by(Origin::System),
+        );
+        m.update(Action::Fit { pane: Some(2) });
+        assert_eq!((m.mode(), shares(&m)), (Mode::Normal, vec![(1, 50.0), (2, 50.0)]));
     }
 
     #[test]

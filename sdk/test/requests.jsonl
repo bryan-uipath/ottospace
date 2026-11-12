@@ -10,6 +10,7 @@
 {"cmd":"move_pane","pane":3,"tab":0}
 {"cmd":"equalize"}
 {"cmd":"drop_pane","source":3,"target":1,"zone":"left"}
+{"cmd":"fit","pane":2}
 {"cmd":"open_app","name":"Safari","axis":"right"}
 {"cmd":"enter","pane":1}
 {"cmd":"leave"}

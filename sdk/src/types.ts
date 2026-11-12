@@ -42,6 +42,17 @@ export interface Pane {
   kind: PaneKind;
   /** Only on a terminal opened by `open_repo`. */
   cwd?: string;
+  /** Only on an app pane whose window kept another size than the pane's. */
+  fit?: PaneFit;
+}
+
+export interface PaneFit {
+  /** The size the window kept: `[width, height]` in points. */
+  wants: [number, number];
+  /** What the pane header says, e.g. `needs 120 pt more width`. */
+  hint: string;
+  /** Only when a `fit` would move nothing: no split on the axis, or the splits at their 10%. */
+  stuck?: "no_split" | "at_limit";
 }
 
 export interface Tab {

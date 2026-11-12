@@ -77,6 +77,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘] / ⌘[ | Focus the next / previous pane |
 | ⌘⌃←/→/↑/↓ or ⌘⌃H/L/K/J | Resize: move the focused pane's split that way |
 | ⌘⌃= | Even out the splits of the tab |
+| ⌘⌃0 | Fit the focused pane to its app's window, when the app refused the pane's size |
 | ⌘⇧⌥←/→/↑/↓ or ⌘⇧⌥H/L/K/J | Swap the focused pane with its neighbour on that side |
 | ⌘⇧⌥1 … ⌘⇧⌥9 | Move the focused pane to that tab on the bar. US keyboard layout only |
 | Drag a pane's header | Onto another pane's edge: split there. Onto its centre: swap. Onto a tab: move there. Esc cancels. An app you are in is parked: click it to go back in |
@@ -241,6 +242,15 @@ An app that refuses the pane's size is shown at its own size from the pane's top
 live: a larger window is cut off, a smaller one leaves a gap. A click in the gap gives the app the
 keyboard; a click there while the app has it returns to ottospace, so a double-click in the gap
 ends in ottospace. The preview follows an app that resizes its own window, within half a second.
+The pane header says what the
+window kept (`needs 120 pt more width`, `fixed size 232×320`). A window less than 24 pt smaller
+than its pane gets no hint: some apps snap their size, as a terminal emulator does to whole
+cells. `fit` beside the hint, or ⌘⌃0, moves the splits around the pane so it has the window's
+size, as far as each side's 10% allows; a split at that limit passes the rest to the next split
+above it. A pane that spans the tab on an axis keeps its size there. When no split can move,
+the word `fit` is not shown and the hint says why (`fixed size 160×120 · no split to move`,
+`· splits at their limit`). In a narrow pane the hint is cut short; `fit` and × stay. Nothing
+is resized unless you ask.
 
 ## The return key
 

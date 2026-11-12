@@ -52,3 +52,9 @@ back.
 ## 6. Routines and agents
 
 ottobot's routines, an Agents section and a menu-bar item, in stages: see [routines.md](routines.md).
+
+## 7. Fit a pane to its window by itself
+
+An `auto_fit` setting, off by default. It applies `fit` (`Action::Fit`) at the moment an app is
+hosted: for a window smaller than its pane, and for one larger where the tab has room. Never
+later than hosting, so panes do not move under the user. With an undo.
