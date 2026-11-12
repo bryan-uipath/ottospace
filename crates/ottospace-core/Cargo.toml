@@ -3,6 +3,7 @@ name = "ottospace-core"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 # Pure logic only: no gpui, no macOS APIs, no I/O.
 [dependencies]

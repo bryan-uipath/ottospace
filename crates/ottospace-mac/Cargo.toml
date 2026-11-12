@@ -3,6 +3,7 @@ name = "ottospace-mac"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [dependencies]
 # Tree reader returns the core's plain `ax::Node`.
