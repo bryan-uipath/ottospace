@@ -2932,6 +2932,25 @@ fn ctl(args: &[String]) -> ! {
     std::process::exit(if ok { 0 } else { 1 });
 }
 
+/// `ottospace agents [dir]`: the agent sessions of the directory's repository, worktrees included,
+/// as JSON. Names, counts and times only; see `docs/ai/agent-runners.md`.
+fn agents(dir: Option<&String>) -> ! {
+    use ottospace_agents::{claude::Claude, codex::Codex, git::checkouts, report::report};
+    let dir = dir.map(PathBuf::from).or_else(|| std::env::current_dir().ok()).unwrap_or_default();
+    // Runners record the real path, e.g. `/private/tmp/x` for `/tmp/x`.
+    let dir = dir.canonicalize().unwrap_or(dir);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+    let (claude, codex) = (Claude::from_env(), Codex::from_env());
+    match report(&[&claude, &codex], &checkouts(&dir), now, 5) {
+        Ok(report) => println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default()),
+        Err(err) => {
+            eprintln!("agents: {err}");
+            std::process::exit(1);
+        }
+    }
+    std::process::exit(0);
+}
+
 /// The `--version` line. `scripts/package.sh` passes the commit and its date in at compile time;
 /// a plain `cargo build` has neither.
 fn version_line(version: &str, commit: Option<&str>, date: Option<&str>) -> String {
@@ -2955,6 +2974,10 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).is_some_and(|a| a == "ctl") {
         ctl(&args[2..]);
+    }
+    // Hidden while its output has no stable shape. Reads other programs' session files.
+    if args.get(1).is_some_and(|a| a == "agents") {
+        agents(args.get(2));
     }
     // `ottospace skill` prints the agent guide; `--stub` prints the SKILL.md that points to it.
     if args.get(1).is_some_and(|a| a == "skill") {

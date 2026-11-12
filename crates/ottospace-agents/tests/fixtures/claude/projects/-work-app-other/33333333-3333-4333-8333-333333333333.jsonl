@@ -1,0 +1,2 @@
+{"type":"mode","mode":"normal","sessionId":"33333333-3333-4333-8333-333333333333"}
+{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":"A session of another repository"},"uuid":"u-1","timestamp":"2026-11-10T08:00:00.000Z","cwd":"/work/app-other","sessionId":"33333333-3333-4333-8333-333333333333"}

@@ -8,6 +8,7 @@ license.workspace = true
 default-run = "ottospace"
 
 [dependencies]
+ottospace-agents = { path = "../ottospace-agents" }
 ottospace-core = { path = "../ottospace-core" }
 ottospace-mac = { path = "../ottospace-mac" }
 # Same version gpui uses: reaches the native window.
