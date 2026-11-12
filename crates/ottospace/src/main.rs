@@ -2154,12 +2154,11 @@ fn list_button(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
 fn running_apps(hosting: bool, only: Option<i32>) -> Vec<capture::App> {
     match (hosting, only) {
         (false, _) => Vec::new(),
-        (true, Some(pid)) if capture::apps().iter().any(|app| app.pid == pid) => {
-            // With its real window count.
-            capture::apps().into_iter().filter(|app| app.pid == pid).collect()
-        }
         (true, Some(pid)) => {
-            capture::name_of(pid).map(|name| capture::App { name, pid, windows: 1 }).into_iter().collect()
+            // One snapshot: with its real window count, or by name if no window of it counts yet.
+            let found: Vec<capture::App> = capture::apps().into_iter().filter(|app| app.pid == pid).collect();
+            let named = || capture::name_of(pid).map(|name| capture::App { name, pid, windows: 1 });
+            if found.is_empty() { named().into_iter().collect() } else { found }
         }
         (true, None) => capture::apps(),
     }
