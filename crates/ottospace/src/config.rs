@@ -82,6 +82,13 @@ pub fn session_dirs() -> Option<SessionDirs> {
     Some(SessionDirs { claude: claude.iter().map(path).collect(), codex: codex.as_ref().map(path) })
 }
 
+/// How long an adopted session is quiet before its task needs the user, in milliseconds:
+/// `session_quiet_minutes` in the settings, else 3 minutes. 0: never.
+pub fn session_quiet_ms() -> u64 {
+    let minutes = get().settings.session_quiet_minutes.map(u64::from);
+    minutes.map_or(ottospace_core::sessions::QUIET_MS, |minutes| minutes.saturating_mul(60_000))
+}
+
 /// Where tasks are kept: `tasks` in the settings (a relative path is inside the user's folder),
 /// else `tasks` in the user's folder. `None`: nothing is kept.
 pub fn tasks_dir() -> Option<PathBuf> {

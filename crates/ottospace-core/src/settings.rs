@@ -10,7 +10,8 @@ use serde::Deserialize;
 ///   "repos": ["~/code", "~/work/clients"],
 ///   "tasks": "~/notes/tasks",
 ///   "sessions": true,
-///   "session_dirs": { "claude": ["~/.claude"], "codex": "~/.codex" } }
+///   "session_dirs": { "claude": ["~/.claude"], "codex": "~/.codex" },
+///   "session_quiet_minutes": 3 }
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -38,6 +39,10 @@ pub struct Settings {
     /// Where the runners keep their sessions. Default: `~/.claude` and `~/.codex`.
     #[serde(default)]
     pub session_dirs: Option<SessionDirs>,
+    /// A task adopted from a session needs you once the session has been quiet this many
+    /// minutes. Default: 3. 0: a quiet session never moves its task.
+    #[serde(default)]
+    pub session_quiet_minutes: Option<u32>,
 }
 
 /// A runner left out keeps its default.
@@ -199,6 +204,14 @@ mod tests {
         let settings = Settings::parse(text).unwrap();
         let dirs = settings.session_dirs.unwrap();
         assert_eq!((settings.sessions, dirs.claude.map(|dirs| dirs.len()), dirs.codex), (Some(false), Some(2), None));
+        assert_eq!(settings.session_quiet_minutes, None);
+        let quiet = |text: &str| Settings::read(text).0.session_quiet_minutes;
+        assert_eq!(
+            (quiet(r#"{ "session_quiet_minutes": 10 }"#), quiet(r#"{ "session_quiet_minutes": 0 }"#)),
+            (Some(10), Some(0))
+        );
+        let (kept, wrong) = Settings::read(r#"{ "session_quiet_minutes": -1 }"#);
+        assert!(kept.session_quiet_minutes.is_none() && wrong[0].starts_with("session_quiet_minutes:"), "{wrong:?}");
         let (_, wrong) = Settings::read(r#"{ "session_dirs": { "gemini": "~/.gemini" } }"#);
         assert!(wrong[0].starts_with("session_dirs: unknown field"), "{wrong:?}");
     }

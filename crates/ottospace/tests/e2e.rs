@@ -1341,6 +1341,7 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
     std::thread::sleep(Duration::from_millis(1500));
     let bar = off.call(json!({"cmd": "state"}))["sessions_bar"].clone();
     assert_eq!((&bar["enabled"], &bar["reads"], &bar["count"]), (&json!(false), &json!(0), &json!(0)));
+    assert_eq!(bar["slow_reads"], 0, "no task follows a session: nothing to look at");
     drop(off);
 
     settings(true);
@@ -1349,6 +1350,7 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
     std::thread::sleep(Duration::from_millis(1500));
     let bar = otto.call(json!({"cmd": "state"}))["sessions_bar"].clone();
     assert_eq!((&bar["enabled"], &bar["reads"], &bar["count"]), (&json!(true), &json!(0), &json!(0)));
+    assert_eq!(bar["slow_reads"], 0, "no task follows a session: nothing to look at");
     // Open: read at once. The active session first, the one older than a day behind "1 older".
     otto.call(json!({"cmd": "section", "section": "tasks"}));
     let reply = otto.wait_for("the sessions to be read", |o| {
@@ -1407,19 +1409,48 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
         Some(o.call(json!({"cmd": "state"}))).filter(|reply| reply["sessions_bar"]["reads"].as_u64() > Some(reads))
     });
     assert_eq!((rows(&reply), &reply["sessions_bar"]["count"]), (vec![], &json!(1)));
-    // The adopted session goes quiet (its file has not changed for two minutes): its task needs you.
-    let transcript = std::fs::File::options().write(true).open(project.join(format!("{busy}.jsonl"))).unwrap();
-    transcript.set_modified(std::time::SystemTime::now() - Duration::from_secs(120)).unwrap();
-    otto.wait_for("the task to follow its session", |o| {
-        (o.call(json!({"cmd": "state"}))["state"]["tasks"]["list"][0]["state"] == "needs_you").then_some(())
-    });
     // Hide takes the last one away, shown or not.
     let reply = otto.call(json!({"cmd": "session_hide", "runner": "codex", "id": old}));
-    assert_eq!(reply["sessions_bar"]["count"], 0);
+    assert_eq!((&reply["sessions_bar"]["count"], &reply["sessions_bar"]["slow_reads"]), (&json!(0), &json!(0)));
+
+    // The adopted session's file last changed `secs` ago.
+    let transcript = project.join(format!("{busy}.jsonl"));
+    let changed = |secs: u64| {
+        let file = std::fs::File::options().write(true).open(&transcript).unwrap();
+        file.set_modified(std::time::SystemTime::now() - Duration::from_secs(secs)).unwrap();
+    };
+    let task_state = |o: &Otto| o.call(json!({"cmd": "state"}))["state"]["tasks"]["list"][0]["state"].clone();
+    // Idle for two minutes, as during a long build that prints nothing: its task runs on. The
+    // threshold for "quiet" is three minutes (`session_quiet_minutes`).
+    changed(120);
+    let reads = otto.call(json!({"cmd": "state"}))["sessions_bar"]["reads"].as_u64().unwrap();
+    otto.wait_for("two more reads", |o| {
+        (o.call(json!({"cmd": "state"}))["sessions_bar"]["reads"].as_u64() > Some(reads + 1)).then_some(())
+    });
+    assert_eq!(task_state(&otto), "running");
+    // Quiet for four minutes, and the Tasks section closed: the task needs you all the same,
+    // and the status bar's count with it. Only the adopted sessions' files were looked at.
+    changed(240);
+    let reads = otto.call(json!({"cmd": "section", "section": "tasks"}))["sessions_bar"]["reads"].clone();
+    let reply = otto.wait_for("the task to follow its quiet session", |o| {
+        Some(o.call(json!({"cmd": "state"}))).filter(|reply| reply["state"]["tasks"]["list"][0]["state"] == "needs_you")
+    });
+    assert_eq!((&reply["needs_you"], &reply["sessions_bar"]["count"]), (&json!(1), &json!(0)));
+    assert_eq!(reply["sessions_bar"]["reads"], reads, "no listing: {reply}");
+    assert!(reply["sessions_bar"]["slow_reads"].as_u64() >= Some(1), "{reply}");
+    drop(otto);
+
+    // A new run, the section never opened: the task follows its session again once it works.
+    // (Its file is found with one listing, as nothing kept where it is.)
+    changed(0);
+    let fresh = Otto::launch_with("sessions-close", &env);
+    let reply = fresh.wait_for("the task to run again", |o| {
+        Some(o.call(json!({"cmd": "state"}))).filter(|reply| reply["state"]["tasks"]["list"][0]["state"] == "running")
+    });
+    assert_eq!((&reply["sessions_bar"]["count"], &reply["sessions_bar"]["reads"]), (&json!(0), &json!(1)));
 
     // What was found is kept only while the section is open: closed, nothing is listed (so
     // nothing reads or adopts a session by what it did a while ago); opened, it is read again.
-    let fresh = Otto::launch_with("sessions-close", &env);
     fresh.call(json!({"cmd": "section", "section": "tasks"}));
     let listed = |o: &Otto, count: u64| {
         o.wait_for("the sessions bar", |o| {
@@ -1433,6 +1464,14 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
     assert_eq!(refused["state"]["tasks"]["list"].as_array().map(Vec::len), Some(2), "not listed: not adopted");
     fresh.call(json!({"cmd": "section", "section": "tasks"}));
     listed(&fresh, 1);
+    drop(fresh);
+
+    // `"sessions": false`: tasks adopted before are not followed either. Nothing is read.
+    settings(false);
+    let off = Otto::launch_with("sessions-off-adopted", &env);
+    std::thread::sleep(Duration::from_millis(1500));
+    let bar = off.call(json!({"cmd": "state"}))["sessions_bar"].clone();
+    assert_eq!((&bar["reads"], &bar["slow_reads"]), (&json!(0), &json!(0)));
 }
 
 #[test]

@@ -24,6 +24,49 @@ pub const MAX_FOUND: usize = 200;
 pub const MAX_KEPT: usize = 2000;
 pub const MAX_LABEL: usize = 40;
 
+/// A task adopted from a session needs the user once its session has been quiet this long, unless
+/// the settings say otherwise (`session_quiet_minutes`). Longer than the 30 seconds after which a
+/// session's row reads idle: a build that prints nothing for a minute is not a question.
+pub const QUIET_MS: u64 = 180_000;
+
+/// An adopted session's file, as the shell last saw it while the Tasks section was closed: no
+/// more than when it last changed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Seen {
+    pub runner: String,
+    pub id: String,
+    /// When the session's file last changed (milliseconds since 1970).
+    pub last_activity: u64,
+    /// It changed in the last 30 seconds: the session is at work.
+    pub active: bool,
+}
+
+/// What a task adopted from a session should be. `None`: leave the task alone.
+///
+/// While the session works (`active`) the task runs. When the session has been quiet for
+/// `quiet_ms` (its file last changed at `last_activity`, and it is `now`), a task that was
+/// running for it needs the user, once. Between the two, idle but not yet quiet, nothing
+/// changes. When it works again the task runs again. `quiet_ms` 0: a quiet session never moves
+/// its task. `link`: the state the task last took from the session; a task whose state is
+/// another was changed by the user or an agent, and keeps it.
+pub fn follow(
+    active: bool,
+    last_activity: Option<u64>,
+    link: Option<State>,
+    state: State,
+    now: u64,
+    quiet_ms: u64,
+) -> Option<State> {
+    let quiet = !active && quiet_ms > 0 && last_activity.is_some_and(|at| now.saturating_sub(at) >= quiet_ms);
+    let next = match (active, quiet, state) {
+        (true, _, State::Running) => return None,
+        (true, _, _) => State::Running,
+        (false, true, State::Running) => State::NeedsYou,
+        _ => return None,
+    };
+    (link == Some(state)).then_some(next)
+}
+
 /// The session a task was adopted from: such a session is the task's, not listed by itself.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Link {
@@ -139,21 +182,6 @@ impl Found {
         !self.active && self.last_activity.is_none_or(|at| now.saturating_sub(at) > OLD_MS)
     }
 
-    /// What a task adopted from this session should be, given what it last took from it
-    /// (`link`) and what it is now. `None`: leave the task alone. While the session works the
-    /// task runs; when it goes quiet a task that was running for it needs the user, once; when
-    /// it works again the task runs again. A task whose state is not the one it took from the
-    /// session was changed by the user or an agent, and keeps it.
-    pub fn follow(&self, link: Option<State>, now: State) -> Option<State> {
-        let next = match (self.active, now) {
-            (true, State::Running) => return None,
-            (true, _) => State::Running,
-            (false, State::Running) => State::NeedsYou,
-            (false, _) => return None,
-        };
-        (link == Some(now)).then_some(next)
-    }
-
     /// `shell · cargo test`, `files`, or nothing: only while active.
     pub fn doing(&self) -> Option<String> {
         let station = self.station.as_deref().filter(|_| self.active)?;
@@ -223,20 +251,32 @@ mod tests {
 
     #[test]
     fn a_task_follows_its_session_until_someone_else_sets_its_state() {
-        let (working, quiet) = (found("claude", "a", "/a", true, 0), found("claude", "a", "/a", false, 0));
-        // Adopted idle (captured), it runs when the session works, needs you when it goes quiet,
-        // and runs again when it works again.
-        assert_eq!(working.follow(Some(State::Captured), State::Captured), Some(State::Running));
-        assert_eq!(quiet.follow(Some(State::Running), State::Running), Some(State::NeedsYou));
-        assert_eq!(working.follow(Some(State::NeedsYou), State::NeedsYou), Some(State::Running));
+        let now = 10 * QUIET_MS;
+        // The session at work, and one whose file last changed `ago` before now.
+        let working = |link, state| follow(true, Some(now), link, state, now, QUIET_MS);
+        let idle = |ago: u64, link, state| follow(false, Some(now - ago), link, state, now, QUIET_MS);
+        // Adopted idle (captured), it runs when the session works, needs you when it has been
+        // quiet for the threshold, and runs again when it works again.
+        assert_eq!(working(Some(State::Captured), State::Captured), Some(State::Running));
+        assert_eq!(idle(QUIET_MS, Some(State::Running), State::Running), Some(State::NeedsYou));
+        assert_eq!(working(Some(State::NeedsYou), State::NeedsYou), Some(State::Running));
+        // Idle is not quiet: a command that prints nothing for a minute moves nothing.
+        assert_eq!(idle(31_000, Some(State::Running), State::Running), None);
+        assert_eq!(idle(QUIET_MS - 1, Some(State::Running), State::Running), None);
         // Nothing to do: it has the state already, or a quiet session says nothing of a task at rest.
-        assert_eq!(working.follow(Some(State::Running), State::Running), None);
-        assert_eq!(quiet.follow(Some(State::NeedsYou), State::NeedsYou), None, "needs you once");
-        assert_eq!(quiet.follow(Some(State::Captured), State::Captured), None);
+        assert_eq!(working(Some(State::Running), State::Running), None);
+        assert_eq!(idle(2 * QUIET_MS, Some(State::NeedsYou), State::NeedsYou), None, "needs you once");
+        assert_eq!(idle(2 * QUIET_MS, Some(State::Captured), State::Captured), None);
         // The user put it on hold, or an agent said done: not the state it took from the session.
-        assert_eq!(working.follow(Some(State::NeedsYou), State::Parked), None);
-        assert_eq!(quiet.follow(Some(State::Running), State::Done), None);
-        assert_eq!(working.follow(None, State::Captured), None, "a link from before this was kept");
+        assert_eq!(working(Some(State::NeedsYou), State::Parked), None);
+        assert_eq!(idle(2 * QUIET_MS, Some(State::Running), State::Done), None);
+        assert_eq!(working(None, State::Captured), None, "a link from before this was kept");
+        // The threshold is the setting's. 0: a quiet session never moves its task; a working one still does.
+        let with = |quiet_ms| follow(false, Some(now - 60_000), Some(State::Running), State::Running, now, quiet_ms);
+        assert_eq!((with(60_000), with(60_001), with(0)), (Some(State::NeedsYou), None, None));
+        assert_eq!(follow(true, Some(now), Some(State::Captured), State::Captured, now, 0), Some(State::Running));
+        // When the file last changed is not known: never quiet.
+        assert_eq!(follow(false, None, Some(State::Running), State::Running, now, QUIET_MS), None);
     }
 
     #[test]

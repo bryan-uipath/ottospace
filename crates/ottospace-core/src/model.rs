@@ -408,6 +408,16 @@ pub enum Action {
     SetSessions {
         found: Vec<Found>,
     },
+    /// How long an adopted session must be quiet before its task needs the user, in
+    /// milliseconds: the `session_quiet_minutes` setting. 0: never.
+    SessionQuiet {
+        ms: u64,
+    },
+    /// When the files of sessions that tasks were adopted from last changed: read by the shell
+    /// while the Tasks section is closed, so those tasks follow their sessions all the same.
+    SessionsSeen {
+        seen: Vec<sessions::Seen>,
+    },
     /// Make a task of a session: named after its repository, in its directory, worked by its
     /// runner, and linked to it, so the session is listed as that task from now on.
     SessionAdopt {
@@ -569,6 +579,8 @@ impl Action {
             | Action::ComposeSubmit { .. }
             | Action::ToggleGroup { .. }
             | Action::SetSessions { .. }
+            | Action::SessionQuiet { .. }
+            | Action::SessionsSeen { .. }
             | Action::SessionAdopt { .. }
             | Action::SessionHide { .. }
             | Action::SessionClick { .. }
@@ -710,6 +722,9 @@ pub struct Model {
     /// Sessions the shell found, in the order listed. Shown through `sessions_bar` only.
     #[serde(skip)]
     found: Vec<Found>,
+    /// How long an adopted session is quiet before its task needs the user. 0: never.
+    #[serde(skip)]
+    session_quiet_ms: u64,
     /// Sessions the user hid, as (runner, id). Not kept between runs.
     #[serde(skip)]
     hidden: Vec<(String, String)>,
@@ -758,6 +773,7 @@ impl Default for Model {
             collapsed: Vec::new(),
             undo_offer: None,
             found: Vec::new(),
+            session_quiet_ms: sessions::QUIET_MS,
             hidden: Vec::new(),
             older_sessions: false,
             now: 0,
@@ -1273,17 +1289,13 @@ impl Model {
             }
             Action::SetSessions { found } => {
                 self.found = sessions::kept(found);
-                // A task adopted from a session follows it: see `Found::follow`.
-                let follows = |task: &Task| {
-                    let link = task.session.as_ref()?;
-                    let session = self.found.iter().find(|s| (&s.runner, &s.id) == (&link.runner, &link.id))?;
-                    Some((task.id, session.follow(link.state, task.state)?))
-                };
-                let moves: Vec<(TaskId, State)> = self.tasks.list.iter().filter_map(follows).collect();
-                for (id, state) in moves {
-                    self.tasks.set_state(id, state);
-                    self.tasks.followed(id, state);
-                }
+                let seen = self.found.iter().map(|s| (s.runner.clone(), s.id.clone(), s.active, s.last_activity));
+                self.follow_sessions(seen.collect());
+            }
+            Action::SessionQuiet { ms } => self.session_quiet_ms = ms,
+            Action::SessionsSeen { seen } => {
+                let seen = seen.into_iter().map(|s| (s.runner, s.id, s.active, Some(s.last_activity)));
+                self.follow_sessions(seen.collect());
             }
             Action::SessionAdopt { runner, id } => {
                 if let Some(session) = self.session(&runner, &id).cloned() {
@@ -1651,6 +1663,32 @@ impl Model {
             section.rows.push(TaskRow { id: task.id, group, tabs, panes, current, detail });
         }
         sections
+    }
+
+    /// Tasks adopted from sessions follow them (`sessions::follow`), by the time of the last
+    /// `Tick`. `seen`: (runner, id, at work, when its file last changed).
+    fn follow_sessions(&mut self, seen: Vec<(String, String, bool, Option<u64>)>) {
+        let follows = |task: &Task| {
+            let link = task.session.as_ref()?;
+            let (.., active, last) = seen.iter().find(|(runner, id, ..)| (runner, id) == (&link.runner, &link.id))?;
+            let next = sessions::follow(*active, *last, link.state, task.state, self.now, self.session_quiet_ms)?;
+            Some((task.id, next))
+        };
+        let moves: Vec<(TaskId, State)> = self.tasks.list.iter().filter_map(follows).collect();
+        for (id, state) in moves {
+            self.tasks.set_state(id, state);
+            self.tasks.followed(id, state);
+        }
+    }
+
+    /// The sessions whose tasks still follow them, as (runner, id): the task has the state it
+    /// last took from its session. Only these are worth reading while the Tasks section is closed.
+    pub fn followed_sessions(&self) -> Vec<(String, String)> {
+        let follows = |task: &Task| {
+            let link = task.session.as_ref().filter(|link| link.state == Some(task.state))?;
+            Some((link.runner.clone(), link.id.clone()))
+        };
+        self.tasks.list.iter().filter_map(follows).collect()
     }
 
     /// The sessions that are no task's and not hidden, in the order listed. At most `MAX_FOUND`.
@@ -2361,6 +2399,8 @@ mod tests {
         Action::TaskFromLine { .. },
         Action::ToggleGroup { .. },
         Action::SetSessions { .. },
+        Action::SessionQuiet { .. },
+        Action::SessionsSeen { .. },
         Action::SessionAdopt { .. },
         Action::SessionHide { .. },
         Action::SessionClick { .. },
@@ -2444,6 +2484,8 @@ mod tests {
             Action::CloseCompose,
             Action::ToggleGroup { heading: Heading::Done },
             Action::SetSessions { found: Vec::new() },
+            Action::SessionQuiet { ms: 0 },
+            Action::SessionsSeen { seen: Vec::new() },
             Action::SessionAdopt { runner: text(), id: text() },
             Action::SessionHide { runner: text(), id: text() },
             Action::SessionClick { runner: text(), id: text() },
@@ -3556,32 +3598,69 @@ mod tests {
 
     #[test]
     fn an_adopted_task_follows_its_session() {
+        const MINUTE: u64 = 60_000;
         let mut m = Model::default();
         m.update(Action::SetRepos { repos: listed() });
-        let found = |active: bool| Action::SetSessions { found: vec![session("claude", "s1", "/code/app", active, 9)] };
+        let start = 100 * MINUTE;
+        // What the shell found at `now`, of a session whose file last changed `ago` before.
+        let at = |m: &mut Model, now: u64, ago: u64| {
+            m.update(Action::Tick { now }.sent_by(Origin::System));
+            let found = vec![session("claude", "s1", "/code/app", ago <= 30_000, now - ago)];
+            m.update(Action::SetSessions { found }.sent_by(Origin::System));
+        };
         let state = |m: &Model| (m.tasks.list[0].state, m.tasks.list[0].session.as_ref().and_then(|link| link.state));
-        m.update(found(true).sent_by(Origin::System));
+        at(&mut m, start, 0);
         m.update(Action::SessionAdopt { runner: "claude".into(), id: "s1".into() });
         assert_eq!(state(&m), (State::Running, Some(State::Running)));
-        // The session goes quiet: the task needs you, once. It works again: the task runs.
-        m.update(found(false).sent_by(Origin::System));
+        // Idle for a minute, as during a build that prints nothing: the task runs on.
+        at(&mut m, start + MINUTE, MINUTE);
+        assert_eq!((state(&m).0, m.tasks.needs_you()), (State::Running, 0));
+        // Quiet for three minutes: the task needs you, once. It works again: the task runs.
+        at(&mut m, start + 3 * MINUTE, 3 * MINUTE);
         assert_eq!((state(&m), m.tasks.needs_you()), ((State::NeedsYou, Some(State::NeedsYou)), 1));
-        m.update(found(false).sent_by(Origin::System));
-        m.update(found(true).sent_by(Origin::System));
+        at(&mut m, start + 4 * MINUTE, 4 * MINUTE);
+        at(&mut m, start + 5 * MINUTE, 0);
         assert_eq!(state(&m), (State::Running, Some(State::Running)));
         // The user puts it on hold: it is theirs now, whatever the session does.
         m.update(Action::TaskHold { id: 1 });
-        m.update(found(false).sent_by(Origin::System));
-        m.update(found(true).sent_by(Origin::System));
+        at(&mut m, start + 9 * MINUTE, 4 * MINUTE);
+        at(&mut m, start + 10 * MINUTE, 0);
         assert_eq!(state(&m), (State::Parked, Some(State::Running)));
         // Back to the state it took from the session (undo), it follows again.
         m.update(Action::TaskUndo);
-        m.update(found(false).sent_by(Origin::System));
+        assert_eq!(m.followed_sessions(), [("claude".to_string(), "s1".to_string())]);
+        at(&mut m, start + 14 * MINUTE, 4 * MINUTE);
         assert_eq!(state(&m).0, State::NeedsYou);
-        // An agent's report is kept too. A session that is not found says nothing.
+        // With the Tasks section closed the shell reads only when the file last changed: the same rule.
+        let seen = |m: &mut Model, now: u64, ago: u64| {
+            m.update(Action::Tick { now }.sent_by(Origin::System));
+            let (runner, id) = ("claude".to_string(), "s1".to_string());
+            let seen = vec![sessions::Seen { runner, id, last_activity: now - ago, active: ago <= 30_000 }];
+            m.update(Action::SessionsSeen { seen }.sent_by(Origin::System));
+        };
+        seen(&mut m, start + 15 * MINUTE, 0);
+        assert_eq!(state(&m), (State::Running, Some(State::Running)));
+        seen(&mut m, start + 16 * MINUTE, MINUTE);
+        assert_eq!(state(&m).0, State::Running);
+        seen(&mut m, start + 19 * MINUTE, 4 * MINUTE);
+        assert_eq!((state(&m).0, m.tasks.needs_you()), (State::NeedsYou, 1));
+        // The setting: one minute is enough; 0 never moves it.
+        seen(&mut m, start + 20 * MINUTE, 0);
+        m.update(Action::SessionQuiet { ms: MINUTE }.sent_by(Origin::System));
+        seen(&mut m, start + 21 * MINUTE, MINUTE);
+        assert_eq!(state(&m).0, State::NeedsYou);
+        seen(&mut m, start + 22 * MINUTE, 0);
+        m.update(Action::SessionQuiet { ms: 0 }.sent_by(Origin::System));
+        seen(&mut m, start + 99 * MINUTE, 70 * MINUTE);
+        assert_eq!(state(&m).0, State::Running);
+        m.update(Action::SessionQuiet { ms: sessions::QUIET_MS }.sent_by(Origin::System));
+        // An agent's report is kept too, and such a task is no longer read for. A session that
+        // is not found says nothing.
         m.update(Action::TaskSetState { id: 1, state: State::Done }.sent_by(Origin::Socket));
-        m.update(found(true).sent_by(Origin::System));
+        assert_eq!(m.followed_sessions(), Vec::<(String, String)>::new());
+        seen(&mut m, start + 100 * MINUTE, 0);
         m.update(Action::SetSessions { found: Vec::new() }.sent_by(Origin::System));
+        m.update(Action::SessionsSeen { seen: Vec::new() }.sent_by(Origin::System));
         assert_eq!(state(&m).0, State::Done);
     }
 

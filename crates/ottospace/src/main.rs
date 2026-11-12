@@ -529,6 +529,8 @@ struct Workspace {
     sessions: Option<sessions::Poller>,
     /// The core holds sessions that were found: they are cleared when the Tasks section closes.
     sessions_listed: bool,
+    /// The core was told the `session_quiet_minutes` setting.
+    sessions_quiet_told: bool,
     /// The user was told that the sessions reader stopped.
     sessions_stopped: bool,
     /// Window ids seen per hosted pid; anything new that appears later gets its own pane.
@@ -732,6 +734,7 @@ impl Workspace {
             sessions: sessions::Poller::start(),
             sessions_listed: false,
             sessions_stopped: false,
+            sessions_quiet_told: false,
             known: Vec::new(),
             live_since: None,
             front_hosted: None,
@@ -1390,6 +1393,8 @@ impl Workspace {
         let mut bar = serde_json::json!(self.model.sessions_bar());
         bar["reads"] = serde_json::json!(self.sessions.as_ref().map_or(0, sessions::Poller::reads));
         bar["enabled"] = serde_json::json!(self.sessions.is_some());
+        // Rounds that looked only at adopted sessions' files, with the section closed.
+        bar["slow_reads"] = serde_json::json!(self.sessions.as_ref().map_or(0, sessions::Poller::slow_reads));
         bar
     }
 
@@ -1398,9 +1403,29 @@ impl Workspace {
     fn poll_sessions(&mut self, window: &Window, cx: &mut Context<Self>) {
         let now = now_ms();
         let open = self.model.sidebar == Some(Section::Tasks);
+        if !self.sessions_quiet_told {
+            self.sessions_quiet_told = true;
+            let ms = config::session_quiet_ms();
+            self.dispatch(Action::SessionQuiet { ms }, Origin::System, window, cx);
+        }
+        // Closed, only the sessions that tasks still follow are looked at, and only their files.
+        let adopted = if open { Vec::new() } else { self.model.followed_sessions() };
         let Some(poller) = &mut self.sessions else { return };
-        poller.ask(open, now);
-        let (found, stopped) = (poller.take(), poller.stopped());
+        poller.ask(open, adopted, now);
+        let (read, stopped) = (poller.take(), poller.stopped());
+        let (mut found, mut seen) = (None, None);
+        for read in read {
+            match read {
+                sessions::Read::Found(list) => found = Some(list),
+                sessions::Read::Seen(list) => seen = Some(list),
+            }
+        }
+        if let Some(seen) = seen {
+            // Adopted tasks follow their sessions by this, with the section closed.
+            self.dispatch(Action::Tick { now }, Origin::System, window, cx);
+            self.dispatch(Action::SessionsSeen { seen }, Origin::System, window, cx);
+            cx.notify();
+        }
         // What was found is shown, and acted on, only while it is fresh: it is read while the
         // section is open, so when the section closes (or the reader is gone) the list is
         // emptied. Nothing then reads or adopts a session by what it was doing a while ago.
