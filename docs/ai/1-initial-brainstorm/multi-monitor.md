@@ -13,15 +13,15 @@ request of 2026-11-11. Not agreed. Nothing here was measured: no multi-display r
 | One GPUI window. Closing it quits. `Workspace` holds the `Model`, the hosted windows and the 60 Hz tick | `main.rs` (`open_window`, `on_window_closed`, `Workspace::new`) | A second window needs the model and `hosted` lifted out of the view |
 | `Model` has one `active` tab, one `layout`, one `focused`, one `live` | `model.rs` | "What each display shows" has no place in the model yet |
 | A task points at one tab (`Task.tab`). Tabs are a flat list. "Task owns its tabs" is designed, not built | `tasks.rs`, `plan.md` | Display mapping should be designed together with task → tabs |
-| `parking_spot()` takes the first display (system order) whose bottom-right corner has no display to the right or below. It ignores where ottospace is | `display.rs` | Windows can park on a different display from their pane |
+| `parking_spot()` takes the first display (system order) with no display reaching into the area right of and below its bottom-right corner. It ignores where ottospace is | `display.rs` | Windows can park on a different display from their pane |
 | Every parked window goes to the same point | `Hosted::park` | They overlap each other. `hosting-windows.md` lists overlap as a throttle risk. Not measured with 2+ windows |
-| A parked window is re-parked only when its pane size or crop changes. Only the live window gets the 500 ms drift check | `sync_layout` | After a display change, nothing puts parked windows back |
-| Stream scale is the ottospace window's `scale_factor()`. `Hosted::new` assumes 2.0 | `park`, `sync_layout`, `Hosted::new` | Wrong when the parking display and the pane's display differ in scale. A scale-only change does not reconfigure the stream |
-| Streams start at host time and never stop, also for background tabs | `Hosted::new` | Two visible tabs cost nothing extra in capture |
+| A parked window is re-parked only when its pane size or crop changes. Only the live window gets the 500 ms drift check | `sync_layout` | Nothing re-parks them on a display change. They move only if their pane's size or crop changes, or when a pane stops being live |
+| Stream scale is the ottospace window's `scale_factor()`. `Hosted::new` assumes 2.0 for the first stream config (replaced by the first `park`) and for the corner radius (never recomputed) | `park`, `sync_layout`, `Hosted::new` | Wrong when the parking display and the pane's display differ in scale. A scale-only change does not reconfigure the stream |
+| Streams start at host time and stay active while the window is hosted, also for background tabs | `Hosted::new` | Showing two tabs at once adds no streams. Capture cost can still change with pane size and scale |
 | `on_screen` adds the window's display origin to the pane bounds | `main.rs` | The one window should already work on a second display. Not verified |
 | Return key: `Action::Leave`, then `cx.activate(true)`. One Carbon hot key, id 1 | `hotkey.rs`, `return_to_ottospace` | With two windows: which one gets the keys is undefined |
 | Native fullscreen is disabled for ottospace's window | `window.rs` | Keep this for every ottospace window |
-| Recovery file stores original frames in global coordinates | `recovery.rs` | An original frame can point at a display that is gone. macOS clamps; `set_position` reads back where it landed |
+| Recovery file stores original frames in global coordinates | `recovery.rs` | An original frame can point at a display that is gone. macOS may clamp it. `set_position` can read back where the window landed, but recovery ignores that |
 
 A free bottom-right corner always exists: the display with the lowest bottom edge (the rightmost one on a tie) has
 nothing right of or below it. So "every display is in use" does not remove the parking spot. Parking needs a corner,
@@ -37,11 +37,12 @@ not a spare display. (Derived from the geometry in `parking_spot`, not measured.
 | Keys (proposals) | ⌘⌃←/→: move the window to the display on that side | ⌘⌃←/→: focus the window on that display. ⌘⌃⇧←/→: send the focused tab there. ⌘⌥ arrows and the planned pane-move key (`app-windows.md`) continue across the display edge |
 | Core | `Action::SetDisplays { displays }` (id, rect, scale, passed in by the shell). `Action::MoveWindow { dir }` → `Effect::MoveWindow(display)` | A `View` per display: `{ display, active tab, layout, focused }` replaces `Model::active / layout / focused`. `live` stays single: there is one keyboard. `Action::FocusDisplay`, `SendTab { display }`, `SendPane { display }` |
 | Shell | Move the window, then re-park (parking follows the window) | Model and `hosted` move from the `Workspace` view to a shared entity. One view per window. The tick runs once, not per window. Quit when the last window closes. `on_screen` and `top_limit` take the pane's own window |
-| Hosting | Parking must follow the window, or scale and Spaces differ between pane and window | Same, per window. A pane's window parks on the display that shows the pane |
+| Hosting | Parking must follow the window, or scale and Spaces differ between pane and window | Same, per window. A pane's window prefers the display that shows the pane; with no free corner there it falls back to another display, and the scale and Spaces risks return |
 | Cost | Small | Large: the shell refactor is most of it. The core change is medium and unit-testable |
 
 In `APP` mode ottospace keys do not fire (accepted constraint in `plan.md`). So "send this app to the other display"
-needs the return key first, or a second global hot key. `RegisterEventHotKey` can register more than one.
+needs the return key first, or a second global hot key. `RegisterEventHotKey` can register more than one; the handler
+must then read the hot key's id (today it sets one flag for any key).
 
 ### B. An indicator on every display
 
@@ -58,6 +59,7 @@ needs the return key first, or a second global hot key. `RegisterEventHotKey` ca
 ### C. Own every window on every display
 
 What macOS allows without SIP changes, and what the tools do. From memory of their docs; not re-checked for this note.
+The yabai and Amethyst rows depend on the tool's and macOS's version: treat their "cannot" lists as unverified.
 
 | | Uses | Can do | Cannot do |
 |---|---|---|---|
@@ -94,25 +96,29 @@ Rejected mapping: one task per display. "Pop next" then has to pick a display, a
 | Where parked windows go | On the display that shows their pane: same scale, same Space, short move on enter. Use that display's free corner. If it has none, the nearest display that has one | Bottom-left corners (window's top-right pixel on screen) would double the spots. Whether macOS allows that position: not verified |
 | Overlap at the spot | All parked windows share one point today | Throttling with several windows at one spot: not verified. If it happens, spread them over corners or offset them |
 | Stream from another display | An SCK window filter does not name a display, so frames should keep coming | Not verified |
-| Display sleep | If every display sleeps, nobody sees the panes. One display off, or the lid closed, is a display change (below) | Stream behaviour across sleep and wake: not verified |
+| Display sleep | If every display sleeps, nobody sees the panes. One display off, or the lid closed, may change the display list or only the power state (not verified) | Stream behaviour across sleep and wake: not verified |
 | Mixed scale | A window parked on a 1x display probably renders at 1x. The stream is configured at the ottospace window's scale. A 1x source in a 2x pane is blurred | Not verified. Parking on the pane's display avoids it. `SetDisplays` must carry scale, and a scale change must reconfigure the stream |
 | Enter across displays | The window moves from the parking display to the pane's display. The app may re-render for the new scale | Delay and flicker: not verified |
 | "Displays have separate Spaces" on (default) | A window belongs to one display's current Space. If the user changes Space on the parking display, parked windows stay behind | Whether streams continue from a hidden Space, and where an AX move across displays lands: not verified. Already a risk with one display |
-| Same setting off | One Space covers all displays. Simpler for us. One menu bar | AeroSpace's guide prefers it off (from memory) |
+| Same setting off | One Space covers all displays. Simpler for us. One menu bar. Native fullscreen on one display may blank the others (from memory; not verified) | AeroSpace's guide prefers it off (from memory) |
 | Fullscreen apps | A native-fullscreen app takes its display's Space. The ottospace window and windows parked there are on another Space | Not verified. A hosted window that goes fullscreen while live is not handled today either |
 | Display unplugged | macOS moves the windows that were on it. Parked windows may land in full view. The live window is fixed by the drift check once its pane has new bounds | Where macOS puts sliver-parked windows, and whether streams survive: not verified |
 | Display connected | The free corner may change. Parked windows stay at the old point, which may now be inside the new display | Follows from the code. Needs the re-park step below |
 
 Display changes, proposed handling: the shell watches the display list (reconfiguration callback, or the 500 ms tick)
-and sends `SetDisplays`. The core recomputes each window's display, each tab's display and each parking spot, and
-emits `Effect::Parked` for every pane that is not live. The shell also extends the drift check to parked windows.
+and sends `SetDisplays { displays, home }`, where `home` is the display ottospace's window is on. It sends it when the
+list changes and when the window's display or scale changes: dragging ottospace to another display must re-park too.
+The core recomputes each window's display, each tab's display and each parking spot, and emits a new
+`Effect::Repark(pane)` for every pane that is not live. Not `Effect::Parked`: that means "this pane stopped being
+live", and the shell's handler for it clears the click guard and can take the keyboard back. `Repark` only moves the
+window. The shell also extends the drift check to parked windows.
 
 ## Return key and focus
 
 - `live` stays one pane across all displays. Entering a pane on display 2 leaves a live pane on display 1 (already the rule in `Action::Enter`).
 - Return key: `Leave`, then make key the window that held the live pane. If none was live, the window used last. The core keeps "focused view"; the shell raises that window only.
 - Whether `cx.activate(true)` raises every ottospace window, and whether that matters: not verified.
-- Clicking any ottospace window while a pane is live already leaves it (`observe_window_activation`). The 400 ms guard must be per window.
+- Clicking any ottospace window while a pane is live already leaves it (`observe_window_activation`). With several windows, each one's observer must consult the one shared 400 ms guard.
 - Keyboard focus moving to another display does not move the pointer. Whether it should: open question.
 
 ## Tests
@@ -129,7 +135,7 @@ which can move the user's windows. Not for local runs.
 
 ## Recommendation
 
-Build D in stages: A1 and B2 are stops on the way, each useful alone. Skip C.
+Build D in stages: A1 and B2 are stops on the way. A1 is useful alone; B2 is optional, and once each display has a window (A2) only its menu-bar count still adds something. Skip C.
 
 - Bryan's note #4 asks for layouts across displays with affinity. Only A2/D gives a second surface; A1 and B only move or point at the one surface.
 - Terminals are drawn by GPUI, so a terminal on display 2 needs an ottospace window there. No AX-only design can do that.
@@ -140,18 +146,19 @@ Build D in stages: A1 and B2 are stops on the way, each useful alone. Skip C.
 
 Parking decided in the core, and re-park on display change. One window still.
 
-- Core: `Action::SetDisplays { displays }`; `parking(displays, home) -> Point` moves from `display.rs` (it is a decision) and prefers the home display's free corner; `Effect::Parked` for each parked pane when the answer changes. Unit tests for the arrangements above.
-- Shell: read the display list (id, UUID, rect, scale) on the 500 ms tick and send the action when it differs; drift check for parked windows; reconfigure the stream when scale changes.
+- Core: `Action::SetDisplays { displays, home }`; `parking(displays, home) -> Point` moves from `display.rs` (it is a decision) and prefers the home display's free corner; `Effect::Repark` for each parked pane when the answer changes. Unit tests for the arrangements above.
+- Shell: read the display list (id, UUID, rect, scale) and the window's own display on the 500 ms tick and send the action when either differs; drift check for parked windows; reconfigure the stream when scale changes.
 - State snapshot: `displays`; `parking` stays. E2E: fake display list request, canary re-parks when the list changes.
-- User-visible: parked windows no longer stay stranded on screen after a display is plugged, unplugged or rearranged.
+- User-visible aim: parked windows are put back after a display is plugged, unplugged or rearranged. What macOS does to them on unplug is not verified (experiment 5), so this is the aim, not a promise.
+- Run experiments 1, 3 and 10 before or with this PR: they can change the rule it builds.
 
 ### Then, in order
 
-1. Run experiments 1-6. They decide the parking rule before more is built on it.
-2. A1: ⌘⌃←/→ sends the window to the next display. Parking follows.
+1. Run the remaining experiments in this order: 2, 4, 5, 6 and 9 next (parking rule and display changes); 8 before step 2; 11 before steps 3 and 6; 7 and 12 before step 6.
+2. A1: ⌘⌃←/→ sends the window to the next display. Parking follows. (Step 7 gives these keys a new meaning, focus the window on that display; decide then whether to keep one meaning.)
 3. B2: menu bar item with the "needs you" count and a task list. Independent; can move earlier or be dropped.
 4. Task owns its tabs (already planned). Do it before views, so views are designed against the final hierarchy.
-5. Core views: `View` per display in the model, still one window drawn. Pure refactor, covered by existing tests.
+5. Core views: `View` per display in the model, still one window drawn. A refactor: many existing tests read `layout`, `focused` and `active` and are updated with it.
 6. Shell: shared model entity, a window per view, one tick. Second window opens by a key or a setting, not automatically.
 7. Focus and send across displays; return key picks the right window.
 8. Tab affinity by display UUID, fallback on disconnect, return on reconnect. Kept with session restore (phase D of the plan).
@@ -160,6 +167,7 @@ Parking decided in the core, and re-park on display change. One window still.
 ## Experiments (need a real multi-display setup)
 
 The `probe` tool is in git history (`d483a37:crates/probe`); it prints frames per second for on-screen, parked, restored.
+It takes an app name and seconds only: experiments 1, 3 and 12 need it to take a parking position and several windows first.
 
 | # | Run | Result that changes the design |
 |---|---|---|
@@ -169,11 +177,11 @@ The `probe` tool is in git history (`d483a37:crates/probe`); it prints frames pe
 | 4 | "Separate Spaces" on. Park on display B, switch B to another Space. Then enter the pane on display A | Frames stop: park on the pane's display and handle Space change. Enter lands on the wrong Space: needs a fix before A2 |
 | 5 | Unplug the display that holds parked windows. Read each window's frame and stream status. Plug it back | Windows land in view (expected): the re-park step is required. Streams die: restart them on display change |
 | 6 | Turn one external display off, close the lid, and sleep and wake, each with parked windows | Frames do not resume: restart streams on wake |
-| 7 | Native-fullscreen an app on the parking display, and on the ottospace display | Streams stop or the window cannot go live: show the pane as unavailable, or move parking away from that display |
+| 7 | Native-fullscreen an app on the parking display, and on the ottospace display. Repeat with "separate Spaces" off | Streams stop or the window cannot go live: show the pane as unavailable, or move parking away from that display |
 | 8 | Move the current window to a second display placed left of or above the main one (negative origin). Enter a pane | Live window misplaced: fix `on_screen` first |
 | 9 | Enter a pane when parking and pane are on displays with different scale. Time until the window looks right | Slow or flickers: parking on the pane's display becomes a hard rule |
 | 10 | Set a window so only its top-right pixel is on a display's bottom-left corner. Read the frame back | Clamped: only bottom-right corners are usable |
-| 11 | GPUI 0.2: open a second window on a chosen display; check `window.display()` after a move; press the return key with two windows; try a non-activating floating window | Any failure moves work into `ottospace-mac` (AppKit calls) and raises the cost of A2 or B1 |
+| 11 | GPUI 0.2: open a second window on a chosen display; check `window.display()` after a move; press the return key with two windows; try a non-activating floating window; try a menu bar status item | Any failure moves work into `ottospace-mac` (AppKit calls) and raises the cost of A2 or B1 |
 | 12 | Same as 1 with "separate Spaces" off | Behaves better: recommend that setting in the README, as AeroSpace does |
 
 ## Open questions
