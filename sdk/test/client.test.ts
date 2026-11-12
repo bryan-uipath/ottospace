@@ -214,6 +214,39 @@ test("sneak mode labels the controls, and a typed label acts as a click", async 
   });
 });
 
+test("marks: add, list, go, rename, remove", async () => {
+  await withOttospace(async (client) => {
+    const pane = (await client.split()).state.focused;
+    assert.equal(pane, 1);
+    const { mark } = await client.markAdd({ pane: 1, name: "notes", key: "n" });
+    assert.deepEqual(
+      [mark.name, mark.key, mark.kind, mark.open, mark.pane, mark.available],
+      ["notes", "n", "terminal", true, 1, true],
+    );
+    const tab = (await client.markAdd({ tab: 1 })).mark;
+    assert.deepEqual([tab.name, tab.kind, tab.tab], ["Tab 1", "tab", 1]);
+    assert.deepEqual((await client.marks()).marks.map((m) => m.name), ["notes", "Tab 1"]);
+    await exactState(client);
+
+    // The jump prefix waits for a letter: the state says so, and the types hold it.
+    const waiting = await client.key({ keys: "cmd-'" });
+    assert.deepEqual([waiting.mode, waiting.state.mark_input], ["mark", { type: "jump" }]);
+    await exactState(client);
+    assert.equal((await client.key({ keys: "escape" })).mode, "normal");
+
+    // Closed, the mark opens a terminal again, under a new pane id.
+    await client.close({ pane: 1 });
+    const gone = await client.markGo({ key: "n" });
+    assert.deepEqual([gone.state.focused, gone.marks[0]?.pane], [2, 2]);
+    const renamed = await client.markRename({ name: "notes", to: "journal" });
+    assert.deepEqual(renamed.marks.map((m) => m.name), ["journal", "Tab 1"]);
+    const removed = await client.markRemove({ key: "n" });
+    assert.deepEqual([removed.marks.map((m) => m.name), removed.mark_removed], [["Tab 1"], "journal"]);
+    await exactState(client);
+    await assert.rejects(client.markGo({ name: "journal" }), { message: 'no mark named "journal"' });
+  });
+});
+
 test("a refused request rejects with the app's message", async () => {
   await withOttospace(async (client) => {
     await assert.rejects(client.taskOpen({ id: 99 }), { name: "Error", message: "no task 99" });

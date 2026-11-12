@@ -27,6 +27,7 @@ use ottospace_core::compose;
 use ottospace_core::hosted::{self as hosting, Click};
 use ottospace_core::keys::{self, Mods};
 use ottospace_core::list::{ListKey, list_key};
+use ottospace_core::marks::{Field, MarkInput, MarkOf, MarkRef, letter};
 use ottospace_core::model::CONFIRM_UP;
 use ottospace_core::rules::{self, Facts};
 use ottospace_core::settings::{Installed, closed_apps};
@@ -47,6 +48,7 @@ mod config;
 mod confirm;
 mod control;
 mod home;
+mod marks;
 mod menus;
 mod repos;
 mod sessions;
@@ -118,6 +120,9 @@ fn to_cg(size: gpui::Size<Pixels>) -> CGSize {
 struct Hosted {
     window_id: u32,
     title: String,
+    /// Whose window it is: the app's bundle id, if it has one, and its name as the Apps list has it.
+    bundle: Option<String>,
+    app: String,
     window: ax::Window,
     original: CGRect,
     latest: Arc<Latest>,
@@ -166,10 +171,14 @@ impl Hosted {
         stream.start_capture().map_err(|e| format!("{e:?}"))?;
         let title = window.title().filter(|t| !t.is_empty()).unwrap_or_else(|| format!("window {id}"));
         let pid = window.pid();
+        let (bundle, known_as) = ax::app_identity(pid);
+        let app = capture::name_of(pid).or(known_as).unwrap_or_default();
         recovery::remember(pid, id, original);
         Ok(Self {
             window_id: id,
             title,
+            bundle,
+            app,
             window,
             original,
             latest,
@@ -191,7 +200,8 @@ impl Hosted {
     }
 
     fn kind(&self) -> Kind {
-        Kind::App { window: self.window_id, title: self.title.clone() }
+        let (bundle, name) = (self.bundle.clone(), self.app.clone());
+        Kind::App { window: self.window_id, title: self.title.clone(), bundle, name }
     }
 
     /// Stops capture and puts the window back where we found it.
@@ -287,6 +297,7 @@ impl AssetSource for Assets {
             "icons/workbook.svg" => Some(include_bytes!("../assets/icons/workbook.svg")),
             "icons/tasks.svg" => Some(include_bytes!("../assets/icons/tasks.svg")),
             "icons/repos.svg" => Some(include_bytes!("../assets/icons/repos.svg")),
+            "icons/marks.svg" => Some(include_bytes!("../assets/icons/marks.svg")),
             "icons/split-right.svg" => Some(include_bytes!("../assets/icons/split-right.svg")),
             "icons/split-down.svg" => Some(include_bytes!("../assets/icons/split-down.svg")),
             "icons/plus.svg" => Some(include_bytes!("../assets/icons/plus.svg")),
@@ -360,6 +371,11 @@ const KEYS_TABS: &[(&str, &str)] = &[
     ("⌃Tab / ⌃⇧Tab", "Next / previous tab"),
     ("⌘⇧W", "Close the tab and its panes"),
 ];
+const KEYS_MARKS: &[(&str, &str)] = &[
+    ("⌘B / ⌘⇧B", "Mark the pane / the tab; again unmarks"),
+    ("⌘' then a letter", "Go to the mark with that letter"),
+    ("⌘⌥1 … ⌘⌥9", "Go to one of the first nine marks"),
+];
 const KEYS_TERMINAL: &[(&str, &str)] = &[
     ("Wheel / trackpad", "Scroll back through history"),
     ("⇧PageUp / ⇧PageDown", "Scroll a page"),
@@ -368,7 +384,7 @@ const KEYS_TERMINAL: &[(&str, &str)] = &[
     ("⌘C", "Copy the selection"),
     ("⌘V", "Paste"),
     ("⌘⇧C", "Visual mode: select with the keyboard"),
-    ("⌘⇧E", "List mode: keys for the bar (Apps, Tasks, Repos). ↵ or space on a heading folds it"),
+    ("⌘⇧E", "List mode: keys for the bar (Apps, Tasks, Repos, Marks). ↵ or space on a heading folds it"),
     ("⌘⌃G", "Sneak mode: a letter label on every control"),
     ("⌘N", "New task: type a line, ↵ files it"),
     ("⌘⇧N", "Next task: show the tabs of the first that needs you"),
@@ -383,6 +399,8 @@ const KEYS_LIST: &[(&str, &str)] = &[
     ("H", "Task: put on hold"),
     ("X", "Task: dismiss from the inbox"),
     ("U", "Task: undo the last of these"),
+    ("R / M / X / U", "Mark: rename / letter / remove / put back"),
+    ("⇧J ⇧K", "Mark: move down / up"),
     ("Esc", "Leave"),
 ];
 const KEYS_VISUAL: &[(&str, &str)] = &[
@@ -401,11 +419,12 @@ const KEYS_SNEAK: &[(&str, &str)] = &[
 ];
 
 /// Rail sections in order, with their icon and label.
-const SECTIONS: [(Section, &str, &str); 4] = [
+const SECTIONS: [(Section, &str, &str); 5] = [
     (Section::Apps, "icons/apps.svg", "Apps"),
     (Section::Workbook, "icons/workbook.svg", "Workbook"),
     (Section::Tasks, "icons/tasks.svg", "Tasks"),
     (Section::Repos, "icons/repos.svg", "Repos"),
+    (Section::Marks, "icons/marks.svg", "Marks"),
 ];
 
 /// A small label shown when the pointer rests on a rail icon.
@@ -492,6 +511,8 @@ actions!(
 );
 // Terminal selection.
 actions!(ottospace, [CopySelection, PasteText, VisualMode, ListMode, SneakMode, NewTask, NextTask]);
+// Marks: mark the focused pane or the tab on show, and the jump prefix.
+actions!(ottospace, [MarkPane, MarkTab, MarkJump]);
 // App menu.
 actions!(ottospace, [Quit, Hide]);
 
@@ -569,6 +590,8 @@ struct Workspace {
     unsaved: Option<String>,
     /// The tasks as last written to disk, to write only what changes.
     stored: Vec<Task>,
+    /// `marks.json` as last read and written, and what the marks were last found to be missing.
+    kept_marks: marks::Kept,
     /// Scroll position of the bar's list, so list mode can bring the selected row into view.
     list_scroll: ScrollHandle,
     /// The minute of the last look at the clock: the Tasks section's ages are drawn again when it changes.
@@ -628,6 +651,11 @@ struct Launch {
     axis: Axis,
     new_tab: bool,
     since: Instant,
+    /// The window a mark asked for; else the app's main window, as a click in the list asks.
+    wanted: Option<marks::Wanted>,
+    /// How many windows the started app had at the last look, and since when: a mark's window
+    /// is picked once they have settled (`marks::settled`).
+    windows: Option<(usize, Instant)>,
 }
 
 /// How long to wait for a started app's window before giving up.
@@ -723,6 +751,10 @@ impl Workspace {
                                 cx.notify();
                             }
                             this.minute = minute;
+                            // The Marks list says what is missing as it is now.
+                            if this.model.sidebar == Some(Section::Marks) {
+                                this.check_marks(cx);
+                            }
                         }
                         // Tell the core which windows kept another size than their pane's. Not
                         // before the panes were drawn again after the last change: until then
@@ -826,6 +858,7 @@ impl Workspace {
             keeping,
             unsaved: None,
             stored: Vec::new(),
+            kept_marks: marks::Kept::default(),
             hosting,
             host_only,
             control,
@@ -835,6 +868,7 @@ impl Workspace {
         };
         this.refresh_apps();
         this.stored = this.kept_tasks(); // what was read needs no writing back
+        this.restore_marks(cx);
         this
     }
 
@@ -872,7 +906,9 @@ impl Workspace {
                 | Action::SessionAdopt { .. }
         );
         let row = matches!(action, Action::RowSnooze { .. } | Action::RowHold { .. } | Action::RowDismiss { .. });
-        if files || row {
+        // And the offer to put a removed mark back.
+        let unmarks = matches!(action, Action::MarkRemove { .. } | Action::MarkToggle { .. } | Action::ListDismiss);
+        if files || row || unmarks {
             self.model.update(Action::Tick { now: now_ms() }.sent_by(Origin::System));
         }
         let effects = self.model.update(action.sent_by(origin));
@@ -885,6 +921,9 @@ impl Workspace {
         }
         self.dispatched_at = self.renders;
         self.store_tasks();
+        self.store_marks();
+        // New marks need looking for; what was found is believed a while, so this is cheap.
+        self.check_marks(cx);
         // What an effect dispatches in turn (a picked app's pane, a label's control) has the same sender.
         self.with_origin(origin, |this| this.carry_out(&effects, window, cx));
         cx.notify();
@@ -893,6 +932,9 @@ impl Workspace {
 
     fn carry_out(&mut self, effects: &[Effect], window: &Window, cx: &mut Context<Self>) {
         let another_goes_live = effects.iter().any(|effect| matches!(effect, Effect::Live(_)));
+        // Every window of this pass that could not be hosted, not only the last.
+        let asked = effects.iter().any(|effect| matches!(effect, Effect::HostWindow { .. }));
+        let mut unhosted: Vec<String> = Vec::new();
         for effect in effects {
             match effect {
                 Effect::Opened(id) => {
@@ -943,6 +985,19 @@ impl Workspace {
                     }
                 }
                 Effect::Activate { id } => self.activate(id, window, cx),
+                Effect::HostWindow { mark, bundle, name, title, into, axis } => {
+                    let (bundle, name, title) = (bundle.clone(), name.clone(), title.clone());
+                    let wanted = marks::Wanted { mark: *mark, bundle, name, title, into: *into, axis: *axis };
+                    if let Err(why) = self.host_window(wanted, window, cx) {
+                        // A rebuilt tab's pane stays empty, and says why.
+                        if let Some(pane) = *into {
+                            self.model.update(Action::Unfilled { pane, why: why.clone() }.sent_by(Origin::System));
+                        }
+                        if !unhosted.contains(&why) {
+                            unhosted.push(why);
+                        }
+                    }
+                }
                 Effect::Quit => {
                     // A moment later, so a socket `quit` gets its reply first.
                     cx.spawn(async move |_, cx| {
@@ -964,6 +1019,9 @@ impl Workspace {
                     }
                 }
             }
+        }
+        if asked {
+            self.error = (!unhosted.is_empty()).then(|| unhosted.join("; "));
         }
     }
 
@@ -1090,7 +1148,12 @@ impl Workspace {
     /// What the status bar says is wrong, most pressing first: the last request that failed, a
     /// task that is not saved, then a problem found at start.
     fn problem(&self) -> Option<String> {
-        self.error.clone().or(self.unsaved.clone()).or(self.notice.clone())
+        // What is wrong with `marks.json` has its own place beside a notice from the start.
+        let start = match (&self.notice, &self.kept_marks.notice) {
+            (Some(notice), Some(marks)) => Some(format!("{notice} · {marks}")),
+            (notice, marks) => notice.clone().or(marks.clone()),
+        };
+        self.error.clone().or(self.unsaved.clone()).or(self.kept_marks.unsaved.clone()).or(start)
     }
 
     /// The global return key: take the keyboard back from a live app, and bring ottospace to the
@@ -1108,6 +1171,10 @@ impl Workspace {
 
     fn serve_calls(&mut self, window: &Window, cx: &mut Context<Self>) {
         let calls: Vec<Call> = self.control.iter().flat_map(|rx| rx.try_iter()).collect();
+        // The reply's marks say what is missing, as last found; look again if that is old.
+        if !calls.is_empty() {
+            self.check_marks(cx);
+        }
         for Call { request, reply } in calls {
             // Keys go through GPUI's own dispatch, after this update: their handlers update `self`.
             if let Request::Key { keys } = &request {
@@ -1124,6 +1191,11 @@ impl Workspace {
             );
             if pointer && self.model.sneak.is_some() {
                 let _ = reply.send(control::error(sneak::ON));
+                continue;
+            }
+            // Nor while a mark waits for the user's letter or name: a click ends the wait.
+            if pointer && self.model.mark_input.is_some() {
+                let _ = reply.send(control::error(ottospace_core::marks::INPUT_ON));
                 continue;
             }
             // Nor under the quit question: a client's click outside the box would cancel it.
@@ -1239,6 +1311,13 @@ impl Workspace {
                     if self.model.confirm.is_some() =>
                 {
                     failure = Some(CONFIRM_UP.into());
+                    None
+                }
+                // Nor while a mark waits for the user's letter or name.
+                Request::Picker { .. } | Request::AxOverlay { .. } | Request::Compose { .. }
+                    if self.model.mark_input.is_some() =>
+                {
+                    failure = Some(ottospace_core::marks::INPUT_ON.into());
                     None
                 }
                 Request::Picker { axis, new_tab } => {
@@ -1435,6 +1514,56 @@ impl Workspace {
                     self.serve_sneak(reply, window, cx);
                     continue;
                 }
+                Request::Marks => {
+                    let _ = reply.send(serde_json::json!({ "ok": true, "marks": self.marks_json() }).to_string());
+                    continue;
+                }
+                Request::MarkAdd { pane: Some(_), tab: Some(_), .. } => {
+                    failure = Some("name a pane or a tab, not both".into());
+                    None
+                }
+                Request::MarkAdd { key: Some(key), .. } if letter(key).is_none() => {
+                    failure = Some("a mark's key is one letter, a to z".into());
+                    None
+                }
+                Request::MarkAdd { pane, tab, name, key } => {
+                    let of = tab.map_or(MarkOf::Pane(pane), |tab| MarkOf::Tab(Some(tab)));
+                    let marked = self.model.mark_of(of).is_some();
+                    if let Some(why) = self.model.mark_refusal(of).filter(|_| !marked) {
+                        failure = Some(why);
+                    } else {
+                        self.add_mark(of, (name, key), window, cx);
+                        // The mark, so the caller has its name.
+                        let id = serde_json::json!(self.model.mark_of(of));
+                        let mark = self.marks_json().into_iter().find(|row| row["id"] == id);
+                        let _ = reply.send(serde_json::json!({ "ok": true, "mark": mark }).to_string());
+                        continue;
+                    }
+                    None
+                }
+                Request::MarkGo { name, key, axis } => {
+                    let found = self.mark_ref(name, key);
+                    failure = found.and_then(|mark| self.go_to_mark(mark, axis, window, cx)).err();
+                    None
+                }
+                Request::MarkRemove { name, key } => match self.mark_ref(name, key) {
+                    Ok(mark) => Some(Action::MarkRemove { mark }),
+                    Err(why) => {
+                        failure = Some(why);
+                        None
+                    }
+                },
+                Request::MarkRename { to, .. } if to.trim().is_empty() => {
+                    failure = Some("the new name is empty".into());
+                    None
+                }
+                Request::MarkRename { name, key, to } => match self.mark_ref(name, key) {
+                    Ok(mark) => Some(Action::MarkRename { mark, name: to }),
+                    Err(why) => {
+                        failure = Some(why);
+                        None
+                    }
+                },
             };
             // What the core would drop because a client sent it is an error, not a silent ok.
             let refused = action.as_ref().and_then(|action| self.model.refusal(action, Origin::Socket));
@@ -1538,7 +1667,7 @@ impl Workspace {
 
     fn tasks_bar(&self) -> serde_json::Value {
         let sections = self.model.task_sections(now_ms());
-        let undo = self.model.undo_offer.map(|offer| offer.moved.title());
+        let undo = self.task_offer().map(|offer| offer.moved.title());
         serde_json::json!({ "empty": sections.is_empty(), "undo": undo, "sections": sections })
     }
 
@@ -1816,6 +1945,12 @@ impl Workspace {
                 "live": self.went_live,
                 "frame_reads": self.hosted.values().map(|h| h.frame_reads).sum::<u64>(),
             })),
+            // The marks in the user's order: name, key, kind, whether its pane or tab is open
+            // now, and whether it can be opened. `row` and `buttons`: where the Marks section
+            // drew it, or null.
+            "marks": self.marks_json(),
+            // The name of the mark just taken off, while the Marks section offers to put it back.
+            "mark_removed": self.mark_offered(),
         })
         .to_string()
     }
@@ -1855,8 +1990,9 @@ impl Workspace {
         Ok(())
     }
 
-    /// Adds an app pane for an already-captured window.
-    fn attach(&mut self, hosted: Hosted, action: Action, window: &Window, cx: &mut Context<Self>) {
+    /// Adds an app pane for an already-captured window. `None`: the core opened no pane for it,
+    /// and the window is back where it was.
+    fn attach(&mut self, hosted: Hosted, action: Action, window: &Window, cx: &mut Context<Self>) -> Option<PaneId> {
         let pid = hosted.pid;
         if !self.known.iter().any(|(p, _)| *p == pid) {
             let ids = ax::Window::standard_of(pid).iter().filter_map(ax::Window::id).collect();
@@ -1872,7 +2008,10 @@ impl Workspace {
             }
             self.cells.insert(*id, hosted.bounds.clone());
             self.hosted.insert(*id, hosted);
+            return Some(*id);
         }
+        hosted.release();
+        None
     }
 
     /// Hosts the app's main window in a pane. The error also shows in the Apps list.
@@ -1910,7 +2049,7 @@ impl Workspace {
                 // An app from the settings that is not running: start it, and host its window
                 // when it has one.
                 Err(err) => match self.closed.iter().find(|closed| closed.name == name).cloned() {
-                    Some(app) => return self.launch(app, axis, new_tab),
+                    Some(app) => return self.launch(app, axis, new_tab, None),
                     None => return Err(err),
                 },
             },
@@ -1933,18 +2072,27 @@ impl Workspace {
 
     /// Starts an app that is not running, in the background: its window is wanted in a pane, not
     /// in front of ottospace. By the path it was found at, so nothing but that app can start.
-    fn launch(&mut self, app: Installed, axis: Axis, new_tab: bool) -> Result<(), String> {
-        if self.launching.iter().any(|launch| launch.app.path == app.path) {
-            return Ok(()); // already on its way
+    /// `wanted`: the window a mark asked for, which waits in line even if the app is on its way.
+    fn launch(
+        &mut self,
+        app: Installed,
+        axis: Axis,
+        new_tab: bool,
+        wanted: Option<marks::Wanted>,
+    ) -> Result<(), String> {
+        let on_its_way = self.launching.iter().any(|launch| launch.app.path == app.path);
+        if on_its_way && wanted.is_none() {
+            return Ok(());
         }
-        match std::process::Command::new("open").arg("-g").arg(&app.path).status() {
-            Ok(status) if status.success() => {
-                self.launching.push(Launch { app, axis, new_tab, since: Instant::now() });
-                Ok(())
+        if !on_its_way {
+            match std::process::Command::new("open").arg("-g").arg(&app.path).status() {
+                Ok(status) if status.success() => {}
+                Ok(_) => return Err(format!("{} could not be opened", app.name)),
+                Err(err) => return Err(format!("{} could not be opened: {err}", app.name)),
             }
-            Ok(_) => Err(format!("{} could not be opened", app.name)),
-            Err(err) => Err(format!("{} could not be opened: {err}", app.name)),
         }
+        self.launching.push(Launch { app, axis, new_tab, since: Instant::now(), wanted, windows: None });
+        Ok(())
     }
 
     /// Hosts the window of each app started from the list, once it has one. A started app is
@@ -1958,18 +2106,34 @@ impl Workspace {
         // ready yet is tried again here, not started a second time by `open_app`.
         self.refresh_apps();
         let running = self.apps.clone();
-        for launch in std::mem::take(&mut self.launching) {
+        for mut launch in std::mem::take(&mut self.launching) {
             let bundle = Some(PathBuf::from(&launch.app.path));
             let app = running.iter().find(|app| icon::bundle_of(app.pid) == bundle);
+            // An app that brings its own windows back opens them one by one: a mark's window is
+            // picked by title only once their number has stopped changing.
+            let settled = app.is_some_and(|app| {
+                let count = ax::Window::standard_of(app.pid).len();
+                let since =
+                    launch.windows.filter(|(before, _)| *before == count).map_or_else(Instant::now, |(_, at)| at);
+                launch.windows = Some((count, since));
+                ottospace_core::marks::settled(count, since.elapsed().as_millis() as u64)
+            });
             // Listed, but its main window may not be ready yet: try again until the time is up.
-            let hosted =
-                app.is_some_and(|app| self.open_app(&app.name, launch.axis, launch.new_tab, window, cx).is_ok());
+            let hosted = app.is_some_and(|app| match &launch.wanted {
+                Some(wanted) => settled && self.host_window_of(app.pid, wanted, window, cx).is_ok(),
+                None => self.open_app(&app.name, launch.axis, launch.new_tab, window, cx).is_ok(),
+            });
             if hosted {
                 continue;
             }
             if launch.since.elapsed() > LAUNCH_WAIT {
                 let seconds = LAUNCH_WAIT.as_secs();
-                self.error = Some(format!("{} did not open a window in {seconds} seconds", launch.app.name));
+                let why = format!("{} did not open a window in {seconds} seconds", launch.app.name);
+                // A rebuilt tab's pane that waited for it says so.
+                if let Some(pane) = launch.wanted.as_ref().and_then(|wanted| wanted.into) {
+                    self.model.update(Action::Unfilled { pane, why: why.clone() }.sent_by(Origin::System));
+                }
+                self.error = Some(why);
             } else {
                 self.error = None; // a try that was too early is not a failure yet
                 self.launching.push(launch);
@@ -2014,6 +2178,7 @@ impl Workspace {
         // too: the core keeps the keyboard under the labels.
         if self.model.keys
             || matches!(self.model.mode(), Mode::Pick | Mode::Compose | Mode::Visual | Mode::Sneak | Mode::Confirm)
+            || self.model.mode() == Mode::Mark
         {
             return;
         }
@@ -2174,6 +2339,13 @@ impl Workspace {
             cx.stop_propagation();
             return;
         }
+        // ⌘⌥1..9 go to one of the first nine marks.
+        let digit = key.key.parse::<usize>().ok().filter(|d| (1..=9).contains(d));
+        if let Some(digit) = digit.filter(|_| m.platform && m.alt && !m.shift && !m.control) {
+            let _ = self.go_to_mark(MarkRef::Place(digit - 1), Axis::Right, window, cx);
+            cx.stop_propagation();
+            return;
+        }
         // ⌘1..⌘9 select a tab.
         if key.modifiers.platform
             && let Some(digit) = key.key.parse::<usize>().ok().filter(|d| (1..=9).contains(d))
@@ -2184,6 +2356,10 @@ impl Workspace {
         }
         if self.model.sneak.is_some() {
             self.sneak_key(event, window, cx);
+            return;
+        }
+        if self.model.mark_input.is_some() {
+            self.mark_key(event, window, cx);
             return;
         }
         if self.model.picker.is_some() {
@@ -2313,9 +2489,16 @@ impl Workspace {
         cx.stop_propagation();
         // ⌃X is not `x`. A held key only moves: one press dismisses or opens one row.
         let pressed = list_key(&key.key, key.modifiers.shift).filter(|_| !key.modifiers.control && !key.modifiers.alt);
-        let action = match pressed.filter(|key| !event.is_held || matches!(key, ListKey::Move(_))) {
+        let repeats = |key: &ListKey| matches!(key, ListKey::Move(_) | ListKey::Reorder(_));
+        let action = match pressed.filter(|key| !event.is_held || repeats(key)) {
             Some(ListKey::Move(delta)) => Action::ListMove { delta },
-            Some(ListKey::Open { down }) => Action::ListChoose { axis: if down { Axis::Down } else { Axis::Right } },
+            Some(ListKey::Open { down }) => {
+                self.check_marks(cx); // a mark's row opens only what is there
+                Action::ListChoose { axis: if down { Axis::Down } else { Axis::Right } }
+            }
+            Some(ListKey::Reorder(delta)) => Action::ListReorder { delta },
+            Some(ListKey::Rename) => Action::ListMarkEdit { field: Field::Name },
+            Some(ListKey::Letter) => Action::ListMarkEdit { field: Field::Key },
             Some(ListKey::Section(delta)) => {
                 self.refresh_lists(); // the section it lands on shows what is there now
                 Action::ListSection { delta }
@@ -2323,7 +2506,7 @@ impl Workspace {
             Some(ListKey::Snooze) => Action::ListSnooze { until: now_ms().saturating_add(SNOOZE_MS) },
             Some(ListKey::Hold) => Action::ListHold,
             Some(ListKey::Dismiss) => Action::ListDismiss,
-            Some(ListKey::Undo) => Action::TaskUndo,
+            Some(ListKey::Undo) => Action::ListUndo,
             Some(ListKey::Leave) => Action::LeaveList,
             None => return,
         };
@@ -2352,12 +2535,19 @@ impl Workspace {
             }
             // A "Not running" heading before the apps that are not.
             Some(Section::Apps) => return Some(at + usize::from(at >= self.apps.len())),
+            // The offer to put a mark back, if it shows, is above the rows.
+            Some(Section::Marks) => return Some(at + usize::from(self.mark_offered().is_some())),
             _ => return Some(at),
         }
         // The offer to undo, if it shows; how to add a task, if none is listed; then the headings
         // and rows, which list mode walks as they are drawn.
         let empty = self.model.task_sections(0).is_empty();
-        Some(usize::from(self.model.undo_offer.is_some()) + usize::from(empty) + at)
+        Some(usize::from(self.task_offer().is_some()) + usize::from(empty) + at)
+    }
+
+    /// The offer to take a task's move back, while it shows. A removed mark's is the Marks section's.
+    fn task_offer(&self) -> Option<ottospace_core::tasks::Notice> {
+        self.model.undo_offer.filter(|offer| offer.moved != ottospace_core::tasks::Moved::MarkRemoved)
     }
 
     /// Reads the Apps and Repos lists again.
@@ -2496,15 +2686,23 @@ impl Workspace {
                     .child(group("ARRANGE", rows(KEYS_ARRANGE)))
                     .child(group("MOUSE", rows(KEYS_DRAG))),
             )
-            .child(div().flex().flex_col().gap_4().child(group("TABS", rows(KEYS_TABS))).child(group(
-                "WINDOW",
-                vec![
-                    (return_key, "From any app: back to ottospace"),
-                    ("⌘⌃F".into(), "Zoom the window"),
-                    ("⌘⌃A".into(), "Accessibility overlay (debug)"),
-                    ("⌘/".into(), "This list"),
-                ],
-            )))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .child(group("TABS", rows(KEYS_TABS)))
+                    .child(group("MARKS", rows(KEYS_MARKS)))
+                    .child(group(
+                        "WINDOW",
+                        vec![
+                            (return_key, "From any app: back to ottospace"),
+                            ("⌘⌃F".into(), "Zoom the window"),
+                            ("⌘⌃A".into(), "Accessibility overlay (debug)"),
+                            ("⌘/".into(), "This list"),
+                        ],
+                    )),
+            )
             .child(
                 div()
                     .flex()
@@ -2903,6 +3101,7 @@ impl Workspace {
             Section::Apps => self.render_apps(cx).into_any_element(),
             Section::Repos => self.render_repos(cx).into_any_element(),
             Section::Tasks => self.render_tasks(cx).into_any_element(),
+            Section::Marks => self.render_marks(cx).into_any_element(),
             _ => {
                 div().p_3().text_xs().text_color(rgb(theme::MUTED)).child("Designed, not built yet.").into_any_element()
             }
@@ -3228,7 +3427,7 @@ impl Workspace {
                 .child(muted(KEYS_HINT))
                 .child(div().px_2().pt_2().text_xs().text_color(rgb(theme::BORDER_STRONG)).child(agents))
         });
-        let notice = self.model.undo_offer.map(|notice| {
+        let notice = self.task_offer().map(|notice| {
             div()
                 .id("task-undo")
                 .relative()
@@ -3476,6 +3675,9 @@ impl Workspace {
         });
         // flex_none: a short pane must not squeeze the header, or a raised bar would overlap the pane above.
         let label: SharedString = if title.is_empty() { tag.into() } else { format!("{tag} {title}").into() };
+        // A marked pane says so, with its letter: ⌘B gives no other sign while the Marks list is shut.
+        let marked = self.model.mark_of(MarkOf::Pane(Some(id))).and_then(|mark| self.model.marks.get(mark));
+        let marked = marked.map(|mark| mark.key.map_or("◆".to_string(), |key| format!("◆ {}", key.to_uppercase())));
         // The header is the pane's handle: a drag of it carries the pane to a drop zone or a tab.
         let workspace = cx.weak_entity();
         let header = div()
@@ -3514,7 +3716,8 @@ impl Workspace {
                     .gap_2()
                     .overflow_hidden()
                     .child(div().flex_none().text_color(rgb(tag_color)).child(tag))
-                    .child(div().min_w_0().truncate().child(title)),
+                    .child(div().min_w_0().truncate().child(title))
+                    .children(marked.map(|sign| div().flex_none().text_color(rgb(theme::MARK)).child(sign))),
             )
             .child(self.controls.mark(format!("header:{id}")))
             // `fit` and × never shrink, so they stay in the header however narrow the pane.
@@ -3596,7 +3799,11 @@ impl Workspace {
                 Kind::Terminal => {
                     div().text_sm().text_color(rgb(theme::ERROR)).child("the shell did not start").into_any_element()
                 }
-                _ => home::empty_pane("⌘E to pick what goes here", id, &self.home).into_any_element(),
+                _ => {
+                    // A pane a mark's tab could not fill says why.
+                    let hint = self.unfilled_why(id).unwrap_or_else(|| "⌘E to pick what goes here".into());
+                    home::empty_pane(hint.into(), id, &self.home).into_any_element()
+                }
             }
         };
         // The content sits 2pt inside the pane. A live app window is placed over it, and without
@@ -3776,6 +3983,11 @@ impl Workspace {
                             .when(active, |d| d.bg(rgb(theme::RAISED)).text_color(rgb(theme::TEXT)))
                             .hover(|s| s.text_color(rgb(theme::TEXT)))
                             .child(mark(&self.marks, Mark::Tab(place)))
+                            .children(
+                                self.model
+                                    .mark_of(MarkOf::Tab(Some(id)))
+                                    .map(|_| div().text_color(rgb(theme::MARK)).child("◆")),
+                            )
                             .child(tab.title.clone())
                             .child(self.controls.mark(format!("tab:{}", tab.id)))
                             .child(
@@ -3839,6 +4051,11 @@ impl Workspace {
             }
             Mode::Sneak => ("SNEAK", "type a label · esc leaves"),
             Mode::Confirm => ("QUIT?", ""),
+            Mode::Mark => match self.model.mark_input {
+                Some(MarkInput::Rename { .. }) => ("MARK", "type its name · ↵ keeps it · esc cancels"),
+                Some(MarkInput::SetKey { .. }) => ("MARK", "a letter for the mark · ⌫ for none · esc cancels"),
+                _ => ("MARK?", "a mark's letter · esc cancels"),
+            },
         };
         let hint = hint.to_string();
         let focused = match self.model.focused.and_then(|id| self.model.pane(id)).map(|p| &p.kind) {
@@ -4080,6 +4297,10 @@ impl Render for Workspace {
                 if this.model.sneak.is_some() {
                     this.dispatch(Action::LeaveSneak, this.input, window, cx);
                 }
+                // And for a mark that waits: a click on another row's pencil starts that one.
+                if this.model.mark_input.is_some() {
+                    this.dispatch(Action::MarkCancel, this.input, window, cx);
+                }
             }))
             .on_action(cx.listener(|this, _: &CopySelection, _, cx| this.copy(cx)))
             .on_action(cx.listener(|this, _: &PasteText, _, cx| this.paste(cx)))
@@ -4092,6 +4313,11 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &SneakMode, window, cx| this.toggle_sneak(window, cx)))
             .on_action(cx.listener(|this, _: &NewTask, window, cx| this.new_task(window, cx)))
+            .on_action(cx.listener(|this, _: &MarkPane, window, cx| this.toggle_mark(MarkOf::Pane(None), window, cx)))
+            .on_action(cx.listener(|this, _: &MarkTab, window, cx| this.toggle_mark(MarkOf::Tab(None), window, cx)))
+            .on_action(cx.listener(|this, _: &MarkJump, window, cx| {
+                this.dispatch(Action::MarkPrefix, this.input, window, cx);
+            }))
             .on_action(cx.listener(|this, _: &NextTask, window, cx| {
                 this.dispatch(Action::Tick { now: now_ms() }, this.input, window, cx);
                 this.dispatch(Action::TaskOpen { id: None }, this.input, window, cx);
@@ -4396,6 +4622,10 @@ fn main() {
             KeyBinding::new(sneak::KEY, SneakMode, None),
             KeyBinding::new("cmd-n", NewTask, None),
             KeyBinding::new("cmd-shift-n", NextTask, None),
+            // Marks: ⌘' waits for a mark's letter. ⌘⌥1..9 go to the first nine (`key_down`).
+            KeyBinding::new("cmd-b", MarkPane, None),
+            KeyBinding::new("cmd-shift-b", MarkTab, None),
+            KeyBinding::new("cmd-'", MarkJump, None),
             KeyBinding::new("cmd-h", Hide, None),
             // Asks first while a terminal runs (`ask_quit`): ⌘Q sits next to ⌘W.
             KeyBinding::new("cmd-q", Quit, None),

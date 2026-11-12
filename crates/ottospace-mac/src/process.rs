@@ -54,6 +54,22 @@ fn short_info(pid: i32) -> Option<ShortInfo> {
     (read == size).then_some(info)
 }
 
+/// `PROC_PIDVNODEPATHINFO` and the size of its `struct proc_vnodepathinfo`: two `vnode_info_path`,
+/// each a 152-byte `vnode_info` and a 1024-byte path. The first is the working directory.
+const VNODE_PATHS: c_int = 9;
+const VNODE_PATHS_SIZE: usize = 2 * (152 + 1024);
+
+/// The working directory of process `pid`, resolved (`/private/tmp`, not `/tmp`). `None`: it is
+/// gone, or another user's.
+pub fn cwd(pid: i32) -> Option<String> {
+    let mut info = [0u8; VNODE_PATHS_SIZE];
+    let size = VNODE_PATHS_SIZE as c_int;
+    let read = unsafe { proc_pidinfo(pid, VNODE_PATHS, 0, info.as_mut_ptr().cast(), size) };
+    let path = info.get(152..152 + 1024).filter(|_| read == size)?;
+    let path = path.split(|byte| *byte == 0).next().filter(|path| !path.is_empty())?;
+    String::from_utf8(path.to_vec()).ok()
+}
+
 /// The parent of process `pid`. `None`: it is gone.
 pub fn parent(pid: i32) -> Option<i32> {
     short_info(pid).map(|info| info.parent as i32)
@@ -78,6 +94,9 @@ mod tests {
         let own = name(std::process::id() as i32).expect("own name");
         assert!(own.starts_with("ottospace_mac"), "{own}");
         assert_eq!(name(i32::MAX), None);
+        let here = std::env::current_dir().and_then(|dir| dir.canonicalize()).expect("a directory");
+        assert_eq!(cwd(std::process::id() as i32).as_deref(), here.to_str());
+        assert_eq!((cwd(i32::MAX), cwd(1)), (None, None), "gone, and root's");
         let file = std::fs::File::open("/dev/null").expect("open");
         assert_eq!(foreground(file.as_fd()), None);
     }

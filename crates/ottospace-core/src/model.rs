@@ -9,6 +9,7 @@ use crate::hosted::{self, Fit, Stuck};
 use crate::keys::Mods;
 use crate::layout::{Axis, Dir, Node, Rect, Zone};
 use crate::list::ListRow;
+use crate::marks::{self, Extra, Field, MarkId, MarkInput, MarkOf, MarkRef, Marks, Need};
 use crate::repos::{self, Repo};
 use crate::sessions::{self, Found};
 use crate::sneak::{Sneak, Typed};
@@ -29,8 +30,16 @@ pub enum Kind {
     Empty,
     /// A shell on a PTY. The shell crate owns the process.
     Terminal,
-    /// Another app's window, by its window-server id.
-    App { window: u32, title: String },
+    /// Another app's window, by its window-server id. `bundle` and `name` say whose it is, e.g.
+    /// `com.tinyspeck.slackmacgap` and `Slack`: a mark finds the app again by them.
+    App {
+        window: u32,
+        title: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bundle: Option<String>,
+        #[serde(default)]
+        name: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -65,6 +74,8 @@ pub enum Mode {
     Sneak,
     /// The quit question: ↵ quits, any other key cancels.
     Confirm,
+    /// A mark has the keyboard: the jump prefix waits for a letter, or a row for its name or letter.
+    Mark,
 }
 
 /// A terminal that runs something quitting would end.
@@ -186,6 +197,7 @@ pub enum Section {
     Workbook,
     Tasks,
     Repos,
+    Marks,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -515,6 +527,93 @@ pub enum Action {
     QuitCancel,
     /// Quit without asking: the socket's `quit`.
     Quit,
+    /// Replace the marks: with those kept on disk at start, or with this run's merged with
+    /// another's (`marks::merge`). `extra`: the file's keys this build does not know.
+    RestoreMarks {
+        marks: Vec<marks::Mark>,
+        extra: Extra,
+    },
+    /// Mark a pane or a tab; one that is marked takes the name and letter given. `uid`: the new
+    /// mark's name for good, made up by the shell. `cwds`: each terminal's directory now, as
+    /// the shell crate read it.
+    MarkAdd {
+        of: MarkOf,
+        name: Option<String>,
+        key: Option<char>,
+        uid: String,
+        cwds: Vec<(PaneId, String)>,
+    },
+    /// Mark what is not marked; take the mark off what is.
+    MarkToggle {
+        of: MarkOf,
+        uid: String,
+        cwds: Vec<(PaneId, String)>,
+    },
+    /// Each app pane's window title as it is now: the shell reads them before a mark is made
+    /// or gone to, so a mark records the title of now, not of when the window was hosted.
+    Titles {
+        titles: Vec<(PaneId, String)>,
+    },
+    /// The shell could not fill a rebuilt tab's empty pane: why.
+    Unfilled {
+        pane: PaneId,
+        why: String,
+    },
+    /// Put the last removed mark back.
+    MarkUndo,
+    /// `u` in list mode: in Marks, `MarkUndo`; else `TaskUndo`.
+    ListUndo,
+    MarkRemove {
+        mark: MarkRef,
+    },
+    MarkRename {
+        mark: MarkRef,
+        name: String,
+    },
+    /// Go to a mark: to its pane or tab if that is open now, else open it. `axis`: where a new
+    /// pane goes if the focused one is not empty.
+    MarkGo {
+        mark: MarkRef,
+        axis: Axis,
+    },
+    /// The window the shell hosted for a pane mark is in `pane`.
+    MarkBind {
+        mark: MarkId,
+        pane: PaneId,
+    },
+    /// What the marks need (`Marks::needs`) that the shell did not find on this machine.
+    MarksChecked {
+        missing: Vec<Need>,
+    },
+    /// Show `kind` in an empty pane, in whichever tab it is. Focus stays where it is: a rebuilt
+    /// tab's app pane gets its window when the app has one.
+    Fill {
+        pane: PaneId,
+        kind: Kind,
+    },
+    /// The jump prefix: wait for a mark's letter, or stop waiting.
+    MarkPrefix,
+    /// Start typing a mark's name or letter in its row.
+    MarkEdit {
+        mark: MarkRef,
+        field: Field,
+    },
+    /// Typed text, for whatever a mark waits for.
+    MarkType {
+        text: String,
+    },
+    MarkBackspace,
+    /// Keep the typed name.
+    MarkSubmit,
+    MarkCancel,
+    /// `MarkEdit` for the selected row, if it is a mark.
+    ListMarkEdit {
+        field: Field,
+    },
+    /// Move the selected mark down (positive) or up the list. On any other row: `ListMove`.
+    ListReorder {
+        delta: i32,
+    },
 }
 
 /// Who sent an action.
@@ -540,6 +639,46 @@ impl Action {
         Envelope { action: self, origin }
     }
 
+    /// Whether the action acts on panes, tabs or the bar: it waits while the picker, the new-task
+    /// box, the key reference or visual mode has the keyboard.
+    pub fn for_panes(&self) -> bool {
+        matches!(
+            self,
+            Action::Split { .. }
+                | Action::OpenRepo { .. }
+                | Action::TaskOpen { .. }
+                | Action::FocusList
+                | Action::ListSection { .. }
+                | Action::ListChoose { .. }
+                | Action::SessionClick { .. }
+                | Action::Close { .. }
+                | Action::Focus { .. }
+                | Action::FocusDir { .. }
+                | Action::FocusCycle { .. }
+                | Action::Resize { .. }
+                | Action::SwapDir { .. }
+                | Action::MovePane { .. }
+                | Action::Equalize
+                | Action::DropPane { .. }
+                | Action::Fit { .. }
+                | Action::Enter { .. }
+                | Action::ToggleSection { .. }
+                | Action::CloseSidebar
+                | Action::NewTab
+                | Action::SelectTab { .. }
+                | Action::SelectVisibleTab { .. }
+                | Action::TaskLeave
+                | Action::CycleTab { .. }
+                | Action::CloseTab { .. }
+                | Action::MarkToggle { .. }
+                | Action::MarkGo { .. }
+                | Action::MarkPrefix
+                | Action::MarkEdit { .. }
+                | Action::ListMarkEdit { .. }
+                | Action::ListReorder { .. }
+        )
+    }
+
     /// Whether the action takes the keyboard for a box, an app or another mode. Sneak mode lets
     /// only the user do that under its labels, and the quit question under itself
     /// (`Model::refusal`). Every action is named, with no
@@ -552,7 +691,10 @@ impl Action {
             | Action::ToggleKeys
             | Action::ToggleVisual
             | Action::ToggleAxOverlay
-            | Action::QuitAsked { .. } => true,
+            | Action::QuitAsked { .. }
+            | Action::MarkPrefix
+            | Action::MarkEdit { .. }
+            | Action::ListMarkEdit { .. } => true,
             Action::Split { .. }
             | Action::Open { .. }
             | Action::Adopt { .. }
@@ -630,7 +772,25 @@ impl Action {
             | Action::LeaveSneak
             | Action::QuitConfirm
             | Action::QuitCancel
-            | Action::Quit => false,
+            | Action::Quit
+            | Action::RestoreMarks { .. }
+            | Action::Titles { .. }
+            | Action::Unfilled { .. }
+            | Action::MarkUndo
+            | Action::ListUndo
+            | Action::MarkAdd { .. }
+            | Action::MarkToggle { .. }
+            | Action::MarkRemove { .. }
+            | Action::MarkRename { .. }
+            | Action::MarkGo { .. }
+            | Action::MarkBind { .. }
+            | Action::MarksChecked { .. }
+            | Action::Fill { .. }
+            | Action::MarkType { .. }
+            | Action::MarkBackspace
+            | Action::MarkSubmit
+            | Action::MarkCancel
+            | Action::ListReorder { .. } => false,
         }
     }
 }
@@ -681,6 +841,17 @@ pub enum Effect {
     },
     /// End the app.
     Quit,
+    /// Host a window of this app: the one titled `title`, else as `marks::pick_window` says; an
+    /// app that is not running is started. `into`: the empty pane it fills (`Action::Fill`),
+    /// else a new pane (`Action::Open` along `axis`). `mark`: the pane mark to bind to that pane.
+    HostWindow {
+        mark: Option<MarkId>,
+        bundle: Option<String>,
+        name: String,
+        title: String,
+        into: Option<PaneId>,
+        axis: Axis,
+    },
 }
 
 /// One tab: its own split tree. Only the active tab is drawn.
@@ -693,9 +864,9 @@ pub struct Tab {
     /// The tab's tree and focus while it is not the active tab. The active tab's live copies
     /// are `Model::layout` and `Model::focused`.
     #[serde(skip)]
-    layout: Option<Node>,
+    pub(crate) layout: Option<Node>,
     #[serde(skip)]
-    focused: Option<PaneId>,
+    pub(crate) focused: Option<PaneId>,
 }
 
 #[derive(Debug, Serialize)]
@@ -756,7 +927,7 @@ pub struct Model {
     older_sessions: bool,
     /// The time of the last `Tick`: when a task filed now was filed. 0: never told.
     #[serde(skip)]
-    now: u64,
+    pub(crate) now: u64,
     /// The pane picker, while it is open.
     pub picker: Option<Picker>,
     /// The quit question, while it is up.
@@ -770,8 +941,13 @@ pub struct Model {
     /// Sneak mode's labels, while it is on.
     #[serde(skip)]
     pub sneak: Option<Sneak>,
+    /// The marks. Not in the state as they are kept: `mark_rows` is what it shows.
     #[serde(skip)]
-    next_id: PaneId,
+    pub marks: Marks,
+    /// What a mark waits for, while one has the keyboard.
+    pub mark_input: Option<MarkInput>,
+    #[serde(skip)]
+    pub(crate) next_id: PaneId,
     #[serde(skip)]
     next_tab: u32,
 }
@@ -806,6 +982,8 @@ impl Default for Model {
             visual: None,
             ax_overlay: false,
             sneak: None,
+            marks: Marks::default(),
+            mark_input: None,
             next_id: 0,
             current_task: None,
             last_tab: Vec::new(),
@@ -834,6 +1012,8 @@ impl Model {
             Mode::Confirm
         } else if self.sneak.is_some() {
             Mode::Sneak
+        } else if self.mark_input.is_some() {
+            Mode::Mark
         } else if self.picker.is_some() {
             Mode::Pick
         } else if self.compose.is_some() {
@@ -873,6 +1053,9 @@ impl Model {
             _ if origin == Origin::User => None,
             action if self.sneak.is_some() && action.takes_keyboard() => Some("sneak mode is on"),
             action if self.confirm.is_some() && action.takes_keyboard() => Some(CONFIRM_UP),
+            // A key a client presses is input to the wait, as a label's letter is to sneak mode.
+            Action::MarkPrefix | Action::MarkEdit { .. } | Action::ListMarkEdit { .. } => None,
+            action if self.mark_input.is_some() && action.takes_keyboard() => Some(marks::INPUT_ON),
             Action::ToggleKeys if boxed && !self.keys => Some("the picker or the new-task box is open"),
             // For the user it waits, as every pane action does. A client is told why.
             Action::SessionClick { .. } if boxed || self.keys || self.visual.is_some() => {
@@ -880,6 +1063,35 @@ impl Model {
             }
             _ => None,
         }
+    }
+
+    /// Why an action does nothing for now, whoever sent it: what has the keyboard that it would
+    /// act behind. `None`: nothing is in its way. The shell answers a socket request with it.
+    pub fn waits(&self, action: &Action) -> Option<&'static str> {
+        let for_panes = action.for_panes();
+        let picker = matches!(action, Action::OpenPicker { .. });
+        // A close of a named pane still runs: the shell sends it when a window or shell is
+        // gone, and must not leave a dead pane.
+        let named_close = matches!(action, Action::Close { pane: Some(_) });
+        // The key reference covers the workspace, so pane actions wait behind it, and the
+        // picker cannot open under it. Visual mode holds the keyboard on its terminal the same way.
+        if self.keys && (for_panes || picker) {
+            return Some("the key reference is open");
+        }
+        if self.visual.is_some() && !named_close && (for_panes || picker) {
+            return Some("visual mode is on");
+        }
+        // The new-task box has the keyboard, as the picker does: what is behind it waits, and
+        // neither opens over the other. (The picker may open again over itself: ⌘T while it is
+        // open turns the pick into a new tab.) The box does not open under the key reference
+        // or in visual mode.
+        let boxed = self.picker.is_some() || self.compose.is_some();
+        let over_other = (self.compose.is_some() && picker) || (boxed && matches!(action, Action::OpenCompose { .. }));
+        if (boxed && for_panes && !named_close) || over_other {
+            return Some(if self.picker.is_some() { "the picker is open" } else { "the new-task box is open" });
+        }
+        let no_box_now = matches!(action, Action::OpenCompose { .. }) && (self.keys || self.visual.is_some());
+        no_box_now.then_some("the key reference or visual mode is in the way")
     }
 
     pub fn update(&mut self, sent: impl Into<Envelope>) -> Vec<Effect> {
@@ -902,6 +1114,20 @@ impl Model {
         if user && !own {
             self.sneak = None;
         }
+        // A mark's wait for a letter or a name ends the same way, and for the same reason.
+        let own_mark = matches!(
+            action,
+            Action::MarkPrefix
+                | Action::MarkEdit { .. }
+                | Action::ListMarkEdit { .. }
+                | Action::MarkType { .. }
+                | Action::MarkBackspace
+                | Action::MarkSubmit
+                | Action::MarkCancel
+        );
+        if user && !own_mark {
+            self.mark_input = None;
+        }
         if self.refusal(&action, origin).is_some() {
             return effects;
         }
@@ -916,38 +1142,7 @@ impl Model {
         };
         // The picker has the keyboard. Pane and bar actions wait until it closes, so a
         // shortcut cannot change what is behind it (e.g. ⌘W closing the pane it splits).
-        let for_panes = matches!(
-            action,
-            Action::Split { .. }
-                | Action::OpenRepo { .. }
-                | Action::TaskOpen { .. }
-                | Action::FocusList
-                | Action::ListSection { .. }
-                | Action::ListChoose { .. }
-                | Action::SessionClick { .. }
-                | Action::Close { .. }
-                | Action::Focus { .. }
-                | Action::FocusDir { .. }
-                | Action::FocusCycle { .. }
-                | Action::Resize { .. }
-                | Action::SwapDir { .. }
-                | Action::MovePane { .. }
-                | Action::Equalize
-                | Action::DropPane { .. }
-                | Action::Fit { .. }
-                | Action::Enter { .. }
-                | Action::ToggleSection { .. }
-                | Action::CloseSidebar
-                | Action::NewTab
-                | Action::SelectTab { .. }
-                | Action::SelectVisibleTab { .. }
-                | Action::TaskLeave
-                | Action::CycleTab { .. }
-                | Action::CloseTab { .. }
-        );
-        // The key reference covers the workspace too, so the same actions wait behind it, and the
-        // picker cannot open under it.
-        let blocked_by_keys = self.keys && (for_panes || matches!(action, Action::OpenPicker { .. }));
+        let for_panes = action.for_panes();
         // Visual mode holds the keyboard on its terminal the same way. A close of a named pane still
         // runs: the shell sends it when a window or shell is gone, and must not leave a dead pane.
         let named_close = matches!(action, Action::Close { pane: Some(_) });
@@ -971,18 +1166,7 @@ impl Model {
             self.confirm = None;
             return effects;
         }
-        let blocked_by_visual =
-            self.visual.is_some() && !named_close && (for_panes || matches!(action, Action::OpenPicker { .. }));
-        // The new-task box has the keyboard, as the picker does: what is behind it waits, and
-        // neither opens over the other. (The picker may open again over itself: ⌘T while it is
-        // open turns the pick into a new tab.) A pane whose window or shell is gone still closes.
-        // The box does not open under the key reference or in visual mode.
-        let boxed = self.picker.is_some() || self.compose.is_some();
-        let over_other = (self.compose.is_some() && matches!(action, Action::OpenPicker { .. }))
-            || (boxed && matches!(action, Action::OpenCompose { .. }));
-        let behind_box = (boxed && for_panes && !named_close) || over_other;
-        let no_box_now = matches!(action, Action::OpenCompose { .. }) && (self.keys || self.visual.is_some());
-        if behind_box || no_box_now || blocked_by_keys || blocked_by_visual {
+        if self.waits(&action).is_some() {
             return effects;
         }
         // The keyboard goes to a pane or a tab: the list gives it up.
@@ -1018,7 +1202,9 @@ impl Model {
                 | Action::ListSnooze { .. }
                 | Action::ListHold
                 | Action::ListDismiss
+                | Action::ListReorder { .. }
                 | Action::TaskUndo
+                | Action::ListUndo
                 | Action::ToggleSection { .. }
                 | Action::FocusList
                 | Action::SessionClick { .. }
@@ -1037,7 +1223,10 @@ impl Model {
         let trees = self.trees();
         self.act(action, &mut effects);
         // Nor is there one to offer once it is taken back, or an agent's report made it stale.
-        if moves || !self.tasks.can_undo() {
+        // The offer to put a mark back goes with the mark it would put back.
+        let of_mark = self.undo_offer.is_some_and(|offer| offer.moved == Moved::MarkRemoved);
+        let stale = if of_mark { self.marks.removed().is_none() } else { moves || !self.tasks.can_undo() };
+        if stale {
             self.undo_offer = None;
         }
         // A measure is of the layout it was taken in. Once a split of its tab moves or a pane
@@ -1047,6 +1236,7 @@ impl Model {
         let stale: Vec<PaneId> = self.panes.iter().filter(|pane| stale(pane)).map(|pane| pane.id).collect();
         self.panes.iter_mut().filter(|pane| stale.contains(&pane.id)).for_each(|pane| pane.fit = None);
         self.mark_stuck();
+        self.prune_unfilled();
         let rows = self.list_rows();
         let followed = selected.and_then(|row| rows.iter().position(|r| *r == row));
         // Its row is gone, or the move was the user's: stay at the same place, on a row.
@@ -1071,7 +1261,7 @@ impl Model {
                 let id = self.add(kind, self.focused, axis);
                 effects.push(Effect::Opened(id));
             }
-            Action::Open { kind, axis, beside } => self.open(kind, axis, beside, effects),
+            Action::Open { kind, axis, beside } => drop(self.open(kind, axis, beside, effects)),
             Action::SetRepos { repos } => self.repos = repos::arrange(repos),
             Action::RestoreTasks { tasks, floor } => self.tasks.restore(tasks, floor),
             Action::TaskAdd { title, priority, state, tab, assign } => {
@@ -1123,10 +1313,7 @@ impl Model {
                         }
                         // The task's repository is where its work starts.
                         if let Some(path) = repo.filter(|path| self.repo_listed(path)) {
-                            self.open(Kind::Terminal, Axis::Right, None, effects);
-                            if let Some(pane) = self.focused.and_then(|id| self.panes.iter_mut().find(|p| p.id == id)) {
-                                pane.cwd = Some(path);
-                            }
+                            self.open_terminal_at(Axis::Right, Some(path), effects);
                         }
                     }
                 }
@@ -1141,10 +1328,7 @@ impl Model {
                 // Only a listed path: the list is what the user sees and can choose from.
                 if let Some(name) = self.repo_name(&path) {
                     let empty_tab = self.layout.is_none();
-                    self.open(Kind::Terminal, axis, None, effects);
-                    if let Some(pane) = self.focused.and_then(|id| self.panes.iter_mut().find(|p| p.id == id)) {
-                        pane.cwd = Some(path);
-                    }
+                    self.open_terminal_at(axis, Some(path), effects);
                     if let Some(tab) = self.tabs.get_mut(self.active).filter(|_| empty_tab) {
                         tab.title = name;
                     }
@@ -1199,6 +1383,7 @@ impl Model {
                 let was_on_show = index == self.active;
                 let tab = self.tabs.remove(index);
                 self.last_tab.retain(|(_, id)| *id != tab.id);
+                self.marks.forget_tab(tab.id);
                 for id in tab.layout.as_ref().map(Node::leaves).unwrap_or_default() {
                     self.close_pane(id, effects);
                 }
@@ -1405,7 +1590,7 @@ impl Model {
             }
             Action::ListSection { delta } => {
                 // Workbook has no rows yet, so the keys pass over it.
-                const ORDER: [Section; 3] = [Section::Apps, Section::Tasks, Section::Repos];
+                const ORDER: [Section; 4] = [Section::Apps, Section::Tasks, Section::Repos, Section::Marks];
                 let at = ORDER.iter().position(|s| Some(*s) == self.sidebar).unwrap_or(0) as i32;
                 if self.list.is_some() {
                     self.sidebar = Some(ORDER[(at + delta).rem_euclid(ORDER.len() as i32) as usize]);
@@ -1429,6 +1614,7 @@ impl Model {
                     }
                 }
                 Some(ListRow::OlderSessions) => self.act(Action::ToggleOlderSessions, effects),
+                Some(ListRow::Mark(id)) => self.mark_go(id, axis, effects),
                 None => {}
             },
             Action::ListSnooze { until } => {
@@ -1444,6 +1630,10 @@ impl Model {
             Action::ListDismiss => {
                 if let Some(id) = self.selected_task() {
                     self.tasks.dismiss(id);
+                }
+                // On a mark's row the same key removes the mark.
+                if let Some(id) = self.selected_mark() {
+                    self.mark_remove(id);
                 }
             }
             Action::OpenPicker { axis, new_tab, items } => {
@@ -1487,7 +1677,7 @@ impl Model {
                             self.park_active();
                             self.push_tab();
                         }
-                        self.open(Kind::Terminal, picker.axis, None, effects)
+                        self.open(Kind::Terminal, picker.axis, None, effects);
                     }
                     // The shell makes the tab only once the window is in hand, so a failed
                     // host does not leave an empty tab.
@@ -1574,6 +1764,64 @@ impl Model {
             Action::QuitConfirm if self.confirm.is_some() => effects.push(Effect::Quit),
             Action::QuitConfirm | Action::QuitCancel => {}
             Action::Quit => effects.push(Effect::Quit),
+            Action::RestoreMarks { marks, extra } => {
+                self.marks.restore(marks);
+                self.marks.extra = extra;
+            }
+            Action::MarkAdd { of, name, key, uid, cwds } => self.mark_add(of, name, key, uid, &cwds),
+            Action::MarkToggle { of, uid, cwds } => self.mark_toggle(of, uid, &cwds),
+            Action::Titles { titles } => self.retitle(titles),
+            Action::Unfilled { pane, why } => self.unfilled(pane, why),
+            Action::MarkUndo => self.mark_undo(),
+            Action::ListUndo if self.sidebar == Some(Section::Marks) => self.mark_undo(),
+            Action::ListUndo => self.tasks.undo(),
+            Action::MarkRemove { mark } => {
+                if let Some(id) = self.marks.find(&mark) {
+                    self.mark_remove(id);
+                }
+            }
+            Action::MarkRename { mark, name } => {
+                if let Some(id) = self.marks.find(&mark) {
+                    self.marks.rename(id, &name);
+                }
+            }
+            Action::MarkGo { mark, axis } => {
+                if let Some(id) = self.marks.find(&mark) {
+                    self.mark_go(id, axis, effects);
+                }
+            }
+            Action::MarkBind { mark, pane } => self.mark_bind(mark, pane),
+            Action::MarksChecked { missing } => self.marks.set_missing(missing),
+            Action::Fill { pane, kind } => {
+                let empty = self.panes.iter_mut().find(|p| p.id == pane && p.kind == Kind::Empty);
+                if let Some(empty) = empty {
+                    empty.kind = kind;
+                    effects.push(Effect::Opened(pane));
+                }
+            }
+            Action::MarkPrefix => self.mark_prefix(),
+            Action::MarkEdit { mark, field } => {
+                if let Some(id) = self.marks.find(&mark) {
+                    self.mark_edit(id, field);
+                }
+            }
+            Action::MarkType { text } => self.mark_type(&text, effects),
+            Action::MarkBackspace => self.mark_backspace(),
+            Action::MarkSubmit => self.mark_submit(),
+            Action::MarkCancel => self.mark_input = None,
+            Action::ListMarkEdit { field } => {
+                if let Some(id) = self.selected_mark() {
+                    self.mark_edit(id, field);
+                }
+            }
+            Action::ListReorder { delta } => match self.selected_mark() {
+                // The selection goes with the mark.
+                Some(id) => {
+                    self.marks.shift(id, delta);
+                    self.list = self.marks.list.iter().position(|mark| mark.id == id);
+                }
+                None => self.act(Action::ListMove { delta }, effects),
+            },
         }
     }
 
@@ -1864,6 +2112,7 @@ impl Model {
                 }
                 rows
             }
+            Some(Section::Marks) => self.marks.list.iter().map(|mark| ListRow::Mark(mark.id)).collect(),
             Some(Section::Workbook) | None => Vec::new(),
         }
     }
@@ -1876,7 +2125,7 @@ impl Model {
     }
 
     /// Shows `kind` in `beside` (default: the focused pane) if that pane is empty; else splits it.
-    fn open(&mut self, kind: Kind, axis: Axis, beside: Option<PaneId>, effects: &mut Vec<Effect>) {
+    pub(crate) fn open(&mut self, kind: Kind, axis: Axis, beside: Option<PaneId>, effects: &mut Vec<Effect>) -> PaneId {
         self.list = None; // the new pane takes the keyboard
         // The new pane takes focus, so the live app must give the keyboard back, and visual mode ends.
         self.leave(effects);
@@ -1892,9 +2141,10 @@ impl Model {
         };
         self.focused = Some(id);
         effects.push(Effect::Opened(id));
+        id
     }
 
-    fn push_tab(&mut self) {
+    pub(crate) fn push_tab(&mut self) {
         self.next_tab += 1;
         let title = format!("Tab {}", self.next_tab);
         self.tabs.push(Tab { id: self.next_tab, title, task: self.current_task, layout: None, focused: None });
@@ -1908,7 +2158,7 @@ impl Model {
     }
 
     /// Notes which tab the current task (or no task) has on show, to come back to it.
-    fn remember_tab(&mut self) {
+    pub(crate) fn remember_tab(&mut self) {
         if let Some(tab) = self.tabs.get(self.active) {
             let scope = self.current_task;
             self.last_tab.retain(|(task, _)| *task != scope);
@@ -1940,7 +2190,7 @@ impl Model {
     }
 
     /// Stores the active tab's tree and focus in the tab, before another tab takes the stage.
-    fn park_active(&mut self) {
+    pub(crate) fn park_active(&mut self) {
         if let Some(tab) = self.tabs.get_mut(self.active) {
             tab.layout = self.layout.take();
             tab.focused = self.focused.take();
@@ -2066,7 +2316,7 @@ impl Model {
         self.tabs.get(index).map(|tab| tab.id)
     }
 
-    fn select_tab(&mut self, index: usize, effects: &mut Vec<Effect>) {
+    pub(crate) fn select_tab(&mut self, index: usize, effects: &mut Vec<Effect>) {
         if index >= self.tabs.len() || index == self.active {
             return;
         }
@@ -2181,7 +2431,7 @@ impl Model {
     }
 
     /// Focusing any pane but the live one takes the keyboard back.
-    fn focus(&mut self, id: PaneId, effects: &mut Vec<Effect>) {
+    pub(crate) fn focus(&mut self, id: PaneId, effects: &mut Vec<Effect>) {
         if self.pane(id).is_none() {
             return;
         }
@@ -2198,7 +2448,7 @@ impl Model {
         }
     }
 
-    fn leave(&mut self, effects: &mut Vec<Effect>) {
+    pub(crate) fn leave(&mut self, effects: &mut Vec<Effect>) {
         if let Some(id) = self.live.take() {
             effects.push(Effect::Parked(id));
         }
@@ -2211,7 +2461,7 @@ mod tests {
     use crate::layout::Axis::{Down, Right};
 
     fn app(window: u32) -> Kind {
-        Kind::App { window, title: format!("w{window}") }
+        Kind::App { window, title: format!("w{window}"), bundle: None, name: "app".into() }
     }
 
     fn ids(model: &Model) -> Vec<PaneId> {
@@ -2542,7 +2792,28 @@ mod tests {
         Action::QuitAsked { .. },
         Action::QuitConfirm,
         Action::QuitCancel,
-        Action::Quit
+        Action::Quit,
+        Action::RestoreMarks { .. },
+        Action::Titles { .. },
+        Action::Unfilled { .. },
+        Action::MarkUndo,
+        Action::ListUndo,
+        Action::MarkAdd { .. },
+        Action::MarkToggle { .. },
+        Action::MarkRemove { .. },
+        Action::MarkRename { .. },
+        Action::MarkGo { .. },
+        Action::MarkBind { .. },
+        Action::MarksChecked { .. },
+        Action::Fill { .. },
+        Action::MarkPrefix,
+        Action::MarkEdit { .. },
+        Action::MarkType { .. },
+        Action::MarkBackspace,
+        Action::MarkSubmit,
+        Action::MarkCancel,
+        Action::ListMarkEdit { .. },
+        Action::ListReorder { .. }
     );
 
     /// One of each action.
@@ -2634,6 +2905,27 @@ mod tests {
             Action::QuitConfirm,
             Action::QuitCancel,
             Action::Quit,
+            Action::RestoreMarks { marks: Vec::new(), extra: Extra::new() },
+            Action::Titles { titles: Vec::new() },
+            Action::Unfilled { pane: 1, why: text() },
+            Action::MarkUndo,
+            Action::ListUndo,
+            Action::MarkAdd { of: MarkOf::Pane(None), name: None, key: None, uid: text(), cwds: Vec::new() },
+            Action::MarkToggle { of: MarkOf::Tab(None), uid: text(), cwds: Vec::new() },
+            Action::MarkRemove { mark: MarkRef::Place(0) },
+            Action::MarkRename { mark: MarkRef::Place(0), name: text() },
+            Action::MarkGo { mark: MarkRef::Place(0), axis: Right },
+            Action::MarkBind { mark: 1, pane: 1 },
+            Action::MarksChecked { missing: Vec::new() },
+            Action::Fill { pane: 1, kind: app(1) },
+            Action::MarkPrefix,
+            Action::MarkEdit { mark: MarkRef::Place(0), field: Field::Name },
+            Action::MarkType { text: text() },
+            Action::MarkBackspace,
+            Action::MarkSubmit,
+            Action::MarkCancel,
+            Action::ListMarkEdit { field: Field::Key },
+            Action::ListReorder { delta: 1 },
         ];
         let mut places: Vec<usize> = samples.iter().map(index).collect();
         places.sort_unstable();
@@ -3322,7 +3614,9 @@ mod tests {
         m.update(Action::SetApps { names: vec!["Notes".into(), "Safari".into()] });
         m.update(Action::ToggleSection { section: Section::Repos });
         m.update(Action::FocusList);
-        m.update(Action::ListSection { delta: 1 }); // after Repos comes Apps
+        m.update(Action::ListSection { delta: 1 }); // after Repos comes Marks, with no rows yet
+        assert_eq!((m.sidebar, m.list_rows()), (Some(Section::Marks), vec![]));
+        m.update(Action::ListSection { delta: 1 }); // then Apps again
         m.update(Action::ListMove { delta: 1 });
         assert_eq!((m.sidebar, m.list), (Some(Section::Apps), Some(1)));
         // The shell hosts the app; until it opens a pane, the list keeps the keyboard.

@@ -32,6 +32,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       keys: false,
       visual: null,
       ax_overlay: overlay !== null,
+      mark_input: null,
     },
     bounds: {},
     frames: {},
@@ -64,6 +65,8 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     ax_overlay: overlay,
     sneak: null,
     counts: { live: 0 },
+    marks: [],
+    mark_removed: null,
   };
 }
 

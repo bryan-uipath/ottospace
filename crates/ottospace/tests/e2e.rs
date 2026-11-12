@@ -2074,7 +2074,7 @@ fn a_two_letter_sneak_label_narrows_then_activates() {
     otto.call(json!({"cmd": "split", "axis": "down", "kind": "empty"}));
     otto.call(json!({"cmd": "new_tab"}));
     otto.call(json!({"cmd": "select_tab", "index": 0}));
-    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.call(json!({"cmd": "section", "section": "marks"})); // one control: the rail has a fifth icon now
     otto.bounds(&[1, 2, 3]);
     otto.call(json!({"cmd": "focus", "pane": 1}));
 
@@ -2225,4 +2225,381 @@ fn a_request_from_the_socket_does_not_end_sneak_mode() {
     let (_, labels) = sneak(&otto);
     let reply = otto.call(json!({"cmd": "key", "keys": letters(&labels["close:2"])}));
     assert_eq!((&reply["mode"], pane_ids(&reply)), (&json!("normal"), vec![1]));
+}
+
+/// Each mark's name, in the list's order.
+fn mark_names(reply: &Value) -> Vec<String> {
+    let marks = reply["marks"].as_array().cloned().unwrap_or_default();
+    marks.iter().filter_map(|mark| mark["name"].as_str().map(str::to_string)).collect()
+}
+
+/// The mark called `name`, as the state has it.
+fn mark_named(reply: &Value, name: &str) -> Value {
+    let marks = reply["marks"].as_array().cloned().unwrap_or_default();
+    marks.into_iter().find(|mark| mark["name"] == name).unwrap_or_else(|| panic!("no mark {name}: {}", reply["marks"]))
+}
+
+/// Types `pwd` into `pane` and waits for a line that is exactly `dir`.
+fn shell_is_in(otto: &Otto, pane: u64, dir: &Path) {
+    otto.call(json!({"cmd": "type", "pane": pane, "text": "pwd\r"}));
+    let pattern = format!("^{}$", dir.display().to_string().replace('.', "\\."));
+    otto.call(json!({"cmd": "wait", "pane": pane, "pattern": pattern}));
+}
+
+/// `marks.json` in `home`, as JSON.
+fn kept_marks(home: &Path) -> Value {
+    serde_json::from_str(&std::fs::read_to_string(home.join("marks.json")).unwrap()).unwrap()
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn marks_are_a_way_back_to_a_pane_and_a_tab_and_are_kept_between_runs() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = user_folder("marks", r#"{"repos": []}"#);
+    std::fs::create_dir_all(home.join("notes")).unwrap();
+    let notes = home.join("notes").canonicalize().unwrap();
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    {
+        let otto = Otto::launch_with("marks-1", &env);
+        let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+        otto.call(json!({"cmd": "split"}));
+        // The shell moves: a mark records where it is now, not where it started.
+        let cd = format!("cd '{}' && echo in-$((6*7))\r", notes.display());
+        otto.call(json!({"cmd": "type", "pane": 1, "text": cd}));
+        otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^in-42$"}));
+
+        // ⌘B marks the focused pane, named for its directory. ⌘B again takes the mark off.
+        let marked = key("cmd-b");
+        let mark = mark_named(&marked, "notes");
+        assert_eq!(
+            (&mark["kind"], &mark["key"], &mark["open"], &mark["pane"], &mark["available"]),
+            (&json!("terminal"), &Value::Null, &json!(true), &json!(1), &json!(true)),
+            "{mark}"
+        );
+        assert_eq!(key("cmd-b")["marks"], json!([]));
+        // By request, with a letter. The reply is the mark.
+        let added = otto.call(json!({"cmd": "mark_add", "pane": 1, "key": "n"}));
+        assert_eq!((&added["mark"]["name"], &added["mark"]["key"]), (&json!("notes"), &json!("n")));
+        // ⌘⇧B marks the tab on show, with both its panes.
+        otto.call(json!({"cmd": "split", "axis": "down"}));
+        let both = key("cmd-shift-b");
+        assert_eq!(mark_names(&both), ["notes", "Tab 1"]);
+        let tab = mark_named(&both, "Tab 1");
+        assert_eq!((&tab["kind"], &tab["open"], &tab["tab"]), (&json!("tab"), &json!(true), &json!(1)));
+
+        // ⌘' waits for a letter (MARK? in the status bar), then goes to that mark: its tab and pane.
+        otto.call(json!({"cmd": "new_tab"}));
+        let waiting = key("cmd-'");
+        assert_eq!((&waiting["mode"], &waiting["state"]["mark_input"]), (&json!("mark"), &json!({"type": "jump"})));
+        let there = key("n");
+        assert_eq!(
+            (&there["mode"], &there["state"]["active"], &there["state"]["focused"]),
+            (&json!("normal"), &json!(0), &json!(1))
+        );
+        // Esc ends the wait, and so does a letter of no mark: neither reaches the shell.
+        assert_eq!((key("cmd-'")["mode"].clone(), key("escape")["mode"].clone()), (json!("mark"), json!("normal")));
+        assert_eq!((key("cmd-'")["mode"].clone(), key("z")["mode"].clone()), (json!("mark"), json!("normal")));
+        let typed = otto.call(json!({"cmd": "capture", "pane": 1}))["text"].as_str().unwrap_or_default().to_string();
+        assert!(!typed.lines().any(|line| line.ends_with('z') || line.ends_with('n')), "{typed}");
+        // ⌘⌥2 goes to the second mark: the tab, from another one.
+        otto.call(json!({"cmd": "select_tab", "index": 1}));
+        assert_eq!(key("cmd-alt-2")["state"]["active"], 0);
+
+        // The pane closes: the mark stays, not open. Going to it opens a shell in its directory.
+        let closed = otto.call(json!({"cmd": "close", "pane": 1}));
+        assert_eq!(mark_named(&closed, "notes")["open"], false);
+        let back = otto.call(json!({"cmd": "mark_go", "name": "notes"}));
+        assert_eq!((&back["state"]["focused"], &mark_named(&back, "notes")["pane"]), (&json!(3), &json!(3)));
+        shell_is_in(&otto, 3, &notes);
+        // Again: it is open, so nothing new opens.
+        assert_eq!(pane_ids(&otto.call(json!({"cmd": "mark_go", "key": "n"}))), [2, 3]);
+
+        // What cannot be marked or found says why. So does a move that waits behind the picker.
+        otto.call(json!({"cmd": "select_tab", "index": 1}));
+        let refused = |request: Value| otto.raw(&request.to_string())["error"].as_str().unwrap_or_default().to_string();
+        assert_eq!(refused(json!({"cmd": "mark_add", "tab": 2})), "a tab with nothing in it has nothing to mark");
+        assert_eq!(refused(json!({"cmd": "mark_add", "pane": 99})), "no pane 99");
+        assert_eq!(refused(json!({"cmd": "mark_add", "pane": 2, "key": "1"})), "a mark's key is one letter, a to z");
+        assert_eq!(refused(json!({"cmd": "mark_go", "name": "nope"})), "no mark named \"nope\"");
+        assert_eq!(refused(json!({"cmd": "mark_go"})), "name the mark by `name` or by `key`: one of them");
+        // No mark takes a command: the field is not one of the request's.
+        assert!(refused(json!({"cmd": "mark_add", "pane": 2, "command": "ls"})).contains("unknown field `command`"));
+        otto.call(json!({"cmd": "picker"}));
+        assert_eq!(refused(json!({"cmd": "mark_go", "key": "n"})), "the picker is open");
+        assert_eq!(otto.call(json!({"cmd": "picker_close"}))["state"]["active"], 1, "and it did not move");
+        otto.call(json!({"cmd": "keys"}));
+        assert_eq!(refused(json!({"cmd": "mark_go", "key": "n"})), "the key reference is open");
+        otto.call(json!({"cmd": "keys"}));
+
+        // The file: the user's alone, with the directory, an id for the mark, and no pane id or pid.
+        let file = kept_marks(&home);
+        let first = &file["marks"][0];
+        assert_eq!((&file["version"], &first["name"], &first["key"]), (&json!(1), &json!("notes"), &json!("n")));
+        assert_eq!(first["id"].as_str().map(str::len), Some(16), "{first}");
+        let pane = &first["target"]["pane"];
+        assert_eq!((&pane["kind"], pane["cwd"].as_str()), (&json!({"type": "terminal"}), notes.to_str()));
+        assert_eq!(file["marks"][1]["target"]["tab"]["layout"]["split"]["axis"], "down");
+        assert_eq!(std::fs::metadata(home.join("marks.json")).unwrap().permissions().mode() & 0o777, 0o600);
+    } // the app is killed here
+
+    // A new run on the same folder: the marks are there, nothing is open, and they still work.
+    let otto = Otto::launch_with("marks-2", &env);
+    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+    let start = otto.call(json!({"cmd": "state"}));
+    assert_eq!((mark_names(&start), pane_ids(&start)), (vec!["notes".to_string(), "Tab 1".into()], vec![]));
+    assert!(start["marks"].as_array().unwrap().iter().all(|mark| mark["open"] == false && mark["available"] == true));
+    key("cmd-'");
+    assert_eq!(key("n")["state"]["focused"], 1);
+    shell_is_in(&otto, 1, &notes);
+
+    // The Marks section lists them. A click on a row goes to the mark: the tab is built again,
+    // split as it was, the upper shell in its directory.
+    otto.call(json!({"cmd": "section", "section": "marks"}));
+    let listed = otto.wait_for("the rows to be drawn", |o| Some(o.drawn()).filter(|s| s["marks"][1]["row"].is_array()));
+    let built = otto.click(at(rect(&mark_named(&listed, "Tab 1")["row"]), 0.3, 0.5), 1);
+    assert_eq!(built["tab_panes"], json!([[1], [2, 3]]), "{}", built["state"]["layout"]);
+    assert_eq!(built["state"]["layout"]["split"]["axis"], "down");
+    assert_eq!((&built["state"]["active"], &mark_named(&built, "Tab 1")["tab"]), (&json!(1), &json!(2)));
+    assert_eq!(built["state"]["tabs"][1]["title"], "Tab 1");
+    shell_is_in(&otto, 2, &notes);
+
+    // List mode: ⇧J moves the selected mark down, M gives it a letter, R renames it in its row.
+    assert_eq!(key("cmd-shift-e")["mode"], "list");
+    assert_eq!(mark_names(&key("shift-j")), ["Tab 1", "notes"]);
+    assert_eq!(key("shift-k")["state"]["list"], 0);
+    assert_eq!(key("j")["state"]["list"], 1);
+    assert_eq!(key("m")["state"]["mark_input"]["type"], "set_key");
+    let lettered = key("t");
+    assert_eq!((&lettered["mode"], &mark_named(&lettered, "Tab 1")["key"]), (&json!("list"), &json!("t")));
+    assert_eq!(key("r")["state"]["mark_input"]["text"], "Tab 1");
+    let renamed = key("backspace backspace backspace backspace backspace w o r k enter");
+    assert_eq!(
+        (mark_names(&renamed), renamed["mode"].as_str()),
+        (vec!["notes".to_string(), "work".into()], Some("list"))
+    );
+    // X takes the selected mark off and offers it back; U, in this section, puts it back in its place.
+    let off = key("x");
+    assert_eq!(
+        (mark_names(&off), &off["mark_removed"], &off["tasks_bar"]["undo"]),
+        (vec!["notes".into()], &json!("work"), &Value::Null)
+    );
+    let on = key("u");
+    assert_eq!((mark_names(&on), &on["mark_removed"]), (vec!["notes".to_string(), "work".into()], &Value::Null));
+    assert_eq!(mark_named(&on, "work")["key"], "t");
+    key("escape");
+
+    // The row's own buttons: the pencil starts a rename (Esc keeps the name), × removes the mark.
+    let rows = otto.drawn();
+    let pencil = otto.click(at(rect(&mark_named(&rows, "notes")["buttons"]["rename"]), 0.5, 0.5), 1);
+    assert_eq!((&pencil["mode"], &pencil["state"]["mark_input"]["type"]), (&json!("mark"), &json!("rename")));
+    assert_eq!(pane_ids(&pencil), [1, 2, 3], "the click did not also go to the mark");
+    assert_eq!(key("x escape")["mode"], "normal");
+    let removed = otto.click(at(rect(&mark_named(&rows, "notes")["buttons"]["remove"]), 0.5, 0.5), 1);
+    assert_eq!((mark_names(&removed), &removed["mark_removed"]), (vec!["work".to_string()], &json!("notes")));
+    assert_eq!(kept_marks(&home)["marks"].as_array().map(Vec::len), Some(1), "the file follows");
+
+    // One of the tab's two directories goes. The mark still opens: what can open does, and the
+    // other pane is empty and says why.
+    otto.call(json!({"cmd": "close_tab", "index": 1}));
+    otto.call(json!({"cmd": "close", "pane": 1}));
+    std::fs::remove_dir_all(&notes).unwrap();
+    let gone = format!("its directory is gone: {}", notes.display());
+    let partly = otto.wait_for("the missing directory to be noticed", |o| {
+        Some(mark_named(&o.call(json!({"cmd": "state"})), "work")).filter(|work| work["reason"].is_string())
+    });
+    assert_eq!(
+        (&partly["open"], &partly["available"], partly["reason"].as_str()),
+        (&json!(false), &json!(true), Some(&*format!("1 of 2 panes cannot open: {gone}")))
+    );
+    let built = otto.call(json!({"cmd": "mark_go", "key": "t"}));
+    let kinds: Vec<&str> =
+        built["state"]["panes"].as_array().unwrap().iter().filter_map(|p| p["kind"]["type"].as_str()).collect();
+    assert_eq!((pane_ids(&built), kinds), (vec![4, 5], vec!["empty", "terminal"]));
+    assert_eq!(mark_named(&built, "work")["unfilled"], json!([{"pane": 4, "why": gone}]));
+    // The directory is back: going to the open tab again starts the shell that was missing.
+    std::fs::create_dir_all(&notes).unwrap();
+    otto.wait_for("the empty pane to be filled", |o| {
+        let again = o.call(json!({"cmd": "mark_go", "key": "t"}));
+        (mark_named(&again, "work")["unfilled"] == json!([])).then_some(())
+    });
+    shell_is_in(&otto, 4, &notes);
+    drop(otto);
+
+    // A file that does not parse is said so, and left as it is.
+    std::fs::write(home.join("marks.json"), "{ not marks").unwrap();
+    let otto = Otto::launch_with("marks-3", &env);
+    let state = otto.call(json!({"cmd": "split"}));
+    assert!(state["notice"].as_str().is_some_and(|notice| notice.starts_with("marks.json: ")), "{}", state["notice"]);
+    assert_eq!(otto.call(json!({"cmd": "mark_add", "pane": 1}))["mark"]["kind"], "terminal");
+    assert_eq!(std::fs::read_to_string(home.join("marks.json")).unwrap(), "{ not marks");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_marks_wait_for_a_letter_is_the_users_and_a_mark_taken_off_by_mistake_comes_back() {
+    let otto = Otto::launch("marks-quiet");
+    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+    // No marks yet.
+    let empty = otto.call(json!({"cmd": "section", "section": "marks"}));
+    assert_eq!((&empty["marks"], &empty["state"]["sidebar"]), (&json!([]), &json!("marks")));
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "mark_add", "pane": 1, "name": "build", "key": "b"}));
+    // A second ⌘B by mistake takes the mark off, and offers it back; a third puts the same mark
+    // back, with its name and letter.
+    let off = key("cmd-b");
+    assert_eq!((&off["marks"], &off["mark_removed"]), (&json!([]), &json!("build")));
+    let on = key("cmd-b");
+    let back = mark_named(&on, "build");
+    assert_eq!((&back["key"], &back["pane"], &on["mark_removed"]), (&json!("b"), &json!(1), &Value::Null));
+    key("cmd-shift-b");
+    assert_eq!(mark_names(&otto.drawn()), ["build", "Tab 1"]);
+
+    // While the prefix waits, a client's request runs underneath, but none takes the keyboard,
+    // and no pointer event ends the wait.
+    key("cmd-'");
+    let split = otto.call(json!({"cmd": "split", "kind": "empty"}));
+    assert_eq!((split["mode"].as_str(), pane_ids(&split)), (Some("mark"), vec![1, 2]));
+    for taker in [json!({"cmd": "picker"}), json!({"cmd": "keys"}), json!({"cmd": "compose"})] {
+        let refused = otto.raw(&taker.to_string());
+        assert_eq!(refused["error"], "a mark is waiting for a letter or a name", "{taker}");
+    }
+    let click = otto.raw(r#"{"cmd":"mouse","action":"down","x":300,"y":300}"#);
+    assert_eq!(click["error"], "a mark is waiting for a letter or a name");
+    assert_eq!(key("b")["state"]["focused"], 1);
+
+    // A pane mark whose directory is gone cannot be opened, and says why. No shell opens elsewhere.
+    let dir = std::env::temp_dir().join(format!("ottospace-e2e-mark-gone-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir = dir.canonicalize().unwrap();
+    otto.call(json!({"cmd": "type", "pane": 1, "text": format!("cd '{}' && echo in-$((6*7))\r", dir.display())}));
+    otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^in-42$"}));
+    assert_eq!(otto.raw(r#"{"cmd":"mark_add","pane":2}"#)["error"], "an empty pane has nothing to mark");
+    otto.call(json!({"cmd": "mark_remove", "name": "build"}));
+    otto.call(json!({"cmd": "mark_add", "pane": 1, "name": "there"}));
+    otto.call(json!({"cmd": "close", "pane": 1}));
+    std::fs::remove_dir_all(&dir).unwrap();
+    let reason = format!("its directory is gone: {}", dir.display());
+    otto.wait_for("the missing directory to be noticed", |o| {
+        let there = mark_named(&o.call(json!({"cmd": "state"})), "there");
+        (there["available"] == false && there["reason"] == json!(reason)).then_some(())
+    });
+    let refused = otto.raw(r#"{"cmd":"mark_go","name":"there"}"#);
+    assert_eq!(refused["error"].as_str(), Some(&*format!("there: {reason}")));
+    assert_eq!(pane_ids(&otto.call(json!({"cmd": "state"}))), [2], "no shell somewhere else");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_hand_written_marks_file_is_checked_and_commands_in_it_are_never_typed() {
+    // A wrong key in the settings too: the two problems are both said.
+    let home = user_folder("marks-file", r#"{"repos": [], "nope": 1}"#);
+    std::fs::create_dir_all(home.join("work")).unwrap();
+    let work = home.join("work").canonicalize().unwrap();
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let shell = |cwd: &str, rest: &str| json!({"id": 1, "kind": {"type": "terminal"}, "cwd": cwd, "command": rest});
+    let chat = json!({"id": 2, "kind": {"type": "app", "bundle": "com.example.acmechat", "name": "Acme Chat", "title": "general", "pid": 811}});
+    let layout = json!({"split": {"axis": "right", "ratio": 0.6, "a": {"leaf": 1}, "b": {"leaf": 2}}});
+    let tab = json!({"title": "review", "layout": layout, "panes": [shell(work.to_str().unwrap(), "echo ran-$((6*7))"), chat], "display": 2});
+    let written = json!({"version": 1, "theme": "dark", "marks": [{"name": "review", "key": "r", "pinned": true, "target": {"tab": tab}}]});
+    std::fs::write(home.join("marks.json"), written.to_string()).unwrap();
+
+    let otto = Otto::launch_with("marks-file-1", &env);
+    let start = otto.call(json!({"cmd": "state"}));
+    let notice = start["notice"].as_str().unwrap_or_default();
+    assert!(
+        notice.contains("settings.json: ") && notice.contains("marks.json: commands are not supported; ignored"),
+        "{notice}"
+    );
+    // The app is not installed: the tab opens with the shell, and that pane empty, saying why.
+    let partly = otto.wait_for("the missing app to be noticed", |o| {
+        Some(mark_named(&o.call(json!({"cmd": "state"})), "review")).filter(|mark| mark["reason"].is_string())
+    });
+    assert_eq!(partly["reason"], "1 of 2 panes cannot open: Acme Chat is not installed");
+    let built = otto.call(json!({"cmd": "key", "keys": "cmd-' r"}));
+    assert_eq!(built["tab_panes"], json!([[], [1, 2]]));
+    assert_eq!(mark_named(&built, "review")["unfilled"], json!([{"pane": 2, "why": "Acme Chat is not installed"}]));
+    // The shell is in its directory, and nothing was typed into it.
+    shell_is_in(&otto, 1, &work);
+    let text = otto.call(json!({"cmd": "capture", "pane": 1, "history": true}))["text"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(!text.contains("ran-"), "{text}");
+    // Written again: what this build does not know is kept, the commands are not.
+    otto.call(json!({"cmd": "mark_rename", "key": "r", "to": "pr review"}));
+    let file = kept_marks(&home);
+    let mark = &file["marks"][0];
+    assert_eq!(
+        (&file["theme"], &mark["pinned"], &mark["name"], &mark["id"]),
+        (&json!("dark"), &json!(true), &json!("pr review"), &json!("name:review"))
+    );
+    let kept = &mark["target"]["tab"];
+    assert_eq!((&kept["display"], &kept["panes"][1]["kind"]["pid"]), (&json!(2), &json!(811)));
+    assert!(!file.to_string().contains("command"), "{file}");
+    drop(otto);
+
+    // A record that is not sound is left out, and said; the file is then left as it is.
+    let unsound = json!({"version": 1, "marks": [
+        {"name": "good", "target": {"pane": {"kind": {"type": "terminal"}, "cwd": work.to_str().unwrap()}}},
+        {"name": "relative", "target": {"pane": {"kind": {"type": "terminal"}, "cwd": "work"}}},
+        {"name": "escape", "target": {"pane": {"kind": {"type": "app", "name": "Chat", "title": "a\u{1b}[31mb"}}}}]});
+    std::fs::write(home.join("marks.json"), unsound.to_string()).unwrap();
+    let otto = Otto::launch_with("marks-file-2", &env);
+    let state = otto.call(json!({"cmd": "split"}));
+    assert_eq!(mark_names(&state), ["good"]);
+    let notice = state["notice"].as_str().unwrap_or_default();
+    for part in [
+        "settings.json: ",
+        "mark \"relative\": its directory is not an absolute path",
+        "mark \"escape\": ",
+        "not saved this run",
+    ] {
+        assert!(notice.contains(part), "{part}: {notice}");
+    }
+    otto.call(json!({"cmd": "mark_add", "pane": 1, "name": "new"}));
+    assert_eq!(std::fs::read_to_string(home.join("marks.json")).unwrap(), unsound.to_string());
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn two_ottospaces_on_one_folder_keep_each_others_marks() {
+    let home = user_folder("marks-two", r#"{"repos": []}"#);
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let (a, b) = (Otto::launch_with("marks-two-a", &env), Otto::launch_with("marks-two-b", &env));
+    let on_disk = || -> Vec<String> {
+        let marks = kept_marks(&home)["marks"].as_array().cloned().unwrap_or_default();
+        marks.iter().filter_map(|mark| mark["name"].as_str().map(str::to_string)).collect()
+    };
+    // Each marks a pane of its own: the second to write takes the first's mark in.
+    for (otto, name) in [(&a, "from a"), (&b, "from b")] {
+        otto.call(json!({"cmd": "split"}));
+        otto.call(json!({"cmd": "mark_add", "pane": 1, "name": name}));
+    }
+    assert_eq!(on_disk(), ["from a", "from b"]);
+    let seen = b.call(json!({"cmd": "state"}));
+    assert_eq!(
+        (mark_names(&seen), &mark_named(&seen, "from a")["open"]),
+        (vec!["from a".to_string(), "from b".into()], &json!(false))
+    );
+    // A learns of B's mark when it next writes; its own is still of its own pane.
+    let third = a.call(json!({"cmd": "mark_add", "tab": 1, "name": "tab of a"}));
+    assert_eq!(third["mark"]["name"], "tab of a");
+    let seen = a.call(json!({"cmd": "state"}));
+    assert_eq!(mark_names(&seen), ["from a", "from b", "tab of a"]);
+    assert_eq!(
+        (&mark_named(&seen, "from a")["pane"], &mark_named(&seen, "from b")["open"]),
+        (&json!(1), &json!(false))
+    );
+    // B renames its mark, A removes its own: neither undoes the other.
+    b.call(json!({"cmd": "mark_rename", "name": "from b", "to": "bee"}));
+    assert_eq!(on_disk(), ["from a", "bee", "tab of a"]);
+    assert_eq!(mark_names(&a.call(json!({"cmd": "mark_remove", "name": "from a"}))), ["bee", "tab of a"]);
+    assert_eq!(on_disk(), ["bee", "tab of a"]);
+    // B sees the removal at its next write, and does not write the mark back.
+    assert_eq!(b.call(json!({"cmd": "mark_add", "pane": 1, "key": "q"}))["mark"]["name"], "bee");
+    assert_eq!(mark_names(&b.call(json!({"cmd": "state"}))), ["bee", "tab of a"]);
+    assert_eq!(on_disk(), ["bee", "tab of a"]);
+    let _ = std::fs::remove_dir_all(&home);
 }

@@ -57,6 +57,24 @@ The fourth icon, Workbook, is empty for now.
 
 The badge on an app is how many windows it has open. A new window of a hosted app gets its own pane.
 
+## Marks
+
+A mark is a named way back to a pane or a whole tab. It is kept between runs.
+
+| I want to | Do |
+|---|---|
+| Mark the focused pane / the tab on show | ⌘B / ⌘⇧B. Again takes the mark off. A marked pane or tab shows ◆ |
+| Go to a mark | ⌘' then its letter · ⌘⌥1 … ⌘⌥9 for the first nine · click it in Marks on the rail |
+| Give a mark a letter, rename it, remove it | In Marks: click its letter box, ✎ or ×. Or ⌘⇧E, then `m`, `r`, `x` |
+| Put back a mark I took off | Undo on the line at the top of Marks (six seconds), or ⌘⇧E on Marks, then `u`. ⌘B again on the same pane or tab puts back the same mark |
+| Reorder marks | ⌘⇧E on Marks, then ⇧J / ⇧K |
+
+Open now (a dot in the list): its tab comes forward and its pane takes focus. Else it is opened
+again: a terminal in the directory it was in when marked, an app's window by its title, a tab with
+its splits. A mark whose directory is gone or whose app is not installed says so; a tab opens with
+what can be opened, and its other panes are empty and say why. Marks are kept in
+`~/.ottospace/marks.json`.
+
 ## Tasks
 
 | I want to | Do |

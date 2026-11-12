@@ -315,6 +315,48 @@ pub enum Request {
     /// drew them; type one with `key`. Already on: it stays on. Fails outside normal and list
     /// mode, and if the window is not drawn.
     Sneak,
+    /// The marks, in the user's order: `{"ok":true,"marks":[{"name":"notes","key":"n",
+    /// "kind":"terminal","open":true,"available":true,..}]}`, not the state.
+    Marks,
+    /// Marks a pane (default: the focused one), or with `tab` (a tab's `id`) a whole tab. `name`:
+    /// default the app, the terminal's directory, or the tab's title. `key`: one letter, `a` to
+    /// `z`; a letter another mark has moves here. A pane or tab that is marked already keeps its
+    /// mark, which takes what is given. The reply is `{"ok":true,"mark":{..}}`.
+    MarkAdd {
+        #[serde(default)]
+        pane: Option<PaneId>,
+        #[serde(default)]
+        tab: Option<u32>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        key: Option<char>,
+    },
+    /// Goes to a mark, by its `name` or its `key`: to its pane or tab if that is open now, else
+    /// opens it (`axis`: where a new pane goes).
+    MarkGo {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        key: Option<char>,
+        #[serde(default)]
+        axis: Axis,
+    },
+    /// Removes a mark, by its `name` or its `key`. What it marks stays open.
+    MarkRemove {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        key: Option<char>,
+    },
+    /// Renames a mark (by its `name` or its `key`) to `to`.
+    MarkRename {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        key: Option<char>,
+        to: String,
+    },
     Quit,
 }
 
