@@ -1,12 +1,17 @@
 name: App windows
 
-# An experiment: can a hosted runner run `cargo e2e-apps` (real windows of the canary app)?
-# It needs Accessibility and Screen Recording for the process that starts ottospace, and a
-# window server. Run by hand, or when this file changes. Never a required check.
+# `cargo e2e-apps`: real windows of the canary app, hosted, entered, dragged. It needs
+# Accessibility and Screen Recording for the process that starts ottospace, which the hosted
+# macOS image grants to bash, and a window server. Run here so nobody's keyboard is taken.
+# Not a required check: a pointer test can still be flaky.
 on:
   workflow_dispatch:
   pull_request:
-    paths: ['.github/workflows/app-windows.yml']
+    # Text nobody compiles: no macOS runner for it.
+    paths-ignore: ['docs/**', 'site/**', 'README.md', 'AGENTS.md', 'CLAUDE.md', 'LICENSE']
+  push:
+    branches: [main]
+    paths-ignore: ['docs/**', 'site/**', 'README.md', 'AGENTS.md', 'CLAUDE.md', 'LICENSE']
 
 permissions:
   contents: read
@@ -40,5 +45,8 @@ jobs:
             sudo sqlite3 "$db" "select service, client, auth_value from access where service in ('kTCCServiceAccessibility','kTCCServiceScreenCapture','kTCCServiceAppleEvents','kTCCServicePostEvent','kTCCServiceListenEvent') order by 1,2" 2>&1 | head -60 || true
           done
           echo "parent chain:"; ps -o pid,ppid,comm -p $$ -p $PPID || true
+      # The tests post a few real pointer events with cliclick.
+      - name: cliclick
+        run: command -v cliclick || HOMEBREW_NO_AUTO_UPDATE=1 brew install cliclick
       - name: App-window tests
         run: cargo e2e-apps
