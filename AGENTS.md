@@ -85,6 +85,7 @@ separate trust decision: see `docs/ai/1-initial-brainstorm/accessibility.md`.
 
 ## Docs
 
+- `docs/cheat-sheet.md` — one page for daily use. Update it when a key, a section or a setting changes.
 - `docs/ideas/<n>-<name>.md` — Bryan's own notes. **Never edit, move or reformat.** Read-only input.
 - `docs/ai/<n>-<name>/` — AI-derived output for that note: plans, refinements, research.
   e.g. `docs/ideas/1-initial-brainstorm.md` → `docs/ai/1-initial-brainstorm/plan.md`.
