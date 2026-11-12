@@ -9,6 +9,8 @@ use std::sync::{Arc, OnceLock};
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
 use alacritty_terminal::grid::{Dimensions, Scroll as GridScroll};
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
@@ -18,8 +20,8 @@ use gpui::{
     App, Bounds, ContentMask, FontStyle, FontWeight, Hsla, Pixels, Size, TextRun, UnderlineStyle, Window, fill, font,
     point, px, rgb, size,
 };
-use ottospace_core::palette;
-use ottospace_core::terminal::{Scroll, Wheel, wheel_scrolls};
+use ottospace_core::terminal::{CellPoint, Scroll, SelectKind, Wheel, paste, wheel_scrolls};
+use ottospace_core::{palette, theme};
 
 const FONT: &str = "Menlo";
 const FONT_SIZE: f32 = 13.;
@@ -165,6 +167,41 @@ impl Terminal {
         (term.grid().display_offset(), term.grid().history_size())
     }
 
+    /// Starts a selection at a visible cell, replacing any other. A click that never drags leaves
+    /// an empty selection, which selects nothing.
+    pub fn select_start(&self, at: CellPoint, kind: SelectKind) {
+        let mut term = self.term.lock();
+        let (point, side) = grid_point(&term, at);
+        let ty = match kind {
+            SelectKind::Simple => SelectionType::Simple,
+            SelectKind::Word => SelectionType::Semantic,
+            SelectKind::Line => SelectionType::Lines,
+        };
+        term.selection = Some(Selection::new(ty, point, side));
+        self.shared.dirty.store(true, Relaxed);
+    }
+
+    /// Moves the selection's far end to a visible cell, as a drag does.
+    pub fn select_to(&self, at: CellPoint) {
+        let mut term = self.term.lock();
+        let (point, side) = grid_point(&term, at);
+        if let Some(selection) = term.selection.as_mut() {
+            selection.update(point, side);
+            self.shared.dirty.store(true, Relaxed);
+        }
+    }
+
+    /// The selected text, if anything is selected.
+    pub fn selected(&self) -> Option<String> {
+        self.term.lock().selection_to_string().filter(|s| !s.is_empty())
+    }
+
+    /// Pastes `text`, bracketed if the program asked for it.
+    pub fn paste(&self, text: &str) {
+        let bracketed = self.term.lock().mode().contains(TermMode::BRACKETED_PASTE);
+        self.write(paste(text, bracketed));
+    }
+
     /// Resizes the grid to fill `area`, if that changes its size.
     pub fn fit(&mut self, area: Size<Pixels>, cell: Size<Pixels>) {
         let grid = Grid { cols: (area.width / cell.width) as usize, rows: (area.height / cell.height) as usize };
@@ -206,6 +243,7 @@ impl Terminal {
         let content = term.renderable_content();
         let mut rows: Vec<Vec<Span>> = (0..self.grid.rows).map(|_| Vec::new()).collect();
         let offset = content.display_offset as i32;
+        let selection = content.selection;
         for cell in content.display_iter {
             let Some(row) = usize::try_from(cell.point.line.0 + offset).ok().and_then(|r| rows.get_mut(r)) else {
                 continue;
@@ -217,7 +255,8 @@ impl Terminal {
             if cell.flags.contains(Flags::INVERSE) {
                 (fg, bg) = (bg, fg);
             }
-            let bg = (bg != palette::BACKGROUND).then_some(bg);
+            let selected = selection.is_some_and(|s| s.contains(cell.point));
+            let bg = if selected { Some(theme::SELECTION) } else { (bg != palette::BACKGROUND).then_some(bg) };
             let bold = cell.flags.contains(Flags::BOLD);
             let italic = cell.flags.contains(Flags::ITALIC);
             let underline = cell.flags.intersects(Flags::ALL_UNDERLINES);
@@ -242,6 +281,12 @@ impl Drop for Terminal {
     fn drop(&mut self) {
         let _ = self.input.send(Msg::Shutdown);
     }
+}
+
+/// A visible cell as a point in the grid, history included, and the side of the cell.
+fn grid_point(term: &Term<Listener>, at: CellPoint) -> (Point, Side) {
+    let line = Line(at.row as i32 - term.grid().display_offset() as i32);
+    (Point::new(line, Column(at.col)), if at.right { Side::Right } else { Side::Left })
 }
 
 fn window_size(grid: Grid, cell: Size<Pixels>) -> WindowSize {

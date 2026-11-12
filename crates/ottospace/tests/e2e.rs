@@ -216,6 +216,52 @@ fn terminal_scrolls_back_and_typing_returns_to_the_bottom() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn mouse_selects_and_copy_paste_use_it() {
+    let otto = Otto::launch("select");
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "split"})); // pane 2 has focus
+    otto.bounds(&[1, 2]);
+    // Fill the screen first, so the next output scrolls it.
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "i=1; while [ $i -le 100 ]; do echo $i; i=$((i+1)); done\r"}));
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "echo alpha beta gamma\r"}));
+    let t = otto.wait_for("the output", |o| Some(term1(o)).filter(|t| shows(t, "alpha beta gamma")));
+    let lines = t["lines"].as_array().expect("lines");
+    let row = lines.iter().position(|l| l.as_str() == Some("alpha beta gamma")).expect("row") as f32 + 0.5;
+
+    // A double-click selects a word, and focuses the pane it lands on.
+    let down =
+        |x: f32, clicks: u32| otto.call(json!({"cmd": "mouse_down", "pane": 1, "x": x, "y": row, "clicks": clicks}));
+    let reply = down(7.5, 2);
+    assert_eq!(reply["state"]["focused"], 1);
+    assert_eq!(reply["terminals"]["1"]["selection"], "beta");
+    assert_eq!(down(7.5, 3)["terminals"]["1"]["selection"], "alpha beta gamma\n", "a triple-click selects the line");
+
+    // A drag selects from the press to the cell under the pointer; a click alone clears it.
+    down(0.25, 1);
+    let reply = otto.call(json!({"cmd": "mouse_drag", "pane": 1, "x": 9.75, "y": row}));
+    assert_eq!(reply["terminals"]["1"]["selection"], "alpha beta");
+    assert_eq!(down(3.5, 1)["terminals"]["1"]["selection"], Value::Null);
+
+    // ⌘C with nothing selected copies nothing.
+    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+    assert_eq!(key("cmd-c")["copied"], Value::Null);
+
+    // The selection follows its text as new output scrolls the screen.
+    down(7.5, 2);
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "echo one; echo two\r"}));
+    let t = otto.wait_for("more output", |o| Some(term1(o)).filter(|t| shows(t, "two")));
+    assert_eq!(t["selection"], "beta", "{t}");
+
+    // ⌘C copies it; ⌘V pastes it at the prompt (e2e runs use a private clipboard).
+    assert_eq!(key("cmd-c")["copied"], "beta");
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "echo pasted-"}));
+    key("cmd-v");
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "\r"}));
+    otto.wait_for("the pasted command's output", |o| Some(term1(o)).filter(|t| shows(t, "pasted-beta")));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn secondary_bar_opens_and_closes_beside_the_panes() {
     let otto = Otto::launch("bar");
     let reply = otto.call(json!({"cmd": "split", "kind": "empty"}));

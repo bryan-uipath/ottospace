@@ -15,6 +15,8 @@ pub const PRIMARY: u32 = 0x00b8db;
 pub const APP: u32 = 0xff8904;
 pub const PICK: u32 = 0x00d492;
 pub const ERROR: u32 = 0xff8484;
+/// Selected terminal text: a muted cyan, dark enough for light text on it.
+pub const SELECTION: u32 = 0x155e75;
 
 /// The one colour that changes with the mode. It marks the status pill and the focused pane.
 pub fn accent(mode: Mode) -> u32 {

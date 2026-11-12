@@ -279,6 +279,13 @@ impl Model {
         }
     }
 
+    /// The terminal that ⌘C copies from and ⌘V pastes into: the focused pane, if it is a
+    /// terminal and ottospace has the keyboard (no picker, key reference or live app).
+    pub fn keyboard_terminal(&self) -> Option<PaneId> {
+        let id = self.focused.filter(|_| self.mode() == Mode::Normal && !self.keys)?;
+        self.pane(id).filter(|p| p.kind == Kind::Terminal).map(|p| p.id)
+    }
+
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
         let mut effects = Vec::new();
         // The picker has the keyboard. Pane and bar actions wait until it closes, so a
@@ -1044,6 +1051,24 @@ mod tests {
             assert_eq!(m.update(action), []);
         }
         assert_eq!((ids(&m), m.tabs.len(), m.picker.is_none()), (vec![1], 1, true));
+    }
+
+    #[test]
+    fn copy_and_paste_act_on_the_focused_terminal_only_while_ottospace_has_the_keyboard() {
+        let mut m = Model::default();
+        assert_eq!(m.keyboard_terminal(), None);
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        assert_eq!(m.keyboard_terminal(), Some(1));
+        m.update(Action::ToggleKeys);
+        assert_eq!(m.keyboard_terminal(), None, "behind the key reference");
+        m.update(Action::CloseKeys);
+        m.update(Action::OpenPicker { axis: Right, new_tab: false, items: vec![PickItem::Terminal] });
+        assert_eq!(m.keyboard_terminal(), None, "the picker has the keys");
+        m.update(Action::ClosePicker);
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        assert_eq!(m.keyboard_terminal(), None, "an app pane is focused");
+        m.update(Action::Focus { pane: 1 });
+        assert_eq!(m.keyboard_terminal(), Some(1));
     }
 
     #[test]

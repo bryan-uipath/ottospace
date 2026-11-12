@@ -15,15 +15,15 @@ use std::time::{Duration, Instant};
 use core_foundation::base::TCFType;
 use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 use gpui::{
-    AnyElement, AnyView, App, Application, AssetSource, BorderStyle, Bounds, BoxShadow, ClickEvent, ContentMask,
-    Context, FocusHandle, ImageSource, KeyBinding, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, Pixels,
-    Resource, ScrollDelta, ScrollWheelEvent, SharedString, Size, Subscription, TitlebarOptions, Window, WindowBounds,
-    WindowOptions, actions, black, canvas, div, img, point, prelude::*, px, quad, rgb, size, surface, svg,
-    transparent_black,
+    AnyElement, AnyView, App, Application, AssetSource, BorderStyle, Bounds, BoxShadow, ClickEvent, ClipboardItem,
+    ContentMask, Context, FocusHandle, ImageSource, KeyBinding, KeyDownEvent, Keystroke, Modifiers, MouseButton,
+    MouseDownEvent, MouseMoveEvent, Pixels, Resource, ScrollDelta, ScrollWheelEvent, SharedString, Size, Subscription,
+    TitlebarOptions, Window, WindowBounds, WindowOptions, actions, black, canvas, div, img, point, prelude::*, px,
+    quad, rgb, size, surface, svg, transparent_black,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::keys::{self, Mods};
-use ottospace_core::terminal::scroll_key;
+use ottospace_core::terminal::{CellPoint, cell_at, scroll_key, select_kind};
 use ottospace_core::{
     Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Pane, PaneId, PickItem, Picker, Rect, Section, theme,
     titlebar::{self, TitleBar},
@@ -276,6 +276,9 @@ const KEYS_TERMINAL: &[(&str, &str)] = &[
     ("Wheel / trackpad", "Scroll back through history"),
     ("⇧PageUp / ⇧PageDown", "Scroll a page"),
     ("⇧Home / ⇧End", "Top / bottom of history"),
+    ("Drag / 2× / 3× click", "Select text, a word, a line"),
+    ("⌘C", "Copy the selection"),
+    ("⌘V", "Paste"),
 ];
 
 /// Rail sections in order, with their icon and label.
@@ -333,8 +336,24 @@ fn empty_workspace() -> impl IntoElement {
 actions!(
     ottospace,
     [
-        SplitRight, SplitDown, PickPane, ClosePane, FocusLeft, FocusRight, FocusUp, FocusDown, FocusNext, FocusPrev,
-        Zoom, NewTab, NextTab, PrevTab, CloseTab, ShowKeys
+        SplitRight,
+        SplitDown,
+        PickPane,
+        ClosePane,
+        FocusLeft,
+        FocusRight,
+        FocusUp,
+        FocusDown,
+        FocusNext,
+        FocusPrev,
+        Zoom,
+        NewTab,
+        NextTab,
+        PrevTab,
+        CloseTab,
+        ShowKeys,
+        CopySelection,
+        PasteText
     ]
 );
 
@@ -346,6 +365,11 @@ struct Workspace {
     terminals: HashMap<PaneId, Terminal>,
     /// One terminal character cell.
     cell: Size<Pixels>,
+    /// The terminal pane a mouse drag is selecting in.
+    dragging: Option<PaneId>,
+    /// The last text copied. E2E runs use it as the clipboard, so tests never touch the user's.
+    copied: Option<String>,
+    system_clipboard: bool,
     /// Each pane's body bounds in window coordinates, recorded during prepaint.
     cells: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
     /// Each pane's bounds inside its border, for e2e to check the live window's gap.
@@ -444,6 +468,9 @@ impl Workspace {
             hosted: HashMap::new(),
             terminals: HashMap::new(),
             cell: terminal::cell_size(window),
+            dragging: None,
+            copied: None,
+            system_clipboard: std::env::var_os("OTTOSPACE_E2E").is_none(),
             cells: HashMap::new(),
             frames: HashMap::new(),
             apps: running_apps(hosting, host_only),
@@ -572,6 +599,32 @@ impl Workspace {
                 Request::PickerClose => Some(Action::ClosePicker),
                 Request::Keys => Some(Action::ToggleKeys),
                 Request::Key { .. } => None, // answered by `press`
+                Request::MouseDown { pane, x, y, clicks } => {
+                    match self.cell_position(pane, x, y) {
+                        Ok((id, position)) => {
+                            let modifiers = Modifiers::default();
+                            let (button, first_mouse) = (MouseButton::Left, false);
+                            let event =
+                                MouseDownEvent { button, position, modifiers, click_count: clicks, first_mouse };
+                            // In the order GPUI calls them: the terminal's handler, then the pane's.
+                            self.terminal_mouse_down(id, &event, cx);
+                            self.click_pane(id, &event, window, cx);
+                        }
+                        Err(err) => failure = Some(err),
+                    }
+                    None
+                }
+                Request::MouseDrag { pane, x, y } => {
+                    match self.cell_position(pane, x, y) {
+                        Ok((_, position)) => {
+                            let pressed_button = Some(MouseButton::Left);
+                            let event = MouseMoveEvent { position, pressed_button, modifiers: Modifiers::default() };
+                            self.mouse_move(&event, cx);
+                        }
+                        Err(err) => failure = Some(err),
+                    }
+                    None
+                }
                 Request::Scroll { pane, lines } => {
                     match pane.or(self.model.focused).filter(|id| self.terminals.contains_key(id)) {
                         Some(id) => self.wheel(id, ScrollDelta::Lines(point(0., lines)), cx),
@@ -606,6 +659,14 @@ impl Workspace {
                 .detach();
             }
         }
+    }
+
+    /// A point in a terminal pane (default: the focused one), given in cells from its top-left, in
+    /// window points.
+    fn cell_position(&self, pane: Option<PaneId>, x: f32, y: f32) -> Result<(PaneId, gpui::Point<Pixels>), String> {
+        let id = pane.or(self.model.focused).filter(|id| self.terminals.contains_key(id)).ok_or("no terminal pane")?;
+        let bounds = self.cells.get(&id).map(|c| c.get()).filter(|b| b.size.width > px(1.)).ok_or("not laid out")?;
+        Ok((id, bounds.origin + point(self.cell.width * x, self.cell.height * y)))
     }
 
     /// Presses `keystrokes` as if typed, once this update is done, then replies with the state.
@@ -657,6 +718,8 @@ impl Workspace {
                     "cols": cols, "rows": rows, "lines": t.lines(),
                     // Lines scrolled back from the bottom, and lines of history kept.
                     "display_offset": display_offset, "history": history,
+                    // What ⌘C would copy.
+                    "selection": t.selected(),
                 });
                 (*id, terminal)
             })
@@ -680,6 +743,8 @@ impl Workspace {
             // Each hosted pane's title-bar crop in points (0: none).
             "crop": crop,
             "terminals": terminals,
+            // The last text ⌘C copied.
+            "copied": self.copied,
         })
         .to_string()
     }
@@ -884,6 +949,60 @@ impl Workspace {
         if let Some(terminal) = self.terminals.get_mut(&id) {
             terminal.wheel(delta.pixel_delta(height).y.into(), height.into());
             cx.notify();
+        }
+    }
+
+    /// A press on a terminal starts a selection there: a drag, or a word or line by click count.
+    /// It also focuses the pane (`click_pane`), so the first click on an unfocused pane selects too.
+    fn terminal_mouse_down(&mut self, id: PaneId, event: &MouseDownEvent, cx: &mut Context<Self>) {
+        let Some(at) = self.cell_under(id, event.position) else { return };
+        if let Some(terminal) = self.terminals.get(&id) {
+            terminal.select_start(at, select_kind(event.click_count));
+            self.dragging = Some(id);
+            cx.notify();
+        }
+    }
+
+    /// A drag extends the selection, even past the pane's edge. Released anywhere, it ends.
+    fn mouse_move(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        let Some(id) = self.dragging else { return };
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.dragging = None;
+            return;
+        }
+        if let (Some(at), Some(terminal)) = (self.cell_under(id, event.position), self.terminals.get(&id)) {
+            terminal.select_to(at);
+            cx.notify();
+        }
+    }
+
+    /// The terminal cell under a window position, from the same bounds the grid is painted in.
+    fn cell_under(&self, id: PaneId, position: gpui::Point<Pixels>) -> Option<CellPoint> {
+        let (bounds, terminal) = (self.cells.get(&id)?.get(), self.terminals.get(&id)?);
+        let local = position - bounds.origin;
+        let cell = (self.cell.width.into(), self.cell.height.into());
+        Some(cell_at(local.x.into(), local.y.into(), cell, terminal.grid_size()))
+    }
+
+    /// ⌘C: copies the focused terminal's selection. With nothing selected it does nothing.
+    fn copy(&mut self, cx: &mut Context<Self>) {
+        let terminal = self.model.keyboard_terminal().and_then(|id| self.terminals.get(&id));
+        let Some(text) = terminal.and_then(Terminal::selected) else { return };
+        if self.system_clipboard {
+            cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+        }
+        self.copied = Some(text);
+    }
+
+    /// ⌘V: pastes the clipboard's text into the focused terminal.
+    fn paste(&mut self, cx: &mut Context<Self>) {
+        let Some(terminal) = self.model.keyboard_terminal().and_then(|id| self.terminals.get(&id)) else { return };
+        let text = match self.system_clipboard {
+            true => cx.read_from_clipboard().and_then(|item| item.text()),
+            false => self.copied.clone(),
+        };
+        if let Some(text) = text {
+            terminal.paste(&text);
         }
     }
 
@@ -1309,6 +1428,10 @@ impl Workspace {
                 .absolute()
                 .size_full()
                 .on_scroll_wheel(cx.listener(move |this, e: &ScrollWheelEvent, _, cx| this.wheel(id, e.delta, cx)))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, e: &MouseDownEvent, _, cx| this.terminal_mouse_down(id, e, cx)),
+                )
                 .child(grid)
                 .into_any_element()
         } else {
@@ -1584,6 +1707,10 @@ impl Render for Workspace {
             .text_color(rgb(theme::TEXT))
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key_down))
+            // On the root, so a selection drag keeps going over other panes.
+            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| this.mouse_move(e, cx)))
+            .on_action(cx.listener(|this, _: &CopySelection, _, cx| this.copy(cx)))
+            .on_action(cx.listener(|this, _: &PasteText, _, cx| this.paste(cx)))
             .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
                 this.dispatch(Action::Split { axis: Axis::Right, kind: Kind::Terminal }, window, cx);
             }))
@@ -1749,6 +1876,9 @@ fn main() {
             KeyBinding::new("ctrl-tab", NextTab, None),
             KeyBinding::new("ctrl-shift-tab", PrevTab, None),
             KeyBinding::new("cmd-shift-w", CloseTab, None),
+            // Terminal selection. ⌘C never sends ^C: that is ⌃C.
+            KeyBinding::new("cmd-c", CopySelection, None),
+            KeyBinding::new("cmd-v", PasteText, None),
         ]);
         let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
         // Draw under the title bar; the top bar leaves room for the traffic lights.
