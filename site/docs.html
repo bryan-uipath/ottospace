@@ -145,7 +145,8 @@ td.w { white-space: normal; }
 <span class="p">$ </span>osi update --check<span class="d">   # only say whether there is one</span>
 <span class="p">$ </span>osi current<span class="d">          # what is installed: channel, version, commit, date</span>
 <span class="p">$ </span>osi rollback<span class="d">         # put the previous build back; again to undo</span>
-<span class="p">$ </span>osi install pr 30<span class="d">    # the build of a pull request. Needs gh, signed in</span>
+<span class="p">$ </span>osi install pr 30<span class="d">    # a pull request's build; waits if it is still building. Needs gh</span>
+<span class="p">$ </span>osi list<span class="d">             # builds you can install: main and open pull requests</span>
 <span class="p">$ </span>osi uninstall<span class="d">        # remove ottospace and osi; settings and tasks are kept</span></pre>
   <p>A running ottospace keeps the build it started with. Quit it and start it again to use the new one.</p>
   <p class="note"><b>What the checksum covers.</b> Every download is checked against the SHA-256 published with it, and a failed check changes nothing. That catches a damaged download. It does not catch a compromised release: whoever can replace the build can replace its checksum. The install script and <code>osi</code> itself come from <code>main</code> over HTTPS with no checksum. A pull request build runs that pull request's code with your terminal's permissions: read the diff first.</p>

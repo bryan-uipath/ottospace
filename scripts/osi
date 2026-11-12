@@ -25,6 +25,7 @@ workflow="build.yml"
 marker="# ottospace-installer"
 
 tmp=""
+bg=""
 staged=""
 staged_app=""
 aside_app=""
@@ -44,8 +45,9 @@ usage: osi <command>
   install pr <n> [--app]     the build of pull request <n> (needs gh, signed in)
   install stable [--app]     the latest release
   install <vX.Y.Z> [--app]   that release
+  list                       builds you can install: main, and each open pull request
   current                    what is installed: channel, version, commit, date
-  update [--check]           install the channel's newer build, if there is one
+  update [--check]           install the channel's newer build, if there is one (--no-wait too)
   rollback                   put the previous build back (again: undo the rollback)
   uninstall                  remove ottospace and osi; settings and tasks are kept
   self-update                replace osi with the one on main
@@ -53,6 +55,7 @@ usage: osi <command>
   --app          also install ottospace.app into ~/Applications
   --force        replace an `ottospace` command or app that osi did not install
   --allow-fork   allow a pull request from a fork (asks you to type its commit)
+  --no-wait      do not wait for a pull request build that is queued or running
 
 A pull request build runs that pull request's code with your terminal's permissions.
 EOF
@@ -61,6 +64,7 @@ EOF
 # Runs on any exit: drops temp files and anything staged but not yet moved into place, and
 # puts back an app that was moved aside if its replacement never arrived.
 cleanup() {
+  if [ -n "$bg" ]; then kill "$bg" 2>/dev/null || true; fi
   if [ -n "$staged" ]; then rm -f "$staged"; fi
   if [ -n "$staged_app" ]; then rm -rf "$staged_app"; fi
   if [ -n "$aside_app" ] && [ -e "$aside_app" ] && [ ! -e "$app" ]; then mv "$aside_app" "$app"; fi
@@ -135,7 +139,7 @@ setup() {
   cmd="$bin_dir/ottospace"
   app="$app_dir/ottospace.app"
   trap cleanup EXIT
-  trap 'exit 1' HUP INT TERM
+  trap 'spin_clear; exit 1' HUP INT TERM
   tmp="$(mktemp -d)"
   dl="$tmp/dl"
   mkdir "$dl"
@@ -173,11 +177,160 @@ pr_read() {
   line="$(gh_run pr view "$1" -R "github.com/$repo" \
     --json state,author,headRefOid,headRepository,isCrossRepository \
     --jq '[.state, (.author.login // "unknown"), .headRefOid, (.headRepository.nameWithOwner // "deleted"), (.isCrossRepository | tostring)] | @tsv' |
-    LC_ALL=C tr -d '\000-\010\012-\037\177')" || line=""
+    clean)" || line=""
   IFS="$(printf '\t')" read -r pr_state pr_author pr_sha pr_head pr_cross <<EOF
 $line
 EOF
   is_sha "$pr_sha" 40 || die "could not read pull request $1 of $repo (is gh signed in? gh auth status)"
+}
+
+# One spinner frame and "$1" on the current line, redrawn in place. Nothing unless a terminal.
+spin_tick=0
+spin() {
+  [ -t 1 ] || return 0
+  spin_msg="$1"
+  set -- ⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏
+  shift $((spin_tick % 10))
+  spin_tick=$((spin_tick + 1))
+  printf '\r\033[2K%s %s' "$1" "$spin_msg"
+}
+spin_clear() { if [ -t 1 ]; then printf '\r\033[2K'; fi; }
+
+# Spins "$2" until process $1 ends and leaves no line. Returns the process's status.
+# The process is $bg while it runs, so an interrupted osi stops it (see cleanup).
+spin_quiet() {
+  bg="$1"
+  while kill -0 "$1" 2>/dev/null; do
+    spin "$2"
+    sleep 0.1
+  done
+  spin_clear
+  bg=""
+  wait "$1"
+}
+
+# The same, and then "$2" stays as a plain line.
+spin_while() {
+  spin_status=0
+  spin_quiet "$@" || spin_status=$?
+  say "$2"
+  return "$spin_status"
+}
+
+# "1m 05s" for $1 seconds.
+elapsed() { printf '%dm %02ds' $(($1 / 60)) $(($1 % 60)); }
+
+# Keeps tabs and printable ASCII only. Text from GitHub (titles, job names, states) is written
+# by whoever opened the pull request: nothing else may reach the terminal.
+clean() { LC_ALL=C tr -cd '\011\040-\176'; }
+
+# One build of commit $1 as "id<TAB>status<TAB>conclusion" in $tmp/run. $2..: more gh options.
+run_query() {
+  run_sha="$1"
+  shift
+  gh_run run list -R "github.com/$repo" --workflow "$workflow" --commit "$run_sha" --event pull_request \
+    --limit 1 --json databaseId,status,conclusion "$@" \
+    --jq '.[0] // empty | [(.databaseId | tostring), .status, (if (.conclusion // "") == "" then "none" else .conclusion end)] | @tsv' \
+    >"$tmp/run" 2>/dev/null
+}
+
+# Reads the build of commit $1: a finished one if there is one, else the newest run (a newer
+# cancelled or unapproved run must not hide a build that exists). Sets run, r_status, r_end;
+# run is empty when there is none. Fails when gh does.
+build_read_run() {
+  run_query "$1" --status success || return 1
+  if [ ! -s "$tmp/run" ]; then run_query "$1" || return 1; fi
+  IFS="$(printf '\t')" read -r run r_status r_end <<EOT
+$(clean <"$tmp/run")
+EOT
+}
+
+# "ready", "failed (<how>)", "queued" or "running" for the build just read; "no build" without one.
+build_state() {
+  if ! is_number "$run"; then
+    echo "no build"
+  elif [ "$r_status" != completed ]; then
+    case "$r_status" in
+      queued | pending | waiting | requested) echo queued ;;
+      *) echo running ;;
+    esac
+  elif [ "$r_end" = success ]; then
+    echo ready
+  else
+    echo "failed ($r_end)"
+  fi
+}
+
+# Finds the build of pull request $1's head commit and sets run. A build that is queued or
+# running is waited for, with its state on one line; --no-wait says the state and stops.
+pr_build() {
+  poll="${OSI_POLL:-10}"
+  limit="${OSI_WAIT_MAX:-3600}"
+  is_number "$poll" || poll=10
+  is_number "$limit" || limit=3600
+  began="$(date +%s)"
+  waited=0
+  did_wait=0
+  misses=0
+  seen=""
+  while :; do
+    if ! build_read_run "$pr_sha"; then
+      # One failed call (network, rate limit) does not end a wait.
+      misses=$((misses + 1))
+      if [ "$misses" -ge 3 ] || [ "$did_wait" = 0 ]; then
+        spin_clear
+        die "could not list the builds of $repo (is gh signed in? gh auth status)"
+      fi
+      sleep "$poll"
+      continue
+    fi
+    misses=0
+    state="$(build_state)"
+    url="https://github.com/$repo/actions/runs/$run"
+    case "$state" in
+      ready)
+        spin_clear
+        if [ "$did_wait" = 1 ]; then say "Build finished after $(elapsed "$waited")"; fi
+        return 0
+        ;;
+      "no build")
+        spin_clear
+        die "no build for commit $(short "$pr_sha"): it has not started (gh pr checks $1 -R $repo), it changes only docs, or it is older than 14 days."
+        ;;
+      "failed (cancelled)")
+        spin_clear
+        die "the build of commit $(short "$pr_sha") was cancelled (a newer push replaces it: run this again): $url"
+        ;;
+      failed*)
+        spin_clear
+        die "the build of commit $(short "$pr_sha") $state: $url"
+        ;;
+    esac
+    [ "$no_wait" = 0 ] || die "the build of commit $(short "$pr_sha") is $state: $url"
+    waited=$(($(date +%s) - began))
+    if [ "$waited" -ge "$limit" ]; then
+      spin_clear
+      die "the build is still $state after $(elapsed "$waited"): $url"
+    fi
+    did_wait=1
+    if [ -t 1 ]; then
+      # Which jobs are done, when gh can say.
+      jobs="$(gh_run run view "$run" -R "github.com/$repo" --json jobs \
+        --jq '[.jobs[] | "\(.name) \(if (.conclusion // "") == "" then .status else .conclusion end)"] | join(", ")' 2>/dev/null |
+        clean | cut -c 1-80)" || jobs=""
+      i=0
+      while [ "$i" -lt $((poll * 10)) ]; do
+        spin "Build $state${jobs:+ ($jobs)} · $(elapsed $(($(date +%s) - began))) · ^C stops"
+        sleep 0.1
+        i=$((i + 1))
+      done
+    else
+      # Not a terminal: one line for each change of state.
+      if [ "$seen" != "$state" ]; then say "Build $state; waiting. $url"; fi
+      seen="$state"
+      sleep "$poll"
+    fi
+  done
 }
 
 # Downloads the build of pull request $1 into $dl, after showing whose code it is.
@@ -198,13 +351,9 @@ pr_download() {
     [ "$typed" = "$(printf '%.7s' "$pr_sha")" ] || die "that is not the head commit. Nothing was changed."
   fi
 
-  run="$(gh_run run list -R "github.com/$repo" --workflow "$workflow" --commit "$pr_sha" --event pull_request \
-    --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')" ||
-    die "could not list the builds of $repo"
-  is_number "$run" ||
-    die "no finished build for commit $(short "$pr_sha"). It may still be running (gh pr checks $1 -R $repo), or it failed, or it is older than 14 days."
-  say "Downloading the build from run $run"
-  gh_run run download "$run" -R "github.com/$repo" -n "$artifact" -D "$dl" || die "could not download the build of run $run"
+  pr_build "$1"
+  gh_run run download "$run" -R "github.com/$repo" -n "$artifact" -D "$dl" 2>"$dl.err" &
+  spin_while $! "Downloading the build from run $run" || die "could not download the build of run $run: $(clean <"$dl.err")"
   # gh puts a lone artifact straight into the directory; older versions used a subdirectory.
   if [ ! -f "$dl/BUILD" ] && [ -f "$dl/$artifact/BUILD" ]; then dl="$dl/$artifact"; fi
   [ -f "$dl/BUILD" ] && [ -f "$dl/SHA256SUMS" ] && [ -f "$dl/$tarball" ] || die "the build of run $run is incomplete"
@@ -380,6 +529,7 @@ cmd_install() {
   want_app=0
   force=0
   allow_fork=0
+  no_wait=0
   channel=""
   ref=""
   while [ $# -gt 0 ]; do
@@ -387,6 +537,7 @@ cmd_install() {
       --app) want_app=1 ;;
       --force) force=1 ;;
       --allow-fork) allow_fork=1 ;;
+      --no-wait) no_wait=1 ;;
       -*) die "unknown option: $1" ;;
       main | stable)
         [ -z "$channel" ] || die "name one build to install"
@@ -418,6 +569,65 @@ cmd_install() {
   install_build "$channel" "$ref"
 }
 
+# The builds that can be installed, and which one is.
+cmd_list() {
+  setup
+  have="$(get commit "$state_dir/current")"
+  mark() { if [ -n "$have" ] && [ "$(short "$1")" = "$(short "$have")" ]; then printf '  (installed)'; fi; }
+
+  release_base main
+  if fetch "$base/BUILD" "$tmp/main.BUILD" 2>/dev/null; then
+    m_commit="$(get commit "$tmp/main.BUILD")"
+    is_sha "$m_commit" 40 || m_commit=""
+  else
+    m_commit=""
+  fi
+  if [ -n "$m_commit" ]; then
+    say "main      $(printf '%.7s' "$m_commit")  ready$(mark "$m_commit")"
+    say "          osi install main"
+  else
+    say "main      no build published"
+  fi
+
+  gh_cmd="${OSI_GH:-$(PATH="$user_path" command -v gh || true)}"
+  if [ -z "$gh_cmd" ]; then
+    say ""
+    say "Pull request builds need the GitHub CLI: https://cli.github.com (then: gh auth login)"
+    return 0
+  fi
+  # One line each: number, head commit, fork or not, title. A title cannot write to the terminal.
+  gh_run pr list -R "github.com/$repo" --state open --limit 51 \
+    --json number,headRefOid,isCrossRepository,title \
+    --jq '.[] | [(.number | tostring), .headRefOid, (.isCrossRepository | tostring), (.title | gsub("[\t\n\r]"; " "))] | @tsv' \
+    >"$tmp/prs" 2>/dev/null &
+  spin_quiet $! "Reading open pull requests" || die "could not list the pull requests of $repo (is gh signed in? gh auth status)"
+  [ -s "$tmp/prs" ] || {
+    say ""
+    say "No open pull requests."
+    return 0
+  }
+  say ""
+  listed=0
+  while IFS="$(printf '\t')" read -r number sha cross title; do
+    is_number "$number" || continue
+    is_sha "$sha" 40 || continue
+    title="$(printf '%s' "$title" | clean | cut -c 1-60)"
+    listed=$((listed + 1))
+    if [ "$listed" -gt 50 ]; then
+      say "…and more: gh pr list -R $repo"
+      break
+    fi
+    spin "pr $number"
+    if build_read_run "$sha"; then state="$(build_state)"; else state="unknown (gh failed)"; fi
+    spin_clear
+    if [ "$cross" != false ]; then state="$state, from a fork"; fi
+    say "$(printf 'pr %-6s %.7s  %s' "$number" "$sha" "$state")$(mark "$sha")"
+    say "          $title"
+  done <"$tmp/prs"
+  say ""
+  say "Install one: osi install pr <n>. A build that is queued or running is waited for."
+}
+
 cmd_current() {
   setup
   [ -f "$state_dir/current" ] || die "nothing is installed by osi (osi install main)"
@@ -439,9 +649,11 @@ cmd_current() {
 
 cmd_update() {
   check=0
+  update_no_wait=0
   for arg in "$@"; do
     case "$arg" in
       --check) check=1 ;;
+      --no-wait) update_no_wait=1 ;;
       *) die "unknown option: $arg" ;;
     esac
   done
@@ -455,6 +667,7 @@ cmd_update() {
   if app_owned; then want_app=1; fi
   force=0
   allow_fork=0
+  no_wait="$update_no_wait"
 
   case "$channel" in
     main | stable)
@@ -593,6 +806,7 @@ main() {
   if [ $# -gt 0 ]; then shift; fi
   case "$command" in
     install) cmd_install "$@" ;;
+    list) cmd_list ;;
     current) cmd_current ;;
     update) cmd_update "$@" ;;
     rollback) cmd_rollback ;;
