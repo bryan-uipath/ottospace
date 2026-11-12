@@ -130,6 +130,8 @@ the tag does not match the crate version.
 
 ## Using it
 
+Short version: [docs/cheat-sheet.md](docs/cheat-sheet.md).
+
 | Key | Action |
 |---|---|
 | ⌘D | Split right, new terminal |
