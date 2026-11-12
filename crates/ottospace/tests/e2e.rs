@@ -263,6 +263,54 @@ fn repos_are_listed_and_open_a_terminal_there() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn tasks_are_listed_as_an_inbox_and_pop_opens_the_next() {
+    let otto = Otto::launch("tasks");
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "new_tab"}));
+    let tabs = otto.call(json!({"cmd": "state"}))["state"]["tabs"].clone();
+    let (first, second) = (tabs[0]["id"].clone(), tabs[1]["id"].clone());
+
+    otto.call(json!({"cmd": "task_add", "title": "idea"}));
+    otto.call(json!({"cmd": "task_add", "title": "build", "state": "running", "tab": second}));
+    otto.call(json!({"cmd": "task_add", "title": "question", "priority": 1, "state": "needs_you", "tab": first}));
+    let inbox = |o: &Otto| -> Vec<(String, String)> {
+        let rows = o.call(json!({"cmd": "task_list"}))["inbox"].as_array().unwrap().clone();
+        rows.iter().map(|r| (r["group"].as_str().unwrap().into(), r["title"].as_str().unwrap().into())).collect()
+    };
+    let row = |group: &str, title: &str| (group.to_string(), title.to_string());
+    assert_eq!(inbox(&otto), [row("needs_you", "question"), row("running", "build"), row("captured", "idea")]);
+    assert_eq!(otto.call(json!({"cmd": "state"}))["needs_you"], 1);
+
+    // Pop next: the tab of the task that needs the user comes forward.
+    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["active"], 1);
+    let popped = otto.call(json!({"cmd": "task_pop"}));
+    assert_eq!(popped["task"]["title"], "question");
+    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["active"], 0);
+
+    // Snoozed: out of the inbox, and pop finds nothing. An agent that needs the user again brings it back.
+    otto.call(json!({"cmd": "task_snooze", "id": 3, "seconds": 3600}));
+    assert_eq!(inbox(&otto), [row("running", "build"), row("captured", "idea")]);
+    assert!(otto.call(json!({"cmd": "task_pop"}))["task"].is_null());
+    otto.call(json!({"cmd": "task_undo"}));
+    assert_eq!(inbox(&otto)[0], row("needs_you", "question"));
+
+    // A snooze that has run out returns by itself.
+    otto.call(json!({"cmd": "task_snooze", "id": 3, "seconds": 0}));
+    otto.wait_for("the snoozed task to return", |o| {
+        (o.call(json!({"cmd": "state"}))["state"]["tasks"]["list"][2]["snoozed_until"].is_null()).then_some(())
+    });
+
+    // Hold and dismiss; a state report from the agent moves the task.
+    otto.call(json!({"cmd": "task_hold", "id": 3}));
+    otto.call(json!({"cmd": "task_dismiss", "id": 1}));
+    otto.call(json!({"cmd": "task_set_state", "id": 2, "state": "needs_you"}));
+    assert_eq!(inbox(&otto), [row("needs_you", "build"), row("on_hold", "question")]);
+    assert_eq!(otto.raw(r#"{"cmd":"task_hold","id":9}"#)["ok"], false, "no such task");
+    assert_eq!(otto.raw(r#"{"cmd":"task_add","title":"x","state":"sleeping"}"#)["ok"], false, "no such state");
+}
+
 /// Terminal 1's entry in the state dump.
 fn term1(o: &Otto) -> Value {
     o.call(json!({"cmd": "state"}))["terminals"]["1"].clone()

@@ -59,6 +59,8 @@ ottospace ctl '{"cmd":"state"}'
 | `terminals.<id>` | `cols`, `rows`, and `lines`: the visible text of that terminal pane. Also `history` (lines scrolled off the top), `display_offset` (how far the view is scrolled back; 0 is the bottom), `selection` (the selected text, or null) and `visual_cursor` |
 | `copied` | The text of the last copy |
 | `apps` | Running apps that `open_app` can host: `name`, `windows` (how many it has open) and `icon` (true if its icon was read) |
+| `state.tasks.list` | Every task: `id`, `title`, `state`, `priority`, `snoozed_until`, `dismissed`, `tab` |
+| `inbox`, `needs_you` | The tasks the Tasks section lists, in order, each with its `group`; and how many are under `needs_you` |
 | `state.repos` | Repositories found on disk: `name`, `path`, `branch`, and `worktrees` (each `name`, `path`, `branch`) |
 | `ax_overlay` | Null, or the accessibility overlay's last read: `pane`, `targets` (`label`, `frame` in window coordinates, `source`), `count`, `truncated`, `millis`, `error` |
 | `bounds.<id>` | Where each pane of the active tab is drawn: `[x, y, w, h]` |
@@ -102,6 +104,39 @@ repositories in the directories named by `$OTTOSPACE_REPOS` (default `~/code` an
 with its git worktrees. `open_repo` opens a terminal whose shell starts in a repository or
 worktree: it fills the focused pane if that is empty, else splits it. `path` must be a `path` from
 `state.repos`; any other path is refused. A tab with no panes takes the repository's name.
+
+Tasks (the inbox in the Tasks section):
+
+```sh
+ottospace ctl '{"cmd":"task_add","title":"Fix the zoom flicker"}'
+ottospace ctl '{"cmd":"task_add","title":"Review the retry fix","priority":1,"state":"needs_you","tab":2}'
+ottospace ctl '{"cmd":"task_set_state","id":1,"state":"needs_you"}'
+ottospace ctl '{"cmd":"task_list"}'
+ottospace ctl '{"cmd":"task_pop"}'
+ottospace ctl '{"cmd":"task_snooze","id":1,"seconds":3600}'
+ottospace ctl '{"cmd":"task_hold","id":1}'
+ottospace ctl '{"cmd":"task_dismiss","id":1}'
+ottospace ctl '{"cmd":"task_undo"}'
+```
+
+A task has a `title`, a `priority` (1 is most urgent, default 3), a `state` and, if you give one,
+the `tab` that is its workspace (a tab `id`; `$OTTOSPACE_TAB` in a shell ottospace started).
+States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stale`, `parked`,
+`done`, `cleaned`. The inbox lists tasks in groups, in this order: `needs_you` (states
+`needs_you`, `stale`), `running` (`running`, `review`), `captured` (`captured`, `triaged`),
+`on_hold` (`parked`), `done`. In a group: priority, then oldest first. `cleaned` tasks are not listed.
+
+- **Report your own state.** If the user gave you a task id, send `task_set_state` with `running`
+  while you work and `needs_you` when you wait for the user. Do not set the state of other tasks.
+- `task_list` replies `{"ok":true,"inbox":[..]}`: each row is a task plus its `group`. The same
+  rows are `inbox` in the state, with the count `needs_you`.
+- `task_pop` brings forward the tab of the first task under `needs_you` and replies
+  `{"ok":true,"task":{..}}`, or `"task":null` if there is none. It switches the tab the user sees.
+- `task_snooze`, `task_hold` and `task_dismiss` are the user's moves; send them only when asked.
+  A snoozed or dismissed task leaves the inbox; it returns when its time is up or when its state
+  changes to `needs_you`. `task_hold` sets the state to `parked`. `task_undo` takes back the last
+  of the three, one step. A request for a task id that does not exist is refused.
+- Tasks are kept in memory only: they are gone when ottospace quits.
 
 Reading a terminal pane:
 

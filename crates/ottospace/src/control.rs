@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::{fs, thread};
 
+use ottospace_core::tasks::{State, TaskId};
 use ottospace_core::{Axis, Dir, PaneId, Section};
 use serde::Deserialize;
 
@@ -131,6 +132,42 @@ pub enum Request {
         #[serde(default)]
         axis: Axis,
     },
+    /// Files a task: `{"cmd":"task_add","title":"Fix the zoom flicker","priority":2}`. `priority`:
+    /// 1 (most urgent) to 9, default 3. `state`: default `captured`. `tab`: the `id` of the tab
+    /// that is the task's workspace (`$OTTOSPACE_TAB` in a shell).
+    TaskAdd {
+        title: String,
+        #[serde(default = "three")]
+        priority: u8,
+        #[serde(default = "captured")]
+        state: State,
+        #[serde(default)]
+        tab: Option<u32>,
+    },
+    /// An agent reports where its task is: `running`, `needs_you`, `done`, ...
+    TaskSetState {
+        id: TaskId,
+        state: State,
+    },
+    /// Hides a task from the inbox for `seconds`, or until it needs the user for a new reason.
+    TaskSnooze {
+        id: TaskId,
+        seconds: u64,
+    },
+    TaskHold {
+        id: TaskId,
+    },
+    /// Takes a task out of the inbox. It goes on running.
+    TaskDismiss {
+        id: TaskId,
+    },
+    /// Takes back the last snooze, hold or dismiss.
+    TaskUndo,
+    /// The inbox, in order: `{"ok":true,"inbox":[{"group":"needs_you","id":1,..}]}`, not the state.
+    TaskList,
+    /// Brings forward the tab of the first task that needs the user. The reply is
+    /// `{"ok":true,"task":{..}}`, or `"task":null` if nothing needs the user.
+    TaskPop,
     /// A terminal pane's text (default: the focused one): the bottom screen, and with `history`
     /// everything scrolled off above it. The reply is `{"ok":true,"pane":3,"text":".."}`, not the state.
     Capture {
@@ -170,6 +207,14 @@ pub enum Request {
 
 fn one() -> usize {
     1
+}
+
+fn three() -> u8 {
+    3
+}
+
+fn captured() -> State {
+    State::Captured
 }
 
 /// Pane kinds a client may create. App panes come from `open_app`.

@@ -23,6 +23,7 @@ use gpui::{
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::keys::{self, Mods};
+use ottospace_core::tasks::{Group, Task};
 use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, scroll_key, select_kind, visual_key};
 use ottospace_core::{
     Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Pane, PaneId, PickItem, Picker, Rect, Section, theme,
@@ -437,6 +438,12 @@ impl Workspace {
                     if tick % 30 == 0 {
                         this.adopt_new_windows(window, cx);
                         this.drop_closed(window, cx);
+                        // A snoozed task returns when its time comes.
+                        if this.model.tasks.list.iter().any(|t| t.snoozed_until.is_some_and(|until| until <= now_ms()))
+                        {
+                            this.dispatch(Action::Tick { now: now_ms() }, window, cx);
+                            cx.notify();
+                        }
                     }
                     this.sync_layout(window, cx, tick % 30 == 15);
                     this.sync_terminals(window, cx);
@@ -664,6 +671,37 @@ impl Workspace {
                     }
                     None
                 }
+                Request::TaskAdd { title, priority, state, tab } => {
+                    Some(Action::TaskAdd { title, priority, state, tab })
+                }
+                Request::TaskUndo => Some(Action::TaskUndo),
+                Request::TaskSetState { id, .. }
+                | Request::TaskSnooze { id, .. }
+                | Request::TaskHold { id }
+                | Request::TaskDismiss { id }
+                    if self.model.tasks.get(id).is_none() =>
+                {
+                    failure = Some(format!("no task {id}"));
+                    None
+                }
+                Request::TaskSetState { id, state } => Some(Action::TaskSetState { id, state }),
+                Request::TaskSnooze { id, seconds } => {
+                    Some(Action::TaskSnooze { id, until: now_ms().saturating_add(seconds.saturating_mul(1000)) })
+                }
+                Request::TaskHold { id } => Some(Action::TaskHold { id }),
+                Request::TaskDismiss { id } => Some(Action::TaskDismiss { id }),
+                Request::TaskList => {
+                    self.dispatch(Action::Tick { now: now_ms() }, window, cx);
+                    let _ = reply.send(serde_json::json!({ "ok": true, "inbox": self.inbox() }).to_string());
+                    continue;
+                }
+                Request::TaskPop => {
+                    self.dispatch(Action::Tick { now: now_ms() }, window, cx);
+                    let task = serde_json::json!(self.model.tasks.next());
+                    self.dispatch(Action::TaskOpen { id: None }, window, cx);
+                    let _ = reply.send(serde_json::json!({ "ok": true, "task": task }).to_string());
+                    continue;
+                }
                 Request::Repos => Some(Action::SetRepos { repos: repos::scan() }),
                 Request::OpenRepo { path, .. } if !self.model.repo_listed(&path) => {
                     failure = Some("no listed repository at that path".into());
@@ -734,6 +772,16 @@ impl Workspace {
         let id = pane.or(self.model.focused).filter(|id| self.terminals.contains_key(id)).ok_or("no terminal pane")?;
         let bounds = self.cells.get(&id).map(|c| c.get()).filter(|b| b.size.width > px(1.)).ok_or("not laid out")?;
         Ok((id, bounds.origin + point(self.cell.width * x, self.cell.height * y)))
+    }
+
+    /// The inbox as JSON rows: each task with the group it is listed under.
+    fn inbox(&self) -> Vec<serde_json::Value> {
+        let row = |(group, task): (Group, &Task)| {
+            let mut row = serde_json::json!(task);
+            row["group"] = serde_json::json!(group);
+            row
+        };
+        self.model.tasks.inbox().into_iter().map(row).collect()
     }
 
     /// Replies when a line of a terminal pane's text matches `pattern`, or with an error at the
@@ -852,6 +900,9 @@ impl Workspace {
             "terminals": terminals,
             // The last text ⌘C copied.
             "copied": self.copied,
+            // Tasks as the Tasks section lists them, and how many need the user.
+            "inbox": self.inbox(),
+            "needs_you": self.model.tasks.needs_you(),
             // The Apps list: what can be hosted now. `icon`: its icon was read.
             "apps": self.apps.iter().map(|app| serde_json::json!({
                 "name": app.name, "windows": app.windows, "icon": self.icons.contains_key(&app.name),
@@ -1498,6 +1549,7 @@ impl Workspace {
         let body = match section {
             Section::Apps => self.render_apps(cx).into_any_element(),
             Section::Repos => self.render_repos(cx).into_any_element(),
+            Section::Tasks => self.render_tasks(cx).into_any_element(),
             _ => {
                 div().p_3().text_xs().text_color(rgb(theme::MUTED)).child("Designed, not built yet.").into_any_element()
             }
@@ -1544,6 +1596,37 @@ impl Workspace {
             Some(icon) => img(icon.clone()).size(side).flex_none().into_any_element(),
             None => div().size(side).flex_none().into_any_element(),
         }
+    }
+
+    /// The inbox: tasks under their group headings, most pressing first. A click brings the
+    /// task's tab forward.
+    fn render_tasks(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut rows: Vec<AnyElement> = Vec::new();
+        let mut heading = None;
+        for (group, task) in self.model.tasks.inbox() {
+            if heading != Some(group) {
+                heading = Some(group);
+                let color = if group == Group::NeedsYou { theme::SNEAK } else { theme::MUTED };
+                rows.push(div().px_2().pt_2().text_xs().text_color(rgb(color)).child(group.title()).into_any_element());
+            }
+            let id = task.id;
+            let urgent = if task.priority == 1 { theme::ERROR } else { theme::MUTED };
+            rows.push(
+                list_button(("task", id as usize))
+                    .child(div().flex_none().text_xs().text_color(rgb(urgent)).child(format!("P{}", task.priority)))
+                    .child(div().flex_1().min_w_0().truncate().child(task.title.clone()))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.dispatch(Action::TaskOpen { id: Some(id) }, window, cx);
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+            );
+        }
+        let empty = rows.is_empty().then(|| {
+            let hint = "No tasks. File one from a shell: ottospace ctl '{\"cmd\":\"task_add\",\"title\":\"...\"}'";
+            div().px_2().text_xs().text_color(rgb(theme::MUTED)).child(hint)
+        });
+        div().id("tasks").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll().children(empty).children(rows)
     }
 
     /// Repositories, each with its worktrees under it. A click opens a terminal there: it fills
@@ -1902,9 +1985,22 @@ impl Workspace {
             .child(div().px_2().rounded_sm().bg(rgb(color)).text_color(rgb(theme::BACKGROUND)).child(mode))
             .child(focused)
             .child(hint)
+            // Pushes what follows to the right. An auto margin there closed the gaps on the left.
+            .child(div().flex_1())
+            // The one thing tasks put here: how many wait for the user.
+            .children(Some(self.model.tasks.needs_you()).filter(|n| *n > 0).map(|n| {
+                let label = if n == 1 { "1 task needs you".to_string() } else { format!("{n} tasks need you") };
+                div().text_color(rgb(theme::SNEAK)).child(label)
+            }))
             // Shown here, not in the Apps list, so it is visible whichever section is open.
-            .children(self.error.clone().map(|e| div().ml_auto().text_color(rgb(theme::ERROR)).child(e)))
+            .children(self.error.clone().map(|e| div().text_color(rgb(theme::ERROR)).child(e)))
     }
+}
+
+/// The time now, in milliseconds since 1970. The core has no clock: actions carry this.
+fn now_ms() -> u64 {
+    let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    since.map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 /// A row of a secondary-bar list. A button at rest: its outline shows. Hover lifts it.

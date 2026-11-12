@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::layout::{Axis, Dir, Node};
 use crate::repos::{self, Repo};
+use crate::tasks::{State, TaskId, Tasks};
 
 pub type PaneId = u32;
 
@@ -205,6 +206,39 @@ pub enum Action {
         path: String,
         axis: Axis,
     },
+    /// File a task. `tab`: the `id` of the tab that is its workspace.
+    TaskAdd {
+        title: String,
+        priority: u8,
+        state: State,
+        tab: Option<u32>,
+    },
+    TaskSetState {
+        id: TaskId,
+        state: State,
+    },
+    /// Hide a task from the inbox until `until` (milliseconds since 1970).
+    TaskSnooze {
+        id: TaskId,
+        until: u64,
+    },
+    TaskHold {
+        id: TaskId,
+    },
+    /// Take a task out of the inbox. It goes on running.
+    TaskDismiss {
+        id: TaskId,
+    },
+    /// Take back the last snooze, hold or dismiss.
+    TaskUndo,
+    /// Bring a task's tab forward (default: the first task that needs the user, "pop next").
+    TaskOpen {
+        id: Option<TaskId>,
+    },
+    /// The time now, in milliseconds since 1970: snoozed tasks whose time has come return.
+    Tick {
+        now: u64,
+    },
 }
 
 /// What the shell must do after an update.
@@ -261,6 +295,7 @@ pub struct Model {
     pub sidebar: Option<Section>,
     /// The Repos section's list, as last read from disk.
     pub repos: Vec<Repo>,
+    pub tasks: Tasks,
     /// The pane picker, while it is open.
     pub picker: Option<Picker>,
     /// The key reference overlay is showing.
@@ -286,6 +321,7 @@ impl Default for Model {
             live: None,
             sidebar: None,
             repos: Vec::new(),
+            tasks: Tasks::default(),
             picker: None,
             keys: false,
             visual: None,
@@ -330,6 +366,7 @@ impl Model {
             action,
             Action::Split { .. }
                 | Action::OpenRepo { .. }
+                | Action::TaskOpen { .. }
                 | Action::Close { .. }
                 | Action::Focus { .. }
                 | Action::FocusDir { .. }
@@ -361,6 +398,20 @@ impl Model {
             }
             Action::Open { kind, axis, beside } => self.open(kind, axis, beside, &mut effects),
             Action::SetRepos { repos } => self.repos = repos::arrange(repos),
+            Action::TaskAdd { title, priority, state, tab } => drop(self.tasks.add(title, priority, state, tab)),
+            Action::TaskSetState { id, state } => self.tasks.set_state(id, state),
+            Action::TaskSnooze { id, until } => self.tasks.snooze(id, until),
+            Action::TaskHold { id } => self.tasks.hold(id),
+            Action::TaskDismiss { id } => self.tasks.dismiss(id),
+            Action::TaskUndo => self.tasks.undo(),
+            Action::Tick { now } => self.tasks.tick(now),
+            Action::TaskOpen { id } => {
+                let task = id.map_or_else(|| self.tasks.next(), |id| self.tasks.get(id));
+                let tab = task.and_then(|task| task.tab);
+                if let Some(index) = tab.and_then(|tab| self.tabs.iter().position(|t| t.id == tab)) {
+                    self.select_tab(index, &mut effects);
+                }
+            }
             Action::OpenRepo { path, axis } => {
                 // Only a listed path: the list is what the user sees and can choose from.
                 if let Some(name) = self.repo_name(&path) {
@@ -998,6 +1049,29 @@ mod tests {
         m.update(Action::FocusCycle { delta: -1 });
         assert_eq!(m.focused, Some(2));
         assert_eq!(Model::default().update(Action::FocusCycle { delta: 1 }), []);
+    }
+
+    #[test]
+    fn opening_a_task_brings_its_tab_forward() {
+        let mut m = Model::default();
+        term(&mut m);
+        m.update(Action::NewTab);
+        let (first, second) = (m.tabs[0].id, m.tabs[1].id);
+        m.update(Action::TaskAdd { title: "waits".into(), priority: 2, state: State::NeedsYou, tab: Some(first) });
+        m.update(Action::TaskAdd { title: "runs".into(), priority: 1, state: State::Running, tab: Some(second) });
+        m.update(Action::TaskAdd { title: "no tab".into(), priority: 1, state: State::Captured, tab: None });
+        // Pop next: the task that needs the user, not the more urgent one that is only running.
+        m.update(Action::TaskOpen { id: None });
+        assert_eq!(m.active, 0);
+        m.update(Action::TaskOpen { id: Some(2) });
+        assert_eq!(m.active, 1);
+        // No tab, a closed tab, or nothing that needs the user: the view stays.
+        m.update(Action::TaskOpen { id: Some(3) });
+        m.update(Action::CloseTab { index: Some(0) });
+        m.update(Action::TaskOpen { id: Some(1) });
+        m.update(Action::TaskSetState { id: 1, state: State::Running });
+        m.update(Action::TaskOpen { id: None });
+        assert_eq!((m.tabs.len(), m.tabs[m.active].id), (1, second));
     }
 
     fn listed() -> Vec<Repo> {
