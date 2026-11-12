@@ -100,6 +100,8 @@ ottospace ctl '{"cmd":"equalize"}'
 ottospace ctl '{"cmd":"swap","dir":"right"}'
 ottospace ctl '{"cmd":"move_pane","tab":1}'
 ottospace ctl '{"cmd":"move_pane","pane":3,"tab":0}'
+ottospace ctl '{"cmd":"drop_pane","source":3,"target":1,"zone":"left"}'
+ottospace ctl '{"cmd":"drop_pane","source":3,"target":1,"zone":"center"}'
 ```
 
 - `resize` moves one border of the focused pane 5% of its split toward `dir`: the pane's right
@@ -113,6 +115,10 @@ ottospace ctl '{"cmd":"move_pane","pane":3,"tab":0}'
   the tabs of `state.current_task` only, so with no task open it equals the index in
   `state.tabs`. A tab left with no panes stays, empty. `$OTTOSPACE_TAB` in a moved terminal
   still names the tab its shell started in.
+- `drop_pane` does what dragging pane `source` by its header onto pane `target` does. `zone` is
+  `left`, `right`, `top` or `bottom`: `target` is split in two and `source` takes that side. Or
+  `center`: the two trade places. The panes may be in different tabs. `source` takes focus and
+  its tab comes forward. It fails if either pane does not exist or they are the same pane.
 
 Terminals:
 

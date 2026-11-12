@@ -13,7 +13,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::{fs, thread};
 
 use ottospace_core::tasks::{State, TaskId};
-use ottospace_core::{Axis, Dir, PaneId, Section};
+use ottospace_core::{Axis, Dir, PaneId, Section, Zone};
 use serde::Deserialize;
 
 /// e.g. `{"cmd":"split","axis":"down"}`, `{"cmd":"type","text":"ls\r"}`, `{"cmd":"state"}`.
@@ -63,6 +63,13 @@ pub enum Request {
     },
     /// Evens out the splits of the active tab.
     Equalize,
+    /// Drops pane `source` on pane `target`, as a mouse drag does. `zone`: `left`, `right`, `top`
+    /// or `bottom` splits `target` and puts `source` on that side; `center` swaps the two.
+    DropPane {
+        source: PaneId,
+        target: PaneId,
+        zone: Zone,
+    },
     OpenApp {
         name: String,
         #[serde(default)]

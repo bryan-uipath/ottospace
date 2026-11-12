@@ -205,6 +205,47 @@ fn panes_resize_swap_and_change_tab_from_the_keyboard() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn a_dropped_pane_splits_or_swaps_where_it_lands() {
+    let otto = Otto::launch("drop");
+    // 1 | 2 | 3
+    for _ in 0..3 {
+        otto.call(json!({"cmd": "split", "kind": "empty"}));
+    }
+    let wide = otto.bounds(&[1])[0];
+
+    // 3 on the top of 1: 3 is drawn over 1, in 1's old column, and has focus.
+    let reply = otto.call(json!({"cmd": "drop_pane", "source": 3, "target": 1, "zone": "top"}));
+    assert_eq!((reply["tab_panes"].clone(), reply["state"]["focused"].as_u64()), (json!([[3, 1, 2]]), Some(3)));
+    let [one, three] = otto.wait_for("3 over 1", |o| {
+        let b = o.bounds(&[1, 3]);
+        (b[1][1] + b[1][3] <= b[0][1]).then_some([b[0], b[1]])
+    });
+    assert_eq!((one[0], three[0]), (wide[0], wide[0]), "both in the left column: {one:?} {three:?}");
+
+    // The centre swaps: 2 takes 3's place at the top left.
+    let reply = otto.call(json!({"cmd": "drop_pane", "source": 2, "target": 3, "zone": "center"}));
+    assert_eq!((reply["tab_panes"].clone(), reply["state"]["focused"].as_u64()), (json!([[2, 1, 3]]), Some(2)));
+    otto.wait_for("2 at the top left", |o| Some(o.bounds(&[2])[0]).filter(|b| b[0] == three[0] && b[1] == three[1]));
+
+    // A pane of a background tab lands in the tab on show.
+    otto.call(json!({"cmd": "new_tab"}));
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    let reply = otto.call(json!({"cmd": "drop_pane", "source": 1, "target": 4, "zone": "left"}));
+    assert_eq!(reply["tab_panes"], json!([[2, 3], [1, 4]]));
+    let [one, four] = otto.bounds(&[1, 4])[..] else { panic!("two panes") };
+    assert!(one[0] + one[2] <= four[0], "1 is left of 4: {one:?} {four:?}");
+
+    for bad in [
+        r#"{"cmd":"drop_pane","source":1,"target":1,"zone":"left"}"#,
+        r#"{"cmd":"drop_pane","source":1,"target":9,"zone":"left"}"#,
+        r#"{"cmd":"drop_pane","source":1,"target":4,"zone":"middle"}"#,
+    ] {
+        assert_eq!(otto.raw(bad)["ok"], false, "{bad}");
+    }
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn terminal_runs_a_typed_command() {
     let otto = Otto::launch("terminal");
     let reply = otto.call(json!({"cmd": "split"}));

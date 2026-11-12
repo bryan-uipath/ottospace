@@ -30,7 +30,7 @@ use ottospace_core::settings::{Installed, closed_apps};
 use ottospace_core::tasks::{Group, MAX_TITLE, Task, TaskId};
 use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, scroll_key, select_kind, visual_key};
 use ottospace_core::{
-    Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Pane, PaneId, PickItem, Picker, Rect, Section, theme,
+    Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Pane, PaneId, PickItem, Picker, Rect, Section, Zone, theme,
     titlebar::{self, TitleBar},
 };
 use ottospace_mac::{ax, capture, display, hotkey, icon, input, recovery};
@@ -287,6 +287,11 @@ const KEYS_ARRANGE: &[(&str, &str)] = &[
     ("⌘⇧⌥ arrows / H J K L", "Swap with the pane that way"),
     ("⌘⇧⌥1 … ⌘⇧⌥9", "Move the pane to a tab (US layout)"),
 ];
+const KEYS_DRAG: &[(&str, &str)] = &[
+    ("Drag a pane's header", "Onto a pane's edge: split there"),
+    ("", "Onto its centre: swap the two"),
+    ("", "Onto a tab: move it there · Esc cancels"),
+];
 const KEYS_TABS: &[(&str, &str)] = &[
     ("⌘T", "New tab: pick what opens in it"),
     ("⌘1 … ⌘9", "Go to a tab"),
@@ -359,6 +364,33 @@ impl Render for Tooltip {
     }
 }
 
+/// A pane on its way to another place: the value a drag of its header carries.
+struct DraggedPane(PaneId);
+
+/// What follows the pointer during a pane drag: the pane's label. `offset`: where in the header
+/// the drag began, as GPUI draws the view that far up and left of the pointer.
+struct DragChip {
+    label: SharedString,
+    offset: gpui::Point<Pixels>,
+}
+
+impl Render for DragChip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().pl(self.offset.x + px(8.)).pt(self.offset.y + px(8.)).child(
+            div()
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .bg(rgb(theme::RAISED))
+                .border_1()
+                .border_color(rgb(theme::PRIMARY))
+                .text_xs()
+                .text_color(rgb(theme::TEXT))
+                .child(self.label.clone()),
+        )
+    }
+}
+
 actions!(
     ottospace,
     [
@@ -383,6 +415,11 @@ struct Workspace {
     cell: Size<Pixels>,
     /// The terminal pane a mouse drag is selecting in.
     dragging: Option<PaneId>,
+    /// During a pane drag: the pane under the pointer and the zone of it a drop would land on.
+    drop_at: Option<(PaneId, Zone)>,
+    /// The app pane that was live when a pane drag began. It was parked so its window does not
+    /// cover the drop zones; it goes live again when the drag ends.
+    relive: Option<PaneId>,
     /// The last text copied. E2E runs use it as the clipboard, so tests never touch the user's.
     copied: Option<String>,
     system_clipboard: bool,
@@ -567,6 +604,8 @@ impl Workspace {
             terminals: HashMap::new(),
             cell: terminal::cell_size(window),
             dragging: None,
+            drop_at: None,
+            relive: None,
             copied: None,
             system_clipboard: std::env::var_os("OTTOSPACE_E2E").is_none(),
             cells: HashMap::new(),
@@ -766,6 +805,17 @@ impl Workspace {
                 }
                 Request::MovePane { pane, tab } => Some(Action::MovePane { pane, tab }),
                 Request::Equalize => Some(Action::Equalize),
+                Request::DropPane { source, target, .. } if source == target => {
+                    failure = Some("a pane cannot be dropped on itself".into());
+                    None
+                }
+                Request::DropPane { source, target, .. }
+                    if self.model.pane(source).is_none() || self.model.pane(target).is_none() =>
+                {
+                    failure = Some(format!("no pane {source} or no pane {target}"));
+                    None
+                }
+                Request::DropPane { source, target, zone } => Some(Action::DropPane { source, target, zone }),
                 Request::Enter { pane } => Some(Action::Enter { pane }),
                 Request::Leave => Some(Action::Leave),
                 Request::Section { section } => Some(Action::ToggleSection { section }),
@@ -1460,6 +1510,13 @@ impl Workspace {
             cx.stop_propagation();
             return;
         }
+        // Esc during a pane drag cancels it.
+        if key.key == "escape" && cx.has_active_drag() {
+            cx.stop_active_drag(window);
+            self.pane_drag_end(window, cx);
+            cx.stop_propagation();
+            return;
+        }
         // ⌘⇧⌥1..9 move the focused pane to a tab. GPUI gives no physical key, so the shifted
         // characters are trusted on a US layout only (see `move_to_tab_key`).
         let m = key.modifiers;
@@ -1545,6 +1602,38 @@ impl Workspace {
             terminal.select_to(at);
             cx.notify();
         }
+    }
+
+    /// A pane drag moved: note the drop zone under the pointer, to draw it and to drop there.
+    fn pane_drag_move(&mut self, source: PaneId, at: gpui::Point<Pixels>, window: &Window, cx: &mut Context<Self>) {
+        // A live window would cover its pane's drop zones: park it for the length of the drag.
+        if let Some(live) = self.model.live {
+            self.relive = Some(live);
+            self.dispatch(Action::Leave, window, cx);
+        }
+        let drop_at = self.drop_zone(source, at);
+        if drop_at != self.drop_at {
+            self.drop_at = drop_at;
+            cx.notify();
+        }
+    }
+
+    /// The drawn pane under `at`, other than the dragged one, and the zone of it `at` is in.
+    fn drop_zone(&self, source: PaneId, at: gpui::Point<Pixels>) -> Option<(PaneId, Zone)> {
+        let drawn = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
+        let under = |id: &PaneId| Some((*id, self.frames.get(id)?.get())).filter(|(_, b)| b.contains(&at));
+        let (id, bounds) = drawn.iter().filter(|id| **id != source).find_map(under)?;
+        let local = at - bounds.origin;
+        Some((id, Zone::at(local.x / bounds.size.width, local.y / bounds.size.height)))
+    }
+
+    /// A pane drag ended, by a drop, a release elsewhere or Esc: the pane parked for it goes live again.
+    fn pane_drag_end(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.drop_at = None;
+        if let Some(pane) = self.relive.take() {
+            self.dispatch(Action::Enter { pane }, window, cx);
+        }
+        cx.notify();
     }
 
     /// The terminal cell under a window position, from the same bounds the grid is painted in.
@@ -1765,7 +1854,8 @@ impl Workspace {
                     .gap_4()
                     .child(group("PANES", rows(KEYS_PANES)))
                     .child(group("MOVE", rows(KEYS_MOVE)))
-                    .child(group("ARRANGE", rows(KEYS_ARRANGE))),
+                    .child(group("ARRANGE", rows(KEYS_ARRANGE)))
+                    .child(group("MOUSE", rows(KEYS_DRAG))),
             )
             .child(div().flex().flex_col().gap_4().child(group("TABS", rows(KEYS_TABS))).child(group(
                 "WINDOW",
@@ -2336,7 +2426,11 @@ impl Workspace {
             Kind::App { title, .. } => ("APP", theme::APP, title.clone()),
         };
         // flex_none: a short pane must not squeeze the header, or a raised bar would overlap the pane above.
+        let label: SharedString = if title.is_empty() { tag.into() } else { format!("{tag} {title}").into() };
+        // The header is the pane's handle: a drag of it carries the pane to a drop zone or a tab.
         let header = div()
+            .id(("header", id))
+            .on_drag(DraggedPane(id), move |_, offset, _, cx| cx.new(|_| DragChip { label: label.clone(), offset }))
             .flex_none()
             .h(px(titlebar::header(bar, PANE_HEADER)))
             .px_2()
@@ -2460,6 +2554,24 @@ impl Workspace {
             )
             .child(header)
             .child(body)
+            .on_drop(cx.listener(move |this, dragged: &DraggedPane, window, cx| {
+                let zone = this.drop_zone(dragged.0, window.mouse_position()).filter(|(target, _)| *target == id);
+                if let Some((target, zone)) = zone {
+                    this.dispatch(Action::DropPane { source: dragged.0, target, zone }, window, cx);
+                }
+                this.pane_drag_end(window, cx);
+            }))
+            // The drop indicator: the half an edge drop would take, or the whole pane for a swap.
+            .children(self.drop_at.filter(|(target, _)| *target == id && cx.has_active_drag()).map(|(_, zone)| {
+                let mark = div().absolute().bg(rgb(theme::PRIMARY)).opacity(0.25);
+                match zone {
+                    Zone::Left => mark.top_0().left_0().h_full().w(relative(0.5)),
+                    Zone::Right => mark.top_0().right_0().h_full().w(relative(0.5)),
+                    Zone::Top => mark.top_0().left_0().w_full().h(relative(0.5)),
+                    Zone::Bottom => mark.bottom_0().left_0().w_full().h(relative(0.5)),
+                    Zone::Center => mark.top_0().left_0().size_full(),
+                }
+            }))
     }
 
     /// Leaves render as panes; splits as a row (`Right`) or column (`Down`), `a` taking `ratio` of it.
@@ -2546,10 +2658,17 @@ impl Workspace {
                     .visible_tabs()
                     .into_iter()
                     .filter_map(|index| Some((index, self.model.tabs.get(index)?)))
-                    .map(|(index, tab)| {
+                    .enumerate()
+                    .map(|(place, (index, tab))| {
                         let (active, id) = (index == self.model.active, tab.id);
                         div()
                             .id(("tab", tab.id))
+                            // A pane dropped on a tab moves there.
+                            .drag_over::<DraggedPane>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
+                            .on_drop(cx.listener(move |this, dragged: &DraggedPane, window, cx| {
+                                this.dispatch(Action::MovePane { pane: Some(dragged.0), tab: place }, window, cx);
+                                this.pane_drag_end(window, cx);
+                            }))
                             .h_full()
                             .pl_3()
                             .pr_1()
@@ -2841,8 +2960,20 @@ impl Render for Workspace {
             .on_key_down(cx.listener(Self::key_down))
             // On the root, so a selection drag keeps going over other panes.
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| this.mouse_move(e, cx)))
+            .on_drag_move(cx.listener(|this, e: &gpui::DragMoveEvent<DraggedPane>, window, cx| {
+                this.pane_drag_move(e.drag(cx).0, e.event.position, window, cx);
+            }))
             // A release ends the drag, so a later drag elsewhere does not extend this selection.
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.dragging = None))
+            // A pane released over no pane and no tab goes nowhere.
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.dragging = None;
+                    if this.drop_at.is_some() || this.relive.is_some() {
+                        this.pane_drag_end(window, cx);
+                    }
+                }),
+            )
             // Any click leaves visual mode first, before the clicked element acts: visual mode has no
             // backdrop, and e.g. a click on an app pane must go live, not be replayed while blocked.
             .capture_any_mouse_down(cx.listener(|this, _, window, cx| {
