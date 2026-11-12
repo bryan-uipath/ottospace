@@ -10,7 +10,9 @@ use crate::layout::{Axis, Dir, Node, Rect, Zone};
 use crate::list::ListRow;
 use crate::repos::{self, Repo};
 use crate::sneak::{Sneak, Typed};
-use crate::tasks::{Assign, MAX_TITLE, State, Task, TaskId, Tasks};
+use crate::tasks::{
+    self, Assign, Heading, MAX_TITLE, Moved, NOTICE_MS, Notice, State, Task, TaskId, TaskRow, TaskSection, Tasks,
+};
 
 pub type PaneId = u32;
 
@@ -344,6 +346,19 @@ pub enum Action {
     },
     /// Take back the last snooze, hold or dismiss.
     TaskUndo,
+    /// Snooze, hold or dismiss a task with the buttons on its row (the mouse). As `TaskSnooze`
+    /// and the others; the Tasks section then offers to take it back for a few seconds
+    /// (`Model::notice`), counted from the last `Tick`.
+    RowSnooze {
+        id: TaskId,
+        until: u64,
+    },
+    RowHold {
+        id: TaskId,
+    },
+    RowDismiss {
+        id: TaskId,
+    },
     /// Show a task's tabs (default: the first task that needs the user, "pop next"). A task
     /// opened for the first time gets a tab: a terminal in its repository, named after it, or
     /// an empty tab named after the task.
@@ -356,7 +371,8 @@ pub enum Action {
     SelectVisibleTab {
         index: usize,
     },
-    /// The time now, in milliseconds since 1970: snoozed tasks whose time has come return.
+    /// The time now, in milliseconds since 1970: snoozed tasks whose time has come return, and
+    /// a notice whose time is up goes.
     Tick {
         now: u64,
     },
@@ -371,13 +387,21 @@ pub enum Action {
     /// Finish the tag being typed with the first suggestion.
     ComposeComplete,
     /// File the line as a task and close the box. A line with no title files nothing.
-    ComposeSubmit,
+    /// `open`: show the new task's tabs at once ("add and start").
+    ComposeSubmit {
+        open: bool,
+    },
     CloseCompose,
     /// File a task from one line, as the box does: `fix zoom flicker #canvas >app @claude p1`.
     /// `known`: what the shell read for this line. The new-task box's own is left alone.
     TaskFromLine {
         line: String,
         known: compose::Known,
+        open: bool,
+    },
+    /// Collapse or expand a heading of the Tasks section.
+    ToggleGroup {
+        heading: Heading,
     },
     /// Replace the Apps list with the apps the shell can host now.
     SetApps {
@@ -519,7 +543,11 @@ impl Action {
             | Action::ComposeType { .. }
             | Action::ComposeBackspace
             | Action::ComposeComplete
-            | Action::ComposeSubmit
+            | Action::ComposeSubmit { .. }
+            | Action::ToggleGroup { .. }
+            | Action::RowSnooze { .. }
+            | Action::RowHold { .. }
+            | Action::RowDismiss { .. }
             | Action::CloseCompose
             | Action::TaskFromLine { .. }
             | Action::SetApps { .. }
@@ -550,6 +578,16 @@ impl From<Action> for Envelope {
     fn from(action: Action) -> Self {
         action.sent_by(Origin::User)
     }
+}
+
+/// Where a listed task goes in the Tasks section.
+struct TaskPlace<'a> {
+    heading: Heading,
+    group: tasks::Group,
+    task: &'a Task,
+    /// Tabs and panes it has open.
+    tabs: usize,
+    panes: usize,
 }
 
 /// What the shell must do after an update.
@@ -635,6 +673,15 @@ pub struct Model {
     /// The line `known`'s paths were read for.
     #[serde(skip)]
     known_line: Option<String>,
+    /// Headings of the Tasks section that are collapsed. Not kept between runs.
+    pub collapsed: Vec<Heading>,
+    /// The offer to take back a snooze, hold or dismiss made with the mouse, while it shows.
+    /// In the snapshot it is `tasks_bar.undo`: `notice` there is the status bar's.
+    #[serde(skip)]
+    pub undo_offer: Option<Notice>,
+    /// The time of the last `Tick`: when a task filed now was filed. 0: never told.
+    #[serde(skip)]
+    now: u64,
     /// The pane picker, while it is open.
     pub picker: Option<Picker>,
     /// The quit question, while it is up.
@@ -671,6 +718,9 @@ impl Default for Model {
             tasks: Tasks::default(),
             known: compose::Known::default(),
             known_line: None,
+            collapsed: Vec::new(),
+            undo_offer: None,
+            now: 0,
             picker: None,
             confirm: None,
             keys: false,
@@ -727,6 +777,13 @@ impl Model {
         self.pane(id).filter(|p| p.kind == Kind::Terminal).map(|p| p.id)
     }
 
+    /// The new-task box, the picker, the key reference, visual mode, sneak mode or the quit
+    /// question has the keyboard.
+    fn holds_keyboard(&self) -> bool {
+        let boxed = self.compose.is_some() || self.picker.is_some() || self.keys;
+        boxed || self.visual.is_some() || self.sneak.is_some() || self.confirm.is_some()
+    }
+
     /// Why an action does nothing because of who sent it. Only the user may take the keyboard
     /// from under sneak mode's labels or the quit question, or close the picker by opening the
     /// key reference.
@@ -765,6 +822,15 @@ impl Model {
         if self.refusal(&action, origin).is_some() {
             return effects;
         }
+        // "Add and start" from anyone but the user adds the task and leaves the tabs on show
+        // alone while a box or a mode holds the keyboard: the view must not change under what
+        // the user is doing. Not a refusal: the task is filed all the same.
+        let action = match action {
+            Action::TaskFromLine { line, known, open: true } if !user && self.holds_keyboard() => {
+                Action::TaskFromLine { line, known, open: false }
+            }
+            action => action,
+        };
         // The picker has the keyboard. Pane and bar actions wait until it closes, so a
         // shortcut cannot change what is behind it (e.g. ⌘W closing the pane it splits).
         let for_panes = matches!(
@@ -872,7 +938,21 @@ impl Model {
                 | Action::FocusList
         );
         let selected = self.list.and_then(|at| self.list_rows().into_iter().nth(at)).filter(|_| !own_move);
+        // The notice offers back one move. Another move, by key or socket, is not the one it names.
+        let moves = matches!(
+            action,
+            Action::TaskSnooze { .. }
+                | Action::TaskHold { .. }
+                | Action::TaskDismiss { .. }
+                | Action::ListSnooze { .. }
+                | Action::ListHold
+                | Action::ListDismiss
+        );
         self.act(action, &mut effects);
+        // Nor is there one to offer once it is taken back, or an agent's report made it stale.
+        if moves || !self.tasks.can_undo() {
+            self.undo_offer = None;
+        }
         let rows = self.list_rows();
         let followed = selected.and_then(|row| rows.iter().position(|r| *r == row));
         // Its row is gone, or the move was the user's: stay at the same place, on a row.
@@ -901,7 +981,7 @@ impl Model {
             Action::SetRepos { repos } => self.repos = repos::arrange(repos),
             Action::RestoreTasks { tasks, floor } => self.tasks.restore(tasks, floor),
             Action::TaskAdd { title, priority, state, tab, assign } => {
-                let id = self.tasks.add(title, priority, state);
+                let id = self.file(title, priority, state);
                 self.tasks.assign(id, assign);
                 // The tab named becomes the task's, unless another task has it: an agent that
                 // files a follow-up from a task's tab must not take the tab away. If it is the one
@@ -928,7 +1008,14 @@ impl Model {
             Action::TaskHold { id } => self.tasks.hold(id),
             Action::TaskDismiss { id } => self.tasks.dismiss(id),
             Action::TaskUndo => self.tasks.undo(),
-            Action::Tick { now } => self.tasks.tick(now),
+            Action::RowSnooze { id, until } => self.row_move(id, Moved::Snoozed, |tasks| tasks.snooze(id, until)),
+            Action::RowHold { id } => self.row_move(id, Moved::Held, |tasks| tasks.hold(id)),
+            Action::RowDismiss { id } => self.row_move(id, Moved::Dismissed, |tasks| tasks.dismiss(id)),
+            Action::Tick { now } => {
+                self.now = now;
+                self.tasks.tick(now);
+                self.undo_offer = self.undo_offer.filter(|offer| offer.until > now);
+            }
             Action::TaskOpen { id } => {
                 let task = id.map_or_else(|| self.tasks.next(), |id| self.tasks.get(id));
                 if let Some((id, title, repo)) = task.map(|t| (t.id, t.title.clone(), t.repo.clone())) {
@@ -1100,7 +1187,7 @@ impl Model {
             Action::ToggleSection { section } => {
                 self.leave(effects);
                 self.sidebar = (self.sidebar != Some(section)).then_some(section);
-                self.list = self.list.map(|_| 0);
+                self.list = self.list.map(|_| self.first_row());
             }
             Action::OpenCompose { text } => {
                 self.leave(effects);
@@ -1125,20 +1212,33 @@ impl Model {
                     self.compose = Some(compose::complete(line, first));
                 }
             }
-            Action::ComposeSubmit => {
+            Action::ComposeSubmit { open } => {
                 let line = self.compose.clone().unwrap_or_default();
-                if self.file_line(&line, None) {
+                if let Some(id) = self.file_line(&line, None) {
                     self.compose = None;
+                    self.start(id, open, effects);
                 }
             }
             Action::CloseCompose => self.compose = None,
-            Action::TaskFromLine { line, known } => drop(self.file_line(&line, Some(known))),
+            Action::TaskFromLine { line, known, open } => {
+                if let Some(id) = self.file_line(&line, Some(known)) {
+                    self.start(id, open, effects);
+                }
+            }
+            Action::ToggleGroup { heading } => {
+                let open = !self.collapsed.contains(&heading);
+                self.collapsed.retain(|h| *h != heading);
+                if open {
+                    self.collapsed.push(heading);
+                }
+            }
             Action::SetApps { names } => self.apps = names,
             Action::FocusList if self.list.is_some() => self.list = None,
             Action::FocusList => {
                 self.leave(effects);
                 self.sidebar = self.sidebar.or(Some(Section::Repos));
                 self.list = Some(0);
+                self.list = Some(self.first_row());
             }
             Action::LeaveList => {}
             Action::ListMove { delta } => {
@@ -1153,7 +1253,7 @@ impl Model {
                 let at = ORDER.iter().position(|s| Some(*s) == self.sidebar).unwrap_or(0) as i32;
                 if self.list.is_some() {
                     self.sidebar = Some(ORDER[(at + delta).rem_euclid(ORDER.len() as i32) as usize]);
-                    self.list = Some(0);
+                    self.list = Some(self.first_row());
                 }
             }
             Action::ListChoose { axis } => match self.list.and_then(|at| self.list_rows().into_iter().nth(at)) {
@@ -1164,6 +1264,8 @@ impl Model {
                     self.list = None;
                     self.act(Action::TaskOpen { id: Some(id) }, effects);
                 }
+                // The selection stays on the heading: the same key unfolds it again.
+                Some(ListRow::Heading(heading)) => self.act(Action::ToggleGroup { heading }, effects),
                 None => {}
             },
             Action::ListSnooze { until } => {
@@ -1347,22 +1449,106 @@ impl Model {
         tags.into_iter().flatten().collect::<Vec<_>>().join(" · ")
     }
 
-    /// Files `line` as a captured task. False if it has no title, or one too long to keep:
+    /// Files `line` as a captured task. `None` if it has no title, or one too long to keep:
     /// nothing is filed.
-    fn file_line(&mut self, line: &str, known: Option<compose::Known>) -> bool {
+    fn file_line(&mut self, line: &str, known: Option<compose::Known>) -> Option<TaskId> {
         let draft = match &known {
             Some(known) => self.draft_knowing(line, known),
             None => self.draft(line),
         };
         if draft.title.is_empty() || draft.title.chars().count() > MAX_TITLE {
-            return false;
+            return None;
         }
         let path = draft.repo.as_deref().and_then(|name| self.repo_named(name));
-        let id = self.tasks.add(draft.title, draft.priority.unwrap_or(3), State::Captured);
+        let id = self.file(draft.title, draft.priority.unwrap_or(3), State::Captured);
         self.tasks.tag(id, draft.project, path);
         let Draft { agent, paths, resolved, skills, .. } = draft;
         self.tasks.assign(id, Assign { agent, paths, resolved, skills });
-        true
+        Some(id)
+    }
+
+    /// True if a `Tick` now would change what shows: a snoozed task's time has come, or the
+    /// offer to undo has run out. The shell asks; it does not look at the times itself.
+    pub fn due(&self, now: u64) -> bool {
+        self.tasks.due(now) || self.undo_offer.is_some_and(|offer| offer.until <= now)
+    }
+
+    /// The row list mode starts on: the first that is not a heading.
+    fn first_row(&self) -> usize {
+        self.list_rows().iter().position(|row| !matches!(row, ListRow::Heading(_))).unwrap_or(0)
+    }
+
+    /// A move made with the mouse: if it changed the task, a notice offers to take it back.
+    fn row_move(&mut self, id: TaskId, moved: Moved, change: impl FnOnce(&mut Tasks)) {
+        let before = self.tasks.get(id).cloned();
+        change(&mut self.tasks);
+        if before.is_some() && self.tasks.get(id) != before.as_ref() {
+            self.undo_offer = Some(Notice { moved, until: self.now.saturating_add(NOTICE_MS) });
+        }
+    }
+
+    /// Adds a task, filed at the time of the last `Tick`, if there was one.
+    fn file(&mut self, title: String, priority: u8, state: State) -> TaskId {
+        let id = self.tasks.add(title, priority, state);
+        if self.now > 0 {
+            self.tasks.stamp(id, self.now);
+        }
+        id
+    }
+
+    /// "Add and start": shows a task just filed, and the list gives up the keyboard.
+    fn start(&mut self, id: TaskId, open: bool, effects: &mut Vec<Effect>) {
+        if open {
+            self.list = None;
+            self.act(Action::TaskOpen { id: Some(id) }, effects);
+        }
+    }
+
+    /// Where each listed task goes in the Tasks section, in the order drawn: under which heading,
+    /// with what open. No text is made here: `list_rows` asks for the order alone.
+    fn task_places(&self) -> Vec<TaskPlace<'_>> {
+        let panes = self.tab_panes();
+        let mut places: Vec<TaskPlace> = Vec::new();
+        for (group, task) in self.tasks.inbox() {
+            let mine = || self.tabs.iter().zip(&panes).filter(|(tab, _)| tab.task == Some(task.id));
+            let (tabs, panes) = (mine().count(), mine().map(|(_, panes)| panes.len()).sum());
+            // What needs the user stays under Needs you, and what is finished under Done, open or not.
+            let own = matches!(group, tasks::Group::NeedsYou | tasks::Group::Done);
+            let heading = if tabs > 0 && !own { Heading::Open } else { group.into() };
+            places.push(TaskPlace { heading, group, task, tabs, panes });
+        }
+        // Under every heading, Open too: most urgent first, then oldest first.
+        places.sort_by_key(|place| (place.heading, place.task.priority, place.task.id));
+        places
+    }
+
+    /// The Tasks section as drawn: what needs the user first, then the other tasks with tabs
+    /// open under "Open", then the rest of the inbox under its groups. A task is listed once: one
+    /// that is open and needs the user is under "Needs you", and a finished one under "Done".
+    /// No empty headings.
+    pub fn task_sections(&self, now: u64) -> Vec<TaskSection> {
+        let mut sections: Vec<TaskSection> = Vec::new();
+        for TaskPlace { heading, group, task, tabs, panes } in self.task_places() {
+            if sections.last().is_none_or(|s| s.heading != heading) {
+                let collapsed = self.collapsed.contains(&heading);
+                sections.push(TaskSection { heading, count: 0, collapsed, rows: Vec::new() });
+            }
+            let Some(section) = sections.last_mut() else { continue };
+            section.count += 1;
+            if section.collapsed {
+                continue;
+            }
+            let open = (tabs > 0).then(|| {
+                let plural = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
+                format!("{}, {}", plural(tabs, "tab"), plural(panes, "pane"))
+            });
+            let tags = Some(self.task_tags(task)).filter(|tags| !tags.is_empty());
+            let age = task.created.map(|created| tasks::age(created, now));
+            let detail = [tags, open, age].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+            let current = self.current_task == Some(task.id);
+            section.rows.push(TaskRow { id: task.id, group, tabs, panes, current, detail });
+        }
+        sections
     }
 
     /// Every listed repository and worktree, as (name, path).
@@ -1403,7 +1589,20 @@ impl Model {
                     .flat_map(|r| std::iter::once(r.path.clone()).chain(r.worktrees.iter().map(|w| w.path.clone())));
                 paths.map(ListRow::Repo).collect()
             }
-            Some(Section::Tasks) => self.tasks.inbox().into_iter().map(|(_, task)| ListRow::Task(task.id)).collect(),
+            // As drawn: each heading, then its rows unless it is folded. A heading is a row, so
+            // a section that is all folded can be unfolded from the keyboard.
+            Some(Section::Tasks) => {
+                let mut rows: Vec<ListRow> = Vec::new();
+                for place in self.task_places() {
+                    if rows.iter().all(|row| *row != ListRow::Heading(place.heading)) {
+                        rows.push(ListRow::Heading(place.heading));
+                    }
+                    if !self.collapsed.contains(&place.heading) {
+                        rows.push(ListRow::Task(place.task.id));
+                    }
+                }
+                rows
+            }
             Some(Section::Workbook) | None => Vec::new(),
         }
     }
@@ -1972,6 +2171,9 @@ mod tests {
         Action::TaskHold { .. },
         Action::TaskDismiss { .. },
         Action::TaskUndo,
+        Action::RowSnooze { .. },
+        Action::RowHold { .. },
+        Action::RowDismiss { .. },
         Action::TaskOpen { .. },
         Action::TaskLeave,
         Action::SelectVisibleTab { .. },
@@ -1980,9 +2182,10 @@ mod tests {
         Action::ComposeType { .. },
         Action::ComposeBackspace,
         Action::ComposeComplete,
-        Action::ComposeSubmit,
+        Action::ComposeSubmit { .. },
         Action::CloseCompose,
         Action::TaskFromLine { .. },
+        Action::ToggleGroup { .. },
         Action::SetApps { .. },
         Action::FocusList,
         Action::LeaveList,
@@ -2058,9 +2261,13 @@ mod tests {
             Action::ComposeType { text: text() },
             Action::ComposeBackspace,
             Action::ComposeComplete,
-            Action::ComposeSubmit,
+            Action::ComposeSubmit { open: false },
             Action::CloseCompose,
-            Action::TaskFromLine { line: text(), known: Default::default() },
+            Action::ToggleGroup { heading: Heading::Done },
+            Action::RowSnooze { id: 1, until: 0 },
+            Action::RowHold { id: 1 },
+            Action::RowDismiss { id: 1 },
+            Action::TaskFromLine { line: text(), known: Default::default(), open: false },
             Action::SetApps { names: Vec::new() },
             Action::FocusList,
             Action::LeaveList,
@@ -2537,10 +2744,12 @@ mod tests {
         m.update(Action::TaskFromLine {
             line: "fix the zoom flicker on the canvas when zooming #canvas >app-2".into(),
             known: Default::default(),
+            open: false,
         });
         m.update(Action::TaskFromLine {
             line: "ask Ana about the retry plan before Friday".into(),
             known: Default::default(),
+            open: false,
         });
         assert_eq!((m.current_task, tab_titles(&m)), (None, vec!["Tab 1"]));
 
@@ -2685,7 +2894,7 @@ mod tests {
         m.update(Action::NewTab);
         let second = m.tabs[1].id;
         m.update(Action::SelectTab { index: 0 });
-        for (title, tab) in [("a", None), ("b", Some(second)), ("c", None)] {
+        for (title, tab) in [("a", Some(second)), ("b", None), ("c", None)] {
             m.update(Action::TaskAdd {
                 title: title.into(),
                 priority: 1,
@@ -2696,19 +2905,28 @@ mod tests {
         }
         m.update(Action::ToggleSection { section: Section::Tasks });
         m.update(Action::FocusList);
-        // Dismiss the first: the selection stays at the top, now on the next task.
-        m.update(Action::ListDismiss);
-        assert_eq!((m.list_rows(), m.list), (vec![ListRow::Task(2), ListRow::Task(3)], Some(0)));
-        // Hold the last: it stays listed (On hold); snooze it: one row left, and the selection moves up to it.
+        let (heading, task) = (ListRow::Heading, ListRow::Task);
+        // The headings are rows too; the selection starts on the first task. "a" has a tab, and
+        // stays under Needs you with the others.
+        assert_eq!((m.list_rows(), m.list), (vec![heading(Heading::NeedsYou), task(1), task(2), task(3)], Some(1)));
+        // Dismiss the second task: the selection stays at its place, now on the next task.
         m.update(Action::ListMove { delta: 1 });
+        m.update(Action::ListDismiss);
+        assert_eq!((m.list_rows(), m.list), (vec![heading(Heading::NeedsYou), task(1), task(3)], Some(2)));
+        // Hold it: it goes under On hold, and the heading that came is under the selection. The
+        // task keys do nothing on a heading.
         m.update(Action::ListHold);
+        let held = vec![heading(Heading::NeedsYou), task(1), heading(Heading::OnHold), task(3)];
+        assert_eq!((m.list_rows(), m.list), (held.clone(), Some(2)));
         m.update(Action::ListSnooze { until: 9 });
-        assert_eq!((m.list_rows(), m.list), (vec![ListRow::Task(2)], Some(0)));
+        assert_eq!(m.list_rows(), held);
+        // Snooze it: gone with its heading, and the selection moves up to a row that is there.
+        m.update(Action::ListMove { delta: 1 });
+        m.update(Action::ListSnooze { until: 9 });
+        assert_eq!((m.list_rows(), m.list), (vec![heading(Heading::NeedsYou), task(1)], Some(1)));
         m.update(Action::TaskUndo);
         assert_eq!(m.tasks.get(3).map(|t| (t.state, t.snoozed_until)), Some((State::Parked, None)));
         // Opening a task brings its tab forward and gives the keyboard back.
-        m.update(Action::ListMove { delta: -1 });
-        m.update(Action::ListMove { delta: 1 });
         m.update(Action::ListChoose { axis: Right });
         assert_eq!((m.active, m.mode()), (1, Mode::Normal));
     }
@@ -2736,16 +2954,17 @@ mod tests {
             tab: None,
             assign: Assign::default(),
         });
-        assert_eq!((m.list, m.list_rows()[2].clone()), (Some(2), ListRow::Task(2)));
+        assert_eq!((m.list, m.list_rows()[3].clone()), (Some(3), ListRow::Task(2)));
         m.update(Action::TaskSetState { id: 1, state: State::Cleaned });
-        assert_eq!(m.list, Some(1));
+        assert_eq!(m.list, Some(2));
         // The user's own hold keeps the place: the next task (c) comes under the selection.
         m.update(Action::ListHold);
-        assert_eq!((m.list, m.list_rows()[1].clone()), (Some(1), ListRow::Task(3)));
+        assert_eq!((m.list, m.list_rows()[2].clone()), (Some(2), ListRow::Task(3)));
         // The selected task is taken away by someone else: the selection stays on a row.
         m.update(Action::TaskSetState { id: 3, state: State::Cleaned });
-        assert_eq!((m.list, m.list_rows().len()), (Some(1), 2));
+        assert_eq!((m.list, m.list_rows()[2].clone()), (Some(2), ListRow::Heading(Heading::OnHold)));
         // ↵ opens the task: its tabs are on the bar, and the keyboard goes back to the panes.
+        m.update(Action::ListMove { delta: 1 });
         m.update(Action::ListChoose { axis: Right });
         assert_eq!((m.mode(), m.current_task), (Mode::Normal, Some(2)));
     }
@@ -2795,7 +3014,7 @@ mod tests {
         m.update(Action::OpenPicker { axis: Right, new_tab: false, items: vec![PickItem::Terminal] });
         assert_eq!((m.panes.len(), m.mode()), (1, Mode::Compose));
         // ↵ on an empty line files nothing and keeps the box.
-        m.update(Action::ComposeSubmit);
+        m.update(Action::ComposeSubmit { open: false });
         assert_eq!((m.tasks.list.len(), m.mode()), (0, Mode::Compose));
         // Tab finishes the repository being typed; the name need not match in case.
         m.update(Action::ComposeType { text: "fix zoom #Canvas >AP".into() });
@@ -2804,7 +3023,7 @@ mod tests {
         m.update(Action::ComposeType { text: "p1x".into() });
         m.update(Action::ComposeBackspace);
         assert_eq!(m.compose.as_deref(), Some("fix zoom #Canvas >app p1"));
-        m.update(Action::ComposeSubmit);
+        m.update(Action::ComposeSubmit { open: false });
         let task = &m.tasks.list[0];
         assert_eq!((task.title.as_str(), task.state, task.priority), ("fix zoom", State::Captured, 1));
         assert_eq!(
@@ -2815,7 +3034,7 @@ mod tests {
         m.update(Action::OpenCompose { text: "look #c".into() });
         assert_eq!(m.compose_suggestions(), ["Canvas"]);
         m.update(Action::CloseCompose);
-        m.update(Action::TaskFromLine { line: "ask @ana about >app-2".into(), known: Default::default() });
+        m.update(Action::TaskFromLine { line: "ask @ana about >app-2".into(), known: Default::default(), open: false });
         assert_eq!(
             (m.tasks.list[1].title.as_str(), m.tasks.list[1].repo.as_deref()),
             ("ask @ana about", Some("/code/app-2"))
@@ -2825,7 +3044,7 @@ mod tests {
         m.update(Action::ComposeType { text: "yz".into() });
         assert_eq!(m.compose.as_ref().map(|line| line.chars().count()), Some(MAX_TITLE));
         m.update(Action::CloseCompose);
-        m.update(Action::TaskFromLine { line: "x".repeat(MAX_TITLE + 1), known: Default::default() });
+        m.update(Action::TaskFromLine { line: "x".repeat(MAX_TITLE + 1), known: Default::default(), open: false });
         assert_eq!(m.tasks.list.len(), 2);
         // The picker may open again over itself, but not over the box; a dead pane closes behind either.
         m.update(Action::OpenPicker { axis: Right, new_tab: false, items: vec![PickItem::Terminal] });
@@ -2884,7 +3103,7 @@ mod tests {
         // once; the path with where it was found; the unknown path stays in the title.
         m.update(Action::OpenCompose { text: line.into() });
         m.update(Action::SetKnown { line: line.into(), names: None, paths: vec![found.clone()], entries: Vec::new() });
-        m.update(Action::ComposeSubmit);
+        m.update(Action::ComposeSubmit { open: false });
         let task = &m.tasks.list[0];
         assert_eq!(
             (task.title.as_str(), task.repo.as_deref(), task.priority),
@@ -2903,10 +3122,10 @@ mod tests {
             names: compose::Names { agents: list(&["ana"]), skills: Vec::new() },
             ..Default::default()
         };
-        m.update(Action::TaskFromLine { line: "ask @ana $deploy".into(), known: theirs });
+        m.update(Action::TaskFromLine { line: "ask @ana $deploy".into(), known: theirs, open: false });
         assert_eq!((m.tasks.list[1].title.as_str(), m.tasks.list[1].agent.as_deref()), ("ask $deploy", Some("ana")));
         assert_eq!(m.draft("mine $deploy").skills, list(&["deploy"]));
-        m.update(Action::ComposeSubmit);
+        m.update(Action::ComposeSubmit { open: false });
         assert_eq!(
             (m.tasks.list[2].title.as_str(), m.tasks.list[2].skills.as_slice()),
             ("mine", &list(&["deploy"])[..])
@@ -2915,6 +3134,242 @@ mod tests {
         let assign = Assign { agent: Some("claude".into()), skills: list(&["a", "b"]), ..Assign::default() };
         m.update(Action::TaskAdd { title: "a".into(), priority: 1, state: State::Running, tab: None, assign });
         assert_eq!(m.task_tags(&m.tasks.list[3]), "@claude · 2 skills");
+    }
+
+    /// The Tasks section as (heading, count, ids of the rows drawn).
+    fn sections(m: &Model) -> Vec<(Heading, usize, Vec<TaskId>)> {
+        let sections = m.task_sections(0);
+        sections.iter().map(|s| (s.heading, s.count, s.rows.iter().map(|r| r.id).collect())).collect()
+    }
+
+    #[test]
+    fn the_tasks_section_lists_each_task_once_and_what_needs_you_first() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        m.update(Action::Tick { now: 1_000 });
+        for (title, state) in [("ask", State::NeedsYou), ("build", State::Running), ("idea", State::Captured)] {
+            m.update(Action::TaskAdd { title: title.into(), priority: 2, state, tab: None, assign: Assign::default() });
+        }
+        m.update(Action::TaskFromLine {
+            line: "fix zoom #canvas >app-2 p1".into(),
+            known: Default::default(),
+            open: false,
+        });
+        assert_eq!(
+            sections(&m),
+            [(Heading::NeedsYou, 1, vec![1]), (Heading::Running, 1, vec![2]), (Heading::Captured, 2, vec![4, 3])]
+        );
+        // A task with a tab moves under Open, and leaves its own group. An empty group has no heading.
+        // One that needs you stays under Needs you, open or not: attention wins.
+        m.update(Action::TaskOpen { id: Some(4) });
+        m.update(Action::NewTab);
+        m.update(Action::TaskOpen { id: Some(2) });
+        m.update(Action::TaskOpen { id: Some(1) });
+        assert_eq!(
+            sections(&m),
+            [(Heading::NeedsYou, 1, vec![1]), (Heading::Open, 2, vec![4, 2]), (Heading::Captured, 1, vec![3])],
+            "under Open as under any heading: most urgent first, then oldest"
+        );
+        // Each row: its tags, what it has open, how old it is. The one on show is marked.
+        let sections = m.task_sections(1_000 + 3 * 3_600_000);
+        let (needs, open) = (&sections[0].rows[0], &sections[1].rows[0]);
+        assert_eq!(
+            (needs.detail.as_str(), needs.tabs, needs.current, needs.group),
+            ("1 tab, 0 panes · 3h", 1, true, tasks::Group::NeedsYou)
+        );
+        assert_eq!((open.detail.as_str(), open.current), ("#canvas · >app-2 · 2 tabs, 1 pane · 3h", false));
+        // List mode walks the headings and rows in the order drawn.
+        m.update(Action::ToggleSection { section: Section::Tasks });
+        let (heading, task) = (ListRow::Heading, ListRow::Task);
+        let drawn = [heading(Heading::NeedsYou), task(1), heading(Heading::Open), task(4), task(2)];
+        assert_eq!(m.list_rows(), [&drawn[..], &[heading(Heading::Captured), task(3)]].concat());
+        // A finished task is under Done, with its tabs open or not: Open is for work going on.
+        m.update(Action::TaskSetState { id: 2, state: State::Done });
+        let sections = m.task_sections(0);
+        let done = sections.last().unwrap();
+        assert_eq!((done.heading, done.rows[0].id, done.rows[0].tabs), (Heading::Done, 2, 1));
+        assert_eq!(sections[1].rows.iter().map(|row| row.id).collect::<Vec<_>>(), [4]);
+    }
+
+    #[test]
+    fn a_collapsed_heading_keeps_its_count_and_hides_its_rows() {
+        let mut m = Model::default();
+        for (title, state) in [("a", State::NeedsYou), ("b", State::NeedsYou), ("c", State::Running)] {
+            m.update(Action::TaskAdd { title: title.into(), priority: 2, state, tab: None, assign: Assign::default() });
+        }
+        m.update(Action::ToggleSection { section: Section::Tasks });
+        m.update(Action::FocusList);
+        m.update(Action::ListMove { delta: 1 }); // on "b"
+        m.update(Action::ToggleGroup { heading: Heading::Running });
+        assert_eq!(sections(&m), [(Heading::NeedsYou, 2, vec![1, 2]), (Heading::Running, 1, vec![])]);
+        let (heading, task) = (ListRow::Heading, ListRow::Task);
+        let (needs, running) = (heading(Heading::NeedsYou), heading(Heading::Running));
+        assert_eq!(
+            (m.list_rows(), m.list),
+            (vec![needs.clone(), task(1), task(2), running.clone()], Some(2)),
+            "it stays"
+        );
+        // The selected row's own heading: the selection goes to a row that is still drawn.
+        m.update(Action::ToggleGroup { heading: Heading::Running });
+        m.update(Action::ToggleGroup { heading: Heading::NeedsYou });
+        assert_eq!(
+            (m.list_rows(), m.list, m.collapsed.as_slice()),
+            (vec![needs.clone(), running.clone(), task(3)], Some(2), &[Heading::NeedsYou][..])
+        );
+        // All folded is no dead end: a heading is a row, and ↵ on it unfolds it. The selection stays on it.
+        m.update(Action::ToggleGroup { heading: Heading::Running });
+        assert_eq!((m.list_rows(), m.list), (vec![needs.clone(), running.clone()], Some(1)));
+        assert_eq!(m.update(Action::ListChoose { axis: Right }), []);
+        assert_eq!(
+            (m.list_rows(), m.list, m.mode()),
+            (vec![needs.clone(), running.clone(), task(3)], Some(1), Mode::List)
+        );
+        m.update(Action::ListChoose { axis: Right });
+        assert_eq!(m.collapsed.as_slice(), &[Heading::NeedsYou, Heading::Running]);
+        m.update(Action::ToggleGroup { heading: Heading::NeedsYou });
+        assert_eq!((sections(&m)[0].2.len(), m.collapsed.len()), (2, 1));
+    }
+
+    #[test]
+    fn a_move_by_mouse_can_be_taken_back_for_a_few_seconds() {
+        let mut m = Model::default();
+        for (title, state) in [("a", State::NeedsYou), ("b", State::Done)] {
+            m.update(Action::TaskAdd { title: title.into(), priority: 2, state, tab: None, assign: Assign::default() });
+        }
+        m.update(Action::Tick { now: 1_000 });
+        m.update(Action::RowDismiss { id: 1 });
+        let notice = Notice { moved: Moved::Dismissed, until: 1_000 + NOTICE_MS };
+        assert_eq!((m.undo_offer, m.tasks.needs_you()), (Some(notice), 0));
+        // It stays until its time is up; undo, as `u` does, takes the move back and the notice with it.
+        m.update(Action::Tick { now: 1_000 + NOTICE_MS - 1 });
+        assert_eq!(m.undo_offer, Some(notice));
+        m.update(Action::TaskUndo);
+        assert_eq!((m.undo_offer, m.tasks.needs_you()), (None, 1));
+        // Time up: the notice goes, the move stays, and `u` still takes it back.
+        m.update(Action::RowSnooze { id: 1, until: 99_000 });
+        assert_eq!(m.undo_offer.map(|n| n.moved), Some(Moved::Snoozed));
+        m.update(Action::Tick { now: 1_000 + 2 * NOTICE_MS });
+        assert_eq!((m.undo_offer, m.tasks.needs_you()), (None, 0));
+        m.update(Action::TaskUndo);
+        assert_eq!(m.tasks.needs_you(), 1);
+        // A move that changes nothing has nothing to offer: a finished task is not put on hold.
+        m.update(Action::RowHold { id: 2 });
+        m.update(Action::RowDismiss { id: 9 });
+        assert_eq!(m.undo_offer, None);
+        // The notice names one move. After another by key or socket, or once an agent's report
+        // has made the move stale, it would take back something else: it goes.
+        m.update(Action::RowHold { id: 1 });
+        assert_eq!(m.undo_offer.map(|n| n.moved), Some(Moved::Held));
+        m.update(Action::TaskDismiss { id: 2 });
+        assert_eq!(m.undo_offer, None);
+        m.update(Action::RowDismiss { id: 1 });
+        m.update(Action::TaskSetState { id: 1, state: State::Running });
+        assert_eq!(m.undo_offer, None);
+    }
+
+    #[test]
+    fn a_move_that_changes_nothing_leaves_the_undo_alone() {
+        let mut m = Model::default();
+        for (title, state) in [("a", State::NeedsYou), ("b", State::Parked)] {
+            m.update(Action::TaskAdd { title: title.into(), priority: 2, state, tab: None, assign: Assign::default() });
+        }
+        m.update(Action::Tick { now: 1_000 });
+        // Dismiss "a", then, while the offer shows, hold "b", which is on hold already.
+        m.update(Action::RowDismiss { id: 1 });
+        m.update(Action::RowHold { id: 2 });
+        assert_eq!(
+            m.undo_offer.map(|offer| offer.moved),
+            Some(Moved::Dismissed),
+            "the offer names the move it takes back"
+        );
+        m.update(Action::TaskUndo);
+        assert_eq!((m.tasks.get(1).map(|t| t.dismissed), m.undo_offer), (Some(false), None));
+        // The same by key or socket, and for the other moves: a second dismiss, a snooze to the same time.
+        m.update(Action::TaskSnooze { id: 1, until: 9_000 });
+        m.update(Action::TaskSnooze { id: 1, until: 9_000 });
+        m.update(Action::TaskHold { id: 2 });
+        m.update(Action::TaskUndo);
+        assert_eq!(m.tasks.get(1).and_then(|t| t.snoozed_until), None);
+        m.update(Action::TaskDismiss { id: 2 });
+        m.update(Action::TaskDismiss { id: 2 });
+        m.update(Action::TaskUndo);
+        assert_eq!(m.tasks.get(2).map(|t| (t.dismissed, t.state)), Some((false, State::Parked)));
+        // `due`: a tick would change what shows.
+        m.update(Action::RowDismiss { id: 1 });
+        assert_eq!((m.due(1_000 + NOTICE_MS - 1), m.due(1_000 + NOTICE_MS)), (false, true));
+        m.update(Action::TaskUndo);
+        m.update(Action::TaskSnooze { id: 1, until: 5_000 });
+        assert_eq!((m.due(4_999), m.due(5_000)), (false, true));
+    }
+
+    #[test]
+    fn add_and_start_from_outside_does_not_change_tabs_under_a_box_or_a_mode() {
+        let from = |origin| {
+            Action::TaskFromLine { line: "theirs".into(), known: Default::default(), open: true }.sent_by(origin)
+        };
+        // Each of these holds the keyboard: the task is added, the tabs on show stay.
+        let holds: [(&str, fn(&mut Model)); 4] = [
+            ("the new-task box", |m| drop(m.update(Action::OpenCompose { text: "mine".into() }))),
+            ("the picker", |m| drop(m.update(Action::OpenPicker { axis: Right, new_tab: false, items: Vec::new() }))),
+            ("the key reference", |m| drop(m.update(Action::ToggleKeys))),
+            ("visual mode", |m| drop(m.update(Action::ToggleVisual))),
+        ];
+        for (what, hold) in holds {
+            let mut m = Model::default();
+            term(&mut m);
+            hold(&mut m);
+            let (mode, tabs) = (m.mode(), m.tabs.len());
+            assert!(mode != Mode::Normal || m.keys, "{what}");
+            assert_eq!(m.update(from(Origin::Socket)), [], "{what}");
+            assert_eq!((m.tasks.list.len(), m.current_task, m.mode(), m.tabs.len()), (1, None, mode, tabs), "{what}");
+            assert_eq!(m.compose.as_deref(), (what == "the new-task box").then_some("mine"));
+        }
+        // Under sneak mode's labels too: the mode stays, and so do the tabs.
+        let mut m = Model::default();
+        sneak(&mut m, 3);
+        m.update(from(Origin::Socket));
+        assert_eq!((m.tasks.list.len(), m.current_task, m.mode()), (1, None, Mode::Sneak));
+        // With nothing in the way it opens. So does the box's own ⌘↵: the box closes first.
+        let mut m = Model::default();
+        m.update(from(Origin::Socket));
+        assert_eq!(m.current_task, Some(1));
+        m.update(Action::TaskLeave);
+        m.update(Action::OpenCompose { text: "mine".into() });
+        m.update(Action::ComposeSubmit { open: true });
+        assert_eq!((m.current_task, m.compose.as_deref()), (Some(2), None));
+    }
+
+    #[test]
+    fn file_and_start_opens_the_task_it_files() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        m.update(Action::OpenCompose { text: "fix zoom >app".into() });
+        // The task's tab, with a terminal in its repository: as `TaskOpen` does.
+        assert_eq!(m.update(Action::ComposeSubmit { open: true }), [Effect::Opened(1)]);
+        assert_eq!((m.compose.as_deref(), m.current_task, m.mode()), (None, Some(1), Mode::Normal));
+        assert_eq!(m.pane(1).and_then(|p| p.cwd.as_deref()), Some("/code/app"));
+        // No title: nothing is filed, nothing opens, the box stays.
+        m.update(Action::OpenCompose { text: "p1".into() });
+        assert_eq!(m.update(Action::ComposeSubmit { open: true }), []);
+        assert_eq!((m.compose.as_deref(), m.tasks.list.len(), m.current_task), (Some("p1"), 1, Some(1)));
+        m.update(Action::CloseCompose);
+        m.update(Action::TaskFromLine { line: "ask Ana".into(), known: Default::default(), open: true });
+        assert_eq!((m.current_task, m.tasks.list.len()), (Some(2), 2));
+    }
+
+    #[test]
+    fn a_task_is_stamped_with_the_time_last_told() {
+        let mut m = Model::default();
+        m.update(Action::TaskAdd {
+            title: "a".into(),
+            priority: 1,
+            state: State::Captured,
+            tab: None,
+            assign: Assign::default(),
+        });
+        m.update(Action::Tick { now: 5_000 });
+        m.update(Action::TaskFromLine { line: "b".into(), known: Default::default(), open: false });
+        assert_eq!(m.tasks.list.iter().map(|t| t.created).collect::<Vec<_>>(), [None, Some(5_000)]);
     }
 
     fn listed() -> Vec<Repo> {

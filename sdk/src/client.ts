@@ -4,7 +4,7 @@
 
 import { Socket } from "node:net";
 
-import { axTreeReply, captureReply, inboxReply, refusal, snapshot, taskPopReply, taskReply, waitReply } from "./parse.ts";
+import { axTreeReply, captureReply, inboxReply, refusal, snapshot, taskNewReply, taskPopReply, taskReply, waitReply } from "./parse.ts";
 import { checkOwned, defaultSocketPath } from "./socket.ts";
 import type {
   AxTreeArgs,
@@ -15,6 +15,7 @@ import type {
   Dir,
   DragArgs,
   DropPaneArgs,
+  Heading,
   InboxReply,
   MouseArgs,
   MouseDownArgs,
@@ -31,6 +32,7 @@ import type {
   TaskAddArgs,
   TaskId,
   TaskPopReply,
+  TaskNewReply,
   TaskReply,
   TaskState,
   TypeArgs,
@@ -298,9 +300,16 @@ export class Client {
   async taskList(): Promise<InboxReply> {
     return inboxReply(await this.send({ cmd: "task_list" }));
   }
-  /** Files a task from one line: `"fix zoom flicker #canvas >repo @claude p1"`. */
-  async taskNew(args: { line: string }): Promise<TaskReply> {
-    return taskReply(await this.send({ cmd: "task_new", ...args }));
+  /**
+   * Files a task from one line: `"fix zoom flicker #canvas >repo @claude p1"`. `open`: also shows its
+   * tabs; the reply's `opened` is false if something held the keyboard and the task was only added.
+   */
+  async taskNew(args: { line: string; open?: boolean }): Promise<TaskNewReply> {
+    return taskNewReply(await this.send({ cmd: "task_new", ...args }));
+  }
+  /** Folds or unfolds a heading of the Tasks section. */
+  taskGroup(args: { heading: Heading }): Promise<Snapshot> {
+    return this.snapshot({ cmd: "task_group", ...args });
   }
   /** Opens the new-task box for the user with `text` in it. Nothing is filed. */
   compose(args: { text?: string } = {}): Promise<Snapshot> {

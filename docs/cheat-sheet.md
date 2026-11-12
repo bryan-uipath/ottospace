@@ -60,13 +60,14 @@ The badge on an app is how many windows it has open. A new window of a hosted ap
 
 | I want to | Do |
 |---|---|
-| File a task | ⌘N, type a line, ↵ |
+| Add a task | ⌘N, type a line, ↵. The + on the Tasks bar opens the same box |
+| Add a task and start it (show its tabs) | ⌘N, type a line, ⌘↵ |
 | Tag the task | In that line: `#project` · `>repo` · `@agent` · `/path` · `$skill` · `p1` … `p9`. Tab completes the tag being typed. [All tags](reference.md#tags) |
 | Open a task: the tab bar shows only its tabs | Click it in Tasks. The first time, it gets a tab named after it. × beside its name on the tab bar goes back |
 | Open the next task that needs me | ⌘⇧N |
 | See what needs me at a glance | A tab with no panes is the home screen: the new-task line (click it, or ⌘N), up to three tasks under Needs you, and a node for each of the first 12 listed tasks. Left to right is the project; within a project the older task is farther; the colour is the state. No node sits under the text, so a small window shows fewer. Hover a node for its title; click a node or a row to open the task |
-| See the inbox | Tasks on the rail: Needs you, Running, Captured, On hold, Done |
-| Snooze 1 hour / hold / dismiss / undo | ⌘⇧E on Tasks, then `s` / `h` / `x` / `u` |
+| See the inbox | Tasks on the rail: Needs you, Open (the other tasks with tabs open), Running, Captured, On hold, Done. Click a heading to fold it, or ⌘⇧E, move to it, ↵ or space |
+| Snooze 1 hour / hold / dismiss / undo | ⌘⇧E on Tasks, then `s` / `h` / `x` / `u`. By mouse: the buttons on a row you hover; "Undo" then shows at the top for 6 seconds |
 
 The status bar shows how many tasks need you. Tasks are kept in `~/.ottospace/tasks`, or the `tasks` setting.
 A tag counts only if its name is known (`>repo` in the Repos list, `@claude` or `@codex`, a skill that is installed, a path that exists); any other word stays in the title.

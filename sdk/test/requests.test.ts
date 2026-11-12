@@ -68,6 +68,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.taskUndo(),
   (c) => c.taskList(),
   (c) => c.taskNew({ line: "fix zoom flicker #canvas >app @claude p1" }),
+  (c) => c.taskGroup({ heading: "open" }),
   (c) => c.compose({ text: "a draft" }),
   (c) => c.taskPop(),
   (c) => c.taskOpen({ id: 1 }),

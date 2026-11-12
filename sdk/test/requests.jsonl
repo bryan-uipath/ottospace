@@ -40,6 +40,7 @@
 {"cmd":"task_undo"}
 {"cmd":"task_list"}
 {"cmd":"task_new","line":"fix zoom flicker #canvas >app @claude p1"}
+{"cmd":"task_group","heading":"open"}
 {"cmd":"compose","text":"a draft"}
 {"cmd":"task_pop"}
 {"cmd":"task_open","id":1}

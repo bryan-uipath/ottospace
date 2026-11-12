@@ -289,6 +289,26 @@ impl Workspace {
             }
             ("repo", _) => Some(Action::OpenRepo { path: name.into(), axis: Axis::Right }),
             ("task" | "home-row" | "home-node", _) => number.map(|id| Action::TaskOpen { id: Some(id) }),
+            ("task-heading", _) => {
+                if let Ok(heading) = serde_json::from_value(serde_json::json!(name)) {
+                    self.click_heading(heading, window, cx);
+                }
+                None
+            }
+            ("task-start" | "task-snooze" | "task-hold" | "task-dismiss", _) => {
+                if let Some(id) = number {
+                    self.click_row_button(kind, id, window, cx);
+                }
+                None
+            }
+            ("task-undo", _) => {
+                self.click_undo(window, cx);
+                None
+            }
+            ("bar", "new_task") | ("task-new", _) => {
+                self.new_task(window, cx);
+                None
+            }
             ("home", "new_task") => {
                 self.new_task(window, cx);
                 None

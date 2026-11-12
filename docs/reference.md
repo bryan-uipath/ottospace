@@ -23,7 +23,7 @@ it over the control socket. Session restore and the rest of the design are not b
 | Control socket and `ottospace ctl` for agents and tests | Works today |
 | Terminal scrollback, mouse selection, copy and paste | Works today |
 | Visual mode: select terminal text with vi keys | Works today |
-| Tasks inbox: tasks grouped by what needs you first; snooze, hold, dismiss, undo. Kept in `~/.ottospace/tasks` | Works today |
+| Tasks inbox: what needs you first, then the other tasks with tabs open (Open), then Running, Captured, On hold, Done. Headings fold (click, or ↵ or space in list mode). A task that is done stays under Done with its tabs open. Each row shows its tags, what it has open and its age; hover it for start, snooze, hold and dismiss buttons. After one of those by mouse, a line at the top offers Undo for 6 seconds. Kept in `~/.ottospace/tasks` | Works today |
 | "Pop next" (⌘⇧N): open the next task that needs you | Works today |
 | New task box (⌘N): one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`. `@agent`, `/path` and `$skill` are stored and shown; nothing acts on them yet | Works today |
 | Home screen: a tab with no panes shows the new-task line, the tasks that need you, and each listed task as a node on a lattice (left to right by project; within a project the older task is farther). A click on a node or a row opens the task | Works today |
@@ -94,9 +94,9 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | Drag / double-click / triple-click | Select text / a word / a line in a terminal |
 | ⌘C | Copy the terminal's selection (nothing selected: does nothing) |
 | ⌘V | Paste into the terminal |
-| ⌘N | New task: a box opens over the workspace. Type what needs doing, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1` to `p9` (Tab completes the one being typed). ↵ files it and closes the box; Esc closes |
+| ⌘N | New task: a box opens over the workspace. Type what needs doing, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1` to `p9` (Tab completes the one being typed). ↵ adds the task and closes the box; ⌘↵ adds it and starts it (shows its tabs); Esc closes |
 | ⌘⇧N | Next task: shows the tabs of the first task that needs you |
-| ⌘⇧E | List mode: the bar (Apps, Tasks, Repos) takes the keyboard. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; Esc or ⌘⇧E leaves |
+| ⌘⇧E | List mode: the bar (Apps, Tasks, Repos) takes the keyboard. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); in Tasks a heading is a row too, and ↵ or space on it folds or unfolds it; Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; Esc or ⌘⇧E leaves |
 | ⌘⌃G | Sneak mode: every control ottospace draws (rail icons, bar rows, tabs and their ×, top-bar buttons, pane headers and their ×, each pane, the home screen's line, rows and nodes) gets a short label, home-row letters first. Type a label and the control does what a click does; a pane's label focuses it, or gives an app pane the keyboard. A × (pane or tab) always has a two-letter label. Two-letter labels narrow on the first letter; ⌫ takes it back. Esc, a click, a letter that goes on with no label, or any ⌘ shortcut leaves; the shortcut then runs (⌘C copies, ⌘V pastes). Other keys do nothing. The labels follow what is drawn: if a control moves its label moves, and if it goes its label goes. What happens by itself (a shell exits, an agent files a task) does not end the mode. Starting it hides the accessibility overlay (⌘⌃A). Not ⌃G alone: a terminal needs that key. On a keyboard layout with no Latin letters, the keys type the letters they have under ⌘. From `APP` mode return first. Controls inside a hosted app's window get no label. Sneak presses no control inside another app and sets no value; entering an app pane raises its window, as a click on the pane does |
 | ⌘⇧C | Visual mode on the terminal: `hjkl`/arrows, `w b e 0 ^ $`, `H M L` move; `v` / `V` select; `y` or ↵ copies and leaves; Esc leaves |
 

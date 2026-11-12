@@ -168,7 +168,8 @@ test("tasks: add, list, open, leave", async () => {
   await withOttospace(async (client) => {
     const otto = new Otto(client);
     const later = await otto.tasks.add("Write the note");
-    assert.deepEqual(later, {
+    assert.equal(typeof later.created, "number", "filed now");
+    assert.deepEqual({ ...later, created: null }, {
       id: 1,
       title: "Write the note",
       state: "captured",
@@ -181,6 +182,7 @@ test("tasks: add, list, open, leave", async () => {
       paths: [],
       resolved: [],
       skills: [],
+      created: null,
     });
     const urgent = await otto.tasks.add("Review the client", { priority: 1, state: "needs_you" });
     const filed = (await client.taskNew({ line: "fix the flicker #canvas p2" })).task;
