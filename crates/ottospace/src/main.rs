@@ -387,6 +387,9 @@ struct Workspace {
     _subscriptions: Vec<Subscription>,
 }
 
+/// Longest a `wait` request may run: 10 minutes.
+const MAX_WAIT_MS: u64 = 600_000;
+
 impl Workspace {
     fn new(
         hosting: bool,
@@ -492,8 +495,7 @@ impl Workspace {
                 Effect::Opened(id) => {
                     if self.model.pane(*id).is_some_and(|p| p.kind == Kind::Terminal) {
                         // The shell learns where it runs, so a program in it can name its own pane.
-                        let tab = self.model.tab_panes().iter().position(|panes| panes.contains(id));
-                        let tab = tab.and_then(|i| self.model.tabs.get(i)).map(|tab| tab.id);
+                        let tab = self.model.tab_of(*id);
                         let mut vars = vec![("OTTOSPACE_PANE", id.to_string())];
                         vars.extend(tab.map(|tab| ("OTTOSPACE_TAB", tab.to_string())));
                         match Terminal::spawn(&vars) {
@@ -719,22 +721,20 @@ impl Workspace {
         let Some(id) = pane.or(self.model.focused).filter(|id| self.terminals.contains_key(id)) else {
             return drop(reply.send(control::error("no terminal pane to wait on")));
         };
-        // `multi_line`: `^` and `$` match at line ends, so `^done$` skips the echoed command.
-        let regex = match regex::RegexBuilder::new(pattern).multi_line(true).build() {
+        let regex = match regex::Regex::new(pattern) {
             Ok(regex) => regex,
             Err(err) => return drop(reply.send(control::error(&err.to_string()))),
         };
-        let limit = Duration::from_millis(timeout_ms.unwrap_or(10_000));
+        // Capped: nothing tells this task that its client went away.
+        let limit = Duration::from_millis(timeout_ms.unwrap_or(10_000).min(MAX_WAIT_MS));
         let start = Instant::now();
         cx.spawn(async move |this, cx| {
             let message = loop {
                 let text = this.update(cx, |this, _| this.terminals.get(&id).map(|t| t.text(true)));
                 let Ok(text) = text else { break control::error("ottospace is closing") };
                 let Some(text) = text else { break control::error(&format!("pane {id} closed")) };
-                if let Some(found) = regex.find(&text) {
-                    // The whole line the match starts on.
-                    let from = text[..found.start()].rfind('\n').map_or(0, |i| i + 1);
-                    let line = text[from..].lines().next().unwrap_or_default();
+                // Line by line, so `^done$` skips the echoed command, which starts with the prompt.
+                if let Some(line) = text.lines().find(|line| regex.is_match(line)) {
                     break serde_json::json!({ "ok": true, "pane": id, "line": line }).to_string();
                 }
                 if start.elapsed() >= limit {

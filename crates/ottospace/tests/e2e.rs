@@ -178,9 +178,9 @@ fn capture_and_wait_read_one_pane() {
 
     // The shell knows its pane and tab. `^` skips the echoed command, which starts with the prompt.
     otto.call(json!({"cmd": "type", "pane": 1, "text": "echo pane-$OTTOSPACE_PANE-tab-$OTTOSPACE_TAB\r"}));
-    let found = otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^pane-", "timeout_ms": 40000}));
     let tab = otto.call(json!({"cmd": "state"}))["state"]["tabs"][0]["id"].as_u64().unwrap();
     let first = format!("pane-1-tab-{tab}");
+    let found = otto.call(json!({"cmd": "wait", "pane": 1, "pattern": format!("^{first}$"), "timeout_ms": 40000}));
     assert_eq!(found["line"], first);
     assert!(found.get("state").is_none(), "wait replies with the line, not the state");
 

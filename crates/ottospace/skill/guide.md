@@ -92,17 +92,20 @@ Reading a terminal pane:
 ```sh
 ottospace ctl '{"cmd":"capture","pane":3}'
 ottospace ctl '{"cmd":"capture","pane":3,"history":true}'
-ottospace ctl '{"cmd":"wait","pane":3,"pattern":"^test result: "}'
-ottospace ctl '{"cmd":"wait","pane":3,"pattern":"^done-41$","timeout_ms":60000}'
+ottospace ctl '{"cmd":"wait","pane":3,"pattern":"^done-7f3a$"}'
+ottospace ctl '{"cmd":"wait","pane":3,"pattern":"^done-7f3a-[0-9]+$","timeout_ms":60000}'
 ```
 
 Neither replies with the state. `capture` replies `{"ok":true,"pane":3,"text":".."}`: the bottom
 screen, and with `history` everything scrolled off above it too. A wrapped line is one line.
-`wait` replies `{"ok":true,"pane":3,"line":".."}` when a line matches the regular expression
-`pattern`, and fails after `timeout_ms` (default 10000) or if the pane closes. `^` and `$` match
-at line ends. `wait` reads the history too, so:
+`wait` replies `{"ok":true,"pane":3,"line":".."}` with the first line that matches the regular
+expression `pattern`, and fails after `timeout_ms` (default 10000, at most 600000) or if the pane
+closes. Each line is matched alone, so `^` and `$` are the ends of a line and a pattern cannot
+span lines. While a full-screen program (vim, less) is up, both requests see only its screen.
+`wait` reads the history too, so:
 
-- Text already in the pane matches at once. Use a marker that is new each time.
+- Text already in the pane matches at once, also from an earlier run. Put a token you make up
+  for this run in the marker (`7f3a` above), not only a fixed word.
 - The command you typed is in the pane too. Anchor the marker with `^` so the echoed command
   line (which starts with the prompt) does not match.
 
@@ -187,10 +190,12 @@ Run a command in a new terminal beside the current pane, and read its output:
 ```sh
 ottospace ctl '{"cmd":"state"}'                                    # note the pane ids that exist
 ottospace ctl '{"cmd":"split","axis":"right"}'                    # reply: state.focused is the new pane, say 3
-ottospace ctl '{"cmd":"type","pane":3,"text":"cargo test; echo done-$?\r"}'   # name the pane: focus may have moved
-ottospace ctl '{"cmd":"wait","pane":3,"pattern":"^done-[0-9]+$","timeout_ms":600000}'
+ottospace ctl '{"cmd":"type","pane":3,"text":"cargo test; echo done-7f3a-$?\r"}'   # name the pane: focus may have moved
+ottospace ctl '{"cmd":"wait","pane":3,"pattern":"^done-7f3a-[0-9]+$","timeout_ms":600000}'
 ottospace ctl '{"cmd":"capture","pane":3,"history":true}'
 ```
+
+`7f3a` is a token made up for this run; the number after it is the command's exit status.
 
 Check that the id from the split reply was not in the first `state`. If it was, the split was
 ignored (the picker or key reference was open): do not type.

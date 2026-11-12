@@ -301,12 +301,15 @@ impl Terminal {
     }
 
     /// The bottom screen as plain text, with everything scrolled off above it if `history`.
-    /// A wrapped line is one line. Trailing spaces and blank lines are removed.
+    /// A wrapped line is one line. Trailing spaces, and blank lines at the end, are removed.
+    /// The alternate screen (vim, less) has no history.
     pub fn text(&self, history: bool) -> String {
         let term = self.term.lock();
         let top = if history { term.topmost_line() } else { Line(0) };
         let (start, end) = (Point::new(top, Column(0)), Point::new(term.bottommost_line(), term.last_column()));
-        term.bounds_to_string(start, end).trim_end().to_string()
+        let mut text = term.bounds_to_string(start, end);
+        text.truncate(text.trim_end().len());
+        text
     }
 
     pub fn screen(&self) -> Screen {

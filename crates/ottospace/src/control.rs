@@ -132,7 +132,8 @@ pub enum Request {
         history: bool,
     },
     /// Replies when a line of a terminal pane's text (history included) matches the regex
-    /// `pattern`: `{"ok":true,"pane":3,"line":".."}`. Fails after `timeout_ms` (default 10000).
+    /// `pattern`: `{"ok":true,"pane":3,"line":".."}`. Fails after `timeout_ms` (default 10000,
+    /// at most 600000).
     Wait {
         #[serde(default)]
         pane: Option<PaneId>,
