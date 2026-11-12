@@ -21,6 +21,10 @@ import type {
   InboxReply,
   InboxRow,
   Layout,
+  Mark,
+  MarkInput,
+  MarkReply,
+  MarksReply,
   Mode,
   Model,
   Pane,
@@ -122,12 +126,13 @@ function axis(value: unknown, at: string): Axis {
 function mode(value: unknown, at: string): Mode {
   if (value === "normal" || value === "app" || value === "pick") return value;
   if (value === "visual" || value === "list" || value === "compose" || value === "sneak") return value;
-  if (value === "confirm") return value;
+  if (value === "confirm" || value === "mark") return value;
   throw wrong(at, "a mode", value);
 }
 
 function section(value: unknown, at: string): Section {
   if (value === "apps" || value === "workbook" || value === "tasks" || value === "repos") return value;
+  if (value === "marks") return value;
   throw wrong(at, "a section", value);
 }
 
@@ -184,7 +189,15 @@ function paneKind(value: unknown, at: string): PaneKind {
   if (o.type === "empty") return { type: "empty" };
   if (o.type === "terminal") return { type: "terminal" };
   if (o.type === "app") {
-    return { type: "app", window: num(o.window, `${at}.window`), title: str(o.title, `${at}.title`) };
+    const app: PaneKind = {
+      type: "app",
+      window: num(o.window, `${at}.window`),
+      title: str(o.title, `${at}.title`),
+      name: str(o.name, `${at}.name`),
+    };
+    // An app with no bundle (a bare binary) has no `bundle`.
+    if (o.bundle !== undefined) app.bundle = str(o.bundle, `${at}.bundle`);
+    return app;
   }
   throw wrong(`${at}.type`, "a pane kind", o.type);
 }
@@ -328,6 +341,45 @@ function confirm(value: unknown, at: string): Confirm {
   return { running: list(running)(fields(value, at).running, `${at}.running`) };
 }
 
+function markInput(value: unknown, at: string): MarkInput {
+  const o = fields(value, at);
+  if (o.type === "jump") return { type: "jump" };
+  if (o.type === "rename") return { type: "rename", mark: num(o.mark, `${at}.mark`), text: str(o.text, `${at}.text`) };
+  if (o.type === "set_key") return { type: "set_key", mark: num(o.mark, `${at}.mark`) };
+  throw wrong(`${at}.type`, "what a mark waits for", o.type);
+}
+
+function markKind(value: unknown, at: string): "terminal" | "app" | "tab" {
+  if (value === "terminal" || value === "app" || value === "tab") return value;
+  throw wrong(at, "a mark's kind", value);
+}
+
+function mark(value: unknown, at: string): Mark {
+  const o = fields(value, at);
+  const buttons = fields(o.buttons, `${at}.buttons`);
+  return {
+    id: num(o.id, `${at}.id`),
+    name: str(o.name, `${at}.name`),
+    key: orNull(str)(o.key, `${at}.key`),
+    kind: markKind(o.kind, `${at}.kind`),
+    open: bool(o.open, `${at}.open`),
+    pane: orNull(num)(o.pane, `${at}.pane`),
+    tab: orNull(num)(o.tab, `${at}.tab`),
+    available: bool(o.available, `${at}.available`),
+    reason: orNull(str)(o.reason, `${at}.reason`),
+    unfilled: list((value, at) => {
+      const empty = fields(value, at);
+      return { pane: num(empty.pane, `${at}.pane`), why: str(empty.why, `${at}.why`) };
+    })(o.unfilled, `${at}.unfilled`),
+    row: orNull(rect)(o.row, `${at}.row`),
+    buttons: {
+      key: orNull(rect)(buttons.key, `${at}.buttons.key`),
+      rename: orNull(rect)(buttons.rename, `${at}.buttons.rename`),
+      remove: orNull(rect)(buttons.remove, `${at}.buttons.remove`),
+    },
+  };
+}
+
 function model(value: unknown, at: string): Model {
   const o = fields(value, at);
   return {
@@ -349,6 +401,7 @@ function model(value: unknown, at: string): Model {
     keys: bool(o.keys, `${at}.keys`),
     visual: orNull(num)(o.visual, `${at}.visual`),
     ax_overlay: bool(o.ax_overlay, `${at}.ax_overlay`),
+    mark_input: orNull(markInput)(o.mark_input, `${at}.mark_input`),
   };
 }
 
@@ -524,12 +577,22 @@ export function snapshot(value: unknown): Snapshot {
     ax_overlay: orNull(axOverlay)(o.ax_overlay, "ax_overlay"),
     sneak: orNull(sneak)(o.sneak, "sneak"),
     counts: orNull(map(num))(o.counts, "counts"),
+    marks: list(mark)(o.marks, "marks"),
+    mark_removed: orNull(str)(o.mark_removed, "mark_removed"),
   };
 }
 
 export function taskNewReply(value: unknown): TaskNewReply {
   const opened = fields(value, "reply").opened;
   return { ...taskReply(value), ...(opened === undefined ? {} : { opened: bool(opened, "opened") }) };
+}
+
+export function marksReply(value: unknown): MarksReply {
+  return { ok: true, marks: list(mark)(fields(value, "reply").marks, "marks") };
+}
+
+export function markReply(value: unknown): MarkReply {
+  return { ok: true, mark: mark(fields(value, "reply").mark, "mark") };
 }
 
 export function taskReply(value: unknown): TaskReply {

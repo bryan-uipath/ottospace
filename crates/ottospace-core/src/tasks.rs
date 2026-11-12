@@ -121,6 +121,8 @@ pub enum Moved {
     Snoozed,
     Held,
     Dismissed,
+    /// Not a task's: a mark was taken off. The Marks section offers it back.
+    MarkRemoved,
 }
 
 impl Moved {
@@ -129,6 +131,7 @@ impl Moved {
             Moved::Snoozed => "Snoozed",
             Moved::Held => "On hold",
             Moved::Dismissed => "Dismissed",
+            Moved::MarkRemoved => "Mark removed",
         }
     }
 }

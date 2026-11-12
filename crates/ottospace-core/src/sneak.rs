@@ -31,10 +31,10 @@ pub fn sneak_key(key: &str) -> Option<SneakKey> {
     }
 }
 
-/// A control that ends something: a pane's or a tab's ×. Its label always has two letters, so one
+/// A control that ends something: a pane's, a tab's or a mark's ×. Its label always has two letters, so one
 /// stray key cannot close a shell. `id` is the shell's name for the control, e.g. `tab-close:2`.
 pub fn destructive(id: &str) -> bool {
-    id.starts_with("close:") || id.starts_with("tab-close:")
+    id.starts_with("close:") || id.starts_with("tab-close:") || id.starts_with("mark-remove:")
 }
 
 fn own_id(target: &Target) -> Option<&str> {

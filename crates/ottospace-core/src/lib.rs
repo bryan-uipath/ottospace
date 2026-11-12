@@ -8,6 +8,7 @@ pub mod hosted;
 pub mod keys;
 pub mod layout;
 pub mod list;
+pub mod marks;
 pub mod model;
 pub mod palette;
 pub mod repos;

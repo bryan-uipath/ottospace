@@ -873,3 +873,82 @@ fn a_refused_size_is_named_in_the_pane_header_and_fit_gives_the_window_room() {
     assert!(ratio(&["split", "b", "split", "ratio"]).as_f64() < inner.as_f64(), "the split moved: was {inner}");
     wait("pane 3 to have its window's width again", &|| pane(3).filter(|b| close(b[2], min_width)));
 }
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn a_mark_hosts_its_canary_window_again_and_of_two_windows_the_one_with_its_title() {
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-marks", "CANARY_SOCKET", &[]);
+    wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
+    let otto = Proc::launch(
+        env!("CARGO_BIN_EXE_ottospace"),
+        "otto-marks",
+        "OTTOSPACE_SOCKET",
+        &[
+            ("OTTOSPACE_E2E", "1"),
+            ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string()),
+            ("OTTOSPACE_RETURN_KEY", "f19"),
+        ],
+    );
+    let state = || otto.call(json!({"cmd": "state"}));
+    // Each app pane's id and window title, in pane order.
+    let titled = |state: &Value| -> Vec<(u64, String)> {
+        let panes = state["state"]["panes"].as_array().cloned().unwrap_or_default();
+        let app = |p: &Value| Some((p["id"].as_u64()?, p["kind"]["title"].as_str()?.to_string()));
+        panes.iter().filter_map(app).collect()
+    };
+    let mark = |state: &Value, name: &str| -> Value {
+        let marks = state["marks"].as_array().cloned().unwrap_or_default();
+        marks.into_iter().find(|m| m["name"] == name).unwrap_or_else(|| panic!("no mark {name}: {}", state["marks"]))
+    };
+
+    // One window in a pane, marked; the app opens a second, which gets its own pane and mark.
+    let hosted = otto.call(json!({"cmd": "open_app", "name": CANARY}));
+    assert_eq!(titled(&hosted), [(1, "Canary 1".to_string())]);
+    assert_eq!(hosted["state"]["panes"][0]["kind"]["name"], CANARY, "the pane says whose window it is");
+    let one = otto.call(json!({"cmd": "mark_add", "pane": 1, "name": "one", "key": "a"}));
+    assert_eq!(
+        (&one["mark"]["kind"], &one["mark"]["open"], &one["mark"]["pane"]),
+        (&json!("app"), &json!(true), &json!(1))
+    );
+    canary.call(json!({"cmd": "open_window"}));
+    wait_for("the second window's pane", || (titled(&state()).len() == 2).then_some(()));
+    assert_eq!(titled(&state())[1], (2, "Canary 2".to_string()));
+    otto.call(json!({"cmd": "mark_add", "pane": 2, "name": "two", "key": "b"}));
+
+    // Both panes close: the windows go back to the app, and the marks stay, not open.
+    otto.call(json!({"cmd": "close", "pane": 1}));
+    let closed = otto.call(json!({"cmd": "close", "pane": 2}));
+    assert_eq!((titled(&closed), closed["hosted"].as_object().map(|h| h.len())), (vec![], Some(0)));
+    for name in ["one", "two"] {
+        let row = mark(&closed, name);
+        assert_eq!((&row["open"], &row["available"]), (&json!(false), &json!(true)), "{row}");
+    }
+
+    // Going to a mark hosts its window again, in a new pane: of the two free windows, the one
+    // with its title, whichever the app calls its main window.
+    let second = otto.call(json!({"cmd": "mark_go", "name": "two"}));
+    assert_eq!(titled(&second), [(3, "Canary 2".to_string())], "{}", second["state"]["panes"]);
+    assert_eq!(
+        (&mark(&second, "two")["pane"], &second["state"]["focused"], &second["mode"]),
+        (&json!(3), &json!(3), &json!("normal"))
+    );
+    let first = otto.call(json!({"cmd": "key", "keys": "cmd-' a"}));
+    assert_eq!(titled(&first), [(3, "Canary 2".to_string()), (4, "Canary 1".to_string())]);
+    assert_eq!((&mark(&first, "one")["pane"], &first["state"]["focused"]), (&json!(4), &json!(4)));
+    assert_eq!(first["hosted"].as_object().map(|h| h.len()), Some(2), "each window is in its own pane");
+    // Open now: going again only focuses, and hosts nothing twice.
+    let again = otto.call(json!({"cmd": "mark_go", "key": "b"}));
+    assert_eq!((titled(&again).len(), &again["state"]["focused"]), (2, &json!(3)));
+
+    // A mark of the tab: closed, it is built again with each window in its own pane, by title.
+    otto.call(json!({"cmd": "mark_add", "tab": 1, "name": "both"}));
+    let emptied = otto.call(json!({"cmd": "close_tab", "index": 0}));
+    assert_eq!((titled(&emptied), mark(&emptied, "both")["open"].clone()), (vec![], json!(false)));
+    otto.call(json!({"cmd": "mark_go", "name": "both"}));
+    let built = wait_for("both windows in the tab's panes", || Some(state()).filter(|s| titled(s).len() == 2));
+    assert_eq!(titled(&built), [(5, "Canary 2".to_string()), (6, "Canary 1".to_string())]);
+    assert_eq!(built["tab_panes"], json!([[], [5, 6]]), "{}", built["state"]["tabs"]);
+    assert_eq!(built["hosted"].as_object().map(|h| h.len()), Some(2));
+    // The pane marks are of the same windows, under their new ids.
+    assert_eq!((&mark(&built, "two")["pane"], &mark(&built, "one")["pane"]), (&json!(5), &json!(6)));
+}

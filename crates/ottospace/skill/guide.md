@@ -47,9 +47,9 @@ ottospace ctl '{"cmd":"state"}'
 
 | Field | Meaning |
 |---|---|
-| `mode` | `normal`, `app` (a hosted app has the keyboard), `pick` (the picker is open), `visual` (selecting terminal text with the keyboard), `list` (the secondary bar has the keyboard), `compose` (the new-task box is open), `confirm` (the quit question is up) or `sneak` (labels are on ottospace's controls; a typed label activates one) |
+| `mode` | `normal`, `app` (a hosted app has the keyboard), `pick` (the picker is open), `visual` (selecting terminal text with the keyboard), `list` (the secondary bar has the keyboard), `compose` (the new-task box is open), `confirm` (the quit question is up), `sneak` (labels are on ottospace's controls; a typed label activates one) or `mark` (a mark waits for a letter or a name: `state.mark_input`) |
 | `state.list` | Null, or the index of the selected row of the open section: the secondary bar has the keyboard (`mode` is `list`, or `pick` while the picker is open over it) |
-| `state.panes` | Every pane of every tab: `id`, `kind`, `cwd` for a terminal opened by `open_repo`, and `fit` for an app pane whose window kept another size than the pane's: `wants` (`[width, height]` in points, the size the window kept) `hint` (what the pane header says, e.g. `needs 120 pt more width` or `fixed size 232×320`) and, only when a `fit` request would move nothing, `stuck`: `no_split` (the pane spans the tab on that axis) or `at_limit` (the splits are at their 10%). No `fit`: the window has the pane's size, or is less than 24 pt smaller (an app that snaps its size), or the layout changed and the pane has not been measured since (within a second). `kind` is an object: `{"type":"terminal"}`, `{"type":"empty"}` or `{"type":"app","window":N,"title":"..."}` |
+| `state.panes` | Every pane of every tab: `id`, `kind`, `cwd` for a terminal opened by `open_repo`, and `fit` for an app pane whose window kept another size than the pane's: `wants` (`[width, height]` in points, the size the window kept) `hint` (what the pane header says, e.g. `needs 120 pt more width` or `fixed size 232×320`) and, only when a `fit` request would move nothing, `stuck`: `no_split` (the pane spans the tab on that axis) or `at_limit` (the splits are at their 10%). No `fit`: the window has the pane's size, or is less than 24 pt smaller (an app that snaps its size), or the layout changed and the pane has not been measured since (within a second). `kind` is an object: `{"type":"terminal"}`, `{"type":"empty"}` or `{"type":"app","window":N,"title":"...","bundle":"com.apple.Safari","name":"Safari"}` (`bundle` is left out for an app that has none) |
 | `state.tabs`, `state.active` | Every tab (`id`, `title`, and `task`: the id of the task it belongs to, or null) and the index of the one showing. Requests take the index, not the `id` |
 | `state.current_task` | The task whose tabs are on the user's tab bar, or null for the tabs of no task. Tabs of other tasks keep running, off the bar |
 | `tab_panes` | Pane ids of each tab, in tab order |
@@ -79,6 +79,9 @@ ottospace ctl '{"cmd":"state"}'
 | `state.repos` | Repositories found on disk: `name`, `path`, `branch`, and `worktrees` (each `name`, `path`, `branch`) |
 | `ax_overlay` | Null, or the accessibility overlay's last read: `pane`, `targets` (`label`, `frame` in window coordinates, `source`), `count`, `truncated`, `millis`, `error` |
 | `sneak` | Null, or sneak mode's labels: `typed` (the letters so far) and `targets`, each `label`, `frame` (`x`, `y`, `w`, `h` in window points) and `source` (`{"type":"own","id":"rail:tasks"}`) |
+| `marks` | The marks, in the user's order: `id` (this run's), `name`, `key` (its letter, or null), `kind` (`terminal`, `app` or `tab`), `open` (its pane or tab is open now: `pane`, or `tab` as a tab `id`), `available` (false: it is not open and nothing of it can be opened) and `reason` (why: its directory is gone, its app is not installed; for a tab also what part of it is missing or empty, while `available` stays true), `unfilled` (the panes of its open tab that are still empty, each `pane` and `why`), and `row` and `buttons` (`key`, `rename`, `remove`): where the Marks section drew it, or null |
+| `mark_removed` | Null, or the name of the mark just taken off, for the few seconds the Marks section offers to put it back |
+| `state.mark_input` | Null, or what a mark waits for while `mode` is `mark`: `{"type":"jump"}` (⌘' was pressed: the next letter goes to that mark), `{"type":"rename","mark":1,"text":".."}` or `{"type":"set_key","mark":1}` |
 | `bounds.<id>` | Where each pane of the active tab is drawn: `[x, y, w, h]` |
 
 ## Requests
@@ -315,6 +318,59 @@ States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stal
   without their tabs. Change tasks through these requests, not by editing the files: the running
   app does not read them again.
 
+Marks (named, saved ways back to a pane or a whole tab; the Marks section lists them):
+
+```sh
+ottospace ctl '{"cmd":"marks"}'
+ottospace ctl '{"cmd":"mark_add","pane":3,"name":"notes","key":"n"}'
+ottospace ctl '{"cmd":"mark_add","tab":2,"name":"review"}'
+ottospace ctl '{"cmd":"mark_go","name":"notes"}'
+ottospace ctl '{"cmd":"mark_go","key":"n","axis":"down"}'
+ottospace ctl '{"cmd":"mark_rename","name":"notes","to":"journal"}'
+ottospace ctl '{"cmd":"mark_remove","name":"journal"}'
+```
+
+- A mark records what to open, not a window or a process: a terminal's directory (where its
+  shell is when it is marked), an app's bundle id, name and window title, or a tab's title,
+  task and split tree with one such record a pane. Marks are kept in `~/.ottospace/marks.json`
+  and come back at the next start. The record is taken when the mark is made and does not
+  follow later changes, but for an app's title, which is read again each time the open mark is
+  gone to. No mark holds a command: nothing is ever typed into a shell for one.
+- `marks` replies `{"ok":true,"marks":[..]}`, the same rows as `marks` in the state.
+- `mark_add` marks a pane (default: the focused one; name it) or, with `tab` (a tab `id`), a
+  whole tab. It replies `{"ok":true,"mark":{..}}`. `name`: default the app's name, the
+  directory's name or the tab's title; a name another mark has gets a number (`notes 2`).
+  `key`: one letter, `a` to `z`; a letter another mark has moves to this one.
+  A pane or tab that is marked already keeps its mark, which takes what is given. An empty
+  pane, or a tab with nothing in it, is refused.
+- `mark_go` takes the mark's `name` or its `key`. If its pane or tab is open now (`open`), the
+  tab comes forward and the pane takes focus; an app pane is focused, not entered. Else it is
+  opened: a terminal in the recorded directory (filling the focused pane if that is empty, else
+  splitting it along `axis`); an app's window in a pane (the window with the recorded title,
+  else the app's only window, else its main one; an app that is not running is started first,
+  and its window is picked once its windows have stopped appearing, so the pane comes after the
+  reply); or a new tab with the recorded splits. A tab opens with what can be opened: a pane
+  whose directory is gone or whose window could not be hosted is an empty pane that says why
+  (`unfilled`), and going to the open tab again tries those panes again. It changes what the
+  user sees, and for an app it moves a real window: send it only when asked. It fails, with
+  the reason, for a mark that is not `available`, when a window cannot be hosted (in a test
+  run, hosting is off), and when the picker, the new-task box, the key reference or visual
+  mode has the keyboard ("the picker is open"): nothing moved.
+- A terminal's mark is of that pane while the pane lives, whatever directory its shell is in
+  by then. An app's mark is of the pane that holds a window of that app with that title.
+- `mark_remove` and `mark_rename` take the mark's `name` or its `key`. Removing a mark closes
+  nothing. The user can put the last removed mark back (`mark_removed` while the section
+  offers it); there is no request for that.
+- Two ottospaces on one folder each write `marks.json`: before writing, each takes in what the
+  other added, changed or removed, mark by mark. A mark made here is not gone because another
+  ottospace wrote the file.
+- The user's keys: ⌘B marks or unmarks the focused pane, ⌘⇧B the tab on show; ⌘' and a letter
+  goes to that mark (`mode` is `mark` in between); ⌘⌥1 to ⌘⌥9 go to the first nine. While
+  `mode` is `mark` the wait may be the user's: the pointer requests and every request that
+  would take the keyboard (`enter`, `picker`, `compose`, `keys`, `ax_overlay`) fail with "a mark
+  is waiting for a letter or a name"; every other request runs underneath and leaves it
+  waiting. `key` with a letter, `backspace`, `enter` or `escape` is input to it.
+
 Reading a terminal pane:
 
 ```sh
@@ -415,7 +471,7 @@ ottospace ctl '{"cmd":"quit"}'
 ```
 
 `picker_choose` opens the selected match, or the match at `"index":N`. `section` is `apps`,
-`workbook`, `tasks` or `repos`; the open section's name closes the bar.
+`workbook`, `tasks`, `repos` or `marks`; the open section's name closes the bar.
 `keys` shows or hides the key reference; it fails while the picker or the new-task box is open,
 which it would close. `picker_choose` fails if the picker is not open.
 
@@ -433,12 +489,13 @@ per keystroke: the control acts as if clicked and the mode ends. A first letter 
 label only narrows; `backspace` takes it back; `escape` leaves with nothing done. So does a letter
 that goes on with no label, and the keys after it in the same `key` request are dropped, as are
 those after a spelled label. Ids: `rail:apps`
-(`workbook`, `tasks`, `repos`), `bar:refresh`, `bar:close`, `app:<name>`, `repo:<path>`,
-`task:<id>`, `tab:<tab id>`, `tab-close:<tab id>`, `top:new_tab`, `top:split_right`,
+(`workbook`, `tasks`, `repos`, `marks`), `bar:refresh`, `bar:close`, `app:<name>`, `repo:<path>`,
+`task:<id>`, `mark:<id>` (go to it), `mark-key:<id>`, `mark-rename:<id>`, `mark-remove:<id>`,
+`mark-undo`, `tab:<tab id>`, `tab-close:<tab id>`, `top:new_tab`, `top:split_right`,
 `top:split_down`, `top:task_leave`, `header:<pane>` (focus), `close:<pane>`, `fit:<pane>` (only
 while the header shows `fit`), `pane:<pane>` (focus;
 an app pane gets the keyboard, as `enter`), `home:new_task`, `home-row:<task>`, `home-node:<task>`.
-A `close:` or `tab-close:` label always has two letters.
+A `close:`, `tab-close:` or `mark-remove:` label always has two letters.
 
 The labels are those of a frame painted after the request came. `sneak` fails with "the window
 has not been drawn" if no frame is painted (a hidden or minimised window), and unless `mode` is

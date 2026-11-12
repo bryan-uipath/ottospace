@@ -42,6 +42,18 @@ pub fn app_path(name: &str) -> Option<PathBuf> {
     found.canonicalize().ok()
 }
 
+/// Where Launch Services says the app with this bundle id is installed. `None`: it is not.
+pub fn app_of_bundle(bundle: &str) -> Option<PathBuf> {
+    let url = NSWorkspace::sharedWorkspace().URLForApplicationWithBundleIdentifier(&NSString::from_str(bundle))?;
+    PathBuf::from(url.path()?.to_string()).canonicalize().ok()
+}
+
+/// Where an app is installed: by its bundle id if it has one, else by its name where apps
+/// usually are. `None`: it is not installed.
+pub fn installed(bundle: Option<&str>, name: &str) -> Option<PathBuf> {
+    bundle.and_then(app_of_bundle).or_else(|| app_path(name))
+}
+
 /// The app bundle the process `pid` runs from, resolved. `None` for a bare executable.
 pub fn bundle_of(pid: i32) -> Option<PathBuf> {
     let url = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)?.bundleURL()?;

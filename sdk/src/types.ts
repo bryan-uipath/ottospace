@@ -8,11 +8,11 @@ export type TaskId = number;
 
 export type Axis = "right" | "down";
 export type Dir = "left" | "right" | "up" | "down";
-export type Section = "apps" | "workbook" | "tasks" | "repos";
+export type Section = "apps" | "workbook" | "tasks" | "repos" | "marks";
 /** Pane kinds `split` may create. App panes come from `open_app`. */
 export type SplitKind = "terminal" | "empty";
 /** Who has the keyboard. */
-export type Mode = "normal" | "app" | "pick" | "visual" | "list" | "compose" | "sneak" | "confirm";
+export type Mode = "normal" | "app" | "pick" | "visual" | "list" | "compose" | "sneak" | "confirm" | "mark";
 
 export type TaskState =
   | "captured"
@@ -34,8 +34,8 @@ export type SessionRunner = "claude" | "codex";
 export type PaneKind =
   | { type: "empty" }
   | { type: "terminal" }
-  /** `window`: the window-server id of the hosted window. */
-  | { type: "app"; window: number; title: string };
+  /** `window`: the window-server id of the hosted window. `bundle`, `name`: whose it is. */
+  | { type: "app"; window: number; title: string; bundle?: string; name: string };
 
 export interface Pane {
   id: PaneId;
@@ -194,6 +194,36 @@ export interface Confirm {
   running: Running[];
 }
 
+/** What a mark waits for while it has the keyboard (`mode` is `mark`). */
+export type MarkInput =
+  /** The jump prefix was pressed: the next letter goes to that mark. */
+  | { type: "jump" }
+  | { type: "rename"; mark: number; text: string }
+  | { type: "set_key"; mark: number };
+
+/** A mark: a named, saved way back to a pane or a tab. */
+export interface Mark {
+  /** This run's id for it. Requests take the name or the key. */
+  id: number;
+  name: string;
+  /** The letter that jumps to it, or null. */
+  key: string | null;
+  kind: "terminal" | "app" | "tab";
+  /** Its pane or tab is open now: `pane` or `tab` (a tab's `id`) says which. */
+  open: boolean;
+  pane: PaneId | null;
+  tab: number | null;
+  /** False: it is not open and nothing of it can be opened. */
+  available: boolean;
+  /** Why it is not available, or what of a tab is missing or empty. */
+  reason: string | null;
+  /** The panes of its open tab that are still empty, each with why. */
+  unfilled: Array<{ pane: PaneId; why: string }>;
+  /** Where the Marks section drew its row and the row's buttons, or null. */
+  row: Rect | null;
+  buttons: { key: Rect | null; rename: Rect | null; remove: Rect | null };
+}
+
 /** `state` in a reply: the core's model. */
 export interface Model {
   /** Panes of every tab. */
@@ -223,6 +253,8 @@ export interface Model {
   /** The terminal pane in visual mode. */
   visual: PaneId | null;
   ax_overlay: boolean;
+  /** What a mark waits for, or null. */
+  mark_input: MarkInput | null;
 }
 
 export interface Terminal {
@@ -382,6 +414,20 @@ export interface Snapshot {
   sneak: Sneak | null;
   /** Counters for tests, by name (`live`: how often a pane went live). Null outside a test run. */
   counts: Record<string, number> | null;
+  /** The marks, in the user's order. */
+  marks: Mark[];
+  /** The name of the mark just taken off, while the Marks section offers to put it back. */
+  mark_removed: string | null;
+}
+
+export interface MarksReply {
+  ok: true;
+  marks: Mark[];
+}
+
+export interface MarkReply {
+  ok: true;
+  mark: Mark;
 }
 
 export interface TaskReply {
@@ -547,4 +593,26 @@ export interface AxTreeArgs {
   pane?: PaneId;
   depth?: number;
   nodes?: number;
+}
+/** Which mark: by its `name` or by its `key`, one of them. */
+export interface MarkRefArgs {
+  name?: string;
+  key?: string;
+}
+export interface MarkAddArgs {
+  /** Default: the focused pane. */
+  pane?: PaneId;
+  /** A tab's `id`: marks the whole tab. Not with `pane`. */
+  tab?: number;
+  /** Default: the app, the terminal's directory, or the tab's title. */
+  name?: string;
+  /** One letter, `a` to `z`. A letter another mark has moves here. */
+  key?: string;
+}
+export interface MarkGoArgs extends MarkRefArgs {
+  /** Where a new pane goes, if the mark has to be opened. */
+  axis?: Axis;
+}
+export interface MarkRenameArgs extends MarkRefArgs {
+  to: string;
 }

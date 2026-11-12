@@ -139,23 +139,52 @@ pub fn load_tasks() -> Kept {
     kept
 }
 
-/// Writes one task to `<id>.json` in the tasks folder. Whole or not at all: it writes beside the
-/// file, then renames over it. The file is the user's alone: a title can be private.
-pub fn save_task(task: &Task) -> io::Result<()> {
+/// Writes `text` to `name` in `dir`, whole or not at all: beside the file, then renamed over it.
+/// The folder and the file are the user's alone: a title or a directory can be private.
+fn write_whole(dir: &Path, name: &str, text: &str) -> io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
-    let Some(dir) = tasks_dir() else { return Ok(()) };
     if !dir.is_dir() {
-        fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir)?;
+        fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
     }
     // The process id keeps two running ottospaces from writing one draft.
-    let draft = dir.join(format!(".{}.json.{}.tmp", task.id, std::process::id()));
-    let text = serde_json::to_string_pretty(task).map_err(io::Error::other)? + "\n";
+    let draft = dir.join(format!(".{name}.{}.tmp", std::process::id()));
     let written = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&draft);
     let written = written.and_then(|mut file| file.write_all(text.as_bytes()));
-    let moved = written.and_then(|()| fs::rename(&draft, dir.join(format!("{}.json", task.id))));
+    let moved = written.and_then(|()| fs::rename(&draft, dir.join(name)));
     if moved.is_err() {
         let _ = fs::remove_file(&draft);
     }
     moved
+}
+
+/// Writes one task to `<id>.json` in the tasks folder.
+pub fn save_task(task: &Task) -> io::Result<()> {
+    let Some(dir) = tasks_dir() else { return Ok(()) };
+    let text = serde_json::to_string_pretty(task).map_err(io::Error::other)? + "\n";
+    write_whole(&dir, &format!("{}.json", task.id), &text)
+}
+
+/// True if marks are kept between runs: not in a test run that named no folder.
+pub fn keeps_marks() -> bool {
+    get().home.is_some()
+}
+
+/// The text of `marks.json` in the user's folder. `None`: no file, or nothing is kept. The
+/// error names a file that could not be read; it must then be left as it is.
+pub fn read_marks() -> Result<Option<String>, String> {
+    let Some(file) = get().home.as_ref().map(|home| home.join("marks.json")) else { return Ok(None) };
+    match fs::metadata(&file) {
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err.to_string()),
+        // A small regular file only: not a pipe, which would hang the read.
+        Ok(meta) if !meta.is_file() || meta.len() > 1_048_576 => Err("not a file of marks".into()),
+        Ok(_) => fs::read_to_string(&file).map(Some).map_err(|err| err.to_string()),
+    }
+}
+
+/// Writes `marks.json`, as `save_task` writes a task.
+pub fn save_marks(text: &str) -> io::Result<()> {
+    let Some(home) = get().home.as_ref() else { return Ok(()) };
+    write_whole(home, "marks.json", text)
 }

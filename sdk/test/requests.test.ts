@@ -83,6 +83,11 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.axTree({ pane: 1, depth: 20, nodes: 500 }),
   (c) => c.axOverlay({ refresh: true }),
   (c) => c.sneak(),
+  (c) => c.marks(),
+  (c) => c.markAdd({ pane: 1, name: "notes", key: "n" }),
+  (c) => c.markGo({ name: "notes", axis: "down" }),
+  (c) => c.markRemove({ key: "n" }),
+  (c) => c.markRename({ name: "notes", to: "journal" }),
   (c) => c.quit(),
 ];
 

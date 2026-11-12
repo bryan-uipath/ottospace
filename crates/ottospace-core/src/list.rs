@@ -1,5 +1,6 @@
 //! List mode: the secondary bar has the keyboard. Keys move a selection over its rows and act on it.
 
+use crate::marks::MarkId;
 use crate::tasks::{Heading, TaskId};
 
 /// What a row of the secondary bar stands for.
@@ -16,6 +17,7 @@ pub enum ListRow {
     Session(String, String),
     /// "N older" under Sessions. Opening it shows or hides the older sessions.
     OlderSessions,
+    Mark(MarkId),
 }
 
 /// What a key does in list mode.
@@ -34,13 +36,21 @@ pub enum ListKey {
     Hold,
     Dismiss,
     Undo,
+    /// Move the selected mark down (positive) or up the list.
+    Reorder(i32),
+    /// Type the selected mark's name, or its letter.
+    Rename,
+    Letter,
     Leave,
 }
 
 /// List-mode keys: arrows or `j`/`k` move, ↵ opens (⇧↵ splits down; space opens too, for a
-/// heading that folds), Tab changes section, `s` `h` `x` `u` act on a task, Esc leaves.
+/// heading that folds), Tab changes section, `s` `h` `x` `u` act on a task, Esc leaves. On a mark: `x` removes it, `r` renames
+/// it, `m` gives it a letter, ⇧J ⇧K (or ⇧↓ ⇧↑) move it.
 pub fn list_key(key: &str, shift: bool) -> Option<ListKey> {
     Some(match key {
+        "down" | "j" if shift => ListKey::Reorder(1),
+        "up" | "k" if shift => ListKey::Reorder(-1),
         "down" | "j" => ListKey::Move(1),
         "up" | "k" => ListKey::Move(-1),
         "enter" => ListKey::Open { down: shift },
@@ -50,6 +60,8 @@ pub fn list_key(key: &str, shift: bool) -> Option<ListKey> {
         "h" => ListKey::Hold,
         "x" => ListKey::Dismiss,
         "u" => ListKey::Undo,
+        "r" => ListKey::Rename,
+        "m" => ListKey::Letter,
         "escape" => ListKey::Leave,
         _ => return None,
     })
@@ -69,6 +81,11 @@ mod tests {
             (Some(ListKey::Section(1)), Some(ListKey::Section(-1)))
         );
         assert_eq!(list_key("x", false), Some(ListKey::Dismiss));
+        assert_eq!(
+            (list_key("j", true), list_key("up", true)),
+            (Some(ListKey::Reorder(1)), Some(ListKey::Reorder(-1)))
+        );
+        assert_eq!((list_key("r", false), list_key("m", false)), (Some(ListKey::Rename), Some(ListKey::Letter)));
         assert_eq!(list_key("q", false), None);
     }
 }

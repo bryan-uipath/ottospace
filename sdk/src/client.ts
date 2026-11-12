@@ -4,7 +4,19 @@
 
 import { Socket } from "node:net";
 
-import { axTreeReply, captureReply, inboxReply, refusal, snapshot, taskNewReply, taskPopReply, taskReply, waitReply } from "./parse.ts";
+import {
+  axTreeReply,
+  captureReply,
+  inboxReply,
+  markReply,
+  marksReply,
+  refusal,
+  snapshot,
+  taskNewReply,
+  taskPopReply,
+  taskReply,
+  waitReply,
+} from "./parse.ts";
 import { checkOwned, defaultSocketPath } from "./socket.ts";
 import type {
   AxTreeArgs,
@@ -18,6 +30,12 @@ import type {
   Heading,
   SessionRunner,
   InboxReply,
+  MarkAddArgs,
+  MarkGoArgs,
+  MarkRefArgs,
+  MarkRenameArgs,
+  MarkReply,
+  MarksReply,
   MouseArgs,
   MouseDownArgs,
   MovePaneArgs,
@@ -375,6 +393,25 @@ export class Client {
    */
   sneak(): Promise<Snapshot> {
     return this.snapshot({ cmd: "sneak" });
+  }
+  /** The marks, in the user's order. */
+  async marks(): Promise<MarksReply> {
+    return marksReply(await this.send({ cmd: "marks" }));
+  }
+  /** Marks a pane (default: the focused one) or, with `tab`, a whole tab. */
+  async markAdd(args: MarkAddArgs = {}): Promise<MarkReply> {
+    return markReply(await this.send({ cmd: "mark_add", ...args }));
+  }
+  /** Goes to a mark: to its pane or tab if that is open now, else opens it. */
+  markGo(args: MarkGoArgs): Promise<Snapshot> {
+    return this.snapshot({ cmd: "mark_go", ...args });
+  }
+  /** Removes a mark. What it marks stays open. */
+  markRemove(args: MarkRefArgs): Promise<Snapshot> {
+    return this.snapshot({ cmd: "mark_remove", ...args });
+  }
+  markRename(args: MarkRenameArgs): Promise<Snapshot> {
+    return this.snapshot({ cmd: "mark_rename", ...args });
   }
   /** Quits the app. */
   quit(): Promise<Snapshot> {

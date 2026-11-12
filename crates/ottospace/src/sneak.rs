@@ -15,6 +15,7 @@ use gpui::{
     Window, black, canvas, div, point, prelude::*, px, rgb,
 };
 use ottospace_core::ax::{Frame, Source, Target};
+use ottospace_core::marks::Field;
 use ottospace_core::sneak::{Sneak, SneakKey, sneak_key};
 use ottospace_core::{Action, Axis, Origin, PaneId, theme};
 
@@ -99,6 +100,11 @@ impl Controls {
             }
         };
         canvas(note, |_, _, _, _| {}).absolute().top_0().left_0().size_full().into_any_element()
+    }
+
+    /// Where the control `id` was last drawn, if it was.
+    pub fn bounds(&self, id: &str) -> Option<Bounds<Pixels>> {
+        self.0.borrow().controls.get(id).copied()
     }
 
     fn frame(&self) -> u64 {
@@ -328,6 +334,7 @@ impl Workspace {
                 self.new_task(window, cx);
                 None
             }
+            ("mark-undo", _) => Some(Action::MarkUndo),
             ("top", "task_leave") => Some(Action::TaskLeave),
             ("top", _) => {
                 if let Some((.., axis, new_tab)) = SPLITS.iter().find(|(top, ..)| *top == name) {
@@ -342,6 +349,10 @@ impl Workspace {
                     ("tab-close", Some(tab)) => self.close_tab(tab, window, cx),
                     ("close", Some(pane)) => self.close_pane(pane, window, cx),
                     ("fit", Some(pane)) => self.fit_pane(pane, window, cx),
+                    ("mark", Some(mark)) => self.choose_mark(mark, Axis::Right, window, cx),
+                    ("mark-key", Some(mark)) => self.edit_mark(mark, Field::Key, window, cx),
+                    ("mark-rename", Some(mark)) => self.edit_mark(mark, Field::Name, window, cx),
+                    ("mark-remove", Some(mark)) => self.remove_mark(mark, window, cx),
                     // The click a mouse also replays into the app has no place here.
                     ("pane", Some(pane)) => drop(self.choose_pane(pane, window, cx)),
                     _ => {}

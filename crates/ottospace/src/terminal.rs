@@ -183,6 +183,13 @@ impl Terminal {
         })
     }
 
+    /// The directory the shell is in now: that of the process in front (at a prompt, the shell
+    /// itself). `None`: it could not be read, e.g. the shell is gone.
+    pub fn cwd(&self) -> Option<String> {
+        let foreground = self.pty.as_ref().and_then(|pty| process::foreground(pty.as_fd()));
+        foreground.and_then(process::cwd).or_else(|| process::cwd(self.child as i32))
+    }
+
     /// Sends bytes to the shell, as if typed. Typing while scrolled back returns to the bottom.
     pub fn write(&self, bytes: Vec<u8>) {
         self.scroll(Scroll::Bottom);

@@ -247,7 +247,7 @@ pub fn dot(color: u32) -> Div {
 }
 
 /// An empty pane: a patch of the lattice with one place waiting, and a hint under it.
-pub fn empty_pane(hint: &'static str, pane: PaneId, drawn: &Shared) -> impl IntoElement + use<> {
+pub fn empty_pane(hint: SharedString, pane: PaneId, drawn: &Shared) -> impl IntoElement + use<> {
     let drawn = drawn.clone();
     let lines = canvas(
         |_, _, _| {},

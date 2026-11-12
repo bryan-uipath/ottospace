@@ -51,7 +51,7 @@ pub struct Rect {
     pub h: f32,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Node {
     Leaf(u32),
