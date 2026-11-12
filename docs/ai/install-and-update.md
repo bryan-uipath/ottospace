@@ -9,7 +9,7 @@ release yet.
 | Question | Decision |
 |---|---|
 | What is installed by default | The bare `ottospace` binary in `~/.local/bin`. The `.app` only with `--app` |
-| Where `main` builds come from | A rolling prerelease, tag `main-latest`, replaced on every push to `main` |
+| Where `main` builds come from | A rolling prerelease, tag `main-latest`, replaced on every push to `main` that changes more than docs |
 | Where pull request builds come from | Workflow artifacts of `build.yml`, fetched with `gh` |
 | Where releases come from | `release.yml` on a `v*` tag, same four files |
 | Default channel of the one-liner | `main`, until there is a tagged release |

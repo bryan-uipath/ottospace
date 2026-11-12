@@ -51,7 +51,8 @@ Rules:
   `cargo fmt -p ottospace -p ottospace-core --check`, `cargo clippy` (errors fail, warnings do not),
   `cargo test --workspace`. `cargo e2e` runs in a separate job that may fail without blocking.
 - A change that touches only `docs/`, `site/`, `README.md`, `AGENTS.md` or `LICENSE` runs neither
-  workflow: macOS runners are scarce. Such a pull request has no checks to wait for.
+  workflow: macOS runners are scarce. Such a pull request has no checks to wait for, and
+  after such a push `main-latest` trails `main` by docs commits.
 - Not in CI: `cargo e2e-apps` (needs Accessibility and Screen Recording), rustfmt on
   `ottospace-mac` (not formatted yet), clippy `-D warnings` (main has warnings).
 - `.github/workflows/build.yml`, on pull requests and pushes to `main`: `scripts/test-osi.sh`, and

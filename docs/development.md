@@ -96,7 +96,7 @@ The release workflow runs `scripts/package.sh` and attaches four files to a GitH
 (the app), `BUILD` (version, commit, date) and `SHA256SUMS`. It fails if the tag does not match
 the crate version. `osi install stable` then installs it.
 
-Every push to `main` publishes the same four files to the `main-latest` prerelease, whose tag
+Every push to `main` that changes more than docs publishes the same four files to the `main-latest` prerelease, whose tag
 moves to the new commit (`git fetch --tags` then reports a clobbered tag: use `--force`). Every
 pull request gets them as a workflow artifact, kept 14 days.
 
