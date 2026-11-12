@@ -27,7 +27,9 @@ export type TaskState =
 /** A heading of the inbox, in the order shown. */
 export type Group = "needs_you" | "running" | "captured" | "on_hold" | "done";
 /** A heading of the Tasks section, in the order drawn. `open`: tasks with tabs open that do not need the user. */
-export type Heading = "needs_you" | "open" | "running" | "captured" | "on_hold" | "done";
+export type Heading = "needs_you" | "open" | "running" | "captured" | "on_hold" | "done" | "sessions";
+/** A program that runs agent sessions. */
+export type SessionRunner = "claude" | "codex";
 
 export type PaneKind =
   | { type: "empty" }
@@ -75,6 +77,39 @@ export interface Task {
   skills: string[];
   /** When it was filed, in milliseconds since 1970. Null: filed before this was kept. */
   created: number | null;
+  /** The session it was adopted from, or null. */
+  session: { runner: string; id: string } | null;
+}
+
+/** A session no task has adopted, as the Tasks section draws it. */
+export interface SessionRow {
+  runner: SessionRunner;
+  id: string;
+  /** The repository or worktree it runs in. */
+  name: string;
+  active: boolean;
+  /** While active: `shell · cargo test`. Untrusted text: built from names in a transcript a model wrote. */
+  doing: string | null;
+  /** How long ago it was last active: `now`, `5m`, `3h`, `2d`. */
+  age: string | null;
+  /** The terminal pane it runs in, when there is no doubt. */
+  pane: PaneId | null;
+}
+
+/** The Sessions group of the Tasks section. */
+export interface SessionsBar {
+  /** Sessions listed, the older ones included. */
+  count: number;
+  collapsed: boolean;
+  /** None while collapsed. The older ones only while `older_open`. */
+  rows: SessionRow[];
+  /** Idle for more than a day. */
+  older: number;
+  older_open: boolean;
+  /** False when the settings turn reading sessions off. */
+  enabled: boolean;
+  /** How many times the sessions were read since the app started. */
+  reads: number;
 }
 
 /** A row of the Tasks section, as drawn. */
@@ -321,6 +356,7 @@ export interface Snapshot {
   /** The tags of the line in the new-task box have been looked up. */
   compose_read: boolean;
   tasks_bar: TasksBar;
+  sessions_bar: SessionsBar;
   /** Null while the tab on show has a pane. */
   home: Home | null;
   home_drawn: HomeDrawn;

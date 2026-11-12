@@ -16,6 +16,7 @@ import type {
   DragArgs,
   DropPaneArgs,
   Heading,
+  SessionRunner,
   InboxReply,
   MouseArgs,
   MouseDownArgs,
@@ -306,6 +307,22 @@ export class Client {
    */
   async taskNew(args: { line: string; open?: boolean }): Promise<TaskNewReply> {
     return taskNewReply(await this.send({ cmd: "task_new", ...args }));
+  }
+  /** Makes a task of a session listed under Sessions (`sessions_bar.rows`). */
+  sessionAdopt(args: { runner: SessionRunner; id: string }): Promise<Snapshot> {
+    return this.snapshot({ cmd: "session_adopt", ...args });
+  }
+  /** Stops listing a session until the app starts again. */
+  sessionHide(args: { runner: SessionRunner; id: string }): Promise<Snapshot> {
+    return this.snapshot({ cmd: "session_hide", ...args });
+  }
+  /** As a click on the session's row: focuses its pane if that is known, else selects the row. */
+  sessionClick(args: { runner: SessionRunner; id: string }): Promise<Snapshot> {
+    return this.snapshot({ cmd: "session_click", ...args });
+  }
+  /** Shows or hides the idle sessions older than a day. */
+  sessionsOlder(): Promise<Snapshot> {
+    return this.snapshot({ cmd: "sessions_older" });
   }
   /** Folds or unfolds a heading of the Tasks section. */
   taskGroup(args: { heading: Heading }): Promise<Snapshot> {

@@ -57,6 +57,31 @@ pub fn repo_roots() -> Vec<PathBuf> {
     listed.iter().map(|dir| PathBuf::from(expand_home(dir, &user_home()))).collect()
 }
 
+/// Where the runners' sessions are read from.
+pub struct SessionDirs {
+    pub claude: Vec<PathBuf>,
+    pub codex: Option<PathBuf>,
+}
+
+/// Where sessions are read from: `session_dirs` in the settings, else `~/.claude` and `~/.codex`
+/// (an app started from the Dock has no `CLAUDE_CONFIG_DIR` to go by). `None`: nothing is read,
+/// because `"sessions": false` says so, or because this is a test run whose settings name no
+/// directory: a test never reads the user's own sessions.
+pub fn session_dirs() -> Option<SessionDirs> {
+    let settings = &get().settings;
+    let test_run = std::env::var_os("OTTOSPACE_E2E").is_some();
+    if settings.sessions == Some(false) || (test_run && settings.session_dirs.is_none()) {
+        return None;
+    }
+    let named = settings.session_dirs.clone().unwrap_or_default();
+    let path = |dir: &String| PathBuf::from(expand_home(dir, &user_home()));
+    // In a test run a runner the settings leave out has no directory, not the user's.
+    let default = |dir: &str| (!test_run).then(|| dir.to_string());
+    let claude = named.claude.unwrap_or_else(|| default("~/.claude").into_iter().collect());
+    let codex = named.codex.or_else(|| default("~/.codex"));
+    Some(SessionDirs { claude: claude.iter().map(path).collect(), codex: codex.as_ref().map(path) })
+}
+
 /// Where tasks are kept: `tasks` in the settings (a relative path is inside the user's folder),
 /// else `tasks` in the user's folder. `None`: nothing is kept.
 pub fn tasks_dir() -> Option<PathBuf> {

@@ -301,6 +301,16 @@ impl Workspace {
                 }
                 None
             }
+            ("session" | "session-adopt" | "session-hide", _) => {
+                if let Some((runner, id)) = name.split_once(':') {
+                    self.click_session_control(kind, runner.into(), id.into(), window, cx);
+                }
+                None
+            }
+            ("sessions-older", _) => {
+                self.click_older_sessions(window, cx);
+                None
+            }
             ("task-undo", _) => {
                 self.click_undo(window, cx);
                 None

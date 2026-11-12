@@ -8,7 +8,9 @@ use serde::Deserialize;
 /// ```json
 /// { "terminal": { "font": "JetBrains Mono", "font_size": 14 },
 ///   "repos": ["~/code", "~/work/clients"],
-///   "tasks": "~/notes/tasks" }
+///   "tasks": "~/notes/tasks",
+///   "sessions": true,
+///   "session_dirs": { "claude": ["~/.claude"], "codex": "~/.codex" } }
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -29,6 +31,25 @@ pub struct Settings {
     /// Choosing one starts it.
     #[serde(default)]
     pub apps: Vec<String>,
+    /// List the agent sessions (Claude Code, Codex) of the listed repositories in the Tasks
+    /// section. Default: true. False: no session file is ever read.
+    #[serde(default)]
+    pub sessions: Option<bool>,
+    /// Where the runners keep their sessions. Default: `~/.claude` and `~/.codex`.
+    #[serde(default)]
+    pub session_dirs: Option<SessionDirs>,
+}
+
+/// A runner left out keeps its default.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionDirs {
+    /// Claude Code's config directories: one each for several accounts.
+    #[serde(default)]
+    pub claude: Option<Vec<String>>,
+    /// Codex's home.
+    #[serde(default)]
+    pub codex: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -169,6 +190,17 @@ mod tests {
             (settings.repos, settings.tasks.as_deref()),
             (Some(vec!["~/code".to_string()]), Some("~/notes/tasks"))
         );
+        assert_eq!((settings.sessions, settings.session_dirs), (None, None));
+    }
+
+    #[test]
+    fn sessions_can_be_turned_off_and_their_directories_named() {
+        let text = r#"{ "sessions": false, "session_dirs": { "claude": ["~/.claude", "~/.claude-work"] } }"#;
+        let settings = Settings::parse(text).unwrap();
+        let dirs = settings.session_dirs.unwrap();
+        assert_eq!((settings.sessions, dirs.claude.map(|dirs| dirs.len()), dirs.codex), (Some(false), Some(2), None));
+        let (_, wrong) = Settings::read(r#"{ "session_dirs": { "gemini": "~/.gemini" } }"#);
+        assert!(wrong[0].starts_with("session_dirs: unknown field"), "{wrong:?}");
     }
 
     #[test]

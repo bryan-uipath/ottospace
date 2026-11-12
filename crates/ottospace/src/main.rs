@@ -48,6 +48,7 @@ mod control;
 mod home;
 mod menus;
 mod repos;
+mod sessions;
 mod sneak;
 mod tags;
 mod terminal;
@@ -524,6 +525,12 @@ struct Workspace {
     filing: Vec<(u64, Filing, Sender<String>)>,
     /// How many such calls there were: each has its own number.
     calls: u64,
+    /// Reads agent sessions on a thread of its own. `None`: the settings turn it off.
+    sessions: Option<sessions::Poller>,
+    /// The core holds sessions that were found: they are cleared when the Tasks section closes.
+    sessions_listed: bool,
+    /// The user was told that the sessions reader stopped.
+    sessions_stopped: bool,
     /// Window ids seen per hosted pid; anything new that appears later gets its own pane.
     known: Vec<(i32, HashSet<u32>)>,
     /// When the live pane went live.
@@ -621,6 +628,9 @@ impl Workspace {
                 let alive = this.update_in(cx, |this, window, cx| {
                     this.serve_control(window, cx);
                     this.take_tags(window, cx);
+                    if tick % 15 == 0 {
+                        this.poll_sessions(window, cx);
+                    }
                     if hotkey::take_press() {
                         this.return_to_ottospace(window, cx);
                     }
@@ -719,6 +729,9 @@ impl Workspace {
             tags_repo: None,
             filing: Vec::new(),
             calls: 0,
+            sessions: sessions::Poller::start(),
+            sessions_listed: false,
+            sessions_stopped: false,
             known: Vec::new(),
             live_since: None,
             front_hosted: None,
@@ -766,8 +779,13 @@ impl Workspace {
         let line = self.model.compose.clone();
         // The core has no clock: a task filed now is stamped with the time told here.
         // So is the notice that offers a mouse move back: it counts its seconds from here.
-        let files =
-            matches!(action, Action::TaskAdd { .. } | Action::TaskFromLine { .. } | Action::ComposeSubmit { .. });
+        let files = matches!(
+            action,
+            Action::TaskAdd { .. }
+                | Action::TaskFromLine { .. }
+                | Action::ComposeSubmit { .. }
+                | Action::SessionAdopt { .. }
+        );
         let row = matches!(action, Action::RowSnooze { .. } | Action::RowHold { .. } | Action::RowDismiss { .. });
         if files || row {
             self.model.update(Action::Tick { now: now_ms() }.sent_by(Origin::System));
@@ -1240,6 +1258,10 @@ impl Workspace {
                 }
                 Request::TaskUndo => Some(Action::TaskUndo),
                 Request::TaskGroup { heading } => Some(Action::ToggleGroup { heading }),
+                Request::SessionAdopt { runner, id } => Some(Action::SessionAdopt { runner, id }),
+                Request::SessionHide { runner, id } => Some(Action::SessionHide { runner, id }),
+                Request::SessionClick { runner, id } => Some(Action::SessionClick { runner, id }),
+                Request::SessionsOlder => Some(Action::ToggleOlderSessions),
                 Request::TaskSetState { id, .. }
                 | Request::TaskSnooze { id, .. }
                 | Request::TaskHold { id }
@@ -1360,6 +1382,42 @@ impl Workspace {
             row
         };
         self.model.tasks.inbox().into_iter().map(row).collect()
+    }
+
+    /// The Sessions group as drawn, and how often sessions were read: `reads` stays 0 while
+    /// reading is off (`"sessions": false`) or the Tasks section was never open.
+    fn sessions_bar(&self) -> serde_json::Value {
+        let mut bar = serde_json::json!(self.model.sessions_bar());
+        bar["reads"] = serde_json::json!(self.sessions.as_ref().map_or(0, sessions::Poller::reads));
+        bar["enabled"] = serde_json::json!(self.sessions.is_some());
+        bar
+    }
+
+    /// Asks for the sessions to be read again when it is time, and takes in what was found.
+    /// The reading itself is on the poller's thread.
+    fn poll_sessions(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let now = now_ms();
+        let open = self.model.sidebar == Some(Section::Tasks);
+        let Some(poller) = &mut self.sessions else { return };
+        poller.ask(open, now);
+        let (found, stopped) = (poller.take(), poller.stopped());
+        // What was found is shown, and acted on, only while it is fresh: it is read while the
+        // section is open, so when the section closes (or the reader is gone) the list is
+        // emptied. Nothing then reads or adopts a session by what it was doing a while ago.
+        let found = if open && !stopped { found } else { self.sessions_listed.then(Vec::new) };
+        if let Some(found) = found {
+            self.sessions_listed = open && !stopped;
+            // The time too: ages and "older" are counted from it.
+            self.dispatch(Action::Tick { now }, Origin::System, window, cx);
+            self.dispatch(Action::SetSessions { found }, Origin::System, window, cx);
+            cx.notify();
+        }
+        if stopped && !self.sessions_stopped {
+            self.sessions_stopped = true;
+            self.error =
+                Some("sessions: the reader stopped; sessions are not listed until ottospace starts again".into());
+            cx.notify();
+        }
     }
 
     fn tasks_bar(&self) -> serde_json::Value {
@@ -1613,6 +1671,9 @@ impl Workspace {
             // collapsed). `empty`: no task is listed, so the section shows how to file one.
             // `undo`: the move the line at its top offers to take back ("Dismissed"), while it shows.
             "tasks_bar": self.tasks_bar(),
+            // Sessions that are no task's, as the Tasks section draws them below the tasks:
+            // derived facts only (runner, id, repository name, active, station and label, age).
+            "sessions_bar": self.sessions_bar(),
             // The home screen, or null while the tab on show has a pane: each task's node (its
             // lane, depth and crossing of the lattice) and the rows under "Needs you".
             "home": self.model.home(&self.home.borrow().keep_out()),
@@ -2141,8 +2202,10 @@ impl Workspace {
             Some(Section::Apps) => return Some(at + usize::from(at >= self.apps.len())),
             _ => return Some(at),
         }
-        // The offer to undo, if it shows; then the headings and rows, which list mode walks alike.
-        Some(usize::from(self.model.undo_offer.is_some()) + at)
+        // The offer to undo, if it shows; how to add a task, if none is listed; then the headings
+        // and rows, which list mode walks as they are drawn.
+        let empty = self.model.task_sections(0).is_empty();
+        Some(usize::from(self.model.undo_offer.is_some()) + usize::from(empty) + at)
     }
 
     /// Reads the Apps and Repos lists again.
@@ -2762,6 +2825,186 @@ impl Workspace {
         cx.notify();
     }
 
+    /// A click on a session's row or on one of its buttons, by the control's name: `session`
+    /// (its pane, if that is known; else the row is selected), `session-adopt` (a task is made
+    /// of it) or `session-hide`. Nothing is ever sent to the session.
+    pub(crate) fn click_session_control(
+        &mut self,
+        control: &str,
+        runner: String,
+        id: String,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let action = match control {
+            "session" => Action::SessionClick { runner, id },
+            "session-adopt" => Action::SessionAdopt { runner, id },
+            "session-hide" => Action::SessionHide { runner, id },
+            _ => return,
+        };
+        self.dispatch(action, self.input, window, cx);
+        cx.notify();
+    }
+
+    /// A click on "N older" under Sessions.
+    pub(crate) fn click_older_sessions(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.dispatch(Action::ToggleOlderSessions, self.input, window, cx);
+        cx.notify();
+    }
+
+    /// A heading of the Tasks section, the Sessions one too: a fold mark, its name and how many
+    /// it holds. A click folds it. `selected`: list mode is on it, and ↵ or space folds it.
+    fn heading_row(
+        &self,
+        heading: Heading,
+        count: usize,
+        collapsed: bool,
+        selected: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let color = match heading {
+            Heading::NeedsYou => theme::task(Group::NeedsYou),
+            Heading::Open => theme::TEXT,
+            _ => theme::MUTED,
+        };
+        div()
+            .id(("task-heading", heading as usize))
+            .px_2()
+            .pt_2()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .text_xs()
+            .text_color(rgb(color))
+            .cursor_pointer()
+            .hover(|s| s.text_color(rgb(theme::TEXT)))
+            .when(selected, |d| d.pb_0p5().rounded_md().bg(rgb(theme::SELECTED)))
+            .child(div().w(px(8.)).text_color(rgb(theme::MUTED)).child(if collapsed { "▸" } else { "▾" }))
+            .child(heading.title())
+            .child(div().text_color(rgb(theme::MUTED)).child(count.to_string()))
+            .relative()
+            .child(self.controls.mark(format!("task-heading:{}", heading_name(heading))))
+            .on_click(cx.listener(move |this, _, window, cx| this.click_heading(heading, window, cx)))
+            .into_any_element()
+    }
+
+    /// The Sessions group: agent sessions found for the listed repositories that are no task's.
+    /// Empty when there are none. `listed`: how many rows of the list come before; the heading,
+    /// each session and "N older" are rows, as list mode walks them.
+    fn render_sessions(&self, mut listed: usize, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let bar = self.model.sessions_bar();
+        if bar.count == 0 {
+            return Vec::new();
+        }
+        let small = |selected: bool| {
+            let line = div().px_2().flex().items_center().gap_1p5().text_xs().text_color(rgb(theme::MUTED));
+            line.relative().when(selected, |d| d.pb_0p5().rounded_md().bg(rgb(theme::SELECTED)))
+        };
+        let selected = self.model.list == Some(listed);
+        let mut rows = vec![self.heading_row(Heading::Sessions, bar.count, bar.collapsed, selected, cx)];
+        listed += 1;
+        let (recent, old) = bar.rows.split_at(bar.recent());
+        for row in recent {
+            rows.push(self.session_row(row, self.model.list == Some(listed), cx));
+            listed += 1;
+        }
+        // "N older" sits between the sessions of the last day and the older ones.
+        if bar.older > 0 && !bar.collapsed {
+            rows.push(
+                small(self.model.list == Some(listed))
+                    .id("sessions-older")
+                    .py_0p5()
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(rgb(theme::TEXT)))
+                    .child(div().w(px(8.)).child(if bar.older_open { "▾" } else { "▸" }))
+                    .child(format!("{} older", bar.older))
+                    .child(self.controls.mark("sessions-older"))
+                    .on_click(cx.listener(|this, _, window, cx| this.click_older_sessions(window, cx)))
+                    .into_any_element(),
+            );
+            listed += 1;
+        }
+        for row in old {
+            rows.push(self.session_row(row, self.model.list == Some(listed), cx));
+            listed += 1;
+        }
+        rows
+    }
+
+    /// A session's row: a dot (lit while it is active), where it runs and which runner, then what
+    /// it is doing and how long ago. Hover (or list mode's selection) shows Adopt and Hide.
+    fn session_row(&self, row: &ottospace_core::sessions::Row, selected: bool, cx: &mut Context<Self>) -> AnyElement {
+        let key = format!("{}:{}", row.runner, row.id);
+        let button = |name: &'static str, label: &'static str, tip: &'static str| {
+            let (runner, id) = (row.runner.clone(), row.id.clone());
+            div()
+                .id(ElementId::Name(format!("{name}:{key}").into()))
+                .relative()
+                .child(self.controls.mark(format!("{name}:{key}")))
+                .px_1()
+                .rounded_sm()
+                .text_xs()
+                .text_color(rgb(theme::TEXT))
+                .hover(|s| s.bg(rgb(theme::BORDER_STRONG)))
+                .child(label)
+                .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation(); // not a click on the row
+                    this.click_session_control(name, runner.clone(), id.clone(), window, cx);
+                }))
+        };
+        let actions = div()
+            .absolute()
+            .right(px(6.))
+            .bottom(px(4.))
+            .flex()
+            .gap_0p5()
+            .pl_1()
+            .bg(rgb(theme::SELECTED))
+            .when(!selected, |d| d.invisible().group_hover("session-row", |s| s.visible()))
+            .child(button("session-adopt", "Adopt", "Make a task of this session"))
+            .child(button("session-hide", "Hide", "Hide until ottospace starts again"));
+        let state = if row.active { row.doing.clone().unwrap_or_else(|| "active".into()) } else { "idle".into() };
+        let detail = [Some(state), row.age.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+        let color = if row.active { theme::task(Group::Running) } else { theme::BORDER_STRONG };
+        let muted = || div().flex_none().text_xs().text_color(rgb(theme::MUTED));
+        let (runner, id) = (row.runner.clone(), row.id.clone());
+        list_button(ElementId::Name(format!("session:{key}").into()), selected)
+            .group("session-row")
+            .relative()
+            .items_start()
+            .child(div().h(px(20.)).flex().items_center().child(home::dot(color)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(div().flex_1().min_w_0().truncate().child(row.name.clone()))
+                            .children(row.pane.map(|pane| muted().child(format!("in pane {pane}"))))
+                            .child(muted().child(row.runner.clone())),
+                    )
+                    .child(
+                        div()
+                            .h(px(20.))
+                            .flex()
+                            .items_center()
+                            .child(muted().flex_1().min_w_0().truncate().child(detail)),
+                    ),
+            )
+            .child(actions)
+            .child(self.controls.mark(format!("session:{key}")))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.click_session_control("session", runner.clone(), id.clone(), window, cx);
+            }))
+            .into_any_element()
+    }
+
     /// The Tasks section: what needs the user, the other tasks with tabs open, then the rest of
     /// the inbox under its headings. A click on a row shows the task's tabs; a click on a heading
     /// folds it. After a snooze, hold or dismiss by mouse, a line at the top offers to undo it.
@@ -2769,35 +3012,8 @@ impl Workspace {
         let mut rows: Vec<AnyElement> = Vec::new();
         let mut listed = 0; // rows of the list so far: a heading is one, as list mode walks them
         for section in self.model.task_sections(now_ms()) {
-            let heading = section.heading;
-            let color = match heading {
-                Heading::NeedsYou => theme::task(Group::NeedsYou),
-                Heading::Open => theme::TEXT,
-                _ => theme::MUTED,
-            };
-            let fold = if section.collapsed { "▸" } else { "▾" };
-            rows.push(
-                div()
-                    .id(("task-heading", heading as usize))
-                    .px_2()
-                    .pt_2()
-                    .flex()
-                    .items_center()
-                    .gap_1p5()
-                    .text_xs()
-                    .text_color(rgb(color))
-                    .cursor_pointer()
-                    .hover(|s| s.text_color(rgb(theme::TEXT)))
-                    // List mode's selection: ↵ or space folds it.
-                    .when(self.model.list == Some(listed), |d| d.pb_0p5().rounded_md().bg(rgb(theme::SELECTED)))
-                    .child(div().w(px(8.)).text_color(rgb(theme::MUTED)).child(fold))
-                    .child(heading.title())
-                    .child(div().text_color(rgb(theme::MUTED)).child(section.count.to_string()))
-                    .relative()
-                    .child(self.controls.mark(format!("task-heading:{}", heading_name(heading))))
-                    .on_click(cx.listener(move |this, _, window, cx| this.click_heading(heading, window, cx)))
-                    .into_any_element(),
-            );
+            let selected = self.model.list == Some(listed);
+            rows.push(self.heading_row(section.heading, section.count, section.collapsed, selected, cx));
             listed += 1;
             for row in &section.rows {
                 if let Some(task) = self.model.tasks.get(row.id) {
@@ -2850,8 +3066,9 @@ impl Workspace {
                 .child(div().text_color(rgb(theme::PRIMARY)).child("Undo"))
                 .on_click(cx.listener(|this, _, window, cx| this.click_undo(window, cx)))
         });
+        let sessions = self.render_sessions(listed, cx);
         let list = div().id("tasks").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
-        list.track_scroll(&self.list_scroll).children(notice).children(empty).children(rows)
+        list.track_scroll(&self.list_scroll).children(notice).children(empty).children(rows).children(sessions)
     }
 
     /// A task's row: a dot in its state's colour, priority and title, then a muted line of where

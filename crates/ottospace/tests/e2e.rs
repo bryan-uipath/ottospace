@@ -1279,6 +1279,162 @@ fn shows(terminal: &Value, text: &str) -> bool {
     terminal["lines"].as_array().is_some_and(|lines| lines.iter().any(|l| l.as_str() == Some(text)))
 }
 
+/// A made-up session file from `ottospace-sessions`' fixtures, copied to `to` with its directory
+/// (`/work/app`) rewritten to `cwd`, and last changed `age` ago. Never a real session file.
+fn session_fixture(fixture: &str, to: &Path, cwd: &Path, age: Duration) {
+    let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ottospace-sessions/tests/fixtures").join(fixture);
+    let text = std::fs::read_to_string(&from).unwrap().replace("/work/app", cwd.to_str().unwrap());
+    std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+    std::fs::write(to, text).unwrap();
+    let file = std::fs::File::options().write(true).open(to).unwrap();
+    file.set_modified(std::time::SystemTime::now() - age).unwrap();
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
+    let home = user_folder("sessions", "");
+    fake_repo(&home.join("src/app"));
+    let repo = home.canonicalize().unwrap().join("src/app");
+    // Three made-up sessions: a Claude Code at work in the repository, a Codex idle for two hours
+    // below it, and a Codex last active three days ago.
+    let (claude, codex) = (home.join("claude"), home.join("codex"));
+    let (busy, idle, old) = (
+        "11111111-1111-4111-8111-111111111111",
+        "c0de0001-0000-4000-8000-000000000001",
+        "c0de0004-0000-4000-8000-000000000004",
+    );
+    let project = claude.join("projects").join(ottospace_sessions::claude::slug(&repo));
+    let hours = |n: u64| Duration::from_secs(n * 3600);
+    session_fixture(
+        &format!("claude/projects/-work-app/{busy}.jsonl"),
+        &project.join(format!("{busy}.jsonl")),
+        &repo,
+        hours(0),
+    );
+    let rollout = |day: &str, at: &str, id: &str| {
+        format!("sessions/2026/{day}/rollout-2026-{}T{at}-{id}.jsonl", day.replace('/', "-"))
+    };
+    let (recent, long_ago) = (rollout("11/12", "09-30-00", idle), rollout("03/02", "15-00-00", old));
+    session_fixture(&format!("codex/{recent}"), &codex.join(&recent), &repo, hours(2));
+    session_fixture(&format!("codex/{long_ago}"), &codex.join(&long_ago), &repo.join("docs"), hours(72));
+    let settings = |sessions: bool| {
+        let dirs = json!({"claude": [claude], "codex": codex});
+        let settings = json!({"repos": [home.join("src")], "sessions": sessions, "session_dirs": dirs});
+        std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
+    };
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    // The Sessions group as (runner, id, name, active) of each row drawn.
+    let rows = |reply: &Value| -> Vec<(String, String, String, bool)> {
+        let text = |row: &Value, key: &str| row[key].as_str().unwrap().to_string();
+        let rows = reply["sessions_bar"]["rows"].as_array().unwrap();
+        rows.iter()
+            .map(|r| (text(r, "runner"), text(r, "id"), text(r, "name"), r["active"].as_bool().unwrap()))
+            .collect()
+    };
+    let row = |runner: &str, id: &str, active: bool| (runner.to_string(), id.to_string(), "app".to_string(), active);
+
+    // `"sessions": false`: nothing is read, with the section open or not.
+    settings(false);
+    let off = Otto::launch_with("sessions-off", &env);
+    off.call(json!({"cmd": "section", "section": "tasks"}));
+    std::thread::sleep(Duration::from_millis(1500));
+    let bar = off.call(json!({"cmd": "state"}))["sessions_bar"].clone();
+    assert_eq!((&bar["enabled"], &bar["reads"], &bar["count"]), (&json!(false), &json!(0), &json!(0)));
+    drop(off);
+
+    settings(true);
+    let otto = Otto::launch_with("sessions", &env);
+    // Nothing is read while the Tasks section is closed.
+    std::thread::sleep(Duration::from_millis(1500));
+    let bar = otto.call(json!({"cmd": "state"}))["sessions_bar"].clone();
+    assert_eq!((&bar["enabled"], &bar["reads"], &bar["count"]), (&json!(true), &json!(0), &json!(0)));
+    // Open: read at once. The active session first, the one older than a day behind "1 older".
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let reply = otto.wait_for("the sessions to be read", |o| {
+        Some(o.call(json!({"cmd": "state"}))).filter(|reply| reply["sessions_bar"]["count"] == 3)
+    });
+    assert_eq!(rows(&reply), [row("claude", busy, true), row("codex", idle, false)]);
+    let bar = &reply["sessions_bar"];
+    assert_eq!(
+        (&bar["older"], &bar["rows"][0]["doing"], &bar["rows"][1]["doing"]),
+        (&json!(1), &json!("network · git push"), &Value::Null)
+    );
+    assert_eq!((&bar["rows"][0]["age"], &bar["rows"][1]["age"]), (&json!("now"), &json!("2h")));
+    let reply = otto.call(json!({"cmd": "sessions_older"}));
+    assert_eq!(rows(&reply)[2], row("codex", old, false));
+    otto.call(json!({"cmd": "sessions_older"}));
+    // The words of the made-up conversation are nowhere in what the app says.
+    let said = otto.call(json!({"cmd": "state"})).to_string();
+    assert!(!said.contains("Add a greeting") && !said.contains("made-up"), "{said}");
+
+    // One terminal opened in the session's directory, one session started there: it runs "in" that
+    // pane, and a click on the row focuses it. Nothing is typed into it.
+    otto.call(json!({"cmd": "repos"}));
+    let pane = otto.call(json!({"cmd": "open_repo", "path": repo}))["state"]["focused"].clone();
+    let other = otto.call(json!({"cmd": "split"}))["state"]["focused"].clone();
+    assert_ne!(pane, other);
+    let reply = otto.call(json!({"cmd": "session_click", "runner": "claude", "id": busy}));
+    assert_eq!((&reply["sessions_bar"]["rows"][0]["pane"], &reply["state"]["focused"]), (&pane, &pane));
+    // No pane to tell: the click selects the row.
+    let reply = otto.call(json!({"cmd": "session_click", "runner": "codex", "id": idle}));
+    assert_eq!(
+        (reply["mode"].as_str(), &reply["state"]["list"], &reply["state"]["focused"]),
+        (Some("list"), &json!(2), &pane)
+    );
+    otto.call(json!({"cmd": "key", "keys": "escape"}));
+
+    // Adopt: a task named after the repository, in it, worked by the session's runner. The task
+    // keeps which session it is, and no path from the session's own file.
+    let reply = otto.call(json!({"cmd": "session_adopt", "runner": "claude", "id": busy}));
+    let task = &reply["state"]["tasks"]["list"][0];
+    assert_eq!((&task["title"], &task["state"], &task["agent"]), (&json!("app"), &json!("running"), &json!("claude")));
+    assert_eq!((task["repo"].as_str(), task["session"]["id"].as_str()), (repo.to_str(), Some(busy)));
+    assert!(task["session"].get("cwd").is_none(), "{task}");
+    assert_eq!(reply["tasks_bar"]["sections"][0]["rows"][0]["detail"], ">app · @claude · now");
+    assert_eq!(rows(&reply), [row("codex", idle, false)]);
+    // One that started below the repository is the repository's task too: `>app`, not `>crates`.
+    let reply = otto.call(json!({"cmd": "session_adopt", "runner": "codex", "id": idle}));
+    let task = &reply["state"]["tasks"]["list"][1];
+    assert_eq!(
+        (task["repo"].as_str(), &task["state"], &task["agent"]),
+        (repo.to_str(), &json!("captured"), &json!("codex"))
+    );
+    assert_eq!(rows(&reply), []);
+    // Both stay tasks when the sessions are read again.
+    let reads = reply["sessions_bar"]["reads"].as_u64().unwrap();
+    let reply = otto.wait_for("the next read", |o| {
+        Some(o.call(json!({"cmd": "state"}))).filter(|reply| reply["sessions_bar"]["reads"].as_u64() > Some(reads))
+    });
+    assert_eq!((rows(&reply), &reply["sessions_bar"]["count"]), (vec![], &json!(1)));
+    // The adopted session goes quiet (its file has not changed for two minutes): its task needs you.
+    let transcript = std::fs::File::options().write(true).open(project.join(format!("{busy}.jsonl"))).unwrap();
+    transcript.set_modified(std::time::SystemTime::now() - Duration::from_secs(120)).unwrap();
+    otto.wait_for("the task to follow its session", |o| {
+        (o.call(json!({"cmd": "state"}))["state"]["tasks"]["list"][0]["state"] == "needs_you").then_some(())
+    });
+    // Hide takes the last one away, shown or not.
+    let reply = otto.call(json!({"cmd": "session_hide", "runner": "codex", "id": old}));
+    assert_eq!(reply["sessions_bar"]["count"], 0);
+
+    // What was found is kept only while the section is open: closed, nothing is listed (so
+    // nothing reads or adopts a session by what it did a while ago); opened, it is read again.
+    let fresh = Otto::launch_with("sessions-close", &env);
+    fresh.call(json!({"cmd": "section", "section": "tasks"}));
+    let listed = |o: &Otto, count: u64| {
+        o.wait_for("the sessions bar", |o| {
+            (o.call(json!({"cmd": "state"}))["sessions_bar"]["count"] == count).then_some(())
+        })
+    };
+    listed(&fresh, 1); // the two adopted above are tasks on disk; the old one is left
+    fresh.call(json!({"cmd": "section", "section": "tasks"}));
+    listed(&fresh, 0);
+    let refused = fresh.call(json!({"cmd": "session_adopt", "runner": "codex", "id": old}));
+    assert_eq!(refused["state"]["tasks"]["list"].as_array().map(Vec::len), Some(2), "not listed: not adopted");
+    fresh.call(json!({"cmd": "section", "section": "tasks"}));
+    listed(&fresh, 1);
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn terminal_scrolls_back_and_typing_returns_to_the_bottom() {

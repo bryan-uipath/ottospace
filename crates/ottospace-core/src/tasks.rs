@@ -51,7 +51,7 @@ impl Group {
 }
 
 /// A heading of the Tasks section, in the order drawn: what needs the user, the other tasks
-/// with tabs open, then the rest of the inbox's groups.
+/// with tabs open, then the rest of the inbox's groups. Last, the sessions that are no task's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Heading {
@@ -61,6 +61,7 @@ pub enum Heading {
     Captured,
     OnHold,
     Done,
+    Sessions,
 }
 
 impl Heading {
@@ -72,6 +73,7 @@ impl Heading {
             Heading::Captured => Group::Captured.title(),
             Heading::OnHold => Group::OnHold.title(),
             Heading::Done => Group::Done.title(),
+            Heading::Sessions => "Sessions",
         }
     }
 }
@@ -192,6 +194,9 @@ pub struct Task {
     /// When it was filed (milliseconds since 1970). `None`: filed before this was kept.
     #[serde(default)]
     pub created: Option<u64>,
+    /// The session it was adopted from, if it was: that session is this task's.
+    #[serde(default)]
+    pub session: Option<crate::sessions::Link>,
 }
 
 /// Who works a task, the paths it is about and the skills it loads.
@@ -312,6 +317,7 @@ impl Tasks {
             resolved,
             skills,
             created: None,
+            session: None,
         });
         self.next_id
     }
@@ -342,6 +348,26 @@ impl Tasks {
             (task.agent, task.paths, task.skills) = (agent.filter(fits), paths, kept(skills));
             task.resolved = places.into_iter().flatten().collect();
         }
+    }
+
+    /// Notes the session a task just filed was adopted from.
+    pub fn link(&mut self, id: TaskId, session: crate::sessions::Link) {
+        if let Some(task) = self.list.iter_mut().find(|t| t.id == id) {
+            task.session = Some(session);
+        }
+    }
+
+    /// Notes the state a task just took from the session it was adopted from.
+    pub fn followed(&mut self, id: TaskId, state: State) {
+        if let Some(link) = self.list.iter_mut().find(|t| t.id == id).and_then(|task| task.session.as_mut()) {
+            link.state = Some(state);
+        }
+    }
+
+    /// True if a task, listed or not, was adopted from this session.
+    pub fn adopted(&self, runner: &str, id: &str) -> bool {
+        let is = |link: &crate::sessions::Link| link.runner == runner && link.id == id;
+        self.list.iter().any(|task| task.session.as_ref().is_some_and(is))
     }
 
     /// Notes when a task just filed was filed.
@@ -578,6 +604,7 @@ mod tests {
             resolved: Vec::new(),
             skills: Vec::new(),
             created: None,
+            session: None,
         };
         let mut tasks = Tasks::default();
         tasks.restore(vec![task(7, "late"), task(2, "early"), task(7, "twin")], 0);
