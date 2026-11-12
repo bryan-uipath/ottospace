@@ -10,6 +10,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+/// How long a wait may take. Generous: a loaded machine can take over 10s to start a shell.
+const TIMEOUT: Duration = Duration::from_secs(40);
+
 /// A running ottospace on a private socket. Killed on drop, so a failed assert leaves no window.
 struct Otto {
     child: Child,
@@ -22,6 +25,10 @@ impl Otto {
         let child = Command::new(env!("CARGO_BIN_EXE_ottospace"))
             .env("OTTOSPACE_E2E", "1")
             .env("OTTOSPACE_SOCKET", &socket)
+            // A plain shell: the test must not depend on the user's shell profile.
+            .env("OTTOSPACE_SHELL", "/bin/sh")
+            // Never inherit hosting from the caller's shell: this suite must not move real windows.
+            .env_remove("OTTOSPACE_HOST_ONLY")
             .spawn()
             .expect("launch ottospace");
         let otto = Self { child, socket };
@@ -33,7 +40,7 @@ impl Otto {
     fn raw(&self, line: &str) -> Value {
         let mut stream = UnixStream::connect(&self.socket).expect("connect");
         // A hung app fails the test instead of hanging it.
-        stream.set_read_timeout(Some(Duration::from_secs(10))).expect("set timeout");
+        stream.set_read_timeout(Some(TIMEOUT)).expect("set timeout");
         writeln!(stream, "{line}").expect("send");
         let mut reply = String::new();
         BufReader::new(stream).read_line(&mut reply).expect("reply");
@@ -46,14 +53,14 @@ impl Otto {
         reply
     }
 
-    /// Polls `check` until it returns a value; panics after 10s.
+    /// Polls `check` until it returns a value; panics after `TIMEOUT`.
     fn wait_for<T>(&self, what: &str, check: impl Fn(&Self) -> Option<T>) -> T {
         let start = Instant::now();
         loop {
             if let Some(value) = check(self) {
                 return value;
             }
-            assert!(start.elapsed() < Duration::from_secs(10), "timed out waiting for {what}");
+            assert!(start.elapsed() < TIMEOUT, "timed out waiting for {what}");
             std::thread::sleep(Duration::from_millis(50));
         }
     }
@@ -75,7 +82,7 @@ impl Otto {
             if let Some(found) = found {
                 return found;
             }
-            assert!(start.elapsed() < Duration::from_secs(10), "no layout for panes {ids:?}; last state: {state}");
+            assert!(start.elapsed() < TIMEOUT, "no layout for panes {ids:?}; last state: {state}");
             std::thread::sleep(Duration::from_millis(50));
         }
     }

@@ -49,6 +49,17 @@ pub fn find(app_name: &str) -> Result<Target, String> {
     target(ax::Window::main_of(pid).ok_or("no standard main window")?)
 }
 
+/// The main window of the process `pid`. Test runs use it to host exactly the app they started.
+pub fn find_pid(pid: i32) -> Result<Target, String> {
+    target(ax::Window::main_of(pid).ok_or("no standard main window")?)
+}
+
+/// The name SCK reports for the process `pid`.
+pub fn name_of(pid: i32) -> Option<String> {
+    let content = SCShareableContent::get().ok()?;
+    content.applications().iter().find(|a| a.process_id() == pid).map(|a| a.application_name())
+}
+
 /// Pairs an AX window with its SCK window (matched by CGWindowID).
 pub fn target(window: ax::Window) -> Result<Target, String> {
     let id = window.id().ok_or("could not resolve CGWindowID")?;

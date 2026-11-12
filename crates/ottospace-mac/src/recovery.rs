@@ -35,7 +35,22 @@ fn write(entries: &[(i32, u32, CGRect)]) {
     let _ = std::fs::write(p, text);
 }
 
+/// Set in test runs: they share this file with the user's real session and must not write it.
+static DISABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Stops `remember` and `forget` from touching the file, for the life of the process.
+pub fn disable() {
+    DISABLED.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn disabled() -> bool {
+    DISABLED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub fn remember(pid: i32, id: u32, original: CGRect) {
+    if disabled() {
+        return;
+    }
     let mut entries = read();
     entries.retain(|(_, i, _)| *i != id);
     entries.push((pid, id, original));
@@ -43,6 +58,9 @@ pub fn remember(pid: i32, id: u32, original: CGRect) {
 }
 
 pub fn forget(id: u32) {
+    if disabled() {
+        return;
+    }
     let mut entries = read();
     entries.retain(|(_, i, _)| *i != id);
     write(&entries);

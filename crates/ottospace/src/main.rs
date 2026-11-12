@@ -157,6 +157,9 @@ impl Hosted {
         let size = to_cg(self.bounds.get().size);
         // Only resize/reconfigure when the pane changed; redoing it on every park flickers.
         if size != self.parked_size {
+            // Move first. Resized where it stood, macOS clamps the window to what fits above the
+            // Dock there (a pane 818pt tall parked at 805pt), and the stream no longer matches.
+            let _ = self.window.set_position(display::parking_spot());
             let _ = self.window.set_size(size);
             // Match the stream to the pane so frames aren't letterboxed into a stale-sized buffer.
             let config = stream_config(size, scale);
@@ -279,13 +282,21 @@ struct Workspace {
     error: Option<String>,
     /// False in e2e runs, which must never move the user's real windows.
     hosting: bool,
+    /// Test runs: the pid of the one app that may be hosted.
+    host_only: Option<i32>,
     control: Option<Receiver<Call>>,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
 impl Workspace {
-    fn new(hosting: bool, control: Option<Receiver<Call>>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(
+        hosting: bool,
+        host_only: Option<i32>,
+        control: Option<Receiver<Call>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let subscriptions = vec![
             // Clicking ottospace itself (title bar, empty space) raises it over the live window,
             // so hand that pane back to its stream. Ignore the activation that the swap click
@@ -335,6 +346,11 @@ impl Workspace {
             && let RawWindowHandle::AppKit(appkit) = handle.as_raw()
         {
             unsafe { ottospace_mac::window::zoom_instead_of_fullscreen(appkit.ns_view.as_ptr()) };
+            // A run with hosting off never activates the app, so keep its window visible another
+            // way. Not with hosting on: a floating ottospace would cover the live app window.
+            if !hosting {
+                unsafe { ottospace_mac::window::keep_on_top(appkit.ns_view.as_ptr()) };
+            }
         }
 
         let focus = cx.focus_handle();
@@ -350,11 +366,12 @@ impl Workspace {
             terminals: HashMap::new(),
             cell: terminal::cell_size(window),
             cells: HashMap::new(),
-            apps: if hosting { capture::apps() } else { Vec::new() },
+            apps: running_apps(hosting, host_only),
             known: Vec::new(),
             live_since: None,
             error: None,
             hosting,
+            host_only,
             control,
             focus,
             _subscriptions: subscriptions,
@@ -471,7 +488,7 @@ impl Workspace {
                     failure = self.error.clone().or(Some("the shell did not start".into()));
                 }
             }
-            let _ = reply.send(failure.map_or_else(|| self.snapshot(), |message| control::error(&message)));
+            let _ = reply.send(failure.map_or_else(|| self.snapshot(window), |message| control::error(&message)));
             if quit {
                 // Quit a moment later, so the connection thread can write the reply first.
                 cx.spawn(async move |_, cx| {
@@ -484,7 +501,18 @@ impl Workspace {
     }
 
     /// State as JSON: the model, plus each pane's drawn bounds `[x, y, w, h]` in window points.
-    fn snapshot(&self) -> String {
+    fn snapshot(&self, window: &Window) -> String {
+        let parking = display::parking_spot();
+        let hosted: BTreeMap<PaneId, [f64; 4]> = self
+            .hosted
+            .iter()
+            .filter_map(|(id, h)| {
+                h.window.frame().map(|f| (*id, [f.origin.x, f.origin.y, f.size.width, f.size.height]))
+            })
+            .collect();
+        let frame = window.bounds();
+        let frame: [f32; 4] =
+            [frame.origin.x.into(), frame.origin.y.into(), frame.size.width.into(), frame.size.height.into()];
         // Only panes of the active tab are drawn; a background pane's last bounds are stale.
         let drawn = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
         let bounds: BTreeMap<PaneId, [f32; 4]> = self
@@ -510,6 +538,12 @@ impl Workspace {
             "state": self.model,
             "bounds": bounds,
             "tab_panes": self.model.tab_panes(),
+            // ottospace's own window frame, so a test can turn pane bounds into screen positions.
+            "window": frame,
+            // Where parked windows go, so a test can tell "parked" from "moved somewhere".
+            "parking": [parking.x, parking.y],
+            // Each hosted window's real frame, in the same global coordinates as `parking`.
+            "hosted": hosted,
             "terminals": terminals,
         })
         .to_string()
@@ -561,7 +595,12 @@ impl Workspace {
         if !self.hosting {
             return Err("window hosting is off in e2e runs".into());
         }
-        let target = capture::find(name)?;
+        let target = match self.host_only {
+            // By pid, not by name: another process may share the canary's name.
+            Some(pid) if capture::name_of(pid).as_deref() == Some(name) => capture::find_pid(pid)?,
+            Some(_) => return Err("this test run may host only the app it started".into()),
+            None => capture::find(name)?,
+        };
         // Already in a pane: go to it (and its tab) instead of doing nothing.
         if let Some((pane, _)) = self.hosted.iter().find(|(_, h)| h.window_id == target.id) {
             let pane = *pane;
@@ -688,9 +727,7 @@ impl Workspace {
 
     /// Opens the pane picker: a terminal, then each running app.
     fn open_picker(&mut self, axis: Axis, new_tab: bool, window: &Window, cx: &mut Context<Self>) {
-        if self.hosting {
-            self.apps = capture::apps();
-        }
+        self.apps = running_apps(self.hosting, self.host_only);
         let apps = self.apps.iter().map(|name| PickItem::App { name: name.clone() });
         let items = std::iter::once(PickItem::Terminal).chain(apps).collect();
         self.dispatch(Action::OpenPicker { axis, new_tab, items }, window, cx);
@@ -951,9 +988,7 @@ impl Workspace {
                     .hover(|s| s.text_color(rgb(theme::TEXT)))
                     .child("Running  ↻")
                     .on_click(cx.listener(|this, _, _, cx| {
-                        if this.hosting {
-                            this.apps = capture::apps();
-                        }
+                        this.apps = running_apps(this.hosting, this.host_only);
                         cx.notify();
                     })),
             )
@@ -1206,6 +1241,15 @@ impl Workspace {
     }
 }
 
+/// Apps that can be hosted right now. In a test run limited to one app, only that app.
+fn running_apps(hosting: bool, only: Option<i32>) -> Vec<String> {
+    match (hosting, only) {
+        (false, _) => Vec::new(),
+        (true, Some(pid)) => capture::name_of(pid).into_iter().collect(),
+        (true, None) => capture::apps(),
+    }
+}
+
 /// Covers the window's rounded corners (transparent, so black in the YUV stream) with the
 /// background: a ring whose inner edge is the window's rounded outline, clipped to the pane.
 fn paint_corner_mask(bounds: Bounds<Pixels>, radius: f64, window: &mut Window) {
@@ -1346,14 +1390,23 @@ fn main() {
     }
 
     // E2E runs get no window hosting, so tests cannot move or strand the user's real windows.
-    let hosting = std::env::var_os("OTTOSPACE_E2E").is_none();
+    // The exception is `OTTOSPACE_HOST_ONLY=<pid>`: hosting is on for that one process only (the
+    // canary the test started), which lets tests cover real window handling.
+    let host_only: Option<i32> = std::env::var("OTTOSPACE_HOST_ONLY").ok().and_then(|pid| pid.parse().ok());
+    let hosting = std::env::var_os("OTTOSPACE_E2E").is_none() || host_only.is_some();
     if hosting {
         capture::init();
-        if !ax::is_trusted(true) {
+        // A test must not raise a system permission prompt: fail instead.
+        if !ax::is_trusted(host_only.is_none()) {
             eprintln!("grant Accessibility access to your terminal, then rerun");
             std::process::exit(1);
         }
-        recovery::restore_leftovers();
+        // The recovery file belongs to the user's real session. A test run must not move its
+        // leftovers, nor write to it.
+        match host_only {
+            None => recovery::restore_leftovers(),
+            Some(_) => recovery::disable(),
+        }
     }
     let control = control::serve().map_err(|err| eprintln!("control socket off: {err}")).ok();
 
@@ -1396,7 +1449,7 @@ fn main() {
             titlebar: Some(titlebar),
             ..Default::default()
         };
-        cx.open_window(options, |window, cx| cx.new(|cx| Workspace::new(hosting, control, window, cx)))
+        cx.open_window(options, |window, cx| cx.new(|cx| Workspace::new(hosting, host_only, control, window, cx)))
             .expect("open window");
         cx.on_window_closed(|cx| cx.quit()).detach();
         if hosting {
