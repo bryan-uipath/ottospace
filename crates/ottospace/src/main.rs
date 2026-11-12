@@ -189,6 +189,7 @@ impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<std::borrow::Cow<'static, [u8]>>> {
         let bytes: Option<&'static [u8]> = match path {
             "otto.svg" => Some(include_bytes!("../assets/otto.svg")),
+            "empty.svg" => Some(include_bytes!("../assets/empty.svg")),
             "icons/apps.svg" => Some(include_bytes!("../assets/icons/apps.svg")),
             "icons/workbook.svg" => Some(include_bytes!("../assets/icons/workbook.svg")),
             "icons/tasks.svg" => Some(include_bytes!("../assets/icons/tasks.svg")),
@@ -277,6 +278,16 @@ fn otto(size: f32, hint: &'static str) -> impl IntoElement {
         // Name the source kind: a bare "otto.svg" parses as a URL and is fetched over HTTP.
         .child(img(ImageSource::Resource(Resource::Embedded("otto.svg".into()))).size(px(size)).opacity(0.3))
         .child(div().text_sm().text_color(rgb(theme::MUTED)).child(hint))
+}
+
+/// The empty workspace: Otto in front of a retro sun, over a faint grid floor.
+fn empty_workspace() -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .child(img(ImageSource::Resource(Resource::Embedded("empty.svg".into()))).w(px(700.)).h(px(392.)))
+        .child(div().text_sm().text_color(rgb(theme::MUTED)).child("⌘E to open a pane · ⌘D for a terminal"))
 }
 
 actions!(
@@ -1486,11 +1497,7 @@ impl Render for Workspace {
                             .flex_1()
                             .h_full()
                             .flex()
-                            .when(tree.is_none(), |d| {
-                                d.items_center()
-                                    .justify_center()
-                                    .child(otto(220., "⌘E to open a pane · ⌘D for a terminal"))
-                            })
+                            .when(tree.is_none(), |d| d.items_center().justify_center().child(empty_workspace()))
                             .children(tree),
                     ),
             )
@@ -1609,7 +1616,7 @@ mod tests {
     #[test]
     fn every_rail_icon_and_otto_is_embedded() {
         let icons = SECTIONS.iter().map(|(_, icon, _)| *icon).chain(SPLITS.iter().map(|(icon, ..)| *icon));
-        for path in icons.chain(["otto.svg"]) {
+        for path in icons.chain(["otto.svg", "empty.svg"]) {
             assert!(Assets.load(path).unwrap().is_some(), "{path} is not in Assets::load");
         }
     }
