@@ -72,14 +72,16 @@ sets `OTTOSPACE_E2E`, which turns window hosting off, so tests never touch your 
 | `crates/ottospace-mac` | macOS calls: AX window control, SCK lookup, display geometry, HID clicks, crash recovery |
 | `crates/ottospace-agents` | Reads Claude Code and Codex session files, read-only: sessions of a directory, events, snapshot. See `docs/ai/agent-runners.md` |
 | `crates/ottospace` | The app: GPUI views, terminal, control socket, `ctl` client. Turns input into `Action`s, carries out `Effect`s |
+| `sdk/` | TypeScript client for the control socket: [`sdk/README.md`](../sdk/README.md). Tests: `npm test` in `sdk/`, after `cargo build -p ottospace` |
 | `harness/` | Local input test page (`python3 -m http.server 8765 -d harness`) |
 | `docs/` | Design notes |
 
 ## CI
 
 - `.github/workflows/ci.yml`, on pull requests and pushes to `main`: `cargo fmt --check` on the
-  formatted crates, `cargo clippy`, `cargo test --workspace`. `cargo e2e` runs in a separate job
-  that may fail without blocking.
+  formatted crates, `cargo clippy`, `cargo test --workspace`, and the SDK's type check and the
+  tests that need no app. `cargo e2e` runs in a separate job that may fail without blocking; the
+  same job then runs the SDK's tests against a private instance.
 - `.github/workflows/build.yml`, on pull requests and pushes to `main`: tests the installer and
   packages a build. On `main` it publishes the `main-latest` prerelease.
 - `.github/workflows/release.yml`, on a `v*` tag: the GitHub Release.

@@ -43,6 +43,17 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked
       - name: Unit tests
         run: cargo test --workspace --locked
+      # The SDK without the app: its types, and that it has a method for every request.
+      # Node, not bun: Node 22.18+ runs TypeScript as it is, and setup-node is GitHub's own action.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: SDK types and request fixture
+        working-directory: sdk
+        run: |
+          npm ci --ignore-scripts
+          npm run typecheck
+          node --test test/requests.test.ts test/parse.test.ts test/socket.test.ts
 
   e2e:
     # Needs a window server, which a hosted runner may lack, so it does not block.
@@ -60,5 +71,16 @@ jobs:
           rustc --version
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # Hosting off. Never cargo e2e-apps here: it needs Accessibility and Screen Recording.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
       - name: E2E
         run: cargo e2e
+      # The TypeScript client against a private instance, as cargo e2e runs one: hosting off, its
+      # own socket, no user folder. No npm install: the SDK has no runtime dependencies.
+      - name: SDK tests
+        if: ${{ !cancelled() }}
+        working-directory: sdk
+        run: |
+          cargo build -p ottospace --locked
+          npm test

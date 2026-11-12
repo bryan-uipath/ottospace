@@ -50,7 +50,9 @@ Rules:
 
 - `.github/workflows/ci.yml`, on pull requests and pushes to `main`, macOS arm64:
   `cargo fmt -p ottospace -p ottospace-core -p ottospace-agents --check`, `cargo clippy` (errors
-  fail, warnings do not), `cargo test --workspace`. `cargo e2e` runs in a separate job that may fail without blocking.
+  fail, warnings do not), `cargo test --workspace`, and the SDK's type check and request-fixture
+  tests (`sdk/`, Node). `cargo e2e` runs in a separate job that may fail without blocking; the
+  same job then runs the SDK's tests against a private instance.
 - A change that touches only `docs/`, `site/`, `README.md`, `AGENTS.md` or `LICENSE` runs neither
   workflow: macOS runners are scarce. Such a pull request has no checks to wait for, and
   after such a push `main-latest` trails `main` by docs commits.
@@ -92,6 +94,13 @@ ottospace ctl '{"cmd":"ax_tree"}'   # the focused app pane's accessibility tree,
 
 `crates/ottospace/skill/guide.md` is the agent-facing guide (`ottospace skill` prints it). When
 you add or change a request, update the guide; a unit test parses every example in it.
+
+`sdk/` is the TypeScript client for the socket: one method per `Request`, and the reply typed.
+When you add or change a request, add or change its method in `sdk/src/client.ts` and its call in
+`sdk/test/requests.test.ts`, then run `UPDATE_FIXTURE=1 npm test` in `sdk/` and commit
+`sdk/test/requests.jsonl`: a unit test parses that file with `Request` and fails on a request with
+no method. When the state gains or loses a key, change `sdk/src/types.ts` and `sdk/src/parse.ts`:
+the SDK's tests compare the typed state with a real reply. Design: `docs/ai/sdk.md`.
 
 Agents use the same socket to inspect and drive ottospace. Keep `Request` a closed set, and
 keep the socket same-user only: `type` sends keys to a terminal, which is as strong as a shell.

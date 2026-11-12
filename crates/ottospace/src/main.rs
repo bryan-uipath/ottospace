@@ -3152,6 +3152,21 @@ mod tests {
         );
     }
 
+    /// Every command name the app accepts, read from serde's own error for an unknown one, so a
+    /// new `Request` variant is in the list with no list to keep.
+    fn request_names() -> Vec<String> {
+        let error = serde_json::from_str::<Request>(r#"{"cmd":"?"}"#).expect_err("? is not a command").to_string();
+        let names: Vec<String> = error.split('`').skip(3).step_by(2).map(String::from).collect();
+        assert!(names.len() > 20, "could not read the command names from: {error}");
+        names
+    }
+
+    /// Fails unless the app accepts `json` as a request. `who`: where the request is written.
+    fn assert_parses(json: &str, who: &str) {
+        let parsed: Result<Request, _> = serde_json::from_str(json);
+        assert!(parsed.is_ok(), "{who} a request the app refuses: {json}: {:?}", parsed.err());
+    }
+
     /// Every `ottospace ctl '<json>'` line in the agent guide must be a request the app accepts,
     /// so the guide cannot drift from the socket protocol.
     #[test]
@@ -3163,20 +3178,30 @@ mod tests {
             .collect();
         assert!(examples.len() > 20, "found {} examples", examples.len());
         for json in examples {
-            let parsed: Result<Request, _> = serde_json::from_str(json);
-            assert!(parsed.is_ok(), "the guide shows a request the app refuses: {json}: {:?}", parsed.err());
+            assert_parses(json, "the guide shows");
         }
     }
 
-    /// Every request the app accepts must have an example in the guide. The names come from
-    /// serde's own error for an unknown command, so a new `Request` variant fails this test.
+    /// Every request the app accepts must have an example in the guide.
     #[test]
     fn the_agent_guide_covers_every_request() {
-        let error = serde_json::from_str::<Request>(r#"{"cmd":"?"}"#).expect_err("? is not a command").to_string();
-        let names: Vec<&str> = error.split('`').skip(3).step_by(2).collect();
-        assert!(names.len() > 20, "could not read the command names from: {error}");
-        for name in names {
+        for name in request_names() {
             assert!(SKILL_GUIDE.contains(&format!(r#""cmd":"{name}""#)), "the guide has no example of `{name}`");
+        }
+    }
+
+    /// The TypeScript client (`sdk/`) writes one line per method to this file, as it sends it. Each
+    /// must parse, and every request must be there: a new `Request` variant with no client method
+    /// fails here, and so does a field the client names wrongly.
+    #[test]
+    fn the_sdk_fixture_holds_every_request() {
+        let fixture = include_str!("../../../sdk/test/requests.jsonl");
+        for json in fixture.lines() {
+            assert_parses(json, "the SDK sends");
+        }
+        for name in request_names() {
+            let sent = fixture.lines().any(|line| line.starts_with(&format!(r#"{{"cmd":"{name}""#)));
+            assert!(sent, "the SDK has no method for `{name}`: add one to sdk/src/client.ts (see sdk/README.md)");
         }
     }
 

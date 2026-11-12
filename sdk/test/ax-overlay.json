@@ -1,0 +1,19 @@
+{
+  "pane": 4,
+  "targets": [
+    {
+      "label": "a",
+      "frame": { "x": 10.0, "y": 20.0, "w": 30.0, "h": 12.0 },
+      "source": { "type": "app", "pane": 4, "path": [0, 2], "role": "AXButton" }
+    },
+    {
+      "label": "s",
+      "frame": { "x": 0.0, "y": 40.0, "w": 48.0, "h": 48.0 },
+      "source": { "type": "own", "id": "rail:apps" }
+    }
+  ],
+  "count": 36,
+  "truncated": { "depth": false, "nodes": false, "timeout": false },
+  "millis": 8.5,
+  "error": null
+}

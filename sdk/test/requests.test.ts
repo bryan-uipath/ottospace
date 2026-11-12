@@ -1,0 +1,122 @@
+// Keeps the client in step with `Request` in `crates/ottospace/src/control.rs`, without the app.
+// `requests.jsonl` holds one request per client method, as the client sends it, with every field
+// set. A Rust unit test (`the_sdk_fixture_holds_every_request`) parses each line with the real
+// `Request`, so a wrong field name or a request with no method fails `cargo test`.
+// To write the file again after a change: `UPDATE_FIXTURE=1 npm test`.
+
+import assert from "node:assert/strict";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { test } from "node:test";
+
+import { Client } from "../src/client.ts";
+import type { Transport } from "../src/client.ts";
+
+const FIXTURE = join(import.meta.dirname, "requests.jsonl");
+const CONTROL_RS = join(import.meta.dirname, "..", "..", "crates", "ottospace", "src", "control.rs");
+
+/** Every method once, with every field the request has. */
+const CALLS: Array<(client: Client) => Promise<unknown>> = [
+  (c) => c.state(),
+  (c) => c.split({ axis: "down", kind: "empty" }),
+  (c) => c.type({ pane: 1, text: "ls\r" }),
+  (c) => c.close({ pane: 1 }),
+  (c) => c.focus({ pane: 1 }),
+  (c) => c.focusDir({ dir: "left" }),
+  (c) => c.focusCycle({ delta: -1 }),
+  (c) => c.resize({ dir: "left" }),
+  (c) => c.swap({ dir: "right" }),
+  (c) => c.movePane({ pane: 3, tab: 0 }),
+  (c) => c.equalize(),
+  (c) => c.openApp({ name: "Safari", axis: "right" }),
+  (c) => c.enter({ pane: 1 }),
+  (c) => c.leave(),
+  (c) => c.section({ section: "tasks" }),
+  (c) => c.picker({ axis: "down", new_tab: true }),
+  (c) => c.newTab(),
+  (c) => c.selectTab({ index: 0 }),
+  (c) => c.cycleTab({ delta: 1 }),
+  (c) => c.closeTab({ index: 1 }),
+  (c) => c.pickerQuery({ query: "term" }),
+  (c) => c.pickerMove({ delta: 1 }),
+  (c) => c.pickerChoose({ index: 0 }),
+  (c) => c.pickerClose(),
+  (c) => c.keys(),
+  (c) => c.key({ keys: "cmd-c" }),
+  (c) => c.mouseDown({ pane: 1, x: 2.5, y: 5, clicks: 2 }),
+  (c) => c.mouseDrag({ pane: 1, x: 20, y: 5 }),
+  (c) => c.scroll({ pane: 1, lines: 40 }),
+  (c) => c.repos(),
+  (c) => c.openRepo({ path: "/Users/me/code/app", axis: "down" }),
+  (c) => c.taskAdd({ title: "Fix the zoom flicker", priority: 1, state: "needs_you", tab: 2 }),
+  (c) => c.taskSetState({ id: 1, state: "running" }),
+  (c) => c.taskSnooze({ id: 1, seconds: 3600 }),
+  (c) => c.taskHold({ id: 1 }),
+  (c) => c.taskDismiss({ id: 1 }),
+  (c) => c.taskUndo(),
+  (c) => c.taskList(),
+  (c) => c.taskNew({ line: "fix zoom flicker #canvas p1" }),
+  (c) => c.compose({ text: "a draft" }),
+  (c) => c.taskPop(),
+  (c) => c.taskOpen({ id: 1 }),
+  (c) => c.taskLeave(),
+  (c) => c.capture({ pane: 1, history: true }),
+  (c) => c.wait({ pane: 1, pattern: "^done$", timeout_ms: 1000 }),
+  (c) => c.axTree({ pane: 1, depth: 20, nodes: 500 }),
+  (c) => c.axOverlay({ refresh: true }),
+  (c) => c.quit(),
+];
+
+/** Not requests: the connection's own methods. */
+const NOT_REQUESTS = ["constructor", "disconnect", "send", "over", "snapshot"];
+
+/** Keeps each line the client sends, and refuses it. */
+async function record(): Promise<string[]> {
+  const lines: string[] = [];
+  const transport: Transport = {
+    send: async (line) => {
+      lines.push(line);
+      return '{"ok":false,"error":"recorded"}';
+    },
+    close: () => {},
+  };
+  const client = new Client(transport, async () => transport);
+  for (const call of CALLS) await assert.rejects(call(client), /recorded/);
+  return lines;
+}
+
+function command(line: string): string {
+  const request: unknown = JSON.parse(line);
+  if (typeof request === "object" && request !== null && "cmd" in request && typeof request.cmd === "string") {
+    return request.cmd;
+  }
+  throw new Error(`no cmd in ${line}`);
+}
+
+/** `taskAdd` → `task_add`. */
+function snake(name: string): string {
+  return name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+}
+
+test("the fixture holds what the client sends", async () => {
+  const sent = `${(await record()).join("\n")}\n`;
+  if (process.env.UPDATE_FIXTURE) writeFileSync(FIXTURE, sent);
+  assert.equal(sent, readFileSync(FIXTURE, "utf8"), "run `UPDATE_FIXTURE=1 npm test` and commit requests.jsonl");
+});
+
+test("every client method is in the fixture, once", async () => {
+  const methods = Object.getOwnPropertyNames(Client.prototype).filter((name) => !NOT_REQUESTS.includes(name));
+  const sent = (await record()).map(command);
+  assert.deepEqual(sent.toSorted(), methods.map(snake).toSorted());
+});
+
+test("every Request variant in control.rs has a client method", () => {
+  const source = readFileSync(CONTROL_RS, "utf8");
+  const body = source.slice(source.indexOf("pub enum Request {"), source.indexOf("\n}\n", source.indexOf("pub enum Request {")));
+  // Variants sit at one level of indentation: `    TaskAdd {` or `    Leave,`.
+  const variants = [...body.matchAll(/^ {4}([A-Z][A-Za-z]*)\b/gm)].map((match) => match[1] ?? "");
+  assert.ok(variants.length > 20, `read ${variants.length} variants from control.rs`);
+  const methods = Object.getOwnPropertyNames(Client.prototype).filter((name) => !NOT_REQUESTS.includes(name));
+  const pascal = (name: string) => name.charAt(0).toUpperCase() + name.slice(1);
+  assert.deepEqual(methods.map(pascal).toSorted(), variants.toSorted());
+});
