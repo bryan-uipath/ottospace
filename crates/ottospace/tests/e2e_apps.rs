@@ -220,15 +220,22 @@ fn a_canary_window_is_hosted_entered_left_and_restored() {
     wait_for("the window to park again", || hosted().filter(|f| at_spot(f) && close(f[3], body[3] + crop)));
 
     // The app comes to the front by itself, as on a click on its Dock icon. Its window is off
-    // screen, so ottospace goes to its pane and gives it the keyboard. (First let ottospace see
-    // that the app is no longer in front: it acts when an app comes forward.)
-    std::thread::sleep(Duration::from_millis(1200));
+    // screen, so ottospace goes to its pane and gives it the keyboard.
     let frontmost = |pid: u32| {
         let script = "tell application \"System Events\" to unix id of first process whose frontmost is true";
         let out = Command::new("osascript").args(["-e", script]).output().expect("run osascript");
         String::from_utf8_lossy(&out.stdout).trim() == pid.to_string()
     };
-    press(&format!("set frontmost of (first process whose unix id is {}) to true", canary.child.id()));
+    // First the user is elsewhere: ottospace in front, long enough for it to see that the app
+    // is not. It acts when an app comes forward, not while one stays in front.
+    let to_front = |pid: u32| format!("set frontmost of (first process whose unix id is {pid}) to true");
+    wait_for("ottospace to be frontmost", || {
+        press(&to_front(otto.child.id()));
+        frontmost(otto.child.id()).then_some(())
+    });
+    std::thread::sleep(Duration::from_millis(1200));
+    assert_eq!(state()["mode"], "normal", "nothing happens while the app is not in front");
+    press(&to_front(canary.child.id()));
     wait_for("the activated app's pane to go live", || (state()["mode"] == "app").then_some(()));
     wait_for("its window to cover the pane", || {
         frame(0).filter(|f| close(f[0], window[0] + body[0]) && close(f[1], window[1] + body[1] - crop))

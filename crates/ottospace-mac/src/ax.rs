@@ -25,6 +25,14 @@ pub fn is_active(pid: i32) -> bool {
     NSRunningApplication::runningApplicationWithProcessIdentifier(pid).is_some_and(|app| app.isActive())
 }
 
+/// True if the app with this pid is the front app, asked of the app itself. `is_active` reads a
+/// value AppKit keeps for this process, which lags until the run loop has seen the change; this
+/// asks now.
+pub fn is_frontmost(pid: i32) -> bool {
+    let app = unsafe { AXUIElement::new_application(pid) };
+    copy_attr(&app, "AXFrontmost").and_then(|v| v.downcast::<CFBoolean>().ok()).is_some_and(|front| front.as_bool())
+}
+
 pub fn is_trusted(prompt: bool) -> bool {
     let key = CFString::from_static_str("AXTrustedCheckOptionPrompt");
     let value = CFBoolean::new(prompt);

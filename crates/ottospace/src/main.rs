@@ -1255,7 +1255,7 @@ impl Workspace {
     /// Only at the moment the app comes forward, not for as long as it is in front: the user may
     /// be in a window of that app that ottospace does not hold, and must be left there.
     fn follow_front_app(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let front = self.hosted.values().map(|hosted| hosted.pid).find(|pid| ax::is_active(*pid));
+        let front = self.hosted.values().map(|hosted| hosted.pid).find(|pid| ax::is_frontmost(*pid));
         let came_forward = front.filter(|pid| self.front_hosted != Some(*pid));
         self.front_hosted = front;
         let Some(pid) = came_forward else { return };
@@ -1272,8 +1272,14 @@ impl Workspace {
         if self.model.keys || matches!(self.model.mode(), Mode::Pick | Mode::Compose | Mode::Visual) {
             return;
         }
-        // ottospace must be on screen under the window it is about to place.
-        cx.activate(true);
+        // ottospace must be on screen under the window it is about to place. In front, but not
+        // the front app: activating ottospace here would race the app's own activation and
+        // could win, leaving the keys with ottospace while the status bar says APP.
+        if let Ok(handle) = HasWindowHandle::window_handle(window)
+            && let RawWindowHandle::AppKit(appkit) = handle.as_raw()
+        {
+            unsafe { ottospace_mac::window::order_front(appkit.ns_view.as_ptr()) };
+        }
         self.dispatch(Action::Enter { pane }, window, cx);
         cx.notify();
     }

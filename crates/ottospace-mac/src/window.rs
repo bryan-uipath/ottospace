@@ -44,6 +44,18 @@ pub unsafe fn keep_on_top(ns_view: *mut c_void, click_through: bool) {
     }
 }
 
+/// Puts the window in front of other apps' windows without making this app the front app.
+/// For when another app is to keep the keyboard, with ottospace visible under its window.
+///
+/// # Safety
+/// `ns_view` must point to a live `NSView`, and this must run on the main thread.
+pub unsafe fn order_front(ns_view: *mut c_void) {
+    let view = unsafe { &*(ns_view as *const NSView) };
+    if let Some(window) = view.window() {
+        window.orderFrontRegardless();
+    }
+}
+
 /// Makes this process a background app: no Dock icon, no place in the app switcher, and it does
 /// not come to the front when it starts. For test runs, which must not take the user's keyboard.
 pub fn stay_in_background() {
