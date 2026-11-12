@@ -1589,7 +1589,7 @@ impl Workspace {
         let hint = if suggestions.is_empty() {
             "#project · @repo · p1 to p9 · ↵ file · esc close".to_string()
         } else {
-            format!("tab: {}", suggestions.join("  ·  "))
+            format!("tab: {}  ·  ↵ file · esc close", suggestions.join("  ·  "))
         };
         let text = div()
             .min_h(px(28.))
@@ -1723,7 +1723,18 @@ impl Workspace {
             )
             .when(rows.is_empty(), |d| d.child(div().p_3().text_xs().text_color(rgb(theme::MUTED)).child("No match")))
             // Long lists scroll inside the panel.
-            .child(div().id("picker-rows").flex_1().min_h_0().overflow_y_scroll().children(rows));
+            .child(div().id("picker-rows").flex_1().min_h_0().overflow_y_scroll().children(rows))
+            // The status bar no longer lists these, and ⌘/ closes the picker.
+            .child(
+                div()
+                    .px_3()
+                    .py_1p5()
+                    .border_t_1()
+                    .border_color(rgb(theme::BORDER))
+                    .text_xs()
+                    .text_color(rgb(theme::MUTED))
+                    .child("↑↓ move · ↵ open · esc close"),
+            );
         div()
             .id("picker-backdrop")
             .absolute()
@@ -2263,7 +2274,7 @@ impl Workspace {
         };
         let (mode, hint) = match self.model.mode() {
             // One hint, not the key list: ⌘/ shows the keys of every mode. A mode you can be in
-            // by accident also says how to leave. The picker and the new-task box carry their own.
+            // by accident also says how to leave. The picker and the new-task box show theirs.
             Mode::Normal => ("NORMAL", "⌘/ keys"),
             Mode::Pick => ("PICK", ""),
             Mode::App => ("APP", app_hint.as_str()),
