@@ -69,6 +69,8 @@ ottospace ctl '{"cmd":"state"}'
 | `state.tasks.list` | Every task: `id`, `title`, `state`, `priority`, `snoozed_until`, `dismissed`, `project` (from a `#tag`, or null) and `repo` (a repository path, or null) |
 | `state.compose` | Null, or the text in the new-task box while it is open |
 | `inbox`, `needs_you` | The tasks the Tasks section lists, in order, each with its `group`; and how many are under `needs_you` |
+| `home` | Null while the tab on show has a pane. Else the home screen: `nodes` (one for each of the first 12 inbox tasks: `task`, `group`, `lane` (its project, by name; tasks of no project share the last), `depth` (0 is the newest task; in a lane the older task is drawn farther) and `crossing`, the `[x, z]` of the lattice it is drawn on; no node is under the text, so a small window has fewer), `needs_you` (up to 3 tasks) and `counts` for each group |
+| `home_drawn` | What the home screen drew, in window points: `area`, `panel` (the new-task line with its list) and `nodes` (each node's click target `[x, y, w, h]` by task id). `lattice_builds` and `lattice_paints` count how often lattice lines were built and painted; a frame that moves nothing paints without building |
 | `state.repos` | Repositories found on disk: `name`, `path`, `branch`, and `worktrees` (each `name`, `path`, `branch`) |
 | `ax_overlay` | Null, or the accessibility overlay's last read: `pane`, `targets` (`label`, `frame` in window coordinates, `source`), `count`, `truncated`, `millis`, `error` |
 | `bounds.<id>` | Where each pane of the active tab is drawn: `[x, y, w, h]` |

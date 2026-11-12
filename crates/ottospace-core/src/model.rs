@@ -3,7 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::compose;
-use crate::layout::{Axis, Dir, Node};
+use crate::home::{self, Home};
+use crate::layout::{Axis, Dir, Node, Rect};
 use crate::list::ListRow;
 use crate::repos::{self, Repo};
 use crate::tasks::{MAX_TITLE, State, Task, TaskId, Tasks};
@@ -1079,6 +1080,12 @@ impl Model {
         }
     }
 
+    /// The home screen, while it is on show: the tab on show has no panes.
+    /// `keep_out`: where the shell draws text over the lattice (see `home::home`).
+    pub fn home(&self, keep_out: &[Rect]) -> Option<Home<'_>> {
+        self.layout.is_none().then(|| home::home(&self.tasks, keep_out))
+    }
+
     /// Pane ids of each tab, in tab order. The state dump uses it to show which tab holds a pane.
     pub fn tab_panes(&self) -> Vec<Vec<PaneId>> {
         let leaves = |layout: &Option<Node>| layout.as_ref().map(Node::leaves).unwrap_or_default();
@@ -1226,6 +1233,21 @@ mod tests {
         assert_eq!(ids(&m), [1, 2]);
         assert_eq!(m.focused, Some(2));
         assert_eq!(m.pane(2).unwrap().kind, Kind::Empty);
+    }
+
+    #[test]
+    fn the_home_screen_shows_while_the_tab_on_show_has_no_panes() {
+        let mut m = Model::default();
+        m.update(Action::TaskAdd { title: "ask".into(), priority: 1, state: State::NeedsYou, tab: None });
+        let home = m.home(&[]).expect("no panes: the home screen");
+        assert_eq!((home.nodes.len(), home.needs_you.len()), (1, 1));
+        m.update(Action::Split { axis: Right, kind: Kind::Empty });
+        assert!(m.home(&[]).is_none(), "a pane takes its place");
+        // The task's own tab has no pane yet: the home screen again.
+        m.update(Action::TaskOpen { id: Some(1) });
+        assert!(m.home(&[]).is_some());
+        m.update(Action::TaskLeave);
+        assert!(m.home(&[]).is_none());
     }
 
     #[test]

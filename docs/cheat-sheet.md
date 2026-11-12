@@ -62,6 +62,7 @@ The badge on an app is how many windows it has open. A new window of a hosted ap
 | Tag a project, name a repository, set priority | In that line: `#canvas` · `@flow-workbench` · `p1` … `p9`. Tab completes `#` and `@` |
 | Open a task: the tab bar shows only its tabs | Click it in Tasks. The first time, it gets a tab named after it. × beside its name on the tab bar goes back |
 | Open the next task that needs me | ⌘⇧N |
+| See what needs me at a glance | A tab with no panes is the home screen: the new-task line (click it, or ⌘N), up to three tasks under Needs you, and a node for each of the first 12 listed tasks. Left to right is the project; within a project the older task is farther; the colour is the state. No node sits under the text, so a small window shows fewer. Hover a node for its title; click a node or a row to open the task |
 | See the inbox | Tasks on the rail: Needs you, Running, Captured, On hold, Done |
 | Snooze 1 hour / hold / dismiss / undo | ⌘⇧E on Tasks, then `s` / `h` / `x` / `u` |
 

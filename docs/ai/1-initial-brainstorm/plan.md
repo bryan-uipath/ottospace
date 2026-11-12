@@ -85,17 +85,18 @@ cheapest daily win. E is the largest value but needs A, B and D.
 - Backlog, from Bryan 2026-11-11:
   - **Coach.** Count how often each shortcut is used, tier the shortcuts, and show hints or
     achievements. Shares its data with the usage metrics for the weekly review (#1a).
-  - **Small delights.** Keep a list as we build. First candidates: Otto reacts to state (a task
+  - **Small delights.** Keep a list as we build. First candidates: the lattice reacts to state (a task
     finishes, a focus block starts).
   - **One title bar per app pane.** Today the app's title bar shows under our pane header. Either
     crop it from the stream and, when live, place the app's title bar over our header; or drop
     our header for app panes. Apps with tabs in the title bar (Chrome) need an exception.
-  - **A real app.** `ottospace.app` with the Otto icon and a stable identity.
+  - **A real app.** `ottospace.app` with its icon and a stable identity.
 - Tab titles: later, a cheap agent names each tab from what is in it. The model is a setting
   (Bryan: default haiku / luna). Until then titles are "Tab N".
 - Scripting in TypeScript (replaces "rules before a scripting language"): see `scripting.md`.
-- Look: apollo-ui future dark, one accent per key mode. Otto mark: `background/otto-icon.svg` (app icon) and
-  `background/otto-pane.svg` (empty pane). Smooth shaded, mono, cyan eyes, ninja band.
+- Look: apollo-ui future dark, one accent per key mode. The mark is abstract (a space for
+  your work), not a mascot: a window of panes drawn from lattice lines with one amber node
+  (`crates/ottospace/assets/icon.svg`). The empty workspace and the empty pane draw the same lattice.
 
 ## Open questions
 

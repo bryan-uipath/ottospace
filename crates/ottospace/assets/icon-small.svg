@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none">
+  <!-- The app icon at 16 and 32 pixels: heavier lines and a larger node, with no glow. -->
+  <defs>
+    <radialGradient id="tile-glow" cx="512" cy="330" r="720" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1c2a30"/><stop offset="1" stop-color="#0c0c0f" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="#0c0c0f"/>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#tile-glow)"/>
+  <rect x="101" y="101" width="822" height="822" rx="185" stroke="#3f3f46" stroke-width="2"/>
+  <!-- Drawn on a 512 grid, fitted to the tile. -->
+  <g transform="translate(72.5 72.5) scale(1.7167)">
+    <g stroke="#00b8db" stroke-width="40" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="84" y="108" width="344" height="296" rx="44"/>
+      <path d="M232 108V404"/>
+      <path d="M232 256H428"/>
+    </g>
+    <circle cx="232" cy="256" r="74" fill="#0c0c0f"/>
+    <circle cx="232" cy="256" r="54" fill="#ffb900"/>
+  </g>
+</svg>

@@ -1,6 +1,6 @@
 # ottospace
 
-<img src="docs/ai/1-initial-brainstorm/background/otto-icon-cyan.svg" width="96" alt="Otto, the ottospace robot">
+<img src="crates/ottospace/assets/icon.svg" width="96" alt="ottospace icon">
 
 **AI-Native Command Center for your Agents and Apps**
 

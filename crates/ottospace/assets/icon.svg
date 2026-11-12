@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none">
+  <!-- The app icon: a window split into panes, drawn as lattice lines, with a task's node at the split.
+       `scripts/icon.sh` turns it into ottospace.icns. -->
+  <defs>
+    <radialGradient id="tile-glow" cx="512" cy="330" r="720" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1c2a30"/><stop offset="1" stop-color="#0c0c0f" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="#0c0c0f"/>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#tile-glow)"/>
+  <rect x="101" y="101" width="822" height="822" rx="185" stroke="#3f3f46" stroke-width="2"/>
+  <!-- Drawn on a 512 grid, fitted to the tile. -->
+  <g transform="translate(72.5 72.5) scale(1.7167)">
+    <g stroke="#00b8db" stroke-width="24" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="96" y="124" width="320" height="264" rx="40"/>
+      <path d="M240 124V388"/>
+      <path d="M240 262H416"/>
+    </g>
+    <circle cx="240" cy="262" r="83" fill="#ffb900" fill-opacity=".10"/>
+    <circle cx="240" cy="262" r="56" fill="#ffb900" fill-opacity=".22"/>
+    <circle cx="240" cy="262" r="36" fill="#ffb900"/>
+    <circle cx="230" cy="252" r="13" fill="#fff" fill-opacity=".8"/>
+  </g>
+</svg>

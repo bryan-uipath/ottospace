@@ -17,18 +17,17 @@ use core_foundation::base::TCFType;
 use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 use gpui::{
     AnyElement, AnyView, App, Application, AssetSource, BorderStyle, Bounds, BoxShadow, ClickEvent, ClipboardItem,
-    ContentMask, Context, Div, ElementId, FocusHandle, FontWeight, ImageSource, KeyBinding, KeyDownEvent, Keystroke,
-    Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Resource, ScrollDelta, ScrollHandle,
-    ScrollWheelEvent, SharedString, Size, Stateful, Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions,
-    actions, black, canvas, div, img, point, prelude::*, px, quad, relative, rgb, size, surface, svg,
-    transparent_black,
+    ContentMask, Context, Div, ElementId, FocusHandle, FontWeight, KeyBinding, KeyDownEvent, Keystroke, Modifiers,
+    MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, ScrollDelta, ScrollHandle, ScrollWheelEvent, SharedString,
+    Size, Stateful, Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions, actions, black, canvas, div,
+    img, point, prelude::*, px, quad, relative, rgb, size, surface, svg, transparent_black,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::keys::{self, Mods};
 use ottospace_core::list::{ListKey, list_key};
 use ottospace_core::rules::{self, Facts};
 use ottospace_core::settings::{Installed, closed_apps};
-use ottospace_core::tasks::{Group, MAX_TITLE, Task};
+use ottospace_core::tasks::{Group, MAX_TITLE, Task, TaskId};
 use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, scroll_key, select_kind, visual_key};
 use ottospace_core::{
     Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Pane, PaneId, PickItem, Picker, Rect, Section, theme,
@@ -41,6 +40,7 @@ use screencapturekit::prelude::*;
 mod ax_debug;
 mod config;
 mod control;
+mod home;
 mod menus;
 mod repos;
 mod terminal;
@@ -223,8 +223,6 @@ struct Assets;
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<std::borrow::Cow<'static, [u8]>>> {
         let bytes: Option<&'static [u8]> = match path {
-            "empty.svg" => Some(include_bytes!("../assets/empty.svg")),
-            "empty-pane.svg" => Some(include_bytes!("../assets/empty-pane.svg")),
             "icons/apps.svg" => Some(include_bytes!("../assets/icons/apps.svg")),
             "icons/workbook.svg" => Some(include_bytes!("../assets/icons/workbook.svg")),
             "icons/tasks.svg" => Some(include_bytes!("../assets/icons/tasks.svg")),
@@ -346,32 +344,6 @@ impl Render for Tooltip {
     }
 }
 
-/// An empty pane: Otto on a small patch of grid, with a hint under it.
-fn empty_pane(hint: &'static str) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_col()
-        .items_center()
-        // Name the source kind: a bare "empty-pane.svg" parses as a URL and is fetched over HTTP.
-        .child(
-            img(ImageSource::Resource(Resource::Embedded("empty-pane.svg".into())))
-                .w(px(224.))
-                .max_w_full()
-                .h(px(184.)),
-        )
-        .child(div().text_sm().text_color(rgb(theme::MUTED)).child(hint))
-}
-
-/// The empty workspace: Otto over a faint grid floor.
-fn empty_workspace() -> impl IntoElement {
-    div()
-        .flex()
-        .flex_col()
-        .items_center()
-        .child(img(ImageSource::Resource(Resource::Embedded("empty.svg".into()))).w(px(700.)).max_w_full().h(px(392.)))
-        .child(div().text_sm().text_color(rgb(theme::MUTED)).child("⌘E to open a pane · ⌘D for a terminal"))
-}
-
 actions!(
     ottospace,
     [
@@ -403,6 +375,8 @@ struct Workspace {
     cells: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
     /// Each pane's bounds inside its border, for e2e to check the live window's gap.
     frames: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
+    /// What the home screen last drew, and the lattice lines kept between frames.
+    home: home::Shared,
     apps: Vec<capture::App>,
     /// Apps the settings name that are not running: listed under the running ones.
     closed: Vec<Installed>,
@@ -571,6 +545,7 @@ impl Workspace {
             system_clipboard: std::env::var_os("OTTOSPACE_E2E").is_none(),
             cells: HashMap::new(),
             frames: HashMap::new(),
+            home: home::Shared::default(),
             apps: Vec::new(),
             closed: Vec::new(),
             launching: Vec::new(),
@@ -1114,6 +1089,13 @@ impl Workspace {
             // Tasks as the Tasks section lists them, and how many need the user.
             "inbox": self.inbox(),
             "needs_you": self.model.tasks.needs_you(),
+            // The home screen, or null while the tab on show has a pane: each task's node (its
+            // lane, depth and crossing of the lattice) and the rows under "Needs you".
+            "home": self.model.home(&self.home.borrow().keep_out()),
+            // What the home screen drew, in window points: its `area`, the `panel` (the new-task
+            // line with its list) and each node's click target by task id. Also how often
+            // lattice lines were built and painted, here and in empty panes.
+            "home_drawn": self.home.borrow().snapshot(),
             // Apps from the settings that are not running: `open_app` starts one.
             "closed_apps": self.closed.iter().map(|app| &app.name).collect::<Vec<_>>(),
             // The Apps list: what can be hosted now. `icon`: its icon was read.
@@ -1767,6 +1749,13 @@ impl Workspace {
             .child(panel)
     }
 
+    /// Opens the new-task box: ⌘N, or a click on the home screen's line.
+    fn new_task(&mut self, window: &Window, cx: &mut Context<Self>) {
+        // The repositories as they are now, for `@name`.
+        self.model.update(Action::SetRepos { repos: repos::scan() });
+        self.dispatch(Action::OpenCompose { text: String::new() }, window, cx);
+    }
+
     /// The new-task box, over the workspace: the line, what it will file, and names that finish
     /// the `#project` or `@repo` being typed. A click outside it closes it.
     fn render_compose(&self, line: &str, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2164,19 +2153,10 @@ impl Workspace {
             }
             let (id, index) = (task.id, listed);
             listed += 1;
-            let urgent = if task.priority == 1 { theme::ERROR } else { theme::MUTED };
             rows.push(
                 list_button(("task", id as usize), self.model.list == Some(index))
-                    .child(div().flex_none().text_xs().text_color(rgb(urgent)).child(format!("P{}", task.priority)))
-                    .child(div().flex_1().min_w_0().truncate().child(task.title.clone()))
-                    .children(task.project.as_ref().map(|project| {
-                        let tag = div().flex_none().max_w(px(90.)).truncate().text_xs();
-                        tag.text_color(rgb(theme::MUTED)).child(format!("#{project}"))
-                    }))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.dispatch(Action::TaskOpen { id: Some(id) }, window, cx);
-                        cx.notify();
-                    }))
+                    .children(task_cells(task, 90.))
+                    .on_click(open_task(id, cx))
                     .into_any_element(),
             );
         }
@@ -2360,7 +2340,7 @@ impl Workspace {
                 Kind::Terminal => {
                     div().text_sm().text_color(rgb(theme::ERROR)).child("the shell did not start").into_any_element()
                 }
-                _ => empty_pane("⌘E to pick what goes here").into_any_element(),
+                _ => home::empty_pane("⌘E to pick what goes here", id, &self.home).into_any_element(),
             }
         };
         let (radius, cropped) = self.hosted.get(&id).map_or((0.0, false), |h| (h.radius, h.crop > 0.0));
@@ -2613,6 +2593,27 @@ impl Workspace {
     }
 }
 
+/// What a task's row shows: its priority, its title, and its project (at most `tag` points
+/// wide) if it has one.
+fn task_cells(task: &Task, tag: f32) -> Vec<Div> {
+    let urgent = if task.priority == 1 { theme::ERROR } else { theme::MUTED };
+    let priority = div().flex_none().text_xs().text_color(rgb(urgent)).child(format!("P{}", task.priority));
+    let title = div().flex_1().min_w_0().truncate().child(task.title.clone());
+    let project = task.project.as_ref().map(|project| {
+        let tag = div().flex_none().max_w(px(tag)).truncate().text_xs();
+        tag.text_color(rgb(theme::MUTED)).child(format!("#{project}"))
+    });
+    [priority, title].into_iter().chain(project).collect()
+}
+
+/// A click that shows a task's tabs.
+fn open_task(id: TaskId, cx: &mut Context<Workspace>) -> Box<dyn Fn(&ClickEvent, &mut Window, &mut App)> {
+    Box::new(cx.listener(move |this, _, window, cx| {
+        this.dispatch(Action::TaskOpen { id: Some(id) }, window, cx);
+        cx.notify();
+    }))
+}
+
 /// A row under a heading (a repository's checkout): no outline at rest, so a long list stays
 /// quiet. Hover and selection mark it.
 fn list_row(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
@@ -2753,6 +2754,10 @@ impl Render for Workspace {
             self.frames.entry(pane.id).or_default();
         }
         let tree = self.model.layout.as_ref().map(|root| self.render_node(root, cx));
+        // Only while the tab on show has no panes. Its lines are built once and kept: a frame
+        // that moves nothing (a terminal printing in another tab) only paints them again.
+        let keep_out = self.home.borrow().keep_out();
+        let home = self.model.home(&keep_out).map(|home| self.render_home(home, cx));
         div()
             .size_full()
             .flex()
@@ -2781,11 +2786,7 @@ impl Render for Workspace {
                 this.refresh_lists();
                 this.dispatch(Action::FocusList, window, cx);
             }))
-            .on_action(cx.listener(|this, _: &NewTask, window, cx| {
-                // The repositories as they are now, for `@name`.
-                this.model.update(Action::SetRepos { repos: repos::scan() });
-                this.dispatch(Action::OpenCompose { text: String::new() }, window, cx);
-            }))
+            .on_action(cx.listener(|this, _: &NewTask, window, cx| this.new_task(window, cx)))
             .on_action(cx.listener(|this, _: &NextTask, window, cx| {
                 this.dispatch(Action::Tick { now: now_ms() }, window, cx);
                 this.dispatch(Action::TaskOpen { id: None }, window, cx);
@@ -2896,7 +2897,7 @@ impl Render for Workspace {
                             .h_full()
                             .flex()
                             .overflow_hidden()
-                            .when(tree.is_none(), |d| d.items_center().justify_center().child(empty_workspace()))
+                            .children(home)
                             .children(tree),
                     ),
             )
@@ -3152,9 +3153,9 @@ mod tests {
 
     /// A missing asset draws as nothing, with no error. Catch a renamed file here.
     #[test]
-    fn every_rail_icon_and_otto_is_embedded() {
+    fn every_rail_icon_is_embedded() {
         let icons = SECTIONS.iter().map(|(_, icon, _)| *icon).chain(SPLITS.iter().map(|(icon, ..)| *icon));
-        for path in icons.chain(["empty.svg", "empty-pane.svg"]) {
+        for path in icons {
             assert!(Assets.load(path).unwrap().is_some(), "{path} is not in Assets::load");
         }
     }

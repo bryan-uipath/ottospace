@@ -1,6 +1,7 @@
 //! UI colours as `0xRRGGBB`: the apollo-ui future-dark scheme, plus one accent per key mode.
 
 use crate::model::Mode;
+use crate::tasks::Group;
 
 pub const BACKGROUND: u32 = 0x09090b;
 /// Bars, pane headers, the secondary bar.
@@ -24,6 +25,17 @@ pub const ERROR: u32 = 0xff8484;
 pub const SELECTION: u32 = 0x155e75;
 /// Sneak labels: a solid amber pill with dark text, readable over any app.
 pub const SNEAK: u32 = 0xffb900;
+
+/// A task's colour by its inbox heading: its node on the home screen.
+pub fn task(group: Group) -> u32 {
+    match group {
+        Group::NeedsYou => SNEAK,
+        Group::Running => PRIMARY,
+        Group::Captured => 0x71717a,
+        Group::OnHold => 0x52525c,
+        Group::Done => PICK,
+    }
+}
 
 /// The one colour that changes with the mode. It marks the status pill and the focused pane.
 pub fn accent(mode: Mode) -> u32 {
