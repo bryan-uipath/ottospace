@@ -124,9 +124,10 @@ fn a_window_the_rules_ignore_never_becomes_a_pane() {
     canary.call(json!({"cmd": "open_window"}));
     wait_for("the third window's pane", || titles().contains(&"Canary 3".to_string()).then_some(()));
     assert_eq!(titles(), ["Canary 1", "Canary 3"]);
-    // It was left where the app put it: still a full-size window of the canary's, not parked.
-    let second = rect(&canary.call(json!({"cmd": "state"}))["windows"][1]["bounds"]).expect("the second window");
-    assert!(second[2] > 200.0 && second[3] > 200.0, "the ignored window keeps its size: {second:?}");
+    // It was left where the app put it. A window in a pane is parked at the far corner of the
+    // screens; the hosted frames show the two panes' windows there and no third.
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!(state["hosted"].as_object().map(|hosted| hosted.len()), Some(2), "{}", state["hosted"]);
     let _ = std::fs::remove_dir_all(&home);
 }
 

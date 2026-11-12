@@ -7,7 +7,8 @@ use serde::Deserialize;
 /// What is known of a window when it is first seen.
 #[derive(Clone, Copy, Debug)]
 pub struct Facts<'a> {
-    /// The app's name, as the Apps list shows it: `zoom.us`.
+    /// The app's name as macOS reports it, which is nearly always what the Apps list shows:
+    /// `zoom.us`. The bundle id is the sure way to name an app.
     pub app: &'a str,
     /// The app's bundle id, if it has one: `us.zoom.xos`.
     pub bundle: Option<&'a str>,
