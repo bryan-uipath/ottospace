@@ -199,6 +199,9 @@ fn terminal_scrolls_back_and_typing_returns_to_the_bottom() {
 
     // ⇧End, ⇧Home, ⇧PageDown move the view; the keys do not reach the shell.
     let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}))["terminals"]["1"].clone();
+    // A huge delta stops at the top instead of overflowing alacritty's offset.
+    let t = otto.call(json!({"cmd": "scroll", "lines": 3e9}))["terminals"]["1"].clone();
+    assert_eq!(t["display_offset"], t["history"]);
     assert_eq!(key("shift-end")["display_offset"], 0);
     let top = key("shift-home");
     assert_eq!(top["display_offset"], top["history"]);
@@ -287,9 +290,15 @@ fn visual_mode_selects_with_the_keyboard() {
     assert_eq!(reply["terminals"]["1"]["selection"], Value::Null);
     assert_eq!(reply["terminals"]["1"]["visual_cursor"], Value::Null);
 
+    // ⌘C copies in visual mode too, and stays in it. A click leaves it.
+    let reply = key("cmd-shift-c k 0 w v e cmd-c");
+    assert_eq!((reply["mode"].as_str(), reply["copied"].as_str()), (Some("visual"), Some("beta")));
+    let reply = otto.call(json!({"cmd": "mouse_down", "x": 0.25, "y": 0.5}));
+    assert_eq!((reply["mode"].as_str(), reply["state"]["visual"].as_u64()), (Some("normal"), None));
+
     // Esc leaves without copying; typed keys never reach the shell while in visual mode.
     let reply = key("cmd-shift-c w v $ escape");
-    assert_eq!((reply["mode"].as_str(), reply["copied"].as_str()), (Some("normal"), Some("alpha")));
+    assert_eq!((reply["mode"].as_str(), reply["copied"].as_str()), (Some("normal"), Some("beta")));
     otto.call(json!({"cmd": "type", "text": "echo done\r"}));
     otto.wait_for("the shell to be untouched", |o| Some(term1(o)).filter(|t| shows(t, "done")));
 }

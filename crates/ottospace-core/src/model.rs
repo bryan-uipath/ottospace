@@ -323,8 +323,11 @@ impl Model {
         // The key reference covers the workspace too, so the same actions wait behind it, and the
         // picker cannot open under it.
         let blocked_by_keys = self.keys && (for_panes || matches!(action, Action::OpenPicker { .. }));
-        // Visual mode holds the keyboard on its terminal the same way.
-        let blocked_by_visual = self.visual.is_some() && (for_panes || matches!(action, Action::OpenPicker { .. }));
+        // Visual mode holds the keyboard on its terminal the same way. A close of a named pane still
+        // runs: the shell sends it when a window or shell is gone, and must not leave a dead pane.
+        let named_close = matches!(action, Action::Close { pane: Some(_) });
+        let blocked_by_visual =
+            self.visual.is_some() && !named_close && (for_panes || matches!(action, Action::OpenPicker { .. }));
         if (self.picker.is_some() && for_panes) || blocked_by_keys || blocked_by_visual {
             return effects;
         }
@@ -505,8 +508,9 @@ impl Model {
 
     /// Shows `kind` in `beside` (default: the focused pane) if that pane is empty; else splits it.
     fn open(&mut self, kind: Kind, axis: Axis, beside: Option<PaneId>, effects: &mut Vec<Effect>) {
-        // The new pane takes focus, so the live app must give the keyboard back.
+        // The new pane takes focus, so the live app must give the keyboard back, and visual mode ends.
         self.leave(effects);
+        self.leave_visual(effects);
         let target = beside.or(self.focused);
         let empty = target.filter(|t| self.pane(*t).is_some_and(|p| p.kind == Kind::Empty));
         let id = match empty.and_then(|t| self.panes.iter_mut().find(|p| p.id == t)) {
@@ -584,6 +588,9 @@ impl Model {
         }
         if self.live == Some(id) {
             self.live = None;
+        }
+        if self.visual == Some(id) {
+            self.visual = None;
         }
         if self.focused == Some(id) {
             // The newest pane left in this tab, not in some other tab.
@@ -1123,6 +1130,25 @@ mod tests {
         assert_eq!(m.update(Action::ToggleVisual), [Effect::Visual { pane: 2, on: false }]);
         assert_eq!(m.mode(), Mode::Normal);
         assert_eq!(m.update(Action::LeaveVisual), []);
+    }
+
+    #[test]
+    fn opening_a_pane_or_closing_a_named_one_ends_or_passes_visual_mode() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        m.update(Action::ToggleVisual);
+        // e.g. a hosted window closed: its pane goes, visual mode stays on its own terminal.
+        assert_eq!(m.update(Action::Close { pane: Some(1) }), [Effect::Closed(Pane { id: 1, kind: Kind::Terminal })]);
+        assert_eq!(m.mode(), Mode::Visual);
+        // The visual terminal's shell exited.
+        m.update(Action::Close { pane: Some(2) });
+        assert_eq!((m.mode(), m.visual), (Mode::Normal, None));
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        m.update(Action::ToggleVisual);
+        let effects = m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        assert_eq!(effects, [Effect::Visual { pane: 3, on: false }, Effect::Opened(4)]);
+        assert_eq!((m.mode(), m.focused), (Mode::Normal, Some(4)));
     }
 
     #[test]

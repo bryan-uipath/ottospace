@@ -606,7 +606,11 @@ impl Workspace {
                             let (button, first_mouse) = (MouseButton::Left, false);
                             let event =
                                 MouseDownEvent { button, position, modifiers, click_count: clicks, first_mouse };
-                            // In the order GPUI calls them: the terminal's handler, then the pane's.
+                            // In the order GPUI calls them: the root's capture, the terminal's
+                            // handler, then the pane's.
+                            if self.model.visual.is_some() {
+                                self.dispatch(Action::LeaveVisual, window, cx);
+                            }
                             self.terminal_mouse_down(id, &event, cx);
                             self.click_pane(id, &event, window, cx);
                         }
@@ -1016,9 +1020,11 @@ impl Workspace {
         cx.notify();
     }
 
-    /// ⌘C: copies the focused terminal's selection. With nothing selected it does nothing.
+    /// ⌘C: copies the focused terminal's selection, in visual mode too. With nothing selected it
+    /// does nothing.
     fn copy(&mut self, cx: &mut Context<Self>) {
-        let terminal = self.model.keyboard_terminal().and_then(|id| self.terminals.get(&id));
+        let pane = self.model.visual.or_else(|| self.model.keyboard_terminal());
+        let terminal = pane.and_then(|id| self.terminals.get(&id));
         let Some(text) = terminal.and_then(Terminal::selected) else { return };
         self.copy_text(text, cx);
     }
@@ -1755,6 +1761,15 @@ impl Render for Workspace {
             .on_key_down(cx.listener(Self::key_down))
             // On the root, so a selection drag keeps going over other panes.
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| this.mouse_move(e, cx)))
+            // A release ends the drag, so a later drag elsewhere does not extend this selection.
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.dragging = None))
+            // Any click leaves visual mode first, before the clicked element acts: visual mode has no
+            // backdrop, and e.g. a click on an app pane must go live, not be replayed while blocked.
+            .capture_any_mouse_down(cx.listener(|this, _, window, cx| {
+                if this.model.visual.is_some() {
+                    this.dispatch(Action::LeaveVisual, window, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &CopySelection, _, cx| this.copy(cx)))
             .on_action(cx.listener(|this, _: &PasteText, _, cx| this.paste(cx)))
             .on_action(cx.listener(|this, _: &VisualMode, window, cx| {

@@ -44,11 +44,17 @@ pub struct Wheel {
 impl Wheel {
     /// `dy` is the event's vertical delta in pixels; positive scrolls back into history.
     pub fn lines(&mut self, dy: f32, line_height: f32) -> i32 {
-        if line_height <= 0. {
+        // Bounded: alacritty adds the count to its offset as an i32, which must not overflow.
+        const MAX: f32 = 100_000.;
+        if line_height <= 0. || !dy.is_finite() {
             return 0;
         }
         let total = self.rest + dy;
         let lines = (total / line_height).trunc();
+        if lines.abs() > MAX {
+            self.rest = 0.;
+            return (lines.signum() * MAX) as i32;
+        }
         self.rest = total - lines * line_height;
         lines as i32
     }
@@ -204,6 +210,11 @@ mod tests {
         assert_eq!(wheel.lines(34., 18.), 2); // 36px
         assert_eq!(wheel.lines(-18., 18.), -1);
         assert_eq!(wheel.lines(5., 0.), 0);
+        // A huge or broken delta (e.g. from the socket) stays bounded and leaves the wheel working.
+        assert_eq!(wheel.lines(f32::INFINITY, 18.), 0);
+        assert_eq!(wheel.lines(1e30, 18.), 100_000);
+        assert_eq!(wheel.lines(-1e30, 18.), -100_000);
+        assert_eq!(wheel.lines(18., 18.), 1);
     }
 
     #[test]
