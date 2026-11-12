@@ -363,6 +363,52 @@ fn list_mode_drives_the_bar_with_the_keyboard() {
     assert_eq!(otto.call(json!({"cmd": "split", "axis": "down"}))["mode"], "normal");
 }
 
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_new_task_box_files_a_line() {
+    // One repository to name with `@`.
+    let root = std::env::temp_dir().join(format!("ottospace-e2e-compose-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("flow-app/.git")).unwrap();
+    std::fs::write(root.join("flow-app/.git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    let otto = Otto::launch_with("compose", &[("OTTOSPACE_REPOS", root.to_str().unwrap())]);
+    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+    otto.call(json!({"cmd": "split"}));
+
+    // ⌘N opens the box. It takes the keys: nothing reaches the shell behind it, and ⌘D waits.
+    let reply = key("cmd-n");
+    assert_eq!((reply["mode"].as_str(), reply["state"]["compose"].as_str()), (Some("compose"), Some("")));
+    assert_eq!(key("cmd-d")["state"]["panes"].as_array().map(Vec::len), Some(1));
+    // ↵ on an empty line files nothing; Esc closes.
+    assert_eq!(key("enter")["mode"], "compose");
+    assert_eq!(key("escape")["mode"], "normal");
+
+    // An agent offers a draft; Tab finishes the repository's name; ↵ files it.
+    otto.call(json!({"cmd": "compose", "text": "fix zoom flicker #canvas p2 @flow"}));
+    assert_eq!(key("tab")["state"]["compose"], "fix zoom flicker #canvas p2 @flow-app ");
+    let reply = key("enter");
+    let task = &reply["state"]["tasks"]["list"][0];
+    assert_eq!((reply["mode"].as_str(), task["title"].as_str()), (Some("normal"), Some("fix zoom flicker")));
+    assert_eq!(
+        (task["project"].as_str(), task["priority"].as_u64(), task["state"].as_str()),
+        (Some("canvas"), Some(2), Some("captured"))
+    );
+    let repo = root.canonicalize().unwrap().join("flow-app");
+    assert_eq!(task["repo"].as_str(), repo.to_str());
+
+    // The same from the socket, without the box. A line with no title is refused.
+    let filed = otto.call(json!({"cmd": "task_new", "line": "ask Ana #support p1"}));
+    assert_eq!((filed["task"]["id"].as_u64(), filed["task"]["project"].as_str()), (Some(2), Some("support")));
+    assert_eq!(otto.raw(r##"{"cmd":"task_new","line":"#support p1"}"##)["ok"], false);
+
+    // ⌘⇧N brings forward the tab of the task that needs the user.
+    otto.call(json!({"cmd": "new_tab"}));
+    let first = otto.call(json!({"cmd": "state"}))["state"]["tabs"][0]["id"].clone();
+    otto.call(json!({"cmd": "task_add", "title": "waits", "state": "needs_you", "tab": first}));
+    assert_eq!(key("cmd-shift-n")["state"]["active"], 0);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A fresh folder to pass as `OTTOSPACE_HOME`, with `settings` as its `settings.json`.
 fn user_folder(name: &str, settings: &str) -> PathBuf {
     let home = std::env::temp_dir().join(format!("ottospace-e2e-home-{name}-{}", std::process::id()));

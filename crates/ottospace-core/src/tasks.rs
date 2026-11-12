@@ -68,6 +68,12 @@ pub struct Task {
     /// The `id` of the tab that is this task's workspace, if it has one.
     #[serde(default)]
     pub tab: Option<u32>,
+    /// The project this task serves, from a `#tag`. Many tasks serve none.
+    #[serde(default)]
+    pub project: Option<String>,
+    /// The path of the repository the work is in, from an `@name`.
+    #[serde(default)]
+    pub repo: Option<String>,
 }
 
 fn default_priority() -> u8 {
@@ -156,8 +162,24 @@ impl Tasks {
     pub fn add(&mut self, title: String, priority: u8, state: State, tab: Option<u32>) -> TaskId {
         self.next_id += 1;
         let priority = priority.clamp(1, 9);
-        self.list.push(Task { id: self.next_id, title, state, priority, snoozed_until: None, dismissed: false, tab });
+        let (snoozed_until, dismissed, project, repo) = (None, false, None, None);
+        self.list.push(Task { id: self.next_id, title, state, priority, snoozed_until, dismissed, tab, project, repo });
         self.next_id
+    }
+
+    /// Names the project and repository of a task just filed from the new-task box.
+    pub fn tag(&mut self, id: TaskId, project: Option<String>, repo: Option<String>) {
+        if let Some(task) = self.list.iter_mut().find(|t| t.id == id) {
+            (task.project, task.repo) = (project, repo);
+        }
+    }
+
+    /// Every project named by a task, once each, by name.
+    pub fn projects(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self.list.iter().filter_map(|t| t.project.as_deref()).collect();
+        names.sort_unstable();
+        names.dedup();
+        names
     }
 
     /// A task that moves under Needs you comes back into the inbox, snoozed or dismissed or not.
@@ -383,6 +405,8 @@ mod tests {
             snoozed_until: None,
             dismissed: false,
             tab,
+            project: None,
+            repo: None,
         };
         let mut tasks = Tasks::default();
         tasks.restore(vec![task(7, "late", Some(3)), task(2, "early", None), task(7, "twin", None)], 0);

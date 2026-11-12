@@ -47,7 +47,7 @@ ottospace ctl '{"cmd":"state"}'
 
 | Field | Meaning |
 |---|---|
-| `mode` | `normal`, `app` (a hosted app has the keyboard), `pick` (the picker is open), `visual` (selecting terminal text with the keyboard) or `list` (the secondary bar has the keyboard) |
+| `mode` | `normal`, `app` (a hosted app has the keyboard), `pick` (the picker is open), `visual` (selecting terminal text with the keyboard), `list` (the secondary bar has the keyboard) or `compose` (the new-task box is open) |
 | `state.list` | Null, or the index of the selected row of the open section: the secondary bar has the keyboard (`mode` is `list`, or `pick` while the picker is open over it) |
 | `state.panes` | Every pane of every tab: `id`, `kind`, and `cwd` for a terminal opened by `open_repo`. `kind` is an object: `{"type":"terminal"}`, `{"type":"empty"}` or `{"type":"app","window":N,"title":"..."}` |
 | `state.tabs`, `state.active` | The tabs (`id`, `title`) and the index of the one showing. Requests take the index, not the `id` |
@@ -62,7 +62,8 @@ ottospace ctl '{"cmd":"state"}'
 | `font`, `cell` | The terminal font in use (`name`, `size`) and the size of one character cell `[w, h]` in points |
 | `notice` | Null, or the problem the status bar shows (a mistake in the settings, an app that could not be hosted). It is not `error`, which means the request failed |
 | `apps` | Running apps that `open_app` can host: `name`, `windows` (how many it has open) and `icon` (true if its icon was read) |
-| `state.tasks.list` | Every task: `id`, `title`, `state`, `priority`, `snoozed_until`, `dismissed`, `tab` |
+| `state.tasks.list` | Every task: `id`, `title`, `state`, `priority`, `snoozed_until`, `dismissed`, `tab`, `project` (from a `#tag`, or null) and `repo` (a repository path, or null) |
+| `state.compose` | Null, or the text in the new-task box while it is open |
 | `inbox`, `needs_you` | The tasks the Tasks section lists, in order, each with its `group`; and how many are under `needs_you` |
 | `state.repos` | Repositories found on disk: `name`, `path`, `branch`, and `worktrees` (each `name`, `path`, `branch`) |
 | `ax_overlay` | Null, or the accessibility overlay's last read: `pane`, `targets` (`label`, `frame` in window coordinates, `source`), `count`, `truncated`, `millis`, `error` |
@@ -114,6 +115,8 @@ Tasks (the inbox in the Tasks section):
 ```sh
 ottospace ctl '{"cmd":"task_add","title":"Fix the zoom flicker"}'
 ottospace ctl '{"cmd":"task_add","title":"Review the retry fix","priority":1,"state":"needs_you","tab":2}'
+ottospace ctl '{"cmd":"task_new","line":"fix zoom flicker #canvas @flow-workbench p1"}'
+ottospace ctl '{"cmd":"compose","text":"reply to Ana about the retry bug #support"}'
 ottospace ctl '{"cmd":"task_set_state","id":1,"state":"needs_you"}'
 ottospace ctl '{"cmd":"task_list"}'
 ottospace ctl '{"cmd":"task_pop"}'
@@ -130,6 +133,13 @@ States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stal
 `needs_you`, `stale`), `running` (`running`, `review`), `captured` (`captured`, `triaged`),
 `on_hold` (`parked`), `done`. In a group: priority, then oldest first. `cleaned` tasks are not listed.
 
+- `task_new` files a task from one line, the way the user's new-task box (⌘N) reads it:
+  `#tag` is the project (optional), `@name` is a repository from `state.repos` by name, `p1` to
+  `p9` is the priority, the rest is the title. A `@name` that matches no repository stays in the
+  title. It replies like `task_add`. A line with no title is refused.
+- `compose` opens the new-task box on the user's screen with `text` in it. Nothing is filed
+  until the user presses ↵: use it to offer a draft, and `task_new` to file one yourself.
+  While the box is open `mode` is `compose` and `state.compose` is its text.
 - `task_add` replies `{"ok":true,"task":{..}}`, not the state: the new task, with its `id`.
   Priorities outside 1 to 9 are moved into that range.
 - **Report your own state.** If the user gave you a task id, send `task_set_state` with `running`

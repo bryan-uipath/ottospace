@@ -286,6 +286,8 @@ const KEYS_TERMINAL: &[(&str, &str)] = &[
     ("⌘V", "Paste"),
     ("⌘⇧C", "Visual mode: select with the keyboard"),
     ("⌘⇧E", "List mode: keys for the bar (Apps, Tasks, Repos)"),
+    ("⌘N", "New task: type a line, ↵ files it"),
+    ("⌘⇧N", "Next task: open the first one that needs you"),
 ];
 const KEYS_LIST: &[(&str, &str)] = &[
     ("J K / ↓ ↑", "Move the selection"),
@@ -366,7 +368,7 @@ actions!(
     ]
 );
 // Terminal selection.
-actions!(ottospace, [CopySelection, PasteText, VisualMode, ListMode]);
+actions!(ottospace, [CopySelection, PasteText, VisualMode, ListMode, NewTask, NextTask]);
 
 struct Workspace {
     model: Model,
@@ -750,6 +752,25 @@ impl Workspace {
                         None => failure = Some("no terminal pane to scroll".into()),
                     }
                     None
+                }
+                Request::Compose { text } => {
+                    self.model.update(Action::SetRepos { repos: repos::scan() });
+                    Some(Action::OpenCompose { text })
+                }
+                Request::TaskNew { line } if line.chars().count() > MAX_TITLE => {
+                    failure = Some(format!("the line is longer than {MAX_TITLE} characters"));
+                    None
+                }
+                Request::TaskNew { line } => {
+                    let before = self.model.tasks.list.len();
+                    self.dispatch(Action::TaskFromLine { line }, window, cx);
+                    let filed = self.model.tasks.list.get(before);
+                    let message = match filed {
+                        Some(task) => serde_json::json!({ "ok": true, "task": task }).to_string(),
+                        None => control::error("the line has no title"),
+                    };
+                    let _ = reply.send(message);
+                    continue;
                 }
                 Request::TaskAdd { title, .. } if title.chars().count() > MAX_TITLE => {
                     failure = Some(format!("the title is longer than {MAX_TITLE} characters"));
@@ -1222,6 +1243,10 @@ impl Workspace {
             self.picker_key(event, window, cx);
             return;
         }
+        if self.model.compose.is_some() {
+            self.compose_key(event, window, cx);
+            return;
+        }
         if self.model.mode() == Mode::Visual {
             self.visual_key(event, window, cx);
             return;
@@ -1285,6 +1310,27 @@ impl Workspace {
         let local = position - bounds.origin;
         let cell = (self.cell.width.into(), self.cell.height.into());
         Some(cell_at(local.x.into(), local.y.into(), cell, terminal.grid_size()))
+    }
+
+    /// The new-task box takes every key but ⌘ shortcuts: text types, ↵ files, Tab completes.
+    fn compose_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
+        let key = &event.keystroke;
+        let m = key.modifiers;
+        let action = match key.key.as_str() {
+            _ if m.platform => return, // ⌘ shortcuts still reach their bindings; pane ones wait
+            "escape" => Action::CloseCompose,
+            "enter" if !event.is_held => Action::ComposeSubmit,
+            "enter" => return,
+            "tab" => Action::ComposeComplete,
+            "backspace" => Action::ComposeBackspace,
+            // ⌥ composes other characters (⌥B is "∫"); only plain typing goes in.
+            _ => match key.key_char.as_deref().filter(|_| !m.control && !m.alt) {
+                Some(text) if !text.chars().any(char::is_control) => Action::ComposeType { text: text.into() },
+                _ => return,
+            },
+        };
+        self.dispatch(action, window, cx);
+        cx.stop_propagation();
     }
 
     /// List mode takes every key but ⌘ shortcuts: they move over the bar's rows and act on one.
@@ -1507,6 +1553,82 @@ impl Workspace {
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
                     this.dispatch(Action::CloseKeys, window, cx);
+                }),
+            )
+            .child(panel)
+    }
+
+    /// The new-task box, over the workspace: the line, what it will file, and names that finish
+    /// the `#project` or `@repo` being typed. A click outside it closes it.
+    fn render_compose(&self, line: &str, cx: &mut Context<Self>) -> impl IntoElement {
+        let draft = ottospace_core::compose::parse(line);
+        let chip = |label: String, color: u32| {
+            div().px_1p5().rounded_sm().bg(rgb(theme::SELECTED)).text_xs().text_color(rgb(color)).child(label)
+        };
+        // What ↵ would file. An `@name` is checked against the list when the task is filed.
+        let reads = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap_2()
+            .children(draft.priority.map(|p| chip(format!("P{p}"), theme::TEXT)))
+            .children(draft.project.map(|p| chip(format!("#{p}"), theme::COMPOSE)))
+            .children(draft.repo.map(|r| chip(format!("@{r}"), theme::PRIMARY)));
+        let suggestions = self.model.compose_suggestions();
+        let hint = if suggestions.is_empty() {
+            "#project · @repo · p1 to p9 · ↵ file · esc close".to_string()
+        } else {
+            format!("tab: {}", suggestions.join("  ·  "))
+        };
+        let text = div()
+            .min_h(px(28.))
+            .flex()
+            .items_center()
+            .text_base()
+            .when(line.is_empty(), |d| d.text_color(rgb(theme::MUTED)).child("What needs doing?"))
+            .when(!line.is_empty(), |d| d.child(line.to_string()))
+            // The caret: there is no cursor movement, so it is always at the end.
+            .child(div().ml(px(1.)).w(px(2.)).h(px(18.)).bg(rgb(theme::COMPOSE)));
+        let panel = div()
+            .w(px(560.))
+            .max_w_full()
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .rounded_lg()
+            .bg(rgb(theme::RAISED))
+            .border_1()
+            .border_color(rgb(theme::COMPOSE))
+            .shadow(vec![BoxShadow {
+                color: black().opacity(0.7),
+                offset: point(px(0.), px(12.)),
+                blur_radius: px(32.),
+                spread_radius: px(0.),
+            }])
+            // A click inside the box must not reach the backdrop, which closes it.
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(div().text_xs().text_color(rgb(theme::COMPOSE)).child("NEW TASK"))
+            .child(text)
+            .child(reads)
+            .child(div().text_xs().text_color(rgb(theme::MUTED)).child(hint));
+        div()
+            .id("compose-backdrop")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .flex()
+            .justify_center()
+            .items_start() // the box is as tall as its lines, not the window
+            .pt(px(120.))
+            .px_4()
+            .bg(black().opacity(0.4))
+            .occlude()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.dispatch(Action::CloseCompose, window, cx);
                 }),
             )
             .child(panel)
@@ -1798,6 +1920,10 @@ impl Workspace {
                 list_button(("task", id as usize), self.model.list == Some(index))
                     .child(div().flex_none().text_xs().text_color(rgb(urgent)).child(format!("P{}", task.priority)))
                     .child(div().flex_1().min_w_0().truncate().child(task.title.clone()))
+                    .children(task.project.as_ref().map(|project| {
+                        let tag = div().flex_none().max_w(px(90.)).truncate().text_xs();
+                        tag.text_color(rgb(theme::MUTED)).child(format!("#{project}"))
+                    }))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.dispatch(Action::TaskOpen { id: Some(id) }, window, cx);
                         cx.notify();
@@ -2134,6 +2260,7 @@ impl Workspace {
                 ("LIST", "jk move · ↵ open · s snooze 1h · h hold · x dismiss · u undo · tab section · esc leave")
             }
             Mode::List => ("LIST", "jk move · ↵ open · ⇧↵ open below · tab section · esc leave"),
+            Mode::Compose => ("TASK", "type the task · tab completes #project and @repo · ↵ file · esc close"),
         };
         let hint = hint.to_string();
         let focused = match self.model.focused.and_then(|id| self.model.pane(id)).map(|p| &p.kind) {
@@ -2327,6 +2454,15 @@ impl Render for Workspace {
                 this.refresh_lists();
                 this.dispatch(Action::FocusList, window, cx);
             }))
+            .on_action(cx.listener(|this, _: &NewTask, window, cx| {
+                // The repositories as they are now, for `@name`.
+                this.model.update(Action::SetRepos { repos: repos::scan() });
+                this.dispatch(Action::OpenCompose { text: String::new() }, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NextTask, window, cx| {
+                this.dispatch(Action::Tick { now: now_ms() }, window, cx);
+                this.dispatch(Action::TaskOpen { id: None }, window, cx);
+            }))
             .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
                 this.dispatch(Action::Split { axis: Axis::Right, kind: Kind::Terminal }, window, cx);
             }))
@@ -2420,6 +2556,7 @@ impl Render for Workspace {
                     .map(ax_debug::Overlay::render),
             )
             .children(self.model.picker.as_ref().map(|picker| self.render_picker(picker, cx)))
+            .children(self.model.compose.as_ref().map(|line| self.render_compose(line, cx)))
             .when(self.model.keys, |d| d.child(self.render_keys(cx)))
     }
 }
@@ -2515,6 +2652,8 @@ fn main() {
             KeyBinding::new("cmd-v", PasteText, None),
             KeyBinding::new("cmd-shift-c", VisualMode, None),
             KeyBinding::new("cmd-shift-e", ListMode, None),
+            KeyBinding::new("cmd-n", NewTask, None),
+            KeyBinding::new("cmd-shift-n", NextTask, None),
         ]);
         let bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
         // Draw under the title bar; the top bar leaves room for the traffic lights.

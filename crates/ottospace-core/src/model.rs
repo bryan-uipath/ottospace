@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::compose;
 use crate::layout::{Axis, Dir, Node};
 use crate::list::ListRow;
 use crate::repos::{self, Repo};
@@ -44,6 +45,8 @@ pub enum Mode {
     Visual,
     /// The secondary bar: keys move over its rows and act on the selected one.
     List,
+    /// The new-task box: keys type a line that becomes a task.
+    Compose,
 }
 
 /// Something the picker can put in a new pane.
@@ -247,6 +250,23 @@ pub enum Action {
     Tick {
         now: u64,
     },
+    /// Open the new-task box, with `text` already in it (an agent's draft for the user to edit).
+    OpenCompose {
+        text: String,
+    },
+    ComposeType {
+        text: String,
+    },
+    ComposeBackspace,
+    /// Finish the `#project` or `@repo` being typed with the first suggestion.
+    ComposeComplete,
+    /// File the line as a task and close the box. A line with no title files nothing.
+    ComposeSubmit,
+    CloseCompose,
+    /// File a task from one line, as the box does: `fix zoom flicker #canvas @app p1`.
+    TaskFromLine {
+        line: String,
+    },
     /// Replace the Apps list with the apps the shell can host now.
     SetApps {
         names: Vec<String>,
@@ -326,6 +346,8 @@ pub struct Model {
     pub live: Option<PaneId>,
     /// Rail section shown in the secondary bar. `None`: the bar is closed.
     pub sidebar: Option<Section>,
+    /// The text in the new-task box, while it is open.
+    pub compose: Option<String>,
     /// The selected row, while the secondary bar has the keyboard.
     pub list: Option<usize>,
     /// The Apps section's list: names of the apps the shell can host.
@@ -358,6 +380,7 @@ impl Default for Model {
             focused: None,
             live: None,
             sidebar: None,
+            compose: None,
             list: None,
             apps: Vec::new(),
             repos: Vec::new(),
@@ -382,6 +405,8 @@ impl Model {
     pub fn mode(&self) -> Mode {
         if self.picker.is_some() {
             Mode::Pick
+        } else if self.compose.is_some() {
+            Mode::Compose
         } else if self.live.is_some() {
             Mode::App
         } else if self.visual.is_some() {
@@ -432,7 +457,12 @@ impl Model {
         let named_close = matches!(action, Action::Close { pane: Some(_) });
         let blocked_by_visual =
             self.visual.is_some() && !named_close && (for_panes || matches!(action, Action::OpenPicker { .. }));
-        if (self.picker.is_some() && for_panes) || blocked_by_keys || blocked_by_visual {
+        // The new-task box has the keyboard, as the picker does: what is behind it waits, and
+        // neither opens over the other. It does not open under the key reference or in visual mode.
+        let overlay = matches!(action, Action::OpenPicker { .. } | Action::OpenCompose { .. });
+        let behind_box = (self.picker.is_some() || self.compose.is_some()) && (for_panes || overlay);
+        let no_box_now = matches!(action, Action::OpenCompose { .. }) && (self.keys || self.visual.is_some());
+        if behind_box || no_box_now || blocked_by_keys || blocked_by_visual {
             return effects;
         }
         // The keyboard goes to a pane or a tab: the list gives it up.
@@ -605,6 +635,33 @@ impl Model {
                 self.sidebar = (self.sidebar != Some(section)).then_some(section);
                 self.list = self.list.map(|_| 0);
             }
+            Action::OpenCompose { text } => {
+                self.leave(effects);
+                self.compose = Some(text);
+            }
+            Action::ComposeType { text } => {
+                if let Some(line) = &mut self.compose {
+                    line.push_str(&text);
+                }
+            }
+            Action::ComposeBackspace => {
+                if let Some(line) = &mut self.compose {
+                    line.pop();
+                }
+            }
+            Action::ComposeComplete => {
+                if let (Some(line), Some(first)) = (&self.compose, self.compose_suggestions().first()) {
+                    self.compose = Some(compose::complete(line, first));
+                }
+            }
+            Action::ComposeSubmit => {
+                let line = self.compose.clone().unwrap_or_default();
+                if self.file_line(&line) {
+                    self.compose = None;
+                }
+            }
+            Action::CloseCompose => self.compose = None,
+            Action::TaskFromLine { line } => drop(self.file_line(&line)),
             Action::SetApps { names } => self.apps = names,
             Action::FocusList if self.list.is_some() => self.list = None,
             Action::FocusList => {
@@ -740,6 +797,45 @@ impl Model {
                 self.leave(effects);
                 self.sidebar = None;
             }
+        }
+    }
+
+    /// Files `line` as a captured task. False if it has no title: nothing is filed.
+    /// An `@name` that matches no listed repository stays in the title, as typed.
+    fn file_line(&mut self, line: &str) -> bool {
+        let mut draft = compose::parse(line);
+        let repo = draft.repo.take().map(|name| (self.repo_named(&name), name));
+        let path = match repo {
+            Some((Some(path), _)) => Some(path),
+            Some((None, name)) => {
+                draft.title = format!("{} @{name}", draft.title).trim().to_string();
+                None
+            }
+            None => None,
+        };
+        if draft.title.is_empty() {
+            return false;
+        }
+        let id = self.tasks.add(draft.title, draft.priority.unwrap_or(3), State::Captured, None);
+        self.tasks.tag(id, draft.project, path);
+        true
+    }
+
+    /// The path of the listed repository or worktree called `name`, whatever the case of the letters.
+    fn repo_named(&self, name: &str) -> Option<String> {
+        let listed = self
+            .repos
+            .iter()
+            .flat_map(|r| std::iter::once((&r.name, &r.path)).chain(r.worktrees.iter().map(|w| (&w.name, &w.path))));
+        listed.into_iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, path)| path.clone())
+    }
+
+    /// Names that finish the `#project` or `@repo` being typed in the new-task box.
+    pub fn compose_suggestions(&self) -> Vec<String> {
+        match self.compose.as_deref().and_then(compose::completing) {
+            Some(('@', typed)) => compose::suggest(typed, self.repos.iter().map(|r| r.name.as_str())),
+            Some((_, typed)) => compose::suggest(typed, self.tasks.projects()),
+            None => Vec::new(),
         }
     }
 
@@ -1340,6 +1436,46 @@ mod tests {
         assert_eq!(m.mode(), Mode::Pick);
         m.update(Action::ClosePicker);
         assert_eq!(m.list, None);
+    }
+
+    #[test]
+    fn the_new_task_box_files_a_line_as_a_task() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        term(&mut m);
+        m.update(Action::OpenCompose { text: String::new() });
+        assert_eq!(m.mode(), Mode::Compose);
+        // It has the keyboard: a split waits, and the picker does not open over it.
+        m.update(Action::Split { axis: Right, kind: Kind::Empty });
+        m.update(Action::OpenPicker { axis: Right, new_tab: false, items: vec![PickItem::Terminal] });
+        assert_eq!((m.panes.len(), m.mode()), (1, Mode::Compose));
+        // ↵ on an empty line files nothing and keeps the box.
+        m.update(Action::ComposeSubmit);
+        assert_eq!((m.tasks.list.len(), m.mode()), (0, Mode::Compose));
+        // Tab finishes the repository being typed; the name need not match in case.
+        m.update(Action::ComposeType { text: "fix zoom #Canvas @AP".into() });
+        assert_eq!(m.compose_suggestions(), ["app"]);
+        m.update(Action::ComposeComplete);
+        m.update(Action::ComposeType { text: "p1x".into() });
+        m.update(Action::ComposeBackspace);
+        assert_eq!(m.compose.as_deref(), Some("fix zoom #Canvas @app p1"));
+        m.update(Action::ComposeSubmit);
+        let task = &m.tasks.list[0];
+        assert_eq!((task.title.as_str(), task.state, task.priority), ("fix zoom", State::Captured, 1));
+        assert_eq!(
+            (task.project.as_deref(), task.repo.as_deref(), m.mode()),
+            (Some("Canvas"), Some("/code/app"), Mode::Normal)
+        );
+        // A project already used is suggested; an unknown repository stays in the title.
+        m.update(Action::OpenCompose { text: "look #c".into() });
+        assert_eq!(m.compose_suggestions(), ["Canvas"]);
+        m.update(Action::CloseCompose);
+        m.update(Action::TaskFromLine { line: "ask about @nowhere".into() });
+        assert_eq!((m.tasks.list[1].title.as_str(), m.tasks.list[1].repo.as_deref()), ("ask about @nowhere", None));
+        // Not under the key reference.
+        m.update(Action::ToggleKeys);
+        m.update(Action::OpenCompose { text: String::new() });
+        assert_eq!(m.compose, None);
     }
 
     fn listed() -> Vec<Repo> {
