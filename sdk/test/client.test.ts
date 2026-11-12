@@ -10,7 +10,7 @@ import type { Client } from "../src/client.ts";
 import { Otto } from "../src/otto.ts";
 import { snapshot } from "../src/parse.ts";
 import type { Snapshot } from "../src/types.ts";
-import { withOttospace } from "./harness.ts";
+import { eventually, withOttospace } from "./harness.ts";
 
 /** The root split's ratio, or null for a single pane or none. */
 function layoutRatio(snapshot: Snapshot): number | null {
@@ -32,11 +32,26 @@ test("state: the typed snapshot is the whole reply", async () => {
     assert.deepEqual(start.state.tabs, [{ id: 1, title: "Tab 1", task: null }]);
     assert.equal(start.state.current_task, null);
     assert.equal(start.notice, null);
+    // No pane: the home screen, with nothing on it yet.
+    assert.deepEqual(start.home?.nodes, []);
+    assert.deepEqual(start.home?.counts, { needs_you: 0, running: 0, captured: 0, on_hold: 0, done: 0 });
     assert.match(start.version, /^\d+\.\d+\.\d+ · \w+$/);
     await exactState(client);
 
+    // The home screen with tasks on it: nodes, the "Needs you" rows and the counts.
+    const ask = (await client.taskAdd({ title: "Answer the agent", state: "needs_you", priority: 1 })).task;
+    await client.taskNew({ line: "tidy up #canvas" });
+    const home = await eventually("both tasks as nodes on the home screen", async () => {
+      const now = (await client.state()).home;
+      return now !== null && now.nodes.length === 2 ? now : undefined;
+    });
+    assert.deepEqual(home.needs_you, [ask]);
+    assert.deepEqual(home.counts, { needs_you: 1, running: 0, captured: 1, on_hold: 0, done: 0 });
+    assert.deepEqual(home.nodes.map((node) => node.task).toSorted(), [1, 2]);
+    await exactState(client);
+
     // With a split tree, a terminal, a task, an inbox row and the picker in it.
-    await client.split({ kind: "terminal" });
+    assert.equal((await client.split({ kind: "terminal" })).home, null, "a pane takes the home screen's place");
     await client.split({ axis: "down", kind: "empty" });
     await client.taskAdd({ title: "Check the types", state: "needs_you" });
     const picking = await client.picker({ axis: "down" });

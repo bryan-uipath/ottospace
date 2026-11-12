@@ -169,6 +169,41 @@ export interface AxOverlay {
   error: string | null;
 }
 
+/** One task on the home screen's lattice. */
+export interface HomeNode {
+  task: TaskId;
+  /** Its inbox heading: the node's colour. */
+  group: Group;
+  /** Its project's place, from 0 on the left. Tasks of no project share the last lane. */
+  lane: number;
+  /** Its rank by age among the shown tasks: 0 is the newest and the nearest. */
+  depth: number;
+  /** The lattice crossing `[x, z]` it is drawn on. */
+  crossing: [number, number];
+}
+
+/** The home screen: what a tab with no pane shows. */
+export interface Home {
+  /** One for each of the first 12 inbox tasks that has room. */
+  nodes: HomeNode[];
+  /** The first tasks that need the user, at most 3. */
+  needs_you: Task[];
+  /** How many listed tasks each inbox heading has. */
+  counts: Record<Group, number>;
+}
+
+/** What the home screen drew, in window points. */
+export interface HomeDrawn {
+  area: Rect;
+  /** The new-task line with its list. */
+  panel: Rect;
+  /** Each node's click target, by task id. */
+  nodes: Record<string, Rect>;
+  /** How often lattice lines were built and painted. */
+  lattice_builds: number;
+  lattice_paints: number;
+}
+
 export interface AppEntry {
   name: string;
   /** How many windows it has open. */
@@ -209,6 +244,9 @@ export interface Snapshot {
   copied: string | null;
   inbox: InboxRow[];
   needs_you: number;
+  /** Null while the tab on show has a pane. */
+  home: Home | null;
+  home_drawn: HomeDrawn;
   closed_apps: string[];
   apps: AppEntry[];
   ax_overlay: AxOverlay | null;

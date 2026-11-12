@@ -13,6 +13,9 @@ import type {
   CaptureReply,
   Frame,
   Group,
+  Home,
+  HomeDrawn,
+  HomeNode,
   InboxReply,
   InboxRow,
   Layout,
@@ -296,6 +299,44 @@ function axOverlay(value: unknown, at: string): AxOverlay {
   };
 }
 
+function homeNode(value: unknown, at: string): HomeNode {
+  const o = fields(value, at);
+  return {
+    task: num(o.task, `${at}.task`),
+    group: group(o.group, `${at}.group`),
+    lane: num(o.lane, `${at}.lane`),
+    depth: num(o.depth, `${at}.depth`),
+    crossing: pair(o.crossing, `${at}.crossing`),
+  };
+}
+
+function home(value: unknown, at: string): Home {
+  const o = fields(value, at);
+  const counts = fields(o.counts, `${at}.counts`);
+  return {
+    nodes: list(homeNode)(o.nodes, `${at}.nodes`),
+    needs_you: list(task)(o.needs_you, `${at}.needs_you`),
+    counts: {
+      needs_you: num(counts.needs_you, `${at}.counts.needs_you`),
+      running: num(counts.running, `${at}.counts.running`),
+      captured: num(counts.captured, `${at}.counts.captured`),
+      on_hold: num(counts.on_hold, `${at}.counts.on_hold`),
+      done: num(counts.done, `${at}.counts.done`),
+    },
+  };
+}
+
+function homeDrawn(value: unknown, at: string): HomeDrawn {
+  const o = fields(value, at);
+  return {
+    area: rect(o.area, `${at}.area`),
+    panel: rect(o.panel, `${at}.panel`),
+    nodes: map(rect)(o.nodes, `${at}.nodes`),
+    lattice_builds: num(o.lattice_builds, `${at}.lattice_builds`),
+    lattice_paints: num(o.lattice_paints, `${at}.lattice_paints`),
+  };
+}
+
 function appEntry(value: unknown, at: string): AppEntry {
   const o = fields(value, at);
   return { name: str(o.name, `${at}.name`), windows: num(o.windows, `${at}.windows`), icon: bool(o.icon, `${at}.icon`) };
@@ -338,6 +379,8 @@ export function snapshot(value: unknown): Snapshot {
     copied: orNull(str)(o.copied, "copied"),
     inbox: list(inboxRow)(o.inbox, "inbox"),
     needs_you: num(o.needs_you, "needs_you"),
+    home: orNull(home)(o.home, "home"),
+    home_drawn: homeDrawn(o.home_drawn, "home_drawn"),
     closed_apps: list(str)(o.closed_apps, "closed_apps"),
     apps: list(appEntry)(o.apps, "apps"),
     ax_overlay: orNull(axOverlay)(o.ax_overlay, "ax_overlay"),
