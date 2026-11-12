@@ -384,6 +384,7 @@ impl Action {
             | Action::Resize { .. }
             | Action::SwapDir { .. }
             | Action::MovePane { .. }
+            | Action::DropPane { .. }
             | Action::Equalize
             | Action::Enter { .. }
             | Action::Leave

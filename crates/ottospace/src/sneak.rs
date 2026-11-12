@@ -174,7 +174,7 @@ impl Workspace {
                 this.dispatch(Action::SneakEnter { targets }, window, cx);
                 this.sync_sneak(window, cx);
                 match this.model.sneak {
-                    Some(_) => this.snapshot(window),
+                    Some(_) => this.snapshot(window, cx),
                     None => {
                         control::error("sneak mode starts from normal or list mode: leave the app or close the box")
                     }
