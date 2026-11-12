@@ -385,6 +385,8 @@ fn the_new_task_box_files_a_line() {
 
     // An agent offers a draft; Tab finishes the repository's name; ↵ files it.
     otto.call(json!({"cmd": "compose", "text": "fix zoom flicker #canvas p2 @flow"}));
+    // A second draft while the first is on screen is refused, not dropped in silence.
+    assert_eq!(otto.raw(r#"{"cmd":"compose","text":"another"}"#)["ok"], false);
     assert_eq!(key("tab")["state"]["compose"], "fix zoom flicker #canvas p2 @flow-app ");
     let reply = key("enter");
     let task = &reply["state"]["tasks"]["list"][0];

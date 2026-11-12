@@ -135,10 +135,13 @@ States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stal
 
 - `task_new` files a task from one line, the way the user's new-task box (⌘N) reads it:
   `#tag` is the project (optional), `@name` is a repository from `state.repos` by name, `p1` to
-  `p9` is the priority, the rest is the title. A `@name` that matches no repository stays in the
-  title. It replies like `task_add`. A line with no title is refused.
-- `compose` opens the new-task box on the user's screen with `text` in it. Nothing is filed
-  until the user presses ↵: use it to offer a draft, and `task_new` to file one yourself.
+  `p9` is the priority, the rest is the title. A `@name` that matches no repository (or
+  worktree) stays in the title where it was typed. It replies like `task_add`. A line with no
+  title, or longer than 500 characters, is refused.
+- `compose` opens the new-task box on the user's screen with `text` in it (at most 500
+  characters). Nothing is filed until the user presses ↵: use it to offer a draft, and
+  `task_new` to file one yourself. It is refused if the box is open already or cannot open
+  (the picker, the key reference or visual mode is in the way): the draft was not shown.
   While the box is open `mode` is `compose` and `state.compose` is its text.
 - `task_add` replies `{"ok":true,"task":{..}}`, not the state: the new task, with its `id`.
   Priorities outside 1 to 9 are moved into that range.

@@ -6,7 +6,7 @@ use crate::compose;
 use crate::layout::{Axis, Dir, Node};
 use crate::list::ListRow;
 use crate::repos::{self, Repo};
-use crate::tasks::{State, Task, TaskId, Tasks};
+use crate::tasks::{MAX_TITLE, State, Task, TaskId, Tasks};
 
 pub type PaneId = u32;
 
@@ -458,9 +458,13 @@ impl Model {
         let blocked_by_visual =
             self.visual.is_some() && !named_close && (for_panes || matches!(action, Action::OpenPicker { .. }));
         // The new-task box has the keyboard, as the picker does: what is behind it waits, and
-        // neither opens over the other. It does not open under the key reference or in visual mode.
-        let overlay = matches!(action, Action::OpenPicker { .. } | Action::OpenCompose { .. });
-        let behind_box = (self.picker.is_some() || self.compose.is_some()) && (for_panes || overlay);
+        // neither opens over the other. (The picker may open again over itself: ⌘T while it is
+        // open turns the pick into a new tab.) A pane whose window or shell is gone still closes.
+        // The box does not open under the key reference or in visual mode.
+        let boxed = self.picker.is_some() || self.compose.is_some();
+        let over_other = (self.compose.is_some() && matches!(action, Action::OpenPicker { .. }))
+            || (boxed && matches!(action, Action::OpenCompose { .. }));
+        let behind_box = (boxed && for_panes && !named_close) || over_other;
         let no_box_now = matches!(action, Action::OpenCompose { .. }) && (self.keys || self.visual.is_some());
         if behind_box || no_box_now || blocked_by_keys || blocked_by_visual {
             return effects;
@@ -637,11 +641,13 @@ impl Model {
             }
             Action::OpenCompose { text } => {
                 self.leave(effects);
-                self.compose = Some(text);
+                self.compose = Some(text.chars().take(MAX_TITLE).collect());
             }
             Action::ComposeType { text } => {
+                // No longer than a task's title may be: a longer one could not be kept.
                 if let Some(line) = &mut self.compose {
-                    line.push_str(&text);
+                    let room = MAX_TITLE.saturating_sub(line.chars().count());
+                    line.extend(text.chars().take(room));
                 }
             }
             Action::ComposeBackspace => {
@@ -800,40 +806,42 @@ impl Model {
         }
     }
 
-    /// Files `line` as a captured task. False if it has no title: nothing is filed.
-    /// An `@name` that matches no listed repository stays in the title, as typed.
+    /// What `line` would file: `@name` counts only for a listed repository.
+    pub fn draft(&self, line: &str) -> compose::Draft {
+        compose::parse(line, |name| self.repo_named(name).is_some())
+    }
+
+    /// Files `line` as a captured task. False if it has no title, or one too long to keep:
+    /// nothing is filed.
     fn file_line(&mut self, line: &str) -> bool {
-        let mut draft = compose::parse(line);
-        let repo = draft.repo.take().map(|name| (self.repo_named(&name), name));
-        let path = match repo {
-            Some((Some(path), _)) => Some(path),
-            Some((None, name)) => {
-                draft.title = format!("{} @{name}", draft.title).trim().to_string();
-                None
-            }
-            None => None,
-        };
-        if draft.title.is_empty() {
+        let draft = self.draft(line);
+        if draft.title.is_empty() || draft.title.chars().count() > MAX_TITLE {
             return false;
         }
+        let path = draft.repo.as_deref().and_then(|name| self.repo_named(name));
         let id = self.tasks.add(draft.title, draft.priority.unwrap_or(3), State::Captured, None);
         self.tasks.tag(id, draft.project, path);
         true
     }
 
-    /// The path of the listed repository or worktree called `name`, whatever the case of the letters.
+    /// Every listed repository and worktree, as (name, path).
+    fn repo_names(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.repos.iter().flat_map(|r| {
+            let worktrees = r.worktrees.iter().map(|w| (w.name.as_str(), w.path.as_str()));
+            std::iter::once((r.name.as_str(), r.path.as_str())).chain(worktrees)
+        })
+    }
+
+    /// The path of the listed repository or worktree called `name`, whatever the case of the
+    /// letters. Of two with one name, the first listed.
     fn repo_named(&self, name: &str) -> Option<String> {
-        let listed = self
-            .repos
-            .iter()
-            .flat_map(|r| std::iter::once((&r.name, &r.path)).chain(r.worktrees.iter().map(|w| (&w.name, &w.path))));
-        listed.into_iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, path)| path.clone())
+        self.repo_names().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, path)| path.to_string())
     }
 
     /// Names that finish the `#project` or `@repo` being typed in the new-task box.
     pub fn compose_suggestions(&self) -> Vec<String> {
         match self.compose.as_deref().and_then(compose::completing) {
-            Some(('@', typed)) => compose::suggest(typed, self.repos.iter().map(|r| r.name.as_str())),
+            Some(('@', typed)) => compose::suggest(typed, self.repo_names().map(|(name, _)| name)),
             Some((_, typed)) => compose::suggest(typed, self.tasks.projects()),
             None => Vec::new(),
         }
@@ -1454,7 +1462,7 @@ mod tests {
         assert_eq!((m.tasks.list.len(), m.mode()), (0, Mode::Compose));
         // Tab finishes the repository being typed; the name need not match in case.
         m.update(Action::ComposeType { text: "fix zoom #Canvas @AP".into() });
-        assert_eq!(m.compose_suggestions(), ["app"]);
+        assert_eq!(m.compose_suggestions(), ["app", "app-2"], "worktrees too");
         m.update(Action::ComposeComplete);
         m.update(Action::ComposeType { text: "p1x".into() });
         m.update(Action::ComposeBackspace);
@@ -1470,8 +1478,26 @@ mod tests {
         m.update(Action::OpenCompose { text: "look #c".into() });
         assert_eq!(m.compose_suggestions(), ["Canvas"]);
         m.update(Action::CloseCompose);
-        m.update(Action::TaskFromLine { line: "ask about @nowhere".into() });
-        assert_eq!((m.tasks.list[1].title.as_str(), m.tasks.list[1].repo.as_deref()), ("ask about @nowhere", None));
+        m.update(Action::TaskFromLine { line: "ask @ana about @app-2".into() });
+        assert_eq!(
+            (m.tasks.list[1].title.as_str(), m.tasks.list[1].repo.as_deref()),
+            ("ask @ana about", Some("/code/app-2"))
+        );
+        // The box holds no more than a title may: a longer task could not be read back.
+        m.update(Action::OpenCompose { text: "x".repeat(MAX_TITLE + 50) });
+        m.update(Action::ComposeType { text: "yz".into() });
+        assert_eq!(m.compose.as_ref().map(|line| line.chars().count()), Some(MAX_TITLE));
+        m.update(Action::CloseCompose);
+        m.update(Action::TaskFromLine { line: "x".repeat(MAX_TITLE + 1) });
+        assert_eq!(m.tasks.list.len(), 2);
+        // The picker may open again over itself, but not over the box; a dead pane closes behind either.
+        m.update(Action::OpenPicker { axis: Right, new_tab: false, items: vec![PickItem::Terminal] });
+        m.update(Action::OpenPicker { axis: Right, new_tab: true, items: vec![PickItem::Terminal] });
+        assert_eq!(m.picker.as_ref().map(|p| p.new_tab), Some(true));
+        m.update(Action::ClosePicker);
+        m.update(Action::OpenCompose { text: String::new() });
+        assert_eq!(m.update(Action::Close { pane: Some(1) }).len(), 1);
+        m.update(Action::CloseCompose);
         // Not under the key reference.
         m.update(Action::ToggleKeys);
         m.update(Action::OpenCompose { text: String::new() });

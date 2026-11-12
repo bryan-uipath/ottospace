@@ -755,7 +755,13 @@ impl Workspace {
                 }
                 Request::Compose { text } => {
                     self.model.update(Action::SetRepos { repos: repos::scan() });
-                    Some(Action::OpenCompose { text })
+                    let was_open = self.model.compose.is_some();
+                    self.dispatch(Action::OpenCompose { text }, window, cx);
+                    // A draft that did not reach the user must not look delivered.
+                    if was_open || self.model.compose.is_none() {
+                        failure = Some("the box did not open: it is open already, or the picker, the key reference or visual mode is in the way".into());
+                    }
+                    None
                 }
                 Request::TaskNew { line } if line.chars().count() > MAX_TITLE => {
                     failure = Some(format!("the line is longer than {MAX_TITLE} characters"));
@@ -1323,8 +1329,8 @@ impl Workspace {
             "enter" => return,
             "tab" => Action::ComposeComplete,
             "backspace" => Action::ComposeBackspace,
-            // ⌥ composes other characters (⌥B is "∫"); only plain typing goes in.
-            _ => match key.key_char.as_deref().filter(|_| !m.control && !m.alt) {
+            // Whatever the key types, ⌥ included: on some layouts `@` and `#` need it.
+            _ => match key.key_char.as_deref().filter(|_| !m.control) {
                 Some(text) if !text.chars().any(char::is_control) => Action::ComposeType { text: text.into() },
                 _ => return,
             },
@@ -1561,11 +1567,11 @@ impl Workspace {
     /// The new-task box, over the workspace: the line, what it will file, and names that finish
     /// the `#project` or `@repo` being typed. A click outside it closes it.
     fn render_compose(&self, line: &str, cx: &mut Context<Self>) -> impl IntoElement {
-        let draft = ottospace_core::compose::parse(line);
+        let draft = self.model.draft(line);
         let chip = |label: String, color: u32| {
             div().px_1p5().rounded_sm().bg(rgb(theme::SELECTED)).text_xs().text_color(rgb(color)).child(label)
         };
-        // What ↵ would file. An `@name` is checked against the list when the task is filed.
+        // What ↵ would file.
         let reads = div()
             .flex()
             .flex_wrap()

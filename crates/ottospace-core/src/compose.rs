@@ -7,26 +7,28 @@ pub struct Draft {
     pub title: String,
     /// From `#canvas`: the project the task serves. A task need not have one.
     pub project: Option<String>,
-    /// From `@app`: the repository's name as typed. The model matches it to a listed repository.
+    /// From `@app`: the name of a listed repository, as typed.
     pub repo: Option<String>,
     pub priority: Option<u8>,
 }
 
 /// A project or repository name: starts with a letter, so `#123` (an issue) stays in the title.
+/// Punctuation after it is not part of it: `#canvas,` names `canvas`.
 fn name(word: &str, mark: char) -> Option<&str> {
-    let name = word.strip_prefix(mark)?;
+    let name = word.strip_prefix(mark)?.trim_end_matches(|c: char| c.is_ascii_punctuation() && !matches!(c, '-' | '_'));
     name.chars().next().filter(|c| c.is_alphabetic()).map(|_| name)
 }
 
-/// Reads a line. Of two `#tags` (or `@names`, or priorities) the last one counts.
-pub fn parse(line: &str) -> Draft {
+/// Reads a line. Of two `#tags` (or `@names`, or priorities) the last one counts. An `@name` is
+/// a repository only if `is_repo` knows it; any other stays in the title, where it was typed.
+pub fn parse(line: &str, is_repo: impl Fn(&str) -> bool) -> Draft {
     let mut draft = Draft::default();
     let mut title: Vec<&str> = Vec::new();
     for word in line.split_whitespace() {
         let priority = word.strip_prefix(['p', 'P']).and_then(|n| n.parse::<u8>().ok()).filter(|n| (1..=9).contains(n));
         if let Some(project) = name(word, '#') {
             draft.project = Some(project.to_string());
-        } else if let Some(repo) = name(word, '@') {
+        } else if let Some(repo) = name(word, '@').filter(|name| is_repo(name)) {
             draft.repo = Some(repo.to_string());
         } else if priority.is_some() && word.len() == 2 {
             draft.priority = priority;
@@ -68,28 +70,36 @@ pub fn complete(line: &str, name: &str) -> String {
 mod tests {
     use super::*;
 
+    fn known(name: &str) -> bool {
+        name.eq_ignore_ascii_case("app")
+    }
+
     #[test]
     fn a_line_is_a_title_with_optional_marks() {
-        let draft = parse("fix zoom flicker #canvas @app p1");
+        let draft = parse("fix zoom flicker #canvas @app p1", known);
         assert_eq!(draft.title, "fix zoom flicker");
         assert_eq!(
             (draft.project.as_deref(), draft.repo.as_deref(), draft.priority),
             (Some("canvas"), Some("app"), Some(1))
         );
-        // Marks may come anywhere; the last of a kind counts.
-        let draft = parse("#a P2 look at   #b the logs");
+        // Marks may come anywhere; the last of a kind counts; punctuation after a name is dropped.
+        let draft = parse("#a P2 look at   #b-2, the logs in @App.", known);
         assert_eq!(
             (draft.title.as_str(), draft.project.as_deref(), draft.priority),
-            ("look at the logs", Some("b"), Some(2))
+            ("look at the logs in", Some("b-2"), Some(2))
         );
-        assert_eq!(parse("  ").title, "");
+        assert_eq!(draft.repo.as_deref(), Some("App"));
+        assert_eq!(parse("  ", known).title, "");
     }
 
     #[test]
     fn words_that_only_look_like_marks_stay_in_the_title() {
-        let draft = parse("see #123 and p10 or p0, mail a@b.c, # alone, @ too");
+        let draft = parse("see #123 and p10 or p0, mail a@b.c, # alone, @ too", known);
         assert_eq!(draft.title, "see #123 and p10 or p0, mail a@b.c, # alone, @ too");
         assert_eq!((draft.project, draft.repo, draft.priority), (None, None, None));
+        // A person, not a repository: the word stays where it was typed.
+        let draft = parse("ask @ana about @app today", known);
+        assert_eq!((draft.title.as_str(), draft.repo.as_deref()), ("ask @ana about today", Some("app")));
     }
 
     #[test]
