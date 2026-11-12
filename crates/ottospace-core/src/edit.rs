@@ -152,7 +152,8 @@ pub struct Field {
     /// The last edit typed text: more typing joins its undo step.
     typing: bool,
     /// What the last click selected, and its count: a drag extends from it by that unit.
-    pressed: (Range<usize>, usize),
+    /// `None` once the text has changed: a drag then goes on from the selection's fixed end.
+    pressed: Option<(Range<usize>, usize)>,
 }
 
 impl Serialize for Field {
@@ -220,6 +221,15 @@ impl Field {
             return self.text.len();
         }
         self.text.grapheme_indices(true).map(|(i, _)| i).take_while(|i| *i <= byte).last().unwrap_or(0)
+    }
+
+    /// The nearest grapheme boundary at or after `byte`.
+    fn snap_up(&self, byte: usize) -> usize {
+        let before = self.snap(byte);
+        if before >= byte.min(self.text.len()) {
+            return before;
+        }
+        self.text[before..].graphemes(true).next().map_or(self.text.len(), |g| before + g.len())
     }
 
     /// As much of `text` as fits beside `kept` characters that stay: whole graphemes only.
@@ -292,10 +302,13 @@ impl Field {
         let kept = self.text.chars().count() - self.text[range.clone()].chars().count();
         let text = self.fitting(text, kept);
         self.text.replace_range(range.clone(), &text);
-        self.head = range.start + text.len();
+        let end = range.start + text.len();
+        // What went in may have joined what follows (a lone joiner, an accent): the cursor
+        // goes after the whole cluster.
+        self.head = self.snap_up(end);
         self.anchor = self.head;
-        self.marked = None;
-        range.start..self.head
+        (self.marked, self.pressed) = (None, None);
+        range.start..end
     }
 
     /// Applies one edit. True if the text changed (not only the cursor or the selection).
@@ -329,15 +342,22 @@ impl Field {
                 (self.anchor, self.head) = (0, self.text.len());
                 self.typing = false;
             }
-            Edit::Click { at, shift: true, .. } => self.head = self.snap(at),
+            // A drag after it extends from the selection's fixed end, by characters.
+            Edit::Click { at, shift: true, .. } => {
+                self.head = self.snap(at);
+                self.pressed = Some((self.anchor..self.anchor, 1));
+                self.typing = false;
+            }
             Edit::Click { at, count, .. } => {
                 let range = self.unit(self.snap(at), count);
                 (self.anchor, self.head) = (range.start, range.end);
-                self.pressed = (range, count);
+                self.pressed = Some((range, count));
                 self.typing = false;
             }
             Edit::Drag { to } => {
-                let (from, count) = self.pressed.clone();
+                let (from, count) = self.pressed.clone().unwrap_or((self.anchor..self.anchor, 1));
+                // The press is never trusted past the text as it is now.
+                let from = self.snap(from.start)..self.snap(from.end).max(self.snap(from.start));
                 let to = self.unit(self.snap(to), count);
                 // Leftward the pressed unit stays selected and the cursor leads.
                 (self.anchor, self.head) =
@@ -354,6 +374,7 @@ impl Field {
                     self.record(range.is_empty());
                 }
                 self.put(range, &clean(&text, false));
+                self.forget_no_change();
             }
             Edit::Mark { range, text, selected } => {
                 let range = self.ime_range(range);
@@ -371,13 +392,22 @@ impl Field {
                         });
                         marked.start + hit.map_or(inside.len(), |(i, _)| i)
                     };
-                    (self.anchor, self.head) = (at(selected.start), at(selected.end));
+                    let (from, to) = (self.snap_up(at(selected.start)), self.snap_up(at(selected.end)));
+                    (self.anchor, self.head) = (from.min(to), to.max(from));
                 }
                 self.marked = Some(marked).filter(|m| !m.is_empty());
+                self.forget_no_change();
             }
             Edit::Unmark => self.marked = None,
         }
         self.text != before
+    }
+
+    /// A composition that ended where it began (cancelled) is no step to undo.
+    fn forget_no_change(&mut self) {
+        if self.marked.is_none() && self.undo.last().is_some_and(|snap| snap.text == self.text) {
+            self.undo.pop();
+        }
     }
 
     /// What a click of `count` at `at` selects.
@@ -422,7 +452,7 @@ impl Field {
         let Some(snap) = from.pop() else { return };
         to.push(Snap { text: std::mem::replace(&mut self.text, snap.text), anchor: self.anchor, head: self.head });
         (self.anchor, self.head) = (snap.anchor, snap.head);
-        self.marked = None;
+        (self.marked, self.pressed) = (None, None);
         self.typing = false;
     }
 }
@@ -501,6 +531,10 @@ mod tests {
 
     fn ins(text: &str) -> Edit {
         Edit::Insert(text.into())
+    }
+
+    fn shift_click(at: usize) -> Edit {
+        Edit::Click { at, count: 1, shift: true }
     }
 
     #[test]
@@ -601,9 +635,150 @@ mod tests {
             ("a👨‍👩‍👧b|", vec![click(6, 1)], "a|👨‍👩‍👧b"),
             ("fix|", vec![click(99, 1)], "fix|"),
             ("|", vec![click(0, 2)], "|"),
+            // A drag after a shift-click goes on from the selection's fixed end, not from an
+            // older press.
+            ("fix zoom now|", vec![click(3, 1), shift_click(8), Edit::Drag { to: 9 }], "fix[ zoom ]|now"),
+            ("fix zoom now|", vec![click(12, 2), go(Start), shift_click(3), Edit::Drag { to: 5 }], "[fix z]|oom now"),
+            ("fix zoom now|", vec![click(5, 2), shift_click(1), Edit::Drag { to: 0 }], "[|fix ]zoom now"),
         ];
         for (start, edits, want) in cases {
             assert_eq!(after(start, edits.clone()), want, "{start} {edits:?}");
+        }
+    }
+
+    #[test]
+    fn a_drag_survives_text_that_changed_under_the_press() {
+        // The press was at the end of a longer line; ⌘A and a letter left one character.
+        let edits = vec![
+            Edit::Click { at: 16, count: 1, shift: false },
+            Edit::SelectAll,
+            ins("x"),
+            shift_click(1),
+            Edit::Drag { to: 1 },
+        ];
+        assert_eq!(after("fix zoom flicker|", edits), "x|");
+        // The text shrinks while the button is held: a key, ⌘Z. The drag goes on from the cursor.
+        let click = Edit::Click { at: 12, count: 2, shift: false };
+        assert_eq!(
+            after("fix zoom now|", vec![click.clone(), Edit::Delete { to: Left }, Edit::Drag { to: 2 }]),
+            "fi[|x zoom ]"
+        );
+        assert_eq!(after("fix|", vec![ins(" zoom"), click, Edit::Undo, Edit::Drag { to: 1 }]), "f[|ix]");
+    }
+
+    #[test]
+    fn what_goes_in_never_leaves_the_cursor_inside_a_cluster() {
+        // A lone accent joins the letter before it; a lone joiner or skin tone, the emoji.
+        assert_eq!(after("e|x", vec![Edit::Paste("\u{301}".into())]), "e\u{301}|x");
+        assert_eq!(after("|\u{301}x", vec![ins("e")]), "e\u{301}|x");
+        assert_eq!(after("👍|", vec![Edit::Paste("\u{1f3fd}".into()), Edit::Delete { to: Left }]), "|");
+        assert_eq!(after("👨|👩", vec![ins("\u{200d}")]), "👨\u{200d}👩|");
+        // Taking a letter away joins its accent to the one before.
+        assert_eq!(after("ax|\u{301}", vec![Edit::Delete { to: Left }]), "a\u{301}|");
+        let mut field = field("e|");
+        field.apply(Edit::Mark { range: None, text: "\u{301}a".into(), selected: Some(0..0) });
+        assert_eq!(show(&field), "e\u{301}|a");
+    }
+
+    /// xorshift64: the same edits on every run.
+    struct Rng(u64);
+
+    impl Rng {
+        fn below(&mut self, n: usize) -> usize {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 % n.max(1) as u64) as usize
+        }
+
+        fn text(&mut self) -> String {
+            const PIECES: [&str; 22] = [
+                "a",
+                " ",
+                "fix",
+                "#tag",
+                "-",
+                "e\u{301}",
+                "\u{301}",
+                "👨‍👩‍👧",
+                "\u{200d}",
+                "👍🏽",
+                "\u{1f3fd}",
+                "🇯🇵",
+                "\u{1f1ef}",
+                "שלום",
+                "مرحبا",
+                "𝒳",
+                "日本",
+                "한",
+                "\n",
+                "\r\n",
+                "\t",
+                "\u{7}",
+            ];
+            (0..self.below(4)).map(|_| PIECES[self.below(PIECES.len())]).collect()
+        }
+
+        fn range(&mut self, len: usize) -> Option<Range<usize>> {
+            let (a, b) = (self.below(len + 3), self.below(len + 3));
+            (self.below(3) > 0).then_some(a.min(b)..a.max(b))
+        }
+
+        fn edit(&mut self, len: usize) -> Edit {
+            let to = [Left, Right, WordLeft, WordRight, Start, End][self.below(6)];
+            // Bytes and UTF-16 offsets from anywhere, inside a character and past the end too.
+            let at = self.below(len + 3);
+            match self.below(16) {
+                0 | 1 => Edit::Insert(self.text()),
+                2 => Edit::Paste(self.text()),
+                3 => Edit::Delete { to },
+                4 => Edit::Cut,
+                5 | 6 => Edit::Move { to, select: self.below(2) == 0 },
+                7 => Edit::SelectAll,
+                8 => Edit::Click { at, count: 1 + self.below(3), shift: false },
+                9 => Edit::Click { at, count: 1, shift: true },
+                10 | 11 => Edit::Drag { to: at },
+                12 => [Edit::Undo, Edit::Redo, Edit::Unmark][self.below(3)].clone(),
+                13 => Edit::Replace { range: self.range(len), text: self.text() },
+                _ => Edit::Mark { range: self.range(len), text: self.text(), selected: self.range(4) },
+            }
+        }
+    }
+
+    #[test]
+    fn any_edits_in_any_order_leave_a_sound_field() {
+        let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+        for round in 0..600 {
+            let limit = [0, 5, 12, 500][round % 4];
+            let mut field = Field::new(&rng.text(), limit);
+            let mut done: Vec<Edit> = Vec::new();
+            for _ in 0..80 {
+                let edit = rng.edit(field.text.len());
+                done.push(edit.clone());
+                field.apply(edit);
+                let text = field.text.clone();
+                let clusters: Vec<usize> = text.grapheme_indices(true).map(|(i, _)| i).chain([text.len()]).collect();
+                let why = format!("limit {limit}, {text:?} after {done:?}");
+                // The cursor and the selection's other end sit between clusters; `selection`,
+                // `selected` and the UTF-16 offsets the shell asks for do not panic.
+                assert!(clusters.contains(&field.head) && clusters.contains(&field.anchor), "{why}");
+                let selection = field.selection();
+                assert!(selection.start <= selection.end && selection.end <= text.len(), "{why}");
+                assert_eq!(field.selected(), &text[selection.clone()], "{why}");
+                assert_eq!(field.byte(field.utf16(selection.end)), selection.end, "{why}");
+                if let Some(marked) = field.marked() {
+                    assert!(marked.start < marked.end && text.get(marked).is_some(), "{why}");
+                }
+                assert!(limit == 0 || text.chars().count() <= limit, "{why}");
+                assert!(!text.chars().any(char::is_control), "{why}");
+                // Undo, then redo: exactly where it was.
+                if !field.undo.is_empty() {
+                    let mut again = field.clone();
+                    again.apply(Edit::Undo);
+                    again.apply(Edit::Redo);
+                    assert_eq!((&again.text, again.anchor, again.head), (&text, field.anchor, field.head), "{why}");
+                }
+            }
         }
     }
 
@@ -686,6 +861,13 @@ mod tests {
         field.apply(Edit::Mark { range: None, text: "x".into(), selected: None });
         field.apply(Edit::Mark { range: None, text: String::new(), selected: None });
         assert_eq!((show(&field).as_str(), field.marked()), ("a😀日本|", None));
+        // A composition that is cancelled leaves no step: ⌘Z takes back what came before it.
+        let mut field = Field::default();
+        field.apply(ins("ab"));
+        field.apply(Edit::Mark { range: None, text: "´".into(), selected: None });
+        field.apply(Edit::Mark { range: None, text: String::new(), selected: None });
+        field.apply(Edit::Undo);
+        assert_eq!(show(&field), "|");
     }
 
     #[test]

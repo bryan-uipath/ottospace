@@ -114,13 +114,15 @@ keys of a macOS text field:
 | ←/→ · ⌥←/→ · ⌘←/→ | Move by character, by word, to the start or end of the line. Also Home/End, ⌃A/⌃E, ⌃B/⌃F. With ⇧: select |
 | ⌘A | Select everything |
 | ⌫/⌦ · ⌥⌫/⌥⌦ · ⌘⌫/⌘⌦ | Delete a character, a word, to the start or end of the line. Also ⌃H, ⌃D, ⌃W, ⌃U, ⌃K |
-| ⌘C / ⌘X / ⌘V | Copy, cut, paste (the Edit menu's Copy and Paste too). A pasted line break becomes a space |
+| ⌘C / ⌘X / ⌘V | Copy, cut, paste. A pasted line break becomes a space |
 | ⌘Z / ⇧⌘Z | Undo, redo: typing a word at a time, up to 100 steps |
+| Edit menu | Undo, Redo, Cut, Copy, Paste and Select All act on the field while it has the keyboard |
 | Mouse | A click places the cursor (⇧-click selects to it), a drag selects, a double click takes a word, a triple click the line |
 
 Typed text replaces the selection. Movement and deletion go by whole characters as you see them
 (an emoji, a letter with its accent). Input methods and dead keys compose in place, underlined.
-A line wider than the field scrolls with the cursor.
+A line wider than the field scrolls with the cursor. The picker's filter holds 200 characters.
+While the quit question is over a field, nothing edits it.
 
 **The quit question.** ⌘Q, Quit in the menu and the window's red close button all ask the same
 question (status chip `QUIT?`). A quit ends every terminal and what runs in it, so it asks when:

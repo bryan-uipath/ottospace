@@ -79,18 +79,13 @@ impl Workspace {
     /// The modal host: the content in a panel near the top, the workspace dimmed behind it. A
     /// click outside the panel closes the box.
     pub fn render_compose(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let panel = self
-            .new_task_content(cx)
+        let panel = dialog::panel(theme::COMPOSE)
             .w(px(560.))
             .max_w_full()
             .p_3()
-            .rounded(px(dialog::RADIUS))
-            .bg(rgb(theme::RAISED))
-            .border_1()
-            .border_color(rgb(theme::COMPOSE))
-            .shadow(dialog::shadow())
             // A click inside the box must not reach the backdrop, which closes it.
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(self.new_task_content(cx));
         div()
             .id("compose-backdrop")
             .absolute()

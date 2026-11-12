@@ -32,8 +32,13 @@ pub fn app_menus() -> Vec<Menu> {
         Menu {
             name: "Edit".into(),
             items: vec![
+                MenuItem::os_action("Undo", Undo, OsAction::Undo),
+                MenuItem::os_action("Redo", Redo, OsAction::Redo),
+                MenuItem::separator(),
+                MenuItem::os_action("Cut", Cut, OsAction::Cut),
                 MenuItem::os_action("Copy", CopySelection, OsAction::Copy),
                 MenuItem::os_action("Paste", PasteText, OsAction::Paste),
+                MenuItem::os_action("Select All", SelectAll, OsAction::SelectAll),
                 MenuItem::separator(),
                 item("Select with the Keyboard", VisualMode),
             ],

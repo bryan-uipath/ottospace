@@ -31,6 +31,12 @@ fn folders() -> Vec<PathBuf> {
     }
 }
 
+/// The bundle path of every running app, windows or none: an app with no window on this Space
+/// (minimised, on another Space, in the menu bar) is running, not one to start.
+pub fn running_bundles() -> Vec<String> {
+    icon::running_bundles().into_iter().map(|path| path.to_string_lossy().into_owned()).collect()
+}
+
 impl Workspace {
     /// The picker opened: tells the core what is installed as last scanned, and scans again if
     /// that was a while ago. The scan's answer comes later.
@@ -57,9 +63,7 @@ impl Workspace {
 
     /// The scan's apps and the bundles running now: the core offers those that are not.
     fn tell_installed(&mut self) {
-        let bundle = |app: &ottospace_mac::capture::App| icon::bundle_of(app.pid);
-        let running = self.apps.iter().filter_map(bundle).map(|path| path.to_string_lossy().into_owned()).collect();
-        let apps = self.installed.apps.clone();
+        let (apps, running) = (self.installed.apps.clone(), running_bundles());
         self.model.update(Action::SetInstalled { apps, running }.sent_by(Origin::System));
     }
 

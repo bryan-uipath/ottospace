@@ -52,6 +52,7 @@ impl Workspace {
         let (key, m) = (&event.keystroke.key, event.keystroke.modifiers);
         let mods = Mods { ctrl: m.control, alt: m.alt, shift: m.shift, cmd: m.platform };
         match edit::key(key, mods) {
+            _ if self.model.field().is_none() => return false,
             Some(Key::Edit(edit)) => self.edit(edit, window, cx),
             Some(Key::Copy) => drop(self.field_copy(false, window, cx)),
             Some(Key::Cut) => drop(self.field_copy(true, window, cx)),
@@ -95,15 +96,33 @@ impl Workspace {
         }
     }
 
+    /// A field opened, closed or lost the keyboard: a drag begun before is over.
+    pub fn field_changed_hands(&mut self) {
+        self.field.borrow_mut().selecting = false;
+    }
+
+    /// The Edit menu's Cut, Select All, Undo and Redo, and their keys when no handler took them.
+    /// Nothing without a field that has the keyboard.
+    pub fn field_menu(&mut self, key: Key, window: &Window, cx: &mut Context<Self>) {
+        match key {
+            Key::Edit(edit) if self.model.field().is_some() => self.edit(edit, window, cx),
+            Key::Cut => drop(self.field_copy(true, window, cx)),
+            _ => {}
+        }
+    }
+
     /// The mouse went down in the field at window `x`.
     pub fn field_press(&mut self, x: Pixels, count: usize, shift: bool, window: &Window, cx: &mut Context<Self>) {
+        if self.model.field().is_none() {
+            return;
+        }
         self.field.borrow_mut().selecting = true;
         self.edit(Edit::Click { at: self.field_index(x), count, shift }, window, cx);
     }
 
     /// The pressed mouse moved to window `x`, inside the field or past its edge.
     pub fn field_drag(&mut self, x: Pixels, window: &Window, cx: &mut Context<Self>) {
-        if self.field.borrow().selecting {
+        if self.field.borrow().selecting && self.model.field().is_some() {
             self.edit(Edit::Drag { to: self.field_index(x) }, window, cx);
         }
     }
@@ -133,7 +152,7 @@ impl Workspace {
 
     /// The open field as an element: as wide as its parent lets it be, one line tall.
     pub fn render_field(&self, placeholder: &'static str, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let field = self.model.field().map(|(_, field)| field.clone()).unwrap_or_default();
+        let field = self.model.open_field().map(|(_, field)| field.clone()).unwrap_or_default();
         div()
             .id("field")
             .flex_1()
@@ -147,6 +166,7 @@ impl Workspace {
             )
             .child(FieldElement {
                 workspace: cx.entity(),
+                active: self.model.field().is_some(),
                 focus: self.focus.clone(),
                 drawn: self.field.clone(),
                 text: field.text().to_string().into(),
@@ -243,6 +263,8 @@ impl EntityInputHandler for Workspace {
 /// Paints the line, the selection and the caret, and registers the input handler.
 struct FieldElement {
     workspace: Entity<Workspace>,
+    /// The field has the keyboard: not under the key reference or the quit question.
+    active: bool,
     focus: FocusHandle,
     drawn: Shared,
     text: SharedString,
@@ -308,7 +330,9 @@ impl Element for FieldElement {
         cx: &mut App,
     ) {
         // The workspace's root has the focus, so the field gets text without taking it.
-        window.handle_input(&self.focus, ElementInputHandler::new(bounds, self.workspace.clone()), cx);
+        if self.active {
+            window.handle_input(&self.focus, ElementInputHandler::new(bounds, self.workspace.clone()), cx);
+        }
 
         let style = window.text_style();
         let empty = self.text.is_empty();
@@ -367,7 +391,7 @@ impl Element for FieldElement {
                 window.paint_quad(fill(quad, rgb(theme::SELECTION)));
             }
             let _ = line.paint(origin, line_height, window, cx);
-            if selection.is_empty() && caret_on {
+            if selection.is_empty() && caret_on && self.active {
                 let caret = Bounds::new(point(origin.x + cursor_x, bounds.top()), size(px(2.), bounds.size.height));
                 window.paint_quad(fill(caret, rgb(self.accent)));
             }

@@ -24,6 +24,7 @@ use gpui::{
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::compose;
+use ottospace_core::edit::{self, Edit};
 use ottospace_core::hosted::{self as hosting, Click};
 use ottospace_core::keys::{self, Mods};
 use ottospace_core::list::{ListKey, list_key};
@@ -524,6 +525,8 @@ actions!(
     [ResizeLeft, ResizeRight, ResizeUp, ResizeDown, SwapLeft, SwapRight, SwapUp, SwapDown, Equalize, FitPane]
 );
 // Terminal selection.
+// The Edit menu items for a text field.
+actions!(ottospace, [Cut, SelectAll, Undo, Redo]);
 actions!(ottospace, [CopySelection, PasteText, VisualMode, ListMode, SneakMode, NewTask, NextTask]);
 // Marks: mark the focused pane or the tab on show, and the jump prefix.
 actions!(ottospace, [MarkPane, MarkTab, MarkJump]);
@@ -916,6 +919,7 @@ impl Workspace {
             self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
         }
         let line = self.model.compose_line().cloned();
+        let field = self.model.field().map(|(of, _)| of);
         // The core has no clock: a task filed now is stamped with the time told here.
         // So is the notice that offers a mouse move back: it counts its seconds from here.
         let files = matches!(
@@ -932,6 +936,9 @@ impl Workspace {
             self.model.update(Action::Tick { now: now_ms() }.sent_by(Origin::System));
         }
         let effects = self.model.update(action.sent_by(origin));
+        if self.model.field().map(|(of, _)| of) != field {
+            self.field_changed_hands();
+        }
         // The line in the new-task box changed: ask what its tags may name. The answer comes
         // later (`take_tags`): reading it is disk I/O, never done here.
         match self.model.compose_line().cloned() {
@@ -2112,6 +2119,11 @@ impl Workspace {
         if on_its_way && wanted.is_none() {
             return Ok(());
         }
+        // Running, with no window to host (minimised, on another Space): `open` would only
+        // bring it to the front. A mark still asks: it waits for the window it wants.
+        if wanted.is_none() && apps::running_bundles().contains(&app.path) {
+            return Err(format!("{} is running but has no window on this Space", app.name));
+        }
         if !on_its_way {
             match std::process::Command::new("open").arg("-g").arg(&app.path).status() {
                 Ok(status) if status.success() => {}
@@ -2680,15 +2692,10 @@ impl Workspace {
                 }))
         };
         let rows = |list: &[(&str, &'static str)]| list.iter().map(|(k, w)| (k.to_string(), *w)).collect::<Vec<_>>();
-        let panel = div()
+        let panel = dialog::panel(theme::BORDER_STRONG)
             .p_4()
             .flex()
             .gap_8()
-            .rounded(px(dialog::RADIUS))
-            .bg(rgb(theme::RAISED))
-            .border_1()
-            .border_color(rgb(theme::BORDER_STRONG))
-            .shadow(dialog::shadow())
             .child(
                 div()
                     .flex()
@@ -2798,7 +2805,7 @@ impl Workspace {
             (false, Axis::Right) => "Split right with",
             (false, Axis::Down) => "Split down with",
         };
-        let panel = div()
+        let panel = dialog::panel(theme::BORDER_STRONG)
             .absolute()
             .top(px(TOP_BAR + 6.))
             .right(px(8.))
@@ -2807,11 +2814,6 @@ impl Workspace {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .rounded(px(dialog::RADIUS))
-            .bg(rgb(theme::RAISED))
-            .border_1()
-            .border_color(rgb(theme::BORDER_STRONG))
-            .shadow(dialog::shadow())
             // A click inside the panel must not reach the backdrop, which closes the picker.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
@@ -3076,12 +3078,7 @@ impl Workspace {
                 Some(Installed { name: name.trim().to_string(), path })
             })
             .collect();
-        let bundles: Vec<String> = if wanted.is_empty() {
-            Vec::new()
-        } else {
-            let bundle = |app: &capture::App| icon::bundle_of(app.pid).map(|path| path.to_string_lossy().into_owned());
-            self.apps.iter().filter_map(bundle).collect()
-        };
+        let bundles: Vec<String> = if wanted.is_empty() { Vec::new() } else { apps::running_bundles() };
         self.closed = closed_apps(&wanted, &bundles);
         // The list as list mode walks it: running apps, then the others.
         let names = running.iter().cloned().chain(self.closed.iter().map(|app| app.name.clone())).collect();
@@ -4238,6 +4235,16 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &CopySelection, window, cx| this.copy(window, cx)))
             .on_action(cx.listener(|this, _: &PasteText, window, cx| this.paste(window, cx)))
+            .on_action(cx.listener(|this, _: &Cut, window, cx| this.field_menu(edit::Key::Cut, window, cx)))
+            .on_action(cx.listener(|this, _: &SelectAll, window, cx| {
+                this.field_menu(edit::Key::Edit(Edit::SelectAll), window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &Undo, window, cx| this.field_menu(edit::Key::Edit(Edit::Undo), window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &Redo, window, cx| this.field_menu(edit::Key::Edit(Edit::Redo), window, cx)),
+            )
             .on_action(cx.listener(|this, _: &VisualMode, window, cx| {
                 this.dispatch(Action::ToggleVisual, this.input, window, cx);
             }))
@@ -4551,6 +4558,11 @@ fn main() {
             // Terminal selection. ⌘C never sends ^C: that is ⌃C.
             KeyBinding::new("cmd-c", CopySelection, None),
             KeyBinding::new("cmd-v", PasteText, None),
+            // A text field takes these keys itself; bound so the Edit menu shows them.
+            KeyBinding::new("cmd-x", Cut, None),
+            KeyBinding::new("cmd-a", SelectAll, None),
+            KeyBinding::new("cmd-z", Undo, None),
+            KeyBinding::new("cmd-shift-z", Redo, None),
             KeyBinding::new("cmd-shift-c", VisualMode, None),
             KeyBinding::new("cmd-shift-e", ListMode, None),
             KeyBinding::new(sneak::KEY, SneakMode, None),

@@ -13,7 +13,7 @@ use crate::list::ListRow;
 use crate::marks::{self, Extra, Field, MarkId, MarkInput, MarkOf, MarkRef, Marks, Need};
 use crate::repos::{self, Repo};
 use crate::sessions::{self, Found};
-use crate::settings::Installed;
+use crate::settings::{Installed, closed_apps};
 use crate::sneak::{Sneak, Typed};
 use crate::tasks::{
     self, Assign, Heading, MAX_TITLE, Moved, NOTICE_MS, Notice, State, Task, TaskId, TaskRow, TaskSection, Tasks,
@@ -140,6 +140,10 @@ impl Confirm {
     }
 }
 
+/// The most characters the picker's filter holds: no app's name is longer, and a huge paste
+/// is not shaped again every frame.
+pub const MAX_FILTER: usize = 200;
+
 /// Something the picker can put in a new pane.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -217,11 +221,10 @@ impl Picker {
 /// is not in `running`) and not already an item, each bundle once, by name.
 fn offered(installed: &[Installed], running: &[String], items: &[PickItem]) -> Vec<PickItem> {
     let listed = |path: &str| items.iter().any(|item| matches!(item, PickItem::Closed { path: p, .. } if p == path));
-    let mut apps: Vec<&Installed> =
-        installed.iter().filter(|app| !running.contains(&app.path) && !listed(&app.path)).collect();
+    let mut apps = closed_apps(installed, running);
+    apps.retain(|app| !listed(&app.path));
     apps.sort_by_key(|app| (app.name.to_lowercase(), app.path.clone()));
-    apps.dedup_by(|a, b| a.path == b.path);
-    apps.into_iter().map(|app| PickItem::Closed { name: app.name.clone(), path: app.path.clone() }).collect()
+    apps.into_iter().map(|app| PickItem::Closed { name: app.name, path: app.path }).collect()
 }
 
 /// A category on the left rail. Its list shows in the secondary bar.
@@ -1537,6 +1540,8 @@ impl Model {
                 // Paths read for another line say nothing of this one.
                 (self.known.paths, self.known.entries, self.known_line) = (Vec::new(), Vec::new(), None);
             }
+            // Not under the key reference or the quit question: the field is hidden there.
+            Action::FieldEdit { .. } if self.field().is_none() => {}
             Action::FieldEdit { edit } => {
                 if let Some(picker) = &mut self.picker {
                     // A new filter starts at its first match.
@@ -1550,7 +1555,7 @@ impl Model {
             Action::ComposeComplete => {
                 let first = self.compose_suggestions().into_iter().next();
                 if let (Some(field), Some(first)) = (&mut self.compose, first) {
-                    let (word, name) = compose::completion(&field.text()[..field.cursor()], &first);
+                    let (word, name) = compose::completion_at(field.text(), field.cursor(), &first);
                     field.splice(word, &name);
                 }
             }
@@ -1685,19 +1690,24 @@ impl Model {
             Action::OpenPicker { axis, new_tab, items } => {
                 self.leave(effects);
                 let installed = offered(&self.installed.0, &self.installed.1, &items);
-                self.picker = Some(Picker { axis, new_tab, items, query: Field::default(), selected: 0, installed });
+                self.picker =
+                    Some(Picker { axis, new_tab, items, query: Field::new("", MAX_FILTER), selected: 0, installed });
             }
             Action::SetInstalled { apps, running } => {
                 self.installed = (apps, running);
                 if let Some(picker) = &mut self.picker {
+                    // The rows change under the selection: it stays on its item, so ↵ opens
+                    // what was highlighted. If the item is gone, on a row.
+                    let chosen = picker.matches().get(picker.selected).copied().cloned();
                     picker.installed = offered(&self.installed.0, &self.installed.1, &picker.items);
-                    // The rows changed under the selection: keep it on a row.
-                    picker.selected = picker.selected.min(picker.matches().len().saturating_sub(1));
+                    let rows = picker.matches();
+                    let same = chosen.and_then(|chosen| rows.iter().position(|row| **row == chosen));
+                    picker.selected = same.unwrap_or(picker.selected.min(rows.len().saturating_sub(1)));
                 }
             }
             Action::PickerQuery { query } => {
                 if let Some(picker) = &mut self.picker {
-                    picker.query = Field::new(&query, 0);
+                    picker.query = Field::new(&query, MAX_FILTER);
                     picker.selected = 0;
                 }
             }
@@ -2123,11 +2133,17 @@ impl Model {
         }
     }
 
-    /// The text field that has the keyboard, and whose it is: the picker's filter, else the
-    /// new-task box.
-    pub fn field(&self) -> Option<(&'static str, &Field)> {
+    /// The text field that is open, and whose it is: the picker's filter, else the new-task
+    /// box. It may be under the key reference or the quit question: see `field`.
+    pub fn open_field(&self) -> Option<(&'static str, &Field)> {
         let picker = self.picker.as_ref().map(|picker| ("picker", &picker.query));
         picker.or(self.compose.as_ref().map(|field| ("compose", field)))
+    }
+
+    /// The open text field, if it has the keyboard: keys, the clipboard and the input method
+    /// edit it. Not while the key reference, the quit question or sneak mode is over it.
+    pub fn field(&self) -> Option<(&'static str, &Field)> {
+        self.open_field().filter(|_| !self.keys && matches!(self.mode(), Mode::Pick | Mode::Compose))
     }
 
     /// The line in the new-task box.
@@ -3419,10 +3435,24 @@ mod tests {
             (rows[0], rows[1], rows[2]),
             (&PickItem::App { name: "Slack".into() }, &closed("Notes"), &closed("Sketch"))
         );
-        // A scan that ends while the picker is open shows at once; the selection stays on a row.
-        m.update(Action::PickerMove { delta: -1 });
+        // A scan that ends while the picker is open shows at once. The selection stays on its
+        // app, wherever that now is: ↵ must not open another.
+        m.update(Action::PickerMove { delta: 3 });
+        let chosen = |m: &Model| m.picker.as_ref().map(|p| p.matches()[p.selected].label().to_string());
+        assert_eq!(chosen(&m).as_deref(), Some("Slides"));
+        let more = vec![app("Sketch"), app("Shazam"), app("Slides"), app("Skim")];
+        m.update(Action::SetInstalled { apps: more, running: Vec::new() });
+        assert_eq!(labels(&m), ["Slack", "Notes", "Shazam", "Sketch", "Skim", "Slides"]);
+        assert_eq!(chosen(&m).as_deref(), Some("Slides"));
+        // Its app is gone: the selection stays on a row.
         m.update(Action::SetInstalled { apps: vec![app("Sketch")], running: Vec::new() });
         assert_eq!((labels(&m), m.picker.as_ref().map(|p| p.selected)), (vec!["Slack", "Notes", "Sketch"], Some(2)));
+        // The filter holds no more than a name may be long.
+        m.update(Action::PickerQuery { query: "s".repeat(MAX_FILTER + 50) });
+        m.update(Action::FieldEdit { edit: Edit::Paste("s".repeat(5000)) });
+        assert_eq!(m.field().map(|(_, field)| field.text().len()), Some(MAX_FILTER));
+        m.update(Action::PickerQuery { query: "s".into() });
+        m.update(Action::PickerMove { delta: 2 });
         // Choosing one starts it, by where it is; no tab is made before it has a window.
         let effects = m.update(Action::PickerChoose { index: None });
         let path = "/Applications/Sketch.app".to_string();
@@ -3764,11 +3794,25 @@ mod tests {
         assert_eq!(m.compose.as_ref().map(Field::text), Some("fix zoom #Canvas >app p1"));
         // Tab finishes the word at the cursor, not the end of the line; ⌘Z takes both steps back.
         m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::Start, select: false } });
-        m.update(Action::FieldEdit { edit: Edit::Insert(">a".into()) });
+        m.update(Action::FieldEdit { edit: Edit::Insert(">a ".into()) });
+        m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::Left, select: false } });
         m.update(Action::ComposeComplete);
         assert_eq!(m.field().map(|(of, field)| (of, field.text())), Some(("compose", ">app fix zoom #Canvas >app p1")));
         m.update(Action::FieldEdit { edit: Edit::Undo });
         m.update(Action::FieldEdit { edit: Edit::Undo });
+        assert_eq!(m.compose_line().map(String::as_str), Some("fix zoom #Canvas >app p1"));
+        // Inside a word, Tab replaces the whole word, not only what is before the cursor.
+        m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::End, select: false } });
+        for _ in 0..5 {
+            m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::Left, select: false } });
+        }
+        m.update(Action::ComposeComplete);
+        assert_eq!(m.field().map(|(_, field)| (field.text(), field.cursor())), Some(("fix zoom #Canvas >app p1", 21)));
+        // Under the key reference the line is hidden: it has no keyboard, and nothing edits it.
+        m.keys = true;
+        m.update(Action::FieldEdit { edit: Edit::Insert("x".into()) });
+        assert_eq!((m.field(), m.open_field().map(|(of, _)| of)), (None, Some("compose")));
+        m.keys = false;
         assert_eq!(m.compose_line().map(String::as_str), Some("fix zoom #Canvas >app p1"));
         m.update(Action::ComposeSubmit { open: false });
         let task = &m.tasks.list[0];

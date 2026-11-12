@@ -53,15 +53,10 @@ impl Workspace {
     /// The question, centred over the workspace. A click outside it cancels.
     pub fn render_confirm(&self, confirm: &Confirm, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let lines = confirm.lines().into_iter().map(|line| div().child(line));
-        let panel = div()
+        let panel = crate::dialog::panel(theme::BORDER_STRONG)
             .w(px(320.))
             .flex()
             .flex_col()
-            .rounded(px(crate::dialog::RADIUS))
-            .bg(rgb(theme::RAISED))
-            .border_1()
-            .border_color(rgb(theme::BORDER_STRONG))
-            .shadow(crate::dialog::shadow())
             // A click inside the panel must not reach the backdrop, which cancels.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(

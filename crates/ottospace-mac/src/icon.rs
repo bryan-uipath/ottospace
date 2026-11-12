@@ -52,8 +52,10 @@ pub fn apps_in(folders: &[PathBuf]) -> Vec<(String, PathBuf)> {
     let entries = folders.iter().filter_map(|folder| std::fs::read_dir(folder).ok()).flatten().flatten();
     let app = |path: PathBuf| {
         let name = path.file_name()?.to_str()?.strip_suffix(".app")?.to_string();
-        (!name.starts_with('.') && path.is_dir()).then_some(())?;
-        Some((name, path.canonicalize().ok()?))
+        // Resolved: a link must lead to a bundle, not to some other folder.
+        let path = path.canonicalize().ok()?;
+        let bundle = path.extension().is_some_and(|ext| ext == "app") && path.is_dir();
+        (!name.starts_with('.') && bundle).then_some((name, path))
     };
     entries.filter_map(|entry| app(entry.path())).collect()
 }
@@ -74,6 +76,18 @@ pub fn installed(bundle: Option<&str>, name: &str) -> Option<PathBuf> {
 pub fn bundle_of(pid: i32) -> Option<PathBuf> {
     let url = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)?.bundleURL()?;
     PathBuf::from(url.path()?.to_string()).canonicalize().ok()
+}
+
+/// The bundle of every running app, resolved: also one with no window on this Space, a
+/// minimised one, one that lives in the menu bar. A process that runs from no `.app` (a bare
+/// executable, a helper) is left out.
+pub fn running_bundles() -> Vec<PathBuf> {
+    let apps = NSWorkspace::sharedWorkspace().runningApplications();
+    let bundle = |app: objc2::rc::Retained<NSRunningApplication>| {
+        let path = PathBuf::from(app.bundleURL()?.path()?.to_string()).canonicalize().ok()?;
+        path.extension().is_some_and(|ext| ext == "app").then_some(path)
+    };
+    apps.into_iter().filter_map(bundle).collect()
 }
 
 fn draw(icon: &NSImage, pixels: u8) -> Option<Vec<u8>> {
@@ -123,7 +137,17 @@ mod tests {
         assert_eq!(super::bundle_of(-1), None);
         // The scan finds it where `app_path` does.
         let apps = super::apps_in(&super::app_folders());
-        assert!(apps.contains(&("Calculator".to_string(), calculator)));
+        assert!(apps.contains(&("Calculator".to_string(), calculator.clone())));
         assert!(super::apps_in(&["/no/such/folder".into()]).is_empty());
+        // A link named like an app that leads to a plain folder is no app; one to a bundle is.
+        let dir = std::env::temp_dir().join(format!("ottospace-mac-apps-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("plain")).unwrap();
+        std::os::unix::fs::symlink(dir.join("plain"), dir.join("Fake.app")).unwrap();
+        std::os::unix::fs::symlink(&calculator, dir.join("Sums.app")).unwrap();
+        assert_eq!(super::apps_in(std::slice::from_ref(&dir)), [("Sums".to_string(), calculator)]);
+        let _ = std::fs::remove_dir_all(&dir);
+        // Finder runs in a login session; whatever runs, each is a bundle that exists.
+        assert!(super::running_bundles().iter().all(|bundle| bundle.is_dir()));
     }
 }

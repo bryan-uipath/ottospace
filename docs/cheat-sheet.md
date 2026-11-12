@@ -162,5 +162,4 @@ setting takes its default.
 
 - Quitting loses tabs, splits and terminals (tasks and settings are kept).
 - Filing a task starts nothing: no agent and no worktree. The task gets its first tab when you open it.
-- No paste or arrow keys in the new-task box.
 - In the Apps section an app that is not running is listed only if the `apps` setting names it. The picker (⌘E) finds any installed app once you type.

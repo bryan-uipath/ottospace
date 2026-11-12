@@ -1724,7 +1724,28 @@ fn the_text_field_moves_selects_and_undoes() {
     assert_eq!((field(&reply), reply["mode"].as_str()), (at("fix zoom flicker", 16, 0, 16), Some("compose")));
     let reply = otto.drag([end + 30.0, y], [b[0] - 30.0, y]);
     assert_eq!(field(&reply), at("fix zoom flicker", 0, 0, 16));
+    // ⇧-click selects from the cursor, and a drag after it goes on from there: not from the
+    // press before (at the end of the line), which the keys have long left.
+    otto.click([end + 30.0, y], 1);
+    key("cmd-left right right right");
+    let shift = |action: &str, x: f64| {
+        otto.call(json!({"cmd": "mouse", "action": action, "x": x, "y": y, "modifiers": ["shift"]}))
+    };
+    let (text, cursor, from, to) = field(&shift("down", b[0] + width * 0.5));
+    assert_eq!((text.as_str(), from, cursor == to), ("fix zoom flicker", 3, true));
+    let (_, cursor, from, further) = field(&shift("move", b[0] + width * 0.7));
+    assert!(from == 3 && further > to && cursor == further, "3..{to} grew to {from}..{further}");
+    shift("up", b[0] + width * 0.7);
+    // The text shrinks under a press: ⌘A and a letter, then ⇧-click and a move of two points.
+    otto.click([end + 30.0, y], 1);
+    key("cmd-a x");
+    shift("down", end);
+    let reply = shift("move", end + 2.0);
+    shift("up", end + 2.0);
+    assert_eq!(field(&reply), at("x", 1, 1, 1));
+    key("cmd-z");
     // The selection is replaced by what is typed next, and ↵ adds the task.
+    key("cmd-a");
     key("t i d y");
     let reply = key("enter");
     assert_eq!(
