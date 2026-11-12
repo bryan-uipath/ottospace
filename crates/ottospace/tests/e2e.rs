@@ -515,9 +515,49 @@ fn the_home_screen_shows_tasks_as_nodes_until_a_pane_opens() {
         (&shown["counts"]["needs_you"], &shown["counts"]["running"], &shown["counts"]["done"]),
         (&json!(2), &json!(1), &json!(1))
     );
+    // What was drawn, not what the model says: a click target for every node, inside the
+    // home screen and clear of the new-task line and its list.
+    let drawn = |o: &Otto, nodes: usize| {
+        o.wait_for("the home screen to be drawn", |o| {
+            let drawn = o.call(json!({"cmd": "state"}))["home_drawn"].clone();
+            (drawn["nodes"].as_object()?.len() == nodes && drawn["panel"][2].as_f64()? > 1.0).then_some(drawn)
+        })
+    };
+    let rect = |v: &Value| -> [f64; 4] { std::array::from_fn(|i| v[i].as_f64().expect("a rectangle")) };
+    let apart = |a: [f64; 4], b: [f64; 4]| {
+        a[0] + a[2] <= b[0] || b[0] + b[2] <= a[0] || a[1] + a[3] <= b[1] || b[1] + b[3] <= a[1]
+    };
+    let first = drawn(&otto, 4);
+    let (area, panel) = (rect(&first["area"]), rect(&first["panel"]));
+    for (task, node) in first["nodes"].as_object().expect("drawn nodes") {
+        let node = rect(node);
+        assert!(apart(node, panel), "the node of task {task} at {node:?} is under the text at {panel:?}");
+        let inside = node[0] >= area[0] && node[1] >= area[1] && node[0] + node[2] <= area[0] + area[2];
+        assert!(inside && node[1] + node[3] <= area[1] + area[3], "task {task} at {node:?} is outside {area:?}");
+    }
     // A hidden task loses its node.
     otto.call(json!({"cmd": "task_dismiss", "id": 4}));
     assert_eq!(home(&otto)["nodes"].as_array().map(Vec::len), Some(3));
+    drawn(&otto, 3);
+
+    // The lattice's lines are built once and kept: frames that move nothing only paint them.
+    let lattice = |o: &Otto| {
+        let drawn = o.call(json!({"cmd": "state"}))["home_drawn"].clone();
+        (drawn["lattice_builds"].as_u64().expect("builds"), drawn["lattice_paints"].as_u64().expect("paints"))
+    };
+    // Showing and hiding the key reference draws the window again.
+    let frames = |o: &Otto| {
+        let (_, before) = lattice(o);
+        o.call(json!({"cmd": "keys"}));
+        o.call(json!({"cmd": "keys"}));
+        o.wait_for("the window to be drawn again", |o| Some(lattice(o)).filter(|(_, paints)| *paints > before))
+    };
+    frames(&otto); // lets a build that is still on its way land
+    let (builds, _) = frames(&otto);
+    assert_eq!(frames(&otto).0, builds, "a frame with nothing moved built the lines again");
+    // A second row under "Needs you" moves the text, so the lines around it are built again.
+    otto.call(json!({"cmd": "task_set_state", "id": 2, "state": "needs_you"}));
+    otto.wait_for("the lines to be built again", |o| (lattice(o).0 > builds).then_some(()));
 
     // A click on a node or a row opens the task (the same action as `task_open`). Its new tab
     // has no pane yet, so the home screen stays until one opens.
@@ -527,6 +567,17 @@ fn the_home_screen_shows_tasks_as_nodes_until_a_pane_opens() {
     let reply = otto.call(json!({"cmd": "split", "kind": "empty"}));
     assert!(reply["home"].is_null(), "a pane takes the home screen's place");
     otto.bounds(&pane_ids(&reply));
+    // The empty pane's patch is kept too: a terminal printing beside it does not build it again.
+    otto.call(json!({"cmd": "split"}));
+    let printed = |o: &Otto, word: &str| {
+        o.call(json!({"cmd": "type", "pane": 2, "text": format!("echo {word}-$((6*7))\r")}));
+        o.call(json!({"cmd": "wait", "pane": 2, "pattern": format!("^{word}-42$"), "timeout_ms": 40000}));
+        lattice(o)
+    };
+    let (builds, paints) = printed(&otto, "one");
+    let (again, later) = (printed(&otto, "two"), printed(&otto, "three"));
+    assert_eq!((again.0, later.0), (builds, builds), "the terminal's frames built the patch again");
+    assert!(later.1 > paints, "the patch was painted with the terminal's frames");
     // The tab of no task is still empty.
     assert!(otto.call(json!({"cmd": "task_leave"}))["home"].is_object());
 }

@@ -85,7 +85,7 @@ cheapest daily win. E is the largest value but needs A, B and D.
 - Backlog, from Bryan 2026-11-11:
   - **Coach.** Count how often each shortcut is used, tier the shortcuts, and show hints or
     achievements. Shares its data with the usage metrics for the weekly review (#1a).
-  - **Small delights.** Keep a list as we build. First candidates: Otto reacts to state (a task
+  - **Small delights.** Keep a list as we build. First candidates: the lattice reacts to state (a task
     finishes, a focus block starts).
   - **One title bar per app pane.** Today the app's title bar shows under our pane header. Either
     crop it from the stream and, when live, place the app's title bar over our header; or drop

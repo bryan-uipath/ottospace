@@ -27,7 +27,7 @@ use ottospace_core::keys::{self, Mods};
 use ottospace_core::list::{ListKey, list_key};
 use ottospace_core::rules::{self, Facts};
 use ottospace_core::settings::{Installed, closed_apps};
-use ottospace_core::tasks::{Group, MAX_TITLE, Task};
+use ottospace_core::tasks::{Group, MAX_TITLE, Task, TaskId};
 use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, scroll_key, select_kind, visual_key};
 use ottospace_core::{
     Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Pane, PaneId, PickItem, Picker, Rect, Section, theme,
@@ -40,8 +40,8 @@ use screencapturekit::prelude::*;
 mod ax_debug;
 mod config;
 mod control;
-mod menus;
 mod home;
+mod menus;
 mod repos;
 mod terminal;
 use control::{Call, PaneKind, Request};
@@ -375,6 +375,8 @@ struct Workspace {
     cells: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
     /// Each pane's bounds inside its border, for e2e to check the live window's gap.
     frames: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
+    /// What the home screen last drew, and the lattice lines kept between frames.
+    home: home::Shared,
     apps: Vec<capture::App>,
     /// Apps the settings name that are not running: listed under the running ones.
     closed: Vec<Installed>,
@@ -543,6 +545,7 @@ impl Workspace {
             system_clipboard: std::env::var_os("OTTOSPACE_E2E").is_none(),
             cells: HashMap::new(),
             frames: HashMap::new(),
+            home: home::Shared::default(),
             apps: Vec::new(),
             closed: Vec::new(),
             launching: Vec::new(),
@@ -1088,7 +1091,11 @@ impl Workspace {
             "needs_you": self.model.tasks.needs_you(),
             // The home screen, or null while the tab on show has a pane: each task's node (its
             // lane, depth and crossing of the lattice) and the rows under "Needs you".
-            "home": self.model.home(),
+            "home": self.model.home(&self.home.borrow().keep_out()),
+            // What the home screen drew, in window points: its `area`, the `panel` (the new-task
+            // line with its list) and each node's click target by task id. Also how often
+            // lattice lines were built and painted, here and in empty panes.
+            "home_drawn": self.home.borrow().snapshot(),
             // Apps from the settings that are not running: `open_app` starts one.
             "closed_apps": self.closed.iter().map(|app| &app.name).collect::<Vec<_>>(),
             // The Apps list: what can be hosted now. `icon`: its icon was read.
@@ -2146,19 +2153,10 @@ impl Workspace {
             }
             let (id, index) = (task.id, listed);
             listed += 1;
-            let urgent = if task.priority == 1 { theme::ERROR } else { theme::MUTED };
             rows.push(
                 list_button(("task", id as usize), self.model.list == Some(index))
-                    .child(div().flex_none().text_xs().text_color(rgb(urgent)).child(format!("P{}", task.priority)))
-                    .child(div().flex_1().min_w_0().truncate().child(task.title.clone()))
-                    .children(task.project.as_ref().map(|project| {
-                        let tag = div().flex_none().max_w(px(90.)).truncate().text_xs();
-                        tag.text_color(rgb(theme::MUTED)).child(format!("#{project}"))
-                    }))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.dispatch(Action::TaskOpen { id: Some(id) }, window, cx);
-                        cx.notify();
-                    }))
+                    .children(task_cells(task, 90.))
+                    .on_click(open_task(id, cx))
                     .into_any_element(),
             );
         }
@@ -2342,7 +2340,7 @@ impl Workspace {
                 Kind::Terminal => {
                     div().text_sm().text_color(rgb(theme::ERROR)).child("the shell did not start").into_any_element()
                 }
-                _ => home::empty_pane("⌘E to pick what goes here").into_any_element(),
+                _ => home::empty_pane("⌘E to pick what goes here", id, &self.home).into_any_element(),
             }
         };
         let (radius, cropped) = self.hosted.get(&id).map_or((0.0, false), |h| (h.radius, h.crop > 0.0));
@@ -2595,6 +2593,27 @@ impl Workspace {
     }
 }
 
+/// What a task's row shows: its priority, its title, and its project (at most `tag` points
+/// wide) if it has one.
+fn task_cells(task: &Task, tag: f32) -> Vec<Div> {
+    let urgent = if task.priority == 1 { theme::ERROR } else { theme::MUTED };
+    let priority = div().flex_none().text_xs().text_color(rgb(urgent)).child(format!("P{}", task.priority));
+    let title = div().flex_1().min_w_0().truncate().child(task.title.clone());
+    let project = task.project.as_ref().map(|project| {
+        let tag = div().flex_none().max_w(px(tag)).truncate().text_xs();
+        tag.text_color(rgb(theme::MUTED)).child(format!("#{project}"))
+    });
+    [priority, title].into_iter().chain(project).collect()
+}
+
+/// A click that shows a task's tabs.
+fn open_task(id: TaskId, cx: &mut Context<Workspace>) -> Box<dyn Fn(&ClickEvent, &mut Window, &mut App)> {
+    Box::new(cx.listener(move |this, _, window, cx| {
+        this.dispatch(Action::TaskOpen { id: Some(id) }, window, cx);
+        cx.notify();
+    }))
+}
+
 /// A row under a heading (a repository's checkout): no outline at rest, so a long list stays
 /// quiet. Hover and selection mark it.
 fn list_row(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
@@ -2735,8 +2754,10 @@ impl Render for Workspace {
             self.frames.entry(pane.id).or_default();
         }
         let tree = self.model.layout.as_ref().map(|root| self.render_node(root, cx));
-        // Drawn only while the tab on show has no panes: it costs a terminal nothing.
-        let home = tree.is_none().then(|| self.render_home(cx));
+        // Only while the tab on show has no panes. Its lines are built once and kept: a frame
+        // that moves nothing (a terminal printing in another tab) only paints them again.
+        let keep_out = self.home.borrow().keep_out();
+        let home = self.model.home(&keep_out).map(|home| self.render_home(home, cx));
         div()
             .size_full()
             .flex()
