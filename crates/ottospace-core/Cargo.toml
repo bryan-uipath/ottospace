@@ -10,3 +10,5 @@ license.workspace = true
 serde = { version = "1", features = ["derive"] }
 # Parses the settings file's text. The shell reads the file.
 serde_json = "1"
+# Text fields move by grapheme and word (UAX #29). Tables only: no I/O.
+unicode-segmentation = "1"

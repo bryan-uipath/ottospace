@@ -226,14 +226,22 @@ pub fn suggest<'a>(typed: &str, names: impl IntoIterator<Item = &'a str>) -> Vec
 /// after a directory (`/src/`): the path goes on. A space in a path gets a backslash, so the
 /// path stays one word: `~/Library/Application\ Support/`.
 pub fn complete(line: &str, name: &str) -> String {
-    let (Some(word), Some((mark, _))) = (typing(line), completing(line)) else { return line.to_string() };
-    let before = &line[..line.len() - word.len()];
-    if mark == '/' {
-        let space = if name.ends_with('/') { "" } else { " " };
-        format!("{before}{}{space}", escape(name))
-    } else {
-        format!("{before}{mark}{name} ")
-    }
+    let (word, name) = completion(line, name);
+    format!("{}{name}{}", &line[..word.start], &line[word.end..])
+}
+
+/// As `complete`, for a caller that edits in place: the bytes of the word being typed at the
+/// end of `line`, and what replaces them.
+pub fn completion(line: &str, name: &str) -> (std::ops::Range<usize>, String) {
+    let (Some(word), Some((mark, _))) = (typing(line), completing(line)) else {
+        return (line.len()..line.len(), String::new());
+    };
+    let name = match mark {
+        '/' if name.ends_with('/') => escape(name),
+        '/' => format!("{} ", escape(name)),
+        _ => format!("{mark}{name} "),
+    };
+    (line.len() - word.len()..line.len(), name)
 }
 
 #[cfg(test)]

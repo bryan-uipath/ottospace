@@ -1,6 +1,6 @@
 //! The quit question: ⌘Q asks before it ends a program running in a terminal.
 
-use gpui::{BoxShadow, Context, Keystroke, MouseButton, Window, black, div, point, prelude::*, px, rgb};
+use gpui::{Context, Keystroke, MouseButton, Window, black, div, prelude::*, px, rgb};
 use ottospace_core::keys::Mods;
 use ottospace_core::model::{Confirm, Running};
 use ottospace_core::{Action, Origin, theme};
@@ -57,16 +57,11 @@ impl Workspace {
             .w(px(320.))
             .flex()
             .flex_col()
-            .rounded_lg()
+            .rounded(px(crate::dialog::RADIUS))
             .bg(rgb(theme::RAISED))
             .border_1()
             .border_color(rgb(theme::BORDER_STRONG))
-            .shadow(vec![BoxShadow {
-                color: black().opacity(0.7),
-                offset: point(px(0.), px(12.)),
-                blur_radius: px(32.),
-                spread_radius: px(0.),
-            }])
+            .shadow(crate::dialog::shadow())
             // A click inside the panel must not reach the backdrop, which cancels.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(

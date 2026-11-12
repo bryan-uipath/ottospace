@@ -1645,6 +1645,144 @@ fn secondary_bar_opens_and_closes_beside_the_panes() {
     otto.wait_for("the pane to move back", |o| Some(o.bounds(&[1])[0]).filter(|b| (b[0] - closed[0]).abs() < 2.0));
 }
 
+/// The open text field as the state gives it: (text, cursor, selection start, selection end).
+fn field(reply: &Value) -> (String, u64, u64, u64) {
+    let f = &reply["field"];
+    let n = |v: &Value| v.as_u64().unwrap_or(u64::MAX);
+    (f["text"].as_str().unwrap_or("<none>").to_string(), n(&f["cursor"]), n(&f["selection"][0]), n(&f["selection"][1]))
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_text_field_moves_selects_and_undoes() {
+    let otto = Otto::launch("field");
+    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+    let at = |text: &str, cursor: u64, from: u64, to: u64| (text.to_string(), cursor, from, to);
+    assert_eq!(key("cmd-n")["field"]["of"], "compose");
+    // Typed text goes in at the cursor, which moves by character, word and line.
+    assert_eq!(field(&key("f i x space z o o m")), at("fix zoom", 8, 8, 8));
+    assert_eq!(field(&key("left left")), at("fix zoom", 6, 6, 6));
+    assert_eq!(field(&key("shift-X")), at("fix zoXom", 7, 7, 7));
+    assert_eq!(field(&key("alt-left")), at("fix zoXom", 4, 4, 4));
+    assert_eq!(field(&key("cmd-left")), at("fix zoXom", 0, 0, 0));
+    assert_eq!(field(&key("ctrl-e")), at("fix zoXom", 9, 9, 9));
+    assert_eq!(field(&key("home alt-right ctrl-f")), at("fix zoXom", 4, 4, 4));
+    assert_eq!(field(&key("end ctrl-a ctrl-b right")), at("fix zoXom", 1, 1, 1));
+    // Shift extends the selection; typing replaces it. The state's `compose` is still the text.
+    let reply = key("end shift-left shift-left shift-left");
+    assert_eq!((field(&reply), reply["field"]["selected"].as_str()), (at("fix zoXom", 6, 6, 9), Some("Xom")));
+    let reply = key("o m");
+    assert_eq!((field(&reply), reply["state"]["compose"].as_str()), (at("fix zoom", 8, 8, 8), Some("fix zoom")));
+    assert_eq!(field(&key("alt-shift-left")), at("fix zoom", 4, 4, 8));
+    assert_eq!(field(&key("cmd-shift-left")), at("fix zoom", 0, 0, 8));
+    // An arrow leaves a selection at that side. ⌘A then a key replaces everything.
+    assert_eq!(field(&key("right")), at("fix zoom", 8, 8, 8));
+    assert_eq!(field(&key("cmd-a")), at("fix zoom", 8, 0, 8));
+    assert_eq!(field(&key("a")), at("a", 1, 1, 1));
+    // ⌘Z takes back a step, ⇧⌘Z does it again. ⌥⌫ takes a word, ⌘⌫ the line, ⌦ what follows.
+    assert_eq!(field(&key("cmd-z")), at("fix zoom", 8, 0, 8));
+    assert_eq!(field(&key("cmd-shift-z")), at("a", 1, 1, 1));
+    assert_eq!(field(&key("cmd-z right space n o w")), at("fix zoom now", 12, 12, 12));
+    assert_eq!(field(&key("alt-backspace")), at("fix zoom ", 9, 9, 9));
+    assert_eq!(field(&key("cmd-z")), at("fix zoom now", 12, 12, 12));
+    assert_eq!(field(&key("alt-left alt-left alt-delete")), at("fix  now", 4, 4, 4));
+    assert_eq!(field(&key("delete backspace")), at("fixnow", 3, 3, 3));
+    assert_eq!(field(&key("cmd-backspace")), at("now", 0, 0, 0));
+    assert_eq!(field(&key("ctrl-k")), at("", 0, 0, 0));
+    // Each undo also puts the cursor back where it was.
+    assert_eq!(field(&key("cmd-z cmd-z cmd-z cmd-z cmd-z")), at("fix zoom now", 4, 4, 4));
+    // ⌘C, ⌘X and ⌘V: in a test run the clipboard is the app's own (`copied`), never the user's.
+    let reply = key("end alt-shift-left cmd-c");
+    assert_eq!((reply["copied"].as_str(), field(&reply)), (Some("now"), at("fix zoom now", 9, 9, 12)));
+    assert_eq!(field(&key("left cmd-v")), at("fix zoom nownow", 12, 12, 12));
+    let reply = key("cmd-a cmd-x");
+    assert_eq!((reply["copied"].as_str(), field(&reply)), (Some("fix zoom nownow"), at("", 0, 0, 0)));
+    assert_eq!(field(&key("cmd-v cmd-v")).0, "fix zoom nownowfix zoom nownow");
+    // An emoji is one step, two UTF-16 units; ⌃X types nothing.
+    key("cmd-a backspace");
+    otto.call(json!({"cmd": "key", "keys": "a"}));
+    assert_eq!(key("escape")["field"], Value::Null);
+    otto.call(json!({"cmd": "compose", "text": "a👍🏽b"}));
+    assert_eq!(field(&key("left left")), at("a👍🏽b", 1, 1, 1));
+    assert_eq!(field(&key("shift-right ctrl-x")), at("a👍🏽b", 5, 1, 5));
+    assert_eq!(field(&key("backspace")), at("ab", 1, 1, 1));
+    key("escape");
+
+    // The mouse: a click places the cursor, a double click takes a word, a triple click the
+    // line, a drag selects, and goes on past the field's edge.
+    otto.call(json!({"cmd": "compose", "text": "fix zoom flicker"}));
+    let drawn = otto.drawn();
+    let (b, end) = (rect(&drawn["field"]["bounds"]), drawn["field"]["cursor_x"].as_f64().unwrap());
+    assert!(b[2] > 100.0 && end > b[0] + 40.0, "the field is drawn, the caret after the text: {}", drawn["field"]);
+    let (y, width) = (b[1] + b[3] / 2.0, end - b[0]);
+    // "zoom" is a quarter to half of the way along; "fix" starts the line.
+    assert_eq!(field(&otto.click([b[0] + width * 0.4, y], 2)), at("fix zoom flicker", 8, 4, 8));
+    assert_eq!(field(&otto.click([b[0] + width * 0.4, y], 3)), at("fix zoom flicker", 16, 0, 16));
+    assert_eq!(field(&otto.click([b[0] + 1.0, y], 1)), at("fix zoom flicker", 0, 0, 0));
+    assert_eq!(field(&otto.click([end + 30.0, y], 1)), at("fix zoom flicker", 16, 16, 16));
+    let reply = otto.drag([b[0] + 1.0, y], [end + 40.0, y + 60.0]);
+    assert_eq!((field(&reply), reply["mode"].as_str()), (at("fix zoom flicker", 16, 0, 16), Some("compose")));
+    let reply = otto.drag([end + 30.0, y], [b[0] - 30.0, y]);
+    assert_eq!(field(&reply), at("fix zoom flicker", 0, 0, 16));
+    // The selection is replaced by what is typed next, and ↵ adds the task.
+    key("t i d y");
+    let reply = key("enter");
+    assert_eq!(
+        (reply["mode"].as_str(), reply["state"]["tasks"]["list"][0]["title"].as_str()),
+        (Some("normal"), Some("tidy"))
+    );
+
+    // A line wider than the box scrolls: the caret stays inside it.
+    let long = "a long line of words that goes on and on ".repeat(4);
+    otto.call(json!({"cmd": "compose", "text": long.trim()}));
+    let drawn = otto.drawn();
+    let (b, x) = (rect(&drawn["field"]["bounds"]), drawn["field"]["cursor_x"].as_f64().unwrap());
+    assert!(x > b[0] + b[2] - 20.0 && x <= b[0] + b[2], "the caret is at the right edge: {}", drawn["field"]);
+    key("cmd-left");
+    assert_eq!(otto.drawn()["field"]["cursor_x"].as_f64(), Some(b[0]));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_picker_filter_is_a_field_and_offers_apps_that_are_not_running() {
+    // Made-up apps in a folder of the test's own: never the user's, and none is ever started.
+    let root = std::env::temp_dir().join(format!("ottospace-e2e-apps-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    for app in ["Sketchpad.app", "Skylark.app", "Lumen Desk.app", "notes.txt"] {
+        std::fs::create_dir_all(root.join(app)).unwrap();
+    }
+    let otto = Otto::launch_with("picker-apps", &[("OTTOSPACE_APPS_DIRS", root.to_str().unwrap())]);
+    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+    let rows = |reply: &Value| -> Vec<String> {
+        let row = |row: &Value| format!("{} {}", row["type"].as_str().unwrap(), row["name"].as_str().unwrap_or(""));
+        reply["picker_rows"].as_array().map(|rows| rows.iter().map(row).collect()).unwrap_or_default()
+    };
+    // Nothing typed: what the picker showed before. The folders are read on another thread.
+    let reply = otto.call(json!({"cmd": "picker"}));
+    assert_eq!((rows(&reply), reply["field"]["of"].as_str()), (vec!["terminal ".to_string()], Some("picker")));
+    otto.wait_for("the scan of the apps folder", |o| {
+        let reply = o.call(json!({"cmd": "picker_query", "query": "sk"}));
+        (rows(&reply) == ["closed Sketchpad", "closed Skylark", "closed Lumen Desk"]).then_some(())
+    });
+    // The filter edits as a field does; names that start with it come before those that hold it.
+    let reply = key("cmd-a d e s");
+    assert_eq!((field(&reply).0.as_str(), rows(&reply)), ("des", vec!["closed Lumen Desk".to_string()]));
+    let reply = key("shift-left shift-left shift-left k");
+    assert_eq!(rows(&reply), ["closed Lumen Desk", "closed Sketchpad", "closed Skylark"]);
+    let reply = key("cmd-z");
+    assert_eq!((field(&reply), rows(&reply).len()), (("des".to_string(), 0, 0, 3), 1));
+    // The terminal and running apps come first. ↓ moves as before; Esc closes.
+    let reply = key("t");
+    assert_eq!(rows(&reply), ["terminal ", "closed Sketchpad"]);
+    assert_eq!(key("down")["state"]["picker"]["selected"], 1);
+    let reply = key("escape");
+    assert_eq!(
+        (reply["mode"].as_str(), &reply["field"], &reply["picker_rows"]),
+        (Some("normal"), &Value::Null, &Value::Null)
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn picker_opens_a_terminal_in_the_chosen_direction() {

@@ -53,6 +53,8 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     crop: {},
     terminals: {},
     copied: null,
+    picker_rows: null,
+    field: null,
     inbox: [],
     needs_you: 0,
     compose_read: false,

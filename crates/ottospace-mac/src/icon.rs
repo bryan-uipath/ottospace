@@ -30,16 +30,32 @@ pub fn app_path(name: &str) -> Option<PathBuf> {
     if name.is_empty() || name.contains('/') || name.starts_with('.') {
         return None;
     }
+    let found = app_folders().iter().map(|folder| folder.join(format!("{name}.app"))).find(|app| app.is_dir())?;
+    found.canonicalize().ok()
+}
+
+/// Where apps usually are.
+pub fn app_folders() -> Vec<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-    let folders = [
+    vec![
         PathBuf::from("/Applications"),
         home.join("Applications"),
         PathBuf::from("/System/Applications"),
         PathBuf::from("/Applications/Utilities"),
         PathBuf::from("/System/Applications/Utilities"),
-    ];
-    let found = folders.iter().map(|folder| folder.join(format!("{name}.app"))).find(|app| app.is_dir())?;
-    found.canonicalize().ok()
+    ]
+}
+
+/// Every app bundle directly in `folders`, as (name, resolved path): `("Notes", "/System/Applications/Notes.app")`.
+/// Reads the folders only: slow on a cold disk, so not for the main thread.
+pub fn apps_in(folders: &[PathBuf]) -> Vec<(String, PathBuf)> {
+    let entries = folders.iter().filter_map(|folder| std::fs::read_dir(folder).ok()).flatten().flatten();
+    let app = |path: PathBuf| {
+        let name = path.file_name()?.to_str()?.strip_suffix(".app")?.to_string();
+        (!name.starts_with('.') && path.is_dir()).then_some(())?;
+        Some((name, path.canonicalize().ok()?))
+    };
+    entries.filter_map(|entry| app(entry.path())).collect()
 }
 
 /// Where Launch Services says the app with this bundle id is installed. `None`: it is not.
@@ -105,5 +121,9 @@ mod tests {
         assert!(super::png_of_app(&calculator, 48).is_some_and(|png| png.starts_with(b"\x89PNG")));
         assert_eq!((super::app_path("../Calculator"), super::app_path("No Such App 9")), (None, None));
         assert_eq!(super::bundle_of(-1), None);
+        // The scan finds it where `app_path` does.
+        let apps = super::apps_in(&super::app_folders());
+        assert!(apps.contains(&("Calculator".to_string(), calculator)));
+        assert!(super::apps_in(&["/no/such/folder".into()]).is_empty());
     }
 }

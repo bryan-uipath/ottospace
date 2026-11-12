@@ -18,7 +18,8 @@ ottospace            # opens on the Repos list
 | I want to | Press |
 |---|---|
 | Split with a new terminal | ⌘D right · ⌘⇧D down |
-| Choose what goes in a new pane (terminal or app) | ⌘E, type to filter, ↵ |
+| Choose what goes in a new pane (terminal or app) | ⌘E, type to filter, ↵. Typing also offers installed apps that are not running |
+| Edit the picker's filter or the new-task line | As any Mac text field: ⌥←/→ words, ⌘←/→ line, ⇧ selects, ⌘A, ⌘C/⌘X/⌘V, ⌘Z/⇧⌘Z, ⌥⌫ a word, ⌘⌫ the line; click, drag, double click |
 | Move between panes | ⌘⌥ arrows or ⌘⌥ H J K L · ⌘] ⌘[ cycle |
 | Resize the pane | ⌘⌃ arrows or ⌘⌃ H J K L: the split moves that way · ⌘⌃= evens all out |
 | Give an app the room its window needs | ⌘⌃0, or `fit` in the pane header: shown when the app refused the pane's size and a split can move |
@@ -50,7 +51,7 @@ The fourth icon, Workbook, is empty for now.
 | I want to | Do |
 |---|---|
 | Put a running app's window in a pane | Apps, click the app (⇧-click: split down). Or ⌘E and pick it |
-| Start an app that is not running | Name it in the `apps` setting. It is listed under "Not running": click it |
+| Start an app that is not running | ⌘E, type its name, ↵. Or name it in the `apps` setting: it is listed under "Not running" in Apps, click it |
 | Type in the app | Click its pane. The status bar turns `APP`; ottospace keys stop |
 | Come back | Click ottospace itself, or the return key |
 | Give the window back to macOS | Come back to ottospace first, then ⌘W on its pane: the window returns to where it was |
@@ -162,4 +163,4 @@ setting takes its default.
 - Quitting loses tabs, splits and terminals (tasks and settings are kept).
 - Filing a task starts nothing: no agent and no worktree. The task gets its first tab when you open it.
 - No paste or arrow keys in the new-task box.
-- An app that is not running is listed only if the `apps` setting names it.
+- In the Apps section an app that is not running is listed only if the `apps` setting names it. The picker (⌘E) finds any installed app once you type.

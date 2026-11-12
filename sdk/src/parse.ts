@@ -12,6 +12,7 @@ import type {
   Axis,
   CaptureReply,
   Confirm,
+  Field,
   Frame,
   Group,
   Heading,
@@ -314,7 +315,25 @@ function pickItem(value: unknown, at: string): PickItem {
   const o = fields(value, at);
   if (o.type === "terminal") return { type: "terminal" };
   if (o.type === "app") return { type: "app", name: str(o.name, `${at}.name`) };
+  if (o.type === "closed") {
+    return { type: "closed", name: str(o.name, `${at}.name`), path: str(o.path, `${at}.path`) };
+  }
   throw wrong(`${at}.type`, "a picker item", o.type);
+}
+
+function field(value: unknown, at: string): Field {
+  const o = fields(value, at);
+  if (o.of !== "compose" && o.of !== "picker") throw wrong(`${at}.of`, "compose or picker", o.of);
+  return {
+    of: o.of,
+    text: str(o.text, `${at}.text`),
+    cursor: num(o.cursor, `${at}.cursor`),
+    selection: pair(o.selection, `${at}.selection`),
+    selected: str(o.selected, `${at}.selected`),
+    marked: orNull(pair)(o.marked, `${at}.marked`),
+    bounds: rect(o.bounds, `${at}.bounds`),
+    cursor_x: num(o.cursor_x, `${at}.cursor_x`),
+  };
 }
 
 function picker(value: unknown, at: string): Picker {
@@ -565,6 +584,8 @@ export function snapshot(value: unknown): Snapshot {
     crop: map(num)(o.crop, "crop"),
     terminals: map(terminal)(o.terminals, "terminals"),
     copied: orNull(str)(o.copied, "copied"),
+    picker_rows: orNull(list(pickItem))(o.picker_rows, "picker_rows"),
+    field: orNull(field)(o.field, "field"),
     inbox: list(inboxRow)(o.inbox, "inbox"),
     needs_you: num(o.needs_you, "needs_you"),
     compose_read: bool(o.compose_read, "compose_read"),

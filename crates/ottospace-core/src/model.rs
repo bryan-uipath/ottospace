@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ax::Target;
 use crate::compose::{self, Draft};
+use crate::edit::{Edit, Field};
 use crate::home::{self, Home};
 use crate::hosted::{self, Fit, Stuck};
 use crate::keys::Mods;
@@ -12,6 +13,7 @@ use crate::list::ListRow;
 use crate::marks::{self, Extra, Field, MarkId, MarkInput, MarkOf, MarkRef, Marks, Need};
 use crate::repos::{self, Repo};
 use crate::sessions::{self, Found};
+use crate::settings::Installed;
 use crate::sneak::{Sneak, Typed};
 use crate::tasks::{
     self, Assign, Heading, MAX_TITLE, Moved, NOTICE_MS, Notice, State, Task, TaskId, TaskRow, TaskSection, Tasks,
@@ -147,13 +149,18 @@ pub enum PickItem {
     App {
         name: String,
     },
+    /// An installed app that is not running, by where it is. Choosing it starts it.
+    Closed {
+        name: String,
+        path: String,
+    },
 }
 
 impl PickItem {
     pub fn label(&self) -> &str {
         match self {
             PickItem::Terminal => "Terminal",
-            PickItem::App { name } => name,
+            PickItem::App { name } | PickItem::Closed { name, .. } => name,
         }
     }
 }
@@ -166,27 +173,55 @@ pub struct Picker {
     /// Open the pick in a new tab instead of splitting.
     pub new_tab: bool,
     pub items: Vec<PickItem>,
-    pub query: String,
+    /// The filter text: a field, with a cursor and a selection.
+    pub query: Field,
     /// Index into `matches()`.
     pub selected: usize,
+    /// Every other installed app that is not running, by name. Offered once something is typed.
+    #[serde(skip)]
+    pub installed: Vec<PickItem>,
 }
 
 impl Picker {
-    /// Items whose label contains the query, ignoring case. Labels that start with it come first.
+    /// The rows. With nothing typed: `items`, as given. Else the items whose label contains
+    /// the filter, ignoring case, those that start with it first: the terminal and running apps,
+    /// then the apps that are not running, those of `items` (the user's own list) before the
+    /// rest of what is installed.
     pub fn matches(&self) -> Vec<&PickItem> {
-        let query = self.query.to_lowercase();
-        let (mut starts, mut contains) = (Vec::new(), Vec::new());
-        for item in &self.items {
-            let label = item.label().to_lowercase();
-            if label.starts_with(&query) {
-                starts.push(item);
-            } else if label.contains(&query) {
-                contains.push(item);
-            }
+        let query = self.query.text().to_lowercase();
+        if query.is_empty() {
+            return self.items.iter().collect();
         }
-        starts.extend(contains);
-        starts
+        let closed = |item: &&PickItem| matches!(item, PickItem::Closed { .. });
+        let groups: [Vec<&PickItem>; 3] = [
+            self.items.iter().filter(|item| !closed(item)).collect(),
+            self.items.iter().filter(closed).collect(),
+            self.installed.iter().collect(),
+        ];
+        let mut rows = Vec::new();
+        for group in groups {
+            let hit = |starts: bool| {
+                let query = &query;
+                group.iter().copied().filter(move |item| {
+                    let label = item.label().to_lowercase();
+                    label.contains(query) && label.starts_with(query) == starts
+                })
+            };
+            rows.extend(hit(true).chain(hit(false)));
+        }
+        rows
     }
+}
+
+/// The installed apps the picker offers beyond its own items: those not running (their bundle
+/// is not in `running`) and not already an item, each bundle once, by name.
+fn offered(installed: &[Installed], running: &[String], items: &[PickItem]) -> Vec<PickItem> {
+    let listed = |path: &str| items.iter().any(|item| matches!(item, PickItem::Closed { path: p, .. } if p == path));
+    let mut apps: Vec<&Installed> =
+        installed.iter().filter(|app| !running.contains(&app.path) && !listed(&app.path)).collect();
+    apps.sort_by_key(|app| (app.name.to_lowercase(), app.path.clone()));
+    apps.dedup_by(|a, b| a.path == b.path);
+    apps.into_iter().map(|app| PickItem::Closed { name: app.name.clone(), path: app.path.clone() }).collect()
 }
 
 /// A category on the left rail. Its list shows in the secondary bar.
@@ -302,6 +337,12 @@ pub enum Action {
     CloseTab {
         index: Option<usize>,
     },
+    /// The apps found installed, and the bundles of those running now. The shell sends it when
+    /// the picker opens and when a scan ends.
+    SetInstalled {
+        apps: Vec<Installed>,
+        running: Vec<String>,
+    },
     /// Replace the picker's filter text.
     PickerQuery {
         query: String,
@@ -310,12 +351,6 @@ pub enum Action {
     PickerMove {
         delta: i32,
     },
-    /// Add typed text to the picker's filter.
-    PickerType {
-        text: String,
-    },
-    /// Remove the last character of the picker's filter.
-    PickerBackspace,
     /// Open an item (default: the selected one) and close the picker. `index` is into the
     /// current matches, so a click opens the row it landed on.
     PickerChoose {
@@ -414,10 +449,11 @@ pub enum Action {
     OpenCompose {
         text: String,
     },
-    ComposeType {
-        text: String,
+    /// One edit to the text field that has the keyboard: the picker's filter, else the
+    /// new-task box.
+    FieldEdit {
+        edit: Edit,
     },
-    ComposeBackspace,
     /// Finish the tag being typed with the first suggestion.
     ComposeComplete,
     /// File the line as a task and close the box. A line with no title files nothing.
@@ -717,9 +753,8 @@ impl Action {
             | Action::CycleTab { .. }
             | Action::CloseTab { .. }
             | Action::PickerQuery { .. }
+            | Action::SetInstalled { .. }
             | Action::PickerMove { .. }
-            | Action::PickerType { .. }
-            | Action::PickerBackspace
             | Action::PickerChoose { .. }
             | Action::ClosePicker
             | Action::CloseKeys
@@ -738,8 +773,7 @@ impl Action {
             | Action::TaskLeave
             | Action::SelectVisibleTab { .. }
             | Action::Tick { .. }
-            | Action::ComposeType { .. }
-            | Action::ComposeBackspace
+            | Action::FieldEdit { .. }
             | Action::ComposeComplete
             | Action::ComposeSubmit { .. }
             | Action::ToggleGroup { .. }
@@ -829,6 +863,14 @@ pub enum Effect {
         axis: Axis,
         new_tab: bool,
     },
+    /// The user picked an installed app that is not running: start the bundle at `path` in the
+    /// background and host its window when it has one.
+    LaunchApp {
+        name: String,
+        path: String,
+        axis: Axis,
+        new_tab: bool,
+    },
     /// The terminal's visual-mode cursor turns on or off.
     Visual {
         pane: PaneId,
@@ -892,7 +934,7 @@ pub struct Model {
     /// Rail section shown in the secondary bar. `None`: the bar is closed.
     pub sidebar: Option<Section>,
     /// The text in the new-task box, while it is open.
-    pub compose: Option<String>,
+    pub compose: Option<Field>,
     /// The selected row, while the secondary bar has the keyboard.
     pub list: Option<usize>,
     /// The Apps section's list: names of the apps the shell can host.
@@ -930,6 +972,9 @@ pub struct Model {
     pub(crate) now: u64,
     /// The pane picker, while it is open.
     pub picker: Option<Picker>,
+    /// The apps found installed and the bundles running, as the shell last said (`SetInstalled`).
+    #[serde(skip)]
+    installed: (Vec<Installed>, Vec<String>),
     /// The quit question, while it is up.
     pub confirm: Option<Confirm>,
     /// The key reference overlay is showing.
@@ -977,6 +1022,7 @@ impl Default for Model {
             older_sessions: false,
             now: 0,
             picker: None,
+            installed: (Vec::new(), Vec::new()),
             confirm: None,
             keys: false,
             visual: None,
@@ -1283,7 +1329,7 @@ impl Model {
                 if let Some(names) = names {
                     self.known.names = names;
                 }
-                if self.compose.as_ref() == Some(&line) {
+                if self.compose_line() == Some(&line) {
                     (self.known.paths, self.known.entries, self.known_line) = (paths, entries, Some(line));
                 }
             }
@@ -1487,29 +1533,29 @@ impl Model {
             }
             Action::OpenCompose { text } => {
                 self.leave(effects);
-                self.compose = Some(text.chars().take(MAX_TITLE).collect());
+                self.compose = Some(Field::new(&text, MAX_TITLE));
                 // Paths read for another line say nothing of this one.
                 (self.known.paths, self.known.entries, self.known_line) = (Vec::new(), Vec::new(), None);
             }
-            Action::ComposeType { text } => {
-                // No longer than a task's title may be: a longer one could not be kept.
-                if let Some(line) = &mut self.compose {
-                    let room = MAX_TITLE.saturating_sub(line.chars().count());
-                    line.extend(text.chars().take(room));
-                }
-            }
-            Action::ComposeBackspace => {
-                if let Some(line) = &mut self.compose {
-                    line.pop();
+            Action::FieldEdit { edit } => {
+                if let Some(picker) = &mut self.picker {
+                    // A new filter starts at its first match.
+                    if picker.query.apply(edit) {
+                        picker.selected = 0;
+                    }
+                } else if let Some(field) = &mut self.compose {
+                    field.apply(edit);
                 }
             }
             Action::ComposeComplete => {
-                if let (Some(line), Some(first)) = (&self.compose, self.compose_suggestions().first()) {
-                    self.compose = Some(compose::complete(line, first));
+                let first = self.compose_suggestions().into_iter().next();
+                if let (Some(field), Some(first)) = (&mut self.compose, first) {
+                    let (word, name) = compose::completion(&field.text()[..field.cursor()], &first);
+                    field.splice(word, &name);
                 }
             }
             Action::ComposeSubmit { open } => {
-                let line = self.compose.clone().unwrap_or_default();
+                let line = self.compose_line().cloned().unwrap_or_default();
                 if let Some(id) = self.file_line(&line, None) {
                     self.compose = None;
                     self.start(id, open, effects);
@@ -1638,11 +1684,20 @@ impl Model {
             }
             Action::OpenPicker { axis, new_tab, items } => {
                 self.leave(effects);
-                self.picker = Some(Picker { axis, new_tab, items, query: String::new(), selected: 0 });
+                let installed = offered(&self.installed.0, &self.installed.1, &items);
+                self.picker = Some(Picker { axis, new_tab, items, query: Field::default(), selected: 0, installed });
+            }
+            Action::SetInstalled { apps, running } => {
+                self.installed = (apps, running);
+                if let Some(picker) = &mut self.picker {
+                    picker.installed = offered(&self.installed.0, &self.installed.1, &picker.items);
+                    // The rows changed under the selection: keep it on a row.
+                    picker.selected = picker.selected.min(picker.matches().len().saturating_sub(1));
+                }
             }
             Action::PickerQuery { query } => {
                 if let Some(picker) = &mut self.picker {
-                    picker.query = query;
+                    picker.query = Field::new(&query, 0);
                     picker.selected = 0;
                 }
             }
@@ -1653,18 +1708,6 @@ impl Model {
                         // i64: `delta` comes from the socket and may be any i32.
                         picker.selected = (picker.selected as i64 + delta as i64).rem_euclid(count as i64) as usize;
                     }
-                }
-            }
-            Action::PickerType { text } => {
-                if let Some(picker) = &mut self.picker {
-                    picker.query.push_str(&text);
-                    picker.selected = 0;
-                }
-            }
-            Action::PickerBackspace => {
-                if let Some(picker) = &mut self.picker {
-                    picker.query.pop();
-                    picker.selected = 0;
                 }
             }
             Action::PickerChoose { index } => {
@@ -1683,6 +1726,9 @@ impl Model {
                     // host does not leave an empty tab.
                     Some(PickItem::App { name }) => {
                         effects.push(Effect::HostApp { name, axis: picker.axis, new_tab: picker.new_tab })
+                    }
+                    Some(PickItem::Closed { name, path }) => {
+                        effects.push(Effect::LaunchApp { name, path, axis: picker.axis, new_tab: picker.new_tab })
                     }
                     // Nothing matches: keep the picker open so the user can fix the query.
                     None => self.picker = Some(picker),
@@ -1839,7 +1885,7 @@ impl Model {
     /// The shell has read what the tags of the line in the new-task box may name: what `draft`
     /// says of it will not change by itself.
     pub fn compose_read(&self) -> bool {
-        self.compose.is_some() && self.compose == self.known_line
+        self.compose.is_some() && self.compose_line() == self.known_line.as_ref()
     }
 
     /// The path of the listed repository `line` names with `>name`, for the shell to look in.
@@ -2063,7 +2109,10 @@ impl Model {
 
     /// Names that finish the tag being typed in the new-task box.
     pub fn compose_suggestions(&self) -> Vec<String> {
-        match self.compose.as_deref().and_then(compose::completing) {
+        let Some(field) = &self.compose else { return Vec::new() };
+        let typed = compose::completing(&field.text()[..field.cursor()]);
+        // Paths were read for the end of the line: they finish only a word typed there.
+        match typed.filter(|(mark, _)| *mark != '/' || field.cursor() == field.text().len()) {
             Some(('>', typed)) => compose::suggest(&typed, self.repo_names().map(|(name, _)| name)),
             Some(('@', typed)) => compose::suggest(&typed, self.known.names.agents.iter().map(String::as_str)),
             Some(('$', typed)) => compose::suggest(&typed, self.known.names.skills.iter().map(String::as_str)),
@@ -2072,6 +2121,18 @@ impl Model {
             Some((_, typed)) => compose::suggest(&typed, self.tasks.projects()),
             None => Vec::new(),
         }
+    }
+
+    /// The text field that has the keyboard, and whose it is: the picker's filter, else the
+    /// new-task box.
+    pub fn field(&self) -> Option<(&'static str, &Field)> {
+        let picker = self.picker.as_ref().map(|picker| ("picker", &picker.query));
+        picker.or(self.compose.as_ref().map(|field| ("compose", field)))
+    }
+
+    /// The line in the new-task box.
+    pub fn compose_line(&self) -> Option<&String> {
+        self.compose.as_ref().map(Field::line)
     }
 
     /// The rows of the open section, top to bottom, as the secondary bar draws them.
@@ -2458,6 +2519,7 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::edit::Motion;
     use crate::layout::Axis::{Down, Right};
 
     fn app(window: u32) -> Kind {
@@ -2732,9 +2794,8 @@ mod tests {
         Action::CycleTab { .. },
         Action::CloseTab { .. },
         Action::PickerQuery { .. },
+        Action::SetInstalled { .. },
         Action::PickerMove { .. },
-        Action::PickerType { .. },
-        Action::PickerBackspace,
         Action::PickerChoose { .. },
         Action::ClosePicker,
         Action::ToggleKeys,
@@ -2760,8 +2821,7 @@ mod tests {
         Action::SelectVisibleTab { .. },
         Action::Tick { .. },
         Action::OpenCompose { .. },
-        Action::ComposeType { .. },
-        Action::ComposeBackspace,
+        Action::FieldEdit { .. },
         Action::ComposeComplete,
         Action::ComposeSubmit { .. },
         Action::CloseCompose,
@@ -2844,9 +2904,8 @@ mod tests {
             Action::CycleTab { delta: 1 },
             Action::CloseTab { index: None },
             Action::PickerQuery { query: text() },
+            Action::SetInstalled { apps: Vec::new(), running: Vec::new() },
             Action::PickerMove { delta: 1 },
-            Action::PickerType { text: text() },
-            Action::PickerBackspace,
             Action::PickerChoose { index: None },
             Action::ClosePicker,
             Action::ToggleKeys,
@@ -2869,8 +2928,7 @@ mod tests {
             Action::SelectVisibleTab { index: 0 },
             Action::Tick { now: 0 },
             Action::OpenCompose { text: text() },
-            Action::ComposeType { text: text() },
-            Action::ComposeBackspace,
+            Action::FieldEdit { edit: Edit::Insert(text()) },
             Action::ComposeComplete,
             Action::ComposeSubmit { open: false },
             Action::CloseCompose,
@@ -3302,10 +3360,18 @@ mod tests {
     fn typing_edits_the_filter_and_a_click_opens_its_own_row() {
         let mut m = Model::default();
         picker(&mut m);
-        m.update(Action::PickerType { text: "g".into() });
-        m.update(Action::PickerType { text: "x".into() });
-        m.update(Action::PickerBackspace);
+        m.update(Action::FieldEdit { edit: Edit::Insert("g".into()) });
+        m.update(Action::FieldEdit { edit: Edit::Insert("x".into()) });
+        m.update(Action::FieldEdit { edit: Edit::Delete { to: Motion::Left } });
         assert_eq!(labels(&m), ["Google Chrome", "Google Slides"]);
+        // Moving the cursor keeps the selected row; a changed filter starts at the first again.
+        m.update(Action::PickerMove { delta: 1 });
+        m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::Start, select: false } });
+        assert_eq!(m.picker.as_ref().map(|p| p.selected), Some(1));
+        m.update(Action::FieldEdit { edit: Edit::Insert("x".into()) });
+        m.update(Action::FieldEdit { edit: Edit::Undo });
+        assert_eq!((m.field().map(|(of, field)| (of, field.text())), labels(&m).len()), (Some(("picker", "g")), 2));
+        assert_eq!(m.picker.as_ref().map(|p| p.selected), Some(0));
         // The selection is on row 0; the click is on row 1.
         let effects = m.update(Action::PickerChoose { index: Some(1) });
         assert_eq!(effects, [Effect::HostApp { name: "Google Slides".into(), axis: Down, new_tab: false }]);
@@ -3330,6 +3396,38 @@ mod tests {
         let effects = m.update(Action::PickerChoose { index: None });
         assert_eq!(effects, [Effect::HostApp { name: "Google Chrome".into(), axis: Down, new_tab: false }]);
         assert!(m.picker.is_none());
+    }
+
+    #[test]
+    fn typing_also_offers_installed_apps_that_are_not_running() {
+        let app = |name: &str| Installed { name: name.into(), path: format!("/Applications/{name}.app") };
+        let closed = |name: &str| PickItem::Closed { name: name.into(), path: format!("/Applications/{name}.app") };
+        let mut m = Model::default();
+        // Slack runs. Notes is on the user's own list and does not. Sketch is listed twice.
+        let apps = vec![app("Sketch"), app("Slack"), app("Notes"), app("Sketch"), app("Asana"), app("Slides")];
+        m.update(Action::SetInstalled { apps: apps.clone(), running: vec!["/Applications/Slack.app".into()] });
+        let items = vec![PickItem::Terminal, PickItem::App { name: "Slack".into() }, closed("Notes")];
+        m.update(Action::OpenPicker { axis: Down, new_tab: false, items });
+        // Nothing typed: what it showed before.
+        assert_eq!(labels(&m), ["Terminal", "Slack", "Notes"]);
+        // Running first, then the user's own, then the rest by name; a running app is not offered
+        // again as one to start, and a bundle is offered once.
+        m.update(Action::PickerQuery { query: "s".into() });
+        assert_eq!(labels(&m), ["Slack", "Notes", "Sketch", "Slides", "Asana"]);
+        let rows = m.picker.as_ref().unwrap().matches();
+        assert_eq!(
+            (rows[0], rows[1], rows[2]),
+            (&PickItem::App { name: "Slack".into() }, &closed("Notes"), &closed("Sketch"))
+        );
+        // A scan that ends while the picker is open shows at once; the selection stays on a row.
+        m.update(Action::PickerMove { delta: -1 });
+        m.update(Action::SetInstalled { apps: vec![app("Sketch")], running: Vec::new() });
+        assert_eq!((labels(&m), m.picker.as_ref().map(|p| p.selected)), (vec!["Slack", "Notes", "Sketch"], Some(2)));
+        // Choosing one starts it, by where it is; no tab is made before it has a window.
+        let effects = m.update(Action::PickerChoose { index: None });
+        let path = "/Applications/Sketch.app".to_string();
+        assert_eq!(effects, [Effect::LaunchApp { name: "Sketch".into(), path, axis: Down, new_tab: false }]);
+        assert_eq!((m.picker.is_none(), m.tabs.len()), (true, 1));
     }
 
     #[test]
@@ -3658,12 +3756,20 @@ mod tests {
         m.update(Action::ComposeSubmit { open: false });
         assert_eq!((m.tasks.list.len(), m.mode()), (0, Mode::Compose));
         // Tab finishes the repository being typed; the name need not match in case.
-        m.update(Action::ComposeType { text: "fix zoom #Canvas >AP".into() });
+        m.update(Action::FieldEdit { edit: Edit::Insert("fix zoom #Canvas >AP".into()) });
         assert_eq!(m.compose_suggestions(), ["app", "app-2"], "worktrees too");
         m.update(Action::ComposeComplete);
-        m.update(Action::ComposeType { text: "p1x".into() });
-        m.update(Action::ComposeBackspace);
-        assert_eq!(m.compose.as_deref(), Some("fix zoom #Canvas >app p1"));
+        m.update(Action::FieldEdit { edit: Edit::Insert("p1x".into()) });
+        m.update(Action::FieldEdit { edit: Edit::Delete { to: Motion::Left } });
+        assert_eq!(m.compose.as_ref().map(Field::text), Some("fix zoom #Canvas >app p1"));
+        // Tab finishes the word at the cursor, not the end of the line; ⌘Z takes both steps back.
+        m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::Start, select: false } });
+        m.update(Action::FieldEdit { edit: Edit::Insert(">a".into()) });
+        m.update(Action::ComposeComplete);
+        assert_eq!(m.field().map(|(of, field)| (of, field.text())), Some(("compose", ">app fix zoom #Canvas >app p1")));
+        m.update(Action::FieldEdit { edit: Edit::Undo });
+        m.update(Action::FieldEdit { edit: Edit::Undo });
+        assert_eq!(m.compose_line().map(String::as_str), Some("fix zoom #Canvas >app p1"));
         m.update(Action::ComposeSubmit { open: false });
         let task = &m.tasks.list[0];
         assert_eq!((task.title.as_str(), task.state, task.priority), ("fix zoom", State::Captured, 1));
@@ -3682,8 +3788,8 @@ mod tests {
         );
         // The box holds no more than a title may: a longer task could not be read back.
         m.update(Action::OpenCompose { text: "x".repeat(MAX_TITLE + 50) });
-        m.update(Action::ComposeType { text: "yz".into() });
-        assert_eq!(m.compose.as_ref().map(|line| line.chars().count()), Some(MAX_TITLE));
+        m.update(Action::FieldEdit { edit: Edit::Insert("yz".into()) });
+        assert_eq!(m.compose.as_ref().map(|line| line.text().chars().count()), Some(MAX_TITLE));
         m.update(Action::CloseCompose);
         m.update(Action::TaskFromLine { line: "x".repeat(MAX_TITLE + 1), known: Default::default(), open: false });
         assert_eq!(m.tasks.list.len(), 2);
@@ -3732,7 +3838,7 @@ mod tests {
         });
         assert_eq!((m.compose_suggestions(), m.compose_read()), (list(&["/src/export/", "/src/extra.rs"]), true));
         m.update(Action::ComposeComplete);
-        assert_eq!((m.compose.as_deref(), m.compose_read()), (Some("see /src/export/"), false));
+        assert_eq!((m.compose.as_ref().map(Field::text), m.compose_read()), (Some("see /src/export/"), false));
         m.update(Action::CloseCompose);
         // Tab offers each tag's own names.
         for (typed, offered) in [("@c", vec!["claude", "codex"]), ("$dep", vec!["deploy"])] {
@@ -4270,7 +4376,7 @@ mod tests {
             assert!(mode != Mode::Normal || m.keys, "{what}");
             assert_eq!(m.update(from(Origin::Socket)), [], "{what}");
             assert_eq!((m.tasks.list.len(), m.current_task, m.mode(), m.tabs.len()), (1, None, mode, tabs), "{what}");
-            assert_eq!(m.compose.as_deref(), (what == "the new-task box").then_some("mine"));
+            assert_eq!(m.compose.as_ref().map(Field::text), (what == "the new-task box").then_some("mine"));
         }
         // Under sneak mode's labels too: the mode stays, and so do the tabs.
         let mut m = Model::default();
@@ -4284,7 +4390,7 @@ mod tests {
         m.update(Action::TaskLeave);
         m.update(Action::OpenCompose { text: "mine".into() });
         m.update(Action::ComposeSubmit { open: true });
-        assert_eq!((m.current_task, m.compose.as_deref()), (Some(2), None));
+        assert_eq!((m.current_task, m.compose.as_ref().map(Field::text)), (Some(2), None));
     }
 
     #[test]
@@ -4294,12 +4400,12 @@ mod tests {
         m.update(Action::OpenCompose { text: "fix zoom >app".into() });
         // The task's tab, with a terminal in its repository: as `TaskOpen` does.
         assert_eq!(m.update(Action::ComposeSubmit { open: true }), [Effect::Opened(1)]);
-        assert_eq!((m.compose.as_deref(), m.current_task, m.mode()), (None, Some(1), Mode::Normal));
+        assert_eq!((m.compose.as_ref().map(Field::text), m.current_task, m.mode()), (None, Some(1), Mode::Normal));
         assert_eq!(m.pane(1).and_then(|p| p.cwd.as_deref()), Some("/code/app"));
         // No title: nothing is filed, nothing opens, the box stays.
         m.update(Action::OpenCompose { text: "p1".into() });
         assert_eq!(m.update(Action::ComposeSubmit { open: true }), []);
-        assert_eq!((m.compose.as_deref(), m.tasks.list.len(), m.current_task), (Some("p1"), 1, Some(1)));
+        assert_eq!((m.compose.as_ref().map(Field::text), m.tasks.list.len(), m.current_task), (Some("p1"), 1, Some(1)));
         m.update(Action::CloseCompose);
         m.update(Action::TaskFromLine { line: "ask Ana".into(), known: Default::default(), open: true });
         assert_eq!((m.current_task, m.tasks.list.len()), (Some(2), 2));

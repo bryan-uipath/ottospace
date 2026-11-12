@@ -6,7 +6,7 @@ macOS agent multiplexer: terminals and real app windows tiled in one workspace. 
 
 | Crate | Role | May use |
 |---|---|---|
-| `ottospace-core` | State and rules. `Model::update(Envelope { action, origin }) -> Vec<Effect>` | std, serde. No I/O, UI, clock, threads |
+| `ottospace-core` | State and rules. `Model::update(Envelope { action, origin }) -> Vec<Effect>` | std, serde, unicode-segmentation. No I/O, UI, clock, threads |
 | `ottospace-mac` | macOS calls: AX, ScreenCaptureKit, displays, input | system APIs |
 | `ottospace-sessions` | Reads Claude Code and Codex session files: sessions of a directory, events, snapshot | std, serde, read-only files. No network, clock, writes |
 | `ottospace` | Shell: GPUI views, control socket. Turns input into `Action`s, carries out `Effect`s | everything |
@@ -47,6 +47,8 @@ Rules:
   The run takes keyboard focus while it lasts. Needs
   Accessibility and Screen Recording for the terminal. Use it for anything that moves, parks,
   adopts or restores a real window.
+- `OTTOSPACE_APPS_DIRS` (folders, `:` between them) replaces the folders scanned for installed apps.
+  An E2E run that names none lists none, and never starts an app.
 - A feature is done when both loops cover it. Extend `Request` and the state snapshot when a test
   needs to drive or read something new.
 
