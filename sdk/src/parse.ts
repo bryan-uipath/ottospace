@@ -11,6 +11,7 @@ import type {
   AxTreeReply,
   Axis,
   CaptureReply,
+  Confirm,
   Frame,
   Group,
   Home,
@@ -28,6 +29,7 @@ import type {
   Picker,
   Rect,
   Repo,
+  Running,
   Section,
   Sneak,
   Snapshot,
@@ -112,6 +114,7 @@ function axis(value: unknown, at: string): Axis {
 function mode(value: unknown, at: string): Mode {
   if (value === "normal" || value === "app" || value === "pick") return value;
   if (value === "visual" || value === "list" || value === "compose" || value === "sneak") return value;
+  if (value === "confirm") return value;
   throw wrong(at, "a mode", value);
 }
 
@@ -222,6 +225,19 @@ function picker(value: unknown, at: string): Picker {
   };
 }
 
+function running(value: unknown, at: string): Running {
+  const o = fields(value, at);
+  return {
+    pane: num(o.pane, `${at}.pane`),
+    program: orNull(str)(o.program, `${at}.program`),
+    background: bool(o.background, `${at}.background`),
+  };
+}
+
+function confirm(value: unknown, at: string): Confirm {
+  return { running: list(running)(fields(value, at).running, `${at}.running`) };
+}
+
 function model(value: unknown, at: string): Model {
   const o = fields(value, at);
   return {
@@ -238,6 +254,7 @@ function model(value: unknown, at: string): Model {
     repos: list(repo)(o.repos, `${at}.repos`),
     tasks: { list: list(task)(fields(o.tasks, `${at}.tasks`).list, `${at}.tasks.list`) },
     picker: orNull(picker)(o.picker, `${at}.picker`),
+    confirm: orNull(confirm)(o.confirm, `${at}.confirm`),
     keys: bool(o.keys, `${at}.keys`),
     visual: orNull(num)(o.visual, `${at}.visual`),
     ax_overlay: bool(o.ax_overlay, `${at}.ax_overlay`),

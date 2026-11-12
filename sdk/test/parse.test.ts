@@ -27,6 +27,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       repos: [],
       tasks: { list: [] },
       picker: null,
+      confirm: null,
       keys: false,
       visual: null,
       ax_overlay: overlay !== null,

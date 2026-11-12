@@ -7,5 +7,6 @@ pub mod display;
 pub mod hotkey;
 pub mod icon;
 pub mod input;
+pub mod process;
 pub mod recovery;
 pub mod window;

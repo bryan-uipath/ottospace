@@ -26,6 +26,7 @@ use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::compose;
 use ottospace_core::keys::{self, Mods};
 use ottospace_core::list::{ListKey, list_key};
+use ottospace_core::model::CONFIRM_UP;
 use ottospace_core::rules::{self, Facts};
 use ottospace_core::settings::{Installed, closed_apps};
 use ottospace_core::tasks::{Assign, Group, MAX_TITLE, State, Task, TaskId};
@@ -42,6 +43,7 @@ use screencapturekit::prelude::*;
 
 mod ax_debug;
 mod config;
+mod confirm;
 mod control;
 mod home;
 mod menus;
@@ -317,6 +319,7 @@ const KEYS_TERMINAL: &[(&str, &str)] = &[
     ("⌘N", "New task: type a line, ↵ files it"),
     ("⌘⇧N", "Next task: show the tabs of the first that needs you"),
     ("⌘H", "Hide ottospace"),
+    ("⌘Q", "Quit: asks first while a terminal runs"),
 ];
 const KEYS_LIST: &[(&str, &str)] = &[
     ("J K / ↓ ↑", "Move the selection"),
@@ -574,9 +577,16 @@ impl Workspace {
                 }
             }),
             // Before the key's binding runs, so every ⌘ shortcut leaves sneak mode and then acts,
-            // also one whose handler changes no state (⌘C, ⌘V).
+            // also one whose handler changes no state (⌘C, ⌘V). The quit question takes the key
+            // whole: no binding and no key handler sees it.
             cx.intercept_keystrokes(move |event, window, cx| {
-                let _ = this.update(cx, |this, cx| this.shortcut_leaves_sneak(&event.keystroke, window, cx));
+                let taken = this.update(cx, |this, cx| {
+                    this.confirm_intercepts(&event.keystroke, window, cx)
+                        || this.shortcut_leaves_sneak(&event.keystroke, window, cx)
+                });
+                if taken.unwrap_or(false) {
+                    cx.stop_propagation();
+                }
             }),
             cx.on_app_quit(|this, _| {
                 this.hosted.drain().for_each(|(_, hosted)| hosted.release());
@@ -797,6 +807,14 @@ impl Workspace {
                     }
                 }
                 Effect::Activate { id } => self.activate(id, window, cx),
+                Effect::Quit => {
+                    // A moment later, so a socket `quit` gets its reply first.
+                    cx.spawn(async move |_, cx| {
+                        cx.background_executor().timer(Duration::from_millis(100)).await;
+                        let _ = cx.update(|cx| cx.quit());
+                    })
+                    .detach();
+                }
                 Effect::Live(id) => {
                     self.live_since = Some(Instant::now());
                     if let Some(hosted) = self.hosted.get_mut(id) {
@@ -956,6 +974,11 @@ impl Workspace {
                 let _ = reply.send(control::error(sneak::ON));
                 continue;
             }
+            // Nor under the quit question: a client's click outside the box would cancel it.
+            if pointer && self.model.confirm.is_some() {
+                let _ = reply.send(control::error(CONFIRM_UP));
+                continue;
+            }
             if let Some(why) = control::pointer_refusal(&request, std::env::var_os("OTTOSPACE_E2E").is_some()) {
                 let _ = reply.send(control::error(why));
                 continue;
@@ -998,10 +1021,10 @@ impl Workspace {
                 self.inject(events, reply, window, cx);
                 continue;
             }
-            let quit = matches!(request, Request::Quit);
             let mut failure: Option<String> = None;
             let action = match request {
-                Request::State | Request::Quit => None,
+                Request::State => None,
+                Request::Quit => Some(Action::Quit),
                 Request::OpenApp { name, axis } => {
                     failure = self.open_app(&name, axis, false, window, cx).err();
                     None
@@ -1053,6 +1076,13 @@ impl Workspace {
                 // They would open over the labels: the core drops them, so say why.
                 Request::Picker { .. } | Request::AxOverlay { .. } if self.model.sneak.is_some() => {
                     failure = Some(sneak::ON.into());
+                    None
+                }
+                // These dispatch by themselves: the core's refusal would be a silent ok.
+                Request::Picker { .. } | Request::AxOverlay { .. } | Request::Compose { .. }
+                    if self.model.confirm.is_some() =>
+                {
+                    failure = Some(CONFIRM_UP.into());
                     None
                 }
                 Request::Picker { axis, new_tab } => {
@@ -1266,14 +1296,6 @@ impl Workspace {
                 }
             }
             let _ = reply.send(failure.map_or_else(|| self.snapshot(window, cx), |message| control::error(&message)));
-            if quit {
-                // Quit a moment later, so the connection thread can write the reply first.
-                cx.spawn(async move |_, cx| {
-                    cx.background_executor().timer(Duration::from_millis(100)).await;
-                    let _ = cx.update(|cx| cx.quit());
-                })
-                .detach();
-            }
         }
     }
 
@@ -1341,13 +1363,21 @@ impl Workspace {
             let labelled = |cx: &App| this.read_with(cx, |this, _| this.model.sneak.is_some()).unwrap_or(false);
             // The key handlers run as for a real key, outside this call, but the client presses.
             let before = this.update(cx, |this, _| this.swap_origin(Origin::Socket));
-            let mut refused = false;
+            let mut refused = None;
             for keystroke in keystrokes {
                 let was = labelled(cx);
                 // Under the user's labels a client types a label or leaves, and nothing else:
                 // its ⌘ shortcut would end the mode, and the user's next letter reach a terminal.
-                refused = was && !sneak::takes(&keystroke);
-                if refused {
+                // Under the quit question it answers (↵, Q, Esc), and nothing else.
+                let unanswered = |this: &Self| {
+                    this.model.confirm.is_some() && this.confirm_answer(&keystroke, Origin::Socket).is_none()
+                };
+                refused = if was && !sneak::takes(&keystroke) {
+                    Some(sneak::ON)
+                } else {
+                    this.read_with(cx, |this, _| unanswered(this)).unwrap_or(false).then_some(CONFIRM_UP)
+                };
+                if refused.is_some() {
                     break;
                 }
                 window.dispatch_keystroke(keystroke, cx);
@@ -1358,7 +1388,7 @@ impl Workspace {
             }
             let state = this.update(cx, |this, cx| {
                 this.input = before.unwrap_or(Origin::User);
-                if refused { control::error(sneak::ON) } else { this.snapshot(window, cx) }
+                refused.map_or_else(|| this.snapshot(window, cx), control::error)
             });
             let _ = reply.send(state.unwrap_or_else(|_| control::error("ottospace is closing")));
         });
@@ -1734,7 +1764,9 @@ impl Workspace {
         // The core would drop the move behind a box or in visual mode. Wait: do not come
         // forward either, which would only take the app away from the user. Sneak mode waits
         // too: the core keeps the keyboard under the labels.
-        if self.model.keys || matches!(self.model.mode(), Mode::Pick | Mode::Compose | Mode::Visual | Mode::Sneak) {
+        if self.model.keys
+            || matches!(self.model.mode(), Mode::Pick | Mode::Compose | Mode::Visual | Mode::Sneak | Mode::Confirm)
+        {
             return;
         }
         self.wanted = None;
@@ -3102,6 +3134,7 @@ impl Workspace {
                 ("SNEAK", "type a label · esc leaves · the accessibility overlay is hidden (⌘⌃A shows it)")
             }
             Mode::Sneak => ("SNEAK", "type a label · esc leaves"),
+            Mode::Confirm => ("QUIT?", ""),
         };
         let hint = hint.to_string();
         let focused = match self.model.focused.and_then(|id| self.model.pane(id)).map(|p| &p.kind) {
@@ -3376,6 +3409,7 @@ impl Render for Workspace {
                 this.dispatch(Action::FocusCycle { delta: -1 }, this.input, window, cx);
             }))
             .on_action(cx.listener(|_, _: &Zoom, window, _| window.zoom_window()))
+            .on_action(cx.listener(|this, _: &Quit, window, cx| this.ask_quit(window, cx)))
             .on_action(cx.listener(|this, _: &ShowKeys, window, cx| {
                 this.dispatch(Action::ToggleKeys, this.input, window, cx);
             }))
@@ -3480,6 +3514,7 @@ impl Render for Workspace {
             .children(self.model.picker.as_ref().map(|picker| self.render_picker(picker, cx)))
             .children(self.model.compose.as_ref().map(|line| self.render_compose(line, cx)))
             .when(self.model.keys, |d| d.child(self.render_keys(cx)))
+            .children(self.model.confirm.as_ref().map(|confirm| self.render_confirm(confirm, cx)))
     }
 }
 
@@ -3651,9 +3686,10 @@ fn main() {
             KeyBinding::new("cmd-n", NewTask, None),
             KeyBinding::new("cmd-shift-n", NextTask, None),
             KeyBinding::new("cmd-h", Hide, None),
+            // Asks first while a terminal runs (`ask_quit`): ⌘Q sits next to ⌘W.
+            KeyBinding::new("cmd-q", Quit, None),
         ]);
         // The menu bar lists the same actions; the app-level ones are handled here.
-        cx.on_action(|_: &Quit, cx| cx.quit());
         cx.on_action(|_: &Hide, cx| cx.hide());
         cx.set_menus(menus::app_menus());
         let mut bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
@@ -3681,8 +3717,25 @@ fn main() {
             focus: !quiet,
             ..Default::default()
         };
-        cx.open_window(options, |window, cx| cx.new(|cx| Workspace::new(hosting, host_only, control, window, cx)))
+        let workspace = cx
+            .open_window(options, |window, cx| cx.new(|cx| Workspace::new(hosting, host_only, control, window, cx)))
             .expect("open window");
+        // Quit comes here from the menu when the window is not the active one (minimised, say):
+        // the workspace handles it first otherwise. Either way it may ask.
+        cx.on_action(move |_: &Quit, cx| {
+            if workspace.update(cx, |this, window, cx| this.ask_quit(window, cx)).is_err() {
+                cx.quit();
+            }
+        });
+        // The red close button asks the same question; `Effect::Quit` ends the app, not the click.
+        let _ = workspace.update(cx, |_, window, cx| {
+            window.on_window_should_close(cx, |window, cx| {
+                if let Some(Some(workspace)) = window.root::<Workspace>() {
+                    workspace.update(cx, |this, cx| this.ask_quit(window, cx));
+                }
+                false
+            });
+        });
         cx.on_window_closed(|cx| cx.quit()).detach();
         if hosting {
             cx.activate(true);

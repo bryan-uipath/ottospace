@@ -47,7 +47,7 @@ ottospace ctl '{"cmd":"state"}'
 
 | Field | Meaning |
 |---|---|
-| `mode` | `normal`, `app` (a hosted app has the keyboard), `pick` (the picker is open), `visual` (selecting terminal text with the keyboard), `list` (the secondary bar has the keyboard), `compose` (the new-task box is open) or `sneak` (labels are on ottospace's controls; a typed label activates one) |
+| `mode` | `normal`, `app` (a hosted app has the keyboard), `pick` (the picker is open), `visual` (selecting terminal text with the keyboard), `list` (the secondary bar has the keyboard), `compose` (the new-task box is open), `confirm` (the quit question is up) or `sneak` (labels are on ottospace's controls; a typed label activates one) |
 | `state.list` | Null, or the index of the selected row of the open section: the secondary bar has the keyboard (`mode` is `list`, or `pick` while the picker is open over it) |
 | `state.panes` | Every pane of every tab: `id`, `kind`, and `cwd` for a terminal opened by `open_repo`. `kind` is an object: `{"type":"terminal"}`, `{"type":"empty"}` or `{"type":"app","window":N,"title":"..."}` |
 | `state.tabs`, `state.active` | Every tab (`id`, `title`, and `task`: the id of the task it belongs to, or null) and the index of the one showing. Requests take the index, not the `id` |
@@ -57,6 +57,7 @@ ottospace ctl '{"cmd":"state"}'
 | `state.layout` | The active tab's split tree, or null: `{"leaf":3}` or `{"split":{"axis":"right","ratio":0.5,"a":..,"b":..}}`. `ratio` is the share of the split that `a` (the left or top side) takes |
 | `state.live` | The app pane that has the keyboard, if any |
 | `state.picker` | Null, or the open picker: `axis`, `new_tab`, `items` (`{"type":"terminal"}` or `{"type":"app","name":"..."}`), `query`, and `selected` (an index into the items that match `query`) |
+| `state.confirm` | Null, or the quit question the user raised (⌘Q, the menu's Quit, the window's close button): `running`, the terminals a quit would end something in, each `pane`, `program` (its name, or null) and `background` (false: the program in front of the shell; true: a background or stopped job of the shell). It is the user's to answer: only the user's own keys and clicks cancel it. From the socket, while it is up: `key` with `enter` or `q` quits and `key` with `escape` cancels; any other `key` (also `cmd-q`), every pointer request (`mouse_down`, `mouse_drag`, `mouse`, `drag`) and every request that would take the keyboard (`enter`, `picker`, `compose`, `keys`, `ax_overlay`) fails with `the quit question is up` and changes nothing. Every other request runs underneath and leaves it up, e.g. `split`, `focus`, `close`, `new_tab`, `type`, `scroll`. A pane that closes leaves `running`; when it empties the question goes away, and ottospace does not quit. `quit` never asks, and quits under the question too |
 | `state.keys` | True while the key reference covers the window |
 | `state.sidebar` | The open rail section, or null |
 | `terminals.<id>` | `cols`, `rows`, and `lines`: the visible text of that terminal pane. Also `history` (lines scrolled off the top), `display_offset` (how far the view is scrolled back; 0 is the bottom), `selection` (the selected text, or null) and `visual_cursor` |

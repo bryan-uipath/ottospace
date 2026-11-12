@@ -87,6 +87,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘1 … ⌘9 | Select a tab on the bar |
 | ⌘⇧] / ⌘⇧[ or ⌃Tab / ⌃⇧Tab | Next / previous tab |
 | ⌘⇧W | Close the tab and its panes |
+| ⌘Q | Quit. While a terminal runs something (a program in front of its shell, or a background or stopped job) it asks first, and lists them: ↵, Q or ⌘Q again quits; Esc, any other key or any other shortcut cancels and does nothing else |
 | Wheel / trackpad | Scroll a terminal back through its history |
 | ⇧PageUp / ⇧PageDown | Scroll a terminal a page |
 | ⇧Home / ⇧End | Top / bottom of a terminal's history |
@@ -98,6 +99,28 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⇧E | List mode: the bar (Apps, Tasks, Repos) takes the keyboard. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; Esc or ⌘⇧E leaves |
 | ⌘⌃G | Sneak mode: every control ottospace draws (rail icons, bar rows, tabs and their ×, top-bar buttons, pane headers and their ×, each pane, the home screen's line, rows and nodes) gets a short label, home-row letters first. Type a label and the control does what a click does; a pane's label focuses it, or gives an app pane the keyboard. A × (pane or tab) always has a two-letter label. Two-letter labels narrow on the first letter; ⌫ takes it back. Esc, a click, a letter that goes on with no label, or any ⌘ shortcut leaves; the shortcut then runs (⌘C copies, ⌘V pastes). Other keys do nothing. The labels follow what is drawn: if a control moves its label moves, and if it goes its label goes. What happens by itself (a shell exits, an agent files a task) does not end the mode. Starting it hides the accessibility overlay (⌘⌃A). Not ⌃G alone: a terminal needs that key. On a keyboard layout with no Latin letters, the keys type the letters they have under ⌘. From `APP` mode return first. Controls inside a hosted app's window get no label. Sneak presses no control inside another app and sets no value; entering an app pane raises its window, as a click on the pane does |
 | ⌘⇧C | Visual mode on the terminal: `hjkl`/arrows, `w b e 0 ^ $`, `H M L` move; `v` / `V` select; `y` or ↵ copies and leaves; Esc leaves |
+
+**The quit question.** ⌘Q, Quit in the menu and the window's red close button all ask the same
+question (status chip `QUIT?`). A quit ends every terminal and what runs in it, so it asks when:
+
+| In a terminal | Asks? |
+|---|---|
+| A shell at its prompt, no jobs | No |
+| A program in front of the shell: `cargo`, `vim`, `ssh`, an agent waiting at its own prompt | Yes |
+| A background or stopped job of the shell (`sleep 100 &`, a ⌃Z'd `vim`) | Yes: listed as `sleep (background)` |
+| A job that is no longer the shell's child (it forked away, as a daemon does) | No |
+| `tmux`, `screen` or a nested shell in the pane | Yes, always |
+| A program the shell `exec`'d: it took the shell's place | No |
+| A shell that exited, pane not closed yet | No |
+
+- While the question is up, ↵, Q or ⌘Q quits. Every other key or shortcut cancels it and does
+  nothing else: ⌘W closes nothing, ⌘V pastes nothing. A held key answers nothing. A click outside
+  the box cancels.
+- A terminal that closes by itself leaves the list. When the list empties the question goes away;
+  ottospace does not quit.
+- Not asked: Quit in the Dock menu, and logout, restart or shutdown. macOS ends the app directly
+  there, and GPUI 0.2.2 gives no hook to answer first. The socket's `quit` never asks.
+- A shell whose prompt keeps a helper process as its child is asked about every time.
 
 Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
 

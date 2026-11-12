@@ -129,6 +129,15 @@ pub fn stay_in_background() {
     NSApplication::sharedApplication(mtm).setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 }
 
+/// True while the event being handled is a key held down, repeating. An action bound to a key
+/// does not see this, and a held ⌘Q must not answer its own question.
+pub fn key_repeating() -> bool {
+    let Some(mtm) = MainThreadMarker::new() else { return false };
+    let event = NSApplication::sharedApplication(mtm).currentEvent();
+    // Only a key event has `isARepeat`: asking another kind raises.
+    event.is_some_and(|event| event.r#type() == NSEventType::KeyDown && event.isARepeat())
+}
+
 /// Shows `icon` (the bytes of an .icns or image file) in the Dock and the app switcher.
 /// A bare binary has no bundle to take an icon from, so without this it gets the generic one.
 /// Does nothing off the main thread or if the bytes are not an image.
