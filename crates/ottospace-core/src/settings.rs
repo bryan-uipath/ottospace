@@ -29,6 +29,17 @@ pub struct Settings {
     /// Choosing one starts it.
     #[serde(default)]
     pub apps: Vec<String>,
+    #[serde(default)]
+    pub routines: Routines,
+}
+
+/// `{ "routines": { "socket": "~/.ottobot/otto.sock" } }`
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Routines {
+    /// The ottobot daemon's socket. Default: `~/.ottobot/otto.sock`.
+    #[serde(default)]
+    pub socket: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -158,6 +169,10 @@ mod tests {
         assert_eq!(settings, Settings::parse("{}").unwrap());
         assert_eq!((settings.terminal.font.as_str(), settings.terminal.font_size), ("Menlo", 13.));
         assert_eq!((settings.terminal.line_height(), settings.repos, settings.tasks), (18., None, None));
+        assert_eq!(settings.routines.socket, None);
+        let named = Settings::parse(r#"{"routines": {"socket": "~/otto.sock"}}"#).unwrap();
+        assert_eq!(named.routines.socket.as_deref(), Some("~/otto.sock"));
+        assert!(Settings::parse(r#"{"routines": {"sock": "x"}}"#).is_err());
     }
 
     #[test]

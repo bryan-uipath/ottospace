@@ -10,6 +10,7 @@ pub mod list;
 pub mod model;
 pub mod palette;
 pub mod repos;
+pub mod routines;
 pub mod rules;
 pub mod settings;
 pub mod tasks;

@@ -238,6 +238,14 @@ pub enum Request {
         #[serde(default)]
         refresh: bool,
     },
+    /// The Routines section as it is listed: `{"ok":true,"routines":{"socket":..,"daemon":{..},
+    /// "rows":[..],"list":[..],"quota":[..]}}`, not the state. Read from the ottobot daemon.
+    Routines,
+    /// Asks the ottobot daemon to run a routine now: an unattended agent run. Refused while the
+    /// routine runs. The reply is the `routines` reply, once the daemon has answered.
+    RoutineRun {
+        name: String,
+    },
     Quit,
 }
 

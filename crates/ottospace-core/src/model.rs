@@ -7,6 +7,7 @@ use crate::home::{self, Home};
 use crate::layout::{Axis, Dir, Node, Rect};
 use crate::list::ListRow;
 use crate::repos::{self, Repo};
+use crate::routines::{self, Routines};
 use crate::tasks::{MAX_TITLE, State, Task, TaskId, Tasks};
 
 pub type PaneId = u32;
@@ -109,6 +110,7 @@ pub enum Section {
     Workbook,
     Tasks,
     Repos,
+    Routines,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -317,6 +319,28 @@ pub enum Action {
     },
     ListHold,
     ListDismiss,
+    /// Replace what is known of the routines with the shell's last poll, made at `now`.
+    RoutinesUpdated {
+        routines: Routines,
+        now: u64,
+    },
+    /// Ask the daemon to run a routine now. Refused if it is running already.
+    RoutineRun {
+        name: String,
+    },
+    /// What the daemon answered to a run request. `None`: it took it.
+    RoutineRunResult {
+        name: String,
+        error: Option<String>,
+    },
+    /// Follow a run's output in a new terminal pane.
+    RoutineFollow {
+        run: String,
+        axis: Axis,
+    },
+    /// Run the selected row's routine, or open its run's report.
+    ListRun,
+    ListReport,
 }
 
 /// What the shell must do after an update.
@@ -339,6 +363,20 @@ pub enum Effect {
     Visual {
         pane: PaneId,
         on: bool,
+    },
+    /// Send the daemon one run request for this routine. Never sent again for this effect.
+    RoutineRun {
+        name: String,
+    },
+    /// The new terminal pane shows this run's output: start `routine-tail` in it.
+    RoutineFollow {
+        pane: PaneId,
+        run: String,
+    },
+    /// Open a run's report with the system's handler, if it is a report file under `store_dir`.
+    OpenReport {
+        path: String,
+        store_dir: String,
     },
 }
 
@@ -389,6 +427,15 @@ pub struct Model {
     /// The Repos section's list, as last read from disk.
     pub repos: Vec<Repo>,
     pub tasks: Tasks,
+    /// The Routines section: the daemon's last snapshot, and when it was taken. Not in the
+    /// state: the `routines` request replies with it.
+    #[serde(skip)]
+    pub routines: Routines,
+    #[serde(skip)]
+    pub routines_at: u64,
+    /// What the last run, follow or report request came to, for the top of the section.
+    #[serde(skip)]
+    pub routines_note: Option<String>,
     /// The pane picker, while it is open.
     pub picker: Option<Picker>,
     /// The key reference overlay is showing.
@@ -418,6 +465,9 @@ impl Default for Model {
             apps: Vec::new(),
             repos: Vec::new(),
             tasks: Tasks::default(),
+            routines: Routines::default(),
+            routines_at: 0,
+            routines_note: None,
             picker: None,
             keys: false,
             visual: None,
@@ -477,6 +527,7 @@ impl Model {
             Action::Split { .. }
                 | Action::OpenRepo { .. }
                 | Action::TaskOpen { .. }
+                | Action::RoutineFollow { .. }
                 | Action::FocusList
                 | Action::ListSection { .. }
                 | Action::ListChoose { .. }
@@ -811,7 +862,7 @@ impl Model {
             }
             Action::ListSection { delta } => {
                 // Workbook has no rows yet, so the keys pass over it.
-                const ORDER: [Section; 3] = [Section::Apps, Section::Tasks, Section::Repos];
+                const ORDER: [Section; 4] = [Section::Apps, Section::Tasks, Section::Repos, Section::Routines];
                 let at = ORDER.iter().position(|s| Some(*s) == self.sidebar).unwrap_or(0) as i32;
                 if self.list.is_some() {
                     self.sidebar = Some(ORDER[(at + delta).rem_euclid(ORDER.len() as i32) as usize]);
@@ -826,6 +877,11 @@ impl Model {
                     self.list = None;
                     self.act(Action::TaskOpen { id: Some(id) }, effects);
                 }
+                // The row's run, or a routine's latest. Its pane takes the keyboard.
+                Some(ListRow::Routine(_)) => match self.selected_routine_row().and_then(|row| row.run) {
+                    Some(run) => self.act(Action::RoutineFollow { run, axis }, effects),
+                    None => self.routines_note = Some("nothing has run yet".into()),
+                },
                 None => {}
             },
             Action::ListSnooze { until } => {
@@ -841,6 +897,46 @@ impl Model {
             Action::ListDismiss => {
                 if let Some(id) = self.selected_task() {
                     self.tasks.dismiss(id);
+                }
+            }
+            Action::RoutinesUpdated { routines, now } => (self.routines, self.routines_at) = (routines, now),
+            Action::RoutineRun { name } => match self.routines.can_run(&name) {
+                Ok(()) => effects.push(Effect::RoutineRun { name }),
+                Err(why) => self.routines_note = Some(why),
+            },
+            Action::RoutineRunResult { name, error } => {
+                let name = routines::plain(&name);
+                self.routines_note = Some(match error {
+                    None => format!("asked ottobot to run {name}"),
+                    Some(why) => format!("{name}: {}", routines::plain(&why)),
+                });
+            }
+            // Only a run the daemon listed, with an id that is safe on a command line.
+            Action::RoutineFollow { run, axis } => {
+                if routines::safe_id(&run) && self.routines.runs.iter().any(|r| r.id == run) {
+                    self.routines_note = None;
+                    self.open(Kind::Terminal, axis, None, effects);
+                    if let Some(pane) = self.focused {
+                        effects.push(Effect::RoutineFollow { pane, run });
+                    }
+                } else {
+                    self.routines_note = Some("that run is not among the daemon's last runs".into());
+                }
+            }
+            Action::ListRun => {
+                if let Some(name) = self.selected_routine_row().and_then(|row| row.routine) {
+                    self.act(Action::RoutineRun { name }, effects);
+                }
+            }
+            Action::ListReport => {
+                if let Some(row) = self.selected_routine_row() {
+                    match row.report {
+                        Some(path) => {
+                            self.routines_note = None;
+                            effects.push(Effect::OpenReport { path, store_dir: self.routines.store_dir.clone() });
+                        }
+                        None => self.routines_note = Some("no report for this row".into()),
+                    }
                 }
             }
             Action::OpenPicker { axis, new_tab, items } => {
@@ -982,8 +1078,19 @@ impl Model {
                 paths.map(ListRow::Repo).collect()
             }
             Some(Section::Tasks) => self.tasks.inbox().into_iter().map(|(_, task)| ListRow::Task(task.id)).collect(),
+            Some(Section::Routines) => self.routine_rows().into_iter().map(|row| ListRow::Routine(row.key)).collect(),
             Some(Section::Workbook) | None => Vec::new(),
         }
+    }
+
+    /// The Routines section's rows, as of the last poll.
+    pub fn routine_rows(&self) -> Vec<routines::Row> {
+        self.routines.rows(self.routines_at)
+    }
+
+    fn selected_routine_row(&self) -> Option<routines::Row> {
+        let at = self.list.filter(|_| self.sidebar == Some(Section::Routines))?;
+        self.routine_rows().into_iter().nth(at)
     }
 
     fn selected_task(&self) -> Option<TaskId> {
@@ -1701,7 +1808,9 @@ mod tests {
         m.update(Action::SetApps { names: vec!["Notes".into(), "Safari".into()] });
         m.update(Action::ToggleSection { section: Section::Repos });
         m.update(Action::FocusList);
-        m.update(Action::ListSection { delta: 1 }); // after Repos comes Apps
+        m.update(Action::ListSection { delta: 1 }); // after Repos comes Routines, then Apps again
+        assert_eq!(m.sidebar, Some(Section::Routines));
+        m.update(Action::ListSection { delta: 1 });
         m.update(Action::ListMove { delta: 1 });
         assert_eq!((m.sidebar, m.list), (Some(Section::Apps), Some(1)));
         // The shell hosts the app; until it opens a pane, the list keeps the keyboard.
@@ -2151,5 +2260,94 @@ mod tests {
         m.update(Action::Enter { pane: 1 });
         m.update(Action::Close { pane: Some(1) });
         assert_eq!(m.mode(), Mode::Normal);
+    }
+
+    /// A daemon with two routines; `busy` runs now, `nightly` ran and left a report.
+    fn routines() -> Routines {
+        use crate::routines::Status;
+        use crate::routines::tests::{routine, run, up};
+        let mut busy = routine("busy", None);
+        busy.active_run = Some("r2".into());
+        let mut done = run("r1", "nightly", Status::Succeeded, 1);
+        done.report = Some("/store/reports/r1.html".into());
+        Routines {
+            list: vec![routine("nightly", Some(1)), busy],
+            runs: vec![run("r2", "busy", Status::Running, 0), done],
+            ..up()
+        }
+    }
+
+    #[test]
+    fn a_routine_is_run_once_and_not_while_it_runs() {
+        let mut m = Model::default();
+        // Before the first poll the daemon counts as absent.
+        assert_eq!(m.update(Action::RoutineRun { name: "nightly".into() }), []);
+        assert_eq!(m.routines_note.as_deref(), Some("ottobot daemon not running"));
+        m.update(Action::RoutinesUpdated { routines: routines(), now: 0 });
+        assert_eq!(
+            m.update(Action::RoutineRun { name: "nightly".into() }),
+            [Effect::RoutineRun { name: "nightly".into() }]
+        );
+        m.update(Action::RoutineRunResult { name: "nightly".into(), error: None });
+        assert_eq!(m.routines_note.as_deref(), Some("asked ottobot to run nightly"));
+        assert_eq!(m.update(Action::RoutineRun { name: "busy".into() }), []);
+        assert_eq!(m.routines_note.as_deref(), Some("busy is already running"));
+        assert_eq!(m.update(Action::RoutineRun { name: "gone".into() }), []);
+        assert_eq!(m.routines_note.as_deref(), Some("no routine gone"));
+        m.update(Action::RoutineRunResult { name: "nightly".into(), error: Some("no answer\nin time".into()) });
+        assert_eq!(m.routines_note.as_deref(), Some("nightly: no answer in time"));
+    }
+
+    #[test]
+    fn list_keys_run_follow_and_open_the_report_of_a_routine_row() {
+        let mut m = Model::default();
+        m.update(Action::RoutinesUpdated { routines: routines(), now: 0 });
+        m.update(Action::ToggleSection { section: Section::Routines });
+        m.update(Action::FocusList);
+        // Now: busy. Next: nightly, busy.
+        let keys = ["run:r2", "routine:nightly", "routine:busy"].map(|key| ListRow::Routine(key.into()));
+        assert_eq!(m.list_rows(), keys);
+        assert_eq!(m.update(Action::ListReport), []);
+        assert_eq!(m.routines_note.as_deref(), Some("no report for this row"));
+        m.update(Action::ListMove { delta: 1 });
+        assert_eq!(m.update(Action::ListRun), [Effect::RoutineRun { name: "nightly".into() }]);
+        let report = Effect::OpenReport { path: "/store/reports/r1.html".into(), store_dir: "/store".into() };
+        assert_eq!(m.update(Action::ListReport), [report]);
+        // ↵ follows the routine's latest run in a new terminal pane, which takes the keyboard.
+        let follow = Effect::RoutineFollow { pane: 1, run: "r1".into() };
+        assert_eq!(m.update(Action::ListChoose { axis: Right }), [Effect::Opened(1), follow]);
+        assert_eq!((m.mode(), m.pane(1).map(|p| &p.kind)), (Mode::Normal, Some(&Kind::Terminal)));
+        // A run the daemon did not list, or an id that is not a plain word, opens nothing.
+        for run in ["r9", "r1; rm -rf ~"] {
+            assert_eq!(m.update(Action::RoutineFollow { run: run.into(), axis: Right }), []);
+        }
+        assert_eq!(m.panes.len(), 1);
+        // The task keys do nothing on a routine row.
+        m.update(Action::FocusList);
+        assert_eq!((m.update(Action::ListDismiss), m.update(Action::ListHold)), (vec![], vec![]));
+    }
+
+    #[test]
+    fn an_update_that_drops_a_routine_keeps_the_selection_on_a_row() {
+        let mut m = Model::default();
+        m.update(Action::RoutinesUpdated { routines: routines(), now: 0 });
+        m.update(Action::ToggleSection { section: Section::Routines });
+        m.update(Action::FocusList);
+        m.update(Action::ListMove { delta: -1 }); // the last row: busy, under Next
+        assert_eq!(m.list, Some(2));
+        // A row that moves is followed.
+        let mut fewer = routines();
+        fewer.runs.remove(0);
+        fewer.list[1].active_run = None;
+        m.update(Action::RoutinesUpdated { routines: fewer.clone(), now: 0 });
+        assert_eq!((m.list_rows().len(), m.list), (2, Some(1)));
+        // Its routine is gone: the selection stays in range.
+        fewer.list.pop();
+        m.update(Action::RoutinesUpdated { routines: fewer, now: 0 });
+        assert_eq!((m.list_rows(), m.list), (vec![ListRow::Routine("routine:nightly".into())], Some(0)));
+        // The daemon goes away: one row, selected.
+        m.update(Action::RoutinesUpdated { routines: Routines::default(), now: 0 });
+        assert_eq!((m.list_rows(), m.list), (vec![ListRow::Routine("daemon".into())], Some(0)));
+        assert_eq!((m.update(Action::ListRun), m.update(Action::ListChoose { axis: Right })), (vec![], vec![]));
     }
 }

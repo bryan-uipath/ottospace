@@ -42,7 +42,9 @@ mod config;
 mod control;
 mod home;
 mod menus;
+mod ottobot;
 mod repos;
+mod routines;
 mod terminal;
 use control::{Call, PaneKind, Request};
 use terminal::Terminal;
@@ -233,6 +235,7 @@ impl AssetSource for Assets {
             "icons/workbook.svg" => Some(include_bytes!("../assets/icons/workbook.svg")),
             "icons/tasks.svg" => Some(include_bytes!("../assets/icons/tasks.svg")),
             "icons/repos.svg" => Some(include_bytes!("../assets/icons/repos.svg")),
+            "icons/routines.svg" => Some(include_bytes!("../assets/icons/routines.svg")),
             "icons/split-right.svg" => Some(include_bytes!("../assets/icons/split-right.svg")),
             "icons/split-down.svg" => Some(include_bytes!("../assets/icons/split-down.svg")),
             "icons/plus.svg" => Some(include_bytes!("../assets/icons/plus.svg")),
@@ -300,7 +303,7 @@ const KEYS_TERMINAL: &[(&str, &str)] = &[
     ("⌘C", "Copy the selection"),
     ("⌘V", "Paste"),
     ("⌘⇧C", "Visual mode: select with the keyboard"),
-    ("⌘⇧E", "List mode: keys for the bar (Apps, Tasks, Repos)"),
+    ("⌘⇧E", "List mode: keys for the bar (Apps, Tasks, Repos, Routines)"),
     ("⌘N", "New task: type a line, ↵ files it"),
     ("⌘⇧N", "Next task: show the tabs of the first that needs you"),
     ("⌘H", "Hide ottospace"),
@@ -313,6 +316,8 @@ const KEYS_LIST: &[(&str, &str)] = &[
     ("H", "Task: put on hold"),
     ("X", "Task: dismiss from the inbox"),
     ("U", "Task: undo the last of these"),
+    ("R", "Routine: run it now"),
+    ("O", "Routine: open the run's report"),
     ("Esc", "Leave"),
 ];
 const KEYS_VISUAL: &[(&str, &str)] = &[
@@ -325,11 +330,12 @@ const KEYS_VISUAL: &[(&str, &str)] = &[
 ];
 
 /// Rail sections in order, with their icon and label.
-const SECTIONS: [(Section, &str, &str); 4] = [
+const SECTIONS: [(Section, &str, &str); 5] = [
     (Section::Apps, "icons/apps.svg", "Apps"),
     (Section::Workbook, "icons/workbook.svg", "Workbook"),
     (Section::Tasks, "icons/tasks.svg", "Tasks"),
     (Section::Repos, "icons/repos.svg", "Repos"),
+    (Section::Routines, "icons/routines.svg", "Routines"),
 ];
 
 /// A small label shown when the pointer rests on a rail icon.
@@ -419,6 +425,8 @@ struct Workspace {
     control: Option<Receiver<Call>>,
     /// The accessibility overlay's last read. Drawn while `model.ax_overlay` is on.
     ax_overlay: Option<ax_debug::Overlay>,
+    /// The ottobot daemon's socket and the thread that polls it, for the Routines section.
+    routines: routines::Link,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -482,6 +490,7 @@ impl Workspace {
                 cx.background_executor().timer(Duration::from_millis(16)).await;
                 let alive = this.update_in(cx, |this, window, cx| {
                     this.serve_control(window, cx);
+                    this.sync_routines(window, cx);
                     if hotkey::take_press() {
                         this.return_to_ottospace(window, cx);
                     }
@@ -570,6 +579,7 @@ impl Workspace {
             host_only,
             control,
             ax_overlay: None,
+            routines: routines::Link::start(),
             focus,
             _subscriptions: subscriptions,
         };
@@ -633,6 +643,9 @@ impl Workspace {
                     if let Some(terminal) = self.terminals.get(pane) {
                         terminal.set_visual(*on);
                     }
+                }
+                Effect::RoutineRun { .. } | Effect::RoutineFollow { .. } | Effect::OpenReport { .. } => {
+                    self.routine_effect(effect);
                 }
                 Effect::Live(id) => {
                     self.live_since = Some(Instant::now());
@@ -921,6 +934,14 @@ impl Workspace {
                 Request::AxOverlay { refresh } => {
                     failure = self.toggle_ax_overlay(refresh, window, cx).err();
                     None
+                }
+                Request::Routines => {
+                    let _ = reply.send(self.routines_reply());
+                    continue;
+                }
+                Request::RoutineRun { name } => {
+                    self.routine_run(name, reply, window, cx);
+                    continue;
                 }
             };
             if let Some(action) = action {
@@ -1546,6 +1567,8 @@ impl Workspace {
             Some(ListKey::Hold) => Action::ListHold,
             Some(ListKey::Dismiss) => Action::ListDismiss,
             Some(ListKey::Undo) => Action::TaskUndo,
+            Some(ListKey::Run) => Action::ListRun,
+            Some(ListKey::Report) => Action::ListReport,
             Some(ListKey::Leave) => Action::LeaveList,
             None => return,
         };
@@ -1574,6 +1597,7 @@ impl Workspace {
             }
             // A "Not running" heading before the apps that are not.
             Some(Section::Apps) => return Some(at + usize::from(at >= self.apps.len())),
+            Some(Section::Routines) => return self.routine_child(at),
             _ => return Some(at),
         }
         let inbox = self.model.tasks.inbox();
@@ -1988,6 +2012,8 @@ impl Workspace {
                 let active = self.model.sidebar == Some(section);
                 div()
                     .id(("rail", i))
+                    .relative()
+                    .children(Some(section).filter(|s| *s == Section::Routines).and_then(|_| self.routine_badge()))
                     .size(px(44.))
                     .rounded_lg()
                     .flex()
@@ -2067,6 +2093,7 @@ impl Workspace {
             Section::Apps => self.render_apps(cx).into_any_element(),
             Section::Repos => self.render_repos(cx).into_any_element(),
             Section::Tasks => self.render_tasks(cx).into_any_element(),
+            Section::Routines => self.render_routines(cx).into_any_element(),
             _ => {
                 div().p_3().text_xs().text_color(rgb(theme::MUTED)).child("Designed, not built yet.").into_any_element()
             }
@@ -2997,6 +3024,10 @@ fn main() {
     if args.get(1).is_some_and(|a| a == "agents") {
         agents(args.get(2));
     }
+    // `ottospace routine-tail <run>` prints an ottobot run's output: what a follow pane runs.
+    if args.get(1).is_some_and(|a| a == "routine-tail") {
+        ottobot::tail(&args[2..]);
+    }
     // `ottospace skill` prints the agent guide; `--stub` prints the SKILL.md that points to it.
     if args.get(1).is_some_and(|a| a == "skill") {
         let stub = args.get(2).is_some_and(|a| a == "--stub");
@@ -3012,7 +3043,9 @@ fn main() {
     // Anything else is a mistake (`ottospace skills`, `--help`). Starting the app for it would
     // open a second window and restore the running instance's hosted windows.
     if let Some(unknown) = args.get(1) {
-        eprintln!("unknown command: {unknown}\nusage: ottospace [ctl '<json request>' | skill [--stub] | --version]");
+        eprintln!(
+            "unknown command: {unknown}\nusage: ottospace [ctl '<json request>' | skill [--stub] | routine-tail <run> | --version]"
+        );
         std::process::exit(2);
     }
 
@@ -3194,10 +3227,14 @@ mod tests {
         }
     }
 
-    /// Every request the app accepts must have an example in the guide.
+    /// Every request the app accepts must have an example in the guide. But one: `routine_run`
+    /// starts an unattended agent run, and the guide does not teach it to agents
+    /// (`docs/ai/routines.md`, open question 7).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        for name in request_names() {
+        assert_parses(r#"{"cmd":"routine_run","name":"morning-brief"}"#, "the socket takes");
+        assert!(!SKILL_GUIDE.contains("routine_run"), "the guide must not teach `routine_run`");
+        for name in request_names().into_iter().filter(|name| name != "routine_run") {
             assert!(SKILL_GUIDE.contains(&format!(r#""cmd":"{name}""#)), "the guide has no example of `{name}`");
         }
     }

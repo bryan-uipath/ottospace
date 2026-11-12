@@ -10,6 +10,8 @@ pub enum ListRow {
     /// A repository or worktree, by path.
     Repo(String),
     Task(TaskId),
+    /// A row of the Routines section, by its key.
+    Routine(String),
 }
 
 /// What a key does in list mode.
@@ -28,11 +30,15 @@ pub enum ListKey {
     Hold,
     Dismiss,
     Undo,
+    /// Run the selected routine now.
+    Run,
+    /// Open the report of the selected row's run.
+    Report,
     Leave,
 }
 
 /// List-mode keys: arrows or `j`/`k` move, ↵ opens (⇧↵ splits down), Tab changes section,
-/// `s` `h` `x` `u` act on a task, Esc leaves.
+/// `s` `h` `x` `u` act on a task, `r` `o` on a routine, Esc leaves.
 pub fn list_key(key: &str, shift: bool) -> Option<ListKey> {
     Some(match key {
         "down" | "j" => ListKey::Move(1),
@@ -43,6 +49,8 @@ pub fn list_key(key: &str, shift: bool) -> Option<ListKey> {
         "h" => ListKey::Hold,
         "x" => ListKey::Dismiss,
         "u" => ListKey::Undo,
+        "r" => ListKey::Run,
+        "o" => ListKey::Report,
         "escape" => ListKey::Leave,
         _ => return None,
     })
@@ -61,6 +69,7 @@ mod tests {
             (Some(ListKey::Section(1)), Some(ListKey::Section(-1)))
         );
         assert_eq!(list_key("x", false), Some(ListKey::Dismiss));
+        assert_eq!((list_key("r", false), list_key("o", false)), (Some(ListKey::Run), Some(ListKey::Report)));
         assert_eq!(list_key("q", false), None);
     }
 }

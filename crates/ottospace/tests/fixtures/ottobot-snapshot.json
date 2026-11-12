@@ -1,0 +1,213 @@
+{
+  "type": "Snapshot",
+  "data": {
+    "root": "/Users/me/.ottobot/skills",
+    "store_dir": "/Users/me/.ottobot/projects/-Users-me--ottobot-skills",
+    "skills": [
+      {
+        "name": "morning-brief",
+        "description": "What changed overnight",
+        "runner": null,
+        "model": "claude/opus@medium",
+        "trigger": { "Ok": "cron 0 8 * * 1-5" },
+        "next_fire": "2026-11-13T08:00:00-08:00",
+        "last_fired": "2026-11-12T08:00:00.014582-08:00",
+        "active_run": null,
+        "note": ""
+      },
+      {
+        "name": "pr-watch",
+        "description": null,
+        "runner": "codex",
+        "model": "codex/gpt-6-astra@medium",
+        "trigger": { "Ok": "event every 20m · a pull request of mine has a new review" },
+        "next_fire": "2026-11-12T10:05:00-08:00",
+        "last_fired": "2026-11-12T09:45:00.201-08:00",
+        "active_run": "20261112-094500-pr-watch",
+        "note": "fired (script) · review on #482"
+      },
+      {
+        "name": "disk-space",
+        "description": "Watches the build volume",
+        "runner": null,
+        "model": null,
+        "trigger": { "Ok": "watch every 4h · the build volume is filling up" },
+        "next_fire": "2026-11-12T12:00:00-08:00",
+        "last_fired": "2026-11-12T08:05:00-08:00",
+        "active_run": null,
+        "note": "skipped: cooldown 2h left"
+      },
+      {
+        "name": "broken-trigger",
+        "description": null,
+        "runner": null,
+        "model": null,
+        "trigger": { "Err": "cron: expected 5 or 6 fields, got 3" },
+        "next_fire": null,
+        "last_fired": null,
+        "active_run": null,
+        "note": ""
+      }
+    ],
+    "skill_errors": [["/Users/me/.ottobot/skills/draft.md", "no trigger in frontmatter"]],
+    "runs": [
+      {
+        "id": "20261112-094500-pr-watch",
+        "skill": "pr-watch",
+        "runner": "codex",
+        "model": "gpt-6-astra",
+        "effort": "medium",
+        "trigger_key": "review-482-3",
+        "cwd": "/Users/me/.ottobot/skills",
+        "started_at": "2026-11-12T09:45:00-08:00",
+        "finished_at": null,
+        "status": "Running",
+        "summary": null,
+        "report": null,
+        "verdict": null,
+        "exit": null,
+        "command": null,
+        "stderr_tail": [],
+        "cost_usd": null,
+        "input_tokens": 0,
+        "output_tokens": 0
+      },
+      {
+        "id": "20261112-080000-morning-brief",
+        "skill": "morning-brief",
+        "runner": "claude",
+        "model": "opus",
+        "effort": "medium",
+        "trigger_key": "2026-11-12T08:00",
+        "cwd": "/Users/me/.ottobot/skills",
+        "started_at": "2026-11-12T08:00:00.020-08:00",
+        "finished_at": "2026-11-12T08:03:12.5-08:00",
+        "status": "Succeeded",
+        "summary": "Wrote the brief.",
+        "report": "/Users/me/.ottobot/projects/-Users-me--ottobot-skills/reports/20261112-080000-morning-brief.html",
+        "verdict": {
+          "level": "normal",
+          "incident_key": "",
+          "headline": "Nothing urgent overnight",
+          "summary": "Two merged pull requests, no pages.",
+          "evidence": [],
+          "action": ""
+        },
+        "exit": "code 0",
+        "command": null,
+        "stderr_tail": [],
+        "cost_usd": 0.42,
+        "input_tokens": 18234,
+        "output_tokens": 2210
+      },
+      {
+        "id": "20261112-080500-disk-space",
+        "skill": "disk-space",
+        "runner": "claude",
+        "model": null,
+        "trigger_key": "watch-1794499500",
+        "cwd": "/Users/me/.ottobot/skills",
+        "started_at": "2026-11-12T08:05:00-08:00",
+        "finished_at": "2026-11-12T08:06:40-08:00",
+        "status": "Succeeded",
+        "summary": "Report saved.",
+        "report": "/Users/me/.ottobot/projects/-Users-me--ottobot-skills/reports/20261112-080500-disk-space.md",
+        "verdict": {
+          "level": "critical",
+          "incident_key": "build-volume",
+          "headline": "Build volume at 91%",
+          "summary": "The build volume has 14 GB left and grows 3 GB a day.",
+          "evidence": ["df -h /Volumes/build: 91%"],
+          "action": "Clear old build outputs."
+        },
+        "exit": "code 0",
+        "command": null,
+        "stderr_tail": [],
+        "cost_usd": null,
+        "input_tokens": 9120,
+        "output_tokens": 640
+      },
+      {
+        "id": "20261111-080000-morning-brief",
+        "skill": "morning-brief",
+        "runner": "claude",
+        "model": "opus",
+        "effort": "medium",
+        "trigger_key": "2026-11-11T08:00",
+        "cwd": "/Users/me/.ottobot/skills",
+        "started_at": "2026-11-11T08:00:00-08:00",
+        "finished_at": "2026-11-11T08:02:51-08:00",
+        "status": "Succeeded",
+        "summary": "Brief written, 3 items",
+        "report": "/Users/me/.ottobot/projects/-Users-me--ottobot-skills/reports/20261111-080000-morning-brief.md",
+        "verdict": null,
+        "exit": "code 0",
+        "command": null,
+        "stderr_tail": [],
+        "cost_usd": 0.38,
+        "input_tokens": 17020,
+        "output_tokens": 1980
+      },
+      {
+        "id": "20261112-030000-flaky-sync",
+        "skill": "flaky-sync",
+        "runner": "claude",
+        "model": "sonnet",
+        "effort": null,
+        "trigger_key": "2026-11-12T03:00",
+        "cwd": "/Users/me/.ottobot/skills",
+        "started_at": "2026-11-12T03:00:00-08:00",
+        "finished_at": "2026-11-12T04:00:00-08:00",
+        "status": { "Failed": "timeout after 1h" },
+        "summary": null,
+        "report": "/Users/me/.ottobot/projects/-Users-me--ottobot-skills/reports/20261112-030000-flaky-sync.md",
+        "verdict": null,
+        "exit": null,
+        "command": null,
+        "stderr_tail": [],
+        "cost_usd": null,
+        "input_tokens": 0,
+        "output_tokens": 0
+      }
+    ],
+    "log": [
+      ["2026-11-12T09:45:00.200-08:00", "pr-watch: fired (script) · review on #482"],
+      ["2026-11-12T09:45:00.390-08:00", "pr-watch: routed to codex/gpt-6-astra (97% left vs claude 63%)"]
+    ],
+    "last_tick": "2026-11-12T09:59:00-08:00",
+    "next_tick": "2026-11-12T10:00:00-08:00",
+    "caffeinated": true,
+    "runner_health": [["claude", { "Ok": "2.1.0 (Claude Code)" }], ["codex", { "Err": "codex not found on PATH" }]],
+    "runner_usage": [
+      [
+        "claude",
+        {
+          "Ok": [
+            { "label": "5h", "used_percent": 37.0, "resets_at": "2026-11-12T20:00:00Z" },
+            { "label": "7d", "used_percent": 7.0, "resets_at": null }
+          ]
+        }
+      ],
+      ["codex", { "Err": "codex not found on PATH" }]
+    ],
+    "daemon_pid": 4242,
+    "power": { "on_ac": true, "percent": 80 },
+    "alerts": [
+      {
+        "skill": "disk-space",
+        "key": "build-volume",
+        "level": "critical",
+        "headline": "Build volume at 91%",
+        "summary": "The build volume has 14 GB left and grows 3 GB a day.",
+        "report": "/Users/me/.ottobot/projects/-Users-me--ottobot-skills/reports/20261112-080500-disk-space.md",
+        "run_id": "20261112-080500-disk-space",
+        "first_seen": "2026-11-12T08:06:40-08:00",
+        "last_seen": "2026-11-12T08:06:40-08:00",
+        "dismissed_level": null,
+        "notify": false
+      }
+    ],
+    "commit": "8bbc374",
+    "dismissed_failures": {}
+  }
+}
