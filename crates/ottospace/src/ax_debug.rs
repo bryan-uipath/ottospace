@@ -5,13 +5,13 @@
 use std::sync::mpsc::Sender;
 use std::time::Instant;
 
-use gpui::{BackgroundExecutor, Bounds, BoxShadow, IntoElement, Pixels, black, div, point, prelude::*, px, rgb};
+use gpui::{BackgroundExecutor, Bounds, IntoElement, Pixels, div, prelude::*, px, rgb};
 use ottospace_core::ax::{self, Frame, Labelled, Limits, Source, Tree, Truncated};
 use ottospace_core::{PaneId, theme};
 use ottospace_mac::{ax as mac_ax, ax_tree};
 use serde::Serialize;
 
-use crate::control;
+use crate::{control, sneak};
 
 /// An app pane's window, as plain data so it can cross threads.
 #[derive(Clone, Copy)]
@@ -28,14 +28,7 @@ pub struct Hosted {
 
 impl Hosted {
     pub fn new(pane: PaneId, pid: i32, window: u32, crop: f64, content: Bounds<Pixels>) -> Self {
-        let (o, s) = (content.origin, content.size);
-        let content = Frame {
-            x: f32::from(o.x).into(),
-            y: f32::from(o.y).into(),
-            w: f32::from(s.width).into(),
-            h: f32::from(s.height).into(),
-        };
-        Self { pane, pid, window, crop, content }
+        Self { pane, pid, window, crop, content: sneak::frame(content) }
     }
 }
 
@@ -137,26 +130,7 @@ impl Overlay {
                 .h(px(f.h as f32))
                 .border_1()
                 .border_color(rgb(theme::SNEAK))
-                .child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .px_1()
-                        .rounded_sm()
-                        .whitespace_nowrap()
-                        .bg(rgb(theme::SNEAK))
-                        .text_color(rgb(theme::BACKGROUND))
-                        .text_xs()
-                        // The raised-panel shadow, scaled down for a chip.
-                        .shadow(vec![BoxShadow {
-                            color: black().opacity(0.7),
-                            offset: point(px(0.), px(2.)),
-                            blur_radius: px(6.),
-                            spread_radius: px(0.),
-                        }])
-                        .child(text),
-                )
+                .child(sneak::chip().absolute().top_0().left_0().child(text))
         });
         let t = self.truncated;
         let cut = if t.depth || t.nodes || t.timeout { " (truncated)" } else { "" };

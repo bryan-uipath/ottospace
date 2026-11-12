@@ -12,7 +12,7 @@ export type Section = "apps" | "workbook" | "tasks" | "repos";
 /** Pane kinds `split` may create. App panes come from `open_app`. */
 export type SplitKind = "terminal" | "empty";
 /** Who has the keyboard. */
-export type Mode = "normal" | "app" | "pick" | "visual" | "list" | "compose";
+export type Mode = "normal" | "app" | "pick" | "visual" | "list" | "compose" | "sneak";
 
 export type TaskState =
   | "captured"
@@ -160,6 +160,13 @@ export interface AxTarget {
   source: AxSource;
 }
 
+/** Sneak mode's labels on ottospace's own controls. Every `source` is `own`. */
+export interface Sneak {
+  targets: AxTarget[];
+  /** The letters typed so far: labels that start with them are on show. */
+  typed: string;
+}
+
 export interface AxOverlay {
   pane: PaneId;
   targets: AxTarget[];
@@ -250,6 +257,8 @@ export interface Snapshot {
   closed_apps: string[];
   apps: AppEntry[];
   ax_overlay: AxOverlay | null;
+  /** Null unless `mode` is `sneak`. */
+  sneak: Sneak | null;
 }
 
 export interface TaskReply {

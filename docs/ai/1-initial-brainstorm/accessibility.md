@@ -129,7 +129,41 @@ body (to focus it). All of them share one namespace with the hosted app's nodes 
   (as the debug overlay does) and labels it over its stream; leaving sneak mode by pressing a
   label in that app makes it live again only if the target needs typing.
 
-## Next step 1: sneak mode
+## Built: sneak over ottospace's own UI
+
+⌘⌃G (`{"cmd":"sneak"}`). Not ⌃G alone: that is BEL in a terminal, and readline, fzf, vim and
+agent CLIs use it.
+
+- Core: `sneak.rs` (`Sneak`: labels, `typed`, narrowing), `Mode::Sneak`, actions
+  `Sneak { targets }` (the key: on or off), `SneakEnter` (the request: on, or stays on),
+  `SneakDrawn` (each painted frame), `SneakType`, `SneakBackspace`, `LeaveSneak`, and
+  `Effect::Activate { id }`. A letter no label goes on with cancels, as planned below; keys that
+  are not letters do nothing.
+- Labels follow what is drawn. The shell reports the controls of each painted frame
+  (`SneakDrawn`); a label keeps its letters while its control is drawn and moves with it, goes
+  when the control is not drawn, and a new control gets none. So a label can only activate a
+  control of the last frame, and `Workspace::activate` refuses an id that frame did not draw.
+- A pane's or tab's × (`close:`, `tab-close:`) always has two letters: one stray key closes nothing.
+- What ends the mode: the user's moves only. `Action::by_user` puts every action on one side:
+  news (the clock, a list read again, an agent's task, a window an app opened, a pane closed
+  because its shell or window is gone) never ends it, or the next letter of a label would reach
+  a terminal. A ⌘ shortcut leaves first and then runs. The key that ended the mode types nothing
+  while it is held, and the rest of a `key` request is dropped.
+- Shell: `sneak.rs`. Each control has a `controls.mark(id)` line beside its click handler, which
+  notes its bounds at prepaint, clipped to what shows. `Workspace::activate` runs what the click
+  handler runs: the same function for a pane's body, a pane's × and a tab and its ×, the same
+  `Action` for the rest. No mouse event is made.
+- Starts from normal and list mode only. A live app has the keyboard, so no label is ever under
+  a real window; the picker, the new-task box and the key reference cover the controls. Starting
+  hides the debug overlay, whose chips use the same letters.
+- Keyboard layouts: the letter is GPUI's `Keystroke::key`, which on a layout with no Latin
+  letters is the letter the key has under ⌘, so the labels can be typed there.
+- Trust. Sneak presses no control inside another app and sets no value; entering an app pane raises its window, as a click on the pane does (`Action::Enter`: `AXRaise` and
+  app activation, less the click a mouse click replays into the app). It reads no AX tree.
+- Not built: labels inside a hosted app (`Source::App` targets are dropped by `Sneak::new`), and
+  pressing or setting anything in one. What follows is still the plan for those.
+
+## Next step 1: sneak mode in hosted apps
 
 1. **Core.** `Mode::Sneak { targets, typed }`. Actions `Sneak { targets }` (the shell passes the
    read-in targets), `SneakType { key }`, `SneakCancel`. Typing narrows by prefix; a full label

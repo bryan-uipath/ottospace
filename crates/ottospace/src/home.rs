@@ -324,6 +324,7 @@ impl Workspace {
                     .size(px(TARGET * 2.))
                     .cursor_pointer()
                     .on_click(open_task(id, cx))
+                    .child(self.controls.mark(format!("home-node:{id}")))
                     .child(measure(drawn, view, move |drawn, bounds| {
                         drawn.nodes.push((id, bounds));
                         false
@@ -354,6 +355,7 @@ impl Workspace {
             .cursor_pointer()
             .hover(|s| s.border_color(rgb(theme::COMPOSE)))
             .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)))
+            .child(self.controls.mark("home:new_task"))
             .child(
                 div()
                     .min_h(px(28.))
@@ -381,6 +383,7 @@ impl Workspace {
                     .cursor_pointer()
                     .hover(|s| s.bg(rgb(theme::SELECTED)))
                     .on_click(open_task(task.id, cx))
+                    .child(self.controls.mark(format!("home-row:{}", task.id)))
                     .child(dot(theme::task(Group::NeedsYou)))
                     .children(task_cells(task, 140.))
             })

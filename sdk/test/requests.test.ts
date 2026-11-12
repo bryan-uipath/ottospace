@@ -64,6 +64,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.wait({ pane: 1, pattern: "^done$", timeout_ms: 1000 }),
   (c) => c.axTree({ pane: 1, depth: 20, nodes: 500 }),
   (c) => c.axOverlay({ refresh: true }),
+  (c) => c.sneak(),
   (c) => c.quit(),
 ];
 

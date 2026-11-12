@@ -196,6 +196,17 @@ test("tasks: add, list, open, leave", async () => {
   });
 });
 
+test("sneak mode labels the controls, and a typed label acts as a click", async () => {
+  await withOttospace(async (client) => {
+    const labelled = await client.sneak();
+    assert.equal(labelled.mode, "sneak");
+    const tasks = labelled.sneak?.targets.find((t) => t.source.type === "own" && t.source.id === "rail:tasks");
+    assert.ok(tasks, "the Tasks icon has a label");
+    const after = await client.key({ keys: tasks.label.split("").join(" ") });
+    assert.deepEqual([after.mode, after.sneak, after.state.sidebar], ["normal", null, "tasks"]);
+  });
+});
+
 test("a refused request rejects with the app's message", async () => {
   await withOttospace(async (client) => {
     await assert.rejects(client.taskOpen({ id: 99 }), { name: "Error", message: "no task 99" });

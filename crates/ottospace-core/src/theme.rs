@@ -46,6 +46,7 @@ pub fn accent(mode: Mode) -> u32 {
         Mode::Visual => VISUAL,
         Mode::List => LIST,
         Mode::Compose => COMPOSE,
+        Mode::Sneak => SNEAK,
     }
 }
 

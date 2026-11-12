@@ -28,6 +28,7 @@ import type {
   Rect,
   Repo,
   Section,
+  Sneak,
   Snapshot,
   Tab,
   Task,
@@ -108,7 +109,7 @@ function axis(value: unknown, at: string): Axis {
 
 function mode(value: unknown, at: string): Mode {
   if (value === "normal" || value === "app" || value === "pick") return value;
-  if (value === "visual" || value === "list" || value === "compose") return value;
+  if (value === "visual" || value === "list" || value === "compose" || value === "sneak") return value;
   throw wrong(at, "a mode", value);
 }
 
@@ -287,6 +288,11 @@ function axTarget(value: unknown, at: string): AxTarget {
   };
 }
 
+function sneak(value: unknown, at: string): Sneak {
+  const o = fields(value, at);
+  return { targets: list(axTarget)(o.targets, `${at}.targets`), typed: str(o.typed, `${at}.typed`) };
+}
+
 function axOverlay(value: unknown, at: string): AxOverlay {
   const o = fields(value, at);
   return {
@@ -384,6 +390,7 @@ export function snapshot(value: unknown): Snapshot {
     closed_apps: list(str)(o.closed_apps, "closed_apps"),
     apps: list(appEntry)(o.apps, "apps"),
     ax_overlay: orNull(axOverlay)(o.ax_overlay, "ax_overlay"),
+    sneak: orNull(sneak)(o.sneak, "sneak"),
   };
 }
 
