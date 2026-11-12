@@ -5,6 +5,7 @@ pub mod ax_tree;
 pub mod capture;
 pub mod display;
 pub mod hotkey;
+pub mod icon;
 pub mod input;
 pub mod recovery;
 pub mod window;

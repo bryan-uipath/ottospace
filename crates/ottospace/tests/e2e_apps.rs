@@ -106,6 +106,10 @@ fn a_canary_window_is_hosted_entered_left_and_restored() {
     let state = || otto.call(json!({"cmd": "state"}));
     let pane = |id: u64| rect(&state()["bounds"][id.to_string()]).filter(|b| b[2] > 1.0);
 
+    // The Apps list holds the canary, with its window count and an icon.
+    let apps = state()["apps"].clone();
+    assert_eq!(apps, json!([{"name": CANARY, "windows": 1, "icon": true}]));
+
     // Host: the pane appears, and the real window is resized to the pane and moved away.
     let reply = otto.call(json!({"cmd": "open_app", "name": CANARY}));
     assert_eq!(reply["state"]["panes"][0]["kind"]["type"], "app", "{reply}");

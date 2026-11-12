@@ -58,6 +58,7 @@ ottospace ctl '{"cmd":"state"}'
 | `state.sidebar` | The open rail section, or null |
 | `terminals.<id>` | `cols`, `rows`, and `lines`: the visible text of that terminal pane. Also `history` (lines scrolled off the top), `display_offset` (how far the view is scrolled back; 0 is the bottom), `selection` (the selected text, or null) and `visual_cursor` |
 | `copied` | The text of the last copy |
+| `apps` | Running apps that `open_app` can host: `name`, `windows` (how many it has open) and `icon` (true if its icon was read) |
 | `ax_overlay` | Null, or the accessibility overlay's last read: `pane`, `targets` (`label`, `frame` in window coordinates, `source`), `count`, `truncated`, `millis`, `error` |
 | `bounds.<id>` | Where each pane of the active tab is drawn: `[x, y, w, h]` |
 
