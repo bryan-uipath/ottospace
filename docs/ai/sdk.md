@@ -14,7 +14,7 @@ design to react to. Built so far: only the typed client in `sdk/` (stage 0 below
 | Transport | Keep request/reply. Add `subscribe`: the connection stays open and the app writes events and, for hooks, questions with a deadline and a default | A hook must be asked and answered in milliseconds without the app ever waiting on a script |
 | `Request` closed set | Stays closed. Scripts register data (an action's title, a selector); they never add a request. Events and questions are two more closed enums | The trust rule in `AGENTS.md` does not change |
 | Types | Hand-written TypeScript, held to the Rust code by tests | The reply is put together with `json!` in the shell, so there is no Rust type to generate it from |
-| Accessibility | Playwright-style locators, evaluated inside the app, step by step, with a wait. Reads first; presses behind a per-app setting | Zoom builds parts of its tree only when asked, so a snapshot misses them |
+| Accessibility | Playwright-style locators, evaluated inside the app, step by step, with a wait. Reads first. Proposed, not decided: presses behind a per-app setting | Zoom builds parts of its tree only when asked, so a snapshot misses them |
 
 ## 1. Where scripts run
 
@@ -140,8 +140,13 @@ fields. `{"cmd":"state","extra":1}` is accepted. The guide says unknown fields a
 
 ## 3. API
 
-Marks: **[socket]** works on today's socket (and is in `sdk/` now). **[request]** needs a new
-request. **[events]** needs `subscribe`. **[app]** needs new behaviour in the app.
+Marks: **[socket]** works on today's socket. **[request]** needs a new request. **[events]**
+needs `subscribe`. **[app]** needs new behaviour in the app.
+
+In `sdk/` now: `state`, `terminal(pane)` (`type`, `wait`, `capture`, `run`) and `tasks`, as
+below, and every request as a method of the plain client (`otto.client.split(..)`,
+`otto.client.openRepo(..)`). Not in `sdk/` yet, though the socket can do them: the `panes`,
+`tabs` and `repos` groups.
 
 ```ts
 declare const otto: Otto;
@@ -236,8 +241,7 @@ otto.windows.on({ app: "us.zoom.xos", title: /Zoom Meeting/ },
 A handler is synchronous on purpose: it must answer inside the deadline from the facts it was
 given. One that needs to look further (read the window's controls) returns nothing and acts later.
 
-`rules.rs` is on the `window-rules` branch, not on `main`: stage 3 needs that merged first
-("settings first, then SDK").
+The selectors are `ottospace_core::rules` ("settings first, then SDK"): stage 3 adds to them.
 
 ## 4. Locators: a Playwright-style API over an app's accessibility tree
 
@@ -369,6 +373,12 @@ lend its Accessibility grant to any client of its socket. Proposal:
 
 - The methods exist, and are refused unless `settings.json` allows that app:
   `"ax_actions": ["us.zoom.xos"]`. Default: none. The refusal names the setting.
+- The two guards `accessibility.md` proposes stay, whatever the setting says:
+  1. **Only hosted panes, never other windows.** An action is refused on a window that is not
+     in a pane. Reads may reach windows outside a pane (Scope, below); actions may not. So a
+     script cannot press in an app the user has not brought into ottospace.
+  2. **Refused while the target app is frontmost and the user is typing**, so a script's press
+     or `fill` cannot land in the middle of the user's own input.
 - An action re-finds the element, checks its role still matches, then acts (as
   `accessibility.md` plans for `ax_press`).
 - While a script acts, the status bar shows it for 2 seconds: `SCRIPT zoom.ts pressed "Open
@@ -480,7 +490,7 @@ Each is one small PR that works by itself.
 | 0 | Typed client for today's socket (`sdk/`). This PR | Tests and tools in TypeScript; a checked list of what the socket says |
 | 1 | `protocol` in the state; `subscribe` with the first event set; `ottospace events`; `otto.on` | E2E tests and agents stop polling; an agent can wait for `needs_you` |
 | 2 | Script host: the folder, start and restart, `notify`, errors in the status bar, the `scripts` setting, `otto` as a global | A user's script that reacts to tasks and terminals |
-| 3 | Window watch (an AX observer for apps named by a rule or hook), `size` and `display` in the facts, `ask` / `answer`, `otto.windows.on`. Needs `window-rules` merged | **Window rules by callback**: the two Zoom windows told apart by size |
+| 3 | Window watch (an AX observer for apps named by a rule or hook), `size` and `display` in the facts, `ask` / `answer`, `otto.windows.on` | **Window rules by callback**: the two Zoom windows told apart by size |
 | 4 | Action deck: actions in the core, the deck in the shell, `actions.define`, `action_pressed` | **The action deck**; "start a task" and "pop next" tiles need no script |
 | 5 | `ax_query` and locator reads, on hosted panes and by app for windows not in a pane; `otto.open` | Participant names and count; "is the user sharing?" |
 | 6 | Layout slots (`w.slot`), a layout template in the core, `builtin:zoom` with the Spin action | **The Zoom layout** and names to the spinner (the user opens the panel) |
@@ -511,8 +521,9 @@ Stages 4 and 5 do not depend on each other; either can go first.
 1. **bun:** fetched by `osi scripts` on request (proposed), or always shipped beside the binary?
 2. **A changed script:** runs at once with a notice (proposed), or waits for you to approve it?
    The second protects against a script an agent wrote and costs a key press on every edit.
-3. **`otto` as a global** (your examples) or `import { otto } from "ottospace"` (`scripting.md`)?
-   The global needs no module resolution; the import is clearer about where things come from.
+3. **`otto` as a global** (your examples) or an import (`scripting.md`)? The global needs no
+   module resolution. An import from the bare name `ottospace` is not safe until the package is
+   published by us: the name on npm is not ours (not checked who has it, if anyone).
 4. **Field names:** the socket is snake_case (`current_task`, `timeout_ms`) and the client in
    `sdk/` keeps it, so a request object is what is sent. Should the script API be camelCase
    instead (`w.size.width` already is)?

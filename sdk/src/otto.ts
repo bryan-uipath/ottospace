@@ -39,20 +39,28 @@ export class TerminalPane {
   }
 
   /**
-   * Types `command` into the shell and waits for it to end, as the guide teaches: a marker made
-   * up for this run follows the command, e.g. `cargo test; echo done-7f3a-$?`. Needs a POSIX
-   * shell at its prompt (`;` and `$?`). The output is read from the pane, so a full-screen
-   * program, or more output than the history keeps, is not all there.
+   * Types `command` into the shell and waits for it to end, as the guide teaches, with a marker
+   * made up for this run: `eval '<command>'; printf '\ndone-7f3a-%d\n' $?`.
+   * - `eval` of the quoted command keeps the two apart: a command that ends in a comment, `;` or
+   *   `&` cannot swallow or break the marker, and `$?` is the command's own exit status.
+   * - The marker starts on a new line, so output with no newline at its end is still seen.
+   * Needs a POSIX shell at its prompt. `output` is the command's output without its last
+   * newline, read from the pane: a full-screen program, or more than the history keeps, is not
+   * all there.
    */
   async run(command: string, timeoutMs = 600_000): Promise<RunResult> {
     const marker = `done-${randomBytes(4).toString("hex")}-`;
-    await this.type(`${command}; echo ${marker}$?\r`);
+    const quoted = `'${command.replaceAll("'", "'\\''")}'`;
+    await this.type(`eval ${quoted}; printf '\\n${marker}%d\\n' $?\r`);
     const end = await this.wait(`^${marker}[0-9]+$`, timeoutMs);
     const lines = (await this.capture(true)).split("\n");
-    // The echoed command line holds the marker too, followed by `$?`: the output is between the two.
-    const from = lines.findIndex((line) => line.includes(`${marker}$?`));
-    const to = lines.lastIndexOf(end);
-    return { status: Number(end.slice(marker.length)), output: lines.slice(from + 1, to).join("\n") };
+    // The echoed command line holds the marker too, followed by `%d`: the output is between the two.
+    const from = lines.findLastIndex((line) => line.includes(`${marker}%d`));
+    const to = lines.indexOf(end, from + 1);
+    const output = lines.slice(from + 1, to);
+    // The marker's own leading newline: an empty line, unless the output ended without one.
+    if (output.at(-1) === "") output.pop();
+    return { status: Number(end.slice(marker.length)), output: output.join("\n") };
   }
 }
 
@@ -87,7 +95,7 @@ export class Otto {
   }
 }
 
-/** Connects to the running ottospace at `socketPath` (default: `$OTTOSPACE_SOCKET`, else the temp dir). */
+/** Connects to the running ottospace at `socketPath` (default: see `defaultSocketPath`). */
 export async function open(socketPath?: string): Promise<Otto> {
   return new Otto(await connect(socketPath));
 }

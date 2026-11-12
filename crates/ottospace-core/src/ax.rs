@@ -456,4 +456,27 @@ mod tests {
         assert!(!json.contains("subrole"), "absent fields are left out: {json}");
         assert_eq!(serde_json::from_str::<Tree>(&json).unwrap(), tree);
     }
+
+    /// `ax_overlay.targets` in the state. The TypeScript client (`sdk/src/parse.ts`) is tested
+    /// against the same file, so its types cannot drift from this shape.
+    #[test]
+    fn a_labelled_target_serializes_as_the_sdk_fixture_says() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../../sdk/test/ax-overlay.json")).unwrap();
+        let app = Source::App { pane: 4, path: vec![0, 2], role: "AXButton".into() };
+        let targets = vec![
+            Labelled {
+                label: "a".into(),
+                target: Target { frame: Frame { x: 10., y: 20., w: 30., h: 12. }, source: app },
+            },
+            Labelled {
+                label: "s".into(),
+                target: Target {
+                    frame: Frame { x: 0., y: 40., w: 48., h: 48. },
+                    source: Source::Own { id: "rail:apps".into() },
+                },
+            },
+        ];
+        assert_eq!(serde_json::to_value(&targets).unwrap(), fixture["targets"]);
+    }
 }

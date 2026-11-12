@@ -3,10 +3,9 @@
 // One JSON request per line out, one JSON reply per line back. A refused request rejects.
 
 import { Socket } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 import { axTreeReply, captureReply, inboxReply, refusal, snapshot, taskPopReply, taskReply, waitReply } from "./parse.ts";
+import { checkOwned, defaultSocketPath } from "./socket.ts";
 import type {
   AxTreeArgs,
   AxTreeReply,
@@ -39,11 +38,6 @@ import type {
 export interface Transport {
   send(line: string): Promise<string>;
   close(): void;
-}
-
-/** `$OTTOSPACE_SOCKET`, else `ottospace.sock` in the per-user temp dir: where the app listens. */
-export function defaultSocketPath(): string {
-  return process.env.OTTOSPACE_SOCKET || join(tmpdir(), "ottospace.sock");
 }
 
 /** One connection. The app answers a connection's requests in order, so replies pair up by position. */
@@ -91,6 +85,7 @@ class SocketTransport implements Transport {
 
 function dial(socketPath: string): Promise<Transport> {
   return new Promise((resolve, reject) => {
+    checkOwned(socketPath); // throws, which rejects: never write to another user's socket
     // Listen before connecting: bun reports a missing socket inside `connect`, and an error
     // with no listener is thrown. For the same reason the listener stays on after a failure.
     const socket = new Socket();
@@ -107,6 +102,9 @@ function dial(socketPath: string): Promise<Transport> {
 export class Client {
   private readonly transport: Transport;
   private readonly dial: () => Promise<Transport>;
+  /** Connections `wait` opened that are still waiting. */
+  private readonly own = new Set<Transport>();
+  private disconnected = false;
 
   /**
    * `dial` opens one more connection. `wait` uses it: the app answers a connection in order, so
@@ -117,9 +115,15 @@ export class Client {
     this.dial = dial;
   }
 
-  /** Ends the connection. `close` is the request that closes a pane. */
+  /**
+   * Ends every connection, also the ones a pending `wait` holds: pending calls reject, and so
+   * does any call made afterwards. `close` is the request that closes a pane.
+   */
   disconnect(): void {
+    this.disconnected = true;
     this.transport.close();
+    for (const transport of this.own) transport.close();
+    this.own.clear();
   }
 
   /** Sends any request and resolves with the parsed reply. Rejects if the app refused it. */
@@ -128,6 +132,7 @@ export class Client {
   }
 
   private async over(transport: Transport, request: object): Promise<unknown> {
+    if (this.disconnected) throw new Error("the client was disconnected");
     const reply: unknown = JSON.parse(await transport.send(JSON.stringify(request)));
     const refused = refusal(reply);
     if (refused !== null) throw new Error(refused);
@@ -280,10 +285,13 @@ export class Client {
   }
   /** Resolves when a line of the pane matches `pattern`; rejects at the time limit. */
   async wait(args: WaitArgs): Promise<WaitReply> {
+    if (this.disconnected) throw new Error("the client was disconnected");
     const own = await this.dial();
+    this.own.add(own); // so `disconnect` ends it; `over` refuses if that happened while dialling
     try {
       return waitReply(await this.over(own, { cmd: "wait", ...args }));
     } finally {
+      this.own.delete(own);
       own.close();
     }
   }

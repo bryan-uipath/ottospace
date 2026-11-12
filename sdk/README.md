@@ -17,10 +17,14 @@ The requests and what they do are in the guide: `ottospace skill`. Its rules app
 
 ## Example
 
-```ts
-import { open } from "ottospace"; // or a path: "../sdk/src/otto.ts"
+Import it by path. The package is named `ottospace` but is not published, and that name on npm
+is not ours: an `import ... from "ottospace"` in a project of your own could one day install
+someone else's code.
 
-const otto = await open(); // $OTTOSPACE_SOCKET, else $TMPDIR/ottospace.sock
+```ts
+import { open } from "../sdk/src/otto.ts"; // the path from your file to this folder
+
+const otto = await open(); // $OTTOSPACE_SOCKET, else ottospace.sock in the per-user temp dir
 try {
   const before = await otto.state();
   const after = await otto.client.split({ axis: "down", kind: "terminal" });
@@ -37,8 +41,12 @@ try {
 }
 ```
 
-`run` types the command followed by a marker made up for that run, waits for the marker, and reads
-the pane, as the guide teaches. It needs a POSIX shell at its prompt.
+`run` types `eval '<command>'` followed by a marker made up for that run, waits for the marker, and
+reads the pane, as the guide teaches. It needs a POSIX shell at its prompt.
+
+The client connects only to a socket the current user owns. With neither `OTTOSPACE_SOCKET` nor
+`TMPDIR` set it asks macOS for the per-user temp dir, as the app does; it never uses `/tmp`.
+`disconnect()` ends every connection, also one a pending `wait` holds, and later calls reject.
 
 ## Tests
 
@@ -55,7 +63,7 @@ npm ci && npm run typecheck  # tsc; the only use of the dev dependencies
 `$TMPDIR`, `/bin/sh` as the shell, no repositories, and no `OTTOSPACE_HOME`, so your
 `~/.ottospace` is not read or written. `OTTOSPACE_BIN` names another binary.
 
-`test/requests.test.ts` needs no app. It keeps the client in step with `Request`:
+`test/parse.test.ts` and `test/socket.test.ts` need no app. So does `test/requests.test.ts`. It keeps the client in step with `Request`:
 
 - `test/requests.jsonl` is every request the client sends, one per method. A Rust unit test
   (`the_sdk_fixture_holds_every_request`) parses each line with the real `Request`.
@@ -69,3 +77,5 @@ npm ci && npm run typecheck  # tsc; the only use of the dev dependencies
 - An unknown value in a reply (a new mode, a new task state) is an error, not passed through.
 - Not tested against a real app: `open_app`, `enter`, `ax_tree` on an app pane and `ax_overlay`
   (they need window hosting, which the tests turn off). Their reply types follow the Rust code.
+  The overlay's targets (`{ label, frame, source }`) are held by a fixture, `test/ax-overlay.json`,
+  that a Rust unit test compares with what the app's types serialize to.

@@ -3,7 +3,9 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { setTimeout as sleep } from "node:timers/promises";
 
+import { connect } from "../src/client.ts";
 import type { Client } from "../src/client.ts";
 import { Otto } from "../src/otto.ts";
 import { snapshot } from "../src/parse.ts";
@@ -73,6 +75,50 @@ test("type, wait and capture; and run on top of them", async () => {
     const never = client.wait({ pane: 1, pattern: "^never-printed$", timeout_ms: 300 });
     assert.equal((await client.state()).state.focused, 1);
     await assert.rejects(never, /no match for the pattern in 300 ms/);
+  });
+});
+
+test("run: the command and the marker cannot break each other", async () => {
+  await withOttospace(async (client) => {
+    await client.split({ kind: "terminal" });
+    const shell = new Otto(client).terminal(1);
+    const quick = 20_000; // each of these hung until the time limit before
+    // Output with no newline at its end: the marker still starts a line.
+    assert.deepEqual(await shell.run("printf foo", quick), { status: 0, output: "foo" });
+    // A comment at the end does not swallow the marker, and the status is the command's.
+    assert.deepEqual(await shell.run("false # a note", quick), { status: 1, output: "" });
+    assert.deepEqual(await shell.run("echo a;", quick), { status: 0, output: "a" });
+    // A job in the background: the shell may print a job line, so only that it ends, with 0.
+    assert.equal((await shell.run("sleep 0.2 &", quick)).status, 0);
+    // Quotes in the command survive the quoting, and an empty line in the output is kept.
+    assert.deepEqual(await shell.run(`echo "it's"; echo; echo 'two  words'`, quick), {
+      status: 0,
+      output: "it's\n\ntwo  words",
+    });
+    assert.deepEqual(await shell.run("echo last; (exit 7)", quick), { status: 7, output: "last" });
+  });
+});
+
+test("disconnect ends a pending wait, and later calls reject", async () => {
+  await withOttospace(async (client, socketPath) => {
+    await client.split({ kind: "terminal" });
+    const other = await connect(socketPath);
+    const started = Date.now();
+    const pending = other.wait({ pane: 1, pattern: "^never-printed$", timeout_ms: 60_000 });
+    await sleep(300); // the wait has its own connection by now
+    other.disconnect();
+    await assert.rejects(pending, /the client was closed|ottospace closed the connection/);
+    assert.ok(Date.now() - started < 5_000, `settled after ${Date.now() - started} ms, not at the time limit`);
+    await assert.rejects(other.state(), /the client was disconnected/);
+    await assert.rejects(other.wait({ pane: 1, pattern: "x" }), /the client was disconnected/);
+
+    // Disconnecting before the wait's own connection is up: still no call left hanging.
+    const early = await connect(socketPath);
+    const racing = early.wait({ pane: 1, pattern: "^never-printed$", timeout_ms: 60_000 });
+    early.disconnect();
+    await assert.rejects(racing, /the client was disconnected|the client was closed/);
+    // The app goes on answering others.
+    assert.equal((await client.state()).state.focused, 1);
   });
 });
 

@@ -153,8 +153,12 @@ export type AxSource =
   | { type: "app"; pane: PaneId; path: number[]; role: string }
   | { type: "own"; id: string };
 
-/** `source` is flattened in: its `type` and fields sit beside `label` and `frame`. */
-export type AxTarget = { label: string; frame: Frame } & AxSource;
+export interface AxTarget {
+  label: string;
+  /** In ottospace window coordinates. */
+  frame: Frame;
+  source: AxSource;
+}
 
 export interface AxOverlay {
   pane: PaneId;

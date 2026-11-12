@@ -260,7 +260,8 @@ function truncated(value: unknown, at: string): Truncated {
   };
 }
 
-function axSource(o: Fields, at: string): AxSource {
+function axSource(value: unknown, at: string): AxSource {
+  const o = fields(value, at);
   if (o.type === "own") return { type: "own", id: str(o.id, `${at}.id`) };
   if (o.type === "app") {
     return {
@@ -275,7 +276,11 @@ function axSource(o: Fields, at: string): AxSource {
 
 function axTarget(value: unknown, at: string): AxTarget {
   const o = fields(value, at);
-  return { label: str(o.label, `${at}.label`), frame: frame(o.frame, `${at}.frame`), ...axSource(o, at) };
+  return {
+    label: str(o.label, `${at}.label`),
+    frame: frame(o.frame, `${at}.frame`),
+    source: axSource(o.source, `${at}.source`),
+  };
 }
 
 function axOverlay(value: unknown, at: string): AxOverlay {

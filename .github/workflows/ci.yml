@@ -53,7 +53,7 @@ jobs:
         run: |
           npm ci --ignore-scripts
           npm run typecheck
-          node --test test/requests.test.ts
+          node --test test/requests.test.ts test/parse.test.ts test/socket.test.ts
 
   e2e:
     # Needs a window server, which a hosted runner may lack, so it does not block.
