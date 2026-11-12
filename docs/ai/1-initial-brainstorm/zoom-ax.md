@@ -1,10 +1,12 @@
 # Zoom: what a meeting exposes through accessibility
 
 Measured facts for `zoom-meeting.md`. Recorded during one real meeting on 2026-11-12 (Zoom
-Workplace 7.2.5 (90525), macOS 26.7.2, two displays): every 30 seconds, the window list and each window's
-accessibility elements were read through System Events. Read-only: nothing was moved or pressed,
-and no picture was taken. The raw log holds people's names and chat text, so it is not in the
-repository; this note has structure only.
+Workplace 7.2.5, macOS 26.7.2, two displays): for about 54 minutes, every 30 seconds, the window
+list and each window's accessibility elements were read through System Events (about 110
+samples). The user shared a screen, watched someone else share, and opened chat and the
+participants panel during it. Read-only: nothing was moved or pressed, and no picture was taken.
+The raw log holds people's names and chat text, so it is not in the repository; this note has
+structure only.
 
 ## Answer first: can we read all participants?
 
@@ -15,7 +17,7 @@ the visible gallery page.
 |---|---|---|
 | How many participants | Yes, always | The toolbar button's description: `Open participants panel, closed, 10 participants`. With the panel open, also its heading: `Participants (11)` |
 | Everyone's name | Yes, with the panel open | The panel is an `outline` with one `row` a participant. All 11 rows gave a name, in about 1 second |
-| Names with the panel closed | Only the visible gallery page | Each video tile is a `tab group` whose description is `<name>, Computer audio muted\|unmuted, Video on\|off`. The gallery showed 4 tiles a page, of 4 pages |
+| Names with the panel closed | The visible tiles only | Each video tile is a `tab group` whose description is `<name>, Computer audio muted\|unmuted, Video on\|off`. Mostly 3 or 4 tiles were on a page (of 3 or 4 pages); in a few samples the gallery showed all 10 or 11. While sharing or watching a share, often none |
 | Who is muted, whose video is off | Yes | Panel: the row's images, described `Computer audio muted` / `unmuted`, `Video on` / `off`. Tiles: the same words in the description |
 
 Reading is all it takes once the panel is open: nothing in Zoom is pressed. Opening the panel
@@ -53,7 +55,7 @@ Positions are left out; sizes are in points.
 
 | State | Window title | Subrole | Size | What it is |
 |---|---|---|---|---|
-| In a meeting | `Zoom Meeting` | `AXStandardWindow` | 696 × 940, and 1065 × 940 with chat open | Main window: tiles, toolbar, and the chat panel in a splitter when chat is open |
+| In a meeting | `Zoom Meeting` | `AXStandardWindow` | 696 to 1399 wide, about 940 high (wider with chat or the participants panel open) | Main window: tiles, toolbar, and the chat and participants panels inside it |
 | In a meeting | `Zoom Meeting` | `AXStandardWindow` | 880 × 496 | Second window with the same title (video on the other display). Few controls: `View`, security, window buttons |
 | Reaction picker open | `Reactions` | `AXUnknown` | 44 × 44 | Transient |
 | Sharing | `zoom share statusbar window` | `AXSystemDialog` | 334 × 22 | "You are screen sharing", 3 buttons |
@@ -61,8 +63,14 @@ Positions are left out; sizes are in points.
 | Sharing | `zoom annotation entrypoint` | `AXSystemDialog` | 56 × 56 | One button |
 | Sharing | `Annotation - Zoom` | `AXSystemDialog` | 1920 × 1080 | A layer over the whole shared display. No elements |
 | Sharing, chat open | `Meeting chat` | `AXSystemDialog` | not recorded | The chat panel, popped out of the main window |
+| Someone else shares | `zoom annotation entrypoint` | `AXSystemDialog` | 56 × 56 | The annotate button, present for most of another person's share |
+| Annotating another's share | `Toolbar` | `AXSystemDialog` | 40 × 564 | A vertical annotation toolbar (`Text`, `Stamp`, `Undo`, `Save`, ...) |
+| Annotating another's share | `Annotation - Zoom` | `AXSystemDialog` | about 1110 × 877 | The annotation layer over the shared picture, here marked as a viewer's (as a presenter it covered the display) |
+| Now and then | (no title) | `AXUnknown` | 256 to 370 × 21 | A thin banner |
 | Sharing | `Zoom Meeting` | `AXStandardWindow` | 880 × 496 | The only standard window left |
 
+- **Both standard windows stayed for the whole meeting** except while the user shared, when only
+  the smaller one was listed. Watching someone else share did not change the two.
 - **Two windows share one title.** A rule cannot tell them apart by title; it needs size, the
   display, or what the window contains (the main one has the toolbar buttons).
 - **Sharing changes the set.** The main window is gone from the list while sharing,
@@ -76,14 +84,15 @@ ignore / not manage". The rule, from what was measured:
 
 | Window | Why |
 |---|---|
-| `zoom share statusbar window`, `zoom share toolbar window`, `zoom annotation entrypoint` | Zoom's floating controls while sharing. Moving them breaks the share controls |
+| `zoom share statusbar window`, `zoom share toolbar window`, `zoom annotation entrypoint`, `Toolbar` | Zoom's floating controls while sharing or annotating. Moving them breaks those controls |
 | `Annotation - Zoom` | A layer over the whole shared display |
-| `Reactions` and other `AXUnknown` windows | Short-lived pop-ups |
+| `Reactions`, untitled banners and other `AXUnknown` windows | Short-lived pop-ups |
 | `Meeting chat` (while sharing) | A system dialog, not a standard window; it goes back into the main window when sharing ends |
 
 All of these have a subrole other than `AXStandardWindow`, so "host standard windows only"
 already skips them. The rule set should still name them, so a later change to what is hosted
-does not pick them up, and so a new-window watcher does not open panes for them.
+does not pick them up, and so a new-window watcher does not open panes for them. Done: they
+are built-in rules in `ottospace-core::rules`, and the `windows` setting adds the user's own.
 - Idle Zoom (no meeting) has one window, `Zoom Workplace`, `AXStandardWindow` (2026-11-11).
 
 ## Main window
@@ -98,6 +107,8 @@ does not pick them up, and so a new-window watcher does not open panes for them.
   `More meeting controls`, the meeting's title, notes, Zoom AI, `View options`, the current view
   (`Speaker` / `Gallery`), security, transcription (`Transcription is on`), rooms, and the three
   window buttons. Element specifiers give these buttons no name: read `description`.
+- **With the participants panel open** the toolbar button reads `Close participants panel`, `opened`,
+  and the panel adds `Invite`, `Unmute me` and `Claim host`.
 - **State you can read from descriptions alone:** muted or not (the button says what a press
   would do), video on or off, chat open or closed, participants panel open or closed, the
   participant count, the gallery page and page count, the view, whether transcription is on,
