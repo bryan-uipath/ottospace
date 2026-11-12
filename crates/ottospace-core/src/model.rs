@@ -190,6 +190,8 @@ pub enum Action {
     /// Enter visual mode on the focused terminal, or leave it.
     ToggleVisual,
     LeaveVisual,
+    /// Show or hide the accessibility debug overlay on the focused app pane.
+    ToggleAxOverlay,
 }
 
 /// What the shell must do after an update.
@@ -250,6 +252,8 @@ pub struct Model {
     pub keys: bool,
     /// The terminal pane in visual mode.
     pub visual: Option<PaneId>,
+    /// The accessibility debug overlay is showing.
+    pub ax_overlay: bool,
     #[serde(skip)]
     next_id: PaneId,
     #[serde(skip)]
@@ -269,6 +273,7 @@ impl Default for Model {
             picker: None,
             keys: false,
             visual: None,
+            ax_overlay: false,
             next_id: 0,
             next_tab: 0,
         };
@@ -498,6 +503,13 @@ impl Model {
                 }
             }
             Action::LeaveVisual => self.leave_visual(&mut effects),
+            // It draws over the parked stream; a live window would cover it.
+            Action::ToggleAxOverlay => {
+                self.ax_overlay = !self.ax_overlay;
+                if self.ax_overlay {
+                    self.leave(&mut effects);
+                }
+            }
             Action::CloseSidebar => {
                 self.leave(&mut effects);
                 self.sidebar = None;
@@ -1072,6 +1084,17 @@ mod tests {
         m.update(Action::ToggleKeys);
         m.update(Action::CloseKeys);
         assert!(!m.keys);
+    }
+
+    #[test]
+    fn the_ax_overlay_toggles_and_parks_the_live_pane() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        m.update(Action::Enter { pane: 1 });
+        assert_eq!(m.update(Action::ToggleAxOverlay), [Effect::Parked(1)]);
+        assert!(m.ax_overlay);
+        assert_eq!(m.update(Action::ToggleAxOverlay), []);
+        assert!(!m.ax_overlay);
     }
 
     #[test]

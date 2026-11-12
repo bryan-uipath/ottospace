@@ -412,6 +412,18 @@ fn bad_requests_are_refused_and_quit_exits() {
     assert_eq!(reply.get("error"), None, "{reply}");
     assert_eq!(pane_ids(&reply), [] as [u64; 0]);
 
+    // Accessibility requests need an app pane: others are refused, and nothing toggles.
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    for bad in [r#"{"cmd":"ax_tree"}"#, r#"{"cmd":"ax_tree","pane":1}"#, r#"{"cmd":"ax_overlay"}"#] {
+        let reply = otto.raw(bad);
+        assert_eq!(reply["ok"], false, "{bad} -> {reply}");
+        assert!(reply["error"].as_str().is_some_and(|e| e.contains("app pane")), "{bad} -> {reply}");
+    }
+    assert_eq!(otto.raw(r#"{"cmd":"ax_tree","limit":1}"#)["ok"], false, "unknown field");
+    let reply = otto.call(json!({"cmd": "state"}));
+    assert_eq!((&reply["state"]["ax_overlay"], &reply["ax_overlay"]), (&json!(false), &Value::Null), "{reply}");
+    otto.call(json!({"cmd": "close"}));
+
     // A second app whose socket path names an ordinary file must leave that file alone.
     let file = std::env::temp_dir().join(format!("ottospace-e2e-notasocket-{}", std::process::id()));
     std::fs::write(&file, "keep me").expect("write");

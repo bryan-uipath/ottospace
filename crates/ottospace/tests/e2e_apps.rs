@@ -125,6 +125,26 @@ fn a_canary_window_is_hosted_entered_left_and_restored() {
         hosted().filter(|f| close(f[2], body[2]) && close(f[3], body[3] + c) && at_spot(f)).map(|_| c)
     });
 
+    // Accessibility: GPUI exposes no controls, so the canary's tree is its window chrome: three
+    // pressable traffic lights, all in the title bar the parked stream crops off.
+    let tree = otto.call(json!({"cmd": "ax_tree"}));
+    assert_eq!(tree["tree"]["root"]["role"], "AXWindow", "{tree}");
+    let presses =
+        |n: &&Value| n["role"] == "AXButton" && n["actions"].as_array().is_some_and(|a| a.contains(&json!("AXPress")));
+    let top = tree["window"]["y"].as_f64().expect("window frame");
+    let buttons: Vec<Value> =
+        tree["tree"]["root"]["children"].as_array().map_or(vec![], |c| c.iter().filter(presses).cloned().collect());
+    assert!(buttons.len() >= 3, "close, minimise and zoom: {tree}");
+    assert!(buttons.iter().all(|b| b["frame"]["y"].as_f64().is_some_and(|y| y - top < crop)), "in the bar: {tree}");
+    // So the overlay reads the tree but labels nothing: controls the picture does not show are dropped.
+    otto.call(json!({"cmd": "ax_overlay"}));
+    let overlay =
+        wait_for("the overlay to read the tree", || Some(state()["ax_overlay"].clone()).filter(|o| o["pane"] == 1));
+    assert!(overlay["error"].is_null() && overlay["count"].as_u64() >= Some(5), "{overlay}");
+    assert_eq!(overlay["targets"], json!([]), "{overlay}");
+    otto.call(json!({"cmd": "ax_overlay"}));
+    assert!(state()["ax_overlay"].is_null(), "off again");
+
     // Enter: the window is raised by its title bar, so its content sits exactly over the pane's
     // content and its own title bar covers the pane header.
     assert_eq!(otto.call(json!({"cmd": "enter", "pane": 1}))["mode"], "app");

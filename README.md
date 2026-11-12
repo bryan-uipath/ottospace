@@ -124,6 +124,7 @@ the tag does not match the crate version.
 | ⌘⌥←/→/↑/↓ or ⌘⌥H/L/K/J | Focus the pane in that direction |
 | ⌘] / ⌘[ | Focus the next / previous pane |
 | ⌘⌃F | Zoom the window to fill the screen; again to restore |
+| ⌘⌃A | Debug: outline the focused app pane's accessibility targets (parked panes only) |
 | ⌘/ | Show every key |
 | F18 | From any app: take the keyboard back and bring ottospace forward |
 | ⌘T | New tab: pick what opens in it |
@@ -242,6 +243,7 @@ first brainstorm:
 - [screen-share-privacy.md](docs/ai/1-initial-brainstorm/screen-share-privacy.md): hiding panes from screen sharing.
 - [scripting.md](docs/ai/1-initial-brainstorm/scripting.md): scripting in TypeScript.
 - [zoom-meeting.md](docs/ai/1-initial-brainstorm/zoom-meeting.md): Zoom meeting layout and participants.
+- [accessibility.md](docs/ai/1-initial-brainstorm/accessibility.md): reading app accessibility trees, toward sneak mode and agent actions.
 - `background/`: icon and mockup images.
 
 [`docs/ai/backlog.md`](docs/ai/backlog.md) is an older backlog. `docs/ideas/` holds the owner's own

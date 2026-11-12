@@ -7,3 +7,7 @@ publish.workspace = true
 # Pure logic only: no gpui, no macOS APIs, no I/O.
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+# Tests only: tree fixtures are JSON.
+serde_json = "1"

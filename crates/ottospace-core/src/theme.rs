@@ -18,6 +18,8 @@ pub const VISUAL: u32 = 0xa684ff;
 pub const ERROR: u32 = 0xff8484;
 /// Selected terminal text: a muted cyan, dark enough for light text on it.
 pub const SELECTION: u32 = 0x155e75;
+/// Sneak labels: a solid amber pill with dark text, readable over any app.
+pub const SNEAK: u32 = 0xffb900;
 
 /// The one colour that changes with the mode. It marks the status pill and the focused pane.
 pub fn accent(mode: Mode) -> u32 {

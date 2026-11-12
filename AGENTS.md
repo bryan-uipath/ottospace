@@ -56,6 +56,7 @@ line, one JSON reply (the full state) per line. See `Request` in `crates/ottospa
 ottospace ctl '{"cmd":"split","axis":"down"}'
 ottospace ctl '{"cmd":"type","text":"ls\r"}'
 ottospace ctl '{"cmd":"state"}'
+ottospace ctl '{"cmd":"ax_tree"}'   # the focused app pane's accessibility tree, not the state
 ```
 
 `crates/ottospace/skill/guide.md` is the agent-facing guide (`ottospace skill` prints it). When
@@ -63,6 +64,8 @@ you add or change a request, update the guide; a unit test parses every example 
 
 Agents use the same socket to inspect and drive ottospace. Keep `Request` a closed set, and
 keep the socket same-user only: `type` sends keys to a terminal, which is as strong as a shell.
+`ax_tree` and `ax_overlay` only read. Requests that press or set values in another app are a
+separate trust decision: see `docs/ai/1-initial-brainstorm/accessibility.md`.
 
 ## App bundle
 
