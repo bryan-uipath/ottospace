@@ -21,15 +21,15 @@ use ottospace_core::{Action, Axis, Origin, PaneId, theme};
 
 use crate::{SECTIONS, SPLITS, Workspace, control};
 
-/// The mode's own shortcut. Not ⌃G alone: that is BEL in a terminal (readline and fzf abort,
-/// vim's file info).
-pub const KEY: &str = "cmd-ctrl-g";
+/// The mode's own shortcuts: ⌘; on the home row, and ⌘⌃G. Not ⌃G alone: that is BEL in a
+/// terminal (readline and fzf abort, vim's file info).
+pub const KEYS: [&str; 2] = ["cmd-;", "cmd-ctrl-g"];
 
 /// What a socket client is told when its request would get in the way of the user's labels.
 pub const ON: &str = "sneak mode is on";
 
 fn is_own(key: &Keystroke) -> bool {
-    Keystroke::parse(KEY).is_ok_and(|own| own.modifiers == key.modifiers && own.key == key.key)
+    KEYS.iter().any(|own| Keystroke::parse(own).is_ok_and(|own| own.modifiers == key.modifiers && own.key == key.key))
 }
 
 /// Whether sneak mode itself takes the key: a letter, ⌫, Esc, or its own shortcut. The only keys a
@@ -154,7 +154,7 @@ pub fn labels(sneak: &Sneak) -> impl IntoElement + use<> {
 }
 
 impl Workspace {
-    /// ⌘⌃G: labels on the controls of the last painted frame, or out of the mode if it is on.
+    /// ⌘; or ⌘⌃G: labels on the controls of the last painted frame, or out of the mode if it is on.
     pub(crate) fn toggle_sneak(&mut self, window: &Window, cx: &mut Context<Self>) {
         let targets = self.controls.targets();
         self.dispatch(Action::Sneak { targets }, self.input, window, cx);
@@ -189,7 +189,7 @@ impl Workspace {
                 if !drawn {
                     return control::error("the window has not been drawn: sneak mode labels what is on screen");
                 }
-                // Enter only: if ⌘⌃G or another caller got here first, the mode stays on.
+                // Enter only: if ⌘; / ⌘⌃G or another caller got here first, the mode stays on.
                 let targets = this.controls.targets();
                 this.dispatch(Action::SneakEnter { targets }, Origin::Socket, window, cx);
                 this.sync_sneak(window, cx);

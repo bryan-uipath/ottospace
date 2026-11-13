@@ -2821,7 +2821,7 @@ impl Model {
             Action::FocusList if self.list.is_some() => self.list = None,
             Action::FocusList => {
                 self.leave(effects);
-                self.sidebar = self.sidebar.or(Some(Section::Repos));
+                self.sidebar = self.sidebar.or(Some(Section::Apps));
                 self.list = Some(0);
                 self.list = Some(self.first_row());
             }
@@ -6211,7 +6211,11 @@ mod tests {
     fn list_mode_moves_over_the_rows_and_opens_one() {
         let mut m = Model::default();
         m.update(Action::SetRepos { repos: listed() });
-        // The bar opens on Repos and takes the keyboard.
+        // With no section open the bar opens on Apps; on an open one it stays there.
+        m.update(Action::FocusList);
+        assert_eq!((m.mode(), m.sidebar), (Mode::List, Some(Section::Apps)));
+        m.update(Action::FocusList);
+        m.update(Action::ToggleSection { section: Section::Repos });
         m.update(Action::FocusList);
         assert_eq!((m.mode(), m.sidebar, m.list), (Mode::List, Some(Section::Repos), Some(0)));
         assert_eq!(m.list_rows(), [ListRow::Repo("/code/app".into()), ListRow::Repo("/code/app-2".into())]);
@@ -6329,7 +6333,7 @@ mod tests {
         assert_eq!((m.mode(), m.list), (Mode::Normal, None));
         m.update(Action::FocusList);
         m.update(Action::FocusList);
-        assert_eq!((m.mode(), m.sidebar), (Mode::Normal, Some(Section::Repos)));
+        assert_eq!((m.mode(), m.sidebar), (Mode::Normal, Some(Section::Apps)));
         // Not behind the picker.
         m.update(Action::OpenPicker { axis: Right, new_tab: false, items: vec![PickItem::Terminal] });
         m.update(Action::FocusList);

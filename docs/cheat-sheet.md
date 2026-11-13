@@ -18,10 +18,10 @@ ottospace            # opens on the Repos list
 | I want to | Press |
 |---|---|
 | Split with a new terminal | ⌘D right · ⌘⇧D down |
-| Choose what goes in a new pane (terminal or app) | ⌘E, type to filter, ↵. Typing also offers installed apps that are not running |
+| Choose what goes in a new pane (terminal or app) | ⌘E (right) or ⌘⇧E (below), type to filter, ↵. Typing also offers installed apps that are not running |
 | Edit the picker's filter or the new-task line | As any Mac text field: ⌥←/→ words, ⌘←/→ line, ⇧ selects, ⌘A, ⌘C/⌘X/⌘V, ⌘Z/⇧⌘Z, ⌥⌫ a word, ⌘⌫ the line; click, drag, double click |
-| Move between panes | ⌘⌥ arrows or ⌘⌥ H J K L · ⌘] ⌘[ cycle |
-| Resize the pane | ⌘⌃ arrows or ⌘⌃ H J K L: the split moves that way · ⌘⌃= evens all out |
+| Move between panes | ⌘⌃ arrows or ⌘⌃ H J K L · ⌘] ⌘[ cycle |
+| Resize the pane | ⌘⌥ arrows or ⌘⌥ H J K L: the split moves that way · ⌘⌃= evens all out |
 | Give an app the room its window needs | ⌘⌃0, or `fit` in the pane header: shown when the app refused the pane's size and a split can move |
 | Swap the pane with its neighbour | ⌘⇧⌥ arrows or ⌘⇧⌥ H J K L |
 | Move the pane to another tab | ⌘⇧⌥1 … ⌘⇧⌥9. US keyboard layout only (US, ABC): on others the keys do nothing |
@@ -42,12 +42,12 @@ ottospace            # opens on the Repos list
 | I want to | Do |
 |---|---|
 | Open a section | Click its icon on the rail |
-| Use it from the keyboard | ⌘⇧E, then `j` `k` move · ↵ open · ⇧↵ open below · Tab next section · Esc leave |
-| Read the lists again | Close and open the section, or ⌘⇧E: Apps and Repos are read when they open |
+| Use it from the keyboard | ⌘⌃E (the open section, or Apps), then `j` `k` move · ↵ open · ⇧↵ open below · Tab next section · Esc leave |
+| Read the lists again | Close and open the section, or ⌘⌃E: Apps and Repos are read when they open |
 | Add something | + in the bar's header: a new task in Tasks, the tab on show in Workbook, a repository in Repos (pick a folder that is one or holds some; it goes into `repos` in the settings) |
 | Stop listing a repository | Point at its name in Repos: Remove. Only for one added as itself |
 | Close the bar | × in its header |
-| Click anything without the mouse | ⌘⌃G: every control gets a letter label (a × gets two). Type it · ⌫ takes a letter back · Esc or a wrong letter leaves |
+| Click anything without the mouse | ⌘; or ⌘⌃G: every control gets a letter label (a × gets two). Type it · ⌫ takes a letter back · Esc or a wrong letter leaves |
 
 ## Apps
 
@@ -55,8 +55,8 @@ ottospace            # opens on the Repos list
 |---|---|
 | Put a running app's window in a pane | Apps, click the app (⇧-click: split down). Or ⌘E and pick it |
 | Start an app that is not running | Apps, click it under "Not running" (pinned apps, then the Dock's) or under "All apps". Or ⌘E, type its name, ↵ |
-| Keep an app at the top of that list | Hover its row, Pin. Or ⌘⇧E on Apps, then `p` (again unpins). It is written to `apps` in the settings |
-| Stop a Dock app being suggested | Hover its row, Hide. Or ⌘⇧E, then `x`. Undo on the line at the top (six seconds), or `u` |
+| Keep an app at the top of that list | Hover its row, Pin. Or ⌘⌃E on Apps, then `p` (again unpins). It is written to `apps` in the settings |
+| Stop a Dock app being suggested | Hover its row, Hide. Or ⌘⌃E, then `x`. Undo on the line at the top (six seconds), or `u` |
 | Find an app among all installed | Apps, "All apps (N)", then click the filter or `/` in list mode, and type |
 | Type in the app | Click its pane. The status bar turns `APP`; ottospace keys stop |
 | Come back | Click ottospace itself, or the return key |
@@ -71,12 +71,12 @@ A workbook is a saved, named set of tabs, for a context that comes back. It is k
 | I want to | Do |
 |---|---|
 | Save the tab on show | ⌘⇧S, or + in the Workbook section's header. Type its name, ↵ |
-| Add the tab on show to one | `Add tab` on its row, or ⌘⇧E, then `a` on it |
+| Add the tab on show to one | `Add tab` on its row, or ⌘⌃E, then `a` on it |
 | Save every tab on the bar as one | File ▸ Save All Tabs as Workbook |
 | Update a tab of it after changing it | ⌘⇧S again on that tab. Undo on the line at the top (six seconds) |
-| Open it | Workbook, click it. Or ⌘⇧E, ↵. Its tabs open in order; one already open is kept |
-| See, open, rename or remove one of its tabs | ▸ on its row (⌘⇧E: space), then the tab's row: click, Rename, Remove |
-| Rename or delete it | Hover its row: Rename, Delete. Or ⌘⇧E, then `r`, `x`; `u` puts a deleted one back |
+| Open it | Workbook, click it. Or ⌘⌃E, ↵. Its tabs open in order; one already open is kept |
+| See, open, rename or remove one of its tabs | ▸ on its row (⌘⌃E: space), then the tab's row: click, Rename, Remove |
+| Rename or delete it | Hover its row: Rename, Delete. Or ⌘⌃E, then `r`, `x`; `u` puts a deleted one back |
 
 It keeps the splits, each app, and each terminal's directory, last 500 lines and the command
 running in it. Opened, a terminal shows those lines above its prompt with the command typed on
@@ -91,9 +91,9 @@ A mark is a named way back to a pane or a whole tab. It is kept between runs.
 |---|---|
 | Mark the focused pane / the tab on show | ⌘B / ⌘⇧B. Again takes the mark off. A marked pane or tab shows ◆ |
 | Go to a mark | ⌘' then its letter · ⌘⌥1 … ⌘⌥9 for the first nine · click it in Marks on the rail |
-| Give a mark a letter, rename it, remove it | In Marks: click its letter box, ✎ or ×. Or ⌘⇧E, then `m`, `r`, `x` |
-| Put back a mark I took off | Undo on the line at the top of Marks (six seconds), or ⌘⇧E on Marks, then `u`. ⌘B again on the same pane or tab puts back the same mark |
-| Reorder marks | ⌘⇧E on Marks, then ⇧J / ⇧K |
+| Give a mark a letter, rename it, remove it | In Marks: click its letter box, ✎ or ×. Or ⌘⌃E, then `m`, `r`, `x` |
+| Put back a mark I took off | Undo on the line at the top of Marks (six seconds), or ⌘⌃E on Marks, then `u`. ⌘B again on the same pane or tab puts back the same mark |
+| Reorder marks | ⌘⌃E on Marks, then ⇧J / ⇧K |
 
 Open now (a dot in the list): its tab comes forward and its pane takes focus. Else it is opened
 again: a terminal in the directory it was in when marked, an app's window by its title, a tab with
@@ -119,11 +119,11 @@ what can be opened, and its other panes are empty and say why. Marks are kept in
 | Open a task: the tab bar shows only its tabs | Click it in Tasks. The first time, it gets a tab named after it. × beside its name on the tab bar goes back |
 | Open the next task that needs me | ⌘⇧N |
 | See what needs me at a glance | A tab with no panes is the home screen: what goes there (Open an app ⌘E, Terminal ⌘D), up to three tasks under Needs you, and a node for each of the first 12 listed tasks. Left to right is the project; within a project the older task is farther; the colour is the state. No node sits under the text, so a small window shows fewer. Hover a node for its title; click a node or a row to open its conversation |
-| See the inbox | Tasks on the rail: Needs you, Running, Later, Done (folded). Click a heading to fold it, or ⌘⇧E, move to it, ↵ or space |
+| See the inbox | Tasks on the rail: Needs you, Running, Later, Done (folded). Click a heading to fold it, or ⌘⌃E, move to it, ↵ or space |
 | See tasks by project | Project in the Tasks header (State goes back): a group a `#project` with a bar of its states, then "no project". Today's work is under the list |
 | See a task's time and tokens | Hover its row, or its badge on the right rail: started, agent time, workspace, tokens by model |
 | See agent sessions that are no task (a Claude Code or Codex started by hand) | Tasks on the rail, under Sessions: runner, repository, the session's title, active or idle, what it does now, the model. Hover a row: Adopt makes it a task, Hide removes it until the next start. [More](reference.md#sessions) |
-| Snooze 1 hour / hold / dismiss / undo | ⌘⇧E on Tasks, then `s` / `h` / `x` / `u`. By mouse: the buttons on a row you hover; "Undo" then shows at the top for 6 seconds |
+| Snooze 1 hour / hold / dismiss / undo | ⌘⌃E on Tasks, then `s` / `h` / `x` / `u`. By mouse: the buttons on a row you hover; "Undo" then shows at the top for 6 seconds |
 
 The status bar shows how many tasks need you. Tasks are kept in `~/.ottospace/tasks`, or the `tasks` setting.
 A tag counts only if its name is known (`>repo` in the Repos list, `@claude` or `@codex`, a runner with a model as `@claude-opus-5-5` or `@codex-gpt-6-astra`, a skill that is installed, a path that exists); any other word stays in the title.

@@ -604,10 +604,10 @@ follow what is drawn: a control that moves keeps its letters, one that is no lon
 its label, and a new one gets none. So read `sneak.targets` from the latest reply before you
 type a label.
 
-The mode may be the user's own (⌘⌃G), with them about to type a letter. What the socket can do
+The mode may be the user's own (⌘; or ⌘⌃G), with them about to type a letter. What the socket can do
 while `mode` is `sneak`:
 
-- `key` with letters, `backspace`, `escape` or `cmd-ctrl-g`: input to the mode, as above.
+- `key` with letters, `backspace`, `escape`, `cmd-;` or `cmd-ctrl-g`: input to the mode, as above.
 - Any other `key` (a number, an arrow, `enter`, every `cmd-` or `ctrl-` shortcut) and the
   pointer requests (`mouse_down`, `mouse_drag`, `mouse`, `drag`) fail with "sneak mode is on" and
   change nothing.

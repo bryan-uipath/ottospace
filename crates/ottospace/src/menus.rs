@@ -67,6 +67,7 @@ pub fn app_menus() -> Vec<Menu> {
                 item("Terminal Right", SplitRight),
                 item("Terminal Below", SplitDown),
                 item("New Pane…", PickPane),
+                item("New Pane Below…", PickPaneDown),
                 item("Mark Pane", MarkPane),
                 MenuItem::separator(),
                 item("Focus Left", FocusLeft),

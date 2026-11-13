@@ -38,8 +38,8 @@ it over the control socket. Session restore and the rest of the design are not b
 | Pane picker: choose a terminal, a running app, or (once you type) any installed app for a new pane or tab | Works today |
 | Icon rail with a secondary bar; Apps lists running apps with their icons | Works today |
 | Repos: each repository's name over its checkouts (the branch, then `Default` or a linked worktree's directory); open a terminal in one. + in the header adds a directory to `repos` in the settings; Remove on a name takes it off | Works today |
-| List mode (⌘⇧E): drive the bar with the keyboard | Works today |
-| Sneak mode (⌘⌃G): a letter label on each of ottospace's own controls; typing it clicks the control | Works today |
+| List mode (⌘⌃E): drive the bar with the keyboard | Works today |
+| Sneak mode (⌘; or ⌘⌃G): a letter label on each of ottospace's own controls; typing it clicks the control | Works today |
 | [Command palette](#command-palette) (⌘P): every command of the menu bar by name, with its key; a Developer group | Works today |
 | [Accessibility inspector](#accessibility-inspector): a hosted app's accessibility tree in the right drawer's place, read-only | Works today |
 | Marks (⌘B, ⌘⇧B, ⌘' and a letter): named ways back to a pane or a tab, kept in `~/.ottospace/marks.json` | Works today |
@@ -83,11 +83,11 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 |---|---|
 | ⌘D | Split right, new terminal |
 | ⌘⇧D | Split down, new terminal |
-| ⌘E | Pick what goes in a new pane: a terminal or a running app. Type to filter: then every installed app that matches is offered too, under "Not running" (those of the `apps` setting first); choosing one starts it in the background. ↑/↓ or ⌃N/⌃P move, ↵ opens, Esc closes |
+| ⌘E / ⌘⇧E | Pick what goes in a new pane, right of / below the focused one: a terminal or a running app. Type to filter: then every installed app that matches is offered too, under "Not running" (those of the `apps` setting first); choosing one starts it in the background. ↑/↓ or ⌃N/⌃P move, ↵ opens, Esc closes |
 | ⌘W | Close the focused pane |
-| ⌘⌥←/→/↑/↓ or ⌘⌥H/L/K/J | Focus the pane in that direction |
+| ⌘⌃←/→/↑/↓ or ⌘⌃H/L/K/J | Focus the pane in that direction |
 | ⌘] / ⌘[ | Focus the next / previous pane |
-| ⌘⌃←/→/↑/↓ or ⌘⌃H/L/K/J | Resize: move the focused pane's split that way |
+| ⌘⌥←/→/↑/↓ or ⌘⌥H/L/K/J | Resize: move the focused pane's split that way |
 | ⌘⌃= | Even out the splits of the tab |
 | ⌘⌃0 | Fit the focused pane to its app's window, when the app refused the pane's size |
 | ⌘⇧⌥←/→/↑/↓ or ⌘⇧⌥H/L/K/J | Swap the focused pane with its neighbour on that side |
@@ -120,8 +120,8 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘B / ⌘⇧B | Mark the focused pane / the tab on show; on one that is marked, take the mark off (the Marks section offers it back for six seconds, and ⌘B again within them puts the same mark back). The mark is named for the app, the terminal's directory or the tab's title. It records what to open, not a window or a process: a terminal's directory as it is then, an app's bundle id, name and window title, a tab's title, task and split tree. A marked pane or tab shows ◆ and its letter |
 | ⌘' then a letter | Go to the mark with that letter. The status bar shows `MARK?` while it waits; Esc, or a letter of no mark, ends the wait and nothing else happens. If the mark's pane or tab is open, its tab comes forward and the pane takes focus (an app pane is focused, not entered). Else it is opened: a terminal in the recorded directory, the app's window in a pane (the one with the recorded title, else its only window, else its main one; an app that is not running is started), or the tab with its splits. A tab opens with what can be opened: a pane whose directory is gone or whose window could not be hosted is empty and says why, and going to the tab again tries it again |
 | ⌘⌥1 … ⌘⌥9 | Go to one of the first nine marks, in the order of the Marks section |
-| ⌘⇧E | List mode: the bar (Apps, Workbook, Tasks, Repos, Marks) takes the keyboard. On a workbook ↵ opens its tabs, space lists them under it, `a` adds the tab on show to it, `r` renames it, `x` deletes it and `u` takes the last delete or update back; on one of its tabs ↵ opens that tab, `r` renames it and `x` takes it out. On a mark `x` removes it, `r` renames it, `m` gives it a letter, ⇧J / ⇧K move it down / up, and `u` puts the last removed mark back. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); in Tasks a heading is a row too, and ↵ or space on it folds or unfolds it; Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; on an app that is not running `p` pins or unpins it, `x` hides a suggestion and `u` takes the last of these back; in Apps `/` types in the filter of "All apps" (↵, ↓ or Esc gives the keys back to the rows); Esc or ⌘⇧E leaves |
-| ⌘⌃G | Sneak mode: every control ottospace draws (rail icons, bar rows, tabs and their ×, top-bar buttons, pane headers and their ×, each pane, the drawer's buttons and picks, the right rail's badges, the home screen's buttons, rows and nodes) gets a short label, home-row letters first. Type a label and the control does what a click does; a pane's label focuses it, or gives an app pane the keyboard. A × (pane or tab) always has a two-letter label. Two-letter labels narrow on the first letter; ⌫ takes it back. Esc, a click, a letter that goes on with no label, or any ⌘ shortcut leaves; the shortcut then runs (⌘C copies, ⌘V pastes). Other keys do nothing. The labels follow what is drawn: if a control moves its label moves, and if it goes its label goes. What happens by itself (a shell exits, an agent files a task) does not end the mode. Starting it hides the accessibility overlay (⌘⌃A). Not ⌃G alone: a terminal needs that key. On a keyboard layout with no Latin letters, the keys type the letters they have under ⌘. From `APP` mode return first. Controls inside a hosted app's window get no label. Sneak presses no control inside another app and sets no value; entering an app pane raises its window, as a click on the pane does |
+| ⌘⌃E | List mode: the bar (Apps, Workbook, Tasks, Repos, Marks) takes the keyboard, on the open section, or Apps if none is. On a workbook ↵ opens its tabs, space lists them under it, `a` adds the tab on show to it, `r` renames it, `x` deletes it and `u` takes the last delete or update back; on one of its tabs ↵ opens that tab, `r` renames it and `x` takes it out. On a mark `x` removes it, `r` renames it, `m` gives it a letter, ⇧J / ⇧K move it down / up, and `u` puts the last removed mark back. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); in Tasks a heading is a row too, and ↵ or space on it folds or unfolds it; Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; on an app that is not running `p` pins or unpins it, `x` hides a suggestion and `u` takes the last of these back; in Apps `/` types in the filter of "All apps" (↵, ↓ or Esc gives the keys back to the rows); Esc or ⌘⌃E leaves |
+| ⌘; or ⌘⌃G | Sneak mode: every control ottospace draws (rail icons, bar rows, tabs and their ×, top-bar buttons, pane headers and their ×, each pane, the drawer's buttons and picks, the right rail's badges, the home screen's buttons, rows and nodes) gets a short label, home-row letters first. Type a label and the control does what a click does; a pane's label focuses it, or gives an app pane the keyboard. A × (pane or tab) always has a two-letter label. Two-letter labels narrow on the first letter; ⌫ takes it back. Esc, a click, a letter that goes on with no label, or any ⌘ shortcut leaves; the shortcut then runs (⌘C copies, ⌘V pastes). Other keys do nothing. The labels follow what is drawn: if a control moves its label moves, and if it goes its label goes. What happens by itself (a shell exits, an agent files a task) does not end the mode. Starting it hides the accessibility overlay (⌘⌃A). Not ⌃G alone: a terminal needs that key. On a keyboard layout with no Latin letters, the keys type the letters they have under ⌘. From `APP` mode return first. Controls inside a hosted app's window get no label. Sneak presses no control inside another app and sets no value; entering an app pane raises its window, as a click on the pane does |
 | ⌘⇧C | Visual mode on the terminal: `hjkl`/arrows, `w b e 0 ^ $`, `H M L` move; `v` / `V` select; `y` or ↵ copies and leaves; Esc leaves |
 
 **Text fields.** The new-task box's line and the picker's filter are the same field, with the
@@ -469,7 +469,7 @@ tab of dashboards, a tab of docs. It is not a task: no agent works it and it is 
   (`DRI`, `DRI 2`).
 - **Save again** on a tab that came from a workbook, or was saved into one, updates that tab of
   it. The section says `Updated · Undo` for six seconds.
-- **Open**: click its row, or ⌘⇧E and ↵. Each of its tabs opens in a new tab, in order, and the
+- **Open**: click its row, or ⌘⌃E and ↵. Each of its tabs opens in a new tab, in order, and the
   first is selected; a tab of it that is open already is kept, not opened twice. A workbook of
   one tab opens under the workbook's name; of several, each tab under its own title. Each
   terminal starts a new shell in its directory; if the directory is gone it starts in your home
@@ -524,7 +524,7 @@ background and puts its window in a pane (ottospace waits up to 30 seconds for t
 - **Not running**: the apps you pinned (★), then the apps in your Dock, in the Dock's order. At
   most 12 of the Dock's show; "and N more" unfolds the rest. The Dock is read (its
   preferences file, never changed) when ottospace starts, when the Apps section opens, when
-  list mode comes on or changes section (⌘⇧E, Tab), and when the
+  list mode comes on or changes section (⌘⌃E, Tab), and when the
   picker opens. A change you make in the Dock shows at the next of those.
 - **All apps (N)**: every other installed app, by name. Folded until you click the heading. Open,
   it has a filter: click it or press `/` in list mode, and type.

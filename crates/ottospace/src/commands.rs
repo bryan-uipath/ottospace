@@ -27,6 +27,7 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::SplitRight => Box::new(SplitRight),
         Command::SplitDown => Box::new(SplitDown),
         Command::PickPane => Box::new(PickPane),
+        Command::PickPaneDown => Box::new(PickPaneDown),
         Command::ClosePane => Box::new(ClosePane),
         Command::FocusLeft => Box::new(FocusLeft),
         Command::FocusRight => Box::new(FocusRight),

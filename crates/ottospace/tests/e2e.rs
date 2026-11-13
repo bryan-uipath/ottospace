@@ -212,8 +212,8 @@ fn panes_resize_swap_and_change_tab_from_the_keyboard() {
     let [one, two] = otto.bounds(&[1, 2])[..] else { panic!("two panes") };
     let total = one[2] + two[2];
 
-    // ⌘⌃← moves the split left: 1 gives 5% of the row to 2. The socket request does the same.
-    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-left"}));
+    // ⌘⌥← moves the split left: 1 gives 5% of the row to 2. The socket request does the same.
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-alt-left"}));
     assert_eq!(reply["state"]["layout"]["split"]["ratio"], 0.45, "{reply}");
     otto.call(json!({"cmd": "resize", "dir": "left"}));
     // The frame of both moves, not the first: 45% is narrower too.
@@ -245,7 +245,9 @@ fn panes_resize_swap_and_change_tab_from_the_keyboard() {
         assert!(close[2].as_f64() > Some(1.0) && right(close) <= right(frame), "× {close} in pane {frame}");
     }
 
-    // ⌘⇧⌥H swaps 2 with its left neighbour; 2 keeps focus.
+    // ⌘⌃H and ⌘⌃→ move focus. ⌘⇧⌥H swaps 2 with its left neighbour; 2 keeps focus.
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-h"}))["state"]["focused"], 1);
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-right"}))["state"]["focused"], 2);
     let reply = otto.call(json!({"cmd": "key", "keys": "cmd-shift-alt-h"}));
     assert_eq!(reply["state"]["focused"], 2);
     assert_eq!(reply["tab_panes"], json!([[2, 1]]));
@@ -860,7 +862,7 @@ fn a_long_repos_list_keeps_each_name_over_its_checkouts() {
     }
 
     // List mode walks the rows, not the names: the worktree is the fourth row, and ↵ opens it.
-    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-shift-e j j j"}));
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-e j j j"}));
     assert_eq!((reply["mode"].as_str(), reply["state"]["list"].as_u64()), (Some("list"), Some(3)));
     let reply = otto.call(json!({"cmd": "key", "keys": "enter"}));
     assert_eq!(reply["state"]["panes"][0]["cwd"], at("zoom"));
@@ -991,7 +993,7 @@ fn the_tasks_section_lists_what_needs_you_then_what_runs_then_what_waits() {
 
     // The buttons of a row show on the row list mode has selected (and under the pointer).
     // Rows as list mode walks them: Needs you, 1, Running, 2, Later, 3, 4, 5.
-    key("cmd-shift-e");
+    key("cmd-ctrl-e");
     let reply = key("j j");
     assert_eq!(reply["state"]["list"], 3);
     // A click on Dismiss: the task leaves, and a line at the top offers to take it back.
@@ -1036,8 +1038,8 @@ fn list_mode_drives_the_bar_with_the_keyboard() {
     }
     otto.call(json!({"cmd": "section", "section": "tasks"}));
 
-    // ⌘⇧E gives the bar the keyboard, on its first task: the heading above it is row 0.
-    let reply = key("cmd-shift-e");
+    // ⌘⌃E gives the bar the keyboard, on its first task: the heading above it is row 0.
+    let reply = key("cmd-ctrl-e");
     assert_eq!((reply["mode"].as_str(), reply["state"]["list"].as_u64()), (Some("list"), Some(1)));
     // j moves down; x dismisses that task; the selection stays at its place.
     key("j");
@@ -1067,7 +1069,7 @@ fn list_mode_drives_the_bar_with_the_keyboard() {
     // Esc gives the keyboard back. While the bar has it, keys do not reach the terminal.
     assert_eq!(key("escape")["mode"], "normal");
     otto.call(json!({"cmd": "split"}));
-    assert_eq!(key("cmd-shift-e")["mode"], "list");
+    assert_eq!(key("cmd-ctrl-e")["mode"], "list");
     key("j k");
     otto.call(json!({"cmd": "type", "pane": 1, "text": "echo typed-$((1+1))\r"}));
     otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^typed-2$", "timeout_ms": 40000}));
@@ -2324,7 +2326,7 @@ fn the_apps_section_lists_pinned_then_dock_then_all_apps_and_a_pin_is_written_to
 
     // List mode: no app runs in a test, so the first row is the pinned app. A client's `p`, `x`
     // or `u` there does nothing: the list and the file stay as they are.
-    let client = otto.call(json!({"cmd": "key", "keys": "cmd-shift-e j j p x u"}));
+    let client = otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-e j j p x u"}));
     assert_eq!(names(&client["apps_bar"]["not_running"]), ["Sketchpad*", "Quill", "Kestrel Mail", "Harbor"]);
     assert_eq!(
         (&client["apps_bar"]["undo"], client["state"]["list"].as_u64(), file()),
@@ -2459,7 +2461,7 @@ fn a_settings_file_that_cannot_be_read_is_not_written_and_dock_suggestions_can_b
     let reply = listed(&otto, 2);
     assert_eq!(reply["apps_bar"]["not_running"][0]["name"], "Quill");
     // A pin shows for this run, the file stays as it was, and the status bar says so.
-    let reply = otto.user_key("cmd-shift-e p");
+    let reply = otto.user_key("cmd-ctrl-e p");
     assert_eq!(reply["apps_bar"]["not_running"][0]["pinned"], true);
     assert!(
         reply["notice"]
@@ -2479,7 +2481,7 @@ fn a_settings_file_that_cannot_be_read_is_not_written_and_dock_suggestions_can_b
     let reply = listed(&otto, 2);
     assert_eq!((&reply["apps_bar"]["not_running"], &reply["apps_bar"]["all_count"]), (&json!([]), &json!(2)));
     // With no row above it, list mode starts on the heading: ↵ unfolds it, and `p` pins Harbor.
-    let reply = otto.user_key("cmd-shift-e enter j p");
+    let reply = otto.user_key("cmd-ctrl-e enter j p");
     assert_eq!(reply["apps_bar"]["not_running"][0]["name"], "Harbor");
     let kept = std::fs::read_to_string(off.join("settings.json")).unwrap();
     assert_eq!(kept, "{\"suggest_dock_apps\": false, \"apps\": [\"Harbor\"]}");
@@ -2493,7 +2495,7 @@ fn a_settings_file_that_cannot_be_read_is_not_written_and_dock_suggestions_can_b
     let vars: Vec<(&str, &str)> = vars.iter().map(|(name, value)| (*name, value.as_str())).collect();
     let otto = Otto::launch_with("apps-mixed", &vars);
     listed(&otto, 2);
-    let reply = otto.user_key("cmd-shift-e p");
+    let reply = otto.user_key("cmd-ctrl-e p");
     let notice = reply["notice"].as_str().unwrap_or_default();
     assert!(notice.contains("was not written") && notice.contains("`apps` is not a list of names"), "{notice}");
     assert_eq!(std::fs::read_to_string(mixed.join("settings.json")).unwrap(), odd);
@@ -2507,7 +2509,7 @@ fn a_settings_file_that_cannot_be_read_is_not_written_and_dock_suggestions_can_b
     let otto = Otto::launch_with("apps-live", &vars);
     listed(&otto, 2);
     std::fs::write(live.join("settings.json"), "{\"apps\": [\"Harbor\", \"Some Other App\"]}").unwrap();
-    let reply = otto.user_key("cmd-shift-e p");
+    let reply = otto.user_key("cmd-ctrl-e p");
     assert_eq!(reply["apps_bar"]["not_running"][0]["name"], "Quill");
     let kept = std::fs::read_to_string(live.join("settings.json")).unwrap();
     assert_eq!(kept, "{\"apps\": [\"Harbor\", \"Some Other App\", \"Quill\"]}");
@@ -2561,6 +2563,13 @@ fn picker_opens_a_terminal_in_the_chosen_direction() {
 
     otto.call(json!({"cmd": "picker"}));
     assert_eq!(otto.call(json!({"cmd": "picker_close"}))["mode"], "normal");
+
+    // ⌘⇧E picks into a pane below the focused one, ⌘E into one on its right.
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-shift-e enter"}))["state"]["focused"], 3);
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-e enter"}))["state"]["focused"], 4);
+    let [two, three, four] = otto.bounds(&[2, 3, 4])[..] else { panic!("three panes") };
+    assert!(two[1] + two[3] <= three[1], "3 is below 2: {two:?} {three:?}");
+    assert!(three[0] + three[2] <= four[0], "4 is right of 3: {three:?} {four:?}");
 
     // The key reference shows and hides.
     assert_eq!(otto.call(json!({"cmd": "keys"}))["state"]["keys"], true);
@@ -2888,9 +2897,11 @@ fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
     sneak(&otto);
     let after = otto.call(json!({"cmd": "key", "keys": "z"}));
     assert_eq!((&after["mode"], &after["sneak"], &after["state"]), (&json!("normal"), &Value::Null, &before["state"]));
-    // The mode's own key enters, and leaves.
+    // The mode's own keys enter, and leave.
     assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-g"}))["mode"], "sneak");
     assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-g"}))["mode"], "normal");
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-;"}))["mode"], "sneak");
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-;"}))["mode"], "normal");
 
     // A rail icon opens its section, where the task has a row; the bar's × closes it.
     let reply = sneak_to(&otto, "rail:tasks");
@@ -3251,7 +3262,7 @@ fn marks_are_a_way_back_to_a_pane_and_a_tab_and_are_kept_between_runs() {
     shell_is_in(&otto, 2, &notes);
 
     // List mode: ⇧J moves the selected mark down, M gives it a letter, R renames it in its row.
-    assert_eq!(key("cmd-shift-e")["mode"], "list");
+    assert_eq!(key("cmd-ctrl-e")["mode"], "list");
     assert_eq!(mark_names(&key("shift-j")), ["Tab 1", "notes"]);
     assert_eq!(key("shift-k")["state"]["list"], 0);
     assert_eq!(key("j")["state"]["list"], 1);
@@ -4043,7 +4054,7 @@ fn a_key_still_held_after_a_marks_wait_reaches_nothing() {
     // List mode: M, then a letter gives the mark that letter. Held, the letter does no more:
     // `j` would move down the list.
     otto.call(json!({"cmd": "mark_add", "pane": 2, "name": "two"}));
-    assert_eq!(otto.user_key("cmd-shift-e")["state"]["list"], 0);
+    assert_eq!(otto.user_key("cmd-ctrl-e")["state"]["list"], 0);
     assert_eq!(otto.user_key("m")["state"]["mark_input"]["type"], "set_key");
     // While it waits a held letter gives none.
     assert_eq!(otto.user_holds("q")["state"]["mark_input"]["type"], "set_key");
@@ -4666,7 +4677,7 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
     );
     assert_eq!((names(&updated), workbook_files(&home).len()), (vec!["dri".to_string()], 1));
     // List mode: U takes it back, R renames, X deletes and U puts back. Not for a client's keys.
-    assert_eq!(otto.user_key("cmd-shift-e")["state"]["list"], 0);
+    assert_eq!(otto.user_key("cmd-ctrl-e")["state"]["list"], 0);
     let undone = otto.user_key("u");
     assert_eq!((&undone["workbooks"][0]["summary"], &undone["workbook_offer"]), (&json!("2 terminals"), &Value::Null));
     assert_eq!(otto.user_key("r")["state"]["mark_input"]["type"], "workbook");
@@ -4725,7 +4736,7 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
     shell_is_in(&otto, panes[0], &one);
     shell_is_in(&otto, panes[1], &me);
     // Delete, by the word in its row. The other files are still there, as they were.
-    otto.user_key("cmd-shift-e");
+    otto.user_key("cmd-ctrl-e");
     let delete = at(rect(&otto.drawn()["workbooks"][0]["buttons"]["delete"]), 0.5, 0.5);
     assert!(names(&otto.user_click(delete)).is_empty());
     let left: Vec<String> =
@@ -4896,7 +4907,7 @@ fn a_workbook_keeps_several_tabs_and_opens_them_in_order() {
         let pane = *pane_ids(&split).last().unwrap();
         cd(&otto, pane, &two);
         // List mode on the workbook's row: a client's A adds nothing, the user's adds the tab on show.
-        assert_eq!(otto.user_key("cmd-shift-e")["state"]["list"], 0);
+        assert_eq!(otto.user_key("cmd-ctrl-e")["state"]["list"], 0);
         let refused = otto.call(json!({"cmd": "key", "keys": "a"}));
         assert_eq!(tabs(&refused), Some(1), "{refused}");
         let added = otto.user_key("a");
@@ -4935,7 +4946,7 @@ fn a_workbook_keeps_several_tabs_and_opens_them_in_order() {
     let alone = otto.user_click(tab_row);
     assert_eq!((titles(&alone).len(), &book(&alone)["tabs"][1]["open"]), (3, &json!(true)));
     // List mode: X on a tab's row takes it out of the workbook, U puts it back.
-    otto.user_key("cmd-shift-e");
+    otto.user_key("cmd-ctrl-e");
     otto.user_key("j j");
     let removed = otto.user_key("x");
     assert_eq!((tabs(&removed), &removed["workbook_offer"]), (Some(1), &json!("updated")));
@@ -4976,7 +4987,7 @@ fn a_workbooks_terminal_comes_back_with_its_lines_and_its_command_typed_not_run(
         // A second tab, added: the workbook keeps two.
         otto.call(json!({"cmd": "new_tab"}));
         otto.call(json!({"cmd": "split"}));
-        otto.user_key("cmd-shift-e");
+        otto.user_key("cmd-ctrl-e");
         let added = otto.user_key("a");
         let pane = &added["workbooks"][0]["tabs"][0]["panes"][0];
         let lines = pane["lines"].as_u64().unwrap_or_default();
@@ -5017,7 +5028,7 @@ fn a_workbooks_terminal_comes_back_with_its_lines_and_its_command_typed_not_run(
     otto.wait_for("↵ to run it", |_| (running(SLEEP) == 1).then_some(()));
     otto.call(json!({"cmd": "type", "pane": pane, "text": "\u{3}"}));
     // Deleting the workbook deletes its file, and the history in it.
-    assert_eq!(otto.user_key("cmd-shift-e")["state"]["sidebar"], "workbook");
+    assert_eq!(otto.user_key("cmd-ctrl-e")["state"]["sidebar"], "workbook");
     assert_eq!(otto.user_key("x")["workbook_offer"], "deleted");
     let left: Vec<String> =
         workbook_files(&home).iter().filter_map(|path| std::fs::read_to_string(path).ok()).collect();
