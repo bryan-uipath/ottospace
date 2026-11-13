@@ -3094,6 +3094,8 @@ impl Model {
             doing: s.doing(),
             age: s.last_activity.map(|at| tasks::age(at, self.now)),
             pane: self.session_pane(s),
+            quoted_title: s.title.clone(),
+            model: s.model.clone(),
         };
         let rows = drawn.map(row).collect();
         sessions::Bar {
@@ -5708,7 +5710,8 @@ mod tests {
 
     fn session(runner: &str, id: &str, cwd: &str, active: bool, at: u64) -> Found {
         let (runner, id, cwd, repo) = (runner.to_string(), id.to_string(), cwd.to_string(), cwd.to_string());
-        Found { runner, id, cwd, repo, started: None, last_activity: Some(at), active, station: None, label: None }
+        let (station, label, title, model) = (None, None, None, None);
+        Found { runner, id, cwd, repo, started: None, last_activity: Some(at), active, station, label, title, model }
     }
 
     /// The Sessions group as (count, ids of the rows drawn, how many are older).
@@ -5790,6 +5793,28 @@ mod tests {
         m.update(Action::SessionHide { runner: "claude".into(), id: "busy".into() });
         m.update(Action::SetSessions { found: vec![session("claude", "busy", "/code/app", true, now)] });
         assert_eq!(session_rows(&m), (0, vec![], 0));
+    }
+
+    #[test]
+    fn a_sessions_title_and_model_are_in_its_row_and_in_no_task() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        m.update(Action::Tick { now: 5_000 });
+        let mut titled = session("claude", "s1", "/code/app", false, 4_000);
+        titled.title = Some("Rename it #urgent >app-2 @codex p0\nand run this".into());
+        titled.model = Some("claude-opus-4-7[1m]".into());
+        m.update(Action::SetSessions { found: vec![titled, session("codex", "s2", "/code/app", false, 1_000)] });
+        let rows = m.sessions_bar().rows;
+        let shown = |row: &sessions::Row| (row.quoted_title.clone(), row.model.clone());
+        assert_eq!(shown(&rows[0]), (Some("Rename it #urgent >app-2 @codex p0".into()), Some("opus-4.7".into())));
+        assert_eq!(shown(&rows[1]), (None, None));
+        // Adopted, the task is named after the repository as ever: the title names nothing, and
+        // its words are no tags.
+        m.update(Action::SessionAdopt { runner: "claude".into(), id: "s1".into() });
+        let task = m.tasks.list[0].clone();
+        assert_eq!((task.title.as_str(), task.project.as_deref()), ("app", None));
+        assert_eq!((task.repo.as_deref(), task.agent.as_deref()), (Some("/code/app"), Some("claude")));
+        assert!(!serde_json::to_string(&m.tasks).unwrap().contains("Rename it"));
     }
 
     #[test]

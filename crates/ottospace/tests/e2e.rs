@@ -1340,6 +1340,8 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
     let (recent, long_ago) = (rollout("11/12", "09-30-00", idle), rollout("03/02", "15-00-00", old));
     session_fixture(&format!("codex/{recent}"), &codex.join(&recent), &repo, hours(2));
     session_fixture(&format!("codex/{long_ago}"), &codex.join(&long_ago), &repo.join("docs"), hours(72));
+    // Codex's names for its threads: one for the idle session, none for the old one.
+    session_fixture("codex/session_index.jsonl", &codex.join("session_index.jsonl"), &repo, hours(2));
     let settings = |sessions: bool| {
         let dirs = json!({"claude": [claude], "codex": codex});
         let settings = json!({"repos": [home.join("src")], "sessions": sessions, "session_dirs": dirs});
@@ -1385,8 +1387,13 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
         (&json!(1), &json!("network · git push"), &Value::Null)
     );
     assert_eq!((&bar["rows"][0]["age"], &bar["rows"][1]["age"]), (&json!("now"), &json!("2h")));
+    // Each row's title, quoted (the last one its file has), and its model in short.
+    let named = |row: &Value| (row["quoted_title"].clone(), row["model"].clone());
+    assert_eq!(named(&bar["rows"][0]), (json!("Greet the user"), json!("fable-5.2")));
+    assert_eq!(named(&bar["rows"][1]), (json!("Tidy the imports"), json!("gpt-6-astra")));
     let reply = otto.call(json!({"cmd": "sessions_older"}));
     assert_eq!(rows(&reply)[2], row("codex", old, false));
+    assert_eq!(named(&reply["sessions_bar"]["rows"][2]), (Value::Null, json!("gpt-5.4")), "no title: none shown");
     otto.call(json!({"cmd": "sessions_older"}));
     // The words of the made-up conversation are nowhere in what the app says.
     let said = otto.call(json!({"cmd": "state"})).to_string();

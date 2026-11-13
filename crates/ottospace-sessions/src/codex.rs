@@ -1,10 +1,11 @@
 //! Codex. Rollouts: `<codex home>/sessions/<yyyy>/<mm>/<dd>/rollout-<time>-<id>.jsonl`.
 //! Schema seen in codex-cli 0.166.0 and in rollouts from earlier 2026 versions.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde_json::Value;
 
@@ -40,6 +41,8 @@ pub struct Codex {
     /// How many rollouts `sessions` looks at, newest day first. Rollouts have no index by directory.
     pub max_files: usize,
     heads: Cache<Head>,
+    /// Thread names by session id, from `session_index.jsonl`: read again only when it changed.
+    names: Cache<Arc<HashMap<String, String>>>,
 }
 
 /// What a rollout's first records say. They do not change as the file grows.
@@ -55,7 +58,7 @@ struct Head {
 impl Codex {
     /// A relative or empty `home` has no sessions.
     pub fn new(home: PathBuf) -> Self {
-        Self { home, max_files: 1000, heads: Cache::default() }
+        Self { home, max_files: 1000, heads: Cache::default(), names: Cache::default() }
     }
 
     /// `$CODEX_HOME` if set and not empty, or `~/.codex`.
@@ -90,6 +93,15 @@ impl Runner for Codex {
         Ok(sessions)
     }
 
+    /// The thread's name in `<codex home>/session_index.jsonl`, for the sessions that have one.
+    /// A rollout itself records no title.
+    fn title(&self, session: &SessionRef) -> Option<String> {
+        let index = self.home.join("session_index.jsonl");
+        let load = || Some(Arc::new(thread_names(&index)));
+        let (names, _) = self.names.get(&index, load).filter(|_| self.home.is_absolute())?;
+        names.get(&session.id).cloned()
+    }
+
     fn read(&self, session: &SessionRef, after: Cursor, budget: u64) -> io::Result<Batch> {
         let (file, mut cursor, restarted) = crate::open(&session.path, after)?;
         let mut events = Vec::new();
@@ -103,6 +115,21 @@ impl Runner for Codex {
         (cursor.offset, cursor.skipping) = (offset, skipping);
         Ok(Batch { events, cursor, restarted, more })
     }
+}
+
+/// Thread names by session id: `{"id", "thread_name", "updated_at"}` a line, a later line for an
+/// id replacing an earlier one. Only the index's last 1 MiB is read.
+fn thread_names(index: &Path) -> HashMap<String, String> {
+    let mut names = HashMap::new();
+    for line in jsonl::tail(index, 1 << 20).unwrap_or_default() {
+        let Ok(record) = serde_json::from_str::<Value>(&line) else { continue };
+        let Some(id) = name_of(&record["id"]) else { continue };
+        match record["thread_name"].as_str().and_then(crate::title_text) {
+            Some(name) => names.insert(id, name),
+            None => names.remove(&id),
+        };
+    }
+    names
 }
 
 /// Collects up to `max` rollout files, walking `depth` levels of date folders with the newest names first.

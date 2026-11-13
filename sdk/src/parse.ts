@@ -497,6 +497,8 @@ function sessionRow(value: unknown, at: string): SessionRow {
     doing: orNull(str)(o.doing, `${at}.doing`),
     age: orNull(str)(o.age, `${at}.age`),
     pane: orNull(num)(o.pane, `${at}.pane`),
+    quoted_title: orNull(str)(o.quoted_title, `${at}.quoted_title`),
+    model: orNull(str)(o.model, `${at}.model`),
   };
 }
 

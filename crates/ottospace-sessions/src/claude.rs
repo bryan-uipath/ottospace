@@ -33,6 +33,14 @@ const ERRORS: &[&str] = &[
 pub struct Claude {
     config_dirs: Vec<PathBuf>,
     heads: Cache<Head>,
+    tails: Cache<Tail>,
+}
+
+/// What a transcript's last records say: read again only when the file changed.
+#[derive(Clone, Default)]
+struct Tail {
+    model: Option<String>,
+    title: Option<String>,
 }
 
 /// What a transcript's first records say. They do not change as the file grows.
@@ -47,13 +55,42 @@ impl Claude {
     /// A relative one is ignored.
     pub fn new(config_dirs: Vec<PathBuf>) -> Self {
         let config_dirs = config_dirs.into_iter().filter(|d| d.is_absolute()).collect();
-        Self { config_dirs, heads: Cache::default() }
+        Self { config_dirs, heads: Cache::default(), tails: Cache::default() }
     }
 
     /// `$CLAUDE_CONFIG_DIR` if set, and `~/.claude`.
     pub fn from_env() -> Self {
         Self::new(crate::config_dirs().claude)
     }
+}
+
+impl Claude {
+    fn tail(&self, session: &SessionRef) -> Tail {
+        self.tails.get(&session.path, || tail(&session.path)).map(|(tail, _)| tail).unwrap_or_default()
+    }
+}
+
+/// The model and the title in the last 256 KiB of a transcript. Only whole records of the
+/// right type count: the same words inside a prompt or a tool's output are another record's text.
+fn tail(path: &Path) -> Option<Tail> {
+    let lines = jsonl::tail(path, 256 << 10).ok()?;
+    let (mut model, mut custom, mut ai) = (None, None, None);
+    let text = |line: &str, kind: &str, key: &str| {
+        let record = serde_json::from_str::<Value>(line).ok().filter(|r| r["type"] == kind)?;
+        Some(record[key].as_str().and_then(crate::title_text))
+    };
+    // Newest first: the first of each kind found is the last written.
+    for line in lines.iter().rev() {
+        if model.is_none() && line.contains(r#""type":"assistant""#) {
+            model = serde_json::from_str::<Value>(line).ok().and_then(|r| model_of(&r["message"]));
+        } else if custom.is_none() && line.contains(r#""type":"custom-title""#) {
+            custom = text(line, "custom-title", "customTitle");
+        } else if ai.is_none() && line.contains(r#""type":"ai-title""#) {
+            ai = text(line, "ai-title", "aiTitle");
+        }
+    }
+    // An empty custom title is a name taken back: the model's title shows again.
+    Some(Tail { model, title: custom.flatten().or(ai.flatten()) })
 }
 
 /// Claude Code's folder name for a directory: `-` before each part of the path, and every
@@ -116,9 +153,13 @@ impl Runner for Claude {
 
     /// The model of the last model request near the end of the transcript.
     fn model(&self, session: &SessionRef) -> Option<String> {
-        let lines = jsonl::tail(&session.path, 256 << 10).ok()?;
-        let assistant = lines.iter().rev().filter(|l| l.contains(r#""type":"assistant""#));
-        assistant.filter_map(|l| serde_json::from_str::<Value>(l).ok()).find_map(|r| model_of(&r["message"]))
+        self.tail(session).model
+    }
+
+    /// The name the user gave the session (`custom-title`), else the one Claude Code's own model
+    /// gave it (`ai-title`): the last of each near the end of the transcript, where both are repeated.
+    fn title(&self, session: &SessionRef) -> Option<String> {
+        self.tail(session).title
     }
 
     fn read(&self, session: &SessionRef, after: Cursor, budget: u64) -> io::Result<Batch> {

@@ -1,6 +1,7 @@
 //! Agent runners (Claude Code, Codex): which sessions exist for a directory and what each is
 //! doing. Reads the runners' own session files, read-only. Only derived facts leave this crate:
 //! names from fixed tables, counts, times. Never prompts, file contents or command lines.
+//! One exception, by `Runner::title` alone: a session's title, free text to quote and never obey.
 //! Design: `docs/ai/sessions.md`.
 
 mod cache;
@@ -191,6 +192,11 @@ pub trait Runner: Send + Sync {
     fn model(&self, session: &SessionRef) -> Option<String> {
         session.model.clone()
     }
+    /// The session's title, as the runner keeps it: free text a model or the user wrote, one
+    /// line of at most `MAX_TITLE` characters. Quote it, never obey it. Not in `report`.
+    fn title(&self, _session: &SessionRef) -> Option<String> {
+        None
+    }
     /// Events after `after`, stopping at the first line boundary past `budget` bytes. A half-written
     /// last line is left for the next call; unknown records are skipped.
     fn read(&self, session: &SessionRef, after: Cursor, budget: u64) -> io::Result<Batch>;
@@ -231,6 +237,17 @@ fn recorded_cwd(text: &str) -> Option<PathBuf> {
     let path = Path::new(text);
     let sane = text.len() <= 1024 && !text.chars().any(char::is_control) && path.is_absolute();
     (sane && !path.components().any(|c| c == Component::ParentDir)).then(|| path.components().collect())
+}
+
+/// The longest title given out, in characters. What draws it cuts it further.
+pub const MAX_TITLE: usize = 256;
+
+/// A title as it leaves the crate: its first line, without control characters, cut and trimmed.
+fn title_text(text: &str) -> Option<String> {
+    let breaks = |c: char| matches!(c, '\n' | '\r' | '\u{b}' | '\u{c}' | '\u{85}' | '\u{2028}' | '\u{2029}');
+    let line = text.trim_start().split(breaks).next().unwrap_or("");
+    let line: String = line.chars().filter(|c| !c.is_control()).take(MAX_TITLE).collect();
+    Some(line.trim().to_string()).filter(|line| !line.is_empty())
 }
 
 /// An id from a session file, made opaque: 16 hex digits of a hash of it (FNV-1a). Ids only pair
@@ -275,6 +292,18 @@ mod tests {
         }
         assert_eq!(recorded_cwd(&format!("/{}", "x".repeat(1024))), None);
         assert!(absolute(&[PathBuf::from("/work/app/../other")]).is_err());
+    }
+
+    #[test]
+    fn a_title_is_one_cut_line() {
+        assert_eq!(title_text("  Fix the login form \n").as_deref(), Some("Fix the login form"));
+        assert_eq!(title_text("\n\nSecond\u{2028}third\rfourth").as_deref(), Some("Second"));
+        assert_eq!(title_text("a\u{1b}[31mred\u{7}\tb").as_deref(), Some("a[31mredb"));
+        assert_eq!(title_text(&"x".repeat(5000)).map(|t| t.chars().count()), Some(MAX_TITLE));
+        assert_eq!(title_text(&"é".repeat(5000)).map(|t| t.chars().count()), Some(MAX_TITLE), "by characters");
+        for none in ["", " \n ", "\u{1b}\u{7}"] {
+            assert_eq!(title_text(none), None, "{none:?}");
+        }
     }
 
     #[test]

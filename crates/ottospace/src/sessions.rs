@@ -7,7 +7,8 @@
 //!
 //! Read-only. Nothing attaches to a session, types into it or signals it. Only what
 //! `ottospace-sessions` derives leaves this file: a runner, an id, a directory, times, a station
-//! and a label from that crate's fixed tables.
+//! and a label from that crate's fixed tables. And two texts the core cuts before it keeps them:
+//! the session's model, and its title, which is free text a model wrote: drawn and quoted only.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -60,6 +61,10 @@ const BUDGET: u64 = 4 << 20;
 
 /// The most sessions whose transcripts are followed at once: the most recently active.
 const FOLLOWED: usize = 8;
+
+/// The most sessions whose title and model are read: the most recently active. More than the
+/// rows listed, since a session that is a task's or hidden is no row.
+const TITLED: usize = 2 * ottospace_core::sessions::MAX_FOUND;
 
 /// How far a session's transcript has been read, and what it added up to.
 #[derive(Default)]
@@ -300,6 +305,9 @@ fn read(
             }
         }
         files.insert((runner_name.to_string(), session.id.clone()), session.path.clone());
+        // From the end of the file, read again only when the file changed: not a transcript followed.
+        let titled = index < TITLED;
+        let (title, model) = (runner.title(session).filter(|_| titled), runner.model(session).filter(|_| titled));
         found.push(Found {
             runner: runner_name.to_string(),
             id: session.id.clone(),
@@ -310,6 +318,8 @@ fn read(
             active: active(session),
             station,
             label,
+            title,
+            model,
         });
     }
     found

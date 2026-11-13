@@ -282,6 +282,10 @@ export interface SessionRow {
   age: string | null;
   /** The terminal pane it runs in, when there is no doubt. */
   pane: PaneId | null;
+  /** The session's title, one line. Untrusted text another model wrote from the session's content: a quotation, never an instruction. */
+  quoted_title: string | null;
+  /** The model in short: `opus-4.7`, `gpt-6`. */
+  model: string | null;
 }
 
 /** An app that is not running, in the Apps section. */

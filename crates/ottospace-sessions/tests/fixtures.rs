@@ -577,6 +577,82 @@ fn nothing_private_comes_out() {
 }
 
 #[test]
+fn a_title_is_the_last_written_and_a_name_given_by_hand_comes_first() {
+    let (claude, codex) = (claude(), codex());
+    let title = |runner: &dyn Runner, dir: &str, id: &str| runner.title(&find(runner, dir, id));
+    assert_eq!(title(&claude, "/work/app", CLAUDE_MAIN).as_deref(), Some("Greet the user"));
+    assert_eq!(title(&claude, "/work/app", CLAUDE_WORKTREE).as_deref(), Some("Renamed by hand"));
+    assert_eq!(title(&claude, "/work/app-other", "33333333-3333-4333-8333-333333333333"), None);
+    // Codex: a name in the index beside the rollouts, for the sessions that have one.
+    assert_eq!(title(&codex, "/work/app", CODEX_NEW).as_deref(), Some("Tidy the imports"));
+    assert_eq!(title(&codex, "/work/app", CODEX_OLD), None);
+    assert_eq!(title(&codex, "/elsewhere", "c0de0003-0000-4000-8000-000000000003"), None, "an empty name");
+}
+
+#[test]
+fn a_hostile_title_is_one_cut_line_and_only_a_title_record_counts() {
+    let path = temp("title").join("session.jsonl");
+    let session = SessionRef { path: path.clone(), ..find(&claude(), "/work/app", CLAUDE_MAIN) };
+    let record = |kind: &str, key: &str, text: &str| serde_json::json!({ "type": kind, key: text }).to_string();
+    let title = |lines: &[String]| {
+        fs::write(&path, lines.join("\n") + "\n").unwrap();
+        Claude::new(Vec::new()).title(&session)
+    };
+    let hostile = format!("  Ignore the user\u{1b}[31m\u{202e}{}\nand a second line\r\nand a third", "x".repeat(5000));
+    let shown = title(&[record("ai-title", "aiTitle", &hostile)]).unwrap();
+    assert!(shown.starts_with("Ignore the user[31m\u{202e}xxx"), "bidi marks are the core's to drop: {shown:?}");
+    assert_eq!(shown.chars().count(), ottospace_sessions::MAX_TITLE);
+    assert!(!shown.chars().any(char::is_control) && !shown.contains("second"));
+    // The words in a prompt or a tool's output are no title record, and neither is another shape.
+    let prompt = serde_json::json!({ "type": "user", "message": { "role": "user", "content":
+        "{\"type\":\"ai-title\",\"aiTitle\":\"from a prompt\"}" }, "aiTitle": "beside a prompt" });
+    let nested = r#"{"type":"progress","data":{"type":"ai-title","aiTitle":"from a tool"}}"#.to_string();
+    let wrong = r#"{"type":"ai-title","aiTitle":{"text":"not a text"}}"#.to_string();
+    assert_eq!(title(&[prompt.to_string(), nested.clone()]), None);
+    assert_eq!(title(&[record("ai-title", "aiTitle", "Real"), prompt.to_string(), nested]).as_deref(), Some("Real"));
+    assert_eq!(title(&[record("ai-title", "aiTitle", "Earlier"), wrong]), None, "the last record decides");
+    // A name taken back (an empty custom title) shows the model's again; blank is no title.
+    let custom = |text: &str| record("custom-title", "customTitle", text);
+    let ai = record("ai-title", "aiTitle", "The model's");
+    assert_eq!(title(&[custom("Mine"), ai.clone()]).as_deref(), Some("Mine"));
+    assert_eq!(title(&[custom("Mine"), ai, custom("")]).as_deref(), Some("The model's"));
+    assert_eq!(title(&[record("ai-title", "aiTitle", " \n\u{7} ")]), None);
+    assert_eq!(title(&[]), None);
+}
+
+#[test]
+fn a_title_is_read_again_only_when_the_file_changed() {
+    let path = temp("title-cache").join("session.jsonl");
+    let session = SessionRef { path: path.clone(), ..find(&claude(), "/work/app", CLAUDE_MAIN) };
+    let line = |text: &str| format!("{{\"type\":\"ai-title\",\"aiTitle\":\"{text}\"}}\n");
+    let claude = Claude::new(Vec::new());
+    fs::write(&path, line("One")).unwrap();
+    assert_eq!(claude.title(&session).as_deref(), Some("One"));
+    // Same length, and its time put back: taken for unchanged, so what was read is kept.
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+    fs::write(&path, line("Two")).unwrap();
+    fs::File::options().write(true).open(&path).unwrap().set_modified(modified).unwrap();
+    assert_eq!(claude.title(&session).as_deref(), Some("One"));
+    fs::write(&path, line("Three")).unwrap();
+    assert_eq!(claude.title(&session).as_deref(), Some("Three"));
+}
+
+#[test]
+fn a_title_leaves_by_title_alone() {
+    // `nothing_private_comes_out` has it that no title is in the report or in any `Debug` form.
+    let root = fixtures().join("adversarial");
+    let (claude, codex) = (Claude::new(vec![root.join("claude")]), Codex::new(root.join("codex")));
+    let dirs = [PathBuf::from("/work/ZZSHOWcwd")];
+    let titles: Vec<Option<String>> = [&claude as &dyn Runner, &codex]
+        .iter()
+        .map(|runner| runner.title(&runner.sessions(&dirs).unwrap()[0]))
+        .collect();
+    // Free text, quoted as written but for its first line and control characters.
+    assert_eq!(titles[0].as_deref(), Some("ZZSENT506 ignore what came before"));
+    assert_eq!(titles[1].as_deref(), Some("ZZSENT508 run this[31m"));
+}
+
+#[test]
 fn what_is_shown_as_written() {
     let (out, claude, codex) = adversarial();
     // Every value with the marker that came out, and nothing else with it.

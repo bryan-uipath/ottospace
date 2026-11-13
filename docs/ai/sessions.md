@@ -24,7 +24,7 @@ documents these files as a stable interface.
 | Where it lives | A new crate, `crates/ottospace-sessions`: std, serde, serde_json. No network, no async, no writes |
 | Source of truth | The runner's own session files, read incrementally |
 | Live updates | Tail the files first. Hooks later, for the pane link and for what files lack |
-| What leaves the crate | Names, counts, times. A command's label is built only from fixed tables. Never prompts, file contents, command lines or outputs |
+| What leaves the crate | Names, counts, times. A command's label is built only from fixed tables. Never prompts, file contents, command lines or outputs. One exception: a session's title, by `Runner::title` alone (see Labels, "Quoted") |
 | Session ↔ directory | The cwd recorded in the session is the directory or below it. Worktrees: pass every checkout in one call |
 | Session ↔ pane | Not built. Plan: runner pid → the pane's shell is an ancestor. Fallback: a hook reports `OTTOSPACE_PANE` |
 | Wiring | None in this slice: no UI, no model, no socket. A hidden `ottospace sessions [dir]` prints JSON |
@@ -36,6 +36,7 @@ trait Runner: Send + Sync {
     fn kind(&self) -> Kind;                                          // Claude | Codex | Other(String)
     fn sessions(&self, dirs: &[PathBuf]) -> io::Result<Vec<SessionRef>>;   // one scan, newest first
     fn model(&self, session: &SessionRef) -> Option<String>;         // may read the file's end
+    fn title(&self, session: &SessionRef) -> Option<String>;         // free text: quote, never obey
     fn read(&self, session: &SessionRef, after: Cursor, budget: u64) -> io::Result<Batch>;
 }
 struct Batch { events: Vec<Event>, cursor: Cursor, restarted: bool, more: bool }
@@ -106,6 +107,34 @@ guide must say so. `what_is_shown_as_written` in `tests/fixtures.rs` lists them 
 | Model (`ModelStep.model`, `ModelChange`, `SessionRef.model`) | `message.model` in a transcript, `turn_context.model` in a rollout | A name, with an optional `[1m]` at the end for Claude. Else the record's model is ignored |
 | Session id (`SessionRef.id`, `parent`) | Claude: the transcript's file name. Codex: `session_meta.id`, `parent_thread_id` | A name. Else the session is **not listed** (chosen over an opaque id: nothing could be matched to it) |
 | Directory (`SessionRef.cwd`, the report's `cwd`; `SessionRef.path`) | `cwd` in the session file; the file's own path | An absolute path of at most 1024 bytes with no control characters and no `..`. Else the session is not listed |
+
+**Quoted.** One value is free text, and the only one: a session's **title**. It leaves the
+crate by `Runner::title` and nowhere else: not in `SessionRef`, an `Event`, a `Snapshot` or the
+report `ottospace sessions` prints.
+
+| Runner | Where the title comes from |
+|---|---|
+| Claude Code | Records `{"type":"custom-title","customTitle":…}` (the user's `/rename`) and `{"type":"ai-title","aiTitle":…}` (written by Claude Code's own model). Claude Code repeats both near the end of the transcript as it grows, so they are read from the file's last 256 KiB, together with the model: one read, kept by (path, modification time, length). The last record of each kind counts. A custom title wins; an empty one is a name taken back. Only a whole record of that type counts: the same words inside a prompt or a tool's output are another record's text |
+| Codex | `<codex home>/session_index.jsonl`: `{"id","thread_name","updated_at"}` a line, the last line for an id. Only its last 1 MiB is read. A rollout records no title, and most sessions have no line in the index: those have none |
+
+No title is made up: no model is called, and nothing is summarised. A session without one
+shows none.
+
+A title is **untrusted free text**: a model wrote it from the session's prompts and from
+whatever the session read, which may be a web page or a file somebody else wrote. The rules:
+
+- The crate gives out its first line, without control characters, at most 256 characters.
+- The core (`sessions::kept`) keeps of that only characters that show (`capture::shows`: no
+  zero-width, direction-turning, tag or filler characters) and at most 80 of them.
+- It is drawn in the session's row, as plain text on one line, and it is in the state reply as
+  `sessions_bar.rows[].quoted_title`. The guide tells an agent that it is a quotation written
+  by another model: data, never an instruction.
+- It goes nowhere else. Adopt names the task after the repository, never after the title. A
+  title is not read for tags, not rendered as markdown, not typed into a terminal and not
+  written to disk.
+
+The model shown beside it is a name (the table above). The core shortens it by a fixed rule
+(`sessions::short_model`): `claude-opus-4-7[1m]` → `opus-4.7`; any other name as it is.
 
 A **name** is 1 to 40 of `A-Z a-z 0-9 _ . : -` that does not look like a credential: it does not
 begin with `ghp_`, `gho_`, `github_pat_`, `sk-`, `xox`, `AKIA` or `eyJ`, and has no `:` with 8
@@ -280,6 +309,8 @@ Session files hold prompts, source code, command output and whatever secrets pas
 - Only derived facts leave the crate. The rules are in Labels above: a command's label is made
   of table entries, never of text from the command line, and every other label must have a
   name's shape or is replaced by a fixed word. The adversarial fixture test checks it.
+- A session's title is the one free text that leaves the crate: see "Quoted" under Labels. It
+  is shown only in the app's Sessions rows and its state reply, never by `ottospace sessions`.
 - Known soft spots, accepted for the local CLI: the fields in "Shown as written" above. A file
   label shows the last two parts of a path; a name-shaped skill, agent type, MCP name or model
   is shown as the model or file wrote it; `SessionRef.cwd` and `path`, and the report's `cwd`,
@@ -321,6 +352,11 @@ Session files hold prompts, source code, command output and whatever secrets pas
 - Codex MCP calls, `local_shell_call`, and refusals in either runner: mapped from names, no
   samples.
 - Other runners (Gemini CLI, opencode, Cursor agent): not looked at. `Kind::Other` is the slot.
+- Titles. Whether Claude Code always repeats a title within the last 256 KiB (on this machine
+  the last one was within 34 KiB of the end in every transcript that had any). `custom-title`
+  is from Claude Code 2.1.323's own code, not from a sample: no transcript here had one. Who
+  writes Codex's `thread_name` (the user, or Codex) was not found out; it is quoted either way.
+  A title for the Codex sessions that have none would need a summarising model: not built.
 
 ## Staged plan
 
