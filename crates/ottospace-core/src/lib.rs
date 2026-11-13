@@ -4,6 +4,8 @@
 pub mod ax;
 pub mod compose;
 pub mod edit;
+#[cfg(test)]
+mod fuzz;
 pub mod home;
 pub mod hosted;
 pub mod keys;

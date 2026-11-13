@@ -213,10 +213,16 @@ fn typing(line: &str) -> Option<&str> {
 }
 
 /// Names that complete what is typed: those that start with it, then those that contain it,
-/// without regard to case. At most `MAX_SUGGESTIONS`.
+/// without regard to case. At most `MAX_SUGGESTIONS`. Only names a tag can have: typed after
+/// its mark, `My Project`, `2048` or `app.` would not read as that name.
 pub fn suggest<'a>(typed: &str, names: impl IntoIterator<Item = &'a str>) -> Vec<String> {
     let typed = typed.to_lowercase();
-    let mut names: Vec<&str> = names.into_iter().filter(|n| n.to_lowercase().contains(&typed)).collect();
+    let taggable = |n: &str| {
+        let tag = format!("#{n}");
+        words(&tag) == [tag.as_str()] && name(&tag, '#') == Some(n)
+    };
+    let fits = |n: &&str| taggable(n) && n.to_lowercase().contains(&typed);
+    let mut names: Vec<&str> = names.into_iter().filter(fits).collect();
     names.sort_by_key(|n| (!n.to_lowercase().starts_with(&typed), n.to_lowercase()));
     names.dedup();
     names.into_iter().take(MAX_SUGGESTIONS).map(str::to_string).collect()
@@ -426,5 +432,162 @@ mod tests {
         assert_eq!(completion_at("fix >app now", 6, "apollo"), (4..8, ">apollo".to_string()));
         assert_eq!(completion_at(r"see ~/My\ Notes now", 8, "~/My Notes/"), (4..15, r"~/My\ Notes/".to_string()));
         assert_eq!(completion_at("fix it", 6, "app"), (6..6, String::new()));
+    }
+
+    /// A draft as a line that reads as it: the tags, then the title. Tabs between them: a space
+    /// after a word that ends in a backslash would join it to the next.
+    fn rebuild(draft: &Draft) -> String {
+        let tag = |mark: char, name: &Option<String>| name.as_ref().map(|name| format!("{mark}{name}"));
+        let skills = draft.skills.iter().map(|skill| format!("${skill}"));
+        let paths = draft.paths.iter().map(|path| escape(path));
+        let priority = draft.priority.map(|n| format!("p{n}"));
+        let title = Some(draft.title.clone()).filter(|title| !title.is_empty());
+        let one = [tag('#', &draft.project), tag('>', &draft.repo), tag('@', &draft.agent)].into_iter().flatten();
+        one.chain(skills).chain(paths).chain(priority).chain(title).collect::<Vec<_>>().join("\t")
+    }
+
+    /// What must hold of any line, with names of any kind known. `Err`: what does not.
+    fn sound(line: &str, names: &[String], known: &dyn Fn(char, &str) -> bool) -> Result<(), String> {
+        let check = |holds: bool, why: String| if holds { Ok(()) } else { Err(format!("{line:?}: {why}")) };
+        let typed = words(line);
+        let draft = parse(line, known);
+        // A tag found is a word of the line, from its start: nothing is read out of the middle of one.
+        let one = [('#', &draft.project), ('>', &draft.repo), ('@', &draft.agent)];
+        let one = one.into_iter().filter_map(|(mark, name)| Some(format!("{mark}{}", name.as_ref()?)));
+        let many =
+            draft.skills.iter().map(|skill| format!("${skill}")).chain(draft.paths.iter().map(|path| escape(path)));
+        for tag in one.chain(many) {
+            check(typed.iter().any(|word| word.starts_with(&tag)), format!("the tag {tag:?} is no word of the line"))?;
+        }
+        let priority = |word: &&str| draft.priority.is_some_and(|n| word.to_lowercase().starts_with(&format!("p{n}")));
+        check(draft.priority.is_none() || typed.iter().any(priority), "the priority is no word of the line".into())?;
+        // The title is the other words, in their order.
+        let mut left = typed.iter();
+        let kept = words(&draft.title).len() == draft.title.split(' ').count() || draft.title.is_empty();
+        let in_order = draft.title.split(' ').all(|word| word.is_empty() || left.any(|typed| *typed == word));
+        check(!kept || in_order, format!("the title {:?} is not words of the line, in order", draft.title))?;
+        // Written out again, the draft reads as itself.
+        let (again, anew) = (rebuild(&draft), parse(&rebuild(&draft), known));
+        check(anew == draft, format!("{draft:?} written as {again:?} reads as {anew:?}"))?;
+        // `read` finds no tag `parse` would not, and never panics on what it is told is known.
+        let lists = Known {
+            names: Names { agents: names.to_vec(), skills: names.to_vec() },
+            paths: names.iter().map(|name| PathFound { typed: name.clone(), resolved: format!("/r{name}") }).collect(),
+            entries: Vec::new(),
+        };
+        let drafted = read(line, |name| known('>', name), &lists);
+        check(drafted.resolved.len() == drafted.paths.len(), "a path was read and not found".into())?;
+        check(drafted.skills.len() <= draft_all(line).skills.len(), "a skill came from nowhere".into())?;
+        let _ = path_words(line);
+        // Every name offered for the word being typed finishes it as that tag, wherever the cursor is.
+        for cursor in (0..=line.len()).filter(|at| line.is_char_boundary(*at)) {
+            let Some((mark, start)) = completing(&line[..cursor]) else { continue };
+            let offered = if mark == '/' { names.to_vec() } else { suggest(&start, names.iter().map(String::as_str)) };
+            // A path the shell lists is path-shaped. KNOWN (see the ignored test below): not one
+            // with a backslash, a tab or a line break in a name, which `escape` does not keep.
+            let typable = |name: &&String| !name.chars().any(|c| c == '\\' || (c.is_whitespace() && c != ' '));
+            let listed = |name: &&String| mark != '/' || (!path_candidates(name).is_empty() && typable(name));
+            for name in offered.iter().filter(listed) {
+                let (word, text) = completion_at(line, cursor, name);
+                let done = format!("{}{text}{}", &line[..word.start], &line[word.end..]);
+                // Up to the finished word: of two `@agent` the last counts, and one may follow.
+                let draft = draft_all(&done[..word.start + text.len()]);
+                let found = match mark {
+                    '#' => draft.project.as_ref() == Some(name),
+                    '>' => draft.repo.as_ref() == Some(name),
+                    '@' => draft.agent.as_ref() == Some(name),
+                    '$' => draft.skills.contains(name),
+                    _ => draft.paths.contains(name),
+                };
+                check(found, format!("at {cursor}, {name:?} completes to {done:?}, which reads as {draft:?}"))?;
+            }
+            if cursor == line.len() {
+                check(
+                    completion_at(line, cursor, "x") == completion(line, "x"),
+                    "the end of the line is not the end".into(),
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The line with every name known.
+    fn draft_all(line: &str) -> Draft {
+        parse(line, |_, _| true)
+    }
+
+    /// Found by the test below. `escape` puts a backslash before a space and nothing else, so a
+    /// path whose name holds a backslash before a space, a tab or a line break is offered and
+    /// then reads as another path, or as two words.
+    #[test]
+    #[ignore = "a decision: how a path with a backslash, a tab or a line break in a name is typed"]
+    fn a_path_with_a_backslash_or_a_tab_in_a_name_completes_to_itself() {
+        for name in ["~/a\\ b", "/src/a\tb", "/src/a\nb"] {
+            let done = complete("see /", name);
+            assert_eq!(draft_all(&done).paths, [name], "{done:?}");
+        }
+    }
+
+    /// Random lines of hostile pieces, tags and words. A failure prints the least pieces that
+    /// still fail, as one line.
+    #[test]
+    fn any_line_reads_the_same_again_and_completes_to_its_tag() {
+        use crate::fuzz::{self, HOSTILE, Rng};
+        const WORDS: [&str; 16] = [
+            "fix",
+            "zoom",
+            "#canvas",
+            ">app",
+            "@claude",
+            "$deploy",
+            "/src/export",
+            "~/My\\ Notes/",
+            "p1",
+            "P9,",
+            "p0",
+            "#",
+            ">ap",
+            "@Claude",
+            "/",
+            "$5",
+        ];
+        const NAMES: [&str; 12] = [
+            "app",
+            "apollo",
+            "Claude",
+            "code-review",
+            "My Project",
+            "2048",
+            "app.",
+            "a,b",
+            "été",
+            "/src/My Dir/",
+            "~/notes.md",
+            "",
+        ];
+        let one = |seed: u64| {
+            let mut rng = Rng::new(seed);
+            let piece = |rng: &mut Rng| match rng.below(4) {
+                0 => rng.pick(HOSTILE).to_string(),
+                1 => rng.pick(&[" ", " ", "  ", "\t", ""]).to_string(),
+                _ => rng.pick(&WORDS).to_string(),
+            };
+            let pieces: Vec<String> = (0..rng.below(12)).map(|_| piece(&mut rng)).collect();
+            let hostile = |rng: &mut Rng| rng.pick(HOSTILE).to_string() + rng.pick(HOSTILE);
+            let names: Vec<String> =
+                NAMES.iter().map(|name| name.to_string()).chain((0..3).map(|_| hostile(&mut rng))).collect();
+            // Every name known, none, or the names of even length.
+            let which = seed % 3;
+            let known = move |_: char, name: &str| which == 0 || (which == 2 && name.chars().count().is_multiple_of(2));
+            let check =
+                |pieces: &[String]| fuzz::caught(|| sound(&pieces.concat(), &names, &known)).unwrap_or_else(Err);
+            check(&pieces).is_err().then(|| {
+                let least = fuzz::shrink(pieces, |pieces| check(pieces).is_err());
+                format!("seed {seed}, names {names:?}: {}", check(&least).err().unwrap_or_default())
+            })
+        };
+        if let Some(report) = fuzz::each_seed(0, 20_000, one) {
+            panic!("{report}");
+        }
     }
 }

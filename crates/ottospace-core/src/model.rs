@@ -1184,7 +1184,11 @@ impl Model {
         // alone while a box or a mode holds the keyboard: the view must not change under what
         // the user is doing. Not a refusal: the task is filed all the same.
         let action = match action {
-            Action::TaskFromLine { line, known, open: true } if !user && self.holds_keyboard() => {
+            // Nor for the user where `TaskOpen` itself would wait, e.g. in visual mode: its
+            // terminal must stay on show.
+            Action::TaskFromLine { line, known, open: true }
+                if (!user && self.holds_keyboard()) || self.waits(&Action::TaskOpen { id: None }).is_some() =>
+            {
                 Action::TaskFromLine { line, known, open: false }
             }
             action => action,
@@ -1312,7 +1316,15 @@ impl Model {
             }
             Action::Open { kind, axis, beside } => drop(self.open(kind, axis, beside, effects)),
             Action::SetRepos { repos } => self.repos = repos::arrange(repos),
-            Action::RestoreTasks { tasks, floor } => self.tasks.restore(tasks, floor),
+            Action::RestoreTasks { tasks, floor } => {
+                self.tasks.restore(tasks, floor);
+                // A tab of a task that is not among them is a tab of no task, and the bar
+                // shows the tabs of whatever the tab on show is of.
+                for tab in &mut self.tabs {
+                    tab.task = tab.task.filter(|id| self.tasks.get(*id).is_some());
+                }
+                self.current_task = self.tabs.get(self.active).and_then(|tab| tab.task);
+            }
             Action::TaskAdd { title, priority, state, tab, assign } => {
                 let id = self.file(title, priority, state);
                 self.tasks.assign(id, assign);
@@ -1500,7 +1512,9 @@ impl Model {
             }
             Action::DropPane { source, target, zone } => self.drop_pane(source, target, zone, effects),
             Action::PaneWants { pane, content, outer, window } => {
-                if let Some(pane) = self.panes.iter_mut().find(|p| p.id == pane) {
+                // Only an app pane has a window to measure: a fit is never a terminal's.
+                let app = |p: &&mut Pane| p.id == pane && matches!(p.kind, Kind::App { .. });
+                if let Some(pane) = self.panes.iter_mut().find(app) {
                     pane.fit = hosted::fit(content, outer, window);
                 }
             }
@@ -1634,17 +1648,18 @@ impl Model {
             }
             Action::LeaveList => {}
             Action::ListMove { delta } => {
-                let rows = self.list_rows().len() as i32;
+                // i64: `delta` comes from the socket and may be any i32.
+                let rows = self.list_rows().len() as i64;
                 if let Some(at) = self.list.filter(|_| rows > 0) {
-                    self.list = Some((at as i32 + delta).rem_euclid(rows) as usize);
+                    self.list = Some((at as i64 + i64::from(delta)).rem_euclid(rows) as usize);
                 }
             }
             Action::ListSection { delta } => {
                 // Workbook has no rows yet, so the keys pass over it.
                 const ORDER: [Section; 4] = [Section::Apps, Section::Tasks, Section::Repos, Section::Marks];
-                let at = ORDER.iter().position(|s| Some(*s) == self.sidebar).unwrap_or(0) as i32;
+                let at = ORDER.iter().position(|s| Some(*s) == self.sidebar).unwrap_or(0) as i64;
                 if self.list.is_some() {
-                    self.sidebar = Some(ORDER[(at + delta).rem_euclid(ORDER.len() as i32) as usize]);
+                    self.sidebar = Some(ORDER[(at + i64::from(delta)).rem_euclid(ORDER.len() as i64) as usize]);
                     self.list = Some(self.first_row());
                 }
             }
@@ -1790,6 +1805,9 @@ impl Model {
                 if let Some(sneak) = &mut self.sneak {
                     sneak.redraw(&targets);
                 }
+                // No labelled control is drawn any more: there is nothing to type, as when
+                // the mode would start with nothing to label.
+                self.sneak = self.sneak.take().filter(|sneak| !sneak.targets.is_empty());
             }
             Action::SneakType { text } => {
                 let Some(sneak) = &mut self.sneak else { return };
@@ -1820,10 +1838,7 @@ impl Model {
             Action::QuitConfirm if self.confirm.is_some() => effects.push(Effect::Quit),
             Action::QuitConfirm | Action::QuitCancel => {}
             Action::Quit => effects.push(Effect::Quit),
-            Action::RestoreMarks { marks, extra } => {
-                self.marks.restore(marks);
-                self.marks.extra = extra;
-            }
+            Action::RestoreMarks { marks, extra } => self.restore_marks(marks, extra),
             Action::MarkAdd { of, name, key, uid, cwds } => self.mark_add(of, name, key, uid, &cwds),
             Action::MarkToggle { of, uid, cwds } => self.mark_toggle(of, uid, &cwds),
             Action::Titles { titles } => self.retitle(titles),
@@ -2212,7 +2227,10 @@ impl Model {
         let id = match empty.and_then(|t| self.panes.iter_mut().find(|p| p.id == t)) {
             Some(pane) => {
                 pane.kind = kind;
-                pane.id
+                let id = pane.id;
+                // The empty pane may be in a background tab: focus is on a pane of the tab on show.
+                self.show_tab_of(id, effects);
+                id
             }
             None => self.add(kind, target, axis),
         };
@@ -2486,6 +2504,7 @@ impl Model {
         let Some(i) = self.panes.iter().position(|p| p.id == id) else { return };
         let closed = self.panes.remove(i);
         self.detach(id);
+        self.marks.forget_pane(id);
         if self.live == Some(id) {
             self.live = None;
         }
@@ -2537,6 +2556,8 @@ mod tests {
     use super::*;
     use crate::edit::Motion;
     use crate::layout::Axis::{Down, Right};
+
+    mod prop;
 
     fn app(window: u32) -> Kind {
         Kind::App { window, title: format!("w{window}"), bundle: None, name: "app".into() }

@@ -27,6 +27,13 @@ Rules:
 ## Tests
 
 - **Inner loop:** `cargo test`. Core unit tests. Fast, no window.
+- **Property tests**, part of `cargo test`: seeded random sequences, with what must hold after every
+  step. The model's (`crates/ottospace-core/src/model/tests/prop.rs`) sends every `Action` from every
+  `Origin`; `layout.rs`, `compose.rs` and `edit.rs` have their own. A new `Action` needs a maker in
+  `MAKERS` (a test fails until it has one), and a new rule about the model belongs in `check`. A
+  failure prints its seed and the least steps that still fail, as a test: paste it under
+  "Regressions" and fix the bug. `OTTOSPACE_PROP_SEED=<n>` runs one sequence again;
+  `cargo test -p ottospace-core --release -- --ignored random_actions` is the long run.
 - **Outer loop:** `cargo e2e`. Launches the real app and drives it over the control socket
   (`crates/ottospace/tests/e2e.rs`). Use it for anything the core cannot prove: drawing, layout
   bounds, key bindings, socket protocol.
