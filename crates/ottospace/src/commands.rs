@@ -10,6 +10,11 @@ use ottospace_core::{Action, theme};
 
 use crate::*;
 
+thread_local! {
+    /// The query and highlighted row last drawn.
+    static SHOWN: std::cell::RefCell<Option<(String, usize)>> = const { std::cell::RefCell::new(None) };
+}
+
 // ⌘P, and the Developer menu's own.
 actions!(ottospace, [CommandPalette, CopyState, OpenSettings, OpenFolder]);
 
@@ -132,9 +137,6 @@ impl Workspace {
             }
         };
         self.dispatch(action, self.input, window, cx);
-        if let Some(palette) = &self.model.palette {
-            self.bars.scroll_to_item("palette", palette.selected);
-        }
         cx.stop_propagation();
     }
 
@@ -161,6 +163,11 @@ impl Workspace {
 
     /// The palette: a box near the top, over the dimmed workspace. A click outside closes it.
     pub fn render_palette(&self, palette: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
+        // The highlighted row comes into view when it or the query changes (↑↓, typing, a paste).
+        let now = (palette.query.text().to_string(), palette.selected);
+        if SHOWN.replace(Some(now.clone())) != Some(now) {
+            self.bars.scroll_to_item("palette", palette.selected);
+        }
         let keymap = cx.key_bindings();
         let keymap = keymap.borrow();
         let rows = palette.matches().into_iter().enumerate().map(|(i, command)| {

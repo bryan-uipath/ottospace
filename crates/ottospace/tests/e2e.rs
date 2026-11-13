@@ -4878,5 +4878,14 @@ fn the_command_palette_runs_a_command_by_name_for_the_user_alone() {
     // ↑ from the first row wraps to the last; Esc closes it.
     otto.user_key("cmd-p up");
     assert_eq!(state()["state"]["palette"]["selected"], rows.len() - 1);
+    // The highlighted row is in view: at the end of the list, then back at its top once typing moves it.
+    let thumb = |o: &Otto| {
+        let bar = &o.call(json!({"cmd": "state"}))["scrollbars"]["palette"];
+        let (track, thumb) = (rect(&bar["track"]), rect(&bar["thumb"]));
+        (track[1] + track[3] - thumb[1] - thumb[3] < 1.0, thumb[1] - track[1] < 1.0)
+    };
+    otto.wait_for("the last row in view", |o| Some(()).filter(|_| thumb(o).0));
+    otto.user_key("space");
+    otto.wait_for("the first row in view", |o| Some(()).filter(|_| thumb(o).1));
     assert_eq!(otto.user_key("escape")["mode"], "normal");
 }
