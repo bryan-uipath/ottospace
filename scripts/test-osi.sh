@@ -189,13 +189,13 @@ run "$osi" update
 check "update installs the newer build" installed_is B
 check "an update does not repeat the permissions note" not_says "Accessibility"
 check "nor compare commits, as --check does" not_says "installed is"
-check "main's tip unknown: nothing about main" not_says "main is ahead"
+check "main's tip unknown: nothing about main" not_says "main has newer commits"
 commit b | tr -d '\n' >"$work/main-tip"
 run "$osi" update
-check "the build is main's tip: nothing about main" not_says "main is ahead"
+check "the build is main's tip: nothing about main" not_says "main has newer commits"
 commit c | tr -d '\n' >"$work/main-tip"
 run "$osi" update
-check "main is ahead of an up-to-date build: said" says "main is ahead of this build (ccccccc); a newer build is not ready yet."
+check "main ahead of an up-to-date build: said" says "main has newer commits (ccccccc) than this build."
 rm "$work/main-tip"
 check "update keeps the previous binary" [ "$("$state/previous.bin")" = "fake ottospace A" ]
 

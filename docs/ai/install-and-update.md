@@ -178,18 +178,19 @@ app is running: "ottospace is running the old build: quit it and start it again.
 How osi knows (2026-11-13). Matching processes by program path counted `ottospace --version`
 and `ottospace ctl` as the app, and `ps` shows argv[0], not the path, for a program started from
 `PATH`. Now the app says it is running: at start, outside a test run, it writes
-`<home>/running` (0600, whole): its pid and its executable's resolved path, one per line. A clean
-quit removes it if it is still its own; a second instance writes over it. osi reads it (a regular
+`<home>/running` (0600, whole): its pid and its executable's resolved path, one per line. A
+second instance leaves a live other process's record alone and replaces a stale one (pid gone);
+a clean quit removes the file only if it names this process. osi reads it (a regular
 file of 4 KiB at most) and counts the app as running when the pid is alive, its executable
 (`lsof -d txt`) is the path in the file, and that path is the command or the app osi installed.
 A stale file (pid gone, or reused by another program) does not count. No socket connection, no
 argument parsing.
 
 An install prints at most three lines: the build (`Installed ottospace 0.1.0 (05e8136) from
-main`), "main is ahead of this build (<tip>); a newer build is not ready yet." when `main` has
-moved past the installed `main` build (one unauthenticated `commits/main` call; silent when it
-fails), and the running line. The permissions note shows on a first install only; it and
-`osi rollback` are in `osi help`. A docs-only commit on `main` also shows as ahead.
+main`), "main has newer commits (<tip>) than this build." when `main` has moved past the
+installed `main` build (one unauthenticated `commits/main` call; silent when it fails), and the
+running line. The permissions note shows on a first install only; it and `osi rollback` are in
+`osi help`. A docs-only commit on `main` counts too: true, and harmless, since it promises no build.
 
 **Proposed, not built: a notice in the app.** ottospace knows its own commit
 (`OTTOSPACE_COMMIT`). If the shell read `commit=` from `~/.ottospace/install/current` now and

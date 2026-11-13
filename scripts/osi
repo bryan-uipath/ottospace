@@ -440,7 +440,7 @@ note_behind() {
   tip="$(curl -fsS --proto "$proto" --tlsv1.2 --max-time 5 -H 'Accept: application/vnd.github.sha' "$main_url" 2>/dev/null |
     head -c 40)" || return 0
   if is_sha "$tip" 40 && [ "$tip" != "$1" ]; then
-    say "main is ahead of this build ($(printf '%.7s' "$tip")); a newer build is not ready yet."
+    say "main has newer commits ($(printf '%.7s' "$tip")) than this build."
   fi
 }
 
