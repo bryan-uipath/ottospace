@@ -93,7 +93,7 @@ fn claude_asks_is_allowed_is_interrupted_and_exits() {
     assert_eq!(first[0], started);
     let (call, permission) = (first.iter().find_map(tool_start), first.iter().find_map(permission));
     assert_eq!(call.as_deref(), Some("Bash git status"));
-    assert_eq!(permission.as_deref(), Some("Bash git status: git status --short"));
+    assert_eq!(permission.as_deref(), Some("Bash git status: command: git status --short"));
     assert!(first.iter().any(|event| matches!(event, Event::ToolEnd { failed: false, .. })));
     assert_eq!(
         texts(&first),
@@ -135,7 +135,10 @@ fn codex_asks_is_allowed_is_interrupted_and_exits() {
     let started = Event::Started { session: Some(CODEX_THREAD.into()), model: Some("gpt-6-astra".into()) };
     assert_eq!(first[0], started, "{first:#?}");
     assert_eq!(first.iter().find_map(tool_start).as_deref(), Some("exec cargo test"));
-    assert_eq!(first.iter().find_map(permission).as_deref(), Some("exec cargo test: cargo test\nin /work/app"));
+    assert_eq!(
+        first.iter().find_map(permission).as_deref(),
+        Some("exec cargo test: command: cargo test\ncwd: /work/app")
+    );
     assert!(first.iter().any(|event| matches!(event, Event::PermissionClosed { .. })));
     assert!(first.iter().any(|event| matches!(event, Event::ToolEnd { failed: false, .. })));
     assert_eq!(texts(&first), ["+Checking ", "+the tests.", "=Checking the tests."]);

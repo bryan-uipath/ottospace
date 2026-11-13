@@ -10,6 +10,7 @@ pub mod claude;
 pub mod codex;
 pub mod driver;
 pub mod lines;
+pub mod payload;
 
 use std::fmt;
 use std::io::{self, Read};
@@ -351,16 +352,6 @@ pub fn is_uuid(id: &str) -> bool {
     id.len() == 36 && id.bytes().enumerate().all(|(at, c)| if dash(at) { c == b'-' } else { c.is_ascii_hexdigit() })
 }
 
-/// Text with what could hide or fake what is shown replaced by `�`: control characters but
-/// newline and tab, and bidirectional controls (`rm x\u{202e}gnp.y` must not read as `rm xy.png`).
-fn sanitise(text: &str) -> String {
-    let hidden = |c: char| {
-        (c.is_control() && c != '\n' && c != '\t')
-            || matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
-    };
-    text.chars().map(|c| if hidden(c) { '\u{fffd}' } else { c }).collect()
-}
-
 /// Why a request was denied unseen.
 const TOO_LONG: &str = "too long to show in full";
 
@@ -373,12 +364,13 @@ fn excerpt(full: &str) -> (Untrusted, bool) {
     }
 }
 
-/// A permission request, from the payload it asks to approve and the model's claim about it.
+/// A permission request, from the payload it asks to approve (built only by `Payload::field`,
+/// so every value is escaped) and the model's claim about it.
 struct Ask<'a> {
     tool: String,
     station: Station,
     label: String,
-    payload: &'a str,
+    payload: payload::Payload,
     claim: &'a str,
 }
 
@@ -389,19 +381,19 @@ impl Ask<'_> {
         if self.payload.len() > MAX_APPROVABLE {
             return self.denied(TOO_LONG);
         }
-        let full = sanitise(self.payload);
-        let (detail, cut) = excerpt(&full);
+        let full = self.payload.text();
+        let (detail, cut) = excerpt(full);
         let len = full.len();
-        ticket.full = Untrusted(full);
-        let claim = Untrusted::new(&sanitise(self.claim), MAX_DETAIL);
+        ticket.full = Untrusted(full.to_string());
+        let claim = Untrusted::new(&payload::escaped(self.claim), MAX_DETAIL);
         let (tool, label, station) = (self.tool, self.label, self.station);
         Event::Permission { ticket, tool, station, label, detail, len, cut, claim }
     }
 
     /// The request, denied without asking for `reason`; what it asked is still shown.
     fn denied(self, reason: &'static str) -> Event {
-        let shown = Untrusted::new(self.payload, MAX_APPROVABLE);
-        let (detail, _) = excerpt(&sanitise(shown.text()));
+        let shown = Untrusted::new(self.payload.text(), MAX_APPROVABLE);
+        let (detail, _) = excerpt(shown.text());
         Event::AutoDenied { tool: self.tool, label: self.label, reason, detail }
     }
 }

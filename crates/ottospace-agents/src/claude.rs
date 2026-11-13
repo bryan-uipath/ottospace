@@ -9,6 +9,7 @@ use ottospace_sessions::claude::describe;
 use ottospace_sessions::station;
 use serde_json::{Value, json};
 
+use crate::payload::Payload;
 use crate::{
     Answer, Argv, Event, Input, MAX_DETAIL, MAX_TEXT, Outcome, Output, Protocol, Refused, Start, Ticket, TicketKind,
     Untrusted, kind_of, model_of, opaque, session_of,
@@ -175,17 +176,16 @@ impl Claude {
         let input = request["input"].clone();
         let (station, label) = describe(tool, &input);
         // The CLI's `permission_suggestions` are never read: an answer grants this call alone.
-        let (mut payload, claim) = payload(tool, &input);
-        // The path outside what the session may touch that made the CLI ask: part of what is allowed.
-        if let Some(path) = request["blocked_path"].as_str() {
-            payload.push_str(&format!("\nblocked path: {path}"));
-        }
+        let (payload, claim) = payload(tool, &input, &request["blocked_path"]);
         let tool_label = station::tool_label(tool);
-        let ask = crate::Ask { tool: tool_label, station, label, payload: &payload, claim: &claim };
-        let ticket = Ticket::new(id.clone(), TicketKind::Claude { input });
-        let event = ask.event(ticket);
-        if matches!(event, Event::AutoDenied { .. }) {
-            let deny = json!({"behavior": "deny", "message": TOO_LONG_DENIED});
+        let unreadable = !request["blocked_path"].is_null() && !request["blocked_path"].is_string();
+        let ask = crate::Ask { tool: tool_label, station, label, payload, claim: &claim };
+        let event = match unreadable {
+            true => ask.denied(UNREADABLE),
+            false => ask.event(Ticket::new(id.clone(), TicketKind::Claude { input })),
+        };
+        if let Event::AutoDenied { reason, .. } = &event {
+            let deny = json!({"behavior": "deny", "message": format!("ottospace denied this tool call: {reason}.")});
             let reply = json!({"type": "control_response",
                     "response": {"subtype": "success", "request_id": id, "response": deny}});
             out.replies.push(reply.to_string());
@@ -194,21 +194,32 @@ impl Claude {
     }
 }
 
-/// What a denial unseen tells the model. Fixed words.
-const TOO_LONG_DENIED: &str = "ottospace denied this tool call: it is too long to show the user in full.";
+/// Why a request is denied when a field that says what it does cannot be read.
+const UNREADABLE: &str = "a field of it cannot be read";
 
-/// What a `can_use_tool` request asks to approve, and the model's own description of it. A
-/// shell command and every option besides its description; any other tool, its whole input.
-fn payload(tool: &str, input: &Value) -> (String, String) {
-    let claim = input["description"].as_str().unwrap_or("").to_string();
-    match (tool, input["command"].as_str(), input.as_object()) {
+/// What a `can_use_tool` request asks to approve, a line per field, and the model's own
+/// description of it. A shell command and every option besides its description (`option: key =
+/// value`); any other tool, its whole input (`input: {…}`); the path outside what the session may
+/// touch that made the CLI ask (`blocked path:`).
+fn payload(tool: &str, input: &Value, blocked: &Value) -> (Payload, String) {
+    let mut payload = Payload::new();
+    let claim = match (tool, input["command"].as_str(), input.as_object()) {
         ("Bash" | "PowerShell", Some(command), Some(fields)) => {
-            let options = fields.iter().filter(|(key, _)| !matches!(key.as_str(), "command" | "description"));
-            let options: String = options.map(|(key, value)| format!("\n{key}: {value}")).collect();
-            (format!("{command}{options}"), claim)
+            payload.field("command", command);
+            for (key, value) in fields.iter().filter(|(key, _)| !matches!(key.as_str(), "command" | "description")) {
+                payload.field("option", &format!("{key} = {value}"));
+            }
+            input["description"].as_str().unwrap_or("").to_string()
         }
-        _ => (serde_json::to_string_pretty(input).unwrap_or_default(), String::new()),
+        _ => {
+            payload.field("input", &input.to_string());
+            String::new()
+        }
+    };
+    if let Some(path) = blocked.as_str() {
+        payload.field("blocked path", path);
     }
+    (payload, claim)
 }
 
 fn assistant(record: &Value, main: bool, emit: &mut Vec<Event>) {
@@ -419,7 +430,7 @@ mod tests {
         let input = json!({"command": "git status --short", "description": "Show changes"});
         let out = ask("Bash", input.clone(), hostile);
         let Some(Event::Permission { detail, claim, cut, .. }) = out.events.first().cloned() else { panic!() };
-        assert_eq!((detail.text(), claim.text(), cut), ("git status --short", "Show changes", false));
+        assert_eq!((detail.text(), claim.text(), cut), ("command: git status --short", "Show changes", false));
         let allowed = answered(&mut Claude::new(), &out, Answer::Allow).unwrap();
         assert_eq!(allowed["response"]["response"], json!({"behavior": "allow", "updatedInput": input}));
         let message = Some("Use git diff".to_string());
@@ -436,13 +447,17 @@ mod tests {
         let long = format!("echo {}", "a".repeat(MAX_DETAIL * 2));
         let out = ask("Bash", json!({"command": long, "run_in_background": true}), json!([]));
         let Some(Event::Permission { ticket, detail, len, cut, .. }) = out.events.first().cloned() else { panic!() };
-        let whole = format!("{long}\nrun_in_background: true");
+        let whole = format!("command: {long}\noption: run_in_background = true");
         assert!(cut && len == whole.len() && ticket.full().text() == whole);
         assert!(detail.text().ends_with(&format!("… [{} more bytes]", whole.len() - MAX_DETAIL)), "{detail:?}");
         // Another tool: its whole input, so a Write's content is part of what is approved.
         let out = ask("Write", json!({"file_path": "/w/a", "content": "x\u{1b}[2J\u{202e}y"}), json!([]));
         let Some(Event::Permission { detail, .. }) = out.events.first() else { panic!() };
-        assert!(detail.text().contains("\"content\"") && detail.text().contains("x\\u001b[2J\u{fffd}y"));
+        assert!(
+            detail.text().starts_with("input: {") && detail.text().contains("x\\\\u001b[2J\\u{202e}y"),
+            "{}",
+            detail.text()
+        );
         // Past the hard cap: denied at once, nothing to answer.
         let out = ask("Bash", json!({"command": "a".repeat(crate::MAX_APPROVABLE + 1)}), json!([]));
         assert!(matches!(&out.events[..], [Event::AutoDenied { reason: "too long to show in full", .. }]));
@@ -497,7 +512,45 @@ mod tests {
             "tool_name": "Bash", "input": {"command": "cat ~/.ssh/id_rsa"}, "blocked_path": "/Users/me/.ssh/id_rsa"}});
         let out = Claude::new().read(&request.to_string());
         let Some(Event::Permission { detail, .. }) = out.events.first() else { panic!("{out:?}") };
-        assert_eq!(detail.text(), "cat ~/.ssh/id_rsa\nblocked path: /Users/me/.ssh/id_rsa");
+        assert_eq!(detail.text(), "command: cat ~/.ssh/id_rsa\nblocked path: /Users/me/.ssh/id_rsa");
+    }
+
+    /// Whatever the strings in a request, what is approved is one line per field, each starting
+    /// with its fixed label: `command`, an `option` per other input field, `blocked path`.
+    #[test]
+    fn any_request_is_one_labelled_line_per_field() {
+        let mut text = crate::payload::testing::hostile(5);
+        for _ in 0..2000 {
+            let mut input = json!({"command": text(), "description": text()});
+            let options = (text().len() % 3) + usize::from(text().is_empty());
+            for i in 0..options {
+                input[format!("{}{i}", text())] = json!(text());
+            }
+            let keys = input.as_object().map_or(0, |map| map.len()) - 2;
+            let blocked = json!(text());
+            let (payload, _) = payload("Bash", &input, &blocked);
+            let labels: Vec<&str> =
+                std::iter::once("command").chain(std::iter::repeat_n("option", keys)).chain(["blocked path"]).collect();
+            crate::payload::testing::assert_lines(payload.text(), &labels);
+            let (payload, _) = payload_of_other(&input, &blocked);
+            crate::payload::testing::assert_lines(payload.text(), &["input", "blocked path"]);
+        }
+    }
+
+    /// `payload` the function, which the test's `payload` values shadow.
+    fn payload_of_other(input: &Value, blocked: &Value) -> (Payload, String) {
+        payload("Write", input, blocked)
+    }
+
+    /// A `blocked_path` that is not text cannot be shown: the request is denied, not asked.
+    #[test]
+    fn an_unreadable_blocked_path_is_denied() {
+        let request = json!({"type": "control_request", "request_id": "r", "request": {"subtype": "can_use_tool",
+            "tool_name": "Bash", "input": {"command": "ls"}, "blocked_path": {"path": "/x\nharmless"}}});
+        let out = Claude::new().read(&request.to_string());
+        assert!(matches!(&out.events[..], [Event::AutoDenied { reason: UNREADABLE, .. }]), "{out:?}");
+        let reply: Value = serde_json::from_str(&out.replies[0]).unwrap();
+        assert_eq!(reply["response"]["response"]["behavior"], "deny");
     }
 
     #[test]
