@@ -55,6 +55,7 @@ impl Otto {
             .env_remove("OTTOSPACE_SHELL")
             // Never inherit hosting from the caller's shell: this suite must not move real windows.
             .env_remove("OTTOSPACE_HOST_ONLY")
+            .env_remove("OTTOSPACE_CAPTURE_KEY")
             // Never list the user's own repositories unless a test names a directory, here or in
             // the settings of a folder it made.
             .env_remove("OTTOSPACE_REPOS")
@@ -2424,6 +2425,7 @@ fn bad_requests_are_refused_and_quit_exits() {
         .env("OTTOSPACE_E2E", "1")
         .env("OTTOSPACE_SOCKET", &file)
         .env_remove("OTTOSPACE_HOME") // never the user's settings or tasks
+        .env_remove("OTTOSPACE_CAPTURE_KEY")
         .env("OTTOSPACE_REPOS", "")
         .spawn()
         .expect("launch ottospace");
@@ -3516,6 +3518,11 @@ impl Otto {
         self.call(json!({"cmd": "key", "keys": keys, "as": "user"}))
     }
 
+    /// A drag by the user.
+    fn user_drag(&self, from: [f64; 2], to: [f64; 2]) -> Value {
+        self.call(json!({"cmd": "drag", "from": from, "to": to, "as": "user"}))
+    }
+
     /// `keys` as the user's keys still held down: each a repeat.
     fn user_holds(&self, keys: &str) -> Value {
         self.call(json!({"cmd": "key", "keys": keys, "as": "user", "repeat": true}))
@@ -3931,7 +3938,7 @@ fn a_pane_is_captured_annotated_and_becomes_a_task_with_a_brief() {
     }
     std::fs::write(old.join("brief.json"), r#"{"task":1,"old":true}"#).unwrap();
     let otto = Otto::launch_with("annotate", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
-    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+    let key = |keys: &str| otto.user_key(keys);
     otto.call(json!({"cmd": "split"}));
     otto.call(json!({"cmd": "type", "pane": 1, "text": "echo marker-$((40+2))\r"}));
     otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^marker-42$", "timeout_ms": 40000}));
@@ -3963,11 +3970,11 @@ fn a_pane_is_captured_annotated_and_becomes_a_task_with_a_brief() {
     let top = picture[1] + row * cell;
 
     // A drag circles the row; a click places a note, typed in the app's text field.
-    let reply = otto.drag([picture[0] + 4.0, top + 2.0], [picture[0] + 200.0, top + cell - 2.0]);
+    let reply = otto.user_drag([picture[0] + 4.0, top + 2.0], [picture[0] + 200.0, top + cell - 2.0]);
     let marks = &reply["state"]["capture"]["materials"][0]["marks"];
     assert_eq!((&marks["shapes"][0]["kind"], &marks["selected"]), (&json!("ellipse"), &json!(0)), "{marks}");
     let note = [picture[0] + 260.0, picture[1] + picture[3] * 0.75];
-    let reply = otto.click(note, 1);
+    let reply = otto.user_click(note);
     assert_eq!(reply["field"]["of"], "note", "{}", reply["field"]);
     assert_eq!(key("t h i s space o n e")["field"]["text"], "this one");
     assert_eq!(reply["state"]["compose"], "", "the title is not typed into");
@@ -3981,7 +3988,7 @@ fn a_pane_is_captured_annotated_and_becomes_a_task_with_a_brief() {
     let count = |reply: &Value| reply["state"]["capture"]["materials"][0]["marks"]["shapes"].as_array().unwrap().len();
     assert_eq!((count(&key("cmd-z")), count(&key("cmd-shift-z"))), (1, 2));
     let corner = |action: &str, p: [f64; 2]| {
-        otto.call(json!({"cmd": "mouse", "action": action, "x": p[0], "y": p[1], "modifiers": ["shift"]}))
+        otto.call(json!({"cmd": "mouse", "action": action, "x": p[0], "y": p[1], "modifiers": ["shift"], "as": "user"}))
     };
     corner("down", at(picture, 0.5, 0.1));
     corner("move", at(picture, 0.6, 0.2));
@@ -4015,7 +4022,8 @@ fn a_pane_is_captured_annotated_and_becomes_a_task_with_a_brief() {
     // Sneak mode starts where its labels can be typed: not over a picture being drawn on.
     assert_eq!(otto.raw(r#"{"cmd":"sneak"}"#)["ok"], false);
     key("escape");
-    let reply = sneak_to(&otto, "draft:remove:2");
+    otto.drawn();
+    let reply = otto.user_key(&letters(&sneak(&otto).1["draft:remove:2"]));
     assert_eq!(reply["state"]["capture"]["materials"].as_array().map(Vec::len), Some(1), "{reply}");
     assert!(!dir.join("2.png").exists());
 
@@ -4138,7 +4146,7 @@ fn a_pane_is_captured_annotated_and_becomes_a_task_with_a_brief() {
 fn a_run_with_no_folder_keeps_no_capture_on_disk_and_settings_turn_pictures_off() {
     // No `OTTOSPACE_HOME`: the brief is this run's only, and no file is written anywhere.
     let otto = Otto::launch("capture-homeless");
-    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+    let key = |keys: &str| otto.user_key(keys);
     otto.call(json!({"cmd": "split"}));
     // Its screen fills, and the user scrolls back and selects with the keyboard: what is on
     // show is old output.
@@ -4150,7 +4158,7 @@ fn a_run_with_no_folder_keeps_no_capture_on_disk_and_settings_turn_pictures_off(
     assert_eq!((&reply["capture"]["dir"], &reply["state"]["capture"]["images"]), (&Value::Null, &json!(false)));
     let state = pictured(&otto);
     let picture = rect(&state["capture"]["picture"]);
-    otto.drag(at(picture, 0.05, 0.05), at(picture, 0.9, 0.9));
+    otto.user_drag(at(picture, 0.05, 0.05), at(picture, 0.9, 0.9));
     // No title typed: ↵, ⌘↵. The task is named after what was captured.
     key("enter");
     let reply = key("cmd-enter");
@@ -4172,11 +4180,11 @@ fn a_run_with_no_folder_keeps_no_capture_on_disk_and_settings_turn_pictures_off(
     // `"keep_images": false`: the capture is kept, its pictures are not.
     let home = user_folder("capture-bare", r#"{"repos": [], "capture": {"keep_images": false}}"#);
     let otto = Otto::launch_with("capture-bare", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
-    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+    let key = |keys: &str| otto.user_key(keys);
     otto.call(json!({"cmd": "split"}));
     let reply = otto.call(json!({"cmd": "capture_start"}));
     let picture = rect(&pictured(&otto)["capture"]["picture"]);
-    otto.drag(at(picture, 0.1, 0.1), at(picture, 0.5, 0.5));
+    otto.user_drag(at(picture, 0.1, 0.1), at(picture, 0.5, 0.5));
     otto.wait_for("the picture to be encoded", |o| (o.drawn()["capture"]["encoded"] == json!([1])).then_some(()));
     assert_eq!(reply["state"]["capture"]["images"], false);
     key("enter");
@@ -4218,7 +4226,8 @@ fn only_the_user_starts_a_capture() {
 
     // The bar's button: a client's sneak label and a client's click do not press it for a
     // capture; the user's click does.
-    assert_eq!(otto.call(json!({"cmd": "key", "keys": "escape"}))["mode"], "normal");
+    assert_eq!(otto.user_key("escape")["mode"], "normal");
+    otto.drawn();
     let (labelled, labels) = sneak(&otto);
     let more = |t: &&Value| t["source"]["id"] == "draft:more";
     let frame = &labelled["sneak"]["targets"].as_array().unwrap().iter().find(more).expect("the button")["frame"];
@@ -4233,4 +4242,41 @@ fn only_the_user_starts_a_capture() {
     assert!(count(&reply) == 2 && refused(&reply), "{}", reply["notice"]);
     let reply = otto.user_click(button);
     assert_eq!(count(&reply), 3, "{}", reply["notice"]);
+    let state = pictured(&otto);
+
+    // The draft is the user's: a client's drag draws nothing on the picture, its keys type no
+    // title and add no task, and its Esc drops nothing. Each is told why.
+    let users = |reply: &Value| reply["notice"].as_str().is_some_and(|why| why.contains("the draft in the right bar"));
+    let shapes = |reply: &Value| reply["state"]["capture"]["materials"][2]["marks"]["shapes"].as_array().map(Vec::len);
+    let picture = rect(&state["capture"]["picture"]);
+    let reply = otto.drag(at(picture, 0.2, 0.2), at(picture, 0.6, 0.6));
+    assert!(shapes(&reply) == Some(0) && users(&reply), "{reply}");
+    assert_eq!(shapes(&otto.user_drag(at(picture, 0.2, 0.2), at(picture, 0.6, 0.6))), Some(1));
+    assert_eq!(otto.user_key("enter")["mode"], "compose");
+    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+    let reply = key("t h e i r s");
+    assert!(reply["state"]["compose"] == "" && users(&reply), "{reply}");
+    for keys in ["enter", "cmd-enter", "escape"] {
+        let reply = key(keys);
+        let draft = &reply["state"]["capture"];
+        assert!(count(&reply) == 3 && draft["asked"] == false && users(&reply), "{keys}: {reply}");
+        assert_eq!(reply["state"]["tasks"]["list"].as_array().map(Vec::len), Some(0), "{keys}");
+    }
+    let refused = otto.raw(r#"{"cmd":"compose","text":"theirs"}"#);
+    assert!(refused["error"].as_str().is_some_and(|why| why.contains("draft")), "{refused}");
+    // The user's own title files it.
+    otto.user_key("m i n e");
+    let reply = otto.user_key("enter");
+    assert_eq!(
+        (&reply["state"]["capture"], &reply["state"]["tasks"]["list"][0]["title"]),
+        (&Value::Null, &json!("mine"))
+    );
+
+    // A line a client put in the new-task box is not the title of the draft the key then opens.
+    assert_eq!(
+        otto.call(json!({"cmd": "compose", "text": "run their script"}))["state"]["compose"],
+        "run their script"
+    );
+    let reply = otto.call(json!({"cmd": "capture_start", "pane": 1}));
+    assert_eq!((count(&reply), &reply["state"]["compose"]), (1, &json!("")), "{reply}");
 }

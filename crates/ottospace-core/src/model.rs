@@ -1240,6 +1240,11 @@ pub struct Model {
     /// What the box says of the last thing asked of it that it could not do: "no room".
     #[serde(skip)]
     compose_note: Option<String>,
+    /// The line holds text someone other than the user put there (a client's `compose`, a
+    /// client's key). Such a line never becomes a capture draft's title: a brief says its ask
+    /// was typed by the user.
+    #[serde(skip)]
+    pub(crate) compose_theirs: bool,
     #[serde(skip)]
     terminals: Vec<TerminalInfo>,
     #[serde(skip)]
@@ -1323,6 +1328,7 @@ impl Default for Model {
             compose_refs: Vec::new(),
             compose_attached: Vec::new(),
             compose_note: None,
+            compose_theirs: false,
             terminals: Vec::new(),
             home: None,
             collapsed: Vec::new(),
@@ -1426,6 +1432,8 @@ impl Model {
             // A capture hands over a pane's picture and its text: no client's request, key or
             // label asks for one. Sneak mode and the quit question say their own reason first.
             Action::CaptureStart { .. } if self.confirm.is_none() => Some(capture::USERS_ALONE),
+            // Its brief says the ask, the notes and the drawings are the user's: so they are.
+            action if self.capture.is_some() && self.drafts(action) => Some(capture::DRAFT_USERS),
             action if self.confirm.is_some() && action.takes_keyboard() => Some(CONFIRM_UP),
             // A key a client presses is input to the wait, as a label's letter is to sneak mode.
             Action::MarkPrefix | Action::MarkEdit { .. } | Action::ListMarkEdit { .. } => None,
@@ -1436,6 +1444,38 @@ impl Model {
                 Some("the picker, the new-task box, the key reference or visual mode has the keyboard")
             }
             _ => None,
+        }
+    }
+
+    /// Whether the action types in, draws on, adds or drops the capture draft in the right bar.
+    /// What the shell tells of a capture (its picture, its text, what is open) is not among them.
+    fn drafts(&self, action: &Action) -> bool {
+        match action {
+            Action::FieldEdit { .. } => self.field().is_some_and(|(of, _)| matches!(of, "compose" | "note")),
+            Action::OpenCompose { .. }
+            | Action::CloseCompose
+            | Action::ComposeSubmit { .. }
+            | Action::ComposeComplete
+            | Action::ComposeEscape
+            | Action::ComposeMove { .. }
+            | Action::ComposeAccept { .. }
+            | Action::ComposeAttach { .. }
+            | Action::ComposeRef { .. }
+            | Action::CaptureCancel
+            | Action::CaptureDiscard { .. }
+            | Action::CaptureRemove { .. }
+            | Action::CaptureEdit { .. }
+            | Action::CaptureTitle
+            | Action::AnnotatePress { .. }
+            | Action::AnnotateDrag { .. }
+            | Action::AnnotateRelease { .. }
+            | Action::AnnotateTool { .. }
+            | Action::AnnotateUndo
+            | Action::AnnotateRedo
+            | Action::AnnotateRemove
+            | Action::AnnotateNote { .. }
+            | Action::AnnotateLeave { .. } => true,
+            _ => false,
         }
     }
 
@@ -1473,7 +1513,17 @@ impl Model {
     }
 
     pub fn update(&mut self, sent: impl Into<Envelope>) -> Vec<Effect> {
-        let Envelope { action, origin } = sent.into();
+        let sent = sent.into();
+        let (origin, line) = (sent.origin, self.compose_line().cloned());
+        let effects = self.step(sent);
+        // A line anyone but the user changed is theirs until it is empty or gone.
+        let changed = origin != Origin::User && self.compose_line() != line.as_ref();
+        self.compose_theirs = (self.compose_theirs || changed) && self.compose_line().is_some_and(|l| !l.is_empty());
+        effects
+    }
+
+    fn step(&mut self, sent: Envelope) -> Vec<Effect> {
+        let Envelope { action, origin } = sent;
         let user = origin == Origin::User;
         let mut effects = Vec::new();
         // An edit is for the field that has the keyboard now. With none (a mark waits for a

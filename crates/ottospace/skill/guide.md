@@ -540,8 +540,9 @@ where WORD is `brief.fence`, a word made up for that brief; every line of a bloc
 block as markdown.
 
 Only the user starts a capture: with the capture key, the menu, or the right bar. No request
-does outside a test run. For tests only (`OTTOSPACE_E2E`), `capture_start` is the user's capture
-key pressed by the test (`{"cmd":"capture_start"}`, or with `"pane":4`); otherwise it is refused.
+does. And while a draft is open only the user types in it, draws on it, adds it or drops it: a
+key or a click you send at it is refused, and `compose` is refused until the draft is gone. Text
+you put in the new-task box before a capture is not taken as the draft's title.
 
 Picker, bars and the rest:
 

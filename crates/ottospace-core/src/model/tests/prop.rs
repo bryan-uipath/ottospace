@@ -1196,7 +1196,7 @@ impl Run {
         // While the bar asks before discarding, ↵ is the answer: it files nothing.
         let answers = m.capture.as_ref().is_some_and(|draft| draft.asked);
         let submits = matches!(action, Action::ComposeSubmit { .. });
-        let filing = m.compose_line().filter(|_| submits && !takes && !answers);
+        let filing = m.compose_line().filter(|_| submits && !takes && !answers && refused.is_none());
         // A draft with captures is filed under a name of its own when none was typed.
         let named = m.capture_title();
         let filing = filing.map(|line| (line.clone(), m.draft(line), m.compose_host()));
@@ -1216,6 +1216,10 @@ impl Run {
         let cancels = matches!(action, Action::ComposeEscape | Action::CloseCompose | Action::CaptureCancel);
         let unasked =
             m.capture.as_ref().filter(|draft| cancels && !draft.asked).map(|draft| draft.materials.len()).unwrap_or(0);
+        let drafted: Option<(Option<String>, Vec<Vec<crate::capture::Shape>>)> = m
+            .capture
+            .as_ref()
+            .map(|draft| (m.compose_line().cloned(), draft.materials.iter().map(|m| m.marks.shapes.clone()).collect()));
         let line_before = m.compose_line().cloned();
         let composing = m.composing();
 
@@ -1226,6 +1230,13 @@ impl Run {
             check_file(m)?;
         }
 
+        // A draft's title and drawings are the user's: nobody else changes them, and a line
+        // someone else wrote is never a draft's title.
+        if let (Some(before), Some(draft), false) = (&drafted, &m.capture, origin == Origin::User) {
+            let now = (m.compose_line().cloned(), draft.materials.iter().map(|m| m.marks.shapes.clone()).collect());
+            ensure!(*before == now, "a draft's title or drawings changed, and not by the user: {before:?}");
+        }
+        ensure!(m.capture.is_none() || !m.compose_theirs, "a draft's title holds what a client wrote");
         let held = m.capture.as_ref().map_or(0, |draft| draft.materials.len());
         ensure!(unasked == 0 || held == unasked, "a draft's {unasked} captures went with no question");
         // Only the user starts a capture: a client's or a timer's is refused, whatever the mode.

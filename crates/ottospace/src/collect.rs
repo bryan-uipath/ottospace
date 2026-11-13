@@ -170,12 +170,31 @@ fn task_dir(task: TaskId, name: &str) -> Option<PathBuf> {
     config::materials_dir().filter(|_| own).map(|dir| dir.join(name))
 }
 
-/// A word of letters and digits no other draft has: for its task's folder and its brief's fence.
-fn new_word() -> String {
-    use std::hash::{BuildHasher, Hasher};
-    // Each `RandomState` has keys of its own, from the system's random source.
-    let random = || std::collections::hash_map::RandomState::new().build_hasher().finish();
-    format!("{:016x}{:08x}", random(), random() as u32)
+/// A word nobody can guess, 24 letters and digits: for a draft's task's folder and its brief's
+/// fence. 96 bits from the system's random source. `None`: that could not be read.
+fn new_word() -> Option<String> {
+    use std::io::Read;
+    let mut bytes = [0u8; 12];
+    std::fs::File::open("/dev/urandom").and_then(|mut source| source.read_exact(&mut bytes)).ok()?;
+    Some(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+/// A picture this build wrote is far smaller.
+const MAX_PICTURE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// macOS's `O_NONBLOCK` and `O_NOFOLLOW`: opening a pipe does not wait, and a link is not followed.
+const OPEN_PLAIN: i32 = 0x0004 | 0x0100;
+
+/// What is in `file`, if it is a plain file of at most `most` bytes: opened once, and asked of
+/// what was opened. What is on disk can be written by any program of the user's.
+fn read_plain(file: &std::path::Path, most: u64) -> Option<Vec<u8>> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    let opened = std::fs::OpenOptions::new().read(true).custom_flags(OPEN_PLAIN).open(file).ok()?;
+    let meta = opened.metadata().ok()?;
+    let mut bytes = Vec::new();
+    let read = (meta.is_file() && meta.len() <= most).then(|| opened.take(most + 1).read_to_end(&mut bytes))?;
+    (read.ok()? as u64 <= most).then_some(bytes)
 }
 
 fn pretty(what: &impl serde::Serialize) -> String {
@@ -290,7 +309,7 @@ impl Workspace {
         let action = Action::CaptureStart {
             pane,
             draft: format!("draft-{}-{}", std::process::id(), now_ms()),
-            word: new_word(),
+            word: new_word().ok_or("capture: the system's random source could not be read")?,
             facts,
             images: config::get().settings.capture.keep_images && config::materials_dir().is_some(),
         };
@@ -569,17 +588,30 @@ impl Workspace {
         let name = self.model.tasks.get(task)?.materials_dir()?.to_string();
         if self.briefs.get(&task).is_none_or(|shown| shown.name != name) {
             self.briefs.remove(&task);
-            let dir = task_dir(task, &name)?;
-            let file = dir.join("brief.json");
-            // Not a link, a pipe or a device: reading one could wait for ever.
-            let plain =
-                std::fs::symlink_metadata(&file).is_ok_and(|meta| meta.is_file() && meta.len() <= MAX_BRIEF_BYTES);
-            let brief: Brief = serde_json::from_str(&std::fs::read_to_string(file).ok().filter(|_| plain)?).ok()?;
-            if brief.task != task {
+            // A brief that could not be read is not read again at every action.
+            if self.no_brief.contains(&name) {
                 return None;
             }
+            let dir = task_dir(task, &name)?;
+            // Not a link, a pipe or a device: reading one could wait for ever.
+            let read = read_plain(&dir.join("brief.json"), MAX_BRIEF_BYTES);
+            let brief = read.and_then(|bytes| serde_json::from_slice::<Brief>(&bytes).ok());
+            let Some(brief) = brief.filter(|brief| brief.task == task) else {
+                self.no_brief.insert(name);
+                return None;
+            };
+            // Each annotated picture, read the same way, by the capture's number: never by a
+            // name the brief's file holds.
+            let picture = |kept: &capture::Kept| {
+                let file = dir.join(format!("{}.annotated.png", kept.n));
+                kept.annotated
+                    .as_ref()
+                    .and_then(|_| read_plain(&file, MAX_PICTURE_BYTES))
+                    .map(|png| (kept.n, png_image(png)))
+            };
+            let pictures = brief.materials.iter().filter_map(picture).collect();
             let text = capture::markdown_in(&brief, Some(&dir.to_string_lossy()));
-            self.briefs.insert(task, Shown { brief, name, dir: Some(dir), text, pictures: Vec::new() });
+            self.briefs.insert(task, Shown { brief, name, dir: Some(dir), text, pictures });
         }
         self.briefs.get(&task)
     }
@@ -1020,12 +1052,8 @@ impl Workspace {
         let shown = self.briefs.get(&id)?;
         let muted = |text: String| div().text_xs().text_color(rgb(theme::MUTED)).child(text);
         let picture = |kept: &ottospace_core::capture::Kept| {
-            let held = shown.pictures.iter().find(|(n, _)| *n == kept.n).map(|(_, image)| img(image.clone()));
-            // After a restart the picture is read from the task's own folder, by the capture's
-            // number: never by a name the brief's file holds.
-            let named = shown.dir.as_ref().filter(|_| kept.annotated.is_some());
-            let file = named.map(|dir| dir.join(format!("{}.annotated.png", kept.n)));
-            let picture = held.or_else(|| file.filter(|file| file.is_file()).map(img))?;
+            // Held since it was drawn, or since the brief was read from the task's folder.
+            let picture = shown.pictures.iter().find(|(n, _)| *n == kept.n).map(|(_, image)| img(image.clone()))?;
             let frame = div().h(px(170.)).rounded_sm().overflow_hidden().bg(rgb(theme::BACKGROUND));
             Some(
                 frame
@@ -1167,8 +1195,22 @@ mod tests {
             ["draft-../x", "7", "draft-1/2", "", "draft-1", "draft-1-2-3", "draft--5", "draft-x-1", "Draft-1-2"];
         assert!(wrong.iter().all(|name| draft_pid(name).is_none()));
         // A word for a task's folder and a brief's fence: letters and digits, new each time.
-        let (one, two) = (new_word(), new_word());
+        let (one, two) = (new_word().expect("a word"), new_word().expect("a word"));
         assert!(one != two && one.len() == 24 && one.bytes().all(|b| b.is_ascii_hexdigit()));
         assert!(ottospace_core::tasks::materials_dir(7, &one).is_some());
+    }
+
+    #[test]
+    fn only_a_plain_file_of_a_size_is_read() {
+        let dir = std::env::temp_dir().join(format!("otto-read-plain-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (file, link) = (dir.join("a"), dir.join("link"));
+        std::fs::write(&file, b"12345").unwrap();
+        std::os::unix::fs::symlink(&file, &link).unwrap();
+        assert_eq!(read_plain(&file, 5).as_deref(), Some(&b"12345"[..]));
+        // Too large, a link, a folder, nothing there.
+        assert_eq!((read_plain(&file, 4), read_plain(&link, 9), read_plain(&dir, 9)), (None, None, None));
+        assert_eq!(read_plain(&dir.join("none"), 9), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

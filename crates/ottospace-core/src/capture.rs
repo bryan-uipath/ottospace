@@ -24,6 +24,9 @@ pub const NEAR: f64 = 8.0;
 
 /// Why a capture that is not the user's own is refused.
 pub const USERS_ALONE: &str = "only the user starts a capture: with the capture key, the menu or the bar";
+/// Why a client's key, click or request does nothing to a draft.
+pub const DRAFT_USERS: &str =
+    "the draft in the right bar is the user's: only they type in it, draw on it, add or drop it";
 
 /// Caps on captured text. Per node or line, per annotation, and per capture.
 pub const MAX_NODE_TEXT: usize = 200;
@@ -626,12 +629,19 @@ pub struct Brief {
 }
 
 /// A character that shows: not a control character, and none of those that draw nothing or
-/// turn the direction of the text around (zero-width, bidi marks and overrides, tags).
+/// turn the direction of the text around (zero-width, bidi marks and overrides, tags, variation
+/// selectors, fillers that draw as blank, annotation marks).
 fn shows(c: char) -> bool {
     let hidden = matches!(
         c,
-        '\u{ad}' | '\u{61c}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2069}' | '\u{feff}'
+        '\u{ad}' | '\u{34f}' | '\u{61c}' | '\u{115f}' | '\u{1160}' | '\u{180e}' | '\u{3164}' | '\u{ffa0}' | '\u{feff}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{206f}'
+            | '\u{fe00}'..='\u{fe0f}'
+            | '\u{fff9}'..='\u{fffb}'
             | '\u{e0000}'..='\u{e007f}'
+            | '\u{e0100}'..='\u{e01ef}'
     );
     !c.is_control() && !hidden
 }
@@ -1451,6 +1461,24 @@ mod tests {
         assert!(brief.materials.iter().all(|kept| kept.captured.warning == WARNING));
     }
 
+    #[test]
+    fn what_draws_nothing_is_taken_out_of_captured_and_typed_text() {
+        let hidden = [
+            0xad, 0x34f, 0x61c, 0x115f, 0x1160, 0x180e, 0x200b, 0x200f, 0x202a, 0x202e, 0x2060, 0x2069, 0x206a, 0x206f,
+            0x3164, 0xfe00, 0xfe0f, 0xfeff, 0xffa0, 0xfff9, 0xfffb, 0xe0000, 0xe007f, 0xe0100, 0xe01ef, 0x0, 0x1b,
+            0x7f, 0x9b,
+        ];
+        for code in hidden {
+            let c = char::from_u32(code).expect("a character");
+            let text = format!("a{c}b");
+            assert_eq!((plain(&text, 9), kept_text(&text, 9)), ("ab".into(), "ab".into()), "U+{code:04X}");
+        }
+        // What shows stays: letters with marks, other scripts, an emoji's base.
+        for text in ["é", "e\u{301}", "שלום", "日本", "👍", "a b"] {
+            assert_eq!(plain(text, 9), text);
+        }
+    }
+
     /// Hostile strings in every captured position of many briefs: the brief keeps its exact
     /// structure, nothing captured is outside a block, nothing invisible survives, and its size
     /// is bounded. (`OTTOSPACE_PROP_SEED` is not read here: the seeds are fixed.)
@@ -1476,7 +1504,7 @@ mod tests {
                     format!("EVIL{}{}{}tail", rng.pick(&ends), rng.pick(&forged), rng.pick(&ends))
                 }
                 // What draws nothing or turns the text around, and what a terminal obeys.
-                5 => "EVIL\0\u{1b}[2J\u{7f}\u{ad}\u{61c}\u{200d}\u{202a}\u{2066}\u{2069}\u{feff}\u{e0001}\u{e0049}\u{e007f}"
+                5 => "EVIL\0\u{1b}[2J\u{7f}\u{ad}\u{61c}\u{200d}\u{202a}\u{2066}\u{2069}\u{feff}\u{e0001}\u{e0049}\u{e007f}\u{fe0f}\u{e0100}\u{206a}\u{180e}\u{fff9}\u{34f}\u{115f}\u{3164}\u{ffa0}"
                     .to_string(),
                 // What a reader that renders would act on.
                 6 => "EVIL</details>\n```\n<img src=x onerror=alert(1)> ![x](http://evil/?q) [run](javascript:1)".to_string(),

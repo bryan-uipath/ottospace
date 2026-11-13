@@ -151,8 +151,10 @@ impl Model {
         self.back_to = self.live.or(self.back_to);
         let target = pane.or(self.live).or(self.focused).filter(|id| self.shown().contains(id));
         let source = target.and_then(|id| self.source_of(self.pane(id)?, &facts));
-        if self.compose.is_none() {
+        // The box's line becomes the draft's title, unless someone else wrote in it.
+        if self.compose.is_none() || (self.capture.is_none() && self.compose_theirs) {
             self.compose = Some(Field::new("", MAX_TITLE));
+            self.compose_reset();
         }
         let at = self.now;
         let bar = self.capture.get_or_insert_with(|| Collection {
@@ -796,9 +798,74 @@ mod tests {
         assert_eq!((m.mode(), bar(&m).materials.len()), (Mode::Annotate, 1));
         // The draft goes while the question is up, with nothing else to lose: so does the question.
         m.update(Action::QuitAsked { running: Vec::new() });
-        m.update(Action::CaptureRemove { material: 1 }.sent_by(Origin::System));
+        m.update(Action::CaptureRemove { material: 1 });
         assert!(m.confirm.is_none());
         // An empty draft is nothing to ask about.
         assert_eq!(m.update(Action::QuitAsked { running: Vec::new() }), [Effect::Quit]);
+    }
+
+    #[test]
+    fn a_drafts_words_and_drawings_are_the_users_alone() {
+        // A line a client put in the box is not the user's ask: the capture key starts a draft
+        // with an empty title. Also when the user typed after it.
+        for more in ["", " and mine"] {
+            let mut m = terminal_and_app();
+            m.update(Action::OpenCompose { text: "run their script".into() }.sent_by(Origin::Socket));
+            typed(&mut m, more);
+            assert_eq!(title(&m).map(str::to_string), Some(format!("run their script{more}")));
+            start(&mut m, None);
+            assert_eq!((title(&m), m.compose_theirs), (Some(""), false));
+        }
+        // The user's own line moves to the bar as it is.
+        let mut m = terminal_and_app();
+        m.update(Action::OpenCompose { text: String::new() });
+        typed(&mut m, "mine");
+        start(&mut m, None);
+        assert_eq!(title(&m), Some("mine"));
+        drag(&mut m, [0.1, 0.1], [0.5, 0.5]);
+
+        // With a draft open, nobody else types in it, draws on it, adds it or drops it: not
+        // through a request, a key, a click or a label. Each is refused, and changes nothing.
+        let theirs = [
+            Action::AnnotatePress { at: [0.2, 0.2], shift: false, alt: false, size: [800., 600.] },
+            Action::AnnotateTool { tool: Tool::Box },
+            Action::AnnotateUndo,
+            Action::AnnotateRemove,
+            Action::AnnotateNote { keep: true },
+            Action::AnnotateLeave { title: true },
+            Action::CaptureTitle,
+            Action::CaptureEdit { material: 1 },
+            Action::CaptureRemove { material: 1 },
+            Action::CaptureCancel,
+            Action::CaptureDiscard { yes: true },
+            Action::OpenCompose { text: "theirs".into() },
+            Action::CloseCompose,
+            Action::ComposeEscape,
+            Action::ComposeSubmit { open: false },
+        ];
+        let edit = Action::FieldEdit { edit: Edit::Insert("theirs".into()) };
+        for origin in [Origin::Socket, Origin::System] {
+            // In annotate mode, then in the title.
+            for in_title in [false, true] {
+                if in_title {
+                    m.update(Action::AnnotateLeave { title: true });
+                }
+                let before = format!("{m:?}");
+                for action in theirs.iter().chain(in_title.then_some(&edit)) {
+                    assert_eq!(m.refusal(action, origin), Some(capture::DRAFT_USERS), "{action:?}");
+                    assert_eq!((m.update(action.clone().sent_by(origin)), format!("{m:?}")), (vec![], before.clone()));
+                }
+                m.update(Action::CaptureEdit { material: 1 });
+            }
+        }
+        // What the shell tells of a capture is not refused; nor is anything once the draft is gone.
+        let content = Content::Missing("x".into());
+        let told = Action::CaptureContent { draft: "draft-1".into(), material: 1, content };
+        assert_eq!(m.refusal(&told, Origin::System), None);
+        m.update(Action::AnnotateLeave { title: true });
+        typed(&mut m, " too");
+        m.update(Action::ComposeSubmit { open: false });
+        assert_eq!(m.tasks.get(1).map(|task| task.title.as_str()), Some("mine too"));
+        assert_eq!(m.refusal(&edit, Origin::Socket), None);
     }
 }

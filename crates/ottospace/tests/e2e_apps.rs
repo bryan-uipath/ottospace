@@ -29,6 +29,8 @@ impl Proc {
         let mut command = Command::new(bin);
         // Never the user's settings, tasks or repositories.
         command.env(socket_var, &socket).env_remove("OTTOSPACE_HOME").env("OTTOSPACE_REPOS", "");
+        // Nor a key taken from every app, unless the test names one.
+        command.env_remove("OTTOSPACE_CAPTURE_KEY");
         let child = command.envs(env.iter().copied()).spawn().expect("launch");
         let proc = Self { child, socket };
         wait_for(&format!("{name}'s socket"), || UnixStream::connect(&proc.socket).ok().map(|_| ()));
@@ -979,7 +981,7 @@ fn a_hosted_window_is_captured_with_the_part_of_its_tree_under_the_circle() {
         ],
     );
     let state = || otto.call(json!({"cmd": "state"}));
-    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys, "as": "user"}));
     otto.call(json!({"cmd": "open_app", "name": CANARY}));
     wait_for("the window to park with its title bar cropped", || {
         state()["crop"]["1"].as_f64().filter(|c| (16.0..=40.0).contains(c))
@@ -1030,7 +1032,7 @@ fn a_hosted_window_is_captured_with_the_part_of_its_tree_under_the_circle() {
     assert!(by > 0.0 && by + bh < picture[3], "the button is in the picture: {named}");
     let (from, to) =
         ([picture[0] + bx - 10.0, picture[1] + by - 10.0], [picture[0] + bx + bw + 10.0, picture[1] + by + bh + 10.0]);
-    let reply = otto.call(json!({"cmd": "drag", "from": from, "to": to}));
+    let reply = otto.call(json!({"cmd": "drag", "from": from, "to": to, "as": "user"}));
     assert_eq!(reply["state"]["capture"]["materials"][0]["marks"]["shapes"][0]["kind"], "ellipse", "{reply}");
     assert_eq!(key("enter")["mode"], "compose");
     key("w h a t space i s space t h i s");

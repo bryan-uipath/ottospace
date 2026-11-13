@@ -604,6 +604,8 @@ struct Workspace {
     bar_at: Rc<Cell<Bounds<Pixels>>>,
     /// Briefs of tasks, as added in this run or read from their folders.
     briefs: HashMap<TaskId, collect::Shown>,
+    /// The folders whose brief could not be read: not tried again in this run.
+    no_brief: std::collections::HashSet<String>,
     /// Pictures asked for and not taken yet, and the terminals whose visual cursor goes after one.
     pending: Vec<collect::Pending>,
     visual_after: Vec<PaneId>,
@@ -908,6 +910,7 @@ impl Workspace {
             annotate_at: Rc::default(),
             bar_at: Rc::default(),
             briefs: HashMap::new(),
+            no_brief: Default::default(),
             pending: Vec::new(),
             visual_after: Vec::new(),
             key_notice: None,
@@ -992,6 +995,11 @@ impl Workspace {
         {
             self.refresh_apps();
             self.offer_installed(cx);
+        }
+        // A client's key, click or label at the user's draft: the status bar says why it did nothing.
+        let draft = ottospace_core::capture::DRAFT_USERS;
+        if origin == Origin::Socket && self.model.refusal(&action, origin) == Some(draft) {
+            self.error = Some(draft.into());
         }
         let line = self.model.compose_line().cloned().map(|line| (line, self.model.compose_typing()));
         let field = self.model.field().map(|(of, _)| of);
@@ -5005,10 +5013,12 @@ mod tests {
         }
     }
 
-    /// Every request the app accepts must have an example in the guide.
+    /// Every request the app accepts must have an example in the guide. But `capture_start`:
+    /// it answers only in a test run, and an agent must not learn it (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        for name in request_names() {
+        assert!(!SKILL_GUIDE.contains("capture_start"));
+        for name in request_names().into_iter().filter(|name| name != "capture_start") {
             assert!(SKILL_GUIDE.contains(&format!(r#""cmd":"{name}""#)), "the guide has no example of `{name}`");
         }
     }

@@ -212,9 +212,12 @@ test("capture: a pane's picture is annotated, and its task has a brief", async (
     const started = await client.captureStart();
     assert.equal(started.mode, "annotate");
     assert.deepEqual([started.state.capture?.annotating, started.state.capture?.materials[0]?.source.type], [1, "terminal"]);
+    // The draft is the user's: a client's key types nothing in it and adds no task.
     await client.key({ keys: "enter" });
-    await client.key({ keys: "f i x" });
-    const added = await client.key({ keys: "enter" });
+    assert.equal((await client.state()).mode, "annotate");
+    await client.key({ keys: "enter", as: "user" });
+    await client.key({ keys: "f i x", as: "user" });
+    const added = await client.key({ keys: "enter", as: "user" });
     assert.equal(added.state.capture, null);
     assert.match(added.state.tasks.list[0]?.materials[0] ?? "", /^1-[0-9a-z]{8,32}\/1\.json$/);
     const reply = await client.taskBrief({ id: 1 });
