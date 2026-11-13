@@ -120,7 +120,7 @@ impl AgentModels {
 
 /// What is said of an `agent_models` entry that is not a name.
 fn not_a_model(id: &str) -> String {
-    format!("{id:?} is not a model name: letters, digits, `.`, `-` and `_`, at most {}", crate::agents::MAX_MODEL)
+    format!("{id} is not a model name: letters, digits, `.`, `-` and `_`, at most {}", crate::agents::MAX_MODEL)
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -173,7 +173,7 @@ impl Settings {
             return Err("\"tasks\" must name a folder of its own, e.g. \"~/notes/tasks\"".into());
         }
         if let Some(id) = settings.agent_models.as_ref().and_then(AgentModels::wrong) {
-            return Err(not_a_model(id));
+            return Err(not_a_model(&format!("{id:?}")));
         }
         Ok(settings)
     }
@@ -201,8 +201,9 @@ impl Settings {
         for list in runners.into_iter().flat_map(|runners| runners.values_mut()).filter_map(|list| list.as_array_mut())
         {
             list.retain(|id| {
-                let named = id.as_str().is_none_or(crate::agents::is_name);
-                wrong.extend(id.as_str().filter(|_| !named).map(|id| format!("agent_models: {}", not_a_model(id))));
+                let named = id.as_str().is_some_and(crate::agents::is_name);
+                let said = id.as_str().map_or_else(|| id.to_string(), |id| format!("{id:?}"));
+                wrong.extend((!named).then(|| format!("agent_models: {}", not_a_model(&said))));
                 named
             });
         }
@@ -456,7 +457,11 @@ mod tests {
         assert_eq!((wrong.len(), settings.sessions), (2, Some(false)));
         assert!(wrong[0].starts_with(r#"agent_models: "--yolo" is not a model name"#), "{wrong:?}");
         assert!(Settings::parse(text).is_err());
-        let (settings, wrong) = Settings::read(r#"{ "agent_models": { "claude": [7], "gemini": [] } }"#);
+        // So does an entry that is no text. A runner nobody knows: the key takes its default.
+        let (settings, wrong) = Settings::read(r#"{ "agent_models": { "claude": ["claude-next-1", 7] } }"#);
+        assert_eq!(settings.agent_models.unwrap().claude.unwrap(), ["claude-next-1"]);
+        assert_eq!(wrong, ["agent_models: 7 is not a model name: letters, digits, `.`, `-` and `_`, at most 64"]);
+        let (settings, wrong) = Settings::read(r#"{ "agent_models": { "gemini": [] } }"#);
         assert_eq!((settings.agent_models, wrong.len()), (None, 1));
     }
 

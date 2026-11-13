@@ -7,7 +7,7 @@ use crate::settings::AgentModels;
 /// The runner whose model ids start with its own name: `claude-opus-5-5` is tag and id both.
 const WHOLE: &str = "claude";
 
-/// The longest model id.
+/// The longest model id, or what follows `claude-` in one typed outright.
 pub const MAX_MODEL: usize = 64;
 
 /// The models offered for each runner, as its CLI names them.
@@ -45,14 +45,12 @@ impl Models {
     }
 }
 
-/// True if `id` can be a model's id: letters, digits, `.`, `-` and `_`, a letter or digit first
-/// and last, at most `MAX_MODEL`. Never a word a command line would read as an option.
+/// True if `id` can be a model's id: letters, digits, and `.`, `-` or `_` between them one at a
+/// time, at most `MAX_MODEL`. Never a word a command line would read as an option. So what
+/// follows the runner in a listed model's tag is a name too, and `typed` reads every one.
 pub fn is_name(id: &str) -> bool {
-    let edge = |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric());
-    id.len() <= MAX_MODEL
-        && edge(id.chars().next())
-        && edge(id.chars().last())
-        && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+    let parts = || id.split(['.', '-', '_']);
+    id.len() <= MAX_MODEL && parts().all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric()))
 }
 
 /// The tag's name for a runner's model: `gpt-6-astra` → `codex-gpt-6-astra`. An id that
@@ -97,20 +95,21 @@ pub fn read(name: &str, models: &Models) -> Agent {
 pub fn kind(name: &str) -> &'static str {
     match (RUNNERS.iter().any(|runner| name.eq_ignore_ascii_case(runner)), typed(name)) {
         (true, _) => "runner",
-        (_, Some(("claude", _))) => "claude model",
+        (_, Some((WHOLE, _))) => "claude model",
         (_, Some(_)) => "codex model",
         _ => "saved agent",
     }
 }
 
 /// The names `@` offers, in order: each runner and then its models, then the saved agents.
-/// A saved agent named as a built-in is left out: the built-in is what the name means.
+/// A saved agent named as a built-in or as a runner's model (`codex-reviewer`) is left out:
+/// that is what the name means.
 pub fn names(models: &Models, saved: Vec<String>) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     let built_in = RUNNERS.iter().flat_map(|runner| {
         std::iter::once(runner.to_string()).chain(models.of(runner).iter().map(|id| tag(runner, id)))
     });
-    for name in built_in.chain(saved) {
+    for name in built_in.chain(saved.into_iter().filter(|name| typed(name).is_none())) {
         if !names.iter().any(|seen| seen.eq_ignore_ascii_case(&name)) {
             names.push(name);
         }
@@ -158,6 +157,7 @@ mod tests {
         assert_eq!(kinds, ["runner", "claude model", "codex model", "saved agent"]);
         assert_eq!(read(&format!("codex-{}", "x".repeat(MAX_MODEL + 1)), &models), Agent::default());
         assert!(is_name(&"x".repeat(MAX_MODEL)) && !is_name("") && !is_name("a.") && !is_name("été"));
+        assert!(!is_name("codex--preview") && !is_name("-a") && is_name("gpt-7.1_mini"));
     }
 
     #[test]
@@ -179,11 +179,17 @@ mod tests {
         let codex = Models { claude: Vec::new(), codex: list(&["codex-mini-latest", "gpt-6-codex"]) };
         assert_eq!(names(&codex, Vec::new()), ["claude", "codex", "codex-mini-latest", "codex-gpt-6-codex"]);
         assert_eq!(read("codex-mini-latest", &codex), agent("codex", Some("codex-mini-latest")));
+        // Every model that can be listed is a row that says so, however long its id.
+        let long = Models { claude: vec!["x".repeat(MAX_MODEL)], codex: vec![format!("codex-{}", "x".repeat(58))] };
+        assert_eq!(
+            names(&long, Vec::new()).iter().map(|name| kind(name)).filter(|kind| kind.ends_with("model")).count(),
+            2
+        );
     }
 
     #[test]
     fn each_runner_then_its_models_then_the_saved_agents() {
-        let saved = list(&["ana", "Claude", "codex-gpt-6-astra", "reviewer"]);
+        let saved = list(&["ana", "Claude", "codex-gpt-6-astra", "codex-reviewer", "reviewer"]);
         let want = [
             "claude",
             "claude-fable-5-2",
@@ -195,7 +201,7 @@ mod tests {
             "ana",
             "reviewer",
         ];
-        // A saved agent named as a built-in is not offered twice.
+        // A saved agent named as a built-in is not offered twice, nor one that reads as a model.
         assert_eq!(names(&Models::default(), saved), want);
         // Every built-in offered is a tag's name, and its row says what `read` reads.
         for name in &want[..7] {

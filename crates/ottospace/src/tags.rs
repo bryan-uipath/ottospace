@@ -255,7 +255,7 @@ mod tests {
         assert_eq!(agents(&models, None), ["claude", "claude-opus-5-5", "codex"]);
         assert_eq!(agents(&models, Some(&dir.join("none"))), ["claude", "claude-opus-5-5", "codex"]);
         std::fs::create_dir_all(dir.join("agents/sub.md")).unwrap();
-        for file in ["reviewer.md", "claude.md", "claude-opus-5-5.md", "notes.txt", "ana.md"] {
+        for file in ["reviewer.md", "claude.md", "claude-opus-5-5.md", "codex-reviewer.md", "notes.txt", "ana.md"] {
             std::fs::write(dir.join("agents").join(file), "").unwrap();
         }
         let read = agents(&models, Some(&dir.join("agents")));
