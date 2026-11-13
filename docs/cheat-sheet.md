@@ -85,6 +85,9 @@ what can be opened, and its other panes are empty and say why. Marks are kept in
 |---|---|
 | Add a task | ⌘N, type a line, ↵. The + on the Tasks bar opens the same box. On the home screen click its line: it is the box, and stays for the next task |
 | Add a task and start it (show its tabs) | ⌘N, type a line, ⌘↵ |
+| Point at something for a task ("this message", "this error") | ⌃⌥⌘Space, from any app: the pane in use freezes as a picture and a draft opens on the right. Drag to circle, ⇧-drag a box, ⌥-drag a line, click to type a note. ↵, type what you want, ↵ (⌘↵ to start it). Esc leaves the picture; Esc in the title cancels the draft. The task keeps the pictures and the text under what you circled as its brief: [Capture](reference.md#capture) |
+| Capture a second pane into the same draft | While drawing, click the other pane. Or press ⌃⌥⌘Space again |
+| Give an agent a task's brief | In a terminal of the task: `ottospace ctl "{\"cmd\":\"task_brief\",\"id\":$OTTOSPACE_TASK}"` |
 | Tag the task | In that line: `#project` · `>repo` · `@agent` · `/path` · `$skill` · `^reference` · `p1` … `p9`. A dropdown finishes the tag at the cursor: ↑↓ move, ↵ or Tab takes a row, Esc closes it. [All tags](reference.md#tags) |
 | Add files to the task | Drag them from Finder onto the box, ⌘O, or copy in Finder and ⌘V: each becomes a `/path` |
 | Point the task at a tab, a pane, a mark or an app | `^name` in the line, or ⌥-click the tab or pane while the box is open |
@@ -148,6 +151,8 @@ ottospace ctl '{"cmd":"state"}' | jq --argjson pane "$OTTOSPACE_PANE" '.state.ta
   "sessions": true,
   "session_dirs": { "claude": ["~/.claude"], "codex": "~/.codex" },
   "session_quiet_minutes": 3,
+  "capture_key": "ctrl-alt-cmd-space",
+  "capture": { "keep_images": true, "ax": true },
   "apps": ["Microsoft Outlook", "Slack"],
   "apps_hidden": ["Music"],
   "suggest_dock_apps": true,
@@ -162,6 +167,8 @@ setting takes its default.
 `sessions`: `false` reads no agent session files. `session_dirs` names where Claude Code and Codex keep them, if not `~/.claude` and `~/.codex`. `session_quiet_minutes`: a task adopted from a session moves to Needs you after the session has been quiet this long (default 3; 0 never).
 
 `apps`: the pinned apps, by name or bundle path. `apps_hidden`: Dock apps not to suggest. Pin, Unpin and Hide in Apps write these two and leave the rest of the file as it is. `suggest_dock_apps`: `false` lists no Dock apps.
+
+`capture_key`: the key that captures the pane in use (`"off"` for none). `capture`: `keep_images` `false` writes no picture; `ax` `false` reads no accessibility tree for a capture.
 
 `windows` rules name windows ottospace leaves alone, by `app`, `title` and `subrole`: [reference](reference.md#settings).
 

@@ -97,6 +97,13 @@ pub fn tasks_dir() -> Option<PathBuf> {
     Some(home.join(dir)) // `join` keeps an absolute path as it is
 }
 
+/// Where captures are kept: `materials` in the user's folder, whatever `tasks` says. Not in the
+/// tasks folder, which may be a notes repository that is shared: a picture of a window is not
+/// for there. `None`: nothing is kept.
+pub fn materials_dir() -> Option<PathBuf> {
+    Some(get().home.as_ref()?.join("materials"))
+}
+
 /// What the tasks folder held at start.
 #[derive(Default)]
 pub struct Kept {
@@ -143,6 +150,11 @@ pub fn load_tasks() -> Kept {
 /// over it. The folder and the file are the user's alone: a title or a directory can be private.
 /// A file that is there keeps its mode.
 fn write_whole(dir: &Path, name: &str, text: &str) -> io::Result<()> {
+    write_private(dir, name, text.as_bytes())
+}
+
+/// As `write_whole`, for any bytes: a capture's picture.
+pub fn write_private(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
     if !dir.is_dir() {
@@ -153,7 +165,7 @@ fn write_whole(dir: &Path, name: &str, text: &str) -> io::Result<()> {
     let draft = dir.join(format!(".{name}.{}.tmp", std::process::id()));
     let write = || {
         let mut file = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&draft)?;
-        file.write_all(text.as_bytes())?;
+        file.write_all(bytes)?;
         file.set_permissions(fs::Permissions::from_mode(mode))?;
         // On disk before it takes the old file's place: a crash leaves one or the other, whole.
         file.sync_all()?;

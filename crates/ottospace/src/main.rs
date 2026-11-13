@@ -50,6 +50,7 @@ use screencapturekit::prelude::*;
 
 mod apps;
 mod ax_debug;
+mod collect;
 mod config;
 mod confirm;
 mod control;
@@ -80,6 +81,9 @@ struct Latest {
     /// Configured stream size as `width << 32 | height`. Frames of any other size are transitional
     /// (mid-reconfigure or mid-move) and render as a small window on black, so they're dropped.
     expected: AtomicU64,
+    /// When the stream last said anything, a frame or "nothing changed" (milliseconds since
+    /// 1970). It says nothing while its window is not drawn: minimised, or on another Space.
+    seen: AtomicU64,
 }
 
 impl Latest {
@@ -92,6 +96,7 @@ struct Output(Arc<Latest>);
 
 impl SCStreamOutputTrait for Output {
     fn did_output_sample_buffer(&self, sample: CMSampleBuffer, _: SCStreamOutputType) {
+        self.0.seen.store(now_ms(), Relaxed);
         let ptr = sample.image_buffer_ptr_borrowed();
         if ptr.is_null() {
             return; // idle frames carry no image
@@ -537,6 +542,8 @@ actions!(ottospace, [Cut, SelectAll, Undo, Redo]);
 actions!(ottospace, [CopySelection, PasteText, VisualMode, ListMode, SneakMode, NewTask, NextTask]);
 // Marks: mark the focused pane or the tab on show, and the jump prefix.
 actions!(ottospace, [MarkPane, MarkTab, MarkJump]);
+// What the capture key does, from the menu.
+actions!(ottospace, [CapturePane]);
 // App menu.
 actions!(ottospace, [Quit, Hide]);
 
@@ -580,12 +587,30 @@ struct Workspace {
     marks: Marks,
     /// The last text copied. E2E runs use it as the clipboard, so tests never touch the user's.
     copied: Option<String>,
-    /// The open text field as last drawn.
+    /// The open text field as last drawn: the new-task line, and a note's and the picker's own.
     field: field::Shared,
     /// What an ⌥-click would reference in the new-task box: outlined while ⌥ is held over it.
     pointing: Option<Bounds<Pixels>>,
     /// Where the pointer last was: ⌥ pressed with it still outlines what is there.
     hover_at: gpui::Point<Pixels>,
+    note_field: field::Shared,
+    picker_field: field::Shared,
+    apps_field: field::Shared,
+    mark_field: field::Shared,
+    /// What is held of each capture of the draft in the bar, by its number.
+    shots: HashMap<u32, collect::Shot>,
+    /// Where the picture being annotated and the right bar were last drawn.
+    annotate_at: Rc<Cell<Bounds<Pixels>>>,
+    bar_at: Rc<Cell<Bounds<Pixels>>>,
+    /// Briefs of tasks, as added in this run or read from their folders.
+    briefs: HashMap<TaskId, collect::Shown>,
+    /// The folders whose brief could not be read: not tried again in this run.
+    no_brief: std::collections::HashSet<String>,
+    /// Pictures asked for and not taken yet, and the terminals whose visual cursor goes after one.
+    pending: Vec<collect::Pending>,
+    visual_after: Vec<PaneId>,
+    /// A global key that could not be registered, for the status bar.
+    key_notice: Option<String>,
     system_clipboard: bool,
     /// Each pane's body bounds in window coordinates, recorded during prepaint.
     cells: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
@@ -750,6 +775,10 @@ impl Workspace {
                 }
             }),
             cx.on_app_quit(|this, _| {
+                // A draft does not outlive the run: what was kept of it goes.
+                if let Some(draft) = this.model.capture.as_ref().map(|bar| bar.draft.clone()) {
+                    this.drop_capture(&draft, None);
+                }
                 this.hosted.drain().for_each(|(_, hosted)| hosted.release());
                 if this.control.is_some() {
                     let _ = std::fs::remove_file(control::path());
@@ -771,6 +800,12 @@ impl Workspace {
                     }
                     if hotkey::take_press() {
                         this.return_to_ottospace(window, cx);
+                    }
+                    if hotkey::take_capture() {
+                        // From any app: ottospace comes forward with the picture to draw on.
+                        this.error = this.capture_pane(None, Origin::User, window, cx).err();
+                        cx.activate(true);
+                        cx.notify();
                     }
                     this.with_origin(Origin::System, |this| {
                         if tick % 30 == 0 {
@@ -809,6 +844,7 @@ impl Workspace {
                         this.sync_terminals(window, cx);
                         this.sync_sneak(window, cx);
                     });
+                    this.take_snapshots(window, cx);
                     if this.hosted.values().any(|h| h.latest.dirty.swap(false, Relaxed)) {
                         cx.notify();
                     }
@@ -866,6 +902,18 @@ impl Workspace {
             field: field::Shared::default(),
             pointing: None,
             hover_at: gpui::Point::default(),
+            note_field: field::Shared::default(),
+            picker_field: field::Shared::default(),
+            apps_field: field::Shared::default(),
+            mark_field: field::Shared::default(),
+            shots: HashMap::new(),
+            annotate_at: Rc::default(),
+            bar_at: Rc::default(),
+            briefs: HashMap::new(),
+            no_brief: Default::default(),
+            pending: Vec::new(),
+            visual_after: Vec::new(),
+            key_notice: None,
             system_clipboard: std::env::var_os("OTTOSPACE_E2E").is_none(),
             cells: HashMap::new(),
             frames: HashMap::new(),
@@ -948,6 +996,11 @@ impl Workspace {
             self.refresh_apps();
             self.offer_installed(cx);
         }
+        // A client's key, click or label at the user's draft: the status bar says why it did nothing.
+        let draft = ottospace_core::capture::DRAFT_USERS;
+        if origin == Origin::Socket && self.model.refusal(&action, origin) == Some(draft) {
+            self.error = Some(draft.into());
+        }
         let line = self.model.compose_line().cloned().map(|line| (line, self.model.compose_typing()));
         let field = self.model.field().map(|(of, _)| of);
         // The core has no clock: a task filed now is stamped with the time told here.
@@ -959,12 +1012,17 @@ impl Workspace {
                 | Action::ComposeSubmit { .. }
                 | Action::SessionAdopt { .. }
         );
+        // So is a capture. And what is open is read again just before a draft is added.
+        let captures = matches!(action, Action::CaptureStart { .. });
+        if matches!(action, Action::ComposeSubmit { .. }) && self.model.capture.is_some() {
+            self.model.update(Action::CaptureFacts { facts: self.pane_facts() }.sent_by(Origin::System));
+        }
         let row = matches!(action, Action::RowSnooze { .. } | Action::RowHold { .. } | Action::RowDismiss { .. });
         // And the offer to put a removed mark back.
         let unmarks = matches!(action, Action::MarkRemove { .. } | Action::MarkToggle { .. } | Action::ListDismiss);
         // And the offer to take a pin, an unpin or a hidden suggestion back.
         let pins = matches!(action, Action::AppPin { .. } | Action::AppHide { .. } | Action::ListPin);
-        if files || row || unmarks || pins {
+        if files || row || unmarks || pins || captures {
             self.model.update(Action::Tick { now: now_ms() }.sent_by(Origin::System));
         }
         let effects = self.model.update(action.sent_by(origin));
@@ -985,6 +1043,10 @@ impl Workspace {
         // New marks need looking for; what was found is believed a while, so this is cheap.
         self.check_marks(cx);
         self.load_icons(cx);
+        // A brief that shows is read from its task's folder, once.
+        if let Some(task) = self.model.brief {
+            self.brief_of(task);
+        }
         // What an effect dispatches in turn (a picked app's pane, a label's control) has the same sender.
         self.with_origin(origin, |this| this.carry_out(&effects, window, cx));
         cx.notify();
@@ -1004,6 +1066,9 @@ impl Workspace {
                         let tab = self.model.tab_of(*id);
                         let mut vars = vec![("OTTOSPACE_PANE", id.to_string())];
                         vars.extend(tab.map(|tab| ("OTTOSPACE_TAB", tab.to_string())));
+                        // A terminal opened for a task names it: an agent there can ask for its brief.
+                        let task = self.model.tabs.iter().find(|t| Some(t.id) == tab).and_then(|t| t.task);
+                        vars.extend(task.map(|task| ("OTTOSPACE_TASK", task.to_string())));
                         let cwd = self.model.pane(*id).and_then(|pane| pane.cwd.as_deref());
                         match Terminal::spawn(&vars, cwd) {
                             Ok(terminal) => drop(self.terminals.insert(*id, terminal)),
@@ -1042,6 +1107,9 @@ impl Workspace {
                 }
                 Effect::LaunchApp { name, path, axis, new_tab } => self.launch_picked(name, path, *axis, *new_tab),
                 Effect::SaveApps { changes } => self.save_apps(changes),
+                // A picture of the pane is asked for: the cursor's going scrolls the terminal to
+                // its bottom, so it waits until the picture of what is on show is taken.
+                Effect::Visual { pane, on: false } if self.snapshot_pending(*pane) => self.visual_after.push(*pane),
                 Effect::Visual { pane, on } => {
                     if let Some(terminal) = self.terminals.get(pane) {
                         terminal.set_visual(*on);
@@ -1061,6 +1129,9 @@ impl Workspace {
                         }
                     }
                 }
+                Effect::Snapshot { draft, material, pane } => self.ask_snapshot(draft, *material, *pane),
+                Effect::CaptureDropped { draft, material } => self.drop_capture(draft, *material),
+                Effect::CaptureKept { draft, dir, brief } => self.keep_capture(draft, dir, brief, cx),
                 Effect::Quit => {
                     // A moment later, so a socket `quit` gets its reply first.
                     cx.spawn(async move |_, cx| {
@@ -1218,6 +1289,7 @@ impl Workspace {
             (Some(notice), Some(marks)) => Some(format!("{notice} · {marks}")),
             (notice, marks) => notice.clone().or(marks.clone()),
         };
+        let start = start.or(self.key_notice.clone());
         self.error.clone().or(self.unsaved.clone()).or(self.kept_marks.unsaved.clone()).or(start)
     }
 
@@ -1470,6 +1542,11 @@ impl Workspace {
                     self.compose_attach(&paths, Origin::Socket, window, cx);
                     None
                 }
+                // A draft in the bar has the line: this text has no box to go to.
+                Request::Compose { .. } if self.model.capture.is_some() => {
+                    failure = Some(ottospace_core::capture_model::DRAFT_OPEN.into());
+                    None
+                }
                 Request::Compose { text } => {
                     self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
                     self.tell_compose_context(cx);
@@ -1581,6 +1658,15 @@ impl Workspace {
                     None
                 }
                 Request::OpenRepo { path, axis } => Some(Action::OpenRepo { path, axis }),
+                // A test run only (refused above otherwise): the user's capture key, pressed by the test.
+                Request::CaptureStart { pane } => {
+                    failure = self.capture_pane(pane, Origin::User, window, cx).err();
+                    None
+                }
+                Request::TaskBrief { id, tab } => {
+                    let _ = reply.send(self.serve_brief(id, tab));
+                    continue;
+                }
                 Request::Capture { pane, history } => {
                     let id = pane.or(self.model.focused);
                     let message = match id.and_then(|id| self.terminals.get(&id).map(|t| (id, t))) {
@@ -2162,6 +2248,8 @@ impl Workspace {
             // `marks`, `picker`, `keys`, `terminal:<pane>`): its bar's `track` and `thumb` in
             // window points, and the bar's `opacity` (0 once it has faded).
             "scrollbars": self.bars.snapshot(),
+            // The capture key, and what was drawn of the draft or the brief in the right bar.
+            "capture": self.capture_snapshot(),
         })
         .to_string()
     }
@@ -2587,8 +2675,12 @@ impl Workspace {
             self.picker_key(event, window, cx);
             return;
         }
-        if self.model.compose.is_some() {
+        if self.model.compose_keys() {
             self.compose_key(event, window, cx);
+            return;
+        }
+        if self.model.mode() == Mode::Annotate {
+            self.annotate_key(event, window, cx);
             return;
         }
         if self.model.mode() == Mode::Visual {
@@ -2627,6 +2719,10 @@ impl Workspace {
     /// A press on a terminal starts a selection there: a drag, or a word or line by click count.
     /// It also focuses the pane (`click_pane`), so the first click on an unfocused pane selects too.
     fn terminal_mouse_down(&mut self, id: PaneId, event: &MouseDownEvent, cx: &mut Context<Self>) {
+        // While a picture is annotated a click on another pane captures it: it selects nothing.
+        if self.model.annotated().is_some() {
+            return;
+        }
         let Some(at) = self.cell_under(id, event.position) else { return };
         if let Some(terminal) = self.terminals.get(&id) {
             terminal.select_start(at, select_kind(event.click_count));
@@ -2863,6 +2959,7 @@ impl Workspace {
     /// The key reference: every shortcut, grouped. ⌘/ or Esc or a click closes it.
     fn render_keys(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let return_key = RETURN_KEY.get().cloned().unwrap_or_else(|| "off".into());
+        let capture_key = collect::KEY.get().map_or_else(|| "off".into(), |key| collect::key_label(key));
         let group = |title: &'static str, rows: Vec<(String, &'static str)>| {
             div()
                 .flex()
@@ -2906,6 +3003,7 @@ impl Workspace {
                         vec![
                             (return_key, "From any app: back to ottospace"),
                             ("⌘⌃F".into(), "Zoom the window"),
+                            (capture_key, "From any app: capture the pane in use"),
                             ("⌘⌃A".into(), "Accessibility overlay (debug)"),
                             ("⌘/".into(), "This list"),
                         ],
@@ -3066,6 +3164,15 @@ impl Workspace {
     /// the app (otherwise the first click is spent on the swap). Other panes just take focus.
     /// What a click on an app pane does is the core's `hosted::click` (`hosting` here).
     fn click_pane(&mut self, id: PaneId, event: &MouseDownEvent, window: &Window, cx: &mut Context<Self>) {
+        // While a picture is annotated, a click on another pane is a capture of that one.
+        if self.model.annotated().is_some_and(|material| material.pane != id) {
+            self.error = self.capture_pane(Some(id), self.input, window, cx).err();
+            return cx.notify();
+        }
+        // Its own pane, in the moment before its picture is taken: the click is for the picture.
+        if self.snapshot_pending(id) {
+            return;
+        }
         let left = self.left_on_activation == Some(id);
         let live = hosting::was_live(self.model.live == Some(id), left, event.first_mouse);
         // Choose first: going live reads the window's size, so the click is judged against what
@@ -3740,6 +3847,9 @@ impl Workspace {
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| this.fit_pane(id, window, cx)))
         });
+        // The pane being annotated has its tools in its header.
+        let drawn_on = self.model.annotated().filter(|m| m.pane == id && self.shots.contains_key(&m.n));
+        let strip = drawn_on.map(|material| self.annotate_strip(material, cx));
         // flex_none: a short pane must not squeeze the header, or a raised bar would overlap the pane above.
         let label: SharedString = if title.is_empty() { tag.into() } else { format!("{tag} {title}").into() };
         // A marked pane says so, with its letter: ⌘B gives no other sign while the Marks list is shut.
@@ -3789,7 +3899,7 @@ impl Workspace {
             .child(self.controls.mark(format!("header:{id}")))
             // `fit` and × never shrink, so they stay in the header however narrow the pane.
             .child(
-                div().flex().min_w_0().gap_2().children(hint).children(word).child(
+                div().flex().min_w_0().gap_2().children(hint).children(word).children(strip).child(
                     div()
                         .id(("close", id))
                         .child(mark(&self.marks, Mark::Close(id)))
@@ -3804,7 +3914,12 @@ impl Workspace {
                         .on_click(cx.listener(move |this, _, window, cx| this.close_pane(id, window, cx))),
                 ),
             );
-        let content = if let Some(hosted) = self.hosted.get(&id) {
+        // Once its picture is taken. Until then the pane draws as ever, beside the bar.
+        let taken = |material: &&ottospace_core::capture::Material| self.shots.contains_key(&material.n);
+        let annotated = self.model.annotated().filter(|material| material.pane == id).filter(taken);
+        let content = if let Some(material) = annotated {
+            self.render_annotate(material, cx)
+        } else if let Some(hosted) = self.hosted.get(&id) {
             // While live, keep showing the last frame under the real window, so any gap during a swap is invisible.
             match hosted.frame() {
                 Some(buffer) => {
@@ -4115,7 +4230,7 @@ impl Workspace {
     }
 
     /// Bottom bar: who has the keyboard, and the focused pane.
-    fn render_status(&self) -> impl IntoElement {
+    fn render_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let color = theme::accent(self.model.mode());
         // Name the return key only if it works: a wrong hint strands the user in the app.
         let app_hint = match RETURN_KEY.get() {
@@ -4136,6 +4251,7 @@ impl Workspace {
             }
             Mode::Sneak => ("SNEAK", "type a label · esc leaves"),
             Mode::Confirm => ("QUIT?", ""),
+            Mode::Annotate => ("ANNOTATE", "drag to circle · click for a note · ↵ title · esc leaves"),
             Mode::Mark => match self.model.mark_input {
                 Some(MarkInput::Rename { .. }) => ("MARK", "type its name · ↵ keeps it · esc cancels"),
                 Some(MarkInput::SetKey { .. }) => ("MARK", "a letter for the mark · ⌫ for none · esc cancels"),
@@ -4166,6 +4282,16 @@ impl Workspace {
             .child(div().flex_none().child(hint))
             // Pushes what follows to the right. An auto margin there closed the gaps on the left.
             .child(div().flex_1())
+            // After a capture from a live app, with the draft gone: the way back to that app.
+            .children(self.model.back_to.filter(|_| self.model.capture.is_none()).and_then(|pane| {
+                let Kind::App { name, .. } = &self.model.pane(pane)?.kind else { return None };
+                let back = div().id("status-back").relative().flex_none().cursor_pointer().text_color(rgb(theme::APP));
+                Some(
+                    back.child(format!("↩ back to {name}"))
+                        .child(self.controls.mark("draft:back"))
+                        .on_click(cx.listener(|this, _, window, cx| this.click_capture("back", window, cx))),
+                )
+            }))
             // The one thing tasks put here: how many wait for the user.
             .children(Some(self.model.tasks.needs_you()).filter(|n| *n > 0).map(|n| {
                 let label = if n == 1 { "1 task needs you".to_string() } else { format!("{n} tasks need you") };
@@ -4366,13 +4492,22 @@ impl Render for Workspace {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key_down))
             // On the root, so a selection drag keeps going over other panes.
-            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| this.mouse_move(e, cx)))
+            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
+                this.mouse_move(e, cx);
+                this.annotate_move(e, window, cx);
+            }))
             .on_drag_move(cx.listener(|this, e: &gpui::DragMoveEvent<DraggedPane>, window, cx| {
                 this.pane_drag_move(e.drag(cx).0, e.event.position, window, cx);
             }))
             // A release ends the drag, so a later drag elsewhere does not extend this selection.
             // The user's release also ends a `mouse` request's hold.
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| (this.dragging, this.held) = (None, false)))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, e: &gpui::MouseUpEvent, window, cx| {
+                    (this.dragging, this.held) = (None, false);
+                    this.annotate_release(e.position, window, cx);
+                }),
+            )
             // Any click leaves visual mode first, before the clicked element acts: visual mode has no
             // backdrop, and e.g. a click on an app pane must go live, not be replayed while blocked.
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
@@ -4400,12 +4535,17 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &SelectAll, window, cx| {
                 this.field_menu(edit::Key::Edit(Edit::SelectAll), window, cx)
             }))
-            .on_action(
-                cx.listener(|this, _: &Undo, window, cx| this.field_menu(edit::Key::Edit(Edit::Undo), window, cx)),
-            )
-            .on_action(
-                cx.listener(|this, _: &Redo, window, cx| this.field_menu(edit::Key::Edit(Edit::Redo), window, cx)),
-            )
+            // ⌘Z and ⇧⌘Z: the field's, else in annotate mode what was drawn.
+            .on_action(cx.listener(|this, _: &Undo, window, cx| {
+                if !this.annotate_step(Action::AnnotateUndo, window, cx) {
+                    this.field_menu(edit::Key::Edit(Edit::Undo), window, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &Redo, window, cx| {
+                if !this.annotate_step(Action::AnnotateRedo, window, cx) {
+                    this.field_menu(edit::Key::Edit(Edit::Redo), window, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &VisualMode, window, cx| {
                 this.dispatch(Action::ToggleVisual, this.input, window, cx);
             }))
@@ -4415,6 +4555,10 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &SneakMode, window, cx| this.toggle_sneak(window, cx)))
             .on_action(cx.listener(|this, _: &NewTask, window, cx| this.new_task(window, cx)))
+            .on_action(cx.listener(|this, _: &CapturePane, window, cx| {
+                this.error = this.capture_pane(None, this.input, window, cx).err();
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &MarkPane, window, cx| this.toggle_mark(MarkOf::Pane(None), window, cx)))
             .on_action(cx.listener(|this, _: &MarkTab, window, cx| this.toggle_mark(MarkOf::Tab(None), window, cx)))
             .on_action(cx.listener(|this, _: &MarkJump, window, cx| {
@@ -4536,9 +4680,11 @@ impl Render for Workspace {
                             .overflow_hidden()
                             .children(home)
                             .children(tree),
-                    ),
+                    )
+                    // The right bar: the draft being collected, else a task's brief.
+                    .children(self.render_draft(cx).or_else(|| self.render_brief(cx))),
             )
-            .child(self.render_status())
+            .child(self.render_status(cx))
             // Only over a parked, drawn pane: a live window sits above ottospace and would cover it.
             .children(
                 self.ax_overlay
@@ -4797,11 +4943,22 @@ fn main() {
             let registered = hotkey::key_code(&name)
                 .ok_or_else(|| "it is not one of f13-f20".to_string())
                 .and_then(hotkey::register);
-            match registered {
-                Ok(()) => drop(RETURN_KEY.set(name.to_uppercase())),
-                Err(err) => eprintln!("return key {name} is off: {err}"),
+            // A key another app holds is said in the status bar too: stderr is seen by nobody.
+            let returns = registered.err().map(|err| format!("return key {} is off: {err}", name.to_uppercase()));
+            if returns.is_none() {
+                let _ = RETURN_KEY.set(name.to_uppercase());
+            }
+            let captures = collect::register_key(host_only.is_some());
+            let notice: Vec<String> = returns.into_iter().chain(captures).collect();
+            if !notice.is_empty() {
+                eprintln!("{}", notice.join("; "));
+                let _ = workspace.update(cx, |this, _, cx| {
+                    this.key_notice = Some(notice.join("; "));
+                    cx.notify();
+                });
             }
         }
+        collect::sweep_drafts();
     });
 }
 
@@ -4856,10 +5013,12 @@ mod tests {
         }
     }
 
-    /// Every request the app accepts must have an example in the guide.
+    /// Every request the app accepts must have an example in the guide. But `capture_start`:
+    /// it answers only in a test run, and an agent must not learn it (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        for name in request_names() {
+        assert!(!SKILL_GUIDE.contains("capture_start"));
+        for name in request_names().into_iter().filter(|name| name != "capture_start") {
             assert!(SKILL_GUIDE.contains(&format!(r#""cmd":"{name}""#)), "the guide has no example of `{name}`");
         }
     }

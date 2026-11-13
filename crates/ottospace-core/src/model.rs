@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::apps;
 use crate::ax::Target;
+use crate::capture::{self, Content, Facts, Tool};
+use crate::capture_model::Collection;
 use crate::complete::{self, Candidate, Dropdown, Row};
 use crate::compose::{self, Draft};
 use crate::edit::{Edit, Field, Motion};
@@ -81,6 +83,8 @@ pub enum Mode {
     Confirm,
     /// A mark has the keyboard: the jump prefix waits for a letter, or a row for its name or letter.
     Mark,
+    /// A frozen picture of a pane is drawn on: drags circle, a click places a note.
+    Annotate,
 }
 
 /// A terminal that runs something quitting would end.
@@ -119,9 +123,10 @@ impl Confirm {
         }
     }
 
-    /// "3 terminals are running".
+    /// "3 terminals are running". With none, the question is about a draft's captures alone.
     pub fn title(&self) -> String {
         match self.running.len() {
+            0 => "A draft is open".into(),
             1 => "1 terminal is running".into(),
             n => format!("{n} terminals are running"),
         }
@@ -151,6 +156,8 @@ pub enum Host {
     Home,
     /// A panel over the dimmed workspace.
     Modal,
+    /// The title of the draft in the right bar: the workspace stays in use beside it.
+    Bar,
 }
 
 /// What the user did to the dropdown, for the tag it was done to (`key`): for another tag it
@@ -772,6 +779,91 @@ pub enum Action {
     ListReorder {
         delta: i32,
     },
+    /// The capture key: freeze a picture of a pane (default: the live one, else the focused
+    /// one) and annotate it, as a material of the draft in the right bar. The bar opens if it
+    /// is closed, with `draft` as its name; the new-task box's line moves there. A live app is
+    /// parked first. `facts`: what the shell read of the panes on show. `images`: pictures are
+    /// kept. With no pane to capture, only the bar opens.
+    /// `word`: letters and digits made up by the shell for this draft (see `Collection::word`).
+    /// Only the user starts a capture: it takes a picture of a pane, and reads its text.
+    CaptureStart {
+        pane: Option<PaneId>,
+        draft: String,
+        word: String,
+        facts: Vec<Facts>,
+        images: bool,
+    },
+    /// The shell froze the picture of a capture. `picture`: there was one to take. `stale`: the
+    /// window's stream had stopped, so it may show the window as it was a while ago.
+    CaptureTaken {
+        draft: String,
+        material: u32,
+        picture: bool,
+        stale: bool,
+    },
+    /// What the shell read of the panes on show, just before the draft is added.
+    CaptureFacts {
+        facts: Vec<Facts>,
+    },
+    /// The text read with a capture's picture. For a draft since gone it is dropped.
+    CaptureContent {
+        draft: String,
+        material: u32,
+        content: Content,
+    },
+    /// The button went down on the picture being annotated, at `at` (0..1 of it). `size`: the
+    /// picture's, in points. ⇧ draws a box and ⌥ a freehand stroke.
+    AnnotatePress {
+        at: [f64; 2],
+        shift: bool,
+        alt: bool,
+        size: [f64; 2],
+    },
+    AnnotateDrag {
+        to: [f64; 2],
+    },
+    AnnotateRelease {
+        at: [f64; 2],
+    },
+    /// What a plain drag draws from now on.
+    AnnotateTool {
+        tool: Tool,
+    },
+    AnnotateUndo,
+    AnnotateRedo,
+    /// Remove the selected annotation.
+    AnnotateRemove,
+    /// End the note being typed. `keep`: it stays (↵); else it is dropped (Esc).
+    AnnotateNote {
+        keep: bool,
+    },
+    /// Leave annotate mode, keeping what was drawn. `title`: the draft's title takes the keyboard.
+    AnnotateLeave {
+        title: bool,
+    },
+    /// Annotate a capture of the draft again, by its number, if its pane is on show.
+    CaptureEdit {
+        material: u32,
+    },
+    /// Take a capture out of the draft.
+    CaptureRemove {
+        material: u32,
+    },
+    /// × or Esc on the draft in the bar: it goes, after a question if it holds captures.
+    CaptureCancel,
+    /// The answer to that question.
+    CaptureDiscard {
+        yes: bool,
+    },
+    /// The draft's title takes the keyboard.
+    CaptureTitle,
+    /// Back to the app the capture key took the keyboard from.
+    CaptureBack,
+    /// Show a task's brief in the right bar, or hide it.
+    BriefShow {
+        id: TaskId,
+    },
+    BriefClose,
 }
 
 /// Who sent an action.
@@ -835,6 +927,7 @@ impl Action {
                 | Action::MarkEdit { .. }
                 | Action::ListMarkEdit { .. }
                 | Action::ListReorder { .. }
+                | Action::CaptureBack
         )
     }
 
@@ -855,7 +948,11 @@ impl Action {
             | Action::QuitAsked { .. }
             | Action::MarkPrefix
             | Action::MarkEdit { .. }
-            | Action::ListMarkEdit { .. } => true,
+            | Action::ListMarkEdit { .. }
+            | Action::CaptureStart { .. }
+            | Action::CaptureEdit { .. }
+            | Action::CaptureTitle
+            | Action::CaptureBack => true,
             Action::Split { .. }
             | Action::Open { .. }
             | Action::Adopt { .. }
@@ -963,7 +1060,24 @@ impl Action {
             | Action::MarkBackspace
             | Action::MarkSubmit
             | Action::MarkCancel
-            | Action::ListReorder { .. } => false,
+            | Action::ListReorder { .. }
+            | Action::CaptureFacts { .. }
+            | Action::CaptureContent { .. }
+            | Action::CaptureTaken { .. }
+            | Action::AnnotatePress { .. }
+            | Action::AnnotateDrag { .. }
+            | Action::AnnotateRelease { .. }
+            | Action::AnnotateTool { .. }
+            | Action::AnnotateUndo
+            | Action::AnnotateRedo
+            | Action::AnnotateRemove
+            | Action::AnnotateNote { .. }
+            | Action::AnnotateLeave { .. }
+            | Action::CaptureRemove { .. }
+            | Action::CaptureCancel
+            | Action::CaptureDiscard { .. }
+            | Action::BriefShow { .. }
+            | Action::BriefClose => false,
         }
     }
 }
@@ -1038,6 +1152,24 @@ pub enum Effect {
         into: Option<PaneId>,
         axis: Axis,
     },
+    /// Freeze a picture of `pane` now, as capture `material` of `draft`, and read its text.
+    Snapshot {
+        draft: String,
+        material: u32,
+        pane: PaneId,
+    },
+    /// The draft is gone, or with `material` one capture of it: what was kept of it goes too.
+    CaptureDropped {
+        draft: String,
+        material: Option<u32>,
+    },
+    /// The draft became task `brief.task`: what was kept of it is the task's now, with the brief.
+    /// `dir`: the task's folder inside the materials folder, a new one.
+    CaptureKept {
+        draft: String,
+        dir: String,
+        brief: Box<capture::Brief>,
+    },
 }
 
 /// One tab: its own split tree. Only the active tab is drawn.
@@ -1108,6 +1240,11 @@ pub struct Model {
     /// What the box says of the last thing asked of it that it could not do: "no room".
     #[serde(skip)]
     compose_note: Option<String>,
+    /// The line holds text someone other than the user put there (a client's `compose`, a
+    /// client's key). Such a line never becomes a capture draft's title: a brief says its ask
+    /// was typed by the user.
+    #[serde(skip)]
+    pub(crate) compose_theirs: bool,
     #[serde(skip)]
     terminals: Vec<TerminalInfo>,
     #[serde(skip)]
@@ -1157,6 +1294,12 @@ pub struct Model {
     pub marks: Marks,
     /// What a mark waits for, while one has the keyboard.
     pub mark_input: Option<MarkInput>,
+    /// The draft in the right bar, while there is one: `compose` is its title.
+    pub capture: Option<Collection>,
+    /// The app pane the capture key took the keyboard from: the way back is offered.
+    pub back_to: Option<PaneId>,
+    /// The task whose brief the right bar shows.
+    pub brief: Option<TaskId>,
     #[serde(skip)]
     pub(crate) next_id: PaneId,
     #[serde(skip)]
@@ -1185,6 +1328,7 @@ impl Default for Model {
             compose_refs: Vec::new(),
             compose_attached: Vec::new(),
             compose_note: None,
+            compose_theirs: false,
             terminals: Vec::new(),
             home: None,
             collapsed: Vec::new(),
@@ -1204,6 +1348,9 @@ impl Default for Model {
             sneak: None,
             marks: Marks::default(),
             mark_input: None,
+            capture: None,
+            back_to: None,
+            brief: None,
             next_id: 0,
             current_task: None,
             last_tab: Vec::new(),
@@ -1236,10 +1383,12 @@ impl Model {
             Mode::Mark
         } else if self.picker.is_some() {
             Mode::Pick
-        } else if self.compose.is_some() {
+        } else if self.compose_keys() {
             Mode::Compose
         } else if self.live.is_some() {
             Mode::App
+        } else if self.annotated().is_some() {
+            Mode::Annotate
         } else if self.visual.is_some() {
             Mode::Visual
         } else if self.list.is_some() {
@@ -1259,7 +1408,7 @@ impl Model {
     /// The new-task box, the picker, the key reference, the Apps section's filter, visual
     /// mode, sneak mode or the quit question has the keyboard.
     fn holds_keyboard(&self) -> bool {
-        let boxed = self.compose.is_some() || self.picker.is_some() || self.keys;
+        let boxed = self.compose_keys() || self.picker.is_some() || self.keys || self.annotated().is_some();
         // The Apps section's filter is a text field with the keyboard, as the picker's is.
         let filtering = self.app_lists.filtering;
         boxed || filtering || self.visual.is_some() || self.sneak.is_some() || self.confirm.is_some()
@@ -1270,7 +1419,7 @@ impl Model {
     /// key reference.
     /// `None`: the origin does not stop it. The shell answers a socket request with the reason.
     pub fn refusal(&self, action: &Action, origin: Origin) -> Option<&'static str> {
-        let boxed = self.picker.is_some() || self.compose.is_some();
+        let boxed = self.picker.is_some() || self.compose_keys();
         match action {
             _ if origin == Origin::User => None,
             // A pin, an unpin, a hidden suggestion and their undo write the user's settings
@@ -1280,6 +1429,11 @@ impl Model {
             }
             Action::ListDismiss | Action::ListUndo if self.sidebar == Some(Section::Apps) => Some(apps::USERS_ALONE),
             action if self.sneak.is_some() && action.takes_keyboard() => Some("sneak mode is on"),
+            // A capture hands over a pane's picture and its text: no client's request, key or
+            // label asks for one. Sneak mode and the quit question say their own reason first.
+            Action::CaptureStart { .. } if self.confirm.is_none() => Some(capture::USERS_ALONE),
+            // Its brief says the ask, the notes and the drawings are the user's: so they are.
+            action if self.capture.is_some() && self.drafts(action) => Some(capture::DRAFT_USERS),
             action if self.confirm.is_some() && action.takes_keyboard() => Some(CONFIRM_UP),
             // A key a client presses is input to the wait, as a label's letter is to sneak mode.
             Action::MarkPrefix | Action::MarkEdit { .. } | Action::ListMarkEdit { .. } => None,
@@ -1290,6 +1444,38 @@ impl Model {
                 Some("the picker, the new-task box, the key reference or visual mode has the keyboard")
             }
             _ => None,
+        }
+    }
+
+    /// Whether the action types in, draws on, adds or drops the capture draft in the right bar.
+    /// What the shell tells of a capture (its picture, its text, what is open) is not among them.
+    fn drafts(&self, action: &Action) -> bool {
+        match action {
+            Action::FieldEdit { .. } => self.field().is_some_and(|(of, _)| matches!(of, "compose" | "note")),
+            Action::OpenCompose { .. }
+            | Action::CloseCompose
+            | Action::ComposeSubmit { .. }
+            | Action::ComposeComplete
+            | Action::ComposeEscape
+            | Action::ComposeMove { .. }
+            | Action::ComposeAccept { .. }
+            | Action::ComposeAttach { .. }
+            | Action::ComposeRef { .. }
+            | Action::CaptureCancel
+            | Action::CaptureDiscard { .. }
+            | Action::CaptureRemove { .. }
+            | Action::CaptureEdit { .. }
+            | Action::CaptureTitle
+            | Action::AnnotatePress { .. }
+            | Action::AnnotateDrag { .. }
+            | Action::AnnotateRelease { .. }
+            | Action::AnnotateTool { .. }
+            | Action::AnnotateUndo
+            | Action::AnnotateRedo
+            | Action::AnnotateRemove
+            | Action::AnnotateNote { .. }
+            | Action::AnnotateLeave { .. } => true,
+            _ => false,
         }
     }
 
@@ -1313,17 +1499,31 @@ impl Model {
         // neither opens over the other. (The picker may open again over itself: ⌘T while it is
         // open turns the pick into a new tab.) The box does not open under the key reference
         // or in visual mode.
-        let boxed = self.picker.is_some() || self.compose.is_some();
-        let over_other = (self.compose.is_some() && picker) || (boxed && matches!(action, Action::OpenCompose { .. }));
+        // A draft in the right bar is not a box: the workspace stays in use beside it.
+        let modal = self.compose.is_some() && self.capture.is_none();
+        let boxed = self.picker.is_some() || modal;
+        // The draft's title or a picture taking the keyboard is the box opening, in the bar.
+        let opens = matches!(action, Action::OpenCompose { .. } | Action::CaptureTitle | Action::CaptureEdit { .. });
+        let over_other = (modal && picker) || (boxed && opens);
         if (boxed && for_panes && !named_close) || over_other {
             return Some(if self.picker.is_some() { "the picker is open" } else { "the new-task box is open" });
         }
-        let no_box_now = matches!(action, Action::OpenCompose { .. }) && (self.keys || self.visual.is_some());
+        let no_box_now = opens && (self.keys || self.visual.is_some());
         no_box_now.then_some("the key reference or visual mode is in the way")
     }
 
     pub fn update(&mut self, sent: impl Into<Envelope>) -> Vec<Effect> {
-        let Envelope { action, origin } = sent.into();
+        let sent = sent.into();
+        let (origin, line) = (sent.origin, self.compose_line().cloned());
+        let effects = self.step(sent);
+        // A line anyone but the user changed is theirs until it is empty or gone.
+        let changed = origin != Origin::User && self.compose_line() != line.as_ref();
+        self.compose_theirs = (self.compose_theirs || changed) && self.compose_line().is_some_and(|l| !l.is_empty());
+        effects
+    }
+
+    fn step(&mut self, sent: Envelope) -> Vec<Effect> {
+        let Envelope { action, origin } = sent;
         let user = origin == Origin::User;
         let mut effects = Vec::new();
         // An edit is for the field that has the keyboard now. With none (a mark waits for a
@@ -1376,6 +1576,13 @@ impl Model {
             {
                 Action::TaskFromLine { line, known, open: false }
             }
+            // The same for the draft in the bar, which can be added while the picker, the key
+            // reference or visual mode has the keyboard: the task is filed, the view stays.
+            Action::ComposeSubmit { open: true }
+                if self.capture.is_some() && self.waits(&Action::TaskOpen { id: None }).is_some() =>
+            {
+                Action::ComposeSubmit { open: false }
+            }
             action => action,
         };
         // The picker has the keyboard. Pane and bar actions wait until it closes, so a
@@ -1399,11 +1606,21 @@ impl Model {
                     | Action::ToggleKeys
                     | Action::ToggleVisual
                     | Action::ToggleAxOverlay
+                    | Action::CaptureStart { .. }
+                    | Action::CaptureEdit { .. }
+                    | Action::CaptureTitle
+                    | Action::CaptureBack
             );
         if self.confirm.is_some() && (cancels || (user && answers_no)) {
             self.confirm = None;
             return effects;
         }
+        // The capture key is the user's "now": what lies over the workspace gives way to it.
+        // (Visual mode ends after the picture is asked for: see `capture_start`.)
+        if user && matches!(action, Action::CaptureStart { .. }) {
+            (self.keys, self.picker) = (false, None);
+        }
+        let action = self.capture_route(action);
         if self.waits(&action).is_some() {
             return effects;
         }
@@ -1426,6 +1643,10 @@ impl Model {
                 | Action::TaskOpen { .. }
                 | Action::ToggleVisual
                 | Action::LeaveList
+                | Action::CaptureStart { .. }
+                | Action::CaptureEdit { .. }
+                | Action::CaptureTitle
+                | Action::CaptureBack
         );
         if leaves_list {
             self.list = None;
@@ -1461,7 +1682,13 @@ impl Model {
                 | Action::ListDismiss
         );
         let trees = self.trees();
+        // The user went to a pane: the draft's title gives up the keyboard. The bar stays.
+        let to_panes = for_panes || matches!(action, Action::Open { .. } | Action::PickerChoose { .. });
+        if let Some(draft) = self.capture.as_mut().filter(|_| user && to_panes) {
+            draft.typing = false;
+        }
         self.act(action, &mut effects);
+        self.settle_capture(&mut effects);
         // Nor is there one to offer once it is taken back, or an agent's report made it stale.
         // The offer to put a mark back goes with the mark it would put back.
         let of_mark = self.undo_offer.is_some_and(|offer| offer.moved == Moved::MarkRemoved);
@@ -1493,7 +1720,9 @@ impl Model {
         let panes = &self.panes;
         if let Some(confirm) = &mut self.confirm {
             confirm.running.retain(|r| panes.iter().any(|p| p.id == r.pane));
-            if confirm.running.is_empty() {
+            // Nor is there one once the draft it would discard is gone too.
+            let discards = self.capture.as_ref().is_some_and(|bar| !bar.materials.is_empty());
+            if confirm.running.is_empty() && !discards {
                 self.confirm = None;
             }
         }
@@ -1561,6 +1790,9 @@ impl Model {
                 if let Some((id, title, repo)) = task.map(|t| (t.id, t.title.clone(), t.repo.clone())) {
                     let first_time = !self.tabs.iter().any(|tab| tab.task == Some(id));
                     self.show_tabs_of(Some(id), effects);
+                    // What was captured for it comes up with it.
+                    let briefed = self.tasks.get(id).is_some_and(|task| !task.materials.is_empty());
+                    self.brief = Some(id).filter(|_| briefed && self.current_task == Some(id));
                     if first_time {
                         // The bar already names the task: the tab is named for where it works.
                         let place = repo.as_deref().and_then(|path| self.repo_name(path));
@@ -1733,6 +1965,10 @@ impl Model {
                     self.leave(effects);
                     self.live = Some(pane);
                     self.focused = Some(pane);
+                    self.back_to = None; // the user is in an app again: no way back to offer
+                    if let Some(draft) = &mut self.capture {
+                        draft.typing = false; // the app has the keyboard, not the draft's title
+                    }
                     effects.push(Effect::Live(pane));
                 }
             }
@@ -1753,24 +1989,39 @@ impl Model {
             }
             // Not under the key reference or the quit question: the field is hidden there.
             Action::FieldEdit { .. } if self.field().is_none() => {}
-            Action::FieldEdit { edit } => {
-                if let Some(MarkInput::Rename { text, .. }) = &mut self.mark_input {
-                    text.apply(edit);
-                } else if let Some(picker) = &mut self.picker {
+            // To the field that has the keyboard: more than one can be open (the draft's title in
+            // the right bar beside a note, a filter or a mark's name).
+            Action::FieldEdit { edit } => match self.field().map(|(of, _)| of) {
+                Some("mark") => {
+                    if let Some(MarkInput::Rename { text, .. }) = &mut self.mark_input {
+                        text.apply(edit);
+                    }
+                }
+                Some("picker") => {
                     // A new filter starts at its first match.
-                    if picker.query.apply(edit) {
+                    if let Some(picker) = &mut self.picker
+                        && picker.query.apply(edit)
+                    {
                         picker.selected = 0;
                     }
-                } else if let Some(exact) = self.spelled_out(&edit) {
-                    // A space after a name that is one of the rows takes that row.
-                    self.accept(exact);
-                } else if let Some(field) = &mut self.compose {
-                    self.compose_note = None;
-                    field.apply(edit);
-                } else {
-                    self.app_lists.filter.apply(edit);
                 }
-            }
+                Some("note") => {
+                    if let Some(field) = self.note_mut() {
+                        field.apply(edit);
+                    }
+                }
+                Some("apps") => drop(self.app_lists.filter.apply(edit)),
+                Some(_) => {
+                    if let Some(exact) = self.spelled_out(&edit) {
+                        // A space after a name that is one of the rows takes that row.
+                        self.accept(exact);
+                    } else if let Some(field) = &mut self.compose {
+                        self.compose_note = None;
+                        field.apply(edit);
+                    }
+                }
+                None => {}
+            },
             Action::ComposeComplete => {
                 if let Some(menu) = self.dropdown().filter(|menu| !menu.rows.is_empty()) {
                     self.accept(menu.selected.unwrap_or(0));
@@ -1796,6 +2047,12 @@ impl Model {
             Action::ComposeEscape => {
                 if self.dropdown().is_some() {
                     self.menu = Menu { key: self.menu_key(), dismissed: true, moved: None };
+                } else if let Some(draft) = &mut self.capture {
+                    // The draft's title: Esc is the bar's ×, and "no" to its question.
+                    match draft.asked {
+                        true => draft.asked = false,
+                        false => self.capture_cancel(effects),
+                    }
                 } else {
                     self.compose = None;
                     self.compose_reset();
@@ -1812,11 +2069,15 @@ impl Model {
                 }
                 let line = self.compose_line().cloned().unwrap_or_default();
                 let host = self.compose_host();
-                if let Some(id) = self.file_line(&line, None) {
+                // A draft with captures needs no title typed: key, circle, ↵.
+                let untitled = self.draft(&line).title.is_empty();
+                let named = self.capture_title().filter(|_| untitled);
+                if let Some(id) = self.file_titled(&line, None, named) {
                     // On the home screen the line stays, empty, for the next task.
                     let stays = host == Some(Host::Home) && !open;
                     self.compose = stays.then(|| Field::new("", MAX_TITLE));
                     self.compose_reset();
+                    self.capture_keep(id, effects);
                     self.start(id, open, effects);
                 }
             }
@@ -1859,6 +2120,7 @@ impl Model {
                     }
                 }
             }
+            Action::CloseCompose if self.capture.is_some() => self.capture_cancel(effects),
             Action::CloseCompose => {
                 self.compose = None;
                 self.compose_reset();
@@ -2128,7 +2390,12 @@ impl Model {
                 }
             }
             Action::LeaveSneak => self.sneak = None,
-            Action::QuitAsked { running } if running.is_empty() || self.confirm.is_some() => effects.push(Effect::Quit),
+            // Nothing to lose: no terminal runs anything, and no draft holds a capture.
+            Action::QuitAsked { running }
+                if (running.is_empty() && self.quit_discards() == 0) || self.confirm.is_some() =>
+            {
+                effects.push(Effect::Quit)
+            }
             Action::QuitAsked { running } => {
                 // The question is ottospace's own UI: a live window would cover it.
                 self.leave(effects);
@@ -2193,6 +2460,87 @@ impl Model {
                 }
                 None => self.act(Action::ListMove { delta }, effects),
             },
+            Action::CaptureStart { pane, draft, word, facts, images } => {
+                self.capture_start(pane, (draft, word), facts, images, effects)
+            }
+            Action::CaptureTaken { draft, material, picture, stale } => {
+                let mine = self.capture.as_mut().filter(|c| c.draft == draft);
+                if let Some(material) = mine.and_then(|c| c.material_mut(material)) {
+                    (material.picture, material.stale) = (Some(picture), stale);
+                }
+            }
+            Action::CaptureFacts { facts } => {
+                if let Some(draft) = &mut self.capture {
+                    draft.facts = facts;
+                }
+            }
+            Action::CaptureContent { draft, material, content } => {
+                let mine = self.capture.as_mut().filter(|c| c.draft == draft);
+                if let Some(material) = mine.and_then(|c| c.material_mut(material)) {
+                    material.content = Some(content);
+                }
+            }
+            Action::AnnotatePress { at, shift, alt, size } => {
+                if let Some(marks) = self.marks_mut() {
+                    marks.press(at, marks.tool.held(shift, alt), size);
+                }
+                // The press is on the picture: the keys are annotate mode's again.
+                if let Some(draft) = &mut self.capture {
+                    draft.typing = false;
+                }
+            }
+            Action::AnnotateDrag { to } => drop(self.marks_mut().map(|marks| marks.drag(to))),
+            Action::AnnotateRelease { at } => drop(self.marks_mut().map(|marks| marks.release(at))),
+            Action::AnnotateTool { tool } => drop(self.marks_mut().map(|marks| marks.tool = tool)),
+            Action::AnnotateUndo => drop(self.marks_mut().map(capture::Marks::undo)),
+            Action::AnnotateRedo => drop(self.marks_mut().map(capture::Marks::redo)),
+            Action::AnnotateRemove => drop(self.marks_mut().map(capture::Marks::remove)),
+            Action::AnnotateNote { keep } => drop(self.marks_mut().map(|marks| marks.end_note(keep))),
+            Action::AnnotateLeave { title } => {
+                if let Some(draft) = self.capture.as_mut().filter(|draft| draft.annotating.is_some()) {
+                    draft.stop_annotating();
+                    draft.typing = title;
+                    // The title is ottospace's own: an app that is live in another pane gives way.
+                    if title {
+                        self.leave(effects);
+                    }
+                }
+            }
+            Action::CaptureEdit { material } => self.capture_edit(material, effects),
+            Action::CaptureRemove { material } => {
+                if let Some(draft) = &mut self.capture
+                    && draft.remove(material)
+                {
+                    effects.push(Effect::CaptureDropped { draft: draft.draft.clone(), material: Some(material) });
+                }
+            }
+            Action::CaptureCancel => self.capture_cancel(effects),
+            // An answer to the question only: not a way to drop a draft unasked.
+            Action::CaptureDiscard { yes: true } if self.capture.as_ref().is_some_and(|draft| draft.asked) => {
+                self.capture_drop(effects)
+            }
+            Action::CaptureDiscard { yes: true } => {}
+            Action::CaptureDiscard { yes: false } => {
+                if let Some(draft) = &mut self.capture {
+                    draft.asked = false;
+                }
+            }
+            Action::CaptureTitle => {
+                if let Some(draft) = &mut self.capture {
+                    draft.typing = true;
+                    self.leave(effects);
+                }
+            }
+            Action::CaptureBack => {
+                if let Some(pane) = self.back_to.take() {
+                    self.act(Action::Enter { pane }, effects);
+                }
+            }
+            Action::BriefShow { id } => {
+                let briefed = self.tasks.get(id).is_some_and(|task| !task.materials.is_empty());
+                self.brief = Some(id).filter(|_| briefed && self.current_task == Some(id));
+            }
+            Action::BriefClose => self.brief = None,
         }
     }
 
@@ -2219,10 +2567,15 @@ impl Model {
         compose::read_spans(line, repo, pointed, &self.known)
     }
 
-    /// Where the new-task box is drawn: in place on the home screen while it shows, else over
-    /// the workspace. `None`: it is not open.
+    /// Where the new-task box is drawn: in the right bar while a draft is collected there; else in
+    /// place on the home screen while it shows, else over the workspace. `None`: it is not open.
     pub fn compose_host(&self) -> Option<Host> {
-        self.compose.as_ref().map(|_| if self.layout.is_none() { Host::Home } else { Host::Modal })
+        let host = match (&self.capture, &self.layout) {
+            (Some(_), _) => Host::Bar,
+            (None, None) => Host::Home,
+            (None, Some(_)) => Host::Modal,
+        };
+        self.compose.as_ref().map(|_| host)
     }
 
     /// The new-task box's line has the keyboard: it is open, and nothing is over it.
@@ -2242,7 +2595,7 @@ impl Model {
     }
 
     /// The box closed, or its task was added: what it kept for its line is the line's no more.
-    fn compose_reset(&mut self) {
+    pub(crate) fn compose_reset(&mut self) {
         (self.menu, self.compose_refs, self.compose_attached, self.compose_note) =
             (Menu::default(), Vec::new(), Vec::new(), None);
     }
@@ -2553,11 +2906,20 @@ impl Model {
 
     /// Files `line` as a captured task. `None` if it has no title, or one too long to keep:
     /// nothing is filed.
-    fn file_line(&mut self, line: &str, known: Option<compose::Known>) -> Option<TaskId> {
-        let draft = match &known {
+    pub(crate) fn file_line(&mut self, line: &str, known: Option<compose::Known>) -> Option<TaskId> {
+        self.file_titled(line, known, None)
+    }
+
+    /// As `file_line`. `title`: the task's title, whatever the line's is; its tags are the line's.
+    fn file_titled(&mut self, line: &str, known: Option<compose::Known>, title: Option<String>) -> Option<TaskId> {
+        let mut draft = match &known {
             Some(known) => self.draft_knowing(line, known, false),
             None => self.draft(line),
         };
+        let made_up = title.is_some();
+        if let Some(title) = title {
+            draft.title = title;
+        }
         if draft.title.is_empty() || draft.title.chars().count() > MAX_TITLE {
             return None;
         }
@@ -2568,6 +2930,9 @@ impl Model {
         self.tasks.assign(id, Assign { agent, paths, resolved, skills });
         let pointed = refs.iter().filter_map(|name| self.pointed(name, known.is_none())).collect();
         self.tasks.point(id, pointed);
+        if made_up {
+            self.tasks.untitled(id);
+        }
         Some(id)
     }
 
@@ -2642,13 +3007,13 @@ impl Model {
             if section.collapsed {
                 continue;
             }
-            let open = (tabs > 0).then(|| {
-                let plural = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
-                format!("{}, {}", plural(tabs, "tab"), plural(panes, "pane"))
-            });
+            let plural = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
+            let open = (tabs > 0).then(|| format!("{}, {}", plural(tabs, "tab"), plural(panes, "pane")));
             let tags = Some(self.task_tags(task)).filter(|tags| !tags.is_empty());
+            // What was captured for it: its brief shows when it is opened.
+            let kept = Some(task.materials.len()).filter(|n| *n > 0).map(|n| plural(n, "material"));
             let age = task.created.map(|created| tasks::age(created, now));
-            let detail = [tags, open, age].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+            let detail = [tags, kept, open, age].into_iter().flatten().collect::<Vec<_>>().join(" · ");
             let current = self.current_task == Some(task.id);
             section.rows.push(TaskRow { id: task.id, group, tabs, panes, current, detail });
         }
@@ -2761,23 +3126,44 @@ impl Model {
             return Some(("mark", text));
         }
         let picker = self.picker.as_ref().map(|picker| ("picker", &picker.query));
-        let apps = self.app_lists.filtering.then_some(("apps", &self.app_lists.filter));
-        picker.or(self.compose.as_ref().map(|field| ("compose", field))).or(apps)
+        // A note being typed on a capture, unless the draft's title has the keyboard.
+        let note = self.note().filter(|_| !self.compose_keys()).map(|field| ("note", field));
+        // The Apps section's filter, while it has the keyboard and no box does.
+        let boxed = self.compose_modal() || self.compose_keys();
+        let apps = (self.app_lists.filtering && !boxed).then_some(("apps", &self.app_lists.filter));
+        picker.or(note).or(apps).or(self.compose.as_ref().map(|field| ("compose", field)))
+    }
+
+    /// A field by whose it is: `picker`, `note`, `apps`, `mark` or `compose`. Two can show at once
+    /// (the draft's title in the bar, and a note or a filter), so the shell asks for each by name.
+    pub fn field_of(&self, of: &str) -> Option<&Field> {
+        match of {
+            "picker" => self.picker.as_ref().map(|picker| &picker.query),
+            "note" => self.note(),
+            "apps" => Some(&self.app_lists.filter),
+            "mark" => match &self.mark_input {
+                Some(MarkInput::Rename { text, .. }) => Some(text),
+                _ => None,
+            },
+            _ => self.compose.as_ref(),
+        }
     }
 
     /// The open text field, if it has the keyboard: keys, the clipboard and the input method
     /// edit it. Not while the key reference, the quit question or sneak mode is over it.
     pub fn field(&self) -> Option<(&'static str, &Field)> {
         // Each field in its own mode: the Apps section's filter in list mode, a mark's name
-        // while it is typed. A mark that waits for a letter is over the filter, not in it.
-        let mode = self.mode();
-        let its_mode = |of: &str| match of {
-            "mark" => mode == Mode::Mark,
-            "picker" => mode == Mode::Pick,
-            "compose" => mode == Mode::Compose,
-            _ => mode == Mode::List,
+        // while it is typed, a note on a capture in annotate mode. A mark that waits for a
+        // letter is over the filter, not in it.
+        let of = match self.mode() {
+            Mode::Mark => "mark",
+            Mode::Pick => "picker",
+            Mode::Compose => "compose",
+            Mode::Annotate => "note",
+            Mode::List if self.app_lists.filtering => "apps",
+            _ => return None,
         };
-        self.open_field().filter(|(of, _)| !self.keys && its_mode(of))
+        self.field_of(of).filter(|_| !self.keys).map(|field| (of, field))
     }
 
     /// The line in the new-task box.
@@ -3157,7 +3543,7 @@ impl Model {
         self.focused = Some(id);
     }
 
-    fn leave_visual(&mut self, effects: &mut Vec<Effect>) {
+    pub(crate) fn leave_visual(&mut self, effects: &mut Vec<Effect>) {
         if let Some(pane) = self.visual.take() {
             effects.push(Effect::Visual { pane, on: false });
         }
@@ -3543,7 +3929,28 @@ mod tests {
         Action::MarkSubmit,
         Action::MarkCancel,
         Action::ListMarkEdit { .. },
-        Action::ListReorder { .. }
+        Action::ListReorder { .. },
+        Action::CaptureStart { .. },
+        Action::CaptureTaken { .. },
+        Action::CaptureFacts { .. },
+        Action::CaptureContent { .. },
+        Action::AnnotatePress { .. },
+        Action::AnnotateDrag { .. },
+        Action::AnnotateRelease { .. },
+        Action::AnnotateTool { .. },
+        Action::AnnotateUndo,
+        Action::AnnotateRedo,
+        Action::AnnotateRemove,
+        Action::AnnotateNote { .. },
+        Action::AnnotateLeave { .. },
+        Action::CaptureEdit { .. },
+        Action::CaptureRemove { .. },
+        Action::CaptureCancel,
+        Action::CaptureDiscard { .. },
+        Action::CaptureTitle,
+        Action::CaptureBack,
+        Action::BriefShow { .. },
+        Action::BriefClose
     );
 
     /// One of each action.
@@ -3668,6 +4075,27 @@ mod tests {
             Action::MarkCancel,
             Action::ListMarkEdit { field: marks::Field::Key },
             Action::ListReorder { delta: 1 },
+            Action::CaptureStart { pane: None, draft: text(), word: text(), facts: Vec::new(), images: true },
+            Action::CaptureTaken { draft: text(), material: 1, picture: true, stale: false },
+            Action::CaptureFacts { facts: Vec::new() },
+            Action::CaptureContent { draft: text(), material: 1, content: Content::Missing(text()) },
+            Action::AnnotatePress { at: [0.5, 0.5], shift: false, alt: false, size: [100., 100.] },
+            Action::AnnotateDrag { to: [0.6, 0.6] },
+            Action::AnnotateRelease { at: [0.6, 0.6] },
+            Action::AnnotateTool { tool: Tool::Box },
+            Action::AnnotateUndo,
+            Action::AnnotateRedo,
+            Action::AnnotateRemove,
+            Action::AnnotateNote { keep: true },
+            Action::AnnotateLeave { title: false },
+            Action::CaptureEdit { material: 1 },
+            Action::CaptureRemove { material: 1 },
+            Action::CaptureCancel,
+            Action::CaptureDiscard { yes: true },
+            Action::CaptureTitle,
+            Action::CaptureBack,
+            Action::BriefShow { id: 1 },
+            Action::BriefClose,
         ];
         let mut places: Vec<usize> = samples.iter().map(index).collect();
         places.sort_unstable();

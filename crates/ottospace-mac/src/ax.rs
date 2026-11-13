@@ -85,6 +85,17 @@ impl Window {
         Self::standard_of(pid).into_iter().find(|w| w.id() == Some(id))
     }
 
+    /// Runs `ask` with a short wait for the app (a quarter of a second a call, not AX's 6), then
+    /// puts the default back: for a question whose answer has a fallback, asked on the main
+    /// thread. An app that hangs then costs the user a blink, not seconds.
+    pub fn quick<R>(&self, ask: impl FnOnce(&Self) -> R) -> R {
+        unsafe { self.element.set_messaging_timeout(0.25) };
+        let answer = ask(self);
+        // 0: the default again.
+        unsafe { self.element.set_messaging_timeout(0.0) };
+        answer
+    }
+
     pub(crate) fn element(&self) -> CFRetained<AXUIElement> {
         self.element.clone()
     }

@@ -73,3 +73,17 @@ read an agent's reply or a task brief aloud.
 - Fits quick capture: hold the key, say the task, release, it is added.
 - Open: which engine and model size; dictation into a hosted app's pane (keys go to that app);
   voices for reading aloud.
+
+## 9. Text of a capture by OCR
+
+A capture ([capture.md](capture.md)) keeps the picture and whatever text the app's accessibility
+exposes. Electron and Chrome apps (Slack, VS Code) expose almost none. Decided for now (Bryan):
+the annotated picture is the material, and agents read images themselves; ottospace does not
+switch an app's accessibility mode on (that is a write into the app) and runs no OCR.
+
+Later, optional: on-device OCR (macOS Vision) of a capture, so the text under a circle is
+searchable and there for readers that cannot see images.
+
+- On the machine only; say so, and never send a picture anywhere.
+- The text is captured content like the rest: inside the brief's fenced blocks, marked untrusted.
+- Keep the picture the first thing a reader is sent to.

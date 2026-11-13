@@ -212,6 +212,16 @@ pub struct Task {
     /// The session it was adopted from, if it was: that session is this task's.
     #[serde(default)]
     pub session: Option<crate::sessions::Link>,
+    /// Nobody typed its title: it was filed from captures alone, and named by fixed words.
+    /// A reader of its brief is told so, and not that the user said it.
+    #[serde(default)]
+    pub title_generated: bool,
+    /// What was captured for it: each capture's file, as a path inside the materials folder,
+    /// e.g. `7-k3f9a2c41b7d/1.json`. Its brief is `brief.md` beside them. The folder is named by
+    /// the task's number and a word made up for it: numbers start again in another tasks folder,
+    /// and a new task 7 must not be handed an old one's captures. Not in the tasks folder.
+    #[serde(default)]
+    pub materials: Vec<String>,
     /// What was open that the task points at, from `^name` words, as it was when the task was
     /// added. Stored and shown; nothing acts on it yet.
     #[serde(default)]
@@ -283,6 +293,22 @@ pub const MAX_RESOLVED: usize = 1024;
 pub const MAX_TAG: usize = 200;
 pub const MAX_TAGS: usize = 20;
 
+/// A task's folder of captures: `<id>-<word>`, the word 8 to 32 letters and digits.
+pub fn materials_dir(id: TaskId, word: &str) -> Option<String> {
+    let plain = (8..=32).contains(&word.len()) && word.bytes().all(|b| b.is_ascii_alphanumeric());
+    plain.then(|| format!("{id}-{word}"))
+}
+
+/// The folder and the capture's number, if `file` is what a task names a capture by:
+/// `<id>-<word>/<number>.json`, e.g. `7-k3f9a2c41b7d/1.json`. Nothing else is ever joined to
+/// the materials folder.
+pub fn material_file(id: TaskId, file: &str) -> Option<(&str, u32)> {
+    let (dir, name) = file.split_once('/')?;
+    let word = dir.strip_prefix(&format!("{id}-"))?;
+    let number = name.strip_suffix(".json").filter(|n| n.len() <= 4 && n.bytes().all(|b| b.is_ascii_digit()))?;
+    materials_dir(id, word).map(|_| (dir, number.parse().ok())).and_then(|(dir, n)| Some((dir, n?)))
+}
+
 fn default_priority() -> u8 {
     3
 }
@@ -304,6 +330,11 @@ impl State {
 }
 
 impl Task {
+    /// The folder its captures are in, inside the materials folder. `None`: it has none.
+    pub fn materials_dir(&self) -> Option<&str> {
+        self.materials.iter().find_map(|file| material_file(self.id, file)).map(|(dir, _)| dir)
+    }
+
     /// The inbox heading for this task. `None`: not listed (cleaned, snoozed or dismissed).
     pub fn group(&self) -> Option<Group> {
         self.state.group().filter(|_| !self.dismissed && self.snoozed_until.is_none())
@@ -360,6 +391,12 @@ impl Tasks {
         tasks.dedup_by_key(|task| task.id);
         for task in &mut tasks {
             task.priority = task.priority.clamp(1, 9);
+            // The file is the user's to edit, or a notes repository's: a name there is not a path to follow.
+            let id = task.id;
+            let dir = task.materials.iter().find_map(|file| material_file(id, file)).map(|(dir, _)| dir.to_string());
+            let kept = |file: &String| dir.is_some() && material_file(id, file).map(|(dir, _)| dir) == dir.as_deref();
+            task.materials.retain(kept);
+            task.materials.dedup();
         }
         self.next_id = tasks.last().map_or(0, |task| task.id).max(floor.min(MAX_ID));
         (self.list, self.undo) = (tasks, None);
@@ -386,8 +423,24 @@ impl Tasks {
             created: None,
             session: None,
             refs: Vec::new(),
+            materials: Vec::new(),
+            title_generated: false,
         });
         self.next_id
+    }
+
+    /// Notes that nobody typed a task's title.
+    pub fn untitled(&mut self, id: TaskId) {
+        if let Some(task) = self.list.iter_mut().find(|t| t.id == id) {
+            task.title_generated = true;
+        }
+    }
+
+    /// Notes what was captured for a task just filed.
+    pub fn attach(&mut self, id: TaskId, materials: Vec<String>) {
+        if let Some(task) = self.list.iter_mut().find(|t| t.id == id) {
+            task.materials = materials;
+        }
     }
 
     /// Names the project and repository of a task just filed from the new-task box.
@@ -687,8 +740,37 @@ mod tests {
             created: None,
             session: None,
             refs: Vec::new(),
+            materials: Vec::new(),
+            title_generated: false,
         };
         let mut tasks = Tasks::default();
+        // A capture is named by its task's number and its own: nothing else is kept from a file.
+        let mut odd = task(9, "odd");
+        let names = [
+            "9/1.json",
+            "9-k3f9a2c41b7d/1.json",
+            "../9-k3f9a2c41b7d/1.json",
+            "9-k3f9a2c41b7d/../1.json",
+            "/etc/passwd",
+            "8-k3f9a2c41b7d/1.json",
+            "9-k3f9a2c41b7d/x.json",
+            "9-k3f9a2c41b7d/.json",
+            "9-short/1.json",
+            "9-k3f9a2c41b7d/2.json",
+            "9-anotherword99/3.json",
+        ];
+        odd.materials = names.map(String::from).to_vec();
+        tasks.restore(vec![odd], 0);
+        let kept = tasks.get(9).expect("the task");
+        // One folder a task: a name in another is dropped with the rest.
+        assert_eq!(kept.materials, ["9-k3f9a2c41b7d/1.json", "9-k3f9a2c41b7d/2.json"]);
+        assert_eq!(kept.materials_dir(), Some("9-k3f9a2c41b7d"));
+        assert_eq!((materials_dir(9, "k3f9"), materials_dir(9, "k3f9a2c4/x")), (None, None));
+        // With no name that is right, none is kept.
+        let mut wrong = task(9, "odd");
+        wrong.materials = vec!["/etc/passwd".into(), "9/1.json".into()];
+        tasks.restore(vec![wrong], 0);
+        assert_eq!(tasks.get(9).map(|task| (task.materials.len(), task.materials_dir())), Some((0, None)));
         tasks.restore(vec![task(7, "late"), task(2, "early"), task(7, "twin")], 0);
         assert_eq!(titles(&tasks), [(Group::NeedsYou, "early"), (Group::NeedsYou, "late")]);
         assert_eq!(tasks.add("new".into(), 3, State::Captured), 8);

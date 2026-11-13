@@ -342,6 +342,11 @@ impl Workspace {
                 self.new_task(window, cx);
                 None
             }
+            // The right bar, the tool strip and the way back: `draft:add`, `draft:edit:2`.
+            ("draft", _) => {
+                self.click_capture(name, window, cx);
+                None
+            }
             ("mark-undo", _) => Some(Action::MarkUndo),
             ("top", "task_leave") => Some(Action::TaskLeave),
             ("top", _) => {

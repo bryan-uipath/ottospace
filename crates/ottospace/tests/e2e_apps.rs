@@ -29,6 +29,8 @@ impl Proc {
         let mut command = Command::new(bin);
         // Never the user's settings, tasks or repositories.
         command.env(socket_var, &socket).env_remove("OTTOSPACE_HOME").env("OTTOSPACE_REPOS", "");
+        // Nor a key taken from every app, unless the test names one.
+        command.env_remove("OTTOSPACE_CAPTURE_KEY");
         let child = command.envs(env.iter().copied()).spawn().expect("launch");
         let proc = Self { child, socket };
         wait_for(&format!("{name}'s socket"), || UnixStream::connect(&proc.socket).ok().map(|_| ()));
@@ -950,4 +952,144 @@ fn a_mark_hosts_its_canary_window_again_and_of_two_windows_the_one_with_its_titl
     assert_eq!(built["hosted"].as_object().map(|h| h.len()), Some(2));
     // The pane marks are of the same windows, under their new ids.
     assert_eq!((&mark(&built, "two")["pane"], &mark(&built, "one")["pane"]), (&json!(5), &json!(6)));
+}
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn a_hosted_window_is_captured_with_the_part_of_its_tree_under_the_circle() {
+    // A folder of the test's own: the captures are kept there, and one rule names a title the
+    // canary's window takes later.
+    let home = std::env::temp_dir().join(format!("otto-apps-capture-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).expect("make the folder");
+    let settings = json!({"repos": [], "windows": [{"app": CANARY, "title": "Private*", "do": "ignore"}]});
+    std::fs::write(home.join("settings.json"), settings.to_string()).expect("write settings");
+
+    // The canary's window has one native control with a name: a button in its content.
+    let env = [("CANARY_BUTTON", "1")];
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-capture", "CANARY_SOCKET", &env);
+    wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
+    let otto = Proc::launch(
+        env!("CARGO_BIN_EXE_ottospace"),
+        "otto-capture",
+        "OTTOSPACE_SOCKET",
+        &[
+            ("OTTOSPACE_E2E", "1"),
+            ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string()),
+            ("OTTOSPACE_RETURN_KEY", "f19"),
+            ("OTTOSPACE_HOME", home.to_str().expect("a plain path")),
+        ],
+    );
+    let state = || otto.call(json!({"cmd": "state"}));
+    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys, "as": "user"}));
+    otto.call(json!({"cmd": "open_app", "name": CANARY}));
+    wait_for("the window to park with its title bar cropped", || {
+        state()["crop"]["1"].as_f64().filter(|c| (16.0..=40.0).contains(c))
+    });
+    wait_for("a frame of its stream", || rect(&state()["shown"]["1"]).filter(|shown| shown[2] > 100.0));
+
+    // From the live app, as the capture key does it: the app is parked so the picture can be
+    // drawn on, and the way back is kept.
+    assert_eq!(otto.call(json!({"cmd": "enter", "pane": 1}))["mode"], "app");
+    let reply = otto.call(json!({"cmd": "capture_start"}));
+    assert_eq!(
+        (&reply["mode"], &reply["state"]["live"], &reply["state"]["back_to"]),
+        (&json!("annotate"), &Value::Null, &json!(1))
+    );
+    let source = &reply["state"]["capture"]["materials"][0]["source"];
+    assert_eq!(
+        (&source["type"], &source["name"], &source["title"]),
+        (&json!("app"), &json!(CANARY), &json!("Canary 1"))
+    );
+    // The bar opens first; the window is then parked at the pane's size beside it, and the
+    // picture is a frame of that size. Its tree is read with it, off the main thread.
+    wait_or(
+        "the picture to be taken",
+        || state().to_string(),
+        || (state()["state"]["capture"]["materials"][0]["picture"] == true).then_some(()),
+    );
+    wait_or(
+        "the window's tree to be read",
+        || state().to_string(),
+        || (state()["state"]["capture"]["materials"][0]["content"] == "app").then_some(()),
+    );
+    let picture = wait_for("the picture to be drawn", || rect(&state()["capture"]["picture"]).filter(|p| p[2] > 100.0));
+    let dir = PathBuf::from(state()["capture"]["dir"].as_str().expect("the draft's folder"));
+    wait_for("the picture to be written", || dir.join("1.png").is_file().then_some(()));
+
+    // Where the button is, by the canary's own tree: in the window, so below the title bar that
+    // the picture crops off. The circle goes round it there.
+    let tree = otto.call(json!({"cmd": "ax_tree", "pane": 1}));
+    let children = tree["tree"]["root"]["children"].as_array().cloned().unwrap_or_default();
+    let named = children.iter().find(|node| node["title"] == "Canary button").unwrap_or_else(|| panic!("{tree}"));
+    let part = |of: &Value, key: &str| of[key].as_f64().expect("a number");
+    let crop = state()["crop"]["1"].as_f64().expect("the crop");
+    let (bx, by) = (
+        part(&named["frame"], "x") - part(&tree["window"], "x"),
+        part(&named["frame"], "y") - part(&tree["window"], "y") - crop,
+    );
+    let (bw, bh) = (part(&named["frame"], "w"), part(&named["frame"], "h"));
+    assert!(by > 0.0 && by + bh < picture[3], "the button is in the picture: {named}");
+    let (from, to) =
+        ([picture[0] + bx - 10.0, picture[1] + by - 10.0], [picture[0] + bx + bw + 10.0, picture[1] + by + bh + 10.0]);
+    let reply = otto.call(json!({"cmd": "drag", "from": from, "to": to, "as": "user"}));
+    assert_eq!(reply["state"]["capture"]["materials"][0]["marks"]["shapes"][0]["kind"], "ellipse", "{reply}");
+    assert_eq!(key("enter")["mode"], "compose");
+    key("w h a t space i s space t h i s");
+    let reply = key("enter");
+    let file = reply["state"]["tasks"]["list"][0]["materials"][0].as_str().expect("its capture").to_string();
+    let name = file.strip_suffix("/1.json").filter(|name| name.starts_with("1-")).expect("a folder of its own");
+    let kept = home.join("materials").join(name);
+    // Written on another thread: the pictures, the brief, and the capture's own file last.
+    wait_for("the task's files", || kept.join("1.json").is_file().then_some(()));
+
+    // The brief names the button, as quoted data from the canary, with its window as context.
+    let brief = otto.call(json!({"cmd": "task_brief", "id": 1}))["brief"].clone();
+    let captured = &brief["materials"][0]["captured"];
+    assert_eq!(captured["untrusted"], true);
+    // The label is the brief's own words: the app's name is data, inside what it labels.
+    assert!(captured["warning"].as_str().is_some_and(|w| w.contains("untrusted") && !w.contains(CANARY)), "{captured}");
+    assert_eq!(captured["source"]["name"], CANARY);
+    let nodes = captured["under"][0]["nodes"].as_array().cloned().unwrap_or_default();
+    let button = nodes.iter().find(|node| node["text"].as_str().is_some_and(|text| text.contains("Canary button")));
+    let tree = || otto.call(json!({"cmd": "ax_tree", "pane": 1}));
+    let button = button.unwrap_or_else(|| panic!("the button is under the circle: {captured}\nthe tree: {}", tree()));
+    assert_eq!(button["role"], "AXButton", "{button}");
+    assert!(button["context"].as_array().is_some_and(|c| c.contains(&json!("Canary 1"))), "{button}");
+    // Its frame in the picture, 0..1 of it: where the circle was drawn.
+    let frame = rect(&button["frame"]).expect("its frame");
+    let near = |part: f64, points: f64, of: f64| (part * of - points).abs() < 3.0;
+    assert!(near(frame[0], bx, picture[2]) && near(frame[1], by, picture[3]), "{frame:?} of {picture:?}");
+    assert!(near(frame[2], bw, picture[2]) && near(frame[3], bh, picture[3]), "{frame:?} of {picture:?}");
+    // No traffic light is listed: the title bar is not in the picture.
+    assert!(nodes.iter().all(|node| node["frame"][1].as_f64() >= Some(0.0)), "{nodes:?}");
+
+    // Both pictures are kept, in the task's folder, and are pictures: the reply gives their whole paths.
+    let path = |key: &str| brief["materials"][0][key].as_str().map(PathBuf::from);
+    assert_eq!((path("image"), path("annotated")), (Some(kept.join("1.png")), Some(kept.join("1.annotated.png"))));
+    for name in ["1.png", "1.annotated.png"] {
+        let png = std::fs::read(kept.join(name)).expect(name);
+        assert!(png.starts_with(b"\x89PNG") && png.len() > 1000, "{name}: {} bytes", png.len());
+    }
+    assert!(std::fs::read_to_string(kept.join("brief.md")).is_ok_and(|text| text.contains("Canary button")));
+    // The way back to the app is still offered, and takes it.
+    assert_eq!(state()["state"]["back_to"], 1);
+
+    // The window takes a title the rules say to leave alone: it is not captured again.
+    canary.call(json!({"cmd": "retitle", "index": 0, "title": "Private notes"}));
+    let refused = wait_for("the capture to be refused", || {
+        let mut stream = UnixStream::connect(&otto.socket).ok()?;
+        writeln!(stream, "{}", json!({"cmd": "capture_start", "pane": 1})).ok()?;
+        let mut reply = String::new();
+        BufReader::new(stream).read_line(&mut reply).ok()?;
+        let reply: Value = serde_json::from_str(&reply).ok()?;
+        (reply["ok"] == false).then_some(reply)
+    });
+    assert!(refused["error"].as_str().is_some_and(|why| why.contains("rules")), "{refused}");
+    let after = state();
+    assert_eq!(
+        (&after["state"]["capture"], std::fs::read_dir(home.join("materials")).map(Iterator::count).ok()),
+        (&Value::Null, Some(1))
+    );
+    let _ = std::fs::remove_dir_all(&home);
 }

@@ -377,9 +377,7 @@ impl Terminal {
 
     /// Visible rows as plain text, trailing spaces removed.
     pub fn lines(&self) -> Vec<String> {
-        let screen = self.screen();
-        let text = |row: &Vec<Span>| row.iter().map(|s| s.text.as_str()).collect::<String>().trim_end().to_string();
-        screen.rows.iter().map(text).collect()
+        self.screen().lines()
     }
 
     /// The bottom screen as plain text, with everything scrolled off above it if `history`.
@@ -430,6 +428,25 @@ impl Terminal {
             .flatten()
             .filter(|(row, _)| *row < self.grid.rows); // scrolled back past it
         Screen { rows, cursor }
+    }
+}
+
+impl Screen {
+    /// The rows as plain text, trailing spaces removed.
+    pub fn lines(&self) -> Vec<String> {
+        let text = |row: &Vec<Span>| row.iter().map(|s| s.text.as_str()).collect::<String>().trim_end().to_string();
+        self.rows.iter().map(text).collect()
+    }
+
+    /// The rows as a picture of a pane `size` points large, `scale` pixels a point: a PNG.
+    /// Plain data in and out: for a thread of its own.
+    pub fn picture(&self, size: [f64; 2], cell: [f64; 2], scale: f64) -> Option<Vec<u8>> {
+        use ottospace_mac::image::{Grid, Run, grid_png};
+        let run = |span: &Span| Run { text: span.text.clone(), fg: span.fg, bg: span.bg, bold: span.bold };
+        let rows: Vec<Vec<Run>> = self.rows.iter().map(|row| row.iter().map(run).collect()).collect();
+        let font = terminal_font();
+        let (font_size, background) = (f64::from(font.font_size), palette::BACKGROUND);
+        grid_png(&Grid { rows: &rows, size, cell, font: &font.font, font_size, background, scale })
     }
 }
 

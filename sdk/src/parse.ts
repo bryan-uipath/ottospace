@@ -10,7 +10,15 @@ import type {
   AxTarget,
   AxTreeReply,
   Axis,
+  Brief,
+  BriefMaterial,
+  CapturedNode,
   CaptureReply,
+  CaptureSource,
+  Draft,
+  Material,
+  Shape,
+  TaskBriefReply,
   Confirm,
   ComposeMenu,
   Field,
@@ -133,7 +141,7 @@ function axis(value: unknown, at: string): Axis {
 function mode(value: unknown, at: string): Mode {
   if (value === "normal" || value === "app" || value === "pick") return value;
   if (value === "visual" || value === "list" || value === "compose" || value === "sneak") return value;
-  if (value === "confirm" || value === "mark") return value;
+  if (value === "confirm" || value === "mark" || value === "annotate") return value;
   throw wrong(at, "a mode", value);
 }
 
@@ -261,6 +269,173 @@ function task(value: unknown, at: string): Task {
     created: orNull(num)(o.created, `${at}.created`),
     session: orNull(sessionLink)(o.session, `${at}.session`),
     refs: list(ref)(o.refs, `${at}.refs`),
+    title_generated: bool(o.title_generated, `${at}.title_generated`),
+    materials: list(str)(o.materials, `${at}.materials`),
+  };
+}
+
+function point(value: unknown, at: string): [number, number] {
+  return pair(value, at);
+}
+
+function shape(value: unknown, at: string): Shape {
+  const o = fields(value, at);
+  if (o.kind === "ellipse" || o.kind === "box") return { kind: o.kind, rect: rect(o.rect, `${at}.rect`) };
+  if (o.kind === "stroke") return { kind: "stroke", points: list(point)(o.points, `${at}.points`) };
+  if (o.kind === "note") return { kind: "note", at: point(o.at, `${at}.at`), text: str(o.text, `${at}.text`) };
+  throw wrong(`${at}.kind`, "a shape", o.kind);
+}
+
+function captureSource(value: unknown, at: string): CaptureSource {
+  const o = fields(value, at);
+  if (o.type === "terminal") {
+    return { type: "terminal", cwd: orNull(str)(o.cwd, `${at}.cwd`), program: orNull(str)(o.program, `${at}.program`) };
+  }
+  if (o.type === "app") {
+    const bundle = orNull(str)(o.bundle, `${at}.bundle`);
+    return { type: "app", name: str(o.name, `${at}.name`), bundle, title: str(o.title, `${at}.title`) };
+  }
+  throw wrong(`${at}.type`, "a capture's source", o.type);
+}
+
+function material(value: unknown, at: string): Material {
+  const o = fields(value, at);
+  const marks = fields(o.marks, `${at}.marks`);
+  const tool = marks.tool;
+  if (tool !== "ellipse" && tool !== "box" && tool !== "stroke") throw wrong(`${at}.marks.tool`, "a tool", tool);
+  const content = o.content;
+  if (content !== null && content !== "app" && content !== "terminal" && content !== "missing") {
+    throw wrong(`${at}.content`, "a kind of content", content);
+  }
+  const note = (value: unknown, at: string): [[number, number], string] => {
+    if (!Array.isArray(value) || value.length !== 2) throw wrong(at, "a point and its text", value);
+    return [point(value[0], `${at}[0]`), str(value[1], `${at}[1]`)];
+  };
+  return {
+    n: num(o.n, `${at}.n`),
+    pane: num(o.pane, `${at}.pane`),
+    source: captureSource(o.source, `${at}.source`),
+    marks: {
+      shapes: list(shape)(marks.shapes, `${at}.marks.shapes`),
+      selected: orNull(num)(marks.selected, `${at}.marks.selected`),
+      tool,
+      note: orNull(note)(marks.note, `${at}.marks.note`),
+    },
+    content,
+    picture: orNull(bool)(o.picture, `${at}.picture`),
+    stale: bool(o.stale, `${at}.stale`),
+    at: num(o.at, `${at}.at`),
+  };
+}
+
+function draft(value: unknown, at: string): Draft {
+  const o = fields(value, at);
+  return {
+    draft: str(o.draft, `${at}.draft`),
+    typing: bool(o.typing, `${at}.typing`),
+    materials: list(material)(o.materials, `${at}.materials`),
+    annotating: orNull(num)(o.annotating, `${at}.annotating`),
+    asked: bool(o.asked, `${at}.asked`),
+    images: bool(o.images, `${at}.images`),
+  };
+}
+
+function captureDrawn(value: unknown, at: string): Snapshot["capture"] {
+  const o = fields(value, at);
+  const shown = (value: unknown, at: string) => {
+    const b = fields(value, at);
+    return { task: num(b.task, `${at}.task`), dir: orNull(str)(b.dir, `${at}.dir`) };
+  };
+  return {
+    key: orNull(str)(o.key, `${at}.key`),
+    pending: num(o.pending, `${at}.pending`),
+    bar: orNull(rect)(o.bar, `${at}.bar`),
+    picture: orNull(rect)(o.picture, `${at}.picture`),
+    encoded: list(num)(o.encoded, `${at}.encoded`),
+    dir: orNull(str)(o.dir, `${at}.dir`),
+    brief: orNull(shown)(o.brief, `${at}.brief`),
+  };
+}
+
+/** The label every captured thing carries: without it the content is not handed on. */
+function labelled(o: Fields, at: string): { untrusted: true; warning: string } {
+  if (o.untrusted !== true) throw wrong(`${at}.untrusted`, "true", o.untrusted);
+  return { untrusted: true, warning: str(o.warning, `${at}.warning`) };
+}
+
+function capturedNode(value: unknown, at: string): CapturedNode {
+  const o = fields(value, at);
+  return {
+    role: str(o.role, `${at}.role`),
+    text: str(o.text, `${at}.text`),
+    frame: rect(o.frame, `${at}.frame`),
+    path: list(num)(o.path, `${at}.path`),
+    context: list(str)(o.context ?? [], `${at}.context`),
+  };
+}
+
+function briefMaterial(value: unknown, at: string): BriefMaterial {
+  const o = fields(value, at);
+  const c = fields(o.captured, `${at}.captured`);
+  const under = (value: unknown, at: string) => {
+    const u = fields(value, at);
+    return {
+      annotation: num(u.annotation, `${at}.annotation`),
+      nodes: list(capturedNode)(u.nodes ?? [], `${at}.nodes`),
+      lines: list(str)(u.lines ?? [], `${at}.lines`),
+    };
+  };
+  return {
+    image: orNull(str)(o.image, `${at}.image`),
+    annotated: orNull(str)(o.annotated, `${at}.annotated`),
+    n: num(o.n, `${at}.n`),
+    stale: bool(o.stale ?? false, `${at}.stale`),
+    annotations: list(shape)(o.annotations, `${at}.annotations`),
+    captured: {
+      ...labelled(c, `${at}.captured`),
+      source: captureSource(c.source, `${at}.captured.source`),
+      under: list(under)(c.under, `${at}.captured.under`),
+      cut: bool(c.cut, `${at}.captured.cut`),
+      missing: orNull(str)(c.missing, `${at}.captured.missing`),
+    },
+    at: num(o.at, `${at}.at`),
+  };
+}
+
+function brief(value: unknown, at: string): Brief {
+  const o = fields(value, at);
+  const ask = fields(o.ask, `${at}.ask`);
+  const open = fields(o.open_windows, `${at}.open_windows`);
+  return {
+    task: num(o.task, `${at}.task`),
+    fence: str(o.fence ?? "", `${at}.fence`),
+    ask: {
+      title: str(ask.title, `${at}.ask.title`),
+      title_generated: bool(ask.title_generated ?? false, `${at}.ask.title_generated`),
+      priority: num(ask.priority, `${at}.ask.priority`),
+      project: orNull(str)(ask.project, `${at}.ask.project`),
+      repo: orNull(str)(ask.repo, `${at}.ask.repo`),
+      agent: orNull(str)(ask.agent, `${at}.ask.agent`),
+      paths: list(str)(ask.paths, `${at}.ask.paths`),
+      skills: list(str)(ask.skills, `${at}.ask.skills`),
+    },
+    materials: list(briefMaterial)(o.materials, `${at}.materials`),
+    open_windows: {
+      ...labelled(open, `${at}.open_windows`),
+      tabs: list(str)(open.tabs, `${at}.open_windows.tabs`),
+      panes: list(captureSource)(open.panes, `${at}.open_windows.panes`),
+    },
+  };
+}
+
+export function taskBriefReply(value: unknown): TaskBriefReply {
+  const o = fields(value, "reply");
+  return {
+    ok: true,
+    task: num(o.task, "task"),
+    dir: orNull(str)(o.dir, "dir"),
+    path: orNull(str)(o.path, "path"),
+    brief: brief(o.brief, "brief"),
   };
 }
 
@@ -297,9 +472,9 @@ function composeMenu(value: unknown, at: string): ComposeMenu {
   };
 }
 
-function composeHost(value: unknown, at: string): "home" | "modal" {
-  if (value === "home" || value === "modal") return value;
-  throw wrong(at, "home or modal", value);
+function composeHost(value: unknown, at: string): "home" | "modal" | "bar" {
+  if (value === "home" || value === "modal" || value === "bar") return value;
+  throw wrong(at, "home, modal or bar", value);
 }
 
 function sessionLink(value: unknown, at: string): { runner: string; id: string } {
@@ -393,8 +568,10 @@ function pickItem(value: unknown, at: string): PickItem {
 
 function field(value: unknown, at: string): Field {
   const o = fields(value, at);
-  const owners = ["compose", "picker", "apps", "mark"];
-  if (typeof o.of !== "string" || !owners.includes(o.of)) throw wrong(`${at}.of`, "compose, picker, apps or mark", o.of);
+  const owners = ["compose", "picker", "apps", "mark", "note"];
+  if (typeof o.of !== "string" || !owners.includes(o.of)) {
+    throw wrong(`${at}.of`, "compose, picker, apps, mark or note", o.of);
+  }
   return {
     of: o.of as Field["of"],
     text: str(o.text, `${at}.text`),
@@ -492,6 +669,9 @@ function model(value: unknown, at: string): Model {
     visual: orNull(num)(o.visual, `${at}.visual`),
     ax_overlay: bool(o.ax_overlay, `${at}.ax_overlay`),
     mark_input: orNull(markInput)(o.mark_input, `${at}.mark_input`),
+    capture: orNull(draft)(o.capture, `${at}.capture`),
+    back_to: orNull(num)(o.back_to, `${at}.back_to`),
+    brief: orNull(num)(o.brief, `${at}.brief`),
   };
 }
 
@@ -677,6 +857,7 @@ export function snapshot(value: unknown): Snapshot {
     marks: list(mark)(o.marks, "marks"),
     mark_removed: orNull(str)(o.mark_removed, "mark_removed"),
     scrollbars: map(scrollbar)(o.scrollbars, "scrollbars"),
+    capture: captureDrawn(o.capture, "capture"),
   };
 }
 

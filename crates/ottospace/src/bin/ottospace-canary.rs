@@ -6,6 +6,10 @@
 //! `{"cmd":"state"}`, `{"cmd":"open_window"}`, `{"cmd":"close_window","index":1}`, `{"cmd":"quit"}`.
 //! A window that refuses a pane's size: `{"cmd":"open_window","min":[900,700]}` cannot be made
 //! smaller than that; `{"cmd":"open_window","fixed":[240,180]}` cannot be resized at all.
+//! `{"cmd":"retitle","index":0,"title":"Private"}` gives a window another title.
+//!
+//! With `CANARY_BUTTON` set, the first window has a native button titled "Canary button" in
+//! its content: a control its accessibility tree names.
 
 use std::cell::RefCell;
 use std::io::{BufRead, BufReader, Write};
@@ -34,6 +38,10 @@ enum Request {
     },
     CloseWindow {
         index: usize,
+    },
+    Retitle {
+        index: usize,
+        title: String,
     },
     Quit,
 }
@@ -101,6 +109,16 @@ fn open(windows: &Windows, min: Option<[f32; 2]>, fixed: Option<[f32; 2]>, cx: &
         })
     });
     if let Ok(handle) = handle {
+        if number == 1 && std::env::var_os("CANARY_BUTTON").is_some() {
+            let _ = handle.update(cx, |_, window, _| {
+                use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                if let Ok(RawWindowHandle::AppKit(appkit)) = HasWindowHandle::window_handle(window).map(|h| h.as_raw())
+                {
+                    let at = [16., 150., 170., 30.];
+                    unsafe { ottospace_mac::window::add_button(appkit.ns_view.as_ptr(), "Canary button", at) };
+                }
+            });
+        }
         windows.borrow_mut().push(handle);
     }
 }
@@ -130,6 +148,16 @@ fn serve(calls: &Receiver<(Request, Sender<String>)>, windows: &Windows, cx: &mu
                 let handle = windows.borrow().get(index).copied();
                 if let Some(handle) = handle {
                     let _ = handle.update(cx, |_, window, _| window.remove_window());
+                }
+            }
+            Request::Retitle { index, title } => {
+                let handle = windows.borrow().get(index).copied();
+                if let Some(handle) = handle {
+                    let _ = handle.update(cx, |canary, window, cx| {
+                        window.set_window_title(&title);
+                        canary.title = title;
+                        cx.notify();
+                    });
                 }
             }
             Request::Quit => {

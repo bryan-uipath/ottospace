@@ -85,7 +85,10 @@ pub fn app_menus() -> Vec<Menu> {
                 item("Swap Down", SwapDown),
             ],
         },
-        Menu { name: "Tasks".into(), items: vec![item("New Task", NewTask), item("Next Task", NextTask)] },
+        Menu {
+            name: "Tasks".into(),
+            items: vec![item("New Task", NewTask), item("Next Task", NextTask), item("Capture the Pane", CapturePane)],
+        },
         Menu { name: "Help".into(), items: vec![item("Keys", ShowKeys)] },
     ]
 }
