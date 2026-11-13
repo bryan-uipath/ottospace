@@ -60,7 +60,8 @@ impl RepoDirs {
     /// repository's path is absolute: an entry the settings could not resolve (`""`) is no
     /// repository's, and is not removed in its name.
     pub fn to_remove(&self, path: &str) -> Result<RepoDir, String> {
-        match (self.dirs.iter().find(|d| d.path == path), self.holder(path)) {
+        // A directory with no text in the settings cannot be named in a change to them.
+        match (self.dirs.iter().find(|d| d.path == path && !d.text.is_empty()), self.holder(path)) {
             _ if self.fixed => Err(FIXED.into()),
             _ if !path.starts_with('/') => Err(format!("Not a directory: {path}")),
             (Some(dir), _) => Ok(dir.clone()),

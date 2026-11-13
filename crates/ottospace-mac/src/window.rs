@@ -282,6 +282,32 @@ pub unsafe fn frame(ns_view: *mut c_void) -> Option<[f64; 4]> {
     Some([f.origin.x, height - f.origin.y - f.size.height, f.size.width, f.size.height])
 }
 
+/// A native checkbox of the canary's: a press (a click or `AXPress`) turns it on or off.
+pub struct Checkbox(Retained<objc2_app_kit::NSButton>);
+
+impl Checkbox {
+    pub fn on(&self) -> bool {
+        self.0.state() != 0
+    }
+}
+
+/// Adds a native checkbox titled `title` to the view, `at` points from its top left, enabled or
+/// not: a control a test can press through sneak mode and then read. For the canary.
+///
+/// # Safety
+/// As `add_button`.
+pub unsafe fn add_checkbox(ns_view: *mut c_void, title: &str, at: [f64; 4], enabled: bool) -> Option<Checkbox> {
+    let mtm = MainThreadMarker::new()?;
+    let view = unsafe { &*(ns_view as *const NSView) };
+    let title = objc2_foundation::NSString::from_str(title);
+    let checkbox = unsafe { objc2_app_kit::NSButton::checkboxWithTitle_target_action(&title, None, None, mtm) };
+    let y = if view.isFlipped() { at[1] } else { view.frame().size.height - at[1] - at[3] };
+    checkbox.setFrame(objc2_foundation::NSRect::new(NSPoint::new(at[0], y), objc2_foundation::NSSize::new(at[2], at[3])));
+    checkbox.setEnabled(enabled);
+    view.addSubview(&checkbox);
+    Some(Checkbox(checkbox))
+}
+
 /// Makes this process a background app: no Dock icon, no place in the app switcher, and it does
 /// not come to the front when it starts. For test runs, which must not take the user's keyboard.
 pub fn stay_in_background() {

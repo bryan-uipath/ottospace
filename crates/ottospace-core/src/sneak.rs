@@ -4,6 +4,7 @@
 use serde::Serialize;
 
 use crate::ax::{self, Labelled, Source, Target};
+use crate::sneak_apps::AppLabels;
 
 /// What a key does in sneak mode.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -46,12 +47,14 @@ fn own_id(target: &Target) -> Option<&str> {
 
 /// Labels in reading order, none a prefix of another. As many one-letter labels as can be, home
 /// row first, and never on a destructive control; the letters left over start the two-letter ones.
-/// e.g. a tab, its × and a pane: `a`, `da`, `s`.
-fn assign(mut targets: Vec<Target>) -> Vec<Labelled> {
+/// e.g. a tab, its × and a pane: `a`, `da`, `s`. `spare`: labels left unused, as for that many
+/// more controls, so an app's elements can be labelled later without changing these.
+fn assign(mut targets: Vec<Target>, spare: usize) -> Vec<Labelled> {
     ax::reading_order(&mut targets);
     let letters: Vec<char> = ax::ALPHABET.chars().collect();
     let safe = |target: &Target| !own_id(target).is_some_and(destructive);
-    let (all, most, plain) = (targets.len(), letters.len(), targets.iter().filter(|t| safe(t)).count());
+    let plain = targets.iter().filter(|t| safe(t)).count() + spare;
+    let (all, most) = (targets.len() + spare, letters.len());
     // `short` one-letter labels leave `most - short` letters to start the two-letter ones.
     let fits = |short: &usize| (most - short) * most >= all - short;
     let short = match plain == all && all <= most {
@@ -79,6 +82,8 @@ pub enum Typed {
     Narrowed,
     /// The letters now spell this control's label.
     Chosen(String),
+    /// The letters now spell the label of a hosted app's element.
+    App(Target),
     /// No label goes on with it.
     NoLabel,
 }
@@ -92,15 +97,23 @@ pub struct Sneak {
     /// Starting the mode hid the accessibility overlay: its chips use the same letters.
     #[serde(skip)]
     pub hid_overlay: bool,
+    /// The app pane whose elements carry labels too, once its tree was read (`sneak_apps`).
+    pub app: Option<AppLabels>,
 }
 
 impl Sneak {
-    /// Labels for ottospace's own controls. A hosted app's nodes get none: pressing another app's
-    /// control is not built. `None`: there is nothing to label.
+    /// Labels for ottospace's own controls. A hosted app's elements get theirs when its tree is
+    /// read (`read_app`). `None`: there is nothing to label.
     pub fn new(targets: Vec<Target>) -> Option<Self> {
+        Self::leaving_room(targets, false)
+    }
+
+    /// As `new`; with `room`, a label is left free so an app pane's elements get labels later
+    /// and these keep theirs.
+    pub fn leaving_room(targets: Vec<Target>, room: bool) -> Option<Self> {
         let own = targets.into_iter().filter(|t| own_id(t).is_some()).collect();
-        let targets = assign(own);
-        (!targets.is_empty()).then(|| Self { targets, typed: String::new(), hid_overlay: false })
+        let targets = assign(own, room.into());
+        (!targets.is_empty()).then(|| Self { targets, typed: String::new(), hid_overlay: false, app: None })
     }
 
     /// The labels still in play: those that start with what was typed.
@@ -110,14 +123,15 @@ impl Sneak {
 
     /// Whether a frame that drew `drawn` moved or dropped a labelled control.
     pub fn is_stale(&self, drawn: &[Target]) -> bool {
-        self.targets.iter().any(|t| !drawn.contains(&t.target))
+        self.targets.iter().any(|t| own_id(&t.target).is_some() && !drawn.contains(&t.target))
     }
 
     /// A new frame was drawn. A control still drawn keeps its letters, at its new place; one no
     /// longer drawn loses its label, so its letters cannot reach what took its place; a new
-    /// control gets none until the mode starts again.
+    /// control gets none until the mode starts again. An app's labels follow its reads instead.
     pub fn redraw(&mut self, drawn: &[Target]) {
         self.targets.retain_mut(|t| match drawn.iter().find(|d| d.source == t.target.source) {
+            _ if own_id(&t.target).is_none() => true,
             Some(now) => {
                 t.target.frame = now.frame;
                 true
@@ -133,8 +147,10 @@ impl Sneak {
             return Typed::NoLabel;
         }
         self.typed = typed;
-        let chosen = self.targets.iter().find(|t| t.label == self.typed).and_then(|t| own_id(&t.target));
-        chosen.map_or(Typed::Narrowed, |id| Typed::Chosen(id.to_string()))
+        match self.targets.iter().find(|t| t.label == self.typed).map(|t| &t.target) {
+            Some(target) => own_id(target).map_or_else(|| Typed::App(target.clone()), |id| Typed::Chosen(id.into())),
+            None => Typed::Narrowed,
+        }
     }
 
     pub fn backspace(&mut self) {
@@ -179,7 +195,7 @@ mod tests {
     fn a_hosted_apps_nodes_get_no_label() {
         let node = Target {
             frame: Frame { x: 0., y: 0., w: 9., h: 9. },
-            source: Source::App { pane: 1, path: vec![0], role: "AXButton".into() },
+            source: Source::App { pane: 1, path: vec![0], role: "AXButton".into(), at: Frame::default() },
         };
         let sneak = Sneak::new(vec![node.clone(), own("rail:apps", 0., 40.)]).unwrap();
         assert_eq!(sneak.targets.len(), 1);

@@ -12,7 +12,8 @@
 //! the app too busy to answer Accessibility calls for that long.
 //!
 //! With `CANARY_BUTTON` set, the first window has a native button titled "Canary button" in
-//! its content: a control its accessibility tree names.
+//! its content: a control its accessibility tree names. Below it, a checkbox "Canary press"
+//! (`pressed` in the state: whether it is on) and a disabled one, "Canary disabled".
 
 use std::cell::RefCell;
 use std::io::{BufRead, BufReader, Write};
@@ -120,6 +121,11 @@ impl Render for Canary {
 
 type Windows = Rc<RefCell<Vec<WindowHandle<Canary>>>>;
 
+thread_local! {
+    /// The first window's checkboxes, with `CANARY_BUTTON`: "Canary press", "Canary disabled".
+    static CHECKBOXES: RefCell<Vec<ottospace_mac::window::Checkbox>> = const { RefCell::new(Vec::new()) };
+}
+
 /// `at`: where its top left goes, as `move` puts it.
 fn open(windows: &Windows, min: Option<[f32; 2]>, fixed: Option<[f32; 2]>, at: Option<[f64; 2]>, cx: &mut App) {
     let number = windows.borrow().len() + 1;
@@ -152,6 +158,13 @@ fn open(windows: &Windows, min: Option<[f32; 2]>, fixed: Option<[f32; 2]>, at: O
                 if let Some(view) = ns_view(window) {
                     let at = [16., 150., 170., 30.];
                     unsafe { ottospace_mac::window::add_button(view, "Canary button", at) };
+                    let add = |title, y, on| unsafe {
+                        ottospace_mac::window::add_checkbox(view, title, [16., y, 170., 24.], on)
+                    };
+                    CHECKBOXES.with_borrow_mut(|boxes| {
+                        boxes.extend(add("Canary press", 190., true));
+                        boxes.extend(add("Canary disabled", 224., false));
+                    });
                 }
             });
         }
@@ -191,7 +204,9 @@ fn state(windows: &Windows, cx: &mut App) -> String {
         });
         entry.map(|entry| open_windows.push(entry)).is_ok()
     });
-    json!({ "ok": true, "windows": open_windows }).to_string()
+    // Whether "Canary press" is on: a press reached it.
+    let pressed = CHECKBOXES.with_borrow(|boxes| boxes.first().map(|b| b.on()));
+    json!({ "ok": true, "windows": open_windows, "pressed": pressed }).to_string()
 }
 
 fn serve(calls: &Receiver<(Request, Sender<String>)>, windows: &Windows, cx: &mut App) {

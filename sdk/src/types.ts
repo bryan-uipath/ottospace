@@ -801,11 +801,19 @@ export interface AxTarget {
   source: AxSource;
 }
 
-/** Sneak mode's labels on ottospace's own controls. Every `source` is `own`. */
+/** Sneak mode's labels: ottospace's own controls (`own`), and the focused app pane's elements (`app`). */
 export interface Sneak {
   targets: AxTarget[];
   /** The letters typed so far: labels that start with them are on show. */
   typed: string;
+  /** Once the app pane's tree was read: labels on its elements now, and how many could have one. */
+  app: SneakApp | null;
+}
+
+export interface SneakApp {
+  pane: PaneId;
+  controls: number;
+  found: number;
 }
 
 export interface AxOverlay {
@@ -943,6 +951,8 @@ export interface Snapshot {
   sneak: Sneak | null;
   /** Counters for tests, by name (`live`: how often a pane went live). Null outside a test run. */
   counts: Record<string, number> | null;
+  /** Test runs only: each press in an app a sneak label asked for, `[pane, path]`. Else null. */
+  app_presses: [PaneId, number[]][] | null;
   /** The marks, in the user's order. */
   marks: Mark[];
   /** The name of the mark just taken off, while the Marks section offers to put it back. */

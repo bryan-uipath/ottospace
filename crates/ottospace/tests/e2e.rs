@@ -3102,6 +3102,95 @@ fn news_does_not_end_sneak_mode_and_no_key_of_a_label_reaches_the_terminal() {
     assert!(!text.contains("xxx"), "{text}");
 }
 
+/// The labels on an app's elements in a sneak reply: each element's path, and its label.
+fn app_labels(reply: &Value) -> Vec<(Value, String)> {
+    let targets = reply["sneak"]["targets"].as_array().cloned().unwrap_or_default();
+    let app = targets.iter().filter(|t| t["source"]["type"] == "app");
+    app.map(|t| (t["source"]["path"].clone(), t["label"].as_str().expect("a label").to_string())).collect()
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn sneak_labels_an_apps_elements_and_only_the_users_letter_presses_one() {
+    let otto = Otto::launch("sneak-app");
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.bounds(&[1]);
+    let (_, own) = sneak(&otto);
+    let content = otto.call(json!({"cmd": "state"}))["sneak"]["targets"]
+        .as_array()
+        .and_then(|t| t.iter().find(|t| t["source"]["id"] == "pane:1").cloned())
+        .expect("the pane's label")["frame"]
+        .clone();
+    // A window as an app's tree reads, its 28-point title bar cut off the pane's picture: a
+    // button, a disabled one, a pressable row holding a button, a text field, one too small, and
+    // a close button in the bar. Its text is another app's: none of it reaches the state.
+    let button = |x: f64, y: f64, extra: Value| {
+        let mut b = json!({"role": "AXButton", "actions": ["AXPress"], "frame": {"x": x, "y": y, "w": 60, "h": 24}});
+        b.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap_or_default());
+        b
+    };
+    let tree = json!({"role": "AXWindow", "title": "Private window title", "children": [
+        button(10., 40., json!({"title": "Secret button"})),
+        button(80., 40., json!({"enabled": false})),
+        {"role": "AXRow", "actions": ["AXPress"], "frame": {"x": 0, "y": 80, "w": 300, "h": 30},
+         "children": [button(200., 83., json!({}))]},
+        {"role": "AXTextField", "value": "typed secret", "frame": {"x": 10, "y": 120, "w": 200, "h": 24}},
+        button(10., 160., json!({"frame": {"x": 10, "y": 160, "w": 2, "h": 24}})),
+        button(8., 6., json!({"subrole": "AXCloseButton"})),
+    ]});
+    let window = json!({"x": 0, "y": 0, "w": 400, "h": 300}); // global, as the frames below
+    let read = json!({"cmd": "sneak_app_tree", "window": window, "crop": 28, "content": content, "tree": tree});
+    let reply = otto.call(read.clone());
+    let labels = app_labels(&reply);
+    let mut paths: Vec<String> = labels.iter().map(|(path, _)| path.to_string()).collect();
+    paths.sort();
+    assert_eq!(paths, ["[0]", "[2,0]", "[3]"], "{reply}");
+    assert_eq!(reply["sneak"]["app"], json!({"pane": 1, "controls": 3, "found": 3}));
+    for secret in ["Private window title", "Secret button", "typed secret"] {
+        assert!(!reply.to_string().contains(secret), "{secret} reached the state");
+    }
+    // ottospace's own labels stay as they were; every label names one control.
+    let now: Labels = reply["sneak"]["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| Some((t["source"]["id"].as_str()?.to_string(), t["label"].as_str()?.to_string())))
+        .collect();
+    assert_eq!(now, own);
+    let mut all: Vec<&String> = now.values().chain(labels.iter().map(|(_, l)| l)).collect();
+    all.sort();
+    all.dedup();
+    assert_eq!(all.len(), now.len() + labels.len());
+    // Each app label lies in the pane, at the element's place below the cropped bar.
+    let (cx, cy) = (content["x"].as_f64().unwrap(), content["y"].as_f64().unwrap());
+    let target = |path: Value| {
+        let targets = reply["sneak"]["targets"].as_array().unwrap();
+        targets.iter().find(|t| t["source"]["path"] == path).cloned().expect("the label")
+    };
+    assert_eq!(
+        (target(json!([0]))["frame"]["x"].as_f64(), target(json!([0]))["frame"]["y"].as_f64()),
+        (Some(cx + 10.), Some(cy + 12.))
+    );
+
+    // A client's letters of the button's label are refused, with the reason; the labels stay.
+    let label =
+        labels.iter().find(|(path, _)| path == &json!([0])).map(|(_, l)| l.clone()).expect("the button's label");
+    let refused = otto.raw(&json!({"cmd": "key", "keys": letters(&label)}).to_string());
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert!(refused["error"].as_str().is_some_and(|e| e.contains("the user's alone")), "{refused}");
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!((&state["mode"], &state["app_presses"]), (&json!("sneak"), &json!([])));
+    // The user's letters press that very element. No window is hosted in a test run, so the
+    // status bar says nothing was pressed.
+    let typed = state["sneak"]["typed"].as_str().unwrap_or("").len();
+    let rest = letters(&label[typed..]);
+    let reply = otto.call(json!({"cmd": "key", "keys": rest, "as": "user"}));
+    assert_eq!((&reply["mode"], &reply["app_presses"]), (&json!("normal"), &json!([[1, [0]]])), "{reply}");
+    assert_eq!(reply["notice"], "the window is gone: nothing was pressed", "{reply}");
+    // Outside sneak mode the request is refused: there is nothing to label.
+    assert_eq!(otto.raw(&read.to_string())["error"], "sneak mode is off");
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_request_from_the_socket_does_not_end_sneak_mode() {

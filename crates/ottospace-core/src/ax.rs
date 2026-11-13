@@ -180,7 +180,14 @@ pub fn labels(n: usize, alphabet: &str) -> Vec<String> {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Source {
     /// A hosted app's accessibility node, by path from its window: activating it presses the node.
-    App { pane: PaneId, path: Vec<usize>, role: String },
+    /// `at`: its frame as read, from the window's top left, which a press checks again.
+    App {
+        pane: PaneId,
+        path: Vec<usize>,
+        role: String,
+        #[serde(skip_serializing)]
+        at: Frame,
+    },
     /// One of ottospace's own controls, by an id the shell picks (e.g. `rail:apps`): activating it
     /// does what clicking it does.
     Own { id: String },
@@ -210,8 +217,10 @@ pub fn app_targets(pane: PaneId, root: &Node, window: Frame, crop: f64, content:
         .into_iter()
         .filter(|f| is_interactive(f.node))
         .filter_map(|f| {
-            let frame = on_pane(f.node.frame?, window, crop, content)?;
-            Some(Target { frame, source: Source::App { pane, path: f.path, role: f.node.role.clone() } })
+            let g = f.node.frame?;
+            let frame = on_pane(g, window, crop, content)?;
+            let at = Frame { x: g.x - window.x, y: g.y - window.y, ..g };
+            Some(Target { frame, source: Source::App { pane, path: f.path, role: f.node.role.clone(), at } })
         })
         .collect()
 }
@@ -354,7 +363,8 @@ mod tests {
         let got = app_targets(7, &window(), Frame { x: 100., y: 50., w: 400., h: 300. }, 0., content);
         let at: Vec<[f64; 2]> = got.iter().map(|t| [t.frame.x, t.frame.y]).collect();
         assert_eq!(at, [[310., 65.], [350., 65.], [310., 110.]]);
-        assert_eq!(got[1].source, Source::App { pane: 7, path: vec![0, 1], role: "AXButton".into() });
+        let at = Frame { x: 50., y: 5., w: 30., h: 30. };
+        assert_eq!(got[1].source, Source::App { pane: 7, path: vec![0, 1], role: "AXButton".into(), at });
     }
 
     #[test]
@@ -525,7 +535,7 @@ mod tests {
     fn a_labelled_target_serializes_as_the_sdk_fixture_says() {
         let fixture: serde_json::Value =
             serde_json::from_str(include_str!("../../../sdk/test/ax-overlay.json")).unwrap();
-        let app = Source::App { pane: 4, path: vec![0, 2], role: "AXButton".into() };
+        let app = Source::App { pane: 4, path: vec![0, 2], role: "AXButton".into(), at: Frame::default() };
         let targets = vec![
             Labelled {
                 label: "a".into(),

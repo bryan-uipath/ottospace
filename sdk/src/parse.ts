@@ -76,6 +76,7 @@ import type {
   AppsBar,
   ClosedApp,
   Sneak,
+  SneakApp,
   Snapshot,
   Tab,
   Task,
@@ -1086,7 +1087,21 @@ function axTarget(value: unknown, at: string): AxTarget {
 
 function sneak(value: unknown, at: string): Sneak {
   const o = fields(value, at);
-  return { targets: list(axTarget)(o.targets, `${at}.targets`), typed: str(o.typed, `${at}.typed`) };
+  return {
+    targets: list(axTarget)(o.targets, `${at}.targets`),
+    typed: str(o.typed, `${at}.typed`),
+    app: orNull(sneakApp)(o.app, `${at}.app`),
+  };
+}
+
+function appPress(value: unknown, at: string): [PaneId, number[]] {
+  if (!Array.isArray(value) || value.length !== 2) throw wrong(at, "[pane, path]", value);
+  return [num(value[0], `${at}[0]`), list(num)(value[1], `${at}[1]`)];
+}
+
+function sneakApp(value: unknown, at: string): SneakApp {
+  const o = fields(value, at);
+  return { pane: num(o.pane, `${at}.pane`), controls: num(o.controls, `${at}.controls`), found: num(o.found, `${at}.found`) };
 }
 
 function axOverlay(value: unknown, at: string): AxOverlay {
@@ -1221,6 +1236,7 @@ export function snapshot(value: unknown): Snapshot {
     ax_overlay: orNull(axOverlay)(o.ax_overlay, "ax_overlay"),
     sneak: orNull(sneak)(o.sneak, "sneak"),
     counts: orNull(map(num))(o.counts, "counts"),
+    app_presses: orNull(list(appPress))(o.app_presses, "app_presses"),
     marks: list(mark)(o.marks, "marks"),
     mark_removed: orNull(str)(o.mark_removed, "mark_removed"),
     workbooks: list(workbook)(o.workbooks, "workbooks"),

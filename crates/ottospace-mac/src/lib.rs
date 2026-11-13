@@ -1,6 +1,7 @@
 //! macOS platform layer: Accessibility window control and display geometry.
 
 pub mod ax;
+pub mod ax_press;
 pub mod ax_tree;
 pub mod capture;
 pub mod display;

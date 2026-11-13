@@ -38,6 +38,7 @@ use ottospace_core::repos::{Checkout, Repo};
 use ottospace_core::rules::{self, Facts};
 use ottospace_core::scrollbar::{Extent, key_step};
 use ottospace_core::settings::Installed;
+use ottospace_core::sneak::{SneakKey, sneak_key};
 use ottospace_core::tasks::{Assign, Group, Heading, MAX_TITLE, State, Task, TaskId, TaskRow};
 use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, scroll_key, select_kind, visual_key};
 use ottospace_core::{
@@ -73,6 +74,7 @@ mod scratch;
 mod scrollbar;
 mod sessions;
 mod sneak;
+mod sneak_apps;
 mod tags;
 mod talk;
 mod terminal;
@@ -690,6 +692,8 @@ struct Workspace {
     controls: sneak::Controls,
     /// The key that ended sneak mode is still down: its repeats are typed nowhere.
     sneak_spent: bool,
+    /// Reads of the focused app pane's tree while sneak mode is on.
+    sneak_reads: sneak_apps::Reads,
     /// Whose key, click or request is being handled now: the person's, unless the control socket
     /// is being served (also a key or click it injects) or the tick is doing its own work.
     input: Origin,
@@ -930,6 +934,7 @@ impl Workspace {
                             this.seek_sessions(window, cx);
                         }
                         this.sync_sneak(window, cx);
+                        this.read_sneak_app(window, cx);
                     });
                     this.take_snapshots(window, cx);
                     if this.hosted.values().any(|h| h.latest.dirty.swap(false, Relaxed)) {
@@ -1025,6 +1030,7 @@ impl Workspace {
             home: home::Shared::default(),
             controls: sneak::Controls::default(),
             sneak_spent: false,
+            sneak_reads: sneak_apps::Reads::default(),
             input: Origin::User,
             apps: Vec::new(),
             launching: Vec::new(),
@@ -1264,6 +1270,7 @@ impl Workspace {
                 }
                 Effect::Activate { id } => self.activate(id, window, cx),
                 Effect::Run { command } => self.run_command(*command, window, cx),
+                Effect::PressApp { pane, path, role, at, .. } => self.press_app(*pane, path, role, *at, window, cx),
                 Effect::HostWindow { mark, bundle, name, title, into, axis } => {
                     let (bundle, name, title) = (bundle.clone(), name.clone(), title.clone());
                     let wanted = marks::Wanted { mark: *mark, bundle, name, title, into: *into, axis: *axis };
@@ -1905,6 +1912,11 @@ impl Workspace {
                     self.serve_sneak(reply, window, cx);
                     continue;
                 }
+                Request::SneakAppTree { window: frame, crop, content, tree } => {
+                    let read = ottospace_core::sneak_apps::AppRead { window: frame, crop, content, root: tree };
+                    failure = self.serve_sneak_app_tree(read, window, cx).err();
+                    None
+                }
                 Request::Marks => {
                     let _ = reply.send(serde_json::json!({ "ok": true, "marks": self.marks_json() }).to_string());
                     continue;
@@ -2150,6 +2162,13 @@ impl Workspace {
     fn key_refusal(&self, key: &Keystroke) -> Option<&'static str> {
         if self.model.sneak.is_some() && !sneak::takes(key) {
             return Some(sneak::ON);
+        }
+        // A client's letter of a label in another app: only the user presses there.
+        if let Some(SneakKey::Type(letter)) = sneak_key(&key.key).filter(|_| self.model.sneak.is_some()) {
+            let typed = Action::SneakType { text: letter.to_string() };
+            if let Some(why) = self.model.refusal(&typed, Origin::Socket) {
+                return Some(why);
+            }
         }
         if self.model.confirm.is_some() {
             return self.confirm_answer(key, Origin::Socket).is_none().then_some(CONFIRM_UP);
@@ -2516,6 +2535,8 @@ impl Workspace {
                 "live": self.went_live,
                 "frame_reads": self.hosted.values().map(|h| h.frame_reads).sum::<u64>(),
             })),
+            // Test runs only: each press in an app a sneak label asked for, `[pane, path]`; else null.
+            "app_presses": std::env::var_os("OTTOSPACE_E2E").map(|_| &self.sneak_reads.presses),
             // The marks in the user's order: name, key, kind, whether its pane or tab is open
             // now, and whether it can be opened. `row` and `buttons`: where the Marks section
             // drew it, or null.
@@ -4765,7 +4786,10 @@ impl Workspace {
                 _ => ("MARK?", "a mark's letter · esc cancels"),
             },
         };
-        let hint = hint.to_string();
+        let hint = match self.sneak_app_hint() {
+            Some(app) => format!("{hint} · {app}"),
+            None => hint.to_string(),
+        };
         let focused = match self.model.focused.and_then(|id| self.model.pane(id)).map(|p| &p.kind) {
             Some(Kind::App { title, .. }) => title.clone(),
             Some(Kind::Empty) => "empty pane".into(),
@@ -5678,11 +5702,12 @@ mod tests {
         }
     }
 
-    /// Every request the app accepts must have an example in the guide. But `capture_start` and
-    /// `repo_add`: they answer only in a test run, and an agent must not learn them (see `AGENTS.md`).
+    /// Every request the app accepts must have an example in the guide. But `capture_start`,
+    /// `repo_add` and `sneak_app_tree`: they answer only in a test run, and an agent must not learn
+    /// them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        const TESTS_ONLY: [&str; 3] = ["capture_start", "repo_add", "inspector_fixture"];
+        const TESTS_ONLY: [&str; 4] = ["capture_start", "repo_add", "inspector_fixture", "sneak_app_tree"];
         assert!(TESTS_ONLY.iter().all(|name| !SKILL_GUIDE.contains(name)));
         for name in request_names().into_iter().filter(|name| !TESTS_ONLY.contains(&name.as_str())) {
             assert!(SKILL_GUIDE.contains(&format!(r#""cmd":"{name}""#)), "the guide has no example of `{name}`");

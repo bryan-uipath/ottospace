@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use gpui::{BackgroundExecutor, Bounds, IntoElement, Pixels, div, prelude::*, px, rgb};
 use ottospace_core::ax::{self, Frame, Labelled, Limits, Source, Tree, Truncated};
+use ottospace_core::sneak_apps::{self, AppRead};
 use ottospace_core::{PaneId, theme};
 use ottospace_mac::{ax as mac_ax, ax_tree};
 use serde::Serialize;
@@ -29,6 +30,14 @@ pub struct Hosted {
 impl Hosted {
     pub fn new(pane: PaneId, pid: i32, window: u32, crop: f64, content: Bounds<Pixels>) -> Self {
         Self { pane, pid, window, crop, content: sneak::frame(content) }
+    }
+
+    /// For sneak mode: the window read as `ax_tree` reads it, with no text, and where the pane
+    /// shows it. Blocking, like `read`.
+    pub fn read_for_sneak(self) -> Result<AppRead, String> {
+        let r = read(self.pid, self.window, Limits::default())?;
+        let root = sneak_apps::without_text(r.tree.root);
+        Ok(AppRead { window: r.window, crop: self.crop, content: self.content, root })
     }
 }
 

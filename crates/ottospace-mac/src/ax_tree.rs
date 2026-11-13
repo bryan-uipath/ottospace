@@ -98,6 +98,14 @@ pub fn read(window: &Window, limits: Limits, fetch: Fetch) -> Tree {
     Tree { root, count, truncated }
 }
 
+/// One element as plain data, and its children's handles: for a press. `None`: it is gone, or
+/// the app did not answer in time.
+pub(crate) fn node_of(element: &AXUIElement) -> Option<(Node, Vec<CFRetained<AXUIElement>>)> {
+    let names: Vec<CFRetained<CFString>> = ATTRS.iter().map(|a| CFString::from_str(a)).collect();
+    let refs: Vec<&CFString> = names.iter().map(|n| &**n).collect();
+    read_node(element, &CFArray::from_objects(&refs), Fetch::Batched, TIMEOUT).ok()
+}
+
 fn read_node(
     element: &AXUIElement,
     names: &CFArray<CFString>,

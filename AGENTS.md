@@ -85,6 +85,9 @@ Rules:
   - `capture_start`: the user's capture key, pressed by the test (`"pane"` optional). Outside a
     test run only the user starts a capture; the core also refuses a `CaptureStart` of any other
     origin, so a client's key, click or sneak label starts none in a test run either.
+  - `sneak_app_tree`: a fixture tree as if read from the focused pane's window while sneak mode
+    is on (a test run hosts no window), so its elements get labels. The state's `app_presses`
+    (null outside a test run) lists each press a label asked for.
   - `"repeat":true` on `key`: each key as one still held down. A key that types is a real repeat
     to `keyDown:`: `enter`, `tab`, `space`, or a character the layout types with no modifier on
     key codes 0 to 50 (`a`, `7`, `/`; not `A`). A `cmd-` shortcut, by the flag alone, is pressed as
@@ -174,7 +177,9 @@ once and keeps what lies under the user's annotations. Only the user starts one 
 key, the menu, the bar): the core refuses a `CaptureStart` of any other origin, and
 `capture_start` on the socket answers only under `OTTOSPACE_E2E` (`control::test_refusal`).
 In a task's brief (`task_brief`) everything captured is quoted and labelled as untrusted: see
-`docs/ai/capture.md`. Requests that press or set values in another app are a
+`docs/ai/capture.md`. The user's own sneak label may press a control in the focused app pane
+(`docs/ai/sneak-apps.md`): the core refuses a label in an app from any other origin. Requests
+that press or set values in another app are still a
 separate trust decision: see `docs/ai/1-initial-brainstorm/accessibility.md`.
 
 ## App bundle

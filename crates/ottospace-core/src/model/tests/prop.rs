@@ -13,6 +13,7 @@ use crate::progress;
 use crate::repos::{MAX_DIRS, RepoDir, RepoDirs, Worktree};
 use crate::sessions::{Link, Seen};
 use crate::settings::ListChange;
+use crate::sneak_apps;
 use crate::workbook::{self, History, Workbook, WorkbookId};
 
 const WORDS: &[&str] = &["fix", "zoom", "flicker", "deploy", "x"];
@@ -331,7 +332,7 @@ impl Gen<'_> {
         let target = |g: &mut Self, i: usize| Target {
             frame: Frame { x: place(g), y: place(g), w: place(g), h: place(g) },
             source: match g.rng.below(8) {
-                0 => Source::App { pane: g.pane(), path: vec![0, i], role: "AXButton".into() },
+                0 => Source::App { pane: g.pane(), path: vec![0, i], role: "AXButton".into(), at: Frame::default() },
                 1 | 2 => Source::Own { id: format!("c{i}") },
                 _ => Source::Own { id: g.name(CONTROLS) },
             },
@@ -497,7 +498,41 @@ impl Gen<'_> {
         self.one_of(&rows, |g| (0..g.rng.below(3)).map(|_| g.rng.below(3)).collect())
     }
 
+    /// A hosted window's tree as sneak mode reads it: buttons, some nested, disabled, tiny or
+    /// off the pane, and text fields.
+    fn app_read(&mut self) -> crate::sneak_apps::AppRead {
+        fn node(g: &mut Gen, depth: usize) -> crate::ax::Node {
+            let place = |g: &mut Gen| g.rng.pick(&[0., 3., 20., 30., 150., 900., -4., f64::NAN]);
+            let role = g.rng.pick(&["AXButton", "AXRow", "AXTextField", "AXGroup", "AXCheckBox"]);
+            let n = if depth < 3 { g.rng.below(4) } else { 0 };
+            crate::ax::Node {
+                role: role.into(),
+                actions: if g.rng.coin() { vec!["AXPress".into()] } else { vec![] },
+                enabled: g.rng.pick(&[None, Some(true), Some(false)]),
+                frame: (!g.rng.one_in(8)).then(|| Frame { x: place(g), y: place(g), w: place(g), h: place(g) }),
+                children: (0..n).map(|_| node(g, depth + 1)).collect(),
+                ..Default::default()
+            }
+        }
+        let root = node(self, 0);
+        let crop = self.rng.pick(&[0., 28.]);
+        let window = Frame { x: 0., y: 0., w: 400., h: 300. };
+        crate::sneak_apps::AppRead { window, crop, content: Frame { x: 50., y: 30., w: 300., h: 200. }, root }
+    }
+
     fn letters(&mut self) -> String {
+        // After a first letter, often the rest of a label it starts.
+        let typed = self.m.sneak.as_ref().map_or(String::new(), |s| s.typed.clone());
+        let rests: Vec<String> = self
+            .m
+            .sneak
+            .iter()
+            .flat_map(|s| s.targets.iter())
+            .filter_map(|t| t.label.strip_prefix(typed.as_str()).filter(|_| !typed.is_empty()).map(str::to_string))
+            .collect();
+        if !rests.is_empty() && self.rng.coin() {
+            return self.one_of(&rests, |g| g.name(&["a"]));
+        }
         let labels: Vec<String> = self.m.sneak.iter().flat_map(|s| s.targets.iter().map(|t| t.label.clone())).collect();
         let label = self.one_of(&labels, |g| g.name(&["a", "s", "x", "1", "ö", "AS"]));
         if self.rng.one_in(3) { label.chars().take(1).collect() } else { label }
@@ -735,6 +770,13 @@ const MAKERS: &[Make] = &[
     |g| Action::SneakType { text: g.letters() },
     |_| Action::SneakBackspace,
     |_| Action::LeaveSneak,
+    |g| {
+        let pane = match (g.m.focused, g.rng.coin()) {
+            (Some(focused), true) => focused,
+            _ => g.pane(),
+        };
+        Action::SneakApp { pane, read: (!g.rng.one_in(5)).then(|| g.app_read()) }
+    },
     |g| {
         let one = |g: &mut Gen| Running {
             pane: g.pane(),
@@ -1174,10 +1216,18 @@ fn check(m: &Model) -> Result<(), String> {
         let free =
             labels.iter().enumerate().all(|(i, a)| labels.iter().enumerate().all(|(j, b)| i == j || !prefix(a, b)));
         ensure!(free, "a label starts another: {labels:?}");
+        // An app's elements are labelled only in the one pane read, and the state counts them.
+        let apps: Vec<_> = sneak.targets.iter().filter(|t| matches!(t.target.source, Source::App { .. })).collect();
+        let pane = sneak.app.map(|a| a.pane);
         ensure!(
-            sneak.targets.iter().all(|t| matches!(t.target.source, Source::Own { .. })),
-            "a label is on an app's node"
+            apps.iter().all(|t| matches!(t.target.source, Source::App { pane: p, .. } if Some(p) == pane)),
+            "a label is on an app's node of a pane not read: {pane:?}"
         );
+        let counted = sneak.app.is_none_or(|a| a.controls == apps.len() && a.controls <= a.found.min(sneak_apps::CAP));
+        ensure!(counted, "the app's count is off: {:?}", sneak.app);
+        // Each app label names one element.
+        let sources: Vec<String> = apps.iter().map(|t| format!("{:?}", t.target.source)).collect();
+        ensure!(unique(&sources), "two labels on one element");
         let covered = boxed || m.keys || m.live.is_some() || m.visual.is_some() || m.mark_input.is_some();
         ensure!(!covered && !m.ax_overlay && m.confirm.is_none(), "sneak mode is on under something else");
         let _ = sneak.visible().count();
@@ -1556,6 +1606,17 @@ struct Run {
     /// Write the state and the marks' file out after every eighth step only: nine tenths of a
     /// run's time is spent there. A replay, and the long run, do it after every step.
     sparse: bool,
+    /// The app elements labelled when nothing was last typed: a press must be of one of them,
+    /// so every letter of its label was typed after the label was drawn.
+    drawn_before: Vec<String>,
+}
+
+/// An app's label as `drawn_before` keeps it: the letters and the element, whatever its frame.
+fn app_label(t: &crate::ax::Labelled) -> Option<String> {
+    match &t.target.source {
+        Source::App { pane, path, role, .. } => Some(format!("{pane} {path:?} {role}")),
+        Source::Own { .. } => None,
+    }
 }
 
 impl Run {
@@ -1563,12 +1624,24 @@ impl Run {
     fn step(&mut self, sent: Envelope) -> Result<(), String> {
         self.steps.push(sent.clone());
         let Envelope { action, origin } = sent.clone();
+        if let Some(sneak) = self.m.sneak.as_ref().filter(|s| s.typed.is_empty()) {
+            self.drawn_before = sneak.targets.iter().filter_map(app_label).collect();
+        }
+        let drawn_before = self.drawn_before.clone();
         let m = &mut self.m;
         let refused = m.refusal(&action, origin).map(|_| format!("{m:?}"));
         let panes: Vec<PaneId> = m.panes.iter().map(|p| p.id).collect();
         let sneak = m.sneak.as_ref().map(|sneak| sneak.typed.clone());
         let labelled: Vec<String> =
             m.sneak.iter().flat_map(|s| s.targets.iter()).map(|t| format!("{:?}", t.target.source)).collect();
+        // ottospace's own labels, which an app's tree arriving must not change.
+        let own_labels = |m: &Model| -> Vec<(String, String)> {
+            let own =
+                m.sneak.iter().flat_map(|s| s.targets.iter()).filter(|t| matches!(t.target.source, Source::Own { .. }));
+            own.map(|t| (t.label.clone(), format!("{:?}", t.target.source))).collect()
+        };
+        let own_before = own_labels(m);
+        let typed_before = m.sneak.as_ref().map(|s| s.typed.clone());
         let asked: Option<Vec<PaneId>> =
             m.confirm.as_ref().map(|confirm| confirm.running.iter().map(|r| r.pane).collect());
         let (mark_input, marks, removed) = (m.mark_input.clone(), m.marks.list.clone(), m.marks.removed().cloned());
@@ -1674,6 +1747,7 @@ impl Run {
                 | Action::SneakType { .. }
                 | Action::SneakBackspace
                 | Action::LeaveSneak
+                | Action::SneakApp { .. }
         );
         let mark_own = matches!(
             action,
@@ -1693,6 +1767,18 @@ impl Run {
         let typing = mark_input.as_ref().is_some_and(|input| input.text().is_some());
         let mark_own = mark_own || (typing && matches!(action, Action::FieldEdit { .. }));
         // Only the user, or the mode's own keys, end sneak mode, the quit question or a mark's wait.
+        // No letter but the user's is typed toward an app's label.
+        if let Some(sneak) = m.sneak.as_ref().filter(|_| !user && matches!(action, Action::SneakType { .. })) {
+            let app = sneak.targets.iter().filter(|t| matches!(t.target.source, Source::App { .. }));
+            let toward = !sneak.typed.is_empty() && app.clone().any(|t| t.label.starts_with(&sneak.typed));
+            ensure!(
+                !toward || typed_before.as_deref() == Some(sneak.typed.as_str()),
+                "{origin:?} typed toward an app's label"
+            );
+        }
+        if matches!(action, Action::SneakApp { .. }) && m.sneak.is_some() {
+            ensure!(own_labels(m) == own_before, "an app's tree changed ottospace's own labels");
+        }
         if sneak.is_some() && !sneak_own {
             let now = m.sneak.as_ref().map(|sneak| sneak.typed.clone());
             ensure!(if user { now.is_none() } else { now == sneak }, "sneak mode: {sneak:?} before, {now:?} after");
@@ -1897,6 +1983,15 @@ impl Run {
                         m.agent_runs(to) && !m.agent_runs(from),
                         "{from:?} moved to {to:?}, and it runs for neither"
                     );
+                }
+                Effect::PressApp { pane, path, role, at, .. } => {
+                    // Only the user's own letter presses in another app, and only what was labelled.
+                    ensure!(user, "{origin:?} pressed in an app: {path:?}");
+                    ensure!(matches!(action, Action::SneakType { .. }), "{action:?} pressed in an app");
+                    let source = Source::App { pane: *pane, path: path.clone(), role: role.clone(), at: *at };
+                    ensure!(labelled.contains(&format!("{source:?}")), "an element with no label is pressed: {path:?}");
+                    let key = format!("{pane} {path:?} {role}");
+                    ensure!(drawn_before.contains(&key), "a label drawn after its first letter pressed {key}");
                 }
                 Effect::SaveApps { changes } => {
                     // The settings file is the user's: no client's action writes it.
@@ -2312,6 +2407,7 @@ fn code(sent: &Envelope) -> String {
         "Tree",
         "Node",
         "Truncated",
+        "AppRead",
     ];
     const ENUM_OF: &[(&str, &str)] = &[
         ("axis", "Axis"),
@@ -2540,6 +2636,48 @@ fn by(origin: Origin, action: Action) -> Envelope {
 
 fn split(axis: Axis, kind: Kind) -> Envelope {
     Action::Split { axis, kind }.into()
+}
+
+/// An app's tree arrived after the user's first letter, and a new app label went on with it: the
+/// user's next letter pressed an element they never saw labelled. (Found by review.)
+#[test]
+fn an_app_label_drawn_after_the_first_letter_is_not_pressed_by_the_second() {
+    let own =
+        |id: &str, x: f64| Target { frame: Frame { x, y: 0., w: 20., h: 20. }, source: Source::Own { id: id.into() } };
+    // 17 controls take one letter each; the ×'s two-letter label starts with the 18th, `o`.
+    let mut targets: Vec<Target> = (0..17).map(|i| own(&format!("c{i}"), i as f64 * 30.)).collect();
+    targets.push(own("close:1", 600.));
+    let button = |x: f64| crate::ax::Node {
+        role: "AXButton".into(),
+        actions: vec!["AXPress".into()],
+        frame: Some(Frame { x, y: 60., w: 30., h: 20. }),
+        ..Default::default()
+    };
+    let root =
+        crate::ax::Node { role: "AXWindow".into(), children: vec![button(10.), button(50.)], ..Default::default() };
+    let window = Frame { x: 0., y: 0., w: 400., h: 300. };
+    let read = sneak_apps::AppRead { window, crop: 0., content: window, root };
+    replay(&[
+        split(Axis::Right, Kind::Empty),
+        Action::Sneak { targets }.into(),
+        Action::SneakType { text: "o".into() }.into(),
+        by(Origin::System, Action::SneakApp { pane: 1, read: Some(read) }),
+        Action::SneakType { text: "s".into() }.into(),
+    ])
+    .unwrap();
+}
+
+/// A listed directory with no text was removed: the change to the settings named nothing.
+#[test]
+fn a_directory_with_no_text_is_not_removed() {
+    replay(&[
+        Action::SetRepoDirs {
+            dirs: RepoDirs { dirs: vec![RepoDir { text: "".into(), path: "".into() }], fixed: false },
+        }
+        .sent_by(Origin::Socket),
+        Action::RepoRemove { path: "".into() }.sent_by(Origin::User),
+    ])
+    .unwrap();
 }
 
 /// `Open` beside an empty pane of a background tab filled it and focused it: the tab on show

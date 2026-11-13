@@ -21,6 +21,8 @@ import {
 } from "./parse.ts";
 import { checkOwned, defaultSocketPath } from "./socket.ts";
 import type {
+  AxNode,
+  Frame,
   AxTreeArgs,
   InspectorFixtureArgs,
   AxTreeReply,
@@ -438,6 +440,13 @@ export class Client {
    */
   sneak(): Promise<Snapshot> {
     return this.snapshot({ cmd: "sneak" });
+  }
+  /**
+   * For tests (`OTTOSPACE_E2E`): `tree` as if just read from the focused pane's window while sneak
+   * mode is on, so its elements get labels as a hosted app's do. Rejects outside a test run.
+   */
+  sneakAppTree(args: { window: Frame; crop?: number; content: Frame; tree: AxNode }): Promise<Snapshot> {
+    return this.snapshot({ cmd: "sneak_app_tree", ...args });
   }
   /** The marks, in the user's order. */
   async marks(): Promise<MarksReply> {

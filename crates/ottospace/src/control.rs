@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::{fs, thread};
 
+use ottospace_core::ax::{Frame, Node};
 use ottospace_core::tasks::{Heading, State, TaskId};
 use ottospace_core::{Axis, Dir, PaneId, Section, Zone};
 use serde::Deserialize;
@@ -383,6 +384,17 @@ pub enum Request {
     /// drew them; type one with `key`. Already on: it stays on. Fails outside normal and list
     /// mode, and if the window is not drawn.
     Sneak,
+    /// For tests (`test_refusal`): `tree` as if just read from the focused pane's window while
+    /// sneak mode is on: the window's frame `window` (global), its title bar `crop` tall, shown in
+    /// `content` (window points). Its elements get labels as a hosted app's do; a test run hosts
+    /// no window. Never for an agent: no client chooses what is labelled in another app.
+    SneakAppTree {
+        window: Frame,
+        #[serde(default)]
+        crop: f64,
+        content: Frame,
+        tree: Node,
+    },
     /// The marks, in the user's order: `{"ok":true,"marks":[{"name":"notes","key":"n",
     /// "kind":"terminal","open":true,"available":true,..}]}`, not the state.
     Marks,
@@ -480,6 +492,7 @@ pub enum Modifier {
 /// own, and end sneak mode or answer the quit question in their place. `capture_start`: a
 /// capture hands over a hosted app's picture and text, and outside a test only the user starts one.
 /// `repo_add`: it writes the user's settings, as only the user's own choice in the folder picker does.
+/// `sneak_app_tree`: it would choose what sneak mode labels in another app.
 pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
     match request {
         _ if e2e => None,
@@ -497,6 +510,9 @@ pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
         }
         Request::InspectorFixture { .. } => {
             Some("inspector_fixture is for tests (OTTOSPACE_E2E): only the user opens the inspector, on a hosted app")
+        }
+        Request::SneakAppTree { .. } => {
+            Some("sneak_app_tree is for tests (OTTOSPACE_E2E): sneak mode reads the app's window itself")
         }
         _ => None,
     }
