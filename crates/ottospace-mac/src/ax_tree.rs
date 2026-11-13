@@ -68,7 +68,9 @@ pub fn read(window: &Window, limits: Limits, fetch: Fetch) -> Tree {
             truncated.timeout = true;
             break;
         }
-        let (node, children) = match read_node(&element, &names, fetch) {
+        // No call waits past the walk's time: one slow node cannot run it long.
+        let left = deadline.map_or(TIMEOUT, |at| at.saturating_duration_since(Instant::now()).as_secs_f32());
+        let (node, children) = match read_node(&element, &names, fetch, left.min(TIMEOUT)) {
             Ok(read) => read,
             Err(Failed::Gone) => continue,
             Err(Failed::Busy) => {
@@ -100,9 +102,10 @@ fn read_node(
     element: &AXUIElement,
     names: &CFArray<CFString>,
     fetch: Fetch,
+    timeout: f32,
 ) -> Result<(Node, Vec<CFRetained<AXUIElement>>), Failed> {
     // Per element: a timeout set on one element does not carry to the elements it returns.
-    unsafe { element.set_messaging_timeout(TIMEOUT) };
+    unsafe { element.set_messaging_timeout(timeout) };
     let values = match fetch {
         Fetch::Batched => batched(element, names)?,
         Fetch::Single => ATTRS.iter().map(|name| attr(element, name)).collect::<Result<_, _>>()?,

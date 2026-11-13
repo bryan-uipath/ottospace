@@ -239,7 +239,9 @@ impl Inspector {
 
     /// Move the selection down (positive) or up the rows; it wraps. With none: the first row.
     pub fn step(&mut self, delta: i32) {
-        let rows = self.rows();
+        // Over the rows drawn only.
+        let mut rows = self.rows();
+        rows.truncate(MAX_ROWS);
         if rows.is_empty() {
             return;
         }
@@ -358,6 +360,17 @@ mod tests {
         assert!(i.rows().is_empty());
         i.step(1);
         assert_eq!(i.selected, None);
+    }
+
+    #[test]
+    fn the_selection_steps_over_the_rows_drawn_only() {
+        let leaves = (0..MAX_ROWS + 100).map(|_| node("AXCell", "", vec![])).collect();
+        let tree = Tree { root: node("AXTable", "", leaves), count: MAX_ROWS + 101, truncated: Truncated::default() };
+        let mut i = Inspector::new(1, "Big");
+        i.take(Read { tree, window: Frame::default(), millis: 1.0 });
+        i.step(1);
+        i.step(-1);
+        assert_eq!(i.selected, Some(vec![MAX_ROWS - 2]));
     }
 
     #[test]

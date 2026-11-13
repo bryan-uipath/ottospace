@@ -156,7 +156,7 @@ impl Workspace {
         let rows = Some(inspector.rows()).filter(|_| inspector.filter.text().is_empty());
         let selected = |rows: &Vec<Row>| {
             let path = inspector.selected.as_ref()?;
-            rows.iter().position(|r| r.path == *path)
+            rows.iter().take(inspect::MAX_ROWS).position(|r| r.path == *path)
         };
         Some(serde_json::json!({
             "pane": inspector.pane,
