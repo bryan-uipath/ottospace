@@ -4,8 +4,8 @@
 use gpui::{AnyView, Context, Div, ElementId, Stateful, Window, div, prelude::*, px, rgb};
 use ottospace_core::marks::MarkInput;
 use ottospace_core::model::Section;
-use ottospace_core::workbook::{self, WorkbookId, WorkbookRow};
-use ottospace_core::{Action, Origin, theme};
+use ottospace_core::workbook::{self, History, WorkbookId, WorkbookRow};
+use ottospace_core::{Action, Origin, PaneId, theme};
 
 use crate::{Tooltip, Workspace, config, list_button, marks, now_ms, rect};
 
@@ -38,6 +38,22 @@ impl Workspace {
         self.model.update(Action::RestoreWorkbooks { workbooks }.sent_by(Origin::System));
         // What was read needs no writing back: a stage 1 file is written as version 2 at its next change.
         self.kept_workbooks.stored = self.workbook_files();
+    }
+
+    /// Each terminal's last lines (`workbook_scrollback_lines`) and the command in front, for a
+    /// workbook the user saves. Read only then: the text goes into the action, never the state.
+    fn histories(&self) -> Vec<(PaneId, History)> {
+        let (most, saved) = (config::workbook_lines(), now_ms());
+        let history = |(id, terminal): (&PaneId, &crate::terminal::Terminal)| {
+            let text = if most == 0 { String::new() } else { terminal.text(true) };
+            let lines: Vec<&str> = text.lines().collect();
+            let lines = lines[lines.len().saturating_sub(most)..].iter().map(|line| line.to_string()).collect();
+            // 0: no terminal text at all, the command line included.
+            let command = (most > 0).then(|| terminal.foreground_command().or_else(|| terminal.offered())).flatten();
+            let history = History { lines, command, saved };
+            (*id, history.kept(most))
+        };
+        self.terminals.iter().map(history).collect()
     }
 
     /// Each workbook as its file would hold it now.
@@ -94,18 +110,19 @@ impl Workspace {
     /// ⌘⇧S, the menu, the header's +: saves the tab on show, or updates the workbook it came from.
     pub(crate) fn save_workbook(&mut self, window: &Window, cx: &mut Context<Self>) {
         let refused = self.model.workbook_save_refusal();
-        let action = Action::WorkbookSave { uid: marks::new_uid(), cwds: self.cwds() };
+        let action = Action::WorkbookSave { uid: marks::new_uid(), cwds: self.cwds(), histories: self.histories() };
         if self.workbook_act(action, window, cx) {
-            self.error = refused;
+            self.error = refused.or_else(|| self.model.workbook_saved_note());
         }
     }
 
     /// File ▸ Save All Tabs as Workbook: the tabs on the bar, as one new workbook.
     pub(crate) fn save_all_workbook(&mut self, window: &Window, cx: &mut Context<Self>) {
         let refused = self.model.workbook_save_all_refusal();
-        let action = Action::WorkbookSaveAll { uid: marks::new_uid(), cwds: self.cwds() };
+        let (uid, cwds, histories) = (marks::new_uid(), self.cwds(), self.histories());
+        let action = Action::WorkbookSaveAll { uid, cwds, histories };
         if self.workbook_act(action, window, cx) {
-            self.error = refused;
+            self.error = refused.or_else(|| self.model.workbook_saved_note());
         }
     }
 
@@ -146,9 +163,10 @@ impl Workspace {
             }
             "workbook-add" => {
                 let refused = self.model.workbook_add_refusal(id);
-                let action = Action::WorkbookAddTab { workbook: id, cwds: self.cwds() };
+                let (cwds, histories) = (self.cwds(), self.histories());
+                let action = Action::WorkbookAddTab { workbook: id, cwds, histories };
                 if self.workbook_act(action, window, cx) {
-                    self.error = refused;
+                    self.error = refused.or_else(|| self.model.workbook_saved_note());
                 }
             }
             // Only what the bar lists changes: nothing written, nothing opened.

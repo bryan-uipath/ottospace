@@ -116,6 +116,13 @@ pub fn session_quiet_ms() -> u64 {
     minutes.map_or(ottospace_core::sessions::QUIET_MS, |minutes| minutes.saturating_mul(60_000))
 }
 
+/// How many of a terminal's last lines a workbook keeps: `workbook_scrollback_lines` in the
+/// settings, else 500, at most 2000. 0: none.
+pub fn workbook_lines() -> usize {
+    let lines = get().settings.workbook_scrollback_lines.map(|lines| lines as usize);
+    lines.unwrap_or(ottospace_core::workbook::HISTORY_LINES).min(ottospace_core::workbook::MAX_HISTORY_LINES)
+}
+
 /// Where tasks are kept: `tasks` in the settings (a relative path is inside the user's folder),
 /// else `tasks` in the user's folder. `None`: nothing is kept.
 pub fn tasks_dir() -> Option<PathBuf> {

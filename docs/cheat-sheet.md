@@ -77,8 +77,9 @@ A workbook is a saved, named set of tabs, for a context that comes back. It is k
 | See, open, rename or remove one of its tabs | ▸ on its row (⌘⇧E: space), then the tab's row: click, Rename, Remove |
 | Rename or delete it | Hover its row: Rename, Delete. Or ⌘⇧E, then `r`, `x`; `u` puts a deleted one back |
 
-It keeps the splits, each terminal's directory and each app. Not what a terminal ran, nor the
-page or document an app showed. A directory that is gone: the terminal starts in your home
+It keeps the splits, each app, and each terminal's directory, last 500 lines and the command
+running in it. Opened, a terminal shows those lines above its prompt with the command typed on
+it, not run: ↵ runs it. Not the page or document an app showed. A directory that is gone: the terminal starts in your home
 folder. Kept in `~/.ottospace/workbooks`.
 
 ## Marks

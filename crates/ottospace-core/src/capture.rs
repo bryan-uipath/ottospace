@@ -631,7 +631,7 @@ pub struct Brief {
 /// A character that shows: not a control character, and none of those that draw nothing or
 /// turn the direction of the text around (zero-width, bidi marks and overrides, tags, variation
 /// selectors, fillers that draw as blank, annotation marks).
-fn shows(c: char) -> bool {
+pub(crate) fn shows(c: char) -> bool {
     let hidden = matches!(
         c,
         '\u{ad}' | '\u{34f}' | '\u{61c}' | '\u{115f}' | '\u{1160}' | '\u{180e}' | '\u{3164}' | '\u{ffa0}' | '\u{feff}'

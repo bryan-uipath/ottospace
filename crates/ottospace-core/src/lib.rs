@@ -22,6 +22,7 @@ pub mod palette;
 pub mod repos;
 pub mod rules;
 pub mod scrollbar;
+pub mod secrets;
 pub mod sessions;
 pub mod settings;
 pub mod sneak;

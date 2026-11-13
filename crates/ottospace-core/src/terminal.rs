@@ -207,6 +207,29 @@ pub struct Work {
     pub background: bool,
 }
 
+/// Arguments as one line a shell reads back as the same arguments: each that holds anything
+/// but letters, digits and `_@%+=:,./-` is quoted. e.g. `["grep", "a b", "it's"]` →
+/// `grep 'a b' 'it'\''s'`.
+pub fn command_line(args: &[String]) -> String {
+    let plain = |c: char| c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c);
+    let quoted = |arg: &String| match !arg.is_empty() && arg.chars().all(plain) {
+        true => arg.clone(),
+        false => format!("'{}'", arg.replace('\'', "'\\''")),
+    };
+    args.iter().map(quoted).collect::<Vec<_>>().join(" ")
+}
+
+/// A program's arguments as a workbook keeps its command, or none. A program that set its own
+/// title (Node, npm: `process.title`) leaves `argv[0]` holding the title and the rest blank, e.g.
+/// `["npm run dev", "", ""]`: an `argv[0]` with a space in it is no command. Blank arguments at
+/// the end are such leftovers too, and go.
+pub fn saved_command(args: &[String]) -> Option<String> {
+    let used = args.iter().rposition(|arg| !arg.is_empty()).map_or(0, |last| last + 1);
+    let args = &args[..used];
+    let name = args.first().filter(|name| !name.chars().any(char::is_whitespace))?;
+    (!name.is_empty()).then(|| command_line(args))
+}
+
 /// What a terminal runs besides its shell; `None` at an idle prompt.
 ///
 /// The shell is the foreground group's leader when that is the child itself, or a child of the
@@ -295,6 +318,19 @@ mod tests {
             let processes = Processes { child, foreground, leader: leader.map(String::from), leader_parent, children };
             assert_eq!(running(&processes), expected, "{case}");
         }
+    }
+
+    #[test]
+    fn a_command_line_quotes_what_a_shell_would_split_or_expand() {
+        let line = |args: &[&str]| command_line(&args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>());
+        assert_eq!(line(&["sleep", "293"]), "sleep 293");
+        assert_eq!(line(&["grep", "a b", "it's", "$HOME", ""]), "grep 'a b' 'it'\\''s' '$HOME' ''");
+        // A title a program set over its arguments is no command; blanks it left at the end go.
+        let saved = |args: &[&str]| saved_command(&args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>());
+        assert_eq!(saved(&["npm run dev", "", "", ""]), None);
+        assert_eq!(saved(&["claude", "", ""]).as_deref(), Some("claude"));
+        assert_eq!(saved(&["grep", "", "x"]).as_deref(), Some("grep '' x"));
+        assert_eq!((saved(&[]), saved(&["", "x"])), (None, None));
     }
 
     const SHIFT: Mods = Mods { ctrl: false, alt: false, shift: true, cmd: false };
