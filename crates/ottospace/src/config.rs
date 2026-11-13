@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::{fs, io};
 
-use ottospace_core::settings::{Settings, expand_home, with_apps};
+use ottospace_core::settings::{ListChange, Settings, expand_home, with_changes};
 use ottospace_core::tasks::Task;
 
 pub struct Config {
@@ -139,23 +139,49 @@ pub fn load_tasks() -> Kept {
     kept
 }
 
-/// Writes `text` to `name` in `dir`, whole or not at all: beside the file, then renamed over it.
-/// The folder and the file are the user's alone: a title or a directory can be private.
+/// Writes `text` to `name` in `dir`, whole or not at all: beside the file, synced, then renamed
+/// over it. The folder and the file are the user's alone: a title or a directory can be private.
+/// A file that is there keeps its mode.
 fn write_whole(dir: &Path, name: &str, text: &str) -> io::Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
     if !dir.is_dir() {
         fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
     }
+    let mode = fs::metadata(dir.join(name)).map(|meta| meta.permissions().mode() & 0o777).unwrap_or(0o600);
     // The process id keeps two running ottospaces from writing one draft.
     let draft = dir.join(format!(".{name}.{}.tmp", std::process::id()));
-    let written = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&draft);
-    let written = written.and_then(|mut file| file.write_all(text.as_bytes()));
-    let moved = written.and_then(|()| fs::rename(&draft, dir.join(name)));
+    let write = || {
+        let mut file = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&draft)?;
+        file.write_all(text.as_bytes())?;
+        file.set_permissions(fs::Permissions::from_mode(mode))?;
+        // On disk before it takes the old file's place: a crash leaves one or the other, whole.
+        file.sync_all()?;
+        fs::rename(&draft, dir.join(name))
+    };
+    let moved = write();
     if moved.is_err() {
         let _ = fs::remove_file(&draft);
     }
     moved
+}
+
+/// Removes drafts of `settings.json` an ottospace that crashed left in the user's folder
+/// (`.settings.json.<pid>.tmp`), once they are a minute old: not one being written now.
+pub fn remove_stale_drafts() {
+    let Some(home) = get().home.as_ref() else { return };
+    let old = |path: &PathBuf| {
+        let age = fs::metadata(path).and_then(|meta| meta.modified()).ok().and_then(|at| at.elapsed().ok());
+        age.is_some_and(|age| age.as_secs() >= 60)
+    };
+    let draft = |path: &PathBuf| {
+        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+        name.starts_with(".settings.json.") && name.ends_with(".tmp")
+    };
+    let entries = fs::read_dir(home).into_iter().flatten().flatten().map(|entry| entry.path());
+    for path in entries.filter(|path| draft(path) && old(path)) {
+        let _ = fs::remove_file(path);
+    }
 }
 
 /// Writes one task to `<id>.json` in the tasks folder.
@@ -165,20 +191,28 @@ pub fn save_task(task: &Task) -> io::Result<()> {
     write_whole(&dir, &format!("{}.json", task.id), &text)
 }
 
-/// Writes the pinned and hidden apps into `settings.json`: only `apps` and `apps_hidden` change.
+/// Makes `changes` to `apps` and `apps_hidden` in `settings.json`, as the file is now: read
+/// again here, so an entry written since the start (by hand, by another ottospace) stays.
 /// Nothing is written in a test run that named no folder, or if the file would not change.
-/// `Err`: the file could not be read as settings, and is left as it is.
-pub fn save_apps(apps: &[String], hidden: &[String]) -> Result<(), String> {
+/// `Err`: the file could not be read as settings, a list in it is not a list of names, or it
+/// is a link to nowhere. It is left as it is.
+pub fn save_apps(changes: &[ListChange]) -> Result<(), String> {
     let Some(home) = get().home.as_ref() else { return Ok(()) };
-    // Through a link to the file it names: a settings file kept elsewhere stays linked.
     let file = home.join("settings.json");
-    let file = fs::canonicalize(&file).unwrap_or(file);
+    // Through a link to the file it names: a settings file kept elsewhere stays linked. A link
+    // to nowhere is not replaced by a file: where it points is the user's to mend.
+    let linked = fs::symlink_metadata(&file).is_ok_and(|meta| meta.file_type().is_symlink());
+    let file = match fs::canonicalize(&file) {
+        Ok(target) => target,
+        Err(_) if linked => return Err("it is a link to a file that is not there".into()),
+        Err(_) => file,
+    };
     let text = match fs::read_to_string(&file) {
         Ok(text) => text,
         Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
         Err(err) => return Err(err.to_string()),
     };
-    let new = with_apps(&text, apps, hidden)?;
+    let new = with_changes(&text, changes)?;
     let (Some(dir), Some(name)) = (file.parent(), file.file_name().and_then(|name| name.to_str())) else {
         return Err("no place for the file".into());
     };

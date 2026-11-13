@@ -1853,7 +1853,8 @@ fn the_apps_section_lists_pinned_then_dock_then_all_apps_and_a_pin_is_written_to
     // Pinned first, then the Dock's in its order; the rest is folded, and counted.
     let bar = &reply["apps_bar"];
     assert_eq!(names(&bar["not_running"]), ["Sketchpad*", "Quill", "Kestrel Mail", "Harbor"]);
-    assert_eq!(reply["closed_apps"], json!(["Sketchpad", "Quill", "Kestrel Mail", "Harbor"]));
+    // What `open_app` may start: the pinned one, not the Dock's.
+    assert_eq!(reply["closed_apps"], json!(["Sketchpad"]));
     assert_eq!(
         (&bar["all"], &bar["all_open"], &bar["more"], &bar["undo"]),
         (&json!([]), &json!(false), &json!(0), &Value::Null)
@@ -1884,14 +1885,15 @@ fn the_apps_section_lists_pinned_then_dock_then_all_apps_and_a_pin_is_written_to
         (Some("Unpinned"), settings.replace("[\"Sketchpad\"]", "[]"))
     );
     key("u");
-    // `x` hides a suggestion: Quill is in the scanned folder, so it goes to "All apps".
+    // `x` hides a suggestion: Quill is in the scanned folder, so it goes to "All apps", and is
+    // written by its name: read back, the name is that same bundle.
     let reply = key("j x");
     assert_eq!(names(&reply["apps_bar"]["not_running"]), ["Sketchpad*", "Kestrel Mail", "Harbor"]);
     assert_eq!(
         (reply["apps_bar"]["undo"].as_str(), &reply["apps_bar"]["all_count"]),
         (Some("Suggestion hidden"), &json!(4))
     );
-    let hidden = settings.replace("false\n", &format!("false,\n    \"apps_hidden\": [{}]\n", json!(path("Quill"))));
+    let hidden = settings.replace("false\n", "false,\n    \"apps_hidden\": [\"Quill\"]\n");
     assert_eq!(file(), hidden);
 
     // The undo line is a control, and so are a row's buttons: a label does what a click does.
@@ -1908,10 +1910,10 @@ fn the_apps_section_lists_pinned_then_dock_then_all_apps_and_a_pin_is_written_to
     let reply = sneak_to(&otto, &format!("app-pin:{}", path("Quill")));
     assert_eq!(names(&reply["apps_bar"]["not_running"]), ["Sketchpad*", "Quill*", "Kestrel Mail"]);
     let kept: Value = serde_json::from_str(&file()).unwrap();
-    assert_eq!(kept["apps"], json!(["Sketchpad", path("Quill")]));
+    assert_eq!(kept["apps"], json!(["Sketchpad", "Quill"]));
     assert_eq!(
         (&kept["apps_hidden"], &kept["colour"], &kept["terminal"]),
-        (&json!([path("Harbor")]), &json!("teal"), &json!({"font": "Menlo"}))
+        (&json!(["Harbor"]), &json!("teal"), &json!({"font": "Menlo"}))
     );
 
     // "All apps" unfolds from its heading, by name; `/` gives the filter the keyboard.
@@ -2012,8 +2014,49 @@ fn a_settings_file_that_cannot_be_read_is_not_written_and_dock_suggestions_can_b
     let reply = otto.call(json!({"cmd": "key", "keys": "cmd-shift-e enter j p"}));
     assert_eq!(reply["apps_bar"]["not_running"][0]["name"], "Harbor");
     let kept = std::fs::read_to_string(off.join("settings.json")).unwrap();
-    assert_eq!(kept, format!("{{\"suggest_dock_apps\": false, \"apps\": [{}]}}", json!(path("Harbor"))));
+    assert_eq!(kept, "{\"suggest_dock_apps\": false, \"apps\": [\"Harbor\"]}");
     drop(otto);
+
+    // A list that is not a list of names reads as none, with a notice. A pin does not write
+    // over it: the entries in it would be lost.
+    let odd = "{\"apps\": [\"Harbor\", 3]}";
+    let mixed = user_folder("apps-mixed", odd);
+    let vars = env(&mixed);
+    let vars: Vec<(&str, &str)> = vars.iter().map(|(name, value)| (*name, value.as_str())).collect();
+    let otto = Otto::launch_with("apps-mixed", &vars);
+    listed(&otto, 2);
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-shift-e p"}));
+    let notice = reply["notice"].as_str().unwrap_or_default();
+    assert!(notice.contains("was not written") && notice.contains("`apps` is not a list of names"), "{notice}");
+    assert_eq!(std::fs::read_to_string(mixed.join("settings.json")).unwrap(), odd);
+    drop(otto);
+
+    // The file is read again at each write: a line added by hand while ottospace runs, or
+    // by another ottospace, stays, and the pin is added to it.
+    let live = user_folder("apps-live", "{\"apps\": []}");
+    let vars = env(&live);
+    let vars: Vec<(&str, &str)> = vars.iter().map(|(name, value)| (*name, value.as_str())).collect();
+    let otto = Otto::launch_with("apps-live", &vars);
+    listed(&otto, 2);
+    std::fs::write(live.join("settings.json"), "{\"apps\": [\"Harbor\", \"Some Other App\"]}").unwrap();
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-shift-e p"}));
+    assert_eq!(reply["apps_bar"]["not_running"][0]["name"], "Quill");
+    let kept = std::fs::read_to_string(live.join("settings.json")).unwrap();
+    assert_eq!(kept, "{\"apps\": [\"Harbor\", \"Some Other App\", \"Quill\"]}");
+    // The undo takes its own line off, and no other.
+    otto.call(json!({"cmd": "key", "keys": "u"}));
+    let kept = std::fs::read_to_string(live.join("settings.json")).unwrap();
+    assert_eq!(kept, "{\"apps\": [\"Harbor\", \"Some Other App\"]}");
+    // A `settings.json` that is a link to nowhere is not replaced by a file.
+    std::fs::remove_file(live.join("settings.json")).unwrap();
+    std::os::unix::fs::symlink(live.join("gone.json"), live.join("settings.json")).unwrap();
+    let reply = otto.call(json!({"cmd": "key", "keys": "p"}));
+    assert!(reply["notice"].as_str().is_some_and(|notice| notice.contains("a link to a file that is not there")));
+    assert!(std::fs::symlink_metadata(live.join("settings.json")).unwrap().file_type().is_symlink());
+    drop(otto);
+    for dir in [&mixed, &live] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
     for dir in [&root, &home, &off] {
         let _ = std::fs::remove_dir_all(dir);
     }

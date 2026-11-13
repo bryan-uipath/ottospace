@@ -26,11 +26,17 @@ pub fn png_of_app(path: &Path, pixels: u8) -> Option<Vec<u8>> {
 /// Where the app called `name` is installed, looking where apps usually are; resolved, so it
 /// compares equal to `bundle_of` for the same app whatever the case of the letters typed.
 pub fn app_path(name: &str) -> Option<PathBuf> {
-    // A name, not a path: it must not walk out of the folders below.
+    app_path_in(name, &app_folders())
+}
+
+/// As `app_path`, looking in `folders`, in their order: the first that has it. The one way
+/// from a name to a bundle, so a name means the same app to a pin and to a mark.
+pub fn app_path_in(name: &str, folders: &[PathBuf]) -> Option<PathBuf> {
+    // A name, not a path: it must not walk out of the folders.
     if name.is_empty() || name.contains('/') || name.starts_with('.') {
         return None;
     }
-    let found = app_folders().iter().map(|folder| folder.join(format!("{name}.app"))).find(|app| app.is_dir())?;
+    let found = folders.iter().map(|folder| folder.join(format!("{name}.app"))).find(|app| app.is_dir())?;
     found.canonicalize().ok()
 }
 

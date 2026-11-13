@@ -67,8 +67,8 @@ ottospace ctl '{"cmd":"state"}'
 | `version` | The build, as the status bar shows it: version and the first seven characters of the commit (`0.1.0 · a4a2582`), or `0.1.0 · local` for a build from source |
 | `font`, `cell` | The terminal font in use (`name`, `size`) and the size of one character cell `[w, h]` in points |
 | `notice` | Null, or the problem the status bar shows (a mistake in the settings, an app that could not be hosted). It is not `error`, which means the request failed |
-| `closed_apps` | The names of `apps_bar.not_running`. `open_app` starts one: leave that to the user |
-| `apps_bar` | The Apps section below the running apps. `not_running`: the user's pinned apps, then the apps of their Dock, each `name`, `path` (the bundle), `pinned` and `suggested` (it is there because the Dock has it). `more`: suggestions behind "and N more" (shown while `more_open`). `all`: every other installed app by name, narrowed by `filter`, listed only while `all_open`; `all_count` of them whatever the filter. `filtering`: the filter has the keyboard (`field.of` is `apps`). `undo`: `Pinned`, `Unpinned` or `Suggestion hidden` while the section offers to take that back, else null. There is no request to pin or hide: a pin writes the user's settings file, and is theirs to make |
+| `closed_apps` | The names of the user's pinned apps that are not running. `open_app` starts one: leave that to the user. The Dock's apps and the rest are in `apps_bar` only: `open_app` does not start those |
+| `apps_bar` | The Apps section below the running apps. `not_running`: the user's pinned apps, then the apps of their Dock, each `name`, `path` (the bundle), `pinned` and `suggested` (it is there because the Dock has it). `more`: suggestions behind "and N more" (shown while `more_open`). `all`: every other installed app by name, narrowed by `filter`, listed only while `all_open`; `all_count` of them whatever the filter. `filtering`: the filter has the keyboard (`field.of` is `apps`). `undo`: `Pinned`, `Unpinned` or `Suggestion hidden` while the section offers to take that back, else null. There is no request to pin or hide, and a `key` or a sneak label you send that would pin, unpin, hide or undo is refused ("settings are the user's to change"): a pin writes the user's settings file, and is theirs to make |
 | `apps` | Running apps that `open_app` can host: `name`, `windows` (how many it has open) and `icon` (true if its icon was read) |
 | `state.tasks.list` | Every task: `id`, `title`, `state`, `priority`, `snoozed_until`, `dismissed`, `project` (from a `#tag`, or null), `repo` (a repository path, or null), `agent`, `paths`, `resolved`, `skills`, `created` (when it was filed, in milliseconds since 1970, or null) and `session` (null, or the session it was adopted from: `runner`, `id`, and `state`, the state the task last took from it) |
 | `compose_read` | True once the tags of the line in the new-task box have been looked up (names and paths are read on another thread, a moment after the line changes). Wait for it before pressing ↵ for the user |
@@ -439,7 +439,8 @@ ottospace ctl '{"cmd":"enter","pane":4}'
 ottospace ctl '{"cmd":"leave"}'
 ```
 
-`open_app` hosts a running app's main window in a pane. For an app in `closed_apps` it starts
+`open_app` hosts a running app's main window in a pane. For an app in `closed_apps` (the
+user's pinned apps, no other) it starts
 the app first and hosts the window when it appears, so the reply comes before the pane exists:
 read `state` again. `enter` gives that app the keyboard;
 `leave` takes it back.

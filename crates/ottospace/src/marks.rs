@@ -542,23 +542,7 @@ impl Workspace {
         });
         // After a mark is taken off, a line at the top offers to put it back, as Tasks does.
         let notice = self.mark_offered().map(|_| {
-            div()
-                .id("mark-undo")
-                .relative()
-                .child(self.controls.mark("mark-undo"))
-                .px_2()
-                .py_1()
-                .flex()
-                .items_center()
-                .gap_1p5()
-                .rounded_md()
-                .bg(rgb(theme::SELECTED))
-                .text_xs()
-                .text_color(rgb(theme::MUTED))
-                .cursor_pointer()
-                .child(Moved::MarkRemoved.title())
-                .child("·")
-                .child(div().text_color(rgb(theme::PRIMARY)).child("Undo"))
+            self.undo_line("mark-undo", Moved::MarkRemoved.title())
                 .on_click(cx.listener(|this, _, window, cx| this.undo_mark(window, cx)))
         });
         let list = div().id("marks").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();

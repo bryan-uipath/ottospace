@@ -519,6 +519,9 @@ pub enum Action {
         pinned: Vec<apps::Entry>,
         hidden: Vec<apps::Entry>,
         suggest: bool,
+        /// A test run: a client's key may pin, hide and undo. Otherwise only the user's may:
+        /// they write the settings file.
+        clients_write: bool,
     },
     /// The Dock's apps, in its order, as the shell last read them.
     SetDock {
@@ -763,6 +766,8 @@ impl Action {
             | Action::ToggleKeys
             | Action::ToggleVisual
             | Action::ToggleAxOverlay
+            // The Apps section's filter is a text field: typing in it takes the keyboard.
+            | Action::AppsFilter { on: true }
             | Action::QuitAsked { .. }
             | Action::MarkPrefix
             | Action::MarkEdit { .. }
@@ -833,7 +838,7 @@ impl Action {
             | Action::AppsUndo
             | Action::ListPin
             | Action::AppsToggle { .. }
-            | Action::AppsFilter { .. }
+            | Action::AppsFilter { on: false }
             | Action::FocusList
             | Action::LeaveList
             | Action::ListMove { .. }
@@ -907,10 +912,10 @@ pub enum Effect {
         axis: Axis,
         new_tab: bool,
     },
-    /// The pinned or hidden apps changed: write `apps` and `apps_hidden` to the settings file.
+    /// The pinned or hidden apps changed: make these changes to `apps` and `apps_hidden` in
+    /// the settings file, as it is then.
     SaveApps {
-        apps: Vec<String>,
-        hidden: Vec<String>,
+        changes: Vec<crate::settings::ListChange>,
     },
     /// The user picked an installed app that is not running: start the bundle at `path` in the
     /// background and host its window when it has one.
@@ -1135,11 +1140,13 @@ impl Model {
         self.pane(id).filter(|p| p.kind == Kind::Terminal).map(|p| p.id)
     }
 
-    /// The new-task box, the picker, the key reference, visual mode, sneak mode or the quit
-    /// question has the keyboard.
+    /// The new-task box, the picker, the key reference, the Apps section's filter, visual
+    /// mode, sneak mode or the quit question has the keyboard.
     fn holds_keyboard(&self) -> bool {
         let boxed = self.compose.is_some() || self.picker.is_some() || self.keys;
-        boxed || self.visual.is_some() || self.sneak.is_some() || self.confirm.is_some()
+        // The Apps section's filter is a text field with the keyboard, as the picker's is.
+        let filtering = self.app_lists.filtering;
+        boxed || filtering || self.visual.is_some() || self.sneak.is_some() || self.confirm.is_some()
     }
 
     /// Why an action does nothing because of who sent it. Only the user may take the keyboard
@@ -1150,6 +1157,18 @@ impl Model {
         let boxed = self.picker.is_some() || self.compose.is_some();
         match action {
             _ if origin == Origin::User => None,
+            // A pin, an unpin, a hidden suggestion and their undo write the user's settings
+            // file: no client's key or label does that, but in a test run.
+            Action::AppPin { .. } | Action::AppHide { .. } | Action::AppsUndo | Action::ListPin
+                if !self.app_lists.clients_write =>
+            {
+                Some(apps::USERS_ALONE)
+            }
+            Action::ListDismiss | Action::ListUndo
+                if self.sidebar == Some(Section::Apps) && !self.app_lists.clients_write =>
+            {
+                Some(apps::USERS_ALONE)
+            }
             action if self.sneak.is_some() && action.takes_keyboard() => Some("sneak mode is on"),
             action if self.confirm.is_some() && action.takes_keyboard() => Some(CONFIRM_UP),
             // A key a client presses is input to the wait, as a label's letter is to sneak mode.
@@ -1699,7 +1718,11 @@ impl Model {
                 }
             }
             Action::SetApps { names } => self.apps = names,
-            Action::SetAppSettings { pinned, hidden, suggest } => self.app_lists.set(pinned, hidden, suggest),
+            Action::SetAppSettings { pinned, hidden, suggest, clients_write } => {
+                self.app_lists.set(pinned, hidden, suggest);
+                self.app_lists.resolve(&self.installed.0);
+                self.app_lists.clients_write = clients_write;
+            }
             Action::SetDock { apps } => self.app_lists.set_dock(apps),
             Action::AppPin { path } => self.app_pin(&path, effects),
             Action::AppHide { path } => self.app_hide(&path, effects),
@@ -1782,6 +1805,7 @@ impl Model {
                     Some(Picker { axis, new_tab, items, query: Field::new("", MAX_FILTER), selected: 0, installed });
             }
             Action::SetInstalled { apps, running } => {
+                self.app_lists.resolve(&apps);
                 self.installed = (apps, running);
                 if let Some(picker) = &mut self.picker {
                     // The rows change under the selection: it stays on its item, so ↵ opens
@@ -3066,7 +3090,7 @@ mod tests {
             Action::RowDismiss { id: 1 },
             Action::TaskFromLine { line: text(), known: Default::default(), open: false },
             Action::SetApps { names: Vec::new() },
-            Action::SetAppSettings { pinned: Vec::new(), hidden: Vec::new(), suggest: true },
+            Action::SetAppSettings { pinned: Vec::new(), hidden: Vec::new(), suggest: true, clients_write: false },
             Action::SetDock { apps: Vec::new() },
             Action::AppPin { path: text() },
             Action::AppHide { path: text() },
@@ -3127,6 +3151,7 @@ mod tests {
         for action in &samples() {
             for origin in [Origin::User, Origin::Socket, Origin::System] {
                 let mut m = Model::default();
+                m.app_lists.clients_write = true; // a pin is refused on its own ground: not this rule
                 m.update(Action::Split { axis: Right, kind: Kind::Empty });
                 sneak(&mut m, 3);
                 let refused = (origin != Origin::User && action.takes_keyboard()).then_some("sneak mode is on");
@@ -5332,6 +5357,7 @@ mod tests {
         for action in &samples() {
             for origin in [Origin::User, Origin::Socket, Origin::System] {
                 let mut m = Model::default();
+                m.app_lists.clients_write = true; // a pin is refused on its own ground: not this rule
                 m.update(Action::Split { axis: Right, kind: Kind::Terminal });
                 m.update(Action::Split { axis: Right, kind: Kind::Terminal });
                 m.update(Action::QuitAsked { running: vec![running(1, "sleep")] });

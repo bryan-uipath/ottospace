@@ -8,8 +8,11 @@ use crate::edit::Field;
 use crate::layout::Axis;
 use crate::list::ListRow;
 use crate::model::{Effect, MAX_FILTER, Model, Section};
-use crate::settings::Installed;
+use crate::settings::{Installed, ListChange};
 use crate::tasks::{Moved, NOTICE_MS, Notice};
+
+/// Why a client's pin, unpin, hide or undo is refused.
+pub const USERS_ALONE: &str = "settings are the user's to change";
 
 /// How many suggestions show before "and N more".
 pub const SUGGESTED: usize = 12;
@@ -78,6 +81,9 @@ pub struct Lists {
     pub filtering: bool,
     /// `pinned` and `hidden` before the last pin, unpin or hide.
     before: Option<(Vec<Entry>, Vec<Entry>)>,
+    /// A client may pin, hide and undo, which write the user's settings file: only in a test
+    /// run, which says so. Otherwise those are the user's alone (`Model::refusal`).
+    pub clients_write: bool,
 }
 
 impl Default for Lists {
@@ -92,17 +98,38 @@ impl Default for Lists {
             filter: Field::new("", MAX_FILTER),
             filtering: false,
             before: None,
+            clients_write: false,
         }
     }
 }
 
-/// What the settings say of `app`: its name if it is where apps usually are, so the file reads
-/// `"Slack"`; else its path, which names it wherever it is.
-fn entry_text(app: &Installed) -> String {
-    const USUAL: [&str; 4] =
-        ["/Applications", "/System/Applications", "/Applications/Utilities", "/System/Applications/Utilities"];
-    let by_name = USUAL.iter().any(|folder| app.path == format!("{folder}/{}.app", app.name));
-    if by_name { app.name.clone() } else { app.path.clone() }
+/// The app a name in the settings means: the first the scan found of that name, whatever the
+/// case of its letters. The scan goes through the folders in the order a name is looked for.
+fn named<'a>(name: &str, installed: &'a [Installed]) -> Option<&'a Installed> {
+    // No name names no app.
+    installed.iter().find(|app| !name.trim().is_empty() && app.name.eq_ignore_ascii_case(name))
+}
+
+/// What the settings say of `app`: its name, so the file reads `"Slack"`, but only if that
+/// name means this very bundle when it is read back. Else its path: two folders may each hold
+/// a `Bar.app`, and a name would pin the other one at the next start.
+fn entry_text(app: &Installed, installed: &[Installed]) -> String {
+    let same = named(&app.name, installed).is_some_and(|found| found.path == app.path);
+    if same { app.name.clone() } else { app.path.clone() }
+}
+
+/// What to change in the settings file to go from one pair of lists to another: each entry
+/// that is new, each that is gone.
+fn changes(before: &(Vec<Entry>, Vec<Entry>), after: &(Vec<Entry>, Vec<Entry>)) -> Vec<ListChange> {
+    let mut found = Vec::new();
+    for (key, was, is) in [("apps", &before.0, &after.0), ("apps_hidden", &before.1, &after.1)] {
+        let has = |list: &[Entry], text: &str| list.iter().any(|entry| entry.text == text);
+        let gone = was.iter().filter(|entry| !has(is, &entry.text));
+        found.extend(gone.map(|entry| ListChange { key, add: false, text: entry.text.clone() }));
+        let new = is.iter().filter(|entry| !has(was, &entry.text));
+        found.extend(new.map(|entry| ListChange { key, add: true, text: entry.text.clone() }));
+    }
+    found
 }
 
 fn names(entries: &[Entry], path: &str) -> bool {
@@ -118,7 +145,24 @@ fn take<'a>(listed: &mut Vec<&'a str>, app: &'a Installed, pinned: bool) -> Opti
 
 impl Lists {
     pub fn set(&mut self, pinned: Vec<Entry>, hidden: Vec<Entry>, suggest: bool) {
+        // An empty line of the file names no app, whatever came with it: it is kept, and
+        // nothing can be done to it from here.
+        let read = |mut entry: Entry| {
+            entry.app = entry.app.filter(|app| !entry.text.trim().is_empty() && !app.name.trim().is_empty());
+            entry
+        };
+        let (pinned, hidden) = (pinned.into_iter().map(read).collect(), hidden.into_iter().map(read).collect());
         (self.pinned, self.hidden, self.suggest, self.before) = (pinned, hidden, suggest, None);
+    }
+
+    /// The scan came in: an entry that named no app found (one installed since, or read before
+    /// the first scan) is looked for again, by its path or its name.
+    pub fn resolve(&mut self, installed: &[Installed]) {
+        for entry in self.pinned.iter_mut().chain(&mut self.hidden).filter(|entry| entry.app.is_none()) {
+            let text = entry.text.trim();
+            let by_path = installed.iter().find(|app| app.path == text);
+            entry.app = by_path.or_else(|| named(text, installed).filter(|_| !text.contains('/'))).cloned();
+        }
     }
 
     pub fn set_dock(&mut self, apps: Vec<Installed>) {
@@ -166,10 +210,12 @@ impl Lists {
         }
     }
 
-    /// The app at `path`, if the settings, the Dock or the scan know it.
+    /// The app at `path`, if the settings, the Dock or the scan know it. One with no name is
+    /// no app: nothing could be written for it.
     pub fn known(&self, path: &str, installed: &[Installed]) -> Option<Installed> {
         let entries = self.pinned.iter().filter_map(|entry| entry.app.as_ref());
-        entries.chain(&self.dock).chain(installed).find(|app| app.path == path).cloned()
+        let found = entries.chain(&self.dock).chain(installed).find(|app| app.path == path).cloned();
+        found.filter(|app| !app.name.trim().is_empty() && !app.path.trim().is_empty())
     }
 
     /// Pins the app at `path`, or unpins it if it is pinned. `None`: no such app is known.
@@ -182,7 +228,12 @@ impl Lists {
             let app = self.known(path, installed)?;
             // A pin says the app is wanted: it is no longer one to keep out of the suggestions.
             self.hidden.retain(|entry| entry.app.as_ref().is_none_or(|app| app.path != path));
-            self.pinned.push(Entry { text: entry_text(&app), app: Some(app) });
+            let text = entry_text(&app, installed);
+            // A line that says the same already (it named no app found till now) is that pin.
+            match self.pinned.iter_mut().find(|entry| entry.text == text) {
+                Some(entry) => entry.app = Some(app),
+                None => self.pinned.push(Entry { text, app: Some(app) }),
+            }
             Moved::AppPinned
         };
         self.before = Some(before);
@@ -190,31 +241,37 @@ impl Lists {
     }
 
     /// Stops suggesting the Dock's app at `path`. False: it is not a suggestion.
-    fn hide(&mut self, path: &str) -> bool {
+    fn hide(&mut self, path: &str, installed: &[Installed]) -> bool {
         let suggested = self.suggest && !names(&self.pinned, path) && !names(&self.hidden, path);
-        let Some(app) = self.dock.iter().find(|app| app.path == path).filter(|_| suggested).cloned() else {
+        let named = |app: &&Installed| suggested && !app.name.trim().is_empty();
+        let Some(app) = self.dock.iter().find(|app| app.path == path).filter(named).cloned() else {
             return false;
         };
         self.before = Some((self.pinned.clone(), self.hidden.clone()));
-        self.hidden.push(Entry { text: entry_text(&app), app: Some(app) });
+        let text = entry_text(&app, installed);
+        self.hidden.retain(|entry| entry.text != text);
+        self.hidden.push(Entry { text, app: Some(app) });
         true
     }
 
-    /// Takes the last pin, unpin or hide back. False: there is none.
-    fn undo(&mut self) -> bool {
-        let Some((pinned, hidden)) = self.before.take() else { return false };
-        (self.pinned, self.hidden) = (pinned, hidden);
-        true
+    /// Takes the last pin, unpin or hide back. `None`: there is none. Else what it changes
+    /// in the settings file.
+    fn undo(&mut self) -> Option<Vec<ListChange>> {
+        let before = self.before.take()?;
+        let was = (std::mem::take(&mut self.pinned), std::mem::take(&mut self.hidden));
+        let undone = changes(&was, &before);
+        (self.pinned, self.hidden) = before;
+        Some(undone)
     }
 
     pub fn can_undo(&self) -> bool {
         self.before.is_some()
     }
 
-    /// `apps` and `apps_hidden` for the settings file.
-    fn saved(&self) -> Effect {
-        let texts = |entries: &[Entry]| entries.iter().map(|entry| entry.text.clone()).collect();
-        Effect::SaveApps { apps: texts(&self.pinned), hidden: texts(&self.hidden) }
+    /// What the last pin, unpin or hide changes in the settings file.
+    fn last_changes(&self) -> Vec<ListChange> {
+        let now = (self.pinned.clone(), self.hidden.clone());
+        self.before.as_ref().map(|before| changes(before, &now)).unwrap_or_default()
     }
 }
 
@@ -255,7 +312,12 @@ impl Model {
     /// A change to the pinned or hidden apps: the shell writes it, and a line offers it back.
     fn apps_changed(&mut self, moved: Moved, effects: &mut Vec<Effect>) {
         self.undo_offer = Some(Notice { moved, until: self.now.saturating_add(NOTICE_MS) });
-        effects.push(self.app_lists.saved());
+        // A pin of an app the file names already (by a line that found no app till now)
+        // changes nothing in it.
+        let changes = self.app_lists.last_changes();
+        if !changes.is_empty() {
+            effects.push(Effect::SaveApps { changes });
+        }
     }
 
     pub(crate) fn app_pin(&mut self, path: &str, effects: &mut Vec<Effect>) {
@@ -265,7 +327,7 @@ impl Model {
     }
 
     pub(crate) fn app_hide(&mut self, path: &str, effects: &mut Vec<Effect>) {
-        if self.app_lists.hide(path) {
+        if self.app_lists.hide(path, &self.installed.0) {
             self.apps_changed(Moved::AppHidden, effects);
         }
     }
@@ -284,9 +346,11 @@ impl Model {
     }
 
     pub(crate) fn apps_undo(&mut self, effects: &mut Vec<Effect>) {
-        if self.app_lists.undo() {
+        if let Some(changes) = self.app_lists.undo() {
             self.undo_offer = self.undo_offer.filter(|offer| !offer.moved.of_apps());
-            effects.push(self.app_lists.saved());
+            if !changes.is_empty() {
+                effects.push(Effect::SaveApps { changes });
+            }
         }
     }
 
@@ -336,7 +400,7 @@ impl Model {
 mod tests {
     use super::*;
     use crate::edit::Edit;
-    use crate::model::Action;
+    use crate::model::{Action, Origin};
 
     fn app(name: &str) -> Installed {
         Installed { name: name.into(), path: format!("/Applications/{name}.app") }
@@ -491,9 +555,10 @@ mod tests {
 
     #[test]
     fn pin_unpin_and_hide_say_what_the_settings_must_hold() {
-        let saved = |lists: &Lists| match lists.saved() {
-            Effect::SaveApps { apps, hidden } => (apps.join(","), hidden.join(",")),
-            other => panic!("{other:?}"),
+        let saved = |lists: &Lists| {
+            let texts =
+                |entries: &[Entry]| entries.iter().map(|entry| entry.text.as_str()).collect::<Vec<_>>().join(",");
+            (texts(&lists.pinned), texts(&lists.hidden))
         };
         let mut lists = Lists::default();
         // A line that names no app found is kept as written, where it was.
@@ -501,8 +566,8 @@ mod tests {
         lists.set(vec![gone.clone(), entry("Zed")], vec![gone], true);
         let lumen = Installed { name: "Lumen".into(), path: "/Users/me/Applications/Lumen.app".into() };
         lists.set_dock(vec![app("Slack"), app("Notes"), lumen.clone()]);
-        let installed = [app("Bear")];
-        // An app where apps usually are is written by its name; another by its path.
+        let installed = [app("Bear"), app("Slack"), app("Notes"), app("Zed")];
+        // An app the scan finds by its name is written by its name; another by its path.
         assert_eq!(lists.pin(&path("Slack"), &installed), Some(Moved::AppPinned));
         assert_eq!(lists.pin(&lumen.path, &installed), Some(Moved::AppPinned));
         assert_eq!(lists.pin(&path("Bear"), &installed), Some(Moved::AppPinned));
@@ -515,26 +580,81 @@ mod tests {
         // The same again unpins; the undo takes one step back.
         assert_eq!(lists.pin(&path("Zed"), &installed), Some(Moved::AppUnpinned));
         assert_eq!(saved(&lists).0, "Gone App,Slack,/Users/me/Applications/Lumen.app,Bear");
-        assert!(lists.undo() && !lists.undo() && !lists.can_undo());
+        assert!(lists.undo().is_some() && lists.undo().is_none() && !lists.can_undo());
         assert_eq!(saved(&lists).0, "Gone App,Zed,Slack,/Users/me/Applications/Lumen.app,Bear");
         // Only a suggestion can be hidden: not a pinned app, not one outside the Dock, not twice.
-        assert!(!lists.hide(&path("Slack")) && !lists.hide(&path("Bear")) && !lists.hide("/tmp/Evil.app"));
-        assert!(lists.hide(&path("Notes")) && !lists.hide(&path("Notes")));
+        let hide = |lists: &mut Lists, path: &str| lists.hide(path, &installed);
+        assert!(
+            !hide(&mut lists, &path("Slack")) && !hide(&mut lists, &path("Bear")) && !hide(&mut lists, "/tmp/Evil.app")
+        );
+        assert!(hide(&mut lists, &path("Notes")) && !hide(&mut lists, &path("Notes")));
         assert_eq!(saved(&lists).1, "Gone App,Notes");
         assert!(shown(&lists.bar(&[], &[]).not_running).iter().all(|name| name != "Notes"));
         // Pinning a hidden app takes it off the hidden list; the undo puts both back.
         assert_eq!(lists.pin(&path("Notes"), &installed), Some(Moved::AppPinned));
         assert_eq!(saved(&lists).1, "Gone App");
-        assert!(lists.undo());
+        assert!(lists.undo().is_some());
         assert_eq!(saved(&lists).1, "Gone App,Notes");
         // With suggestions off there is none to hide.
         lists.set(Vec::new(), Vec::new(), false);
-        assert!(!lists.hide(&path("Slack")));
+        assert!(!lists.hide(&path("Slack"), &installed));
+    }
+
+    #[test]
+    fn a_pin_is_written_so_that_it_reads_back_as_the_same_bundle() {
+        let at = |folder: &str, name: &str| Installed { name: name.into(), path: format!("{folder}/{name}.app") };
+        // Two folders each hold a `Bar.app`. The scan lists them in the order a name is looked for.
+        let (first, second) = (at("/Applications", "Bar"), at("/Applications/Utilities", "Bar"));
+        let installed = [first.clone(), second.clone(), at("/Applications/Utilities", "Disk")];
+        let mut lists = Lists::default();
+        lists.set_dock(vec![second.clone(), first.clone()]);
+        // The name means the first: it is written by name. The other only by its path.
+        assert_eq!(
+            (entry_text(&first, &installed), entry_text(&second, &installed)),
+            ("Bar".into(), second.path.clone())
+        );
+        assert_eq!(entry_text(&installed[2], &installed), "Disk", "alone of its name, wherever it is");
+        // One the scan has not found (not yet in, or outside its folders): its path.
+        assert_eq!(entry_text(&first, &[]), first.path);
+        // What is written reads back as the bundle that was pinned, and as hidden the same.
+        lists.pin(&second.path, &installed);
+        lists.hide(&first.path, &installed);
+        let read = |entries: &[Entry]| {
+            let mut again = Lists::default();
+            again.set(
+                entries.iter().map(|entry| Entry { text: entry.text.clone(), app: None }).collect(),
+                Vec::new(),
+                true,
+            );
+            again.resolve(&installed);
+            again.pinned.iter().map(|entry| entry.app.as_ref().map(|app| app.path.clone())).collect::<Vec<_>>()
+        };
+        assert_eq!(
+            (read(&lists.pinned), read(&lists.hidden)),
+            (vec![Some(second.path.clone())], vec![Some(first.path.clone())])
+        );
+        // An entry that named no app found is looked for again when the scan comes in, and a
+        // pin of the app it names does not write it twice.
+        let mut lists = Lists::default();
+        lists.set(
+            vec![Entry { text: "disk".into(), app: None }, Entry { text: "Gone".into(), app: None }],
+            Vec::new(),
+            true,
+        );
+        assert!(lists.bar(&installed, &[]).not_running.is_empty());
+        let unfound = lists.clone();
+        lists.resolve(&installed);
+        assert_eq!(shown(&lists.bar(&installed, &[]).not_running), ["Disk*"]);
+        let mut lists = unfound;
+        lists.set(vec![Entry { text: "Disk".into(), app: None }], Vec::new(), true);
+        assert_eq!(lists.pin(&installed[2].path, &installed), Some(Moved::AppPinned));
+        assert_eq!((lists.pinned.len(), lists.last_changes()), (1, vec![]));
     }
 
     fn model() -> Model {
         let mut m = Model::default();
-        m.update(Action::SetAppSettings { pinned: vec![entry("Zed")], hidden: Vec::new(), suggest: true });
+        let (pinned, hidden) = (vec![entry("Zed")], Vec::new());
+        m.update(Action::SetAppSettings { pinned, hidden, suggest: true, clients_write: false });
         m.update(Action::SetDock { apps: vec![app("Slack"), app("Notes")] });
         m.update(Action::SetInstalled { apps: ["Bear", "Arc", "Zed", "Slack"].map(app).into(), running: Vec::new() });
         m.update(Action::SetApps { names: vec!["Finder".into()] });
@@ -559,11 +679,16 @@ mod tests {
         assert_eq!(m.update(Action::ListChoose { axis: Axis::Down }), [bear]);
         // P pins it: it moves up, the selection stays at its place, and the settings are written.
         m.update(Action::Tick { now: 1_000 });
-        let saved = |apps: &[&str], hidden: &[&str]| {
-            let texts = |names: &[&str]| names.iter().map(|name| name.to_string()).collect();
-            vec![Effect::SaveApps { apps: texts(apps), hidden: texts(hidden) }]
+        // What the file must gain or lose: `+apps:Bear`, `-hidden:Notes`.
+        let saved = |specs: &[&str]| {
+            let change = |spec: &&str| {
+                let (key, text) = spec[1..].split_once(':').unwrap();
+                let key = if key == "apps" { "apps" } else { "apps_hidden" };
+                ListChange { key, add: spec.starts_with('+'), text: text.into() }
+            };
+            vec![Effect::SaveApps { changes: specs.iter().map(change).collect() }]
         };
-        assert_eq!(m.update(Action::ListPin), saved(&["Zed", "Bear"], &[]));
+        assert_eq!(m.update(Action::ListPin), saved(&["+apps:Bear"]));
         assert_eq!(
             (shown(&m.apps_bar().not_running), m.list),
             (vec!["Zed*".into(), "Bear*".into(), "Slack".into(), "Notes".into()], Some(6))
@@ -571,16 +696,16 @@ mod tests {
         assert_eq!(m.apps_bar().undo, Some("Pinned"));
         assert_eq!(m.undo_offer, Some(Notice { moved: Moved::AppPinned, until: 1_000 + NOTICE_MS }));
         // `u` takes it back, and the line goes.
-        assert_eq!(m.update(Action::ListUndo), saved(&["Zed"], &[]));
+        assert_eq!(m.update(Action::ListUndo), saved(&["-apps:Bear"]));
         assert_eq!((m.apps_bar().undo, m.undo_offer), (None, None));
         // `x` hides a suggestion and nothing else; P on a pinned app unpins it.
         m.list = Some(1);
         assert_eq!(m.update(Action::ListDismiss), []);
-        assert_eq!(m.update(Action::ListPin), saved(&[], &[]));
+        assert_eq!(m.update(Action::ListPin), saved(&["-apps:Zed"]));
         assert_eq!(m.apps_bar().undo, Some("Unpinned"));
         m.list = Some(2);
         assert_eq!(m.list_rows()[2], closed("Notes"));
-        assert_eq!(m.update(Action::ListDismiss), saved(&[], &["Notes"]));
+        assert_eq!(m.update(Action::ListDismiss), saved(&["+hidden:/Applications/Notes.app"]));
         assert_eq!(
             (m.apps_bar().undo, shown(&m.apps_bar().not_running)),
             (Some("Suggestion hidden"), vec!["Slack".into()])
@@ -588,11 +713,31 @@ mod tests {
         // The line runs out; `u` still takes the last change back. Nothing is left to take back then.
         m.update(Action::Tick { now: 1_000 + NOTICE_MS });
         assert_eq!(m.apps_bar().undo, None);
-        assert_eq!(m.update(Action::AppsUndo), saved(&[], &[]));
+        assert_eq!(m.update(Action::AppsUndo), saved(&["-hidden:/Applications/Notes.app"]));
         assert_eq!(m.update(Action::AppsUndo), []);
         // By path, as a click does. An app nothing lists is neither pinned nor hidden nor started.
-        assert_eq!(m.update(Action::AppPin { path: path("Arc") }), saved(&["Arc"], &[]));
-        assert_eq!(m.update(Action::AppHide { path: path("Slack") }), saved(&["Arc"], &["Slack"]));
+        assert_eq!(m.update(Action::AppPin { path: path("Arc") }), saved(&["+apps:Arc"]));
+        assert_eq!(m.update(Action::AppHide { path: path("Slack") }), saved(&["+hidden:Slack"]));
+        // A client's key or label does none of it: the settings file is the user's. A test
+        // run says its clients may.
+        for action in [Action::AppPin { path: path("Bear") }, Action::AppHide { path: path("Notes") }, Action::AppsUndo]
+        {
+            assert_eq!(m.refusal(&action, Origin::Socket), Some(USERS_ALONE));
+            assert_eq!(
+                (m.update(action.clone().sent_by(Origin::Socket)), m.refusal(&action, Origin::User)),
+                (vec![], None)
+            );
+        }
+        for action in [Action::ListPin, Action::ListDismiss, Action::ListUndo] {
+            assert_eq!(m.refusal(&action, Origin::Socket), Some(USERS_ALONE));
+        }
+        m.app_lists.clients_write = true;
+        assert_eq!(m.update(Action::AppsUndo.sent_by(Origin::Socket)), saved(&["-hidden:Slack"]));
+        // In another section a client's `x` and `u` are what they were.
+        m.app_lists.clients_write = false;
+        m.update(Action::ToggleSection { section: Section::Tasks });
+        assert_eq!(m.refusal(&Action::ListDismiss, Origin::Socket), None);
+        m.update(Action::ToggleSection { section: Section::Apps });
         assert_eq!(m.update(Action::AppPin { path: "/tmp/Evil.app".into() }), []);
         assert_eq!(m.update(Action::AppHide { path: "/tmp/Evil.app".into() }), []);
         let mut effects = Vec::new();
@@ -671,6 +816,22 @@ mod tests {
         m.update(Action::AppsFilter { on: true });
         m.update(Action::OpenPicker { axis: Axis::Right, new_tab: false, items: Vec::new() });
         assert_eq!(m.field().map(|(of, _)| of), Some("picker"));
+    }
+
+    #[test]
+    fn the_filter_holds_the_keyboard_against_a_client() {
+        let mut m = model();
+        assert!(Action::AppsFilter { on: true }.takes_keyboard() && !Action::AppsFilter { on: false }.takes_keyboard());
+        m.update(Action::AppsFilter { on: true });
+        // A client adds a task "and starts it" while the user types in the filter: the task is
+        // added, and the tabs on show stay.
+        let line = Action::TaskFromLine { line: "theirs".into(), known: Default::default(), open: true };
+        m.update(line.clone().sent_by(Origin::Socket));
+        assert_eq!((m.tasks.list.len(), m.current_task, m.field().map(|(of, _)| of)), (1, None, Some("apps")));
+        // With the keyboard given back, the same starts the task.
+        m.update(Action::AppsFilter { on: false });
+        m.update(line.sent_by(Origin::Socket));
+        assert_eq!((m.tasks.list.len(), m.current_task), (2, Some(2)));
     }
 
     #[test]

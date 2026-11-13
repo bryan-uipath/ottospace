@@ -351,7 +351,7 @@ function pickItem(value: unknown, at: string): PickItem {
 
 function field(value: unknown, at: string): Field {
   const o = fields(value, at);
-  if (o.of !== "compose" && o.of !== "picker") throw wrong(`${at}.of`, "compose or picker", o.of);
+  if (o.of !== "compose" && o.of !== "picker" && o.of !== "apps") throw wrong(`${at}.of`, "compose, picker or apps", o.of);
   return {
     of: o.of,
     text: str(o.text, `${at}.text`),

@@ -1023,7 +1023,7 @@ impl Workspace {
                     let _ = self.open_app(name, *axis, *new_tab, window, cx);
                 }
                 Effect::LaunchApp { name, path, axis, new_tab } => self.launch_picked(name, path, *axis, *new_tab),
-                Effect::SaveApps { apps, hidden } => self.save_apps(apps, hidden),
+                Effect::SaveApps { changes } => self.save_apps(changes),
                 Effect::Visual { pane, on } => {
                     if let Some(terminal) = self.terminals.get(pane) {
                         terminal.set_visual(*on);
@@ -1982,8 +1982,9 @@ impl Workspace {
             // line with its list) and each node's click target by task id. Also how often
             // lattice lines were built and painted, here and in empty panes.
             "home_drawn": self.home.borrow().snapshot(),
-            // The apps listed as not running (pinned, then the Dock's): `open_app` starts one.
-            "closed_apps": self.model.apps_bar().not_running.iter().map(|app| app.name.clone()).collect::<Vec<_>>(),
+            // The pinned apps that are not running: `open_app` starts one. The Dock's and the
+            // rest are in `apps_bar`: those are the user's to start.
+            "closed_apps": self.pinned_closed().map(|app| app.name).collect::<Vec<_>>(),
             // The Apps section below the running apps: `not_running` (each with `name`, `path`,
             // `pinned`, `suggested`), `more` behind "and N more", `all` (every other installed
             // app, while `all_open`; `all_count` of them) narrowed by `filter`, and `undo`.
@@ -2107,7 +2108,8 @@ impl Workspace {
             None => match capture::find(name, window_managed) {
                 Ok(target) => target,
                 // A listed app that is not running: start it, and host its window when it has one.
-                Err(err) => match self.model.apps_bar().not_running.into_iter().find(|app| app.name == name) {
+                // Only one the user pinned: not every app the Dock or the folders have.
+                Err(err) => match self.pinned_closed().find(|app| app.name == name) {
                     Some(app) => return self.launch(Installed { name: app.name, path: app.path }, axis, new_tab, None),
                     None => return Err(err),
                 },
@@ -2678,8 +2680,7 @@ impl Workspace {
         self.refresh_apps();
         // What `refresh_apps` just listed: running apps, then the pinned ones that are not.
         let apps = self.apps.iter().map(|app| PickItem::App { name: app.name.clone() });
-        let closed = self.model.apps_bar().not_running.into_iter().filter(|app| app.pinned);
-        let closed = closed.map(|app| PickItem::Closed { name: app.name, path: app.path });
+        let closed = self.pinned_closed().map(|app| PickItem::Closed { name: app.name, path: app.path });
         let items = std::iter::once(PickItem::Terminal).chain(apps).chain(closed).collect();
         self.offer_installed(cx);
         self.dispatch(Action::OpenPicker { axis, new_tab, items }, self.input, window, cx);
@@ -2828,8 +2829,11 @@ impl Workspace {
                 .hover(|s| s.bg(rgb(theme::SELECTED)))
                 .child(match item {
                     // An app shows its icon where the tag would be.
-                    PickItem::App { name } | PickItem::Closed { name, .. } if self.icons.contains_key(name) => {
-                        div().w(px(36.)).child(self.app_icon(name))
+                    // A running app's icon is kept by its name, one that is not by its bundle.
+                    PickItem::App { name: key } | PickItem::Closed { path: key, .. }
+                        if self.icons.contains_key(key) =>
+                    {
+                        div().w(px(36.)).child(self.app_icon(key))
                     }
                     _ => div().w(px(36.)).text_xs().text_color(rgb(color)).child(tag),
                 })
@@ -3119,7 +3123,6 @@ impl Workspace {
         self.tell_installed();
         // An app that quit loses its icon: a later app of the same name may have another.
         self.icons.retain(|name, _| running.contains(name) || !before.contains(name));
-        self.forget_icon_tries();
         for app in &self.apps {
             if !self.icons.contains_key(&app.name)
                 && let Some(png) = icon::png(app.pid, ICON_PIXELS)
@@ -3157,6 +3160,28 @@ impl Workspace {
         };
         self.dispatch(action, self.input, window, cx);
         cx.notify();
+    }
+
+    /// The line a section shows after a move that can be taken back: "Dismissed · Undo". The
+    /// caller says what a click on it does.
+    pub(crate) fn undo_line(&self, id: &'static str, what: &'static str) -> Stateful<Div> {
+        div()
+            .id(id)
+            .relative()
+            .child(self.controls.mark(id))
+            .px_2()
+            .py_1()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .rounded_md()
+            .bg(rgb(theme::SELECTED))
+            .text_xs()
+            .text_color(rgb(theme::MUTED))
+            .cursor_pointer()
+            .child(what)
+            .child("·")
+            .child(div().text_color(rgb(theme::PRIMARY)).child("Undo"))
     }
 
     /// A click on the notice ("Dismissed · Undo"): what `u` does in list mode.
@@ -3387,23 +3412,7 @@ impl Workspace {
                 .child(div().px_2().pt_2().text_xs().text_color(rgb(theme::BORDER_STRONG)).child(agents))
         });
         let notice = self.task_offer().map(|notice| {
-            div()
-                .id("task-undo")
-                .relative()
-                .child(self.controls.mark("task-undo"))
-                .px_2()
-                .py_1()
-                .flex()
-                .items_center()
-                .gap_1p5()
-                .rounded_md()
-                .bg(rgb(theme::SELECTED))
-                .text_xs()
-                .text_color(rgb(theme::MUTED))
-                .cursor_pointer()
-                .child(notice.moved.title())
-                .child("·")
-                .child(div().text_color(rgb(theme::PRIMARY)).child("Undo"))
+            self.undo_line("task-undo", notice.moved.title())
                 .on_click(cx.listener(|this, _, window, cx| this.click_undo(window, cx)))
         });
         let sessions = self.render_sessions(listed, cx);

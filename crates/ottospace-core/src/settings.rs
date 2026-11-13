@@ -171,11 +171,64 @@ pub fn closed_apps(wanted: &[Installed], running_bundles: &[String]) -> Vec<Inst
     closed
 }
 
-/// The settings file's text with `apps` and `apps_hidden` set to these lists, for a pin made in
-/// the Apps section. Only those two values change: every other key, known or not, and the
-/// file's own spacing stay as they are. A list that is empty and has no key gets none.
-/// `Err`: the file is not a JSON object, and must be left alone.
-pub fn with_apps(text: &str, apps: &[String], hidden: &[String]) -> Result<String, String> {
+/// One entry added to, or taken off, a list of the settings file: `apps` or `apps_hidden`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ListChange {
+    pub key: &'static str,
+    /// False: take it off.
+    pub add: bool,
+    pub text: String,
+}
+
+/// The settings file's text after `changes`, for a pin made in the Apps section. Each is made
+/// to the list as the file has it NOW, which may not be the one read at start: the user may
+/// have edited it since, or another ottospace. Only the lists changed are touched: every
+/// other key, known or not, and the file's own spacing stay as they are. An entry is added
+/// once; an empty list with no key gets none.
+/// `Err`: the file is not a JSON object, or a list to change is not a list of names. It must
+/// then be left alone: nothing in it is dropped for not being understood.
+pub fn with_changes(text: &str, changes: &[ListChange]) -> Result<String, String> {
+    let body = text.trim_start_matches('\u{feff}');
+    let keys = match serde_json::from_str::<serde_json::Value>(if body.trim().is_empty() { "{}" } else { body }) {
+        Ok(serde_json::Value::Object(keys)) => keys,
+        Ok(_) => return Err("the file must be a JSON object: { ... }".into()),
+        Err(err) => return Err(format!("not valid JSON: {err}")),
+    };
+    let mut new = text.to_string();
+    for key in ["apps", "apps_hidden"] {
+        let mine: Vec<&ListChange> = changes.iter().filter(|change| change.key == key).collect();
+        if mine.is_empty() {
+            continue;
+        }
+        let names = |list: &Vec<serde_json::Value>| list.iter().map(|item| item.as_str().map(str::to_string)).collect();
+        let before: Vec<String> = match keys.get(key) {
+            None => Vec::new(),
+            Some(value) => value
+                .as_array()
+                .and_then(names)
+                .ok_or_else(|| format!("`{key}` is not a list of names: [\"Slack\", \"Notes\"]"))?,
+        };
+        let mut list = before.clone();
+        for change in mine {
+            list.retain(|text| *text != change.text);
+            if change.add {
+                list.push(change.text.clone());
+            }
+        }
+        // An entry that was there stays where it was.
+        let kept = before.iter().filter(|text| list.contains(text));
+        let added = list.iter().filter(|text| !before.contains(text));
+        let list: Vec<String> = kept.chain(added).cloned().collect();
+        if list != before {
+            new = with_list(&new, key, &list)?;
+        }
+    }
+    Ok(new)
+}
+
+/// As `with_changes`, with both lists given whole.
+#[cfg(test)]
+fn with_apps(text: &str, apps: &[String], hidden: &[String]) -> Result<String, String> {
     let with_apps = with_list(text, "apps", apps)?;
     with_list(&with_apps, "apps_hidden", hidden)
 }
@@ -213,13 +266,15 @@ fn splice(text: &str, key: &str, value: &str) -> Option<String> {
     if let Some((_, _, at)) = members.iter().rev().find(|(name, ..)| name == key) {
         return Some(format!("{}{value}{}", &text[..at.start], &text[at.end..]));
     }
+    // A file with Windows line ends gets them in what is added.
+    let end = if text.contains("\r\n") { "\r\n" } else { "\n" };
     let Some((_, last_key, last)) = members.last() else {
         let open = text.find('{')? + 1;
-        return Some(format!("{}\n  \"{key}\": {value}\n{}", &text[..open], text[open..].trim_start()));
+        return Some(format!("{}{end}  \"{key}\": {value}{end}{}", &text[..open], text[open..].trim_start()));
     };
     // The last key's own line start, if only spaces come before it; else all is on one line.
-    let line = text[..*last_key].rfind('\n').map(|at| &text[at..*last_key]).filter(|gap| gap.trim().is_empty());
-    let between = line.map_or_else(|| ", ".to_string(), |indent| format!(",{indent}"));
+    let line = text[..*last_key].rfind('\n').map(|at| &text[at + 1..*last_key]).filter(|gap| gap.trim().is_empty());
+    let between = line.map_or_else(|| ", ".to_string(), |indent| format!(",{end}{indent}"));
     Some(format!("{}{between}\"{key}\": {value}{}", &text[..last.end], &text[last.end..]))
 }
 
@@ -463,6 +518,48 @@ mod tests {
         assert!(with_apps("{ not json", &list(&["Slack"]), &[]).unwrap_err().starts_with("not valid JSON"));
         assert!(with_apps("[1]", &list(&["Slack"]), &[]).unwrap_err().contains("JSON object"));
         assert!(with_apps("{\"apps\": [\"A\"],}", &[], &[]).is_err());
+    }
+
+    #[test]
+    fn a_pin_changes_the_list_the_file_has_now_and_drops_nothing_of_it() {
+        let change = |spec: &str| {
+            let (key, text) = spec[1..].split_once(':').unwrap();
+            let key = if key == "apps" { "apps" } else { "apps_hidden" };
+            ListChange { key, add: spec.starts_with('+'), text: text.into() }
+        };
+        let after =
+            |text: &str, specs: &[&str]| with_changes(text, &specs.iter().map(|s| change(s)).collect::<Vec<_>>());
+        let ok = |text: &str, specs: &[&str]| after(text, specs).unwrap();
+        // One entry is added to what the file holds, whatever was read at start: a line added
+        // by hand since, or by another ottospace, stays. An entry is there once.
+        assert_eq!(ok(r#"{"apps": ["Slack", "Notes"]}"#, &["+apps:Zed"]), r#"{"apps": ["Slack", "Notes", "Zed"]}"#);
+        assert_eq!(ok(r#"{"apps": ["Zed", "Notes"]}"#, &["+apps:Zed"]), r#"{"apps": ["Zed", "Notes"]}"#);
+        assert_eq!(ok(r#"{"apps": ["Foo"]}"#, &["+apps:Foo", "+apps:Foo"]), r#"{"apps": ["Foo"]}"#);
+        // One is taken off; taking off what is not there changes nothing, byte for byte.
+        assert_eq!(ok(r#"{"apps": ["Slack", "Zed", "Notes"]}"#, &["-apps:Zed"]), r#"{"apps": ["Slack", "Notes"]}"#);
+        assert_eq!(ok("{ \"apps\" : [ \"Slack\" ] }", &["-apps:Zed"]), "{ \"apps\" : [ \"Slack\" ] }");
+        // A pin of a hidden app: on one list, off the other. The list not named is not touched,
+        // even one this could not read.
+        let both = ok(r#"{"apps_hidden": ["Notes", "Music"], "apps": []}"#, &["-hidden:Notes", "+apps:Notes"]);
+        assert_eq!(both, r#"{"apps_hidden": ["Music"], "apps": ["Notes"]}"#);
+        assert_eq!(
+            ok(r#"{"apps": ["A"], "apps_hidden": 7}"#, &["+apps:B"]),
+            r#"{"apps": ["A", "B"], "apps_hidden": 7}"#
+        );
+        // A list that is not a list of names is not written over: the entries it has that
+        // were not understood would be lost.
+        for text in [r#"{"apps": ["Slack", "Notes", 3]}"#, r#"{"apps": "Slack"}"#, r#"{"apps": null}"#] {
+            assert!(after(text, &["+apps:Zed"]).unwrap_err().contains("`apps` is not a list of names"), "{text}");
+        }
+        assert!(after("{ not json", &["+apps:Zed"]).is_err() && after("[1]", &["+apps:Zed"]).is_err());
+        // No file yet, or an empty one: the key is added; taking off from nothing adds none.
+        assert_eq!(ok("", &["+apps:Zed"]), "{\n  \"apps\": [\"Zed\"]\n}\n");
+        assert_eq!(ok("", &["-apps:Zed"]), "");
+        // Windows line ends are kept in the line that is added.
+        assert_eq!(
+            ok("{\r\n  \"tasks\": \"t\"\r\n}\r\n", &["+apps:Zed"]),
+            "{\r\n  \"tasks\": \"t\",\r\n  \"apps\": [\"Zed\"]\r\n}\r\n"
+        );
     }
 
     #[test]

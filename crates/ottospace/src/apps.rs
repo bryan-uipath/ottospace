@@ -26,8 +26,10 @@ pub struct Scan {
     apps: Vec<Installed>,
     /// When the last scan started. `None`: never.
     at: Option<Instant>,
-    /// Apps whose icon was asked for, by name: one that has none is not asked again.
+    /// Apps whose icon was asked for, by bundle path: one that has none is not asked again.
     icons_tried: HashSet<String>,
+    /// The bundles that ran when the core was last told.
+    running: Vec<String>,
     /// More icons are on their way.
     loading: bool,
 }
@@ -57,12 +59,8 @@ fn resolve(entry: &str) -> Option<Installed> {
     if entry.starts_with('/') || entry.starts_with('~') {
         return bundle(Path::new(&expand_home(entry, &std::env::var("HOME").unwrap_or_default())));
     }
-    // A name, not a path: it must not walk out of the folders.
-    if entry.is_empty() || entry.contains('/') || entry.starts_with('.') {
-        return None;
-    }
-    let found = folders().iter().map(|folder| folder.join(format!("{entry}.app"))).find(|app| app.is_dir())?;
-    Some(Installed { name: entry.to_string(), ..bundle(&found)? })
+    // As a mark looks an app up by its name: one name, one bundle.
+    Some(Installed { name: entry.to_string(), ..bundle(&icon::app_path_in(entry, &folders())?)? })
 }
 
 /// The Dock's apps that exist, in its order: `$OTTOSPACE_DOCK_APPS` (bundle paths separated by
@@ -103,7 +101,11 @@ impl Workspace {
         };
         let (pinned, hidden) = (entries(&settings.apps), entries(&settings.apps_hidden));
         let suggest = offer && settings.suggest_dock_apps.unwrap_or(true);
-        self.model.update(Action::SetAppSettings { pinned, hidden, suggest }.sent_by(Origin::System));
+        // Only a test run lets a client's key pin: it writes the settings file.
+        let clients_write = std::env::var_os("OTTOSPACE_E2E").is_some();
+        let told = Action::SetAppSettings { pinned, hidden, suggest, clients_write };
+        self.model.update(told.sent_by(Origin::System));
+        config::remove_stale_drafts();
     }
 
     /// The picker or the Apps section opened: tells the core what is installed as last scanned,
@@ -138,6 +140,10 @@ impl Workspace {
     /// The scan's apps and the bundles running now: the core lists those that are not.
     pub fn tell_installed(&mut self) {
         let (apps, running) = (self.installed.apps.clone(), running_bundles());
+        // An app that ran and quit is listed again: its icon is asked for again.
+        let quit: Vec<String> = self.installed.running.iter().filter(|path| !running.contains(path)).cloned().collect();
+        self.installed.icons_tried.retain(|path| !quit.contains(path));
+        self.installed.running = running.clone();
         self.model.update(Action::SetInstalled { apps, running }.sent_by(Origin::System));
     }
 
@@ -149,14 +155,15 @@ impl Workspace {
         }
         let bar = self.model.apps_bar();
         let wanted =
-            |row: &&Row| !self.icons.contains_key(&row.name) && !self.installed.icons_tried.contains(&row.name);
+            |row: &&Row| !self.icons.contains_key(&row.path) && !self.installed.icons_tried.contains(&row.path);
         let rows: Vec<Row> =
             bar.not_running.iter().chain(&bar.all).filter(wanted).take(ICONS_AT_ONCE).cloned().collect();
         for row in &rows {
-            self.installed.icons_tried.insert(row.name.clone());
+            // By its path: two apps of one name each have their own icon.
+            self.installed.icons_tried.insert(row.path.clone());
             if let Some(png) = icon::png_of_app(Path::new(&row.path), ICON_PIXELS) {
                 let image = Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png));
-                self.icons.insert(row.name.clone(), image);
+                self.icons.insert(row.path.clone(), image);
             }
         }
         if rows.len() < ICONS_AT_ONCE {
@@ -174,12 +181,6 @@ impl Workspace {
         .detach();
     }
 
-    /// An app that quit may start again with another icon: its name is asked again.
-    pub fn forget_icon_tries(&mut self) {
-        let icons = &self.icons;
-        self.installed.icons_tried.retain(|name| icons.contains_key(name));
-    }
-
     /// Starts a listed app that is not running. Only one the core knows (the scan, the Dock or
     /// the settings found it), and never in a test run: a real app would start.
     pub fn launch_picked(&mut self, name: &str, path: &str, axis: Axis, new_tab: bool) {
@@ -194,16 +195,22 @@ impl Workspace {
         self.error = started.err();
     }
 
-    /// Carries out `Effect::SaveApps`: writes the pinned and hidden apps to `settings.json`. A
-    /// file that cannot be read as settings is left alone, and the status bar says so; the pin
-    /// then lasts until ottospace quits.
-    pub fn save_apps(&mut self, apps: &[String], hidden: &[String]) {
+    /// The pinned apps that are not running, in their order.
+    pub fn pinned_closed(&self) -> impl Iterator<Item = Row> + use<> {
+        self.model.apps_bar().not_running.into_iter().filter(|app| app.pinned)
+    }
+
+    /// Carries out `Effect::SaveApps`: makes the change to `apps` or `apps_hidden` in
+    /// `settings.json` as it is now. A file that cannot be read as settings, or whose list is
+    /// not a list of names, is left alone, and the status bar says so; the pin then lasts
+    /// until ottospace quits.
+    pub fn save_apps(&mut self, changes: &[ottospace_core::settings::ListChange]) {
         const NOT_WRITTEN: &str = "settings.json was not written: ";
         // The lists of a run that hosts only its test app are not the user's.
         if self.host_only.is_some() {
             return;
         }
-        match config::save_apps(apps, hidden) {
+        match config::save_apps(changes) {
             Err(why) => self.error = Some(format!("{NOT_WRITTEN}{why}")),
             Ok(()) if self.error.as_ref().is_some_and(|error| error.starts_with(NOT_WRITTEN)) => self.error = None,
             Ok(()) => {}
@@ -315,7 +322,7 @@ impl Workspace {
             .py_1p5()
             .gap_3()
             .text_color(rgb(theme::MUTED))
-            .child(self.app_icon(&row.name))
+            .child(self.app_icon(&row.path))
             .child(self.controls.mark(format!("closed-app:{}", row.path)))
             .child(div().flex_1().min_w_0().truncate().child(row.name.clone()))
             .when(row.pinned, |d| d.child(div().flex_none().text_xs().text_color(rgb(theme::BORDER_STRONG)).child("★")))
@@ -352,23 +359,7 @@ impl Workspace {
                 .on_click(cx.listener(move |this, _, window, cx| this.click_apps_control(id, window, cx)))
         };
         let notice = bar.undo.map(|moved| {
-            div()
-                .id("apps-undo")
-                .relative()
-                .child(self.controls.mark("apps-undo"))
-                .px_2()
-                .py_1()
-                .flex()
-                .items_center()
-                .gap_1p5()
-                .rounded_md()
-                .bg(rgb(theme::SELECTED))
-                .text_xs()
-                .text_color(rgb(theme::MUTED))
-                .cursor_pointer()
-                .child(moved)
-                .child("·")
-                .child(div().text_color(rgb(theme::PRIMARY)).child("Undo"))
+            self.undo_line("apps-undo", moved)
                 .on_click(cx.listener(|this, _, window, cx| this.click_apps_control("apps-undo", window, cx)))
                 .into_any_element()
         });

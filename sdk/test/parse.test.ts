@@ -91,3 +91,13 @@ test("a reply the types do not describe is an error that names the place", () =>
   assert.throws(() => snapshot(replyWith(overlay)), /ax_overlay\.targets\[0\]\.source should be an object/);
   assert.throws(() => snapshot({ ...replyWith(null), mode: "zen" }), /mode should be a mode, got "zen"/);
 });
+
+test("the field of each owner parses: the Apps section's filter too", () => {
+  const field = (of: string) => ({
+    of, text: "sk", cursor: 2, selection: [2, 2], selected: "", marked: null, bounds: [0, 0, 100, 20], cursor_x: 12,
+  });
+  for (const owner of ["compose", "picker", "apps"]) {
+    assert.equal(snapshot({ ...replyWith(null), field: field(owner) }).field?.of, owner);
+  }
+  assert.throws(() => snapshot({ ...replyWith(null), field: field("elsewhere") }), /field\.of should be/);
+});
