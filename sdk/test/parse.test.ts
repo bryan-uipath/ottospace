@@ -67,6 +67,9 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     needs_you: 0,
     compose_read: false,
     compose_host: null,
+    compose_plan: null,
+    compose_picks: { wheres: ["app"], whos: ["claude", "codex"] },
+    welcome: false,
     compose_menu: null,
     compose_pointing: null,
     compose_note: null,
@@ -87,6 +90,12 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     workbook_offer: null,
     scrollbars: {},
     capture: { key: null, bar: null, picture: null, encoded: [], pending: 0, dir: null, brief: null },
+    drawer: {
+      body: [880, 40, 470, 820],
+      agents: { "1": { model: "claude", ended: false, cols: 60, rows: 45, lines: ["fake claude ready"] } },
+      goes_to: null,
+      note: null,
+    },
   };
 }
 

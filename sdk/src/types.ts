@@ -713,8 +713,14 @@ export interface Snapshot {
   needs_you: number;
   /** The tags of the line in the new-task box have been looked up. */
   compose_read: boolean;
-  /** Where the new-task box is: in place of the home screen's line, over the workspace, or closed. */
-  compose_host: "home" | "modal" | "bar" | null;
+  /** Where the new-task box is: the drawer's new-task state, the draft's title, or closed. */
+  compose_host: "drawer" | "bar" | null;
+  /** What ↵ in the box would do: start `agent` (unless a saved agent: `starts` false) in the repository `dir` (null: the home folder), on `branch`. Null while the box is closed. */
+  compose_plan: { agent: string; starts: boolean; dir: string | null; branch: string | null } | null;
+  /** The drawer's one-click picks: repository names and agent names. */
+  compose_picks: { wheres: string[]; whos: string[] };
+  /** Nothing is open yet (no pane, task or conversation): the drawer shows the new task by itself. */
+  welcome: boolean;
   compose_menu: ComposeMenu | null;
   /** The tab or pane an ⌥-click would reference in the new-task box, while ⌥ is held over it. */
   compose_pointing: Rect | null;
@@ -760,6 +766,13 @@ export interface Snapshot {
     /** The draft's folder, or null when nothing is kept on disk. */
     dir: string | null;
     brief: { task: TaskId; dir: string | null } | null;
+  };
+  /** The right drawer: where its conversation is drawn, each task's agent by task id, the workspace ⌘↵ goes to, and why no agent runs for the task on show. */
+  drawer: {
+    body: Rect | null;
+    agents: Record<string, { model: string; ended: boolean; cols: number; rows: number; lines: string[] }>;
+    goes_to: string | null;
+    note: string | null;
   };
 }
 

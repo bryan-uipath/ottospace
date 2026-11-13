@@ -273,8 +273,8 @@ pub fn empty_pane(hint: SharedString, pane: PaneId, drawn: &Shared) -> impl Into
 }
 
 impl Workspace {
-    /// The home screen: the lattice with a node for each listed task, the new-task line with
-    /// the tasks that need the user under it, and a legend.
+    /// The home screen: the lattice with a node for each listed task, what the workspace is
+    /// for with the tasks that need the user under it, and a legend.
     pub(crate) fn render_home(&self, home: Home<'_>, cx: &mut Context<Self>) -> AnyElement {
         let (counts, view, drawn) = (home.counts, cx.entity_id(), &self.home);
         let any = counts.total() > 0;
@@ -330,57 +330,46 @@ impl Workspace {
             })
             .collect();
 
-        // `occlude`: a click on the text must not reach anything under it.
-        let line = crate::dialog::panel(theme::BORDER_STRONG)
-            .id("home-new-task")
+        // What the workspace is for, and the two ways to fill it. New tasks are the drawer's.
+        let button = |id: &'static str, label: &'static str, key: &'static str| {
+            div()
+                .id(id)
+                .relative()
+                .px_3()
+                .py_1p5()
+                .flex()
+                .gap_2()
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(theme::BORDER_STRONG))
+                .bg(rgb(theme::RAISED))
+                .text_sm()
+                .cursor_pointer()
+                .hover(|s| s.bg(rgb(theme::SELECTED)))
+                .child(label)
+                .child(div().text_color(rgb(theme::MUTED)).child(key))
+                .child(self.controls.mark(format!("home:{id}")))
+        };
+        let open_app = button("open_app", "Open an app", "⌘E").on_click(cx.listener(|this, _, window, cx| {
+            this.open_picker(ottospace_core::Axis::Right, false, window, cx);
+        }));
+        let terminal = button("terminal", "Terminal", "⌘D").on_click(cx.listener(|this, _, window, cx| {
+            let split = ottospace_core::Action::Split {
+                axis: ottospace_core::Axis::Right,
+                kind: ottospace_core::Kind::Terminal,
+            };
+            this.dispatch(split, this.input, window, cx);
+        }));
+        let line = div()
+            .id("home-workspace")
             .occlude()
-            .p_3()
             .flex()
             .flex_col()
+            .items_center()
             .gap_2()
-            .cursor_pointer()
-            .hover(|s| s.border_color(rgb(theme::COMPOSE)))
-            .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)))
-            .child(self.controls.mark("home:new_task"))
-            .child(
-                div()
-                    .min_h(px(28.))
-                    .flex()
-                    .items_center()
-                    .text_base()
-                    .text_color(rgb(theme::MUTED))
-                    .child("What needs doing?"),
-            )
-            .child(
-                muted()
-                    .flex()
-                    .justify_between()
-                    .child("#project  >repo  @agent  /path  $skill  p1–p9")
-                    .child("click, or ⌘N from anywhere"),
-            );
-
-        // While the new-task box is open here, the line is the box itself: the same content
-        // the modal shows, in place. The text column grows with its dropdown, and with it
-        // what the lattice keeps clear.
-        let composing = self.model.compose_host() == Some(ottospace_core::model::Host::Home);
-        let line = match composing {
-            true => crate::dialog::panel(theme::COMPOSE)
-                .id("home-new-task")
-                .occlude()
-                .p_3()
-                .child(self.new_task_content(cx))
-                .into_any_element(),
-            false => line.into_any_element(),
-        };
-        // A click anywhere else on the home screen puts the line back; no node under it is clicked.
-        let away = composing.then(|| {
-            div().id("home-compose-away").absolute().size_full().occlude().on_mouse_down(
-                gpui::MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
-                    this.dispatch(ottospace_core::Action::CloseCompose, this.input, window, cx);
-                }),
-            )
-        });
+            .child(div().text_xs().text_color(rgb(theme::MUTED)).child("WORKSPACE"))
+            .child(div().text_base().child("Your windows, apps and terminals go here"))
+            .child(div().pt_2().flex().gap_2().child(open_app).child(terminal));
 
         let rows: Vec<_> = (home.needs_you.iter().enumerate())
             .map(|(i, task)| {
@@ -427,15 +416,7 @@ impl Workspace {
             let label = format!("{} · {}", Group::Running.title(), counts.running);
             div().flex().items_center().gap_2().child(dot(theme::task(Group::Running))).child(label)
         });
-        let under = muted()
-            .px_1()
-            .flex()
-            .flex_wrap()
-            .gap_x_4()
-            .when(any, |d| d.justify_between())
-            .when(!any, |d| d.justify_center())
-            .children(running)
-            .child("⌘E to open a pane · ⌘D for a terminal");
+        let under = muted().px_1().flex().flex_wrap().gap_x_4().children(running);
         let text = div()
             .relative()
             .w(px(560.))
@@ -513,7 +494,6 @@ impl Workspace {
             .overflow_hidden()
             .child(lines.absolute().size_full())
             .children(nodes)
-            .children(away)
             .child(panel)
             .children(legend)
             .into_any_element()

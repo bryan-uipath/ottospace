@@ -550,6 +550,11 @@ const MAKERS: &[Make] = &[
     },
     |g| Action::ComposeRef { target: if g.rng.coin() { Pointed::Pane(g.pane()) } else { Pointed::Tab(g.tab_id()) } },
     |g| {
+        let mark = g.rng.pick(&['>', '@', '#']);
+        let name = g.rng.coin().then(|| g.name(&["app", "claude", "codex-gpt-6-astra", "ana", "--yolo"]));
+        Action::ComposePick { mark, name }
+    },
+    |g| {
         let info = |g: &mut Gen| TerminalInfo {
             pane: g.pane(),
             cwd: g.rng.coin().then(|| g.name(DIRS)),
@@ -1081,8 +1086,8 @@ fn check(m: &Model) -> Result<(), String> {
         "the way back leads to pane {:?}, which is gone",
         m.back_to
     );
-    let briefed =
-        |id: TaskId| m.current_task == Some(id) && m.tasks.get(id).is_some_and(|task| !task.materials.is_empty());
+    let shown = |id: TaskId| m.current_task == Some(id) || m.talk.is_some_and(|talk| talk.task == id);
+    let briefed = |id: TaskId| shown(id) && m.tasks.get(id).is_some_and(|task| !task.materials.is_empty());
     ensure!(m.brief.is_none_or(briefed), "the brief of task {:?} shows: not on show, or it has none", m.brief);
     for task in &m.tasks.list {
         let dir = task.materials_dir();
@@ -1302,7 +1307,7 @@ impl Run {
         let filing = m.compose_line().filter(|_| submits && !takes && !answers && refused.is_none());
         // A draft with captures is filed under a name of its own when none was typed.
         let named = m.capture_title();
-        let filing = filing.map(|line| (line.clone(), m.draft(line), m.compose_host()));
+        let filing = filing.map(|line| (line.clone(), m.draft(line)));
         // A row taken reads back as the tag it is, of that very name.
         let taken = match (&action, m.dropdown()) {
             (Action::ComposeAccept { index }, Some(menu)) => {
@@ -1431,10 +1436,12 @@ impl Run {
             ensure!(reads, "{mark}{name} was taken, and {:?} reads as {draft:?}", m.compose_line());
         }
         // What only the box's own line takes does nothing while the line has no keyboard.
-        if matches!(action, Action::ComposeAttach { .. } | Action::ComposeRef { .. }) && !composing {
+        if matches!(action, Action::ComposeAttach { .. } | Action::ComposeRef { .. } | Action::ComposePick { .. })
+            && !composing
+        {
             ensure!(m.compose_line() == line_before.as_ref(), "the line changed with no keyboard: {line_before:?}");
         }
-        if let Some((line, draft, host)) = filing {
+        if let Some((line, draft)) = filing {
             let filed: Vec<&Task> = m.tasks.list.iter().filter(|task| !task_ids.contains(&task.id)).collect();
             if let Some(named) = named.filter(|_| draft.title.is_empty()) {
                 // Named by fixed words, and marked as not typed: nothing captured is in a title.
@@ -1449,10 +1456,12 @@ impl Run {
                     "a line with no title filed a task, or closed the box"
                 );
             } else {
-                // On the home screen the line stays for the next task, empty, unless the task is started.
-                let stays = host == Some(Host::Home) && !matches!(action, Action::ComposeSubmit { open: true });
-                let left = if stays { m.compose_line().is_some_and(String::is_empty) } else { m.compose.is_none() };
-                ensure!(filed.len() == 1 && left, "{line:?} filed {} tasks; the box is {:?}", filed.len(), m.compose);
+                ensure!(
+                    filed.len() == 1 && m.compose.is_none(),
+                    "{line:?} filed {} tasks; the box is {:?}",
+                    filed.len(),
+                    m.compose
+                );
                 ensure!(!filed[0].title_generated, "a title that was typed is marked as made up");
                 let task = filed[0];
                 let repo = draft.repo.as_deref().and_then(|name| m.repo_named(name));
@@ -2565,6 +2574,7 @@ fn a_brief_goes_when_its_task_no_longer_names_a_capture() {
         Action::AnnotateLeave { title: true },
         Action::FieldEdit { edit: Edit::Insert("fix".into()) },
         Action::ComposeSubmit { open: true },
+        Action::BriefShow { id: 1 },
     ];
     steps.into_iter().for_each(|action| run.step(action.into()).unwrap());
     assert_eq!(run.m.brief, Some(1));

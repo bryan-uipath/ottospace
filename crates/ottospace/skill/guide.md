@@ -516,8 +516,8 @@ ottospace ctl "{\"cmd\":\"task_brief\",\"id\":$OTTOSPACE_TASK}"
 ```
 
 `task_brief` replies `{"ok":true,"task":7,"dir":"..","path":"../brief.md","brief":{..}}`, not the
-state. Without `id` it is the task of the tab `tab` (`$OTTOSPACE_TAB`), else the task on show. It
-fails with "has no materials" for a task nothing was captured for. `brief` holds:
+state. Without `id` it is the task of the tab `tab` (`$OTTOSPACE_TAB`), else the task whose tabs
+are on show, else the task in the drawer. It fails with "has no materials" for a task nothing was captured for. `brief` holds:
 
 - `ask`: the user's own words: `title`, `priority`, `project`, `repo`, `agent`, `paths`, `skills`.
   `title_generated` true: nobody typed the title (the task was filed from captures alone); it

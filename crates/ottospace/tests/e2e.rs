@@ -947,7 +947,7 @@ fn the_tasks_section_lists_what_needs_you_then_what_is_open() {
     otto.call(json!({"cmd": "task_add", "title": "build", "state": "running"}));
     otto.call(json!({"cmd": "task_new", "line": "idea p1"}));
 
-    // ⌘↵ in the new-task box adds the task and starts it: its tab is on show, and it is under Open.
+    // A client's ⌘↵ in the new-task box adds the task and shows its tab: it is under Open.
     otto.call(json!({"cmd": "compose", "text": "fix zoom #canvas"}));
     let reply = key("cmd-enter");
     assert_eq!((reply["mode"].as_str(), &reply["state"]["current_task"]), (Some("normal"), &json!(4)));
@@ -1013,8 +1013,8 @@ fn the_tasks_section_lists_what_needs_you_then_what_is_open() {
     assert!(drawn("task-dismiss:2") && !drawn("task-hold:2"));
     // The same moves from the socket (an agent's) offer nothing.
     assert_eq!(otto.call(json!({"cmd": "task_dismiss", "id": 3}))["tasks_bar"]["undo"], json!(null));
-    // A click on Start shows the task's tabs.
-    let reply = press("task-start:2");
+    // A client's click on a row shows the task's tabs: only the user's starts an agent.
+    let reply = press("task:2");
     assert_eq!(reply["state"]["current_task"], 2);
 
     // `task_new` with `open` while the new-task box is open: the task is added, the tabs on show
@@ -1905,13 +1905,12 @@ fn the_text_field_moves_selects_and_undoes() {
     // The selection is replaced by what is typed next, and ↵ adds the task.
     key("cmd-a");
     key("t i d y");
-    // No pane is open: the box is the home screen's line, and stays for the next task.
-    let reply = key("enter");
+    // ⇧↵ files it for later: the box closes.
+    let reply = key("shift-enter");
     assert_eq!(
-        (reply["mode"].as_str(), reply["state"]["tasks"]["list"][0]["title"].as_str(), field(&reply).0.as_str()),
-        (Some("compose"), Some("tidy"), "")
+        (reply["mode"].as_str(), reply["state"]["tasks"]["list"][0]["title"].as_str(), &reply["field"]),
+        (Some("normal"), Some("tidy"), &Value::Null)
     );
-    key("escape");
 
     // A line wider than the box scrolls: the caret stays inside it.
     let long = "a long line of words that goes on and on ".repeat(4);
@@ -2004,9 +2003,9 @@ fn the_new_task_dropdown_finishes_the_tag_at_the_cursor() {
     for line in ["a #canvas", "b #cables", "c #canvas"] {
         otto.call(json!({"cmd": "task_new", "line": line}));
     }
-    // With a pane showing, ⌘N opens the box over the workspace.
+    // ⌘N opens the box in the drawer, beside the workspace.
     otto.call(json!({"cmd": "split"}));
-    assert_eq!(key("cmd-n")["compose_host"], "modal");
+    assert_eq!(key("cmd-n")["compose_host"], "drawer");
     // A bare mark lists what there is and highlights nothing; a letter narrows, and
     // highlights the first row; ↓ ↑ move.
     otto.call(json!({"cmd": "key", "keys": "f i x space"}));
@@ -2106,7 +2105,7 @@ fn files_dropped_on_the_new_task_box_and_what_is_pointed_at_go_into_the_line() {
     let reply = otto.call(json!({"cmd": "compose_drop", "paths": [file, folder]}));
     assert_eq!(field(&reply).0, format!("read {} {folder} ", file.replace(' ', "\\ ")));
     read();
-    let reply = key("enter");
+    let reply = key("shift-enter");
     let task = &reply["state"]["tasks"]["list"][0];
     assert_eq!(
         (task["title"].as_str(), &task["paths"], &task["resolved"]),
@@ -2124,7 +2123,7 @@ fn files_dropped_on_the_new_task_box_and_what_is_pointed_at_go_into_the_line() {
     );
     assert_eq!(reply["compose_note"], "1 left out: its name is too long, or not one a line can hold");
     read();
-    let reply = key("enter");
+    let reply = key("shift-enter");
     let task = &reply["state"]["tasks"]["list"][1];
     assert_eq!((&task["paths"], &task["resolved"]), (&json!([shot, outside]), &json!([shot, outside])));
 
@@ -2150,7 +2149,7 @@ fn files_dropped_on_the_new_task_box_and_what_is_pointed_at_go_into_the_line() {
     assert_eq!((field(&reply).0, reply["mode"].as_str()), (format!(r"compare ^Tab\ 1 ^{escaped} "), Some("compose")));
     assert_eq!(otto.mouse("move", below)["compose_pointing"], Value::Null, "no ⌥: nothing is outlined");
     // The task keeps what each pointed at, as it was.
-    let reply = key("enter");
+    let reply = key("shift-enter");
     let task = &reply["state"]["tasks"]["list"][2];
     assert_eq!((reply["mode"].as_str(), task["title"].as_str()), (Some("normal"), Some("compare")));
     // The state has what tells the pane apart; the task's file keeps its name and id only.
@@ -2171,41 +2170,37 @@ fn files_dropped_on_the_new_task_box_and_what_is_pointed_at_go_into_the_line() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn on_the_home_screen_the_new_task_line_is_the_box() {
+fn with_nothing_open_the_drawer_offers_a_new_task() {
     let otto = Otto::launch("home-compose");
     let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
-    // A click on the line: the box opens in its place. No panel over the workspace.
-    let resting = rect(&otto.drawn()["home_drawn"]["panel"]);
-    let reply = otto.click([resting[0] + resting[2] / 2.0, resting[1] + 24.0], 1);
-    assert_eq!((reply["mode"].as_str(), reply["compose_host"].as_str()), (Some("compose"), Some("home")));
-    // Typing goes into it. Its dropdown opens under the line, and what the lattice keeps
-    // clear grows with it.
-    let open = rect(&otto.drawn()["home_drawn"]["panel"]);
-    let reply = key("t i d y space # x");
-    assert_eq!((field(&reply).0.as_str(), reply["compose_menu"]["note"].as_str()), ("tidy #x", Some("new project")));
-    let grown = rect(&otto.drawn()["home_drawn"]["panel"]);
-    assert!(
-        grown[3] > open[3] + 10.0 && (grown[0], grown[2]) == (resting[0], resting[2]),
-        "{resting:?} {open:?} {grown:?}"
-    );
-    // ↵ adds the task and the line stays, empty, on the home screen.
-    let reply = key("enter");
+    // Nothing open: the drawer shows its new task by itself, the center what goes there.
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!((&state["welcome"], &state["compose_host"]), (&json!(true), &Value::Null));
+    for control in ["drawer:new_task", "home:open_app", "home:terminal", "pick:@codex"] {
+        otto.control(control);
+    }
+    // A pick fills the line: the box opens with the agent in it, and says what ↵ will do.
+    let reply = otto.click(at(otto.control("pick:@codex"), 0.5, 0.5), 1);
+    assert_eq!((reply["mode"].as_str(), reply["compose_host"].as_str()), (Some("compose"), Some("drawer")));
+    assert_eq!(field(&reply).0, "@codex ");
+    // What `@codex` names is read a moment later.
+    let reply = otto.wait_for("the tags to be read", |o| {
+        Some(o.call(json!({"cmd": "state"}))).filter(|r| r["compose_read"] == true)
+    });
+    let plan = json!({"agent": "codex", "starts": true, "dir": null, "branch": null});
+    assert_eq!(reply["compose_plan"], plan);
+    // Typing goes into it; ⇧↵ files the task for later and the box closes. A task is open now:
+    // the drawer goes.
+    key("cmd-a t i d y space # x");
+    let reply = key("shift-enter");
+    assert_eq!(reply["state"]["tasks"]["list"][0]["title"], "tidy");
     assert_eq!(
-        (
-            reply["state"]["tasks"]["list"][0]["title"].as_str(),
-            reply["compose_host"].as_str(),
-            field(&reply).0.as_str()
-        ),
-        (Some("tidy"), Some("home"), "")
+        (&reply["compose_host"], &reply["welcome"], &reply["mode"]),
+        (&Value::Null, &json!(false), &json!("normal"))
     );
-    assert!(reply["home"]["nodes"].as_array().is_some_and(|nodes| nodes.len() == 1), "the task has its node");
-    // Esc goes back to the resting line; ⌘N opens it in place again.
+    // ⌘N opens it again; Esc leaves.
+    assert_eq!(key("cmd-n")["compose_host"], "drawer");
     assert_eq!(key("escape")["compose_host"], Value::Null);
-    assert_eq!(key("cmd-n")["compose_host"], "home");
-    key("escape");
-    // With a pane showing, ⌘N is the box over the workspace.
-    otto.call(json!({"cmd": "split"}));
-    assert_eq!(key("cmd-n")["compose_host"], "modal");
 }
 
 #[test]
@@ -2838,7 +2833,7 @@ fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
     for id in ["tab:1", "tab-close:1", "top:new_tab", "top:split_right", "top:split_down"] {
         assert!(ids.contains(&id), "no label for {id}: {ids:?}");
     }
-    for id in ["home:new_task", "home-row:1", "home-node:1"] {
+    for id in ["home:open_app", "home:terminal", "home-row:1", "home-node:1", "rail:new-task"] {
         assert!(ids.contains(&id), "no label for {id}: {ids:?}");
     }
     let mut unique: Vec<&String> = labels.values().collect();
@@ -2897,10 +2892,10 @@ fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
     assert_eq!(sneak_to(&otto, "top:task_leave")["state"]["current_task"], Value::Null);
     assert_eq!(sneak_to(&otto, "home-node:1")["state"]["current_task"], 1);
     otto.call(json!({"cmd": "task_leave"}));
-    // The new-task line opens the box, a top-bar button the picker. Neither lets sneak mode start.
-    assert_eq!(sneak_to(&otto, "home:new_task")["mode"], "compose");
+    // The rail's + opens the box, a top-bar button the picker. Neither lets sneak mode start.
+    assert_eq!(sneak_to(&otto, "rail:new-task")["mode"], "compose");
     let refused = otto.raw(r#"{"cmd":"sneak"}"#);
-    assert!(refused["error"].as_str().is_some_and(|e| e.contains("normal or list")), "{refused}");
+    assert!(refused["error"].as_str().is_some_and(|e| e.contains("normal, list or talk")), "{refused}");
     otto.call(json!({"cmd": "key", "keys": "escape"}));
     assert_eq!(sneak_to(&otto, "top:split_down")["state"]["picker"]["axis"], "down");
     assert_eq!(otto.raw(r#"{"cmd":"sneak"}"#)["ok"], false);
@@ -2925,7 +2920,7 @@ fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
     for id in ["header:1", "close:1", "pane:1", "header:3", "close:3", "pane:3", tab.as_str(), tab_close.as_str()] {
         assert!(labels.contains_key(id), "no label for {id}: {labels:?}");
     }
-    assert!(!labels.contains_key("home:new_task"), "the home screen is gone: {labels:?}");
+    assert!(!labels.contains_key("home:terminal"), "the home screen is gone: {labels:?}");
     // A pane's own label covers its body.
     let body = reply["sneak"]["targets"].as_array().unwrap().iter().find(|t| t["source"]["id"] == "pane:2").unwrap();
     assert!((body["frame"]["x"].as_f64().unwrap() - drawn[1][0]).abs() < 1.0, "{body} {drawn:?}");
@@ -3900,7 +3895,7 @@ fn the_users_click_on_a_scrollbar_leaves_sneak_mode_and_scrolls() {
     let frame = &labelled["sneak"]["targets"].as_array().unwrap().iter().find(row).expect("a row")["frame"];
     let f = |side: &str| frame[side].as_f64().unwrap();
     let opened = otto.user_click([f("x") + f("w") * 0.3, f("y") + f("h") / 2.0]);
-    assert!(opened["mode"] == "normal" && opened["state"]["current_task"].is_u64(), "{}", opened["state"]);
+    assert!(opened["state"]["talk"]["task"].is_u64(), "{}", opened["state"]);
 }
 
 #[test]
@@ -4371,7 +4366,7 @@ fn a_run_with_no_folder_keeps_no_capture_on_disk_and_settings_turn_pictures_off(
     // No title typed: ↵, ⌘↵. The task is named after what was captured.
     key("enter");
     let reply = key("cmd-enter");
-    assert_eq!(reply["state"]["current_task"], 1, "add and start shows the task's tabs");
+    assert_eq!(reply["state"]["talk"]["task"], 1, "add and start opens the task's conversation");
     // In fixed words: no directory's or app's name is ever in a title nobody typed.
     let task = &reply["state"]["tasks"]["list"][0];
     assert_eq!((&task["title"], &task["title_generated"]), (&json!("Capture from a terminal"), &json!(true)));
@@ -4496,6 +4491,42 @@ fn workbook_files(home: &Path) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = entries.map(|entry| entry.path()).collect();
     files.sort();
     files
+}
+
+impl Otto {
+    /// The frame `[x, y, w, h]` of the control `id` as drawn, read from sneak mode's labels.
+    fn control(&self, id: &str) -> [f64; 4] {
+        let reply = self.call(json!({"cmd": "sneak"}));
+        self.call(json!({"cmd": "key", "keys": "escape"}));
+        let targets = reply["sneak"]["targets"].as_array().expect("targets");
+        let drawn: Vec<&str> = targets.iter().filter_map(|t| t["source"]["id"].as_str()).collect();
+        let target = targets.iter().find(|t| t["source"]["id"] == id).unwrap_or_else(|| panic!("no {id} in {drawn:?}"));
+        let f = |key: &str| target["frame"][key].as_f64().unwrap();
+        [f("x"), f("y"), f("w"), f("h")]
+    }
+}
+
+/// Stand-ins for `claude` and `codex` in a folder of their own: each writes where it ran and its
+/// arguments to `<name>.argv` (separated by NUL), says it is ready, then echoes what it is sent.
+fn fake_agents(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(dir).unwrap();
+    for name in ["claude", "codex"] {
+        let log = dir.join(format!("{name}.argv"));
+        let script = format!(
+            "#!/bin/sh\n{{ printf '%s\\0' \"$PWD\"; for a in \"$@\"; do printf '%s\\0' \"$a\"; done; }} > '{}'\necho 'fake {name} ready'\nexec cat\n",
+            log.display()
+        );
+        let path = dir.join(name);
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+/// What a stand-in was started with: its directory, then each argument.
+fn agent_argv(dir: &Path, name: &str) -> Option<Vec<String>> {
+    let text = std::fs::read_to_string(dir.join(format!("{name}.argv"))).ok()?;
+    Some(text.split_terminator('\0').map(str::to_string).collect())
 }
 
 #[test]
@@ -4669,4 +4700,99 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
     assert_eq!(left, ["{ not a workbook", "mine"]);
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_click_on_a_task_starts_its_agent_in_the_drawer_and_the_workspace_stays() {
+    let root = std::env::temp_dir().join(format!("ottospace-e2e-talk-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (bin, repos) = (root.join("bin"), root.join("repos"));
+    fake_agents(&bin);
+    fake_repo(&repos.join("app"));
+    let app = repos.join("app").canonicalize().unwrap().to_string_lossy().into_owned();
+    let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_REPOS", repos.to_str().unwrap())];
+    let otto = Otto::launch_with("talk", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "fix login >app"}));
+    otto.call(json!({"cmd": "task_new", "line": "try codex @codex-gpt-6-astra"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let before = otto.call(json!({"cmd": "state"}));
+
+    // The user's click on the row: the agent starts in the drawer at once, with the keyboard.
+    let row = otto.control("task:1");
+    let reply = otto.user_click(at(row, 0.3, 0.3));
+    assert_eq!((&reply["mode"], &reply["state"]["talk"]["task"]), (&json!("talk"), &json!(1)), "{reply}");
+    let lines = otto.wait_for("the agent to say it is ready", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        let lines = state["drawer"]["agents"]["1"]["lines"].clone();
+        lines.as_array()?.iter().any(|l| l == "fake claude ready").then_some(lines)
+    });
+    assert!(lines.is_array());
+    // One program, its flags, a new session's id, `--` and one prompt; in the task's repository.
+    let argv = otto.wait_for("the argv", |_| agent_argv(&bin, "claude"));
+    let state = otto.call(json!({"cmd": "state"}));
+    let session = state["state"]["tasks"]["list"][0]["session"]["id"].as_str().expect("a session").to_string();
+    assert_eq!(argv, [app.as_str(), "--session-id", &session, "--", "Task: fix login"]);
+    assert_eq!(state["state"]["tasks"]["list"][0]["state"], "running");
+    // The workspace is as it was: the same tabs, no task's tabs on show.
+    assert_eq!((&state["state"]["tabs"], &state["state"]["current_task"]), (&before["state"]["tabs"], &json!(null)));
+    // The tab strip ends where the drawer begins.
+    let body = state["drawer"]["body"].as_array().expect("the drawer is drawn");
+    let tab = state["tabs"][0].as_array().expect("a tab");
+    assert!(tab[0].as_f64().unwrap() + tab[2].as_f64().unwrap() <= body[0].as_f64().unwrap(), "{tab:?} {body:?}");
+
+    // Keys go to the agent.
+    otto.user_key("h i enter");
+    otto.wait_for("the agent to echo", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        state["drawer"]["agents"]["1"]["lines"].as_array()?.iter().any(|l| l == "hi").then_some(())
+    });
+    // ⌘L gives the keyboard back; ⌘⇧L closes the drawer to the rail and opens it again.
+    assert_eq!(otto.user_key("cmd-l")["mode"], "normal");
+    let closed = otto.user_key("cmd-shift-l");
+    assert_eq!((&closed["state"]["talk"]["open"], &closed["drawer"]["body"]), (&json!(false), &json!(null)));
+    assert_eq!(otto.user_key("cmd-shift-l")["state"]["talk"]["open"], true);
+
+    // Stop ends it: the task needs the user.
+    let stopped = otto.user_click(at(otto.control("talk:talk-stop"), 0.5, 0.5));
+    assert_eq!(stopped["state"]["agents"], json!([]));
+    assert_eq!(stopped["state"]["tasks"]["list"][0]["state"], "needs_you");
+
+    // A task tagged with a Codex model starts Codex with that model, in the home folder.
+    otto.user_click(at(otto.control("task:2"), 0.3, 0.3));
+    let argv = otto.wait_for("codex's argv", |_| agent_argv(&bin, "codex"));
+    assert_eq!(argv[1..], ["--model", "gpt-6-astra", "--", "Task: try codex"]);
+    // A client's click on a row shows the task's tabs and starts nothing.
+    let theirs = otto.click(at(otto.control("task:1"), 0.3, 0.3), 1);
+    assert_eq!((&theirs["state"]["current_task"], &theirs["state"]["agents"]), (&json!(1), &json!([2])), "{theirs}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The window's buttons sit at its top left, 80 points wide and as tall as the tab strip (28).
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn nothing_is_drawn_over_the_window_buttons_with_a_section_or_the_drawer_open_or_not() {
+    let otto = Otto::launch("lights");
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    let clear = |what: &str| {
+        let state = otto.call(json!({"cmd": "state"}));
+        for tab in state["tabs"].as_array().unwrap() {
+            assert!(tab[0].as_f64().unwrap() >= 80.0, "{what}: a tab at {tab}");
+        }
+        // Sneak mode, which says where controls are, does not start over the new-task box.
+        let rails: &[&str] = if state["mode"] == "compose" { &[] } else { &["rail:apps", "rail:tasks"] };
+        for rail in rails {
+            let cell = otto.control(rail);
+            let square = (cell[2] - cell[3]).abs() <= 1.0;
+            assert!(cell[1] >= 28.0 && square, "{what}: {rail} at {cell:?}, not square below the strip");
+        }
+    };
+    clear("no section");
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    clear("a section");
+    otto.call(json!({"cmd": "compose", "text": "drawer"}));
+    clear("the drawer");
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    clear("the drawer, no section");
 }

@@ -1,13 +1,13 @@
 //! The new-task box. `new_task_content` is what it holds: the line, the dropdown that finishes
-//! the tag at the cursor, the hints. It knows nothing of where it is: no size, no position, no
-//! backdrop. Two hosts show it: `render_compose`, a panel over the dimmed workspace, and the
-//! home screen, in place of its line (`home.rs`). Which one is the core's `compose_host`.
+//! the tag at the cursor, the hints. It knows nothing of where it is: no size, no position.
+//! The drawer hosts it, in its new-task state (`render_new_task`), or in its collecting state
+//! as the draft's title (`collect.rs`). Which one is the core's `compose_host`.
 
 use std::path::PathBuf;
 
 use gpui::{
     Bounds, Context, Div, ExternalPaths, FontWeight, KeyDownEvent, MouseButton, MouseDownEvent, PathPromptOptions,
-    Pixels, Point, Window, black, div, prelude::*, px, rgb,
+    Pixels, Point, Window, div, prelude::*, px, rgb,
 };
 use ottospace_core::complete::{Dropdown, Row};
 use ottospace_core::model::{Pointed, TerminalInfo};
@@ -32,8 +32,8 @@ pub fn tag_color(mark: char) -> u32 {
 }
 
 impl Workspace {
-    /// The box's keys. ↵ takes the dropdown's highlighted row, else adds the task; ⌘↵ adds and
-    /// starts it; Tab takes a row; ↑ ↓ (⌃P ⌃N) move over the rows; Esc closes the dropdown,
+    /// The box's keys. ↵ takes the dropdown's highlighted row, else adds the task and starts
+    /// its agent; ⇧↵ adds it for later; ⌘↵ adds and starts it; Tab takes a row; ↑ ↓ (⌃P ⌃N) move over the rows; Esc closes the dropdown,
     /// then the box; ⌘O picks files. The rest edit the line. ⌘ shortcuts the line does not use
     /// still reach their bindings; pane ones wait.
     pub fn compose_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
@@ -43,7 +43,8 @@ impl Workspace {
         let action = match key.key.as_str() {
             "enter" if event.is_held => return,
             "enter" if m.platform => Action::ComposeSubmit { open: true },
-            "enter" => Action::ComposeSubmit { open: false },
+            "enter" if m.shift => Action::ComposeSubmit { open: false },
+            "enter" => Action::ComposeEnter,
             "escape" => Action::ComposeEscape,
             "tab" => Action::ComposeComplete,
             "up" if plain && !m.control => Action::ComposeMove { delta: -1 },
@@ -274,8 +275,8 @@ impl Workspace {
             None => (None, None),
         };
         let keys = match menu.as_ref().map(|menu| (menu.rows.is_empty(), menu.selected.is_some())) {
-            Some((false, true)) => "↑↓ move · ↵ or tab take · esc close the list · ⌘↵ add and start",
-            Some((false, false)) => "↑↓ move · tab take · ↵ add task · esc close the list",
+            Some((false, true)) => "↑↓ move · ↵ or tab take · esc close the list · ⌘↵ start",
+            Some((false, false)) => "↑↓ move · tab take · ↵ start · esc close the list",
             _ => KEYS_HINT,
         };
         let muted = |text: &'static str| div().text_xs().text_color(rgb(theme::MUTED)).child(text);
@@ -343,37 +344,132 @@ impl Workspace {
             .child(muted(keys))
     }
 
-    /// The modal host: the content in a panel near the top, the workspace dimmed behind it. A
-    /// click outside the panel closes the box; an ⌥-click there references what is under it.
-    pub fn render_compose(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let panel = dialog::panel(theme::COMPOSE)
-            .w(px(560.))
-            .max_w_full()
-            .p_3()
-            // A click inside the box must not reach the backdrop, which closes it.
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(self.new_task_content(cx));
-        div()
-            .id("compose-backdrop")
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .flex()
-            .justify_center()
-            .items_start() // the box is as tall as its lines, not the window
-            .pt(px(120.))
-            .px_4()
-            .bg(black().opacity(0.4))
-            .occlude()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                    if !this.compose_point(event, window, cx) {
-                        this.dispatch(Action::CloseCompose, this.input, window, cx);
+    /// The drawer in its new-task state, `width` points wide: a heading, one-click picks for
+    /// where and who, what ↵ will do, and the box at the bottom. With the box closed (nothing
+    /// open yet, `Model::welcome`) a click on its line opens it.
+    pub fn render_new_task(&self, width: f32, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
+        let open = self.model.compose.is_some();
+        let picks = self.model.compose_picks();
+        let draft = self.model.compose_line().map(|line| self.model.draft(line));
+        let repo = draft.as_ref().and_then(|draft| draft.repo.clone());
+        let agent = draft.as_ref().and_then(|draft| draft.agent.clone());
+        let heading = |text: &'static str| div().pt_2().text_xs().text_color(rgb(theme::MUTED)).child(text);
+        let pick = |mark: char, name: Option<String>, label: String, on: bool| {
+            let id = format!("pick:{mark}{}", name.as_deref().unwrap_or(""));
+            div()
+                .id(gpui::SharedString::from(id.clone()))
+                .relative()
+                .px_2()
+                .py_0p5()
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(if on { tag_color(mark) } else { theme::BORDER_STRONG }))
+                .text_xs()
+                .text_color(rgb(if on { theme::TEXT } else { theme::MUTED }))
+                .cursor_pointer()
+                .hover(|s| s.bg(rgb(theme::SELECTED)))
+                .child(label)
+                .child(self.controls.mark(id))
+                // A pick fills the line: with the box closed it opens first.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if this.model.compose.is_none() {
+                        this.new_task(window, cx);
                     }
-                }),
+                    this.dispatch(Action::ComposePick { mark, name: name.clone() }, this.input, window, cx);
+                }))
+        };
+        let wheres = picks
+            .wheres
+            .iter()
+            .map(|name| pick('>', Some(name.clone()), format!(">{name}"), repo.as_ref() == Some(name)));
+        let none = pick('>', None, "no repository".into(), open && repo.is_none());
+        let whos = picks.whos.iter().map(|name| {
+            let on = agent.as_ref().is_some_and(|agent| agent.eq_ignore_ascii_case(name));
+            pick('@', Some(name.clone()), format!("@{name}"), on)
+        });
+        let plan = self.model.compose_plan().map(|plan| {
+            let place = match (&plan.dir, &plan.branch) {
+                (Some(dir), Some(branch)) => format!("in {dir} on {branch}"),
+                (Some(dir), None) => format!("in {dir}"),
+                (None, _) => "in your home folder".into(),
+            };
+            let text = match plan.starts {
+                true => format!("↵ will start {} {place}", plan.agent),
+                false => format!("@{} is a saved agent: ↵ files the task and starts nothing yet", plan.agent),
+            };
+            div().text_xs().text_color(rgb(theme::COMPOSE)).child(text)
+        });
+        let idle = (!open).then(|| {
+            dialog::panel(theme::BORDER_STRONG)
+                .id("drawer-new-task")
+                .p_3()
+                .cursor_pointer()
+                .hover(|s| s.border_color(rgb(theme::COMPOSE)))
+                .text_color(rgb(theme::MUTED))
+                .child("What needs doing?")
+                .child(self.controls.mark("drawer:new_task"))
+                .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)))
+        });
+        let close = div()
+            .id("new-task-close")
+            .relative()
+            .px_1p5()
+            .rounded_sm()
+            .cursor_pointer()
+            .text_color(rgb(theme::MUTED))
+            .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
+            .child("×")
+            .child(self.controls.mark("drawer:close"))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(
+                cx.listener(|this, _, window, cx| drop(this.dispatch(Action::CloseCompose, this.input, window, cx))),
+            );
+        let body = div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_3()
+            .child(div().text_lg().child("What needs doing?"))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(theme::MUTED))
+                    .child("Say it in a line: an agent starts on it here, beside your workspace."),
             )
-            .child(panel)
+            .child(heading("WHERE"))
+            .child(div().flex().flex_wrap().gap_1().children(wheres).child(none))
+            .child(heading("WHO"))
+            .child(div().flex().flex_wrap().gap_1().children(whos))
+            .child(div().flex_1())
+            .children(plan)
+            .children(open.then(|| self.new_task_content(cx)))
+            .children(idle);
+        // Its header is as high as the tab strip: one title strip runs across the window.
+        let header = div()
+            .h(px(crate::TOP_BAR))
+            .flex_none()
+            .px_3()
+            .flex()
+            .items_center()
+            .justify_between()
+            .border_b_1()
+            .border_color(rgb(theme::BORDER))
+            .child(div().text_xs().text_color(rgb(theme::COMPOSE)).child("NEW TASK"))
+            .children(open.then_some(close));
+        div()
+            .id("new-task-drawer")
+            .flex_none()
+            .w(px(width))
+            .h_full()
+            .flex()
+            .flex_col()
+            .bg(rgb(theme::RAISED))
+            .border_l_1()
+            .border_color(rgb(theme::BORDER))
+            .child(header)
+            .child(body)
     }
 }

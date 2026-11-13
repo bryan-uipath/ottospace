@@ -67,6 +67,7 @@ mod scrollbar;
 mod sessions;
 mod sneak;
 mod tags;
+mod talk;
 mod terminal;
 mod workbook;
 use control::{Call, MouseAction, PaneKind, Request};
@@ -341,6 +342,11 @@ static RETURN_KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 /// it keeps clear on the left for the traffic lights.
 const TOP_BAR: f32 = 28.;
 const TRAFFIC_LIGHTS: f32 = 80.;
+/// The left rail's width, and the section list's beside it.
+const RAIL: f32 = 56.;
+const SECTION: f32 = 260.;
+/// The drawer is never narrower than this, unless the window is.
+const MIN_DRAWER: f32 = ottospace_core::talk::MIN_WIDTH;
 /// Height of a pane's header (label and close button).
 const PANE_HEADER: f32 = 28.;
 /// The least width a pane header keeps for its tag and title, e.g. `APP Calc…`.
@@ -552,6 +558,8 @@ actions!(ottospace, [MarkPane, MarkTab, MarkJump]);
 actions!(ottospace, [SaveWorkbook]);
 // What the capture key does, from the menu.
 actions!(ottospace, [CapturePane]);
+// The right drawer: the keyboard in or out, closed to the rail or open, the task's workspace.
+actions!(ottospace, [TalkFocus, TalkToggle, TalkGo]);
 // App menu.
 actions!(ottospace, [Quit, Hide]);
 
@@ -566,7 +574,7 @@ enum Filing {
 /// What a line in the new-task box may hold, and what its keys do: in the box and where the
 /// Tasks section says how to add a task.
 const TAG_HINT: &str = "#project · >repo · @agent · /path · $skill · ^open · p1–p9";
-const KEYS_HINT: &str = "↵ add task · ⌘↵ add and start";
+const KEYS_HINT: &str = "↵ start · ⇧↵ file for later · esc leaves";
 
 /// A heading's name in a control's id and on the socket: `needs_you`, `open`, ...
 fn heading_name(heading: Heading) -> String {
@@ -579,6 +587,8 @@ struct Workspace {
     hosted: HashMap<PaneId, Hosted>,
     /// Shell half of each terminal pane.
     terminals: HashMap<PaneId, Terminal>,
+    /// The right drawer: each task's agent, and where its conversation was drawn.
+    drawer: talk::Drawer,
     /// One terminal character cell.
     cell: Size<Pixels>,
     /// The terminal pane a mouse drag is selecting in.
@@ -853,6 +863,12 @@ impl Workspace {
                             }
                         }
                         this.sync_terminals(window, cx);
+                        this.sync_agents(window, cx);
+                        // The header's time goes on while an agent runs.
+                        let runs = this.model.talk.is_some_and(|t| t.open && this.model.agent_runs(t.task));
+                        if runs && tick % 30 == 0 {
+                            cx.notify();
+                        }
                         this.sync_sneak(window, cx);
                     });
                     this.take_snapshots(window, cx);
@@ -898,11 +914,17 @@ impl Workspace {
         if hosting {
             // Repos is the way in while there are no panes: most work starts in a repository.
             model.update(Action::ToggleSection { section: Section::Repos }.sent_by(Origin::System));
+            // Nothing open yet: the keyboard is in the drawer's new task. Not in a test run,
+            // whose tests start from normal mode, as the Repos section above.
+            if model.welcome() {
+                model.update(Action::OpenCompose { text: String::new() }.sent_by(Origin::System));
+            }
         }
         let mut this = Self {
             model,
             hosted: HashMap::new(),
             terminals: HashMap::new(),
+            drawer: talk::Drawer::default(),
             cell: terminal::cell_size(window),
             dragging: None,
             drop_at: None,
@@ -1073,13 +1095,23 @@ impl Workspace {
         // Every window of this pass that could not be hosted, not only the last.
         let asked = effects.iter().any(|effect| matches!(effect, Effect::HostWindow { .. }));
         let mut unhosted: Vec<String> = Vec::new();
-        let mut unstarted: Vec<u32> = Vec::new();
+        // What became of the agents asked for, told once the effects are carried out.
+        let mut agents: Vec<Action> = Vec::new();
         for effect in effects {
             match effect {
-                // The drawer does not host an agent's terminal yet: none is started, and the
-                // core is told so, so no task waits for one and the keyboard stays where it is.
-                Effect::StartAgent { task, .. } => unstarted.push(*task),
-                Effect::StopAgent { task } => unstarted.push(*task),
+                Effect::StartAgent { task, start, cwd, brief } => {
+                    match self.start_agent(*task, start, cwd.as_deref(), brief.as_deref()) {
+                        Ok(session) => agents.push(Action::AgentStarted { task: *task, session }),
+                        Err(why) => {
+                            self.error = Some(format!("agent: {why}"));
+                            agents.push(Action::AgentExited { task: *task });
+                        }
+                    }
+                }
+                Effect::StopAgent { task } => {
+                    self.stop_agent(*task);
+                    agents.push(Action::AgentExited { task: *task });
+                }
                 Effect::Opened(id) => {
                     if self.model.pane(*id).is_some_and(|p| p.kind == Kind::Terminal) {
                         // The shell learns where it runs, so a program in it can name its own pane.
@@ -1179,8 +1211,8 @@ impl Workspace {
         if asked {
             self.error = (!unhosted.is_empty()).then(|| unhosted.join("; "));
         }
-        for task in unstarted {
-            self.dispatch(Action::AgentExited { task }, Origin::System, window, cx);
+        for news in agents {
+            self.dispatch(news, Origin::System, window, cx);
         }
     }
 
@@ -2253,9 +2285,15 @@ impl Workspace {
             // True once what the tags of the line in the new-task box may name has been read:
             // they are read on another thread, a moment after the line changes.
             "compose_read": self.model.compose_read(),
-            // Where the new-task box is: `home` (in place of the home screen's line), `modal`
-            // (over the workspace), or null while it is closed.
+            // Where the new-task box is: `drawer` (its new-task state), `bar` (the title of the
+            // draft being collected), or null while it is closed.
             "compose_host": self.model.compose_host(),
+            // What ↵ in the box would do (`agent`, `starts`, `dir`, `branch`), or null; and the
+            // drawer's picks: repository names (`wheres`) and agent names (`whos`).
+            "compose_plan": self.model.compose_plan(),
+            "compose_picks": self.model.compose_picks(),
+            // Nothing is open yet: the drawer shows the new task by itself.
+            "welcome": self.model.welcome(),
             // The dropdown that finishes the tag at the cursor, or null: its `mark`, what is
             // `typed`, the `rows` (name, kind, detail, matched letters) and the one `selected`.
             "compose_menu": self.model.dropdown(),
@@ -2319,6 +2357,10 @@ impl Workspace {
             "scrollbars": self.bars.snapshot(),
             // The capture key, and what was drawn of the draft or the brief in the right bar.
             "capture": self.capture_snapshot(),
+            // The right drawer: where its conversation is drawn (`body`), each task's agent
+            // (`model`, `ended`, its terminal's `lines`), the workspace ⌘↵ goes to, and why no
+            // agent runs for the task on show (`note`).
+            "drawer": self.talk_snapshot(),
         })
         .to_string()
     }
@@ -2759,6 +2801,9 @@ impl Workspace {
         if self.model.mode() == Mode::List {
             self.list_key(event, window, cx);
             return;
+        }
+        if self.model.mode() == Mode::Talk {
+            return self.talk_key(event, cx);
         }
         let Some(terminal) = self.model.focused.and_then(|id| self.terminals.get(&id)) else { return };
         let key = &event.keystroke;
@@ -3301,36 +3346,34 @@ impl Workspace {
 
     /// Left rail: one icon per section. The open section's icon is raised.
     fn render_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // Square cells as wide as the rail. The open section's cell has the list's background,
+        // an accent bar at its left edge and no border on its right: it reads as joined to the list.
+        let open = self.model.sidebar;
+        let needs_you = self.model.tasks.needs_you() > 0;
         div()
             .id("rail")
-            .w(px(56.))
+            .w(px(RAIL))
             .h_full()
+            // The raised cell's shadow falls on its neighbours, never over the list.
+            .overflow_hidden()
             .flex()
             .flex_col()
-            .items_center()
-            .gap_1()
-            .py_2()
-            .border_r_1()
-            .border_color(rgb(theme::BORDER))
             .children(SECTIONS.iter().enumerate().map(|(i, (section, icon, label))| {
                 let (section, label) = (*section, *label);
-                let active = self.model.sidebar == Some(section);
+                let active = open == Some(section);
                 div()
                     .id(("rail", i))
-                    .size(px(44.))
-                    .rounded_lg()
+                    .size(px(RAIL))
                     .flex()
                     .items_center()
                     .justify_center()
                     .cursor_pointer()
+                    .when(!active, |d| d.border_r_1().border_color(rgb(theme::BORDER)))
                     .hover(|s| s.bg(rgb(theme::SELECTED)))
                     .when(active, |d| {
-                        d.bg(rgb(theme::SELECTED)).shadow(vec![BoxShadow {
-                            color: black().opacity(0.7),
-                            offset: point(px(0.), px(3.)),
-                            blur_radius: px(10.),
-                            spread_radius: px(0.),
-                        }])
+                        // Amber on Tasks while a task needs the user, as its dot is.
+                        let tasks = section == Section::Tasks && needs_you;
+                        raised_cell(d, if tasks { theme::SNEAK } else { theme::PRIMARY }, false)
                     })
                     .child(svg().path(*icon).size(px(20.)).text_color(rgb(if active {
                         theme::TEXT
@@ -3343,6 +3386,22 @@ impl Workspace {
                         this.dispatch(Action::ToggleSection { section }, this.input, window, cx);
                     }))
             }))
+            .child(div().flex_1().border_r_1().border_color(rgb(theme::BORDER)))
+    }
+
+    /// The strip over the rail and the section list: the traffic lights, and room to drag the
+    /// window by.
+    fn render_lights(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // No line runs up through it beside the window's buttons.
+        div().h(px(TOP_BAR)).flex_none().border_b_1().border_color(rgb(theme::BORDER)).on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, e: &MouseDownEvent, window, cx| {
+                this.dispatch(Action::Leave, this.input, window, cx);
+                if e.click_count == 2 && !this.injected {
+                    window.titlebar_double_click();
+                }
+            }),
+        )
     }
 
     /// The bar's header, the same for every section: its name, + where the section can add
@@ -3485,11 +3544,11 @@ impl Workspace {
         };
         div()
             .id("bar")
-            .w(px(260.))
+            .w(px(SECTION))
             // Min and max too: the layout first sizes a flex item by its content, ignoring `w`. Text
             // measured then with no width is never cut, and `truncate` shows no ellipsis.
-            .min_w(px(260.))
-            .max_w(px(260.))
+            .min_w(px(SECTION))
+            .max_w(px(SECTION))
             .h_full()
             .flex()
             .flex_col()
@@ -3542,11 +3601,10 @@ impl Workspace {
         cx.notify();
     }
 
-    /// A click on a button of a task's row, by the button's name: `task-start`, `task-snooze`,
-    /// `task-hold` or `task-dismiss`. The last three offer to be undone.
+    /// A click on a button of a task's row, by the button's name: `task-snooze`,
+    /// `task-hold` or `task-dismiss`. Each offers to be undone.
     pub(crate) fn click_row_button(&mut self, button: &str, id: TaskId, window: &Window, cx: &mut Context<Self>) {
         let action = match button {
-            "task-start" => Action::TaskOpen { id: Some(id) },
             "task-snooze" => Action::RowSnooze { id, until: now_ms().saturating_add(SNOOZE_MS) },
             "task-hold" => Action::RowHold { id },
             "task-dismiss" => Action::RowDismiss { id },
@@ -3836,7 +3894,6 @@ impl Workspace {
                     this.click_row_button(name, id, window, cx);
                 }))
         };
-        let (start, start_tip) = if row.tabs == 0 { ("Start", "Start (↵)") } else { ("Show", "Show its tabs (↵)") };
         // Over the end of the muted line, on the row's own colour: hidden, they take no room from it.
         let actions = div()
             .absolute()
@@ -3847,8 +3904,7 @@ impl Workspace {
             .pl_1()
             .bg(rgb(theme::SELECTED))
             .when(!selected, |d| d.invisible().group_hover("task-row", |s| s.visible()))
-            // The task on show has its tabs on the bar already: no Show for it.
-            .children((!(row.current && row.tabs > 0)).then(|| button("task-start", start, start_tip)))
+            // No Start or Show: a click on the row opens its conversation.
             .child(button("task-snooze", "Snooze", "Snooze 1 hour (S)"))
             // A finished task cannot be put on hold, and one on hold is there already: no button
             // for a move that would change nothing.
@@ -4257,10 +4313,12 @@ impl Workspace {
 
     /// Top bar, drawn where the system title bar was: tabs on the left, new-tab and split
     /// buttons on the right.
-    fn render_top(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_top(&self, left: f32, cx: &mut Context<Self>) -> impl IntoElement {
+        // The traffic lights sit over the left column: room for them only where it is narrower.
         div()
             .h(px(TOP_BAR))
-            .pl(px(TRAFFIC_LIGHTS))
+            .flex_none()
+            .pl(px((TRAFFIC_LIGHTS - left).max(0.)))
             .flex()
             .items_center()
             .border_b_1()
@@ -4278,44 +4336,56 @@ impl Workspace {
                     }
                 }),
             )
-            // The task whose tabs these are. × goes back to the tabs of no task; the task goes on.
-            .children(self.model.current_task.and_then(|id| self.model.tasks.get(id)).map(|task| {
-                div()
-                    .id("task-chip")
-                    .h_full()
-                    .pl_3()
-                    .pr_1()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .border_r_1()
-                    .border_color(rgb(theme::BORDER))
-                    .text_xs()
-                    .text_color(rgb(theme::MUTED))
-                    .child(svg().path("icons/tasks.svg").size(px(12.)).flex_none().text_color(rgb(theme::MUTED)))
-                    .child(div().max_w(px(220.)).truncate().child(task.title.clone()))
-                    // It names a task, it is no tab: a click shows the task in the Tasks section.
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        if this.model.sidebar != Some(Section::Tasks) {
-                            this.dispatch(Action::ToggleSection { section: Section::Tasks }, this.input, window, cx);
-                        }
-                    }))
-                    .child(
+            // The task whose tabs these are, unless the drawer's header names it. × goes back to
+            // the tabs of no task; the task goes on.
+            .children(
+                self.model.current_task.filter(|id| !self.talk_names(*id)).and_then(|id| self.model.tasks.get(id)).map(
+                    |task| {
                         div()
-                            .id("task-leave")
-                            .px_1()
-                            .rounded_sm()
-                            .cursor_pointer()
+                            .id("task-chip")
+                            .h_full()
+                            .pl_3()
+                            .pr_1()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .border_r_1()
+                            .border_color(rgb(theme::BORDER))
+                            .text_xs()
                             .text_color(rgb(theme::MUTED))
-                            .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
-                            .child("×")
-                            .child(self.controls.mark("top:task_leave"))
+                            .child(
+                                svg().path("icons/tasks.svg").size(px(12.)).flex_none().text_color(rgb(theme::MUTED)),
+                            )
+                            .child(div().max_w(px(220.)).truncate().child(task.title.clone()))
+                            // It names a task, it is no tab: a click shows the task in the Tasks section.
+                            .cursor_pointer()
                             .on_click(cx.listener(|this, _, window, cx| {
-                                this.dispatch(Action::TaskLeave, this.input, window, cx);
-                            })),
-                    )
-            }))
+                                if this.model.sidebar != Some(Section::Tasks) {
+                                    this.dispatch(
+                                        Action::ToggleSection { section: Section::Tasks },
+                                        this.input,
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            }))
+                            .child(
+                                div()
+                                    .id("task-leave")
+                                    .px_1()
+                                    .rounded_sm()
+                                    .cursor_pointer()
+                                    .text_color(rgb(theme::MUTED))
+                                    .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
+                                    .child("×")
+                                    .child(self.controls.mark("top:task_leave"))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.dispatch(Action::TaskLeave, this.input, window, cx);
+                                    })),
+                            )
+                    },
+                ),
+            )
             // Only the current task's tabs (or those of no task) are on the bar.
             .children(
                 self.model
@@ -4493,9 +4563,54 @@ fn task_tags_cell(tags: String, width: f32) -> Option<Div> {
 /// A click that shows a task's tabs.
 fn open_task(id: TaskId, cx: &mut Context<Workspace>) -> Box<dyn Fn(&ClickEvent, &mut Window, &mut App)> {
     Box::new(cx.listener(move |this, _, window, cx| {
-        this.dispatch(Action::TaskOpen { id: Some(id) }, this.input, window, cx);
+        // The user's click is the one verb: its conversation. A client's shows its tabs, as
+        // its `task_open` does: only the user starts an agent.
+        let action =
+            if this.input == Origin::User { Action::TaskTalk { id } } else { Action::TaskOpen { id: Some(id) } };
+        this.dispatch(action, this.input, window, cx);
         cx.notify();
     }))
+}
+
+/// The shadow a side zone `width` points wide casts onto the workspace: from its inner edge,
+/// to the right for the left zone (`left`), to the left for the right zone.
+fn zone_shadow(width: f32, left: bool) -> Div {
+    // Below the title strip, which is higher: no shadow falls on it, and none doubles at its corners.
+    let edge = div().absolute().top(px(TOP_BAR)).bottom_0().w(px(1.));
+    let edge = if left { edge.left(px(width - 1.)) } else { edge.right(px(width - 1.)) };
+    edge.shadow(vec![BoxShadow {
+        color: black().opacity(0.65),
+        offset: point(px(if left { 8. } else { -8. }), px(0.)),
+        blur_radius: px(16.),
+        spread_radius: px(-6.),
+    }])
+}
+
+/// The title strip's shadow, down onto everything under it.
+fn title_shadow() -> Div {
+    div().absolute().left_0().top(px(TOP_BAR - 1.)).w_full().h(px(1.)).shadow(vec![BoxShadow {
+        color: black().opacity(0.7),
+        offset: point(px(0.), px(8.)),
+        blur_radius: px(14.),
+        spread_radius: px(-8.),
+    }])
+}
+
+/// A rail's open cell, raised: the panel's background, a soft shadow above and below it, a
+/// lighter line along its top, and an accent bar at the window's edge (`right`: the right rail's).
+fn raised_cell(cell: Stateful<Div>, accent: u32, right: bool) -> Stateful<Div> {
+    let shadow = |y: f32| BoxShadow {
+        color: black().opacity(0.85),
+        offset: point(px(0.), px(y)),
+        blur_radius: px(9.),
+        spread_radius: px(-6.),
+    };
+    let bar = div().absolute().top_0().w(px(2.)).h_full().bg(rgb(accent));
+    cell.relative()
+        .bg(rgb(theme::RAISED))
+        .shadow(vec![shadow(-7.), shadow(7.)])
+        .child(div().absolute().top_0().left_0().w_full().h(px(1.)).bg(rgb(0x303036)))
+        .child(if right { bar.right_0() } else { bar.left_0() })
 }
 
 /// A row under a heading (a repository's checkout): no outline at rest, so a long list stays
@@ -4635,7 +4750,7 @@ fn on_screen(body: Bounds<Pixels>, window: &Window, cx: &App) -> CGRect {
 }
 
 impl Render for Workspace {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
         for pane in &self.model.panes {
             self.cells.entry(pane.id).or_default();
@@ -4655,6 +4770,13 @@ impl Render for Workspace {
         // that moves nothing (a terminal printing in another tab) only paints them again.
         let keep_out = self.home.borrow().keep_out();
         let home = self.model.home(&keep_out).map(|home| self.render_home(home, cx));
+        // The left column's width, and the drawer's: as dragged, or half the window when widened.
+        let left = RAIL + if self.model.sidebar.is_some() { SECTION } else { 0. };
+        let half = f32::from(window.viewport_size().width) / 2.;
+        let drawer = if self.model.talk_wide { half } else { self.model.talk_width.min(half.max(MIN_DRAWER)) };
+        self.drawer.width = drawer;
+        let right = self.render_draft(cx).or_else(|| self.render_drawer(drawer, cx));
+        let right_width = talk::RAIL + if right.is_some() { drawer } else { 0. };
         div()
             .size_full()
             .flex()
@@ -4727,6 +4849,21 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &SneakMode, window, cx| this.toggle_sneak(window, cx)))
             .on_action(cx.listener(|this, _: &NewTask, window, cx| this.new_task(window, cx)))
+            .on_action(cx.listener(|this, _: &TalkFocus, window, cx| {
+                let on = !this.model.talk.is_some_and(|talk| talk.keys);
+                this.dispatch(Action::TalkKeys { on }, this.input, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &TalkToggle, window, cx| {
+                this.dispatch(Action::TalkToggle, this.input, window, cx);
+            }))
+            // ⌘↵ is the new-task box's "start" while it has the keyboard: the binding comes first.
+            .on_action(cx.listener(|this, _: &TalkGo, window, cx| {
+                if this.model.compose_keys() {
+                    this.dispatch(Action::ComposeSubmit { open: true }, this.input, window, cx);
+                } else {
+                    this.talk_go(window, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &CapturePane, window, cx| {
                 this.error = this.capture_pane(None, this.input, window, cx).err();
                 cx.notify();
@@ -4826,36 +4963,59 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &FitPane, window, cx| {
                 this.dispatch(Action::Fit { pane: None }, this.input, window, cx);
             }))
-            .child(self.render_top(cx))
             .child(
                 div()
+                    .relative()
                     .flex_1()
                     .w_full()
+                    .min_h_0()
                     .overflow_hidden()
                     .flex()
-                    // While an app has the keyboard, fade ottospace's own chrome.
+                    // Left: the traffic lights' strip over the rail and the section list. While an
+                    // app has the keyboard, ottospace's own chrome fades.
                     .child(
                         div()
                             .h_full()
+                            .flex_none()
                             .flex()
+                            .flex_col()
                             .when(self.model.live.is_some(), |d| d.opacity(0.5))
-                            .child(self.render_rail(cx))
-                            .children(self.model.sidebar.map(|section| self.render_bar(section, cx))),
+                            .child(self.render_lights(cx))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .flex()
+                                    .child(self.render_rail(cx))
+                                    .children(self.model.sidebar.map(|section| self.render_bar(section, cx))),
+                            ),
                     )
+                    // Center: the tab strip over the workspace, from the section list to the drawer.
                     .child(
-                        div()
-                            .flex_1()
-                            // Let the canvas shrink below its content, so a wide image cannot
-                            // push it past the window; it scales down instead.
-                            .min_w_0()
-                            .h_full()
-                            .flex()
-                            .overflow_hidden()
-                            .children(home)
-                            .children(tree),
+                        div().flex_1().min_w_0().h_full().flex().flex_col().child(self.render_top(left, cx)).child(
+                            div()
+                                .flex_1()
+                                // Let the canvas shrink below its content, so a wide image cannot
+                                // push it past the window; it scales down instead.
+                                .min_w_0()
+                                .min_h_0()
+                                .w_full()
+                                .flex()
+                                .overflow_hidden()
+                                .children(home)
+                                .children(tree),
+                        ),
                     )
-                    // The right bar: the draft being collected, else a task's brief.
-                    .children(self.render_draft(cx).or_else(|| self.render_brief(cx))),
+                    // Right: the drawer (the draft being collected, a conversation, or a brief),
+                    // then its rail.
+                    .children(right)
+                    .child(self.render_right_rail(cx))
+                    // The side zones sit above the workspace: each casts a soft shadow onto it.
+                    // Drawn last, so it lies over the panes. A live app's window is above it all.
+                    .child(zone_shadow(left, true))
+                    .child(zone_shadow(right_width, false))
+                    // Highest, the title strip: its shadow falls on all three zones.
+                    .child(title_shadow()),
             )
             .child(self.render_status(cx))
             // Only over a parked, drawn pane: a live window sits above ottospace and would cover it.
@@ -4869,11 +5029,6 @@ impl Render for Workspace {
             // Over everything of ottospace's own. It is never on while an app's window is.
             .children(self.model.sneak.as_ref().map(sneak::labels))
             .children(self.model.picker.as_ref().map(|picker| self.render_picker(picker, cx)))
-            // Over the workspace, unless the home screen shows it in place of its own line.
-            .children(
-                (self.model.compose_host() == Some(ottospace_core::model::Host::Modal))
-                    .then(|| self.render_compose(cx)),
-            )
             .children(self.render_pointing())
             .when(self.model.keys, |d| d.child(self.render_keys(cx)))
             .children(self.model.confirm.as_ref().map(|confirm| self.render_confirm(confirm, cx)))
@@ -5056,6 +5211,9 @@ fn main() {
             KeyBinding::new(sneak::KEY, SneakMode, None),
             KeyBinding::new("cmd-n", NewTask, None),
             KeyBinding::new("cmd-shift-n", NextTask, None),
+            KeyBinding::new("cmd-l", TalkFocus, None),
+            KeyBinding::new("cmd-shift-l", TalkToggle, None),
+            KeyBinding::new("cmd-enter", TalkGo, None),
             // Marks: ⌘' waits for a mark's letter. ⌘⌥1..9 go to the first nine (`key_down`).
             KeyBinding::new("cmd-b", MarkPane, None),
             KeyBinding::new("cmd-shift-b", MarkTab, None),

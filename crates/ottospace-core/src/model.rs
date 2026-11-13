@@ -157,12 +157,30 @@ impl Confirm {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Host {
-    /// In place of the home screen's line: no panel over the workspace, no backdrop.
-    Home,
-    /// A panel over the dimmed workspace.
-    Modal,
-    /// The title of the draft in the right bar: the workspace stays in use beside it.
+    /// The drawer, in its new-task state: the workspace stays in use beside it.
+    Drawer,
+    /// The title of the draft in the drawer's collecting state.
     Bar,
+}
+
+/// How many repositories the drawer offers as picks.
+pub const PICKS: usize = 4;
+
+/// The new-task line's one-click picks: repository names (WHERE) and agent names (WHO).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Picks {
+    pub wheres: Vec<String>,
+    pub whos: Vec<String>,
+}
+
+/// What ↵ would do: start `agent` (unless it is a saved agent, `starts` false) in `dir`, a
+/// listed repository's name (none: the home folder), on `branch`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Plan {
+    pub agent: String,
+    pub starts: bool,
+    pub dir: Option<String>,
+    pub branch: Option<String>,
 }
 
 /// What the user did to the dropdown, for the tag it was done to (`key`): for another tag it
@@ -573,6 +591,12 @@ pub enum Action {
     /// An ⌥-click on a tab or a pane while the box is open: its `^reference` goes in at the cursor.
     ComposeRef {
         target: Pointed,
+    },
+    /// A click on one of the drawer's picks: the line's `>repo` (`mark` `>`) or `@agent` (`@`)
+    /// becomes `name`, or goes with `None`. Only a name `compose_picks` offers.
+    ComposePick {
+        mark: char,
+        name: Option<String>,
     },
     /// File the line as a task and close the box. A line with no title files nothing.
     /// `open`: show the new task's tabs at once ("add and start").
@@ -1093,6 +1117,7 @@ impl Action {
             | Action::ComposeAccept { .. }
             | Action::ComposeAttach { .. }
             | Action::ComposeRef { .. }
+            | Action::ComposePick { .. }
             | Action::TaskSetState { .. }
             | Action::TaskSnooze { .. }
             | Action::TaskHold { .. }
@@ -1660,6 +1685,7 @@ impl Model {
             | Action::ComposeAccept { .. }
             | Action::ComposeAttach { .. }
             | Action::ComposeRef { .. }
+            | Action::ComposePick { .. }
             | Action::CaptureCancel
             | Action::CaptureDiscard { .. }
             | Action::CaptureRemove { .. }
@@ -2284,21 +2310,20 @@ impl Model {
                     return;
                 }
                 let line = self.compose_line().cloned().unwrap_or_default();
-                let host = self.compose_host();
                 // A draft with captures needs no title typed: key, circle, ↵.
                 let untitled = self.draft(&line).title.is_empty();
                 let named = self.capture_title().filter(|_| untitled);
                 if let Some(id) = self.file_titled(&line, None, named) {
-                    // On the home screen the line stays, empty, for the next task.
-                    let stays = host == Some(Host::Home) && !open;
-                    self.compose = stays.then(|| Field::new("", MAX_TITLE));
+                    self.compose = None;
                     self.compose_reset();
                     self.capture_keep(id, effects);
                     self.start(id, open, effects);
                 }
             }
             // Not while the box is hidden under the key reference: nothing changes a line unseen.
-            Action::ComposeAttach { .. } | Action::ComposeRef { .. } if !self.composing() => {}
+            Action::ComposeAttach { .. } | Action::ComposeRef { .. } | Action::ComposePick { .. }
+                if !self.composing() => {}
+            Action::ComposePick { mark, name } => self.compose_pick(mark, name),
             Action::ComposeAttach { paths, home, unreadable } => {
                 // A name the line cannot hold (a line break in it) or one too long to keep
                 // is left out, and the box says how many were.
@@ -2577,7 +2602,7 @@ impl Model {
             Action::Sneak { .. } if self.sneak.is_some() => self.sneak = None,
             Action::SneakEnter { .. } if self.sneak.is_some() => {}
             Action::Sneak { targets } | Action::SneakEnter { targets } => {
-                if matches!(self.mode(), Mode::Normal | Mode::List) && !self.keys {
+                if matches!(self.mode(), Mode::Normal | Mode::List | Mode::Talk) && !self.keys {
                     self.sneak = Sneak::new(targets);
                 }
                 // Two sets of chips from one alphabet would not say which a letter means.
@@ -2772,7 +2797,8 @@ impl Model {
             }
             Action::BriefShow { id } => {
                 let briefed = self.tasks.get(id).is_some_and(|task| !task.materials.is_empty());
-                self.brief = Some(id).filter(|_| briefed && self.current_task == Some(id));
+                let shown = self.current_task == Some(id) || self.talk.is_some_and(|talk| talk.task == id);
+                self.brief = Some(id).filter(|_| briefed && shown);
             }
             Action::BriefClose => self.brief = None,
             Action::SetAgents { claude, codex, default } => {
@@ -2860,6 +2886,14 @@ impl Model {
         }
     }
 
+    /// The workspace the drawer's header offers to go to (⌘↵): the name of the first tab of
+    /// the conversation's task, while the center shows other tabs. `None`: no such offer.
+    pub fn talk_goes_to(&self) -> Option<&str> {
+        let task = self.talk?.task;
+        let tab = self.tabs.iter().find(|tab| tab.task == Some(task))?;
+        (self.current_task != Some(task)).then_some(tab.title.as_str())
+    }
+
     /// Opens the drawer on a task's conversation, with the keyboard if its agent runs, and
     /// starts the agent if it does not.
     fn talk_to(&mut self, id: TaskId, effects: &mut Vec<Effect>) {
@@ -2933,11 +2967,7 @@ impl Model {
     /// Where the new-task box is drawn: in the right bar while a draft is collected there; else in
     /// place on the home screen while it shows, else over the workspace. `None`: it is not open.
     pub fn compose_host(&self) -> Option<Host> {
-        let host = match (&self.capture, &self.layout) {
-            (Some(_), _) => Host::Bar,
-            (None, None) => Host::Home,
-            (None, Some(_)) => Host::Modal,
-        };
+        let host = if self.capture.is_some() { Host::Bar } else { Host::Drawer };
         self.compose.as_ref().map(|_| host)
     }
 
@@ -3084,6 +3114,66 @@ impl Model {
         }
         field.splice(range, &text);
         true
+    }
+
+    /// Nothing is open yet: no pane in any tab, no task, no conversation. The drawer then shows
+    /// itself, in its new-task state, and the center says what goes there.
+    pub fn welcome(&self) -> bool {
+        self.panes.is_empty() && self.tasks.list.is_empty() && self.talk.is_none() && self.capture.is_none()
+    }
+
+    /// The drawer's one-click picks for the new-task line: WHERE, the first listed repositories;
+    /// WHO, the default agent, then each runner and its models.
+    pub fn compose_picks(&self) -> Picks {
+        let wheres = self.repos.iter().take(PICKS).map(|repo| repo.name.clone()).collect();
+        let default = self.default_agent.clone().unwrap_or_else(|| sessions::RUNNERS[0].to_string());
+        let mut whos = vec![default];
+        for name in agents::names(&self.models, Vec::new()) {
+            if !whos.iter().any(|seen| seen.eq_ignore_ascii_case(&name)) {
+                whos.push(name);
+            }
+        }
+        Picks { wheres, whos }
+    }
+
+    /// The line's tag of `mark` becomes `name` (one the picks offer), or goes: every word that
+    /// is such a tag is taken out, and the new one added at the end.
+    fn compose_pick(&mut self, mark: char, name: Option<String>) {
+        let picks = self.compose_picks();
+        let offered = match mark {
+            '>' => &picks.wheres,
+            '@' => &picks.whos,
+            _ => return,
+        };
+        if name.as_ref().is_some_and(|name| !offered.contains(name)) {
+            return;
+        }
+        let Some(field) = self.compose.as_mut() else { return };
+        let kept = field.text().split(' ').filter(|word| !word.starts_with(mark) && !word.is_empty());
+        let mut words: Vec<String> = kept.map(str::to_string).collect();
+        words.extend(name.map(|name| format!("{mark}{name}")));
+        let text = format!("{} ", words.join(" "));
+        let all = 0..field.text().len();
+        if field.fits(all.clone(), &text) {
+            field.splice(all, &text);
+        }
+    }
+
+    /// What ↵ in the new-task box would do with the line as it is: start this agent, in this
+    /// repository (none: the home folder), on its branch. `None`: the box is closed.
+    pub fn compose_plan(&self) -> Option<Plan> {
+        let draft = self.draft(self.compose_line()?);
+        let default = self.default_agent.as_deref().unwrap_or(sessions::RUNNERS[0]);
+        let agent = draft.agent.clone().unwrap_or_else(|| default.to_string());
+        let starts = agents::launch(Some(&agent), default, &self.models, String::new()).is_some();
+        let path = draft.repo.as_deref().and_then(|name| self.repo_named(name));
+        let checkouts = self.repos.iter().flat_map(|repo| {
+            let worktrees = repo.worktrees.iter().map(|w| (&w.path, &w.name, &w.branch));
+            std::iter::once((&repo.path, &repo.name, &repo.branch)).chain(worktrees)
+        });
+        let found = path.and_then(|path| checkouts.into_iter().find(|(at, ..)| **at == path));
+        let (dir, branch) = found.map_or((None, None), |(_, name, branch)| (Some(name.clone()), branch.clone()));
+        Some(Plan { agent, starts, dir, branch })
     }
 
     /// The path being typed at the cursor of the new-task box: the shell lists what finishes it.
@@ -3342,13 +3432,13 @@ impl Model {
 
     /// "Add and start": shows a task just filed, and the list gives up the keyboard.
     fn start(&mut self, id: TaskId, open: bool, effects: &mut Vec<Effect>) {
-        if open {
+        // Only the user's own ↵ starts an agent, in the drawer: the workspace stays. A client's
+        // "open" shows the task's tabs, as before.
+        if open && self.by_user {
+            self.talk_to(id, effects);
+        } else if open {
             self.list = None;
             self.act(Action::TaskOpen { id: Some(id) }, effects);
-            // Only the user's own ↵ starts an agent: a client's "open" shows the tabs, as before.
-            if self.by_user {
-                self.talk_to(id, effects);
-            }
         }
     }
 
@@ -4286,6 +4376,7 @@ mod tests {
         Action::ComposeAccept { .. },
         Action::ComposeAttach { .. },
         Action::ComposeRef { .. },
+        Action::ComposePick { .. },
         Action::TaskSetState { .. },
         Action::TaskSnooze { .. },
         Action::TaskHold { .. },
@@ -4450,6 +4541,7 @@ mod tests {
             Action::ComposeAccept { index: 0 },
             Action::ComposeAttach { paths: Vec::new(), home: None, unreadable: 0 },
             Action::ComposeRef { target: Pointed::Tab(1) },
+            Action::ComposePick { mark: '>', name: None },
             Action::TaskSetState { id: 1, state: State::Done },
             Action::TaskSnooze { id: 1, until: 0 },
             Action::TaskHold { id: 1 },
@@ -5956,27 +6048,59 @@ mod tests {
     }
 
     #[test]
-    fn the_box_is_the_home_screens_line_while_no_pane_shows() {
+    fn the_box_is_the_drawers_new_task_state() {
         let mut m = Model::default();
-        assert_eq!(m.compose_host(), None);
+        // Nothing open: the drawer shows itself, in its new-task state.
+        assert!(m.welcome() && m.compose_host().is_none());
         m.update(Action::OpenCompose { text: "tidy up".into() });
-        assert_eq!(m.compose_host(), Some(Host::Home));
-        // ↵ adds and the line stays, empty; Esc goes back to the resting line.
+        assert_eq!(m.compose_host(), Some(Host::Drawer));
+        // ⇧↵ files it for later: the box closes. Nothing is open but a task: no welcome.
         m.update(Action::ComposeSubmit { open: false });
-        assert_eq!((m.tasks.list.len(), line(&m), m.mode()), (1, "", Mode::Compose));
-        m.update(Action::ComposeEscape);
-        assert_eq!((m.compose_host(), m.mode()), (None, Mode::Normal));
-        // ⌘↵ adds and starts: the task's tab shows, so the line goes.
+        assert_eq!((m.tasks.list.len(), m.compose_host(), m.mode(), m.welcome()), (1, None, Mode::Normal, false));
+        // ↵ adds and starts: its conversation opens, so the box goes.
         m.update(Action::OpenCompose { text: "start me".into() });
-        m.update(Action::ComposeSubmit { open: true });
-        assert_eq!((m.compose_host(), m.current_task), (None, Some(2)));
-        // With a pane showing it is the box over the workspace, and ↵ closes it.
-        m.update(Action::TaskLeave);
+        m.update(Action::ComposeEnter);
+        assert_eq!((m.compose_host(), m.talk.map(|talk| talk.task)), (None, Some(2)));
+        // With a pane showing it is the drawer too.
         term(&mut m);
         m.update(Action::OpenCompose { text: "over panes".into() });
-        assert_eq!(m.compose_host(), Some(Host::Modal));
-        m.update(Action::ComposeSubmit { open: false });
-        assert_eq!((m.compose_host(), m.tasks.list.len()), (None, 3));
+        assert_eq!(m.compose_host(), Some(Host::Drawer));
+    }
+
+    #[test]
+    fn the_drawers_picks_set_the_lines_repository_and_agent_and_say_what_enter_does() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        m.update(Action::OpenCompose { text: "fix zoom >old @ana".into() });
+        let picks = m.compose_picks();
+        assert_eq!(picks.wheres, ["app"]);
+        assert_eq!(picks.whos[..3], ["claude", "claude-fable-5-2", "claude-opus-5-5"]);
+        // WHERE and WHO replace the line's own tags; "no repository" takes it out.
+        m.update(Action::ComposePick { mark: '>', name: Some("app".into()) });
+        m.update(Action::ComposePick { mark: '@', name: Some("codex-gpt-6-astra".into()) });
+        assert_eq!(line(&m), "fix zoom >app @codex-gpt-6-astra ");
+        let plan = Plan { agent: "codex-gpt-6-astra".into(), starts: true, dir: Some("app".into()), branch: None };
+        assert_eq!(m.compose_plan(), Some(plan));
+        m.update(Action::ComposePick { mark: '>', name: None });
+        assert_eq!(line(&m), "fix zoom @codex-gpt-6-astra ");
+        // Only what the picks offer: nothing else is written into the line.
+        for (mark, name) in [('>', "elsewhere"), ('@', "ana"), ('#', "app"), ('@', "--yolo")] {
+            m.update(Action::ComposePick { mark, name: Some(name.into()) });
+            assert_eq!(line(&m), "fix zoom @codex-gpt-6-astra ", "{mark}{name}");
+        }
+        // No tag: the default agent, in the home folder. A saved agent starts nothing.
+        m.update(Action::ComposePick { mark: '@', name: None });
+        assert_eq!(
+            m.compose_plan().map(|plan| (plan.agent, plan.starts, plan.dir)),
+            Some(("claude".into(), true, None))
+        );
+        m.update(Action::SetAgents { claude: Vec::new(), codex: Vec::new(), default: Some("ana".into()) });
+        assert_eq!(m.compose_plan().map(|plan| plan.starts), Some(false));
+        m.update(Action::CloseCompose);
+        assert_eq!(
+            (m.compose_plan(), m.update(Action::ComposePick { mark: '>', name: Some("app".into()) })),
+            (None, vec![])
+        );
     }
 
     #[test]
@@ -6117,9 +6241,8 @@ mod tests {
             (&list(&["/src/export"])[..], &list(&["/code/app/src/export"])[..])
         );
         assert_eq!(m.task_tags(task), ">app · @codex · 1 path · 1 skill");
-        // No pane is open: the box is the home screen's line, and stays for the next task.
-        assert_eq!((m.compose_host(), m.compose_line().map(String::as_str)), (Some(Host::Home), Some("")));
-        m.update(Action::CloseCompose);
+        // Filed: the box closes.
+        assert_eq!(m.compose_host(), None);
         // A line filed from outside brings what was read for it, and leaves what the box knows
         // alone: the line the user is typing keeps its tags.
         m.update(Action::OpenCompose { text: "mine $deploy".into() });
@@ -6671,7 +6794,8 @@ mod tests {
         m.update(Action::TaskLeave);
         m.update(Action::OpenCompose { text: "mine".into() });
         m.update(Action::ComposeSubmit { open: true });
-        assert_eq!((m.current_task, m.compose.as_ref().map(Field::text)), (Some(2), None));
+        let talk = m.talk.map(|talk| talk.task);
+        assert_eq!((m.current_task, talk, m.compose.as_ref().map(Field::text)), (None, Some(2), None));
     }
 
     #[test]
@@ -6763,6 +6887,12 @@ mod tests {
         m.update(Action::TalkResize { width: 9e9 });
         m.update(Action::TalkWide);
         assert_eq!((m.talk_width, m.talk_wide), (talk::MAX_WIDTH, true));
+        // The header offers the task's workspace only while the center shows other tabs.
+        assert_eq!(m.talk_goes_to(), None, "task 1 has no tabs");
+        m.update(Action::TaskOpen { id: Some(1) });
+        assert_eq!(m.talk_goes_to(), None, "its tabs are on show");
+        m.update(Action::TaskLeave);
+        assert_eq!(m.talk_goes_to(), Some("app"));
     }
 
     #[test]
@@ -6782,25 +6912,27 @@ mod tests {
     }
 
     #[test]
-    fn file_and_start_opens_the_task_it_files() {
+    fn file_and_start_starts_its_agent_and_leaves_the_workspace() {
         let mut m = Model::default();
         m.update(Action::SetRepos { repos: listed() });
         m.update(Action::OpenCompose { text: "fix zoom >app".into() });
-        // The task's tab, with a terminal in its repository, as `TaskOpen` does; and its agent,
-        // in the drawer, with the keyboard.
+        // Its agent, in the drawer, with the keyboard, in its repository. No tab opens.
         let launch = agents::Launch { runner: "claude", model: None, title: "fix zoom".into() };
         let start = agents::Start::New(launch);
         let agent = Effect::StartAgent { task: 1, start, cwd: Some("/code/app".into()), brief: None };
-        assert_eq!(m.update(Action::ComposeSubmit { open: true }), [Effect::Opened(1), agent]);
-        assert_eq!((m.compose.as_ref().map(Field::text), m.current_task, m.mode()), (None, Some(1), Mode::Talk));
-        assert_eq!(m.pane(1).and_then(|p| p.cwd.as_deref()), Some("/code/app"));
+        assert_eq!(m.update(Action::ComposeSubmit { open: true }), [agent]);
+        assert_eq!((m.compose.as_ref().map(Field::text), m.current_task, m.mode()), (None, None, Mode::Talk));
+        assert_eq!((m.tabs.len(), m.layout.is_none()), (1, true));
         // No title: nothing is filed, nothing opens, the box stays.
         m.update(Action::OpenCompose { text: "p1".into() });
         assert_eq!(m.update(Action::ComposeSubmit { open: true }), []);
-        assert_eq!((m.compose.as_ref().map(Field::text), m.tasks.list.len(), m.current_task), (Some("p1"), 1, Some(1)));
+        assert_eq!((m.compose.as_ref().map(Field::text), m.tasks.list.len()), (Some("p1"), 1));
         m.update(Action::CloseCompose);
-        m.update(Action::TaskFromLine { line: "ask Ana".into(), known: Default::default(), open: true });
+        // A client's "open" shows the task's tabs, with a terminal in its repository; no agent.
+        let theirs = Action::TaskFromLine { line: "ask Ana >app".into(), known: Default::default(), open: true };
+        assert_eq!(m.update(theirs.sent_by(Origin::Socket)), [Effect::Opened(1)]);
         assert_eq!((m.current_task, m.tasks.list.len()), (Some(2), 2));
+        assert_eq!(m.pane(1).and_then(|p| p.cwd.as_deref()), Some("/code/app"));
     }
 
     #[test]

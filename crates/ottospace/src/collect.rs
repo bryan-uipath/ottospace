@@ -30,7 +30,6 @@ use crate::{Frame, Hosted, Workspace, ax_debug, config, control, now_ms, sneak, 
 pub static KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// How wide the right bar is.
-const BAR: f32 = 320.;
 /// How long an app may take to answer for its tree before the capture goes without it.
 const AX_LIMIT: Duration = Duration::from_secs(8);
 /// A picture is taken once the pane is drawn beside the bar: this long after the key at least
@@ -164,7 +163,7 @@ fn draft_dir(draft: &str) -> Option<PathBuf> {
 }
 
 /// A task's folder of captures, if `name` is one the core gives a task of this number.
-fn task_dir(task: TaskId, name: &str) -> Option<PathBuf> {
+pub(crate) fn task_dir(task: TaskId, name: &str) -> Option<PathBuf> {
     let word = name.strip_prefix(&format!("{task}-"))?;
     let own = tasks::materials_dir(task, word).is_some_and(|dir| dir == name);
     config::materials_dir().filter(|_| own).map(|dir| dir.join(name))
@@ -619,7 +618,8 @@ impl Workspace {
     /// The `task_brief` request.
     pub(crate) fn serve_brief(&mut self, id: Option<TaskId>, tab: Option<u32>) -> String {
         let of_tab = tab.and_then(|tab| self.model.tabs.iter().find(|t| t.id == tab)).and_then(|t| t.task);
-        let Some(id) = id.or(of_tab).or(self.model.current_task) else {
+        let talking = self.model.talk.map(|talk| talk.task);
+        let Some(id) = id.or(of_tab).or(self.model.current_task).or(talking) else {
             return control::error("name a task: {\"cmd\":\"task_brief\",\"id\":7}");
         };
         match self.model.tasks.get(id).map(|task| task.materials.is_empty()) {
@@ -941,14 +941,14 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// The right bar's frame: as high as the workspace, `BAR` wide.
+    /// The right bar's frame: the drawer, as high as the window and as wide as it is.
     fn right_bar(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let at = self.bar_at.clone();
         div()
             .id("right-bar")
             .relative()
             .flex_none()
-            .w(px(BAR))
+            .w(px(self.drawer.width))
             .h_full()
             .flex()
             .flex_col()
@@ -1048,6 +1048,12 @@ impl Workspace {
     /// A task's brief in the right bar, read-only: how an agent gets it, each capture's picture,
     /// then the brief as it is written.
     pub(crate) fn render_brief(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let content = self.brief_content(cx)?;
+        Some(self.right_bar(cx).p_0().child(content).into_any_element())
+    }
+
+    /// The brief itself, for the right bar or the drawer.
+    pub(crate) fn brief_content(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let id = self.model.brief?;
         let shown = self.briefs.get(&id)?;
         let muted = |text: String| div().text_xs().text_color(rgb(theme::MUTED)).child(text);
@@ -1077,8 +1083,13 @@ impl Workspace {
         let fetch = format!("ottospace ctl '{{\"cmd\":\"task_brief\",\"id\":{id}}}'");
         let file = shown.dir.as_ref().map(|dir| muted(dir.join("brief.md").to_string_lossy().into_owned()));
         let lines = shown.text.lines().map(|line| div().min_h(px(8.)).child(line.to_string()));
-        let bar = self
-            .right_bar(cx)
+        let bar = div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_3()
             .child(
                 div()
                     .flex()

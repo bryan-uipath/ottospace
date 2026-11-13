@@ -294,7 +294,8 @@ impl Model {
         }
         self.back_to = self.back_to.filter(|pane| self.pane(*pane).is_some());
         let briefed = |id: &TaskId| self.tasks.get(*id).is_some_and(|task| !task.materials.is_empty());
-        self.brief = self.brief.filter(|id| self.current_task == Some(*id) && briefed(id));
+        let shown = |id: &TaskId| self.current_task == Some(*id) || self.talk.is_some_and(|talk| talk.task == *id);
+        self.brief = self.brief.filter(|id| shown(id) && briefed(id));
     }
 }
 

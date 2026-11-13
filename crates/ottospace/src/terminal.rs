@@ -145,14 +145,33 @@ impl Terminal {
     /// environment, e.g. `[("OTTOSPACE_PANE", "3")]`. Without `cwd`: the current directory, or
     /// the home directory when that is `/` (an app started from Finder or the Dock).
     pub fn spawn(vars: &[(&str, String)], cwd: Option<&str>) -> io::Result<Self> {
+        // `$OTTOSPACE_SHELL` replaces the login shell. Tests use it: a login shell with a heavy
+        // profile can take a minute to reach a prompt on a busy machine.
+        let shell = std::env::var("OTTOSPACE_SHELL").ok().map(|program| tty::Shell::new(program, Vec::new()));
+        Self::start(shell, vars, cwd)
+    }
+
+    /// Runs `program` with `args` through the user's login shell, for its `PATH`:
+    /// `$SHELL -lic 'exec "$@"' ottospace-agent <program> <args…>`. The script is fixed text;
+    /// the program and each argument are positional parameters, never read by the shell.
+    /// With `$OTTOSPACE_SHELL` (tests), that shell runs it without reading a profile.
+    pub fn run(program: &str, args: &[String], vars: &[(&str, String)], cwd: Option<&str>) -> io::Result<Self> {
+        let (shell, flags) = match std::env::var("OTTOSPACE_SHELL") {
+            Ok(test) => (test, "-c"),
+            Err(_) => (login_shell(), "-lic"),
+        };
+        let mut argv = vec![flags.to_string(), "exec \"$@\"".to_string(), "ottospace-agent".to_string()];
+        argv.push(program.to_string());
+        argv.extend(args.iter().cloned());
+        Self::start(Some(tty::Shell::new(shell, argv)), vars, cwd)
+    }
+
+    fn start(shell: Option<tty::Shell>, vars: &[(&str, String)], cwd: Option<&str>) -> io::Result<Self> {
         let grid = Grid { cols: 80, rows: 24 };
         let shared = Arc::new(Shared::default());
         let listener = Listener(shared.clone());
         let mut env = HashMap::from([("TERM".to_string(), "xterm-256color".to_string())]);
         env.extend(vars.iter().map(|(name, value)| (name.to_string(), value.clone())));
-        // `$OTTOSPACE_SHELL` replaces the login shell. Tests use it: a login shell with a heavy
-        // profile can take a minute to reach a prompt on a busy machine.
-        let shell = std::env::var("OTTOSPACE_SHELL").ok().map(|program| tty::Shell::new(program, Vec::new()));
         let at_root = std::env::current_dir().is_ok_and(|dir| dir.parent().is_none());
         // A `cwd` that is gone starts in the user's folder: never in `/`, nor where ottospace started.
         let gone = cwd.is_some_and(|dir| !std::path::Path::new(dir).is_dir());
@@ -461,6 +480,15 @@ impl Drop for Terminal {
 fn grid_point(term: &Term<Listener>, at: CellPoint) -> (Point, Side) {
     let line = Line(at.row as i32 - term.grid().display_offset() as i32);
     (Point::new(line, Column(at.col)), if at.right { Side::Right } else { Side::Left })
+}
+
+/// The user's `$SHELL` if it reads `exec "$@"` as a POSIX shell does, else zsh: e.g. fish
+/// names its arguments otherwise.
+fn login_shell() -> String {
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    let name = shell.rsplit('/').next().unwrap_or_default();
+    let posix = shell.starts_with('/') && matches!(name, "zsh" | "bash" | "sh" | "ksh" | "dash");
+    if posix { shell } else { "/bin/zsh".into() }
 }
 
 fn window_size(grid: Grid, cell: Size<Pixels>) -> WindowSize {
