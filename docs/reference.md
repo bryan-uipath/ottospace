@@ -103,7 +103,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘B / ⌘⇧B | Mark the focused pane / the tab on show; on one that is marked, take the mark off (the Marks section offers it back for six seconds, and ⌘B again within them puts the same mark back). The mark is named for the app, the terminal's directory or the tab's title. It records what to open, not a window or a process: a terminal's directory as it is then, an app's bundle id, name and window title, a tab's title, task and split tree. A marked pane or tab shows ◆ and its letter |
 | ⌘' then a letter | Go to the mark with that letter. The status bar shows `MARK?` while it waits; Esc, or a letter of no mark, ends the wait and nothing else happens. If the mark's pane or tab is open, its tab comes forward and the pane takes focus (an app pane is focused, not entered). Else it is opened: a terminal in the recorded directory, the app's window in a pane (the one with the recorded title, else its only window, else its main one; an app that is not running is started), or the tab with its splits. A tab opens with what can be opened: a pane whose directory is gone or whose window could not be hosted is empty and says why, and going to the tab again tries it again |
 | ⌘⌥1 … ⌘⌥9 | Go to one of the first nine marks, in the order of the Marks section |
-| ⌘⇧E | List mode: the bar (Apps, Tasks, Repos, Marks) takes the keyboard. On a mark `x` removes it, `r` renames it, `m` gives it a letter, ⇧J / ⇧K move it down / up, and `u` puts the last removed mark back. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); in Tasks a heading is a row too, and ↵ or space on it folds or unfolds it; Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; Esc or ⌘⇧E leaves |
+| ⌘⇧E | List mode: the bar (Apps, Tasks, Repos, Marks) takes the keyboard. On a mark `x` removes it, `r` renames it, `m` gives it a letter, ⇧J / ⇧K move it down / up, and `u` puts the last removed mark back. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); in Tasks a heading is a row too, and ↵ or space on it folds or unfolds it; Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; on an app that is not running `p` pins or unpins it, `x` hides a suggestion and `u` takes the last of these back; in Apps `/` types in the filter of "All apps" (↵, ↓ or Esc gives the keys back to the rows); Esc or ⌘⇧E leaves |
 | ⌘⌃G | Sneak mode: every control ottospace draws (rail icons, bar rows, tabs and their ×, top-bar buttons, pane headers and their ×, each pane, the home screen's line, rows and nodes) gets a short label, home-row letters first. Type a label and the control does what a click does; a pane's label focuses it, or gives an app pane the keyboard. A × (pane or tab) always has a two-letter label. Two-letter labels narrow on the first letter; ⌫ takes it back. Esc, a click, a letter that goes on with no label, or any ⌘ shortcut leaves; the shortcut then runs (⌘C copies, ⌘V pastes). Other keys do nothing. The labels follow what is drawn: if a control moves its label moves, and if it goes its label goes. What happens by itself (a shell exits, an agent files a task) does not end the mode. Starting it hides the accessibility overlay (⌘⌃A). Not ⌃G alone: a terminal needs that key. On a keyboard layout with no Latin letters, the keys type the letters they have under ⌘. From `APP` mode return first. Controls inside a hosted app's window get no label. Sneak presses no control inside another app and sets no value; entering an app pane raises its window, as a click on the pane does |
 | ⌘⇧C | Visual mode on the terminal: `hjkl`/arrows, `w b e 0 ^ $`, `H M L` move; `v` / `V` select; `y` or ↵ copies and leaves; Esc leaves |
 
@@ -251,10 +251,42 @@ unfocused pane. Paste is bracketed when the program asks for it.
 
 ## App panes
 
-To put an app window in a pane, open Apps on the left rail and click the app. Apps you name in the settings are
-listed there while they are not running: a click starts one (ottospace waits up to 30 seconds for its window). It fills the focused pane if that is
+To put an app window in a pane, open Apps on the left rail and click the app. It fills the focused pane if that is
 empty, otherwise it splits right. Shift-click splits down. New windows of a hosted app get their
-own pane. Original window frames are saved to disk and restored on quit or after a crash.
+own pane.
+
+Below the running apps the section lists apps that are not running. A click starts one in the
+background and puts its window in a pane (ottospace waits up to 30 seconds for the window):
+
+- **Not running**: the apps you pinned (★), then the apps in your Dock, in the Dock's order. At
+  most 12 of the Dock's show; "and N more" unfolds the rest. The Dock is read (its
+  preferences file, never changed) when ottospace starts, when the Apps section opens, when
+  list mode comes on or changes section (⌘⇧E, Tab), when the bar's ↻ is pressed, and when the
+  picker opens. A change you make in the Dock shows at the next of those.
+- **All apps (N)**: every other installed app, by name. Folded until you click the heading. Open,
+  it has a filter: click it or press `/` in list mode, and type.
+
+Hover a row (or select it in list mode) for its buttons. **Pin** (`p`) keeps the app at the top of
+the list, and **Unpin** takes it off. **Hide** (`x`), on an app of the Dock, stops suggesting it;
+it is still among all apps. Each of these writes `~/.ottospace/settings.json` (`apps`,
+`apps_hidden`), and for six seconds a line at the top offers to undo it (`u` in list mode).
+
+- The file is read again at each write, and one entry is added to or taken off the list as it is
+  then: a line you added by hand since ottospace started, or one another ottospace wrote, stays.
+- Only the list changed is touched: every other key and the file's spacing stay.
+- Not written, with a notice in the status bar, and the pin then lasts until ottospace quits:
+  a file that is not a JSON object; a list that is not a list of names (`"apps": ["Slack", 3]`):
+  nothing in it is dropped for not being understood; a `settings.json` that is a link to a file
+  that is not there.
+- The new file takes the old one's place whole, with the old one's permissions (only you can
+  read a new one); a link to a file elsewhere stays a link.
+- An app is written by its name only if that name means the same bundle when read back: the
+  first `Name.app` in `/Applications`, `~/Applications`, `/System/Applications`,
+  `/Applications/Utilities`, `/System/Applications/Utilities`, in that order. Any other app
+  (one in another folder, or the second of two with one name) is written by its path.
+- Only your own key or click pins, unpins, hides or undoes: a socket client's key or sneak
+  label is refused ("settings are the user's to change").
+A running app has no Pin button yet. Original window frames are saved to disk and restored on quit or after a crash.
 
 Click an app pane to give it the keyboard (`APP` mode). If you bring a hosted app forward from
 outside (its Dock icon, ⌘Tab) and the window it shows is one ottospace holds, ottospace comes
@@ -303,6 +335,8 @@ optional:
   "session_dirs": { "claude": ["~/.claude"], "codex": "~/.codex" },
   "session_quiet_minutes": 3,
   "apps": ["Microsoft Outlook", "Slack"],
+  "apps_hidden": ["Music"],
+  "suggest_dock_apps": true,
   "windows": [{ "app": "us.zoom.xos", "title": "Zoom Meeting", "do": "ignore" }]
 }
 ```
@@ -317,7 +351,9 @@ optional:
 | `session_dirs` | Where the runners keep their sessions: `claude` is a list of Claude Code config directories (one for each account), `codex` is Codex's home. A runner left out keeps its default. An app started from the Dock does not see `CLAUDE_CONFIG_DIR` or `CODEX_HOME`: name other directories here | `~/.claude`, `~/.codex` |
 | `session_quiet_minutes` | A task adopted from a session moves to Needs you once the session has been quiet this many minutes. `0`: a quiet session never moves its task | `3` |
 | `windows` | Rules for windows ottospace must leave alone. Each rule selects windows by `app` (the app's name or bundle id), `title` and `subrole`; every field given must match, `*` stands for any text, and case does not matter. `"do": "ignore"`: the window never becomes a pane, when its app is hosted or when it opens later. `"do": "manage"` undoes a built-in rule. Your rules come first. Name an app by its bundle id to be sure. A window is judged once, when it is first seen, on the title it has then; rules are read at start | Built in: only standard windows are ever put in a pane, and Zoom's sharing controls, annotation layer and pop-ups are ignored |
-| `apps` | Apps to offer while they are not running, by the name of the app as Finder shows it (`Visual Studio Code` for `Visual Studio Code.app`). It must be in `/Applications`, `~/Applications` or `/System/Applications` (or their `Utilities`); a name that is not found is left out. They show under "Not running" in Apps, and in the picker before anything is typed; choosing one starts it in the background and puts its window in a pane. (Once you type in the picker it offers every installed app in those folders, these first) | none |
+| `apps` | The pinned apps: listed first under "Not running" in Apps, and in the picker before anything is typed; choosing one starts it in the background and puts its window in a pane. Each is the name of the app as Finder shows it (`Visual Studio Code` for `Visual Studio Code.app`), looked for in `/Applications`, `~/Applications` and `/System/Applications` (and their `Utilities`), or the path of its bundle (`~/Tools/Lumen.app`). One that is not found is left out of the list and kept in the file. Pin and Unpin in the Apps section write this list: the name if it means that same bundle when read back (the first of that name in those folders, in that order), else its path. A name that is found only once ottospace runs (the app was installed since) is listed from the next scan. (Once you type in the picker it offers every installed app in those folders, these first) | none |
+| `apps_hidden` | Apps of the Dock not to suggest in Apps, written as `apps` is. Hide in the Apps section writes this list | none |
+| `suggest_dock_apps` | List the Dock's apps that are not running under "Not running". `false`: only pinned apps are listed there, and the Dock is not read | `true` |
 
 A mistake in the file (a key that does not exist, a wrong value, a font that is not installed) is
 shown in the status bar. That key takes its default and the others still apply. If the file is

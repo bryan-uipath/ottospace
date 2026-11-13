@@ -18,6 +18,11 @@ pub enum ListRow {
     /// "N older" under Sessions. Opening it shows or hides the older sessions.
     OlderSessions,
     Mark(MarkId),
+    /// An app that is not running, by its bundle path. Opening it starts it.
+    Closed(String),
+    /// "and N more" under the suggested apps, and the "All apps" heading. Opening one folds or unfolds it.
+    MoreApps,
+    AllApps,
 }
 
 /// What a key does in list mode.
@@ -41,12 +46,17 @@ pub enum ListKey {
     /// Type the selected mark's name, or its letter.
     Rename,
     Letter,
+    /// Pin or unpin the selected app.
+    Pin,
+    /// Type in the filter of "All apps".
+    Filter,
     Leave,
 }
 
 /// List-mode keys: arrows or `j`/`k` move, ↵ opens (⇧↵ splits down; space opens too, for a
 /// heading that folds), Tab changes section, `s` `h` `x` `u` act on a task, Esc leaves. On a mark: `x` removes it, `r` renames
-/// it, `m` gives it a letter, ⇧J ⇧K (or ⇧↓ ⇧↑) move it.
+/// it, `m` gives it a letter, ⇧J ⇧K (or ⇧↓ ⇧↑) move it. On an app that is not running: `p` pins or
+/// unpins it, `x` hides a suggestion, `u` takes that back; `/` types in the filter of "All apps".
 pub fn list_key(key: &str, shift: bool) -> Option<ListKey> {
     Some(match key {
         "down" | "j" if shift => ListKey::Reorder(1),
@@ -62,6 +72,8 @@ pub fn list_key(key: &str, shift: bool) -> Option<ListKey> {
         "u" => ListKey::Undo,
         "r" => ListKey::Rename,
         "m" => ListKey::Letter,
+        "p" => ListKey::Pin,
+        "/" => ListKey::Filter,
         "escape" => ListKey::Leave,
         _ => return None,
     })
@@ -86,6 +98,7 @@ mod tests {
             (Some(ListKey::Reorder(1)), Some(ListKey::Reorder(-1)))
         );
         assert_eq!((list_key("r", false), list_key("m", false)), (Some(ListKey::Rename), Some(ListKey::Letter)));
+        assert_eq!((list_key("p", true), list_key("/", false)), (Some(ListKey::Pin), Some(ListKey::Filter)));
         assert_eq!(list_key("q", false), None);
     }
 }

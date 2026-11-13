@@ -107,6 +107,35 @@ export interface SessionRow {
   pane: PaneId | null;
 }
 
+/** An app that is not running, in the Apps section. */
+export interface ClosedApp {
+  name: string;
+  /** The bundle: `/Applications/Slack.app`. */
+  path: string;
+  pinned: boolean;
+  /** Listed because the Dock has it: it can be hidden. */
+  suggested: boolean;
+}
+
+/** The Apps section below the running apps. */
+export interface AppsBar {
+  /** Pinned apps, then the Dock's, in the Dock's order. */
+  not_running: ClosedApp[];
+  /** Suggestions behind "and N more". 0: no such row. */
+  more: number;
+  more_open: boolean;
+  /** Every other installed app, whatever the filter. */
+  all_count: number;
+  all_open: boolean;
+  /** Those apps, narrowed by `filter`. None while the group is folded. */
+  all: ClosedApp[];
+  filter: string;
+  /** The filter has the keyboard. */
+  filtering: boolean;
+  /** What the line at the top offers to take back: `Pinned`, `Unpinned`, `Suggestion hidden`. */
+  undo: string | null;
+}
+
 /** The Sessions group of the Tasks section. */
 export interface SessionsBar {
   /** Sessions listed, the older ones included. */
@@ -178,7 +207,7 @@ export type PickItem =
 /** The text field that has the keyboard. Offsets are UTF-16 units: JavaScript string indexes. */
 export interface Field {
   /** Whose it is: the new-task box's line or the picker's filter. */
-  of: "compose" | "picker";
+  of: "compose" | "picker" | "apps";
   text: string;
   cursor: number;
   /** Start and end, in text order. Equal: only a cursor. */
@@ -433,7 +462,9 @@ export interface Snapshot {
   /** Null while the tab on show has a pane. */
   home: Home | null;
   home_drawn: HomeDrawn;
+  /** Names of `apps_bar.not_running`. */
   closed_apps: string[];
+  apps_bar: AppsBar;
   apps: AppEntry[];
   ax_overlay: AxOverlay | null;
   /** Null unless `mode` is `sneak`. */

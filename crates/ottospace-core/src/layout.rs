@@ -118,12 +118,30 @@ impl Node {
 
     /// Removes leaf `id`; its sibling takes the parent's place. `None` once the tree is empty.
     pub fn remove(self, id: u32) -> Option<Node> {
+        let mut left = self.without(id)?;
+        // With more than ten panes in a row `equalize` gives each less than `MIN_SHARE`. With
+        // one gone, each side of a split is owed a little more: no ratio is left past it.
+        let least = MIN_SHARE.min(1.0 / left.leaves().len() as f32);
+        left.keep_within(least);
+        Some(left)
+    }
+
+    fn without(self, id: u32) -> Option<Node> {
         match self {
             Node::Leaf(leaf) => (leaf != id).then_some(Node::Leaf(leaf)),
-            Node::Split { axis, ratio, a, b } => match (a.remove(id), b.remove(id)) {
+            Node::Split { axis, ratio, a, b } => match (a.without(id), b.without(id)) {
                 (Some(a), Some(b)) => Some(Node::Split { axis, ratio, a: Box::new(a), b: Box::new(b) }),
                 (a, b) => a.or(b),
             },
+        }
+    }
+
+    /// Brings every ratio to where each side has at least `least` of its split.
+    fn keep_within(&mut self, least: f32) {
+        if let Node::Split { ratio, a, b, .. } = self {
+            *ratio = ratio.clamp(least, 1.0 - least);
+            a.keep_within(least);
+            b.keep_within(least);
         }
     }
 

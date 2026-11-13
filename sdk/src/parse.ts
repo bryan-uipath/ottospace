@@ -41,6 +41,8 @@ import type {
   SessionRow,
   SessionRunner,
   SessionsBar,
+  AppsBar,
+  ClosedApp,
   Sneak,
   Snapshot,
   Tab,
@@ -295,6 +297,31 @@ function sessionsBar(value: unknown, at: string): SessionsBar {
   };
 }
 
+function closedApp(value: unknown, at: string): ClosedApp {
+  const o = fields(value, at);
+  return {
+    name: str(o.name, `${at}.name`),
+    path: str(o.path, `${at}.path`),
+    pinned: bool(o.pinned, `${at}.pinned`),
+    suggested: bool(o.suggested, `${at}.suggested`),
+  };
+}
+
+function appsBar(value: unknown, at: string): AppsBar {
+  const o = fields(value, at);
+  return {
+    not_running: list(closedApp)(o.not_running, `${at}.not_running`),
+    more: num(o.more, `${at}.more`),
+    more_open: bool(o.more_open, `${at}.more_open`),
+    all_count: num(o.all_count, `${at}.all_count`),
+    all_open: bool(o.all_open, `${at}.all_open`),
+    all: list(closedApp)(o.all, `${at}.all`),
+    filter: str(o.filter, `${at}.filter`),
+    filtering: bool(o.filtering, `${at}.filtering`),
+    undo: orNull(str)(o.undo, `${at}.undo`),
+  };
+}
+
 function inboxRow(value: unknown, at: string): InboxRow {
   return { ...task(value, at), group: group(fields(value, at).group, `${at}.group`) };
 }
@@ -324,7 +351,7 @@ function pickItem(value: unknown, at: string): PickItem {
 
 function field(value: unknown, at: string): Field {
   const o = fields(value, at);
-  if (o.of !== "compose" && o.of !== "picker") throw wrong(`${at}.of`, "compose or picker", o.of);
+  if (o.of !== "compose" && o.of !== "picker" && o.of !== "apps") throw wrong(`${at}.of`, "compose, picker or apps", o.of);
   return {
     of: o.of,
     text: str(o.text, `${at}.text`),
@@ -595,6 +622,7 @@ export function snapshot(value: unknown): Snapshot {
     home: orNull(home)(o.home, "home"),
     home_drawn: homeDrawn(o.home_drawn, "home_drawn"),
     closed_apps: list(str)(o.closed_apps, "closed_apps"),
+    apps_bar: appsBar(o.apps_bar, "apps_bar"),
     apps: list(appEntry)(o.apps, "apps"),
     ax_overlay: orNull(axOverlay)(o.ax_overlay, "ax_overlay"),
     sneak: orNull(sneak)(o.sneak, "sneak"),

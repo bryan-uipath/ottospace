@@ -290,12 +290,20 @@ impl Workspace {
             }
             ("bar", "close") => Some(Action::CloseSidebar),
             ("bar", "refresh") => {
-                self.refresh_lists();
+                self.refresh_lists(cx);
                 cx.notify();
                 None
             }
             ("app", _) => {
                 let _ = self.open_app(name, Axis::Right, false, window, cx);
+                None
+            }
+            ("closed-app" | "app-pin" | "app-hide", _) => {
+                self.click_app_control(kind, name, Axis::Right, window, cx);
+                None
+            }
+            ("apps-more" | "apps-all" | "apps-filter" | "apps-undo", _) => {
+                self.click_apps_control(kind, window, cx);
                 None
             }
             ("repo", _) => Some(Action::OpenRepo { path: name.into(), axis: Axis::Right }),

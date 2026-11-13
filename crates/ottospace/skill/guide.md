@@ -56,9 +56,9 @@ ottospace ctl '{"cmd":"state"}'
 | `state.focused` | The pane that splits and keys act on |
 | `state.layout` | The active tab's split tree, or null: `{"leaf":3}` or `{"split":{"axis":"right","ratio":0.5,"a":..,"b":..}}`. `ratio` is the share of the split that `a` (the left or top side) takes |
 | `state.live` | The app pane that has the keyboard, if any |
-| `state.picker` | Null, or the open picker: `axis`, `new_tab`, `items` (`{"type":"terminal"}`, `{"type":"app","name":"..."}` for a running app, or `{"type":"closed","name":"...","path":"..."}` for an app of the `apps` setting that is not running), `query` (the filter's text), and `selected` (an index into `picker_rows`) |
+| `state.picker` | Null, or the open picker: `axis`, `new_tab`, `items` (`{"type":"terminal"}`, `{"type":"app","name":"..."}` for a running app, or `{"type":"closed","name":"...","path":"..."}` for a pinned app (the `apps` setting) that is not running), `query` (the filter's text), and `selected` (an index into `picker_rows`) |
 | `picker_rows` | Null, or the open picker's rows as drawn: `items` narrowed by the filter, then, once something is typed, every installed app that is not running and matches, as `closed` items. Choosing a `closed` row starts that app on the user's Mac: leave those to the user |
-| `field` | Null, or the text field that has the keyboard: `of` (`compose` or `picker`), `text`, `cursor` and `selection` (`[start, end]`) in UTF-16 units, `selected` (the selected text), `marked` (an input method's composition, or null), and `bounds` and `cursor_x` as last drawn |
+| `field` | Null, or the text field that has the keyboard: `of` (`compose`, `picker`, or `apps` for the filter of "All apps" in the Apps section), `text`, `cursor` and `selection` (`[start, end]`) in UTF-16 units, `selected` (the selected text), `marked` (an input method's composition, or null), and `bounds` and `cursor_x` as last drawn |
 | `state.confirm` | Null, or the quit question the user raised (⌘Q, the menu's Quit, the window's close button): `running`, the terminals a quit would end something in, each `pane`, `program` (its name, or null) and `background` (false: the program in front of the shell; true: a background or stopped job of the shell). It is the user's to answer: only the user's own keys and clicks cancel it. From the socket, while it is up: `key` with `enter` or `q` quits and `key` with `escape` cancels; any other `key` (also `cmd-q`), every pointer request (`mouse_down`, `mouse_drag`, `mouse`, `drag`) and every request that would take the keyboard (`enter`, `picker`, `compose`, `keys`, `ax_overlay`) fails with `the quit question is up` and changes nothing. Every other request runs underneath and leaves it up, e.g. `split`, `focus`, `close`, `new_tab`, `type`, `scroll`. A pane that closes leaves `running`; when it empties the question goes away, and ottospace does not quit. `quit` never asks, and quits under the question too |
 | `state.keys` | True while the key reference covers the window |
 | `state.sidebar` | The open rail section, or null |
@@ -67,7 +67,8 @@ ottospace ctl '{"cmd":"state"}'
 | `version` | The build, as the status bar shows it: version and the first seven characters of the commit (`0.1.0 · a4a2582`), or `0.1.0 · local` for a build from source |
 | `font`, `cell` | The terminal font in use (`name`, `size`) and the size of one character cell `[w, h]` in points |
 | `notice` | Null, or the problem the status bar shows (a mistake in the settings, an app that could not be hosted). It is not `error`, which means the request failed |
-| `closed_apps` | Apps the user's settings name that are not running. `open_app` starts one |
+| `closed_apps` | The names of the user's pinned apps that are not running. `open_app` starts one: leave that to the user. The Dock's apps and the rest are in `apps_bar` only: `open_app` does not start those |
+| `apps_bar` | The Apps section below the running apps. `not_running`: the user's pinned apps, then the apps of their Dock, each `name`, `path` (the bundle), `pinned` and `suggested` (it is there because the Dock has it). `more`: suggestions behind "and N more" (shown while `more_open`). `all`: every other installed app by name, narrowed by `filter`, listed only while `all_open`; `all_count` of them whatever the filter. `filtering`: the filter has the keyboard (`field.of` is `apps`). `undo`: `Pinned`, `Unpinned` or `Suggestion hidden` while the section offers to take that back, else null. There is no request to pin or hide, and a `key` or a sneak label you send that would pin, unpin, hide or undo is refused ("settings are the user's to change"): a pin writes the user's settings file, and is theirs to make |
 | `apps` | Running apps that `open_app` can host: `name`, `windows` (how many it has open) and `icon` (true if its icon was read) |
 | `state.tasks.list` | Every task: `id`, `title`, `state`, `priority`, `snoozed_until`, `dismissed`, `project` (from a `#tag`, or null), `repo` (a repository path, or null), `agent`, `paths`, `resolved`, `skills`, `created` (when it was filed, in milliseconds since 1970, or null) and `session` (null, or the session it was adopted from: `runner`, `id`, and `state`, the state the task last took from it) |
 | `compose_read` | True once the tags of the line in the new-task box have been looked up (names and paths are read on another thread, a moment after the line changes). Wait for it before pressing ↵ for the user |
@@ -438,7 +439,8 @@ ottospace ctl '{"cmd":"enter","pane":4}'
 ottospace ctl '{"cmd":"leave"}'
 ```
 
-`open_app` hosts a running app's main window in a pane. For an app in `closed_apps` it starts
+`open_app` hosts a running app's main window in a pane. For an app in `closed_apps` (the
+user's pinned apps, no other) it starts
 the app first and hosts the window when it appears, so the reply comes before the pane exists:
 read `state` again. `enter` gives that app the keyboard;
 `leave` takes it back.

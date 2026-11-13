@@ -6,7 +6,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::mpsc::{Receiver, Sender};
@@ -32,7 +32,7 @@ use ottospace_core::marks::{Field, MarkInput, MarkOf, MarkRef, letter};
 use ottospace_core::model::CONFIRM_UP;
 use ottospace_core::rules::{self, Facts};
 use ottospace_core::scrollbar::{Extent, key_step};
-use ottospace_core::settings::{Installed, closed_apps};
+use ottospace_core::settings::Installed;
 use ottospace_core::tasks::{Assign, Group, Heading, MAX_TITLE, State, Task, TaskId, TaskRow};
 use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, scroll_key, select_kind, visual_key};
 use ottospace_core::{
@@ -408,6 +408,8 @@ const KEYS_LIST: &[(&str, &str)] = &[
     ("U", "Task: undo the last of these"),
     ("R / M / X / U", "Mark: rename / letter / remove / put back"),
     ("⇧J ⇧K", "Mark: move down / up"),
+    ("P / X / U", "App not running: pin or unpin / hide a suggestion / undo"),
+    ("/", "Apps: filter all apps"),
     ("Esc", "Leave"),
 ];
 const KEYS_VISUAL: &[(&str, &str)] = &[
@@ -596,8 +598,6 @@ struct Workspace {
     /// is being served (also a key or click it injects) or the tick is doing its own work.
     input: Origin,
     apps: Vec<capture::App>,
-    /// Apps the settings name that are not running: listed under the running ones.
-    closed: Vec<Installed>,
     /// Apps started from the list, and where each one's window goes once it has one.
     launching: Vec<Launch>,
     /// The apps found installed, for the picker.
@@ -859,7 +859,6 @@ impl Workspace {
             sneak_spent: false,
             input: Origin::User,
             apps: Vec::new(),
-            closed: Vec::new(),
             launching: Vec::new(),
             installed: apps::Scan::default(),
             icons: HashMap::new(),
@@ -894,7 +893,9 @@ impl Workspace {
             focus,
             _subscriptions: subscriptions,
         };
+        this.tell_app_settings();
         this.refresh_apps();
+        this.offer_installed(cx);
         this.stored = this.kept_tasks(); // what was read needs no writing back
         this.restore_marks(cx);
         this
@@ -923,6 +924,13 @@ impl Workspace {
         if opens_repos && matches!(action, Action::ToggleSection { section: Section::Repos }) {
             self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
         }
+        // Opening the Apps section too: apps start and quit, and the Dock changes.
+        if self.model.sidebar != Some(Section::Apps)
+            && matches!(action, Action::ToggleSection { section: Section::Apps })
+        {
+            self.refresh_apps();
+            self.offer_installed(cx);
+        }
         let line = self.model.compose_line().cloned();
         let field = self.model.field().map(|(of, _)| of);
         // The core has no clock: a task filed now is stamped with the time told here.
@@ -937,7 +945,9 @@ impl Workspace {
         let row = matches!(action, Action::RowSnooze { .. } | Action::RowHold { .. } | Action::RowDismiss { .. });
         // And the offer to put a removed mark back.
         let unmarks = matches!(action, Action::MarkRemove { .. } | Action::MarkToggle { .. } | Action::ListDismiss);
-        if files || row || unmarks {
+        // And the offer to take a pin, an unpin or a hidden suggestion back.
+        let pins = matches!(action, Action::AppPin { .. } | Action::AppHide { .. } | Action::ListPin);
+        if files || row || unmarks || pins {
             self.model.update(Action::Tick { now: now_ms() }.sent_by(Origin::System));
         }
         let effects = self.model.update(action.sent_by(origin));
@@ -956,6 +966,7 @@ impl Workspace {
         self.store_marks();
         // New marks need looking for; what was found is believed a while, so this is cheap.
         self.check_marks(cx);
+        self.load_icons(cx);
         // What an effect dispatches in turn (a picked app's pane, a label's control) has the same sender.
         self.with_origin(origin, |this| this.carry_out(&effects, window, cx));
         cx.notify();
@@ -1012,6 +1023,7 @@ impl Workspace {
                     let _ = self.open_app(name, *axis, *new_tab, window, cx);
                 }
                 Effect::LaunchApp { name, path, axis, new_tab } => self.launch_picked(name, path, *axis, *new_tab),
+                Effect::SaveApps { changes } => self.save_apps(changes),
                 Effect::Visual { pane, on } => {
                     if let Some(terminal) = self.terminals.get(pane) {
                         terminal.set_visual(*on);
@@ -1970,8 +1982,13 @@ impl Workspace {
             // line with its list) and each node's click target by task id. Also how often
             // lattice lines were built and painted, here and in empty panes.
             "home_drawn": self.home.borrow().snapshot(),
-            // Apps from the settings that are not running: `open_app` starts one.
-            "closed_apps": self.closed.iter().map(|app| &app.name).collect::<Vec<_>>(),
+            // The pinned apps that are not running: `open_app` starts one. The Dock's and the
+            // rest are in `apps_bar`: those are the user's to start.
+            "closed_apps": self.pinned_closed().map(|app| app.name).collect::<Vec<_>>(),
+            // The Apps section below the running apps: `not_running` (each with `name`, `path`,
+            // `pinned`, `suggested`), `more` behind "and N more", `all` (every other installed
+            // app, while `all_open`; `all_count` of them) narrowed by `filter`, and `undo`.
+            "apps_bar": self.model.apps_bar(),
             // The Apps list: what can be hosted now. `icon`: its icon was read.
             "apps": self.apps.iter().map(|app| serde_json::json!({
                 "name": app.name, "windows": app.windows, "icon": self.icons.contains_key(&app.name),
@@ -2090,10 +2107,10 @@ impl Workspace {
             Some(_) => return Err("this test run may host only the app it started".into()),
             None => match capture::find(name, window_managed) {
                 Ok(target) => target,
-                // An app from the settings that is not running: start it, and host its window
-                // when it has one.
-                Err(err) => match self.closed.iter().find(|closed| closed.name == name).cloned() {
-                    Some(app) => return self.launch(app, axis, new_tab, None),
+                // A listed app that is not running: start it, and host its window when it has one.
+                // Only one the user pinned: not every app the Dock or the folders have.
+                Err(err) => match self.pinned_closed().find(|app| app.name == name) {
+                    Some(app) => return self.launch(Installed { name: app.name, path: app.path }, axis, new_tab, None),
                     None => return Err(err),
                 },
             },
@@ -2514,6 +2531,9 @@ impl Workspace {
     /// List mode takes every key but ⌘ shortcuts: they move over the bar's rows and act on one.
     fn list_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
         let key = &event.keystroke;
+        if self.model.app_lists.filtering {
+            return self.apps_filter_key(event, window, cx);
+        }
         if key.modifiers.platform {
             return; // ⌘ shortcuts still reach their bindings; ⌘⇧E leaves
         }
@@ -2531,13 +2551,15 @@ impl Workspace {
             Some(ListKey::Rename) => Action::ListMarkEdit { field: Field::Name },
             Some(ListKey::Letter) => Action::ListMarkEdit { field: Field::Key },
             Some(ListKey::Section(delta)) => {
-                self.refresh_lists(); // the section it lands on shows what is there now
+                self.refresh_lists(cx); // the section it lands on shows what is there now
                 Action::ListSection { delta }
             }
             Some(ListKey::Snooze) => Action::ListSnooze { until: now_ms().saturating_add(SNOOZE_MS) },
             Some(ListKey::Hold) => Action::ListHold,
             Some(ListKey::Dismiss) => Action::ListDismiss,
             Some(ListKey::Undo) => Action::ListUndo,
+            Some(ListKey::Pin) => Action::ListPin,
+            Some(ListKey::Filter) => Action::AppsFilter { on: true },
             Some(ListKey::Leave) => Action::LeaveList,
             None => return,
         };
@@ -2564,8 +2586,7 @@ impl Workspace {
                 });
                 return Some(at + headings.count());
             }
-            // A "Not running" heading before the apps that are not.
-            Some(Section::Apps) => return Some(at + usize::from(at >= self.apps.len())),
+            Some(Section::Apps) => return Some(self.apps_child(at)),
             // The offer to put a mark back, if it shows, is above the rows.
             Some(Section::Marks) => return Some(at + usize::from(self.mark_offered().is_some())),
             _ => return Some(at),
@@ -2578,12 +2599,14 @@ impl Workspace {
 
     /// The offer to take a task's move back, while it shows. A removed mark's is the Marks section's.
     fn task_offer(&self) -> Option<ottospace_core::tasks::Notice> {
-        self.model.undo_offer.filter(|offer| offer.moved != ottospace_core::tasks::Moved::MarkRemoved)
+        let tasks = |moved: ottospace_core::tasks::Moved| moved != ottospace_core::tasks::Moved::MarkRemoved;
+        self.model.undo_offer.filter(|offer| tasks(offer.moved) && !offer.moved.of_apps())
     }
 
     /// Reads the Apps and Repos lists again.
-    fn refresh_lists(&mut self) {
+    fn refresh_lists(&mut self, cx: &mut Context<Self>) {
         self.refresh_apps();
+        self.offer_installed(cx);
         self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
     }
 
@@ -2655,9 +2678,9 @@ impl Workspace {
     /// Opens the pane picker: a terminal, then each running app.
     fn open_picker(&mut self, axis: Axis, new_tab: bool, window: &Window, cx: &mut Context<Self>) {
         self.refresh_apps();
-        // What `refresh_apps` just listed: running apps, then those of the settings that are not.
+        // What `refresh_apps` just listed: running apps, then the pinned ones that are not.
         let apps = self.apps.iter().map(|app| PickItem::App { name: app.name.clone() });
-        let closed = self.closed.iter().map(|app| PickItem::Closed { name: app.name.clone(), path: app.path.clone() });
+        let closed = self.pinned_closed().map(|app| PickItem::Closed { name: app.name, path: app.path });
         let items = std::iter::once(PickItem::Terminal).chain(apps).chain(closed).collect();
         self.offer_installed(cx);
         self.dispatch(Action::OpenPicker { axis, new_tab, items }, self.input, window, cx);
@@ -2806,8 +2829,11 @@ impl Workspace {
                 .hover(|s| s.bg(rgb(theme::SELECTED)))
                 .child(match item {
                     // An app shows its icon where the tag would be.
-                    PickItem::App { name } | PickItem::Closed { name, .. } if self.icons.contains_key(name) => {
-                        div().w(px(36.)).child(self.app_icon(name))
+                    // A running app's icon is kept by its name, one that is not by its bundle.
+                    PickItem::App { name: key } | PickItem::Closed { path: key, .. }
+                        if self.icons.contains_key(key) =>
+                    {
+                        div().w(px(36.)).child(self.app_icon(key))
                     }
                     _ => div().w(px(36.)).text_xs().text_color(rgb(color)).child(tag),
                 })
@@ -3038,7 +3064,7 @@ impl Workspace {
                     .child("↻")
                     .child(self.controls.mark("bar:refresh"))
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.refresh_lists();
+                        this.refresh_lists(cx);
                         cx.notify();
                     }))
             }))
@@ -3088,41 +3114,21 @@ impl Workspace {
     }
 
     /// Lists the apps that can be hosted now, and reads the icon of each one not seen before.
+    /// The core is told which bundles run: it lists the pinned and suggested apps that do not.
     fn refresh_apps(&mut self) {
+        let before: Vec<String> = self.apps.iter().map(|app| app.name.clone()).collect();
         self.apps = running_apps(self.hosting, self.host_only);
         let running: Vec<String> = self.apps.iter().map(|app| app.name.clone()).collect();
-        // Never in a test run: choosing one starts a real app.
-        let offer = self.hosting && self.host_only.is_none();
-        let wanted: Vec<Installed> = config::get()
-            .settings
-            .apps
-            .iter()
-            .filter(|_| offer)
-            .filter_map(|name| {
-                let path = icon::app_path(name.trim())?.to_string_lossy().into_owned();
-                Some(Installed { name: name.trim().to_string(), path })
-            })
-            .collect();
-        let bundles: Vec<String> = if wanted.is_empty() { Vec::new() } else { apps::running_bundles() };
-        self.closed = closed_apps(&wanted, &bundles);
-        // The list as list mode walks it: running apps, then the others.
-        let names = running.iter().cloned().chain(self.closed.iter().map(|app| app.name.clone())).collect();
-        self.model.update(Action::SetApps { names }.sent_by(Origin::System));
+        self.model.update(Action::SetApps { names: running.clone() }.sent_by(Origin::System));
+        self.tell_installed();
         // An app that quit loses its icon: a later app of the same name may have another.
-        self.icons.retain(|name, _| running.contains(name) || self.closed.iter().any(|app| app.name == *name));
-        let image = |png: Vec<u8>| Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png));
+        self.icons.retain(|name, _| running.contains(name) || !before.contains(name));
         for app in &self.apps {
             if !self.icons.contains_key(&app.name)
                 && let Some(png) = icon::png(app.pid, ICON_PIXELS)
             {
-                self.icons.insert(app.name.clone(), image(png));
-            }
-        }
-        for app in &self.closed {
-            if !self.icons.contains_key(&app.name)
-                && let Some(png) = icon::png_of_app(Path::new(&app.path), ICON_PIXELS)
-            {
-                self.icons.insert(app.name.clone(), image(png));
+                let image = Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png));
+                self.icons.insert(app.name.clone(), image);
             }
         }
     }
@@ -3154,6 +3160,28 @@ impl Workspace {
         };
         self.dispatch(action, self.input, window, cx);
         cx.notify();
+    }
+
+    /// The line a section shows after a move that can be taken back: "Dismissed · Undo". The
+    /// caller says what a click on it does.
+    pub(crate) fn undo_line(&self, id: &'static str, what: &'static str) -> Stateful<Div> {
+        div()
+            .id(id)
+            .relative()
+            .child(self.controls.mark(id))
+            .px_2()
+            .py_1()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .rounded_md()
+            .bg(rgb(theme::SELECTED))
+            .text_xs()
+            .text_color(rgb(theme::MUTED))
+            .cursor_pointer()
+            .child(what)
+            .child("·")
+            .child(div().text_color(rgb(theme::PRIMARY)).child("Undo"))
     }
 
     /// A click on the notice ("Dismissed · Undo"): what `u` does in list mode.
@@ -3384,23 +3412,7 @@ impl Workspace {
                 .child(div().px_2().pt_2().text_xs().text_color(rgb(theme::BORDER_STRONG)).child(agents))
         });
         let notice = self.task_offer().map(|notice| {
-            div()
-                .id("task-undo")
-                .relative()
-                .child(self.controls.mark("task-undo"))
-                .px_2()
-                .py_1()
-                .flex()
-                .items_center()
-                .gap_1p5()
-                .rounded_md()
-                .bg(rgb(theme::SELECTED))
-                .text_xs()
-                .text_color(rgb(theme::MUTED))
-                .cursor_pointer()
-                .child(notice.moved.title())
-                .child("·")
-                .child(div().text_color(rgb(theme::PRIMARY)).child("Undo"))
+            self.undo_line("task-undo", notice.moved.title())
                 .on_click(cx.listener(|this, _, window, cx| this.click_undo(window, cx)))
         });
         let sessions = self.render_sessions(listed, cx);
@@ -3547,64 +3559,6 @@ impl Workspace {
             list.track_scroll(&self.list_scroll).children(empty).children(items),
             &self.list_scroll,
         )
-    }
-
-    /// Running apps. A click hosts the app's main window in a pane.
-    fn render_apps(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let list = div()
-            .id("apps")
-            .flex_1()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .p_2()
-            .overflow_y_scroll()
-            .track_scroll(&self.list_scroll)
-            .children(self.apps.iter().enumerate().map(|(i, app)| {
-                let target = app.name.clone();
-                list_button(("app", i), self.model.list == Some(i))
-                    .py_1p5()
-                    .gap_3()
-                    .child(self.app_icon(&app.name))
-                    .child(self.controls.mark(format!("app:{target}")))
-                    .child(div().flex_1().min_w_0().truncate().child(app.name.clone()))
-                    // How many windows the app has open, when more than one.
-                    .when(app.windows > 1, |row| {
-                        // A fixed box with the digits centred in it. Digits have no descender, so
-                        // a line centred by its box sits high: one point of padding evens it.
-                        let badge = div().h(px(18.)).min_w(px(18.)).px_1().pt(px(1.)).flex_none().flex();
-                        let badge = badge.items_center().justify_center().rounded_full().bg(rgb(theme::SELECTED));
-                        let badge = badge.text_xs().line_height(px(16.)).text_color(rgb(theme::MUTED));
-                        row.child(badge.child(app.windows.to_string()))
-                    })
-                    // Fills the focused pane if it is empty. Else splits it: right, or down with shift.
-                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                        let axis = if e.modifiers().shift { Axis::Down } else { Axis::Right };
-                        let _ = this.open_app(&target, axis, false, window, cx);
-                    }))
-            }))
-            // Apps the settings name that are not running. A click starts one and hosts its window.
-            .children(
-                (!self.closed.is_empty())
-                    .then(|| div().px_2().pt_2().text_xs().text_color(rgb(theme::MUTED)).child("Not running")),
-            )
-            .children(self.closed.iter().enumerate().map(|(i, app)| {
-                let (name, target, row) = (&app.name, app.name.clone(), self.apps.len() + i);
-                let waiting = self.launching.iter().any(|launch| launch.app.path == app.path);
-                list_button(("closed-app", i), self.model.list == Some(row))
-                    .py_1p5()
-                    .gap_3()
-                    .text_color(rgb(theme::MUTED))
-                    .child(self.app_icon(name))
-                    .child(self.controls.mark(format!("app:{target}")))
-                    .child(div().flex_1().min_w_0().truncate().child(name.clone()))
-                    .when(waiting, |row| row.child(div().flex_none().text_xs().child("opening…")))
-                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                        let axis = if e.modifiers().shift { Axis::Down } else { Axis::Right };
-                        let _ = this.open_app(&target, axis, false, window, cx);
-                    }))
-            }));
-        self.bars.tracked("apps", list, &self.list_scroll)
     }
 
     fn render_pane(&self, pane: &Pane, cx: &mut Context<Self>) -> impl IntoElement {
@@ -4299,7 +4253,7 @@ impl Render for Workspace {
                 this.dispatch(Action::ToggleVisual, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &ListMode, window, cx| {
-                this.refresh_lists();
+                this.refresh_lists(cx);
                 this.dispatch(Action::FocusList, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &SneakMode, window, cx| this.toggle_sneak(window, cx)))

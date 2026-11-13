@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::apps;
 use crate::ax::Target;
 use crate::compose::{self, Draft};
 use crate::edit::{Edit, Field};
@@ -512,6 +513,40 @@ pub enum Action {
     SetApps {
         names: Vec<String>,
     },
+    /// What the settings say of apps, read at start: the pinned ones (`apps`), those not to
+    /// suggest (`apps_hidden`), and whether the Dock's are suggested at all.
+    SetAppSettings {
+        pinned: Vec<apps::Entry>,
+        hidden: Vec<apps::Entry>,
+        suggest: bool,
+        /// A test run: a client's key may pin, hide and undo. Otherwise only the user's may:
+        /// they write the settings file.
+        clients_write: bool,
+    },
+    /// The Dock's apps, in its order, as the shell last read them.
+    SetDock {
+        apps: Vec<Installed>,
+    },
+    /// Pin the app at `path`, or unpin it if it is pinned. `Effect::SaveApps` says what to write.
+    AppPin {
+        path: String,
+    },
+    /// Stop suggesting the Dock's app at `path`.
+    AppHide {
+        path: String,
+    },
+    /// Take back the last pin, unpin or hide.
+    AppsUndo,
+    /// Pin or unpin the selected row's app.
+    ListPin,
+    /// Fold or unfold "and N more" or "All apps".
+    AppsToggle {
+        group: apps::Group,
+    },
+    /// Give the keyboard to the filter of "All apps", or take it back.
+    AppsFilter {
+        on: bool,
+    },
     /// Give the keyboard to the secondary bar (it opens if it is closed), or take it back.
     FocusList,
     LeaveList,
@@ -687,6 +722,7 @@ impl Action {
                 | Action::OpenRepo { .. }
                 | Action::TaskOpen { .. }
                 | Action::FocusList
+                | Action::AppsFilter { .. }
                 | Action::ListSection { .. }
                 | Action::ListChoose { .. }
                 | Action::SessionClick { .. }
@@ -730,6 +766,8 @@ impl Action {
             | Action::ToggleKeys
             | Action::ToggleVisual
             | Action::ToggleAxOverlay
+            // The Apps section's filter is a text field: typing in it takes the keyboard.
+            | Action::AppsFilter { on: true }
             | Action::QuitAsked { .. }
             | Action::MarkPrefix
             | Action::MarkEdit { .. }
@@ -793,6 +831,14 @@ impl Action {
             | Action::CloseCompose
             | Action::TaskFromLine { .. }
             | Action::SetApps { .. }
+            | Action::SetAppSettings { .. }
+            | Action::SetDock { .. }
+            | Action::AppPin { .. }
+            | Action::AppHide { .. }
+            | Action::AppsUndo
+            | Action::ListPin
+            | Action::AppsToggle { .. }
+            | Action::AppsFilter { on: false }
             | Action::FocusList
             | Action::LeaveList
             | Action::ListMove { .. }
@@ -865,6 +911,11 @@ pub enum Effect {
         name: String,
         axis: Axis,
         new_tab: bool,
+    },
+    /// The pinned or hidden apps changed: make these changes to `apps` and `apps_hidden` in
+    /// the settings file, as it is then.
+    SaveApps {
+        changes: Vec<crate::settings::ListChange>,
     },
     /// The user picked an installed app that is not running: start the bundle at `path` in the
     /// background and host its window when it has one.
@@ -977,7 +1028,10 @@ pub struct Model {
     pub picker: Option<Picker>,
     /// The apps found installed and the bundles running, as the shell last said (`SetInstalled`).
     #[serde(skip)]
-    installed: (Vec<Installed>, Vec<String>),
+    pub(crate) installed: (Vec<Installed>, Vec<String>),
+    /// The Apps section's pinned, suggested and hidden apps. In the snapshot it is `apps_bar`.
+    #[serde(skip)]
+    pub app_lists: apps::Lists,
     /// The quit question, while it is up.
     pub confirm: Option<Confirm>,
     /// The key reference overlay is showing.
@@ -1026,6 +1080,7 @@ impl Default for Model {
             now: 0,
             picker: None,
             installed: (Vec::new(), Vec::new()),
+            app_lists: apps::Lists::default(),
             confirm: None,
             keys: false,
             visual: None,
@@ -1085,11 +1140,13 @@ impl Model {
         self.pane(id).filter(|p| p.kind == Kind::Terminal).map(|p| p.id)
     }
 
-    /// The new-task box, the picker, the key reference, visual mode, sneak mode or the quit
-    /// question has the keyboard.
+    /// The new-task box, the picker, the key reference, the Apps section's filter, visual
+    /// mode, sneak mode or the quit question has the keyboard.
     fn holds_keyboard(&self) -> bool {
         let boxed = self.compose.is_some() || self.picker.is_some() || self.keys;
-        boxed || self.visual.is_some() || self.sneak.is_some() || self.confirm.is_some()
+        // The Apps section's filter is a text field with the keyboard, as the picker's is.
+        let filtering = self.app_lists.filtering;
+        boxed || filtering || self.visual.is_some() || self.sneak.is_some() || self.confirm.is_some()
     }
 
     /// Why an action does nothing because of who sent it. Only the user may take the keyboard
@@ -1100,6 +1157,18 @@ impl Model {
         let boxed = self.picker.is_some() || self.compose.is_some();
         match action {
             _ if origin == Origin::User => None,
+            // A pin, an unpin, a hidden suggestion and their undo write the user's settings
+            // file: no client's key or label does that, but in a test run.
+            Action::AppPin { .. } | Action::AppHide { .. } | Action::AppsUndo | Action::ListPin
+                if !self.app_lists.clients_write =>
+            {
+                Some(apps::USERS_ALONE)
+            }
+            Action::ListDismiss | Action::ListUndo
+                if self.sidebar == Some(Section::Apps) && !self.app_lists.clients_write =>
+            {
+                Some(apps::USERS_ALONE)
+            }
             action if self.sneak.is_some() && action.takes_keyboard() => Some("sneak mode is on"),
             action if self.confirm.is_some() && action.takes_keyboard() => Some(CONFIRM_UP),
             // A key a client presses is input to the wait, as a label's letter is to sneak mode.
@@ -1255,6 +1324,8 @@ impl Model {
                 | Action::ListSnooze { .. }
                 | Action::ListHold
                 | Action::ListDismiss
+                | Action::ListPin
+                | Action::AppsFilter { .. }
                 | Action::ListReorder { .. }
                 | Action::TaskUndo
                 | Action::ListUndo
@@ -1278,7 +1349,12 @@ impl Model {
         // Nor is there one to offer once it is taken back, or an agent's report made it stale.
         // The offer to put a mark back goes with the mark it would put back.
         let of_mark = self.undo_offer.is_some_and(|offer| offer.moved == Moved::MarkRemoved);
-        let stale = if of_mark { self.marks.removed().is_none() } else { moves || !self.tasks.can_undo() };
+        let of_apps = self.undo_offer.is_some_and(|offer| offer.moved.of_apps());
+        let stale = match (of_mark, of_apps) {
+            (true, _) => self.marks.removed().is_none(),
+            (_, true) => !self.app_lists.can_undo(),
+            _ => moves || !self.tasks.can_undo(),
+        };
         if stale {
             self.undo_offer = None;
         }
@@ -1290,6 +1366,7 @@ impl Model {
         self.panes.iter_mut().filter(|pane| stale.contains(&pane.id)).for_each(|pane| pane.fit = None);
         self.mark_stuck();
         self.prune_unfilled();
+        self.settle_app_filter();
         let rows = self.list_rows();
         let followed = selected.and_then(|row| rows.iter().position(|r| *r == row));
         // Its row is gone, or the move was the user's: stay at the same place, on a row.
@@ -1564,6 +1641,8 @@ impl Model {
                     }
                 } else if let Some(field) = &mut self.compose {
                     field.apply(edit);
+                } else {
+                    self.app_lists.filter.apply(edit);
                 }
             }
             Action::ComposeComplete => {
@@ -1639,6 +1718,18 @@ impl Model {
                 }
             }
             Action::SetApps { names } => self.apps = names,
+            Action::SetAppSettings { pinned, hidden, suggest, clients_write } => {
+                self.app_lists.set(pinned, hidden, suggest);
+                self.app_lists.resolve(&self.installed.0);
+                self.app_lists.clients_write = clients_write;
+            }
+            Action::SetDock { apps } => self.app_lists.set_dock(apps),
+            Action::AppPin { path } => self.app_pin(&path, effects),
+            Action::AppHide { path } => self.app_hide(&path, effects),
+            Action::AppsUndo => self.apps_undo(effects),
+            Action::ListPin => self.list_pin(effects),
+            Action::AppsToggle { group } => self.apps_toggle(group),
+            Action::AppsFilter { on } => self.apps_filter(on, effects),
             Action::FocusList if self.list.is_some() => self.list = None,
             Action::FocusList => {
                 self.leave(effects);
@@ -1681,6 +1772,9 @@ impl Model {
                 }
                 Some(ListRow::OlderSessions) => self.act(Action::ToggleOlderSessions, effects),
                 Some(ListRow::Mark(id)) => self.mark_go(id, axis, effects),
+                Some(ListRow::Closed(path)) => self.app_launch(&path, axis, effects),
+                Some(ListRow::MoreApps) => self.apps_toggle(apps::Group::More),
+                Some(ListRow::AllApps) => self.apps_toggle(apps::Group::All),
                 None => {}
             },
             Action::ListSnooze { until } => {
@@ -1701,6 +1795,8 @@ impl Model {
                 if let Some(id) = self.selected_mark() {
                     self.mark_remove(id);
                 }
+                // On a suggested app's row it hides the suggestion.
+                self.list_hide(effects);
             }
             Action::OpenPicker { axis, new_tab, items } => {
                 self.leave(effects);
@@ -1709,6 +1805,7 @@ impl Model {
                     Some(Picker { axis, new_tab, items, query: Field::new("", MAX_FILTER), selected: 0, installed });
             }
             Action::SetInstalled { apps, running } => {
+                self.app_lists.resolve(&apps);
                 self.installed = (apps, running);
                 if let Some(picker) = &mut self.picker {
                     // The rows change under the selection: it stays on its item, so ↵ opens
@@ -1845,6 +1942,7 @@ impl Model {
             Action::Unfilled { pane, why } => self.unfilled(pane, why),
             Action::MarkUndo => self.mark_undo(),
             Action::ListUndo if self.sidebar == Some(Section::Marks) => self.mark_undo(),
+            Action::ListUndo if self.sidebar == Some(Section::Apps) => self.apps_undo(effects),
             Action::ListUndo => self.tasks.undo(),
             Action::MarkRemove { mark } => {
                 if let Some(id) = self.marks.find(&mark) {
@@ -2152,13 +2250,15 @@ impl Model {
     /// box. It may be under the key reference or the quit question: see `field`.
     pub fn open_field(&self) -> Option<(&'static str, &Field)> {
         let picker = self.picker.as_ref().map(|picker| ("picker", &picker.query));
-        picker.or(self.compose.as_ref().map(|field| ("compose", field)))
+        let apps = self.app_lists.filtering.then_some(("apps", &self.app_lists.filter));
+        picker.or(self.compose.as_ref().map(|field| ("compose", field))).or(apps)
     }
 
     /// The open text field, if it has the keyboard: keys, the clipboard and the input method
     /// edit it. Not while the key reference, the quit question or sneak mode is over it.
     pub fn field(&self) -> Option<(&'static str, &Field)> {
-        self.open_field().filter(|_| !self.keys && matches!(self.mode(), Mode::Pick | Mode::Compose))
+        // List mode is the mode of the Apps section's filter: `open_field` has it only then.
+        self.open_field().filter(|_| !self.keys && matches!(self.mode(), Mode::Pick | Mode::Compose | Mode::List))
     }
 
     /// The line in the new-task box.
@@ -2169,7 +2269,7 @@ impl Model {
     /// The rows of the open section, top to bottom, as the secondary bar draws them.
     pub fn list_rows(&self) -> Vec<ListRow> {
         match self.sidebar {
-            Some(Section::Apps) => self.apps.iter().cloned().map(ListRow::App).collect(),
+            Some(Section::Apps) => self.app_rows(),
             Some(Section::Repos) => {
                 let paths = self
                     .repos
@@ -2872,6 +2972,14 @@ mod tests {
         Action::SessionClick { .. },
         Action::ToggleOlderSessions,
         Action::SetApps { .. },
+        Action::SetAppSettings { .. },
+        Action::SetDock { .. },
+        Action::AppPin { .. },
+        Action::AppHide { .. },
+        Action::AppsUndo,
+        Action::ListPin,
+        Action::AppsToggle { .. },
+        Action::AppsFilter { .. },
         Action::FocusList,
         Action::LeaveList,
         Action::ListMove { .. },
@@ -2982,6 +3090,14 @@ mod tests {
             Action::RowDismiss { id: 1 },
             Action::TaskFromLine { line: text(), known: Default::default(), open: false },
             Action::SetApps { names: Vec::new() },
+            Action::SetAppSettings { pinned: Vec::new(), hidden: Vec::new(), suggest: true, clients_write: false },
+            Action::SetDock { apps: Vec::new() },
+            Action::AppPin { path: text() },
+            Action::AppHide { path: text() },
+            Action::AppsUndo,
+            Action::ListPin,
+            Action::AppsToggle { group: apps::Group::All },
+            Action::AppsFilter { on: true },
             Action::FocusList,
             Action::LeaveList,
             Action::ListMove { delta: 1 },
@@ -3035,6 +3151,7 @@ mod tests {
         for action in &samples() {
             for origin in [Origin::User, Origin::Socket, Origin::System] {
                 let mut m = Model::default();
+                m.app_lists.clients_write = true; // a pin is refused on its own ground: not this rule
                 m.update(Action::Split { axis: Right, kind: Kind::Empty });
                 sneak(&mut m, 3);
                 let refused = (origin != Origin::User && action.takes_keyboard()).then_some("sneak mode is on");
@@ -5240,6 +5357,7 @@ mod tests {
         for action in &samples() {
             for origin in [Origin::User, Origin::Socket, Origin::System] {
                 let mut m = Model::default();
+                m.app_lists.clients_write = true; // a pin is refused on its own ground: not this rule
                 m.update(Action::Split { axis: Right, kind: Kind::Terminal });
                 m.update(Action::Split { axis: Right, kind: Kind::Terminal });
                 m.update(Action::QuitAsked { running: vec![running(1, "sleep")] });

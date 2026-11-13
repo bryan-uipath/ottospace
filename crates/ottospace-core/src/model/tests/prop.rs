@@ -59,6 +59,12 @@ impl Gen<'_> {
         self.one_of(&real, Self::stray)
     }
 
+    /// The bundle of an app of the pool, or a path that is no app's.
+    fn app_path(&mut self) -> String {
+        let name = self.name(APPS);
+        if self.rng.one_in(6) { "/tmp/Evil.app".to_string() } else { format!("/Applications/{name}.app") }
+    }
+
     fn delta(&mut self) -> i32 {
         self.rng.pick(&[1, -1, 1, -1, 2, -3, 0, i32::MAX, i32::MIN])
     }
@@ -496,6 +502,31 @@ const MAKERS: &[Make] = &[
     |_| Action::QuitConfirm,
     |_| Action::QuitCancel,
     |_| Action::Quit,
+    // The Apps section: what the settings, the Dock and the scan say, and the user's pins.
+    |g| {
+        let entry = |g: &mut Gen| {
+            let name = g.name(APPS);
+            let found =
+                g.rng.coin().then(|| Installed { path: format!("/Applications/{name}.app"), name: name.clone() });
+            crate::apps::Entry { text: name, app: found }
+        };
+        let pinned = (0..g.rng.below(3)).map(|_| entry(g)).collect();
+        let hidden = (0..g.rng.below(2)).map(|_| entry(g)).collect();
+        Action::SetAppSettings { pinned, hidden, suggest: !g.rng.one_in(4), clients_write: g.rng.coin() }
+    },
+    |g| {
+        let app = |g: &mut Gen| {
+            let name = g.name(APPS);
+            Installed { path: format!("/Applications/{name}.app"), name }
+        };
+        Action::SetDock { apps: (0..g.rng.below(4)).map(|_| app(g)).collect() }
+    },
+    |g| Action::AppPin { path: g.app_path() },
+    |g| Action::AppHide { path: g.app_path() },
+    |_| Action::AppsUndo,
+    |_| Action::ListPin,
+    |g| Action::AppsToggle { group: if g.rng.coin() { crate::apps::Group::More } else { crate::apps::Group::All } },
+    |g| Action::AppsFilter { on: g.rng.coin() },
     |g| {
         // As the shell does: only what `marks::parse` lets through.
         let kept: Vec<Mark> = (0..g.rng.below(4)).map(|_| g.kept_mark()).collect();
@@ -657,14 +688,18 @@ fn check(m: &Model) -> Result<(), String> {
     let whose = match (m.open_field(), &m.picker, &m.compose) {
         (Some(("picker", field)), Some(picker), _) => std::ptr::eq(field, &picker.query),
         (Some(("compose", field)), None, Some(line)) => std::ptr::eq(field, line),
-        (None, None, None) => true,
+        // With no box open, the Apps section's filter, while it has the keyboard.
+        (Some(("apps", field)), None, None) => m.app_lists.filtering && std::ptr::eq(field, &m.app_lists.filter),
+        (None, None, None) => !m.app_lists.filtering,
         _ => false,
     };
     ensure!(whose, "the open text field is {:?}; it is not the open box's", m.open_field().map(|(of, _)| of));
     let has_keys = matches!(m.mode(), Mode::Pick | Mode::Compose) && !m.keys;
-    ensure!(m.field().is_some() == (boxed && has_keys), "a text field has the keyboard in {:?} mode", m.mode());
+    let filter_keys = !boxed && m.app_lists.filtering && m.mode() == Mode::List && !m.keys;
+    let keyed = (boxed && has_keys) || filter_keys;
+    ensure!(m.field().is_some() == keyed, "a text field has the keyboard in {:?} mode", m.mode());
     if let Some((of, field)) = m.open_field() {
-        let (text, most) = (field.text(), if of == "picker" { MAX_FILTER } else { MAX_TITLE });
+        let (text, most) = (field.text(), if of == "compose" { MAX_TITLE } else { MAX_FILTER });
         ensure!(text.chars().count() <= most, "the {of} field holds {} characters", text.chars().count());
         ensure!(!text.chars().any(char::is_control), "the {of} field holds a control character: {text:?}");
         let (cursor, selection) = (field.cursor(), field.selection());
@@ -744,9 +779,26 @@ fn check(m: &Model) -> Result<(), String> {
         Some(Moved::MarkRemoved) => {
             ensure!(m.marks.removed().is_some(), "a removed mark is offered back and there is none")
         }
+        Some(moved) if moved.of_apps() => {
+            ensure!(m.app_lists.can_undo(), "a pin is offered back and there is none")
+        }
         Some(_) => ensure!(m.tasks.can_undo(), "a task move is offered back and there is none"),
         None => {}
     }
+    // The Apps section: an app is one bundle, listed once, and never while it runs. The filter
+    // has the keyboard only in list mode there, with "All apps" unfolded.
+    let bar = m.apps_bar();
+    let listed: Vec<&String> = bar.not_running.iter().chain(&bar.all).map(|row| &row.path).collect();
+    ensure!(unique(&listed), "an app is listed twice: {listed:?}");
+    ensure!(listed.iter().all(|path| !m.installed.1.contains(path)), "a running app is listed as not running");
+    ensure!(bar.all_open || bar.all.is_empty(), "apps show under a folded heading");
+    let filtering = m.app_lists.filtering;
+    ensure!(
+        !filtering || (bar.all_open && m.list.is_some() && m.sidebar == Some(Section::Apps)),
+        "the Apps filter has the keyboard out of its place: {:?} {:?}",
+        m.sidebar,
+        m.list
+    );
 
     // Marks.
     let list = &m.marks.list;
@@ -885,6 +937,11 @@ impl Run {
         let (mark_input, marks, removed) = (m.mark_input.clone(), m.marks.list.clone(), m.marks.removed().cloned());
         let rows = m.picker.iter().flat_map(|picker| picker.matches());
         let offered: Vec<String> = m.apps.iter().cloned().chain(rows.map(|row| row.label().to_string())).collect();
+        // What a pin, an unpin or a hide may name, and the apps the section's rows start.
+        let apps_before = m.apps_bar();
+        let app_rows: Vec<String> =
+            apps_before.not_running.iter().chain(&apps_before.all).map(|row| row.name.clone()).collect();
+        let offered: Vec<String> = offered.into_iter().chain(app_rows).collect();
         let chosen = m.picker.as_ref().and_then(|picker| picker.matches().get(picker.selected).copied().cloned());
         let field = (m.field().is_some(), m.open_field().map(|(_, field)| field.text().to_string()));
         let task_ids: Vec<TaskId> = m.tasks.list.iter().map(|task| task.id).collect();
@@ -1042,6 +1099,16 @@ impl Run {
                 Effect::Activate { id } => {
                     let own = format!("{:?}", Source::Own { id: id.clone() });
                     ensure!(labelled.contains(&own), "a control with no label is activated: {id:?}");
+                }
+                Effect::SaveApps { changes } => {
+                    // The settings file is the user's: a client's action writes it only in a test run.
+                    ensure!(user || m.app_lists.clients_write, "{origin:?} wrote the settings: {changes:?}");
+                    ensure!(!changes.is_empty(), "the settings are written for no change");
+                    let keys = changes.iter().all(|change| matches!(change.key, "apps" | "apps_hidden"));
+                    ensure!(
+                        keys && changes.iter().all(|change| !change.text.is_empty()),
+                        "a change names no list or no app: {changes:?}"
+                    );
                 }
                 Effect::Quit => {
                     ensure!(
@@ -1348,6 +1415,7 @@ fn code(sent: &Envelope) -> String {
         "Frame",
         "Running",
         "Installed",
+        "Entry",
     ];
     const ENUM_OF: &[(&str, &str)] = &[
         ("axis", "Axis"),
@@ -1364,6 +1432,7 @@ fn code(sent: &Envelope) -> String {
         ("edit", "Edit"),
         ("to", "Motion"),
         ("items", "PickItem"),
+        ("group", "crate::apps::Group"),
         ("missing", "Need"),
     ];
     // A mark is long, and half of it is JSON already: it is given as its file's text.
@@ -1796,6 +1865,70 @@ fn the_new_task_box_keeps_its_line_under_the_key_reference() {
     m.update(Action::CloseKeys);
     assert_eq!((m.keys, m.field().map(|(of, field)| (of, field.text()))), (false, Some(("compose", "fix"))));
     check(&m).unwrap();
+}
+
+/// Found by the random run: an app with no name was pinned, and the settings told to hold `""`.
+#[test]
+fn an_app_with_no_name_is_not_pinned() {
+    let app = |name: &str| Installed { name: name.into(), path: format!("/Applications/{name}.app") };
+    replay(&[
+        Action::SetAppSettings { pinned: vec![], hidden: vec![], suggest: true, clients_write: true }
+            .sent_by(Origin::User),
+        Action::SetInstalled { apps: vec![app("Slides"), app("")], running: vec![] }.sent_by(Origin::User),
+        Action::SetDock { apps: vec![app("")] }.sent_by(Origin::User),
+        Action::AppPin { path: "/Applications/.app".into() }.sent_by(Origin::System),
+        Action::AppHide { path: "/Applications/.app".into() }.sent_by(Origin::User),
+    ])
+    .unwrap();
+    // Nor is an empty line of the settings unpinned: it names nothing, also once the scan is in.
+    let empty = crate::apps::Entry { text: "".into(), app: Some(app("")) };
+    replay(&[
+        Action::SetInstalled { apps: vec![app("")], running: vec![] }.sent_by(Origin::System),
+        Action::SetAppSettings { pinned: vec![empty], hidden: vec![], suggest: true, clients_write: true }
+            .sent_by(Origin::System),
+        Action::AppPin { path: "/Applications/.app".into() }.sent_by(Origin::User),
+    ])
+    .unwrap();
+}
+
+/// Found by the random run: a pin of an app the settings name already wrote them for no change.
+#[test]
+fn a_pin_of_an_app_the_settings_name_already_writes_nothing() {
+    let sketch = Installed { name: "Sketch".into(), path: "/Applications/Sketch.app".into() };
+    let named = crate::apps::Entry { text: "Sketch".into(), app: None };
+    let mut m = Model::default();
+    m.update(Action::SetAppSettings { pinned: vec![named], hidden: vec![], suggest: true, clients_write: false });
+    assert!(m.apps_bar().not_running.is_empty(), "no scan yet: the line names no app found");
+    m.update(Action::SetInstalled { apps: vec![sketch.clone()], running: vec![] });
+    assert_eq!(m.apps_bar().not_running.len(), 1, "the scan came in: it is the pinned app");
+    // Pinned already: a pin unpins it, and that is one line off the file.
+    let effects = m.update(Action::AppPin { path: sketch.path.clone() });
+    assert!(matches!(&effects[..], [Effect::SaveApps { changes }] if changes.len() == 1 && !changes[0].add));
+    check(&m).unwrap();
+}
+
+/// Found by the long random run: thirteen panes in a row, evened out, and one closed. The
+/// ratios `Equalize` gave thirteen left a side of twelve less than its least share.
+#[test]
+fn a_pane_closed_from_a_long_even_row_leaves_every_side_its_share() {
+    let app = |window: u32, name: &str| Kind::App { window, title: "w1".into(), bundle: None, name: name.into() };
+    replay(&[
+        Action::Open { kind: app(1, "app"), axis: Axis::Right, beside: None }.sent_by(Origin::User),
+        Action::Split { axis: Axis::Right, kind: Kind::Terminal }.sent_by(Origin::User),
+        Action::Open { kind: app(2, "Slack"), axis: Axis::Down, beside: Some(1) }.sent_by(Origin::User),
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.sent_by(Origin::Socket),
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: Some(2) }.sent_by(Origin::System),
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: Some(7) }.sent_by(Origin::User),
+        Action::Open { kind: app(2, "Safari"), axis: Axis::Right, beside: Some(3) }.sent_by(Origin::User),
+        Action::DropPane { source: 1, target: 3, zone: Zone::Left }.sent_by(Origin::Socket),
+        Action::Adopt { kind: app(3, "Slack"), beside: Some(5) }.sent_by(Origin::User),
+        Action::Adopt { kind: Kind::Empty, beside: Some(9) }.sent_by(Origin::User),
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.sent_by(Origin::User),
+        Action::Open { kind: Kind::Empty, axis: Axis::Right, beside: Some(1) }.sent_by(Origin::Socket),
+        Action::Equalize.sent_by(Origin::System),
+        Action::Close { pane: None }.sent_by(Origin::Socket),
+    ])
+    .unwrap();
 }
 
 // Known, and left: a decision to make, not a slip.

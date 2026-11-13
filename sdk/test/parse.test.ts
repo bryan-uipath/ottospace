@@ -63,6 +63,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     home: { nodes: [], needs_you: [], counts: { needs_you: 0, running: 0, captured: 0, on_hold: 0, done: 0 } },
     home_drawn: { area: [0, 30, 1400, 846], panel: [80, 300, 520, 120], nodes: {}, lattice_builds: 1, lattice_paints: 2 },
     closed_apps: [],
+    apps_bar: { not_running: [], more: 0, more_open: false, all_count: 0, all_open: false, all: [], filter: "", filtering: false, undo: null },
     apps: [],
     ax_overlay: overlay,
     sneak: null,
@@ -89,4 +90,14 @@ test("a reply the types do not describe is an error that names the place", () =>
   const overlay = { pane: 4, targets: [flattened], count: 1, truncated: { depth: false, nodes: false, timeout: false }, millis: 1, error: null };
   assert.throws(() => snapshot(replyWith(overlay)), /ax_overlay\.targets\[0\]\.source should be an object/);
   assert.throws(() => snapshot({ ...replyWith(null), mode: "zen" }), /mode should be a mode, got "zen"/);
+});
+
+test("the field of each owner parses: the Apps section's filter too", () => {
+  const field = (of: string) => ({
+    of, text: "sk", cursor: 2, selection: [2, 2], selected: "", marked: null, bounds: [0, 0, 100, 20], cursor_x: 12,
+  });
+  for (const owner of ["compose", "picker", "apps"]) {
+    assert.equal(snapshot({ ...replyWith(null), field: field(owner) }).field?.of, owner);
+  }
+  assert.throws(() => snapshot({ ...replyWith(null), field: field("elsewhere") }), /field\.of should be/);
 });
