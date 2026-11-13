@@ -467,10 +467,13 @@ export type MarkInput =
   /** A workbook's name is being typed in its row; with `tab`, the title of that tab of it. */
   | { type: "workbook"; workbook: number; tab?: number; text: string };
 
-/** A pane of a workbook's tab. `app`: an app pane's app, by name. */
+/** A pane of a workbook's tab. `app`: an app pane's app, by name. A terminal's `lines` and
+ * `has_command` count the history it kept; the text is never in the state. */
 export interface WorkbookPane {
   kind: "terminal" | "app" | "empty";
   app?: string;
+  lines?: number;
+  has_command?: boolean;
 }
 
 /** One tab of a workbook. */

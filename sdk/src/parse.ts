@@ -745,7 +745,10 @@ function workbook(value: unknown, at: string): Workbook {
     const p = fields(value, at);
     const kind = p.kind;
     if (kind !== "terminal" && kind !== "app" && kind !== "empty") throw wrong(`${at}.kind`, "a pane's kind", kind);
-    return p.app === undefined ? { kind } : { kind, app: str(p.app, `${at}.app`) };
+    const read: WorkbookPane = p.app === undefined ? { kind } : { kind, app: str(p.app, `${at}.app`) };
+    if (p.lines !== undefined) read.lines = num(p.lines, `${at}.lines`);
+    if (p.has_command !== undefined) read.has_command = bool(p.has_command, `${at}.has_command`);
+    return read;
   };
   const tab = (value: unknown, at: string): WorkbookTab => {
     const t = fields(value, at);

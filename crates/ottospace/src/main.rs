@@ -1125,7 +1125,12 @@ impl Workspace {
                         let task = self.model.tabs.iter().find(|t| Some(t.id) == tab).and_then(|t| t.task);
                         vars.extend(task.map(|task| ("OTTOSPACE_TASK", task.to_string())));
                         let cwd = self.model.pane(*id).and_then(|pane| pane.cwd.as_deref());
-                        match Terminal::spawn(&vars, cwd) {
+                        // A workbook's terminal shows what it showed when saved: the core says so next.
+                        let history = effects.iter().find_map(|effect| match effect {
+                            Effect::History { pane, history } if pane == id => Some(history),
+                            _ => None,
+                        });
+                        match Terminal::spawn(&vars, cwd, history) {
                             Ok(terminal) => drop(self.terminals.insert(*id, terminal)),
                             Err(err) => self.error = Some(format!("terminal: {err}")),
                         }
@@ -1186,6 +1191,8 @@ impl Workspace {
                         }
                     }
                 }
+                // Carried out with its pane's `Opened`, before the shell starts.
+                Effect::History { .. } => {}
                 Effect::Snapshot { draft, material, pane } => self.ask_snapshot(draft, *material, *pane),
                 Effect::CaptureDropped { draft, material } => self.drop_capture(draft, *material),
                 Effect::CaptureKept { draft, dir, brief } => self.keep_capture(draft, dir, brief, cx),

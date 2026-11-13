@@ -25,7 +25,7 @@ use crate::tasks::{
     self, Assign, Heading, MAX_TITLE, Moved, NOTICE_MS, Notice, Ref, RefKind, State, Task, TaskId, TaskRow,
     TaskSection, Tasks,
 };
-use crate::workbook::{self, Workbook, WorkbookId, Workbooks};
+use crate::workbook::{self, History, Workbook, WorkbookId, Workbooks};
 
 /// The axes of a `Fit`'s sizes, in their order: width, height.
 const AXES: [Axis; 2] = [Axis::Right, Axis::Down];
@@ -923,19 +923,23 @@ pub enum Action {
     },
     /// Save the tab on show as a workbook, or update its tab of the one it came from. `uid`: a
     /// new one's file name, made up by the shell. `cwds`: each terminal's directory now.
+    /// `histories`: each terminal's last lines and the command in front, as the shell read them.
     WorkbookSave {
         uid: String,
         cwds: Vec<(PaneId, String)>,
+        histories: Vec<(PaneId, History)>,
     },
     /// Add the tab on show to a workbook, or update it there.
     WorkbookAddTab {
         workbook: WorkbookId,
         cwds: Vec<(PaneId, String)>,
+        histories: Vec<(PaneId, History)>,
     },
     /// Save the tabs on the bar as one new workbook.
     WorkbookSaveAll {
         uid: String,
         cwds: Vec<(PaneId, String)>,
+        histories: Vec<(PaneId, History)>,
     },
     /// Open a workbook's tabs (`tab`: that one, by place) in new tabs, keeping those that are
     /// open, and select the first. `home`: the user's folder, where a terminal starts whose
@@ -1358,6 +1362,12 @@ pub enum Effect {
         title: String,
         into: Option<PaneId>,
         axis: Axis,
+    },
+    /// Show a workbook's saved history in terminal `pane`, just opened (`Opened`), above its
+    /// prompt, and type its command there without running it.
+    History {
+        pane: PaneId,
+        history: History,
     },
     /// Freeze a picture of `pane` now, as capture `material` of `draft`, and read its text.
     Snapshot {
@@ -2792,9 +2802,13 @@ impl Model {
                 }
             }
             Action::RestoreWorkbooks { workbooks } => self.restore_workbooks(workbooks),
-            Action::WorkbookSave { uid, cwds } => self.workbook_save(uid, &cwds, effects),
-            Action::WorkbookAddTab { workbook, cwds } => self.workbook_add_tab(workbook, &cwds),
-            Action::WorkbookSaveAll { uid, cwds } => self.workbook_save_all(uid, &cwds, effects),
+            Action::WorkbookSave { uid, cwds, histories } => self.workbook_save(uid, (&cwds, &histories), effects),
+            Action::WorkbookAddTab { workbook, cwds, histories } => {
+                self.workbook_add_tab(workbook, (&cwds, &histories))
+            }
+            Action::WorkbookSaveAll { uid, cwds, histories } => {
+                self.workbook_save_all(uid, (&cwds, &histories), effects)
+            }
             Action::WorkbookOpen { workbook, tab, home } => self.workbook_open(workbook, tab, home, effects),
             Action::WorkbookEdit { workbook, tab } => self.workbook_edit(workbook, tab),
             Action::WorkbookRemove { workbook, tab } => self.workbook_remove(workbook, tab),
@@ -4867,9 +4881,9 @@ mod tests {
             Action::BriefShow { id: 1 },
             Action::BriefClose,
             Action::RestoreWorkbooks { workbooks: Vec::new() },
-            Action::WorkbookSave { uid: text(), cwds: Vec::new() },
-            Action::WorkbookAddTab { workbook: 1, cwds: Vec::new() },
-            Action::WorkbookSaveAll { uid: text(), cwds: Vec::new() },
+            Action::WorkbookSave { uid: text(), cwds: Vec::new(), histories: Vec::new() },
+            Action::WorkbookAddTab { workbook: 1, cwds: Vec::new(), histories: Vec::new() },
+            Action::WorkbookSaveAll { uid: text(), cwds: Vec::new(), histories: Vec::new() },
             Action::WorkbookOpen { workbook: 1, tab: None, home: None },
             Action::WorkbookEdit { workbook: 1, tab: None },
             Action::WorkbookRemove { workbook: 1, tab: None },

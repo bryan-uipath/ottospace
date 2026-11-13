@@ -385,9 +385,10 @@ A workbook is a saved, named set of tabs for a context that comes back, e.g. "Ma
 tab of dashboards, a tab of docs. It is not a task: no agent works it and it is never done.
 
 - **Save**: ⌘⇧S, File ▸ Save Tab as Workbook, or + in the Workbook section's header. It records
-  the tab's splits and their sizes, each terminal's directory as it is then, and each app pane's
-  app (bundle id and name). It records no scrollback, no command, and no window title, URL or
-  document. A tab with nothing in it is not saved.
+  the tab's splits and their sizes, and each app pane's app (bundle id and name); for each
+  terminal, its directory as it is then, its last 500 lines (`workbook_scrollback_lines`; `0`
+  keeps none) and the command line of the program in front of its shell, if one runs. No window
+  title, URL or document. A tab with nothing in it is not saved.
 - **Add a tab**: `Add tab` on a workbook's row, `a` on it in list mode, or File ▸ Add Tab to
   Workbook… (it opens the section in list mode: pick the row, `a`). **All tabs**: File ▸ Save All
   Tabs as Workbook saves every tab on the bar that has something in it, in bar order, as one new
@@ -400,8 +401,11 @@ tab of dashboards, a tab of docs. It is not a task: no agent works it and it is 
 - **Open**: click its row, or ⌘⇧E and ↵. Each of its tabs opens in a new tab, in order, and the
   first is selected; a tab of it that is open already is kept, not opened twice. A workbook of
   one tab opens under the workbook's name; of several, each tab under its own title. Each
-  terminal starts in its directory; if the directory is gone it starts in your home folder, and
-  the status bar says so. Each app pane gets a window of its app as a tab's mark does: one no
+  terminal starts a new shell in its directory; if the directory is gone it starts in your home
+  folder, and the status bar says so. Above its prompt, in grey, are the lines it kept, then
+  `── saved <date> ──`. A command it kept is typed on the prompt, not run: ↵ runs it, or edit or
+  clear it first. The divider names it too (`↵ runs: npm run dev`). The program itself did not
+  survive: this is not session restore. Each app pane gets a window of its app as a tab's mark does: one no
   pane holds (the only one, else the main one); an app that is not running is started. A pane
   whose app is not installed, or whose window is in another pane, stays empty and says why. A
   dot marks the row while a tab of it is open, and the tab bar marks its tabs with the workbook
@@ -412,6 +416,15 @@ tab of dashboards, a tab of docs. It is not a task: no agent works it and it is 
 - **Rename, Delete**: the words on its row (hover it, or select it in list mode), or `r` and
   `x` in list mode. Deleting leaves the open tabs alone; `Workbook deleted · Undo` shows for six
   seconds (`u` in list mode).
+- Kept lines and commands can hold secrets a tool printed, or a token in a command line. They
+  stay in your workbook files, plain text with escape sequences taken out, at most 64 KB a
+  terminal and 1 MB a workbook. Credential-shaped text is hidden as `[hidden]` (tokens, `key=`
+  passwords, `user:pass@` URLs, `Authorization:` headers; a private key block is left out), and
+  a command holding any is not kept. This is best effort: a secret of another shape is kept as
+  printed. Set `workbook_scrollback_lines` to `0` and no terminal text is saved at all. The save
+  says what it kept in the status bar, and the row says `history` while a workbook holds any;
+  deleting the workbook deletes its file. Never in the control socket's state (it counts them:
+  `lines`, `has_command`).
 - Kept in `~/.ottospace/workbooks`, one file each, readable by you alone. A file there that
   ottospace cannot read is counted in the status bar and left as it is.
 - Only you save, open, rename or delete a workbook: a socket client's key, click or label is
@@ -517,6 +530,7 @@ optional:
   "default_agent": "claude",
   "capture_key": "ctrl-alt-cmd-space",
   "capture": { "keep_images": true, "ax": true },
+  "workbook_scrollback_lines": 500,
   "apps": ["Microsoft Outlook", "Slack"],
   "apps_hidden": ["Music"],
   "suggest_dock_apps": true,
@@ -535,6 +549,7 @@ optional:
 | `session_quiet_minutes` | A task adopted from a session moves to Needs you once the session has been quiet this many minutes. `0`: a quiet session never moves its task | `3` |
 | `agent_models` | The models the `@agent` dropdown offers after each runner, in place of the built-in list: ids as the runner's CLI takes them. `claude` and `codex` are each a list; a runner left out keeps its own, an empty list offers the runner alone. An id that does not start with the runner's name gets it in the tag: `gpt-6-astra` is `@codex-gpt-6-astra`, `opus` is `@claude-opus`. An entry that is not a name (letters and digits, with `.`, `-` or `_` between them one at a time; at most 64) is left out and named in the status bar | `claude-fable-5-2`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`; `gpt-6-astra` |
 | `default_agent` | The agent a task with no `@agent` starts: a runner (`claude`, `codex`) or a runner and a model (`claude-opus-5-5`, `codex-gpt-6-astra`). The first WHO pick in the drawer | `claude` |
+| `workbook_scrollback_lines` | How many of a terminal's last lines a [workbook](#workbooks) keeps when it is saved, shown again above its prompt when it opens. At most `2000`. `0`: none is kept | `500` |
 | `capture_key` | The key that captures the pane in use, from any app: modifiers (`ctrl`, `alt`, `cmd`, `shift`) and a key, with `-` between them. `"off"`: no key. `OTTOSPACE_CAPTURE_KEY` wins over it. Not `ctrl-alt-space`: macOS uses it to change the input source | `ctrl-alt-cmd-space` |
 | `capture.keep_images` | Keep a capture's pictures on disk. `false`: no picture is ever written | `true` |
 | `capture.ax` | Read an app pane's accessibility tree with its picture. `false`: it is never read for a capture | `true` |

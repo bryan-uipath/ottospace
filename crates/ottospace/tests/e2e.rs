@@ -4561,7 +4561,7 @@ fn agent_argv(dir: &Path, name: &str) -> Option<Vec<String>> {
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_saved_tab_is_a_workbook_kept_between_runs() {
     use std::os::unix::fs::PermissionsExt;
-    let home = user_folder("workbook", r#"{"repos": []}"#);
+    let home = user_folder("workbook", r#"{"repos": [], "workbook_scrollback_lines": 0}"#);
     let dir = |name: &str| {
         std::fs::create_dir_all(home.join(name)).unwrap();
         home.join(name).canonicalize().unwrap()
@@ -4608,7 +4608,8 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
             (&json!("dri"), &json!("2 terminals"), &json!(true), &json!(1), &json!("normal")),
             "{row}"
         );
-        assert_eq!(row["panes"], json!([{"kind": "terminal"}, {"kind": "terminal"}]));
+        let kinds: Vec<&Value> = row["panes"].as_array().unwrap().iter().map(|pane| &pane["kind"]).collect();
+        assert_eq!(kinds, [&json!("terminal"), &json!("terminal")], "{row}");
         assert_eq!(titles(&named), ["dri"], "its tab takes the name");
         // The state names kinds, never a directory.
         assert!(!named["workbooks"].to_string().contains("/one"), "{}", named["workbooks"]);
@@ -4862,7 +4863,7 @@ fn nothing_is_drawn_over_the_window_buttons_with_a_section_or_the_drawer_open_or
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_workbook_keeps_several_tabs_and_opens_them_in_order() {
-    let home = user_folder("workbook-tabs", r#"{"repos": []}"#);
+    let home = user_folder("workbook-tabs", r#"{"repos": [], "workbook_scrollback_lines": 0}"#);
     let dir = |name: &str| {
         std::fs::create_dir_all(home.join(name)).unwrap();
         home.join(name).canonicalize().unwrap()
@@ -4935,6 +4936,88 @@ fn a_workbook_keeps_several_tabs_and_opens_them_in_order() {
     let removed = otto.user_key("x");
     assert_eq!((tabs(&removed), &removed["workbook_offer"]), (Some(1), &json!("updated")));
     assert_eq!(tabs(&otto.user_key("u")), Some(2));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// How many processes run exactly `line`, e.g. "sleep 2931".
+fn running(line: &str) -> usize {
+    let found = Command::new("pgrep").args(["-f", &format!("^{line}$")]).output().expect("pgrep");
+    String::from_utf8_lossy(&found.stdout).lines().count()
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_workbooks_terminal_comes_back_with_its_lines_and_its_command_typed_not_run() {
+    const SLEEP: &str = "sleep 2931";
+    let home = user_folder("workbook-history", r#"{"repos": [], "workbook_scrollback_lines": 50}"#);
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let saved = |reply: &Value| {
+        let text = reply.to_string();
+        text.contains("hist-a") || text.contains("hist-b") || text.contains(SLEEP)
+    };
+    {
+        let otto = Otto::launch_with("workbook-history-1", &env);
+        otto.call(json!({"cmd": "split"}));
+        otto.call(json!({"cmd": "type", "pane": 1, "text": "printf 'hist-%s\\n' a b\r"}));
+        otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^hist-b$"}));
+        otto.call(json!({"cmd": "type", "pane": 1, "text": format!("{SLEEP}\r")}));
+        otto.wait_for("the sleep to run", |_| (running(SLEEP) == 1).then_some(()));
+        // The status bar says what was kept, and the row that it holds history.
+        let saved_now = otto.user_key("cmd-shift-s");
+        let notice = saved_now["notice"].as_str().unwrap_or_default();
+        assert!(notice.contains("1 tab, ") && notice.contains("lines of history, 1 command"), "{saved_now}");
+        assert_eq!(saved_now["workbooks"][0]["summary"], "1 terminal · history");
+        otto.user_key("h i s t enter");
+        // A second tab, added: the workbook keeps two.
+        otto.call(json!({"cmd": "new_tab"}));
+        otto.call(json!({"cmd": "split"}));
+        otto.user_key("cmd-shift-e");
+        let added = otto.user_key("a");
+        let pane = &added["workbooks"][0]["tabs"][0]["panes"][0];
+        let lines = pane["lines"].as_u64().unwrap_or_default();
+        assert!(lines >= 3 && pane["has_command"] == json!(true), "{pane}");
+        // Counts only: none of the saved text is in the workbooks' state.
+        assert!(!saved(&added["workbooks"]), "{}", added["workbooks"]);
+        let files = workbook_files(&home);
+        let kept: Value = serde_json::from_str(&std::fs::read_to_string(&files[0]).unwrap()).unwrap();
+        let history = &kept["tabs"][0]["panes"][0]["history"];
+        let lines: Vec<&str> = history["lines"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert!(lines.contains(&"hist-a") && lines.contains(&"hist-b"), "{history}");
+        assert_eq!((&history["command"], kept["tabs"].as_array().map(Vec::len)), (&json!(SLEEP), Some(2)));
+    }
+    // Its sleep ended with that instance.
+    let otto = Otto::launch_with("workbook-history-2", &env);
+    otto.wait_for("the old sleep to end", |_| (running(SLEEP) == 0).then_some(()));
+    let listed = otto.call(json!({"cmd": "section", "section": "workbook"}));
+    assert!(!saved(&listed), "{listed}");
+    let row = at(rect(&otto.drawn()["workbooks"][0]["row"]), 0.3, 0.3);
+    let opened = otto.user_click(row);
+    let pane = pane_ids(&opened)[0];
+    assert!(!saved(&opened["workbooks"]), "{}", opened["workbooks"]);
+    // The lines, then the divider naming the command, then the prompt with the command typed on it.
+    let text = otto.wait_for("the command on the prompt", |o| {
+        let text = o.call(json!({"cmd": "capture", "pane": pane}))["text"].as_str().unwrap_or_default().to_string();
+        text.trim_end().ends_with(&format!("$ {SLEEP}")).then_some(text)
+    });
+    let lines: Vec<&str> = text.trim_end().lines().collect();
+    let at_line = |what: &dyn Fn(&str) -> bool| lines.iter().position(|line| what(line));
+    let (a, divider) = (at_line(&|line| line == "hist-a"), at_line(&|line| line.starts_with("── saved ")));
+    let prompt = Some(lines.len() - 1);
+    assert!(a < divider && divider < prompt && a.is_some(), "{text}");
+    assert!(lines[divider.unwrap()].contains(&format!("↵ runs: {SLEEP}")), "{text}");
+    // Typed, not run: no sleep until the user presses ↵.
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(running(SLEEP), 0, "{text}");
+    otto.call(json!({"cmd": "type", "pane": pane, "text": "\r"}));
+    otto.wait_for("↵ to run it", |_| (running(SLEEP) == 1).then_some(()));
+    otto.call(json!({"cmd": "type", "pane": pane, "text": "\u{3}"}));
+    // Deleting the workbook deletes its file, and the history in it.
+    assert_eq!(otto.user_key("cmd-shift-e")["state"]["sidebar"], "workbook");
+    assert_eq!(otto.user_key("x")["workbook_offer"], "deleted");
+    let left: Vec<String> =
+        workbook_files(&home).iter().filter_map(|path| std::fs::read_to_string(path).ok()).collect();
+    assert!(left.is_empty(), "{left:?}");
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
 }

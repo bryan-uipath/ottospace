@@ -12,7 +12,7 @@ use crate::marks::{Mark, PaneRecord, RecordKind, TabRecord};
 use crate::repos::{MAX_DIRS, RepoDir, RepoDirs, Worktree};
 use crate::sessions::{Link, Seen};
 use crate::settings::ListChange;
-use crate::workbook::{self, Workbook, WorkbookId};
+use crate::workbook::{self, History, Workbook, WorkbookId};
 
 const WORDS: &[&str] = &["fix", "zoom", "flicker", "deploy", "x"];
 const REPOS: &[&str] = &["app", "canvas", "My Project", "2048", "Ottospace"];
@@ -24,6 +24,8 @@ const UIDS: &[&str] = &["u1", "u2", "u3", "u4", ""];
 /// A workbook's id is its file's name: three that may be one, and some that may not.
 const BOOK_UIDS: &[&str] = &["00000000000000a1", "00000000000000a2", "00000000000000a3", "../../x", "A1", ""];
 const SESSIONS: &[&str] = &["s1", "s2", "s3"];
+/// In every line of a terminal's saved history, and nowhere else.
+const SAVED: &str = "SAVEDHISTORY";
 const CONTROLS: &[&str] = &["rail:apps", "pane:1", "close:1", "tab:1", "tab-close:1", "mark-remove:1", "c0", "c1"];
 
 /// Arguments for an action: from the model as it is half the time, else anything.
@@ -371,6 +373,17 @@ impl Gen<'_> {
     /// What the shell read for some panes: a directory, or a title.
     fn read(&mut self, pool: &[&str]) -> Vec<(PaneId, String)> {
         (0..self.rng.below(3)).map(|_| (self.pane(), self.name(pool))).collect()
+    }
+
+    /// Terminals' histories as the shell reads them: each line and command holds `SAVED`, which
+    /// nothing else sends, so the state can be searched for it.
+    fn histories(&mut self) -> Vec<(PaneId, History)> {
+        let history = |g: &mut Self| History {
+            lines: (0..g.rng.below(4)).map(|n| format!("{SAVED}-{n} {}", g.text())).collect(),
+            command: g.rng.coin().then(|| format!("{SAVED} {}", g.text())),
+            saved: g.time(),
+        };
+        (0..self.rng.below(3)).map(|_| (self.pane(), history(self))).collect()
     }
 
     fn need(&mut self) -> Need {
@@ -749,9 +762,13 @@ const MAKERS: &[Make] = &[
         let read = |book: &Workbook| workbook::parse(&workbook::write(book), &book.uid).ok();
         Action::RestoreWorkbooks { workbooks: kept.iter().filter_map(read).collect() }
     },
-    |g| Action::WorkbookSave { uid: g.rng.pick(BOOK_UIDS).to_string(), cwds: g.read(DIRS) },
-    |g| Action::WorkbookAddTab { workbook: g.workbook(), cwds: g.read(DIRS) },
-    |g| Action::WorkbookSaveAll { uid: g.rng.pick(BOOK_UIDS).to_string(), cwds: g.read(DIRS) },
+    |g| Action::WorkbookSave { uid: g.rng.pick(BOOK_UIDS).to_string(), cwds: g.read(DIRS), histories: g.histories() },
+    |g| Action::WorkbookAddTab { workbook: g.workbook(), cwds: g.read(DIRS), histories: g.histories() },
+    |g| Action::WorkbookSaveAll {
+        uid: g.rng.pick(BOOK_UIDS).to_string(),
+        cwds: g.read(DIRS),
+        histories: g.histories(),
+    },
     |g| Action::WorkbookOpen { workbook: g.workbook(), tab: g.book_tab(), home: g.rng.coin().then(|| g.name(DIRS)) },
     |g| Action::WorkbookEdit { workbook: g.workbook(), tab: g.book_tab() },
     |g| Action::WorkbookRemove { workbook: g.workbook(), tab: g.book_tab() },
@@ -827,6 +844,15 @@ fn unique<T: PartialEq>(list: &[T]) -> bool {
 }
 
 /// What must hold of a model at rest, whatever was done to it.
+/// A capture's drawings, a note still being typed among them as the note it becomes: when
+/// annotate mode ends (its pane is gone or live), the note is kept, and that is no change.
+fn drawn(material: &crate::capture::Material) -> Vec<crate::capture::Shape> {
+    let marks = &material.marks;
+    let typed = marks.note.as_ref().map(|(at, field)| (*at, field.text().trim().to_string()));
+    let typed = typed.filter(|(_, text)| !text.is_empty()).map(|(at, text)| crate::capture::Shape::Note { at, text });
+    marks.shapes.iter().cloned().chain(typed).collect()
+}
+
 fn check(m: &Model) -> Result<(), String> {
     // Tabs, their trees and the panes.
     ensure!(!m.tabs.is_empty(), "no tabs");
@@ -1278,6 +1304,9 @@ fn check_state(m: &Model) -> Result<(), String> {
     let _: Vec<Vec<String>> = m.workbooks.list.iter().map(|book| m.workbook_gone(book.id, None)).collect();
     let _: Vec<Option<String>> = m.workbooks.list.iter().map(|book| m.workbook_add_refusal(book.id)).collect();
     let _ = m.workbook_save_all_refusal();
+    // A terminal's saved history is kept, and never shown in the state: the rows count it only.
+    let rows = serde_json::to_string(&m.workbook_rows()).unwrap_or_default();
+    ensure!(!state.to_string().contains(SAVED) && !rows.contains(SAVED), "a saved history reached the state");
     let _ = (
         m.draft(m.compose_line().map(String::as_str).unwrap_or_default()),
         m.mark_refusal(MarkOf::Pane(None)),
@@ -1365,10 +1394,8 @@ impl Run {
         let cancels = matches!(action, Action::ComposeEscape | Action::CloseCompose | Action::CaptureCancel);
         let unasked =
             m.capture.as_ref().filter(|draft| cancels && !draft.asked).map(|draft| draft.materials.len()).unwrap_or(0);
-        let drafted: Option<(Option<String>, Vec<Vec<crate::capture::Shape>>)> = m
-            .capture
-            .as_ref()
-            .map(|draft| (m.compose_line().cloned(), draft.materials.iter().map(|m| m.marks.shapes.clone()).collect()));
+        let drafted: Option<(Option<String>, Vec<Vec<crate::capture::Shape>>)> =
+            m.capture.as_ref().map(|draft| (m.compose_line().cloned(), draft.materials.iter().map(drawn).collect()));
         let line_before = m.compose_line().cloned();
         let composing = m.composing();
 
@@ -1382,7 +1409,7 @@ impl Run {
         // A draft's title and drawings are the user's: nobody else changes them, and a line
         // someone else wrote is never a draft's title.
         if let (Some(before), Some(draft), false) = (&drafted, &m.capture, origin == Origin::User) {
-            let now = (m.compose_line().cloned(), draft.materials.iter().map(|m| m.marks.shapes.clone()).collect());
+            let now = (m.compose_line().cloned(), draft.materials.iter().map(drawn).collect());
             ensure!(*before == now, "a draft's title or drawings changed, and not by the user: {before:?}");
         }
         ensure!(m.capture.is_none() || !m.compose_theirs, "a draft's title holds what a client wrote");
@@ -1542,6 +1569,20 @@ impl Run {
                     self.shell.panes.retain(|id| *id != pane.id);
                     self.shell.live = self.shell.live.filter(|live| *live != pane.id);
                     self.shell.visual = self.shell.visual.filter(|visual| *visual != pane.id);
+                }
+                // A history goes to a terminal that has just started, of the user's opening, and is clean.
+                Effect::History { pane, history } => {
+                    let opened = effects.contains(&Effect::Opened(*pane));
+                    let terminal = m.pane(*pane).is_some_and(|p| p.kind == Kind::Terminal);
+                    ensure!(
+                        opened && terminal && user,
+                        "a history for pane {pane}, not a terminal just opened by the user"
+                    );
+                    // Plain, and nothing credential-shaped left in it.
+                    let plain = |text: &String| text.chars().all(crate::capture::shows);
+                    let hidden = history.lines.iter().all(|line| plain(line) && crate::secrets::hide(line) == *line);
+                    let command = history.command.as_ref().is_none_or(|c| plain(c) && !crate::secrets::holds_secret(c));
+                    ensure!(hidden && command, "a history not cleaned: {history:?}");
                 }
                 Effect::Live(pane) => {
                     ensure!(self.shell.live.is_none(), "pane {pane} goes live over {:?}", self.shell.live);
@@ -1991,6 +2032,7 @@ fn code(sent: &Envelope) -> String {
         "TerminalInfo",
         "Facts",
         "Started",
+        "History",
     ];
     const ENUM_OF: &[(&str, &str)] = &[
         ("axis", "Axis"),
@@ -2676,4 +2718,42 @@ fn a_workbook_whose_file_names_a_task_opens_as_a_tab_of_no_task() {
     // A terminal and nothing typed into it: no effect carries a command.
     assert_eq!(effects, vec![Effect::Opened(1)]);
     assert_eq!((m.tabs[m.active].task, m.current_task, m.tabs[m.active].title.as_str()), (None, None, "dri"));
+}
+
+/// A system `CloseTab` took the capture's pane off show, which ends annotate mode and keeps the
+/// note being typed: the check took that for a change to the drawings. A note being typed is one.
+#[test]
+fn closing_a_tab_by_the_system_leaves_a_drafts_title_and_drawings_as_they_are() {
+    replay(&[
+        Action::Open {
+            kind: Kind::App { window: 9, title: "w9".into(), bundle: None, name: "app".into() },
+            axis: Axis::Right,
+            beside: None,
+        }
+        .sent_by(Origin::User),
+        Action::Adopt {
+            kind: Kind::App {
+                window: 3,
+                title: "general".into(),
+                bundle: Some("com.safari".into()),
+                name: "Slack".into(),
+            },
+            beside: None,
+        }
+        .sent_by(Origin::Socket),
+        Action::CaptureStart {
+            pane: Some(2),
+            draft: "".into(),
+            word: "w0rdw0rdw0rd".into(),
+            facts: vec![],
+            images: false,
+        }
+        .sent_by(Origin::User),
+        Action::AnnotatePress { at: [0.5, 0.75], shift: true, alt: true, size: [800.0, f32::NAN as _] }
+            .sent_by(Origin::User),
+        Action::AnnotateRelease { at: [f32::NAN as _, 0.75] }.sent_by(Origin::User),
+        Action::FieldEdit { edit: Edit::Insert("x\t$,\t  ".into()) }.sent_by(Origin::User),
+        Action::CloseTab { index: Some(0) }.sent_by(Origin::System),
+    ])
+    .unwrap();
 }

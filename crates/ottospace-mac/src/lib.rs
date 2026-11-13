@@ -12,4 +12,5 @@ pub mod input;
 pub mod pasteboard;
 pub mod process;
 pub mod recovery;
+pub mod time;
 pub mod window;
