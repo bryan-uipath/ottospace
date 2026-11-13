@@ -49,6 +49,9 @@ import type {
   Picker,
   Palette,
   PaletteRow,
+  Inspector,
+  InspectorRow,
+  InspectorState,
   Rect,
   Repo,
   Running,
@@ -148,6 +151,7 @@ function axis(value: unknown, at: string): Axis {
 
 function mode(value: unknown, at: string): Mode {
   if (value === "normal" || value === "app" || value === "pick" || value === "palette") return value;
+  if (value === "inspect") return value;
   if (value === "visual" || value === "list" || value === "compose" || value === "sneak") return value;
   if (value === "confirm" || value === "mark" || value === "annotate" || value === "talk") return value;
   throw wrong(at, "a mode", value);
@@ -657,7 +661,7 @@ function pickItem(value: unknown, at: string): PickItem {
 
 function field(value: unknown, at: string): Field {
   const o = fields(value, at);
-  const owners = ["compose", "picker", "palette", "apps", "mark", "workbook", "note"];
+  const owners = ["compose", "picker", "palette", "inspector", "apps", "mark", "workbook", "note"];
   if (typeof o.of !== "string" || !owners.includes(o.of)) {
     throw wrong(`${at}.of`, "compose, picker, apps, mark, workbook or note", o.of);
   }
@@ -687,6 +691,56 @@ function picker(value: unknown, at: string): Picker {
 function palette(value: unknown, at: string): Palette {
   const o = fields(value, at);
   return { query: str(o.query, `${at}.query`), selected: num(o.selected, `${at}.selected`) };
+}
+
+function inspectorState(value: unknown, at: string): InspectorState {
+  const o = fields(value, at);
+  return {
+    pane: num(o.pane, `${at}.pane`),
+    app: str(o.app, `${at}.app`),
+    error: orNull(str)(o.error, `${at}.error`),
+    filter: str(o.filter, `${at}.filter`),
+    filtering: bool(o.filtering, `${at}.filtering`),
+  };
+}
+
+function inspectorRow(value: unknown, at: string): InspectorRow {
+  const o = fields(value, at);
+  return {
+    path: list(num)(o.path, `${at}.path`),
+    depth: num(o.depth, `${at}.depth`),
+    role: str(o.role, `${at}.role`),
+    pressable: bool(o.pressable, `${at}.pressable`),
+    settable: bool(o.settable, `${at}.settable`),
+    focused: bool(o.focused, `${at}.focused`),
+    children: num(o.children, `${at}.children`),
+    folded: bool(o.folded, `${at}.folded`),
+  };
+}
+
+function inspector(value: unknown, at: string): Inspector {
+  const o = fields(value, at);
+  const c = fields(o.counts, `${at}.counts`);
+  const role = (v: unknown, where: string): [string, number] => {
+    if (!Array.isArray(v) || v.length !== 2) throw wrong(where, "[role, count]", v);
+    return [str(v[0], `${where}[0]`), num(v[1], `${where}[1]`)];
+  };
+  return {
+    pane: num(o.pane, `${at}.pane`),
+    counts: {
+      nodes: num(c.nodes, `${at}.counts.nodes`),
+      pressable: num(c.pressable, `${at}.counts.pressable`),
+      settable: num(c.settable, `${at}.counts.settable`),
+      roles: list(role)(c.roles, `${at}.counts.roles`),
+      truncated: truncated(c.truncated, `${at}.counts.truncated`),
+      sparse: bool(c.sparse, `${at}.counts.sparse`),
+    },
+    millis: orNull(num)(o.millis, `${at}.millis`),
+    rows: orNull(list(inspectorRow))(o.rows, `${at}.rows`),
+    row_count: orNull(num)(o.row_count, `${at}.row_count`),
+    selected: orNull(num)(o.selected, `${at}.selected`),
+    outline: orNull(frame)(o.outline, `${at}.outline`),
+  };
 }
 
 function paletteRow(value: unknown, at: string): PaletteRow {
@@ -828,6 +882,7 @@ function model(value: unknown, at: string): Model {
     collapsed: list(heading)(o.collapsed, `${at}.collapsed`),
     picker: orNull(picker)(o.picker, `${at}.picker`),
     palette: orNull(palette)(o.palette, `${at}.palette`),
+    inspector: orNull(inspectorState)(o.inspector, `${at}.inspector`),
     confirm: orNull(confirm)(o.confirm, `${at}.confirm`),
     keys: bool(o.keys, `${at}.keys`),
     visual: orNull(num)(o.visual, `${at}.visual`),
@@ -1010,6 +1065,7 @@ export function snapshot(value: unknown): Snapshot {
     copied: orNull(str)(o.copied, "copied"),
     picker_rows: orNull(list(pickItem))(o.picker_rows, "picker_rows"),
     palette_rows: orNull(list(paletteRow))(o.palette_rows, "palette_rows"),
+    inspector: orNull(inspector)(o.inspector, "inspector"),
     field: orNull(field)(o.field, "field"),
     inbox: list(inboxRow)(o.inbox, "inbox"),
     needs_you: num(o.needs_you, "needs_you"),

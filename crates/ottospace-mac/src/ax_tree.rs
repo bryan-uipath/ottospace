@@ -5,6 +5,7 @@
 
 use std::collections::VecDeque;
 use std::ptr::NonNull;
+use std::time::{Duration, Instant};
 
 use objc2_application_services::{AXCopyMultipleAttributeOptions, AXError, AXUIElement, AXValue, AXValueType};
 use objc2_core_foundation::{CFArray, CFBoolean, CFNumber, CFRetained, CFString, CFType, CGPoint, CGSize};
@@ -16,8 +17,19 @@ use crate::ax::Window;
 const TIMEOUT: f32 = 0.5;
 
 /// Read per node, in this order.
-const ATTRS: [&str; 9] =
-    ["AXRole", "AXSubrole", "AXTitle", "AXDescription", "AXValue", "AXPosition", "AXSize", "AXEnabled", "AXChildren"];
+const ATTRS: [&str; 11] = [
+    "AXRole",
+    "AXSubrole",
+    "AXTitle",
+    "AXDescription",
+    "AXValue",
+    "AXPosition",
+    "AXSize",
+    "AXEnabled",
+    "AXChildren",
+    "AXIdentifier",
+    "AXFocused",
+];
 
 /// How attributes are fetched. `Batched` is one IPC per node for all of them (plus one for the
 /// actions); `Single` is one IPC per attribute. Both are kept to measure the difference.
@@ -46,12 +58,19 @@ pub fn read(window: &Window, limits: Limits, fetch: Fetch) -> Tree {
     // Each node with its parent's index. Children always come after their parent.
     let mut nodes: Vec<(Node, Option<usize>)> = Vec::new();
     let mut queue = VecDeque::from([(window.element(), None, 0)]);
+    let deadline = limits.millis.map(|ms| Instant::now() + Duration::from_millis(ms));
     while let Some((element, parent, depth)) = queue.pop_front() {
         if nodes.len() >= limits.nodes {
             truncated.nodes = true;
             break;
         }
-        let (node, children) = match read_node(&element, &names, fetch) {
+        if deadline.is_some_and(|at| Instant::now() >= at) {
+            truncated.timeout = true;
+            break;
+        }
+        // No call waits past the walk's time: one slow node cannot run it long.
+        let left = deadline.map_or(TIMEOUT, |at| at.saturating_duration_since(Instant::now()).as_secs_f32());
+        let (node, children) = match read_node(&element, &names, fetch, left.min(TIMEOUT)) {
             Ok(read) => read,
             Err(Failed::Gone) => continue,
             Err(Failed::Busy) => {
@@ -83,16 +102,18 @@ fn read_node(
     element: &AXUIElement,
     names: &CFArray<CFString>,
     fetch: Fetch,
+    timeout: f32,
 ) -> Result<(Node, Vec<CFRetained<AXUIElement>>), Failed> {
     // Per element: a timeout set on one element does not carry to the elements it returns.
-    unsafe { element.set_messaging_timeout(TIMEOUT) };
+    unsafe { element.set_messaging_timeout(timeout) };
     let values = match fetch {
         Fetch::Batched => batched(element, names)?,
         Fetch::Single => ATTRS.iter().map(|name| attr(element, name)).collect::<Result<_, _>>()?,
     };
     let text = |i: usize| string(values[i].as_deref()).filter(|s| !s.is_empty());
+    let role = text(0).unwrap_or_default();
     let node = Node {
-        role: text(0).unwrap_or_default(),
+        role: role.clone(),
         subrole: text(1),
         title: text(2),
         description: text(3),
@@ -100,6 +121,9 @@ fn read_node(
         frame: frame(values[5].as_deref(), values[6].as_deref()),
         enabled: values[7].as_deref().and_then(|v| v.downcast_ref::<CFBoolean>()).map(CFBoolean::as_bool),
         actions: actions(element)?,
+        identifier: text(9),
+        focused: flag(values[10].as_deref()),
+        settable: INPUT.contains(&role.as_str()) && settable(element),
         children: Vec::new(),
     };
     Ok((node, children(values[8].as_deref())))
@@ -151,6 +175,21 @@ fn attr(element: &AXUIElement, name: &str) -> Result<Option<CFRetained<CFType>>,
     let mut out: *const CFType = std::ptr::null();
     let err = unsafe { element.copy_attribute_value(&name, NonNull::from(&mut out)) };
     owned(err, out)
+}
+
+/// Roles whose value may be settable: asked only of these, so other nodes cost no extra call.
+const INPUT: [&str; 5] = ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField", "AXSlider"];
+
+fn flag(value: Option<&CFType>) -> bool {
+    value.and_then(|v| v.downcast_ref::<CFBoolean>()).is_some_and(CFBoolean::as_bool)
+}
+
+/// Whether the node's value can be set. Only asked, never set. Any failure: no, and the walk goes on.
+fn settable(element: &AXUIElement) -> bool {
+    let name = CFString::from_str("AXValue");
+    let mut settable: u8 = 0;
+    let err = unsafe { element.is_attribute_settable(&name, NonNull::from(&mut settable).cast()) };
+    err == AXError::Success && settable != 0
 }
 
 fn actions(element: &AXUIElement) -> Result<Vec<String>, Failed> {

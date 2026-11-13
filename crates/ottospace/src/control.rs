@@ -342,6 +342,15 @@ pub enum Request {
         #[serde(default)]
         pane: Option<PaneId>,
     },
+    /// For tests (`test_refusal`): opens the accessibility inspector on a pane (default: the
+    /// focused one) as the user, with `tree` as if read from its window at `0,0` (`window` its
+    /// size). A test run hosts no window to read.
+    InspectorFixture {
+        #[serde(default)]
+        pane: Option<PaneId>,
+        app: String,
+        tree: ottospace_core::ax::Tree,
+    },
     /// A task's brief: what was asked and what was captured for it. `id`: the task (an agent
     /// passes `$OTTOSPACE_TASK`); else the task of the tab with id `tab` (`$OTTOSPACE_TAB`);
     /// else the task whose tabs are on show, else the drawer's. The reply is `{"ok":true,"task":7,"dir":"..","path":"../brief.md",
@@ -483,6 +492,9 @@ pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
         Request::CaptureStart { .. } => {
             Some("capture_start is for tests (OTTOSPACE_E2E): only the user starts a capture, with the capture key")
         }
+        Request::InspectorFixture { .. } => {
+            Some("inspector_fixture is for tests (OTTOSPACE_E2E): only the user opens the inspector, on a hosted app")
+        }
         _ => None,
     }
 }
@@ -617,6 +629,12 @@ mod tests {
         let capture = parse(r#"{"cmd":"capture_start","pane":1}"#);
         assert!(test_refusal(&capture, false).expect("refused").contains("only the user"));
         assert_eq!(test_refusal(&capture, true), None);
+        // Nor the inspector: only the user opens it, on a window they host.
+        let tree =
+            r#"{"root":{"role":"AXWindow"},"count":1,"truncated":{"depth":false,"nodes":false,"timeout":false}}"#;
+        let fixture = parse(&format!(r#"{{"cmd":"inspector_fixture","app":"A","tree":{tree}}}"#));
+        assert!(test_refusal(&fixture, false).expect("refused").contains("only the user"));
+        assert_eq!(test_refusal(&fixture, true), None);
         let ordinary = [
             r#"{"cmd":"drop_pane","source":3,"target":1,"zone":"left"}"#,
             r#"{"cmd":"key","keys":"cmd-q"}"#,

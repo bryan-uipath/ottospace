@@ -1150,3 +1150,35 @@ fn a_workbook_hosts_its_apps_window_again_beside_its_terminal() {
     assert_eq!(built["state"]["panes"][0]["kind"]["title"], "Canary 1");
     assert_eq!((&built["workbooks"][0]["open"], &built["notice"]), (&json!(true), &Value::Null));
 }
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn the_inspector_reads_a_hosted_canary_window_and_counts_its_roles() {
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary", "CANARY_SOCKET", &[]);
+    wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
+    let otto = Proc::launch(
+        env!("CARGO_BIN_EXE_ottospace"),
+        "otto",
+        "OTTOSPACE_SOCKET",
+        &[("OTTOSPACE_E2E", "1"), ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string())],
+    );
+    let state = || otto.call(json!({"cmd": "state"}));
+    otto.call(json!({"cmd": "open_app", "name": CANARY}));
+    wait_for("the pane layout", || rect(&state()["bounds"]["1"]).filter(|b| b[2] > 1.0));
+    // The user's palette opens it on the focused app pane; it reads the window off the UI thread.
+    otto.call(json!({"cmd": "key", "keys": "cmd-p i n s p e c t o r enter", "as": "user"}));
+    let read = wait_for("the inspector's read", || {
+        Some(state()["inspector"].clone()).filter(|i| i["counts"]["nodes"].as_u64() > Some(0))
+    });
+    // GPUI exposes no controls: the window and its three traffic lights, all it has.
+    let counts = &read["counts"];
+    assert!(counts["pressable"].as_u64() >= Some(3), "{read}");
+    assert_eq!((&read["pane"], &counts["sparse"]), (&json!(1), &json!(true)), "{read}");
+    let roles: Vec<&str> = counts["roles"].as_array().unwrap().iter().filter_map(|r| r[0].as_str()).collect();
+    assert!(roles.contains(&"AXWindow") && roles.contains(&"AXButton"), "{roles:?}");
+    // `ax_tree` is as it was: what the inspector reads more of is not in its reply.
+    let tree = otto.call(json!({"cmd": "ax_tree"})).to_string();
+    assert!(!tree.contains("\"focused\"") && !tree.contains("\"settable\"") && !tree.contains("\"identifier\""));
+    // It goes with its pane.
+    assert!(otto.call(json!({"cmd": "close"}))["inspector"].is_null());
+}

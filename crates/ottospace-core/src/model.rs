@@ -13,6 +13,7 @@ use crate::compose::{self, Draft};
 use crate::edit::{Edit, Field, Motion};
 use crate::home::{self, Home};
 use crate::hosted::{self, Fit, Stuck};
+use crate::inspect::{self, Inspector};
 use crate::keys::Mods;
 use crate::layout::{Axis, Dir, Node, Rect, Zone};
 use crate::list::ListRow;
@@ -77,6 +78,8 @@ pub enum Mode {
     Pick,
     /// The command palette: keys filter commands and run one.
     Palette,
+    /// The accessibility inspector's filter has the keyboard.
+    Inspect,
     /// A cursor in a terminal's output: keys move it and select text to copy.
     Visual,
     /// The secondary bar: keys move over its rows and act on the selected one.
@@ -469,6 +472,40 @@ pub enum Action {
         index: Option<usize>,
     },
     ClosePalette,
+    /// Open the accessibility inspector on a pane, named for its `app`. Only the user's.
+    InspectorOpen {
+        pane: PaneId,
+        app: String,
+    },
+    /// The shell read the inspected pane's window: its tree, the window's frame, how long it took.
+    InspectorRead {
+        pane: PaneId,
+        tree: crate::ax::Tree,
+        window: crate::ax::Frame,
+        millis: f64,
+    },
+    /// The shell could not read it: why.
+    InspectorFailed {
+        pane: PaneId,
+        why: String,
+    },
+    InspectorClose,
+    /// Fold or unfold the node at `path` (child indices from the root).
+    InspectorFold {
+        path: Vec<usize>,
+    },
+    /// Select the node at `path`, or none: its frame is outlined on the pane.
+    InspectorSelect {
+        path: Option<Vec<usize>>,
+    },
+    /// Move the selection down (positive) or up the rows; it wraps.
+    InspectorMove {
+        delta: i32,
+    },
+    /// Give the keyboard to the inspector's filter, or take it back.
+    InspectorFilter {
+        on: bool,
+    },
     /// Show or hide the key reference.
     ToggleKeys,
     CloseKeys,
@@ -1045,6 +1082,21 @@ pub enum Action {
     },
 }
 
+/// What the right drawer shows (see `Model::drawer_view`).
+#[derive(PartialEq)]
+struct DrawerView {
+    talk: Option<(TaskId, bool)>,
+    compose: Option<bool>,
+    capture: Option<bool>,
+    brief: Option<TaskId>,
+}
+
+impl DrawerView {
+    fn shows(&self) -> bool {
+        self.talk.is_some() || self.compose.is_some() || self.capture.is_some() || self.brief.is_some()
+    }
+}
+
 /// Who sent an action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Origin {
@@ -1128,6 +1180,7 @@ impl Action {
             Action::Enter { .. }
             | Action::OpenPicker { .. }
             | Action::PaletteOpen
+            | Action::InspectorFilter { on: true }
             | Action::OpenCompose { .. }
             | Action::ToggleKeys
             | Action::ToggleVisual
@@ -1178,6 +1231,14 @@ impl Action {
             | Action::PaletteMove { .. }
             | Action::PaletteChoose { .. }
             | Action::ClosePalette
+            | Action::InspectorOpen { .. }
+            | Action::InspectorRead { .. }
+            | Action::InspectorFailed { .. }
+            | Action::InspectorClose
+            | Action::InspectorFold { .. }
+            | Action::InspectorSelect { .. }
+            | Action::InspectorMove { .. }
+            | Action::InspectorFilter { on: false }
             | Action::CloseKeys
             | Action::LeaveVisual
             | Action::SetRepos { .. }
@@ -1532,6 +1593,8 @@ pub struct Model {
     pub picker: Option<Picker>,
     /// The command palette, while it is open.
     pub palette: Option<Palette>,
+    /// The accessibility inspector, while it is open.
+    pub inspector: Option<Inspector>,
     /// The apps found installed and the bundles running, as the shell last said (`SetInstalled`).
     #[serde(skip)]
     pub(crate) installed: (Vec<Installed>, Vec<String>),
@@ -1628,6 +1691,7 @@ impl Default for Model {
             now: 0,
             picker: None,
             palette: None,
+            inspector: None,
             installed: (Vec::new(), Vec::new()),
             app_lists: apps::Lists::default(),
             confirm: None,
@@ -1674,6 +1738,16 @@ impl Model {
         self.panes.iter().find(|p| p.id == id)
     }
 
+    /// What the right drawer shows, and whether it has the keyboard.
+    fn drawer_view(&self) -> DrawerView {
+        DrawerView {
+            talk: self.talk.filter(|talk| talk.open).map(|talk| (talk.task, talk.keys)),
+            compose: self.compose.is_some().then(|| self.compose_keys()),
+            capture: self.capture.as_ref().map(|draft| draft.typing),
+            brief: self.brief,
+        }
+    }
+
     pub fn mode(&self) -> Mode {
         if self.confirm.is_some() {
             Mode::Confirm
@@ -1689,6 +1763,8 @@ impl Model {
             Mode::Compose
         } else if self.talk.is_some_and(|talk| talk.keys) {
             Mode::Talk
+        } else if self.inspector.as_ref().is_some_and(|i| i.filtering) {
+            Mode::Inspect
         } else if self.live.is_some() {
             Mode::App
         } else if self.annotated().is_some() {
@@ -1713,7 +1789,7 @@ impl Model {
     /// mode, sneak mode or the quit question has the keyboard.
     fn holds_keyboard(&self) -> bool {
         let boxed = self.compose_keys() || self.picker.is_some() || self.keys || self.annotated().is_some();
-        let boxed = boxed || self.palette.is_some();
+        let boxed = boxed || self.palette.is_some() || self.inspector.as_ref().is_some_and(|i| i.filtering);
         // The Apps section's filter is a text field with the keyboard, as the picker's is.
         let filtering = self.app_lists.filtering;
         boxed || filtering || self.visual.is_some() || self.sneak.is_some() || self.confirm.is_some()
@@ -1781,6 +1857,20 @@ impl Model {
                 Some(commands::USERS_ALONE)
             }
             Action::ToggleKeys if self.palette.is_some() => Some(commands::PALETTE_OPEN),
+            // The inspector shows another app's tree: only the user opens it and moves in it, and
+            // only the shell's own read fills it. It adds nothing a client can read or do.
+            Action::InspectorOpen { .. }
+            | Action::InspectorClose
+            | Action::InspectorFold { .. }
+            | Action::InspectorSelect { .. }
+            | Action::InspectorMove { .. }
+            | Action::InspectorFilter { .. } => Some(inspect::USERS_ALONE),
+            Action::InspectorRead { .. } | Action::InspectorFailed { .. } if origin == Origin::Socket => {
+                Some(inspect::USERS_ALONE)
+            }
+            Action::FieldEdit { .. } if self.field().is_some_and(|(of, _)| of == "inspector") => {
+                Some(inspect::USERS_ALONE)
+            }
             Action::ToggleKeys if boxed && !self.keys => Some("the picker or the new-task box is open"),
             // For the user it waits, as every pane action does. A client is told why.
             Action::SessionClick { .. } if boxed || self.keys || self.visual.is_some() => {
@@ -1847,7 +1937,9 @@ impl Model {
         // A draft in the right bar is not a box: the workspace stays in use beside it.
         let modal = self.compose.is_some() && self.capture.is_none();
         // The palette opens over nothing that has the keyboard, and holds it as the picker does.
-        if matches!(action, Action::PaletteOpen) && (self.holds_keyboard() || self.mark_input.is_some()) {
+        let opens =
+            matches!(action, Action::PaletteOpen | Action::InspectorFilter { on: true } | Action::InspectorOpen { .. });
+        if opens && (self.holds_keyboard() || self.mark_input.is_some()) {
             return Some("something else has the keyboard");
         }
         let boxed = self.picker.is_some() || modal || self.palette.is_some();
@@ -1916,6 +2008,12 @@ impl Model {
         let own_mark = own_mark || (renaming && matches!(action, Action::FieldEdit { .. }));
         if user && !own_mark {
             self.mark_input = None;
+        }
+        // The inspector's filter gives the keyboard back on the user's other moves.
+        let own_filter = matches!(action, Action::InspectorFilter { .. } | Action::InspectorMove { .. })
+            || (matches!(action, Action::FieldEdit { .. }) && self.field().is_some_and(|(of, _)| of == "inspector"));
+        if let Some(inspector) = self.inspector.as_mut().filter(|_| user && !own_filter) {
+            inspector.filtering = false;
         }
         if self.refusal(&action, origin).is_some() || unfielded {
             return effects;
@@ -2054,7 +2152,13 @@ impl Model {
             draft.typing = false;
         }
         self.by_user = user;
+        // The inspector shows in the drawer's place: what the drawer is asked to show next takes it back.
+        let (drawer, inspecting) = (self.drawer_view(), matches!(action, Action::InspectorOpen { .. }));
         self.act(action, &mut effects);
+        let view = self.drawer_view();
+        if !inspecting && view != drawer && view.shows() {
+            self.inspector = None;
+        }
         self.by_user = false;
         self.settle_capture(&mut effects);
         // Nor is there one to offer once it is taken back, or an agent's report made it stale.
@@ -2079,6 +2183,12 @@ impl Model {
         self.prune_unfilled();
         self.settle_app_filter();
         self.settle_talk();
+        // The inspector goes with its pane, and gives up the keyboard to an app that takes it.
+        let panes = &self.panes;
+        self.inspector = self.inspector.take().filter(|i| panes.iter().any(|p| p.id == i.pane));
+        if let Some(inspector) = self.inspector.as_mut().filter(|_| self.live.is_some()) {
+            inspector.filtering = false;
+        }
         let rows = self.list_rows();
         let followed = selected.and_then(|row| rows.iter().position(|r| *r == row));
         // Its row is gone, or the move was the user's: stay at the same place, on a row.
@@ -2377,6 +2487,11 @@ impl Model {
                 Some("mark" | "workbook") => {
                     if let Some(text) = self.mark_input.as_mut().and_then(MarkInput::text_mut) {
                         text.apply(edit);
+                    }
+                }
+                Some("inspector") => {
+                    if let Some(inspector) = &mut self.inspector {
+                        inspector.filter.apply(edit);
                     }
                 }
                 Some("palette") => {
@@ -2738,6 +2853,52 @@ impl Model {
                 }
             }
             Action::ClosePalette => self.palette = None,
+            Action::InspectorOpen { pane, app } => {
+                if self.pane(pane).is_some() {
+                    self.inspector = Some(Inspector::new(pane, &app));
+                    // The drawer it covers keeps its state, but not the keyboard.
+                    if self.talk.is_some_and(|talk| talk.keys) {
+                        self.talk_keys(false, effects);
+                    }
+                    if let Some(draft) = &mut self.capture {
+                        draft.typing = false;
+                    }
+                }
+            }
+            Action::InspectorRead { pane, tree, window, millis } => {
+                if let Some(inspector) = self.inspector.as_mut().filter(|i| i.pane == pane) {
+                    inspector.take(inspect::Read { tree, window, millis });
+                }
+            }
+            Action::InspectorFailed { pane, why } => {
+                if let Some(inspector) = self.inspector.as_mut().filter(|i| i.pane == pane) {
+                    inspector.failed(&why);
+                }
+            }
+            Action::InspectorClose => self.inspector = None,
+            Action::InspectorFold { path } => {
+                if let Some(inspector) = &mut self.inspector {
+                    inspector.fold(&path);
+                }
+            }
+            Action::InspectorSelect { path } => {
+                if let Some(inspector) = &mut self.inspector {
+                    inspector.select(path);
+                }
+            }
+            Action::InspectorMove { delta } => {
+                if let Some(inspector) = &mut self.inspector {
+                    inspector.step(delta);
+                }
+            }
+            Action::InspectorFilter { on } => {
+                if on && self.inspector.is_some() {
+                    self.leave(effects);
+                }
+                if let Some(inspector) = &mut self.inspector {
+                    inspector.filtering = on;
+                }
+            }
             // The overlay is ottospace's own UI: it needs the keyboard back to be dismissed.
             Action::ToggleKeys => {
                 self.keys = !self.keys;
@@ -2983,7 +3144,10 @@ impl Model {
                 self.default_agent = default;
             }
             Action::TaskTalk { id } => self.talk_to(id, effects),
-            Action::TalkPick { id } if self.talk.is_some_and(|talk| talk.open && talk.task == id) => {
+            // Under the inspector the rail's cell shows its conversation, as on a closed drawer.
+            Action::TalkPick { id }
+                if self.talk.is_some_and(|talk| talk.open && talk.task == id) && self.inspector.is_none() =>
+            {
                 self.talk = self.talk.map(|talk| Talk { open: false, keys: false, ..talk });
             }
             Action::TalkPick { id } => self.talk_to(id, effects),
@@ -3906,6 +4070,7 @@ impl Model {
         let boxed = self.compose_modal() || self.compose_keys();
         let apps = (self.app_lists.filtering && !boxed).then_some(("apps", &self.app_lists.filter));
         let palette = self.palette.as_ref().map(|palette| ("palette", &palette.query));
+        let palette = palette.or(self.inspector.as_ref().filter(|i| i.filtering).map(|i| ("inspector", &i.filter)));
         picker.or(palette).or(note).or(apps).or(self.compose.as_ref().map(|field| ("compose", field)))
     }
 
@@ -3915,6 +4080,7 @@ impl Model {
         match of {
             "picker" => self.picker.as_ref().map(|picker| &picker.query),
             "palette" => self.palette.as_ref().map(|palette| &palette.query),
+            "inspector" => self.inspector.as_ref().map(|inspector| &inspector.filter),
             "note" => self.note(),
             "apps" => Some(&self.app_lists.filter),
             "mark" => match &self.mark_input {
@@ -3940,6 +4106,7 @@ impl Model {
             Mode::Mark => "mark",
             Mode::Pick => "picker",
             Mode::Palette => "palette",
+            Mode::Inspect => "inspector",
             Mode::Compose => "compose",
             Mode::Annotate => "note",
             Mode::List if self.app_lists.filtering => "apps",
@@ -4675,6 +4842,14 @@ mod tests {
         Action::PaletteMove { .. },
         Action::PaletteChoose { .. },
         Action::ClosePalette,
+        Action::InspectorOpen { .. },
+        Action::InspectorRead { .. },
+        Action::InspectorFailed { .. },
+        Action::InspectorClose,
+        Action::InspectorFold { .. },
+        Action::InspectorSelect { .. },
+        Action::InspectorMove { .. },
+        Action::InspectorFilter { .. },
         Action::ToggleKeys,
         Action::CloseKeys,
         Action::ToggleVisual,
@@ -4850,6 +5025,19 @@ mod tests {
             Action::PaletteMove { delta: 1 },
             Action::PaletteChoose { index: None },
             Action::ClosePalette,
+            Action::InspectorOpen { pane: 1, app: text() },
+            Action::InspectorRead {
+                pane: 1,
+                tree: crate::ax::Tree { root: Default::default(), count: 1, truncated: Default::default() },
+                window: Default::default(),
+                millis: 1.0,
+            },
+            Action::InspectorFailed { pane: 1, why: text() },
+            Action::InspectorClose,
+            Action::InspectorFold { path: vec![0] },
+            Action::InspectorSelect { path: None },
+            Action::InspectorMove { delta: 1 },
+            Action::InspectorFilter { on: true },
             Action::ToggleKeys,
             Action::CloseKeys,
             Action::ToggleVisual,
@@ -5019,6 +5207,31 @@ mod tests {
     /// way says its own reason first.
     fn in_palette(action: &Action) -> bool {
         matches!(action, Action::PaletteMove { .. } | Action::PaletteChoose { .. } | Action::ClosePalette)
+            || matches!(
+                action,
+                Action::InspectorOpen { .. }
+                    | Action::InspectorClose
+                    | Action::InspectorFold { .. }
+                    | Action::InspectorSelect { .. }
+                    | Action::InspectorMove { .. }
+                    | Action::InspectorFilter { on: false }
+            )
+    }
+
+    #[test]
+    fn the_inspector_takes_the_drawers_place_and_gives_it_back() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        // Not over the new-task box while it has the keyboard: the box would type unseen.
+        m.update(Action::OpenCompose { text: "fix".into() });
+        m.update(Action::InspectorOpen { pane: 1, app: "A".into() });
+        assert!(m.inspector.is_none());
+        m.update(Action::CloseCompose);
+        // A drawer that closes under it leaves it there; what the drawer is asked to show next takes the place back.
+        m.update(Action::InspectorOpen { pane: 1, app: "A".into() });
+        assert!(m.inspector.is_some());
+        m.update(Action::OpenCompose { text: "fix".into() });
+        assert_eq!((m.inspector.is_none(), m.compose_line().cloned()), (true, Some("fix".into())));
     }
 
     #[test]
@@ -5075,6 +5288,10 @@ mod tests {
         assert!(m.palette.is_none());
     }
 
+    fn action_is_palettes(action: &Action) -> bool {
+        matches!(action, Action::PaletteMove { .. } | Action::PaletteChoose { .. } | Action::ClosePalette)
+    }
+
     /// Every action from every origin. The origin decides, not the action: only the user's own
     /// move ends sneak mode, and only the user takes the keyboard from under its labels.
     #[test]
@@ -5091,7 +5308,11 @@ mod tests {
                     Action::TaskTalk { .. } | Action::TalkPick { .. } | Action::TaskStop { .. } => {
                         Some(agents::USERS_ALONE)
                     }
-                    _ if in_palette(action) => Some(commands::USERS_ALONE),
+                    _ if in_palette(action) && action_is_palettes(action) => Some(commands::USERS_ALONE),
+                    _ if in_palette(action) => Some(inspect::USERS_ALONE),
+                    Action::InspectorRead { .. } | Action::InspectorFailed { .. } if origin == Origin::Socket => {
+                        Some(inspect::USERS_ALONE)
+                    }
                     _ => action.takes_keyboard().then_some("sneak mode is on"),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");
@@ -8282,7 +8503,11 @@ mod tests {
                     Action::TaskTalk { .. } | Action::TalkPick { .. } | Action::TaskStop { .. } => {
                         Some(agents::USERS_ALONE)
                     }
-                    _ if in_palette(action) => Some(commands::USERS_ALONE),
+                    _ if in_palette(action) && action_is_palettes(action) => Some(commands::USERS_ALONE),
+                    _ if in_palette(action) => Some(inspect::USERS_ALONE),
+                    Action::InspectorRead { .. } | Action::InspectorFailed { .. } if origin == Origin::Socket => {
+                        Some(inspect::USERS_ALONE)
+                    }
                     _ => action.takes_keyboard().then_some(CONFIRM_UP),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");

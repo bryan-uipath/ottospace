@@ -359,6 +359,10 @@ impl Workspace {
                 self.click_capture(name, window, cx);
                 None
             }
+            ("inspector" | "inspector-row" | "inspector-fold", _) => {
+                self.click_inspector(kind, name, window, cx);
+                None
+            }
             ("mark-undo", _) => Some(Action::MarkUndo),
             (
                 "workbook" | "workbook-open" | "workbook-add" | "workbook-fold" | "workbook-rename" | "workbook-delete",

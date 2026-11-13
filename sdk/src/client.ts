@@ -21,6 +21,7 @@ import {
 import { checkOwned, defaultSocketPath } from "./socket.ts";
 import type {
   AxTreeArgs,
+  InspectorFixtureArgs,
   AxTreeReply,
   CaptureArgs,
   CaptureReply,
@@ -403,6 +404,13 @@ export class Client {
    */
   captureStart(args: OptionalPaneArg = {}): Promise<Snapshot> {
     return this.snapshot({ cmd: "capture_start", ...args });
+  }
+  /**
+   * For tests (`OTTOSPACE_E2E`): opens the accessibility inspector on a pane (default: the focused
+   * one) with `tree` as if read from its window. Rejects outside a test run: only the user opens it.
+   */
+  inspectorFixture(args: InspectorFixtureArgs): Promise<Snapshot> {
+    return this.snapshot({ cmd: "inspector_fixture", ...args });
   }
   /**
    * A task's brief: the ask, and what was captured for it. `id`: default `$OTTOSPACE_TASK`, which

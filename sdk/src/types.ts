@@ -17,6 +17,7 @@ export type Mode =
   | "app"
   | "pick"
   | "palette"
+  | "inspect"
   | "visual"
   | "list"
   | "compose"
@@ -421,7 +422,7 @@ export type PickItem =
 /** The text field that has the keyboard. Offsets are UTF-16 units: JavaScript string indexes. */
 export interface Field {
   /** Whose it is: the new-task line, the picker's or the Apps section's filter, a mark's name, or a note on a capture. */
-  of: "compose" | "picker" | "palette" | "apps" | "mark" | "workbook" | "note";
+  of: "compose" | "picker" | "palette" | "inspector" | "apps" | "mark" | "workbook" | "note";
   text: string;
   cursor: number;
   /** Start and end, in text order. Equal: only a cursor. */
@@ -450,6 +451,53 @@ export interface Palette {
   query: string;
   /** An index into `palette_rows`. */
   selected: number;
+}
+
+/** The accessibility inspector, while it is open: the user's own. `state.inspector`. */
+export interface InspectorState {
+  pane: PaneId;
+  /** The app's name. */
+  app: string;
+  /** Why the last read failed, or null. */
+  error: string | null;
+  filter: string;
+  /** The filter has the keyboard (`mode` is `inspect`). */
+  filtering: boolean;
+}
+
+/** A row of the inspector as drawn: no text of the app's, only its role and flags. */
+export interface InspectorRow {
+  path: number[];
+  depth: number;
+  role: string;
+  pressable: boolean;
+  settable: boolean;
+  focused: boolean;
+  children: number;
+  folded: boolean;
+}
+
+/** The top-level `inspector`: counts and roles of the inspected tree. */
+export interface Inspector {
+  pane: PaneId;
+  counts: {
+    nodes: number;
+    pressable: number;
+    settable: number;
+    /** `[role, count]`, most first. */
+    roles: [string, number][];
+    truncated: Truncated;
+    /** Read whole and fewer than 25 nodes: the app exposes almost nothing. */
+    sparse: boolean;
+  };
+  millis: number | null;
+  /** At most 400. Null while a filter is typed: which rows match would tell the app's text. */
+  rows: InspectorRow[] | null;
+  row_count: number | null;
+  /** An index into `rows`, or null. */
+  selected: number | null;
+  /** Where the selected node is outlined on the pane, in window points, or null (also while filtering). */
+  outline: Frame | null;
 }
 
 /** A row of the command palette: a command that needs no argument. */
@@ -579,6 +627,7 @@ export interface Model {
   collapsed: Heading[];
   picker: Picker | null;
   palette: Palette | null;
+  inspector: InspectorState | null;
   /** The quit question while it is up. */
   confirm: Confirm | null;
   keys: boolean;
@@ -751,6 +800,8 @@ export interface Snapshot {
   picker_rows: PickItem[] | null;
   /** The command palette's rows as drawn, best match first, or null while it is closed. */
   palette_rows: PaletteRow[] | null;
+  /** The accessibility inspector, or null: counts and roles only, never the app's text. */
+  inspector: Inspector | null;
   /** The open text field, or null. `state.compose` and `state.picker.query` stay its text. */
   field: Field | null;
   inbox: InboxRow[];
@@ -890,6 +941,10 @@ export interface AxNode {
   enabled?: boolean;
   actions?: string[];
   children?: AxNode[];
+  /** A test fixture's only (`inspectorFixture`): `ax_tree` never returns these. */
+  identifier?: string;
+  focused?: boolean;
+  settable?: boolean;
 }
 
 export interface AxTreeReply {
@@ -901,6 +956,12 @@ export interface AxTreeReply {
 }
 
 // Request arguments: the request without its `cmd`.
+
+export interface InspectorFixtureArgs {
+  pane?: PaneId;
+  app: string;
+  tree: { root: AxNode; count: number; truncated: Truncated };
+}
 
 export interface SplitArgs {
   axis?: Axis;

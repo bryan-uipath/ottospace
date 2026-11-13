@@ -418,6 +418,40 @@ impl Gen<'_> {
         (0..self.rng.below(3)).map(|_| fact(self)).collect()
     }
 
+    /// The inspected pane, mostly.
+    fn inspected(&mut self) -> PaneId {
+        match self.m.inspector.as_ref() {
+            Some(i) if !self.rng.one_in(4) => i.pane,
+            _ => self.pane(),
+        }
+    }
+
+    /// A small accessibility tree, with text that must not show as it is.
+    fn ax_tree(&mut self) -> crate::ax::Tree {
+        fn node(g: &mut Gen, depth: usize) -> crate::ax::Node {
+            let width = if depth < 3 { g.rng.below(4) } else { 0 };
+            let children = (0..width).map(|_| node(g, depth + 1)).collect();
+            crate::ax::Node {
+                role: g.name(&["AXWindow", "AXButton", "AXGroup", "AXTextField", ""]),
+                title: g.rng.coin().then(|| g.name(&["Play", "\u{202e}evil", "a\u{7}b"])),
+                actions: if g.rng.coin() { vec!["AXPress".into()] } else { Vec::new() },
+                focused: g.rng.one_in(5),
+                settable: g.rng.one_in(4),
+                children,
+                ..Default::default()
+            }
+        }
+        let root = node(self, 0);
+        let count = crate::ax::flatten(&root).len();
+        crate::ax::Tree { root, count, truncated: Default::default() }
+    }
+
+    /// A row's path in the inspector, or one that may not be there.
+    fn ax_path(&mut self) -> Vec<usize> {
+        let rows: Vec<Vec<usize>> = self.m.inspector.iter().flat_map(|i| i.rows()).map(|row| row.path).collect();
+        self.one_of(&rows, |g| (0..g.rng.below(3)).map(|_| g.rng.below(3)).collect())
+    }
+
     fn letters(&mut self) -> String {
         let labels: Vec<String> = self.m.sneak.iter().flat_map(|s| s.targets.iter().map(|t| t.label.clone())).collect();
         let label = self.one_of(&labels, |g| g.name(&["a", "s", "x", "1", "ö", "AS"]));
@@ -498,6 +532,19 @@ const MAKERS: &[Make] = &[
     |g| Action::PaletteMove { delta: g.delta() },
     |g| Action::PaletteChoose { index: g.rng.coin().then(|| g.index(50)) },
     |_| Action::ClosePalette,
+    |g| Action::InspectorOpen { pane: g.pane(), app: g.name(&["Spotify", "\u{202e}evil", "a\u{7}b", ""]) },
+    |g| Action::InspectorRead {
+        pane: g.inspected(),
+        tree: g.ax_tree(),
+        window: Frame { x: 0., y: 0., w: 800., h: 600. },
+        millis: 3.0,
+    },
+    |g| Action::InspectorFailed { pane: g.inspected(), why: g.name(&["the window is gone", "\u{7}"]) },
+    |_| Action::InspectorClose,
+    |g| Action::InspectorFold { path: g.ax_path() },
+    |g| Action::InspectorSelect { path: g.rng.coin().then(|| g.ax_path()) },
+    |g| Action::InspectorMove { delta: g.delta() },
+    |g| Action::InspectorFilter { on: g.rng.coin() },
     |_| Action::ToggleKeys,
     |_| Action::CloseKeys,
     |_| Action::ToggleVisual,
@@ -815,6 +862,7 @@ const MAKERS: &[Make] = &[
 const WAYS_OUT: &[Action] = &[
     Action::ClosePicker,
     Action::ClosePalette,
+    Action::InspectorFilter { on: false },
     Action::CloseKeys,
     Action::LeaveVisual,
     Action::CloseCompose,
@@ -951,6 +999,21 @@ fn check(m: &Model) -> Result<(), String> {
         let matches = picker.matches().len();
         ensure!(picker.selected < matches.max(1), "the picker selects {} of {matches}", picker.selected);
     }
+    // The inspector is of a pane that is there; what it selects and folds is in its tree.
+    if let Some(inspector) = &m.inspector {
+        ensure!(m.pane(inspector.pane).is_some(), "the inspector is of pane {}, which is gone", inspector.pane);
+        let rows = inspector.rows();
+        let selected = inspector.selected.as_ref();
+        ensure!(selected.is_none() || inspector.selected_node().is_some(), "the inspector selects {selected:?}");
+        ensure!(!(inspector.filtering && m.live.is_some()), "the inspector's filter has the keyboard over a live app");
+        // It covers the drawer: nothing there has the keyboard.
+        let covered = m.talk.is_some_and(|talk| talk.keys) || m.capture.as_ref().is_some_and(|draft| draft.typing);
+        ensure!(!covered, "the drawer under the inspector has the keyboard");
+        for row in &rows {
+            let shown = format!("{}{}", row.role, row.text);
+            ensure!(shown.chars().all(|c| !c.is_control() && c != '\u{202e}'), "a row shows {shown:?}");
+        }
+    }
     // The palette opens over nothing that has the keyboard, and nothing takes it from under it
     // but the quit question.
     if let Some(palette) = &m.palette {
@@ -971,6 +1034,9 @@ fn check(m: &Model) -> Result<(), String> {
         (Some(("mark" | "workbook", field)), Some(name), ..) => std::ptr::eq(field, name),
         (Some(("picker", field)), None, Some(picker), ..) => std::ptr::eq(field, &picker.query),
         (Some(("palette", field)), None, None, ..) => m.palette.as_ref().is_some_and(|p| std::ptr::eq(field, &p.query)),
+        (Some(("inspector", field)), None, None, ..) => {
+            m.inspector.as_ref().is_some_and(|i| i.filtering && std::ptr::eq(field, &i.filter))
+        }
         (Some(("note", field)), None, None, Some(note), _) => std::ptr::eq(field, note),
         (Some(("apps", field)), None, None, None, _) => apps && std::ptr::eq(field, &m.app_lists.filter),
         (Some(("compose", field)), None, None, None, Some(line)) => !apps && std::ptr::eq(field, line),
@@ -981,7 +1047,7 @@ fn check(m: &Model) -> Result<(), String> {
     let has_keys = !m.keys
         && match m.mode() {
             Mode::Mark => renaming.is_some(),
-            Mode::Pick | Mode::Palette | Mode::Compose => true,
+            Mode::Pick | Mode::Palette | Mode::Inspect | Mode::Compose => true,
             Mode::Annotate => m.note().is_some(),
             Mode::List => m.app_lists.filtering,
             _ => false,
@@ -1442,6 +1508,18 @@ impl Run {
             origin == Origin::User || !palette_own || refused.is_some(),
             "a client's {action:?} reached the palette"
         );
+        // Only the user opens and moves in the inspector; no client fills it with a tree.
+        let inspector_own = match &action {
+            Action::InspectorRead { .. } | Action::InspectorFailed { .. } => origin == Origin::Socket,
+            Action::InspectorOpen { .. }
+            | Action::InspectorClose
+            | Action::InspectorFold { .. }
+            | Action::InspectorSelect { .. }
+            | Action::InspectorMove { .. }
+            | Action::InspectorFilter { .. } => origin != Origin::User,
+            _ => false,
+        };
+        ensure!(!inspector_own || refused.is_some(), "a client's {action:?} reached the inspector");
         // An action refused for who sent it changes nothing at all.
         if let Some(before) = &refused {
             ensure!(
@@ -1950,6 +2028,14 @@ const MODES: &[(Mode, Setup)] = &[
     ),
     (Mode::Compose, &[|_| Action::OpenCompose { text: "fix zoom >ap".into() }]),
     (Mode::Palette, &[|_| Action::Leave, |_| Action::PaletteOpen]),
+    (
+        Mode::Inspect,
+        &[
+            |_| terminal(),
+            |m| Action::InspectorOpen { pane: m.focused.unwrap_or(0), app: "Fixture".into() },
+            |_| Action::InspectorFilter { on: true },
+        ],
+    ),
     (Mode::Sneak, &[|_| Action::Leave, |_| Action::Sneak { targets: controls(5) }]),
     (
         Mode::Confirm,
@@ -2061,6 +2147,9 @@ fn code(sent: &Envelope) -> String {
         "Facts",
         "Started",
         "History",
+        "Tree",
+        "Node",
+        "Truncated",
     ];
     const ENUM_OF: &[(&str, &str)] = &[
         ("axis", "Axis"),

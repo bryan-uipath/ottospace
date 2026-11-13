@@ -5077,3 +5077,82 @@ fn the_command_palette_runs_a_command_by_name_for_the_user_alone() {
     otto.wait_for("the first row in view", |o| Some(()).filter(|_| thumb(o).1));
     assert_eq!(otto.user_key("escape")["mode"], "normal");
 }
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_inspector_shows_a_trees_counts_and_roles_never_its_text() {
+    let otto = Otto::launch("inspector");
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    // From the palette, on a pane that is no app: it says so, and opens nothing.
+    otto.user_key("cmd-p i n s p e c t o r enter");
+    let said = |o: &Otto| Some(o.call(json!({"cmd": "state"}))).filter(|r| r["notice"].is_string());
+    let reply = otto.wait_for("the notice", said);
+    assert!(reply["notice"].as_str().unwrap().contains("needs a focused app pane"), "{}", reply["notice"]);
+    assert!(reply["inspector"].is_null());
+
+    // A test run hosts no window: the tree is a fixture, as read from a window at 0,0.
+    let frame = |x: u32, y: u32, w: u32, h: u32| json!({"x": x, "y": y, "w": w, "h": h});
+    let button = json!({"role": "AXButton", "title": "Play", "actions": ["AXPress"], "frame": frame(10, 20, 60, 24)});
+    let field = json!({
+        "role": "AXTextField", "value": "private message", "settable": true, "focused": true,
+        "identifier": "search", "frame": frame(80, 20, 120, 24),
+    });
+    let root = json!({
+        "role": "AXWindow", "title": "Fixture \u{202e}secret", "frame": frame(0, 0, 400, 300),
+        "children": [{"role": "AXGroup", "children": [button, field]}, {"role": "AXStaticText", "value": "Now playing"}],
+    });
+    let truncated = json!({"depth": false, "nodes": false, "timeout": false});
+    let tree = json!({"root": root, "count": 5, "truncated": truncated});
+    let reply = otto.call(json!({"cmd": "inspector_fixture", "app": "Fixture", "tree": tree.clone()}));
+    let inspector = &reply["inspector"];
+    let counts = &inspector["counts"];
+    let numbers = (&counts["nodes"], &counts["pressable"], &counts["settable"], &counts["sparse"]);
+    assert_eq!(numbers, (&json!(5), &json!(1), &json!(1), &json!(true)));
+    let rows = |reply: &Value| -> Vec<(u64, String)> {
+        let rows = reply["inspector"]["rows"].as_array().expect("rows");
+        rows.iter().map(|r| (r["depth"].as_u64().unwrap(), r["role"].as_str().unwrap().to_string())).collect()
+    };
+    let all: Vec<(u64, String)> = [(0, "Window"), (1, "Group"), (2, "Button"), (2, "TextField"), (1, "StaticText")]
+        .map(|(d, r)| (d, r.into()))
+        .into();
+    assert_eq!(rows(&reply), all);
+    // The app's text is on screen only: never in the state.
+    let text = reply.to_string();
+    for secret in ["secret", "private message", "Now playing", "\"search\""] {
+        assert!(!text.contains(secret), "{secret} is in the state");
+    }
+
+    // A click on a row selects it, and its frame is outlined on the pane.
+    let press = |id: &str| {
+        let reply = otto.call(json!({"cmd": "sneak"}));
+        otto.call(json!({"cmd": "key", "keys": "escape"}));
+        let targets = reply["sneak"]["targets"].as_array().expect("targets");
+        let target = targets.iter().find(|t| t["source"]["id"] == id).unwrap_or_else(|| panic!("no {id}"));
+        let f = |key: &str| target["frame"][key].as_f64().unwrap();
+        otto.user_click([f("x") + f("w") / 2.0, f("y") + f("h") / 2.0])
+    };
+    let pane = otto.bounds(&[1])[0];
+    let reply = press("inspector-row:2");
+    assert_eq!(reply["inspector"]["selected"], 2);
+    let outline = &reply["inspector"]["outline"];
+    let at = [&outline["x"], &outline["y"], &outline["w"]].map(|v| v.as_f64().unwrap());
+    assert_eq!(at, [pane[0] + 10.0, pane[1] + 20.0, 60.0], "{outline}");
+    // A fold hides the group's rows, and takes the selection up to it.
+    let reply = press("inspector-fold:1");
+    assert_eq!((rows(&reply).len(), &reply["inspector"]["selected"]), (3, &json!(1)));
+    // The filter takes the keyboard. Which rows match is not in the state: it would tell the text.
+    assert_eq!(press("inspector:filter")["mode"], "inspect");
+    let reply = otto.user_key("p l a y");
+    let filtered =
+        (&reply["inspector"]["rows"], &reply["inspector"]["outline"], &reply["inspector"]["counts"]["nodes"]);
+    assert_eq!(filtered, (&Value::Null, &Value::Null, &json!(5)));
+    // A client's key types nothing in it.
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "x"}))["state"]["inspector"]["filter"], "play");
+    assert_eq!(otto.user_key("escape")["mode"], "normal");
+    // It goes with its pane.
+    // It sits in the drawer's place: the new-task box (⌘N) takes the place back.
+    assert!(otto.user_key("cmd-n")["inspector"].is_null());
+    otto.user_key("escape");
+    otto.call(json!({"cmd": "inspector_fixture", "app": "Fixture", "tree": tree}));
+    assert!(otto.call(json!({"cmd": "close", "pane": 1}))["inspector"].is_null());
+}

@@ -51,6 +51,14 @@ pub struct Node {
     /// e.g. `AXPress`, `AXShowMenu`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
+    /// For the inspector, never in `ax_tree`'s reply: the developer's id (`AXIdentifier`), the
+    /// node has the keyboard (`AXFocused`), its value can be set.
+    #[serde(default, skip_serializing)]
+    pub identifier: Option<String>,
+    #[serde(default, skip_serializing)]
+    pub focused: bool,
+    #[serde(default, skip_serializing)]
+    pub settable: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<Node>,
 }
@@ -61,11 +69,15 @@ pub struct Limits {
     /// Nodes deeper than this are not read. The window is depth 0.
     pub depth: usize,
     pub nodes: usize,
+    /// How long the whole walk may take, in milliseconds; it stops there (`Truncated::timeout`).
+    /// None: no bound but the per-call timeout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub millis: Option<u64>,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { depth: 40, nodes: 3000 }
+        Self { depth: 40, nodes: 3000, millis: None }
     }
 }
 
@@ -76,7 +88,7 @@ pub struct Truncated {
     pub depth: bool,
     /// The node limit was reached.
     pub nodes: bool,
-    /// The app did not answer in time (busy or hung); the walk stopped there.
+    /// The app did not answer in time (busy or hung), or the walk ran out of its time; it stopped there.
     pub timeout: bool,
 }
 
@@ -126,10 +138,15 @@ const PRESS: &[&str] = &["AXPress", "AXPick", "AXConfirm", "AXOpen"];
 /// Roles that take typing or a value even without a press action.
 const INPUT: &[&str] = &["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField", "AXSlider"];
 
+/// A node with an action that does what a click would.
+pub fn presses(node: &Node) -> bool {
+    node.actions.iter().any(|a| PRESS.contains(&a.as_str()))
+}
+
 /// A node the user can act on: it presses like a button or takes input, is not disabled, and has
 /// an area on screen to put a label on.
 pub fn is_interactive(node: &Node) -> bool {
-    let acts = node.actions.iter().any(|a| PRESS.contains(&a.as_str())) || INPUT.contains(&node.role.as_str());
+    let acts = presses(node) || INPUT.contains(&node.role.as_str());
     let visible = node.frame.is_some_and(|f| f.w > 0.0 && f.h > 0.0);
     acts && visible && node.enabled != Some(false)
 }
@@ -185,20 +202,24 @@ pub struct Labelled {
 /// live window sits, so a window that refused the pane's size is cut off or leaves a gap. Nodes
 /// the pane does not show (e.g. traffic lights in a cropped bar) are left out.
 pub fn app_targets(pane: PaneId, root: &Node, window: Frame, crop: f64, content: Frame) -> Vec<Target> {
-    let window = Frame { y: window.y + crop, h: window.h - crop, ..window };
-    let shown = Frame { w: content.w.min(window.w), h: content.h.min(window.h), ..content };
     flatten(root)
         .into_iter()
         .filter(|f| is_interactive(f.node))
         .filter_map(|f| {
-            let g = f.node.frame?;
-            let frame = Frame { x: content.x + g.x - window.x, y: content.y + g.y - window.y, ..g };
-            let source = Source::App { pane, path: f.path, role: f.node.role.clone() };
-            // Clipped to what shows (the pane, and no more than the window), so a partly
-            // scrolled-out control is labelled where it shows.
-            frame.intersects(&shown).then(|| Target { frame: frame.clip(&shown), source })
+            let frame = on_pane(f.node.frame?, window, crop, content)?;
+            Some(Target { frame, source: Source::App { pane, path: f.path, role: f.node.role.clone() } })
         })
         .collect()
+}
+
+/// Where a node's frame `g` (global) shows on its pane, as `app_targets` places it. Clipped to
+/// what shows (the pane, and no more than the window), so a partly scrolled-out control is
+/// placed where it shows. None: it does not show.
+pub fn on_pane(g: Frame, window: Frame, crop: f64, content: Frame) -> Option<Frame> {
+    let window = Frame { y: window.y + crop, h: window.h - crop, ..window };
+    let shown = Frame { w: content.w.min(window.w), h: content.h.min(window.h), ..content };
+    let frame = Frame { x: content.x + g.x - window.x, y: content.y + g.y - window.y, ..g };
+    frame.intersects(&shown).then(|| frame.clip(&shown))
 }
 
 /// Top to bottom, then left to right.

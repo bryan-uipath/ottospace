@@ -58,6 +58,7 @@
 {"cmd":"capture","pane":1,"history":true}
 {"cmd":"wait","pane":1,"pattern":"^done$","timeout_ms":1000}
 {"cmd":"capture_start","pane":1}
+{"cmd":"inspector_fixture","app":"Fixture","tree":{"root":{"role":"AXWindow","children":[{"role":"AXButton","actions":["AXPress"]}]},"count":2,"truncated":{"depth":false,"nodes":false,"timeout":false}}}
 {"cmd":"task_brief","id":1}
 {"cmd":"ax_tree","pane":1,"depth":20,"nodes":500}
 {"cmd":"ax_overlay","refresh":true}

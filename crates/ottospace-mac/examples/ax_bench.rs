@@ -25,7 +25,7 @@ fn main() {
     // Batched twice: the first read of an app can pay for it building its tree.
     for fetch in [Fetch::Batched, Fetch::Single, Fetch::Batched] {
         let start = Instant::now();
-        let tree = read(&window, Limits { depth, nodes }, fetch);
+        let tree = read(&window, Limits { depth, nodes, millis: None }, fetch);
         let ms = start.elapsed().as_secs_f64() * 1000.0;
         let interactive = ax::flatten(&tree.root).iter().filter(|f| ax::is_interactive(f.node)).count();
         println!(
