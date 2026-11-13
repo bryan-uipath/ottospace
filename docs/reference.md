@@ -356,7 +356,7 @@ tab of dashboards, a tab of docs. It is not a task: no agent works it and it is 
 - **Add a tab**: `Add tab` on a workbook's row, `a` on it in list mode, or File ▸ Add Tab to
   Workbook… (it opens the section in list mode: pick the row, `a`). **All tabs**: File ▸ Save All
   Tabs as Workbook saves every tab on the bar that has something in it, in bar order, as one new
-  workbook. A tab stands for one workbook's tab at most: added to another, it leaves the first.
+  workbook (at most 32; with more it saves none and says so). A tab stands for one workbook's tab at most: added to another, it leaves the first.
 - A new workbook is named for the tab (all tabs: "Workbook"), and the section opens with the
   name selected: type over it, ↵ keeps it, Esc keeps it as it is. No two workbooks share a name
   (`DRI`, `DRI 2`).

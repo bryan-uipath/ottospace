@@ -17,6 +17,13 @@ pub const VERSION: u32 = 2;
 /// The most tabs a workbook keeps.
 pub const MAX_TABS: usize = 32;
 
+/// The largest file a workbook may have: the shell reads no larger one. A save that would
+/// write one is refused, so what is saved always reads back.
+pub const MAX_FILE_BYTES: usize = 262_144;
+
+const TOO_LARGE: &str = "the workbook would be too large to read back";
+const EMPTY: &str = "a tab with nothing in it has nothing to save";
+
 /// Why a client's workbook action does nothing: they are the user's files and apps.
 pub const USERS_ALONE: &str = "only the user saves, opens, renames or deletes a workbook";
 
@@ -67,7 +74,17 @@ pub fn write(book: &Workbook) -> String {
     serde_json::to_string_pretty(book).unwrap_or_default() + "\n"
 }
 
+/// `Ok` if `book`'s file reads back: no larger than `MAX_FILE_BYTES`, with room for its id and a
+/// name of `MAX_NAME` characters it may not have yet.
+fn sized(book: &Workbook) -> Result<(), String> {
+    (write(book).len() + 256 <= MAX_FILE_BYTES).then_some(()).ok_or_else(|| TOO_LARGE.into())
+}
+
 impl Workbook {
+    fn new(uid: String, name: String, tabs: Vec<TabRecord>) -> Self {
+        Workbook { id: 0, version: VERSION, uid, name, tabs, live: Vec::new(), extra: Extra::new() }
+    }
+
     /// What is wrong with it as read from disk, if anything.
     fn unsound(&self) -> Option<&'static str> {
         if self.name.is_empty() {
@@ -349,7 +366,7 @@ impl Model {
             }
         }
         if panes.iter().all(|pane| pane.kind == RecordKind::Empty) {
-            return Err("a tab with nothing in it has nothing to save".into());
+            return Err(EMPTY.into());
         }
         let title = marks::kept_title(&tab.title, 256);
         let record = TabRecord { title, task: None, focused, layout, panes, extra: Extra::new() };
@@ -361,22 +378,71 @@ impl Model {
 
     /// Why the tab on show cannot be saved, for the shell to say.
     pub fn workbook_save_refusal(&self) -> Option<String> {
-        self.workbook_record(self.active, &[]).err()
+        let record = match self.workbook_record(self.active, &[]) {
+            Ok(record) => record,
+            Err(why) => return Some(why),
+        };
+        let tab = self.tabs.get(self.active)?;
+        match self.workbooks.entry_of(tab.id) {
+            Some((id, at)) => self.workbook_with(id, Some(at), record).err(),
+            None => sized(&Workbook::new(String::new(), tab.title.clone(), vec![record])).err(),
+        }
     }
 
     /// Why the tab on show cannot be added to workbook `id`, for the shell to say.
     pub fn workbook_add_refusal(&self, id: WorkbookId) -> Option<String> {
         let tab = self.tabs.get(self.active).map(|tab| tab.id)?;
-        let book = self.workbooks.get(id)?;
-        let full = book.place_of(tab).is_none() && book.tabs.len() >= MAX_TABS;
-        let full = full.then(|| format!("a workbook keeps {MAX_TABS} tabs at most"));
-        self.workbook_save_refusal().or(full)
+        let at = self.workbooks.get(id)?.place_of(tab);
+        match self.workbook_record(self.active, &[]) {
+            Ok(record) => self.workbook_with(id, at, record).err(),
+            Err(why) => Some(why),
+        }
     }
 
     /// Why the tabs on the bar cannot be saved as a workbook, for the shell to say.
     pub fn workbook_save_all_refusal(&self) -> Option<String> {
-        let saved = self.visible_tabs().into_iter().filter(|at| self.workbook_record(*at, &[]).is_ok()).count();
-        (saved == 0).then(|| "no tab on the bar has anything to save".into())
+        self.workbook_all_records(&[]).err()
+    }
+
+    /// Each tab on the bar as a workbook keeps it, in bar order, but those with nothing in them.
+    /// Refused whole rather than saved in part: more than `MAX_TABS`, or one that cannot be kept.
+    fn workbook_all_records(&self, cwds: &[(PaneId, String)]) -> Result<Vec<(u32, TabRecord)>, String> {
+        let mut tabs = Vec::new();
+        for at in self.visible_tabs() {
+            match self.workbook_record(at, cwds) {
+                Ok(record) => tabs.push((self.tabs[at].id, record)),
+                Err(why) if why == EMPTY => {}
+                Err(why) => return Err(format!("{}: {why}", self.tabs[at].title)),
+            }
+        }
+        match tabs.len() {
+            0 => Err("no tab on the bar has anything to save".into()),
+            n if n > MAX_TABS => Err(format!("{n} tabs on the bar; a workbook keeps {MAX_TABS} at most")),
+            _ => sized(&Workbook::new(String::new(), String::new(), tabs.iter().map(|(_, r)| r.clone()).collect()))
+                .map(|_| tabs),
+        }
+    }
+
+    /// Workbook `id` with its tab at `at` (`None`: a new one at the end) replaced by `record`,
+    /// or why it cannot be.
+    fn workbook_with(&self, id: WorkbookId, at: Option<usize>, record: TabRecord) -> Result<Workbook, String> {
+        let mut book = self.workbooks.get(id).cloned().ok_or("no such workbook")?;
+        match at.filter(|at| *at < book.tabs.len()) {
+            Some(at) => {
+                // The tab's keys this build does not know stay.
+                let kept = &mut book.tabs[at];
+                *kept = TabRecord { extra: std::mem::take(&mut kept.extra), ..record };
+            }
+            None if book.tabs.len() < MAX_TABS => {
+                // Its first tab opened under the workbook's name, and goes on doing so.
+                if let [only] = book.tabs.as_mut_slice() {
+                    only.title = book.name.clone();
+                }
+                book.tabs.push(record);
+            }
+            None => return Err(format!("a workbook keeps {MAX_TABS} tabs at most")),
+        }
+        sized(&book).map(|_| book)
     }
 
     /// The section shows workbook `id`, its row selected in list mode.
@@ -390,28 +456,17 @@ impl Model {
     /// as tab `tab`, and offers the old workbook back.
     fn workbook_put(&mut self, id: WorkbookId, at: Option<usize>, record: TabRecord, tab: u32) {
         let until = self.now.saturating_add(NOTICE_MS);
-        let Some(before) = self.workbooks.get(id).cloned() else { return };
+        let (Some(before), Ok(mut after)) = (self.workbooks.get(id).cloned(), self.workbook_with(id, at, record))
+        else {
+            return;
+        };
         // A tab stands for one workbook's tab at most.
         self.workbooks.forget_tab(tab);
-        let Some(book) = self.workbooks.get_mut(id) else { return };
-        let at = match at.filter(|at| *at < book.tabs.len()) {
-            Some(at) => {
-                // The tab's keys this build does not know stay.
-                let first = &mut book.tabs[at];
-                *first = TabRecord { extra: std::mem::take(&mut first.extra), ..record };
-                at
-            }
-            None if book.tabs.len() < MAX_TABS => {
-                // Its first tab opened under the workbook's name, and goes on doing so.
-                if let [only] = book.tabs.as_mut_slice() {
-                    only.title = book.name.clone();
-                }
-                book.tabs.push(record);
-                book.tabs.len() - 1
-            }
-            None => return,
-        };
-        book.set_live(at, Some(tab));
+        after.live = self.workbooks.get(id).map(|book| book.live.clone()).unwrap_or_default();
+        after.set_live(at.filter(|at| *at < before.tabs.len()).unwrap_or(after.tabs.len() - 1), Some(tab));
+        if let Some(book) = self.workbooks.get_mut(id) {
+            *book = after;
+        }
         self.workbooks.offer = Some(Offer { change: Change::Updated, before, until });
     }
 
@@ -439,22 +494,14 @@ impl Model {
     pub(crate) fn workbook_add_tab(&mut self, id: WorkbookId, cwds: &[(PaneId, String)]) {
         let Ok(record) = self.workbook_record(self.active, cwds) else { return };
         let Some(tab) = self.tabs.get(self.active).map(|tab| tab.id) else { return };
-        let Some(book) = self.workbooks.get(id) else { return };
-        let at = book.place_of(tab);
-        if at.is_none() && book.tabs.len() >= MAX_TABS {
-            return;
-        }
+        let Some(at) = self.workbooks.get(id).map(|book| book.place_of(tab)) else { return };
         self.workbook_put(id, at, record, tab);
         self.show_workbook(id);
     }
 
     /// Saves every tab on the bar that has something in it as one new workbook, in bar order.
     pub(crate) fn workbook_save_all(&mut self, uid: String, cwds: &[(PaneId, String)], effects: &mut Vec<Effect>) {
-        let record = |at: usize| Some((self.tabs[at].id, self.workbook_record(at, cwds).ok()?));
-        let tabs: Vec<(u32, TabRecord)> = self.visible_tabs().into_iter().filter_map(record).take(MAX_TABS).collect();
-        if tabs.is_empty() {
-            return;
-        }
+        let Ok(tabs) = self.workbook_all_records(cwds) else { return };
         if let Some(id) = self.workbook_new(uid, "Workbook".into(), tabs, effects) {
             self.show_workbook(id);
         }
@@ -471,12 +518,13 @@ impl Model {
         if !valid_uid(&uid) || self.workbooks.list.iter().any(|book| book.uid == uid) {
             return None;
         }
+        let live = tabs.iter().map(|(tab, _)| Some(*tab)).collect();
+        let book =
+            Workbook { live, ..Workbook::new(uid, name, tabs.iter().map(|(_, record)| record.clone()).collect()) };
+        sized(&book).ok()?;
         for (tab, _) in &tabs {
             self.workbooks.forget_tab(*tab);
         }
-        let live = tabs.iter().map(|(tab, _)| Some(*tab)).collect();
-        let tabs = tabs.into_iter().map(|(_, record)| record).collect();
-        let book = Workbook { id: 0, version: VERSION, uid, name, tabs, live, extra: Extra::new() };
         let id = self.workbooks.add(book);
         self.workbooks.offer = None;
         self.leave(effects);
@@ -1199,5 +1247,48 @@ mod tests {
         let many =
             format!(r#"{{"version": 2, "id": "{UID}", "name": "x", "tabs": [{}]}}"#, vec![tab; MAX_TABS + 1].join(","));
         assert_eq!(parse(&many, UID), Err("it has too many tabs".into()));
+    }
+
+    #[test]
+    fn save_all_refuses_rather_than_leave_a_tab_out_and_no_save_writes_a_file_too_large_to_read() {
+        let mut m = Model::default();
+        for _ in 0..=MAX_TABS {
+            m.update(Action::NewTab);
+            m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        }
+        let refused = Some(format!("{} tabs on the bar; a workbook keeps {MAX_TABS} at most", MAX_TABS + 1));
+        assert_eq!(m.workbook_save_all_refusal(), refused);
+        m.update(Action::WorkbookSaveAll { uid: UID.into(), cwds: vec![] });
+        assert_eq!(names(&m), Vec::<&str>::new());
+        // Long directories in many panes: the file would pass the reader's cap. Not saved.
+        let mut m = Model::default();
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        for _ in 0..39 {
+            m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        }
+        let dir = format!("/{}", "d".repeat(1000));
+        let cwds: Vec<(PaneId, String)> = (1..=40).map(|pane| (pane, dir.clone())).collect();
+        m.update(Action::WorkbookSave { uid: UID.into(), cwds: cwds.clone() });
+        let first = write(&m.workbooks.list[0]).len();
+        assert!(first < MAX_FILE_BYTES, "{first}");
+        // Added again and again under the cap, then refused with the reason.
+        let mut added = 1;
+        while m.workbook_add_refusal(1).is_none() && added < MAX_TABS {
+            m.update(Action::NewTab);
+            for pane in 0..40 {
+                let kind = Kind::Terminal;
+                if pane == 0 {
+                    m.update(Action::Open { kind, axis: Right, beside: None });
+                } else {
+                    m.update(Action::Split { axis: Right, kind });
+                }
+            }
+            let ids: Vec<PaneId> = m.layout.as_ref().map(Node::leaves).unwrap_or_default();
+            let cwds: Vec<(PaneId, String)> = ids.iter().map(|id| (*id, dir.clone())).collect();
+            m.update(Action::WorkbookAddTab { workbook: 1, cwds });
+            added += 1;
+        }
+        assert_eq!(m.workbook_add_refusal(1).as_deref(), Some(TOO_LARGE));
+        assert!(write(&m.workbooks.list[0]).len() <= MAX_FILE_BYTES);
     }
 }

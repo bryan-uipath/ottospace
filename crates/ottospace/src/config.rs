@@ -285,7 +285,7 @@ pub fn save_marks(text: &str) -> io::Result<()> {
 
 /// The most workbook files read, and the largest one read: a folder is input, not trusted text.
 const MAX_WORKBOOKS: usize = 512;
-const MAX_WORKBOOK_BYTES: u64 = 262_144;
+const MAX_WORKBOOK_BYTES: u64 = ottospace_core::workbook::MAX_FILE_BYTES as u64;
 
 /// Where workbooks are kept: `workbooks` in the user's folder. `None`: nothing is kept.
 fn workbooks_dir() -> Option<PathBuf> {

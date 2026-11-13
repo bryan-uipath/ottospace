@@ -121,7 +121,9 @@ tab opened from a workbook, or saved or added into one, it updates that tab's pl
   The tab on show goes at the end. Its tab is that one's already: it is updated in place.
 - **Save All Tabs as Workbook** (File menu): every tab on the bar (of the current task's scope,
   as the bar shows it) that has something in it, in bar order, as one new workbook named
-  "Workbook", its name selected to type over.
+  "Workbook", its name selected to type over. Refused whole, with the reason in the status
+  bar, rather than saved in part: more than 32 such tabs, or one that cannot be kept (split
+  too deep).
 
 A tab stands for one workbook's tab at most (`Workbook::live`, by place). Added to another
 workbook, or saved with Save All, it leaves the first; that one keeps its record, closed.
@@ -148,7 +150,9 @@ workbook. Its tabs are ordinary tabs otherwise: no scope hides the others.
 **File.** `version` 2. A version 1 file reads as a workbook of its tabs (stage 1 wrote one) and
 is written as version 2 at its next change, not at start. Each tab must be sound now, not only
 the first. At most 32 tabs (`MAX_TABS`); the depth, pane and size caps of stage 1 stay, and a
-saved pane is still a clean record (keys a waiting pane kept from its file are dropped).
+saved pane is still a clean record (keys a waiting pane kept from its file are dropped). A
+save that would write a file larger than the reader takes (`MAX_FILE_BYTES`, 256 KB) is refused
+with "the workbook would be too large to read back": what is saved always reads back.
 
 **Who.** Add and Save All are `Origin::User` only, as Save is. Folding a row is not refused: it
 writes nothing and opens nothing. The state lists each workbook's `tabs` (title, pane kinds,

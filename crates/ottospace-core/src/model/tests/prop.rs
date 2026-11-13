@@ -1155,6 +1155,8 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(book.live.len() <= book.tabs.len(), "workbook {:?} stands for tabs it does not have", book.name);
         let tabs = book.tabs.len();
         ensure!((1..=workbook::MAX_TABS).contains(&tabs), "workbook {:?} has {tabs} tabs", book.name);
+        let size = workbook::write(book).len();
+        ensure!(size <= workbook::MAX_FILE_BYTES, "workbook {:?} is {size} bytes: too large to read back", book.name);
         let read = workbook::parse(&workbook::write(book), &book.uid);
         let read = read.map_err(|why| format!("workbook {:?} does not read back: {why}", book.name))?;
         ensure!(workbook::write(&read) == workbook::write(book), "workbook {:?} reads back changed", book.name);
