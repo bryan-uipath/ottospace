@@ -37,7 +37,8 @@ tab` in the empty section. The tab on show is recorded:
 - an app pane: the app's bundle id and name. No window title, URL or document;
 - an empty pane: empty.
 
-A tab with nothing in it is not saved; the status bar says so.
+A tab with nothing in it is not saved; the status bar says so. A pane of an opened workbook
+that still waits for its app's window is saved as that app's, not as empty.
 
 A new workbook is named for the tab. The section opens on it with the name selected in a text
 field: type over it, ↵ keeps it, Esc keeps the tab's name. Names are unique (`DRI`, `DRI 2`).
@@ -85,7 +86,8 @@ that named no folder). Folder 0700, files 0600, written whole and renamed into p
   file over 256 KB, or one that does not read is counted in the status bar and never touched.
 - `tabs` is a list so several tabs need no new format. This build saves and opens the first;
   others are kept as they are.
-- Keys this build does not know are kept.
+- Keys this build does not know are kept: the file's and the tab's always, a pane's until
+  the tab is saved again (a saved pane is a new record).
 - A `task` or a `command` in a file does nothing: the tab is of no task, and nothing is typed.
 - The list is sorted by name: a folder has no order.
 - Two ottospaces on one folder: each writes only the files it changed. One sees the other's

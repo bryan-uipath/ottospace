@@ -294,9 +294,8 @@ pub fn load_workbooks() -> KeptWorkbooks {
     let mut kept = KeptWorkbooks::default();
     for path in paths {
         let uid = path.file_stem().and_then(|stem| stem.to_str()).filter(|stem| workbook_file(stem).is_some());
-        let small = fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file() && meta.len() <= MAX_WORKBOOK_BYTES);
-        let text =
-            uid.filter(|_| small && kept.files.len() < MAX_WORKBOOKS).and_then(|_| fs::read_to_string(&path).ok());
+        let read = || String::from_utf8(crate::collect::read_plain(&path, MAX_WORKBOOK_BYTES)?).ok();
+        let text = uid.filter(|_| kept.files.len() < MAX_WORKBOOKS).and_then(|_| read());
         match (uid, text) {
             (Some(uid), Some(text)) => kept.files.push((uid.to_string(), text)),
             _ => kept.unread += 1,

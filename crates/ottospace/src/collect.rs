@@ -187,7 +187,7 @@ const OPEN_PLAIN: i32 = 0x0004 | 0x0100;
 
 /// What is in `file`, if it is a plain file of at most `most` bytes: opened once, and asked of
 /// what was opened. What is on disk can be written by any program of the user's.
-fn read_plain(file: &std::path::Path, most: u64) -> Option<Vec<u8>> {
+pub(crate) fn read_plain(file: &std::path::Path, most: u64) -> Option<Vec<u8>> {
     use std::io::Read;
     use std::os::unix::fs::OpenOptionsExt;
     let opened = std::fs::OpenOptions::new().read(true).custom_flags(OPEN_PLAIN).open(file).ok()?;

@@ -251,8 +251,13 @@ impl Model {
     fn workbook_record(&self, cwds: &[(PaneId, String)]) -> Result<TabRecord, String> {
         let tab = self.tabs.get(self.active).ok_or("no tab to save")?;
         let leaves = self.layout.as_ref().map(Node::leaves).unwrap_or_default();
-        let mut panes: Vec<PaneRecord> =
-            leaves.iter().filter_map(|id| self.pane(*id)).map(|pane| self.record(pane, cwds)).collect();
+        // A pane still waiting for its window or directory is saved as what it waits for, not as empty.
+        let waiting = |id: PaneId| self.marks.unfilled().iter().find(|empty| empty.pane == id);
+        let record = |pane: &crate::model::Pane| match waiting(pane.id) {
+            Some(empty) => PaneRecord { id: pane.id, ..empty.record.clone() },
+            None => self.record(pane, cwds),
+        };
+        let mut panes: Vec<PaneRecord> = leaves.iter().filter_map(|id| self.pane(*id)).map(record).collect();
         for pane in &mut panes {
             if let RecordKind::App { title, .. } = &mut pane.kind {
                 title.clear();
@@ -285,7 +290,8 @@ impl Model {
                 let book = &mut self.workbooks.list[at];
                 let before = book.clone();
                 match book.tabs.first_mut() {
-                    Some(first) => *first = record,
+                    // The tab's keys this build does not know stay.
+                    Some(first) => *first = TabRecord { extra: std::mem::take(&mut first.extra), ..record },
                     None => book.tabs.push(record),
                 }
                 self.workbooks.offer = Some(Offer { change: Change::Updated, before, until });
@@ -571,9 +577,17 @@ mod tests {
             &panes[panes.len() - 3..],
             [(&Kind::Terminal, Some("/code/app")), (&Kind::Empty, None), (&Kind::Empty, None)]
         );
-        // Saving it now updates the same workbook.
+        // Saving it now updates the same workbook. The pane still waiting for Slack's window
+        // is saved as Slack's, not as empty, and a key of the tab this build does not know stays.
+        m.workbooks.list[0].tabs[0].extra.insert("pinned".into(), serde_json::json!(true));
         save(&mut m, UID_2, &[]);
         assert_eq!((names(&m), m.workbooks.offered()), (vec!["DRI"], Some(Change::Updated)));
+        let tab = &m.workbooks.list[0].tabs[0];
+        let kinds: Vec<&str> = m.workbook_rows()[0].panes.iter().map(|pane| pane.kind).collect();
+        assert_eq!(
+            (kinds, tab.extra.get("pinned")),
+            (vec!["terminal", "app", "empty"], Some(&serde_json::json!(true)))
+        );
     }
 
     #[test]
