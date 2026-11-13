@@ -917,9 +917,9 @@ impl Workspace {
         if hosting {
             // Repos is the way in while there are no panes: most work starts in a repository.
             model.update(Action::ToggleSection { section: Section::Repos }.sent_by(Origin::System));
-            // Nothing open yet: the keyboard is in the drawer's new task. Not in a test run,
-            // whose tests start from normal mode, as the Repos section above.
-            if model.welcome() {
+            // Nothing open yet: the keyboard is in the drawer's new task. Not in a test run, the
+            // app-window loop's too: its tests start from normal mode.
+            if model.welcome() && std::env::var_os("OTTOSPACE_E2E").is_none() {
                 model.update(Action::OpenCompose { text: String::new() }.sent_by(Origin::System));
             }
         }
