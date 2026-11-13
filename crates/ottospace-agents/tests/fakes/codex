@@ -1,0 +1,18 @@
+#!/bin/sh
+# Fake `codex app-server` for tests: records argv and stdin under $FAKE_DIR, and answers each
+# JSON-RPC line by replaying a fixture from $FAKE_FIXTURES. Starts no model session.
+printf '%s\n' "$@" >"$FAKE_DIR/argv"
+replay() { grep -v '"_fixture"' "$FAKE_FIXTURES/$1"; }
+turn=0
+while IFS= read -r line; do
+  printf '%s\n' "$line" >>"$FAKE_DIR/stdin"
+  case "$line" in
+    *'"method":"initialize"'*) echo '{"id":0,"result":{"userAgent":"fake"}}' ;;
+    *'"method":"thread/start"'*) replay thread.jsonl ;;
+    *'"method":"turn/start"'*) turn=$((turn + 1)); replay "turn$turn.jsonl" ;;
+    *'"decision":"accept"'*) replay turn1-accepted.jsonl ;;
+    *'"method":"turn/interrupt"'*) replay turn2-interrupted.jsonl ;;
+  esac
+done
+echo "fake codex: stdin closed" >&2
+exit 4

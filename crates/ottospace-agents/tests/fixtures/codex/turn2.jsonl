@@ -1,0 +1,4 @@
+{"method":"_fixture","params":{"note":"HAND-WRITTEN from the app-server v2 schema. Not a recording."}}
+{"id":3,"result":{"turn":{"id":"turn-fixture-2","status":"inProgress","items":[]}}}
+{"method":"turn/started","params":{"threadId":"019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b","turn":{"id":"turn-fixture-2","status":"inProgress","items":[]}}}
+{"method":"item/agentMessage/delta","params":{"threadId":"019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b","turnId":"turn-fixture-2","itemId":"item-fixture-3","delta":"Working on it"}}

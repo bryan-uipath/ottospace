@@ -1,0 +1,3 @@
+{"method":"_fixture","params":{"note":"HAND-WRITTEN from `codex app-server generate-json-schema` (codex-cli 0.166, v2). Not a recording. Message order UNVERIFIED."}}
+{"id":1,"result":{"thread":{"id":"019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b","cwd":"/work/app","status":"idle","turns":[]},"model":"gpt-6-astra","modelProvider":"openai","cwd":"/work/app","approvalPolicy":"on-request","approvalsReviewer":"user","sandbox":{"type":"workspaceWrite"}}}
+{"method":"thread/started","params":{"thread":{"id":"019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b"}}}

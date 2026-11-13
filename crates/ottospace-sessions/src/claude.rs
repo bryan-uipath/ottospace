@@ -334,7 +334,8 @@ fn window(model: &str, peak: u64) -> Option<u64> {
 }
 
 /// A tool call's station and label, from its name and the names in its input.
-fn describe(tool: &str, input: &Value) -> (Station, String) {
+/// `ottospace-agents` labels a live call's start and permission request with it.
+pub fn describe(tool: &str, input: &Value) -> (Station, String) {
     let text = |key: &str| input[key].as_str();
     let path = text("file_path").or(text("notebook_path")).or(text("path"));
     let station = station::classify(tool, text("command").or(path));

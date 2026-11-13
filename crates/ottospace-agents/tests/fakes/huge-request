@@ -1,0 +1,6 @@
+#!/bin/sh
+# Fake CLI for tests: asks a permission in a line too long to read (past 32 MB), then waits on stdin.
+printf '%s' '{"type":"control_request","request_id":"r","request":{"subtype":"can_use_tool","input":{"content":"'
+head -c 34000000 /dev/zero | tr '\0' a
+printf '"}}}\n'
+exec cat
