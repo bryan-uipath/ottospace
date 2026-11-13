@@ -58,6 +58,23 @@ Rules:
   An E2E run that names none lists none, and never starts an app. `OTTOSPACE_DOCK_APPS` (bundle
   paths, `:` between them) stands for the Dock's apps; a test run that names none has none, and
   never reads the user's Dock.
+- Requests and fields that answer only under `OTTOSPACE_E2E`, by one gate (`control::test_refusal`).
+  They are documented here and on `Request` in `control.rs`, never in `skill/guide.md`: an agent
+  must not learn them.
+  - `mouse` (`down`, `move`, `up`, `wheel`, `exit`, `enter`) and `drag` hand events to the window's
+    own AppKit handlers, never posted. `wheel` takes `dx`, `dy`: lines, or with `precise` points,
+    both rounded to whole numbers.
+  - `"as":"user"` on `key`, `mouse` and `drag`: the event is `Origin::User`, for what a socket
+    client is refused (sneak mode, a mark's wait, the quit question, a pin in the Apps section).
+    Every key and pointer event a client sends is otherwise the client's. Outside a test run a
+    client that passed for the user could quit over running programs, end the mode the user is
+    typing in, or write their settings. A test run hosts no window and is the test's own
+    instance, on its own socket.
+  - `"repeat":true` on `key`: each key as one still held down. A key that types is a real repeat
+    to `keyDown:`: `enter`, `tab`, `space`, or a character the layout types with no modifier on
+    key codes 0 to 50 (`a`, `7`, `/`; not `A`). A `cmd-` shortcut, by the flag alone, is pressed as
+    without `repeat` while `key_repeating()` says held. `escape`, `backspace` and arrows answer
+    "no key to hold down".
 - A feature is done when both loops cover it. Extend `Request` and the state snapshot when a test
   needs to drive or read something new.
 

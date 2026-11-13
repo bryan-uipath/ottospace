@@ -101,9 +101,7 @@ impl Workspace {
         };
         let (pinned, hidden) = (entries(&settings.apps), entries(&settings.apps_hidden));
         let suggest = offer && settings.suggest_dock_apps.unwrap_or(true);
-        // Only a test run lets a client's key pin: it writes the settings file.
-        let clients_write = std::env::var_os("OTTOSPACE_E2E").is_some();
-        let told = Action::SetAppSettings { pinned, hidden, suggest, clients_write };
+        let told = Action::SetAppSettings { pinned, hidden, suggest };
         self.model.update(told.sent_by(Origin::System));
         config::remove_stale_drafts();
     }

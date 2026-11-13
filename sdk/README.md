@@ -65,7 +65,7 @@ npm ci && npm run typecheck  # tsc; the only use of the dev dependencies
 
 `test/parse.test.ts` and `test/socket.test.ts` need no app. So does `test/requests.test.ts`. It keeps the client in step with `Request`:
 
-- `test/requests.jsonl` is every request the client sends, one per method. A Rust unit test
+- `test/requests.jsonl` is every request the client sends, at least one per method. A Rust unit test
   (`the_sdk_fixture_holds_every_request`) parses each line with the real `Request`.
 - After adding or changing a method: `UPDATE_FIXTURE=1 npm test`, and commit the file.
 

@@ -606,9 +606,6 @@ pub enum Action {
         pinned: Vec<apps::Entry>,
         hidden: Vec<apps::Entry>,
         suggest: bool,
-        /// A test run: a client's key may pin, hide and undo. Otherwise only the user's may:
-        /// they write the settings file.
-        clients_write: bool,
     },
     /// The Dock's apps, in its order, as the shell last read them.
     SetDock {
@@ -1277,17 +1274,11 @@ impl Model {
         match action {
             _ if origin == Origin::User => None,
             // A pin, an unpin, a hidden suggestion and their undo write the user's settings
-            // file: no client's key or label does that, but in a test run.
-            Action::AppPin { .. } | Action::AppHide { .. } | Action::AppsUndo | Action::ListPin
-                if !self.app_lists.clients_write =>
-            {
+            // file: no client's key or label does that.
+            Action::AppPin { .. } | Action::AppHide { .. } | Action::AppsUndo | Action::ListPin => {
                 Some(apps::USERS_ALONE)
             }
-            Action::ListDismiss | Action::ListUndo
-                if self.sidebar == Some(Section::Apps) && !self.app_lists.clients_write =>
-            {
-                Some(apps::USERS_ALONE)
-            }
+            Action::ListDismiss | Action::ListUndo if self.sidebar == Some(Section::Apps) => Some(apps::USERS_ALONE),
             action if self.sneak.is_some() && action.takes_keyboard() => Some("sneak mode is on"),
             action if self.confirm.is_some() && action.takes_keyboard() => Some(CONFIRM_UP),
             // A key a client presses is input to the wait, as a label's letter is to sneak mode.
@@ -1930,10 +1921,9 @@ impl Model {
                 }
             }
             Action::SetApps { names } => self.apps = names,
-            Action::SetAppSettings { pinned, hidden, suggest, clients_write } => {
+            Action::SetAppSettings { pinned, hidden, suggest } => {
                 self.app_lists.set(pinned, hidden, suggest);
                 self.app_lists.resolve(&self.installed.0);
-                self.app_lists.clients_write = clients_write;
             }
             Action::SetDock { apps } => self.app_lists.set_dock(apps),
             Action::AppPin { path } => self.app_pin(&path, effects),
@@ -3631,7 +3621,7 @@ mod tests {
             Action::RowDismiss { id: 1 },
             Action::TaskFromLine { line: text(), known: Default::default(), open: false },
             Action::SetApps { names: Vec::new() },
-            Action::SetAppSettings { pinned: Vec::new(), hidden: Vec::new(), suggest: true, clients_write: false },
+            Action::SetAppSettings { pinned: Vec::new(), hidden: Vec::new(), suggest: true },
             Action::SetDock { apps: Vec::new() },
             Action::AppPin { path: text() },
             Action::AppHide { path: text() },
@@ -3685,6 +3675,11 @@ mod tests {
         samples
     }
 
+    /// A pin, a hide or their undo: refused from all but the user on its own ground.
+    fn writes_settings(action: &Action) -> bool {
+        matches!(action, Action::AppPin { .. } | Action::AppHide { .. } | Action::AppsUndo | Action::ListPin)
+    }
+
     /// Every action from every origin. The origin decides, not the action: only the user's own
     /// move ends sneak mode, and only the user takes the keyboard from under its labels.
     #[test]
@@ -3692,10 +3687,13 @@ mod tests {
         for action in &samples() {
             for origin in [Origin::User, Origin::Socket, Origin::System] {
                 let mut m = Model::default();
-                m.app_lists.clients_write = true; // a pin is refused on its own ground: not this rule
                 m.update(Action::Split { axis: Right, kind: Kind::Empty });
                 sneak(&mut m, 3);
-                let refused = (origin != Origin::User && action.takes_keyboard()).then_some("sneak mode is on");
+                let refused = match action {
+                    _ if origin == Origin::User => None,
+                    _ if writes_settings(action) => Some(apps::USERS_ALONE),
+                    _ => action.takes_keyboard().then_some("sneak mode is on"),
+                };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");
                 m.update(action.clone().sent_by(origin));
                 let ends = match action {
@@ -6478,12 +6476,15 @@ mod tests {
         for action in &samples() {
             for origin in [Origin::User, Origin::Socket, Origin::System] {
                 let mut m = Model::default();
-                m.app_lists.clients_write = true; // a pin is refused on its own ground: not this rule
                 m.update(Action::Split { axis: Right, kind: Kind::Terminal });
                 m.update(Action::Split { axis: Right, kind: Kind::Terminal });
                 m.update(Action::QuitAsked { running: vec![running(1, "sleep")] });
                 let user = origin == Origin::User;
-                let refused = (!user && action.takes_keyboard()).then_some(CONFIRM_UP);
+                let refused = match action {
+                    _ if user => None,
+                    _ if writes_settings(action) => Some(apps::USERS_ALONE),
+                    _ => action.takes_keyboard().then_some(CONFIRM_UP),
+                };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");
                 let before = (ids(&m), m.focused, m.tabs.len(), m.keys);
                 let effects = m.update(action.clone().sent_by(origin));

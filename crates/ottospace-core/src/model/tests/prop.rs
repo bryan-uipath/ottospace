@@ -548,7 +548,7 @@ const MAKERS: &[Make] = &[
         };
         let pinned = (0..g.rng.below(3)).map(|_| entry(g)).collect();
         let hidden = (0..g.rng.below(2)).map(|_| entry(g)).collect();
-        Action::SetAppSettings { pinned, hidden, suggest: !g.rng.one_in(4), clients_write: g.rng.coin() }
+        Action::SetAppSettings { pinned, hidden, suggest: !g.rng.one_in(4) }
     },
     |g| {
         let app = |g: &mut Gen| {
@@ -1218,8 +1218,8 @@ impl Run {
                     ensure!(labelled.contains(&own), "a control with no label is activated: {id:?}");
                 }
                 Effect::SaveApps { changes } => {
-                    // The settings file is the user's: a client's action writes it only in a test run.
-                    ensure!(user || m.app_lists.clients_write, "{origin:?} wrote the settings: {changes:?}");
+                    // The settings file is the user's: no client's action writes it.
+                    ensure!(user, "{origin:?} wrote the settings: {changes:?}");
                     ensure!(!changes.is_empty(), "the settings are written for no change");
                     let keys = changes.iter().all(|change| matches!(change.key, "apps" | "apps_hidden"));
                     ensure!(
@@ -1993,11 +1993,10 @@ fn the_new_task_box_keeps_its_line_under_the_key_reference() {
 fn an_app_with_no_name_is_not_pinned() {
     let app = |name: &str| Installed { name: name.into(), path: format!("/Applications/{name}.app") };
     replay(&[
-        Action::SetAppSettings { pinned: vec![], hidden: vec![], suggest: true, clients_write: true }
-            .sent_by(Origin::User),
+        Action::SetAppSettings { pinned: vec![], hidden: vec![], suggest: true }.sent_by(Origin::User),
         Action::SetInstalled { apps: vec![app("Slides"), app("")], running: vec![] }.sent_by(Origin::User),
         Action::SetDock { apps: vec![app("")] }.sent_by(Origin::User),
-        Action::AppPin { path: "/Applications/.app".into() }.sent_by(Origin::System),
+        Action::AppPin { path: "/Applications/.app".into() }.sent_by(Origin::User),
         Action::AppHide { path: "/Applications/.app".into() }.sent_by(Origin::User),
     ])
     .unwrap();
@@ -2005,8 +2004,7 @@ fn an_app_with_no_name_is_not_pinned() {
     let empty = crate::apps::Entry { text: "".into(), app: Some(app("")) };
     replay(&[
         Action::SetInstalled { apps: vec![app("")], running: vec![] }.sent_by(Origin::System),
-        Action::SetAppSettings { pinned: vec![empty], hidden: vec![], suggest: true, clients_write: true }
-            .sent_by(Origin::System),
+        Action::SetAppSettings { pinned: vec![empty], hidden: vec![], suggest: true }.sent_by(Origin::System),
         Action::AppPin { path: "/Applications/.app".into() }.sent_by(Origin::User),
     ])
     .unwrap();
@@ -2018,7 +2016,7 @@ fn a_pin_of_an_app_the_settings_name_already_writes_nothing() {
     let sketch = Installed { name: "Sketch".into(), path: "/Applications/Sketch.app".into() };
     let named = crate::apps::Entry { text: "Sketch".into(), app: None };
     let mut m = Model::default();
-    m.update(Action::SetAppSettings { pinned: vec![named], hidden: vec![], suggest: true, clients_write: false });
+    m.update(Action::SetAppSettings { pinned: vec![named], hidden: vec![], suggest: true });
     assert!(m.apps_bar().not_running.is_empty(), "no scan yet: the line names no app found");
     m.update(Action::SetInstalled { apps: vec![sketch.clone()], running: vec![] });
     assert_eq!(m.apps_bar().not_running.len(), 1, "the scan came in: it is the pinned app");
