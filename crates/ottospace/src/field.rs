@@ -38,6 +38,21 @@ pub struct Drawn {
     ticking: bool,
     /// The window's height when it was drawn: what hangs under the field knows its room.
     viewport: Pixels,
+    /// Where the new-task box's content was last drawn.
+    panel: Bounds<Pixels>,
+}
+
+impl Drawn {
+    pub fn set_panel(&mut self, bounds: Bounds<Pixels>) {
+        self.panel = bounds;
+    }
+
+    /// True if `position` is over the new-task box's content, or the padding around it.
+    pub fn over_panel(&self, position: gpui::Point<Pixels>) -> bool {
+        let pad = px(14.);
+        let (from, to) = (self.panel.origin - point(pad, pad), self.panel.bottom_right() + point(pad, pad));
+        self.panel.size.width > px(1.) && Bounds::from_corners(from, to).contains(&position)
+    }
 }
 
 pub type Shared = Rc<RefCell<Drawn>>;
@@ -104,7 +119,19 @@ impl Workspace {
 
     /// A field opened, closed or lost the keyboard: a drag begun before is over.
     pub fn field_changed_hands(&mut self) {
-        self.field.borrow_mut().selecting = false;
+        let mut drawn = self.field.borrow_mut();
+        drawn.selecting = false;
+        // The new-task box closed: its panel is nowhere, and nothing is pointed at.
+        if self.model.compose.is_none() {
+            (drawn.panel, self.pointing) = (Bounds::default(), None);
+        }
+    }
+
+    /// True if a mark's name is being typed and `position` is in its field: a click there
+    /// places the cursor, and does not end the typing.
+    pub fn in_mark_name(&self, position: gpui::Point<Pixels>) -> bool {
+        let renaming = self.model.field().is_some_and(|(of, _)| of == "mark");
+        renaming && self.field.borrow().bounds.contains(&position)
     }
 
     /// The Edit menu's Cut, Select All, Undo and Redo, and their keys when no handler took them.
@@ -459,5 +486,10 @@ impl Element for FieldElement {
         });
         let shared = self.drawn.clone();
         window.on_mouse_event(move |_: &MouseUpEvent, _, _, _| shared.borrow_mut().selecting = false);
+        // ⌥ let go, or pressed, with the pointer still: the outline follows the key.
+        let workspace = self.workspace.clone();
+        window.on_modifiers_changed(move |event: &gpui::ModifiersChangedEvent, _, cx| {
+            workspace.update(cx, |this, cx| this.compose_hover(this.hover_at, event.modifiers.alt, cx));
+        });
     }
 }

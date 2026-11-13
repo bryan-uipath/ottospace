@@ -505,6 +505,8 @@ export interface Snapshot {
   compose_menu: ComposeMenu | null;
   /** The tab or pane an ⌥-click would reference in the new-task box, while ⌥ is held over it. */
   compose_pointing: Rect | null;
+  /** What the new-task box says it could not do ("no room in the line for that name"), or null. */
+  compose_note: string | null;
   tasks_bar: TasksBar;
   sessions_bar: SessionsBar;
   /** Null while the tab on show has a pane. */

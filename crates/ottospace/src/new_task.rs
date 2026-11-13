@@ -83,9 +83,11 @@ impl Workspace {
     /// Files or folders for the line: dropped on the box, picked, or pasted. Each goes in at
     /// the cursor as a path word.
     pub fn compose_attach(&mut self, paths: &[PathBuf], origin: Origin, window: &Window, cx: &mut Context<Self>) {
-        let paths = paths.iter().map(|path| path.to_string_lossy().into_owned()).collect();
+        // A name that is not text cannot be in the line: the core is told how many were left out.
+        let named: Vec<String> = paths.iter().filter_map(|path| path.to_str().map(str::to_string)).collect();
+        let unreadable = paths.len() - named.len();
         let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
-        self.dispatch(Action::ComposeAttach { paths, home }, origin, window, cx);
+        self.dispatch(Action::ComposeAttach { paths: named, home, unreadable }, origin, window, cx);
     }
 
     /// ⌘O, or the box's + button: the system's file picker. What is chosen goes into the line.
@@ -120,7 +122,11 @@ impl Workspace {
     }
 
     /// The tab or pane drawn at a window position: what an ⌥-click there would reference.
+    /// Nothing under the box's own panel: that click is the box's.
     fn pointed_at(&self, position: Point<Pixels>) -> Option<(Pointed, Bounds<Pixels>)> {
+        if self.field.borrow().over_panel(position) {
+            return None;
+        }
         let tab = self.model.tabs.iter().find_map(|tab| {
             let bounds = self.controls.bounds(&format!("tab:{}", tab.id))?;
             bounds.contains(&position).then_some((Pointed::Tab(tab.id), bounds))
@@ -135,6 +141,7 @@ impl Workspace {
 
     /// The pointer moved: with ⌥ held while the box is open, what is under it is outlined.
     pub fn compose_hover(&mut self, position: Point<Pixels>, alt: bool, cx: &mut Context<Self>) {
+        self.hover_at = position;
         let pointing = self.model.compose.as_ref().filter(|_| alt).and_then(|_| self.pointed_at(position));
         let outline = pointing.map(|(_, bounds)| bounds);
         if self.pointing != outline {
@@ -272,6 +279,10 @@ impl Workspace {
             _ => KEYS_HINT,
         };
         let muted = |text: &'static str| div().text_xs().text_color(rgb(theme::MUTED)).child(text);
+        // What the box could not do: a name with no room, files left out.
+        let note =
+            self.model.compose_note().map(|note| div().text_xs().text_color(rgb(theme::ERROR)).child(note.to_string()));
+        let panel = self.field.clone();
         let attach = div()
             .id("compose-attach")
             .px_1p5()
@@ -301,6 +312,7 @@ impl Workspace {
             .child(self.render_field("What needs doing?", cx));
         div()
             .id("compose-content")
+            .relative()
             .flex()
             .flex_col()
             .gap_2()
@@ -317,9 +329,16 @@ impl Workspace {
                     .child(div().text_xs().text_color(rgb(theme::COMPOSE)).child("NEW TASK"))
                     .child(attach),
             )
+            // Where the content is drawn: an ⌥-click over it references nothing.
+            .child(
+                gpui::canvas(move |bounds, _, _| panel.borrow_mut().set_panel(bounds), |_, _, _, _| {})
+                    .absolute()
+                    .size_full(),
+            )
             .children(over)
             .child(line)
             .children(under)
+            .children(note)
             .when(!above, |d| d.child(muted(TAG_HINT)))
             .child(muted(keys))
     }

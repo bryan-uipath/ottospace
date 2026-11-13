@@ -218,6 +218,16 @@ pub struct Task {
     pub refs: Vec<Ref>,
 }
 
+impl Task {
+    /// The task as it is written to its file. A reference keeps what it is, its name, its id
+    /// then and its app's name: not a window's title, a terminal's directory or program, or
+    /// where an app is installed. The tasks folder may be shared; those stay in memory.
+    pub fn for_file(&self) -> Task {
+        let kept = |r: &Ref| Ref { title: None, cwd: None, program: None, bundle: None, ..r.clone() };
+        Task { refs: self.refs.iter().map(kept).collect(), ..self.clone() }
+    }
+}
+
 /// What a reference points at.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -229,8 +239,9 @@ pub enum RefKind {
     App,
 }
 
-/// Something a task points at, as it was when the task was added: ids do not last past a
-/// quit, so the words that told it apart are kept with it.
+/// Something a task points at, as it was when the task was added. `title`, `cwd`, `program`
+/// and `bundle` tell it apart while ottospace runs, and are not written to the task's file
+/// (`Task::for_file`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Ref {
     pub kind: RefKind,
@@ -386,9 +397,6 @@ impl Tasks {
         }
     }
 
-    /// Names who works a task, the paths it is about and the skills it loads. Names too long to
-    /// keep, and those past the twentieth, are dropped. Where the paths were found is kept only
-    /// if it is known for every one of them.
     /// Sets what a task points at: at most `MAX_TAGS`, each name once.
     pub fn point(&mut self, id: TaskId, refs: Vec<Ref>) {
         let mut kept: Vec<Ref> = Vec::new();
@@ -402,6 +410,9 @@ impl Tasks {
         }
     }
 
+    /// Names who works a task, the paths it is about and the skills it loads. Names too long to
+    /// keep, and those past the twentieth, are dropped. Where the paths were found is kept only
+    /// if it is known for every one of them.
     pub fn assign(&mut self, id: TaskId, assign: Assign) {
         let Assign { agent, paths, resolved, skills } = assign;
         let fits = |name: &String| !name.is_empty() && name.chars().count() <= MAX_TAG;

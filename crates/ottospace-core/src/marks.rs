@@ -7,7 +7,6 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::edit::{Edit, Motion};
 use crate::layout::{Axis, MIN_SHARE, Node};
 use crate::list::ListRow;
 use crate::model::{Effect, Kind, Mode, Model, Pane, PaneId};
@@ -288,7 +287,7 @@ fn kept_title(title: &str, most: usize) -> String {
 }
 
 /// The last part of a path, e.g. "notes" for "/Users/me/notes".
-fn directory_name(path: &str) -> Option<&str> {
+pub(crate) fn directory_name(path: &str) -> Option<&str> {
     path.trim_end_matches('/').rsplit('/').next().filter(|name| !name.is_empty())
 }
 
@@ -1112,10 +1111,8 @@ impl Model {
                 // Not a letter: it still waits for one.
                 None => self.mark_input = Some(MarkInput::SetKey { mark }),
             },
-            Some(MarkInput::Rename { mark, mut text }) => {
-                text.apply(Edit::Insert(typed.to_string()));
-                self.mark_input = Some(MarkInput::Rename { mark, text });
-            }
+            // A name is typed in its text field (`FieldEdit`), not here.
+            renaming @ Some(MarkInput::Rename { .. }) => self.mark_input = renaming,
             None => {}
         }
     }
@@ -1123,7 +1120,8 @@ impl Model {
     /// ⌫: takes a character off the name, or the letter off the mark.
     pub(crate) fn mark_backspace(&mut self) {
         match &mut self.mark_input {
-            Some(MarkInput::Rename { text, .. }) => drop(text.apply(Edit::Delete { to: Motion::Left })),
+            // A name's ⌫ is its text field's.
+            Some(MarkInput::Rename { .. }) => {}
             Some(MarkInput::SetKey { mark }) => {
                 let mark = *mark;
                 self.marks.set_key(mark, None);
@@ -1146,6 +1144,7 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::edit::{Edit, Motion};
     use crate::layout::Axis::{Down, Right};
     use crate::model::{Action, Origin};
     use crate::tasks::State;
@@ -1641,16 +1640,17 @@ mod tests {
         assert_eq!((typing(&m), m.mode()), (Some((shell, "my shell".into())), Mode::Mark));
         m.update(Action::FieldEdit { edit: Edit::Undo });
         m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::End, select: false } });
-        for _ in 0..5 {
-            m.update(Action::MarkBackspace);
-        }
-        m.update(Action::MarkType { text: "no\ntes".into() });
+        m.update(Action::FieldEdit { edit: Edit::Delete { to: Motion::Start } });
+        m.update(Action::FieldEdit { edit: Edit::Insert("no\ntes".into()) });
+        // The letter keys of a jump are not a name's: they change nothing of it.
+        m.update(Action::MarkType { text: "x".into() });
+        m.update(Action::MarkBackspace);
         assert_eq!(typing(&m), Some((shell, "notes".into())));
         m.update(Action::MarkSubmit);
         assert_eq!((names(&m), m.mode()), (vec!["notes", "Tab 1"], Mode::Normal));
         // No longer than a name may be. Esc keeps the old name.
         m.update(Action::MarkEdit { mark: MarkRef::Id(shell), field: Field::Name });
-        m.update(Action::MarkType { text: "x".repeat(100) });
+        m.update(Action::FieldEdit { edit: Edit::Insert("x".repeat(100)) });
         let Some(MarkInput::Rename { text, .. }) = &m.mark_input else { panic!("renaming") };
         assert_eq!(text.text().chars().count(), MAX_NAME);
         m.update(Action::MarkCancel);
@@ -1687,7 +1687,7 @@ mod tests {
         assert_eq!((names(&m), m.list), (vec!["b", "a", "c"], Some(1)));
         m.update(Action::ListMarkEdit { field: Field::Name });
         assert_eq!(m.mode(), Mode::Mark);
-        m.update(Action::MarkType { text: "!".into() });
+        m.update(Action::FieldEdit { edit: Edit::Insert("!".into()) });
         m.update(Action::MarkSubmit);
         assert_eq!((names(&m), m.mode(), m.list), (vec!["b", "a!", "c"], Mode::List, Some(1)));
         // ↵ goes to it: the pane has the keyboard, not the list.

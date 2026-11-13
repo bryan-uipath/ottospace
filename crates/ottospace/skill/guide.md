@@ -76,6 +76,7 @@ ottospace ctl '{"cmd":"state"}'
 | `compose_host` | Null, `modal` (the box is over the workspace) or `home` (it is the home screen's own line, in place: there ↵ adds the task and the line stays open, empty) |
 | `compose_menu` | Null, or the dropdown for the tag at the cursor: `mark`, `typed`, `rows` (each `name`, `kind`, `detail`, `matched`), `selected` (the highlighted row, or null) and `note` (`no match`, `new project`, or null). While `selected` is not null, ↵ takes that row instead of adding the task, unless the word is that name already |
 | `compose_pointing` | Null, or the rect of the tab or pane the user's ⌥-click would reference |
+| `compose_note` | Null, or what the box says it could not do: a name the line has no room for, files left out |
 | `inbox`, `needs_you` | The listed tasks by group, each with its `group`; and how many are under `needs_you` |
 | `tasks_bar` | The Tasks section as drawn. `sections`: each `heading` (`needs_you`, `open`, `running`, `captured`, `on_hold`, `done`) with its `count`, `collapsed`, and `rows` (none while collapsed): `id`, `group`, `tabs` and `panes` (what the task has open), `current` (its tabs are on show) and `detail` (the muted line: tags, what is open, age). A task with tabs open is under `open`, unless it needs the user. `empty`: nothing is listed. `undo`: null, or the move the line at the section's top offers to take back (`Dismissed`, `On hold`, `Snoozed`), for 6 seconds after the user clicked a button on a row. It is not `notice`, which is the status bar's |
 | `state.collapsed` | The headings of the Tasks section that are folded |
@@ -283,7 +284,9 @@ States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stal
   Esc closes the dropdown first when one is open (`compose_menu` is not null), then the box:
   to close the box, press `escape` until `mode` is no longer `compose`. A task's `refs` are
   what its `^references` pointed at when it was added (`kind`, `name`, and `id`, `title`,
-  `app`, `cwd`, `program` or `bundle` where known); nothing acts on them.
+  `app`, `cwd`, `program` or `bundle` where known); nothing acts on them. The task's file keeps
+  `kind`, `name`, `id` and `app` only: after a restart the rest is gone. In a line, a backslash
+  keeps the next character in its word (a space, a backslash): `~/My\ Notes`, `^Tab\ 1`.
   While the box is open `mode` is `compose` and `state.compose` is its text; `field` has its
   cursor and selection. `key` edits it as the user's keys do (`alt-backspace`, `cmd-a`, `cmd-z`).
 - `task_add` replies `{"ok":true,"task":{..}}`, not the state: the new task, with its `id`.

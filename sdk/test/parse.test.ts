@@ -61,6 +61,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     compose_host: null,
     compose_menu: null,
     compose_pointing: null,
+    compose_note: null,
     tasks_bar: { empty: true, undo: null, sections: [] },
     sessions_bar: { count: 0, collapsed: false, rows: [], older: 0, older_open: false, enabled: false, reads: 0, slow_reads: 0 },
     home: { nodes: [], needs_you: [], counts: { needs_you: 0, running: 0, captured: 0, on_hold: 0, done: 0 } },

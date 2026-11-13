@@ -290,10 +290,11 @@ impl Field {
         self.typing = typing;
     }
 
-    /// True if `text` would go in whole in place of the selection: the limit leaves room.
-    pub fn fits(&self, text: &str) -> bool {
-        let kept = self.text.chars().count() - self.selected().chars().count();
-        self.limit == 0 || kept + text.chars().count() <= self.limit
+    /// True if `text` would go in whole in place of bytes `range`: the limit leaves room.
+    /// `splice` cuts what does not fit; a caller that must not write half a name asks first.
+    pub fn fits(&self, range: Range<usize>, text: &str) -> bool {
+        let gone = self.text.get(range).map_or(0, |part| part.chars().count());
+        self.limit == 0 || self.text.chars().count() - gone + text.chars().count() <= self.limit
     }
 
     /// Replaces bytes `range` with `text` as one undo step, the cursor after it. For a caller

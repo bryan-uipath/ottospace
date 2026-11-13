@@ -584,6 +584,8 @@ struct Workspace {
     field: field::Shared,
     /// What an ⌥-click would reference in the new-task box: outlined while ⌥ is held over it.
     pointing: Option<Bounds<Pixels>>,
+    /// Where the pointer last was: ⌥ pressed with it still outlines what is there.
+    hover_at: gpui::Point<Pixels>,
     system_clipboard: bool,
     /// Each pane's body bounds in window coordinates, recorded during prepaint.
     cells: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
@@ -855,6 +857,7 @@ impl Workspace {
             copied: None,
             field: field::Shared::default(),
             pointing: None,
+            hover_at: gpui::Point::default(),
             system_clipboard: std::env::var_os("OTTOSPACE_E2E").is_none(),
             cells: HashMap::new(),
             frames: HashMap::new(),
@@ -1084,7 +1087,8 @@ impl Workspace {
         let names = self.tags_repo.as_ref() != Some(&repo);
         self.tags_repo = Some(repo.clone());
         if let Some(reader) = &self.tags {
-            reader.ask(tags::Job { call: 0, line, typing, repo, names });
+            let whole = self.model.compose_attached().to_vec();
+            reader.ask(tags::Job { call: 0, line, typing, whole, repo, names });
         }
     }
 
@@ -1163,7 +1167,7 @@ impl Workspace {
         };
         self.calls += 1;
         let repo = self.model.draft_repo(&line);
-        reader.ask(tags::Job { call: self.calls, line, typing: None, repo, names: true });
+        reader.ask(tags::Job { call: self.calls, line, typing: None, whole: Vec::new(), repo, names: true });
         self.filing.push((self.calls, filing, reply));
     }
 
@@ -1238,9 +1242,14 @@ impl Workspace {
                 }
                 continue;
             }
+            // `compose_drop` is a drop from the pointer: refused where a click is.
             let pointer = matches!(
                 request,
-                Request::Mouse { .. } | Request::Drag { .. } | Request::MouseDown { .. } | Request::MouseDrag { .. }
+                Request::Mouse { .. }
+                    | Request::Drag { .. }
+                    | Request::MouseDown { .. }
+                    | Request::MouseDrag { .. }
+                    | Request::ComposeDrop { .. }
             );
             if pointer && self.model.sneak.is_some() {
                 let _ = reply.send(control::error(sneak::ON));
@@ -1997,6 +2006,8 @@ impl Workspace {
             // The dropdown that finishes the tag at the cursor, or null: its `mark`, what is
             // `typed`, the `rows` (name, kind, detail, matched letters) and the one `selected`.
             "compose_menu": self.model.dropdown(),
+            // What the box says it could not do ("no room in the line for that name"), or null.
+            "compose_note": self.model.compose_note(),
             // The tab or pane an ⌥-click would reference, outlined while ⌥ is held over it
             // with the box open: its rect, or null.
             "compose_pointing": self.pointing.filter(|_| self.model.compose.is_some()).map(rect),
@@ -4271,7 +4282,8 @@ impl Render for Workspace {
                     this.dispatch(Action::LeaveSneak, this.input, window, cx);
                 }
                 // And for a mark that waits: a click on another row's pencil starts that one.
-                if this.model.mark_input.is_some() {
+                // Not a click in the name being typed: that places its cursor.
+                if this.model.mark_input.is_some() && !this.in_mark_name(event.position) {
                     this.dispatch(Action::MarkCancel, this.input, window, cx);
                 }
             }))

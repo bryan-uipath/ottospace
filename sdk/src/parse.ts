@@ -396,7 +396,7 @@ function field(value: unknown, at: string): Field {
   const owners = ["compose", "picker", "apps", "mark"];
   if (typeof o.of !== "string" || !owners.includes(o.of)) throw wrong(`${at}.of`, "compose, picker, apps or mark", o.of);
   return {
-    of: o.of,
+    of: o.of as Field["of"],
     text: str(o.text, `${at}.text`),
     cursor: num(o.cursor, `${at}.cursor`),
     selection: pair(o.selection, `${at}.selection`),
@@ -663,6 +663,7 @@ export function snapshot(value: unknown): Snapshot {
     compose_host: orNull(composeHost)(o.compose_host, "compose_host"),
     compose_menu: orNull(composeMenu)(o.compose_menu, "compose_menu"),
     compose_pointing: orNull(rect)(o.compose_pointing, "compose_pointing"),
+    compose_note: orNull(str)(o.compose_note, "compose_note"),
     tasks_bar: tasksBar(o.tasks_bar, "tasks_bar"),
     sessions_bar: sessionsBar(o.sessions_bar, "sessions_bar"),
     home: orNull(home)(o.home, "home"),

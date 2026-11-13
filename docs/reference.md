@@ -145,13 +145,17 @@ no panes) the home screen's own line is the box, in place, and a click on that l
   nothing; once a letter of the name is typed the first row is highlighted. Typing narrows it;
   a click on a row takes it.
 - **Taking a row** replaces the whole word under the cursor with the name and a space. A
-  folder takes no space: the dropdown stays open on what is inside it. A space typed after a
-  name that is one of the rows takes that row, spelled as it is kept.
+  folder takes no space: the dropdown stays open on what is inside it. A space typed at
+  the end of a name that is one of the rows takes that row, spelled as it is kept; inside a
+  word a space is a space.
 - **Tags that are understood** are drawn in their colour on a faint chip, in the line itself;
   a word that names nothing stays plain.
 - **Files.** Files and folders dragged from Finder onto the box, picked with ⌘O, or copied in
-  Finder and pasted (⌘V), each go in at the cursor as a `/path` word: one inside the home
-  folder as `~/..`, a space with a backslash before it.
+  Finder and pasted (⌘V), each go in as a `/path` word, after the word the cursor is in: one
+  inside the home folder as `~/..`, a space with a backslash before it.
+- **When it cannot.** A name the line has no room for (it holds 500 characters) is not put in
+  in part: the line stays as it is and the box says "no room". ↵ then adds the task as typed.
+  Files left out (a name too long, one with a line break) are counted in the same place.
 
 **The quit question.** ⌘Q, Quit in the menu and the window's red close button all ask the same
 question (status chip `QUIT?`). A quit ends every terminal and what runs in it, so it asks when:
@@ -197,12 +201,18 @@ fix zoom flicker #canvas >canvas-app @claude p2
 review the export PR >canvas-app @codex $code-review /src/export
 ```
 
-- **A `^reference`** is kept on the task as it was when the task was added: what it is (a
-  tab, a pane, a mark, an app), its name, its id then, and what tells it apart (a tab's title,
-  an app pane's app and window title, a terminal's directory and program, an app's bundle).
-  Ids do not last past a quit. One taken from the dropdown or by ⌥-click is kept even if
-  what it names closes before ↵. Nothing acts on a reference yet: it is stored, counted in
-  the task's row, and in the state as `refs`. Opening a task does not open what it points at.
+- **A `^reference`** is kept on the task as it was when the task was added. One taken from
+  the dropdown or by ⌥-click is kept even if what it names closes before ↵, and a name in a
+  line means one thing as long as the line is there: a second pane of that name is `name-2`.
+  A name is read as typed first (`^notes\ v1.`), then without the punctuation a clause ends in.
+  - **In the task's file** (`tasks/<id>.json`, which may be in a folder you share): what it
+    is (`tab`, `pane`, `mark`, `app`), its name, its id then, and the app's name. A terminal
+    is named by its directory's name only.
+  - **In memory, and in the state, until ottospace quits**: also a tab's title, an app
+    pane's window title, a terminal's full directory and its program, where an app is
+    installed. None of these is written to the file. Ids do not last past a quit.
+  - Nothing acts on a reference yet: it is stored, counted in the task's row, and in the
+    state as `refs`. Opening a task does not open what it points at.
 - **A tag counts only if its name is known.** A `>word`, `@word` or `$word` that names nothing
   stays in the title where it was typed, and so does a `/word` that is not a file or directory.
   `ask @ana`, `costs $5` and `use > 3 workers` are safe. A name starts with a letter, so `#123`,
@@ -216,8 +226,13 @@ review the export PR >canvas-app @codex $code-review /src/export
   (`paths`) and, beside it, the absolute path that was found (`resolved`).
 - **Punctuation and spaces.** A comma or full stop after a tag is not part of it: `#canvas,`
   and `p1,` work. For a path the word as typed is tried first, so a file named `v1.` is found,
-  then the word without the punctuation. A space in a path is written with a backslash before
-  it, `~/My\ Notes`; Tab writes it for you. The task keeps the path without the backslash.
+  then the word without the punctuation. A space in a path or a reference is written with a
+  backslash before it, `~/My\ Notes`, and so is any other character that would end the word (a
+  no-break space, as in a macOS screenshot's name) and a backslash itself (`a\\b`); taking a
+  row, a drop or ⌥-click writes them for you. The task keeps the name without them. A name
+  with a line break or a tab in it cannot be in the line: it is left out, and the box says so.
+- **A file dropped, picked or pasted** is that very file: `/tmp/report.txt` put in whole is
+  not looked for inside the line's `>repo`, as a path you type is.
 - **How many.** One `#project`, one `>repo`, one `@agent`, one priority: of two, the last one
   counts. Every `/path` and `$skill` is kept, each once (at most 20 of each). `@agent` and
   `$skill` are kept as their file or folder spells them, whatever the case typed.

@@ -53,14 +53,6 @@ fn new_uid() -> String {
     format!("{:016x}", std::collections::hash_map::RandomState::new().build_hasher().finish())
 }
 
-/// The text a key types into a name: its character, or for a key the socket pressed, its
-/// one-letter name.
-fn typed(event: &KeyDownEvent) -> Option<String> {
-    let key = &event.keystroke;
-    let named = Some(key.key.clone()).filter(|name| name.chars().count() == 1);
-    key.key_char.clone().or(named).filter(|text| !text.chars().any(char::is_control))
-}
-
 /// The letter a key stands for, whatever the layout types with it: `key` is the letter the key
 /// has under ⌘, as sneak mode reads it. Else what it types.
 fn lettered(event: &KeyDownEvent) -> Option<String> {
@@ -331,7 +323,7 @@ impl Workspace {
             return;
         }
         // A letter to jump to or to give is the key's own, whatever the layout types with it.
-        let text = if renaming { typed(event) } else { lettered(event) };
+        let text = lettered(event);
         let action = match key.key.as_str() {
             "escape" => Action::MarkCancel,
             "enter" if !event.is_held => Action::MarkSubmit,

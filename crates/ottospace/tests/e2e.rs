@@ -1865,10 +1865,23 @@ fn the_new_task_dropdown_finishes_the_tag_at_the_cursor() {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn files_dropped_on_the_new_task_box_and_what_is_pointed_at_go_into_the_line() {
-    let root = compose_fixture("drop");
+    let root = compose_fixture("drop").canonicalize().unwrap();
     std::fs::create_dir_all(root.join("My Notes")).unwrap();
     std::fs::write(root.join("My Notes/plan b.md"), "").unwrap();
-    let otto = Otto::launch_with("drop", &[("OTTOSPACE_REPOS", root.to_str().unwrap())]);
+    // As macOS names a screenshot: a narrow no-break space before AM.
+    let shot = root.join("Shot at 9.41.05\u{202f}AM.png");
+    std::fs::write(&shot, "").unwrap();
+    // A file outside the repository, and one inside it where that file's path would lead.
+    std::fs::create_dir_all(root.join("elsewhere")).unwrap();
+    std::fs::write(root.join("elsewhere/report.txt"), "").unwrap();
+    let outside = root.join("elsewhere/report.txt");
+    let mirror = root.join("flow-app").join(outside.strip_prefix("/").unwrap());
+    std::fs::create_dir_all(mirror.parent().unwrap()).unwrap();
+    std::fs::write(&mirror, "").unwrap();
+    // The tasks are kept in a folder of the test's own, to read a task's file.
+    let home = user_folder("drop", "{}");
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap()), ("OTTOSPACE_REPOS", root.to_str().unwrap())];
+    let otto = Otto::launch_with("drop", &env);
     let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
     let read = || {
         otto.wait_for("the line's tags", |o| o.call(json!({"cmd": "state"}))["compose_read"].as_bool().filter(|r| *r))
@@ -1891,6 +1904,21 @@ fn files_dropped_on_the_new_task_box_and_what_is_pointed_at_go_into_the_line() {
         (task["title"].as_str(), &task["paths"], &task["resolved"]),
         (Some("read"), &json!([file, folder]), &json!([file, folder]))
     );
+    // A name with a space that is not a plain space stays one word, and one path. A dropped
+    // path is that very file: with `>flow-app` in the line it is not looked for inside the
+    // repository, where a file of that path also is.
+    otto.call(json!({"cmd": "compose", "text": "see >flow-app"}));
+    let (shot, outside) = (shot.to_str().unwrap(), outside.to_str().unwrap());
+    let reply = otto.call(json!({"cmd": "compose_drop", "paths": [shot, outside, "/no/such\nname"]}));
+    assert_eq!(
+        field(&reply).0,
+        format!("see >flow-app {} {outside} ", shot.replace(' ', "\\ ").replace('\u{202f}', "\\\u{202f}"))
+    );
+    assert_eq!(reply["compose_note"], "1 left out: its name is too long, or not one a line can hold");
+    read();
+    let reply = key("enter");
+    let task = &reply["state"]["tasks"]["list"][1];
+    assert_eq!((&task["paths"], &task["resolved"]), (&json!([shot, outside]), &json!([shot, outside])));
 
     // `^` names what is open: the tab, the terminal pane. ↓ ↵ takes the first.
     otto.call(json!({"cmd": "compose", "text": "compare ^"}));
@@ -1915,14 +1943,22 @@ fn files_dropped_on_the_new_task_box_and_what_is_pointed_at_go_into_the_line() {
     assert_eq!(otto.mouse("move", below)["compose_pointing"], Value::Null, "no ⌥: nothing is outlined");
     // The task keeps what each pointed at, as it was.
     let reply = key("enter");
-    let task = &reply["state"]["tasks"]["list"][1];
+    let task = &reply["state"]["tasks"]["list"][2];
     assert_eq!((reply["mode"].as_str(), task["title"].as_str()), (Some("normal"), Some("compare")));
+    // The state has what tells the pane apart; the task's file keeps its name and id only.
+    assert!(task["refs"][1]["cwd"].is_string(), "{}", task["refs"][1]);
+    let kept: Value = serde_json::from_str(&std::fs::read_to_string(home.join("tasks/3.json")).unwrap()).unwrap();
+    assert_eq!(kept["refs"][0], json!({"kind": "tab", "name": "Tab 1", "id": task["refs"][0]["id"]}));
+    assert_eq!(kept["refs"][1], json!({"kind": "pane", "name": pane_name, "id": 1}));
+    // The outline is gone with the box: nothing is pointed at once it is closed.
+    assert_eq!(alt("move")["compose_pointing"], Value::Null);
     assert_eq!((&task["refs"][0]["kind"], &task["refs"][0]["title"]), (&json!("tab"), &json!("Tab 1")));
     assert_eq!(
         (&task["refs"][1]["kind"], &task["refs"][1]["id"], task["refs"][1]["name"].as_str()),
         (&json!("pane"), &json!(1), Some(pane_name.as_str()))
     );
     let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[test]
@@ -2608,6 +2644,7 @@ fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
     refused(json!({"cmd": "mouse_down", "x": 1, "y": 1}));
     refused(json!({"cmd": "mouse", "action": "down", "x": 5, "y": 5}));
     refused(json!({"cmd": "drag", "from": [5, 5], "to": [50, 50]}));
+    refused(json!({"cmd": "compose_drop", "paths": ["/tmp"]}));
     let before = otto.call(json!({"cmd": "state"}));
     assert_eq!((&before["mode"], &before["sneak"]["typed"]), (&json!("sneak"), &json!("")));
     assert_eq!((&before["state"]["keys"], sneak_labels(&before)), (&json!(false), labels.clone()));
@@ -3011,7 +3048,11 @@ fn marks_are_a_way_back_to_a_pane_and_a_tab_and_are_kept_between_runs() {
     let pencil = otto.click(at(rect(&mark_named(&rows, "notes")["buttons"]["rename"]), 0.5, 0.5), 1);
     assert_eq!((&pencil["mode"], &pencil["state"]["mark_input"]["type"]), (&json!("mark"), &json!("rename")));
     assert_eq!(pane_ids(&pencil), [1, 2, 3], "the click did not also go to the mark");
-    assert_eq!(key("x escape")["mode"], "normal");
+    // The name is a text field: the keys edit it as any other. (A click in it cannot be sent
+    // from here: pointer requests are refused while a mark waits.)
+    let typed = key("cmd-left x");
+    assert_eq!((&typed["field"]["of"], &typed["state"]["mark_input"]["text"]), (&json!("mark"), &json!("xnotes")));
+    assert_eq!(key("escape")["mode"], "normal");
     let removed = otto.click(at(rect(&mark_named(&rows, "notes")["buttons"]["remove"]), 0.5, 0.5), 1);
     assert_eq!((mark_names(&removed), &removed["mark_removed"]), (vec!["work".to_string()], &json!("notes")));
     assert_eq!(kept_marks(&home)["marks"].as_array().map(Vec::len), Some(1), "the file follows");
