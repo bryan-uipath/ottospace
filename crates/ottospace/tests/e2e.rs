@@ -4508,20 +4508,32 @@ impl Otto {
 
 /// Stand-ins for `claude` and `codex` in a folder of their own: each writes where it ran and its
 /// arguments to `<name>.argv` (separated by NUL), says it is ready, then echoes what it is sent.
+/// With `CODEX_HOME` set, `codex` writes a session there as Codex does: `session_meta` with a
+/// new id, where it ran and when, in `sessions/<y>/<m>/<d>/rollout-…-<id>.jsonl`.
 fn fake_agents(dir: &Path) {
     use std::os::unix::fs::PermissionsExt;
     std::fs::create_dir_all(dir).unwrap();
     for name in ["claude", "codex"] {
         let log = dir.join(format!("{name}.argv"));
         let script = format!(
-            "#!/bin/sh\n{{ printf '%s\\0' \"$PWD\"; for a in \"$@\"; do printf '%s\\0' \"$a\"; done; }} > '{}'\necho 'fake {name} ready'\nexec cat\n",
-            log.display()
+            "#!/bin/sh\n{{ printf '%s\\0' \"$PWD\"; for a in \"$@\"; do printf '%s\\0' \"$a\"; done; }} > '{}'\n{}echo 'fake {name} ready'\nexec cat\n",
+            log.display(),
+            if name == "codex" { CODEX_SESSION } else { "" }
         );
         let path = dir.join(name);
         std::fs::write(&path, script).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 }
+
+/// What the stand-in `codex` writes when `CODEX_HOME` is set: its session, as Codex does.
+const CODEX_SESSION: &str = r#"if [ -n "$CODEX_HOME" ]; then
+  id=$(uuidgen | tr A-Z a-z); at=$(date -u +%Y-%m-%dT%H:%M:%S.000Z); day="$CODEX_HOME/sessions/2026/01/01"
+  mkdir -p "$day"
+  printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s","timestamp":"%s"}}\n' "$id" "$(pwd -P)" "$at" > "$day/rollout-2026-01-01T00-00-00-$id.jsonl"
+  printf '%s' "$id" > "$CODEX_HOME/last-id"
+fi
+"#;
 
 /// What a stand-in was started with: its directory, then each argument.
 fn agent_argv(dir: &Path, name: &str) -> Option<Vec<String>> {
@@ -4711,7 +4723,12 @@ fn a_click_on_a_task_starts_its_agent_in_the_drawer_and_the_workspace_stays() {
     fake_agents(&bin);
     fake_repo(&repos.join("app"));
     let app = repos.join("app").canonicalize().unwrap().to_string_lossy().into_owned();
-    let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_REPOS", repos.to_str().unwrap())];
+    let codex_home = root.join("codex");
+    let env = [
+        ("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()),
+        ("OTTOSPACE_REPOS", repos.to_str().unwrap()),
+        ("CODEX_HOME", codex_home.to_str().unwrap()),
+    ];
     let otto = Otto::launch_with("talk", &env);
     otto.call(json!({"cmd": "split", "kind": "empty"}));
     otto.call(json!({"cmd": "task_new", "line": "fix login >app"}));
@@ -4771,6 +4788,13 @@ fn a_click_on_a_task_starts_its_agent_in_the_drawer_and_the_workspace_stays() {
     otto.user_click(at(otto.control("task:2"), 0.3, 0.3));
     let argv = otto.wait_for("codex's argv", |_| agent_argv(&bin, "codex"));
     assert_eq!(argv[1..], ["--model", "gpt-6-astra", "--", "Task: try codex"]);
+    assert_eq!(Some(&argv[0]), std::env::var("HOME").ok().as_ref(), "no repository: the home folder");
+    // Codex names its own session: it is found where Codex wrote it, and the task follows it.
+    let id = otto.wait_for("codex's session", |_| std::fs::read_to_string(codex_home.join("last-id")).ok());
+    otto.wait_for("the task to follow it", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        (state["state"]["tasks"]["list"][1]["session"]["id"] == id.as_str()).then_some(())
+    });
     // A client's click on a row shows the task's tabs and starts nothing.
     let theirs = otto.click(at(otto.control("task:1"), 0.3, 0.3), 1);
     assert_eq!((&theirs["state"]["current_task"], &theirs["state"]["agents"]), (&json!(1), &json!([2])), "{theirs}");

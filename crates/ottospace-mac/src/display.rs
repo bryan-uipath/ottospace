@@ -37,8 +37,3 @@ pub fn parking_spot() -> CGPoint {
         .find(|p| !overlaps(p.x + 1.0, p.y) && !overlaps(p.x, p.y + 1.0))
         .unwrap_or_else(|| corner(&bounds(unsafe { CGMainDisplayID() })))
 }
-
-/// True while the user asks for less motion (System Settings › Accessibility › Display).
-pub fn reduce_motion() -> bool {
-    objc2_app_kit::NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion()
-}

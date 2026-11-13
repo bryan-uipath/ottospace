@@ -869,8 +869,8 @@ impl Workspace {
                         if runs && tick % 30 == 0 {
                             cx.notify();
                         }
-                        if tick % 30 == 0 {
-                            this.blink(cx);
+                        if tick % 60 == 0 {
+                            this.seek_sessions(window, cx);
                         }
                         this.sync_sneak(window, cx);
                     });
@@ -927,7 +927,7 @@ impl Workspace {
             model,
             hosted: HashMap::new(),
             terminals: HashMap::new(),
-            drawer: talk::Drawer { still: display::reduce_motion(), ..Default::default() },
+            drawer: talk::Drawer::default(),
             cell: terminal::cell_size(window),
             dragging: None,
             drop_at: None,
@@ -1105,7 +1105,7 @@ impl Workspace {
             match effect {
                 Effect::StartAgent { task, start, cwd, brief } => {
                     match self.start_agent(*task, start, cwd.as_deref(), brief.as_deref()) {
-                        Ok(session) => agents.push(Action::AgentStarted { task: *task, session }),
+                        Ok(session) => agents.push(Action::AgentStarted { task: *task, session, at: now_ms() }),
                         Err(why) => {
                             self.error = Some(format!("agent: {why}"));
                             agents.push(Action::AgentExited { task: *task });

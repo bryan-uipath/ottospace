@@ -40,9 +40,8 @@ pub struct Drawer {
     pub body: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
     /// Its width at the last render: the draft's collecting state takes the same.
     pub width: f32,
-    /// The working dots are lit, in their blink; `still`: the system asks for less motion.
-    pub blink: bool,
-    pub still: bool,
+    /// A read of new Codex sessions under way, for agents whose session is not known yet.
+    reading: Option<std::sync::mpsc::Receiver<Vec<agents::Started>>>,
 }
 
 /// A new session's id: a random (version 4) UUID. `None`: no random bytes could be read.
@@ -93,6 +92,9 @@ impl Workspace {
         let Command { program: name, args } = command;
         // The agent can ask for its task's brief over the socket, as in a task's own terminals.
         let vars = [("OTTOSPACE_TASK", task.to_string())];
+        // No repository: the home folder, as the core says, not wherever ottospace was started.
+        let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
+        let cwd = cwd.or(home.as_deref());
         let terminal = Terminal::run(&program(name)?, &args, &vars, cwd).map_err(|err| format!("{name}: {err}"))?;
         let agent = Agent { terminal, since: Instant::now(), model, told: false };
         self.drawer.agents.insert(task, agent);
@@ -395,16 +397,10 @@ impl Workspace {
                 .text_xs()
                 .text_color(rgb(theme::TEXT))
                 .child(cell.mono.clone())
-                // At work: a dot at the corner that blinks, unless the system asks for less motion.
+                // At work: a steady dot at the corner. Nothing on the rail moves.
                 .children(cell.working.then(|| {
-                    let lit = self.drawer.blink || self.drawer.still;
-                    home::dot(theme::PICK)
-                        .absolute()
-                        .top(px(-3.))
-                        .right(px(-3.))
-                        .border_1()
-                        .border_color(rgb(theme::BACKGROUND))
-                        .when(!lit, |d| d.opacity(0.25))
+                    let dot = home::dot(theme::PICK).absolute().top(px(-3.)).right(px(-3.));
+                    dot.border_1().border_color(rgb(theme::BACKGROUND))
                 }));
             div()
                 .id(("rail-talk", task as usize))
@@ -465,12 +461,42 @@ impl Workspace {
         }
     }
 
-    /// Every half second while a rail cell's agent is at work: its dot blinks.
-    pub(crate) fn blink(&mut self, cx: &mut Context<Self>) {
-        if !self.drawer.still && self.model.rail().iter().any(|cell| cell.working) {
-            self.drawer.blink = !self.drawer.blink;
-            cx.notify();
+    /// About once a second while an agent's session is not known (`Model::seeking`): reads, on a
+    /// thread of its own, the sessions Codex wrote in those folders, and tells the core
+    /// (`AgentSessions`), which links each agent to its own. A test run reads only a
+    /// `CODEX_HOME` it names.
+    pub(crate) fn seek_sessions(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if let Some(found) = self.drawer.reading.as_ref().and_then(|read| read.try_recv().ok()) {
+            self.drawer.reading = None;
+            let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
+            let news = Action::AgentSessions { found, home, now: crate::now_ms() };
+            self.dispatch(news, Origin::System, window, cx);
         }
+        let seeking = self.model.seeking();
+        let test = std::env::var_os("OTTOSPACE_E2E").is_some() && std::env::var_os("CODEX_HOME").is_none();
+        if seeking.is_empty() || self.drawer.reading.is_some() || test {
+            return;
+        }
+        let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
+        let dirs: Vec<String> = seeking.into_iter().filter_map(|(_, cwd)| cwd.or_else(|| home.clone())).collect();
+        let (send, read) = std::sync::mpsc::channel();
+        self.drawer.reading = Some(read);
+        std::thread::spawn(move || {
+            use ottospace_sessions::Runner;
+            let codex = ottospace_sessions::codex::Codex::from_env();
+            // A folder as the core names it: Codex writes where it ran with links resolved.
+            let named = |cwd: &std::path::Path| {
+                dirs.iter().find(|dir| std::fs::canonicalize(dir).is_ok_and(|real| real == cwd)).cloned()
+            };
+            let roots: Vec<std::path::PathBuf> =
+                dirs.iter().filter_map(|dir| std::fs::canonicalize(dir).ok()).collect();
+            let sessions = codex.sessions(&roots).unwrap_or_default();
+            let found = sessions.into_iter().filter_map(|session| {
+                let (cwd, started) = (named(&session.cwd)?, session.started?);
+                Some(agents::Started { runner: "codex".into(), id: session.id, cwd, started })
+            });
+            let _ = send.send(found.collect());
+        });
     }
 
     /// What the state reply says of the drawer: where it is drawn, and each agent's terminal.

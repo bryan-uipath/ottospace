@@ -757,7 +757,21 @@ const MAKERS: &[Make] = &[
     |g| Action::TaskTalk { id: g.task() },
     |g| Action::TalkPick { id: g.task() },
     |_| Action::ComposeEnter,
-    |g| Action::AgentStarted { task: g.task(), session: g.rng.coin().then(|| g.session_id()) },
+    |g| Action::AgentStarted {
+        task: g.task(),
+        session: g.rng.coin().then(|| g.session_id()),
+        at: g.rng.below(100) as u64,
+    },
+    |g| {
+        let started = |g: &mut Gen| agents::Started {
+            runner: g.rng.pick(&["codex", "claude"]).to_string(),
+            id: g.session_id(),
+            cwd: g.rng.pick(&["/code/app", "/Users/me", "/elsewhere"]).to_string(),
+            started: g.rng.below(200) as u64,
+        };
+        let found = (0..g.rng.below(3)).map(|_| started(g)).collect();
+        Action::AgentSessions { found, home: Some("/Users/me".into()), now: g.rng.below(100_000) as u64 }
+    },
     |g| Action::AgentExited { task: g.task() },
     |g| Action::TaskStop { id: g.task() },
     |_| Action::TalkToggle,
@@ -1958,6 +1972,7 @@ fn code(sent: &Envelope) -> String {
         "Entry",
         "TerminalInfo",
         "Facts",
+        "Started",
     ];
     const ENUM_OF: &[(&str, &str)] = &[
         ("axis", "Axis"),

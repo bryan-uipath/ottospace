@@ -949,11 +949,20 @@ pub enum Action {
     /// ↵ in the new-task box: takes the highlighted row of the dropdown, else adds the task
     /// and starts it (`ComposeSubmit { open: true }`).
     ComposeEnter,
-    /// The shell started the agent a `StartAgent` asked for. `session`: the id it gave the
-    /// new session, if the runner's CLI takes one.
+    /// The shell started the agent a `StartAgent` asked for, at `at` (ms since 1970).
+    /// `session`: the id it gave the new session, if the runner's CLI takes one.
     AgentStarted {
         task: TaskId,
         session: Option<String>,
+        at: u64,
+    },
+    /// Sessions of a runner that names its own (Codex) that started in a folder an agent was
+    /// started in (`Model::seeking`), read at `now`. `home`: where an agent with no repository
+    /// runs. Each task waiting for its session is linked to the first one that started after it.
+    AgentSessions {
+        found: Vec<agents::Started>,
+        home: Option<String>,
+        now: u64,
     },
     /// A task's agent is gone: it ended, was stopped, or could not be started.
     AgentExited {
@@ -1218,6 +1227,7 @@ impl Action {
             | Action::SetAgents { .. }
             | Action::ComposeEnter
             | Action::AgentStarted { .. }
+            | Action::AgentSessions { .. }
             | Action::AgentExited { .. }
             | Action::TaskStop { .. }
             | Action::TalkToggle
@@ -1484,6 +1494,9 @@ pub struct Model {
     /// The conversations the user opened in this run, the last opened last.
     #[serde(skip)]
     opened: Vec<TaskId>,
+    /// Agents started whose session's id is not known yet: their runner names it.
+    #[serde(skip)]
+    seeking: Vec<agents::Seek>,
     /// Those asked for and not yet started, each with the runner of a new session.
     #[serde(skip)]
     starting: Vec<(TaskId, Option<&'static str>)>,
@@ -1552,6 +1565,7 @@ impl Default for Model {
             talk_wide: false,
             agents: Vec::new(),
             opened: Vec::new(),
+            seeking: Vec::new(),
             starting: Vec::new(),
             models: agents::Models::default(),
             default_agent: None,
@@ -2827,10 +2841,15 @@ impl Model {
                     self.accept(row);
                 }
             }
-            Action::AgentStarted { task, session } => {
-                if let Some(at) = self.starting.iter().position(|(id, _)| *id == task) {
-                    let (_, runner) = self.starting.remove(at);
+            Action::AgentStarted { task, session, at } => {
+                if let Some(place) = self.starting.iter().position(|(id, _)| *id == task) {
+                    let (_, runner) = self.starting.remove(place);
                     self.agents.push(task);
+                    // A runner that names its own session: look for it (`AgentSessions`).
+                    if let Some(runner) = runner.filter(|runner| !agents::names_session(runner)) {
+                        let cwd = self.tasks.get(task).and_then(|task| task.repo.clone());
+                        self.seeking.push(agents::Seek { task, runner, cwd, since: at });
+                    }
                     // A new session: the task runs, and follows the session if its id is known.
                     if let Some(runner) = runner {
                         self.tasks.set_state(task, State::Running);
@@ -2841,6 +2860,20 @@ impl Model {
                         }
                     }
                 }
+            }
+            Action::AgentSessions { found, home, now } => {
+                let linked: Vec<(String, String)> = self.followed_sessions();
+                let links = agents::find_sessions(&self.seeking, &found, home.as_deref(), &linked);
+                for (task, id) in links {
+                    let runner = self.seeking.iter().find(|seek| seek.task == task).map(|seek| seek.runner);
+                    if let Some(runner) = runner {
+                        let link = sessions::Link { runner: runner.into(), id, state: Some(State::Running) };
+                        self.tasks.link(task, link);
+                    }
+                    self.seeking.retain(|seek| seek.task != task);
+                }
+                // Not found in a while: the task runs, with no session to follow.
+                self.seeking.retain(|seek| now.saturating_sub(seek.since) <= agents::SEEK_MS);
             }
             Action::AgentExited { task } => {
                 let ran = self.agents.contains(&task);
@@ -2867,6 +2900,12 @@ impl Model {
             Action::TalkResize { width } => self.talk_width = talk::width(width),
             Action::TalkWide => self.talk_wide = !self.talk_wide,
         }
+    }
+
+    /// The folders and runners whose new sessions the shell should read (`AgentSessions`): an
+    /// agent was started there and its session is not known yet. `None` folder: the home folder.
+    pub fn seeking(&self) -> Vec<(&'static str, Option<String>)> {
+        self.seeking.iter().map(|seek| (seek.runner, seek.cwd.clone())).collect()
     }
 
     /// True if the task's agent runs in the drawer, or is about to.
@@ -3010,6 +3049,7 @@ impl Model {
         let tasks = &self.tasks;
         self.agents.retain(|id| tasks.get(*id).is_some());
         self.opened.retain(|id| tasks.get(*id).is_some());
+        self.seeking.retain(|seek| tasks.get(seek.task).is_some_and(|task| task.session.is_none()));
         self.starting.retain(|(id, _)| tasks.get(*id).is_some());
         self.talk = self.talk.filter(|talk| self.tasks.get(talk.task).is_some());
         // A picture being drawn on keeps the keyboard, as an app, the list and visual mode do.
@@ -4562,6 +4602,7 @@ mod tests {
         Action::TaskTalk { .. },
         Action::ComposeEnter,
         Action::AgentStarted { .. },
+        Action::AgentSessions { .. },
         Action::AgentExited { .. },
         Action::TaskStop { .. },
         Action::TalkToggle,
@@ -4727,7 +4768,8 @@ mod tests {
             Action::SetAgents { claude: Vec::new(), codex: Vec::new(), default: None },
             Action::TaskTalk { id: 1 },
             Action::ComposeEnter,
-            Action::AgentStarted { task: 1, session: None },
+            Action::AgentStarted { task: 1, session: None, at: 0 },
+            Action::AgentSessions { found: Vec::new(), home: None, now: 0 },
             Action::AgentExited { task: 1 },
             Action::TaskStop { id: 1 },
             Action::TalkToggle,
@@ -6914,7 +6956,7 @@ mod tests {
         assert_eq!(m.talk, Some(Talk { task: 1, open: true, keys: true }));
         assert_eq!((m.mode(), m.current_task, m.tabs.len()), (Mode::Talk, None, 1));
         // Started: the task runs. Codex names its own session, so there is none to follow.
-        system(&mut m, Action::AgentStarted { task: 1, session: Some(UUID.into()) });
+        system(&mut m, Action::AgentStarted { task: 1, session: Some(UUID.into()), at: 0 });
         let task = m.tasks.get(1).unwrap();
         assert_eq!((m.agents.clone(), task.state, task.session.is_none()), (vec![1], State::Running, true));
         // A second click starts no second agent.
@@ -6940,7 +6982,7 @@ mod tests {
         // No `@agent`: the default agent, in the home folder. Claude takes the session's id:
         // the task follows that session from the start.
         assert_eq!(m.update(Action::TaskTalk { id: 2 }), [asked(2, launch("claude", None, "plain"), None)]);
-        system(&mut m, Action::AgentStarted { task: 2, session: Some(UUID.into()) });
+        system(&mut m, Action::AgentStarted { task: 2, session: Some(UUID.into()), at: 0 });
         let link = sessions::Link { runner: "claude".into(), id: UUID.into(), state: Some(State::Running) };
         assert_eq!(m.tasks.get(2).unwrap().session, Some(link));
         assert_eq!(m.followed_sessions(), [("claude".to_string(), UUID.to_string())]);
@@ -6992,7 +7034,7 @@ mod tests {
         // Opened and started: 1, 2 and 3 run, in the order they started.
         for id in [1, 2, 3] {
             m.update(Action::TaskTalk { id });
-            system(&mut m, Action::AgentStarted { task: id, session: None });
+            system(&mut m, Action::AgentStarted { task: id, session: None, at: 0 });
         }
         assert_eq!(order(&m), [1, 2, 3]);
         // 2 needs the user: first. 3 ends while at work, so it needs the user too: the last
@@ -7022,6 +7064,40 @@ mod tests {
         // A task that goes is off the rail.
         m.update(Action::RestoreTasks { tasks: Vec::new(), floor: 12 });
         assert!(order(&m).is_empty());
+    }
+
+    #[test]
+    fn two_codex_agents_in_one_repository_follow_two_sessions() {
+        let system = |m: &mut Model, action: Action| m.update(action.sent_by(Origin::System));
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        let names = compose::Names { agents: vec!["codex".into()], skills: Vec::new() };
+        let known = compose::Known { names, ..Default::default() };
+        for line in ["one >app @codex", "two >app @codex", "mine >app", "late >app @codex"] {
+            m.update(Action::TaskFromLine { line: line.into(), known: known.clone(), open: false });
+        }
+        for (task, at) in [(1, 1_000), (2, 2_000), (3, 3_000)] {
+            m.update(Action::TaskTalk { id: task });
+            system(&mut m, Action::AgentStarted { task, session: None, at });
+        }
+        // Codex names its own sessions: they are looked for in the repository. Claude's is not.
+        let app = ("codex", Some("/code/app".to_string()));
+        assert_eq!(m.seeking(), [app.clone(), app]);
+        let id = |n: u8| format!("8f14e45f-ceea-467f-a8d3-0242ac1300{n:02}");
+        let started =
+            |n, at| agents::Started { runner: "codex".into(), id: id(n), cwd: "/code/app".into(), started: at };
+        let found = vec![started(7, 2_500), started(8, 1_200)];
+        system(&mut m, Action::AgentSessions { found: found.clone(), home: None, now: 3_000 });
+        let link = |m: &Model, task| m.tasks.get(task).and_then(|task| task.session.as_ref()).map(|l| l.id.clone());
+        assert_eq!((link(&m, 1), link(&m, 2), link(&m, 3)), (Some(id(8)), Some(id(7)), None));
+        assert!(m.seeking().is_empty());
+        // Read again, nothing changes; a task whose session is never found stops being looked for.
+        system(&mut m, Action::AgentSessions { found, home: None, now: 4_000 });
+        assert_eq!((link(&m, 1), link(&m, 2)), (Some(id(8)), Some(id(7))));
+        m.update(Action::TaskTalk { id: 4 });
+        system(&mut m, Action::AgentStarted { task: 4, session: None, at: 5_000 });
+        system(&mut m, Action::AgentSessions { found: Vec::new(), home: None, now: 5_000 + agents::SEEK_MS + 1 });
+        assert!(m.seeking().is_empty() && link(&m, 4).is_none());
     }
 
     #[test]
