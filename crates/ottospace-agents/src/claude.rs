@@ -132,7 +132,12 @@ impl Claude {
                 emit.push(Event::Usage { context: None, window, cost_micro_usd: cost.map(|usd| (usd * 1e6) as u64) });
                 self.pending = self.pending.saturating_sub(1);
                 self.announced = false;
-                let outcome = if std::mem::take(&mut self.interrupting) {
+                // The CLI says a turn was cut short: `terminal_reason: aborted_streaming` (seen
+                // after an interrupt). Our own interrupt counts only if the turn did not succeed:
+                // one that arrives as the turn ends leaves it completed.
+                let aborted = record["terminal_reason"].as_str().is_some_and(|reason| reason.starts_with("aborted"));
+                let interrupted = std::mem::take(&mut self.interrupting) && record["subtype"] != "success";
+                let outcome = if aborted || interrupted {
                     Outcome::Interrupted
                 } else if record["subtype"] == "success" && record["is_error"] != true {
                     Outcome::Completed
@@ -170,7 +175,11 @@ impl Claude {
         let input = request["input"].clone();
         let (station, label) = describe(tool, &input);
         // The CLI's `permission_suggestions` are never read: an answer grants this call alone.
-        let (payload, claim) = payload(tool, &input);
+        let (mut payload, claim) = payload(tool, &input);
+        // The path outside what the session may touch that made the CLI ask: part of what is allowed.
+        if let Some(path) = request["blocked_path"].as_str() {
+            payload.push_str(&format!("\nblocked path: {path}"));
+        }
         let tool_label = station::tool_label(tool);
         let ask = crate::Ask { tool: tool_label, station, label, payload: &payload, claim: &claim };
         let ticket = Ticket::new(id.clone(), TicketKind::Claude { input });
@@ -471,6 +480,24 @@ mod tests {
         let out = claude.read(r#"{"type":"result","subtype":"error_max_turns","is_error":true}"#);
         let failed = Outcome::Failed { kind: "error_max_turns".into() };
         assert_eq!(out.events.last(), Some(&Event::TurnFinished { outcome: failed }));
+        // An interrupt that reaches a turn as it ends leaves it completed.
+        claude.write(send()).unwrap();
+        claude.write(Input::Interrupt).unwrap();
+        let done = r#"{"type":"result","subtype":"success","is_error":false,"terminal_reason":"completed"}"#;
+        assert_eq!(claude.read(done).events.last(), Some(&Event::TurnFinished { outcome: Outcome::Completed }));
+        // The CLI's own word for a cut turn, as 2.1.323 sends it after an interrupt (seen in a probe).
+        let cut = r#"{"type":"result","subtype":"error_during_execution","is_error":true,"terminal_reason":"aborted_streaming"}"#;
+        assert_eq!(Claude::new().read(cut).events.last(), Some(&Event::TurnFinished { outcome: Outcome::Interrupted }));
+    }
+
+    /// The path that made the CLI ask is part of what is allowed: shown with the command.
+    #[test]
+    fn a_blocked_path_is_shown() {
+        let request = json!({"type": "control_request", "request_id": "r", "request": {"subtype": "can_use_tool",
+            "tool_name": "Bash", "input": {"command": "cat ~/.ssh/id_rsa"}, "blocked_path": "/Users/me/.ssh/id_rsa"}});
+        let out = Claude::new().read(&request.to_string());
+        let Some(Event::Permission { detail, .. }) = out.events.first() else { panic!("{out:?}") };
+        assert_eq!(detail.text(), "cat ~/.ssh/id_rsa\nblocked path: /Users/me/.ssh/id_rsa");
     }
 
     #[test]

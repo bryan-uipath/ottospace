@@ -70,7 +70,7 @@ session: the drawer stops its structured process first.
   never wider than what was displayed.**
   - The payload: Claude Bash/PowerShell, the command and every option but `description`
     (`run_in_background`, `dangerouslyDisableSandbox`, …); any other Claude tool, its whole
-    input as JSON (a `Write`'s content included). Codex command: the command, its `cwd`, then
+    input as JSON (a `Write`'s content included); and the request's `blocked_path`, if any. Codex command: the command, its `cwd`, then
     every other field of the request but its ids (`approvalId`, `itemId`, `threadId`,
     `turnId`, `startedAtMs`) and `reason`, one a line (`proposedNetworkPolicyAmendments: […]`).
     Codex file change: each change as `update|add|delete <path>` with a move's destination
@@ -181,7 +181,7 @@ enum Event {
   interrupt with no turn running sends nothing; a Codex interrupt before the turn has an id is
   sent when the id comes. A Codex thread or turn that fails to start ends as a failed turn.
 
-Tests: 25 unit (incl. the approval rules: an answer grants this call alone, cut and
+Tests: 26 unit (incl. the approval rules: an answer grants this call alone, a blocked path shown, cut and
 auto-deny, every changed path, move and escaped newline, every exec field, and the declines of
 an unknown field, a network approval and a `grantRoot`), 6 driver tests against fake
 `claude` and `codex` scripts (`tests/fakes`) that replay hand-written fixtures and record argv
@@ -260,26 +260,46 @@ the shapes of `system/init`, `stream_event`, `assistant`, `user`, `result` (incl
 `total_cost_usd`, `modelUsage[*].contextWindow`), `system/api_retry` error codes; every Codex
 request, notification and approval shape and decision value used (from the generated schema).
 
-UNVERIFIED, and what settles each:
+Verified by the real probes (`tests/real.rs`, run 2026-11-13 with the user's approval, Claude
+Code 2.1.323 on `haiku`, codex-cli 0.166.0 on the user's default model, each in a new empty
+folder; they print protocol names and key names, never text):
+
+| What | Seen |
+|---|---|
+| Claude's permission envelope | stdout `{type: control_request, request_id, request: {subtype: can_use_tool, tool_name, input, tool_use_id, permission_suggestions, description, display_name, blocked_path}}`; our `{type: control_response, response: {subtype: success, request_id, response: {behavior: allow, updatedInput}}}` is accepted: the file did not exist when the request came and existed after Allow |
+| `--permission-prompt-tool stdio` | accepted by 2.1.323: prompts come to us as above |
+| Why the first Claude run asked nothing | the user's settings set the permission mode to `auto` (`system/init.permissionMode`): the classifier approved the `touch`. With `--setting-sources project` (probe only: the user's settings not loaded, in an empty folder) the mode is `default` and the request came. ottospace keeps the user's mode: the drawer sees only what falls to a prompt |
+| `system/init` | sent after each user message, after any `SessionStart` hook events: `Started` comes once per turn |
+| Claude interrupt | our `control_request {subtype: interrupt}` is answered `control_response {subtype: success}`; the turn ends `result {subtype: error_during_execution, is_error: true, stop_reason: null, terminal_reason: aborted_streaming}` with no text after. The parser now reads `terminal_reason` (`aborted*`); its own flag counts only when the turn did not succeed |
+| Codex order and JSON-RPC | `initialize` → result → `initialized` + `thread/start` → result works without `"jsonrpc"`; in a folder that is not a git repository |
+| Codex approval | asked under the user's config. `item/started` (commandExecution) comes before `item/commandExecution/requestApproval`, whose params carry `availableDecisions` (not in the plain schema; in `--experimental`'s: "decisions the client may present") — that alone made the first run decline. It grants nothing, so it is now known; Allow is offered only when it lists `accept`. `additionalPermissions` (also experimental) declines as wider. After Allow: `serverRequest/resolved`, the item completes, the file exists |
+| Codex interrupt | `turn/interrupt` → `turn/completed` with `turn.status: interrupted` |
+
+Lines no rule reads (`Unknown`), and what becomes of them:
+
+| Runner | Kind | Decision |
+|---|---|---|
+| Claude | `system.hook_started`, `system.hook_response` (the user's hooks) | stay `Unknown`; later the activity view's Hooks station |
+| Claude | `system.status` | stay `Unknown` (turn events say the same) |
+| Claude | `rate_limit_event` | later an event: rate-limit state for the header (stage 2a) |
+| Claude | `system.thinking_tokens` | later an event: a "thinking" indicator (stage 2a) |
+| Codex | `thread.status.changed`, `account.updated`, `remoteControl.status.changed` | stay `Unknown` |
+| Codex | `mcpServer.startupStatus.updated` | later an event: MCP servers on the activity view (stage 2c) |
+| Codex | `account.rateLimits.updated` | later an event, with Claude's rate limits |
+
+Still UNVERIFIED:
 
 | What | Why it matters |
 |---|---|
-| Claude's `control_request`/`control_response` wire shape (`request_id`, `request.subtype: can_use_tool`, `tool_name`, `input`; response `{subtype: success, request_id, response: PermissionResult}`) | The docs give `PermissionResult` and say a `control_response` must echo `request_id`, but not the envelope. Written from the SDKs' behaviour |
-| `--permission-prompt-tool stdio` accepted by 2.1.323 | The docs describe `--permission-prompt-tool` as an MCP tool name; `stdio` is what the SDKs pass |
-| `updatedInput` required or optional on allow | We send the original input back, which both accept |
-| When Claude prints `system/init` (at start or after the first message) | Only ordering; the parser does not care |
-| The `result` after an interrupt, and the interrupt's `control_response` | The parser marks the turn interrupted itself |
-| Codex app-server message order, and whether it needs `"jsonrpc":"2.0"` | The schema does not require the field; we omit it |
-| Codex asks for approval at all under the user's default policy and sandbox | A `touch` in a workspace-write sandbox may need none |
-| Codex app-server in a folder that is not a git repository | The probe uses an empty folder |
+| Whether `updatedInput` is required on allow | We send the original input back, which works either way |
+| A Codex file-change approval, `grantRoot`, `networkApprovalContext` | Not triggered by the probe; declines are built from the schema |
+| The Claude `control_cancel_request` | Not seen; `PermissionClosed` relies on the SDK's shape |
 
-Commands that settle all of the above. Each starts **one short model session on your
-account** (Claude with `haiku`, Codex with your default model) in a new empty temporary folder,
-with the prompt "Run the shell command `touch ottospace-probe` …" and then "Count from 1 to
-200", interrupted at once. They print event kinds only. Not run without your approval:
+The probes, each one short model session on the user's account (approval needed each time):
 
 ```
 OTTOSPACE_REAL_CLI=1 cargo test -p ottospace-agents --test real -- --ignored --nocapture claude_real
+OTTOSPACE_PROBE_ISOLATED=1 OTTOSPACE_REAL_CLI=1 cargo test -p ottospace-agents --test real -- --ignored --nocapture claude_real
 OTTOSPACE_REAL_CLI=1 cargo test -p ottospace-agents --test real -- --ignored --nocapture codex_real
 ```
 
@@ -293,8 +313,9 @@ OTTOSPACE_REAL_CLI=1 cargo test -p ottospace-agents --test real -- --ignored --n
 3. **Session grants ("always allow") in the drawer at all?** Recommend not until the later stage
    above, and then one grant kind at a time (an exact Bash command first), each with its own
    prompt; meanwhile the terminal view or the user's settings grant more.
-4. **Set Codex's approval policy for drawer sessions** (e.g. `on-request`), or keep the user's
-   config? Recommend the user's config, shown in the drawer header so a `never` is visible.
+4. **Set the permission mode / approval policy for drawer sessions**, or keep the user's? The
+   probe found this user's Claude mode is `auto`, so most calls never reach the drawer.
+   Recommend the user's own, shown in the drawer header (`auto`, `never`) so it is visible.
 5. **May a socket client send a message to a task's agent?** Recommend no for now, as stage 1;
    revisit with the agent-to-agent work.
 6. **Text selection.** Copy buttons first, or build drag-selection over `StyledText` before 2a

@@ -44,7 +44,7 @@ const ERRORS: &[&str] = &[
 
 /// Fields that say which request it is, not what it does: never shown.
 const IDS: &[&str] = &["approvalId", "itemId", "threadId", "turnId", "startedAtMs"];
-/// The fields an exec or file-change approval may have, from the 0.166 schema.
+/// The fields an exec or file-change approval may have, from the 0.166 schema with `--experimental`.
 const COMMAND_FIELDS: &[&str] = &[
     "command",
     "commandActions",
@@ -54,6 +54,10 @@ const COMMAND_FIELDS: &[&str] = &[
     "networkApprovalContext",
     "proposedExecpolicyAmendment",
     "proposedNetworkPolicyAmendments",
+    // The decisions the client may offer: says what may be answered, grants nothing.
+    "availableDecisions",
+    // Permissions beyond the sandbox for this command: read below as wider than the command.
+    "additionalPermissions",
     "reason",
 ];
 const FILE_FIELDS: &[&str] = &["grantRoot", "reason"];
@@ -349,7 +353,13 @@ impl Codex {
                 // `accept` is "User approved the command"; proposed amendments apply only through
                 // decisions this client never sends. A managed-network approval may let the host
                 // in past this one command: not provably one action.
-                let wider = !params["networkApprovalContext"].is_null();
+                // Extra permissions are more than the command; and when the server offers no
+                // plain `accept`, Allow cannot be this one action either.
+                let offers = params["availableDecisions"].as_array();
+                let no_accept = offers.is_some_and(|offers| !offers.iter().any(|decision| decision == "accept"));
+                let wider = !params["networkApprovalContext"].is_null()
+                    || !params["additionalPermissions"].is_null()
+                    || no_accept;
                 let payload = format!("{command}{cwd}{others}");
                 (!command.is_empty()).then_some(("exec", station, label, payload, known, wider))
             }
@@ -682,9 +692,14 @@ mod tests {
         let amendments = "proposedNetworkPolicyAmendments: [{\"action\":\"allow\",\"host\":\"x.example\"}]";
         assert_eq!(detail.text(), format!("curl https://x.example\nin /work/app\n{amendments}"));
         assert_eq!(claim.text(), "Needs the network");
+        // As codex-cli 0.166 sends it (seen in a probe): the decisions it offers, `accept` among them.
+        let offers = json!({"availableDecisions": ["accept", "acceptForSession", "decline", "cancel"]});
+        assert!(matches!(ask(offers).events.first(), Some(Event::Permission { .. })));
 
         for extra in [
             json!({"networkApprovalContext": {"host": "x.example", "protocol": "https"}}),
+            json!({"additionalPermissions": {"fileSystem": {"write": ["/"]}}}),
+            json!({"availableDecisions": ["acceptForSession", "decline"]}),
             json!({"sandboxEscalation": {"writableRoots": ["/"]}}),
         ] {
             let out = ask(extra.clone());
