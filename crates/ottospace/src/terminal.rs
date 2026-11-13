@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io;
 use std::os::fd::AsFd;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 use std::sync::{Arc, OnceLock};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
@@ -70,6 +70,8 @@ pub fn cell_size(window: &Window) -> Size<Pixels> {
 struct Shared {
     dirty: AtomicBool,
     exited: AtomicBool,
+    /// How often the user scrolled the history: the scrollbar shows on a change.
+    scrolls: AtomicU32,
     input: OnceLock<EventLoopSender>,
 }
 
@@ -209,6 +211,22 @@ impl Terminal {
         };
         term.scroll_display(scroll);
         self.shared.dirty.store(true, Relaxed);
+        self.shared.scrolls.fetch_add(1, Relaxed);
+    }
+
+    pub fn scrolls(&self) -> u32 {
+        self.shared.scrolls.load(Relaxed)
+    }
+
+    /// Scrolls to a number of lines back from the bottom: the scrollbar's drag and paging.
+    pub fn scroller(&self) -> impl Fn(usize) + 'static {
+        let (term, shared) = (self.term.clone(), self.shared.clone());
+        move |back| {
+            let mut term = term.lock();
+            let delta = back as i64 - term.grid().display_offset() as i64;
+            term.scroll_display(GridScroll::Delta(delta as i32));
+            shared.dirty.store(true, Relaxed);
+        }
     }
 
     /// A wheel or trackpad move of `dy` pixels. Ignored while the program owns the wheel.

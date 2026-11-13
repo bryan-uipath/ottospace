@@ -2762,3 +2762,213 @@ fn two_ottospaces_on_one_folder_keep_each_others_marks() {
     assert_eq!(on_disk(), ["bee", "tab of a"]);
     let _ = std::fs::remove_dir_all(&home);
 }
+
+/// A scroll area's bar as the state gives it: (track, thumb, opacity). `None`: its content fits.
+fn scrollbar(reply: &Value, id: &str) -> Option<([f64; 4], [f64; 4], f64)> {
+    let bar = reply["scrollbars"].get(id)?;
+    Some((rect(&bar["track"]), rect(&bar["thumb"]), bar["opacity"].as_f64()?))
+}
+
+impl Otto {
+    /// A press at `from`, a drag to `to` and a release there, as separate events.
+    fn press_drag(&self, from: [f64; 2], to: [f64; 2]) -> Value {
+        self.mouse("down", from);
+        self.mouse("move", to);
+        self.mouse("up", to)
+    }
+
+    /// Waits until the bar of `id` has faded out, the pointer being elsewhere.
+    fn faded(&self, id: &str) -> Value {
+        self.drawn();
+        let state = |o: &Self| o.call(json!({"cmd": "state"}));
+        self.wait_for("the bar to fade", |o| {
+            Some(state(o)).filter(|s| scrollbar(s, id).is_some_and(|bar| bar.2 == 0.0))
+        })
+    }
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_long_list_has_a_scrollbar_that_drags_and_pages() {
+    let otto = Otto::launch("scrollbar");
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.call(json!({"cmd": "task_add", "title": "task 0"}));
+    otto.bounds(&[1]);
+    // A list that fits has no bar.
+    assert_eq!(otto.drawn()["scrollbars"], json!({}));
+
+    for i in 1..60 {
+        otto.call(json!({"cmd": "task_add", "title": format!("task {i}")}));
+    }
+    let bar = |reply: &Value| scrollbar(reply, "tasks");
+    // At the top, faded out: the pointer is elsewhere and nothing scrolled.
+    let (track, thumb, opacity) = otto.wait_for("the bar", |o| bar(&o.drawn()));
+    assert_eq!((thumb[1], opacity), (track[1], 0.0), "{track:?} {thumb:?}");
+    assert!(track[2] == 8.0 && thumb[2] == 6.0, "a 6 point thumb on an 8 point track: {track:?} {thumb:?}");
+    assert!(thumb[3] >= 24.0 && thumb[3] < track[3] / 2.0, "60 rows, a short thumb: {track:?} {thumb:?}");
+
+    // The pointer over the list shows it; over the bar, the thumb widens.
+    let (_, _, opacity) = bar(&otto.mouse("move", [track[0] - 100.0, track[1] + 200.0])).unwrap();
+    assert_eq!(opacity, 1.0);
+    let (_, wide, _) = bar(&otto.mouse("move", at(thumb, 0.5, 0.5))).unwrap();
+    assert_eq!((wide[0], wide[2]), (track[0], 8.0));
+    // It stays for as long as the pointer rests on it.
+    std::thread::sleep(Duration::from_millis(1600));
+    assert_eq!(bar(&otto.call(json!({"cmd": "state"}))).unwrap().2, 1.0);
+
+    // A drag of the thumb moves it with the pointer, and stops at the bottom. No row is clicked.
+    let reply = otto.drag(at(thumb, 0.5, 0.5), [thumb[0], thumb[1] + thumb[3] / 2.0 + 100.0]);
+    let (_, dragged, _) = bar(&reply).unwrap();
+    assert!((dragged[1] - (thumb[1] + 100.0)).abs() < 1.0, "{thumb:?} {dragged:?}");
+    let reply = otto.drag(at(dragged, 0.5, 0.5), [dragged[0], track[1] + track[3] + 500.0]);
+    let (_, bottom, _) = bar(&reply).unwrap();
+    assert!((bottom[1] + bottom[3] - (track[1] + track[3])).abs() < 0.5, "{track:?} {bottom:?}");
+    assert_eq!((pane_ids(&reply), reply["state"]["tabs"].as_array().map(Vec::len)), (vec![1], Some(1)));
+
+    // A click on the track above the thumb pages up: the thumb moves by its own length.
+    otto.mouse("move", at(track, 0.5, 0.02));
+    let (_, paged, _) = bar(&otto.click(at(track, 0.5, 0.02), 1)).unwrap();
+    assert!((bottom[1] - paged[1] - thumb[3]).abs() < 1.0, "{bottom:?} {paged:?}");
+    // A moment after the pointer leaves, the bar fades.
+    otto.faded("tasks");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_terminal_scrollbar_shows_the_scrollback_and_drags_it() {
+    let otto = Otto::launch("scrollbar-term");
+    otto.call(json!({"cmd": "split"}));
+    otto.bounds(&[1]);
+    // An empty history has no bar.
+    assert_eq!(otto.drawn()["scrollbars"], json!({}));
+    // 200 lines, then rows of digits that fill the width.
+    otto.call(json!({"cmd": "type", "text": "i=1; while [ $i -le 200 ]; do echo line-$i; i=$((i+1)); done\r"}));
+    otto.wait_for("200 lines", |o| Some(term1(o)).filter(|t| shows(t, "line-200")));
+    otto.call(json!({"cmd": "type", "text": "printf '%04000d\\n' 7; echo full\r"}));
+    otto.wait_for("the digits", |o| Some(term1(o)).filter(|t| shows(t, "full")));
+
+    let bar = |reply: &Value| scrollbar(reply, "terminal:1").unwrap();
+    let reply = otto.drawn();
+    let (t, (track, thumb, _)) = (&reply["terminals"]["1"], bar(&reply));
+    let (rows, cols, history) = (t["rows"].as_f64().unwrap(), t["cols"].as_u64(), t["history"].as_f64().unwrap());
+    // The thumb is the screen's share of all the lines, at the bottom.
+    assert!((thumb[3] / track[3] - rows / (rows + history)).abs() < 0.01, "{track:?} {thumb:?} {rows} {history}");
+    assert!((thumb[1] + thumb[3] - (track[1] + track[3])).abs() < 0.5, "{track:?} {thumb:?}");
+
+    // A selection drag that ends on the track reaches the last column.
+    let row = [reply["bounds"]["1"][0].as_f64().unwrap() + 2.0, track[1] + track[3] * 0.6];
+    let reply = otto.press_drag(row, [track[0] + 4.0, row[1]]);
+    let selected = reply["terminals"]["1"]["selection"].as_str().map(str::len);
+    assert_eq!(selected.map(|len| len as u64), cols, "{}", reply["terminals"]["1"]);
+    // A press on the track beside the thumb is the terminal's too: it selects, and pages nothing.
+    let reply = otto.press_drag(at(track, 0.5, 0.6), [track[0] - 100.0, row[1]]);
+    let t = &reply["terminals"]["1"];
+    assert!(t["selection"].as_str().is_some_and(|s| s.len() > 5) && t["display_offset"] == 0, "{t}");
+
+    // The bar has faded: a press where the thumb was is the terminal's, and holds no thumb.
+    otto.click([row[0], track[1] + 5.0], 1); // nothing selected
+    otto.faded("terminal:1");
+    let reply = otto.press_drag(at(thumb, 0.5, 0.5), [thumb[0] - 100.0, thumb[1] - 60.0]);
+    let t = &reply["terminals"]["1"];
+    assert!(t["selection"].as_str().is_some_and(|s| s.len() > 5) && t["display_offset"] == 0, "{t}");
+    otto.click([row[0], track[1] + 5.0], 1);
+
+    // Shown, the thumb drags to the top: the first line shows. The press selects nothing.
+    otto.mouse("move", at(thumb, 0.5, 0.5));
+    let reply = otto.drag(at(thumb, 0.5, 0.5), [thumb[0], track[1] - 50.0]);
+    let t = &reply["terminals"]["1"];
+    assert_eq!(t["display_offset"], t["history"], "{t}");
+    assert!(shows(t, "line-1") && t["selection"].is_null(), "{t}");
+    // A press on the bar is a click like any other: it leaves visual mode.
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-shift-c"}))["mode"], "visual");
+    let (_, top, _) = bar(&otto.mouse("move", at(track, 0.5, 0.02)));
+    assert_eq!(otto.click(at(top, 0.5, 0.5), 1)["mode"], "normal");
+
+    // Output that arrives while scrolled back does not bring a faded bar back.
+    otto.call(json!({"cmd": "key", "keys": "shift-end"}));
+    otto.call(json!({"cmd": "type", "text": "sleep 3; echo late\r"}));
+    otto.call(json!({"cmd": "scroll", "lines": 30}));
+    let before = otto.faded("terminal:1")["terminals"]["1"]["history"].as_u64();
+    otto.wait_for("the late line", |o| Some(term1(o)).filter(|t| t["history"].as_u64() > before));
+    assert_eq!(bar(&otto.call(json!({"cmd": "state"}))).2, 0.0);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_pane_dropped_on_a_terminals_scrollbar_lands() {
+    let otto = Otto::launch("scrollbar-drop");
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "split", "axis": "down", "kind": "empty"}));
+    otto.bounds(&[1, 2]);
+    otto.call(
+        json!({"cmd": "type", "pane": 1, "text": "i=1; while [ $i -le 200 ]; do echo line-$i; i=$((i+1)); done\r"}),
+    );
+    let (track, ..) = otto.wait_for("the bar", |o| scrollbar(&o.drawn(), "terminal:1"));
+    // 1 over 2. Pane 2, dropped on the right edge of 1 where its bar is, goes right of it.
+    let from = at(rect(&otto.drawn()["headers"]["2"]), 0.5, 0.5);
+    otto.drag(from, at(track, 0.5, 0.5));
+    let [one, two] = otto.bounds(&[1, 2])[..] else { panic!("two panes") };
+    assert!(one[0] + one[2] <= two[0] && (one[1] - two[1]).abs() < 2.0, "2 is right of 1: {one:?} {two:?}");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_keys_overlay_scrolls_inside_the_window() {
+    let otto = Otto::launch("scrollbar-keys");
+    let reply = otto.call(json!({"cmd": "keys"}));
+    let window = rect(&reply["window"]);
+    let (track, thumb, _) = otto.wait_for("the bar", |o| scrollbar(&o.drawn(), "keys"));
+    assert!(track[1] > 0.0 && track[1] + track[3] < window[3], "the panel is inside the window: {track:?} {window:?}");
+    // Dragging the bar scrolls the list and does not close it, as a press beside the panel does.
+    otto.mouse("move", at(thumb, 0.5, 0.5));
+    let reply = otto.drag(at(thumb, 0.5, 0.5), [thumb[0], track[1] + track[3]]);
+    let (_, bottom, _) = scrollbar(&reply, "keys").unwrap();
+    assert!((bottom[1] + bottom[3] - (track[1] + track[3])).abs() < 0.5, "{track:?} {bottom:?}");
+    assert_eq!(reply["state"]["keys"], true);
+
+    // The keyboard scrolls it: Home and End, a line, a page. Esc still closes.
+    let key = |keys: &str| {
+        let reply = otto.call(json!({"cmd": "key", "keys": keys}));
+        // The bar as drawn after the key, while the list is still open.
+        if reply["state"]["keys"] == true { otto.drawn() } else { reply }
+    };
+    let top = |reply: &Value| scrollbar(reply, "keys").unwrap().1[1];
+    assert_eq!(top(&key("home")), track[1]);
+    let line = top(&key("j"));
+    assert!(line > track[1] && top(&key("down")) > line && top(&key("k k")) == track[1], "{line}");
+    assert_eq!(top(&key("end")), bottom[1]);
+    assert!(top(&key("pageup")) < bottom[1] && top(&key("space")) == bottom[1]);
+    assert_eq!(key("escape")["state"]["keys"], false);
+    // Closed, its bar is gone.
+    assert_eq!(otto.drawn()["scrollbars"], json!({}));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_pickers_list_has_a_scrollbar() {
+    // Made-up apps in a folder of the test's own: never the user's, and none is ever started.
+    let root = std::env::temp_dir().join(format!("ottospace-e2e-scrollbar-apps-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    for i in 0..40 {
+        std::fs::create_dir_all(root.join(format!("Made Up {i:02}.app"))).unwrap();
+    }
+    let otto = Otto::launch_with("scrollbar-picker", &[("OTTOSPACE_APPS_DIRS", root.to_str().unwrap())]);
+    otto.call(json!({"cmd": "picker"}));
+    // One row fits. Typed, the filter lists the apps: more than the panel holds.
+    assert_eq!(otto.drawn()["scrollbars"], json!({}));
+    let (track, thumb, _) = otto.wait_for("the bar", |o| {
+        o.call(json!({"cmd": "picker_query", "query": "made"}));
+        scrollbar(&o.drawn(), "picker")
+    });
+    // A drag of the thumb scrolls to the end; the press picks no row and leaves the picker open.
+    otto.mouse("move", at(thumb, 0.5, 0.5));
+    let reply = otto.drag(at(thumb, 0.5, 0.5), [thumb[0], track[1] + track[3] + 50.0]);
+    let (_, bottom, _) = scrollbar(&reply, "picker").unwrap();
+    assert!((bottom[1] + bottom[3] - (track[1] + track[3])).abs() < 0.5, "{track:?} {bottom:?}");
+    otto.mouse("move", at(track, 0.5, 0.05));
+    let reply = otto.click(at(track, 0.5, 0.05), 1);
+    assert!(scrollbar(&reply, "picker").unwrap().1[1] < bottom[1], "the track click pages up");
+    assert!(reply["state"]["picker"].is_object() && pane_ids(&reply).is_empty(), "{}", reply["state"]);
+    let _ = std::fs::remove_dir_all(&root);
+}

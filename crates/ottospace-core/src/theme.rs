@@ -10,6 +10,10 @@ pub const RAISED: u32 = 0x18181b;
 pub const SELECTED: u32 = 0x27272a;
 pub const BORDER: u32 = 0x27272a;
 pub const BORDER_STRONG: u32 = 0x3f3f46;
+/// A scrollbar's thumb: at rest, under the pointer, held. The track is clear.
+pub const SCROLL_THUMB: u32 = BORDER_STRONG;
+pub const SCROLL_THUMB_HOVER: u32 = 0x52525b;
+pub const SCROLL_THUMB_HELD: u32 = 0x71717a;
 pub const TEXT: u32 = 0xfafafa;
 pub const MUTED: u32 = 0x9f9fa9;
 pub const PRIMARY: u32 = 0x00b8db;

@@ -31,6 +31,7 @@ use ottospace_core::list::{ListKey, list_key};
 use ottospace_core::marks::{Field, MarkInput, MarkOf, MarkRef, letter};
 use ottospace_core::model::CONFIRM_UP;
 use ottospace_core::rules::{self, Facts};
+use ottospace_core::scrollbar::{Extent, key_step};
 use ottospace_core::settings::{Installed, closed_apps};
 use ottospace_core::tasks::{Assign, Group, Heading, MAX_TITLE, State, Task, TaskId, TaskRow};
 use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, scroll_key, select_kind, visual_key};
@@ -56,6 +57,7 @@ mod marks;
 mod menus;
 mod new_task;
 mod repos;
+mod scrollbar;
 mod sessions;
 mod sneak;
 mod tags;
@@ -615,6 +617,8 @@ struct Workspace {
     kept_marks: marks::Kept,
     /// Scroll position of the bar's list, so list mode can bring the selected row into view.
     list_scroll: ScrollHandle,
+    /// Every scroll area's bar.
+    bars: scrollbar::Bars,
     /// The minute of the last look at the clock: the Tasks section's ages are drawn again when it changes.
     minute: u64,
     /// Reads what tags may name, on a thread of its own.
@@ -860,6 +864,7 @@ impl Workspace {
             installed: apps::Scan::default(),
             icons: HashMap::new(),
             list_scroll: ScrollHandle::new(),
+            bars: scrollbar::Bars::default(),
             minute: 0,
             tags: tags::Reader::start(),
             tags_repo: None,
@@ -1986,6 +1991,10 @@ impl Workspace {
             "marks": self.marks_json(),
             // The name of the mark just taken off, while the Marks section offers to put it back.
             "mark_removed": self.mark_offered(),
+            // Each scroll area whose content does not fit, by its id (`tasks`, `repos`, `apps`,
+            // `marks`, `picker`, `keys`, `terminal:<pane>`): its bar's `track` and `thumb` in
+            // window points, and the bar's `opacity` (0 once it has faded).
+            "scrollbars": self.bars.snapshot(),
         })
         .to_string()
     }
@@ -2355,8 +2364,13 @@ impl Workspace {
         // terminal or the picker behind it. (⌘ shortcuts go to their bindings; the core ignores
         // pane actions while it is open, and ⌘/ closes it.)
         if self.model.keys {
+            let plain = !(key.modifiers.platform || key.modifiers.control || key.modifiers.alt);
             if key.key == "escape" {
                 self.dispatch(Action::CloseKeys, self.input, window, cx);
+            } else if let Some(step) = key_step(&key.key, key.modifiers.shift).filter(|_| plain) {
+                // The list is longer than a small window: these keys scroll it.
+                self.bars.step("keys", step);
+                cx.notify();
             }
             cx.stop_propagation();
             return;
@@ -2687,12 +2701,13 @@ impl Workspace {
                         .flex()
                         .gap_3()
                         .text_sm()
-                        .child(div().w(px(150.)).text_color(rgb(theme::TEXT)).child(keys))
-                        .child(div().text_color(rgb(theme::MUTED)).child(what))
+                        .child(div().w(px(150.)).flex_none().text_color(rgb(theme::TEXT)).child(keys))
+                        // A long line wraps in a narrow window.
+                        .child(div().min_w_0().text_color(rgb(theme::MUTED)).child(what))
                 }))
         };
         let rows = |list: &[(&str, &'static str)]| list.iter().map(|(k, w)| (k.to_string(), *w)).collect::<Vec<_>>();
-        let panel = dialog::panel(theme::BORDER_STRONG)
+        let columns = div()
             .p_4()
             .flex()
             .gap_8()
@@ -2726,6 +2741,7 @@ impl Workspace {
             )
             .child(
                 div()
+                    .min_w_0()
                     .flex()
                     .flex_col()
                     .gap_4()
@@ -2734,13 +2750,20 @@ impl Workspace {
                     .child(group("LIST", rows(KEYS_LIST)))
                     .child(group("SNEAK", rows(KEYS_SNEAK))),
             );
+        // No taller than the window: the list scrolls inside the panel.
+        let panel = dialog::panel(theme::BORDER_STRONG).min_h_0().max_w_full().flex().flex_col().overflow_hidden();
+        // The columns keep their height inside the list: a flex row would stretch them to its own.
+        let list = div().id("keys-rows").flex_1().overflow_y_scroll().child(columns);
+        let panel = panel.child(self.bars.area("keys", list));
         div()
             .id("keys-backdrop")
             .absolute()
             .top_0()
             .left_0()
             .size_full()
+            .p_6()
             .flex()
+            .flex_col()
             .items_center()
             .justify_center()
             .bg(black().opacity(0.5))
@@ -2831,7 +2854,9 @@ impl Workspace {
             )
             .when(rows.is_empty(), |d| d.child(div().p_3().text_xs().text_color(rgb(theme::MUTED)).child("No match")))
             // Long lists scroll inside the panel.
-            .child(div().id("picker-rows").flex_1().min_h_0().overflow_y_scroll().children(rows))
+            .child(
+                self.bars.area("picker", div().id("picker-rows").flex_1().min_h_0().overflow_y_scroll().children(rows)),
+            )
             // The status bar no longer lists these, and ⌘/ closes the picker.
             .child(
                 div()
@@ -3380,7 +3405,8 @@ impl Workspace {
         });
         let sessions = self.render_sessions(listed, cx);
         let list = div().id("tasks").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
-        list.track_scroll(&self.list_scroll).children(notice).children(empty).children(rows).children(sessions)
+        let list = list.track_scroll(&self.list_scroll).children(notice).children(empty).children(rows);
+        self.bars.tracked("tasks", list.children(sessions), &self.list_scroll)
     }
 
     /// A task's row: a dot in its state's colour, priority and title, then a muted line of where
@@ -3516,12 +3542,16 @@ impl Workspace {
             div().px_2().text_xs().text_color(rgb(theme::MUTED)).child(hint)
         });
         let list = div().id("repos").flex_1().flex().flex_col().p_2().overflow_y_scroll();
-        list.track_scroll(&self.list_scroll).children(empty).children(items)
+        self.bars.tracked(
+            "repos",
+            list.track_scroll(&self.list_scroll).children(empty).children(items),
+            &self.list_scroll,
+        )
     }
 
     /// Running apps. A click hosts the app's main window in a pane.
     fn render_apps(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
+        let list = div()
             .id("apps")
             .flex_1()
             .flex()
@@ -3573,7 +3603,8 @@ impl Workspace {
                         let axis = if e.modifiers().shift { Axis::Down } else { Axis::Right };
                         let _ = this.open_app(&target, axis, false, window, cx);
                     }))
-            }))
+            }));
+        self.bars.tracked("apps", list, &self.list_scroll)
     }
 
     fn render_pane(&self, pane: &Pane, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3715,6 +3746,23 @@ impl Workspace {
                 move |bounds, _, window, cx| terminal::paint(&screen, bounds, cell, has_keys, window, cx),
             )
             .size_full();
+            // The scrollback as a scroll area: the screen is its last page.
+            let ((_, rows), (back, history), line) =
+                (terminal.grid_size(), terminal.scrollback(), f32::from(cell.height));
+            let extent = Extent {
+                viewport: rows as f32 * line,
+                content: (history + rows) as f32 * line,
+                offset: history.saturating_sub(back) as f32 * line,
+            };
+            // Shown by the user's own scrolls, not by output arriving. A press beside the thumb
+            // is the terminal's: a selection, or the program's own mouse.
+            let (scroll_to, scrolls) = (terminal.scroller(), terminal.scrolls() as f32);
+            let scrollbar = self.bars.overlay(
+                &format!("terminal:{id}"),
+                false,
+                move || (extent, scrolls),
+                move |offset| scroll_to(history.saturating_sub((offset / line).round() as usize)),
+            );
             div()
                 .absolute()
                 .size_full()
@@ -3724,6 +3772,7 @@ impl Workspace {
                     cx.listener(move |this, e: &MouseDownEvent, _, cx| this.terminal_mouse_down(id, e, cx)),
                 )
                 .child(grid)
+                .child(scrollbar)
                 .into_any_element()
         } else {
             match pane.kind {
@@ -4192,6 +4241,7 @@ impl Render for Workspace {
             self.frames.entry(pane.id).or_default();
         }
         self.controls.begin();
+        self.bars.begin();
         // The pane drag is over, however it ended (a drop, Esc, a release outside the window):
         // no drop zone may stay drawn.
         if !cx.has_active_drag() {

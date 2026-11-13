@@ -562,6 +562,7 @@ impl Workspace {
                 .on_click(cx.listener(|this, _, window, cx| this.undo_mark(window, cx)))
         });
         let list = div().id("marks").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
-        list.track_scroll(&self.list_scroll).children(notice).children(empty).children(rows).children(hint)
+        let list = list.track_scroll(&self.list_scroll).children(notice).children(empty).children(rows);
+        self.bars.tracked("marks", list.children(hint), &self.list_scroll)
     }
 }
