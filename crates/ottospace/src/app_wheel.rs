@@ -41,11 +41,12 @@ impl Workspace {
         // The picture shows the window below its cropped title bar, unscaled from its top left.
         let at = CGPoint::new(h.parked_at.x + x, h.parked_at.y + h.shown_crop + y);
         // The system's own event, phases and momentum and all; a test's is made from its deltas.
-        let made = || match event.delta {
-            ScrollDelta::Pixels(p) => Scroll::new(f32::from(p.x).into(), f32::from(p.y).into(), true),
-            ScrollDelta::Lines(l) => Scroll::new(l.x.into(), l.y.into(), false),
+        let (delta, precise) = match event.delta {
+            ScrollDelta::Pixels(p) => ([f32::from(p.x).into(), f32::from(p.y).into()], true),
+            ScrollDelta::Lines(l) => ([l.x.into(), l.y.into()], false),
         };
-        let Some(scroll) = Scroll::current().or_else(made) else { return };
+        let made = || Scroll::new(delta[0], delta[1], precise);
+        let Some(scroll) = Scroll::current(delta).or_else(made) else { return };
         let (origin, pid, window) = (self.input, h.pid, h.window_id);
         // Added to the last one of the same pane, window, sender and phase: one event a frame.
         match self.wheel.pending.last_mut() {

@@ -19,11 +19,14 @@ const POINTS: [CGEventField; 2] =
     [CGEventField::ScrollWheelEventPointDeltaAxis1, CGEventField::ScrollWheelEventPointDeltaAxis2];
 
 impl Scroll {
-    /// The scroll AppKit is handling now, copied whole. `None` if the event being handled is
-    /// not a scroll (a test's, handed to a view and never queued).
-    pub fn current() -> Option<Self> {
+    /// The scroll AppKit is handling now, copied whole, if its deltas are `delta` (`[dx, dy]` as
+    /// the view was handed them). `None` for another event: a test's, handed to a view and never
+    /// queued, leaves AppKit's current event as it was.
+    pub fn current(delta: [f64; 2]) -> Option<Self> {
         let event = NSApplication::sharedApplication(MainThreadMarker::new()?).currentEvent()?;
-        if event.r#type() != NSEventType::ScrollWheel {
+        let same = |a: f64, b: f64| (a - b).abs() < 0.01;
+        let ours = same(event.scrollingDeltaX(), delta[0]) && same(event.scrollingDeltaY(), delta[1]);
+        if event.r#type() != NSEventType::ScrollWheel || !ours {
             return None;
         }
         CGEvent::new_copy(Some(&*event.CGEvent()?)).map(Self)
@@ -50,9 +53,12 @@ impl Scroll {
         }
     }
 
-    /// `[dx, dy]` in points.
+    /// `[dx, dy]` in points. An event with lines alone counts 10 points a line, as AppKit scrolls one.
     pub fn points(&self) -> [f64; 2] {
-        [self.get(POINTS[1]), self.get(POINTS[0])]
+        match [self.get(POINTS[1]), self.get(POINTS[0])] {
+            [0.0, 0.0] => [self.get(FIXED[1]) * 10.0, self.get(FIXED[0]) * 10.0],
+            points => points,
+        }
     }
 
     /// Its scroll phase and momentum phase: scrolls with the same ones may be added up.

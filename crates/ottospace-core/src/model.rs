@@ -3236,7 +3236,8 @@ impl Model {
                 let app = self.pane(pane).is_some_and(|p| matches!(p.kind, Kind::App { .. }));
                 let shown = self.layout.as_ref().is_some_and(|l| l.leaves().contains(&pane));
                 let (dx, dy) = (crate::app_wheel::cap(dx), crate::app_wheel::cap(dy));
-                if app && shown && self.live != Some(pane) && (dx, dy) != (0.0, 0.0) {
+                // A scroll of no distance still goes: a trackpad gesture's end has none.
+                if app && shown && self.live != Some(pane) {
                     effects.push(Effect::AppWheel { pane, dx, dy });
                 }
             }

@@ -45,10 +45,11 @@ mod tests {
             assert_eq!(m.refusal(&wheel, origin), Some(USERS_ALONE));
             assert_eq!(m.update(wheel.clone().sent_by(origin)), []);
         }
-        // Capped; a scroll of nothing is not sent.
+        // Capped. A scroll of no distance goes too: it ends a trackpad gesture.
         let big = Action::AppWheel { pane: 1, dx: 1e9, dy: f64::NAN };
         assert_eq!(m.update(big), [Effect::AppWheel { pane: 1, dx: MAX_POINTS, dy: 0. }]);
-        assert_eq!(m.update(Action::AppWheel { pane: 1, dx: 0., dy: f64::NAN }), []);
+        let end = Action::AppWheel { pane: 1, dx: 0., dy: 0. };
+        assert_eq!(m.update(end), [Effect::AppWheel { pane: 1, dx: 0., dy: 0. }]);
         // Not a pane that is live (the real window takes its own scrolls), and not another kind.
         m.update(Action::Enter { pane: 1 });
         assert_eq!(m.update(Action::AppWheel { pane: 1, dx: 0., dy: 5. }), []);

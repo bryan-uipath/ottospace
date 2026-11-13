@@ -295,6 +295,10 @@ impl Hosted {
     fn show(&mut self, scale: f64) -> Option<CGSize> {
         let pane = to_cg(self.bounds.get().size);
         let frame = self.window_frame().filter(|_| pane.width >= 1.0)?;
+        // Parked (not placed over a pane): where it is now, should it have moved.
+        if self.placed == CGRect::default() {
+            self.parked_at = frame.origin;
+        }
         let content = CGSize::new(frame.size.width, frame.size.height - self.crop);
         let shown = CGSize::new(pane.width.min(content.width), pane.height.min(content.height));
         let asked = (shown, self.crop);
