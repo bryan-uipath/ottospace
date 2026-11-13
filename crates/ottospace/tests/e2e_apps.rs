@@ -28,7 +28,7 @@ struct Proc {
 
 impl Proc {
     fn launch(bin: &str, name: &str, socket_var: &str, env: &[(&str, &str)]) -> Self {
-        let socket = std::env::temp_dir().join(format!("otto-apps-{name}-{}.sock", std::process::id()));
+        let socket = support::temp(&format!("otto-apps-{name}-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&socket);
         let mut command = Command::new(bin);
         // Never the user's settings, tasks or repositories.
@@ -68,7 +68,10 @@ impl Drop for Proc {
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
-        let _ = std::fs::remove_file(&self.socket);
+        // A killed app removes nothing: its socket, the lock beside it, a trace it dumped.
+        for end in ["sock", "lock", "trace.jsonl"] {
+            let _ = std::fs::remove_file(self.socket.with_extension(end));
+        }
     }
 }
 
@@ -160,7 +163,7 @@ fn close(a: f64, b: f64) -> bool {
 #[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
 fn a_window_the_rules_ignore_never_becomes_a_pane() {
     // A folder of the test's own, with one rule: leave the canary's second window alone.
-    let home = std::env::temp_dir().join(format!("otto-apps-rules-{}", std::process::id()));
+    let home = support::temp(&format!("otto-apps-rules-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
     std::fs::create_dir_all(&home).expect("make the folder");
     let settings = json!({"windows": [{"app": CANARY, "title": "Canary 2", "do": "ignore"}]});
@@ -396,7 +399,7 @@ fn middle(r: [f64; 4]) -> [f64; 2] {
 fn a_hosted_pane_is_dragged_by_its_header() {
     // A folder of the test's own, with one rule: the canary's second window is never a pane.
     // It is the other app's window over ottospace at the end.
-    let home = std::env::temp_dir().join(format!("otto-apps-drag-{}", std::process::id()));
+    let home = support::temp(&format!("otto-apps-drag-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
     std::fs::create_dir_all(&home).expect("make the folder");
     let settings = json!({"windows": [{"app": CANARY, "title": "Canary 2", "do": "ignore"}]});
@@ -980,7 +983,7 @@ fn a_mark_hosts_its_canary_window_again_and_of_two_windows_the_one_with_its_titl
 fn a_hosted_window_is_captured_with_the_part_of_its_tree_under_the_circle() {
     // A folder of the test's own: the captures are kept there, and one rule names a title the
     // canary's window takes later.
-    let home = std::env::temp_dir().join(format!("otto-apps-capture-{}", std::process::id()));
+    let home = support::temp(&format!("otto-apps-capture-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
     std::fs::create_dir_all(&home).expect("make the folder");
     let settings = json!({"repos": [], "windows": [{"app": CANARY, "title": "Private*", "do": "ignore"}]});

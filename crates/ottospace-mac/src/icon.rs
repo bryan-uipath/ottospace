@@ -148,6 +148,14 @@ mod tests {
         // A link named like an app that leads to a plain folder is no app; one to a bundle is.
         let dir = std::env::temp_dir().join(format!("ottospace-mac-apps-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
+        // Removed when the test ends, pass or fail.
+        struct Gone<'a>(&'a std::path::Path);
+        impl Drop for Gone<'_> {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(self.0);
+            }
+        }
+        let _gone = Gone(&dir);
         std::fs::create_dir_all(dir.join("plain")).unwrap();
         std::os::unix::fs::symlink(dir.join("plain"), dir.join("Fake.app")).unwrap();
         std::os::unix::fs::symlink(&calculator, dir.join("Sums.app")).unwrap();

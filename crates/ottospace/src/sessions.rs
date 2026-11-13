@@ -440,7 +440,7 @@ mod tests {
 
     #[test]
     fn an_adopted_sessions_file_is_at_work_if_it_changed_lately_or_since_the_last_look() {
-        let file = std::env::temp_dir().join(format!("ottospace-seen-{}.jsonl", std::process::id()));
+        let file = crate::scratch::Scratch::path(&format!("ottospace-seen-{}.jsonl", std::process::id()));
         std::fs::write(&file, "").unwrap();
         let ms = |time: SystemTime| time.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
         let (now_time, minute) = (SystemTime::now(), Duration::from_secs(60));
@@ -451,7 +451,7 @@ mod tests {
         };
         let key: Key = ("claude".into(), "s1".into());
         let gone: Key = ("codex".into(), "s2".into());
-        let files = HashMap::from([(key.clone(), file.clone()), (gone.clone(), file.with_extension("gone"))]);
+        let files = HashMap::from([(key.clone(), file.to_path_buf()), (gone.clone(), file.with_extension("gone"))]);
         let mut last = HashMap::new();
         let mut look = |keys: &[Key]| seen(keys, &files, &mut last, now);
         let all = [key.clone(), gone.clone(), ("claude".into(), "unknown".into())];
@@ -469,6 +469,5 @@ mod tests {
         let after = look(&all);
         assert_eq!((after[0].active, now - after[0].last_activity), (true, 120_000));
         assert!(!look(&all)[0].active, "and not again at the next look");
-        let _ = std::fs::remove_file(&file);
     }
 }

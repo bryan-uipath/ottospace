@@ -94,11 +94,8 @@ mod tests {
     }
 
     /// A fresh folder for one test.
-    fn folder(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ottospace-running-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
+    fn folder(name: &str) -> crate::scratch::Scratch {
+        crate::scratch::Scratch::dir(&format!("ottospace-running-{name}-{}", std::process::id()))
     }
 
     fn read(dir: &Path) -> String {

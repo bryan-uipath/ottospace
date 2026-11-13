@@ -50,7 +50,7 @@ impl Otto {
 
     /// Launches with `env`, and without `OTTOSPACE_SHELL` unless `env` names it.
     fn launch_shell(name: &str, env: &[(&str, &str)]) -> Self {
-        let socket = std::env::temp_dir().join(format!("ottospace-e2e-{name}-{}.sock", std::process::id()));
+        let socket = support::temp(&format!("ottospace-e2e-{name}-{}.sock", std::process::id()));
         let child = Command::new(env!("CARGO_BIN_EXE_ottospace"))
             .env("OTTOSPACE_E2E", "1")
             .env("OTTOSPACE_SOCKET", &socket)
@@ -145,7 +145,10 @@ impl Drop for Otto {
         support::exiting(self.child.id());
         let _ = self.child.kill();
         let _ = self.child.wait();
-        let _ = std::fs::remove_file(&self.socket);
+        // A killed app removes nothing: its socket, the lock beside it, a trace it dumped.
+        for end in ["sock", "lock", "trace.jsonl"] {
+            let _ = std::fs::remove_file(self.socket.with_extension(end));
+        }
     }
 }
 
@@ -709,7 +712,7 @@ fn capture_and_wait_read_one_pane() {
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn repos_are_listed_and_open_a_terminal_there() {
     // A repository with one linked worktree, written the way git lays them out, and a plain directory.
-    let root = std::env::temp_dir().join(format!("ottospace-e2e-repos-{}", std::process::id()));
+    let root = support::temp(&format!("ottospace-e2e-repos-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     fake_repo(&root.join("app"));
     std::fs::create_dir_all(root.join("plain")).unwrap();
@@ -756,7 +759,7 @@ fn repos_are_listed_and_open_a_terminal_there() {
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_directory_is_added_to_the_repos_list_and_removed_in_the_settings() {
     // `code` holds two repositories and is in the settings; `zed` is one by itself; `plain` has none.
-    let root = std::env::temp_dir().join(format!("ottospace-e2e-repo-add-{}", std::process::id()));
+    let root = support::temp(&format!("ottospace-e2e-repo-add-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     for repo in ["code/app", "code/web", "elsewhere/zed"] {
         fake_repo(&root.join(repo));
@@ -842,7 +845,7 @@ fn a_directory_is_added_to_the_repos_list_and_removed_in_the_settings() {
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_long_repos_list_keeps_each_name_over_its_checkouts() {
     // More repositories than the bar is tall; the third has a linked worktree.
-    let root = std::env::temp_dir().join(format!("ottospace-e2e-repos-list-{}", std::process::id()));
+    let root = support::temp(&format!("ottospace-e2e-repos-list-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     for n in 0..40 {
         fake_repo(&root.join(format!("repo-{n:02}")));
@@ -1102,7 +1105,7 @@ fn list_mode_drives_the_bar_with_the_keyboard() {
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_new_task_box_files_a_line() {
     // One repository to name with `>`.
-    let root = std::env::temp_dir().join(format!("ottospace-e2e-compose-{}", std::process::id()));
+    let root = support::temp(&format!("ottospace-e2e-compose-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("flow-app/.git")).unwrap();
     std::fs::write(root.join("flow-app/.git/HEAD"), "ref: refs/heads/main\n").unwrap();
@@ -1356,7 +1359,7 @@ fn the_home_screen_shows_tasks_as_nodes_until_a_pane_opens() {
 
 /// A fresh folder to pass as `OTTOSPACE_HOME`, with `settings` as its `settings.json`.
 fn user_folder(name: &str, settings: &str) -> PathBuf {
-    let home = std::env::temp_dir().join(format!("ottospace-e2e-home-{name}-{}", std::process::id()));
+    let home = support::temp(&format!("ottospace-e2e-home-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
     std::fs::create_dir_all(&home).unwrap();
     std::fs::write(home.join("settings.json"), settings).unwrap();
@@ -2007,7 +2010,7 @@ fn an_agent_tag_names_a_runner_and_a_model() {
 /// A folder of repositories for a test of the new-task box: `flow-app`, with `src/export/a.md`
 /// and `src/extra.rs` in it.
 fn compose_fixture(name: &str) -> PathBuf {
-    let root = std::env::temp_dir().join(format!("ottospace-e2e-{name}-{}", std::process::id()));
+    let root = support::temp(&format!("ottospace-e2e-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("flow-app/.git")).unwrap();
     std::fs::write(root.join("flow-app/.git/HEAD"), "ref: refs/heads/main\n").unwrap();
@@ -2239,7 +2242,7 @@ fn with_nothing_open_the_drawer_offers_a_new_task() {
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_picker_filter_is_a_field_and_offers_apps_that_are_not_running() {
     // Made-up apps in a folder of the test's own: never the user's, and none is ever started.
-    let root = std::env::temp_dir().join(format!("ottospace-e2e-apps-{}", std::process::id()));
+    let root = support::temp(&format!("ottospace-e2e-apps-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     for app in ["Sketchpad.app", "Skylark.app", "Lumen Desk.app", "notes.txt"] {
         std::fs::create_dir_all(root.join(app)).unwrap();
@@ -2278,7 +2281,7 @@ fn the_picker_filter_is_a_field_and_offers_apps_that_are_not_running() {
 
 /// Made-up apps in a folder of the test's own: never the user's, and none is ever started.
 fn fake_apps(name: &str, apps: &[&str]) -> PathBuf {
-    let root = std::env::temp_dir().join(format!("ottospace-e2e-{name}-{}", std::process::id()));
+    let root = support::temp(&format!("ottospace-e2e-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     for app in apps {
         std::fs::create_dir_all(root.join(format!("{app}.app"))).unwrap();
@@ -2660,7 +2663,7 @@ fn bad_requests_are_refused_and_quit_exits() {
     otto.call(json!({"cmd": "close"}));
 
     // A second app whose socket path names an ordinary file must leave that file alone.
-    let file = std::env::temp_dir().join(format!("ottospace-e2e-notasocket-{}", std::process::id()));
+    let file = support::temp(&format!("ottospace-e2e-notasocket-{}", std::process::id()));
     std::fs::write(&file, "keep me").expect("write");
     let mut other = Command::new(env!("CARGO_BIN_EXE_ottospace"))
         .env("OTTOSPACE_E2E", "1")
@@ -2797,7 +2800,7 @@ fn asks(otto: &Otto, running: &Value) -> Value {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn cmd_q_knows_an_idle_shell_behind_login() {
-    let dir = std::env::temp_dir().join(format!("ottospace-e2e-login-{}", std::process::id()));
+    let dir = support::temp(&format!("ottospace-e2e-login-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("make the home");
     // Up, and really behind login. The second line is a builtin: when it has printed, `ps` is
     // gone and the shell is in front again.
@@ -2854,7 +2857,7 @@ fn sneak_to(o: &Otto, id: &str) -> Value {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
-    let root = std::env::temp_dir().join(format!("ottospace-e2e-sneak-{}", std::process::id()));
+    let root = support::temp(&format!("ottospace-e2e-sneak-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     fake_repo(&root.join("app"));
     let repo = root.canonicalize().unwrap().join("app").to_string_lossy().into_owned();
@@ -3160,7 +3163,7 @@ fn mark_named(reply: &Value, name: &str) -> Value {
 fn shell_is_in(otto: &Otto, pane: u64, dir: &Path) {
     otto.call(json!({"cmd": "type", "pane": pane, "text": "pwd\r"}));
     let pattern = format!("^{}$", dir.display().to_string().replace('.', "\\."));
-    otto.call(json!({"cmd": "wait", "pane": pane, "pattern": pattern}));
+    otto.call(json!({"cmd": "wait", "pane": pane, "pattern": pattern, "timeout_ms": 40000}));
 }
 
 /// `marks.json` in `home`, as JSON.
@@ -3183,7 +3186,7 @@ fn marks_are_a_way_back_to_a_pane_and_a_tab_and_are_kept_between_runs() {
         // The shell moves: a mark records where it is now, not where it started.
         let cd = format!("cd '{}' && echo in-$((6*7))\r", notes.display());
         otto.call(json!({"cmd": "type", "pane": 1, "text": cd}));
-        otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^in-42$"}));
+        otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^in-42$", "timeout_ms": 40000}));
 
         // ⌘B marks the focused pane, named for its directory. ⌘B again takes the mark off.
         let marked = key("cmd-b");
@@ -3390,11 +3393,11 @@ fn a_marks_wait_for_a_letter_is_the_users_and_a_mark_taken_off_by_mistake_comes_
     assert_eq!(key("b")["state"]["focused"], 1);
 
     // A pane mark whose directory is gone cannot be opened, and says why. No shell opens elsewhere.
-    let dir = std::env::temp_dir().join(format!("ottospace-e2e-mark-gone-{}", std::process::id()));
+    let dir = support::temp(&format!("ottospace-e2e-mark-gone-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let dir = dir.canonicalize().unwrap();
     otto.call(json!({"cmd": "type", "pane": 1, "text": format!("cd '{}' && echo in-$((6*7))\r", dir.display())}));
-    otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^in-42$"}));
+    otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^in-42$", "timeout_ms": 40000}));
     assert_eq!(otto.raw(r#"{"cmd":"mark_add","pane":2}"#)["error"], "an empty pane has nothing to mark");
     otto.call(json!({"cmd": "mark_remove", "name": "build"}));
     otto.call(json!({"cmd": "mark_add", "pane": 1, "name": "there"}));
@@ -3711,7 +3714,7 @@ fn the_keys_overlay_scrolls_inside_the_window() {
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_pickers_list_has_a_scrollbar() {
     // Made-up apps in a folder of the test's own: never the user's, and none is ever started.
-    let root = std::env::temp_dir().join(format!("ottospace-e2e-scrollbar-apps-{}", std::process::id()));
+    let root = support::temp(&format!("ottospace-e2e-scrollbar-apps-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     for i in 0..40 {
         std::fs::create_dir_all(root.join(format!("Made Up {i:02}.app"))).unwrap();
@@ -4618,7 +4621,7 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
         for (pane, to) in [(1, &one), (2, &two)] {
             let cd = format!("cd '{}' && echo in-$((6*7))\r", to.display());
             otto.call(json!({"cmd": "type", "pane": pane, "text": cd}));
-            otto.call(json!({"cmd": "wait", "pane": pane, "pattern": "^in-42$"}));
+            otto.call(json!({"cmd": "wait", "pane": pane, "pattern": "^in-42$", "timeout_ms": 40000}));
         }
         let resized = otto.call(json!({"cmd": "resize", "dir": "up"}));
         let ratio = resized["state"]["layout"]["split"]["ratio"].clone();
@@ -4768,7 +4771,7 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_click_on_a_task_starts_its_agent_in_the_drawer_and_the_workspace_stays() {
-    let root = std::env::temp_dir().join(format!("ottospace-e2e-talk-{}", std::process::id()));
+    let root = support::temp(&format!("ottospace-e2e-talk-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let (bin, repos, sessions) = (root.join("bin"), root.join("repos"), root.join("sessions"));
     fake_agents(&bin, &sessions);
@@ -4907,7 +4910,7 @@ fn a_workbook_keeps_several_tabs_and_opens_them_in_order() {
     let cd = |otto: &Otto, pane: u64, to: &Path| {
         let text = format!("cd '{}' && echo in-$((6*7))\r", to.display());
         otto.call(json!({"cmd": "type", "pane": pane, "text": text}));
-        otto.call(json!({"cmd": "wait", "pane": pane, "pattern": "^in-42$"}));
+        otto.call(json!({"cmd": "wait", "pane": pane, "pattern": "^in-42$", "timeout_ms": 40000}));
     };
     let book = |reply: &Value| reply["workbooks"][0].clone();
     let tabs = |reply: &Value| book(reply)["tabs"].as_array().map(Vec::len);
@@ -4994,7 +4997,7 @@ fn a_workbooks_terminal_comes_back_with_its_lines_and_its_command_typed_not_run(
         let otto = Otto::launch_with("workbook-history-1", &env);
         otto.call(json!({"cmd": "split"}));
         otto.call(json!({"cmd": "type", "pane": 1, "text": "printf 'hist-%s\\n' a b\r"}));
-        otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^hist-b$"}));
+        otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^hist-b$", "timeout_ms": 40000}));
         otto.call(json!({"cmd": "type", "pane": 1, "text": format!("{SLEEP}\r")}));
         otto.wait_for("the sleep to run", |_| (running(SLEEP) == 1).then_some(()));
         // The status bar says what was kept, and the row that it holds history.
@@ -5280,4 +5283,27 @@ fn the_inspector_shows_a_trees_counts_and_roles_never_its_text() {
     otto.user_key("escape");
     otto.call(json!({"cmd": "inspector_fixture", "app": "Fixture", "tree": tree}));
     assert!(otto.call(json!({"cmd": "close", "pane": 1}))["inspector"].is_null());
+}
+
+/// Two tests run again in a process of their own, with a `$TMPDIR` of their own: apps killed
+/// and one that quits, folders of settings, a file that is no socket. Nothing is left in it.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_test_leaves_nothing_in_the_temp_dir() {
+    // Short: a socket's path holds about 100 characters.
+    let tmp = support::temp(&format!("ottospace-e2e-t-{}", std::process::id()));
+    let out = support::temp(&format!("ottospace-e2e-out-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let tests = ["tasks_are_kept_between_runs", "bad_requests_are_refused_and_quit_exits"];
+    let run = Command::new(std::env::current_exe().unwrap())
+        .args(["--ignored", "--exact", "--test-threads=1"])
+        .args(tests)
+        .env("TMPDIR", &tmp)
+        .env("OTTOSPACE_E2E_OUT", &out)
+        .output()
+        .expect("run the tests again");
+    let log = String::from_utf8_lossy(&run.stdout);
+    assert!(run.status.success() && log.contains("2 passed"), "{log}");
+    let left: Vec<_> = std::fs::read_dir(&tmp).unwrap().flatten().map(|e| e.file_name()).collect();
+    assert!(left.is_empty(), "left in $TMPDIR: {left:?}");
 }

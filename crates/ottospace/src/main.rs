@@ -67,6 +67,8 @@ mod new_task;
 mod progress;
 mod repos;
 mod running;
+#[cfg(test)]
+mod scratch;
 mod scrollbar;
 mod sessions;
 mod sneak;
@@ -849,7 +851,9 @@ impl Workspace {
                     hosted.give_back();
                 });
                 if this.control.is_some() {
+                    // The socket and the lock file `control::serve` made beside it.
                     let _ = std::fs::remove_file(control::path());
+                    let _ = std::fs::remove_file(control::path().with_extension("lock"));
                 }
                 running::remove();
                 async {}

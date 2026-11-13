@@ -18,12 +18,35 @@ fn here() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests")
 }
 
-/// A fresh folder for what the fake records.
-fn record_dir(name: &str) -> PathBuf {
+/// A fresh folder for what the fake records, removed when the test ends, pass or fail.
+fn record_dir(name: &str) -> Scratch {
     let dir = std::env::temp_dir().join(format!("ottospace-agents-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    dir
+    Scratch(dir)
+}
+
+/// A folder removed on drop. Use it as a `&Path`.
+struct Scratch(PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+impl std::ops::Deref for Scratch {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for Scratch {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
 }
 
 /// The fake in place of `argv.program`, with the table's arguments.
@@ -174,7 +197,7 @@ fn what_the_cli_started_ends_with_it() {
         let dir = record_dir(name);
         let mut command = Command::new("/bin/sh");
         let script = format!("sleep 1000 & echo $! >\"$FAKE_DIR/pid\"; {script}");
-        command.args(["-c", &script]).env("FAKE_DIR", &dir);
+        command.args(["-c", &script]).env("FAKE_DIR", &*dir);
         let mut driver = Driver::spawn(command, Claude::new()).unwrap();
         let pid_file = dir.join("pid");
         while std::fs::read_to_string(&pid_file).map_or(true, |pid| !pid.ends_with('\n')) {

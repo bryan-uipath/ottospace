@@ -79,3 +79,20 @@ frame goes.
   nextest needed locally.
 - `reliability.yml`: nightly and by hand, `cargo e2e` and `cargo e2e-apps` five times each on
   macOS runners, tallied in the summary. The nightly run opens or updates one issue, "Flaky tests".
+
+## Nothing left in `$TMPDIR`
+
+Runs had left about 12,000 files there: a lock per launch, settings folders, unit tests' folders.
+
+- The app owns its socket and the `.lock` beside it: it removes both when it quits, and the
+  lock when it took it but could not listen. A killed app removes nothing, so the harness
+  removes its socket, lock and trace dump after the kill.
+- An e2e test makes every path with `support::temp(name)`: registered in the test's log and
+  removed when its thread ends, pass or fail. The failure folders are under
+  `$OTTOSPACE_E2E_OUT`, never registered: they stay.
+- A unit test that makes a folder holds a guard that removes it on drop (`Scratch`).
+- The first launch of a run sweeps this suite's own leftovers older than a day:
+  `ottospace-e2e-<words>-<numbers>[.sock|.lock|.trace.jsonl]`, plain files and folders right in
+  `$TMPDIR`, never through a link. `ottospace.sock`, the user's, never matches.
+- `a_test_leaves_nothing_in_the_temp_dir` runs two tests again with a `$TMPDIR` of their own (an
+  app killed, one that quits, settings folders, a file that is no socket) and asserts it is empty.

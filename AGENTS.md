@@ -41,6 +41,9 @@ Rules:
 - In an E2E run a reply with the state waits for the frame that draws its request: read bounds
   from it, no poll needed. A failed test writes a folder that explains it (its panic names it),
   and `scripts/e2e-repeat N [filter]` tallies flaky tests. See `docs/ai/e2e-reliability.md`.
+- A test leaves nothing in `$TMPDIR`, pass or fail. An e2e test makes its paths with
+  `support::temp`, removed when it ends; a unit test holds a guard that removes its folder on
+  drop. `a_test_leaves_nothing_in_the_temp_dir` checks it.
 - An E2E run reads no `settings.json` and keeps no tasks on disk, unless the test names its own
   folder with `OTTOSPACE_HOME`. Tests must never read or write the user's `~/.ottospace`.
 - E2E runs set `OTTOSPACE_E2E`, which turns window hosting off. Tests must never move the

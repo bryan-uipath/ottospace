@@ -1217,8 +1217,7 @@ mod tests {
 
     #[test]
     fn only_a_plain_file_of_a_size_is_read() {
-        let dir = std::env::temp_dir().join(format!("otto-read-plain-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::scratch::Scratch::dir(&format!("otto-read-plain-{}", std::process::id()));
         let (file, link) = (dir.join("a"), dir.join("link"));
         std::fs::write(&file, b"12345").unwrap();
         std::os::unix::fs::symlink(&file, &link).unwrap();
@@ -1226,6 +1225,5 @@ mod tests {
         // Too large, a link, a folder, nothing there.
         assert_eq!((read_plain(&file, 4), read_plain(&link, 9), read_plain(&dir, 9)), (None, None, None));
         assert_eq!(read_plain(&dir.join("none"), 9), None);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

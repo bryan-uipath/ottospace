@@ -36,10 +36,97 @@ struct Log {
     waits: Vec<Value>,
     /// The failure folders, once written.
     folders: Vec<PathBuf>,
+    /// What the test made under `$TMPDIR` (`temp`): removed when it ends.
+    made: Vec<PathBuf>,
+}
+
+/// The test's thread ends, pass or fail: what it made in `$TMPDIR` goes. The failure folders
+/// stay: they are under `out()`, never in `made`.
+impl Drop for Log {
+    fn drop(&mut self) {
+        for path in &self.made {
+            let _ = std::fs::remove_dir_all(path);
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 thread_local! {
     static LOG: RefCell<Log> = RefCell::default();
+}
+
+/// `$TMPDIR/<name>` for the test to make something at, removed when the test ends, pass or
+/// fail. Starts empty: what an earlier run left there is removed now.
+pub fn temp(name: &str) -> PathBuf {
+    let path = std::env::temp_dir().join(name);
+    let _ = std::fs::remove_dir_all(&path);
+    let _ = std::fs::remove_file(&path);
+    LOG.with_borrow_mut(|log| log.made.push(path.clone()));
+    path
+}
+
+/// A leftover of this suite in `$TMPDIR`: `ottospace-e2e-<words>-<pid>[-<n>]`, a folder or one
+/// with `.sock`, `.lock` or `.trace.jsonl`. Not `ottospace-e2e` (the failure folders), nor the
+/// user's own `ottospace.sock`.
+pub fn is_leftover(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("ottospace-e2e-") else { return false };
+    let stem = [".sock", ".lock", ".trace.jsonl"].iter().find_map(|end| rest.strip_suffix(end)).unwrap_or(rest);
+    let words: Vec<&str> = stem.split('-').collect();
+    let plain = |w: &&str| !w.is_empty() && w.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+    // A name, then one to three numbers: `keep-1-4242`, `marks-4242-2`.
+    let numbers = words.iter().rev().take_while(|w| !w.is_empty() && w.chars().all(|c| c.is_ascii_digit())).count();
+    words.iter().all(plain) && (1..=3).contains(&numbers) && numbers < words.len()
+}
+
+/// Once per run: removes this suite's leftovers in `$TMPDIR` older than a day. Only names
+/// `is_leftover` takes, only plain files and folders right there; a link is never followed.
+pub fn sweep() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else { return };
+        let day = Duration::from_secs(24 * 3600);
+        for entry in entries.flatten() {
+            let (path, name) = (entry.path(), entry.file_name());
+            let Ok(meta) = std::fs::symlink_metadata(&path) else { continue };
+            let old = meta.modified().ok().and_then(|at| at.elapsed().ok()).is_some_and(|age| age > day);
+            if !old || !name.to_str().is_some_and(is_leftover) || meta.file_type().is_symlink() {
+                continue;
+            }
+            let _ = if meta.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+        }
+    });
+}
+
+#[test]
+fn only_this_suites_own_leftovers_are_swept() {
+    for name in [
+        "ottospace-e2e-splits-4242.sock",
+        "ottospace-e2e-splits-4242.lock",
+        "ottospace-e2e-keep-1-4242.lock",
+        "ottospace-e2e-home-tasks-4242",
+        "ottospace-e2e-repos-4242",
+        "ottospace-e2e-marks-4242-2.lock",
+        "ottospace-e2e-zz-4242.trace.jsonl",
+    ] {
+        assert!(is_leftover(name), "{name}");
+    }
+    for name in [
+        "ottospace.sock",
+        "ottospace.lock",
+        "ottospace-e2e",
+        "ottospace-e2e-",
+        "ottospace-e2e-splits",
+        "ottospace-e2e-splits-4242.txt",
+        "ottospace-e2e-Splits-4242",
+        "ottospace-e2e-a/b-4242",
+        "ottospace-e2e-..-4242",
+        "ottospace-e2e-a--4242",
+        "ottospace-e2e-a-4242-1-2-3",
+        "ottospace-sessions-4242-git",
+        "my-ottospace-e2e-splits-4242",
+    ] {
+        assert!(!is_leftover(name), "{name}");
+    }
 }
 
 fn ms(since: Instant) -> u64 {
@@ -63,6 +150,7 @@ pub fn out() -> PathBuf {
 
 /// An app is up on `socket`. The timeline counts from the first launch of the test.
 pub fn launched(pid: u32, socket: &Path) {
+    sweep();
     LOG.with_borrow_mut(|log| {
         log.apps.push(App { pid, socket: socket.to_path_buf(), last_state: None });
         let start = *log.launched.get_or_insert_with(Instant::now);
