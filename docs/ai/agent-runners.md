@@ -54,12 +54,17 @@ plugin/MCP setup flows), a request the native client refuses (Codex
 stage 1 command with `--resume <id>`: the same session, in the TUI. Never both at once on one
 session: the drawer stops its structured process first.
 
-### Who answers a permission, and what "always allow" means
+### Who answers a permission, and what an answer grants
 
 - Only the user answers: `Origin::User` in the core, as stage 1 does for `TaskTalk`. A socket
   client's request to answer is refused (`agents::USERS_ALONE`), and `capture_start`'s
   test-only gate is the precedent for an E2E-only way in. A `Ticket` is made only by a parser,
   so an answer always names a request the CLI really asked; the shell maps it to an index.
+- **An answer is Allow (this one request, exactly as displayed) or Deny (with an optional
+  message to the agent). Nothing else: no "always", no session rule, no policy or amendment.**
+  Claude: `allow` with the input sent back as it came, or `deny`; never `updatedPermissions`,
+  and the CLI's `permission_suggestions` are never read. Codex: `accept` or `decline`; never
+  `acceptForSession`, `acceptWithExecpolicyAmendment` or `applyNetworkPolicyAmendment`.
 - **What the user approves is derived from the request's payload, never from text the model
   describes it with. What cannot be shown in full is not approvable in one step. A grant is
   never wider than what was displayed.**
@@ -67,46 +72,54 @@ session: the drawer stops its structured process first.
     (`run_in_background`, `dangerouslyDisableSandbox`, …); any other Claude tool, its whole
     input as JSON (a `Write`'s content included). Codex command: the command, its `cwd`, then
     every other field of the request but its ids (`approvalId`, `itemId`, `threadId`,
-    `turnId`, `startedAtMs`) and `reason`, one a line (`networkApprovalContext: {…}`). Codex
-    file change: each change as `update|add|delete <path>` with a move's destination
-    (`-> <path>`), paths outside the working directory flagged; a `grantRoot` if asked; the
-    other fields as for a command; then every diff (kept from `item/started` and
-    `item/fileChange/patchUpdated`).
-  - A field the client does not know (not in the 0.166 schema) is shown, named
-    `<field> (unknown field)`, and the request may then be allowed once but not "always": a
-    grant must not cover what we cannot describe. Chosen over declining, so a new Codex field
-    does not stop every approval.
+    `turnId`, `startedAtMs`) and `reason`, one a line (`proposedNetworkPolicyAmendments: […]`).
+    Codex file change: each change as `update|add|delete <path>` with a move's destination
+    (`-> <path>`), control characters in a path escaped (`\u{a}`: one change, one line), paths
+    outside the working directory flagged; a `grantRoot` if asked; the other fields as for a
+    command; then every diff (kept from `item/started` and `item/fileChange/patchUpdated`).
+  - Allowed only when Allow provably grants this one action, per the protocol schema. Codex
+    `accept` is "User approved the command" / "the file changes"; proposed amendments apply
+    only through decisions we never send, so a request that merely proposes one may be allowed
+    (and shows it). Declined, shown, with a reason pointing to the terminal view
+    (`Event::AutoDenied`): a field the client does not know (not in the 0.166 schema); a
+    `networkApprovalContext` (a managed-network approval may let the host in past this one
+    command); a `grantRoot` (writes under a root for the rest of the session).
   - Shown sanitised: control characters (but newline, tab) and bidirectional controls become
     `�`, so `rm x\u{202e}gnp.y` cannot read as something else.
   - `Event::Permission.detail` is the payload whole, or its first 4 KB and `… [N more bytes]`
     with `cut: true`; `ticket.full()` holds all of it. **UI rule: no one-click Allow on a cut
     request.** The drawer shows the full text (scrollable) first; Allow is enabled after it.
-  - Over 1 MB (`MAX_APPROVABLE`) a request is denied unseen (`Event::AutoDenied`), as is a Codex
-    approval with no command or for changes never announced.
+  - Over 1 MB (`MAX_APPROVABLE`) a request is denied (`Event::AutoDenied`, its start shown), as
+    is a Codex approval with no command or for changes never announced.
   - The model's description (Claude's `description`, Codex's `reason`) is `claim`: shown apart,
     smaller, labelled as the agent's words, never as what is approved.
 - The drawer shows the request in the transcript where the call is: tool, label, the payload as
-  untrusted text, the claim, and four answers: **Allow** (↵), **Always this session**,
-  **Deny**, **Deny and stop** (⎋). A request the CLI withdraws (`control_cancel_request`,
-  `serverRequest/resolved`) disappears.
-- "Always" is **this session only**, and offered only with what it grants shown
-  (`Event::Permission.always`). Claude: the CLI's `permission_suggestions` are never forwarded
-  (they could `setMode`, add directories or replace rules). We build one `addRules`/`allow`/
-  `session` rule, and only `Bash(<the exact command shown>)`: the permission docs say a rule
-  without `*` "matches the exact command" (it also matches the command behind a fixed set of
-  wrappers such as `timeout`, and after known-safe env assignments, both of which run that same
-  command). Not for a command with `*` (a pattern, incl. `:*`), a control character (a newline
-  makes it compound) or an option beyond `timeout`. Never for other tools, because their rules
-  are wider than one shown call: file rules are gitignore patterns (a path that is a directory
-  covers everything under it, and the crate cannot tell without reading the disk) and "`Edit`
-  rules apply to all built-in tools that edit files"; `WebFetch(domain:…)` covers every URL on
-  the host; PowerShell rules match aliases, case-insensitively. Then only Allow is offered and
-  "always" is refused. Codex: `acceptForSession`, which the server scopes to the same command
-  or the same files; `always` shows that command or those paths, and is withheld when the
-  request has an unknown field. Writing a lasting rule stays a TUI or settings act.
+  untrusted text, the claim, and two answers: **Allow** (↵) and **Deny** (⎋, with an optional
+  message). Stopping the turn is the separate Stop. A request the CLI withdraws
+  (`control_cancel_request`, `serverRequest/resolved`) disappears. Granting more than one call
+  stays a TUI or settings act until the stage below.
 - Neither CLI times out a prompt: the task shows "Needs you" while one waits.
 - The permission mode and approval policy are the user's own settings, as in the TUI. ottospace
   does not pass `--dangerously-skip-permissions`, `--permission-mode` or `approvalPolicy`.
+
+### Later: session grants ("always allow")
+
+Not built, on purpose: three review rounds found a grant wider than what was shown (forwarded
+CLI suggestions that could `setMode` or add directories; file rules that are gitignore patterns
+covering a directory and every edit tool; host rules covering every URL; a Codex
+`acceptForSession` summary built beside the payload that understated a `grantRoot` or a path
+with a newline, and an exec "always" labelled with the command that granted network access).
+A later stage may add them only under these requirements:
+
+- A grant is never wider than what was displayed.
+- The grant's text is generated from the exact payload sent back (the rule or decision
+  itself), never from a parallel summary.
+- Runner-proposed rules and policies (Claude's `permission_suggestions`, Codex's
+  `proposedExecpolicyAmendment`, `proposedNetworkPolicyAmendments`) are never forwarded.
+- Network/host and directory-root grants each need their own explicit prompt, never folded
+  into a command or file approval.
+- Each grant kind proven exact from the runner's documented rule grammar, with a test that a
+  near-miss (a directory, a pattern character, an alias, a wrapper) is refused.
 
 ### The session file still matters
 
@@ -132,13 +145,13 @@ pub trait Runner {                          // driver::Driver implements it
     fn kill(&mut self) -> io::Result<()>;
 }
 enum Input { Send { text, images }, Answer { ticket, answer }, Interrupt }
-enum Answer { Allow, AllowForSession, Deny, DenyAndStop }
+enum Answer { Allow, Deny { message } }                // this one request, or not
 enum Event {
     Started { session, model }, TurnStarted,
     TextDelta { text: Untrusted }, Text { text: Untrusted },
     ToolStart { id, parent, tool, station, label, detail: Untrusted }, ToolEnd { id, failed },
-    Permission { ticket, tool, station, label, detail: Untrusted, len, cut, claim: Untrusted,
-                 always: Option<Untrusted> }, PermissionClosed { ticket }, AutoDenied { tool, label, reason },
+    Permission { ticket, tool, station, label, detail: Untrusted, len, cut, claim: Untrusted },
+    PermissionClosed { ticket }, AutoDenied { tool, label, reason, detail: Untrusted },
     Usage { context, window, cost_micro_usd }, Compaction,
     TurnFinished { outcome }, Error { kind, retrying }, Unknown { kind },
     Exited { code, stderr: Untrusted },
@@ -168,8 +181,9 @@ enum Event {
   interrupt with no turn running sends nothing; a Codex interrupt before the turn has an id is
   sent when the id comes. A Codex thread or turn that fails to start ends as a failed turn.
 
-Tests: 25 unit (incl. the approval rules: the exact Bash rule only, cut and auto-deny, every
-changed path and move, every exec field and unknown ones), 6 driver tests against fake
+Tests: 25 unit (incl. the approval rules: an answer grants this call alone, cut and
+auto-deny, every changed path, move and escaped newline, every exec field, and the declines of
+an unknown field, a network approval and a `grantRoot`), 6 driver tests against fake
 `claude` and `codex` scripts (`tests/fakes`) that replay hand-written fixtures and record argv
 and stdin (a turn with a permission asked and allowed, a turn interrupted, stdin closed; a
 background command ended with its CLI; an unreadable request; a send to a CLI that reads
@@ -253,7 +267,6 @@ UNVERIFIED, and what settles each:
 | Claude's `control_request`/`control_response` wire shape (`request_id`, `request.subtype: can_use_tool`, `tool_name`, `input`; response `{subtype: success, request_id, response: PermissionResult}`) | The docs give `PermissionResult` and say a `control_response` must echo `request_id`, but not the envelope. Written from the SDKs' behaviour |
 | `--permission-prompt-tool stdio` accepted by 2.1.323 | The docs describe `--permission-prompt-tool` as an MCP tool name; `stdio` is what the SDKs pass |
 | `updatedInput` required or optional on allow | We send the original input back, which both accept |
-| That our session rule (`addRules`, `toolName: Bash`, `ruleContent` the exact command, `destination: session`) is honoured | If not, "always" falls back to asking again: safe, less useful |
 | When Claude prints `system/init` (at start or after the first message) | Only ordering; the parser does not care |
 | The `result` after an interrupt, and the interrupt's `control_response` | The parser marks the turn interrupted itself |
 | Codex app-server message order, and whether it needs `"jsonrpc":"2.0"` | The schema does not require the field; we omit it |
@@ -277,8 +290,9 @@ OTTOSPACE_REAL_CLI=1 cargo test -p ottospace-agents --test real -- --ignored --n
    passes, with the terminal tab as its fallback.
 2. **Should a task started natively be resumable in the terminal tab, and vice versa?**
    Recommend yes, one at a time: the drawer stops one process before starting the other.
-3. **"Always this session" or also "always for this repository"?** Recommend session only in
-   ottospace; a lasting rule is the user's edit of their own settings.
+3. **Session grants ("always allow") in the drawer at all?** Recommend not until the later stage
+   above, and then one grant kind at a time (an exact Bash command first), each with its own
+   prompt; meanwhile the terminal view or the user's settings grant more.
 4. **Set Codex's approval policy for drawer sessions** (e.g. `on-request`), or keep the user's
    config? Recommend the user's config, shown in the drawer header so a `never` is visible.
 5. **May a socket client send a message to a task's agent?** Recommend no for now, as stage 1;

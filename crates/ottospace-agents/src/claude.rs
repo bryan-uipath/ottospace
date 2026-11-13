@@ -169,14 +169,11 @@ impl Claude {
         let tool = request["tool_name"].as_str().unwrap_or("");
         let input = request["input"].clone();
         let (station, label) = describe(tool, &input);
-        // The CLI's `permission_suggestions` are never forwarded: "always" grants only a rule
-        // built here from what the user is shown.
+        // The CLI's `permission_suggestions` are never read: an answer grants this call alone.
         let (payload, claim) = payload(tool, &input);
-        let rule = session_rule(tool, &input);
-        let always = rule.as_ref().map(|(_, shown)| shown.clone());
         let tool_label = station::tool_label(tool);
-        let ask = crate::Ask { tool: tool_label, station, label, payload: &payload, claim: &claim, always };
-        let ticket = Ticket::new(id.clone(), TicketKind::Claude { input, rule: rule.map(|(rule, _)| rule) });
+        let ask = crate::Ask { tool: tool_label, station, label, payload: &payload, claim: &claim };
+        let ticket = Ticket::new(id.clone(), TicketKind::Claude { input });
         let event = ask.event(ticket);
         if matches!(event, Event::AutoDenied { .. }) {
             let deny = json!({"behavior": "deny", "message": TOO_LONG_DENIED});
@@ -203,30 +200,6 @@ fn payload(tool: &str, input: &Value) -> (String, String) {
         }
         _ => (serde_json::to_string_pretty(input).unwrap_or_default(), String::new()),
     }
-}
-
-/// Characters that make a Bash rule a pattern (`*`, `:*`) rather than one exact command.
-const PATTERN: &[char] = &['*'];
-
-/// The one rule "always this session" grants, and how it reads: `Bash(git status)`, which the
-/// permission docs say matches that exact command. A grant is never wider than what was shown,
-/// so only this: file rules are gitignore patterns (a directory's covers all under it; an
-/// `Edit` rule covers every edit tool), a WebFetch rule covers a whole host, PowerShell rules
-/// match aliases. `None` too for a command with `*`, a control character (a newline splits it)
-/// or an option beyond `timeout`.
-fn session_rule(tool: &str, input: &Value) -> Option<(Value, String)> {
-    let fields = input.as_object()?;
-    let only = fields.keys().all(|key| matches!(key.as_str(), "command" | "description" | "timeout"));
-    let command = input["command"].as_str().filter(|command| {
-        tool == "Bash"
-            && only
-            && !command.is_empty()
-            && !command.contains(PATTERN)
-            && !command.chars().any(char::is_control)
-    })?;
-    let rule = json!({"type": "addRules", "rules": [{"toolName": "Bash", "ruleContent": command}],
-        "behavior": "allow", "destination": "session"});
-    Some((rule, format!("Bash({command})")))
 }
 
 fn assistant(record: &Value, main: bool, emit: &mut Vec<Event>) {
@@ -342,20 +315,14 @@ impl Protocol for Claude {
                 json!({"type": "user", "message": {"role": "user", "content": content}, "parent_tool_use_id": null, "session_id": ""})
             }
             Input::Answer { ticket, answer } => {
-                let TicketKind::Claude { input, rule } = ticket.kind else {
+                let TicketKind::Claude { input } = ticket.kind else {
                     return Err(Refused("not a Claude Code request"));
                 };
+                // This call, its input as it came: never `updatedPermissions`, never a mode.
                 let result = match answer {
                     Answer::Allow => json!({"behavior": "allow", "updatedInput": input}),
-                    // Our one exact rule, for this session: never written to settings.
-                    Answer::AllowForSession => {
-                        let rule = rule.ok_or(Refused("no exact rule for this request: answer Allow"))?;
-                        json!({"behavior": "allow", "updatedInput": input, "updatedPermissions": [rule]})
-                    }
-                    Answer::Deny => json!({"behavior": "deny", "message": DENIED}),
-                    Answer::DenyAndStop => {
-                        self.interrupting = true;
-                        json!({"behavior": "deny", "message": DENIED, "interrupt": true})
+                    Answer::Deny { message } => {
+                        json!({"behavior": "deny", "message": message.unwrap_or_else(|| DENIED.to_string())})
                     }
                 };
                 json!({"type": "control_response",
@@ -431,46 +398,26 @@ mod tests {
         Ok(serde_json::from_str(&line[0]).unwrap())
     }
 
-    /// The CLI's suggestions could set a mode, add directories or replace rules: never forwarded.
-    /// "Always" grants the one exact rule built from what the user was shown, and says so first.
+    /// An answer grants this one call, as shown, and nothing more: the CLI's suggestions (a
+    /// mode, directories, rules) are never sent back, nor any rule of ours.
     #[test]
-    fn always_allow_grants_only_the_exact_shown_rule() {
+    fn an_answer_grants_this_call_alone() {
         let hostile = json!([
             {"type": "setMode", "mode": "bypassPermissions", "destination": "session"},
             {"type": "addDirectories", "directories": ["/"], "destination": "session"},
-            {"type": "replaceRules", "rules": [{"toolName": "Bash"}], "behavior": "allow", "destination": "session"},
             {"type": "addRules", "rules": [{"toolName": "Bash", "ruleContent": "*"}], "behavior": "allow", "destination": "session"}
         ]);
-        let out = ask("Bash", json!({"command": "git status --short", "description": "Show changes"}), hostile);
-        let Some(Event::Permission { detail, claim, always, cut, .. }) = out.events.first().cloned() else { panic!() };
+        let input = json!({"command": "git status --short", "description": "Show changes"});
+        let out = ask("Bash", input.clone(), hostile);
+        let Some(Event::Permission { detail, claim, cut, .. }) = out.events.first().cloned() else { panic!() };
         assert_eq!((detail.text(), claim.text(), cut), ("git status --short", "Show changes", false));
-        assert_eq!(always.as_ref().map(Untrusted::text), Some("Bash(git status --short)"));
-        let answer = answered(&mut Claude::new(), &out, Answer::AllowForSession).unwrap();
-        let rule = json!({"type": "addRules", "rules": [{"toolName": "Bash", "ruleContent": "git status --short"}],
-            "behavior": "allow", "destination": "session"});
-        assert_eq!(answer["response"]["response"]["updatedPermissions"], json!([rule]));
-        // A grant is never wider than what was shown. Only Bash's exact-command rule is: a file
-        // rule is a gitignore pattern (a directory's covers what is under it, and an `Edit` rule
-        // covers every edit tool), a host rule covers every URL on it, and PowerShell rules
-        // match aliases. None of those is offered; nor a command with a pattern, a newline or
-        // an option beyond `timeout`.
-        let none = [
-            ("Bash", json!({"command": "rm *"})),
-            ("Bash", json!({"command": "git log:*"})),
-            ("Bash", json!({"command": "ls\nrm -rf ~"})),
-            ("Bash", json!({"command": "ls", "dangerouslyDisableSandbox": true})),
-            ("PowerShell", json!({"command": "Remove-Item x"})),
-            ("Edit", json!({"file_path": "/w/a.rs"})),
-            ("Write", json!({"file_path": "/w/src/", "content": ""})),
-            ("Read", json!({"file_path": "/w/src"})),
-            ("WebFetch", json!({"url": "https://docs.rs/x"})),
-            ("mcp__db__query", json!({"sql": "select 1"})),
-        ];
-        for (tool, input) in none {
-            let out = ask(tool, input.clone(), json!([]));
-            let Some(Event::Permission { always: None, .. }) = out.events.first() else { panic!("{tool} {input}") };
-            assert!(answered(&mut Claude::new(), &out, Answer::AllowForSession).is_err(), "{tool} {input}");
-        }
+        let allowed = answered(&mut Claude::new(), &out, Answer::Allow).unwrap();
+        assert_eq!(allowed["response"]["response"], json!({"behavior": "allow", "updatedInput": input}));
+        let message = Some("Use git diff".to_string());
+        let denied = answered(&mut Claude::new(), &out, Answer::Deny { message }).unwrap();
+        assert_eq!(denied["response"]["response"], json!({"behavior": "deny", "message": "Use git diff"}));
+        let denied = answered(&mut Claude::new(), &out, Answer::Deny { message: None }).unwrap();
+        assert_eq!(denied["response"]["response"]["message"], DENIED);
     }
 
     /// What is approved is shown whole, or marked cut with its full text on the ticket; past the
@@ -528,7 +475,7 @@ mod tests {
 
     #[test]
     fn a_codex_ticket_is_refused() {
-        let ticket = Ticket::new(json!(1), TicketKind::Codex { session: true });
+        let ticket = Ticket::new(json!(1), TicketKind::Codex);
         assert!(Claude::new().write(Input::Answer { ticket, answer: Answer::Allow }).is_err());
     }
 

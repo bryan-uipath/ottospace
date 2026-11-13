@@ -80,12 +80,10 @@ impl Ticket {
 
 #[derive(Clone)]
 enum TicketKind {
-    /// Claude's `can_use_tool`: the tool's input, sent back as it came, and the one rule "always
-    /// this session" grants, built by us from that input (`None`: no exact rule can be).
-    Claude { input: Value, rule: Option<Value> },
+    /// Claude's `can_use_tool`: the tool's input, sent back as it came.
+    Claude { input: Value },
     /// Codex's command and file-change approvals: the decision is all the answer says.
-    /// `session`: "always this session" may be answered (no field of the request was unknown).
-    Codex { session: bool },
+    Codex,
     /// A request the CLI withdrew: equal to the one it closes, answered by nothing.
     Closed,
 }
@@ -102,16 +100,16 @@ impl fmt::Debug for Ticket {
     }
 }
 
-/// The user's answer to a permission request.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The user's answer to a permission request: this one request, as shown, or not. No answer
+/// grants more (no "always", no rule, no policy): see "Later: session grants" in the design note.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Answer {
     Allow,
-    /// Allow, and the like of it for the rest of this session. Never written to settings.
-    AllowForSession,
-    /// Deny; the agent goes on without it.
-    Deny,
-    /// Deny and end the turn.
-    DenyAndStop,
+    /// Deny; the agent goes on without it. `message`: the user's words to the agent (Claude
+    /// only; Codex's answer carries none).
+    Deny {
+        message: Option<String>,
+    },
 }
 
 /// An image file's type, read from its first bytes.
@@ -245,7 +243,6 @@ pub enum Event {
     /// from the request's payload: whole, or when `cut`, its first `MAX_DETAIL` bytes and
     /// `… [N more bytes]` (`len`: the whole payload's bytes; `ticket.full()` has all of it).
     /// `claim` is the model's own description of why: secondary, never what is approved.
-    /// `always`: what "always this session" grants; `None`: it is not offered.
     Permission {
         ticket: Ticket,
         tool: String,
@@ -255,13 +252,14 @@ pub enum Event {
         len: usize,
         cut: bool,
         claim: Untrusted,
-        always: Option<Untrusted>,
     },
-    /// A request denied without asking: it could not be shown in full (`reason`, fixed words).
+    /// A request denied without asking (`reason`, fixed words): too long to show, nothing to
+    /// show, or Allow would grant more than this one action. `detail` as in `Permission`.
     AutoDenied {
         tool: String,
         label: String,
         reason: &'static str,
+        detail: Untrusted,
     },
     /// The CLI no longer waits for that answer.
     PermissionClosed {
@@ -366,35 +364,45 @@ fn sanitise(text: &str) -> String {
 /// Why a request was denied unseen.
 const TOO_LONG: &str = "too long to show in full";
 
-/// A permission request's event and its ticket's payload, from the payload it asks to approve.
-/// `AutoDenied`: longer than `MAX_APPROVABLE`, so the caller denies it unseen. A cut detail ends with `… [N more bytes]`.
+/// The shown part of a payload: all of it, or its first `MAX_DETAIL` bytes and `… [N more bytes]`.
+fn excerpt(full: &str) -> (Untrusted, bool) {
+    let shown = Untrusted::new(full, MAX_DETAIL);
+    match shown.0.len() < full.len() {
+        true => (Untrusted(format!("{}… [{} more bytes]", shown.0, full.len() - shown.0.len())), true),
+        false => (shown, false),
+    }
+}
+
+/// A permission request, from the payload it asks to approve and the model's claim about it.
 struct Ask<'a> {
     tool: String,
     station: Station,
     label: String,
     payload: &'a str,
     claim: &'a str,
-    always: Option<String>,
 }
 
 impl Ask<'_> {
+    /// `Permission`, or `AutoDenied` when the payload is longer than `MAX_APPROVABLE`: the
+    /// caller then denies it.
     fn event(self, mut ticket: Ticket) -> Event {
-        let (tool, label) = (self.tool, self.label);
         if self.payload.len() > MAX_APPROVABLE {
-            return Event::AutoDenied { tool, label, reason: TOO_LONG };
+            return self.denied(TOO_LONG);
         }
         let full = sanitise(self.payload);
-        let shown = Untrusted::new(&full, MAX_DETAIL);
-        let cut = shown.0.len() < full.len();
-        let detail = match cut {
-            true => Untrusted(format!("{}… [{} more bytes]", shown.0, full.len() - shown.0.len())),
-            false => shown,
-        };
+        let (detail, cut) = excerpt(&full);
         let len = full.len();
         ticket.full = Untrusted(full);
         let claim = Untrusted::new(&sanitise(self.claim), MAX_DETAIL);
-        let always = self.always.map(|text| Untrusted::new(&sanitise(&text), MAX_DETAIL));
-        Event::Permission { ticket, tool, station: self.station, label, detail, len, cut, claim, always }
+        let (tool, label, station) = (self.tool, self.label, self.station);
+        Event::Permission { ticket, tool, station, label, detail, len, cut, claim }
+    }
+
+    /// The request, denied without asking for `reason`; what it asked is still shown.
+    fn denied(self, reason: &'static str) -> Event {
+        let shown = Untrusted::new(self.payload, MAX_APPROVABLE);
+        let (detail, _) = excerpt(&sanitise(shown.text()));
+        Event::AutoDenied { tool: self.tool, label: self.label, reason, detail }
     }
 }
 
