@@ -4581,9 +4581,10 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
     let again = otto.user_click(row);
     assert_eq!((titles(&again).len(), &again["state"]["active"], pane_ids(&again)), (2, &json!(1), vec![1, 2]));
 
-    // Saving its tab again updates the workbook, and the section offers the old one back.
+    // Saving its tab again, with the header's +, updates the workbook and offers the old one back.
     otto.call(json!({"cmd": "split"}));
-    let updated = otto.user_key("cmd-shift-s");
+    let (_, labels) = sneak(&otto);
+    let updated = otto.user_key(&letters(&labels["bar:save_tab"]));
     assert_eq!(
         (&updated["workbooks"][0]["summary"], &updated["workbook_offer"], &updated["mode"]),
         (&json!("3 terminals"), &json!("updated"), &json!("normal"))
