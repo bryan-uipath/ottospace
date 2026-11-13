@@ -164,7 +164,9 @@ and `codesign` only for `--app`. All ship with macOS except `gh`.
   `#!/bin/sh` and the marker line and parses (`sh -n`); the installed file carries the marker;
   and the bundled `OSI_VERSION` is higher than the installed one's (none counts as 0). It says
   `Updated osi too.` The run that does it finishes with the old code. `OSI_VERSION` is bumped by
-  hand on every change to osi. `rollback` does not roll osi back. A build from before this
+  hand on every change to osi. A pull request build never replaces osi: two branches can carry
+  one number with different code, and a PR's osi would then outstay main's. `rollback` does not
+  roll osi back. A build from before this
   carries no osi and changes nothing; an osi from before it never looks, and needs one
   `osi self-update` (said at the top of `docs/install.md`).
 - **gh is pinned to github.com**: every call passes `-R github.com/bryan-uipath/ottospace`, and

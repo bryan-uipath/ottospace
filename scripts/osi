@@ -584,8 +584,13 @@ install_build() {
   fi
   if [ "$channel" = main ]; then note_behind "$b_commit"; fi
   note_running
-  update_self "$tmp/bin/osi"
+  # Not from a pull request: two branches can carry one OSI_VERSION with different code, and
+  # a PR's osi would then outstay main's. Run that PR's scripts/osi directly to try it.
+  if [ "$channel" != pr ]; then update_self "$tmp/bin/osi"; fi
 }
+
+# True when file $1 is an osi: `#!/bin/sh`, the marker line, and it parses.
+is_osi() { [ "$(sed -n 1p "$1")" = "#!/bin/sh" ] && [ "$(sed -n 2p "$1")" = "$marker" ] && sh -n "$1"; }
 
 # The OSI_VERSION in file $1; 0 when it has none (an osi from before the number).
 osi_version_of() {
@@ -598,15 +603,14 @@ osi_version_of() {
 update_self() {
   dest="$bin_dir/osi"
   [ -f "$1" ] && [ ! -L "$1" ] && [ -f "$dest" ] && [ ! -L "$dest" ] || return 0
-  [ "$(sed -n 2p "$dest")" = "$marker" ] || return 0
-  [ "$(sed -n 1p "$1")" = "#!/bin/sh" ] && [ "$(sed -n 2p "$1")" = "$marker" ] && sh -n "$1" || return 0
+  [ "$(sed -n 2p "$dest")" = "$marker" ] && is_osi "$1" || return 0
   [ "$(osi_version_of "$1")" -gt "$(osi_version_of "$dest")" ] || return 0
   staged="$bin_dir/.osi.new.$$"
-  cp "$1" "$staged"
-  chmod "$(stat -f %Lp "$dest")" "$staged"
-  if mv -f "$staged" "$dest"; then
+  # Never fails the install, which is done: at worst osi stays as it was.
+  if cp "$1" "$staged" && chmod "$(stat -f %Lp "$dest")" "$staged" && mv -f "$staged" "$dest"; then
     say "Updated osi too."
   else
+    rm -f "$staged"
     say "Could not update osi: run osi self-update."
   fi
   staged=""
@@ -907,7 +911,7 @@ cmd_self_update() {
     die "$dest exists and is not osi. Remove it and run again."
   fi
   fetch "$self_url" "$tmp/osi" || die "download failed: $self_url"
-  if [ "$(sed -n 1p "$tmp/osi")" != "#!/bin/sh" ] || [ "$(sed -n 2p "$tmp/osi")" != "$marker" ] || ! sh -n "$tmp/osi"; then
+  if ! is_osi "$tmp/osi"; then
     die "the download is not osi. Nothing was changed."
   fi
   mkdir -p "$bin_dir"

@@ -50,7 +50,8 @@ osi self-update       # replace osi with the one on main
   not published yet, or it changed only docs (which publish none).
 - Undo an install: `osi rollback`. It puts the previous ottospace back, not the previous osi.
 - Each build carries its own `osi`. When it is newer than yours, an install or update replaces
-  yours with it and says `Updated osi too.`; the next `osi` command uses it.
+  yours with it and says `Updated osi too.`; the next `osi` command uses it. A pull request
+  build never does: run that pull request's `scripts/osi` to try it.
 - **A pull request build runs that pull request's code with your terminal's permissions.** `osi`
   shows the author and the head commit first. It refuses a pull request from a fork unless you
   pass `--allow-fork` and type the commit. Read the diff before you do.

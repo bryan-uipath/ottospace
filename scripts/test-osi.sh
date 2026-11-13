@@ -151,7 +151,7 @@ chmod 755 "$OSI_GH"
 
 # publish_pr <head commit> <id> [<built commit>]: the artifact of the run for that head.
 publish_pr() {
-  make_build "$FAKE_GH_DIR/build-$1" "$2" "${3:-$1}"
+  make_build "$FAKE_GH_DIR/build-$1" "$2" "${3:-$1}" "${4:-}"
   rm -f "$FAKE_GH_DIR/build-current"
   ln -s "$FAKE_GH_DIR/build-$1" "$FAKE_GH_DIR/build-current"
 }
@@ -307,6 +307,14 @@ publish_pr "$(commit 1)" WRONG "$(commit 2)"
 run "$osi" install pr 31
 check "a build of another commit is refused" says "not the pull request's head"
 check "the old binary is still installed" installed_is PR30b
+
+make_pr 29 "$(commit 8)" bryan-uipath/ottospace false bryan-uipath
+publish_pr "$(commit 8)" PR29 "$(commit 8)" 99
+run "$osi" install pr 29
+check "a pull request build installs" installed_is PR29
+check "but its osi is not taken, whatever its number" eval "! grep -qxF '# fixture osi 99' '$bin/osi'"
+publish_pr "$(commit f)" PR30b
+run "$osi" install pr 30
 
 echo "# pull request from a fork"
 make_pr 32 "$(commit 3)" mallory/ottospace true mallory
