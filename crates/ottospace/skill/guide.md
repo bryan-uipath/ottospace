@@ -83,6 +83,7 @@ ottospace ctl '{"cmd":"state"}'
 | `sneak` | Null, or sneak mode's labels: `typed` (the letters so far) and `targets`, each `label`, `frame` (`x`, `y`, `w`, `h` in window points) and `source` (`{"type":"own","id":"rail:tasks"}`) |
 | `marks` | The marks, in the user's order: `id` (this run's), `name`, `key` (its letter, or null), `kind` (`terminal`, `app` or `tab`), `open` (its pane or tab is open now: `pane`, or `tab` as a tab `id`), `available` (false: it is not open and nothing of it can be opened) and `reason` (why: its directory is gone, its app is not installed; for a tab also what part of it is missing or empty, while `available` stays true), `unfilled` (the panes of its open tab that are still empty, each `pane` and `why`), and `row` and `buttons` (`key`, `rename`, `remove`): where the Marks section drew it, or null |
 | `mark_removed` | Null, or the name of the mark just taken off, for the few seconds the Marks section offers to put it back |
+| `scrollbars` | Each scroll area whose content does not fit, by id (`tasks`, `repos`, `apps`, `marks`, `picker`, `keys`, `terminal:<pane>`): its bar's `track` and `thumb` (`[x, y, w, h]` in window points) and `opacity` (0 once it has faded) |
 | `state.mark_input` | Null, or what a mark waits for while `mode` is `mark`: `{"type":"jump"}` (⌘' was pressed: the next letter goes to that mark), `{"type":"rename","mark":1,"text":".."}` or `{"type":"set_key","mark":1}` |
 | `bounds.<id>` | Where each pane of the active tab is drawn: `[x, y, w, h]` |
 

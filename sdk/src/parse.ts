@@ -36,6 +36,7 @@ import type {
   Rect,
   Repo,
   Running,
+  Scrollbar,
   Section,
   SessionRow,
   SessionRunner,
@@ -600,6 +601,16 @@ export function snapshot(value: unknown): Snapshot {
     counts: orNull(map(num))(o.counts, "counts"),
     marks: list(mark)(o.marks, "marks"),
     mark_removed: orNull(str)(o.mark_removed, "mark_removed"),
+    scrollbars: map(scrollbar)(o.scrollbars, "scrollbars"),
+  };
+}
+
+function scrollbar(value: unknown, at: string): Scrollbar {
+  const o = fields(value, at);
+  return {
+    track: rect(o.track, `${at}.track`),
+    thumb: rect(o.thumb, `${at}.thumb`),
+    opacity: num(o.opacity, `${at}.opacity`),
   };
 }
 

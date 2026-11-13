@@ -444,6 +444,15 @@ export interface Snapshot {
   marks: Mark[];
   /** The name of the mark just taken off, while the Marks section offers to put it back. */
   mark_removed: string | null;
+  /** Each scroll area whose content does not fit, by id (`tasks`, `picker`, `keys`, `terminal:1`). */
+  scrollbars: Record<string, Scrollbar>;
+}
+
+/** A scroll area's bar, in window points. `opacity` 0: faded out; a press on it still lands. */
+export interface Scrollbar {
+  track: Rect;
+  thumb: Rect;
+  opacity: number;
 }
 
 export interface MarksReply {

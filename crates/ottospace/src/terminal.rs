@@ -211,6 +211,17 @@ impl Terminal {
         self.shared.dirty.store(true, Relaxed);
     }
 
+    /// Scrolls to a number of lines back from the bottom: the scrollbar's drag and paging.
+    pub fn scroller(&self) -> impl Fn(usize) + 'static {
+        let (term, shared) = (self.term.clone(), self.shared.clone());
+        move |back| {
+            let mut term = term.lock();
+            let delta = back as i64 - term.grid().display_offset() as i64;
+            term.scroll_display(GridScroll::Delta(delta as i32));
+            shared.dirty.store(true, Relaxed);
+        }
+    }
+
     /// A wheel or trackpad move of `dy` pixels. Ignored while the program owns the wheel.
     pub fn wheel(&mut self, dy: f32, line_height: f32) {
         let mode = *self.term.lock().mode();

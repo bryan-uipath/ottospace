@@ -69,6 +69,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     counts: { live: 0 },
     marks: [],
     mark_removed: null,
+    scrollbars: {},
   };
 }
 

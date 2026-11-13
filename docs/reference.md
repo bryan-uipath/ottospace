@@ -22,6 +22,7 @@ it over the control socket. Session restore and the rest of the design are not b
 | Key bindings and a status bar showing `NORMAL` / `APP` mode | Works today |
 | Control socket and `ottospace ctl` for agents and tests | Works today |
 | Terminal scrollback, mouse selection, copy and paste | Works today |
+| Scrollbars on every list that scrolls, the key reference and a terminal's scrollback: drag the thumb, click the track to page. They follow the system's "Show scroll bars" setting | Works today |
 | Visual mode: select terminal text with vi keys | Works today |
 | Tasks inbox: what needs you first, then the other tasks with tabs open (Open), then Running, Captured, On hold, Done. Headings fold (click, or ↵ or space in list mode). A task that is done stays under Done with its tabs open. Each row shows its tags, what it has open and its age; hover it for start, snooze, hold and dismiss buttons. After one of those by mouse, a line at the top offers Undo for 6 seconds. Kept in `~/.ottospace/tasks` | Works today |
 | "Pop next" (⌘⇧N): open the next task that needs you | Works today |
