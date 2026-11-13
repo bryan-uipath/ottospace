@@ -9,6 +9,7 @@ use crate::ax::{Frame, Source};
 use crate::compose::{Known, Names, PathFound};
 use crate::fuzz::{self, Rng};
 use crate::marks::{Mark, PaneRecord, RecordKind, TabRecord};
+use crate::progress;
 use crate::repos::{MAX_DIRS, RepoDir, RepoDirs, Worktree};
 use crate::sessions::{Link, Seen};
 use crate::settings::ListChange;
@@ -241,6 +242,14 @@ impl Gen<'_> {
             session: self.rng.one_in(4).then(|| self.link()),
             refs: Vec::new(),
             title_generated: self.rng.one_in(4),
+            started_at: self.rng.coin().then(|| self.time()),
+            finished_at: self.rng.one_in(4).then(|| self.time()),
+            work: (0..self.rng.below(3)).map(|_| self.work()).collect(),
+            extra: if self.rng.one_in(4) {
+                [("tabs".to_string(), serde_json::json!([1]))].into()
+            } else {
+                Default::default()
+            },
             materials: self.names(
                 &[
                     "1-k3f9a2c41b7d/1.json",
@@ -254,6 +263,31 @@ impl Gen<'_> {
                 ],
                 3,
             ),
+        }
+    }
+
+    /// What a session did, for a task's session half the time.
+    fn work(&mut self) -> progress::Work {
+        let (runner, session) = self.session();
+        let tokens = |g: &mut Gen| progress::Tokens {
+            model: g.name(&["claude-opus-5-5", "claude-haiku-5", "gpt-6-astra", "not a model"]),
+            sub: g.rng.coin(),
+            input: g.rng.pick(&[0, 1, 40_000, u64::MAX]),
+            output: g.rng.pick(&[0, 7, u64::MAX]),
+            cached: g.rng.pick(&[0, 30_000]),
+        };
+        let mut clock = progress::Clock::default();
+        for _ in 0..self.rng.below(4) {
+            let (at, day) = (self.time(), self.time());
+            clock.tick(at, day);
+        }
+        progress::Work {
+            runner,
+            session,
+            clock,
+            tokens: (0..self.rng.below(4)).map(|_| tokens(self)).collect(),
+            context: self.rng.coin().then(|| self.time()),
+            window: self.rng.coin().then(|| self.time()),
         }
     }
 
@@ -638,8 +672,16 @@ const MAKERS: &[Make] = &[
     },
     |g| {
         use Heading::*;
-        Action::ToggleGroup { heading: g.rng.pick(&[NeedsYou, Open, Running, Captured, OnHold, Done, Sessions]) }
+        Action::ToggleGroup { heading: g.rng.pick(&[NeedsYou, Running, Later, Done, Sessions]) }
     },
+    |g| Action::TasksView { view: g.rng.pick(&[TasksView::State, TasksView::Project]) },
+    |g| {
+        let named: Vec<Option<String>> = g.m.tasks.list.iter().map(|t| t.project.clone()).collect();
+        let project =
+            if named.is_empty() || g.rng.one_in(4) { g.rng.coin().then(|| g.name(REPOS)) } else { g.rng.pick(&named) };
+        Action::ToggleProject { project, done: g.rng.coin() }
+    },
+    |g| Action::SessionWork { work: g.work() },
     |g| Action::SetSessions { found: (0..g.rng.below(5)).map(|_| g.found()).collect() },
     |g| Action::SessionQuiet { ms: g.rng.pick(&[0, 1, sessions::QUIET_MS, u64::MAX]) },
     |g| {
@@ -1344,6 +1386,55 @@ fn check(m: &Model) -> Result<(), String> {
 
 /// The marks' file: written and read again, every mark is there as it was, and so are the keys
 /// this build does not know.
+/// Each view of the Tasks section lists every task of the inbox once, in the groups and order
+/// it says; a project's bar counts its tasks; a task's file reads back as it was.
+fn check_views(m: &Model) -> Result<(), String> {
+    let mut inbox: Vec<TaskId> = m.tasks.inbox().iter().map(|(_, t)| t.id).collect();
+    inbox.sort_unstable();
+    let ids = |rows: &[ListRow]| {
+        let mut ids: Vec<TaskId> =
+            rows.iter().filter_map(|r| if let ListRow::Task(id) = r { Some(*id) } else { None }).collect();
+        ids.sort_unstable();
+        ids
+    };
+    for view in [TasksView::State, TasksView::Project] {
+        // As if nothing were folded: every task shows.
+        ensure!(ids(&m.task_list_rows(view, true)) == inbox, "the {view:?} view does not list each task once");
+    }
+    let groups = m.project_groups(0);
+    let mut seen: Vec<&Option<String>> = Vec::new();
+    for group in &groups {
+        ensure!(!seen.contains(&&group.project), "project {:?} is two groups", group.project);
+        seen.push(&group.project);
+        let bar = group.bar;
+        let open = bar.needs_you + bar.running + bar.later;
+        ensure!(bar.done == group.done, "the bar of {:?} counts {} done of {}", group.project, bar.done, group.done);
+        ensure!(
+            group.folded || group.rows.len() == open,
+            "{:?} lists {} open of {open}",
+            group.project,
+            group.rows.len()
+        );
+        let order: Vec<Heading> = group.rows.iter().map(|r| r.group.into()).collect();
+        ensure!(order.is_sorted(), "{:?} is not by state: {order:?}", group.project);
+        let shares = bar.shares();
+        let sum: f32 = shares.iter().sum();
+        ensure!(open + bar.done == 0 || (sum - 1.).abs() < 1e-4, "the bar's shares sum to {sum}");
+    }
+    ensure!(
+        groups.iter().position(|g| g.project.is_none()).is_none_or(|at| at + 1 == groups.len()),
+        "no project is not last"
+    );
+    for task in &m.tasks.list {
+        let text = serde_json::to_string(&task.for_file()).map_err(|e| e.to_string())?;
+        let back: Task =
+            serde_json::from_str(&text).map_err(|e| format!("task {} does not read back: {e}", task.id))?;
+        ensure!(back == task.for_file(), "task {} reads back changed", task.id);
+        ensure!(task.work.len() <= progress::MAX_SESSIONS, "task {} keeps {} sessions", task.id, task.work.len());
+    }
+    Ok(())
+}
+
 fn check_file(m: &Model) -> Result<(), String> {
     let list = &m.marks.list;
     let loaded = marks::parse(&marks::write(list, &m.marks.extra))
@@ -1485,6 +1576,7 @@ impl Run {
         if !self.sparse || self.steps.len().is_multiple_of(8) {
             check_state(m)?;
             check_file(m)?;
+            check_views(m)?;
         }
 
         // A draft's title and drawings are the user's: nobody else changes them, and a line
@@ -1758,6 +1850,10 @@ impl Run {
                     ensure!(m.repo_dirs.dirs.len() <= MAX_DIRS, "more directories than the settings may name");
                 }
                 Effect::Notice { text } => ensure!(user && !text.is_empty(), "{origin:?} is told {text:?}"),
+                // The settings file is the user's.
+                Effect::SaveTasksView { view } => {
+                    ensure!(user && m.tasks_view == *view, "{origin:?} wrote tasks_view {view:?}")
+                }
                 Effect::Run { command } => {
                     ensure!(user && matches!(action, Action::PaletteChoose { .. }), "{command:?} run by {action:?}")
                 }
@@ -2171,12 +2267,22 @@ fn code(sent: &Envelope) -> String {
         ("target", "Pointed"),
         ("tool", "Tool"),
         ("content", "Content"),
+        ("view", "TasksView"),
     ];
     // A mark is long, and half of it is JSON already: it is given as its file's text.
     if let Action::RestoreMarks { marks, extra } = &sent.action {
         let (marks, extra) =
             (serde_json::to_string(marks).unwrap_or_default(), serde_json::to_string(extra).unwrap_or_default());
         return format!("restore_marks({marks:?}, {extra:?}).sent_by(Origin::{:?})", sent.origin);
+    }
+    // So are kept tasks, and a session's work: both are read from files.
+    if let Action::RestoreTasks { tasks, floor } = &sent.action {
+        let tasks = serde_json::to_string(tasks).unwrap_or_default();
+        return format!("restore_tasks({tasks:?}, {floor}).sent_by(Origin::{:?})", sent.origin);
+    }
+    if let Action::SessionWork { work } = &sent.action {
+        let work = serde_json::to_string(work).unwrap_or_default();
+        return format!("session_work({work:?}).sent_by(Origin::{:?})", sent.origin);
     }
     if let Action::RestoreWorkbooks { workbooks } = &sent.action {
         let workbooks = serde_json::to_string(workbooks).unwrap_or_default();
@@ -2244,6 +2350,15 @@ fn restore_marks(marks: &str, extra: &str) -> Action {
         marks: serde_json::from_str(marks).expect(read),
         extra: serde_json::from_str(extra).expect(read),
     }
+}
+
+/// `RestoreTasks` from the JSON of its tasks, and `SessionWork` from its work's, as `code` writes them.
+fn restore_tasks(tasks: &str, floor: TaskId) -> Action {
+    Action::RestoreTasks { tasks: serde_json::from_str(tasks).expect("a regression's tasks are JSON"), floor }
+}
+
+fn session_work(work: &str) -> Action {
+    Action::SessionWork { work: serde_json::from_str(work).expect("a regression's work is JSON") }
 }
 
 /// `RestoreWorkbooks` from the JSON of its workbooks, as `code` writes it.

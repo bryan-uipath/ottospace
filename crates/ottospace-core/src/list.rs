@@ -14,6 +14,9 @@ pub enum ListRow {
     Task(TaskId),
     /// A heading of the Tasks section. Opening it folds or unfolds it.
     Heading(Heading),
+    /// A project of the Project view (`None`: no project), and its "Done" line. Opening one folds or unfolds it.
+    Project(Option<String>),
+    ProjectDone(Option<String>),
     /// A session no task has adopted, by runner and id.
     Session(String, String),
     /// "N older" under Sessions. Opening it shows or hides the older sessions.

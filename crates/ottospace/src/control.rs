@@ -268,8 +268,8 @@ pub enum Request {
         #[serde(default)]
         open: bool,
     },
-    /// Collapses or expands a heading of the Tasks section: `needs_you`, `open`, `running`,
-    /// `captured`, `on_hold`, `done`, `sessions`.
+    /// Collapses or expands a heading of the Tasks section: `needs_you`, `running`, `later`,
+    /// `done`, `sessions`.
     TaskGroup {
         heading: Heading,
     },

@@ -119,7 +119,9 @@ what can be opened, and its other panes are empty and say why. Marks are kept in
 | Open a task: the tab bar shows only its tabs | Click it in Tasks. The first time, it gets a tab named after it. × beside its name on the tab bar goes back |
 | Open the next task that needs me | ⌘⇧N |
 | See what needs me at a glance | A tab with no panes is the home screen: what goes there (Open an app ⌘E, Terminal ⌘D), up to three tasks under Needs you, and a node for each of the first 12 listed tasks. Left to right is the project; within a project the older task is farther; the colour is the state. No node sits under the text, so a small window shows fewer. Hover a node for its title; click a node or a row to open its conversation |
-| See the inbox | Tasks on the rail: Needs you, Open (the other tasks with tabs open), Running, Captured, On hold, Done. Click a heading to fold it, or ⌘⇧E, move to it, ↵ or space |
+| See the inbox | Tasks on the rail: Needs you, Running, Later, Done (folded). Click a heading to fold it, or ⌘⇧E, move to it, ↵ or space |
+| See tasks by project | Project in the Tasks header (State goes back): a group a `#project` with a bar of its states, then "no project". Today's work is under the list |
+| See a task's time and tokens | Hover its row, or its badge on the right rail: started, agent time, workspace, tokens by model |
 | See agent sessions that are no task (a Claude Code or Codex started by hand) | Tasks on the rail, under Sessions: runner, repository, the session's title, active or idle, what it does now, the model. Hover a row: Adopt makes it a task, Hide removes it until the next start. [More](reference.md#sessions) |
 | Snooze 1 hour / hold / dismiss / undo | ⌘⇧E on Tasks, then `s` / `h` / `x` / `u`. By mouse: the buttons on a row you hover; "Undo" then shows at the top for 6 seconds |
 

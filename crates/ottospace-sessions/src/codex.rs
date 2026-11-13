@@ -111,6 +111,26 @@ impl Runner for Codex {
         names.get(&session.id).cloned()
     }
 
+    /// The rollouts whose `parent_thread_id` is this session's: its sub-agents. Among the
+    /// newest `max_files`, as `sessions` looks.
+    fn subagents(&self, session: &SessionRef) -> Vec<SessionRef> {
+        let mut rollouts = Vec::new();
+        if self.home.is_absolute() {
+            newest_first(&self.home.join("sessions"), 3, self.max_files, &mut rollouts);
+        }
+        let mut subs = Vec::new();
+        for path in rollouts {
+            let Some((head, modified)) = self.heads.get(&path, || head(&path)) else { continue };
+            if head.parent.as_deref() == Some(session.id.as_str()) {
+                let Head { id, cwd, started, model, parent } = head;
+                let (kind, last_activity, pid, busy) = (Kind::Codex, Some(modified), None, None);
+                subs.push(SessionRef { kind, id, cwd, path, started, last_activity, model, pid, busy, parent });
+            }
+        }
+        subs.sort_by(|a, b| a.path.cmp(&b.path));
+        subs
+    }
+
     fn read(&self, session: &SessionRef, after: Cursor, budget: u64) -> io::Result<Batch> {
         let (file, mut cursor, restarted) = crate::open(&session.path, after)?;
         let mut events = Vec::new();

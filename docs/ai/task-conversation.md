@@ -1,8 +1,8 @@
 # The task conversation
 
 Status: stage 1 is built: the drawer hosts the agent's terminal, the composer lives in it, the
-right rail lists open conversations, Codex sessions are found. Not built: the Tasks groups
-(next pull request). See "What is built".
+right rail lists open conversations, Codex sessions are found; the Tasks groups, the Project
+view, time and tokens on the task, the hover card. See "What is built".
 
 ## Three zones
 
@@ -101,8 +101,14 @@ The capture draft is the same drawer in its collecting state.
    modal, no home-screen line); the empty state; Codex's session read on a thread of its own.
    `cargo e2e` runs stand-in `claude` and `codex` (`OTTOSPACE_AGENTS_DIR`, test runs only;
    without it a test run starts no agent).
-3. Not built: the Tasks groups (Needs you, Running, Later, Done) and rows that show the
-   session's live line and model.
+3. Progress: the State view (Needs you, Running, Later, Done folded) and a Project view
+   (`tasks::by_project`, `Segments`), rows with the session's live line and model, a Today
+   footer (`Model::today`, local midnight passed in), a hover card (`Model::card`). The task's
+   file keeps `started_at`, `finished_at` and `work`: per session its time at work
+   (`progress::Clock`: activity until a two-minute quiet gap) and tokens by model, read on by
+   `ottospace-sessions::tally` and replaced whole each read, so a restart counts nothing twice.
+   Unknown keys of the file are kept (`Task::extra`): the session-restore layer can add a task's
+   tabs and layout there with no format break.
 
 One seam: the drawer asks one function what to show for a conversation. Stage 1 answers "the
 agent's terminal".
@@ -127,8 +133,7 @@ agent's terminal".
   its repository; an adopted session may have started in a folder below it.
 - A session that still runs in the user's own terminal: going on with it from the drawer
   starts a second program on it.
-- Tasks groups: Needs you, Running, To review, Later, Done. "To review" needs a state the core
-  does not have; until then it is part of Needs you. Not built in this pull request.
+- "To review" needs a state the core does not have; until then a review is under Running.
 - The quit question does not ask about agents in the drawer yet.
 - A sessions row (no task) in the drawer: `Talk.task` becomes a subject that may be a session.
 - Does a client ever start an agent? Not in stage 1.

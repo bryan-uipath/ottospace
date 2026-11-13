@@ -162,16 +162,43 @@ impl Runner for Claude {
         self.tail(session).title
     }
 
+    /// `<session>/subagents/agent-*.jsonl`: each sub-agent's own transcript.
+    fn subagents(&self, session: &SessionRef) -> Vec<SessionRef> {
+        let Ok(files) = fs::read_dir(session.path.with_extension("").join("subagents")) else { return Vec::new() };
+        let mut subs = Vec::new();
+        for path in files.flatten().map(|f| f.path()).filter(|p| p.extension().is_some_and(|e| e == "jsonl")) {
+            let Some(id) = path.file_stem().and_then(|s| s.to_str()).filter(|s| station::is_name(s)) else { continue };
+            let modified = path.metadata().and_then(|m| m.modified()).ok();
+            let last_activity = modified.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
+            subs.push(SessionRef {
+                kind: Kind::Claude,
+                id: id.to_string(),
+                cwd: session.cwd.clone(),
+                path,
+                started: None,
+                last_activity: last_activity.map(|d| d.as_millis() as u64),
+                model: None,
+                pid: None,
+                busy: None,
+                parent: Some(session.id.clone()),
+            });
+        }
+        subs.sort_by(|a, b| a.path.cmp(&b.path));
+        subs
+    }
+
     fn read(&self, session: &SessionRef, after: Cursor, budget: u64) -> io::Result<Batch> {
         let (file, mut cursor, restarted) = crate::open(&session.path, after)?;
         let mut events = Vec::new();
         let mut skipping = cursor.skipping;
+        // A sub-agent's own file: its records are its main loop.
+        let sub = session.parent.is_some();
         let (offset, more) = jsonl::lines(file, cursor.offset, budget, &mut skipping, |line| {
             // Request logs: most of the file's bytes, nothing a station shows.
             if !line.starts_with(r#"{"type":"api-request"#)
                 && let Ok(record) = serde_json::from_str::<Value>(line)
             {
-                record_events(&record, &mut cursor, &mut events);
+                record_events(&record, sub, &mut cursor, &mut events);
             }
             false
         })?;
@@ -230,9 +257,9 @@ fn model_of(message: &Value) -> Option<String> {
     station::is_name(bare).then(|| model.to_string())
 }
 
-fn record_events(record: &Value, cursor: &mut Cursor, events: &mut Vec<Event>) {
-    // A sub-agent's own records live in its own file; any here are not the main loop's.
-    if record["isSidechain"] == true {
+fn record_events(record: &Value, sub: bool, cursor: &mut Cursor, events: &mut Vec<Event>) {
+    // A sub-agent's own records live in its own file; any in its parent's are not the main loop's.
+    if record["isSidechain"] == true && !sub {
         return;
     }
     let at = jsonl::time_of(record);
@@ -468,7 +495,7 @@ mod tests {
         };
         let (mut cursor, mut events) = (Cursor::default(), Vec::new());
         for record in [step("m1", 150_000), step("m2", 250_000), step("m3", 40_000), step("m4", u64::MAX)] {
-            record_events(&record, &mut cursor, &mut events);
+            record_events(&record, false, &mut cursor, &mut events);
         }
         let windows = events.iter().filter_map(|e| match &e.what {
             What::ModelStep { window, .. } => Some(*window),
@@ -495,7 +522,7 @@ mod tests {
             let (mut cursor, mut events) = (Cursor::default(), Vec::new());
             let record =
                 serde_json::json!({ "type": "assistant", "error": error, "isApiErrorMessage": true, "message": {} });
-            record_events(&record, &mut cursor, &mut events);
+            record_events(&record, false, &mut cursor, &mut events);
             match &events[0].what {
                 What::Error { kind } => kind.clone(),
                 other => panic!("{other:?}"),

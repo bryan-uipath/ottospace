@@ -50,16 +50,14 @@ impl Group {
     }
 }
 
-/// A heading of the Tasks section, in the order drawn: what needs the user, the other tasks
-/// with tabs open, then the rest of the inbox's groups. Last, the sessions that are no task's.
+/// A heading of the Tasks section's State view, in the order drawn: what needs the user, what
+/// runs, what waits (captured or on hold), what is done. Last, the sessions that are no task's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Heading {
     NeedsYou,
-    Open,
     Running,
-    Captured,
-    OnHold,
+    Later,
     Done,
     Sessions,
 }
@@ -67,11 +65,9 @@ pub enum Heading {
 impl Heading {
     pub fn title(self) -> &'static str {
         match self {
-            Heading::Open => "Open",
             Heading::NeedsYou => Group::NeedsYou.title(),
             Heading::Running => Group::Running.title(),
-            Heading::Captured => Group::Captured.title(),
-            Heading::OnHold => Group::OnHold.title(),
+            Heading::Later => "Later",
             Heading::Done => Group::Done.title(),
             Heading::Sessions => "Sessions",
         }
@@ -83,8 +79,7 @@ impl From<Group> for Heading {
         match group {
             Group::NeedsYou => Heading::NeedsYou,
             Group::Running => Heading::Running,
-            Group::Captured => Heading::Captured,
-            Group::OnHold => Heading::OnHold,
+            Group::Captured | Group::OnHold => Heading::Later,
             Group::Done => Heading::Done,
         }
     }
@@ -93,6 +88,9 @@ impl From<Group> for Heading {
 /// A row of the Tasks section, as drawn.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct TaskRow {
+    /// What its session does now (`shell · cargo test`), while it is at work, and its model in short.
+    pub live: Option<String>,
+    pub model: Option<String>,
     pub id: TaskId,
     /// The inbox group, whatever heading the row is under: its dot's colour.
     pub group: Group,
@@ -112,6 +110,63 @@ pub struct TaskSection {
     pub count: usize,
     pub collapsed: bool,
     pub rows: Vec<TaskRow>,
+}
+
+/// The listed tasks by project, as the Project view groups them: projects by name (whatever the
+/// case of the letters), then the tasks of no project. In each: needs you, running, later, done;
+/// within those, most urgent first, then oldest first. Every task of `inbox` once.
+pub fn by_project<'a>(inbox: Vec<(Group, &'a Task)>) -> Vec<(Option<String>, Vec<(Group, &'a Task)>)> {
+    let mut groups: Vec<(Option<String>, Vec<(Group, &Task)>)> = Vec::new();
+    for (group, task) in inbox {
+        match groups.iter_mut().find(|(project, _)| *project == task.project) {
+            Some((_, tasks)) => tasks.push((group, task)),
+            None => groups.push((task.project.clone(), vec![(group, task)])),
+        }
+    }
+    let state = |group: Group| Heading::from(group);
+    for (_, tasks) in &mut groups {
+        tasks.sort_by_key(|(group, task)| (state(*group), task.priority, task.id));
+    }
+    let key = |project: &Option<String>| (project.is_none(), project.as_deref().map(str::to_lowercase));
+    groups.sort_by(|a, b| key(&a.0).cmp(&key(&b.0)).then_with(|| a.0.cmp(&b.0)));
+    groups
+}
+
+/// A project's tasks by state: the segments of its bar, in this order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Segments {
+    pub needs_you: usize,
+    pub running: usize,
+    pub later: usize,
+    pub done: usize,
+}
+
+impl Segments {
+    pub fn of(tasks: &[(Group, &Task)]) -> Segments {
+        let mut s = Segments::default();
+        for (group, _) in tasks {
+            match Heading::from(*group) {
+                Heading::NeedsYou => s.needs_you += 1,
+                Heading::Running => s.running += 1,
+                Heading::Done => s.done += 1,
+                Heading::Later | Heading::Sessions => s.later += 1,
+            }
+        }
+        s
+    }
+
+    /// Each segment's share of the bar, by task count, in order. All 0 with no tasks.
+    pub fn shares(&self) -> [f32; 4] {
+        let counts = [self.needs_you, self.running, self.later, self.done];
+        let total: usize = counts.iter().sum();
+        counts.map(|n| if total == 0 { 0. } else { n as f32 / total as f32 })
+    }
+
+    /// The bar's tooltip: `1 needs you · 2 running · 0 later · 3 done`.
+    pub fn tip(&self) -> String {
+        let need = if self.needs_you == 1 { "needs" } else { "need" };
+        format!("{} {need} you · {} running · {} later · {} done", self.needs_you, self.running, self.later, self.done)
+    }
 }
 
 /// What the user just did to a task with the mouse.
@@ -226,6 +281,18 @@ pub struct Task {
     /// added. Stored and shown; nothing acts on it yet.
     #[serde(default)]
     pub refs: Vec<Ref>,
+    /// When its agent first started, and when it was last done (milliseconds since 1970).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<u64>,
+    /// What its agent's sessions did, one entry a session, the newest last.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub work: Vec<crate::progress::Work>,
+    /// Keys this build does not know, written back as they were: a later build's (its tabs and
+    /// layout, say) survive a write by this one.
+    #[serde(flatten)]
+    pub extra: crate::marks::Extra,
 }
 
 impl Task {
@@ -425,6 +492,10 @@ impl Tasks {
             refs: Vec::new(),
             materials: Vec::new(),
             title_generated: false,
+            started_at: None,
+            finished_at: None,
+            work: Vec::new(),
+            extra: Default::default(),
         });
         self.next_id
     }
@@ -509,6 +580,26 @@ impl Tasks {
     pub fn adopted(&self, runner: &str, id: &str) -> bool {
         let is = |link: &crate::sessions::Link| link.runner == runner && link.id == id;
         self.list.iter().any(|task| task.session.as_ref().is_some_and(is))
+    }
+
+    /// Notes when a task's agent first started. Kept from the first time on.
+    pub fn started(&mut self, id: TaskId, at: Option<u64>) {
+        if let Some(task) = self.list.iter_mut().find(|t| t.id == id && t.started_at.is_none()) {
+            task.started_at = at;
+        }
+    }
+
+    /// A task that became done since `before` (each task's state then) was finished at `now`;
+    /// one that is no longer done is not finished. `now` 0 (no clock yet): not known.
+    pub fn finished(&mut self, before: &[(TaskId, State)], now: u64) {
+        for task in &mut self.list {
+            let Some((_, was)) = before.iter().find(|(id, _)| *id == task.id) else { continue };
+            match (*was == State::Done, task.state == State::Done) {
+                (false, true) => task.finished_at = Some(now).filter(|now| *now > 0),
+                (true, false) => task.finished_at = None,
+                _ => {}
+            }
+        }
     }
 
     /// Notes when a task just filed was filed.
@@ -749,6 +840,10 @@ mod tests {
             refs: Vec::new(),
             materials: Vec::new(),
             title_generated: false,
+            started_at: None,
+            finished_at: None,
+            work: Vec::new(),
+            extra: Default::default(),
         };
         let mut tasks = Tasks::default();
         // A capture is named by its task's number and its own: nothing else is kept from a file.

@@ -244,6 +244,16 @@ pub fn save_task(task: &Task) -> io::Result<()> {
 /// `Err`: the file could not be read as settings, a list in it is not a list of names, or it
 /// is a link to nowhere. It is left as it is.
 pub fn save_apps(changes: &[ListChange]) -> Result<(), String> {
+    save_settings(|text| with_changes(text, changes))
+}
+
+/// Sets one key of `settings.json` to `value`, as `save_apps` changes its lists.
+pub fn save_value(key: &str, value: &serde_json::Value) -> Result<(), String> {
+    save_settings(|text| ottospace_core::settings::with_value(text, key, value))
+}
+
+/// `settings.json` made over by `edit`, from the file as it is now.
+fn save_settings(edit: impl FnOnce(&str) -> Result<String, String>) -> Result<(), String> {
     let Some(home) = get().home.as_ref() else { return Ok(()) };
     let file = home.join("settings.json");
     // Through a link to the file it names: a settings file kept elsewhere stays linked. A link
@@ -259,7 +269,7 @@ pub fn save_apps(changes: &[ListChange]) -> Result<(), String> {
         Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
         Err(err) => return Err(err.to_string()),
     };
-    let new = with_changes(&text, changes)?;
+    let new = edit(&text)?;
     let (Some(dir), Some(name)) = (file.parent(), file.file_name().and_then(|name| name.to_str())) else {
         return Err("no place for the file".into());
     };

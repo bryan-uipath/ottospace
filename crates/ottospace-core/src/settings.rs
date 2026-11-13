@@ -70,6 +70,10 @@ pub struct Settings {
     /// its prompt when it opens. Default: 500; at most 2000. 0: none is kept.
     #[serde(default)]
     pub workbook_scrollback_lines: Option<u32>,
+    /// How the Tasks section groups its tasks: `state` (default) or `project`. Written when the
+    /// user picks one in the section's header.
+    #[serde(default)]
+    pub tasks_view: Option<crate::model::TasksView>,
 }
 
 /// The default capture key. Not ⌃⌥Space: macOS gives that to "Select next source in Input menu".
@@ -325,6 +329,29 @@ pub fn with_changes(text: &str, changes: &[ListChange]) -> Result<String, String
     Ok(new)
 }
 
+/// `text` with its top-level `key` set to `value`: every other key, and the file's spacing, as
+/// they were. e.g. `"tasks_view": "project"`.
+pub fn with_value(text: &str, key: &str, value: &serde_json::Value) -> Result<String, String> {
+    let body = text.trim_start_matches('\u{feff}');
+    let mut keys = match serde_json::from_str::<serde_json::Value>(if body.trim().is_empty() { "{}" } else { body }) {
+        Ok(serde_json::Value::Object(keys)) => keys,
+        Ok(_) => return Err("the file must be a JSON object: { ... }".into()),
+        Err(err) => return Err(format!("not valid JSON: {err}")),
+    };
+    if keys.get(key) == Some(value) {
+        return Ok(text.to_string());
+    }
+    keys.insert(key.to_string(), value.clone());
+    let wanted = serde_json::Value::Object(keys);
+    let spliced = Some(body)
+        .filter(|body| !body.trim().is_empty())
+        .and_then(|body| splice(body, key, &value.to_string()))
+        .filter(|new| serde_json::from_str(new).ok().as_ref() == Some(&wanted));
+    let bom = &text[..text.len() - body.len()];
+    let fresh = || serde_json::to_string_pretty(&wanted).unwrap_or_default() + "\n";
+    Ok(format!("{bom}{}", spliced.unwrap_or_else(fresh)))
+}
+
 /// As `with_changes`, with both lists given whole.
 #[cfg(test)]
 fn with_apps(text: &str, apps: &[String], hidden: &[String]) -> Result<String, String> {
@@ -436,6 +463,21 @@ pub fn expand_home(path: &str, home: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_value_is_set_in_the_file_as_it_is() {
+        let view = serde_json::json!("project");
+        let text = "{\n  // no comments in JSON\n}";
+        assert!(with_value(text, "tasks_view", &view).is_err());
+        let text = "{\n    \"apps\": [\"Slack\"],\n    \"x\": 1\n}\n";
+        let set = with_value(text, "tasks_view", &view).unwrap();
+        assert_eq!(set, "{\n    \"apps\": [\"Slack\"],\n    \"x\": 1,\n    \"tasks_view\": \"project\"\n}\n");
+        assert_eq!(with_value(&set, "tasks_view", &view).unwrap(), set, "the same value: no change");
+        assert_eq!(with_value("", "tasks_view", &view).unwrap(), "{\n  \"tasks_view\": \"project\"\n}\n");
+        // Read back: the key is known (`x` is the one that is not).
+        let (settings, wrong) = Settings::read(&set);
+        assert_eq!((settings.tasks_view, wrong.len()), (Some(crate::model::TasksView::Project), 1));
+    }
 
     #[test]
     fn nothing_written_means_the_defaults() {

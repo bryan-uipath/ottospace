@@ -21,6 +21,7 @@ pub mod list;
 pub mod marks;
 pub mod model;
 pub mod palette;
+pub mod progress;
 pub mod repos;
 pub mod rules;
 pub mod scrollbar;
