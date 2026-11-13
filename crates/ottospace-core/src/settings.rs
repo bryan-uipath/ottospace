@@ -42,6 +42,10 @@ pub struct Settings {
     /// Suggest the Dock's apps that are not running. Default: true.
     #[serde(default)]
     pub suggest_dock_apps: Option<bool>,
+    /// The wheel or trackpad over an app pane you are not in scrolls the app, which stays where it
+    /// is (`app_wheel`). Default: true. False: the wheel there does nothing.
+    #[serde(default)]
+    pub wheel_to_apps: Option<bool>,
     /// List the agent sessions (Claude Code, Codex) of the listed repositories in the Tasks
     /// section. Default: true. False: no session file is ever read.
     #[serde(default)]
@@ -751,6 +755,7 @@ mod tests {
         let settings = Settings::parse(r#"{"apps_hidden": ["Music"], "suggest_dock_apps": false}"#).unwrap();
         assert_eq!((settings.apps_hidden, settings.suggest_dock_apps), (vec!["Music".to_string()], Some(false)));
         assert_eq!(Settings::default().suggest_dock_apps, None);
+        assert_eq!(Settings::parse(r#"{"wheel_to_apps": false}"#).unwrap().wheel_to_apps, Some(false));
     }
 
     #[test]

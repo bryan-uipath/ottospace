@@ -40,6 +40,7 @@ it over the control socket. Session restore and the rest of the design are not b
 | Repos: each repository's name over its checkouts (the branch, then `Default` or a linked worktree's directory); open a terminal in one. + in the header adds a directory to `repos` in the settings; Remove on a name takes it off | Works today |
 | List mode (⌘⌃E): drive the bar with the keyboard | Works today |
 | Sneak mode (⌘; or ⌘⌃G): a letter label on each of ottospace's own controls, and on the buttons and text fields of the focused app pane; typing it clicks the control, presses the app's button, or focuses its text field | Works today |
+| The wheel over an app pane you are not in scrolls the app, which stays in the back | Works today |
 | [Command palette](#command-palette) (⌘P): every command of the menu bar by name, with its key; a Developer group | Works today |
 | [Accessibility inspector](#accessibility-inspector): a hosted app's accessibility tree in the right drawer's place, read-only | Works today |
 | Marks (⌘B, ⌘⇧B, ⌘' and a letter): named ways back to a pane or a tab, kept in `~/.ottospace/marks.json` | Works today |
@@ -567,6 +568,10 @@ it is still among all apps. Each of these writes `~/.ottospace/settings.json` (`
 A running app has no Pin button yet. Original window frames are saved to disk and restored on
 every way out: see [Getting a window back](#getting-a-window-back).
 
+The wheel or trackpad over an app pane you are not in scrolls the app where it is: the window
+stays parked and in the back, and the pointer does not move (`wheel_to_apps`). Only your own
+scroll is passed on; a click, a key or a drag still enters the pane first.
+
 Click an app pane to give it the keyboard (`APP` mode). If you bring a hosted app forward from
 outside (its Dock icon, ⌘Tab) and the window it shows is one ottospace holds, ottospace comes
 forward on that window's pane and gives it the keyboard, within half a second. ottospace shortcuts do not fire in that
@@ -621,6 +626,7 @@ optional:
   "apps": ["Microsoft Outlook", "Slack"],
   "apps_hidden": ["Music"],
   "suggest_dock_apps": true,
+  "wheel_to_apps": true,
   "windows": [{ "app": "us.zoom.xos", "title": "Zoom Meeting", "do": "ignore" }]
 }
 ```
@@ -644,6 +650,7 @@ optional:
 | `windows` | Rules for windows ottospace must leave alone. Each rule selects windows by `app` (the app's name or bundle id), `title` and `subrole`; every field given must match, `*` stands for any text, and case does not matter. `"do": "ignore"`: the window never becomes a pane, when its app is hosted or when it opens later. `"do": "manage"` undoes a built-in rule. Your rules come first. Name an app by its bundle id to be sure. A window is judged once, when it is first seen, on the title it has then; rules are read at start | Built in: only standard windows are ever put in a pane, and Zoom's sharing controls, annotation layer and pop-ups are ignored |
 | `apps` | The pinned apps: listed first under "Not running" in Apps, and in the picker before anything is typed; choosing one starts it in the background and puts its window in a pane. Each is the name of the app as Finder shows it (`Visual Studio Code` for `Visual Studio Code.app`), looked for in `/Applications`, `~/Applications` and `/System/Applications` (and their `Utilities`), or the path of its bundle (`~/Tools/Lumen.app`). One that is not found is left out of the list and kept in the file. Pin and Unpin in the Apps section write this list: the name if it means that same bundle when read back (the first of that name in those folders, in that order), else its path. A name that is found only once ottospace runs (the app was installed since) is listed from the next scan. (Once you type in the picker it offers every installed app in those folders, these first) | none |
 | `apps_hidden` | Apps of the Dock not to suggest in Apps, written as `apps` is. Hide in the Apps section writes this list | none |
+| `wheel_to_apps` | The wheel or trackpad over an app pane you are not in scrolls the app, which stays in the back. `false`: the wheel there does nothing | `true` |
 | `suggest_dock_apps` | List the Dock's apps that are not running under "Not running". `false`: only pinned apps are listed there, and the Dock is not read | `true` |
 
 A mistake in the file (a key that does not exist, a wrong value, a font that is not installed) is
@@ -704,7 +711,8 @@ The guide itself: [`crates/ottospace/skill/guide.md`](../crates/ottospace/skill/
 macOS cannot reparent another process's window, so ottospace fakes embedding with the Accessibility
 (AX) API and ScreenCaptureKit (SCK). An inactive app window is parked off-screen with one pixel on
 a display, and its pane shows an SCK stream of it. Clicking the pane moves the real window over it
-and replays the click, so input is native. A pane shows one title bar: the stream leaves out the
+and replays the click, so input is native. The wheel over a parked pane is posted to the app's
+process alone (`CGEventPostToPid`) at the matching point of the parked window. A pane shows one title bar: the stream leaves out the
 app's own, and the live window's covers the pane header. Measurements and risks: [docs/ai/hosting-windows.md](ai/hosting-windows.md).
 
 ### Getting a window back

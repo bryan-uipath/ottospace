@@ -813,6 +813,13 @@ pub enum Action {
         pane: PaneId,
         read: Option<crate::sneak_apps::AppRead>,
     },
+    /// The user's wheel or trackpad over a parked app pane, by `dx`, `dy` points (positive `dy`
+    /// scrolls back, as AppKit counts): forwarded to the app's window. See `app_wheel`.
+    AppWheel {
+        pane: PaneId,
+        dx: f64,
+        dy: f64,
+    },
     /// ⌘Q. `running`: the terminals with a program in front of their shell, as the shell crate
     /// sees them now. None: quit. Some: ask first. Asked again while the question is up: quit.
     QuitAsked {
@@ -1337,6 +1344,7 @@ impl Action {
             | Action::SneakBackspace
             | Action::LeaveSneak
             | Action::SneakApp { .. }
+            | Action::AppWheel { .. }
             | Action::QuitConfirm
             | Action::QuitCancel
             | Action::Quit
@@ -1538,6 +1546,13 @@ pub enum Effect {
         role: String,
         at: crate::ax::Frame,
         focus: bool,
+    },
+    /// Scroll the parked app window of `pane` by `dx`, `dy` points (capped), without raising it.
+    /// Only ever the user's own scroll.
+    AppWheel {
+        pane: PaneId,
+        dx: f64,
+        dy: f64,
     },
     /// End the app.
     Quit,
@@ -1941,6 +1956,8 @@ impl Model {
         let boxed = self.picker.is_some() || self.compose_keys();
         match action {
             _ if origin == Origin::User => None,
+            // So does a scroll in another app.
+            Action::AppWheel { .. } => Some(crate::app_wheel::USERS_ALONE),
             // A label in another app presses there: only the user's own letters spell one.
             Action::SneakType { text } if self.sneak.as_ref().is_some_and(|s| s.reaches_app(text)) => {
                 Some(crate::sneak_apps::USERS_ALONE)
@@ -2147,6 +2164,8 @@ impl Model {
                 | Action::SneakBackspace
                 | Action::LeaveSneak
                 | Action::SneakApp { .. }
+                // As the wheel over a terminal, a scroll in an app ends no mode.
+                | Action::AppWheel { .. }
         );
         if user && !own {
             self.sneak = None;
@@ -2161,6 +2180,7 @@ impl Model {
                 | Action::MarkBackspace
                 | Action::MarkSubmit
                 | Action::MarkCancel
+                | Action::AppWheel { .. }
         );
         // A name being typed is a text field: an edit of it is the wait's own, too.
         let renaming = self.mark_input.as_ref().is_some_and(|input| input.text().is_some());
@@ -3209,6 +3229,15 @@ impl Model {
                     }
                     Some(Typed::NoLabel) => self.sneak = None,
                     Some(Typed::Narrowed) | None => {}
+                }
+            }
+            Action::AppWheel { pane, dx, dy } => {
+                // A parked app pane on show: a live window takes its own scrolls.
+                let app = self.pane(pane).is_some_and(|p| matches!(p.kind, Kind::App { .. }));
+                let shown = self.layout.as_ref().is_some_and(|l| l.leaves().contains(&pane));
+                let (dx, dy) = (crate::app_wheel::cap(dx), crate::app_wheel::cap(dy));
+                if app && shown && self.live != Some(pane) && (dx, dy) != (0.0, 0.0) {
+                    effects.push(Effect::AppWheel { pane, dx, dy });
                 }
             }
             Action::SneakApp { pane, read } => {
@@ -5457,6 +5486,7 @@ mod tests {
         Action::SneakBackspace,
         Action::LeaveSneak,
         Action::SneakApp { .. },
+        Action::AppWheel { .. },
         Action::QuitAsked { .. },
         Action::QuitConfirm,
         Action::QuitCancel,
@@ -5647,6 +5677,7 @@ mod tests {
             Action::SneakBackspace,
             Action::LeaveSneak,
             Action::SneakApp { pane: 1, read: None },
+            Action::AppWheel { pane: 1, dx: 0., dy: 1. },
             Action::QuitAsked { running: Vec::new() },
             Action::QuitConfirm,
             Action::QuitCancel,
@@ -5857,6 +5888,7 @@ mod tests {
                     Action::InspectorRead { .. } | Action::InspectorFailed { .. } if origin == Origin::Socket => {
                         Some(inspect::USERS_ALONE)
                     }
+                    Action::AppWheel { .. } => Some(crate::app_wheel::USERS_ALONE),
                     _ => action.takes_keyboard().then_some("sneak mode is on"),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");
@@ -5868,7 +5900,8 @@ mod tests {
                     | Action::SneakDrawn { .. }
                     | Action::SneakType { .. }
                     | Action::SneakBackspace
-                    | Action::SneakApp { .. } => false,
+                    | Action::SneakApp { .. }
+                    | Action::AppWheel { .. } => false,
                     _ => origin == Origin::User,
                 };
                 assert_eq!(m.sneak.is_none(), ends, "{action:?} from {origin:?}");
@@ -9372,6 +9405,7 @@ mod tests {
                     Action::InspectorRead { .. } | Action::InspectorFailed { .. } if origin == Origin::Socket => {
                         Some(inspect::USERS_ALONE)
                     }
+                    Action::AppWheel { .. } => Some(crate::app_wheel::USERS_ALONE),
                     _ => action.takes_keyboard().then_some(CONFIRM_UP),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");

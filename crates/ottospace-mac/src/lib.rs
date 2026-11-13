@@ -14,4 +14,5 @@ pub mod pasteboard;
 pub mod process;
 pub mod recovery;
 pub mod time;
+pub mod wheel;
 pub mod window;

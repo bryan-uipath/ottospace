@@ -14,6 +14,9 @@
 //! With `CANARY_BUTTON` set, the first window has a native button titled "Canary button" in
 //! its content: a control its accessibility tree names. Below it, a checkbox "Canary press"
 //! (`pressed` in the state: whether it is on) and a disabled one, "Canary disabled".
+//!
+//! With `CANARY_SCROLL` set, the first window has a native scroll view filling it below the top
+//! line, over a tall page: `scrolled` in the state is how far it is scrolled, in points.
 
 use std::cell::RefCell;
 use std::io::{BufRead, BufReader, Write};
@@ -124,6 +127,8 @@ type Windows = Rc<RefCell<Vec<WindowHandle<Canary>>>>;
 thread_local! {
     /// The first window's checkboxes, with `CANARY_BUTTON`: "Canary press", "Canary disabled".
     static CHECKBOXES: RefCell<Vec<ottospace_mac::window::Checkbox>> = const { RefCell::new(Vec::new()) };
+    /// The first window's scroll view, with `CANARY_SCROLL`.
+    static SCROLL: RefCell<Option<ottospace_mac::window::ScrollView>> = const { RefCell::new(None) };
 }
 
 /// `at`: where its top left goes, as `move` puts it.
@@ -153,6 +158,17 @@ fn open(windows: &Windows, min: Option<[f32; 2]>, fixed: Option<[f32; 2]>, at: O
         })
     });
     if let Ok(handle) = handle {
+        if number == 1 && std::env::var_os("CANARY_SCROLL").is_some() {
+            let _ = handle.update(cx, |_, window, _| {
+                use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                if let Ok(RawWindowHandle::AppKit(appkit)) = HasWindowHandle::window_handle(window).map(|h| h.as_raw())
+                {
+                    let at = [0., 60., f64::from(width), f64::from(height) - 60.];
+                    let view = unsafe { ottospace_mac::window::add_scroll_view(appkit.ns_view.as_ptr(), at) };
+                    SCROLL.with_borrow_mut(|scroll| *scroll = view);
+                }
+            });
+        }
         if number == 1 && std::env::var_os("CANARY_BUTTON").is_some() {
             let _ = handle.update(cx, |_, window, _| {
                 if let Some(view) = ns_view(window) {
@@ -206,7 +222,8 @@ fn state(windows: &Windows, cx: &mut App) -> String {
     });
     // Whether "Canary press" is on: a press reached it.
     let pressed = CHECKBOXES.with_borrow(|boxes| boxes.first().map(|b| b.on()));
-    json!({ "ok": true, "windows": open_windows, "pressed": pressed }).to_string()
+    let scrolled = SCROLL.with_borrow(|scroll| scroll.as_ref().map(|s| s.offset()));
+    json!({ "ok": true, "windows": open_windows, "pressed": pressed, "scrolled": scrolled }).to_string()
 }
 
 fn serve(calls: &Receiver<(Request, Sender<String>)>, windows: &Windows, cx: &mut App) {
