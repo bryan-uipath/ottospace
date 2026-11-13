@@ -518,6 +518,11 @@ impl Workspace {
         // The pictures by their whole path: a reader opens them from wherever it runs.
         let at = dir.as_ref().map(|dir| dir.to_string_lossy().into_owned());
         let text = capture::markdown_in(brief, at.as_deref());
+        // Now, not after the pictures: the task's agent starts in this same step and reads it
+        // first. It is written again below once each picture is there or taken out.
+        if let Some(dir) = &dir {
+            let _ = config::write_private(dir, "brief.md", text.as_bytes());
+        }
         let shown =
             Shown { brief: brief.clone(), name: name.to_string(), dir: dir.clone(), text, pictures: Vec::new() };
         self.briefs.insert(task, shown);
