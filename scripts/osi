@@ -70,7 +70,11 @@ EOF
 # Runs on any exit: drops temp files and anything staged but not yet moved into place, and
 # puts back an app that was moved aside if its replacement never arrived.
 cleanup() {
-  if [ -n "$bg" ]; then kill "$bg" 2>/dev/null || true; fi
+  # Its children too: a download in a subshell runs curl, which ignores ^C in the background.
+  if [ -n "$bg" ]; then
+    pkill -P "$bg" 2>/dev/null || true
+    kill "$bg" 2>/dev/null || true
+  fi
   if [ -n "$staged" ]; then rm -f "$staged"; fi
   if [ -n "$staged_app" ]; then rm -rf "$staged_app"; fi
   if [ -n "$aside_app" ] && [ -e "$aside_app" ] && [ ! -e "$app" ]; then mv "$aside_app" "$app"; fi
@@ -404,7 +408,8 @@ is_running() {
   run_pid="$(sed -n 1p "$run_file")"
   run_program="$(sed -n 2p "$run_file")"
   is_number "$run_pid" || return 1
-  [ "$run_program" = "$cmd" ] || { [ -n "$app" ] && [ "$run_program" = "$app/Contents/MacOS/ottospace" ]; } || return 1
+  [ "$run_program" = "$(resolved "$cmd")" ] ||
+    { [ -n "$app" ] && [ "$run_program" = "$(resolved "$app/Contents/MacOS/ottospace")" ]; } || return 1
   kill -0 "$run_pid" 2>/dev/null || return 1
   if [ -n "${OSI_PS:-}" ]; then
     exe="$("$OSI_PS" "$run_pid" 2>/dev/null)" || return 1
@@ -415,8 +420,12 @@ is_running() {
   [ "$exe" = "$run_program" ]
 }
 
+# Path $1 with its folder's symlinks resolved, as the app records it (`~/.local/bin` may be one).
+resolved() { printf '%s/%s' "$(cd -P "$(dirname "$1")" 2>/dev/null && pwd)" "$(basename "$1")"; }
+
+# After a swap: $was_running, asked before it.
 note_running() {
-  if is_running; then say "ottospace is running the old build: quit it and start it again."; fi
+  if [ "$was_running" = 1 ]; then say "ottospace is running the old build: quit it and start it again."; fi
 }
 
 # Says when main has a newer commit than the build installed, commit $1. Silent when the lookup
@@ -428,7 +437,7 @@ note_behind() {
     file://*) proto='=file' ;;
     *) return 0 ;;
   esac
-  tip="$(curl -fsS --proto "$proto" --max-time 5 -H 'Accept: application/vnd.github.sha' "$main_url" 2>/dev/null |
+  tip="$(curl -fsS --proto "$proto" --tlsv1.2 --max-time 5 -H 'Accept: application/vnd.github.sha' "$main_url" 2>/dev/null |
     head -c 40)" || return 0
   if is_sha "$tip" 40 && [ "$tip" != "$1" ]; then
     say "main is ahead of this build ($(printf '%.7s' "$tip")); a newer build is not ready yet."
@@ -509,6 +518,9 @@ install_build() {
     keep=1
   fi
 
+  # Asked before the swap: once a running app is moved aside, its executable's path changes.
+  was_running=0
+  if is_running; then was_running=1; fi
   # Everything is staged: from here on only renames. A failure puts the old app back.
   if [ "$want_app" = 1 ]; then
     if [ -e "$app" ] || [ -L "$app" ]; then
@@ -551,7 +563,9 @@ install_build() {
 
   say "Installed ottospace $b_version ($(printf '%.7s' "$b_commit")) from $(describe "$channel" "$ref")"
   if [ "$want_app" = 1 ]; then
-    say "The app is a new identity to macOS with every build: grant it Accessibility and Screen Recording again."
+    if [ "$owned" != 1 ]; then
+      say "The app is a new identity to macOS with every build: grant it Accessibility and Screen Recording after each install."
+    fi
   elif [ "$owned" = 1 ] && [ -e "$app" ]; then
     say "$app is build $(short "$(get commit "$state_dir/app")") and was left as it is (add --app to update it)."
   fi
@@ -753,8 +767,8 @@ cmd_update() {
     if [ "$channel" = main ]; then note_behind "$have"; fi
     return 0
   fi
-  say "$(describe "$channel" "$ref") is at $(short "$latest"); installed is $(short "$have")."
   if [ "$check" = 1 ]; then
+    say "$(describe "$channel" "$ref") is at $(short "$latest"); installed is $(short "$have")."
     say "Run: osi update"
     return 0
   fi
@@ -767,6 +781,8 @@ cmd_rollback() {
   setup
   [ -f "$state_dir/previous" ] && [ -f "$state_dir/previous.bin" ] || die "there is no previous build to go back to"
   [ -f "$state_dir/current" ] || die "the state file is missing: $state_dir/current"
+  was_running=0
+  if is_running; then was_running=1; fi
   mkdir -p "$bin_dir"
   staged="$bin_dir/.ottospace.new.$$"
   cp -p "$state_dir/previous.bin" "$staged"
@@ -824,6 +840,8 @@ cmd_rollback() {
 cmd_uninstall() {
   setup
   [ -f "$state_dir/current" ] || die "nothing is installed by osi"
+  was_running=0
+  if is_running; then was_running=1; fi
   rm -f "$cmd"
   say "Removed $cmd"
   if app_owned && [ -d "$app" ]; then
@@ -837,7 +855,7 @@ cmd_uninstall() {
     say "Removed $bin_dir/osi"
   fi
   say "Kept: settings and tasks in $(dirname "$state_dir")."
-  if is_running; then
+  if [ "$was_running" = 1 ]; then
     say "ottospace is still running. Quit it: use its window, or the control socket request {\"cmd\":\"quit\"}."
   fi
 }

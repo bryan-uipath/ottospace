@@ -188,6 +188,7 @@ check "update --check installs nothing" installed_is A
 run "$osi" update
 check "update installs the newer build" installed_is B
 check "an update does not repeat the permissions note" not_says "Accessibility"
+check "nor compare commits, as --check does" not_says "installed is"
 check "main's tip unknown: nothing about main" not_says "main is ahead"
 commit b | tr -d '\n' >"$work/main-tip"
 run "$osi" update
@@ -524,16 +525,31 @@ echo "# a running ottospace"
 # process stands in for the app; the fake OSI_PS says which program it is.
 sleep 60 &
 alive=$!
-printf '#!/bin/sh\necho %s\n' "$bin/ottospace" >"$work/ps-ours"
+# The app records its resolved path. Here the bin folder is under /var, a symlink to /private/var.
+ours="$(cd -P "$bin" && pwd)/ottospace"
+printf '#!/bin/sh\necho %s\n' "$ours" >"$work/ps-ours"
 printf '#!/bin/sh\necho /bin/sleep\n' >"$work/ps-other"
 chmod 755 "$work/ps-ours" "$work/ps-other"
 running_line="ottospace is running the old build: quit it and start it again."
 rm -f "$HOME/.ottospace/running"
 run env OSI_PS="$work/ps-ours" "$osi" install main --force
 check "no file (nothing running, or only \`ottospace ctl\`): not said" not_says "is running"
-printf '%s\n%s\n' "$alive" "$bin/ottospace" >"$HOME/.ottospace/running"
+printf '%s\n%s\n' "$alive" "$ours" >"$HOME/.ottospace/running"
 run env OSI_PS="$work/ps-ours" "$osi" install main --force
 check "the installed app running: said in one line" says "$running_line"
+# The app bundle running, then moved aside by the update: lsof would name its new place.
+run "$osi" install main --app --force
+rm -rf "$state/previous.app"
+app_exe="$(cd -P "$HOME/Applications" && pwd)/ottospace.app/Contents/MacOS/ottospace"
+printf '#!/bin/sh\nif [ -e %s ]; then echo %s; else echo %s; fi\n' "$state/previous.app" \
+  "$state/previous.app/Contents/MacOS/ottospace" "$app_exe" >"$work/ps-app"
+chmod 755 "$work/ps-app"
+printf '%s\n%s\n' "$alive" "$app_exe" >"$HOME/.ottospace/running"
+make_build "$main_dir" P "$(commit e)"
+run env OSI_PS="$work/ps-app" "$osi" update
+check "the app running, moved aside by the update: said" says "$running_line"
+check "and the app was set aside" [ -e "$state/previous.app" ]
+printf '%s\n%s\n' "$alive" "$ours" >"$HOME/.ottospace/running"
 run env OSI_PS="$work/ps-other" "$osi" install main --force
 check "its pid now another program's: not said" not_says "is running"
 run "$osi" install main --force
@@ -543,7 +559,7 @@ run env OSI_PS="$work/ps-ours" "$osi" install main --force
 check "an ottospace osi did not install: not said" not_says "is running"
 kill "$alive"
 wait "$alive" 2>/dev/null || true
-printf '%s\n%s\n' "$alive" "$bin/ottospace" >"$HOME/.ottospace/running"
+printf '%s\n%s\n' "$alive" "$ours" >"$HOME/.ottospace/running"
 run env OSI_PS="$work/ps-ours" "$osi" install main --force
 check "a stale file (pid gone): not said" not_says "is running"
 rm "$HOME/.ottospace/running"
