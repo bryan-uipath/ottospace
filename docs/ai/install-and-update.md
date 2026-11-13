@@ -159,7 +159,8 @@ and `codesign` only for `--app`. All ship with macOS except `gh`.
   `GH_HOST` and `GH_REPO` are dropped, so an enterprise host cannot stand in for the repository.
 - **Overrides**, for tests: `HOME`, `OSI_BIN_DIR`, `OSI_APP_DIR`, `OTTOSPACE_HOME`,
   `OSI_RELEASES_URL` and `OSI_SELF_URL` (`file://` allowed), `OSI_GH`; `OSI_POLL`,
-  `OSI_WAIT_MAX` and `OSI_START_MAX` (seconds) for the waits.
+  `OSI_WAIT_MAX` and `OSI_START_MAX` (seconds) for the waits; `OSI_MAIN_URL` (main's tip) and
+  `OSI_PS` (prints a pid's executable).
 
 `install.sh` downloads `scripts/osi` from `main`, installs it as `~/.local/bin/osi`, and runs
 `osi install main`. `OTTOSPACE_CHANNEL=stable` or `=v0.1.0` picks another build;
@@ -170,8 +171,25 @@ because it comes over HTTPS from this repository.
 
 Replacing the file does not touch a running ottospace: the process keeps the old file until it
 exits. osi never stops it. It hosts the user's real windows, and only its own quit path puts them
-back. After an install osi says so when it finds ottospace running, and names the way:
-`ottospace ctl '{"cmd":"quit"}'`, then start it again.
+back; a quit also closes terminal panes and the agents in them, and osi could not start the app
+again under the right terminal's permissions. After an install osi says, in one line, when the
+app is running: "ottospace is running the old build: quit it and start it again."
+
+How osi knows (2026-11-13). Matching processes by program path counted `ottospace --version`
+and `ottospace ctl` as the app, and `ps` shows argv[0], not the path, for a program started from
+`PATH`. Now the app says it is running: at start, outside a test run, it writes
+`<home>/running` (0600, whole): its pid and its executable's resolved path, one per line. A clean
+quit removes it if it is still its own; a second instance writes over it. osi reads it (a regular
+file of 4 KiB at most) and counts the app as running when the pid is alive, its executable
+(`lsof -d txt`) is the path in the file, and that path is the command or the app osi installed.
+A stale file (pid gone, or reused by another program) does not count. No socket connection, no
+argument parsing.
+
+An install prints at most three lines: the build (`Installed ottospace 0.1.0 (05e8136) from
+main`), "main is ahead of this build (<tip>); a newer build is not ready yet." when `main` has
+moved past the installed `main` build (one unauthenticated `commits/main` call; silent when it
+fails), and the running line. The permissions note shows on a first install only; it and
+`osi rollback` are in `osi help`. A docs-only commit on `main` also shows as ahead.
 
 **Proposed, not built: a notice in the app.** ottospace knows its own commit
 (`OTTOSPACE_COMMIT`). If the shell read `commit=` from `~/.ottospace/install/current` now and

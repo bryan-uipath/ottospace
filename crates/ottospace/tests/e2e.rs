@@ -1275,6 +1275,8 @@ fn tasks_are_kept_between_runs() {
             (&file["title"], &file["state"], &file["tab"]),
             (&json!("question"), &json!("needs_you"), &Value::Null)
         );
+        // `running` is for osi and the user's app: a test run writes none, even with a folder.
+        assert!(!home.join("running").exists());
         titles(&otto)
     }; // the app is killed here, with no chance to save on the way out
     assert_eq!(before, [("needs_you".into(), "question".into()), ("on_hold".into(), "idea".into())]);

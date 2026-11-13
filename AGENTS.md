@@ -116,6 +116,9 @@ Rules:
 - `osi` reads the asset names, the `main-latest` tag, the workflow file name, the artifact name and
   the label `pr-build`.
   Change them in `scripts/package.sh`, `build.yml` and `scripts/osi` together.
+- The app writes `<home>/running` (its pid and resolved executable) at start and removes it on a
+  clean quit; subcommands and test runs (`OTTOSPACE_E2E`) write none. `osi` reads it to say the
+  old build is still running (`crates/ottospace/src/running.rs`).
 - Test with `scripts/test-osi.sh`: fixture builds, a temp `HOME`, no network. Never run
   `install.sh` or `osi` against the real `HOME` in a test; every path has an override.
 

@@ -17,6 +17,8 @@ export HOME="$work/home"
 export OSI_RELEASES_URL="file://$work/releases"
 export OSI_SELF_URL="file://$osi"
 export OSI_GH="$work/fake-gh"
+# main's tip, as GitHub would say it; no file: the lookup fails.
+export OSI_MAIN_URL="file://$work/main-tip"
 export FAKE_GH_DIR="$work/gh"
 mkdir -p "$HOME" "$FAKE_GH_DIR"
 
@@ -164,6 +166,10 @@ check "the main build is installed" installed_is A
 check "state records the channel" state_has "channel=main"
 check "state records the commit" state_has "commit=$(commit a)"
 check "says it uses the terminal's permissions" says "terminal's Accessibility and Screen Recording"
+check "names the build in one line" says "Installed ottospace 0.1.0 (aaaaaaa) from main"
+not_says() { ! says "$1"; }
+check "no download URL" not_says "file://"
+check "no command path when the bin directory is on PATH" eval "! PATH='$bin:$PATH' '$bin/osi' install main --force 2>&1 | grep -q '$bin'"
 check "no app without --app" [ ! -e "$app" ]
 # From here on, the installed copy.
 osi="$bin/osi"
@@ -181,6 +187,15 @@ check "update --check reports the newer build" says "main is at bbbbbbbbbbbb; in
 check "update --check installs nothing" installed_is A
 run "$osi" update
 check "update installs the newer build" installed_is B
+check "an update does not repeat the permissions note" not_says "Accessibility"
+check "main's tip unknown: nothing about main" not_says "main is ahead"
+commit b | tr -d '\n' >"$work/main-tip"
+run "$osi" update
+check "the build is main's tip: nothing about main" not_says "main is ahead"
+commit c | tr -d '\n' >"$work/main-tip"
+run "$osi" update
+check "main is ahead of an up-to-date build: said" says "main is ahead of this build (ccccccc); a newer build is not ready yet."
+rm "$work/main-tip"
 check "update keeps the previous binary" [ "$("$state/previous.bin")" = "fake ottospace A" ]
 
 echo "# rollback"
@@ -505,15 +520,33 @@ check "update takes --no-wait" says "is running: https://github.com/bryan-uipath
 check "and installs nothing" installed_is PR35
 
 echo "# a running ottospace"
-# Only the installed command counts as running: not a build from a checkout or a test's.
-printf '#!/bin/sh\necho /somewhere/target/debug/ottospace\n' >"$work/ps-other"
+# The app writes `running` (pid, program); osi checks the pid lives and is that program. A live
+# process stands in for the app; the fake OSI_PS says which program it is.
+sleep 60 &
+alive=$!
 printf '#!/bin/sh\necho %s\n' "$bin/ottospace" >"$work/ps-ours"
-chmod 755 "$work/ps-other" "$work/ps-ours"
-run env OSI_PS="$work/ps-other" "$osi" install main --force
-not_said_running() { ! says "is running and keeps"; }
-check "another ottospace is not ours" not_said_running
+printf '#!/bin/sh\necho /bin/sleep\n' >"$work/ps-other"
+chmod 755 "$work/ps-ours" "$work/ps-other"
+running_line="ottospace is running the old build: quit it and start it again."
+rm -f "$HOME/.ottospace/running"
 run env OSI_PS="$work/ps-ours" "$osi" install main --force
-check "the installed one running is said" says "is running and keeps the build it started with"
+check "no file (nothing running, or only \`ottospace ctl\`): not said" not_says "is running"
+printf '%s\n%s\n' "$alive" "$bin/ottospace" >"$HOME/.ottospace/running"
+run env OSI_PS="$work/ps-ours" "$osi" install main --force
+check "the installed app running: said in one line" says "$running_line"
+run env OSI_PS="$work/ps-other" "$osi" install main --force
+check "its pid now another program's: not said" not_says "is running"
+run "$osi" install main --force
+check "the real lister sees sleep, not ottospace: not said" not_says "is running"
+printf '%s\n%s\n' "$alive" /somewhere/target/debug/ottospace >"$HOME/.ottospace/running"
+run env OSI_PS="$work/ps-ours" "$osi" install main --force
+check "an ottospace osi did not install: not said" not_says "is running"
+kill "$alive"
+wait "$alive" 2>/dev/null || true
+printf '%s\n%s\n' "$alive" "$bin/ottospace" >"$HOME/.ottospace/running"
+run env OSI_PS="$work/ps-ours" "$osi" install main --force
+check "a stale file (pid gone): not said" not_says "is running"
+rm "$HOME/.ottospace/running"
 
 echo "# overrides"
 run env OSI_BIN_DIR="$work/elsewhere/bin" OTTOSPACE_HOME="$work/elsewhere/home" "$osi" install main

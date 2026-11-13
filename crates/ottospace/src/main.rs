@@ -62,6 +62,7 @@ mod marks;
 mod menus;
 mod new_task;
 mod repos;
+mod running;
 mod scrollbar;
 mod sessions;
 mod sneak;
@@ -791,6 +792,7 @@ impl Workspace {
                 if this.control.is_some() {
                     let _ = std::fs::remove_file(control::path());
                 }
+                running::remove();
                 async {}
             }),
         ];
@@ -4872,6 +4874,8 @@ fn main() {
         }
     }
     let control = control::serve().map_err(|err| eprintln!("control socket off: {err}")).ok();
+    // For `osi`: which program the running app is.
+    running::write();
 
     Application::new().with_assets(Assets).run(move |cx: &mut App| {
         // Run as a bare binary (`ottospace`, `cargo run`) there is no bundle to supply the icon.
