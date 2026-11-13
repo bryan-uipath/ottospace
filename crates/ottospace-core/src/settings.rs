@@ -28,10 +28,16 @@ pub struct Settings {
     /// See `rules`. They come before the rules that ship with ottospace.
     #[serde(default)]
     pub windows: Vec<crate::rules::Rule>,
-    /// Apps to offer when they are not running, by name: `["Microsoft Outlook", "Slack"]`.
-    /// Choosing one starts it.
+    /// The pinned apps: listed first when they are not running, by name (`"Slack"`) or by the
+    /// path of the bundle. Choosing one starts it. A pin in the Apps section writes this list.
     #[serde(default)]
     pub apps: Vec<String>,
+    /// Apps of the Dock not to suggest, written as `apps` is.
+    #[serde(default)]
+    pub apps_hidden: Vec<String>,
+    /// Suggest the Dock's apps that are not running. Default: true.
+    #[serde(default)]
+    pub suggest_dock_apps: Option<bool>,
     /// List the agent sessions (Claude Code, Codex) of the listed repositories in the Tasks
     /// section. Default: true. False: no session file is ever read.
     #[serde(default)]
@@ -165,6 +171,105 @@ pub fn closed_apps(wanted: &[Installed], running_bundles: &[String]) -> Vec<Inst
     closed
 }
 
+/// The settings file's text with `apps` and `apps_hidden` set to these lists, for a pin made in
+/// the Apps section. Only those two values change: every other key, known or not, and the
+/// file's own spacing stay as they are. A list that is empty and has no key gets none.
+/// `Err`: the file is not a JSON object, and must be left alone.
+pub fn with_apps(text: &str, apps: &[String], hidden: &[String]) -> Result<String, String> {
+    let with_apps = with_list(text, "apps", apps)?;
+    with_list(&with_apps, "apps_hidden", hidden)
+}
+
+fn with_list(text: &str, key: &str, list: &[String]) -> Result<String, String> {
+    let quoted: Vec<String> = list.iter().map(|item| serde_json::Value::from(item.as_str()).to_string()).collect();
+    let value = format!("[{}]", quoted.join(", "));
+    let body = text.trim_start_matches('\u{feff}');
+    if body.trim().is_empty() {
+        return Ok(if list.is_empty() { text.to_string() } else { format!("{{\n  \"{key}\": {value}\n}}\n") });
+    }
+    let mut keys = match serde_json::from_str::<serde_json::Value>(body) {
+        Ok(serde_json::Value::Object(keys)) => keys,
+        Ok(_) => return Err("the file must be a JSON object: { ... }".into()),
+        Err(err) => return Err(format!("not valid JSON: {err}")),
+    };
+    if list.is_empty() && !keys.contains_key(key) {
+        return Ok(text.to_string());
+    }
+    keys.insert(key.to_string(), serde_json::json!(list));
+    let wanted = serde_json::Value::Object(keys);
+    // The edit is made in the text. If that does not read back as wanted, the file is written
+    // out afresh: right before pretty.
+    let spliced = splice(body, key, &value).filter(|new| serde_json::from_str(new).ok().as_ref() == Some(&wanted));
+    let bom = &text[..text.len() - body.len()];
+    let fresh = || serde_json::to_string_pretty(&wanted).unwrap_or_default() + "\n";
+    Ok(format!("{bom}{}", spliced.unwrap_or_else(fresh)))
+}
+
+/// `text` (a JSON object) with the value of its top-level `key` replaced, or the key added
+/// after the last one, indented as that one is. `None`: the text is not as expected.
+fn splice(text: &str, key: &str, value: &str) -> Option<String> {
+    let members = members(text)?;
+    // Of a key written twice, the last one counts.
+    if let Some((_, _, at)) = members.iter().rev().find(|(name, ..)| name == key) {
+        return Some(format!("{}{value}{}", &text[..at.start], &text[at.end..]));
+    }
+    let Some((_, last_key, last)) = members.last() else {
+        let open = text.find('{')? + 1;
+        return Some(format!("{}\n  \"{key}\": {value}\n{}", &text[..open], text[open..].trim_start()));
+    };
+    // The last key's own line start, if only spaces come before it; else all is on one line.
+    let line = text[..*last_key].rfind('\n').map(|at| &text[at..*last_key]).filter(|gap| gap.trim().is_empty());
+    let between = line.map_or_else(|| ", ".to_string(), |indent| format!(",{indent}"));
+    Some(format!("{}{between}\"{key}\": {value}{}", &text[..last.end], &text[last.end..]))
+}
+
+/// The top-level members of a JSON object's text: each key, where it starts, and where its
+/// value is. e.g. `{"a": [1]}` → `[("a", 1, 6..9)]`.
+fn members(text: &str) -> Option<Vec<(String, usize, std::ops::Range<usize>)>> {
+    let bytes = text.as_bytes();
+    let space = |mut at: usize| {
+        while bytes.get(at).is_some_and(u8::is_ascii_whitespace) {
+            at += 1;
+        }
+        at
+    };
+    // The index after the string that starts at `at`.
+    let string = |at: usize| {
+        let mut end = at + 1;
+        while *bytes.get(end)? != b'"' {
+            end += if bytes[end] == b'\\' { 2 } else { 1 };
+        }
+        Some(end + 1)
+    };
+    let mut at = space(0);
+    (*bytes.get(at)? == b'{').then_some(())?;
+    at = space(at + 1);
+    let mut found = Vec::new();
+    while *bytes.get(at)? != b'}' {
+        let (key_at, key_end) = (at, string(at)?);
+        let key: String = serde_json::from_str(text.get(key_at..key_end)?).ok()?;
+        at = space(key_end);
+        (*bytes.get(at)? == b':').then_some(())?;
+        let start = space(at + 1);
+        // The value ends at the comma or brace that closes it, outside any string or nesting.
+        let (mut end, mut depth) = (start, 0usize);
+        loop {
+            match *bytes.get(end)? {
+                b'"' => end = string(end)? - 1,
+                b'{' | b'[' => depth += 1,
+                b'}' | b',' if depth == 0 => break,
+                b'}' | b']' => depth -= 1,
+                _ => {}
+            }
+            end += 1;
+        }
+        let value = start..start + text[start..end].trim_end().len();
+        found.push((key, key_at, value));
+        at = space(end + usize::from(bytes[end] == b','));
+    }
+    Some(found)
+}
+
 /// A path as the user wrote it → a real one: `~/code` → `/Users/me/code`. Other paths pass.
 pub fn expand_home(path: &str, home: &str) -> String {
     match path.strip_prefix('~') {
@@ -284,6 +389,87 @@ mod tests {
         );
         // Of a key written twice, the last one counts.
         assert_eq!(Settings::read(r#"{"tasks": "a", "tasks": "b"}"#).0.tasks.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn a_pin_rewrites_two_keys_and_leaves_the_rest_of_the_file_as_it_is() {
+        let list = |items: &[&str]| items.iter().map(|item| item.to_string()).collect::<Vec<_>>();
+        let cases: [(&str, &str, &[&str], &[&str], &str); 9] = [
+            ("no file yet", "", &["Slack"], &[], "{\n  \"apps\": [\"Slack\"]\n}\n"),
+            ("nothing to say, nothing written", "", &[], &[], ""),
+            (
+                "an empty object",
+                "{}",
+                &["Slack"],
+                &["Notes"],
+                "{\n  \"apps\": [\"Slack\"],\n  \"apps_hidden\": [\"Notes\"]\n}",
+            ),
+            (
+                "a value is replaced where it is; other keys, an unknown one and the spacing stay",
+                "{\n    \"terminal\": { \"font\": \"Monaco\" },\n    \"apps\":   [\"Old\",\n      \"Older\"],\n    \"colour\": \"teal\"\n}\n",
+                &["Slack", "Lumen \"2\""],
+                &[],
+                "{\n    \"terminal\": { \"font\": \"Monaco\" },\n    \"apps\":   [\"Slack\", \"Lumen \\\"2\\\"\"],\n    \"colour\": \"teal\"\n}\n",
+            ),
+            (
+                "a new key goes after the last, indented as it is",
+                "{\n\t\"repos\": [\"~/code\"],\n\t\"sessions\": false\n}\n",
+                &["Slack"],
+                &["Notes"],
+                "{\n\t\"repos\": [\"~/code\"],\n\t\"sessions\": false,\n\t\"apps\": [\"Slack\"],\n\t\"apps_hidden\": [\"Notes\"]\n}\n",
+            ),
+            (
+                "a file on one line stays on one line",
+                "{ \"tasks\": \"t\", \"x\": {\"a}\": \"}\\\"\"} }",
+                &["Slack"],
+                &[],
+                "{ \"tasks\": \"t\", \"x\": {\"a}\": \"}\\\"\"}, \"apps\": [\"Slack\"] }",
+            ),
+            (
+                "a list emptied keeps its key",
+                "{\"apps\":[\"Slack\"],\"apps_hidden\":[\"Notes\"]}",
+                &[],
+                &[],
+                "{\"apps\":[],\"apps_hidden\":[]}",
+            ),
+            (
+                "of a key written twice, the one that counts is changed",
+                "{\"apps\": [\"A\"], \"apps\": [\"B\"]}",
+                &["C"],
+                &[],
+                "{\"apps\": [\"A\"], \"apps\": [\"C\"]}",
+            ),
+            (
+                "the mark some editors start a file with stays",
+                "\u{feff}{}",
+                &["Slack"],
+                &[],
+                "\u{feff}{\n  \"apps\": [\"Slack\"]\n}",
+            ),
+        ];
+        for (what, text, apps, hidden, wanted) in cases {
+            let new = with_apps(text, &list(apps), &list(hidden)).unwrap();
+            assert_eq!(new, wanted, "{what}");
+            // What was written reads back as the lists, and every other key as before.
+            let (before, after) = (Settings::read(text).0, Settings::read(&new).0);
+            assert_eq!((&after.apps, &after.apps_hidden), (&list(apps), &list(hidden)), "{what}");
+            assert_eq!(
+                Settings { apps: Vec::new(), apps_hidden: Vec::new(), ..after },
+                Settings { apps: Vec::new(), apps_hidden: Vec::new(), ..before },
+                "{what}"
+            );
+        }
+        // A file that cannot be read as an object is not rewritten.
+        assert!(with_apps("{ not json", &list(&["Slack"]), &[]).unwrap_err().starts_with("not valid JSON"));
+        assert!(with_apps("[1]", &list(&["Slack"]), &[]).unwrap_err().contains("JSON object"));
+        assert!(with_apps("{\"apps\": [\"A\"],}", &[], &[]).is_err());
+    }
+
+    #[test]
+    fn the_dock_setting_and_the_hidden_apps_are_read() {
+        let settings = Settings::parse(r#"{"apps_hidden": ["Music"], "suggest_dock_apps": false}"#).unwrap();
+        assert_eq!((settings.apps_hidden, settings.suggest_dock_apps), (vec!["Music".to_string()], Some(false)));
+        assert_eq!(Settings::default().suggest_dock_apps, None);
     }
 
     #[test]

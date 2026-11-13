@@ -51,7 +51,10 @@ The fourth icon, Workbook, is empty for now.
 | I want to | Do |
 |---|---|
 | Put a running app's window in a pane | Apps, click the app (⇧-click: split down). Or ⌘E and pick it |
-| Start an app that is not running | ⌘E, type its name, ↵. Or name it in the `apps` setting: it is listed under "Not running" in Apps, click it |
+| Start an app that is not running | Apps, click it under "Not running" (pinned apps, then the Dock's) or under "All apps". Or ⌘E, type its name, ↵ |
+| Keep an app at the top of that list | Hover its row, Pin. Or ⌘⇧E on Apps, then `p` (again unpins). It is written to `apps` in the settings |
+| Stop a Dock app being suggested | Hover its row, Hide. Or ⌘⇧E, then `x`. Undo on the line at the top (six seconds), or `u` |
+| Find an app among all installed | Apps, "All apps (N)", then click the filter or `/` in list mode, and type |
 | Type in the app | Click its pane. The status bar turns `APP`; ottospace keys stop |
 | Come back | Click ottospace itself, or the return key |
 | Give the window back to macOS | Come back to ottospace first, then ⌘W on its pane: the window returns to where it was |
@@ -144,6 +147,8 @@ ottospace ctl '{"cmd":"state"}' | jq --argjson pane "$OTTOSPACE_PANE" '.state.ta
   "session_dirs": { "claude": ["~/.claude"], "codex": "~/.codex" },
   "session_quiet_minutes": 3,
   "apps": ["Microsoft Outlook", "Slack"],
+  "apps_hidden": ["Music"],
+  "suggest_dock_apps": true,
   "windows": [{ "app": "us.zoom.xos", "title": "Zoom Meeting", "do": "ignore" }]
 }
 ```
@@ -154,6 +159,8 @@ setting takes its default.
 
 `sessions`: `false` reads no agent session files. `session_dirs` names where Claude Code and Codex keep them, if not `~/.claude` and `~/.codex`. `session_quiet_minutes`: a task adopted from a session moves to Needs you after the session has been quiet this long (default 3; 0 never).
 
+`apps`: the pinned apps, by name or bundle path. `apps_hidden`: Dock apps not to suggest. Pin, Unpin and Hide in Apps write these two and leave the rest of the file as it is. `suggest_dock_apps`: `false` lists no Dock apps.
+
 `windows` rules name windows ottospace leaves alone, by `app`, `title` and `subrole`: [reference](reference.md#settings).
 
 `OTTOSPACE_REPOS` (directories, `:` between them) wins over `repos`. `OTTOSPACE_HOME` names another folder than `~/.ottospace`.
@@ -162,4 +169,4 @@ setting takes its default.
 
 - Quitting loses tabs, splits and terminals (tasks and settings are kept).
 - Filing a task starts nothing: no agent and no worktree. The task gets its first tab when you open it.
-- In the Apps section an app that is not running is listed only if the `apps` setting names it. The picker (⌘E) finds any installed app once you type.
+- A running app cannot be pinned from the Apps section: pin it while it is closed, or name it in `apps`.

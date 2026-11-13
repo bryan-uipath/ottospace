@@ -55,7 +55,9 @@ Rules:
   Accessibility and Screen Recording for the terminal. Use it for anything that moves, parks,
   adopts or restores a real window.
 - `OTTOSPACE_APPS_DIRS` (folders, `:` between them) replaces the folders scanned for installed apps.
-  An E2E run that names none lists none, and never starts an app.
+  An E2E run that names none lists none, and never starts an app. `OTTOSPACE_DOCK_APPS` (bundle
+  paths, `:` between them) stands for the Dock's apps; a test run that names none has none, and
+  never reads the user's Dock.
 - A feature is done when both loops cover it. Extend `Request` and the state snapshot when a test
   needs to drive or read something new.
 

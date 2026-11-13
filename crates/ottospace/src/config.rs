@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::{fs, io};
 
-use ottospace_core::settings::{Settings, expand_home};
+use ottospace_core::settings::{Settings, expand_home, with_apps};
 use ottospace_core::tasks::Task;
 
 pub struct Config {
@@ -163,6 +163,26 @@ pub fn save_task(task: &Task) -> io::Result<()> {
     let Some(dir) = tasks_dir() else { return Ok(()) };
     let text = serde_json::to_string_pretty(task).map_err(io::Error::other)? + "\n";
     write_whole(&dir, &format!("{}.json", task.id), &text)
+}
+
+/// Writes the pinned and hidden apps into `settings.json`: only `apps` and `apps_hidden` change.
+/// Nothing is written in a test run that named no folder, or if the file would not change.
+/// `Err`: the file could not be read as settings, and is left as it is.
+pub fn save_apps(apps: &[String], hidden: &[String]) -> Result<(), String> {
+    let Some(home) = get().home.as_ref() else { return Ok(()) };
+    // Through a link to the file it names: a settings file kept elsewhere stays linked.
+    let file = home.join("settings.json");
+    let file = fs::canonicalize(&file).unwrap_or(file);
+    let text = match fs::read_to_string(&file) {
+        Ok(text) => text,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err.to_string()),
+    };
+    let new = with_apps(&text, apps, hidden)?;
+    let (Some(dir), Some(name)) = (file.parent(), file.file_name().and_then(|name| name.to_str())) else {
+        return Err("no place for the file".into());
+    };
+    if new == text { Ok(()) } else { write_whole(dir, name, &new).map_err(|err| err.to_string()) }
 }
 
 /// True if marks are kept between runs: not in a test run that named no folder.

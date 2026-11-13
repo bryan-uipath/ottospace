@@ -41,6 +41,8 @@ import type {
   SessionRow,
   SessionRunner,
   SessionsBar,
+  AppsBar,
+  ClosedApp,
   Sneak,
   Snapshot,
   Tab,
@@ -292,6 +294,31 @@ function sessionsBar(value: unknown, at: string): SessionsBar {
     enabled: bool(o.enabled, `${at}.enabled`),
     reads: num(o.reads, `${at}.reads`),
     slow_reads: num(o.slow_reads, `${at}.slow_reads`),
+  };
+}
+
+function closedApp(value: unknown, at: string): ClosedApp {
+  const o = fields(value, at);
+  return {
+    name: str(o.name, `${at}.name`),
+    path: str(o.path, `${at}.path`),
+    pinned: bool(o.pinned, `${at}.pinned`),
+    suggested: bool(o.suggested, `${at}.suggested`),
+  };
+}
+
+function appsBar(value: unknown, at: string): AppsBar {
+  const o = fields(value, at);
+  return {
+    not_running: list(closedApp)(o.not_running, `${at}.not_running`),
+    more: num(o.more, `${at}.more`),
+    more_open: bool(o.more_open, `${at}.more_open`),
+    all_count: num(o.all_count, `${at}.all_count`),
+    all_open: bool(o.all_open, `${at}.all_open`),
+    all: list(closedApp)(o.all, `${at}.all`),
+    filter: str(o.filter, `${at}.filter`),
+    filtering: bool(o.filtering, `${at}.filtering`),
+    undo: orNull(str)(o.undo, `${at}.undo`),
   };
 }
 
@@ -595,6 +622,7 @@ export function snapshot(value: unknown): Snapshot {
     home: orNull(home)(o.home, "home"),
     home_drawn: homeDrawn(o.home_drawn, "home_drawn"),
     closed_apps: list(str)(o.closed_apps, "closed_apps"),
+    apps_bar: appsBar(o.apps_bar, "apps_bar"),
     apps: list(appEntry)(o.apps, "apps"),
     ax_overlay: orNull(axOverlay)(o.ax_overlay, "ax_overlay"),
     sneak: orNull(sneak)(o.sneak, "sneak"),

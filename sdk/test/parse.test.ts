@@ -63,6 +63,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     home: { nodes: [], needs_you: [], counts: { needs_you: 0, running: 0, captured: 0, on_hold: 0, done: 0 } },
     home_drawn: { area: [0, 30, 1400, 846], panel: [80, 300, 520, 120], nodes: {}, lattice_builds: 1, lattice_paints: 2 },
     closed_apps: [],
+    apps_bar: { not_running: [], more: 0, more_open: false, all_count: 0, all_open: false, all: [], filter: "", filtering: false, undo: null },
     apps: [],
     ax_overlay: overlay,
     sneak: null,

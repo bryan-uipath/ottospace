@@ -123,6 +123,10 @@ pub enum Moved {
     Dismissed,
     /// Not a task's: a mark was taken off. The Marks section offers it back.
     MarkRemoved,
+    /// Not a task's either: the Apps section offers a pin, an unpin or a hidden suggestion back.
+    AppPinned,
+    AppUnpinned,
+    AppHidden,
 }
 
 impl Moved {
@@ -132,7 +136,15 @@ impl Moved {
             Moved::Held => "On hold",
             Moved::Dismissed => "Dismissed",
             Moved::MarkRemoved => "Mark removed",
+            Moved::AppPinned => "Pinned",
+            Moved::AppUnpinned => "Unpinned",
+            Moved::AppHidden => "Suggestion hidden",
         }
+    }
+
+    /// The Apps section's offer, not the Tasks section's.
+    pub fn of_apps(self) -> bool {
+        matches!(self, Moved::AppPinned | Moved::AppUnpinned | Moved::AppHidden)
     }
 }
 

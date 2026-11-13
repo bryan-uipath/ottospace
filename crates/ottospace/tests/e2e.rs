@@ -1804,6 +1804,221 @@ fn the_picker_filter_is_a_field_and_offers_apps_that_are_not_running() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Made-up apps in a folder of the test's own: never the user's, and none is ever started.
+fn fake_apps(name: &str, apps: &[&str]) -> PathBuf {
+    let root = std::env::temp_dir().join(format!("ottospace-e2e-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    for app in apps {
+        std::fs::create_dir_all(root.join(format!("{app}.app"))).unwrap();
+    }
+    // As the app resolves them: the temp folder is behind a link.
+    root.canonicalize().unwrap()
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_apps_section_lists_pinned_then_dock_then_all_apps_and_a_pin_is_written_to_the_settings() {
+    let root = fake_apps("apps-bar", &["Sketchpad", "Skylark", "Lumen Desk", "Quill", "Harbor", "Tally"]);
+    let path = |app: &str| root.join(format!("{app}.app")).to_str().unwrap().to_string();
+    // The Dock has an app outside the scanned folder, one that is pinned, and one that is gone.
+    let other = fake_apps("apps-dock", &["Kestrel Mail"]);
+    let kestrel = other.join("Kestrel Mail.app").to_str().unwrap().to_string();
+    let dock = [path("Quill"), path("Sketchpad"), kestrel.clone(), path("Harbor"), path("Gone")].join(":");
+    // Settings with other keys, an unknown one, and spacing of their own. Pinned by name.
+    let settings = "{\n    \"terminal\": { \"font\": \"Menlo\" },\n    \"apps\": [\"Sketchpad\"],\n    \"colour\": \"teal\",\n    \"sessions\": false\n}\n";
+    let home = user_folder("apps-bar", settings);
+    let env = [
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+        ("OTTOSPACE_REPOS", ""),
+        ("OTTOSPACE_APPS_DIRS", root.to_str().unwrap()),
+        ("OTTOSPACE_DOCK_APPS", dock.as_str()),
+    ];
+    let otto = Otto::launch_with("apps-bar", &env);
+    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+    let file = || std::fs::read_to_string(home.join("settings.json")).unwrap();
+    let names = |rows: &Value| -> Vec<String> {
+        let name = |row: &Value| {
+            let mark = if row["pinned"] == true { "*" } else { "" };
+            format!("{}{mark}", row["name"].as_str().unwrap())
+        };
+        rows.as_array().unwrap().iter().map(name).collect()
+    };
+    // The folder and the Dock are read on another thread.
+    otto.call(json!({"cmd": "section", "section": "apps"}));
+    let reply = otto.wait_for("the apps to be listed", |o| {
+        let reply = o.call(json!({"cmd": "state"}));
+        (reply["apps_bar"]["all_count"] == 3 && reply["apps_bar"]["not_running"].as_array()?.len() == 4)
+            .then_some(reply)
+    });
+    // Pinned first, then the Dock's in its order; the rest is folded, and counted.
+    let bar = &reply["apps_bar"];
+    assert_eq!(names(&bar["not_running"]), ["Sketchpad*", "Quill", "Kestrel Mail", "Harbor"]);
+    assert_eq!(reply["closed_apps"], json!(["Sketchpad", "Quill", "Kestrel Mail", "Harbor"]));
+    assert_eq!(
+        (&bar["all"], &bar["all_open"], &bar["more"], &bar["undo"]),
+        (&json!([]), &json!(false), &json!(0), &Value::Null)
+    );
+    assert_eq!(
+        bar["not_running"][2],
+        json!({"name": "Kestrel Mail", "path": kestrel, "pinned": false, "suggested": true})
+    );
+    let notice = reply["notice"].as_str().unwrap_or_default();
+    assert!(notice.starts_with("settings.json: colour: unknown field"), "{notice}");
+
+    // List mode: no app runs in a test, so the first row is the pinned app. `p` on the Dock's
+    // Kestrel Mail pins it: by its path, as it is in no folder the names are looked for in.
+    let reply = key("cmd-shift-e j j p");
+    assert_eq!(names(&reply["apps_bar"]["not_running"]), ["Sketchpad*", "Kestrel Mail*", "Quill", "Harbor"]);
+    assert_eq!((reply["apps_bar"]["undo"].as_str(), reply["mode"].as_str()), (Some("Pinned"), Some("list")));
+    let pinned = settings.replace("[\"Sketchpad\"]", &format!("[\"Sketchpad\", {}]", json!(kestrel)));
+    assert_eq!(file(), pinned, "only the list changed: the other keys, the unknown one and the spacing stay");
+    // `u` takes it back, in the file too.
+    let reply = key("u");
+    assert_eq!(names(&reply["apps_bar"]["not_running"]), ["Sketchpad*", "Quill", "Kestrel Mail", "Harbor"]);
+    assert_eq!((file(), &reply["apps_bar"]["undo"]), (settings.to_string(), &Value::Null));
+    // `p` on a pinned app unpins it: it is in the Dock, so it stays as a suggestion.
+    let reply = key("k k p");
+    assert_eq!(names(&reply["apps_bar"]["not_running"]), ["Quill", "Sketchpad", "Kestrel Mail", "Harbor"]);
+    assert_eq!(
+        (reply["apps_bar"]["undo"].as_str(), file()),
+        (Some("Unpinned"), settings.replace("[\"Sketchpad\"]", "[]"))
+    );
+    key("u");
+    // `x` hides a suggestion: Quill is in the scanned folder, so it goes to "All apps".
+    let reply = key("j x");
+    assert_eq!(names(&reply["apps_bar"]["not_running"]), ["Sketchpad*", "Kestrel Mail", "Harbor"]);
+    assert_eq!(
+        (reply["apps_bar"]["undo"].as_str(), &reply["apps_bar"]["all_count"]),
+        (Some("Suggestion hidden"), &json!(4))
+    );
+    let hidden = settings.replace("false\n", &format!("false,\n    \"apps_hidden\": [{}]\n", json!(path("Quill"))));
+    assert_eq!(file(), hidden);
+
+    // The undo line is a control, and so are a row's buttons: a label does what a click does.
+    let reply = sneak_to(&otto, "apps-undo");
+    assert_eq!(names(&reply["apps_bar"]["not_running"]), ["Sketchpad*", "Quill", "Kestrel Mail", "Harbor"]);
+    assert_eq!(file(), settings.replace("false\n", "false,\n    \"apps_hidden\": []\n"));
+    // A row's buttons show on the row list mode has selected (and under the pointer). The
+    // selection went with Kestrel Mail's row; Harbor is the next, and Quill two above that.
+    assert_eq!((reply["mode"].as_str(), reply["state"]["list"].as_u64()), (Some("list"), Some(2)));
+    key("j");
+    let reply = sneak_to(&otto, &format!("app-hide:{}", path("Harbor")));
+    assert_eq!(names(&reply["apps_bar"]["not_running"]), ["Sketchpad*", "Quill", "Kestrel Mail"]);
+    key("k k");
+    let reply = sneak_to(&otto, &format!("app-pin:{}", path("Quill")));
+    assert_eq!(names(&reply["apps_bar"]["not_running"]), ["Sketchpad*", "Quill*", "Kestrel Mail"]);
+    let kept: Value = serde_json::from_str(&file()).unwrap();
+    assert_eq!(kept["apps"], json!(["Sketchpad", path("Quill")]));
+    assert_eq!(
+        (&kept["apps_hidden"], &kept["colour"], &kept["terminal"]),
+        (&json!([path("Harbor")]), &json!("teal"), &json!({"font": "Menlo"}))
+    );
+
+    // "All apps" unfolds from its heading, by name; `/` gives the filter the keyboard.
+    let reply = sneak_to(&otto, "apps-all");
+    assert_eq!(names(&reply["apps_bar"]["all"]), ["Harbor", "Lumen Desk", "Skylark", "Tally"]);
+    let reply = key("/");
+    assert_eq!((reply["field"]["of"].as_str(), reply["mode"].as_str()), (Some("apps"), Some("list")));
+    let reply = key("s k");
+    assert_eq!(
+        (names(&reply["apps_bar"]["all"]), field(&reply).0.as_str()),
+        (vec!["Skylark".to_string(), "Lumen Desk".into()], "sk")
+    );
+    assert_eq!((&reply["apps_bar"]["all_count"], &reply["apps_bar"]["filtering"]), (&json!(4), &json!(true)));
+    // ↵ gives the keys back to the rows, on the first app left; `p` pins it out of the group.
+    let reply = key("enter");
+    assert_eq!(
+        (&reply["field"], &reply["apps_bar"]["filtering"], reply["mode"].as_str()),
+        (&Value::Null, &json!(false), Some("list"))
+    );
+    let reply = key("p");
+    assert_eq!(names(&reply["apps_bar"]["not_running"]), ["Sketchpad*", "Quill*", "Skylark*", "Kestrel Mail"]);
+    assert_eq!(
+        (names(&reply["apps_bar"]["all"]), &reply["apps_bar"]["all_count"]),
+        (vec!["Lumen Desk".to_string()], &json!(3))
+    );
+    // Folding the group clears the filter. No row was opened: nothing is ever started in a test.
+    let reply = sneak_to(&otto, "apps-all");
+    assert_eq!(
+        (&reply["apps_bar"]["all_open"], &reply["apps_bar"]["filter"], &reply["state"]["panes"]),
+        (&json!(false), &json!(""), &json!([]))
+    );
+    drop(otto);
+
+    // The next start reads what was written: pinned in the order pinned, Harbor not suggested.
+    let otto = Otto::launch_with("apps-bar-again", &env);
+    otto.call(json!({"cmd": "section", "section": "apps"}));
+    otto.wait_for("the kept pins", |o| {
+        let reply = o.call(json!({"cmd": "state"}));
+        (names(&reply["apps_bar"]["not_running"]) == ["Sketchpad*", "Quill*", "Skylark*", "Kestrel Mail"]).then_some(())
+    });
+    drop(otto);
+    for dir in [&root, &other, &home] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_settings_file_that_cannot_be_read_is_not_written_and_dock_suggestions_can_be_turned_off() {
+    let root = fake_apps("apps-broken", &["Quill", "Harbor"]);
+    let path = |app: &str| root.join(format!("{app}.app")).to_str().unwrap().to_string();
+    let dock = path("Quill");
+    let broken = "{ \"apps\": [\"Harbor\"], oops }\n";
+    let home = user_folder("apps-broken", broken);
+    let env = |home: &Path| {
+        vec![
+            ("OTTOSPACE_HOME", home.to_str().unwrap().to_string()),
+            ("OTTOSPACE_REPOS", String::new()),
+            ("OTTOSPACE_APPS_DIRS", root.to_str().unwrap().to_string()),
+            ("OTTOSPACE_DOCK_APPS", dock.clone()),
+        ]
+    };
+    let listed = |otto: &Otto, count: u64| {
+        otto.call(json!({"cmd": "section", "section": "apps"}));
+        otto.wait_for("the apps to be listed", |o| {
+            let reply = o.call(json!({"cmd": "state"}));
+            let bar = &reply["apps_bar"];
+            (bar["all_count"].as_u64()? + bar["not_running"].as_array()?.len() as u64 == count).then_some(reply)
+        })
+    };
+    let vars = env(&home);
+    let vars: Vec<(&str, &str)> = vars.iter().map(|(name, value)| (*name, value.as_str())).collect();
+    let otto = Otto::launch_with("apps-broken", &vars);
+    // Nothing of the file is read, so nothing is pinned; the Dock's app is suggested.
+    let reply = listed(&otto, 2);
+    assert_eq!(reply["apps_bar"]["not_running"][0]["name"], "Quill");
+    // A pin shows for this run, the file stays as it was, and the status bar says so.
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-shift-e p"}));
+    assert_eq!(reply["apps_bar"]["not_running"][0]["pinned"], true);
+    assert!(
+        reply["notice"]
+            .as_str()
+            .is_some_and(|notice| notice.starts_with("settings.json was not written: not valid JSON")),
+        "{}",
+        reply["notice"]
+    );
+    assert_eq!(std::fs::read_to_string(home.join("settings.json")).unwrap(), broken);
+    drop(otto);
+
+    // `"suggest_dock_apps": false`: the Dock's apps are only among all apps. A first pin makes the file's key.
+    let off = user_folder("apps-off", "{\"suggest_dock_apps\": false}");
+    let vars = env(&off);
+    let vars: Vec<(&str, &str)> = vars.iter().map(|(name, value)| (*name, value.as_str())).collect();
+    let otto = Otto::launch_with("apps-off", &vars);
+    let reply = listed(&otto, 2);
+    assert_eq!((&reply["apps_bar"]["not_running"], &reply["apps_bar"]["all_count"]), (&json!([]), &json!(2)));
+    // With no row above it, list mode starts on the heading: ↵ unfolds it, and `p` pins Harbor.
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-shift-e enter j p"}));
+    assert_eq!(reply["apps_bar"]["not_running"][0]["name"], "Harbor");
+    let kept = std::fs::read_to_string(off.join("settings.json")).unwrap();
+    assert_eq!(kept, format!("{{\"suggest_dock_apps\": false, \"apps\": [{}]}}", json!(path("Harbor"))));
+    drop(otto);
+    for dir in [&root, &home, &off] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn picker_opens_a_terminal_in_the_chosen_direction() {
