@@ -1,5 +1,7 @@
 # Install and update
 
+If `osi install` output looks different from this page, run `osi self-update` once.
+
 Short version: [README](../README.md#install).
 
 Apple Silicon, macOS 14 or later:
@@ -25,7 +27,8 @@ osi install pr 30     # the build of a pull request. Needs gh, signed in. Withou
                       # requested, queued or running (--no-wait: say its state and stop)
 osi list              # builds you can install: main, and each open pull request with its state
 osi install stable    # the latest release; osi install v0.1.0 for one release
-osi current           # what is installed: channel, version, commit, date
+osi current           # what is installed: channel, version, commit, date; osi's version
+osi --version         # osi's version, and the build it installed
 osi update            # install the channel's newer build, if there is one (waits like install)
 osi update --check    # only say whether there is one
 osi rollback          # put the previous build back; again to undo
@@ -45,7 +48,10 @@ osi self-update       # replace osi with the one on main
   do not count.
 - After installing `main`, osi says when `main` has a newer commit than the build: its build is
   not published yet, or it changed only docs (which publish none).
-- Undo an install: `osi rollback`.
+- Undo an install: `osi rollback`. It puts the previous ottospace back, not the previous osi.
+- Each build carries its own `osi`. When it is newer than yours, an install or update replaces
+  yours with it and says `Updated osi too.`; the next `osi` command uses it. A pull request
+  build never does: run that pull request's `scripts/osi` to try it.
 - **A pull request build runs that pull request's code with your terminal's permissions.** `osi`
   shows the author and the head commit first. It refuses a pull request from a fork unless you
   pass `--allow-fork` and type the commit. Read the diff before you do.

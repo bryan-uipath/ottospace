@@ -59,15 +59,22 @@ app_is() { [ "$(cat "$app/Contents/Resources/id")" = "$1" ]; }
 # A 40-character commit made of one letter, e.g. `commit a`.
 commit() { printf "%040d" 0 | tr 0 "$1"; }
 
-# make_build <dir> <id> <commit>: the files scripts/package.sh would publish, with a fake binary
-# that prints its id and an ad hoc signed fake app.
+# make_build <dir> <id> <commit> [<osi version>]: the files scripts/package.sh would publish, with
+# a fake binary that prints its id and an ad hoc signed fake app. With a version, the tarball
+# also carries this osi with that OSI_VERSION and a last line `# fixture osi <version>`.
 make_build() {
-  local dir="$1" id="$2" sha="$3" stage="$work/stage"
+  local dir="$1" id="$2" sha="$3" osi_version="${4:-}" stage="$work/stage"
   rm -rf "$stage" "$dir"
   mkdir -p "$stage/ottospace.app/Contents/MacOS" "$stage/ottospace.app/Contents/Resources" "$dir"
   printf '#!/bin/sh\necho "fake ottospace %s"\n' "$id" >"$stage/ottospace"
   chmod 755 "$stage/ottospace"
-  tar -czf "$dir/ottospace-$target.tar.gz" -C "$stage" ottospace
+  if [ -n "$osi_version" ]; then
+    sed "s/^OSI_VERSION=.*/OSI_VERSION=$osi_version/" "$root/scripts/osi" >"$stage/osi"
+    echo "# fixture osi $osi_version" >>"$stage/osi"
+    tar -czf "$dir/ottospace-$target.tar.gz" -C "$stage" ottospace osi
+  else
+    tar -czf "$dir/ottospace-$target.tar.gz" -C "$stage" ottospace
+  fi
   # A real Mach-O, so the signature check in osi has something to verify.
   cp /usr/bin/true "$stage/ottospace.app/Contents/MacOS/ottospace"
   printf '%s' "$id" >"$stage/ottospace.app/Contents/Resources/id"
@@ -144,7 +151,7 @@ chmod 755 "$OSI_GH"
 
 # publish_pr <head commit> <id> [<built commit>]: the artifact of the run for that head.
 publish_pr() {
-  make_build "$FAKE_GH_DIR/build-$1" "$2" "${3:-$1}"
+  make_build "$FAKE_GH_DIR/build-$1" "$2" "${3:-$1}" "${4:-}"
   rm -f "$FAKE_GH_DIR/build-current"
   ln -s "$FAKE_GH_DIR/build-$1" "$FAKE_GH_DIR/build-current"
 }
@@ -208,6 +215,60 @@ check "a second rollback undoes the first" installed_is B
 run "$osi" current
 check "current shows the previous build" says "previous:  main  0.1.0  commit aaaaaaaaaaaa"
 
+echo "# a build carries osi"
+osi_is() { tail -n 1 "$bin/osi" | grep -qxF "# fixture osi $1"; }
+cur="$(sed -n 's/^OSI_VERSION=//p' "$root/scripts/osi")"
+chmod 750 "$bin/osi"
+run "$osi" --version
+check "osi --version names osi's version and the build" says "osi $cur"
+check "and the build installed" says "ottospace main  0.1.0  commit"
+make_build "$main_dir" O1 "$(commit 1)" $((cur + 1))
+run "$osi" install main
+check "a newer osi in the build replaces the installed one" osi_is $((cur + 1))
+check "it says so" says "Updated osi too."
+check "the build installs as well" installed_is O1
+check "osi keeps its mode" [ "$(stat -f %Lp "$bin/osi")" = 750 ]
+run "$osi" current
+check "current names osi's version" says "osi:       version $((cur + 1))"
+make_build "$main_dir" O2 "$(commit 2)" $((cur + 1))
+run "$osi" install main
+check "the same version: not replaced" not_says "Updated osi"
+make_build "$main_dir" O3 "$(commit 3)" "$cur"
+run "$osi" install main
+check "an older version: not replaced" osi_is $((cur + 1))
+check "and not said" not_says "Updated osi"
+make_build "$main_dir" O4 "$(commit 4)"
+run "$osi" install main
+check "a build without osi changes nothing of osi" osi_is $((cur + 1))
+check "and installs" installed_is O4
+run "$osi" rollback
+check "rollback does not roll osi back" osi_is $((cur + 1))
+# A bundled osi without the marker line is not osi.
+make_build "$main_dir" O5 "$(commit 5)" $((cur + 9))
+mkdir -p "$work/nomark" && tar -xzf "$main_dir/ottospace-$target.tar.gz" -C "$work/nomark"
+sed -i '' '2d' "$work/nomark/osi"
+tar -czf "$main_dir/ottospace-$target.tar.gz" -C "$work/nomark" ottospace osi
+resum "$main_dir"
+run "$osi" install main
+check "a bundled osi without the marker: not used" osi_is $((cur + 1))
+check "the build installs" installed_is O5
+# An installed osi without the marker is not osi's to replace.
+cp "$bin/osi" "$work/osi-kept"
+printf '#!/bin/sh\necho mine\n' >"$bin/osi"
+make_build "$main_dir" O6 "$(commit 6)" $((cur + 9))
+run "$work/osi-kept" install main
+check "an installed osi without the marker: left alone" [ "$(sh "$bin/osi")" = mine ]
+check "the build installs" installed_is O6
+mv "$work/osi-kept" "$bin/osi"
+# A changed tarball fails its checksum, osi with it.
+make_build "$main_dir" O7 "$(commit 7)" $((cur + 9))
+echo tampered >>"$main_dir/ottospace-$target.tar.gz"
+run "$osi" install main
+check "a bad checksum fails" [ "$status" != 0 ]
+check "osi is not replaced" osi_is $((cur + 1))
+make_build "$main_dir" B "$(commit b)"
+run "$osi" install main
+
 echo "# checksum mismatch"
 make_build "$main_dir" C "$(commit c)"
 echo tampered >>"$main_dir/ottospace-$target.tar.gz"
@@ -246,6 +307,14 @@ publish_pr "$(commit 1)" WRONG "$(commit 2)"
 run "$osi" install pr 31
 check "a build of another commit is refused" says "not the pull request's head"
 check "the old binary is still installed" installed_is PR30b
+
+make_pr 29 "$(commit 8)" bryan-uipath/ottospace false bryan-uipath
+publish_pr "$(commit 8)" PR29 "$(commit 8)" 99
+run "$osi" install pr 29
+check "a pull request build installs" installed_is PR29
+check "but its osi is not taken, whatever its number" eval "! grep -qxF '# fixture osi 99' '$bin/osi'"
+publish_pr "$(commit f)" PR30b
+run "$osi" install pr 30
 
 echo "# pull request from a fork"
 make_pr 32 "$(commit 3)" mallory/ottospace true mallory

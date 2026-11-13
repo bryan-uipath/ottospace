@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds what a release or a CI build publishes, into <out dir> (default: dist):
-#   ottospace-<target>.tar.gz   the bare `ottospace` binary
+#   ottospace-<target>.tar.gz   the bare `ottospace` binary, and `osi` (an install updates osi with it)
 #   ottospace-<target>.app.zip  ottospace.app
 #   BUILD                       version, commit and commit date, one key=value per line
 #   SHA256SUMS                  checksums of the three files above
@@ -38,7 +38,7 @@ esac
 
 mkdir -p "$out"
 name="ottospace-$target_triple"
-tar -czf "$out/$name.tar.gz" -C "$target/release" ottospace
+tar -czf "$out/$name.tar.gz" -C "$target/release" ottospace -C "$root/scripts" osi
 # ditto keeps the bundle layout and its signature intact.
 ditto -c -k --keepParent "$target/release/bundle/ottospace.app" "$out/$name.app.zip"
 printf 'version=%s\ncommit=%s\ndate=%s\ntarget=%s\n' "$version" "$commit" "$date" "$target_triple" > "$out/BUILD"

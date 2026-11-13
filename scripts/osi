@@ -27,6 +27,9 @@ build_label="pr-build"
 has_label='([.labels[].name] | index("'"$build_label"'") != null | tostring)'
 # Second line of this file. install.sh and self-update replace only an osi that carries it.
 marker="# ottospace-installer"
+# Bump on every change to this file: an install replaces an older installed osi with the one
+# its build carries, never with an older or equal one.
+OSI_VERSION=1
 
 tmp=""
 bg=""
@@ -55,6 +58,7 @@ usage: osi <command>
   rollback                   put the previous build back (again: undo the rollback)
   uninstall                  remove ottospace and osi; settings and tasks are kept
   self-update                replace osi with the one on main
+  --version                  osi's version, and the build it installed
 
   --app          also install ottospace.app into ~/Applications
   --force        replace an `ottospace` command or app that osi did not install
@@ -490,6 +494,8 @@ install_build() {
   tar -xzf "$dl/$tarball" -C "$tmp/bin" ottospace || die "the download holds no ottospace binary"
   [ -f "$tmp/bin/ottospace" ] && [ ! -L "$tmp/bin/ottospace" ] && [ -s "$tmp/bin/ottospace" ] ||
     die "the download holds no ottospace binary"
+  # The osi this build carries, if any (older builds carry none). Same checksum as the binary.
+  tar -xzf "$dl/$tarball" -C "$tmp/bin" osi 2>/dev/null || true
   if [ "$want_app" = 1 ]; then
     [ -f "$dl/$appzip" ] || die "this build has no $appzip"
     verify "$appzip"
@@ -578,6 +584,36 @@ install_build() {
   fi
   if [ "$channel" = main ]; then note_behind "$b_commit"; fi
   note_running
+  # Not from a pull request: two branches can carry one OSI_VERSION with different code, and
+  # a PR's osi would then outstay main's. Run that PR's scripts/osi directly to try it.
+  if [ "$channel" != pr ]; then update_self "$tmp/bin/osi"; fi
+}
+
+# True when file $1 is an osi: `#!/bin/sh`, the marker line, and it parses.
+is_osi() { [ "$(sed -n 1p "$1")" = "#!/bin/sh" ] && [ "$(sed -n 2p "$1")" = "$marker" ] && sh -n "$1"; }
+
+# The OSI_VERSION in file $1; 0 when it has none (an osi from before the number).
+osi_version_of() {
+  v="$(sed -n 's/^OSI_VERSION=\([0-9][0-9]*\)$/\1/p' "$1" 2>/dev/null | head -n 1)"
+  echo "${v:-0}"
+}
+
+# Replaces the installed osi with $1, the osi a build carries, when $1 is a newer osi and the
+# installed file is osi's. This run goes on with the old code; the next one uses the new.
+update_self() {
+  dest="$bin_dir/osi"
+  [ -f "$1" ] && [ ! -L "$1" ] && [ -f "$dest" ] && [ ! -L "$dest" ] || return 0
+  [ "$(sed -n 2p "$dest")" = "$marker" ] && is_osi "$1" || return 0
+  [ "$(osi_version_of "$1")" -gt "$(osi_version_of "$dest")" ] || return 0
+  staged="$bin_dir/.osi.new.$$"
+  # Never fails the install, which is done: at worst osi stays as it was.
+  if cp "$1" "$staged" && chmod "$(stat -f %Lp "$dest")" "$staged" && mv -f "$staged" "$dest"; then
+    say "Updated osi too."
+  else
+    rm -f "$staged"
+    say "Could not update osi: run osi self-update."
+  fi
+  staged=""
 }
 
 describe() {
@@ -701,11 +737,19 @@ cmd_list() {
   say "Install one: osi install pr <n>. A build that is missing is requested, and waited for."
 }
 
+# osi's own version, and the build it installed.
+cmd_version() {
+  setup
+  say "osi $OSI_VERSION"
+  if [ -f "$state_dir/current" ]; then say "ottospace $(state_line "$state_dir/current")"; fi
+}
+
 cmd_current() {
   setup
   [ -f "$state_dir/current" ] || die "nothing is installed by osi (osi install main)"
   say "ottospace $(state_line "$state_dir/current")"
   say "  installed: $(get installed "$state_dir/current")"
+  say "  osi:       version $OSI_VERSION"
   say "  command:   $cmd"
   if [ ! -f "$cmd" ]; then
     say "             missing"
@@ -867,7 +911,7 @@ cmd_self_update() {
     die "$dest exists and is not osi. Remove it and run again."
   fi
   fetch "$self_url" "$tmp/osi" || die "download failed: $self_url"
-  if [ "$(sed -n 1p "$tmp/osi")" != "#!/bin/sh" ] || [ "$(sed -n 2p "$tmp/osi")" != "$marker" ] || ! sh -n "$tmp/osi"; then
+  if ! is_osi "$tmp/osi"; then
     die "the download is not osi. Nothing was changed."
   fi
   mkdir -p "$bin_dir"
@@ -891,6 +935,7 @@ main() {
     uninstall) cmd_uninstall ;;
     self-update) cmd_self_update ;;
     help | -h | --help) usage ;;
+    --version | version) cmd_version ;;
     "")
       usage >&2
       exit 2

@@ -43,7 +43,7 @@ credentials become CI secrets. Those must reach only the jobs that publish (`pub
 
 | File | What |
 |---|---|
-| `ottospace-aarch64-apple-darwin.tar.gz` | The binary |
+| `ottospace-aarch64-apple-darwin.tar.gz` | The binary, and `osi` |
 | `ottospace-aarch64-apple-darwin.app.zip` | `ottospace.app` |
 | `BUILD` | `version=`, `commit=`, `date=` (the commit's date, UTC) |
 | `SHA256SUMS` | Checksums of the three files above |
@@ -130,7 +130,8 @@ and `codesign` only for `--app`. All ship with macOS except `gh`.
 |---|---|
 | `osi install main` / `stable` / `vX.Y.Z` / `pr <n>` | Installs that build. `--app` adds `~/Applications/ottospace.app` |
 | `osi list` | The main build and each open pull request: commit, build state (ready, queued, running, failed, no build), which is installed |
-| `osi current` | Channel, version, commit, date, when installed, the previous build |
+| `osi current` | Channel, version, commit, date, when installed, the previous build, osi's version |
+| `osi --version` | osi's version, and the build it installed |
 | `osi update` | Installs the channel's build if its commit differs. `--check` only reports |
 | `osi rollback` | Swaps the installed and the previous build. Twice: back where you were |
 | `osi uninstall` | Removes the command, the app it installed, its state and itself. Keeps settings and tasks |
@@ -155,6 +156,19 @@ and `codesign` only for `--app`. All ship with macOS except `gh`.
   the previous build: `rollback` restores it only if its commit is the one rolled back to.
 - **Staged, then swapped.** Binary and app are both staged before either moves. If a rename
   fails, the old app goes back and `current` still names what is installed.
+- **osi comes with each build** (2026-11-13). `osi install main` updated ottospace but not osi,
+  so an old osi kept printing old output after its fix shipped, and nobody knew about
+  `self-update`. Now `scripts/package.sh` puts `scripts/osi` in the tarball beside `ottospace`,
+  covered by the tarball's checksum. After a successful install or update osi replaces
+  `~/.local/bin/osi` with it, by rename and with the same mode, when: the bundled file starts
+  `#!/bin/sh` and the marker line and parses (`sh -n`); the installed file carries the marker;
+  and the bundled `OSI_VERSION` is higher than the installed one's (none counts as 0). It says
+  `Updated osi too.` The run that does it finishes with the old code. `OSI_VERSION` is bumped by
+  hand on every change to osi. A pull request build never replaces osi: two branches can carry
+  one number with different code, and a PR's osi would then outstay main's. `rollback` does not
+  roll osi back. A build from before this
+  carries no osi and changes nothing; an osi from before it never looks, and needs one
+  `osi self-update` (said at the top of `docs/install.md`).
 - **gh is pinned to github.com**: every call passes `-R github.com/bryan-uipath/ottospace`, and
   `GH_HOST` and `GH_REPO` are dropped, so an enterprise host cannot stand in for the repository.
 - **Overrides**, for tests: `HOME`, `OSI_BIN_DIR`, `OSI_APP_DIR`, `OTTOSPACE_HOME`,
