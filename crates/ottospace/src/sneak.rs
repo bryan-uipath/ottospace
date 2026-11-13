@@ -289,9 +289,14 @@ impl Workspace {
                 section.map(|(section, ..)| Action::ToggleSection { section: *section })
             }
             ("bar", "close") => Some(Action::CloseSidebar),
-            ("bar", "refresh") => {
-                self.refresh_lists(cx);
-                cx.notify();
+            ("bar", "add") => {
+                if let Some(section) = self.model.sidebar {
+                    self.bar_add(section, window, cx);
+                }
+                None
+            }
+            ("repo-remove", _) => {
+                self.remove_repo(name, window, cx);
                 None
             }
             ("app", _) => {
@@ -334,7 +339,7 @@ impl Workspace {
                 self.click_undo(window, cx);
                 None
             }
-            ("bar", "new_task") | ("task-new", _) => {
+            ("task-new", _) => {
                 self.new_task(window, cx);
                 None
             }

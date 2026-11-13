@@ -29,7 +29,7 @@ same code (`rebuild_tab`). They differ in what they are for:
 
 ## Stage 1, as built
 
-**Save.** ⌘⇧S, File ▸ Save Tab as Workbook, `Save tab` in the section's header, or `Save this
+**Save.** ⌘⇧S, File ▸ Save Tab as Workbook, + in the section's header, or `Save this
 tab` in the empty section. The tab on show is recorded:
 
 - its split tree with ratios, and which pane had focus;

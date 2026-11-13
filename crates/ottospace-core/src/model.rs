@@ -436,6 +436,21 @@ pub enum Action {
     SetRepos {
         repos: Vec<Repo>,
     },
+    /// The directories the Repos list is read from, as the shell resolved them.
+    SetRepoDirs {
+        dirs: repos::RepoDirs,
+    },
+    /// Add `dir` (resolved) to the settings' `repos`: `found` is what the shell read there. With
+    /// no repository, a notice. Listed already: nothing is written. Its first row is selected.
+    RepoAdd {
+        dir: String,
+        found: Vec<Repo>,
+    },
+    /// Stop listing the repository at `path`: its directory comes off the settings' `repos`,
+    /// if it is named there as itself.
+    RepoRemove {
+        path: String,
+    },
     /// Open a terminal in a listed repository or worktree, by its path. An empty tab takes its name.
     OpenRepo {
         path: String,
@@ -1014,6 +1029,9 @@ impl Action {
             | Action::CloseKeys
             | Action::LeaveVisual
             | Action::SetRepos { .. }
+            | Action::SetRepoDirs { .. }
+            | Action::RepoAdd { .. }
+            | Action::RepoRemove { .. }
             | Action::OpenRepo { .. }
             | Action::RestoreTasks { .. }
             | Action::TaskAdd { .. }
@@ -1157,6 +1175,15 @@ pub enum Effect {
     SaveApps {
         changes: Vec<crate::settings::ListChange>,
     },
+    /// The directories of the Repos list changed: make these changes to `repos` in the
+    /// settings file, as it is then.
+    SaveRepos {
+        changes: Vec<crate::settings::ListChange>,
+    },
+    /// Say this in the status bar: why a move of the user's did nothing.
+    Notice {
+        text: String,
+    },
     /// The user picked an installed app that is not running: start the bundle at `path` in the
     /// background and host its window when it has one.
     LaunchApp {
@@ -1254,6 +1281,8 @@ pub struct Model {
     pub apps: Vec<String>,
     /// The Repos section's list, as last read from disk.
     pub repos: Vec<Repo>,
+    /// The directories it is read from.
+    pub repo_dirs: repos::RepoDirs,
     pub tasks: Tasks,
     /// What the new-task box's tags may name, as the shell last read it.
     #[serde(skip)]
@@ -1359,6 +1388,7 @@ impl Default for Model {
             list: None,
             apps: Vec::new(),
             repos: Vec::new(),
+            repo_dirs: repos::RepoDirs::default(),
             tasks: Tasks::default(),
             known: compose::Known::default(),
             known_line: None,
@@ -1467,6 +1497,8 @@ impl Model {
             Action::AppPin { .. } | Action::AppHide { .. } | Action::AppsUndo | Action::ListPin => {
                 Some(apps::USERS_ALONE)
             }
+            // So do a directory added to the Repos list and one taken off it.
+            Action::RepoAdd { .. } | Action::RepoRemove { .. } => Some(apps::USERS_ALONE),
             Action::ListDismiss | Action::ListUndo if self.sidebar == Some(Section::Apps) => Some(apps::USERS_ALONE),
             // A workbook is the user's file, and opening one starts their apps.
             Action::WorkbookSave { .. }
@@ -1730,6 +1762,7 @@ impl Model {
                 | Action::ListUndo
                 | Action::ToggleSection { .. }
                 | Action::FocusList
+                | Action::RepoAdd { .. }
                 | Action::SessionClick { .. }
         );
         let selected = self.list.and_then(|at| self.list_rows().into_iter().nth(at)).filter(|_| !own_move);
@@ -1800,6 +1833,9 @@ impl Model {
             }
             Action::Open { kind, axis, beside } => drop(self.open(kind, axis, beside, effects)),
             Action::SetRepos { repos } => self.repos = repos::arrange(repos),
+            Action::SetRepoDirs { dirs } => self.repo_dirs = dirs,
+            Action::RepoAdd { dir, found } => self.repo_add(dir, found, effects),
+            Action::RepoRemove { path } => self.repo_remove(&path, effects),
             Action::RestoreTasks { tasks, floor } => {
                 self.tasks.restore(tasks, floor);
                 // A tab of a task that is not among them is a tab of no task, and the bar
@@ -3511,6 +3547,43 @@ impl Model {
         self.repo_name(path).is_some()
     }
 
+    /// The Repos section's +: `dir` joins the settings' directories unless it is listed
+    /// already, and list mode selects its first row. Nothing found there: a notice.
+    fn repo_add(&mut self, dir: String, found: Vec<Repo>, effects: &mut Vec<Effect>) {
+        let listed = self.repo_listed(&dir);
+        let wanted: Vec<String> =
+            if listed { vec![dir.clone()] } else { found.iter().map(|r| r.path.clone()).collect() };
+        match self.repo_dirs.may_add(&dir, found.len(), listed) {
+            Err(text) => return effects.push(Effect::Notice { text }),
+            Ok(false) => {}
+            Ok(true) => {
+                let change = crate::settings::ListChange { key: "repos", add: true, text: dir.clone() };
+                effects.push(Effect::SaveRepos { changes: vec![change] });
+                self.repo_dirs.dirs.push(repos::RepoDir { text: dir.clone(), path: dir });
+                self.repos = repos::arrange(self.repos.drain(..).chain(found).collect());
+            }
+        }
+        self.leave(effects);
+        self.sidebar = Some(Section::Repos);
+        let row = |row: &ListRow| matches!(row, ListRow::Repo(path) if wanted.contains(path));
+        self.list = self.list_rows().iter().position(row);
+    }
+
+    /// "Remove" on a repository's name: its directory comes off the settings, or a notice says
+    /// why not. It stays listed while a directory that holds it is still named.
+    fn repo_remove(&mut self, path: &str, effects: &mut Vec<Effect>) {
+        match self.repo_dirs.to_remove(path) {
+            Err(text) => effects.push(Effect::Notice { text }),
+            Ok(dir) => {
+                let change = crate::settings::ListChange { key: "repos", add: false, text: dir.text.clone() };
+                effects.push(Effect::SaveRepos { changes: vec![change] });
+                self.repo_dirs.dirs.retain(|d| *d != dir);
+                let held = self.repo_dirs.holder(path).is_some();
+                self.repos.retain(|repo| held || repo.path != path);
+            }
+        }
+    }
+
     /// The `id` of the tab that holds `pane`, active tab included.
     pub fn tab_of(&self, pane: PaneId) -> Option<u32> {
         let index = self.tab_panes().iter().position(|panes| panes.contains(&pane))?;
@@ -3947,6 +4020,9 @@ mod tests {
         Action::LeaveVisual,
         Action::ToggleAxOverlay,
         Action::SetRepos { .. },
+        Action::SetRepoDirs { .. },
+        Action::RepoAdd { .. },
+        Action::RepoRemove { .. },
         Action::OpenRepo { .. },
         Action::RestoreTasks { .. },
         Action::TaskAdd { .. },
@@ -4098,6 +4174,9 @@ mod tests {
             Action::LeaveVisual,
             Action::ToggleAxOverlay,
             Action::SetRepos { repos: Vec::new() },
+            Action::SetRepoDirs { dirs: repos::RepoDirs::default() },
+            Action::RepoAdd { dir: text(), found: Vec::new() },
+            Action::RepoRemove { path: text() },
             Action::OpenRepo { path: text(), axis: Right },
             Action::RestoreTasks { tasks: Vec::new(), floor: 0 },
             Action::TaskAdd { title: text(), priority: 3, state: State::Running, tab: None, assign: Assign::default() },
@@ -4218,7 +4297,9 @@ mod tests {
 
     /// A pin, a hide or their undo: refused from all but the user on its own ground.
     fn writes_settings(action: &Action) -> bool {
-        matches!(action, Action::AppPin { .. } | Action::AppHide { .. } | Action::AppsUndo | Action::ListPin)
+        let apps =
+            matches!(action, Action::AppPin { .. } | Action::AppHide { .. } | Action::AppsUndo | Action::ListPin);
+        apps || matches!(action, Action::RepoAdd { .. } | Action::RepoRemove { .. })
     }
 
     /// A workbook saved, opened, renamed, deleted or put back: the user's alone, as those are.
@@ -6335,6 +6416,40 @@ mod tests {
         m.update(Action::CloseCompose);
         m.update(Action::TaskFromLine { line: "ask Ana".into(), known: Default::default(), open: true });
         assert_eq!((m.current_task, m.tasks.list.len()), (Some(2), 2));
+    }
+
+    #[test]
+    fn a_directory_is_added_to_the_repos_list_and_taken_off_it_by_the_user_alone() {
+        let repo = |path: &str| Repo { name: repos::name_of(path), path: path.into(), branch: None, worktrees: vec![] };
+        let dir = |text: &str, path: &str| repos::RepoDir { text: text.into(), path: path.into() };
+        let change = |add: bool, text: &str| crate::settings::ListChange { key: "repos", add, text: text.into() };
+        let notice = |text: &str| vec![Effect::Notice { text: text.into() }];
+        let mut m = Model::default();
+        m.update(Action::SetRepoDirs { dirs: repos::RepoDirs { dirs: vec![dir("~/code", "/code")], fixed: false } });
+        m.update(Action::SetRepos { repos: listed() });
+        let add = |dir: &str, found: Vec<Repo>| Action::RepoAdd { dir: dir.into(), found };
+        // A client writes no settings: refused, and nothing changes.
+        assert_eq!(m.refusal(&add("/src/zed", vec![repo("/src/zed")]), Origin::Socket), Some(apps::USERS_ALONE));
+        // No repository there: said, and nothing is written.
+        assert_eq!(m.update(add("/tmp", vec![])), notice("No repository in /tmp"));
+        assert_eq!((m.repo_dirs.dirs.len(), m.list), (1, None));
+        // A repository: written, listed, and its row selected in list mode.
+        let saved = vec![Effect::SaveRepos { changes: vec![change(true, "/src/zed")] }];
+        assert_eq!(m.update(add("/src/zed", vec![repo("/src/zed")])), saved);
+        assert_eq!(m.repo_dirs.dirs[1], dir("/src/zed", "/src/zed"));
+        assert_eq!((m.sidebar, m.mode(), m.list), (Some(Section::Repos), Mode::List, Some(2)));
+        assert_eq!(m.list_rows()[2], ListRow::Repo("/src/zed".into()));
+        // Listed already, as itself or through `~/code`: selected, nothing written.
+        m.update(Action::LeaveList);
+        assert_eq!((m.update(add("/src/zed", vec![repo("/src/zed")])), m.list), (vec![], Some(2)));
+        assert_eq!((m.update(add("/code/app", vec![repo("/code/app")])), m.list), (vec![], Some(0)));
+        assert_eq!(m.repo_dirs.dirs.len(), 2);
+        // Remove: only a directory named as itself. One held by `~/code` is the user's to edit.
+        let through = "app is listed through ~/code: take that directory out of `repos` in settings.json";
+        assert_eq!(m.update(Action::RepoRemove { path: "/code/app".into() }), notice(through));
+        let saved = vec![Effect::SaveRepos { changes: vec![change(false, "/src/zed")] }];
+        assert_eq!(m.update(Action::RepoRemove { path: "/src/zed".into() }), saved);
+        assert_eq!((m.repo_dirs.dirs.len(), m.repos.len(), m.repo_listed("/src/zed")), (1, 1, false));
     }
 
     #[test]

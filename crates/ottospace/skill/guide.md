@@ -88,6 +88,7 @@ ottospace ctl '{"cmd":"state"}'
 | `home` | Null while the tab on show has a pane. Else the home screen: `nodes` (one for each of the first 12 inbox tasks: `task`, `group`, `lane` (its project, by name; tasks of no project share the last), `depth` (0 is the newest task; in a lane the older task is drawn farther) and `crossing`, the `[x, z]` of the lattice it is drawn on; no node is under the text, so a small window has fewer), `needs_you` (up to 3 tasks) and `counts` for each group |
 | `home_drawn` | What the home screen drew, in window points: `area`, `panel` (the new-task line with its list) and `nodes` (each node's click target `[x, y, w, h]` by task id). `lattice_builds` and `lattice_paints` count how often lattice lines were built and painted; a frame that moves nothing paints without building |
 | `state.repos` | Repositories found on disk: `name`, `path`, `branch`, and `worktrees` (each `name`, `path`, `branch`) |
+| `state.repo_dirs` | Where `state.repos` is read from: `dirs` (each `text`, as the settings name it, and `path`, resolved) and `fixed` (true while `OTTOSPACE_REPOS` names them). Only the user changes them, with the Repos section's + and Remove: no request does |
 | `repos_bar` | The Repos section as it lists `state.repos`: each repository's `name`, `path`, `header` (where its name is, `[x, y, w, h]` in window points) and `rows`, its checkouts: `path` (what `open_repo` takes), `branch` (`(no branch)` if unreadable), `default` (true for the repository's own directory), `label` (`Default`, or a linked worktree's directory name) and `row` (where it is). `header` and `row` are as laid out, scrolled out of view or not, and null while the section is not drawn |
 | `ax_overlay` | Null, or the accessibility overlay's last read: `pane`, `targets` (`label`, `frame` in window coordinates, `source`), `count`, `truncated`, `millis`, `error` |
 | `sneak` | Null, or sneak mode's labels: `typed` (the letters so far) and `targets`, each `label`, `frame` (`x`, `y`, `w`, `h` in window points) and `source` (`{"type":"own","id":"rail:tasks"}`) |
@@ -580,7 +581,7 @@ per keystroke: the control acts as if clicked and the mode ends. A first letter 
 label only narrows; `backspace` takes it back; `escape` leaves with nothing done. So does a letter
 that goes on with no label, and the keys after it in the same `key` request are dropped, as are
 those after a spelled label. Ids: `rail:apps`
-(`workbook`, `tasks`, `repos`, `marks`), `bar:refresh`, `bar:close`, `app:<name>`, `repo:<path>`,
+(`workbook`, `tasks`, `repos`, `marks`), `bar:add` (Tasks: the new-task box; Repos: the folder picker, for the user alone), `bar:save_tab` (Workbook's +: save the tab on show), `bar:close`, `repo-remove:<path>` (under the pointer; the user's alone), `app:<name>`, `repo:<path>`,
 `task:<id>`, `mark:<id>` (go to it), `mark-key:<id>`, `mark-rename:<id>`, `mark-remove:<id>`,
 `mark-undo`, `tab:<tab id>`, `tab-close:<tab id>`, `top:new_tab`, `top:split_right`,
 `top:split_down`, `top:task_leave`, `header:<pane>` (focus), `close:<pane>`, `fit:<pane>` (only

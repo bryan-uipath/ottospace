@@ -55,6 +55,7 @@ import type {
   SessionRunner,
   SessionsBar,
   ReposGroup,
+  RepoDirs,
   CheckoutRow,
   AppsBar,
   ClosedApp,
@@ -583,6 +584,15 @@ function repo(value: unknown, at: string): Repo {
   return { ...worktree(value, at), worktrees: list(worktree)(fields(value, at).worktrees, `${at}.worktrees`) };
 }
 
+function repoDirs(value: unknown, at: string): RepoDirs {
+  const o = fields(value, at);
+  const dir = (value: unknown, at: string) => {
+    const d = fields(value, at);
+    return { text: str(d.text, `${at}.text`), path: str(d.path, `${at}.path`) };
+  };
+  return { dirs: list(dir)(o.dirs, `${at}.dirs`), fixed: bool(o.fixed, `${at}.fixed`) };
+}
+
 function pickItem(value: unknown, at: string): PickItem {
   const o = fields(value, at);
   if (o.type === "terminal") return { type: "terminal" };
@@ -721,6 +731,7 @@ function model(value: unknown, at: string): Model {
     compose: orNull(str)(o.compose, `${at}.compose`),
     list: orNull(num)(o.list, `${at}.list`),
     repos: list(repo)(o.repos, `${at}.repos`),
+    repo_dirs: repoDirs(o.repo_dirs, `${at}.repo_dirs`),
     tasks: { list: list(task)(fields(o.tasks, `${at}.tasks`).list, `${at}.tasks.list`) },
     collapsed: list(heading)(o.collapsed, `${at}.collapsed`),
     picker: orNull(picker)(o.picker, `${at}.picker`),

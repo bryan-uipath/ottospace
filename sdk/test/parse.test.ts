@@ -25,6 +25,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       compose: null,
       list: null,
       repos: [],
+      repo_dirs: { dirs: [], fixed: false },
       tasks: { list: [] },
       collapsed: [],
       picker: null,

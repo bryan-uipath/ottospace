@@ -1,7 +1,7 @@
 //! Workbooks in the shell: the Workbook section and the files in `~/.ottospace/workbooks`.
 //! What one holds and what opening it does are the core's (`ottospace_core::workbook`).
 
-use gpui::{AnyView, Context, Div, ElementId, Stateful, Window, div, prelude::*, px, rgb};
+use gpui::{AnyView, Context, ElementId, Window, div, prelude::*, px, rgb};
 use ottospace_core::marks::MarkInput;
 use ottospace_core::workbook::{self, WorkbookId, WorkbookRow};
 use ottospace_core::{Action, Origin, theme};
@@ -84,7 +84,7 @@ impl Workspace {
         true
     }
 
-    /// ⌘⇧S, the menu, "Save tab": saves the tab on show, or updates the workbook it came from.
+    /// ⌘⇧S, the menu, the header's +: saves the tab on show, or updates the workbook it came from.
     pub(crate) fn save_workbook(&mut self, window: &Window, cx: &mut Context<Self>) {
         let refused = self.model.workbook_save_refusal();
         let action = Action::WorkbookSave { uid: marks::new_uid(), cwds: self.cwds() };
@@ -138,24 +138,6 @@ impl Workspace {
             value
         };
         self.model.workbook_rows().into_iter().map(row).collect()
-    }
-
-    /// "Save tab" in the Workbook section's header.
-    pub(crate) fn save_tab_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
-        div()
-            .id("bar-save-tab")
-            .relative()
-            .h(px(24.))
-            .px_2()
-            .flex()
-            .items_center()
-            .rounded_md()
-            .cursor_pointer()
-            .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
-            .child("Save tab")
-            .tooltip(|_, cx| AnyView::from(cx.new(|_| Tooltip("Save this tab as a workbook (⌘⇧S)".into()))))
-            .child(self.controls.mark("bar:save_tab"))
-            .on_click(cx.listener(|this, _, window, cx| this.save_workbook(window, cx)))
     }
 
     /// The Workbook section: each workbook's name and what its tab holds. A click opens it;

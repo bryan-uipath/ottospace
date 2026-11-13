@@ -9,7 +9,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::mpsc::{Receiver, Sender};
@@ -319,6 +319,7 @@ impl AssetSource for Assets {
             "icons/split-right.svg" => Some(include_bytes!("../assets/icons/split-right.svg")),
             "icons/split-down.svg" => Some(include_bytes!("../assets/icons/split-down.svg")),
             "icons/plus.svg" => Some(include_bytes!("../assets/icons/plus.svg")),
+            "icons/dismiss.svg" => Some(include_bytes!("../assets/icons/dismiss.svg")),
             _ => None,
         };
         Ok(bytes.map(Into::into))
@@ -884,6 +885,7 @@ impl Workspace {
         let focus = cx.focus_handle();
         window.focus(&focus);
         let mut model = Model::default();
+        model.update(Action::SetRepoDirs { dirs: config::repo_dirs() }.sent_by(Origin::System));
         model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
         let kept = config::load_tasks();
         let unread = kept.unread;
@@ -1120,6 +1122,8 @@ impl Workspace {
                 }
                 Effect::LaunchApp { name, path, axis, new_tab } => self.launch_picked(name, path, *axis, *new_tab),
                 Effect::SaveApps { changes } => self.save_apps(changes),
+                Effect::SaveRepos { changes } => self.save_apps(changes),
+                Effect::Notice { text } => self.error = Some(text.clone()),
                 // A picture of the pane is asked for: the cursor's going scrolls the terminal to
                 // its bottom, so it waits until the picture of what is on show is taken.
                 Effect::Visual { pane, on: false } if self.snapshot_pending(*pane) => self.visual_after.push(*pane),
@@ -1672,6 +1676,11 @@ impl Workspace {
                     None
                 }
                 Request::OpenRepo { path, axis } => Some(Action::OpenRepo { path, axis }),
+                // A test run only (refused above otherwise): the folder the user's picker would give.
+                Request::RepoAdd { path } => {
+                    self.add_repo(Path::new(&path), Origin::User, window, cx);
+                    None
+                }
                 // A test run only (refused above otherwise): the user's capture key, pressed by the test.
                 Request::CaptureStart { pane } => {
                     failure = self.capture_pane(pane, Origin::User, window, cx).err();
@@ -3319,10 +3328,32 @@ impl Workspace {
             }))
     }
 
-    /// Secondary bar: the open section's list. Closable.
-    fn render_bar(&self, section: Section, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The bar's header, the same for every section: its name, + where the section can add
+    /// something, and × to close the bar.
+    fn bar_header(&self, section: Section, cx: &mut Context<Self>) -> Div {
         let title = SECTIONS.iter().find(|(s, ..)| *s == section).map_or("", |(_, _, label)| label);
-        let header = div()
+        let button = |id: &'static str, icon: &'static str, tip: &'static str| {
+            div()
+                .id(id)
+                .size(px(28.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_md()
+                .cursor_pointer()
+                .hover(|s| s.bg(rgb(theme::SELECTED)))
+                .child(svg().path(icon).size(px(14.)).text_color(rgb(theme::MUTED)))
+                .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
+                .relative()
+        };
+        // What + adds, and its sneak id. Apps and Marks have nothing to add from here.
+        let add = match section {
+            Section::Tasks => Some(("New task (⌘N)", "bar:add")),
+            Section::Repos => Some(("Add a repository…", "bar:add")),
+            Section::Workbook => Some(("Save this tab as a workbook (⌘⇧S)", "bar:save_tab")),
+            _ => None,
+        };
+        div()
             .h(px(40.))
             .pl_3()
             .pr_1()
@@ -3341,57 +3372,93 @@ impl Workspace {
                 badge.line_height(px(16.)).text_color(rgb(theme::task(Group::NeedsYou))).child(n.to_string())
             }))
             .child(div().flex_1())
-            .children((section == Section::Tasks).then(|| {
-                div()
-                    .id("bar-new-task")
-                    .size(px(28.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(rgb(theme::SELECTED)))
-                    .child(svg().path("icons/plus.svg").size(px(14.)).text_color(rgb(theme::MUTED)))
-                    .tooltip(|_, cx| AnyView::from(cx.new(|_| Tooltip("New task (⌘N)".into()))))
-                    .relative()
-                    .child(self.controls.mark("bar:new_task"))
-                    .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)))
+            .children(add.map(|(tip, mark)| {
+                button("bar-add", "icons/plus.svg", tip)
+                    .child(self.controls.mark(mark))
+                    .on_click(cx.listener(move |this, _, window, cx| this.bar_add(section, window, cx)))
             }))
-            .children((section == Section::Workbook).then(|| self.save_tab_button(cx)))
-            // Reads the section's list again. Tasks and Workbook have nothing to read.
-            .children(matches!(section, Section::Apps | Section::Repos).then(|| {
-                div()
-                    .id("bar-refresh")
-                    .size(px(28.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
-                    .child("↻")
-                    .child(self.controls.mark("bar:refresh"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.refresh_lists(cx);
-                        cx.notify();
-                    }))
-            }))
-            .child(
-                div()
-                    .id("bar-close")
-                    .size(px(28.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
-                    .child("×")
-                    .child(self.controls.mark("bar:close"))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.dispatch(Action::CloseSidebar, this.input, window, cx);
-                    })),
-            );
+            .child(button("bar-close", "icons/dismiss.svg", "Close").child(self.controls.mark("bar:close")).on_click(
+                cx.listener(|this, _, window, cx| {
+                    this.dispatch(Action::CloseSidebar, this.input, window, cx);
+                }),
+            ))
+    }
+
+    /// The header's +: a new task in Tasks, a repository to list in Repos, the tab on show in Workbook.
+    pub(crate) fn bar_add(&mut self, section: Section, window: &Window, cx: &mut Context<Self>) {
+        match section {
+            Section::Tasks => self.new_task(window, cx),
+            Section::Repos => self.pick_repo(window, cx),
+            Section::Workbook => self.save_workbook(window, cx),
+            _ => {}
+        }
+    }
+
+    /// The Repos section's +: the system's folder picker. Only for the user: a client opens no
+    /// panel over their work. Not in a test run: nothing could answer the panel.
+    fn pick_repo(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.input != Origin::User {
+            self.error = Some(ottospace_core::apps::USERS_ALONE.into());
+            return;
+        }
+        if std::env::var_os("OTTOSPACE_E2E").is_some() {
+            return;
+        }
+        let options =
+            gpui::PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some("Add".into()) };
+        let chosen = cx.prompt_for_paths(options);
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(paths))) = chosen.await else { return };
+            let Some(path) = paths.first() else { return };
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.add_repo(path, Origin::User, window, cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// A folder for the Repos list: resolved first (links, `..`), and only a directory. The
+    /// core decides what to do with what is found there.
+    fn add_repo(&mut self, path: &Path, origin: Origin, window: &Window, cx: &mut Context<Self>) {
+        let dir = path.canonicalize().ok().filter(|dir| dir.is_dir());
+        let Some(dir) = dir.as_deref().and_then(Path::to_str) else {
+            self.error = Some(format!("Not a directory: {}", path.display()));
+            return;
+        };
+        let found = repos::found_in(Path::new(dir));
+        self.change_repos(Action::RepoAdd { dir: dir.into(), found }, origin, window, cx);
+    }
+
+    /// "Remove" on a repository's name in the Repos section.
+    pub(crate) fn remove_repo(&mut self, path: &str, window: &Window, cx: &mut Context<Self>) {
+        self.change_repos(Action::RepoRemove { path: path.into() }, self.input, window, cx);
+    }
+
+    /// A directory added to the Repos list or taken off it. The list is read before, so what is
+    /// listed already is known, and after, from the directories as they then are. If the
+    /// settings were not written the directories are as before: the next try writes again.
+    fn change_repos(&mut self, action: Action, origin: Origin, window: &Window, cx: &mut Context<Self>) {
+        // A refused one (a client's) leaves the status bar and the list alone.
+        if self.model.refusal(&action, origin).is_some() {
+            self.dispatch(action, origin, window, cx);
+            return;
+        }
+        self.model.update(Action::SetRepoDirs { dirs: config::repo_dirs() }.sent_by(Origin::System));
+        let before = self.model.repo_dirs.clone();
+        self.error = None; // what the last try said is not about this one
+        self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
+        self.dispatch(action, origin, window, cx);
+        if self.error.as_ref().is_some_and(|error| error.starts_with(Self::NOT_WRITTEN)) {
+            self.model.update(Action::SetRepoDirs { dirs: before }.sent_by(Origin::System));
+        }
+        config::set_repo_roots(&self.model.repo_dirs);
+        self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
+    }
+
+    /// Secondary bar: the open section's list. Closable.
+    fn render_bar(&self, section: Section, cx: &mut Context<Self>) -> impl IntoElement {
+        let header = self.bar_header(section, cx);
         let body = match section {
             Section::Apps => self.render_apps(cx).into_any_element(),
             Section::Repos => self.render_repos(cx).into_any_element(),
@@ -3850,7 +3917,28 @@ impl Workspace {
             let name = div().flex_none().px_2().pb_0p5().text_xs().font_weight(FontWeight::SEMIBOLD);
             let name = name.text_color(rgb(theme::MUTED)).map(|d| if n == 0 { d.pt_1() } else { d.pt_3() });
             let name = name.child(mark(&self.marks, Mark::Repo(n))).child(div().truncate().child(repo.name.clone()));
-            items.push(name.into_any_element());
+            // Under the pointer: a word that stops listing the repository. Not while
+            // `OTTOSPACE_REPOS` names the directories: there is no setting to take it from.
+            let path = repo.path.clone();
+            let remove = (!self.model.repo_dirs.fixed).then(|| {
+                div()
+                    .id(("repo-remove", n))
+                    .absolute()
+                    .right(px(6.))
+                    .bottom(px(1.))
+                    .px_1()
+                    .rounded_sm()
+                    .bg(rgb(theme::RAISED))
+                    .font_weight(FontWeight::NORMAL)
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(rgb(theme::TEXT)))
+                    .invisible()
+                    .group_hover("repo-name", |s| s.visible())
+                    .child("Remove")
+                    .child(self.controls.mark(format!("repo-remove:{path}")))
+                    .on_click(cx.listener(move |this, _, window, cx| this.remove_repo(&path, window, cx)))
+            });
+            items.push(name.group("repo-name").relative().children(remove).into_any_element());
             for checkout in repo.checkouts() {
                 items.push(row(index, checkout).into_any_element());
                 index += 1;
@@ -5083,12 +5171,13 @@ mod tests {
         }
     }
 
-    /// Every request the app accepts must have an example in the guide. But `capture_start`:
-    /// it answers only in a test run, and an agent must not learn it (see `AGENTS.md`).
+    /// Every request the app accepts must have an example in the guide. But `capture_start` and
+    /// `repo_add`: they answer only in a test run, and an agent must not learn them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        assert!(!SKILL_GUIDE.contains("capture_start"));
-        for name in request_names().into_iter().filter(|name| name != "capture_start") {
+        const TESTS_ONLY: [&str; 2] = ["capture_start", "repo_add"];
+        assert!(TESTS_ONLY.iter().all(|name| !SKILL_GUIDE.contains(name)));
+        for name in request_names().into_iter().filter(|name| !TESTS_ONLY.contains(&name.as_str())) {
             assert!(SKILL_GUIDE.contains(&format!(r#""cmd":"{name}""#)), "the guide has no example of `{name}`");
         }
     }

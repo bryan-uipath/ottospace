@@ -36,6 +36,7 @@
 {"cmd":"drag","from":[300,60],"to":[900,400],"steps":8,"as":"user"}
 {"cmd":"repos"}
 {"cmd":"open_repo","path":"/Users/me/code/app","axis":"down"}
+{"cmd":"repo_add","path":"/Users/me/code/app"}
 {"cmd":"task_add","title":"Fix the zoom flicker","priority":1,"state":"needs_you","tab":2,"agent":"codex","paths":["/src/export"],"skills":["code-review"]}
 {"cmd":"task_set_state","id":1,"state":"running"}
 {"cmd":"task_snooze","id":1,"seconds":3600}

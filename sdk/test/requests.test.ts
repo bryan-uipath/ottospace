@@ -66,6 +66,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.drag({ from: [300, 60], to: [900, 400], steps: 8, as: "user" }),
   (c) => c.repos(),
   (c) => c.openRepo({ path: "/Users/me/code/app", axis: "down" }),
+  (c) => c.repoAdd({ path: "/Users/me/code/app" }),
   (c) =>
     c.taskAdd({
       title: "Fix the zoom flicker",

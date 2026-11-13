@@ -2,10 +2,11 @@
 //! tasks kept between runs. Read once, at start: a changed setting applies at the next start.
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::{fs, io};
 
-use ottospace_core::settings::{ListChange, Settings, expand_home, with_changes};
+use ottospace_core::repos::{RepoDir, RepoDirs};
+use ottospace_core::settings::{DEFAULT_REPOS, ListChange, Settings, expand_home, with_changes};
 use ottospace_core::tasks::Task;
 
 pub struct Config {
@@ -48,13 +49,39 @@ fn load() -> Config {
 }
 
 /// Where repositories are looked for: `$OTTOSPACE_REPOS` (directories, `:` between them), else
-/// `repos` in the settings, else `~/code` and `~/notes`.
-pub fn repo_roots() -> Vec<PathBuf> {
+/// the settings' `repos` as the Repos section last changed them, else `~/code` and `~/notes`.
+/// Each as named and resolved (links, `..`) now: a link may point elsewhere since the start.
+pub fn repo_dirs() -> RepoDirs {
+    let resolved = |text: String, path: PathBuf| {
+        let path = path.canonicalize().unwrap_or(path).to_string_lossy().into_owned();
+        RepoDir { text, path }
+    };
     if let Some(list) = std::env::var_os("OTTOSPACE_REPOS") {
-        return std::env::split_paths(&list).filter(|p| !p.as_os_str().is_empty()).collect();
+        let named = std::env::split_paths(&list).filter(|p| !p.as_os_str().is_empty());
+        return RepoDirs { dirs: named.map(|p| resolved(p.to_string_lossy().into_owned(), p)).collect(), fixed: true };
     }
-    let listed = get().settings.repos.clone().unwrap_or_else(|| vec!["~/code".into(), "~/notes".into()]);
-    listed.iter().map(|dir| PathBuf::from(expand_home(dir, &user_home()))).collect()
+    let changed = NAMED.lock().ok().and_then(|named| named.clone());
+    let settings = || get().settings.repos.clone().unwrap_or_else(|| DEFAULT_REPOS.map(String::from).to_vec());
+    let dirs = changed.unwrap_or_else(settings).into_iter().map(|text| {
+        let path = PathBuf::from(expand_home(&text, &user_home()));
+        resolved(text, path)
+    });
+    RepoDirs { dirs: dirs.collect(), fixed: false }
+}
+
+/// The settings' `repos` as the Repos section last changed them, by name.
+static NAMED: Mutex<Option<Vec<String>>> = Mutex::new(None);
+
+/// Where repositories are looked for now, on any thread.
+pub fn repo_roots() -> Vec<PathBuf> {
+    repo_dirs().dirs.into_iter().map(|dir| PathBuf::from(dir.path)).collect()
+}
+
+/// The model's directories changed: later reads of the list look there.
+pub fn set_repo_roots(dirs: &RepoDirs) {
+    if let Ok(mut named) = NAMED.lock() {
+        *named = Some(dirs.dirs.iter().map(|dir| dir.text.clone()).collect());
+    }
 }
 
 /// Where the runners' sessions are read from.
@@ -204,7 +231,7 @@ pub fn save_task(task: &Task) -> io::Result<()> {
     write_whole(&dir, &format!("{}.json", task.id), &text)
 }
 
-/// Makes `changes` to `apps` and `apps_hidden` in `settings.json`, as the file is now: read
+/// Makes `changes` to `apps`, `apps_hidden` and `repos` in `settings.json`, as the file is now: read
 /// again here, so an entry written since the start (by hand, by another ottospace) stays.
 /// Nothing is written in a test run that named no folder, or if the file would not change.
 /// `Err`: the file could not be read as settings, a list in it is not a list of names, or it
