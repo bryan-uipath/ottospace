@@ -327,7 +327,10 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(div().text_xs().text_color(rgb(theme::COMPOSE)).child("NEW TASK"))
+                    // The draft's title says what it is; the drawer's header does that in its new-task state.
+                    .child(div().text_xs().text_color(rgb(theme::COMPOSE)).children(
+                        (self.model.compose_host() == Some(ottospace_core::model::Host::Bar)).then_some("NEW TASK"),
+                    ))
                     .child(attach),
             )
             // Where the content is drawn: an ⌥-click over it references nothing.
