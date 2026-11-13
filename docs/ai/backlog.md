@@ -87,3 +87,12 @@ searchable and there for readers that cannot see images.
 - On the machine only; say so, and never send a picture anywhere.
 - The text is captured content like the rest: inside the brief's fenced blocks, marked untrusted.
 - Keep the picture the first thing a reader is sent to.
+
+## 10. Terminals and agents survive quitting, updating and reopening ottospace
+
+Tasks come back as they were. Designed in [terminal-persistence.md](terminal-persistence.md): each
+terminal, the drawer agent's included, runs in a small holder process outside the app, and the
+app attaches again at start. Builds on [session-restore.md](session-restore.md) layer 1 (the
+layout file names each terminal's session) and replaces nothing there: after a reboot, layer 2
+(scrollback, directory) and agent resume still apply. Separate from workbooks
+([workbook.md](workbook.md)), which are templates with no process in them.
