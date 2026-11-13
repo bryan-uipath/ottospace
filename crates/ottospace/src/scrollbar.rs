@@ -78,6 +78,13 @@ impl Bars {
         div().relative().flex_1().min_h_0().flex().flex_col().child(list).child(bar)
     }
 
+    /// Scrolls an `area`'s list so its child `ix` is in view.
+    pub fn scroll_to_item(&self, id: &str, ix: usize) {
+        if let Some(bar) = self.0.borrow().get(id) {
+            bar.handle.scroll_to_item(ix);
+        }
+    }
+
     /// A step from the keyboard through an `area`.
     pub fn step(&self, id: &str, step: Step) {
         if let Some(bar) = self.0.borrow().get(id) {

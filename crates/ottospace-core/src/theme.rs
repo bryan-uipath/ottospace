@@ -28,6 +28,8 @@ pub const LIST: u32 = 0xfb64b6;
 pub const CONFIRM: u32 = 0xff6467;
 /// A mark has the keyboard.
 pub const MARK: u32 = 0x51a2ff;
+/// The command palette is open.
+pub const COMMAND: u32 = 0xed6aff;
 pub const ERROR: u32 = 0xff8484;
 /// Selected terminal text: a muted cyan, dark enough for light text on it.
 pub const SELECTION: u32 = 0x155e75;
@@ -51,6 +53,7 @@ pub fn accent(mode: Mode) -> u32 {
         Mode::Normal => PRIMARY,
         Mode::App => APP,
         Mode::Pick => PICK,
+        Mode::Palette => COMMAND,
         Mode::Visual => VISUAL,
         Mode::List => LIST,
         Mode::Compose => COMPOSE,

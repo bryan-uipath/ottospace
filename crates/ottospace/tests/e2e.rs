@@ -4837,3 +4837,55 @@ fn a_workbooks_terminal_comes_back_with_its_lines_and_its_command_typed_not_run(
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
 }
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_command_palette_runs_a_command_by_name_for_the_user_alone() {
+    let otto = Otto::launch("palette");
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    let state = || otto.call(json!({"cmd": "state"}));
+    // A client's ⌘P opens nothing: the palette runs any command as the user's.
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-p"}));
+    assert_eq!((&reply["mode"], &reply["palette_rows"]), (&json!("normal"), &Value::Null));
+    // The user's opens it with every command, its group and its key.
+    let reply = otto.user_key("cmd-p");
+    assert_eq!(reply["mode"], "palette");
+    let rows = reply["palette_rows"].as_array().expect("rows").clone();
+    assert!(rows.len() > 30, "{rows:?}");
+    let first = json!({"command": "split_right", "name": "Terminal Right", "group": "Panes", "key": "⌘D"});
+    assert_eq!(rows[0], first);
+    // Typing narrows the rows, best first. A client's key is refused, and its split waits.
+    let reply = otto.user_key("t e r m space b e l");
+    let typed = (&reply["state"]["palette"]["query"], &reply["palette_rows"][0]["name"]);
+    assert_eq!(typed, (&json!("term bel"), &json!("Terminal Below")));
+    assert_eq!(otto.raw(r#"{"cmd":"key","keys":"x"}"#)["error"], "only the user runs the command palette");
+    let split = otto.call(json!({"cmd": "split"}));
+    assert_eq!((pane_ids(&split).len(), &split["state"]["palette"]["query"]), (1, &json!("term bel")));
+    // ↵ runs it as its menu item does, and the palette closes.
+    otto.user_key("enter");
+    let two = |o: &Otto| Some(o.call(json!({"cmd": "state"}))).filter(|r| pane_ids(r).len() == 2);
+    let reply = otto.wait_for("a terminal below", two);
+    assert_eq!((&reply["mode"], &reply["palette_rows"]), (&json!("normal"), &Value::Null));
+    let [top, below] = otto.bounds(&[1, 2])[..] else { panic!("two panes") };
+    assert!(top[1] + top[3] <= below[1], "2 is below 1: {top:?} {below:?}");
+    // A Developer command: the state, copied (a test run's clipboard is its own).
+    otto.user_key("cmd-p c o p y space s t a t e");
+    assert_eq!(state()["palette_rows"][0]["group"], "Developer");
+    otto.user_key("enter");
+    let copied = |o: &Otto| o.call(json!({"cmd": "state"}))["copied"].as_str().map(String::from);
+    let copied = otto.wait_for("the state copied", copied);
+    assert!(copied.starts_with("{\"ok\":true") && copied.contains("\"palette_rows\""), "{copied}");
+    // ↑ from the first row wraps to the last; Esc closes it.
+    otto.user_key("cmd-p up");
+    assert_eq!(state()["state"]["palette"]["selected"], rows.len() - 1);
+    // The highlighted row is in view: at the end of the list, then back at its top once typing moves it.
+    let thumb = |o: &Otto| {
+        let bar = &o.call(json!({"cmd": "state"}))["scrollbars"]["palette"];
+        let (track, thumb) = (rect(&bar["track"]), rect(&bar["thumb"]));
+        (track[1] + track[3] - thumb[1] - thumb[3] < 1.0, thumb[1] - track[1] < 1.0)
+    };
+    otto.wait_for("the last row in view", |o| Some(()).filter(|_| thumb(o).0));
+    otto.user_key("space");
+    otto.wait_for("the first row in view", |o| Some(()).filter(|_| thumb(o).1));
+    assert_eq!(otto.user_key("escape")["mode"], "normal");
+}

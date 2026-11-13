@@ -47,6 +47,8 @@ import type {
   PaneKind,
   PickItem,
   Picker,
+  Palette,
+  PaletteRow,
   Rect,
   Repo,
   Running,
@@ -145,7 +147,7 @@ function axis(value: unknown, at: string): Axis {
 }
 
 function mode(value: unknown, at: string): Mode {
-  if (value === "normal" || value === "app" || value === "pick") return value;
+  if (value === "normal" || value === "app" || value === "pick" || value === "palette") return value;
   if (value === "visual" || value === "list" || value === "compose" || value === "sneak") return value;
   if (value === "confirm" || value === "mark" || value === "annotate") return value;
   throw wrong(at, "a mode", value);
@@ -606,7 +608,7 @@ function pickItem(value: unknown, at: string): PickItem {
 
 function field(value: unknown, at: string): Field {
   const o = fields(value, at);
-  const owners = ["compose", "picker", "apps", "mark", "workbook", "note"];
+  const owners = ["compose", "picker", "palette", "apps", "mark", "workbook", "note"];
   if (typeof o.of !== "string" || !owners.includes(o.of)) {
     throw wrong(`${at}.of`, "compose, picker, apps, mark, workbook or note", o.of);
   }
@@ -630,6 +632,21 @@ function picker(value: unknown, at: string): Picker {
     items: list(pickItem)(o.items, `${at}.items`),
     query: str(o.query, `${at}.query`),
     selected: num(o.selected, `${at}.selected`),
+  };
+}
+
+function palette(value: unknown, at: string): Palette {
+  const o = fields(value, at);
+  return { query: str(o.query, `${at}.query`), selected: num(o.selected, `${at}.selected`) };
+}
+
+function paletteRow(value: unknown, at: string): PaletteRow {
+  const o = fields(value, at);
+  return {
+    command: str(o.command, `${at}.command`),
+    name: str(o.name, `${at}.name`),
+    group: str(o.group, `${at}.group`),
+    key: orNull(str)(o.key, `${at}.key`),
   };
 }
 
@@ -761,6 +778,7 @@ function model(value: unknown, at: string): Model {
     tasks: { list: list(task)(fields(o.tasks, `${at}.tasks`).list, `${at}.tasks.list`) },
     collapsed: list(heading)(o.collapsed, `${at}.collapsed`),
     picker: orNull(picker)(o.picker, `${at}.picker`),
+    palette: orNull(palette)(o.palette, `${at}.palette`),
     confirm: orNull(confirm)(o.confirm, `${at}.confirm`),
     keys: bool(o.keys, `${at}.keys`),
     visual: orNull(num)(o.visual, `${at}.visual`),
@@ -933,6 +951,7 @@ export function snapshot(value: unknown): Snapshot {
     terminals: map(terminal)(o.terminals, "terminals"),
     copied: orNull(str)(o.copied, "copied"),
     picker_rows: orNull(list(pickItem))(o.picker_rows, "picker_rows"),
+    palette_rows: orNull(list(paletteRow))(o.palette_rows, "palette_rows"),
     field: orNull(field)(o.field, "field"),
     inbox: list(inboxRow)(o.inbox, "inbox"),
     needs_you: num(o.needs_you, "needs_you"),

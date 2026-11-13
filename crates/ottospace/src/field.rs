@@ -112,7 +112,8 @@ impl Workspace {
     fn drawn_of(&self, of: &str) -> Shared {
         match of {
             "note" => self.note_field.clone(),
-            "picker" => self.picker_field.clone(),
+            // The picker and the palette are never open together.
+            "picker" | "palette" => self.picker_field.clone(),
             "apps" => self.apps_field.clone(),
             "mark" | "workbook" => self.mark_field.clone(),
             _ => self.field.clone(),
