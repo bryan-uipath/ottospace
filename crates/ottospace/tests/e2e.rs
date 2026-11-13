@@ -10,6 +10,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+mod support;
+
 /// How long a wait may take. Generous: a loaded machine can take over 10s to start a shell.
 const TIMEOUT: Duration = Duration::from_secs(40);
 
@@ -65,20 +67,30 @@ impl Otto {
             .envs(env.iter().copied())
             .spawn()
             .expect("launch ottospace");
+        support::launched(child.id(), &socket);
         let otto = Self { child, socket };
         otto.wait_for("the control socket", |o| UnixStream::connect(&o.socket).ok().map(|_| ()));
+        otto.wait_for("the first frame", |o| {
+            (o.call(json!({"cmd": "state"}))["frame"]["number"].as_u64() > Some(0)).then_some(())
+        });
         otto
     }
 
     /// Sends one raw request line; returns the parsed reply.
     fn raw(&self, line: &str) -> Value {
+        let started = Instant::now();
         let mut stream = UnixStream::connect(&self.socket).expect("connect");
         // A hung app fails the test instead of hanging it.
         stream.set_read_timeout(Some(TIMEOUT)).expect("set timeout");
         writeln!(stream, "{line}").expect("send");
         let mut reply = String::new();
-        BufReader::new(stream).read_line(&mut reply).expect("reply");
-        serde_json::from_str(&reply).expect("reply is JSON")
+        if let Err(err) = BufReader::new(stream).read_line(&mut reply) {
+            support::request("otto", line, started, None);
+            panic!("{}", support::timed_out(&format!("the reply to {line}"), started, &err.to_string()));
+        }
+        let reply = serde_json::from_str(&reply).expect("reply is JSON");
+        support::request("otto", line, started, Some(&reply));
+        reply
     }
 
     fn call(&self, request: Value) -> Value {
@@ -92,9 +104,12 @@ impl Otto {
         let start = Instant::now();
         loop {
             if let Some(value) = check(self) {
+                support::waited(what, start, true);
                 return value;
             }
-            assert!(start.elapsed() < TIMEOUT, "timed out waiting for {what}");
+            if start.elapsed() >= TIMEOUT {
+                panic!("{}", support::timed_out(what, start, ""));
+            }
             std::thread::sleep(Duration::from_millis(50));
         }
     }
@@ -114,9 +129,13 @@ impl Otto {
                 })
                 .collect();
             if let Some(found) = found {
+                support::waited(&format!("layout of panes {ids:?}"), start, true);
                 return found;
             }
-            assert!(start.elapsed() < TIMEOUT, "no layout for panes {ids:?}; last state: {state}");
+            if start.elapsed() >= TIMEOUT {
+                let detail = format!("bounds {}", state["bounds"]);
+                panic!("{}", support::timed_out(&format!("layout of panes {ids:?}"), start, &detail));
+            }
             std::thread::sleep(Duration::from_millis(50));
         }
     }
@@ -124,6 +143,11 @@ impl Otto {
 
 impl Drop for Otto {
     fn drop(&mut self) {
+        // While the app still runs: what it was showing when the test failed.
+        if std::thread::panicking() {
+            support::failed_without_timeout();
+        }
+        support::finish(!std::thread::panicking());
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = std::fs::remove_file(&self.socket);

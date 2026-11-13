@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+mod support;
+
 /// How long a wait may take. Generous: a loaded machine can take over 10s to start a shell.
 const TIMEOUT: Duration = Duration::from_secs(40);
 
@@ -20,6 +22,8 @@ const CANARY: &str = "ottospace-canary";
 struct Proc {
     child: Child,
     socket: PathBuf,
+    /// `otto` or `canary`, for the timeline.
+    who: &'static str,
 }
 
 impl Proc {
@@ -32,18 +36,27 @@ impl Proc {
         // Nor a key taken from every app, unless the test names one.
         command.env_remove("OTTOSPACE_CAPTURE_KEY");
         let child = command.envs(env.iter().copied()).spawn().expect("launch");
-        let proc = Self { child, socket };
+        let who = if socket_var == "OTTOSPACE_SOCKET" { "otto" } else { "canary" };
+        if who == "otto" {
+            support::launched(child.id(), &socket);
+        }
+        let proc = Self { child, socket, who };
         wait_for(&format!("{name}'s socket"), || UnixStream::connect(&proc.socket).ok().map(|_| ()));
         proc
     }
 
     fn call(&self, request: Value) -> Value {
+        let (line, started) = (request.to_string(), Instant::now());
         let mut stream = UnixStream::connect(&self.socket).expect("connect");
         stream.set_read_timeout(Some(TIMEOUT)).expect("set timeout");
         writeln!(stream, "{request}").expect("send");
         let mut reply = String::new();
-        BufReader::new(stream).read_line(&mut reply).expect("reply");
+        if let Err(err) = BufReader::new(stream).read_line(&mut reply) {
+            support::request(self.who, &line, started, None);
+            panic!("{}", support::timed_out(&format!("{}'s reply to {line}", self.who), started, &err.to_string()));
+        }
         let reply: Value = serde_json::from_str(&reply).expect("reply is JSON");
+        support::request(self.who, &line, started, Some(&reply));
         assert_eq!(reply["ok"], true, "{request} failed: {reply}");
         reply
     }
@@ -51,6 +64,13 @@ impl Proc {
 
 impl Drop for Proc {
     fn drop(&mut self) {
+        // While the app still runs: what it was showing when the test failed.
+        if self.who == "otto" {
+            if std::thread::panicking() {
+                support::failed_without_timeout();
+            }
+            support::finish(!std::thread::panicking());
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = std::fs::remove_file(&self.socket);
@@ -68,9 +88,12 @@ fn wait_or<T>(what: &str, held: impl Fn() -> String, check: impl Fn() -> Option<
     let start = Instant::now();
     loop {
         if let Some(value) = check() {
+            support::waited(what, start, true);
             return value;
         }
-        assert!(start.elapsed() < TIMEOUT, "timed out waiting for {what}: {}", held());
+        if start.elapsed() >= TIMEOUT {
+            panic!("{}", support::timed_out(what, start, &held()));
+        }
         std::thread::sleep(Duration::from_millis(100));
     }
 }

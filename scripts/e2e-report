@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""Tallies e2e runs: which tests failed in how many runs, the slowest tests and waits.
+
+usage: scripts/e2e-report <out> [--markdown <file>] [--flaky <file>]
+
+<out> holds one folder per run (`run-1`, `run-2`, ..), or is one run itself. A run folder has
+what the harness wrote (`results.jsonl`, `failures/`) and the runner's result: `log` (libtest's
+output) or `junit.xml` (nextest's, where a test that failed and then passed on a retry is flaky).
+Writes `<out>/timings.json`. `--markdown`: the tables as Markdown (for $GITHUB_STEP_SUMMARY).
+`--flaky`: the tests that failed at least once, as Markdown, only if there are any.
+Exits 1 if a test failed in any run (a flaky test that passed on a retry does not count).
+"""
+
+import json
+import re
+import statistics
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+LIBTEST = re.compile(r"^test (\S+) \.\.\. ")
+
+
+def runs_of(out):
+    runs = sorted((p for p in out.iterdir() if p.is_dir() and p.name.startswith("run-")), key=lambda p: int(p.name[4:]))
+    return runs or [out]
+
+
+def outcomes(run):
+    """{test: "pass" | "fail" | "flaky"} for one run."""
+    found = {}
+    log = run / "log"
+    if log.exists():
+        # The app's stderr can land between `test x ... ` and its `ok`: the names come from the
+        # start of the line, the failures from libtest's closing list.
+        lines = log.read_text(errors="replace").splitlines()
+        for line in lines:
+            m = LIBTEST.match(line)
+            if m:
+                found[m.group(1)] = "pass"
+        listing = False
+        for line in lines:
+            if line == "failures:":
+                listing = True
+            elif listing and line.startswith("    ") and line.strip() in found:
+                found[line.strip()] = "fail"
+            elif line.startswith("test result:"):
+                listing = False
+    for junit in run.glob("**/junit.xml"):
+        for case in ET.parse(junit).iter("testcase"):
+            name = case.get("name", "")
+            if case.find("failure") is not None or case.find("error") is not None:
+                found[name] = "fail"
+            elif case.find("flakyFailure") is not None or case.find("flakyError") is not None:
+                found[name] = "flaky"
+            elif case.find("skipped") is None:
+                found[name] = "pass"
+    return found
+
+
+def records(run):
+    path = run / "results.jsonl"
+    if not path.exists():
+        return []
+    rows = []
+    for line in path.read_text(errors="replace").splitlines():
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            pass
+    return rows
+
+
+def main(argv):
+    if not argv or argv[0].startswith("-"):
+        print(__doc__, file=sys.stderr)
+        return 2
+    out = Path(argv[0])
+    opts = dict(zip(argv[1::2], argv[2::2]))
+    runs = runs_of(out)
+
+    tally = {}  # test: {"pass": n, "fail": n, "flaky": n, "folders": [..]}
+    totals, first_frames, waits = {}, [], []
+    for run in runs:
+        for test, outcome in outcomes(run).items():
+            tally.setdefault(test, {"pass": 0, "fail": 0, "flaky": 0, "folders": []})[outcome] += 1
+        for row in records(run):
+            test = row.get("test", "?")
+            if row.get("total_ms") is not None:
+                totals.setdefault(test, []).append(row["total_ms"])
+            if row.get("first_frame_ms") is not None:
+                first_frames.append(row["first_frame_ms"])
+            if row.get("folder"):
+                tally.setdefault(test, {"pass": 0, "fail": 0, "flaky": 0, "folders": []})["folders"].append(row["folder"])
+            for wait in row.get("waits", []):
+                waits.append({"test": test, "what": wait.get("what"), "ms": wait.get("ms", 0), "met": wait.get("met")})
+
+    shaky = {t: c for t, c in tally.items() if c["fail"] or c["flaky"]}
+    slowest_tests = sorted(((max(v), statistics.median(v), t) for t, v in totals.items()), reverse=True)[:10]
+    slowest_waits = sorted(waits, key=lambda w: w["ms"], reverse=True)[:15]
+    timings = {
+        "runs": len(runs),
+        "tests": {t: {**c, "total_ms": totals.get(t, [])} for t, c in sorted(tally.items())},
+        "first_frame_ms": {"median": statistics.median(first_frames) if first_frames else None, "max": max(first_frames, default=None)},
+        "slowest_waits": slowest_waits,
+    }
+    (out / "timings.json").write_text(json.dumps(timings, indent=1))
+
+    md = [f"### e2e: {len(runs)} run(s), {len(tally)} tests, {len(shaky)} failed at least once", ""]
+    if shaky:
+        md += ["| Test | Failed | Flaky (passed on retry) | Passed | Failure folders |", "|---|---|---|---|---|"]
+        for test, c in sorted(shaky.items(), key=lambda kv: -(kv[1]["fail"] + kv[1]["flaky"])):
+            folders = "<br>".join(Path(f).name for f in c["folders"][:3])
+            md.append(f"| `{test}` | {c['fail']} | {c['flaky']} | {c['pass']} | {folders} |")
+        md.append("")
+    if first_frames:
+        md.append(f"Launch to first frame: median {statistics.median(first_frames):.0f} ms, max {max(first_frames)} ms.")
+        md.append("")
+    if slowest_tests:
+        md += ["| Slowest tests | Max ms | Median ms |", "|---|---|---|"]
+        md += [f"| `{t}` | {mx} | {med:.0f} |" for mx, med, t in slowest_tests]
+        md.append("")
+    if slowest_waits:
+        md += ["| Slowest waits | Test | ms | Met |", "|---|---|---|---|"]
+        md += [f"| {w['what']} | `{w['test']}` | {w['ms']} | {'yes' if w['met'] else 'no'} |" for w in slowest_waits]
+        md.append("")
+    text = "\n".join(md)
+    print(text)
+    if "--markdown" in opts:
+        Path(opts["--markdown"]).write_text(text + "\n")
+    if "--flaky" in opts and shaky:
+        lines = [f"- `{t}`: failed {c['fail']}, flaky {c['flaky']}, passed {c['pass']}" for t, c in sorted(shaky.items())]
+        Path(opts["--flaky"]).write_text("\n".join(lines) + "\n")
+    return 1 if any(c["fail"] for c in tally.values()) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
