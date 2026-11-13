@@ -58,3 +58,18 @@ ottobot's routines, an Agents section and a menu-bar item, in stages: see [routi
 An `auto_fit` setting, off by default. It applies `fit` (`Action::Fit`) at the moment an app is
 hosted: for a window smaller than its pane, and for one larger where the tab has room. Never
 later than hosting, so panes do not move under the user. With an undo.
+
+## 8. Voice: speech to text and back
+
+After the task and agent work. A hot key starts the microphone; speech becomes text where the
+keyboard is (a terminal, the new-task box), transcribed on the machine (Whisper). The other way:
+read an agent's reply or a task brief aloud.
+
+- Push-to-talk on a global key, and a visible "listening" mark: never a microphone that is on
+  without the user holding or toggling it.
+- Local transcription first (whisper.cpp or similar, model fetched on request); say plainly if any
+  mode sends audio off the machine.
+- Needs the Microphone permission for whatever starts ottospace.
+- Fits quick capture: hold the key, say the task, release, it is added.
+- Open: which engine and model size; dictation into a hosted app's pane (keys go to that app);
+  voices for reading aloud.
