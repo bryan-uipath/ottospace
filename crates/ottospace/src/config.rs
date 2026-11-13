@@ -187,7 +187,8 @@ pub fn remove_stale_drafts() {
 /// Writes one task to `<id>.json` in the tasks folder.
 pub fn save_task(task: &Task) -> io::Result<()> {
     let Some(dir) = tasks_dir() else { return Ok(()) };
-    let text = serde_json::to_string_pretty(task).map_err(io::Error::other)? + "\n";
+    // Less of a reference than the session knows: the folder may be shared.
+    let text = serde_json::to_string_pretty(&task.for_file()).map_err(io::Error::other)? + "\n";
     write_whole(&dir, &format!("{}.json", task.id), &text)
 }
 

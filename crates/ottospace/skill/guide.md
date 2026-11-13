@@ -58,7 +58,7 @@ ottospace ctl '{"cmd":"state"}'
 | `state.live` | The app pane that has the keyboard, if any |
 | `state.picker` | Null, or the open picker: `axis`, `new_tab`, `items` (`{"type":"terminal"}`, `{"type":"app","name":"..."}` for a running app, or `{"type":"closed","name":"...","path":"..."}` for a pinned app (the `apps` setting) that is not running), `query` (the filter's text), and `selected` (an index into `picker_rows`) |
 | `picker_rows` | Null, or the open picker's rows as drawn: `items` narrowed by the filter, then, once something is typed, every installed app that is not running and matches, as `closed` items. Choosing a `closed` row starts that app on the user's Mac: leave those to the user |
-| `field` | Null, or the text field that has the keyboard: `of` (`compose`, `picker`, or `apps` for the filter of "All apps" in the Apps section), `text`, `cursor` and `selection` (`[start, end]`) in UTF-16 units, `selected` (the selected text), `marked` (an input method's composition, or null), and `bounds` and `cursor_x` as last drawn |
+| `field` | Null, or the text field that has the keyboard: `of` (`compose`, `picker`, `apps` for the filter of "All apps" in the Apps section, or `mark` for a mark's name being typed), `text`, `cursor` and `selection` (`[start, end]`) in UTF-16 units, `selected` (the selected text), `marked` (an input method's composition, or null), and `bounds` and `cursor_x` as last drawn |
 | `state.confirm` | Null, or the quit question the user raised (⌘Q, the menu's Quit, the window's close button): `running`, the terminals a quit would end something in, each `pane`, `program` (its name, or null) and `background` (false: the program in front of the shell; true: a background or stopped job of the shell). It is the user's to answer: only the user's own keys and clicks cancel it. From the socket, while it is up: `key` with `enter` or `q` quits and `key` with `escape` cancels; any other `key` (also `cmd-q`), every pointer request (`mouse_down`, `mouse_drag`, `mouse`, `drag`) and every request that would take the keyboard (`enter`, `picker`, `compose`, `keys`, `ax_overlay`) fails with `the quit question is up` and changes nothing. Every other request runs underneath and leaves it up, e.g. `split`, `focus`, `close`, `new_tab`, `type`, `scroll`. A pane that closes leaves `running`; when it empties the question goes away, and ottospace does not quit. `quit` never asks, and quits under the question too |
 | `state.keys` | True while the key reference covers the window |
 | `state.sidebar` | The open rail section, or null |
@@ -73,6 +73,10 @@ ottospace ctl '{"cmd":"state"}'
 | `state.tasks.list` | Every task: `id`, `title`, `state`, `priority`, `snoozed_until`, `dismissed`, `project` (from a `#tag`, or null), `repo` (a repository path, or null), `agent`, `paths`, `resolved`, `skills`, `created` (when it was filed, in milliseconds since 1970, or null) and `session` (null, or the session it was adopted from: `runner`, `id`, and `state`, the state the task last took from it) |
 | `compose_read` | True once the tags of the line in the new-task box have been looked up (names and paths are read on another thread, a moment after the line changes). Wait for it before pressing ↵ for the user |
 | `state.compose` | Null, or the text in the new-task box while it is open |
+| `compose_host` | Null, `modal` (the box is over the workspace) or `home` (it is the home screen's own line, in place: there ↵ adds the task and the line stays open, empty) |
+| `compose_menu` | Null, or the dropdown for the tag at the cursor: `mark`, `typed`, `rows` (each `name`, `kind`, `detail`, `matched`), `selected` (the highlighted row, or null) and `note` (`no match`, `new project`, or null). While `selected` is not null, ↵ takes that row instead of adding the task, unless the word is that name already |
+| `compose_pointing` | Null, or the rect of the tab or pane the user's ⌥-click would reference |
+| `compose_note` | Null, or what the box says it could not do: a name the line has no room for, files left out |
 | `inbox`, `needs_you` | The listed tasks by group, each with its `group`; and how many are under `needs_you` |
 | `tasks_bar` | The Tasks section as drawn. `sections`: each `heading` (`needs_you`, `open`, `running`, `captured`, `on_hold`, `done`) with its `count`, `collapsed`, and `rows` (none while collapsed): `id`, `group`, `tabs` and `panes` (what the task has open), `current` (its tabs are on show) and `detail` (the muted line: tags, what is open, age). A task with tabs open is under `open`, unless it needs the user. `empty`: nothing is listed. `undo`: null, or the move the line at the section's top offers to take back (`Dismissed`, `On hold`, `Snoozed`), for 6 seconds after the user clicked a button on a row. It is not `notice`, which is the status bar's |
 | `state.collapsed` | The headings of the Tasks section that are folded |
@@ -151,6 +155,9 @@ ottospace ctl '{"cmd":"drop_pane","source":3,"target":1,"zone":"center"}'
 
 During a pane drag `drag` in the state is `{"target":1,"zone":"left"}`: where a release would
 drop it, both `null` over anything that is no drop zone. Otherwise `drag` is `null`.
+
+For tests only: `compose_drop` puts files into the open new-task box as a drop from Finder
+does (`{"cmd":"compose_drop","paths":["/tmp/a.txt"]}`); it answers only under `OTTOSPACE_E2E`.
 
 For tests only: the pointer. `mouse` and `drag` answer only when ottospace runs under
 `OTTOSPACE_E2E`; otherwise they are refused. To act, use the requests above (`drop_pane`,
@@ -251,6 +258,7 @@ States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stal
   | `@agent` | who works it | `claude`, `codex`, or a file `agents/<name>.md` in the user's folder |
   | `/path` | a path it is about: a word starting with `/` or `~/` | the file or directory exists, at the root or inside the `>repo` |
   | `$skill` | a skill to load for it | a skill folder of that name exists (the runners' `skills/`, the repository's `.claude/skills`) |
+  | `^reference` | something open it points at (a space in the name has a backslash: `^Tab\ 1`) | a tab has that title, a pane that name (a terminal's directory, an app pane's app), a mark that name, or an installed app that is not running has it |
   | `p1` to `p9` | the priority | always |
 
   The rest is the title. A tag whose name is not known stays in the title where it was typed,
@@ -273,6 +281,12 @@ States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stal
   characters). Nothing is filed until the user presses ↵: use it to offer a draft, and
   `task_new` to file one yourself. It is refused if the box is open already or cannot open
   (the picker, the key reference or visual mode is in the way): the draft was not shown.
+  Esc closes the dropdown first when one is open (`compose_menu` is not null), then the box:
+  to close the box, press `escape` until `mode` is no longer `compose`. A task's `refs` are
+  what its `^references` pointed at when it was added (`kind`, `name`, and `id`, `title`,
+  `app`, `cwd`, `program` or `bundle` where known); nothing acts on them. The task's file keeps
+  `kind`, `name`, `id` and `app` only: after a restart the rest is gone. In a line, a backslash
+  keeps the next character in its word (a space, a backslash): `~/My\ Notes`, `^Tab\ 1`.
   While the box is open `mode` is `compose` and `state.compose` is its text; `field` has its
   cursor and selection. `key` edits it as the user's keys do (`alt-backspace`, `cmd-a`, `cmd-z`).
 - `task_add` replies `{"ok":true,"task":{..}}`, not the state: the new task, with its `id`.

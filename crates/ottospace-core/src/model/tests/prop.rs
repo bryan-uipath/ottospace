@@ -193,6 +193,7 @@ impl Gen<'_> {
             skills: self.names(SKILLS, 2),
             created: self.rng.coin().then(|| self.time()),
             session: self.rng.one_in(4).then(|| self.link()),
+            refs: Vec::new(),
         }
     }
 
@@ -383,7 +384,7 @@ const MAKERS: &[Make] = &[
         // Edits of every kind, from the field's own test: offsets inside a character and past
         // the end too. One time in 4 a line with tags, for `ComposeSubmit` to read.
         let len = g.m.open_field().map_or(0, |(_, field)| field.text().len());
-        let edit = crate::edit::tests::Rng(g.rng.next() | 1).edit(len);
+        let edit = crate::edit::fuzz::Rng(g.rng.next() | 1).edit(len);
         Action::FieldEdit { edit: if g.rng.one_in(4) { Edit::Insert(g.line()) } else { edit } }
     },
     |g| {
@@ -418,8 +419,12 @@ const MAKERS: &[Make] = &[
     |g| {
         let line = g.m.compose_line().cloned().filter(|_| g.rng.coin()).unwrap_or_else(|| g.line());
         let known = g.known(&line);
+        // For the path at the cursor, or (an answer that is late) for another.
+        let typing =
+            g.m.compose_typing().filter(|_| g.rng.coin()).or_else(|| g.rng.one_in(4).then(|| "/src/".to_string()));
         Action::SetKnown {
             line,
+            typing,
             names: g.rng.coin().then_some(known.names),
             paths: known.paths,
             entries: known.entries,
@@ -441,6 +446,37 @@ const MAKERS: &[Make] = &[
     |_| Action::ComposeComplete,
     |g| Action::ComposeSubmit { open: g.rng.coin() },
     |_| Action::CloseCompose,
+    |_| Action::ComposeEscape,
+    |g| Action::ComposeMove { delta: g.delta() },
+    |g| Action::ComposeAccept { index: g.index(4) },
+    |g| {
+        // Paths of every kind: a space, a narrow no-break space, a backslash, a line break,
+        // one too long, one that is no path.
+        const PATHS: &[&str] = &[
+            "/code/app",
+            "/Users/me/My Notes/a b.md",
+            "/tmp/Shot 9.41\u{202f}AM.png",
+            "/a\\b",
+            "/a\nb",
+            "relative",
+            "/",
+        ];
+        let mut paths: Vec<String> = (0..g.rng.below(3)).map(|_| g.name(PATHS)).collect();
+        if g.rng.one_in(8) {
+            paths.push(format!("/{}", "x".repeat(tasks::MAX_TAG + 1)));
+        }
+        Action::ComposeAttach { paths, home: g.rng.coin().then(|| "/Users/me".to_string()), unreadable: g.rng.below(2) }
+    },
+    |g| Action::ComposeRef { target: if g.rng.coin() { Pointed::Pane(g.pane()) } else { Pointed::Tab(g.tab_id()) } },
+    |g| {
+        let info = |g: &mut Gen| TerminalInfo {
+            pane: g.pane(),
+            cwd: g.rng.coin().then(|| g.name(DIRS)),
+            program: g.rng.coin().then(|| g.name(&["vim", "cargo", ""])),
+        };
+        let terminals = (0..g.rng.below(3)).map(|_| info(g)).collect();
+        Action::SetTerminals { terminals, home: g.rng.coin().then(|| "/code".to_string()) }
+    },
     |g| {
         let line = g.line();
         Action::TaskFromLine { known: g.known(&line), line, open: g.rng.coin() }
@@ -685,21 +721,60 @@ fn check(m: &Model) -> Result<(), String> {
     }
     // The text field is the picker's filter, else the new-task box's line; with neither open
     // there is none. It has the keyboard in their modes only, and not under the key reference.
-    let whose = match (m.open_field(), &m.picker, &m.compose) {
-        (Some(("picker", field)), Some(picker), _) => std::ptr::eq(field, &picker.query),
-        (Some(("compose", field)), None, Some(line)) => std::ptr::eq(field, line),
+    // A mark's name being typed is a text field too, before either.
+    let renaming = match &m.mark_input {
+        Some(MarkInput::Rename { text, .. }) => Some(text),
+        _ => None,
+    };
+    let filtering = m.app_lists.filtering;
+    let whose = match (m.open_field(), renaming, &m.picker, &m.compose) {
+        (Some(("mark", field)), Some(name), ..) => std::ptr::eq(field, name),
+        (Some(("picker", field)), None, Some(picker), _) => std::ptr::eq(field, &picker.query),
+        (Some(("compose", field)), None, None, Some(line)) => std::ptr::eq(field, line),
         // With no box open, the Apps section's filter, while it has the keyboard.
-        (Some(("apps", field)), None, None) => m.app_lists.filtering && std::ptr::eq(field, &m.app_lists.filter),
-        (None, None, None) => !m.app_lists.filtering,
+        (Some(("apps", field)), None, None, None) => filtering && std::ptr::eq(field, &m.app_lists.filter),
+        (None, None, None, None) => !filtering,
         _ => false,
     };
     ensure!(whose, "the open text field is {:?}; it is not the open box's", m.open_field().map(|(of, _)| of));
     let has_keys = matches!(m.mode(), Mode::Pick | Mode::Compose) && !m.keys;
     let filter_keys = !boxed && m.app_lists.filtering && m.mode() == Mode::List && !m.keys;
-    let keyed = (boxed && has_keys) || filter_keys;
+    let keyed = match renaming {
+        Some(_) => m.mode() == Mode::Mark && !m.keys,
+        None => (boxed && has_keys) || filter_keys,
+    };
     ensure!(m.field().is_some() == keyed, "a text field has the keyboard in {:?} mode", m.mode());
+    // The new-task box: its dropdown, what its line points at, and what it says.
+    let menu = m.dropdown();
+    ensure!(menu.is_none() || m.field().is_some_and(|(of, _)| of == "compose"), "a dropdown with no line to finish");
+    if let Some(menu) = &menu {
+        let rows = menu.rows.len();
+        ensure!(rows <= complete::MAX_ROWS, "the dropdown has {rows} rows");
+        ensure!(menu.selected.is_none_or(|at| at < rows), "the dropdown highlights row {:?} of {rows}", menu.selected);
+        ensure!(!menu.rows.is_empty() || menu.note.is_some(), "a dropdown with no row and nothing to say");
+        let names: Vec<&String> = menu.rows.iter().map(|row| &row.name).collect();
+        ensure!(unique(&names), "a name is on the dropdown twice: {names:?}");
+        let line = m.compose_line().map(String::as_str).unwrap_or_default();
+        ensure!(line.is_char_boundary(menu.start) && menu.start <= line.len(), "the dropdown hangs off the line");
+    }
+    let (aliases, targets): (Vec<&String>, Vec<(RefKind, Option<u32>, &Option<String>)>) =
+        m.compose_refs.iter().map(|r| (&r.name, (r.kind, r.id, &r.bundle))).unzip();
+    ensure!(
+        unique(&aliases) && unique(&targets),
+        "the line points at one thing twice, or two by one name: {aliases:?}"
+    );
+    let kept = !m.compose_refs.is_empty() || !m.compose_attached.is_empty() || m.compose_note.is_some();
+    ensure!(m.compose.is_some() || !kept, "the box is closed and something of its line is kept");
+    let offered: Vec<String> = m.ref_candidates().into_iter().map(|(r, _)| r.name).collect();
+    ensure!(unique(&offered), "two things are offered by one name: {offered:?}");
+    ensure!(m.compose_host().is_some() == m.compose.is_some(), "the box is open nowhere, or closed somewhere");
     if let Some((of, field)) = m.open_field() {
-        let (text, most) = (field.text(), if of == "compose" { MAX_TITLE } else { MAX_FILTER });
+        let most = match of {
+            "compose" => MAX_TITLE,
+            "mark" => marks::MAX_NAME,
+            _ => MAX_FILTER,
+        };
+        let text = field.text();
         ensure!(text.chars().count() <= most, "the {of} field holds {} characters", text.chars().count());
         ensure!(!text.chars().any(char::is_control), "the {of} field holds a control character: {text:?}");
         let (cursor, selection) = (field.cursor(), field.selection());
@@ -750,9 +825,9 @@ fn check(m: &Model) -> Result<(), String> {
         Some(MarkInput::Rename { mark, text }) => {
             ensure!(m.marks.get(*mark).is_some(), "a name is typed for mark {mark}, which is gone");
             ensure!(
-                text.chars().count() <= marks::MAX_NAME,
+                text.text().chars().count() <= marks::MAX_NAME,
                 "a typed mark name has {} characters",
-                text.chars().count()
+                text.text().chars().count()
             );
         }
         Some(MarkInput::SetKey { mark }) => {
@@ -886,7 +961,7 @@ fn check_state(m: &Model) -> Result<(), String> {
     ensure!(round_trips(&m.found), "the sessions do not read back as written");
     ensure!(m.panes.iter().all(|pane| round_trips(&pane.kind)), "a pane's kind does not read back as written");
     ensure!(round_trips(&(m.sidebar, m.collapsed.clone())), "the bar does not read back as written");
-    let _ = (m.task_sections(m.now), m.sessions_bar(), m.compose_suggestions(), m.home(&[]), m.mark_rows());
+    let _ = (m.task_sections(m.now), m.sessions_bar(), m.compose_spans(), m.home(&[]), m.mark_rows());
     let _ = (m.keyboard_terminal(), m.due(m.now), m.followed_sessions(), m.compose_read(), m.marks.needs());
     let _ = (
         m.draft(m.compose_line().map(String::as_str).unwrap_or_default()),
@@ -945,8 +1020,27 @@ impl Run {
         let chosen = m.picker.as_ref().and_then(|picker| picker.matches().get(picker.selected).copied().cloned());
         let field = (m.field().is_some(), m.open_field().map(|(_, field)| field.text().to_string()));
         let task_ids: Vec<TaskId> = m.tasks.list.iter().map(|task| task.id).collect();
-        let filing = m.compose_line().filter(|_| matches!(action, Action::ComposeSubmit { .. }));
-        let filing = filing.map(|line| (line.clone(), m.draft(line)));
+        // ↵ on a highlighted row that would change the line takes the row: it files nothing.
+        let takes = match (&action, m.dropdown().and_then(|menu| menu.selected)) {
+            (Action::ComposeSubmit { open: false }, Some(row)) => m.changes(row),
+            _ => false,
+        };
+        let filing = m.compose_line().filter(|_| matches!(action, Action::ComposeSubmit { .. }) && !takes);
+        let filing = filing.map(|line| (line.clone(), m.draft(line), m.compose_host()));
+        // A row taken reads back as the tag it is, of that very name.
+        let taken = match (&action, m.dropdown()) {
+            (Action::ComposeAccept { index }, Some(menu)) => {
+                menu.rows.get(*index).map(|row| (menu.mark, row.name.clone(), *index))
+            }
+            (Action::ComposeComplete, Some(menu)) => {
+                let at = menu.selected.unwrap_or(0);
+                menu.rows.get(at).map(|row| (menu.mark, row.name.clone(), at))
+            }
+            _ => None,
+        };
+        let taken = taken.filter(|(.., at)| m.taking(*at).is_some());
+        let line_before = m.compose_line().cloned();
+        let composing = m.composing();
 
         let effects = m.update(sent);
         check(m)?;
@@ -956,9 +1050,9 @@ impl Run {
         }
 
         // An action refused for who sent it changes nothing at all.
-        if let Some(before) = refused {
+        if let Some(before) = &refused {
             ensure!(
-                effects.is_empty() && format!("{m:?}") == before,
+                effects.is_empty() && format!("{m:?}") == *before,
                 "a refused action changed the model, or had effects"
             );
         }
@@ -982,6 +1076,9 @@ impl Run {
                 | Action::MarkSubmit
                 | Action::MarkCancel
         );
+        // A name being typed is a text field: an edit of it is the wait's own, whoever sends it.
+        let mark_own =
+            mark_own || matches!((&action, &mark_input), (Action::FieldEdit { .. }, Some(MarkInput::Rename { .. })));
         // Only the user, or the mode's own keys, end sneak mode, the quit question or a mark's wait.
         if sneak.is_some() && !sneak_own {
             let now = m.sneak.as_ref().map(|sneak| sneak.typed.clone());
@@ -1014,7 +1111,29 @@ impl Run {
             ensure!(!rows.contains(&chosen) || now == Some(chosen), "the picker was on {chosen:?} and is on {now:?}");
         }
         // What the new-task box files is what its line reads as: one task, or none and the box stays.
-        if let Some((line, draft)) = filing {
+        if takes && refused.is_none() {
+            ensure!(m.tasks.list.len() == task_ids.len() && m.compose.is_some(), "↵ on a row to take filed a task");
+        }
+        if let Some((mark, name, _)) = taken.filter(|_| refused.is_none()) {
+            // Up to the word taken: of two `>repo` the last counts, and one may follow.
+            let upto = m.compose.as_ref().map(|field| &field.text()[..field.cursor()]).unwrap_or_default();
+            let draft = m.draft(upto);
+            let reads = match mark {
+                '#' => draft.project.as_ref() == Some(&name),
+                '>' => draft.repo.as_ref() == Some(&name),
+                '@' => draft.agent.as_ref() == Some(&name),
+                '$' => draft.skills.iter().any(|skill| skill.eq_ignore_ascii_case(&name)),
+                '^' => draft.refs.contains(&name),
+                // A path is read once the shell has looked it up.
+                _ => true,
+            };
+            ensure!(reads, "{mark}{name} was taken, and {:?} reads as {draft:?}", m.compose_line());
+        }
+        // What only the box's own line takes does nothing while the line has no keyboard.
+        if matches!(action, Action::ComposeAttach { .. } | Action::ComposeRef { .. }) && !composing {
+            ensure!(m.compose_line() == line_before.as_ref(), "the line changed with no keyboard: {line_before:?}");
+        }
+        if let Some((line, draft, host)) = filing {
             let filed: Vec<&Task> = m.tasks.list.iter().filter(|task| !task_ids.contains(&task.id)).collect();
             if draft.title.is_empty() || draft.title.chars().count() > MAX_TITLE {
                 ensure!(
@@ -1022,12 +1141,10 @@ impl Run {
                     "a line with no title filed a task, or closed the box"
                 );
             } else {
-                ensure!(
-                    filed.len() == 1 && m.compose.is_none(),
-                    "{line:?} filed {} tasks; the box is {:?}",
-                    filed.len(),
-                    m.compose
-                );
+                // On the home screen the line stays for the next task, empty, unless the task is started.
+                let stays = host == Some(Host::Home) && !matches!(action, Action::ComposeSubmit { open: true });
+                let left = if stays { m.compose_line().is_some_and(String::is_empty) } else { m.compose.is_none() };
+                ensure!(filed.len() == 1 && left, "{line:?} filed {} tasks; the box is {:?}", filed.len(), m.compose);
                 let task = filed[0];
                 let repo = draft.repo.as_deref().and_then(|name| m.repo_named(name));
                 let read = (&draft.title, draft.priority.unwrap_or(3), &draft.project, &repo, &draft.agent);
@@ -1416,6 +1533,7 @@ fn code(sent: &Envelope) -> String {
         "Running",
         "Installed",
         "Entry",
+        "TerminalInfo",
     ];
     const ENUM_OF: &[(&str, &str)] = &[
         ("axis", "Axis"),
@@ -1434,6 +1552,7 @@ fn code(sent: &Envelope) -> String {
         ("items", "PickItem"),
         ("group", "crate::apps::Group"),
         ("missing", "Need"),
+        ("target", "Pointed"),
     ];
     // A mark is long, and half of it is JSON already: it is given as its file's text.
     if let Action::RestoreMarks { marks, extra } = &sent.action {
@@ -1576,6 +1695,8 @@ fn a_failure_is_shrunk_to_the_steps_it_needs() {
     };
     let (mut rng, m) = (Rng::new(3), Model::default());
     let mut steps: Vec<Envelope> = (0..200).map(|_| random(&mut rng, &m)).collect();
+    // One split for sure, whatever the makers drew.
+    steps.insert(50, Action::Split { axis: Axis::Right, kind: Kind::Empty }.into());
     steps.push(Action::CloseTab { index: None }.into());
     let least = fuzz::shrink(steps, fails);
     assert!(matches!(
@@ -1929,6 +2050,38 @@ fn a_pane_closed_from_a_long_even_row_leaves_every_side_its_share() {
         Action::Close { pane: None }.sent_by(Origin::Socket),
     ])
     .unwrap();
+}
+
+/// Found by the random run once the Apps filter and a mark's wait met: a jump to a mark asked
+/// for while the filter was typed in left the filter with the keyboard, in the mark's mode.
+#[test]
+fn a_mark_that_waits_for_a_letter_is_over_the_apps_filter() {
+    let mut m = Model::default();
+    m.update(Action::ToggleSection { section: Section::Apps });
+    m.update(Action::AppsFilter { on: true });
+    assert_eq!(m.field().map(|(of, _)| of), Some("apps"));
+    m.update(Action::MarkPrefix.sent_by(Origin::Socket));
+    assert_eq!((m.mode(), m.field().map(|(of, _)| of)), (Mode::Mark, None));
+    check(&m).unwrap();
+    // Found by the long run: an edit then ends the wait, and types nothing into the filter under it.
+    m.update(Action::FieldEdit { edit: Edit::Insert("x".into()) });
+    assert_eq!((m.mode(), m.field().map(|(of, field)| (of, field.text()))), (Mode::List, Some(("apps", ""))));
+    check(&m).unwrap();
+}
+
+/// Found by the long random run: a repository whose name holds a control character was
+/// offered, and taken it read as another name. It is not offered.
+#[test]
+fn a_name_the_line_cannot_hold_is_not_offered() {
+    let repo = |name: &str| Repo { name: name.into(), path: format!("/code/{name}"), branch: None, worktrees: vec![] };
+    let mut m = Model::default();
+    m.update(Action::SetRepos { repos: vec![repo("a\u{7f}"), repo("app")] });
+    m.update(Action::OpenCompose { text: "fix >".into() });
+    let names: Vec<String> = m.dropdown().unwrap().rows.into_iter().map(|row| row.name).collect();
+    assert_eq!(names, ["app"]);
+    m.update(Action::ComposeComplete);
+    assert_eq!(m.draft(m.compose_line().unwrap()).repo.as_deref(), Some("app"));
+    check(&m).unwrap();
 }
 
 // Known, and left: a decision to make, not a slip.

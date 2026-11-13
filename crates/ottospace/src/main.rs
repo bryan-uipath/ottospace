@@ -4,6 +4,9 @@
 //! An app pane shows its parked window's SCK stream. Clicking it moves the real window over the
 //! pane ("live") and replays the click; clicking ottospace itself parks it again.
 
+// The state snapshot is one `json!` with more keys than the default limit expands.
+#![recursion_limit = "256"]
+
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
@@ -393,7 +396,7 @@ const KEYS_TERMINAL: &[(&str, &str)] = &[
     ("⌘⇧C", "Visual mode: select with the keyboard"),
     ("⌘⇧E", "List mode: keys for the bar (Apps, Tasks, Repos, Marks). ↵ or space on a heading folds it"),
     ("⌘⌃G", "Sneak mode: a letter label on every control"),
-    ("⌘N", "New task: type a line, ↵ adds it"),
+    ("⌘N", "New task: type a line, ↵ adds it. ↑↓ ↵ pick from its list; ⌘O adds files"),
     ("⌘⇧N", "Next task: show the tabs of the first that needs you"),
     ("⌘H", "Hide ottospace"),
     ("⌘Q", "Quit: asks first while a terminal runs"),
@@ -547,7 +550,7 @@ enum Filing {
 
 /// What a line in the new-task box may hold, and what its keys do: in the box and where the
 /// Tasks section says how to add a task.
-const TAG_HINT: &str = "#project · >repo · @agent · /path · $skill · p1–p9";
+const TAG_HINT: &str = "#project · >repo · @agent · /path · $skill · ^open · p1–p9";
 const KEYS_HINT: &str = "↵ add task · ⌘↵ add and start";
 
 /// A heading's name in a control's id and on the socket: `needs_you`, `open`, ...
@@ -579,6 +582,10 @@ struct Workspace {
     copied: Option<String>,
     /// The open text field as last drawn.
     field: field::Shared,
+    /// What an ⌥-click would reference in the new-task box: outlined while ⌥ is held over it.
+    pointing: Option<Bounds<Pixels>>,
+    /// Where the pointer last was: ⌥ pressed with it still outlines what is there.
+    hover_at: gpui::Point<Pixels>,
     system_clipboard: bool,
     /// Each pane's body bounds in window coordinates, recorded during prepaint.
     cells: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
@@ -849,6 +856,8 @@ impl Workspace {
             marks: Marks::default(),
             copied: None,
             field: field::Shared::default(),
+            pointing: None,
+            hover_at: gpui::Point::default(),
             system_clipboard: std::env::var_os("OTTOSPACE_E2E").is_none(),
             cells: HashMap::new(),
             frames: HashMap::new(),
@@ -931,7 +940,7 @@ impl Workspace {
             self.refresh_apps();
             self.offer_installed(cx);
         }
-        let line = self.model.compose_line().cloned();
+        let line = self.model.compose_line().cloned().map(|line| (line, self.model.compose_typing()));
         let field = self.model.field().map(|(of, _)| of);
         // The core has no clock: a task filed now is stamped with the time told here.
         // So is the notice that offers a mouse move back: it counts its seconds from here.
@@ -956,8 +965,9 @@ impl Workspace {
         }
         // The line in the new-task box changed: ask what its tags may name. The answer comes
         // later (`take_tags`): reading it is disk I/O, never done here.
-        match self.model.compose_line().cloned() {
-            Some(now) if line.as_ref() != Some(&now) => self.ask_tags(now),
+        // Also when the cursor moved into another path: what finishes it is listed for it.
+        match self.model.compose_line().cloned().map(|line| (line, self.model.compose_typing())) {
+            Some(now) if line.as_ref() != Some(&now) => self.ask_tags(now.0, now.1),
             Some(_) => {}
             None => self.tags_repo = None,
         }
@@ -1072,12 +1082,13 @@ impl Workspace {
 
     /// Asks the reader what the tags of the line in the new-task box may name. Agents and skills
     /// are read when the box opens and when the line's `>repo` changes; paths for every line.
-    fn ask_tags(&mut self, line: String) {
+    fn ask_tags(&mut self, line: String, typing: Option<String>) {
         let repo = self.model.draft_repo(&line);
         let names = self.tags_repo.as_ref() != Some(&repo);
         self.tags_repo = Some(repo.clone());
         if let Some(reader) = &self.tags {
-            reader.ask(tags::Job { call: 0, line, repo, names });
+            let whole = self.model.compose_attached().to_vec();
+            reader.ask(tags::Job { call: 0, line, typing, whole, repo, names });
         }
     }
 
@@ -1085,9 +1096,10 @@ impl Workspace {
     /// that has changed since), and for the socket calls that waited for it.
     fn take_tags(&mut self, window: &Window, cx: &mut Context<Self>) {
         let read = self.tags.as_ref().map(tags::Reader::take).unwrap_or_default();
-        for tags::Read { call, line, names, paths, entries } in read {
+        for tags::Read { call, line, typing, names, paths, entries } in read {
             if call == 0 {
-                self.dispatch(Action::SetKnown { line, names, paths, entries }, Origin::System, window, cx);
+                let known = Action::SetKnown { line, typing, names, paths, entries };
+                self.dispatch(known, Origin::System, window, cx);
                 cx.notify();
                 continue;
             }
@@ -1155,7 +1167,7 @@ impl Workspace {
         };
         self.calls += 1;
         let repo = self.model.draft_repo(&line);
-        reader.ask(tags::Job { call: self.calls, line, repo, names: true });
+        reader.ask(tags::Job { call: self.calls, line, typing: None, whole: Vec::new(), repo, names: true });
         self.filing.push((self.calls, filing, reply));
     }
 
@@ -1230,9 +1242,14 @@ impl Workspace {
                 }
                 continue;
             }
+            // `compose_drop` is a drop from the pointer: refused where a click is.
             let pointer = matches!(
                 request,
-                Request::Mouse { .. } | Request::Drag { .. } | Request::MouseDown { .. } | Request::MouseDrag { .. }
+                Request::Mouse { .. }
+                    | Request::Drag { .. }
+                    | Request::MouseDown { .. }
+                    | Request::MouseDrag { .. }
+                    | Request::ComposeDrop { .. }
             );
             if pointer && self.model.sneak.is_some() {
                 let _ = reply.send(control::error(sneak::ON));
@@ -1421,8 +1438,18 @@ impl Workspace {
                     }
                     None
                 }
+                Request::ComposeDrop { .. } if self.model.compose.is_none() => {
+                    failure = Some("the new-task box is not open".into());
+                    None
+                }
+                Request::ComposeDrop { paths } => {
+                    let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+                    self.compose_attach(&paths, Origin::Socket, window, cx);
+                    None
+                }
                 Request::Compose { text } => {
                     self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
+                    self.tell_compose_context(cx);
                     let was_open = self.model.compose.is_some();
                     self.dispatch(Action::OpenCompose { text }, Origin::Socket, window, cx);
                     // A draft that did not reach the user must not look delivered.
@@ -1780,6 +1807,11 @@ impl Workspace {
                 if refused.is_some() {
                     break;
                 }
+                // A text field takes typed text through the input handler its last frame set:
+                // draw one first, as between real keys, so a field the key before opened is there.
+                if this.read_with(cx, |this, _| this.model.field().is_some()).unwrap_or(false) {
+                    window.draw(cx).clear();
+                }
                 window.dispatch_keystroke(keystroke, cx);
                 // The keys after the one that ended sneak mode were for labels, not a terminal.
                 if was && !labelled(cx) {
@@ -1968,6 +2000,17 @@ impl Workspace {
             // True once what the tags of the line in the new-task box may name has been read:
             // they are read on another thread, a moment after the line changes.
             "compose_read": self.model.compose_read(),
+            // Where the new-task box is: `home` (in place of the home screen's line), `modal`
+            // (over the workspace), or null while it is closed.
+            "compose_host": self.model.compose_host(),
+            // The dropdown that finishes the tag at the cursor, or null: its `mark`, what is
+            // `typed`, the `rows` (name, kind, detail, matched letters) and the one `selected`.
+            "compose_menu": self.model.dropdown(),
+            // What the box says it could not do ("no room in the line for that name"), or null.
+            "compose_note": self.model.compose_note(),
+            // The tab or pane an ⌥-click would reference, outlined while ⌥ is held over it
+            // with the box open: its rect, or null.
+            "compose_pointing": self.pointing.filter(|_| self.model.compose.is_some()).map(rect),
             // The Tasks section as drawn: each heading with its count and rows (none while it is
             // collapsed). `empty`: no task is listed, so the section shows how to file one.
             // `undo`: the move the line at its top offers to take back ("Dismissed"), while it shows.
@@ -2802,8 +2845,9 @@ impl Workspace {
 
     /// Opens the new-task box: ⌘N, or a click on the home screen's line.
     fn new_task(&mut self, window: &Window, cx: &mut Context<Self>) {
-        // The repositories as they are now, for `@name`.
+        // The repositories as they are now, for `>name`; what is open, for `^name`.
         self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
+        self.tell_compose_context(cx);
         self.dispatch(Action::OpenCompose { text: String::new() }, self.input, window, cx);
     }
 
@@ -4224,7 +4268,12 @@ impl Render for Workspace {
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| (this.dragging, this.held) = (None, false)))
             // Any click leaves visual mode first, before the clicked element acts: visual mode has no
             // backdrop, and e.g. a click on an app pane must go live, not be replayed while blocked.
-            .capture_any_mouse_down(cx.listener(|this, _, window, cx| {
+            .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                // ⌥-click while the new-task box is open references what is under it, and
+                // does nothing else: the tab is not selected, the pane not focused.
+                if this.compose_point(event, window, cx) {
+                    return cx.stop_propagation();
+                }
                 if this.model.visual.is_some() {
                     this.dispatch(Action::LeaveVisual, this.input, window, cx);
                 }
@@ -4233,7 +4282,8 @@ impl Render for Workspace {
                     this.dispatch(Action::LeaveSneak, this.input, window, cx);
                 }
                 // And for a mark that waits: a click on another row's pencil starts that one.
-                if this.model.mark_input.is_some() {
+                // Not a click in the name being typed: that places its cursor.
+                if this.model.mark_input.is_some() && !this.in_mark_name(event.position) {
                     this.dispatch(Action::MarkCancel, this.input, window, cx);
                 }
             }))
@@ -4393,7 +4443,12 @@ impl Render for Workspace {
             // Over everything of ottospace's own. It is never on while an app's window is.
             .children(self.model.sneak.as_ref().map(sneak::labels))
             .children(self.model.picker.as_ref().map(|picker| self.render_picker(picker, cx)))
-            .children(self.model.compose.as_ref().map(|_| self.render_compose(cx)))
+            // Over the workspace, unless the home screen shows it in place of its own line.
+            .children(
+                (self.model.compose_host() == Some(ottospace_core::model::Host::Modal))
+                    .then(|| self.render_compose(cx)),
+            )
+            .children(self.render_pointing())
             .when(self.model.keys, |d| d.child(self.render_keys(cx)))
             .children(self.model.confirm.as_ref().map(|confirm| self.render_confirm(confirm, cx)))
     }

@@ -290,6 +290,13 @@ impl Field {
         self.typing = typing;
     }
 
+    /// True if `text` would go in whole in place of bytes `range`: the limit leaves room.
+    /// `splice` cuts what does not fit; a caller that must not write half a name asks first.
+    pub fn fits(&self, range: Range<usize>, text: &str) -> bool {
+        let gone = self.text.get(range).map_or(0, |part| part.chars().count());
+        self.limit == 0 || self.text.chars().count() - gone + text.chars().count() <= self.limit
+    }
+
     /// Replaces bytes `range` with `text` as one undo step, the cursor after it. For a caller
     /// that completes a word; `range` must lie on character boundaries.
     pub fn splice(&mut self, range: Range<usize>, text: &str) {
@@ -464,9 +471,82 @@ fn clean(text: &str, breaks: bool) -> String {
     text.chars().filter(|c| !c.is_control()).collect()
 }
 
+/// Random edits for the property tests, the same on every run.
+#[cfg(test)]
+pub(crate) mod fuzz {
+    use super::Motion::*;
+    use super::*;
+
+    /// xorshift64: the same edits on every run.
+    pub(crate) struct Rng(pub u64);
+
+    impl Rng {
+        pub fn below(&mut self, n: usize) -> usize {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 % n.max(1) as u64) as usize
+        }
+
+        pub fn text(&mut self) -> String {
+            const PIECES: &[&str] = &[
+                "a",
+                " ",
+                "fix",
+                "#tag",
+                "-",
+                "e\u{301}",
+                "\u{301}",
+                "👨‍👩‍👧",
+                "\u{200d}",
+                "👍🏽",
+                "\u{1f3fd}",
+                "🇯🇵",
+                "\u{1f1ef}",
+                "שלום",
+                "مرحبا",
+                "𝒳",
+                "日本",
+                "한",
+                "\n",
+                "\r\n",
+                "\t",
+                "\u{7}",
+            ];
+            (0..self.below(4)).map(|_| PIECES[self.below(PIECES.len())]).collect()
+        }
+
+        pub fn range(&mut self, len: usize) -> Option<Range<usize>> {
+            let (a, b) = (self.below(len + 3), self.below(len + 3));
+            (self.below(3) > 0).then_some(a.min(b)..a.max(b))
+        }
+
+        pub fn edit(&mut self, len: usize) -> Edit {
+            let to = [Left, Right, WordLeft, WordRight, Start, End][self.below(6)];
+            // Bytes and UTF-16 offsets from anywhere, inside a character and past the end too.
+            let at = self.below(len + 3);
+            match self.below(16) {
+                0 | 1 => Edit::Insert(self.text()),
+                2 => Edit::Paste(self.text()),
+                3 => Edit::Delete { to },
+                4 => Edit::Cut,
+                5 | 6 => Edit::Move { to, select: self.below(2) == 0 },
+                7 => Edit::SelectAll,
+                8 => Edit::Click { at, count: 1 + self.below(3), shift: false },
+                9 => Edit::Click { at, count: 1, shift: true },
+                10 | 11 => Edit::Drag { to: at },
+                12 => [Edit::Undo, Edit::Redo, Edit::Unmark][self.below(3)].clone(),
+                13 => Edit::Replace { range: self.range(len), text: self.text() },
+                _ => Edit::Mark { range: self.range(len), text: self.text(), selected: self.range(4) },
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::Motion::*;
+    use super::fuzz::Rng;
     use super::*;
 
     /// `"fix [zoom]| now"`: `[` the anchor, `|` the cursor. No `[`: no selection.
@@ -678,71 +758,6 @@ pub(crate) mod tests {
         let mut field = field("e|");
         field.apply(Edit::Mark { range: None, text: "\u{301}a".into(), selected: Some(0..0) });
         assert_eq!(show(&field), "e\u{301}|a");
-    }
-
-    /// xorshift64: the same edits on every run. The model's property test draws its edits here too.
-    pub(crate) struct Rng(pub(crate) u64);
-
-    impl Rng {
-        fn below(&mut self, n: usize) -> usize {
-            self.0 ^= self.0 << 13;
-            self.0 ^= self.0 >> 7;
-            self.0 ^= self.0 << 17;
-            (self.0 % n.max(1) as u64) as usize
-        }
-
-        fn text(&mut self) -> String {
-            const PIECES: [&str; 22] = [
-                "a",
-                " ",
-                "fix",
-                "#tag",
-                "-",
-                "e\u{301}",
-                "\u{301}",
-                "👨‍👩‍👧",
-                "\u{200d}",
-                "👍🏽",
-                "\u{1f3fd}",
-                "🇯🇵",
-                "\u{1f1ef}",
-                "שלום",
-                "مرحبا",
-                "𝒳",
-                "日本",
-                "한",
-                "\n",
-                "\r\n",
-                "\t",
-                "\u{7}",
-            ];
-            (0..self.below(4)).map(|_| PIECES[self.below(PIECES.len())]).collect()
-        }
-
-        fn range(&mut self, len: usize) -> Option<Range<usize>> {
-            let (a, b) = (self.below(len + 3), self.below(len + 3));
-            (self.below(3) > 0).then_some(a.min(b)..a.max(b))
-        }
-
-        pub(crate) fn edit(&mut self, len: usize) -> Edit {
-            let to = [Left, Right, WordLeft, WordRight, Start, End][self.below(6)];
-            // Bytes and UTF-16 offsets from anywhere, inside a character and past the end too.
-            let at = self.below(len + 3);
-            match self.below(16) {
-                0 | 1 => Edit::Insert(self.text()),
-                2 => Edit::Paste(self.text()),
-                3 => Edit::Delete { to },
-                4 => Edit::Cut,
-                5 | 6 => Edit::Move { to, select: self.below(2) == 0 },
-                7 => Edit::SelectAll,
-                8 => Edit::Click { at, count: 1 + self.below(3), shift: false },
-                9 => Edit::Click { at, count: 1, shift: true },
-                10 | 11 => Edit::Drag { to: at },
-                12 => [Edit::Undo, Edit::Redo, Edit::Unmark][self.below(3)].clone(),
-                13 => Edit::Replace { range: self.range(len), text: self.text() },
-                _ => Edit::Mark { range: self.range(len), text: self.text(), selected: self.range(4) },
-            }
-        }
     }
 
     #[test]

@@ -4,8 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::apps;
 use crate::ax::Target;
+use crate::complete::{self, Candidate, Dropdown, Row};
 use crate::compose::{self, Draft};
-use crate::edit::{Edit, Field};
+use crate::edit::{Edit, Field, Motion};
 use crate::home::{self, Home};
 use crate::hosted::{self, Fit, Stuck};
 use crate::keys::Mods;
@@ -17,7 +18,8 @@ use crate::sessions::{self, Found};
 use crate::settings::{Installed, closed_apps};
 use crate::sneak::{Sneak, Typed};
 use crate::tasks::{
-    self, Assign, Heading, MAX_TITLE, Moved, NOTICE_MS, Notice, State, Task, TaskId, TaskRow, TaskSection, Tasks,
+    self, Assign, Heading, MAX_TITLE, Moved, NOTICE_MS, Notice, Ref, RefKind, State, Task, TaskId, TaskRow,
+    TaskSection, Tasks,
 };
 
 /// The axes of a `Fit`'s sizes, in their order: width, height.
@@ -139,6 +141,59 @@ impl Confirm {
         }
         lines
     }
+}
+
+/// Where the new-task box is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Host {
+    /// In place of the home screen's line: no panel over the workspace, no backdrop.
+    Home,
+    /// A panel over the dimmed workspace.
+    Modal,
+}
+
+/// What the user did to the dropdown, for the tag it was done to (`key`): for another tag it
+/// counts for nothing.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Menu {
+    /// Where the tag starts, its mark and what is typed of it.
+    key: Option<(usize, char, String)>,
+    /// Esc closed it.
+    dismissed: bool,
+    /// The row ↑ or ↓ went to, by its name: the rows may change under it (a scan lands, a
+    /// task is added), and the highlight stays on what it was on.
+    moved: Option<String>,
+}
+
+/// A path as a row or the line shows it: `~/..` inside the user's folder `home`.
+fn short(home: Option<&str>, path: &str) -> String {
+    match home.and_then(|home| path.strip_prefix(home)) {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("~{rest}"),
+        _ => path.to_string(),
+    }
+}
+
+/// True if two references are to one thing: the same tab, pane, mark or app.
+fn same_target(a: &Ref, b: &Ref) -> bool {
+    (a.kind, a.id, &a.bundle) == (b.kind, b.id, &b.bundle)
+}
+
+/// A terminal pane as the shell last saw it, for a `^reference` to tell panes apart.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TerminalInfo {
+    pub pane: PaneId,
+    pub cwd: Option<String>,
+    /// The program in front of the shell, if one is.
+    pub program: Option<String>,
+}
+
+/// What an ⌥-click in the workspace points at while the new-task box is open.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Pointed {
+    /// A tab, by its `id`.
+    Tab(u32),
+    Pane(PaneId),
 }
 
 /// The most characters the picker's filter holds: no app's name is longer, and a huge paste
@@ -397,9 +452,18 @@ pub enum Action {
     /// still holds `line`: an answer for a line since changed is dropped.
     SetKnown {
         line: String,
+        /// The path being typed at the cursor that `entries` finish, if one was.
+        typing: Option<String>,
         names: Option<compose::Names>,
         paths: Vec<compose::PathFound>,
         entries: Vec<String>,
+    },
+    /// Each terminal pane's directory and program now: the shell tells it when the new-task
+    /// box opens, for `^references`.
+    SetTerminals {
+        terminals: Vec<TerminalInfo>,
+        /// The user's folder: a path inside it is shown as `~/..` on a dropdown's row.
+        home: Option<String>,
     },
     TaskSetState {
         id: TaskId,
@@ -458,8 +522,31 @@ pub enum Action {
     FieldEdit {
         edit: Edit,
     },
-    /// Finish the tag being typed with the first suggestion.
+    /// Tab: take the dropdown's highlighted row, or its first.
     ComposeComplete,
+    /// Esc: close the dropdown if it is open, else the box.
+    ComposeEscape,
+    /// ↑ or ↓: move the dropdown's highlight. With no dropdown, to the line's start or end.
+    ComposeMove {
+        delta: i32,
+    },
+    /// A click on a row of the dropdown: take it.
+    ComposeAccept {
+        index: usize,
+    },
+    /// Files or folders dropped on the box, picked or pasted: each goes in at the cursor as a
+    /// `/path` word. `home`: the user's folder, so paths inside it are written `~/..`.
+    ComposeAttach {
+        paths: Vec<String>,
+        home: Option<String>,
+        /// How many more were given whose names are not text (not UTF-8): they are left out,
+        /// and the box says so.
+        unreadable: usize,
+    },
+    /// An ⌥-click on a tab or a pane while the box is open: its `^reference` goes in at the cursor.
+    ComposeRef {
+        target: Pointed,
+    },
     /// File the line as a task and close the box. A line with no title files nothing.
     /// `open`: show the new task's tabs at once ("add and start").
     ComposeSubmit {
@@ -805,6 +892,12 @@ impl Action {
             | Action::RestoreTasks { .. }
             | Action::TaskAdd { .. }
             | Action::SetKnown { .. }
+            | Action::SetTerminals { .. }
+            | Action::ComposeEscape
+            | Action::ComposeMove { .. }
+            | Action::ComposeAccept { .. }
+            | Action::ComposeAttach { .. }
+            | Action::ComposeRef { .. }
             | Action::TaskSetState { .. }
             | Action::TaskSnooze { .. }
             | Action::TaskHold { .. }
@@ -1003,6 +1096,25 @@ pub struct Model {
     /// The line `known`'s paths were read for.
     #[serde(skip)]
     known_line: Option<String>,
+    /// The path at the cursor `known.entries` finish.
+    #[serde(skip)]
+    known_typing: Option<String>,
+    #[serde(skip)]
+    menu: Menu,
+    /// What the line's `^references` pointed at when each went in: kept if it closes since.
+    #[serde(skip)]
+    compose_refs: Vec<Ref>,
+    /// The paths put into the line whole (dropped, picked, pasted), as typed there: each is
+    /// that very path, not one of that name inside the line's `>repo`.
+    #[serde(skip)]
+    compose_attached: Vec<String>,
+    /// What the box says of the last thing asked of it that it could not do: "no room".
+    #[serde(skip)]
+    compose_note: Option<String>,
+    #[serde(skip)]
+    terminals: Vec<TerminalInfo>,
+    #[serde(skip)]
+    home: Option<String>,
     /// Headings of the Tasks section that are collapsed. Not kept between runs.
     pub collapsed: Vec<Heading>,
     /// The offer to take back a snooze, hold or dismiss made with the mouse, while it shows.
@@ -1071,6 +1183,13 @@ impl Default for Model {
             tasks: Tasks::default(),
             known: compose::Known::default(),
             known_line: None,
+            known_typing: None,
+            menu: Menu::default(),
+            compose_refs: Vec::new(),
+            compose_attached: Vec::new(),
+            compose_note: None,
+            terminals: Vec::new(),
+            home: None,
             collapsed: Vec::new(),
             undo_offer: None,
             found: Vec::new(),
@@ -1216,6 +1335,9 @@ impl Model {
         let Envelope { action, origin } = sent.into();
         let user = origin == Origin::User;
         let mut effects = Vec::new();
+        // An edit is for the field that has the keyboard now. With none (a mark waits for a
+        // letter over the filter), it ends the wait as any move of the user's does, and types nothing.
+        let unfielded = matches!(action, Action::FieldEdit { .. }) && self.field().is_none();
         // Sneak mode ends on the user's own moves. A socket client's request and news never end
         // it, or the next letter of a label would reach a terminal: the labels follow what is
         // drawn instead. Its own actions say below what they do to it, whoever sent them: a
@@ -1243,10 +1365,13 @@ impl Model {
                 | Action::MarkSubmit
                 | Action::MarkCancel
         );
+        // A name being typed is a text field: an edit of it is the wait's own, too.
+        let renaming = matches!(self.mark_input, Some(MarkInput::Rename { .. }));
+        let own_mark = own_mark || (renaming && matches!(action, Action::FieldEdit { .. }));
         if user && !own_mark {
             self.mark_input = None;
         }
-        if self.refusal(&action, origin).is_some() {
+        if self.refusal(&action, origin).is_some() || unfielded {
             return effects;
         }
         // "Add and start" from anyone but the user adds the task and leaves the tabs on show
@@ -1417,14 +1542,16 @@ impl Model {
                     }
                 }
             }
-            Action::SetKnown { line, names, paths, entries } => {
+            Action::SetKnown { line, typing, names, paths, entries } => {
                 if let Some(names) = names {
                     self.known.names = names;
                 }
                 if self.compose_line() == Some(&line) {
                     (self.known.paths, self.known.entries, self.known_line) = (paths, entries, Some(line));
+                    self.known_typing = typing;
                 }
             }
+            Action::SetTerminals { terminals, home } => (self.terminals, self.home) = (terminals, home),
             Action::TaskSetState { id, state } => self.tasks.set_state(id, state),
             Action::TaskSnooze { id, until } => self.tasks.snooze(id, until),
             Action::TaskHold { id } => self.tasks.hold(id),
@@ -1630,36 +1757,121 @@ impl Model {
                 self.compose = Some(Field::new(&text, MAX_TITLE));
                 // Paths read for another line say nothing of this one.
                 (self.known.paths, self.known.entries, self.known_line) = (Vec::new(), Vec::new(), None);
+                self.known_typing = None;
+                self.compose_reset();
             }
             // Not under the key reference or the quit question: the field is hidden there.
             Action::FieldEdit { .. } if self.field().is_none() => {}
             Action::FieldEdit { edit } => {
-                if let Some(picker) = &mut self.picker {
+                if let Some(MarkInput::Rename { text, .. }) = &mut self.mark_input {
+                    text.apply(edit);
+                } else if let Some(picker) = &mut self.picker {
                     // A new filter starts at its first match.
                     if picker.query.apply(edit) {
                         picker.selected = 0;
                     }
+                } else if let Some(exact) = self.spelled_out(&edit) {
+                    // A space after a name that is one of the rows takes that row.
+                    self.accept(exact);
                 } else if let Some(field) = &mut self.compose {
+                    self.compose_note = None;
                     field.apply(edit);
                 } else {
                     self.app_lists.filter.apply(edit);
                 }
             }
             Action::ComposeComplete => {
-                let first = self.compose_suggestions().into_iter().next();
-                if let (Some(field), Some(first)) = (&mut self.compose, first) {
-                    let (word, name) = compose::completion_at(field.text(), field.cursor(), &first);
-                    field.splice(word, &name);
+                if let Some(menu) = self.dropdown().filter(|menu| !menu.rows.is_empty()) {
+                    self.accept(menu.selected.unwrap_or(0));
+                }
+            }
+            Action::ComposeAccept { index } => self.accept(index),
+            Action::ComposeMove { delta } => match self.dropdown().filter(|menu| !menu.rows.is_empty()) {
+                Some(menu) => {
+                    let to = complete::moved(menu.selected, delta, menu.rows.len());
+                    let moved = to.and_then(|at| menu.rows.get(at)).map(|row| row.name.clone());
+                    self.menu = Menu { key: self.menu_key(), dismissed: false, moved };
+                }
+                // No dropdown: ↑ and ↓ are the line's ends, as in any one-line field.
+                None => {
+                    let to = if delta < 0 { Motion::Start } else { Motion::End };
+                    if let Some(field) = self.compose.as_mut().filter(|_| self.picker.is_none()) {
+                        field.apply(Edit::Move { to, select: false });
+                    }
+                }
+            },
+            // Under the key reference the box is hidden: Esc is the reference's there.
+            Action::ComposeEscape if self.compose.is_some() && !self.composing() => {}
+            Action::ComposeEscape => {
+                if self.dropdown().is_some() {
+                    self.menu = Menu { key: self.menu_key(), dismissed: true, moved: None };
+                } else {
+                    self.compose = None;
+                    self.compose_reset();
                 }
             }
             Action::ComposeSubmit { open } => {
+                // ↵ on a highlighted row takes the row, unless the word is that name already
+                // or the name has no room: then there is nothing to take, and ↵ adds. ⌘↵ always adds.
+                if let Some(row) =
+                    self.dropdown().and_then(|menu| menu.selected).filter(|row| !open && self.changes(*row))
+                {
+                    self.accept(row);
+                    return;
+                }
                 let line = self.compose_line().cloned().unwrap_or_default();
+                let host = self.compose_host();
                 if let Some(id) = self.file_line(&line, None) {
-                    self.compose = None;
+                    // On the home screen the line stays, empty, for the next task.
+                    let stays = host == Some(Host::Home) && !open;
+                    self.compose = stays.then(|| Field::new("", MAX_TITLE));
+                    self.compose_reset();
                     self.start(id, open, effects);
                 }
             }
-            Action::CloseCompose => self.compose = None,
+            // Not while the box is hidden under the key reference: nothing changes a line unseen.
+            Action::ComposeAttach { .. } | Action::ComposeRef { .. } if !self.composing() => {}
+            Action::ComposeAttach { paths, home, unreadable } => {
+                // A name the line cannot hold (a line break in it) or one too long to keep
+                // is left out, and the box says how many were.
+                let named: Vec<String> = paths
+                    .iter()
+                    .filter(|path| path.starts_with('/'))
+                    .map(|path| short(home.as_deref(), path))
+                    .collect();
+                let fits = |path: &&String| compose::writable(path) && path.chars().count() <= tasks::MAX_TAG;
+                let whole: Vec<String> = named.iter().filter(fits).cloned().collect();
+                let left_out = unreadable + named.len() - whole.len();
+                let room = self.insert_words(whole.iter().map(|path| compose::escape(path)).collect());
+                self.compose_note = match (room, left_out) {
+                    (false, _) if !whole.is_empty() => Some("no room in the line: nothing was added".into()),
+                    (_, 0) => None,
+                    (_, 1) => Some("1 left out: its name is too long, or not one a line can hold".into()),
+                    (_, n) => Some(format!("{n} left out: a name too long, or not one a line can hold")),
+                };
+                if room {
+                    self.compose_attached.retain(|path| !whole.contains(path));
+                    self.compose_attached.extend(whole);
+                }
+            }
+            Action::ComposeRef { target } => {
+                let wanted = match target {
+                    Pointed::Tab(id) => (RefKind::Tab, id),
+                    Pointed::Pane(id) => (RefKind::Pane, id as u32),
+                };
+                let pointed = self.ref_candidates().into_iter().map(|(reference, _)| reference);
+                if let Some(reference) = pointed.into_iter().find(|r| (r.kind, r.id) == (wanted.0, Some(wanted.1))) {
+                    let room = self.insert_words(vec![format!("^{}", compose::escape(&reference.name))]);
+                    self.compose_note = (!room).then(|| "no room in the line: nothing was added".into());
+                    if room {
+                        self.capture(reference);
+                    }
+                }
+            }
+            Action::CloseCompose => {
+                self.compose = None;
+                self.compose_reset();
+            }
             Action::TaskFromLine { line, known, open } => {
                 if let Some(id) = self.file_line(&line, Some(known)) {
                     self.start(id, open, effects);
@@ -1995,14 +2207,333 @@ impl Model {
     }
 
     /// What `line` would file. A tag counts only if its name is known: `>name` a listed
-    /// repository; `@name`, `$name` and `/path` what the shell last read (`SetKnown`).
+    /// repository; `@name`, `$name` and `/path` what the shell last read (`SetKnown`); `^name`
+    /// what the box's line pointed at, or what is open by that name.
     pub fn draft(&self, line: &str) -> Draft {
-        self.draft_knowing(line, &self.known)
+        self.draft_knowing(line, &self.known, true)
     }
 
-    /// What `line` would file, given what was read for it.
-    fn draft_knowing(&self, line: &str, known: &compose::Known) -> Draft {
-        compose::read(line, |name| self.repo_named(name).is_some(), known)
+    /// What `line` would file, given what was read for it. `captures`: the line is the box's
+    /// own, and a `^name` may be one it kept. A line from a client is read without them.
+    fn draft_knowing(&self, line: &str, known: &compose::Known, captures: bool) -> Draft {
+        let (repo, pointed) =
+            (|name: &str| self.repo_named(name).is_some(), |name: &str| self.pointed(name, captures).is_some());
+        compose::read(line, repo, pointed, known)
+    }
+
+    /// Where the tags of the line in the new-task box are: what it draws as understood.
+    pub fn compose_spans(&self) -> Vec<compose::Span> {
+        let Some(line) = self.compose_line() else { return Vec::new() };
+        let (repo, pointed) =
+            (|name: &str| self.repo_named(name).is_some(), |name: &str| self.pointed(name, true).is_some());
+        compose::read_spans(line, repo, pointed, &self.known)
+    }
+
+    /// Where the new-task box is drawn: in place on the home screen while it shows, else over
+    /// the workspace. `None`: it is not open.
+    pub fn compose_host(&self) -> Option<Host> {
+        self.compose.as_ref().map(|_| if self.layout.is_none() { Host::Home } else { Host::Modal })
+    }
+
+    /// The new-task box's line has the keyboard: it is open, and nothing is over it.
+    fn composing(&self) -> bool {
+        self.field().is_some_and(|(of, _)| of == "compose")
+    }
+
+    /// What the box says of the last thing it could not do, while it says it.
+    pub fn compose_note(&self) -> Option<&str> {
+        self.compose_note.as_deref().filter(|_| self.compose.is_some())
+    }
+
+    /// The paths in the box's line that were put in whole: the shell looks each up as that
+    /// very path, not inside the line's repository.
+    pub fn compose_attached(&self) -> &[String] {
+        &self.compose_attached
+    }
+
+    /// The box closed, or its task was added: what it kept for its line is the line's no more.
+    fn compose_reset(&mut self) {
+        (self.menu, self.compose_refs, self.compose_attached, self.compose_note) =
+            (Menu::default(), Vec::new(), Vec::new(), None);
+    }
+
+    /// What a `^name` points at: what is open by that name now; and for the box's own line
+    /// (`captures`), first what a reference of that name pointed at when it went in.
+    fn pointed(&self, name: &str, captures: bool) -> Option<Ref> {
+        let kept = self.compose_refs.iter().find(|r| captures && r.name == name).cloned();
+        let open = || {
+            let all = if captures { self.ref_candidates() } else { self.named_refs(&[]) };
+            all.into_iter().map(|(r, _)| r).find(|r| r.name == name)
+        };
+        kept.or_else(open)
+    }
+
+    /// Keeps what a reference points at, as it is now. One thing is kept once, under the name
+    /// it has in this line.
+    fn capture(&mut self, reference: Ref) {
+        if !self.compose_refs.iter().any(|kept| same_target(kept, &reference)) {
+            self.compose_refs.push(reference);
+        }
+    }
+
+    /// What a `^reference` may name in the box's line, each with a word of detail: every tab,
+    /// every pane that shows something, every mark, and the installed apps that are not
+    /// running. What the line already points at keeps the name it has there.
+    pub fn ref_candidates(&self) -> Vec<(Ref, String)> {
+        self.named_refs(&self.compose_refs)
+    }
+
+    /// As `ref_candidates`, with `kept` the references whose names are taken. Two things of one
+    /// name: the later ones get `-2`, `-3`, and never a name `kept` has for something else, so
+    /// a name in a line means one thing as long as the line is there.
+    fn named_refs(&self, kept: &[Ref]) -> Vec<(Ref, String)> {
+        let blank = |kind, name: &str| Ref {
+            kind,
+            name: name.to_string(),
+            id: None,
+            title: None,
+            app: None,
+            cwd: None,
+            program: None,
+            bundle: None,
+        };
+        let mut found: Vec<(Ref, String)> = Vec::new();
+        let panes = self.tab_panes();
+        for (tab, inside) in self.tabs.iter().zip(&panes) {
+            let detail = format!("tab · {} pane{}", inside.len(), if inside.len() == 1 { "" } else { "s" });
+            let title = Some(tab.title.clone());
+            found.push((Ref { id: Some(tab.id), title, ..blank(RefKind::Tab, &tab.title) }, detail));
+        }
+        for pane in &self.panes {
+            let id = Some(pane.id as u32);
+            match &pane.kind {
+                Kind::Empty => {}
+                Kind::Terminal => {
+                    let info = self.terminals.iter().find(|info| info.pane == pane.id);
+                    let cwd = info.and_then(|info| info.cwd.clone()).or(pane.cwd.clone());
+                    let program = info.and_then(|info| info.program.clone());
+                    // As a mark of the pane is named: its directory, else `shell`.
+                    let name = cwd.as_deref().and_then(marks::directory_name).unwrap_or("shell").to_string();
+                    let place = cwd.as_deref().map(|cwd| short(self.home.as_deref(), cwd)).unwrap_or_default();
+                    let detail = ["terminal", program.as_deref().unwrap_or("shell"), &place];
+                    let detail = detail.into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" · ");
+                    found.push((Ref { id, cwd, program, ..blank(RefKind::Pane, &name) }, detail));
+                }
+                Kind::App { title, name, .. } => {
+                    let app = if name.is_empty() { title } else { name };
+                    let reference =
+                        Ref { id, title: Some(title.clone()), app: Some(app.clone()), ..blank(RefKind::Pane, app) };
+                    found.push((reference, format!("app pane · {title}")));
+                }
+            }
+        }
+        for mark in self.mark_rows() {
+            found.push((
+                Ref { id: Some(mark.id as u32), ..blank(RefKind::Mark, &mark.name) },
+                format!("mark · {}", mark.kind),
+            ));
+        }
+        let mut closed = closed_apps(&self.installed.0, &self.installed.1);
+        closed.sort_by_key(|app| app.name.to_lowercase());
+        for app in closed {
+            let reference =
+                Ref { app: Some(app.name.clone()), bundle: Some(app.path), ..blank(RefKind::App, &app.name) };
+            found.push((reference, "app · not running".to_string()));
+        }
+        // A name the line can hold, and nothing with no name at all.
+        found.retain(|(reference, _)| !reference.name.trim().is_empty() && compose::writable(&reference.name));
+        let mut names: Vec<String> = kept.iter().map(|r| r.name.clone()).collect();
+        for (reference, _) in &mut found {
+            if let Some(kept) = kept.iter().find(|kept| same_target(kept, reference)) {
+                reference.name = kept.name.clone();
+                continue;
+            }
+            let base = reference.name.clone();
+            let mut n = 1;
+            while names.contains(&reference.name) {
+                n += 1;
+                reference.name = format!("{base}-{n}");
+            }
+            names.push(reference.name.clone());
+        }
+        found
+    }
+
+    /// Puts `words` into the line, each a word of its own, as one undo step: in place of the
+    /// selection, else after the word the cursor is in (never inside it). False, and nothing
+    /// goes in, if the box is not open or has no room for all of them.
+    fn insert_words(&mut self, words: Vec<String>) -> bool {
+        let Some(field) = self.compose.as_mut().filter(|_| !words.is_empty()) else { return false };
+        let selection = field.selection();
+        // At the start of a word, or between two: there. Inside one: after it.
+        let inside = field.text()[..selection.end].chars().next_back().is_some_and(|c| !c.is_whitespace());
+        let end = if inside { compose::word_end(field.text(), selection.end) } else { selection.end };
+        let at = if selection.is_empty() { end } else { selection.end };
+        let range = if selection.is_empty() { at..at } else { selection };
+        let before = field.text()[..range.start].chars().next_back();
+        let lead = if before.is_none_or(char::is_whitespace) { "" } else { " " };
+        let text = format!("{lead}{} ", words.join(" "));
+        if !field.fits(range.clone(), &text) {
+            return false;
+        }
+        field.splice(range, &text);
+        true
+    }
+
+    /// The path being typed at the cursor of the new-task box: the shell lists what finishes it.
+    pub fn compose_typing(&self) -> Option<String> {
+        self.menu_key().filter(|(_, mark, _)| *mark == '/').map(|(_, _, typed)| typed)
+    }
+
+    /// The tag at the cursor of the new-task box, as the dropdown's state is kept for it.
+    fn menu_key(&self) -> Option<(usize, char, String)> {
+        let field = self.compose.as_ref()?;
+        let before = &field.text()[..field.cursor()];
+        let (mark, typed) = compose::completing(before)?;
+        Some((compose::completion(before, "").0.start, mark, typed))
+    }
+
+    /// The names a tag may take, the likelier first, and whether they are all in: a path's
+    /// are read by the shell a moment after it is typed. Only names that read back as the
+    /// tag when they are in the line.
+    fn candidates(&self, mark: char, typed: &str) -> (Vec<Candidate>, bool) {
+        let of = |kind: &'static str, name: &str, detail: String| Candidate { name: name.to_string(), kind, detail };
+        let list: Vec<Candidate> = match mark {
+            '#' => {
+                // The project with the most tasks first.
+                let mut projects: Vec<(usize, &str)> = Vec::new();
+                for name in self.tasks.list.iter().filter_map(|task| task.project.as_deref()) {
+                    match projects.iter_mut().find(|(_, seen)| *seen == name) {
+                        Some((count, _)) => *count += 1,
+                        None => projects.push((1, name)),
+                    }
+                }
+                projects.sort_by_key(|(count, name)| (std::cmp::Reverse(*count), name.to_lowercase()));
+                let detail = |n: usize| format!("{n} task{}", if n == 1 { "" } else { "s" });
+                projects.into_iter().map(|(count, name)| of("project", name, detail(count))).collect()
+            }
+            '>' => self.repo_names().map(|(name, path)| of("repo", name, short(self.home.as_deref(), path))).collect(),
+            '@' => {
+                let detail = |name: &str| if matches!(name, "claude" | "codex") { "runner" } else { "saved agent" };
+                self.known.names.agents.iter().map(|name| of("agent", name, detail(name).to_string())).collect()
+            }
+            '$' => self.known.names.skills.iter().map(|name| of("skill", name, String::new())).collect(),
+            '/' => {
+                if self.known_typing.as_deref() != Some(typed) {
+                    return (Vec::new(), false);
+                }
+                let kind = |path: &str| if path.ends_with('/') { "folder" } else { "file" };
+                let entries = compose::path_suggestions(&self.known.entries);
+                return (entries.iter().map(|path| of(kind(path), path, String::new())).collect(), true);
+            }
+            '^' => {
+                let kind = |kind| match kind {
+                    RefKind::Tab => "tab",
+                    RefKind::Pane => "pane",
+                    RefKind::Mark => "mark",
+                    RefKind::App => "app",
+                };
+                let refs = self.ref_candidates();
+                return (refs.into_iter().map(|(r, detail)| of(kind(r.kind), &r.name, detail)).collect(), true);
+            }
+            _ => Vec::new(),
+        };
+        (list.into_iter().filter(|candidate| compose::taggable(mark, &candidate.name)).collect(), true)
+    }
+
+    /// The completion dropdown of the new-task box, while it is open: the cursor is in a tag,
+    /// the line has the keyboard, nothing is selected, and Esc has not closed it for this tag.
+    pub fn dropdown(&self) -> Option<Dropdown> {
+        if !self.composing() {
+            return None;
+        }
+        let field = self.compose.as_ref()?;
+        if !field.selection().is_empty() || field.marked().is_some() {
+            return None;
+        }
+        let key = self.menu_key()?;
+        let menu = Some(&self.menu).filter(|menu| menu.key.as_ref() == Some(&key));
+        if menu.is_some_and(|menu| menu.dismissed) {
+            return None;
+        }
+        let (start, mark, typed) = key;
+        let (candidates, read) = self.candidates(mark, &typed);
+        // A path's entries were listed for what is typed: all match, from the last `/` on.
+        let (rows, name) = if mark == '/' {
+            let from = typed.rfind('/').map_or(0, |at| typed[..at + 1].chars().count());
+            let matched = |name: &str| (from..typed.chars().count().min(name.chars().count())).collect();
+            let row = |c: Candidate| Row { matched: matched(&c.name), name: c.name, kind: c.kind, detail: c.detail };
+            let rows = candidates.into_iter().take(complete::MAX_ROWS).map(row).collect::<Vec<_>>();
+            (rows, typed.rsplit('/').next().unwrap_or(""))
+        } else {
+            (complete::rows(&typed, candidates), typed.as_str())
+        };
+        let note = match (rows.is_empty(), read, mark) {
+            (false, ..) => None,
+            (true, false, _) => return None,
+            // A project is whatever is typed: one nobody used yet is a new one.
+            (true, true, '#') if !typed.is_empty() => Some("new project"),
+            (true, true, _) => Some("no match"),
+        };
+        // The row the user moved to, wherever it now is; one that is gone moves nothing.
+        let moved =
+            menu.and_then(|menu| menu.moved.as_ref()).and_then(|name| rows.iter().position(|row| row.name == *name));
+        let selected = complete::selected(moved, name, rows.len());
+        Some(Dropdown { mark, typed: typed.clone(), start, rows, selected, note })
+    }
+
+    /// The row a typed space takes: the dropdown's row whose name is exactly what is typed,
+    /// whatever the case of the letters. Only at the end of the word: a space typed inside one
+    /// is a space. Not for a path, where a space ends the word anyway.
+    fn spelled_out(&self, edit: &Edit) -> Option<usize> {
+        let space = matches!(edit, Edit::Insert(text) | Edit::Replace { range: None, text } if text == " ");
+        let field = self.compose.as_ref()?;
+        let at_end = compose::word_end(field.text(), field.cursor()) == field.cursor();
+        let menu = self.dropdown().filter(|menu| space && at_end && menu.mark != '/' && !menu.typed.is_empty())?;
+        menu.rows.iter().position(|row| row.name.to_lowercase() == menu.typed.to_lowercase())
+    }
+
+    /// What taking row `index` would put where: the word under the cursor, and the text for
+    /// it. `None`: no such row, or the line has no room for the name whole.
+    fn taking(&self, index: usize) -> Option<(std::ops::Range<usize>, String)> {
+        let (menu, field) = (self.dropdown()?, self.compose.as_ref()?);
+        let (word, text) = compose::completion_at(field.text(), field.cursor(), &menu.rows.get(index)?.name);
+        field.fits(word.clone(), &text).then_some((word, text))
+    }
+
+    /// Whether taking row `index` would change the word under the cursor: false if it is
+    /// spelled out already, or the name has no room. A folder named without its last `/` is
+    /// spelled out.
+    fn changes(&self, index: usize) -> bool {
+        let (Some((word, text)), Some(field)) = (self.taking(index), &self.compose) else { return false };
+        let (typed, taken) = (&field.text()[word], text.trim_end());
+        typed != taken && Some(typed) != taken.strip_suffix('/')
+    }
+
+    /// Takes row `index` of the dropdown: its name replaces the whole word under the cursor,
+    /// with a space after it, and nothing past that word. A folder takes no space: the
+    /// dropdown stays, on what is in it. A name the line has no room for is not taken in
+    /// part: the line stays, and the box says so.
+    fn accept(&mut self, index: usize) {
+        let Some(menu) = self.dropdown() else { return };
+        let Some(row) = menu.rows.get(index) else { return };
+        let Some((word, text)) = self.taking(index) else {
+            self.compose_note = Some("no room in the line for that name".into());
+            return;
+        };
+        if menu.mark == '^' {
+            if let Some((reference, _)) = self.ref_candidates().into_iter().find(|(r, _)| r.name == row.name) {
+                self.capture(reference);
+            }
+        }
+        let Some(field) = &mut self.compose else { return };
+        let spaced = text.ends_with(' ') || text.ends_with('/');
+        field.splice(word, &text);
+        // A space was there already: the cursor goes past it, out of the tag.
+        if !spaced {
+            field.apply(Edit::Move { to: Motion::Right, select: false });
+        }
+        (self.menu, self.compose_note) = (Menu::default(), None);
     }
 
     /// The shell has read what the tags of the line in the new-task box may name: what `draft`
@@ -2025,7 +2556,8 @@ impl Model {
         });
         let project = task.project.as_ref().map(|project| format!("#{project}"));
         let agent = task.agent.as_ref().map(|agent| format!("@{agent}"));
-        let tags = [project, repo, agent, count(task.paths.len(), "path"), count(task.skills.len(), "skill")];
+        let (paths, skills) = (count(task.paths.len(), "path"), count(task.skills.len(), "skill"));
+        let tags = [project, repo, agent, paths, skills, count(task.refs.len(), "reference")];
         tags.into_iter().flatten().collect::<Vec<_>>().join(" · ")
     }
 
@@ -2033,7 +2565,7 @@ impl Model {
     /// nothing is filed.
     fn file_line(&mut self, line: &str, known: Option<compose::Known>) -> Option<TaskId> {
         let draft = match &known {
-            Some(known) => self.draft_knowing(line, known),
+            Some(known) => self.draft_knowing(line, known, false),
             None => self.draft(line),
         };
         if draft.title.is_empty() || draft.title.chars().count() > MAX_TITLE {
@@ -2042,8 +2574,10 @@ impl Model {
         let path = draft.repo.as_deref().and_then(|name| self.repo_named(name));
         let id = self.file(draft.title, draft.priority.unwrap_or(3), State::Captured);
         self.tasks.tag(id, draft.project, path);
-        let Draft { agent, paths, resolved, skills, .. } = draft;
+        let Draft { agent, paths, resolved, skills, refs, .. } = draft;
         self.tasks.assign(id, Assign { agent, paths, resolved, skills });
+        let pointed = refs.iter().filter_map(|name| self.pointed(name, known.is_none())).collect();
+        self.tasks.point(id, pointed);
         Some(id)
     }
 
@@ -2230,25 +2764,12 @@ impl Model {
         self.repo_names().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, path)| path.to_string())
     }
 
-    /// Names that finish the tag being typed in the new-task box.
-    pub fn compose_suggestions(&self) -> Vec<String> {
-        let Some(field) = &self.compose else { return Vec::new() };
-        let typed = compose::completing(&field.text()[..field.cursor()]);
-        // Paths were read for the end of the line: they finish only a word typed there.
-        match typed.filter(|(mark, _)| *mark != '/' || field.cursor() == field.text().len()) {
-            Some(('>', typed)) => compose::suggest(&typed, self.repo_names().map(|(name, _)| name)),
-            Some(('@', typed)) => compose::suggest(&typed, self.known.names.agents.iter().map(String::as_str)),
-            Some(('$', typed)) => compose::suggest(&typed, self.known.names.skills.iter().map(String::as_str)),
-            // The shell listed them for what is typed.
-            Some(('/', _)) => compose::path_suggestions(&self.known.entries),
-            Some((_, typed)) => compose::suggest(&typed, self.tasks.projects()),
-            None => Vec::new(),
-        }
-    }
-
-    /// The text field that is open, and whose it is: the picker's filter, else the new-task
-    /// box. It may be under the key reference or the quit question: see `field`.
+    /// The text field that is open, and whose it is: a mark's name being typed, the picker's
+    /// filter, else the new-task box. It may be under the key reference or the quit question: see `field`.
     pub fn open_field(&self) -> Option<(&'static str, &Field)> {
+        if let Some(MarkInput::Rename { text, .. }) = &self.mark_input {
+            return Some(("mark", text));
+        }
         let picker = self.picker.as_ref().map(|picker| ("picker", &picker.query));
         let apps = self.app_lists.filtering.then_some(("apps", &self.app_lists.filter));
         picker.or(self.compose.as_ref().map(|field| ("compose", field))).or(apps)
@@ -2257,8 +2778,16 @@ impl Model {
     /// The open text field, if it has the keyboard: keys, the clipboard and the input method
     /// edit it. Not while the key reference, the quit question or sneak mode is over it.
     pub fn field(&self) -> Option<(&'static str, &Field)> {
-        // List mode is the mode of the Apps section's filter: `open_field` has it only then.
-        self.open_field().filter(|_| !self.keys && matches!(self.mode(), Mode::Pick | Mode::Compose | Mode::List))
+        // Each field in its own mode: the Apps section's filter in list mode, a mark's name
+        // while it is typed. A mark that waits for a letter is over the filter, not in it.
+        let mode = self.mode();
+        let its_mode = |of: &str| match of {
+            "mark" => mode == Mode::Mark,
+            "picker" => mode == Mode::Pick,
+            "compose" => mode == Mode::Compose,
+            _ => mode == Mode::List,
+        };
+        self.open_field().filter(|(of, _)| !self.keys && its_mode(of))
     }
 
     /// The line in the new-task box.
@@ -2945,6 +3474,12 @@ mod tests {
         Action::RestoreTasks { .. },
         Action::TaskAdd { .. },
         Action::SetKnown { .. },
+        Action::SetTerminals { .. },
+        Action::ComposeEscape,
+        Action::ComposeMove { .. },
+        Action::ComposeAccept { .. },
+        Action::ComposeAttach { .. },
+        Action::ComposeRef { .. },
         Action::TaskSetState { .. },
         Action::TaskSnooze { .. },
         Action::TaskHold { .. },
@@ -3062,7 +3597,13 @@ mod tests {
             Action::OpenRepo { path: text(), axis: Right },
             Action::RestoreTasks { tasks: Vec::new(), floor: 0 },
             Action::TaskAdd { title: text(), priority: 3, state: State::Running, tab: None, assign: Assign::default() },
-            Action::SetKnown { line: text(), names: None, paths: Vec::new(), entries: Vec::new() },
+            Action::SetKnown { line: text(), typing: None, names: None, paths: Vec::new(), entries: Vec::new() },
+            Action::SetTerminals { terminals: Vec::new(), home: None },
+            Action::ComposeEscape,
+            Action::ComposeMove { delta: 1 },
+            Action::ComposeAccept { index: 0 },
+            Action::ComposeAttach { paths: Vec::new(), home: None, unreadable: 0 },
+            Action::ComposeRef { target: Pointed::Tab(1) },
             Action::TaskSetState { id: 1, state: State::Done },
             Action::TaskSnooze { id: 1, until: 0 },
             Action::TaskHold { id: 1 },
@@ -3925,7 +4466,7 @@ mod tests {
         assert_eq!((m.tasks.list.len(), m.mode()), (0, Mode::Compose));
         // Tab finishes the repository being typed; the name need not match in case.
         m.update(Action::FieldEdit { edit: Edit::Insert("fix zoom #Canvas >AP".into()) });
-        assert_eq!(m.compose_suggestions(), ["app", "app-2"], "worktrees too");
+        assert_eq!(offered(&m), ["app", "app-2"], "worktrees too");
         m.update(Action::ComposeComplete);
         m.update(Action::FieldEdit { edit: Edit::Insert("p1x".into()) });
         m.update(Action::FieldEdit { edit: Edit::Delete { to: Motion::Left } });
@@ -3945,7 +4486,7 @@ mod tests {
             m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::Left, select: false } });
         }
         m.update(Action::ComposeComplete);
-        assert_eq!(m.field().map(|(_, field)| (field.text(), field.cursor())), Some(("fix zoom #Canvas >app p1", 21)));
+        assert_eq!(m.field().map(|(_, field)| (field.text(), field.cursor())), Some(("fix zoom #Canvas >app p1", 22)));
         // Under the key reference the line is hidden: it has no keyboard, and nothing edits it.
         m.keys = true;
         m.update(Action::FieldEdit { edit: Edit::Insert("x".into()) });
@@ -3961,7 +4502,7 @@ mod tests {
         );
         // A project already used is suggested; an unknown repository stays in the title.
         m.update(Action::OpenCompose { text: "look #c".into() });
-        assert_eq!(m.compose_suggestions(), ["Canvas"]);
+        assert_eq!(offered(&m), ["Canvas"]);
         m.update(Action::CloseCompose);
         m.update(Action::TaskFromLine { line: "ask @ana about >app-2".into(), known: Default::default(), open: false });
         assert_eq!(
@@ -3989,6 +4530,575 @@ mod tests {
         assert_eq!(m.compose, None);
     }
 
+    fn keys(m: &mut Model, text: &str) {
+        for c in text.chars() {
+            m.update(Action::FieldEdit { edit: Edit::Insert(c.to_string()) });
+        }
+    }
+
+    fn line(m: &Model) -> &str {
+        m.compose_line().map_or("<closed>", String::as_str)
+    }
+
+    /// A box over one terminal, with two repositories, two agents, a skill and three projects.
+    fn composing() -> Model {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        term(&mut m);
+        for line in ["a #canvas", "b #canvas", "c #Cables", "d #flow-canvas"] {
+            m.update(Action::TaskFromLine { line: line.into(), known: Default::default(), open: false });
+        }
+        m.update(Action::OpenCompose { text: String::new() });
+        let names = compose::Names { agents: vec!["claude".into(), "codex".into()], skills: vec!["deploy".into()] };
+        let known =
+            Action::SetKnown { line: String::new(), typing: None, names: Some(names), paths: vec![], entries: vec![] };
+        m.update(known);
+        m
+    }
+
+    #[test]
+    fn the_dropdown_opens_in_a_tag_and_its_keys_take_or_leave_a_row() {
+        let mut m = composing();
+        let shown = |m: &Model| m.dropdown().map(|menu| (menu.mark, offered(m), menu.selected, menu.note));
+        // No tag at the cursor: no dropdown, and ↑ ↓ are the line's ends.
+        keys(&mut m, "fix zoom");
+        m.update(Action::ComposeMove { delta: -1 });
+        assert_eq!((shown(&m), m.field().map(|(_, f)| f.cursor())), (None, Some(0)));
+        m.update(Action::ComposeMove { delta: 1 });
+        // A bare mark lists what there is, the project with the most tasks first, and
+        // highlights nothing: ↵ would still add the task.
+        keys(&mut m, " #");
+        let all = vec!["canvas".to_string(), "Cables".into(), "flow-canvas".into()];
+        assert_eq!(shown(&m), Some(('#', all, None, None)));
+        // A letter narrows and highlights the first row. Matches at the start come first.
+        keys(&mut m, "ca");
+        let rows = m.dropdown().unwrap().rows;
+        assert_eq!(shown(&m), Some(('#', vec!["canvas".into(), "Cables".into(), "flow-canvas".into()], Some(0), None)));
+        assert_eq!((rows[0].kind, rows[0].detail.as_str(), &rows[0].matched), ("project", "2 tasks", &vec![0, 1]));
+        assert_eq!(rows[2].matched, [5, 6], "the letters matched are told, for the shell to draw them stronger");
+        // ↓ and ↑ move and wrap; typing more keeps to the rows that are left.
+        m.update(Action::ComposeMove { delta: 1 });
+        m.update(Action::ComposeMove { delta: 1 });
+        m.update(Action::ComposeMove { delta: 1 });
+        m.update(Action::ComposeMove { delta: -1 });
+        assert_eq!(m.dropdown().unwrap().selected, Some(2));
+        keys(&mut m, "b");
+        assert_eq!(shown(&m), Some(('#', vec!["Cables".into()], Some(0), None)));
+        // ↵ on a highlighted row takes it and adds no task. The box stays; the dropdown is gone.
+        m.update(Action::ComposeSubmit { open: false });
+        assert_eq!((line(&m), shown(&m), m.tasks.list.len()), ("fix zoom #Cables ", None, 4));
+        // Tab takes the highlighted row, or the first when none is.
+        keys(&mut m, ">");
+        m.update(Action::ComposeComplete);
+        assert_eq!(line(&m), "fix zoom #Cables >app ");
+        // Esc closes the dropdown and keeps the box; ↵ then adds, with the word as typed.
+        keys(&mut m, "@co");
+        m.update(Action::ComposeEscape);
+        assert_eq!((shown(&m), m.mode()), (None, Mode::Compose));
+        m.update(Action::ComposeMove { delta: 1 });
+        assert_eq!(shown(&m), None, "closed, it does not take ↓");
+        // Typing on opens it again; a second Esc, with it closed, closes the box.
+        keys(&mut m, "d");
+        assert_eq!(offered(&m), ["codex"]);
+        m.update(Action::ComposeEscape);
+        m.update(Action::ComposeEscape);
+        assert_eq!(m.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn enter_adds_the_task_unless_a_row_would_change_the_line() {
+        // A name typed in full: its row is highlighted, but there is nothing to take. ↵ adds.
+        let mut m = composing();
+        keys(&mut m, "fix #canvas");
+        assert_eq!(m.dropdown().and_then(|menu| menu.selected), Some(0));
+        m.update(Action::ComposeSubmit { open: false });
+        assert_eq!((m.mode(), m.tasks.list[4].project.as_deref()), (Mode::Normal, Some("canvas")));
+        // A bare mark, or a name nobody has: nothing is highlighted. ↵ adds.
+        for text in ["fix #", "fix #brand-new", "fix @nobody"] {
+            m.update(Action::OpenCompose { text: text.into() });
+            let note = m.dropdown().and_then(|menu| menu.note);
+            assert_eq!(
+                note,
+                Some(if text.ends_with('w') { "new project" } else { "no match" }).filter(|_| text != "fix #")
+            );
+            m.update(Action::ComposeSubmit { open: false });
+            assert_eq!(m.mode(), Mode::Normal, "{text}");
+        }
+        // ⌘↵ adds whatever is highlighted.
+        m.update(Action::OpenCompose { text: "fix #ca".into() });
+        m.update(Action::ComposeSubmit { open: true });
+        assert_eq!(
+            (
+                m.compose_line(),
+                m.tasks.list.last().filter(|t| t.project.as_deref() == Some("ca")).map(|t| t.title.as_str())
+            ),
+            (None, Some("fix"))
+        );
+        // A space after a name that is a row's takes the row, spelled as it is kept.
+        m.update(Action::TaskLeave);
+        m.update(Action::OpenCompose { text: "fix #CABLES".into() });
+        keys(&mut m, " ");
+        assert_eq!(line(&m), "fix #Cables ");
+        keys(&mut m, "#cab ");
+        assert_eq!(line(&m), "fix #Cables #cab ", "part of a name is not the name");
+        // A click takes its row; a row that is not there takes nothing.
+        keys(&mut m, "@c");
+        m.update(Action::ComposeAccept { index: 9 });
+        m.update(Action::ComposeAccept { index: 1 });
+        assert_eq!(line(&m), "fix #Cables #cab @codex ");
+        // Inside a line the whole word goes, and the cursor leaves the tag past the space there.
+        m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::Start, select: false } });
+        m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::WordRight, select: false } });
+        keys(&mut m, " >a");
+        m.update(Action::ComposeComplete);
+        assert_eq!(
+            (line(&m), m.field().map(|(_, f)| f.cursor()), m.dropdown()),
+            ("fix >app #Cables #cab @codex ", Some(9), None)
+        );
+        // A selection, or the key reference over the box: no dropdown.
+        keys(&mut m, "#c");
+        m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::Left, select: true } });
+        assert_eq!(m.dropdown(), None);
+        m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::Right, select: false } });
+        m.keys = true;
+        assert_eq!(m.dropdown(), None);
+    }
+
+    #[test]
+    fn a_folder_taken_from_the_dropdown_keeps_it_open_on_what_is_inside() {
+        let mut m = composing();
+        let read = |m: &mut Model, typing: &str, entries: &[&str]| {
+            let (line, entries) = (m.compose_line().cloned().unwrap(), entries.iter().map(|e| e.to_string()).collect());
+            m.update(Action::SetKnown { line, typing: Some(typing.into()), names: None, paths: vec![], entries });
+        };
+        keys(&mut m, "see /src/ex");
+        // Not read yet: no dropdown, not "no match".
+        assert_eq!(m.dropdown(), None);
+        read(&mut m, "/src/ex", &["/src/export/", "/src/extra.rs"]);
+        let menu = m.dropdown().unwrap();
+        assert_eq!((menu.rows[0].kind, menu.rows[1].kind, &menu.rows[0].matched), ("folder", "file", &vec![5, 6]));
+        // What was read for another word typed since is not shown.
+        keys(&mut m, "p");
+        assert_eq!(m.dropdown(), None);
+        read(&mut m, "/src/exp", &["/src/export/"]);
+        m.update(Action::ComposeSubmit { open: false });
+        assert_eq!((line(&m), m.dropdown()), ("see /src/export/", None));
+        // Its entries arrive; nothing of a name is typed, so none is highlighted.
+        read(&mut m, "/src/export/", &["/src/export/My Notes/", "/src/export/a.rs"]);
+        assert_eq!((offered(&m).len(), m.dropdown().unwrap().selected), (2, None));
+        m.update(Action::ComposeMove { delta: 1 });
+        m.update(Action::ComposeComplete);
+        assert_eq!(line(&m), r"see /src/export/My\ Notes/");
+        read(&mut m, "/src/export/My Notes/", &[]);
+        assert_eq!(m.dropdown().and_then(|menu| menu.note), Some("no match"));
+        // A folder typed in full, without its last `/`: its row is highlighted, but ↵ adds.
+        m.update(Action::FieldEdit { edit: Edit::Delete { to: Motion::Left } });
+        read(&mut m, "/src/export/My Notes", &["/src/export/My Notes/"]);
+        assert_eq!(m.dropdown().and_then(|menu| menu.selected), Some(0));
+        m.update(Action::ComposeSubmit { open: false });
+        assert_eq!(
+            (m.mode(), m.tasks.list.last().map(|task| task.title.as_str())),
+            (Mode::Normal, Some(r"see /src/export/My\ Notes"))
+        );
+    }
+
+    #[test]
+    fn the_tags_understood_are_told_with_where_they_are() {
+        let mut m = composing();
+        keys(&mut m, "fix #canvas ");
+        keys(&mut m, ">app ");
+        keys(&mut m, ">web @claude p2, $nope");
+        let marks: Vec<(char, &str)> =
+            m.compose_spans().iter().map(|span| (span.mark, &line(&m)[span.range.clone()])).collect();
+        assert_eq!(marks, [('#', "#canvas"), ('>', ">app"), ('@', "@claude"), ('p', "p2,")]);
+    }
+
+    #[test]
+    fn files_go_in_as_path_words_at_the_cursor() {
+        let mut m = composing();
+        keys(&mut m, "read now");
+        m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::WordLeft, select: false } });
+        let paths = vec!["/Users/me/My Notes/a b.md".to_string(), "/etc/hosts".into(), "relative".into()];
+        m.update(Action::ComposeAttach { paths: paths.clone(), home: Some("/Users/me".into()), unreadable: 0 });
+        // Inside the home folder: `~/`. A space gets a backslash. Not a path: left out.
+        assert_eq!(line(&m), r"read ~/My\ Notes/a\ b.md /etc/hosts now");
+        assert_eq!(compose::path_words(line(&m)), [vec!["~/My Notes/a b.md"], vec!["/etc/hosts"]]);
+        // One step to undo; a word is added after a word.
+        m.update(Action::FieldEdit { edit: Edit::Undo });
+        m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::End, select: false } });
+        m.update(Action::ComposeAttach {
+            paths: paths[1..2].to_vec(),
+            home: Some("/Users/meadow".into()),
+            unreadable: 0,
+        });
+        assert_eq!(line(&m), "read now /etc/hosts ");
+        // No room for all of it: none goes in. No box: nothing happens.
+        let long = vec![format!("/{}", "x".repeat(MAX_TITLE))];
+        m.update(Action::ComposeAttach { paths: long.clone(), home: None, unreadable: 0 });
+        assert_eq!(line(&m), "read now /etc/hosts ");
+        m.update(Action::CloseCompose);
+        m.update(Action::ComposeAttach { paths: long, home: None, unreadable: 0 });
+        assert_eq!(m.compose, None);
+    }
+
+    #[test]
+    fn a_reference_names_what_is_open_and_is_kept_as_it_was() {
+        let mut m = Model::default();
+        // Two tabs of one title; a terminal in a repository running vim; an app pane.
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        m.update(Action::Open { kind: app(7), axis: Right, beside: None });
+        m.update(Action::NewTab);
+        m.tabs[1].title = m.tabs[0].title.clone();
+        m.update(Action::SelectTab { index: 0 });
+        let info = TerminalInfo { pane: 1, cwd: Some("/code/flow app".into()), program: Some("vim".into()) };
+        m.update(Action::SetTerminals { terminals: vec![info], home: Some("/code".into()) });
+        let sketch = Installed { name: "Sketchpad".into(), path: "/Applications/Sketchpad.app".into() };
+        m.update(Action::SetInstalled { apps: vec![sketch], running: Vec::new() });
+        m.update(Action::OpenCompose { text: "compare ^".into() });
+        let rows = m.dropdown().unwrap().rows;
+        let shown: Vec<(&str, &str, &str)> =
+            rows.iter().map(|r| (r.kind, r.name.as_str(), r.detail.as_str())).collect();
+        assert_eq!(
+            shown,
+            [
+                ("tab", "Tab 1", "tab · 2 panes"),
+                ("tab", "Tab 1-2", "tab · 0 panes"),
+                ("pane", "flow app", "terminal · vim · ~/flow app"),
+                ("pane", "app", "app pane · w7"),
+                ("app", "Sketchpad", "app · not running"),
+            ]
+        );
+        // Taken from the dropdown, a space in the name gets a backslash.
+        keys(&mut m, "fl");
+        m.update(Action::ComposeComplete);
+        assert_eq!(line(&m), r"compare ^flow\ app ");
+        // ⌥-click on a tab and on a pane: each goes in at the cursor; one that is gone does not.
+        m.update(Action::ComposeRef { target: Pointed::Tab(m.tabs[1].id) });
+        m.update(Action::ComposeRef { target: Pointed::Pane(2) });
+        m.update(Action::ComposeRef { target: Pointed::Pane(99) });
+        keys(&mut m, "^Sketchpad ^nothing");
+        assert_eq!(line(&m), r"compare ^flow\ app ^Tab\ 1-2 ^app ^Sketchpad ^nothing");
+        let marks: Vec<char> = m.compose_spans().iter().map(|span| span.mark).collect();
+        assert_eq!(marks, ['^', '^', '^', '^']);
+        // The terminal closes before the task is added: its reference is kept as it was.
+        m.update(Action::Close { pane: Some(1) });
+        m.update(Action::ComposeEscape);
+        m.update(Action::ComposeSubmit { open: false });
+        let task = m.tasks.list.last().unwrap();
+        assert_eq!(task.title, "compare ^nothing");
+        let kept: Vec<(RefKind, &str, Option<u32>)> =
+            task.refs.iter().map(|r| (r.kind, r.name.as_str(), r.id)).collect();
+        assert_eq!(
+            kept,
+            [
+                (RefKind::Pane, "flow app", Some(1)),
+                (RefKind::Tab, "Tab 1-2", Some(m.tabs[1].id)),
+                (RefKind::Pane, "app", Some(2)),
+                (RefKind::App, "Sketchpad", None)
+            ]
+        );
+        assert_eq!(
+            (task.refs[0].cwd.as_deref(), task.refs[0].program.as_deref()),
+            (Some("/code/flow app"), Some("vim"))
+        );
+        assert_eq!(task.refs[3].bundle.as_deref(), Some("/Applications/Sketchpad.app"));
+        assert_eq!(m.task_tags(task), "4 references");
+        // Kept in the task's file, and read back; a task from before has none.
+        let json = serde_json::to_value(task).unwrap();
+        assert_eq!(
+            json["refs"][1],
+            serde_json::json!({"kind": "tab", "name": "Tab 1-2", "id": m.tabs[1].id, "title": "Tab 1"})
+        );
+        let back: Task = serde_json::from_value(json).unwrap();
+        assert_eq!(&back, task);
+        let old: Task = serde_json::from_str(r#"{"id":1,"title":"x","state":"captured"}"#).unwrap();
+        assert!(old.refs.is_empty());
+        // From the socket's line: what is open by that name now.
+        m.update(Action::TaskFromLine {
+            line: "look at ^app ^flow\\ app".into(),
+            known: Default::default(),
+            open: false,
+        });
+        let task = m.tasks.list.last().unwrap();
+        assert_eq!((task.title.as_str(), task.refs.len()), (r"look at ^flow\ app", 1));
+    }
+
+    #[test]
+    fn taking_a_row_never_loses_what_is_typed() {
+        // A space typed inside a word is a space: the row is not taken, and nothing after
+        // the cursor goes.
+        let mut m = composing();
+        keys(&mut m, "do #cablesfix the bug");
+        for _ in 0.."fix the bug".len() {
+            m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::Left, select: false } });
+        }
+        assert_eq!(offered(&m), ["Cables"]);
+        keys(&mut m, " ");
+        assert_eq!(line(&m), "do #cables fix the bug");
+        // At the end of the word it takes the row.
+        m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::Left, select: false } });
+        keys(&mut m, " ");
+        assert_eq!(line(&m), "do #Cables fix the bug");
+        m.update(Action::CloseCompose);
+
+        // A line with no room for the name: the row is not taken in part. Tab says so and
+        // leaves the line; ↵ adds the task with what is typed.
+        let full = format!("{} #ca", "x".repeat(MAX_TITLE - 4));
+        m.update(Action::OpenCompose { text: full.clone() });
+        assert_eq!(
+            (offered(&m), m.dropdown().unwrap().selected),
+            (vec!["canvas".into(), "Cables".into(), "flow-canvas".into()], Some(0))
+        );
+        m.update(Action::ComposeComplete);
+        assert_eq!((line(&m), m.compose_note()), (full.as_str(), Some("no room in the line for that name")));
+        m.update(Action::ComposeAccept { index: 1 });
+        assert_eq!(line(&m), full);
+        // The note goes with the next key.
+        m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::End, select: false } });
+        assert_eq!(m.compose_note(), None);
+        let before = m.tasks.list.len();
+        m.update(Action::ComposeSubmit { open: false });
+        let task = m.tasks.list.last().unwrap();
+        assert_eq!((m.tasks.list.len(), task.project.as_deref(), m.mode()), (before + 1, Some("ca"), Mode::Normal));
+
+        // A file with no room is not put in in part either, and the box says so.
+        m.update(Action::OpenCompose { text: "x".repeat(MAX_TITLE - 4) });
+        m.update(Action::ComposeAttach { paths: vec!["/etc/hosts".into()], home: None, unreadable: 0 });
+        assert_eq!((line(&m).len(), m.compose_note()), (MAX_TITLE - 4, Some("no room in the line: nothing was added")));
+    }
+
+    #[test]
+    fn a_path_of_any_name_goes_in_as_one_word_or_not_at_all() {
+        let mut m = composing();
+        // macOS names a screenshot with a narrow no-break space before AM; a name may hold a backslash.
+        let shot = "/Users/me/Desktop/Screenshot 2026-11-12 at 9.41.05\u{202f}AM.png".to_string();
+        let odd = r"/tmp/a\b c".to_string();
+        m.update(Action::ComposeAttach {
+            paths: vec![shot.clone(), odd.clone()],
+            home: Some("/Users/me".into()),
+            unreadable: 0,
+        });
+        assert_eq!(line(&m), "~/Desktop/Screenshot\\ 2026-11-12\\ at\\ 9.41.05\\\u{202f}AM.png /tmp/a\\\\b\\ c ");
+        let read = compose::path_words(line(&m));
+        assert_eq!(read, [vec![shot.replace("/Users/me", "~")], vec![odd.clone()]]);
+        assert_eq!(m.compose_attached(), [shot.replace("/Users/me", "~"), odd]);
+        // A line break cannot be in the line; a name too long cannot be kept; one that is
+        // not text was never given. Each is left out, and the box says how many.
+        m.update(Action::FieldEdit { edit: Edit::SelectAll });
+        let long = format!("/{}", "x".repeat(tasks::MAX_TAG));
+        let paths = vec!["/tmp/a\nb".to_string(), long, "/etc/hosts".into()];
+        m.update(Action::ComposeAttach { paths, home: None, unreadable: 1 });
+        assert_eq!(
+            (line(&m), m.compose_note()),
+            ("/etc/hosts ", Some("3 left out: a name too long, or not one a line can hold"))
+        );
+        // Under the key reference the box is hidden: nothing goes into its line, and Esc is not its own.
+        m.keys = true;
+        m.update(Action::ComposeAttach { paths: vec!["/etc/passwd".into()], home: None, unreadable: 0 });
+        m.update(Action::ComposeRef { target: Pointed::Pane(1) });
+        m.update(Action::ComposeEscape);
+        m.keys = false;
+        assert_eq!((line(&m), m.mode()), ("/etc/hosts ", Mode::Compose));
+    }
+
+    #[test]
+    fn a_name_in_a_line_means_one_thing_while_the_line_is_there() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        let info = |pane, cwd: &str| TerminalInfo { pane, cwd: Some(cwd.into()), program: None };
+        m.update(Action::SetTerminals { terminals: vec![info(1, "/code/repo"), info(2, "/code/other")], home: None });
+        m.update(Action::OpenCompose { text: String::new() });
+        // ⌥-click pane 1 (`repo`). It exits; pane 2 moves into a directory of that name; ⌥-click it.
+        m.update(Action::ComposeRef { target: Pointed::Pane(1) });
+        m.update(Action::Close { pane: Some(1) });
+        m.update(Action::SetTerminals { terminals: vec![info(2, "/work/repo")], home: None });
+        m.update(Action::ComposeRef { target: Pointed::Pane(2) });
+        // The same pane again adds its word again, and is still one reference.
+        m.update(Action::ComposeRef { target: Pointed::Pane(2) });
+        assert_eq!(line(&m), "^repo ^repo-2 ^repo-2 ");
+        keys(&mut m, "compare");
+        m.update(Action::ComposeSubmit { open: false });
+        let refs = &m.tasks.list[0].refs;
+        let kept: Vec<(&str, Option<u32>, Option<&str>)> =
+            refs.iter().map(|r| (r.name.as_str(), r.id, r.cwd.as_deref())).collect();
+        assert_eq!(kept, [("repo", Some(1), Some("/code/repo")), ("repo-2", Some(2), Some("/work/repo"))]);
+
+        // A draft that is cancelled keeps nothing: a client's line is read against what is
+        // open, and never against what a box pointed at.
+        m.update(Action::OpenCompose { text: String::new() });
+        m.update(Action::ComposeRef { target: Pointed::Pane(2) });
+        m.update(Action::Close { pane: Some(2) });
+        assert_eq!(m.draft("x ^repo").refs, ["repo"], "the box's own line keeps it");
+        let theirs = Action::TaskFromLine { line: "theirs ^repo".into(), known: Default::default(), open: false };
+        m.update(theirs.clone());
+        assert_eq!((m.tasks.list[1].title.as_str(), m.tasks.list[1].refs.len()), ("theirs ^repo", 0));
+        m.update(Action::CloseCompose);
+        assert_eq!((m.compose_refs.len(), m.draft("x ^repo").refs.len()), (0, 0));
+        m.update(Action::OpenCompose { text: String::new() });
+        m.update(Action::ComposeRef { target: Pointed::Tab(m.tabs[0].id) });
+        m.update(Action::ComposeEscape);
+        m.update(theirs);
+        assert_eq!((m.compose_refs.len(), m.tasks.list[2].refs.len()), (0, 0));
+        // A name that ends as a clause does reads as itself first, then without the dot.
+        m.tabs[0].title = "notes v1.".into();
+        m.update(Action::NewTab);
+        m.tabs[1].title = "plan".into();
+        let draft = m.draft(r"see ^notes\ v1. and ^plan. now");
+        assert_eq!((draft.refs, draft.title.as_str()), (vec!["notes v1.".to_string(), "plan".into()], "see and now"));
+    }
+
+    #[test]
+    fn the_highlight_stays_on_its_row_when_the_rows_change() {
+        let mut m = composing();
+        keys(&mut m, "fix #ca");
+        m.update(Action::ComposeMove { delta: 1 });
+        let on = |m: &Model| m.dropdown().and_then(|menu| menu.selected.map(|at| menu.rows[at].name.clone()));
+        assert_eq!(on(&m).as_deref(), Some("Cables"));
+        // A client adds tasks: `Cables` now has the most, and is the first row.
+        for _ in 0..3 {
+            m.update(
+                Action::TaskFromLine { line: "more #Cables".into(), known: Default::default(), open: false }
+                    .sent_by(Origin::Socket),
+            );
+        }
+        assert_eq!((offered(&m)[0].as_str(), on(&m).as_deref()), ("Cables", Some("Cables")));
+        // What the user moved to is gone from the rows: the first is highlighted again.
+        m.tasks.list.retain(|task| task.project.as_deref() != Some("Cables"));
+        assert_eq!(on(&m).as_deref(), Some("canvas"));
+    }
+
+    #[test]
+    fn a_task_file_keeps_less_of_a_reference_than_the_session_does() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        m.update(Action::Open { kind: app(7), axis: Right, beside: None });
+        let info = TerminalInfo { pane: 1, cwd: Some("/Users/me/clients/acme".into()), program: Some("vim".into()) };
+        m.update(Action::SetTerminals { terminals: vec![info], home: None });
+        let sketch = Installed { name: "Sketchpad".into(), path: "/Applications/Sketchpad.app".into() };
+        m.update(Action::SetInstalled { apps: vec![sketch], running: Vec::new() });
+        m.update(Action::OpenCompose { text: "look ^acme ^app ^Sketchpad ^Tab\\ 1".into() });
+        m.update(Action::ComposeSubmit { open: false });
+        let task = &m.tasks.list[0];
+        // In memory, and in the state: what tells each apart.
+        assert_eq!(
+            (task.refs[0].cwd.as_deref(), task.refs[1].title.as_deref()),
+            (Some("/Users/me/clients/acme"), Some("w7"))
+        );
+        // In the file: what it is, its name, its id then, its app. No window title, no
+        // directory, no program, no place on disk.
+        let file = serde_json::to_value(task.for_file()).unwrap();
+        assert_eq!(
+            file["refs"],
+            serde_json::json!([
+                {"kind": "pane", "name": "acme", "id": 1},
+                {"kind": "pane", "name": "app", "id": 2, "app": "app"},
+                {"kind": "app", "name": "Sketchpad", "app": "Sketchpad"},
+                {"kind": "tab", "name": "Tab 1", "id": m.tabs[0].id},
+            ])
+        );
+        assert_eq!(serde_json::from_value::<Task>(file).unwrap().refs.len(), 4);
+    }
+
+    #[test]
+    fn the_box_is_the_home_screens_line_while_no_pane_shows() {
+        let mut m = Model::default();
+        assert_eq!(m.compose_host(), None);
+        m.update(Action::OpenCompose { text: "tidy up".into() });
+        assert_eq!(m.compose_host(), Some(Host::Home));
+        // ↵ adds and the line stays, empty; Esc goes back to the resting line.
+        m.update(Action::ComposeSubmit { open: false });
+        assert_eq!((m.tasks.list.len(), line(&m), m.mode()), (1, "", Mode::Compose));
+        m.update(Action::ComposeEscape);
+        assert_eq!((m.compose_host(), m.mode()), (None, Mode::Normal));
+        // ⌘↵ adds and starts: the task's tab shows, so the line goes.
+        m.update(Action::OpenCompose { text: "start me".into() });
+        m.update(Action::ComposeSubmit { open: true });
+        assert_eq!((m.compose_host(), m.current_task), (None, Some(2)));
+        // With a pane showing it is the box over the workspace, and ↵ closes it.
+        m.update(Action::TaskLeave);
+        term(&mut m);
+        m.update(Action::OpenCompose { text: "over panes".into() });
+        assert_eq!(m.compose_host(), Some(Host::Modal));
+        m.update(Action::ComposeSubmit { open: false });
+        assert_eq!((m.compose_host(), m.tasks.list.len()), (None, 3));
+    }
+
+    #[test]
+    fn any_keys_in_the_box_leave_a_line_that_reads_and_a_dropdown_that_holds() {
+        use unicode_segmentation::UnicodeSegmentation;
+        let mut rng = crate::edit::fuzz::Rng(0x2545_f491_4f6c_dd1d);
+        let mut m = composing();
+        let sketch = Installed { name: "Sketch pad".into(), path: "/Applications/Sketch pad.app".into() };
+        m.update(Action::SetInstalled { apps: vec![sketch], running: Vec::new() });
+        for step in 0..6000 {
+            if m.compose.is_none() {
+                m.update(Action::OpenCompose { text: rng.text() });
+            }
+            let len = line(&m).len();
+            let before = m.dropdown();
+            let action = match rng.below(12) {
+                0 => Action::ComposeMove { delta: rng.below(5) as i32 - 2 },
+                1 => Action::ComposeComplete,
+                2 => Action::ComposeAccept { index: rng.below(9) },
+                3 => Action::ComposeEscape,
+                4 if rng.below(8) == 0 => Action::ComposeSubmit { open: false },
+                5 => Action::ComposeRef { target: Pointed::Pane(1) },
+                6 if rng.below(4) == 0 => {
+                    Action::ComposeAttach { paths: vec!["/a b/c".into()], home: None, unreadable: 0 }
+                }
+                _ => Action::FieldEdit { edit: rng.edit(len) },
+            };
+            let taken = match (&action, &before) {
+                (Action::ComposeAccept { index }, Some(menu)) => {
+                    menu.rows.get(*index).map(|row| (menu.mark, row.name.clone()))
+                }
+                (Action::ComposeComplete, Some(menu)) => {
+                    menu.rows.get(menu.selected.unwrap_or(0)).map(|row| (menu.mark, row.name.clone()))
+                }
+                _ => None,
+            };
+            m.update(action.clone());
+            let Some(field) = &m.compose else { continue };
+            let text = field.text();
+            let why = format!("step {step}: {text:?} after {action:?}");
+            // The cursor is between clusters; the line reads; its spans are words of it.
+            let clusters: Vec<usize> = text.grapheme_indices(true).map(|(i, _)| i).chain([text.len()]).collect();
+            assert!(clusters.contains(&field.cursor()), "{why}");
+            let (draft, spans) = (m.draft(text), m.compose_spans());
+            assert!(draft.title.len() <= text.len(), "{why}");
+            assert!(
+                spans.iter().all(|span| text
+                    .get(span.range.clone())
+                    .is_some_and(|word| !word.contains(' ') || word.contains('\\'))),
+                "{why}"
+            );
+            // The highlight is on a row. A row taken reads back as the tag it is: a project,
+            // a repository, an agent, a skill or a reference of that very name.
+            if let Some(menu) = m.dropdown() {
+                assert!(
+                    menu.selected.is_none_or(|at| at < menu.rows.len()) && menu.rows.len() <= complete::MAX_ROWS,
+                    "{why}"
+                );
+            }
+            if let Some((mark, name)) = taken.filter(|(mark, _)| *mark != '/') {
+                let named = match mark {
+                    '#' => draft.project.as_ref() == Some(&name),
+                    '>' => draft.repo.as_ref() == Some(&name),
+                    '@' => draft.agent.as_ref() == Some(&name),
+                    '$' => draft.skills.contains(&name),
+                    _ => draft.refs.contains(&name),
+                };
+                assert!(named, "{mark}{name} was taken and does not read: {draft:?}; {why}");
+            }
+        }
+    }
+
+    /// The names on the dropdown's rows.
+    fn offered(m: &Model) -> Vec<String> {
+        m.dropdown().map(|menu| menu.rows.into_iter().map(|row| row.name).collect()).unwrap_or_default()
+    }
+
     #[test]
     fn tags_count_only_for_names_the_shell_read() {
         let mut m = Model::default();
@@ -4006,32 +5116,40 @@ mod tests {
         assert!(!m.compose_read());
         let stale = Action::SetKnown {
             line: "see /src/e".into(),
+            typing: Some("/src/e".into()),
             names: Some(names.clone()),
             paths: vec![found.clone()],
             entries: list(&["/src/elsewhere/"]),
         };
         m.update(stale);
-        assert_eq!((m.compose_suggestions(), m.compose_read()), (vec![], false));
+        assert_eq!((offered(&m), m.compose_read()), (vec![], false));
         m.update(Action::SetKnown {
             line: "see /src/ex".into(),
+            typing: Some("/src/ex".into()),
             names: None,
             paths: Vec::new(),
             entries: list(&["/src/export/", "/src/extra.rs"]),
         });
-        assert_eq!((m.compose_suggestions(), m.compose_read()), (list(&["/src/export/", "/src/extra.rs"]), true));
+        assert_eq!((offered(&m), m.compose_read()), (list(&["/src/export/", "/src/extra.rs"]), true));
         m.update(Action::ComposeComplete);
         assert_eq!((m.compose.as_ref().map(Field::text), m.compose_read()), (Some("see /src/export/"), false));
         m.update(Action::CloseCompose);
         // Tab offers each tag's own names.
-        for (typed, offered) in [("@c", vec!["claude", "codex"]), ("$dep", vec!["deploy"])] {
+        for (typed, names) in [("@c", vec!["claude", "codex"]), ("$dep", vec!["deploy"])] {
             m.update(Action::OpenCompose { text: typed.into() });
-            assert_eq!(m.compose_suggestions(), offered, "{typed}");
+            assert_eq!(offered(&m), names, "{typed}");
             m.update(Action::CloseCompose);
         }
         // Filed from the box: agent and skill as they are spelled where they were read, the skill
         // once; the path with where it was found; the unknown path stays in the title.
         m.update(Action::OpenCompose { text: line.into() });
-        m.update(Action::SetKnown { line: line.into(), names: None, paths: vec![found.clone()], entries: Vec::new() });
+        m.update(Action::SetKnown {
+            line: line.into(),
+            typing: None,
+            names: None,
+            paths: vec![found.clone()],
+            entries: Vec::new(),
+        });
         m.update(Action::ComposeSubmit { open: false });
         let task = &m.tasks.list[0];
         assert_eq!(
@@ -4044,6 +5162,9 @@ mod tests {
             (&list(&["/src/export"])[..], &list(&["/code/app/src/export"])[..])
         );
         assert_eq!(m.task_tags(task), ">app · @codex · 1 path · 1 skill");
+        // No pane is open: the box is the home screen's line, and stays for the next task.
+        assert_eq!((m.compose_host(), m.compose_line().map(String::as_str)), (Some(Host::Home), Some("")));
+        m.update(Action::CloseCompose);
         // A line filed from outside brings what was read for it, and leaves what the box knows
         // alone: the line the user is typing keeps its tags.
         m.update(Action::OpenCompose { text: "mine $deploy".into() });

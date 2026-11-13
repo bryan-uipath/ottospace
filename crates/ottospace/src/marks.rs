@@ -53,14 +53,6 @@ fn new_uid() -> String {
     format!("{:016x}", std::collections::hash_map::RandomState::new().build_hasher().finish())
 }
 
-/// The text a key types into a name: its character, or for a key the socket pressed, its
-/// one-letter name.
-fn typed(event: &KeyDownEvent) -> Option<String> {
-    let key = &event.keystroke;
-    let named = Some(key.key.clone()).filter(|name| name.chars().count() == 1);
-    key.key_char.clone().or(named).filter(|text| !text.chars().any(char::is_control))
-}
-
 /// The letter a key stands for, whatever the layout types with it: `key` is the letter the key
 /// has under ⌘, as sneak mode reads it. Else what it types.
 fn lettered(event: &KeyDownEvent) -> Option<String> {
@@ -313,17 +305,25 @@ impl Workspace {
     /// the mark), text for its name, ⌫, ↵ and Esc.
     pub(crate) fn mark_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
         let key = &event.keystroke;
-        if key.modifiers.platform {
+        let renaming = matches!(self.model.mark_input, Some(MarkInput::Rename { .. }));
+        if key.modifiers.platform && !renaming {
             return; // ⌘ shortcuts still reach their bindings, and end the wait
         }
+        // A name is a text field: it edits as the others do, and what types text is left to
+        // the input method.
+        if renaming && !matches!(key.key.as_str(), "escape" | "enter") {
+            if self.field_key(event, window, cx) {
+                cx.stop_propagation();
+            }
+            return;
+        }
         cx.stop_propagation();
-        let renaming = matches!(self.model.mark_input, Some(MarkInput::Rename { .. }));
         // A held key types only into a name: one press, one jump.
         if event.is_held && !renaming {
             return;
         }
         // A letter to jump to or to give is the key's own, whatever the layout types with it.
-        let text = if renaming { typed(event) } else { lettered(event) };
+        let text = lettered(event);
         let action = match key.key.as_str() {
             "escape" => Action::MarkCancel,
             "enter" if !event.is_held => Action::MarkSubmit,
@@ -454,15 +454,14 @@ impl Workspace {
                 "app" => ("APP", theme::APP),
                 _ => ("TAB", theme::TEXT),
             };
-            let renaming = match input {
-                Some(MarkInput::Rename { mark, text }) if *mark == id => Some(text.clone()),
-                _ => None,
-            };
+            let renaming = matches!(input, Some(MarkInput::Rename { mark, .. }) if *mark == id);
             let lettering = input == Some(&MarkInput::SetKey { mark: id });
             let name = match renaming {
-                // The name being typed, with a caret.
-                Some(text) => div().text_color(rgb(theme::MARK)).child(format!("{text}▏")),
-                None => div().when(!row.available, |d| d.text_color(rgb(theme::MUTED))).child(row.name.clone()),
+                // The name being typed: the text field.
+                true => {
+                    div().flex_1().min_w_0().flex().text_color(rgb(theme::MARK)).child(self.render_field("name", cx))
+                }
+                false => div().when(!row.available, |d| d.text_color(rgb(theme::MUTED))).child(row.name.clone()),
             };
             let letter = match (lettering, row.key) {
                 (true, _) => "?".to_string(),
@@ -540,6 +539,7 @@ impl Workspace {
                     this.choose_mark(id, axis, window, cx);
                 }))
         });
+        let rows: Vec<_> = rows.collect();
         // After a mark is taken off, a line at the top offers to put it back, as Tasks does.
         let notice = self.mark_offered().map(|_| {
             self.undo_line("mark-undo", Moved::MarkRemoved.title())

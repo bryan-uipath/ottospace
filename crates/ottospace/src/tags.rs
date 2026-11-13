@@ -8,7 +8,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use ottospace_core::compose::{self, MAX_SUGGESTIONS, Names, PathFound};
+use ottospace_core::complete::MAX_ROWS;
+use ottospace_core::compose::{self, Names, PathFound};
 
 use crate::config;
 
@@ -18,6 +19,11 @@ pub struct Job {
     /// call's own number: every one of those is answered, in order.
     pub call: u64,
     pub line: String,
+    /// The path being typed at the cursor, to list what finishes it.
+    pub typing: Option<String>,
+    /// Path words that were put into the line whole (dropped, picked, pasted): each is that
+    /// very path, and is not looked for inside the repository.
+    pub whole: Vec<String>,
     /// The repository the line names with `>name`: a `/path` may be inside it, and its
     /// `.claude/skills` count.
     pub repo: Option<String>,
@@ -30,6 +36,7 @@ pub struct Job {
 pub struct Read {
     pub call: u64,
     pub line: String,
+    pub typing: Option<String>,
     pub names: Option<Names>,
     pub paths: Vec<PathFound>,
     pub entries: Vec<String>,
@@ -83,12 +90,9 @@ impl Reader {
 fn read(job: Job, agents_dir: Option<&Path>, skill_dirs: &[PathBuf]) -> Read {
     let repo = job.repo.as_deref().map(Path::new);
     let names = job.names.then(|| Names { agents: agents(agents_dir), skills: skills(skill_dirs, repo) });
-    let paths = paths(&compose::path_words(&job.line), repo);
-    let entries = match compose::completing(&job.line) {
-        Some(('/', typed)) => entries(&typed, repo),
-        _ => Vec::new(),
-    };
-    Read { call: job.call, line: job.line, names, paths, entries }
+    let paths = paths(&compose::path_words(&job.line), repo, &job.whole);
+    let entries = job.typing.as_deref().map(|typed| entries(typed, repo)).unwrap_or_default();
+    Read { call: job.call, line: job.line, typing: job.typing, names, paths, entries }
 }
 
 fn home() -> Option<PathBuf> {
@@ -157,8 +161,10 @@ fn places(word: &str, repo: Option<&Path>) -> Vec<PathBuf> {
 
 /// The path words that name a file or directory, with where each was found. For each word, the
 /// first of what it may be (`compose::path_words`) that is somewhere, in the first place it is.
-fn paths(words: &[Vec<String>], repo: Option<&Path>) -> Vec<PathFound> {
+fn paths(words: &[Vec<String>], repo: Option<&Path>, whole: &[String]) -> Vec<PathFound> {
     let found = |typed: &String| {
+        // A path dropped on the box is that file: `/tmp/a.txt`, not the repository's `tmp/a.txt`.
+        let repo = repo.filter(|_| !whole.contains(typed));
         let place = places(typed, repo).into_iter().find(|place| place.exists())?;
         Some(PathFound { typed: typed.clone(), resolved: place.to_string_lossy().into_owned() })
     };
@@ -167,7 +173,7 @@ fn paths(words: &[Vec<String>], repo: Option<&Path>) -> Vec<PathFound> {
 
 /// Paths that finish `typed`: the entries of its folder whose names start as its last part does.
 /// e.g. `/src/ex` → `/src/export/`. Those inside the repository come before those at the root.
-/// Hidden files only when a `.` is typed. At most `MAX_SUGGESTIONS`: only those are looked at
+/// Hidden files only when a `.` is typed. At most `MAX_ROWS`: only those are looked at
 /// to see which is a directory.
 fn entries(typed: &str, repo: Option<&Path>) -> Vec<String> {
     let cut = typed.rfind('/').map_or(0, |at| at + 1);
@@ -183,7 +189,7 @@ fn entries(typed: &str, repo: Option<&Path>) -> Vec<String> {
             }
         }
     }
-    found.truncate(MAX_SUGGESTIONS);
+    found.truncate(MAX_ROWS);
     let slash = |path: &Path| if path.is_dir() { "/" } else { "" };
     found.iter().map(|(path, name)| format!("{folder}{name}{}", slash(path))).collect()
 }
@@ -218,15 +224,18 @@ mod tests {
         let at = |part: &str| repo.join(part).to_string_lossy().into_owned();
         let found = |typed: &str, resolved: String| PathFound { typed: typed.into(), resolved };
 
-        let read = paths(&words("see /src/export, /nowhere-at-all and /tmp"), inside);
+        let read = paths(&words("see /src/export, /nowhere-at-all and /tmp"), inside, &[]);
         assert_eq!(read, [found("/src/export", at("src/export")), found("/tmp", at("tmp"))]);
+        // Put in whole, `/tmp` is the root's, whatever the repository has of that name.
+        let whole = paths(&words("see /src/export and /tmp"), inside, &["/tmp".to_string()]);
+        assert_eq!(whole, [found("/src/export", at("src/export")), found("/tmp", "/tmp".into())]);
         // Without the repository the same word is the root's, or nothing.
-        assert_eq!(paths(&words("see /src/export and /tmp"), None), [found("/tmp", "/tmp".into())]);
+        assert_eq!(paths(&words("see /src/export and /tmp"), None, &[]), [found("/tmp", "/tmp".into())]);
         // An absolute path counts by itself.
         let absolute = format!("look in {}", at("src"));
-        assert_eq!(paths(&words(&absolute), None), [found(&at("src"), at("src"))]);
+        assert_eq!(paths(&words(&absolute), None, &[]), [found(&at("src"), at("src"))]);
         // The word as typed first: a name may end in a dot. A space is written with a backslash.
-        let read = paths(&words(r"read /src/v1. and /src/extra.rs. in /My\ Notes"), inside);
+        let read = paths(&words(r"read /src/v1. and /src/extra.rs. in /My\ Notes"), inside, &[]);
         let typed: Vec<&str> = read.iter().map(|path| path.typed.as_str()).collect();
         assert_eq!(typed, ["/src/v1.", "/src/extra.rs", "/My Notes"]);
 
@@ -236,7 +245,7 @@ mod tests {
         assert_eq!(entries("/My", inside), ["/My Notes/"]);
         let both = entries("/tm", inside);
         assert_eq!(both, ["/tmp/"], "the repository's and the root's are one name: once");
-        assert!(entries("/", inside).len() <= MAX_SUGGESTIONS);
+        assert!(entries("/", inside).len() <= MAX_ROWS);
         assert_eq!(entries("/", inside)[0], "/My Notes/", "the repository's come first");
         let _ = std::fs::remove_dir_all(&repo);
     }

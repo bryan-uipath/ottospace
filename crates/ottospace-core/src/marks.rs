@@ -174,8 +174,8 @@ pub enum Field {
 pub enum MarkInput {
     /// The jump prefix was pressed: the next letter goes to the mark with that letter.
     Jump,
-    /// A mark's name is being typed. ↵ keeps it.
-    Rename { mark: MarkId, text: String },
+    /// A mark's name is being typed, in a text field as any other (in JSON: its text). ↵ keeps it.
+    Rename { mark: MarkId, text: crate::edit::Field },
     /// A mark waits for its letter.
     SetKey { mark: MarkId },
 }
@@ -287,7 +287,7 @@ fn kept_title(title: &str, most: usize) -> String {
 }
 
 /// The last part of a path, e.g. "notes" for "/Users/me/notes".
-fn directory_name(path: &str) -> Option<&str> {
+pub(crate) fn directory_name(path: &str) -> Option<&str> {
     path.trim_end_matches('/').rsplit('/').next().filter(|name| !name.is_empty())
 }
 
@@ -1091,7 +1091,7 @@ impl Model {
     pub(crate) fn mark_edit(&mut self, id: MarkId, field: Field) {
         let Some(mark) = self.marks.get(id).filter(|_| self.mark_input_may_start()) else { return };
         self.mark_input = Some(match field {
-            Field::Name => MarkInput::Rename { mark: id, text: mark.name.clone() },
+            Field::Name => MarkInput::Rename { mark: id, text: crate::edit::Field::new(&mark.name, MAX_NAME) },
             Field::Key => MarkInput::SetKey { mark: id },
         });
     }
@@ -1111,11 +1111,8 @@ impl Model {
                 // Not a letter: it still waits for one.
                 None => self.mark_input = Some(MarkInput::SetKey { mark }),
             },
-            Some(MarkInput::Rename { mark, mut text }) => {
-                let room = MAX_NAME.saturating_sub(text.chars().count());
-                text.extend(typed.chars().filter(|c| !c.is_control()).take(room));
-                self.mark_input = Some(MarkInput::Rename { mark, text });
-            }
+            // A name is typed in its text field (`FieldEdit`), not here.
+            renaming @ Some(MarkInput::Rename { .. }) => self.mark_input = renaming,
             None => {}
         }
     }
@@ -1123,7 +1120,8 @@ impl Model {
     /// ⌫: takes a character off the name, or the letter off the mark.
     pub(crate) fn mark_backspace(&mut self) {
         match &mut self.mark_input {
-            Some(MarkInput::Rename { text, .. }) => drop(text.pop()),
+            // A name's ⌫ is its text field's.
+            Some(MarkInput::Rename { .. }) => {}
             Some(MarkInput::SetKey { mark }) => {
                 let mark = *mark;
                 self.marks.set_key(mark, None);
@@ -1136,7 +1134,7 @@ impl Model {
     /// ↵: keeps the typed name.
     pub(crate) fn mark_submit(&mut self) {
         if let Some(MarkInput::Rename { mark, text }) = &self.mark_input {
-            let (mark, text) = (*mark, text.clone());
+            let (mark, text) = (*mark, text.text().to_string());
             self.marks.rename(mark, &text);
             self.mark_input = None;
         }
@@ -1146,6 +1144,7 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::edit::{Edit, Motion};
     use crate::layout::Axis::{Down, Right};
     use crate::model::{Action, Origin};
     use crate::tasks::State;
@@ -1629,19 +1628,31 @@ mod tests {
         mark(&mut m, MarkOf::Tab(None), &[]);
         let (shell, tab) = (m.marks.list[0].id, m.marks.list[1].id);
         m.update(Action::MarkEdit { mark: MarkRef::Id(shell), field: Field::Name });
-        assert_eq!(m.mark_input, Some(MarkInput::Rename { mark: shell, text: "shell".into() }));
-        for _ in 0..5 {
-            m.update(Action::MarkBackspace);
-        }
-        m.update(Action::MarkType { text: "no\ntes".into() });
-        assert_eq!(m.mark_input, Some(MarkInput::Rename { mark: shell, text: "notes".into() }));
+        let typing = |m: &Model| match &m.mark_input {
+            Some(MarkInput::Rename { mark, text }) => Some((*mark, text.text().to_string())),
+            _ => None,
+        };
+        assert_eq!(typing(&m), Some((shell, "shell".into())));
+        // The name is a text field: it has the keyboard, and edits as the others do.
+        assert_eq!(m.field().map(|(of, field)| (of, field.text())), Some(("mark", "shell")));
+        m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::Start, select: false } });
+        m.update(Action::FieldEdit { edit: Edit::Insert("my ".into()) });
+        assert_eq!((typing(&m), m.mode()), (Some((shell, "my shell".into())), Mode::Mark));
+        m.update(Action::FieldEdit { edit: Edit::Undo });
+        m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::End, select: false } });
+        m.update(Action::FieldEdit { edit: Edit::Delete { to: Motion::Start } });
+        m.update(Action::FieldEdit { edit: Edit::Insert("no\ntes".into()) });
+        // The letter keys of a jump are not a name's: they change nothing of it.
+        m.update(Action::MarkType { text: "x".into() });
+        m.update(Action::MarkBackspace);
+        assert_eq!(typing(&m), Some((shell, "notes".into())));
         m.update(Action::MarkSubmit);
         assert_eq!((names(&m), m.mode()), (vec!["notes", "Tab 1"], Mode::Normal));
         // No longer than a name may be. Esc keeps the old name.
         m.update(Action::MarkEdit { mark: MarkRef::Id(shell), field: Field::Name });
-        m.update(Action::MarkType { text: "x".repeat(100) });
+        m.update(Action::FieldEdit { edit: Edit::Insert("x".repeat(100)) });
         let Some(MarkInput::Rename { text, .. }) = &m.mark_input else { panic!("renaming") };
-        assert_eq!(text.chars().count(), MAX_NAME);
+        assert_eq!(text.text().chars().count(), MAX_NAME);
         m.update(Action::MarkCancel);
         assert_eq!(names(&m), ["notes", "Tab 1"]);
         // The letter: the first one typed. A digit is not one, and the row goes on waiting.
@@ -1676,7 +1687,7 @@ mod tests {
         assert_eq!((names(&m), m.list), (vec!["b", "a", "c"], Some(1)));
         m.update(Action::ListMarkEdit { field: Field::Name });
         assert_eq!(m.mode(), Mode::Mark);
-        m.update(Action::MarkType { text: "!".into() });
+        m.update(Action::FieldEdit { edit: Edit::Insert("!".into()) });
         m.update(Action::MarkSubmit);
         assert_eq!((names(&m), m.mode(), m.list), (vec!["b", "a!", "c"], Mode::List, Some(1)));
         // ↵ goes to it: the pane has the keyboard, not the list.

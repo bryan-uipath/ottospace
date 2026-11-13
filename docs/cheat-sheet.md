@@ -83,9 +83,11 @@ what can be opened, and its other panes are empty and say why. Marks are kept in
 
 | I want to | Do |
 |---|---|
-| Add a task | ⌘N, type a line, ↵. The + on the Tasks bar opens the same box |
+| Add a task | ⌘N, type a line, ↵. The + on the Tasks bar opens the same box. On the home screen click its line: it is the box, and stays for the next task |
 | Add a task and start it (show its tabs) | ⌘N, type a line, ⌘↵ |
-| Tag the task | In that line: `#project` · `>repo` · `@agent` · `/path` · `$skill` · `p1` … `p9`. Tab completes the tag being typed. [All tags](reference.md#tags) |
+| Tag the task | In that line: `#project` · `>repo` · `@agent` · `/path` · `$skill` · `^reference` · `p1` … `p9`. A dropdown finishes the tag at the cursor: ↑↓ move, ↵ or Tab takes a row, Esc closes it. [All tags](reference.md#tags) |
+| Add files to the task | Drag them from Finder onto the box, ⌘O, or copy in Finder and ⌘V: each becomes a `/path` |
+| Point the task at a tab, a pane, a mark or an app | `^name` in the line, or ⌥-click the tab or pane while the box is open |
 | Open a task: the tab bar shows only its tabs | Click it in Tasks. The first time, it gets a tab named after it. × beside its name on the tab bar goes back |
 | Open the next task that needs me | ⌘⇧N |
 | See what needs me at a glance | A tab with no panes is the home screen: the new-task line (click it, or ⌘N), up to three tasks under Needs you, and a node for each of the first 12 listed tasks. Left to right is the project; within a project the older task is farther; the colour is the state. No node sits under the text, so a small window shows fewer. Hover a node for its title; click a node or a row to open the task |

@@ -36,6 +36,23 @@ pub struct Drawn {
     since: Option<Instant>,
     /// A redraw for the next blink is on its way.
     ticking: bool,
+    /// The window's height when it was drawn: what hangs under the field knows its room.
+    viewport: Pixels,
+    /// Where the new-task box's content was last drawn.
+    panel: Bounds<Pixels>,
+}
+
+impl Drawn {
+    pub fn set_panel(&mut self, bounds: Bounds<Pixels>) {
+        self.panel = bounds;
+    }
+
+    /// True if `position` is over the new-task box's content, or the padding around it.
+    pub fn over_panel(&self, position: gpui::Point<Pixels>) -> bool {
+        let pad = px(14.);
+        let (from, to) = (self.panel.origin - point(pad, pad), self.panel.bottom_right() + point(pad, pad));
+        self.panel.size.width > px(1.) && Bounds::from_corners(from, to).contains(&position)
+    }
 }
 
 pub type Shared = Rc<RefCell<Drawn>>;
@@ -80,6 +97,10 @@ impl Workspace {
         if self.model.field().is_none() {
             return false;
         }
+        // Files copied in Finder go into the new-task line as paths.
+        if self.paste_files(window, cx) {
+            return true;
+        }
         if let Some(text) = self.clipboard_text(cx) {
             self.edit(Edit::Paste(text), window, cx);
         }
@@ -98,7 +119,19 @@ impl Workspace {
 
     /// A field opened, closed or lost the keyboard: a drag begun before is over.
     pub fn field_changed_hands(&mut self) {
-        self.field.borrow_mut().selecting = false;
+        let mut drawn = self.field.borrow_mut();
+        drawn.selecting = false;
+        // The new-task box closed: its panel is nowhere, and nothing is pointed at.
+        if self.model.compose.is_none() {
+            (drawn.panel, self.pointing) = (Bounds::default(), None);
+        }
+    }
+
+    /// True if a mark's name is being typed and `position` is in its field: a click there
+    /// places the cursor, and does not end the typing.
+    pub fn in_mark_name(&self, position: gpui::Point<Pixels>) -> bool {
+        let renaming = self.model.field().is_some_and(|(of, _)| of == "mark");
+        renaming && self.field.borrow().bounds.contains(&position)
     }
 
     /// The Edit menu's Cut, Select All, Undo and Redo, and their keys when no handler took them.
@@ -109,6 +142,19 @@ impl Workspace {
             Key::Cut => drop(self.field_copy(true, window, cx)),
             _ => {}
         }
+    }
+
+    /// Where byte `at` of the open field's text was last drawn: its window x, the field's
+    /// bounds, and the window's height then. `None`: not drawn yet.
+    pub fn field_place(&self, at: usize) -> Option<(Pixels, Bounds<Pixels>, Pixels)> {
+        let drawn = self.field.borrow();
+        let empty = self.model.open_field().is_none_or(|(_, field)| field.text().is_empty());
+        let x = match &drawn.line {
+            Some(line) if !empty => line.x_for_index(at),
+            _ => px(0.),
+        };
+        (drawn.bounds.size.width > px(1.))
+            .then(|| (drawn.bounds.left() + x - drawn.scroll, drawn.bounds, drawn.viewport))
     }
 
     /// The mouse went down in the field at window `x`.
@@ -152,7 +198,10 @@ impl Workspace {
 
     /// The open field as an element: as wide as its parent lets it be, one line tall.
     pub fn render_field(&self, placeholder: &'static str, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let field = self.model.open_field().map(|(_, field)| field.clone()).unwrap_or_default();
+        let (of, field) = self.model.open_field().map(|(of, field)| (of, field.clone())).unwrap_or_default();
+        // The new-task line shows which of its tags are understood.
+        let spans = if of == "compose" { self.model.compose_spans() } else { Vec::new() };
+        let spans = spans.into_iter().map(|span| (span.range, crate::new_task::tag_color(span.mark))).collect();
         div()
             .id("field")
             .flex_1()
@@ -166,6 +215,7 @@ impl Workspace {
             )
             .child(FieldElement {
                 workspace: cx.entity(),
+                spans,
                 active: self.model.field().is_some(),
                 focus: self.focus.clone(),
                 drawn: self.field.clone(),
@@ -263,6 +313,8 @@ impl EntityInputHandler for Workspace {
 /// Paints the line, the selection and the caret, and registers the input handler.
 struct FieldElement {
     workspace: Entity<Workspace>,
+    /// Tags to draw in their colour, by their bytes in the text.
+    spans: Vec<(Range<usize>, u32)>,
     /// The field has the keyboard: not under the key reference or the quit question.
     active: bool,
     focus: FocusHandle,
@@ -340,7 +392,7 @@ impl Element for FieldElement {
             true => (self.placeholder.clone(), rgb(theme::MUTED).into()),
             false => (self.text.clone(), style.color),
         };
-        let run = |len: usize, underline: bool| TextRun {
+        let run = |len: usize, color: gpui::Hsla, underline: bool| TextRun {
             len,
             font: style.font(),
             color,
@@ -349,11 +401,21 @@ impl Element for FieldElement {
             underline: underline.then_some(UnderlineStyle { color: Some(color), thickness: px(1.), wavy: false }),
             strikethrough: None,
         };
-        let runs: Vec<TextRun> = match self.marked.clone().filter(|_| !empty) {
-            Some(m) => vec![run(m.start, false), run(m.len(), true), run(shown.len() - m.end, false)],
-            None => vec![run(shown.len(), false)],
+        // One run between each two places where the look changes: a tag's ends, the composition's.
+        let (marked, spans) = (self.marked.clone().filter(|_| !empty), self.spans.iter().filter(|_| !empty));
+        let mut cuts: Vec<usize> = spans.clone().flat_map(|(range, _)| [range.start, range.end]).collect();
+        cuts.extend(marked.iter().flat_map(|m| [m.start, m.end]));
+        cuts.extend([0, shown.len()]);
+        cuts.retain(|cut| *cut <= shown.len() && shown.is_char_boundary(*cut));
+        cuts.sort_unstable();
+        cuts.dedup();
+        let part = |ends: &[usize]| {
+            let (from, to) = (ends[0], ends[1]);
+            let tag = spans.clone().find(|(range, _)| range.start <= from && to <= range.end);
+            let composing = marked.as_ref().is_some_and(|m| m.start <= from && to <= m.end);
+            run(to - from, tag.map_or(color, |(_, tint)| rgb(*tint).into()), composing)
         };
-        let runs: Vec<TextRun> = runs.into_iter().filter(|run| run.len > 0).collect();
+        let runs: Vec<TextRun> = cuts.windows(2).map(part).collect();
         let font_size = style.font_size.to_pixels(window.rem_size());
         let line = window.text_system().shape_line(shown, font_size, &runs, None);
         let x = |index: usize| if empty { px(0.) } else { line.x_for_index(index) };
@@ -385,6 +447,13 @@ impl Element for FieldElement {
         let selection = self.selection.clone();
         let line_height = window.line_height();
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            // A tag that is understood sits on a faint chip of its own colour.
+            for (range, tint) in self.spans.iter().filter(|(range, _)| !empty && range.end <= self.text.len()) {
+                let (from, to) = (origin.x + x(range.start) - px(2.), origin.x + x(range.end) + px(2.));
+                let chip =
+                    Bounds::from_corners(point(from, bounds.top() + px(1.)), point(to, bounds.bottom() - px(1.)));
+                window.paint_quad(fill(chip, gpui::Hsla::from(rgb(*tint)).opacity(0.14)).corner_radii(px(4.)));
+            }
             if !selection.is_empty() {
                 let (from, to) = (origin.x + x(selection.start), origin.x + x(selection.end));
                 let quad = Bounds::from_corners(point(from, bounds.top()), point(to, bounds.bottom()));
@@ -398,16 +467,29 @@ impl Element for FieldElement {
         });
         drawn.line = Some(line);
         drawn.bounds = bounds;
+        drawn.viewport = window.viewport_size().height;
         drop(drawn);
 
         // On the window, not the field: a drag goes on past its edges, and ends anywhere.
         let workspace = self.workspace.clone();
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
-            if phase == DispatchPhase::Bubble && event.pressed_button == Some(MouseButton::Left) {
-                workspace.update(cx, |this, cx| this.field_drag(event.position.x, window, cx));
+            if phase != DispatchPhase::Bubble {
+                return;
             }
+            workspace.update(cx, |this, cx| {
+                if event.pressed_button == Some(MouseButton::Left) {
+                    this.field_drag(event.position.x, window, cx);
+                }
+                // With ⌥ held over the workspace, the new-task box shows what a click would reference.
+                this.compose_hover(event.position, event.modifiers.alt, cx);
+            });
         });
         let shared = self.drawn.clone();
         window.on_mouse_event(move |_: &MouseUpEvent, _, _, _| shared.borrow_mut().selecting = false);
+        // ⌥ let go, or pressed, with the pointer still: the outline follows the key.
+        let workspace = self.workspace.clone();
+        window.on_modifiers_changed(move |event: &gpui::ModifiersChangedEvent, _, cx| {
+            workspace.update(cx, |this, cx| this.compose_hover(this.hover_at, event.modifiers.alt, cx));
+        });
     }
 }

@@ -265,6 +265,12 @@ pub enum Request {
         #[serde(default)]
         text: String,
     },
+    /// For tests (`pointer_refusal`): files or folders dropped on the open new-task box, as a
+    /// drag from Finder drops them: `{"cmd":"compose_drop","paths":["/tmp/a.txt"]}`. Each goes
+    /// into the line at the cursor as a `/path` word.
+    ComposeDrop {
+        paths: Vec<String>,
+    },
     /// Shows the tabs of the first task that needs the user. The reply is
     /// `{"ok":true,"task":{..},"opened":true}`; `"task":null` if nothing needs the user, and
     /// `"opened":false` if the view could not change (the picker or key reference is open).
@@ -396,7 +402,7 @@ pub enum Modifier {
 /// Why a request is refused, if it is: `mouse` and `drag` answer only in a test run (`e2e`:
 /// `OTTOSPACE_E2E` is set). Coordinates would reach every control with no request of its own.
 pub fn pointer_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
-    let pointer = matches!(request, Request::Mouse { .. } | Request::Drag { .. });
+    let pointer = matches!(request, Request::Mouse { .. } | Request::Drag { .. } | Request::ComposeDrop { .. });
     (pointer && !e2e)
         .then_some("pointer requests are for tests (OTTOSPACE_E2E); use drop_pane, focus, close, enter and the like")
 }
