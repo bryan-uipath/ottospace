@@ -245,7 +245,10 @@ pub fn closed_apps(wanted: &[Installed], running_bundles: &[String]) -> Vec<Inst
     closed
 }
 
-/// One entry added to, or taken off, a list of the settings file: `apps` or `apps_hidden`.
+/// The directories of `repos` when the settings name none.
+pub const DEFAULT_REPOS: [&str; 2] = ["~/code", "~/notes"];
+
+/// One entry added to, or taken off, a list of the settings file: `apps`, `apps_hidden` or `repos`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ListChange {
     pub key: &'static str,
@@ -254,7 +257,8 @@ pub struct ListChange {
     pub text: String,
 }
 
-/// The settings file's text after `changes`, for a pin made in the Apps section. Each is made
+/// The settings file's text after `changes`, for a pin made in the Apps section or a directory
+/// added in Repos. A file with no `repos` has the default ones: they are written with the change. Each is made
 /// to the list as the file has it NOW, which may not be the one read at start: the user may
 /// have edited it since, or another ottospace. Only the lists changed are touched: every
 /// other key, known or not, and the file's own spacing stay as they are. An entry is added
@@ -269,13 +273,14 @@ pub fn with_changes(text: &str, changes: &[ListChange]) -> Result<String, String
         Err(err) => return Err(format!("not valid JSON: {err}")),
     };
     let mut new = text.to_string();
-    for key in ["apps", "apps_hidden"] {
+    for key in ["apps", "apps_hidden", "repos"] {
         let mine: Vec<&ListChange> = changes.iter().filter(|change| change.key == key).collect();
         if mine.is_empty() {
             continue;
         }
         let names = |list: &Vec<serde_json::Value>| list.iter().map(|item| item.as_str().map(str::to_string)).collect();
         let before: Vec<String> = match keys.get(key) {
+            None if key == "repos" => DEFAULT_REPOS.map(String::from).to_vec(),
             None => Vec::new(),
             Some(value) => value
                 .as_array()
@@ -649,6 +654,20 @@ mod tests {
             ok("{\r\n  \"tasks\": \"t\"\r\n}\r\n", &["+apps:Zed"]),
             "{\r\n  \"tasks\": \"t\",\r\n  \"apps\": [\"Zed\"]\r\n}\r\n"
         );
+    }
+
+    #[test]
+    fn a_directory_added_to_repos_keeps_the_default_ones_of_a_file_that_names_none() {
+        let change = |add: bool, text: &str| [ListChange { key: "repos", add, text: text.into() }];
+        let after = |text: &str, add: bool, dir: &str| with_changes(text, &change(add, dir)).unwrap();
+        assert_eq!(after(r#"{"repos": ["~/work"]}"#, true, "/src/app"), r#"{"repos": ["~/work", "/src/app"]}"#);
+        assert_eq!(after(r#"{"repos": ["~/work", "/src/app"]}"#, false, "/src/app"), r#"{"repos": ["~/work"]}"#);
+        // No `repos`: `~/code` and `~/notes` are listed, and stay so once the key is there.
+        let defaults = "{\n  \"repos\": [\"~/code\", \"~/notes\", \"/src/app\"]\n}\n";
+        assert_eq!(after("", true, "/src/app"), defaults);
+        assert_eq!(after(r#"{"apps": []}"#, false, "~/notes"), r#"{"apps": [], "repos": ["~/code"]}"#);
+        // Taking off what is not there writes nothing.
+        assert_eq!(after(r#"{"apps": []}"#, false, "/src/app"), r#"{"apps": []}"#);
     }
 
     #[test]

@@ -213,6 +213,11 @@ pub enum Request {
         #[serde(default)]
         axis: Axis,
     },
+    /// A test run only: the folder the user chose with the Repos section's +, as their own act.
+    /// `{"cmd":"repo_add","path":"/tmp/repos/app"}`.
+    RepoAdd {
+        path: String,
+    },
     /// Files a task: `{"cmd":"task_add","title":"Fix the zoom flicker","priority":2}`. `priority`:
     /// 1 (most urgent) to 9, default 3. `state`: default `captured`. `tab`: the `id` of an open
     /// tab that becomes the task's (`$OTTOSPACE_TAB` in a shell). The reply is
@@ -462,6 +467,7 @@ pub enum Modifier {
 /// request of its own. `as` and `repeat` on `key`: a client's key would pass for the user's
 /// own, and end sneak mode or answer the quit question in their place. `capture_start`: a
 /// capture hands over a hosted app's picture and text, and outside a test only the user starts one.
+/// `repo_add`: it writes the user's settings, as only the user's own choice in the folder picker does.
 pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
     match request {
         _ if e2e => None,
@@ -471,6 +477,9 @@ pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
         Request::Key { by, repeat, .. } if by.is_some() || *repeat => {
             Some("`as` and `repeat` are for tests (OTTOSPACE_E2E): a client's key is never the user's")
         }
+        Request::RepoAdd { .. } => Some(
+            "repo_add is for tests (OTTOSPACE_E2E): only the user adds a directory to their settings, with the Repos section's +",
+        ),
         Request::CaptureStart { .. } => {
             Some("capture_start is for tests (OTTOSPACE_E2E): only the user starts a capture, with the capture key")
         }
@@ -616,5 +625,9 @@ mod tests {
         for line in ordinary {
             assert_eq!(test_refusal(&parse(line), false), None);
         }
+        // Nor a directory for the Repos list: it is written to the user's settings.
+        let add = parse(r#"{"cmd":"repo_add","path":"/tmp/app"}"#);
+        assert!(test_refusal(&add, false).expect("refused").contains("only the user"));
+        assert_eq!(test_refusal(&add, true), None);
     }
 }

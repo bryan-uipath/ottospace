@@ -33,7 +33,7 @@ it over the control socket. Session restore and the rest of the design are not b
 | Tabs, each with its own split tree | Works today |
 | Pane picker: choose a terminal, a running app, or (once you type) any installed app for a new pane or tab | Works today |
 | Icon rail with a secondary bar; Apps lists running apps with their icons | Works today |
-| Repos: each repository's name over its checkouts (the branch, then `Default` or a linked worktree's directory); open a terminal in one | Works today |
+| Repos: each repository's name over its checkouts (the branch, then `Default` or a linked worktree's directory); open a terminal in one. + in the header adds a directory to `repos` in the settings; Remove on a name takes it off | Works today |
 | List mode (⌘⇧E): drive the bar with the keyboard | Works today |
 | Sneak mode (⌘⌃G): a letter label on each of ottospace's own controls; typing it clicks the control | Works today |
 | Marks (⌘B, ⌘⇧B, ⌘' and a letter): named ways back to a pane or a tab, kept in `~/.ottospace/marks.json` | Works today |
@@ -340,7 +340,7 @@ included) that no task has adopted: for example a Claude Code you started by han
 A workbook is a saved, named tab for a context that comes back, e.g. "Maestro DRI". It is not a
 task: no agent works it and it is never done.
 
-- **Save**: ⌘⇧S, File ▸ Save Tab as Workbook, or `Save tab` in the Workbook section. It records
+- **Save**: ⌘⇧S, File ▸ Save Tab as Workbook, or + in the Workbook section's header. It records
   the tab's splits and their sizes, each terminal's directory as it is then, and each app pane's
   app (bundle id and name). It records no scrollback, no command, and no window title, URL or
   document. A tab with nothing in it is not saved.
@@ -385,7 +385,7 @@ background and puts its window in a pane (ottospace waits up to 30 seconds for t
 - **Not running**: the apps you pinned (★), then the apps in your Dock, in the Dock's order. At
   most 12 of the Dock's show; "and N more" unfolds the rest. The Dock is read (its
   preferences file, never changed) when ottospace starts, when the Apps section opens, when
-  list mode comes on or changes section (⌘⇧E, Tab), when the bar's ↻ is pressed, and when the
+  list mode comes on or changes section (⌘⇧E, Tab), and when the
   picker opens. A change you make in the Dock shows at the next of those.
 - **All apps (N)**: every other installed app, by name. Folded until you click the heading. Open,
   it has a filter: click it or press `/` in list mode, and type.
@@ -472,7 +472,7 @@ optional:
 |---|---|---|
 | `terminal.font` | The terminal's font, by family name. Use a monospaced one | `Menlo` |
 | `terminal.font_size` | In points, 6 to 72 | `13` |
-| `repos` | Directories that are repositories or hold them, for the Repos section. `OTTOSPACE_REPOS` (`:` between directories) wins over it | `~/code`, `~/notes` |
+| `repos` | Directories that are repositories or hold them, for the Repos section. `OTTOSPACE_REPOS` (`:` between directories) wins over it. The section's + adds the folder you pick (a repository, or one that holds some), by its full path; if the file named none, `~/code` and `~/notes` are written with it. Remove, on a repository's name under the pointer, takes off a directory listed as itself; one that comes from a folder holding several is yours to edit. At most 64 through + | `~/code`, `~/notes` |
 | `tasks` | Where tasks are kept, one JSON file each. A relative path is inside `~/.ottospace` | `tasks` |
 | `sessions` | List agent sessions that are no task's under Sessions in the Tasks section. `false`: no session file is ever read | `true` |
 | `session_dirs` | Where the runners keep their sessions: `claude` is a list of Claude Code config directories (one for each account), `codex` is Codex's home. A runner left out keeps its default. An app started from the Dock does not see `CLAUDE_CONFIG_DIR` or `CODEX_HOME`: name other directories here | `~/.claude`, `~/.codex` |

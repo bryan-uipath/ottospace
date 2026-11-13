@@ -42,7 +42,10 @@ ottospace            # opens on the Repos list
 |---|---|
 | Open a section | Click its icon on the rail |
 | Use it from the keyboard | ⌘⇧E, then `j` `k` move · ↵ open · ⇧↵ open below · Tab next section · Esc leave |
-| Read the lists again | ↻ in the bar's header |
+| Read the lists again | Close and open the section, or ⌘⇧E: Apps and Repos are read when they open |
+| Add something | + in the bar's header: a new task in Tasks, the tab on show in Workbook, a repository in Repos (pick a folder that is one or holds some; it goes into `repos` in the settings) |
+| Stop listing a repository | Point at its name in Repos: Remove. Only for one added as itself |
+| Close the bar | × in its header |
 | Click anything without the mouse | ⌘⌃G: every control gets a letter label (a × gets two). Type it · ⌫ takes a letter back · Esc or a wrong letter leaves |
 
 ## Apps
@@ -66,7 +69,7 @@ A workbook is a saved, named tab, for a context that comes back. It is kept betw
 
 | I want to | Do |
 |---|---|
-| Save the tab on show | ⌘⇧S, or `Save tab` in Workbook on the rail. Type its name, ↵ |
+| Save the tab on show | ⌘⇧S, or + in the Workbook section's header. Type its name, ↵ |
 | Update it after changing the tab | ⌘⇧S again on that tab. Undo on the line at the top (six seconds) |
 | Open it | Workbook, click it. Or ⌘⇧E, ↵. If its tab is open (a dot), that tab is selected |
 | Rename or delete it | Hover its row: Rename, Delete. Or ⌘⇧E, then `r`, `x`; `u` puts a deleted one back |

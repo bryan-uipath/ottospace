@@ -9,8 +9,9 @@ use crate::ax::{Frame, Source};
 use crate::compose::{Known, Names, PathFound};
 use crate::fuzz::{self, Rng};
 use crate::marks::{Mark, PaneRecord, RecordKind, TabRecord};
-use crate::repos::Worktree;
+use crate::repos::{MAX_DIRS, RepoDir, RepoDirs, Worktree};
 use crate::sessions::{Link, Seen};
+use crate::settings::ListChange;
 use crate::workbook::{self, Workbook, WorkbookId};
 
 const WORDS: &[&str] = &["fix", "zoom", "flicker", "deploy", "x"];
@@ -181,6 +182,12 @@ impl Gen<'_> {
             worktrees: (0..g.rng.below(3)).map(|_| worktree(g)).collect(),
         };
         (0..self.rng.below(4)).map(|_| repo(self)).collect()
+    }
+
+    fn repo_dirs(&mut self) -> RepoDirs {
+        let dir = |g: &mut Self| g.name(DIRS);
+        let dirs = (0..self.rng.below(3)).map(|_| dir(self)).map(|path| RepoDir { text: path.clone(), path }).collect();
+        RepoDirs { dirs, fixed: self.rng.below(4) == 0 }
     }
 
     fn repo_path(&mut self) -> String {
@@ -468,6 +475,9 @@ const MAKERS: &[Make] = &[
     |_| Action::LeaveVisual,
     |_| Action::ToggleAxOverlay,
     |g| Action::SetRepos { repos: g.repos() },
+    |g| Action::SetRepoDirs { dirs: g.repo_dirs() },
+    |g| Action::RepoAdd { dir: g.name(DIRS), found: g.repos() },
+    |g| Action::RepoRemove { path: g.name(DIRS) },
     |g| Action::OpenRepo { path: g.repo_path(), axis: g.axis() },
     |g| {
         let tasks = (0..g.rng.below(4)).map(|_| g.kept_task()).collect();
@@ -1489,6 +1499,13 @@ impl Run {
                         "a change names no list or no app: {changes:?}"
                     );
                 }
+                Effect::SaveRepos { changes } => {
+                    ensure!(user && !m.repo_dirs.fixed, "{origin:?} wrote the settings: {changes:?}");
+                    let named = |change: &ListChange| change.key == "repos" && !change.text.is_empty();
+                    ensure!(changes.len() == 1 && changes.iter().all(named), "not one directory: {changes:?}");
+                    ensure!(m.repo_dirs.dirs.len() <= MAX_DIRS, "more directories than the settings may name");
+                }
+                Effect::Notice { text } => ensure!(user && !text.is_empty(), "{origin:?} is told {text:?}"),
                 Effect::Quit => {
                     ensure!(
                         matches!(action, Action::QuitAsked { .. } | Action::QuitConfirm | Action::Quit),
@@ -1844,6 +1861,8 @@ fn explore(sequences: u64, actions: usize, sparse: bool) {
 fn code(sent: &Envelope) -> String {
     const STRUCTS: &[&str] = &[
         "Repo",
+        "RepoDir",
+        "RepoDirs",
         "Worktree",
         "Task",
         "Assign",

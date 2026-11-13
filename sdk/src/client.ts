@@ -389,6 +389,14 @@ export class Client {
     }
   }
   /**
+   * For tests (`OTTOSPACE_E2E`): the folder the user chose with the Repos section's +. It joins
+   * `repos` in the settings if it is a repository or holds some. Rejects outside a test run:
+   * only the user adds a directory to their settings.
+   */
+  repoAdd(args: { path: string }): Promise<Snapshot> {
+    return this.snapshot({ cmd: "repo_add", ...args });
+  }
+  /**
    * For tests (`OTTOSPACE_E2E`): the user's capture key, pressed by the test. A frozen picture of
    * a pane (default: the live one, else the focused one) to annotate, as a material of the draft
    * in the right bar. Rejects outside a test run: only the user starts a capture.

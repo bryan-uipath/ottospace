@@ -70,6 +70,9 @@ Rules:
     client that passed for the user could quit over running programs, end the mode the user is
     typing in, or write their settings. A test run hosts no window and is the test's own
     instance, on its own socket.
+  - `repo_add` (`"path"`): the folder the user's picker would give the Repos section's +, as the
+    user's own act. Outside a test run only the user adds a directory to their settings, and a
+    test run that names no `OTTOSPACE_HOME` writes none.
   - `capture_start`: the user's capture key, pressed by the test (`"pane"` optional). Outside a
     test run only the user starts a capture; the core also refuses a `CaptureStart` of any other
     origin, so a client's key, click or sneak label starts none in a test run either.

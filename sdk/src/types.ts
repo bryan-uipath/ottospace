@@ -398,6 +398,14 @@ export interface Repo extends Worktree {
   worktrees: Worktree[];
 }
 
+/** Where the Repos list is read from. */
+export interface RepoDirs {
+  /** Each directory as the settings name it (`~/code`) and resolved (`/Users/me/code`). */
+  dirs: { text: string; path: string }[];
+  /** True while `OTTOSPACE_REPOS` names them: none is added or removed. */
+  fixed: boolean;
+}
+
 export type PickItem =
   | { type: "terminal" }
   | { type: "app"; name: string }
@@ -519,6 +527,7 @@ export interface Model {
   /** The selected row while the secondary bar has the keyboard. */
   list: number | null;
   repos: Repo[];
+  repo_dirs: RepoDirs;
   tasks: { list: Task[] };
   /** Headings of the Tasks section that are folded. */
   collapsed: Heading[];

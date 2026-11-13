@@ -730,6 +730,80 @@ fn repos_are_listed_and_open_a_terminal_there() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn a_directory_is_added_to_the_repos_list_and_removed_in_the_settings() {
+    // `code` holds two repositories and is in the settings; `zed` is one by itself; `plain` has none.
+    let root = std::env::temp_dir().join(format!("ottospace-e2e-repo-add-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    for repo in ["code/app", "code/web", "elsewhere/zed"] {
+        fake_repo(&root.join(repo));
+    }
+    std::fs::create_dir_all(root.join("plain/inner")).unwrap();
+    let root = root.canonicalize().unwrap();
+    let dir = |rest: &str| root.join(rest).to_string_lossy().into_owned();
+    // Settings with an unknown key and spacing of their own.
+    let listing = |dirs: &[String]| {
+        let dirs: Vec<String> = dirs.iter().map(|dir| json!(dir).to_string()).collect();
+        format!("{{\n    \"colour\": \"teal\",\n    \"repos\": [{}],\n    \"sessions\": false\n}}\n", dirs.join(", "))
+    };
+    let settings = listing(&[dir("code")]);
+    let home = user_folder("repo-add", &settings);
+    let otto = Otto::launch_with("repo-add", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    let file = || std::fs::read_to_string(home.join("settings.json")).unwrap();
+    let names = |reply: &Value| -> Vec<String> {
+        reply["state"]["repos"].as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap().to_string()).collect()
+    };
+    let add = |path: &str| otto.call(json!({"cmd": "repo_add", "path": path}));
+    let reply = otto.call(json!({"cmd": "section", "section": "repos"}));
+    assert_eq!(
+        (names(&reply), &reply["state"]["repo_dirs"]["fixed"]),
+        (vec!["app".into(), "web".into()], &json!(false))
+    );
+
+    // A folder with no repository, and what is no folder: said in the status bar, nothing written.
+    let reply = add(&dir("plain"));
+    assert_eq!(reply["notice"].as_str(), Some(format!("No repository in {}", dir("plain")).as_str()));
+    let reply = add(&dir("code/app/.git/HEAD"));
+    assert!(reply["notice"].as_str().is_some_and(|notice| notice.starts_with("Not a directory")), "{reply}");
+    assert_eq!((names(&reply), file()), (vec!["app".to_string(), "web".into()], settings.clone()));
+
+    // A repository, by a path with `..` in it: written resolved, listed, and its row selected.
+    let reply = add(&format!("{}/plain/../elsewhere/zed", root.display()));
+    let added = listing(&[dir("code"), dir("elsewhere/zed")]);
+    assert_eq!((names(&reply), file()), (vec!["app".to_string(), "web".into(), "zed".into()], added.clone()));
+    assert_eq!((reply["mode"].as_str(), reply["state"]["list"].as_u64()), (Some("list"), Some(2)));
+    // What the last try said is gone: the status bar is back to what it said at start.
+    assert!(reply["notice"].as_str().is_some_and(|notice| notice.starts_with("settings.json: colour")), "{reply}");
+    // It is still listed when the list is read again.
+    assert_eq!(names(&otto.call(json!({"cmd": "repos"}))), ["app", "web", "zed"]);
+    // Listed already, as itself or through `code`: its row is selected and nothing is written.
+    assert_eq!((add(&dir("code/web"))["state"]["list"].as_u64(), file()), (Some(1), added.clone()));
+    assert_eq!((add(&dir("elsewhere/zed"))["state"]["list"].as_u64(), file()), (Some(2), added.clone()));
+
+    // "Remove" shows on the name under the pointer. A client's label does nothing with it.
+    let header = |reply: &Value, n: usize| at(rect(&reply["repos_bar"][n]["header"]), 0.5, 0.5);
+    let remove = format!("repo-remove:{}", dir("elsewhere/zed"));
+    otto.user_key("escape");
+    let reply = otto.mouse("move", header(&otto.drawn(), 2));
+    assert_eq!(reply["repos_bar"][2]["name"], "zed");
+    let client = sneak_to(&otto, &remove);
+    assert_eq!((names(&client), file()), (vec!["app".to_string(), "web".into(), "zed".into()], added));
+    // The user's does: the directory comes off the settings, and the repository off the list.
+    let (_, labels) = sneak(&otto);
+    let reply = otto.user_key(&letters(&labels[&remove]));
+    assert_eq!((names(&reply), file()), (vec!["app".to_string(), "web".into()], settings.clone()));
+    // One that a folder of the settings holds is not removed: the status bar says where it comes from.
+    otto.mouse("move", header(&otto.drawn(), 0));
+    let (_, labels) = sneak(&otto);
+    let reply = otto.user_key(&letters(&labels[&format!("repo-remove:{}", dir("code/app"))]));
+    let notice = reply["notice"].as_str().unwrap_or_default();
+    assert!(notice.starts_with("app is listed through ") && file() == settings, "{notice}");
+    assert_eq!(names(&reply), ["app", "web"]);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn a_long_repos_list_keeps_each_name_over_its_checkouts() {
     // More repositories than the bar is tall; the third has a linked worktree.
     let root = std::env::temp_dir().join(format!("ottospace-e2e-repos-list-{}", std::process::id()));
@@ -2737,7 +2811,7 @@ fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
     let (reply, labels) = sneak(&otto);
     let ids: Vec<&str> = labels.keys().map(String::as_str).collect();
     let row = format!("repo:{repo}");
-    for id in ["rail:apps", "rail:workbook", "rail:tasks", "rail:repos", "bar:refresh", "bar:close", row.as_str()] {
+    for id in ["rail:apps", "rail:workbook", "rail:tasks", "rail:repos", "bar:add", "bar:close", row.as_str()] {
         assert!(ids.contains(&id), "no label for {id}: {ids:?}");
     }
     for id in ["tab:1", "tab-close:1", "top:new_tab", "top:split_right", "top:split_down"] {

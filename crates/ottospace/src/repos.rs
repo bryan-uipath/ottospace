@@ -12,16 +12,16 @@ pub fn roots() -> Vec<PathBuf> {
 
 /// Every repository under `roots()`, unsorted. The core arranges the list.
 pub fn scan() -> Vec<Repo> {
-    let mut repos = Vec::new();
-    for root in roots() {
-        if root.join(".git").exists() {
-            repos.extend(read(&root));
-            continue;
-        }
-        let children = fs::read_dir(root).into_iter().flatten().flatten().map(|entry| entry.path());
-        repos.extend(children.filter(|dir| dir.join(".git").exists()).filter_map(|dir| read(&dir)));
+    roots().iter().flat_map(|root| found_in(root)).collect()
+}
+
+/// The repositories of one directory: itself, or those it holds one level down.
+pub fn found_in(root: &Path) -> Vec<Repo> {
+    if root.join(".git").exists() {
+        return read(root).into_iter().collect();
     }
-    repos
+    let children = fs::read_dir(root).into_iter().flatten().flatten().map(|entry| entry.path());
+    children.filter(|dir| dir.join(".git").exists()).filter_map(|dir| read(&dir)).collect()
 }
 
 /// The repository at `dir`. A linked worktree (its `.git` is a file) reads as a repository with
