@@ -58,6 +58,7 @@ mod confirm;
 mod control;
 mod dialog;
 mod field;
+mod give_back;
 mod home;
 mod inspector;
 mod marks;
@@ -147,6 +148,8 @@ struct Hosted {
     app: String,
     window: ax::Window,
     original: CGRect,
+    /// The window was off screen when hosted: `original` is the middle of the main screen.
+    off_screen: bool,
     latest: Arc<Latest>,
     stream: SCStream,
     pid: i32,
@@ -179,11 +182,21 @@ struct Hosted {
 impl Hosted {
     fn new(target: capture::Target) -> Result<Self, String> {
         let capture::Target { window, sc_window, id } = target;
-        let original = window.frame().ok_or("could not read window frame")?;
+        let found = window.frame().ok_or("could not read window frame")?;
+        // Found parked or off screen (left so by a crash, or a window the app re-made where the
+        // old one was parked): it goes back to the middle of the main screen instead.
+        let screens = recovery::screens();
+        let off_screen = !ottospace_core::restore::reachable(recovery::to_frame(found), &screens.visible);
+        let original = match off_screen {
+            true => recovery::to_rect(ottospace_core::restore::centred(recovery::to_frame(found), screens.main)),
+            false => found,
+        };
         let latest = Arc::new(Latest::default());
         let radius = capture::corner_radius(&sc_window, 2.0).unwrap_or(0.0);
         let bar = title_bar(&window);
-        eprintln!("hosting window {id}: corner radius {radius:.1}pt, title bar {bar}pt");
+        eprintln!(
+            "hosting window {id}: corner radius {radius:.1}pt, title bar {bar}pt, found at {found:?}, off screen {off_screen}"
+        );
         let filter = SCContentFilter::create().with_window(&sc_window).build().map_err(|e| format!("{e:?}"))?;
         // Resized to the pane on park.
         let config = stream_config(original.size, 0.0, 2.0);
@@ -195,9 +208,10 @@ impl Hosted {
         let pid = window.pid();
         let (bundle, known_as) = ax::app_identity(pid);
         let app = capture::name_of(pid).or(known_as).unwrap_or_default();
-        recovery::remember(pid, id, original);
+        give_back::remember(pid, id, recovery::to_frame(original));
         Ok(Self {
             window_id: id,
+            off_screen,
             title,
             bundle,
             app,
@@ -226,12 +240,23 @@ impl Hosted {
         Kind::App { window: self.window_id, title: self.title.clone(), bundle, name }
     }
 
-    /// Stops capture and puts the window back where we found it.
+    /// Stops capture and puts the window back where we found it; forgets it once it is there.
     fn release(self) {
+        let id = self.window_id;
+        if self.give_back() {
+            give_back::forget(id);
+        }
+    }
+
+    /// As `release`, but the record stays: at a quit, for the guardian to check again once
+    /// ottospace is gone. True when the window is back where the user can reach it.
+    fn give_back(self) -> bool {
         let _ = self.stream.stop_capture();
-        let _ = self.window.set_size(self.original.size);
-        let _ = self.window.set_position(self.original.origin);
-        recovery::forget(self.window_id);
+        let back = recovery::put_back(&self.window, recovery::to_frame(self.original), &recovery::screens());
+        if back.is_none() {
+            eprintln!("window {}: not back on screen", self.window_id);
+        }
+        back.is_some()
     }
 
     /// Sizes the window to the pane (so the stream matches) and parks it on the off-screen sliver.
@@ -807,7 +832,10 @@ impl Workspace {
                 if let Some(draft) = this.model.capture.as_ref().map(|bar| bar.draft.clone()) {
                     this.drop_capture(&draft, None);
                 }
-                this.hosted.drain().for_each(|(_, hosted)| hosted.release());
+                // Every quit ends here: ⌘Q, the menu, the close button, `ctl quit`, a signal.
+                this.hosted.drain().for_each(|(_, hosted)| {
+                    hosted.give_back();
+                });
                 if this.control.is_some() {
                     let _ = std::fs::remove_file(control::path());
                 }
@@ -822,6 +850,9 @@ impl Workspace {
             for tick in 0u64.. {
                 cx.background_executor().timer(Duration::from_millis(16)).await;
                 let alive = this.update_in(cx, |this, window, cx| {
+                    if give_back::signalled() {
+                        cx.quit();
+                    }
                     this.serve_control(window, cx);
                     this.take_tags(window, cx);
                     if tick % 15 == 0 {
@@ -2478,6 +2509,10 @@ impl Workspace {
             if !drawn {
                 let _ = hosted.window.set_position(display::parking_spot());
             }
+            if hosted.off_screen {
+                self.error =
+                    Some(format!("{}'s window was off screen: it goes back to the middle of the screen", hosted.app));
+            }
             self.cells.insert(*id, hosted.bounds.clone());
             self.hosted.insert(*id, hosted);
             return Some(*id);
@@ -2495,8 +2530,12 @@ impl Workspace {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        // Cleared first: a notice hosting sets (a window found off screen) outlives a success.
+        self.error = None;
         let result = self.try_open_app(name, axis, new_tab, window, cx);
-        self.error = result.clone().err();
+        if let Err(err) = &result {
+            self.error = Some(err.clone());
+        }
         cx.notify();
         result
     }
@@ -2677,14 +2716,16 @@ impl Workspace {
 
     /// Removes panes whose window is gone (closed by the user or the app).
     fn drop_closed(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let gone: Vec<PaneId> =
-            self.hosted.iter().filter(|(_, h)| h.window.frame().is_none()).map(|(id, _)| *id).collect();
+        // An unreadable frame alone is no proof: a busy app times the call out, and its parked
+        // window would be stranded. The window server says whether the window is still there.
+        let gone = |h: &Hosted| h.window.frame().is_none() && !recovery::window_exists(h.window_id);
+        let gone: Vec<PaneId> = self.hosted.iter().filter(|(_, h)| gone(h)).map(|(id, _)| *id).collect();
         for id in gone {
-            eprintln!("pane {id}: window gone (AX frame unreadable); closing");
+            eprintln!("pane {id}: window gone; closing");
             // Nothing to put back, so stop the stream here instead of `release` in `dispatch`.
             if let Some(hosted) = self.hosted.remove(&id) {
                 let _ = hosted.stream.stop_capture();
-                recovery::forget(hosted.window_id);
+                give_back::forget(hosted.window_id);
                 // Its app may still be frontmost with no window here: take the keyboard back.
                 if self.model.live == Some(id) && ax::is_frontmost(hosted.pid) {
                     cx.activate(true);
@@ -5261,6 +5302,14 @@ fn main() {
         print!("{}", if stub { SKILL_STUB } else { SKILL_GUIDE });
         return;
     }
+    // Brings back windows stranded off screen; no app need run.
+    if args.get(1).is_some_and(|a| a == "rescue") {
+        give_back::rescue_command();
+    }
+    // Hidden: the guardian the app starts, which gives its windows back if it dies.
+    if args.get(1).is_some_and(|a| a == "guard") {
+        give_back::guard(args.get(2));
+    }
     // Which build this is, e.g. "ottospace 0.1.0 (a4a2582c0ffe, 2026-11-12T08:09:00Z)".
     if args.get(1).is_some_and(|a| a == "--version" || a == "-V") {
         let (commit, date) = (option_env!("OTTOSPACE_COMMIT"), option_env!("OTTOSPACE_BUILD_DATE"));
@@ -5270,7 +5319,9 @@ fn main() {
     // Anything else is a mistake (`ottospace skills`, `--help`). Starting the app for it would
     // open a second window and restore the running instance's hosted windows.
     if let Some(unknown) = args.get(1) {
-        eprintln!("unknown command: {unknown}\nusage: ottospace [ctl '<json request>' | skill [--stub] | --version]");
+        eprintln!(
+            "unknown command: {unknown}\nusage: ottospace [ctl '<json request>' | skill [--stub] | rescue | --version]"
+        );
         std::process::exit(2);
     }
 
@@ -5286,13 +5337,12 @@ fn main() {
             eprintln!("grant Accessibility access to your terminal, then rerun");
             std::process::exit(1);
         }
-        // The recovery file belongs to the user's real session. A test run must not move its
-        // leftovers, nor write to it.
-        match host_only {
-            None => recovery::restore_leftovers(),
-            Some(_) => recovery::disable(),
-        }
+        // Windows a run that ended without its quit left hosted. A test run keeps its record in
+        // its own folder (`OTTOSPACE_HOME`), or none, and moves only its canary's.
+        give_back::leftovers(host_only);
     }
+    // TERM, INT, HUP: a quit, so hosted windows go back.
+    give_back::on_signals();
     let control = control::serve().map_err(|err| eprintln!("control socket off: {err}")).ok();
     // For `osi`: which program the running app is.
     running::write();

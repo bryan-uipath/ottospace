@@ -310,7 +310,7 @@ review the export PR &gt;canvas-app @codex $code-review /src/export</pre>
     <li><b>The pane shows a live stream.</b> ScreenCaptureKit streams the parked window into its pane.</li>
     <li><b>A click brings the real window.</b> Click the pane and the real window moves over it, and the click is replayed. Input is native from then on.</li>
   </ol>
-  <p>This is why ottospace needs Accessibility and Screen Recording. A new window of a hosted app gets its own pane. The original window positions are saved to disk and restored when you quit, or after a crash. The badge on an app in the Apps list is how many windows it has open.</p>
+  <p>This is why ottospace needs Accessibility and Screen Recording. A new window of a hosted app gets its own pane. The original window positions are saved to disk and restored on every way out: a quit, a signal, and after a crash or <code>kill -9</code> a small guardian process puts them back. A window lost off screen comes back with <code>ottospace rescue</code> in a terminal, or Developer ▸ Bring All Windows Back. The badge on an app in the Apps list is how many windows it has open.</p>
 
   <h3 id="limits">Known limits</h3>
   <ul>

@@ -18,7 +18,7 @@ thread_local! {
 // ⌘P, and the Developer menu's own.
 actions!(
     ottospace,
-    [CommandPalette, CopyState, OpenSettings, OpenFolder, AxInspector, InspectorFilter, InspectorRefresh]
+    [CommandPalette, CopyState, OpenSettings, OpenFolder, AxInspector, InspectorFilter, InspectorRefresh, BringBack]
 );
 
 /// The action a command's menu item dispatches. A new command must name one here.
@@ -74,6 +74,7 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::CopyState => Box::new(CopyState),
         Command::OpenSettings => Box::new(OpenSettings),
         Command::OpenFolder => Box::new(OpenFolder),
+        Command::BringBack => Box::new(BringBack),
         Command::Hide => Box::new(Hide),
         Command::Quit => Box::new(Quit),
     }
@@ -126,6 +127,26 @@ impl Workspace {
                 this.error = open_in_user_folder(None).err();
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &BringBack, _, cx| {
+                this.error = Some(this.bring_back());
+                cx.notify();
+            }))
+    }
+
+    /// Bring All Windows Back: the user's alone (menu, palette), never a client's. A test run
+    /// moves its canary's windows only, and with hosting off none.
+    fn bring_back(&self) -> String {
+        if self.input != Origin::User {
+            return "only the user brings windows back".into();
+        }
+        if !self.hosting {
+            return "window hosting is off: no window moved".into();
+        }
+        let hosted: Vec<u32> = self.hosted.values().map(|h| h.window_id).collect();
+        match crate::give_back::rescue(self.host_only, &hosted) {
+            1 => "moved 1 window back on screen".into(),
+            n => format!("moved {n} windows back on screen"),
+        }
     }
 
     /// ⌘P: open the palette, or close it.

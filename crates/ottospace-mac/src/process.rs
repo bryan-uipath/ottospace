@@ -84,6 +84,16 @@ pub fn cwd(pid: i32) -> Option<String> {
     String::from_utf8(path.to_vec()).ok()
 }
 
+/// True while process `pid` exists, ours or another user's.
+pub fn alive(pid: i32) -> bool {
+    unsafe extern "C" {
+        fn kill(pid: c_int, signal: c_int) -> c_int;
+    }
+    // 0 and negative pids name process groups, not one process.
+    // SAFETY: signal 0 sends nothing; it only checks that the process exists.
+    pid > 0 && (unsafe { kill(pid, 0) } == 0 || std::io::Error::last_os_error().raw_os_error() == Some(1)) // EPERM
+}
+
 /// The parent of process `pid`. `None`: it is gone.
 pub fn parent(pid: i32) -> Option<i32> {
     short_info(pid).map(|info| info.parent as i32)

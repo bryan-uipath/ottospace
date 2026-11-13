@@ -1182,3 +1182,190 @@ fn the_inspector_reads_a_hosted_canary_window_and_counts_its_roles() {
     // It goes with its pane.
     assert!(otto.call(json!({"cmd": "close"}))["inspector"].is_null());
 }
+
+/// The canary window's frame as Accessibility has it: global, top-left origin.
+fn global_frame(canary: &Proc, index: usize) -> Option<[f64; 4]> {
+    rect(&canary.call(json!({"cmd": "state"}))["windows"][index]["frame"])
+}
+
+/// True when the user can take hold of the window: its title bar on a screen.
+fn reachable(f: [f64; 4]) -> bool {
+    let screens = ottospace_mac::recovery::screens();
+    ottospace_core::restore::reachable(ottospace_core::ax::Frame::new(f[0], f[1], f[2], f[3]), &screens.visible)
+}
+
+/// An ottospace that hosts only the canary's windows. `env`: more of its environment.
+fn otto_for(canary: &Proc, name: &str, env: &[(&str, &str)]) -> Proc {
+    let pid = canary.child.id().to_string();
+    let mut all = vec![("OTTOSPACE_E2E", "1"), ("OTTOSPACE_HOST_ONLY", pid.as_str()), ("OTTOSPACE_RETURN_KEY", "f19")];
+    all.extend_from_slice(env);
+    Proc::launch(env!("CARGO_BIN_EXE_ottospace"), name, "OTTOSPACE_SOCKET", &all)
+}
+
+/// Hosts the canary's first window and waits for it to park. Returns the parking spot.
+fn host_and_park(otto: &Proc) -> [f64; 2] {
+    let reply = otto.call(json!({"cmd": "open_app", "name": CANARY}));
+    assert_eq!(reply["state"]["panes"][0]["kind"]["type"], "app", "{reply}");
+    let spot = point(&otto.call(json!({"cmd": "state"}))["parking"]).expect("parking spot");
+    wait_for("the window to park", || {
+        rect(&otto.call(json!({"cmd": "state"}))["hosted"]["1"]).filter(|f| close(f[0], spot[0]))
+    });
+    spot
+}
+
+/// Waits for the process to end; panics after `TIMEOUT`.
+fn wait_exit(proc: &mut Proc, what: &str) {
+    let start = Instant::now();
+    while proc.child.try_wait().expect("wait").is_none() {
+        assert!(start.elapsed() < TIMEOUT, "{what}: ottospace did not end");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn signal(proc: &Proc, name: &str) {
+    let status = Command::new("kill").args([format!("-{name}"), proc.child.id().to_string()]).status().expect("kill");
+    assert!(status.success(), "kill -{name}");
+}
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn every_way_out_gives_the_window_back_where_it_was() {
+    for way in ["ctl quit", "cmd-q", "close button", "TERM", "INT", "HUP"] {
+        let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-out", "CANARY_SOCKET", &[]);
+        wait_for("the canary window", || global_frame(&canary, 0));
+        // Near the main screen's bottom-right corner: put back size first, from the parking
+        // spot, macOS would clamp the window to what fits there.
+        let main = ottospace_mac::display::all()[0];
+        let to = [main.origin.x + main.size.width - 700.0, main.origin.y + main.size.height - 520.0];
+        canary.call(json!({"cmd": "move", "index": 0, "to": to}));
+        let original = wait_for("the canary to move", || global_frame(&canary, 0).filter(|f| close(f[0], to[0])));
+        let mut otto = otto_for(&canary, "otto-out", &[]);
+        host_and_park(&otto);
+        match way {
+            "ctl quit" => drop(otto.call(json!({"cmd": "quit"}))),
+            "cmd-q" => drop(otto.call(json!({"cmd": "key", "keys": "cmd-q"}))),
+            "close button" => {
+                let pid = otto.child.id();
+                press(&format!(
+                    "tell (first process whose unix id is {pid}) to click (first button of window 1 whose subrole is \"AXCloseButton\")"
+                ));
+            }
+            name => signal(&otto, name),
+        }
+        wait_exit(&mut otto, way);
+        let back = global_frame(&canary, 0).expect("canary frame");
+        let within = (0..4).all(|i| (back[i] - original[i]).abs() <= 1.0);
+        assert!(within, "{way}: the window is at {back:?}, it was at {original:?}");
+    }
+}
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn a_killed_ottospace_has_its_guardian_give_the_window_back() {
+    let home = std::env::temp_dir().join(format!("otto-apps-guard-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).expect("make the folder");
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-guard", "CANARY_SOCKET", &[]);
+    let original = wait_for("the canary window", || global_frame(&canary, 0));
+    let home_str = home.to_str().expect("a plain path");
+    let mut otto = otto_for(&canary, "otto-guard", &[("OTTOSPACE_HOME", home_str), ("OTTOSPACE_GUARD", "1")]);
+    host_and_park(&otto);
+    let record = || std::fs::read_to_string(home.join("hosted.json")).unwrap_or_default();
+    let pid = otto.child.id();
+    assert!(record().contains(&format!("\"owner\":{pid}")), "the record: {}", record());
+    let guardian = || {
+        let out = Command::new("pgrep").args(["-f", &format!("ottospace guard {pid}$")]).output().expect("pgrep");
+        !String::from_utf8_lossy(&out.stdout).trim().is_empty()
+    };
+    assert!(guardian(), "a guardian watches the run");
+
+    // No quit runs: SIGKILL.
+    otto.child.kill().expect("kill -9");
+    let _ = otto.child.wait();
+    let start = Instant::now();
+    let back = wait_for("the guardian to put the window back", || {
+        global_frame(&canary, 0).filter(|f| (0..4).all(|i| (f[i] - original[i]).abs() <= 1.0))
+    });
+    assert!(start.elapsed() < Duration::from_secs(10), "back after {:?}: {back:?}", start.elapsed());
+    wait_for("the record to be cleared", || (record() == "[]").then_some(()));
+    wait_for("the guardian to end", || (!guardian()).then_some(()));
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn a_window_found_off_screen_comes_back_on_screen_and_rescue_brings_one_back() {
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-off", "CANARY_SOCKET", &[]);
+    wait_for("the canary window", || global_frame(&canary, 0));
+    let otto = otto_for(&canary, "otto-off", &[]);
+    let spot = point(&otto.call(json!({"cmd": "state"}))["parking"]).expect("parking spot");
+    // Where a crashed run would have left it: parked.
+    let parked = [spot[0], spot[1] - 200.0];
+    canary.call(json!({"cmd": "move", "index": 0, "to": parked}));
+    wait_for("the canary to be off screen", || global_frame(&canary, 0).filter(|f| !reachable(*f)));
+    let reply = otto.call(json!({"cmd": "open_app", "name": CANARY}));
+    let notice = reply["notice"].as_str().unwrap_or_default().to_string();
+    assert!(notice.contains("off screen"), "the status bar says so: {reply}");
+    otto.call(json!({"cmd": "quit"}));
+    wait_for("the window on screen after the quit", || global_frame(&canary, 0).filter(|f| reachable(*f)));
+    drop(otto);
+
+    // `ottospace rescue`, no app running: a window parked by nobody comes back.
+    canary.call(json!({"cmd": "move", "index": 0, "to": parked}));
+    wait_for("the canary to be off screen", || global_frame(&canary, 0).filter(|f| !reachable(*f)));
+    let out = Command::new(env!("CARGO_BIN_EXE_ottospace"))
+        .arg("rescue")
+        .env("OTTOSPACE_E2E", "1")
+        .env("OTTOSPACE_HOST_ONLY", canary.child.id().to_string())
+        .env_remove("OTTOSPACE_HOME")
+        .output()
+        .expect("run rescue");
+    let said = String::from_utf8_lossy(&out.stdout);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success() && said.contains("moved 1 window back"), "{said} {err}");
+    let back = global_frame(&canary, 0).expect("canary frame");
+    assert!(reachable(back), "rescued to {back:?}");
+}
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn a_window_the_app_remade_while_hosted_is_not_stranded() {
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-remade", "CANARY_SOCKET", &[]);
+    wait_for("the canary window", || global_frame(&canary, 0));
+    let otto = otto_for(&canary, "otto-remade", &[]);
+    let spot = host_and_park(&otto);
+    // The app closes its window and opens a new one where the old one stood: parked.
+    canary.call(json!({"cmd": "recreate", "index": 0, "at": [spot[0], spot[1] - 200.0]}));
+    let titles = || -> Vec<String> {
+        let panes = otto.call(json!({"cmd": "state"}))["state"]["panes"].as_array().cloned().unwrap_or_default();
+        panes.iter().filter_map(|p| p["kind"]["title"].as_str().map(str::to_string)).collect()
+    };
+    wait_for("the new window's pane alone", || (titles() == ["Canary 2"]).then_some(()));
+    // It was found off screen: what is recorded is the middle of the screen.
+    let state = otto.call(json!({"cmd": "state"}));
+    assert!(state["notice"].as_str().is_some_and(|n| n.contains("off screen")), "{}", state["notice"]);
+    otto.call(json!({"cmd": "quit"}));
+    wait_for("the new window on screen", || {
+        let windows = canary.call(json!({"cmd": "state"}))["windows"].clone();
+        let frame = rect(&windows.as_array()?.iter().find(|w| w["title"] == "Canary 2")?["frame"])?;
+        reachable(frame).then_some(frame)
+    });
+}
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn a_busy_app_keeps_its_pane_and_gets_its_window_back() {
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-busy", "CANARY_SOCKET", &[]);
+    let original = wait_for("the canary window", || global_frame(&canary, 0));
+    let otto = otto_for(&canary, "otto-busy", &[]);
+    host_and_park(&otto);
+    // Longer than Accessibility's 6s wait: a frame read times out while the app is busy.
+    canary.call(json!({"cmd": "hang", "ms": 9000}));
+    std::thread::sleep(Duration::from_secs(11));
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!(state["state"]["panes"][0]["kind"]["type"], "app", "the pane stays: {}", state["state"]["panes"]);
+    otto.call(json!({"cmd": "quit"}));
+    wait_for("the window back where it was", || {
+        global_frame(&canary, 0).filter(|f| (0..4).all(|i| (f[i] - original[i]).abs() <= 1.0))
+    });
+}

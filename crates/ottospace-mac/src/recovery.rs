@@ -1,78 +1,156 @@
-//! Remembers hosted windows' original frames on disk, so a crash doesn't strand them parked.
-//! Format: one `pid window-id x y w h` line per hosted window.
+//! Puts other apps' windows back on screen: a hosted window at its original frame, read back to
+//! be sure, and a window stranded off screen moved onto the main screen. The decisions are the
+//! core's (`ottospace_core::restore`); this reads screens and moves windows.
 
-use std::path::PathBuf;
+use std::ffi::c_void;
 
+use objc2::MainThreadMarker;
+use objc2_app_kit::{NSApplicationActivationPolicy, NSScreen, NSWorkspace};
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+use ottospace_core::ax::Frame;
+use ottospace_core::restore;
 
-use crate::ax;
+use crate::{ax, display};
 
-fn path() -> PathBuf {
-    let home = std::env::var_os("HOME").unwrap_or_default();
-    PathBuf::from(home).join("Library/Application Support/ottospace/hosted.txt")
+pub fn to_frame(r: CGRect) -> Frame {
+    Frame::new(r.origin.x, r.origin.y, r.size.width, r.size.height)
 }
 
-fn read() -> Vec<(i32, u32, CGRect)> {
-    let text = std::fs::read_to_string(path()).unwrap_or_default();
-    text.lines()
-        .filter_map(|line| {
-            let v: Vec<f64> = line.split_whitespace().filter_map(|s| s.parse().ok()).collect();
-            let [pid, id, x, y, w, h] = v[..] else { return None };
-            Some((pid as i32, id as u32, CGRect { origin: CGPoint::new(x, y), size: CGSize::new(w, h) }))
+pub fn to_rect(f: Frame) -> CGRect {
+    CGRect { origin: CGPoint::new(f.x, f.y), size: CGSize::new(f.w, f.h) }
+}
+
+/// The screens now, in Accessibility's coordinates.
+pub struct Screens {
+    /// Each screen's visible frame: below the menu bar, beside the Dock.
+    pub visible: Vec<Frame>,
+    /// Each display's whole bounds.
+    pub displays: Vec<Frame>,
+    /// The visible frame of the screen with the menu bar.
+    pub main: Frame,
+    /// Where ottospace parks a window (`display::parking_spot`).
+    pub spot: (f64, f64),
+}
+
+pub fn screens() -> Screens {
+    let displays: Vec<Frame> = display::all().into_iter().map(to_frame).collect();
+    // AppKit counts from the main screen's bottom left; Accessibility from its top left.
+    let visible: Vec<Frame> = match MainThreadMarker::new() {
+        Some(mtm) => {
+            let all = NSScreen::screens(mtm);
+            let height = all.firstObject().map_or(0.0, |s| s.frame().size.height);
+            all.iter()
+                .map(|s| {
+                    let v = s.visibleFrame();
+                    Frame::new(v.origin.x, height - v.origin.y - v.size.height, v.size.width, v.size.height)
+                })
+                .collect()
+        }
+        // Off the main thread AppKit cannot be asked: whole displays, less a menu bar's height.
+        None => displays.iter().map(|d| Frame::new(d.x, d.y + 25.0, d.w, d.h - 25.0)).collect(),
+    };
+    let fallback = Frame::new(0.0, 25.0, 1280.0, 775.0);
+    let main = visible.first().copied().unwrap_or(fallback);
+    let spot = display::parking_spot();
+    Screens { visible, displays, main, spot: (spot.x, spot.y) }
+}
+
+/// Moves the window to `frame`: position, size, position again. Position first: resized at the
+/// parking spot, macOS clamps the window to what fits there. Again after: an app may shift a
+/// window as it resizes it.
+fn place(window: &ax::Window, frame: Frame) {
+    let rect = to_rect(frame);
+    let _ = window.set_position(rect.origin);
+    let _ = window.set_size(rect.size);
+    let _ = window.set_position(rect.origin);
+}
+
+/// Puts `window` back at `original`, or centred on the main screen when the user could not reach
+/// it there, and reads it back. `None`: it is not where the user can reach it, even after a
+/// second try in the middle of the main screen (the app refused, or the window is gone).
+pub fn put_back(window: &ax::Window, original: Frame, screens: &Screens) -> Option<Frame> {
+    let target = restore::destination(original, &screens.visible, screens.main);
+    place(window, target);
+    let landed = to_frame(window.frame()?);
+    if restore::reachable(landed, &screens.visible) {
+        return Some(landed);
+    }
+    eprintln!("window {:?}: put at {target:?}, it is at {landed:?}; centring it", window.id());
+    place(window, restore::centred(target, screens.main));
+    window.frame().map(to_frame).filter(|f| restore::reachable(*f, &screens.visible))
+}
+
+/// True when the user cannot get at the window: it sits in ottospace's parking spot, or wholly
+/// off every display.
+pub fn stranded(frame: Frame, screens: &Screens) -> bool {
+    restore::parked(frame, screens.spot) || restore::off_every(frame, &screens.displays)
+}
+
+/// The app's standard windows that are stranded, with their frames.
+pub fn stranded_of(pid: i32, screens: &Screens) -> Vec<(ax::Window, Frame)> {
+    ax::Window::standard_of(pid)
+        .into_iter()
+        .filter_map(|w| {
+            let frame = to_frame(w.frame()?);
+            stranded(frame, screens).then_some((w, frame))
         })
         .collect()
 }
 
-fn write(entries: &[(i32, u32, CGRect)]) {
-    let text: String = entries
+/// Moves every stranded standard window of every running app (of `only`, if named) onto the
+/// main screen at its own size, no larger than the screen. Leaves visible windows alone, and
+/// those `skip` names (pid, window id): another ottospace's panes. Returns how many it moved.
+pub fn rescue(only: Option<i32>, skip: impl Fn(i32, u32) -> bool) -> usize {
+    let screens = screens();
+    let me = std::process::id() as i32;
+    let pids: Vec<i32> = NSWorkspace::sharedWorkspace()
+        .runningApplications()
         .iter()
-        .map(|(pid, id, r)| format!("{pid} {id} {} {} {} {}\n", r.origin.x, r.origin.y, r.size.width, r.size.height))
+        .filter(|app| app.activationPolicy() == NSApplicationActivationPolicy::Regular && !app.isTerminated())
+        .map(|app| app.processIdentifier())
+        .filter(|pid| *pid != me && only.is_none_or(|only| only == *pid))
         .collect();
-    let p = path();
-    if let Some(dir) = p.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let _ = std::fs::write(p, text);
-}
-
-/// Set in test runs: they share this file with the user's real session and must not write it.
-static DISABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// Stops `remember` and `forget` from touching the file, for the life of the process.
-pub fn disable() {
-    DISABLED.store(true, std::sync::atomic::Ordering::Relaxed);
-}
-
-fn disabled() -> bool {
-    DISABLED.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-pub fn remember(pid: i32, id: u32, original: CGRect) {
-    if disabled() {
-        return;
-    }
-    let mut entries = read();
-    entries.retain(|(_, i, _)| *i != id);
-    entries.push((pid, id, original));
-    write(&entries);
-}
-
-pub fn forget(id: u32) {
-    if disabled() {
-        return;
-    }
-    let mut entries = read();
-    entries.retain(|(_, i, _)| *i != id);
-    write(&entries);
-}
-
-/// Puts back any windows a previous run left parked, then clears the list.
-pub fn restore_leftovers() {
-    for (pid, id, frame) in read() {
-        if let Some(w) = ax::Window::standard_of(pid).into_iter().find(|w| w.id() == Some(id)) {
-            let _ = w.set_size(frame.size);
-            let _ = w.set_position(frame.origin);
+    let mut moved = 0;
+    for pid in pids {
+        for (window, frame) in stranded_of(pid, &screens) {
+            if window.id().is_some_and(|id| skip(pid, id)) {
+                continue;
+            }
+            place(&window, restore::centred(frame, screens.main));
+            moved += 1;
         }
     }
-    write(&[]);
+    moved
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> *const c_void;
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    fn CFArrayGetCount(array: *const c_void) -> isize;
+    fn CFRelease(object: *const c_void);
+}
+
+/// True while the window server has a window with this id, on screen or not. Asks the window
+/// server, not the app: a busy app that times out an Accessibility call still has its window.
+pub fn window_exists(id: u32) -> bool {
+    // kCGWindowListOptionIncludingWindow: just that window.
+    let list = unsafe { CGWindowListCopyWindowInfo(1 << 3, id) };
+    if list.is_null() {
+        return false;
+    }
+    let count = unsafe { CFArrayGetCount(list) };
+    unsafe { CFRelease(list) };
+    count > 0
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_window_id_nobody_has_does_not_exist() {
+        assert!(!super::window_exists(u32::MAX));
+    }
 }
