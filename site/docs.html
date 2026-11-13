@@ -167,7 +167,7 @@ td.w { white-space: normal; }
   <p class="note"><b>Builds are not notarized.</b> They are signed ad hoc. <code>ottospace.app</code> has its own identity, so macOS asks for both permissions for the app itself, and each build is a new identity: expect to grant both again after every update. That is why the bare command is the default. A zip downloaded in a browser is quarantined and macOS refuses to open the app; <code>osi</code> downloads with <code>curl</code>, which sets no such flag.</p>
 
   <h3 id="open-repo"><span class="step">3</span>Open a repository</h3>
-  <p>ottospace opens on the Repos list: your repositories as headings, each checkout and worktree a row. Click a row and a terminal opens in that directory. It fills the pane if the pane is empty; otherwise it splits to the right. Shift-click splits down.</p>
+  <p>ottospace opens on the Repos list: your repositories as headings, each checkout and worktree a row: its branch, and under it <code>Default</code> for the repository's own directory or the worktree's directory name. Click a row and a terminal opens in that directory. It fills the pane if the pane is empty; otherwise it splits to the right. Shift-click splits down.</p>
   <p>Repos looks in <code>~/code</code> and <code>~/notes</code>. To change the folders, see <a href="#settings">Settings</a>.</p>
 
   <h3 id="split"><span class="step">4</span>Split</h3>

@@ -3176,11 +3176,7 @@ impl Model {
         match self.sidebar {
             Some(Section::Apps) => self.app_rows(),
             Some(Section::Repos) => {
-                let paths = self
-                    .repos
-                    .iter()
-                    .flat_map(|r| std::iter::once(r.path.clone()).chain(r.worktrees.iter().map(|w| w.path.clone())));
-                paths.map(ListRow::Repo).collect()
+                self.repos.iter().flat_map(Repo::checkouts).map(|checkout| ListRow::Repo(checkout.path)).collect()
             }
             // As drawn: each heading, then its rows unless it is folded. A heading is a row, so
             // a section that is all folded can be unfolded from the keyboard.
