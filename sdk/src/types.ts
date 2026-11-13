@@ -16,6 +16,7 @@ export type Mode =
   | "normal"
   | "app"
   | "pick"
+  | "palette"
   | "visual"
   | "list"
   | "compose"
@@ -443,6 +444,25 @@ export interface Picker {
   selected: number;
 }
 
+/** The command palette, while it is open. Only the user types, moves or runs in it. */
+export interface Palette {
+  query: string;
+  /** An index into `palette_rows`. */
+  selected: number;
+}
+
+/** A row of the command palette: a command that needs no argument. */
+export interface PaletteRow {
+  /** Its id, e.g. `split_right`. */
+  command: string;
+  /** Its menu item's name, e.g. `Terminal Right`. */
+  name: string;
+  /** e.g. `Panes`, `Developer`. */
+  group: string;
+  /** Its first key, as the menu shows it (`⌘D`), or null. */
+  key: string | null;
+}
+
 /** A terminal a quit would end something in. */
 export interface Running {
   pane: PaneId;
@@ -557,6 +577,7 @@ export interface Model {
   /** Headings of the Tasks section that are folded. */
   collapsed: Heading[];
   picker: Picker | null;
+  palette: Palette | null;
   /** The quit question while it is up. */
   confirm: Confirm | null;
   keys: boolean;
@@ -716,6 +737,8 @@ export interface Snapshot {
   copied: string | null;
   /** The picker's rows as drawn, or null: its items narrowed by the filter, then, once something is typed, the installed apps that are not running. */
   picker_rows: PickItem[] | null;
+  /** The command palette's rows as drawn, best match first, or null while it is closed. */
+  palette_rows: PaletteRow[] | null;
   /** The open text field, or null. `state.compose` and `state.picker.query` stay its text. */
   field: Field | null;
   inbox: InboxRow[];

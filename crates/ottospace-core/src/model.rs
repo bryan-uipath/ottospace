@@ -6,6 +6,7 @@ use crate::apps;
 use crate::ax::Target;
 use crate::capture::{self, Content, Facts, Tool};
 use crate::capture_model::Collection;
+use crate::commands::{self, Command, Palette};
 use crate::complete::{self, Candidate, Dropdown, Row};
 use crate::compose::{self, Draft};
 use crate::edit::{Edit, Field, Motion};
@@ -72,6 +73,8 @@ pub enum Mode {
     App,
     /// The pane picker: keys filter and choose.
     Pick,
+    /// The command palette: keys filter commands and run one.
+    Palette,
     /// A cursor in a terminal's output: keys move it and select text to copy.
     Visual,
     /// The secondary bar: keys move over its rows and act on the selected one.
@@ -424,6 +427,17 @@ pub enum Action {
         index: Option<usize>,
     },
     ClosePicker,
+    /// Open the command palette. Only the user's: it runs any command as theirs.
+    PaletteOpen,
+    /// Move the palette's highlight down (positive) or up; it wraps.
+    PaletteMove {
+        delta: i32,
+    },
+    /// Run a command (default: the highlighted one; `index` is into the matches) and close the palette.
+    PaletteChoose {
+        index: Option<usize>,
+    },
+    ClosePalette,
     /// Show or hide the key reference.
     ToggleKeys,
     CloseKeys,
@@ -1009,6 +1023,7 @@ impl Action {
         match self {
             Action::Enter { .. }
             | Action::OpenPicker { .. }
+            | Action::PaletteOpen
             | Action::OpenCompose { .. }
             | Action::ToggleKeys
             | Action::ToggleVisual
@@ -1053,6 +1068,9 @@ impl Action {
             | Action::PickerMove { .. }
             | Action::PickerChoose { .. }
             | Action::ClosePicker
+            | Action::PaletteMove { .. }
+            | Action::PaletteChoose { .. }
+            | Action::ClosePalette
             | Action::CloseKeys
             | Action::LeaveVisual
             | Action::SetRepos { .. }
@@ -1233,6 +1251,10 @@ pub enum Effect {
     },
     /// End the app.
     Quit,
+    /// The user chose a command in the palette: run it as its menu item does.
+    Run {
+        command: Command,
+    },
     /// Host a window of this app: the one titled `title`, else as `marks::pick_window` says; an
     /// app that is not running is started. `into`: the empty pane it fills (`Action::Fill`),
     /// else a new pane (`Action::Open` along `axis`). `mark`: the pane mark to bind to that pane.
@@ -1372,6 +1394,8 @@ pub struct Model {
     pub(crate) now: u64,
     /// The pane picker, while it is open.
     pub picker: Option<Picker>,
+    /// The command palette, while it is open.
+    pub palette: Option<Palette>,
     /// The apps found installed and the bundles running, as the shell last said (`SetInstalled`).
     #[serde(skip)]
     pub(crate) installed: (Vec<Installed>, Vec<String>),
@@ -1443,6 +1467,7 @@ impl Default for Model {
             older_sessions: false,
             now: 0,
             picker: None,
+            palette: None,
             installed: (Vec::new(), Vec::new()),
             app_lists: apps::Lists::default(),
             confirm: None,
@@ -1488,6 +1513,8 @@ impl Model {
             Mode::Mark
         } else if self.picker.is_some() {
             Mode::Pick
+        } else if self.palette.is_some() {
+            Mode::Palette
         } else if self.compose_keys() {
             Mode::Compose
         } else if self.live.is_some() {
@@ -1514,6 +1541,7 @@ impl Model {
     /// mode, sneak mode or the quit question has the keyboard.
     fn holds_keyboard(&self) -> bool {
         let boxed = self.compose_keys() || self.picker.is_some() || self.keys || self.annotated().is_some();
+        let boxed = boxed || self.palette.is_some();
         // The Apps section's filter is a text field with the keyboard, as the picker's is.
         let filtering = self.app_lists.filtering;
         boxed || filtering || self.visual.is_some() || self.sneak.is_some() || self.confirm.is_some()
@@ -1569,6 +1597,15 @@ impl Model {
             // A key a client presses is input to the wait, as a label's letter is to sneak mode.
             Action::MarkPrefix | Action::MarkEdit { .. } | Action::ListMarkEdit { .. } => None,
             action if self.mark_input.is_some() && action.takes_keyboard() => Some(marks::INPUT_ON),
+            // The palette runs any command as the user's: no client opens it, types in it, moves
+            // in it or chooses. Nor does a client close it from under the user.
+            Action::PaletteOpen | Action::PaletteMove { .. } | Action::PaletteChoose { .. } | Action::ClosePalette => {
+                Some(commands::USERS_ALONE)
+            }
+            Action::FieldEdit { .. } if self.field().is_some_and(|(of, _)| of == "palette") => {
+                Some(commands::USERS_ALONE)
+            }
+            Action::ToggleKeys if self.palette.is_some() => Some(commands::PALETTE_OPEN),
             Action::ToggleKeys if boxed && !self.keys => Some("the picker or the new-task box is open"),
             // For the user it waits, as every pane action does. A client is told why.
             Action::SessionClick { .. } if boxed || self.keys || self.visual.is_some() => {
@@ -1632,12 +1669,20 @@ impl Model {
         // or in visual mode.
         // A draft in the right bar is not a box: the workspace stays in use beside it.
         let modal = self.compose.is_some() && self.capture.is_none();
-        let boxed = self.picker.is_some() || modal;
+        // The palette opens over nothing that has the keyboard, and holds it as the picker does.
+        if matches!(action, Action::PaletteOpen) && (self.holds_keyboard() || self.mark_input.is_some()) {
+            return Some("something else has the keyboard");
+        }
+        let boxed = self.picker.is_some() || modal || self.palette.is_some();
         // The draft's title or a picture taking the keyboard is the box opening, in the bar.
         let opens = matches!(action, Action::OpenCompose { .. } | Action::CaptureTitle | Action::CaptureEdit { .. });
-        let over_other = (modal && picker) || (boxed && opens);
+        let over_other = ((modal || self.palette.is_some()) && picker) || (boxed && opens);
         if (boxed && for_panes && !named_close) || over_other {
-            return Some(if self.picker.is_some() { "the picker is open" } else { "the new-task box is open" });
+            return Some(match (self.picker.is_some(), self.palette.is_some()) {
+                (true, _) => "the picker is open",
+                (_, true) => commands::PALETTE_OPEN,
+                _ => "the new-task box is open",
+            });
         }
         let no_box_now = opens && (self.keys || self.visual.is_some());
         no_box_now.then_some("the key reference or visual mode is in the way")
@@ -1733,6 +1778,7 @@ impl Model {
                 action,
                 Action::QuitCancel
                     | Action::OpenPicker { .. }
+                    | Action::PaletteOpen
                     | Action::OpenCompose { .. }
                     | Action::ToggleKeys
                     | Action::ToggleVisual
@@ -1749,7 +1795,7 @@ impl Model {
         // The capture key is the user's "now": what lies over the workspace gives way to it.
         // (Visual mode ends after the picture is asked for: see `capture_start`.)
         if user && matches!(action, Action::CaptureStart { .. }) {
-            (self.keys, self.picker) = (false, None);
+            (self.keys, self.picker, self.palette) = (false, None, None);
         }
         let action = self.capture_route(action);
         if self.waits(&action).is_some() {
@@ -2134,6 +2180,13 @@ impl Model {
                         text.apply(edit);
                     }
                 }
+                Some("palette") => {
+                    if let Some(palette) = &mut self.palette
+                        && palette.query.apply(edit)
+                    {
+                        palette.selected = 0;
+                    }
+                }
                 Some("picker") => {
                     // A new filter starts at its first match.
                     if let Some(picker) = &mut self.picker
@@ -2464,12 +2517,33 @@ impl Model {
                 }
             }
             Action::ClosePicker => self.picker = None,
+            Action::PaletteOpen => {
+                self.leave(effects);
+                self.palette = Some(Palette { query: Field::new("", MAX_FILTER), selected: 0 });
+            }
+            Action::PaletteMove { delta } => {
+                if let Some(palette) = &mut self.palette {
+                    let count = palette.matches().len() as i64;
+                    if count > 0 {
+                        palette.selected = (palette.selected as i64 + delta as i64).rem_euclid(count) as usize;
+                    }
+                }
+            }
+            Action::PaletteChoose { index } => {
+                let Some(palette) = self.palette.take() else { return };
+                match palette.matches().get(index.unwrap_or(palette.selected)) {
+                    Some(&command) => effects.push(Effect::Run { command }),
+                    // Nothing there: it stays open, so the query can be fixed.
+                    None => self.palette = Some(palette),
+                }
+            }
+            Action::ClosePalette => self.palette = None,
             // The overlay is ottospace's own UI: it needs the keyboard back to be dismissed.
             Action::ToggleKeys => {
                 self.keys = !self.keys;
                 if self.keys {
                     // One overlay at a time, and the overlay needs the keyboard to be dismissed.
-                    self.picker = None;
+                    (self.picker, self.palette) = (None, None);
                     self.leave(effects);
                 }
             }
@@ -3308,7 +3382,8 @@ impl Model {
         // The Apps section's filter, while it has the keyboard and no box does.
         let boxed = self.compose_modal() || self.compose_keys();
         let apps = (self.app_lists.filtering && !boxed).then_some(("apps", &self.app_lists.filter));
-        picker.or(note).or(apps).or(self.compose.as_ref().map(|field| ("compose", field)))
+        let palette = self.palette.as_ref().map(|palette| ("palette", &palette.query));
+        picker.or(palette).or(note).or(apps).or(self.compose.as_ref().map(|field| ("compose", field)))
     }
 
     /// A field by whose it is: `picker`, `note`, `apps`, `mark` or `compose`. Two can show at once
@@ -3316,6 +3391,7 @@ impl Model {
     pub fn field_of(&self, of: &str) -> Option<&Field> {
         match of {
             "picker" => self.picker.as_ref().map(|picker| &picker.query),
+            "palette" => self.palette.as_ref().map(|palette| &palette.query),
             "note" => self.note(),
             "apps" => Some(&self.app_lists.filter),
             "mark" => match &self.mark_input {
@@ -3340,6 +3416,7 @@ impl Model {
             Mode::Mark if matches!(self.mark_input, Some(MarkInput::Workbook { .. })) => "workbook",
             Mode::Mark => "mark",
             Mode::Pick => "picker",
+            Mode::Palette => "palette",
             Mode::Compose => "compose",
             Mode::Annotate => "note",
             Mode::List if self.app_lists.filtering => "apps",
@@ -4069,6 +4146,10 @@ mod tests {
         Action::PickerMove { .. },
         Action::PickerChoose { .. },
         Action::ClosePicker,
+        Action::PaletteOpen,
+        Action::PaletteMove { .. },
+        Action::PaletteChoose { .. },
+        Action::ClosePalette,
         Action::ToggleKeys,
         Action::CloseKeys,
         Action::ToggleVisual,
@@ -4226,6 +4307,10 @@ mod tests {
             Action::PickerMove { delta: 1 },
             Action::PickerChoose { index: None },
             Action::ClosePicker,
+            Action::PaletteOpen,
+            Action::PaletteMove { delta: 1 },
+            Action::PaletteChoose { index: None },
+            Action::ClosePalette,
             Action::ToggleKeys,
             Action::CloseKeys,
             Action::ToggleVisual,
@@ -4377,6 +4462,49 @@ mod tests {
         )
     }
 
+    /// A move in the palette: the user's alone. Opening it takes the keyboard, so a mode in its
+    /// way says its own reason first.
+    fn in_palette(action: &Action) -> bool {
+        matches!(action, Action::PaletteMove { .. } | Action::PaletteChoose { .. } | Action::ClosePalette)
+    }
+
+    #[test]
+    fn the_palette_runs_the_chosen_command_for_the_user_alone() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        // A client opens nothing, and the user's ⌘P opens it.
+        assert!(m.update(Action::PaletteOpen.sent_by(Origin::Socket)).is_empty());
+        assert_eq!(m.mode(), Mode::Normal);
+        m.update(Action::PaletteOpen);
+        assert_eq!((m.mode(), m.field().map(|(of, _)| of)), (Mode::Palette, Some("palette")));
+        // A client types nothing in it and chooses nothing.
+        m.update(Action::FieldEdit { edit: Edit::Insert("quit".into()) }.sent_by(Origin::Socket));
+        assert!(m.update(Action::PaletteChoose { index: None }.sent_by(Origin::Socket)).is_empty());
+        assert_eq!(m.palette.as_ref().map(|p| p.query.text().to_string()), Some(String::new()));
+        // Behind it, pane actions wait, and no other box opens.
+        assert_eq!(m.waits(&Action::Close { pane: None }), Some(commands::PALETTE_OPEN));
+        m.update(Action::OpenPicker { axis: Right, new_tab: false, items: vec![PickItem::Terminal] });
+        m.update(Action::OpenCompose { text: String::new() });
+        assert_eq!((m.picker.is_none(), m.compose.is_none(), m.panes.len()), (true, true, 1));
+        // Typing narrows it to its first match; ↓ wraps; ↵ runs the highlighted one and closes it.
+        m.update(Action::FieldEdit { edit: Edit::Insert("next".into()) });
+        let rows = m.palette.as_ref().map(Palette::matches).unwrap_or_default();
+        assert_eq!(rows[..2], [Command::FocusNext, Command::NextTab]);
+        m.update(Action::PaletteMove { delta: rows.len() as i32 + 1 });
+        assert_eq!(m.update(Action::PaletteChoose { index: None }), vec![Effect::Run { command: Command::NextTab }]);
+        assert_eq!((m.palette.is_none(), m.mode()), (true, Mode::Normal));
+        // Nothing matched: ↵ keeps it open, so the query can be fixed.
+        m.update(Action::PaletteOpen);
+        m.update(Action::FieldEdit { edit: Edit::Insert("zzz".into()) });
+        assert!(m.update(Action::PaletteChoose { index: None }).is_empty());
+        assert!(m.palette.is_some());
+        // Not over the key reference.
+        m.update(Action::ClosePalette);
+        m.update(Action::ToggleKeys);
+        m.update(Action::PaletteOpen);
+        assert!(m.palette.is_none());
+    }
+
     /// Every action from every origin. The origin decides, not the action: only the user's own
     /// move ends sneak mode, and only the user takes the keyboard from under its labels.
     #[test]
@@ -4390,6 +4518,7 @@ mod tests {
                     _ if origin == Origin::User => None,
                     _ if writes_settings(action) => Some(apps::USERS_ALONE),
                     _ if of_workbooks(action) => Some(workbook::USERS_ALONE),
+                    _ if in_palette(action) => Some(commands::USERS_ALONE),
                     _ => action.takes_keyboard().then_some("sneak mode is on"),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");
@@ -7287,6 +7416,7 @@ mod tests {
                     _ if user => None,
                     _ if writes_settings(action) => Some(apps::USERS_ALONE),
                     _ if of_workbooks(action) => Some(workbook::USERS_ALONE),
+                    _ if in_palette(action) => Some(commands::USERS_ALONE),
                     _ => action.takes_keyboard().then_some(CONFIRM_UP),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");
