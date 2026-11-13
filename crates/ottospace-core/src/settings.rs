@@ -175,10 +175,11 @@ impl Settings {
         if settings.tasks.as_deref().is_some_and(|dir| matches!(dir.trim().trim_end_matches('/'), "" | "~" | ".")) {
             return Err("\"tasks\" must name a folder of its own, e.g. \"~/notes/tasks\"".into());
         }
-        // Only a runner, or a runner and a model: a saved agent starts nothing yet.
+        // Only a runner, or a runner and a model, in small letters: a saved agent starts nothing
+        // yet. Whatever `agent_models` lists: each key is read by itself (`read`).
         if let Some(name) = settings.default_agent.as_deref() {
-            let listed = crate::agents::Models::with(settings.agent_models.as_ref());
-            if crate::agents::read(name, &listed).runner.is_none() {
+            let built_in = crate::sessions::RUNNERS.contains(&name) || crate::agents::typed(name).is_some();
+            if !built_in {
                 return Err(format!("{name:?} is not `claude`, `codex` or one with a model, as `codex-gpt-6-astra`"));
             }
         }
@@ -481,6 +482,9 @@ mod tests {
         assert!(wrong[0].starts_with(r#"default_agent: "ana" is not `claude`"#), "{wrong:?}");
         let (settings, wrong) = Settings::read(r#"{ "default_agent": "codex-gpt-6-astra" }"#);
         assert_eq!((settings.default_agent.as_deref(), wrong.len()), (Some("codex-gpt-6-astra"), 0));
+        // The same answer with a list of models beside it, and from the file read whole.
+        let text = r#"{ "agent_models": { "codex": ["gpt-7"] }, "default_agent": "CODEX-GPT-7" }"#;
+        assert_eq!((Settings::read(text).0.default_agent, Settings::parse(text).is_err()), (None, true));
         // So does an entry that is no text. A runner nobody knows: the key takes its default.
         let (settings, wrong) = Settings::read(r#"{ "agent_models": { "claude": ["claude-next-1", 7] } }"#);
         assert_eq!(settings.agent_models.unwrap().claude.unwrap(), ["claude-next-1"]);
