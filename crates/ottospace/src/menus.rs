@@ -107,6 +107,7 @@ pub fn app_menus() -> Vec<Menu> {
             name: "Developer".into(),
             items: vec![
                 item("Accessibility Overlay", AxOverlay),
+                item("Accessibility Inspector", commands::AxInspector),
                 item("Copy State as JSON", commands::CopyState),
                 item("Open the Settings File", commands::OpenSettings),
                 item("Open the ottospace Folder", commands::OpenFolder),

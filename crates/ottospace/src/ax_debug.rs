@@ -40,6 +40,10 @@ struct Read {
 }
 
 /// Blocking AX IPC to the app: run it off the UI thread.
+pub fn read_with(pid: i32, id: u32, limits: Limits) -> Result<(Frame, Tree, f64), String> {
+    read(pid, id, limits).map(|r| (r.window, r.tree, r.millis))
+}
+
 fn read(pid: i32, id: u32, limits: Limits) -> Result<Read, String> {
     let start = Instant::now();
     let window = mac_ax::Window::find(pid, id).ok_or("the window is gone")?;
@@ -68,7 +72,7 @@ pub fn serve_tree(
         return;
     };
     let defaults = Limits::default();
-    let limits = Limits { depth: depth.unwrap_or(defaults.depth), nodes: nodes.unwrap_or(defaults.nodes) };
+    let limits = Limits { depth: depth.unwrap_or(defaults.depth), nodes: nodes.unwrap_or(defaults.nodes), ..defaults };
     executor
         .spawn(async move {
             let answer = match read(pid, window, limits) {

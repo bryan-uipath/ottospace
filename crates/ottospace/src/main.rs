@@ -59,6 +59,7 @@ mod control;
 mod dialog;
 mod field;
 mod home;
+mod inspector;
 mod marks;
 mod menus;
 mod new_task;
@@ -618,6 +619,7 @@ struct Workspace {
     picker_field: field::Shared,
     apps_field: field::Shared,
     mark_field: field::Shared,
+    inspector_field: field::Shared,
     /// What is held of each capture of the draft in the bar, by its number.
     shots: HashMap<u32, collect::Shot>,
     /// Where the picture being annotated and the right bar were last drawn.
@@ -837,6 +839,7 @@ impl Workspace {
                             this.drop_closed(window, cx);
                             this.follow_front_app(window, cx);
                             this.host_launched(window, cx);
+                            this.refresh_inspector(window, cx);
                             // A snoozed task returns when its time comes, and the offer to undo goes.
                             let now = now_ms();
                             if this.model.due(now) {
@@ -946,6 +949,7 @@ impl Workspace {
             picker_field: field::Shared::default(),
             apps_field: field::Shared::default(),
             mark_field: field::Shared::default(),
+            inspector_field: field::Shared::default(),
             shots: HashMap::new(),
             annotate_at: Rc::default(),
             bar_at: Rc::default(),
@@ -1738,6 +1742,20 @@ impl Workspace {
                     failure = self.capture_pane(pane, Origin::User, window, cx).err();
                     None
                 }
+                Request::InspectorFixture { pane, app, tree } => match pane.or(self.model.focused) {
+                    Some(pane) => {
+                        self.dispatch(Action::InspectorOpen { pane, app }, Origin::User, window, cx);
+                        // As the shell's own read would land.
+                        let frame = ottospace_core::ax::Frame { x: 0., y: 0., w: 4000., h: 4000. };
+                        let read = Action::InspectorRead { pane, tree, window: frame, millis: 0. };
+                        self.dispatch(read, Origin::System, window, cx);
+                        None
+                    }
+                    None => {
+                        failure = Some("no pane".into());
+                        None
+                    }
+                },
                 Request::TaskBrief { id, tab } => {
                     let _ = reply.send(self.serve_brief(id, tab));
                     continue;
@@ -2348,6 +2366,9 @@ impl Workspace {
                 "name": app.name, "windows": app.windows, "icon": self.icons.contains_key(&app.name),
             })).collect::<Vec<_>>(),
             "ax_overlay": self.ax_overlay.as_ref().filter(|_| self.model.ax_overlay),
+            // The accessibility inspector, or null: its pane, `counts` (nodes, pressable,
+            // settable, each role's count), `rows` (depth, role, flags; no text), `selected`, `outline`.
+            "inspector": self.inspector_snapshot(),
             // Sneak mode's labels, each with its control's id and frame, and the letters typed; or null.
             "sneak": self.model.sneak,
             // Test runs only: `live`, how often a pane went live; `frame_reads`, how often the
@@ -2815,6 +2836,10 @@ impl Workspace {
         }
         if self.model.palette.is_some() {
             self.palette_key(event, window, cx);
+            return;
+        }
+        if self.model.mode() == Mode::Inspect {
+            self.inspector_key(event, window, cx);
             return;
         }
         if self.model.compose_keys() {
@@ -4531,6 +4556,7 @@ impl Workspace {
             Mode::Normal => ("NORMAL", "⌘/ keys"),
             Mode::Pick => ("PICK", ""),
             Mode::Palette => ("COMMAND", ""),
+            Mode::Inspect => ("INSPECT", "type to filter · ↑↓ select · ↵ folds · esc leaves"),
             Mode::App => ("APP", app_hint.as_str()),
             Mode::Visual => ("VISUAL", "esc leaves · ⌘/ keys"),
             Mode::List => ("LIST", "esc leaves · ⌘/ keys"),
@@ -4828,7 +4854,9 @@ impl Render for Workspace {
         let half = f32::from(window.viewport_size().width) / 2.;
         let drawer = if self.model.talk_wide { half } else { self.model.talk_width.min(half.max(MIN_DRAWER)) };
         self.drawer.width = drawer;
-        let right = self.render_draft(cx).or_else(|| self.render_drawer(drawer, cx));
+        // The inspector takes the drawer's place while it is open; the drawer keeps its state.
+        let right = self.render_inspector(drawer, cx);
+        let right = right.or_else(|| self.render_draft(cx)).or_else(|| self.render_drawer(drawer, cx));
         let right_width = talk::RAIL + if right.is_some() { drawer } else { 0. };
         div()
             .size_full()
@@ -5091,6 +5119,7 @@ impl Render for Workspace {
                     .filter(|o| self.model.layout.as_ref().is_some_and(|l| l.leaves().contains(&o.pane)))
                     .map(ax_debug::Overlay::render),
             )
+            .children(self.render_inspector_outline())
             // Over everything of ottospace's own. It is never on while an app's window is.
             .children(self.model.sneak.as_ref().map(sneak::labels))
             .children(self.model.picker.as_ref().map(|picker| self.render_picker(picker, cx)))
@@ -5418,7 +5447,7 @@ mod tests {
     /// `repo_add`: they answer only in a test run, and an agent must not learn them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        const TESTS_ONLY: [&str; 2] = ["capture_start", "repo_add"];
+        const TESTS_ONLY: [&str; 3] = ["capture_start", "repo_add", "inspector_fixture"];
         assert!(TESTS_ONLY.iter().all(|name| !SKILL_GUIDE.contains(name)));
         for name in request_names().into_iter().filter(|name| !TESTS_ONLY.contains(&name.as_str())) {
             assert!(SKILL_GUIDE.contains(&format!(r#""cmd":"{name}""#)), "the guide has no example of `{name}`");

@@ -16,7 +16,7 @@ thread_local! {
 }
 
 // ⌘P, and the Developer menu's own.
-actions!(ottospace, [CommandPalette, CopyState, OpenSettings, OpenFolder]);
+actions!(ottospace, [CommandPalette, CopyState, OpenSettings, OpenFolder, AxInspector]);
 
 /// The action a command's menu item dispatches. A new command must name one here.
 pub fn action(command: Command) -> Box<dyn gpui::Action> {
@@ -64,6 +64,7 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::Zoom => Box::new(Zoom),
         Command::ShowKeys => Box::new(ShowKeys),
         Command::AxOverlay => Box::new(AxOverlay),
+        Command::AxInspector => Box::new(AxInspector),
         Command::CopyState => Box::new(CopyState),
         Command::OpenSettings => Box::new(OpenSettings),
         Command::OpenFolder => Box::new(OpenFolder),
@@ -108,6 +109,7 @@ impl Workspace {
                 this.error = open_in_user_folder(Some("settings.json")).err();
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &AxInspector, window, cx| this.toggle_inspector(window, cx)))
             .on_action(cx.listener(|this, _: &OpenFolder, _, cx| {
                 this.error = open_in_user_folder(None).err();
                 cx.notify();

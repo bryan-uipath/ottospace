@@ -5,6 +5,7 @@
 
 use std::collections::VecDeque;
 use std::ptr::NonNull;
+use std::time::{Duration, Instant};
 
 use objc2_application_services::{AXCopyMultipleAttributeOptions, AXError, AXUIElement, AXValue, AXValueType};
 use objc2_core_foundation::{CFArray, CFBoolean, CFNumber, CFRetained, CFString, CFType, CGPoint, CGSize};
@@ -16,8 +17,19 @@ use crate::ax::Window;
 const TIMEOUT: f32 = 0.5;
 
 /// Read per node, in this order.
-const ATTRS: [&str; 9] =
-    ["AXRole", "AXSubrole", "AXTitle", "AXDescription", "AXValue", "AXPosition", "AXSize", "AXEnabled", "AXChildren"];
+const ATTRS: [&str; 11] = [
+    "AXRole",
+    "AXSubrole",
+    "AXTitle",
+    "AXDescription",
+    "AXValue",
+    "AXPosition",
+    "AXSize",
+    "AXEnabled",
+    "AXChildren",
+    "AXIdentifier",
+    "AXFocused",
+];
 
 /// How attributes are fetched. `Batched` is one IPC per node for all of them (plus one for the
 /// actions); `Single` is one IPC per attribute. Both are kept to measure the difference.
@@ -46,9 +58,14 @@ pub fn read(window: &Window, limits: Limits, fetch: Fetch) -> Tree {
     // Each node with its parent's index. Children always come after their parent.
     let mut nodes: Vec<(Node, Option<usize>)> = Vec::new();
     let mut queue = VecDeque::from([(window.element(), None, 0)]);
+    let deadline = limits.millis.map(|ms| Instant::now() + Duration::from_millis(ms));
     while let Some((element, parent, depth)) = queue.pop_front() {
         if nodes.len() >= limits.nodes {
             truncated.nodes = true;
+            break;
+        }
+        if deadline.is_some_and(|at| Instant::now() >= at) {
+            truncated.timeout = true;
             break;
         }
         let (node, children) = match read_node(&element, &names, fetch) {
@@ -91,8 +108,9 @@ fn read_node(
         Fetch::Single => ATTRS.iter().map(|name| attr(element, name)).collect::<Result<_, _>>()?,
     };
     let text = |i: usize| string(values[i].as_deref()).filter(|s| !s.is_empty());
+    let role = text(0).unwrap_or_default();
     let node = Node {
-        role: text(0).unwrap_or_default(),
+        role: role.clone(),
         subrole: text(1),
         title: text(2),
         description: text(3),
@@ -100,6 +118,9 @@ fn read_node(
         frame: frame(values[5].as_deref(), values[6].as_deref()),
         enabled: values[7].as_deref().and_then(|v| v.downcast_ref::<CFBoolean>()).map(CFBoolean::as_bool),
         actions: actions(element)?,
+        identifier: text(9),
+        focused: flag(values[10].as_deref()),
+        settable: (values[4].is_some() || INPUT.contains(&role.as_str())) && settable(element)?,
         children: Vec::new(),
     };
     Ok((node, children(values[8].as_deref())))
@@ -151,6 +172,26 @@ fn attr(element: &AXUIElement, name: &str) -> Result<Option<CFRetained<CFType>>,
     let mut out: *const CFType = std::ptr::null();
     let err = unsafe { element.copy_attribute_value(&name, NonNull::from(&mut out)) };
     owned(err, out)
+}
+
+/// Roles whose value may be settable with none read: asked only of these and of nodes with a value.
+const INPUT: [&str; 5] = ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField", "AXSlider"];
+
+fn flag(value: Option<&CFType>) -> bool {
+    value.and_then(|v| v.downcast_ref::<CFBoolean>()).is_some_and(CFBoolean::as_bool)
+}
+
+/// Whether the node's value can be set. Only asked, never set.
+fn settable(element: &AXUIElement) -> Result<bool, Failed> {
+    let name = CFString::from_str("AXValue");
+    let mut settable: u8 = 0;
+    let err = unsafe { element.is_attribute_settable(&name, NonNull::from(&mut settable).cast()) };
+    match err {
+        AXError::Success => Ok(settable != 0),
+        AXError::CannotComplete => Err(Failed::Busy),
+        AXError::InvalidUIElement => Err(Failed::Gone),
+        _ => Ok(false),
+    }
 }
 
 fn actions(element: &AXUIElement) -> Result<Vec<String>, Failed> {

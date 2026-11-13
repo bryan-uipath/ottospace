@@ -97,6 +97,11 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.capture({ pane: 1, history: true }),
   (c) => c.wait({ pane: 1, pattern: "^done$", timeout_ms: 1000 }),
   (c) => c.captureStart({ pane: 1 }),
+  (c) =>
+    c.inspectorFixture({
+      app: "Fixture",
+      tree: { root: { role: "AXWindow", children: [{ role: "AXButton", actions: ["AXPress"] }] }, count: 2, truncated: { depth: false, nodes: false, timeout: false } },
+    }),
   (c) => c.taskBrief({ id: 1 }),
   (c) => c.axTree({ pane: 1, depth: 20, nodes: 500 }),
   (c) => c.axOverlay({ refresh: true }),

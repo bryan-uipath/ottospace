@@ -107,6 +107,7 @@ commands! {
     Zoom: "Fill the Screen", View;
     ShowKeys: "Keys", View;
     AxOverlay: "Accessibility Overlay", Developer;
+    AxInspector: "Accessibility Inspector", Developer;
     CopyState: "Copy State as JSON", Developer;
     OpenSettings: "Open the Settings File", Developer;
     OpenFolder: "Open the ottospace Folder", Developer;

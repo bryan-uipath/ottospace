@@ -14,6 +14,7 @@ pub mod edit;
 mod fuzz;
 pub mod home;
 pub mod hosted;
+pub mod inspect;
 pub mod keys;
 pub mod layout;
 pub mod list;

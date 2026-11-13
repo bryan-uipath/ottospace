@@ -39,6 +39,7 @@ it over the control socket. Session restore and the rest of the design are not b
 | List mode (⌘⇧E): drive the bar with the keyboard | Works today |
 | Sneak mode (⌘⌃G): a letter label on each of ottospace's own controls; typing it clicks the control | Works today |
 | [Command palette](#command-palette) (⌘P): every command of the menu bar by name, with its key; a Developer group | Works today |
+| [Accessibility inspector](#accessibility-inspector): a hosted app's accessibility tree in a panel beside it, read-only | Works today |
 | Marks (⌘B, ⌘⇧B, ⌘' and a letter): named ways back to a pane or a tab, kept in `~/.ottospace/marks.json` | Works today |
 | Capture (⌃⌥⌘Space, from any app): a frozen picture of the pane in use to circle and write on, collected in a draft in the drawer; the task it becomes has a brief with the pictures, the notes and the text under each annotation (`task_brief`), and its agent is told the brief's path. Kept in `~/.ottospace/materials` | Works today |
 | Workbooks (⌘⇧S): save tabs under a name (their splits, each terminal's directory, each app) and open them again from the Workbook section. Several tabs each: add a tab to one, or save all the tabs on the bar as one. Kept in `~/.ottospace/workbooks`. An app comes back as its window, not on the page or document it showed | Works today |
@@ -232,7 +233,8 @@ a word's first letter and letters side by side rank first, then a group's name (
 Developer group). ↑/↓ or ⌃N/⌃P move, a click or ↵ runs the command as its menu item does, Esc, ⌘P
 or a click outside closes it. A command that nothing matches keeps the box open.
 
-The Developer group, also the Developer menu: Accessibility Overlay (⌘⌃A), Copy State as JSON
+The Developer group, also the Developer menu: Accessibility Overlay (⌘⌃A), [Accessibility
+Inspector](#accessibility-inspector), Copy State as JSON
 (the reply of `{"cmd":"state"}`, to the clipboard), Open the Settings File and Open the ottospace
 Folder (in the Finder; a test run that named no folder has none).
 
@@ -246,6 +248,34 @@ Conversation (⌘⇧L), Go to the Task's Tabs (⌘↵) and Stop the Agent (the d
 the conversation the drawer shows. ⌘P while you type in the conversation opens the palette over
 it: the agent gets no key while it is open, and when it closes the keyboard is the workspace's
 (⌘L goes back in).
+
+## Accessibility inspector
+
+Developer ▸ Accessibility Inspector, or "inspector" in the [command palette](#command-palette),
+with an app pane focused: a panel on the right shows that app's accessibility tree, as
+ottospace reads it. Again, × or closing the pane closes it.
+
+- The header names the app and counts what it exposes: "Spotify: 3 nodes, 0 pressable", then
+  the most common roles. An app that exposes fewer than 25 nodes says so: Electron and Chromium
+  apps (Spotify, Slack) build their full tree only when an assistive app asks, and ottospace
+  does not switch that on. That is why sneak mode and the overlay find almost nothing in them.
+- Each row: the role, then the title, label and value (cleaned of characters that do not show,
+  60 characters at most), and `press`, `set` or `focus` when the node presses like a button, its
+  value can be set, or it has the keyboard. ▸ / ▾ folds a node.
+- A click on a row selects it: its frame is outlined on the pane (a parked pane: a live window
+  covers ottospace), and the strip at the bottom shows its role, subrole, identifier, frame and
+  its actions' names.
+- The filter (click it) keeps the rows whose role or text holds what is typed, and those above
+  them. While it has the keyboard (`INSPECT`), ↑/↓ select, ↵ folds the selected node, Esc gives
+  the keyboard back.
+- Read again every 2 seconds while it shows (Refresh reads at once), off the main thread, within
+  30 levels, 2000 nodes and 750 ms, each call to the app 0.5 s at most. The header says when a
+  read stopped at one of them.
+
+Read-only: it presses nothing and sets nothing in the app. The tree holds the app's text (names,
+messages): it is shown on screen only. The state snapshot has the counts, the roles and each
+row's flags, never a title, label or value, and a socket client cannot open the inspector or move
+in it.
 
 ## Tags
 
