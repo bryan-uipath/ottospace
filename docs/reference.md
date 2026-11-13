@@ -258,8 +258,7 @@ in a terminal it clears the screen, and is kept for that.
 The Tasks group also holds the drawer's commands: Type in the Conversation (⌘L), Open or Close the
 Conversation (⌘⇧L), Go to the Task's Tabs (⌘↵) and Stop the Agent (the drawer's Stop), each for
 the conversation the drawer shows. ⌘P while you type in the conversation opens the palette over
-it: the agent gets no key while it is open, and when it closes the keyboard is the workspace's
-(⌘L goes back in).
+it: the agent gets no key while it is open, and when it closes the keyboard goes back to it.
 
 ## Accessibility inspector
 

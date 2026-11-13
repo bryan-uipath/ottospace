@@ -5059,6 +5059,10 @@ fn a_workbooks_terminal_comes_back_with_its_lines_and_its_command_typed_not_run(
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// The keys that move focus between panes, and on past them into the zones.
+const FOCUS_LEFT: &str = "cmd-ctrl-left";
+const FOCUS_RIGHT: &str = "cmd-ctrl-right";
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn tasks_show_by_state_or_project_with_time_tokens_a_footer_and_a_card() {
@@ -5162,24 +5166,24 @@ fn focus_moves_across_the_zones_to_the_rails_and_back() {
     otto.call(json!({"cmd": "split", "axis": "right", "kind": "empty"}));
     let focus = |reply: &Value| reply["focus"].clone();
     // A client's move stops at the panes.
-    otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-left"}));
-    assert_eq!(focus(&otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-left"}))), json!({"pane": 1}));
+    otto.call(json!({"cmd": "key", "keys": FOCUS_LEFT}));
+    assert_eq!(focus(&otto.call(json!({"cmd": "key", "keys": FOCUS_LEFT}))), json!({"pane": 1}));
     // The user's goes on: the left rail (no section open), its cells by ↓, a section's list by →.
-    let rail = otto.user_key("cmd-ctrl-left");
+    let rail = otto.user_key(FOCUS_LEFT);
     assert_eq!((focus(&rail), &rail["mode"]), (json!({"rail": "apps"}), &json!("list")));
     assert_eq!(focus(&otto.user_key("down")), json!({"rail": "workbook"}));
     let list = otto.user_key("right");
     assert_eq!((list["focus"].get("list").is_some(), &list["state"]["sidebar"]), (true, &json!("workbook")), "{list}");
-    assert_eq!(focus(&otto.user_key("cmd-ctrl-left")), json!({"rail": "workbook"}));
-    otto.user_key("cmd-ctrl-right");
+    assert_eq!(focus(&otto.user_key(FOCUS_LEFT)), json!({"rail": "workbook"}));
+    otto.user_key(FOCUS_RIGHT);
     // Back to the pane it came from, then across to the right rail (no conversation: its +).
-    assert_eq!(focus(&otto.user_key("cmd-ctrl-right")), json!({"pane": 1}));
-    otto.user_key("cmd-ctrl-right");
-    assert_eq!(focus(&otto.user_key("cmd-ctrl-right")), json!({"right": 0}));
+    assert_eq!(focus(&otto.user_key(FOCUS_RIGHT)), json!({"pane": 1}));
+    otto.user_key(FOCUS_RIGHT);
+    assert_eq!(focus(&otto.user_key(FOCUS_RIGHT)), json!({"right": 0}));
     // Esc returns to the pane.
     assert_eq!(focus(&otto.user_key("escape")), json!({"pane": 2}));
     // The rail cell with the keyboard is drawn, with a ring apart from the open one.
-    otto.user_key("cmd-ctrl-right");
+    otto.user_key(FOCUS_RIGHT);
     assert_eq!(otto.drawn()["mode"], "list");
 }
 

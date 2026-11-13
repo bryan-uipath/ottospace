@@ -1692,6 +1692,9 @@ pub struct Model {
     pub palette: Option<Palette>,
     /// The accessibility inspector, while it is open.
     pub inspector: Option<Inspector>,
+    /// The palette was opened over the conversation with the keyboard: closing it gives it back.
+    #[serde(skip)]
+    palette_over_talk: bool,
     /// The apps found installed and the bundles running, as the shell last said (`SetInstalled`).
     #[serde(skip)]
     pub(crate) installed: (Vec<Installed>, Vec<String>),
@@ -1795,6 +1798,7 @@ impl Default for Model {
             picker: None,
             palette: None,
             inspector: None,
+            palette_over_talk: false,
             installed: (Vec::new(), Vec::new()),
             app_lists: apps::Lists::default(),
             confirm: None,
@@ -2987,6 +2991,7 @@ impl Model {
             }
             Action::ClosePicker => self.picker = None,
             Action::PaletteOpen => {
+                self.palette_over_talk = self.talk.is_some_and(|talk| talk.keys);
                 self.leave(effects);
                 self.palette = Some(Palette { query: Field::new("", MAX_FILTER), selected: 0 });
             }
@@ -3001,12 +3006,19 @@ impl Model {
             Action::PaletteChoose { index } => {
                 let Some(palette) = self.palette.take() else { return };
                 match palette.matches().get(index.unwrap_or(palette.selected)) {
-                    Some(&command) => effects.push(Effect::Run { command }),
+                    // The command runs from where the keyboard was.
+                    Some(&command) => {
+                        self.palette_closed(effects);
+                        effects.push(Effect::Run { command })
+                    }
                     // Nothing there: it stays open, so the query can be fixed.
                     None => self.palette = Some(palette),
                 }
             }
-            Action::ClosePalette => self.palette = None,
+            Action::ClosePalette => {
+                self.palette = None;
+                self.palette_closed(effects);
+            }
             Action::InspectorOpen { pane, app } => {
                 if self.pane(pane).is_some() {
                     self.inspector = Some(Inspector::new(pane, &app));
@@ -3520,6 +3532,13 @@ impl Model {
             let brief = brief.filter(|_| runner.is_some());
             self.starting.push((id, runner));
             effects.push(Effect::StartAgent { task: id, start, cwd, brief });
+        }
+    }
+
+    /// The palette closed: the keyboard goes back into the conversation it was taken from.
+    fn palette_closed(&mut self, effects: &mut Vec<Effect>) {
+        if std::mem::take(&mut self.palette_over_talk) && self.palette.is_none() {
+            self.talk_keys(true, effects);
         }
     }
 
@@ -5554,8 +5573,7 @@ mod tests {
         m.update(Action::FieldEdit { edit: Edit::Insert("zzz".into()) });
         assert!(m.update(Action::PaletteChoose { index: None }).is_empty());
         assert!(m.palette.is_some());
-        // Over the conversation: the palette takes the keys, and closing it leaves them with the
-        // workspace (⌘L goes back), as any box over the drawer does.
+        // Over the conversation: the palette takes the keys, and closing it gives them back.
         m.update(Action::ClosePalette);
         m.update(Action::TaskAdd {
             title: "t".into(),
@@ -5570,7 +5588,7 @@ mod tests {
         m.update(Action::PaletteOpen);
         assert_eq!(m.mode(), Mode::Palette);
         m.update(Action::ClosePalette);
-        assert_eq!((m.mode(), m.talk.map(|talk| talk.open)), (Mode::Normal, Some(true)));
+        assert_eq!(m.mode(), Mode::Talk);
         // Not over the key reference.
         m.update(Action::ClosePalette);
         m.update(Action::ToggleKeys);
