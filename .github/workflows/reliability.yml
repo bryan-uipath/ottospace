@@ -101,8 +101,12 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           IN: ${{ runner.temp }}/in
         run: |
-          FLAKY_E2E="$(cat "$IN/reliability-e2e/flaky.md" 2>/dev/null)"
-          FLAKY_APPS="$(cat "$IN/reliability-e2e-apps/flaky.md" 2>/dev/null)"
+          # No flaky.md: nothing failed (a run that did not start lists itself). No folder: no report.
+          listed() {
+            if [ ! -d "$1" ]; then echo "no report: the job did not finish"; else cat "$1/flaky.md" 2>/dev/null || true; fi
+          }
+          FLAKY_E2E="$(listed "$IN/reliability-e2e")"
+          FLAKY_APPS="$(listed "$IN/reliability-e2e-apps")"
           body="$(mktemp)"
           {
             echo "Tests that failed at least once in the last nightly [Reliability run]($RUN_URL)."

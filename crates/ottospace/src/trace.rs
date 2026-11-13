@@ -2,7 +2,7 @@
 //! Names, counts, durations and ids only: never terminal text, titles, typed text or paths.
 //! Times are milliseconds since the app started, from a monotonic clock.
 //! Under `OTTOSPACE_E2E` or `OTTOSPACE_TRACE=1` it is also written to a file on a panic or on
-//! SIGUSR1 (a test's timeout): `<home>/trace.jsonl`, or beside the socket in a test run with no home.
+//! SIGUSR1 (a test's timeout): beside the socket in a test run, else `<home>/trace.jsonl`.
 
 use std::collections::VecDeque;
 use std::fmt::{self, Debug, Write as _};
@@ -64,11 +64,14 @@ pub fn name(value: &dyn Debug) -> String {
     name.0
 }
 
-/// Where the ring is written: `<home>/trace.jsonl`. A test run with no home: beside its socket.
+/// Where the ring is written: in a test run beside its socket, where the harness looks; else
+/// `<home>/trace.jsonl`.
 fn file() -> PathBuf {
+    if std::env::var_os("OTTOSPACE_E2E").is_some() {
+        return crate::control::path().with_extension("trace.jsonl");
+    }
     match std::env::var_os("OTTOSPACE_HOME").filter(|home| !home.is_empty()) {
         Some(home) => PathBuf::from(home).join("trace.jsonl"),
-        None if std::env::var_os("OTTOSPACE_E2E").is_some() => crate::control::path().with_extension("trace.jsonl"),
         None => PathBuf::from(crate::config::user_home()).join(".ottospace/trace.jsonl"),
     }
 }

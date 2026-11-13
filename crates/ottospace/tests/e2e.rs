@@ -85,11 +85,10 @@ impl Otto {
         writeln!(stream, "{line}").expect("send");
         let mut reply = String::new();
         if let Err(err) = BufReader::new(stream).read_line(&mut reply) {
-            support::request("otto", line, started, None);
-            panic!("{}", support::timed_out(&format!("the reply to {line}"), started, &err.to_string()));
+            panic!("{}", support::no_reply("otto", &self.socket, line, started, &err));
         }
         let reply = serde_json::from_str(&reply).expect("reply is JSON");
-        support::request("otto", line, started, Some(&reply));
+        support::request("otto", &self.socket, line, started, Some(&reply));
         reply
     }
 
@@ -143,11 +142,7 @@ impl Otto {
 
 impl Drop for Otto {
     fn drop(&mut self) {
-        // While the app still runs: what it was showing when the test failed.
-        if std::thread::panicking() {
-            support::failed_without_timeout();
-        }
-        support::finish(!std::thread::panicking());
+        support::exiting(self.child.id());
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = std::fs::remove_file(&self.socket);

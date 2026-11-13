@@ -677,8 +677,8 @@ struct Workspace {
     seq: u64,
     drawn_seq: u64,
     settles: bool,
-    /// Replies waiting for that frame: (the seq to draw, since when, where the reply goes).
-    settling: Vec<(u64, Instant, Sender<String>)>,
+    /// Replies waiting for that frame: (since when, where the reply goes).
+    settling: Vec<(Instant, Sender<String>)>,
     /// When the frame being drawn began, for the trace's frame time.
     frame_start: Rc<Cell<Option<Instant>>>,
     /// What the home screen last drew, and the lattice lines kept between frames.
@@ -1277,10 +1277,12 @@ impl Workspace {
                 Effect::CaptureDropped { draft, material } => self.drop_capture(draft, *material),
                 Effect::CaptureKept { draft, dir, brief } => self.keep_capture(draft, dir, brief, cx),
                 Effect::Quit => {
-                    // A moment later, so a socket `quit` gets its reply first.
-                    cx.spawn(async move |_, cx| {
+                    // A moment later, so a socket `quit` gets its reply first; one still held for
+                    // a frame goes now.
+                    cx.spawn_in(window, async move |this, cx| {
                         cx.background_executor().timer(Duration::from_millis(100)).await;
-                        let _ = cx.update(|cx| cx.quit());
+                        let _ = this.update_in(cx, |this, window, cx| this.settle(true, window, cx));
+                        let _ = cx.update(|_, cx| cx.quit());
                     })
                     .detach();
                 }
@@ -1451,7 +1453,7 @@ impl Workspace {
 
     /// Answers queued control-socket calls. Each reply is the state after the call.
     fn serve_control(&mut self, window: &Window, cx: &mut Context<Self>) {
-        self.settle(window, cx);
+        self.settle(false, window, cx);
         // What a request reaches through a shared method (`open_app`, a click) is the client's too.
         self.with_origin(Origin::Socket, |this| this.serve_calls(window, cx));
     }
@@ -1460,26 +1462,29 @@ impl Workspace {
     /// so the bounds in the reply are of the new layout, never the one before it.
     fn answer(&mut self, reply: Sender<String>, window: &Window, cx: &mut Context<Self>) {
         if self.settles && self.drawn_seq < self.seq {
-            self.settling.push((self.seq, Instant::now(), reply));
+            self.settling.push((Instant::now(), reply));
             cx.notify();
         } else {
             let _ = reply.send(self.snapshot(window, cx));
         }
     }
 
-    /// Sends the replies a frame has drawn for. One that waited `SETTLE_LIMIT` goes as it is,
-    /// marked `"stale":true`: the window drew no frame (hidden, or stuck).
-    fn settle(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let (drawn, limit) = (self.drawn_seq, SETTLE_LIMIT);
+    /// Sends the held replies once the last frame drew every action so far: the state they
+    /// carry is the current one, so an action since their own must be drawn too. One that
+    /// waited `SETTLE_LIMIT`, or all of them with `now` (the app quits), goes as it is, marked
+    /// `"stale":true` if undrawn: the window drew no frame (hidden, or stuck).
+    fn settle(&mut self, now: bool, window: &Window, cx: &mut Context<Self>) {
+        let drawn = self.drawn_seq >= self.seq;
         let (due, waiting) = std::mem::take(&mut self.settling)
             .into_iter()
-            .partition(|(seq, since, _)| drawn >= *seq || since.elapsed() >= limit);
+            .partition(|(since, _)| drawn || now || since.elapsed() >= SETTLE_LIMIT);
         self.settling = waiting;
-        for (seq, since, reply) in due {
+        for (since, reply) in due {
             let mut state = self.state(window, cx);
-            if drawn < seq {
+            if !drawn {
                 state["stale"] = serde_json::json!(true);
-                trace::record("timeout", serde_json::json!({ "what": "settle", "seq": seq, "drawn": drawn }));
+                let fields = serde_json::json!({ "what": "settle", "seq": self.seq, "drawn": self.drawn_seq });
+                trace::record("timeout", fields);
             }
             state["frame"]["waited_ms"] = serde_json::json!(since.elapsed().as_millis() as u64);
             let _ = reply.send(state.to_string());

@@ -3,10 +3,10 @@
 //!
 //! Everything goes under `$OTTOSPACE_E2E_OUT` (default `$TMPDIR/ottospace-e2e`):
 //! - `results.jsonl`: one line per app a test launched: its test, pass or fail, times, waits.
-//! - `failures/<test>-<pid>/`: `summary.txt`, `state.json` (the last full state), `timeline.jsonl`
-//!   (request names and reply numbers, never their text), `trace.jsonl` (the app's own),
-//!   `sample.txt` (`sample <pid> 3`, on a timeout) and `screenshot.png` (the app's window, if
-//!   the window server allows it).
+//! - `failures/<test>-<pid>/`, one per app still running: `summary.txt`, `state.json` (the last
+//!   full state), `timeline.jsonl` (request names and reply numbers, never their text),
+//!   `trace.jsonl` (the app's own), `sample.txt` (`sample <pid> 3`, on a timeout) and
+//!   `screenshot.png` (the app's window, if the window server allows it).
 //!
 //! Each test runs on a thread of its own named after it, so the log is the thread's.
 
@@ -19,16 +19,23 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+/// An ottospace the test launched and has not killed yet.
+struct App {
+    pid: u32,
+    socket: PathBuf,
+    /// The last full state it replied with: kept for a folder if it stops answering.
+    last_state: Option<Value>,
+}
+
 #[derive(Default)]
 struct Log {
-    /// The app the test drives: its pid and socket.
-    app: Option<(u32, PathBuf)>,
+    apps: Vec<App>,
     launched: Option<Instant>,
     first_frame_ms: Option<u64>,
     timeline: Vec<Value>,
     waits: Vec<Value>,
-    /// The failure folder, once written.
-    folder: Option<PathBuf>,
+    /// The failure folders, once written.
+    folders: Vec<PathBuf>,
 }
 
 thread_local! {
@@ -43,25 +50,30 @@ fn test_name() -> String {
     std::thread::current().name().unwrap_or("unnamed").replace("::", "-")
 }
 
+/// A request line's `cmd`, never the rest: a label must not carry what a test types.
+fn cmd(request: &str) -> String {
+    let parsed = serde_json::from_str::<Value>(request).ok();
+    parsed.and_then(|r| r["cmd"].as_str().map(str::to_string)).unwrap_or_else(|| "?".into())
+}
+
 /// Where the run's results and failure folders go.
 pub fn out() -> PathBuf {
     std::env::var_os("OTTOSPACE_E2E_OUT").map_or_else(|| std::env::temp_dir().join("ottospace-e2e"), PathBuf::from)
 }
 
-/// The app is up on `socket`. The timeline counts from the first launch of the test.
+/// An app is up on `socket`. The timeline counts from the first launch of the test.
 pub fn launched(pid: u32, socket: &Path) {
     LOG.with_borrow_mut(|log| {
-        log.app = Some((pid, socket.to_path_buf()));
+        log.apps.push(App { pid, socket: socket.to_path_buf(), last_state: None });
         let start = *log.launched.get_or_insert_with(Instant::now);
         log.timeline.push(json!({ "ms": ms(start), "event": "launch", "pid": pid }));
     });
 }
 
-/// One request and its reply: the request's `cmd`, how long the reply took, and the reply's
-/// frame numbers. `who`: `otto`, or another process the test drives.
-pub fn request(who: &str, request: &str, started: Instant, reply: Option<&Value>) {
-    let cmd = serde_json::from_str::<Value>(request).ok().and_then(|r| r["cmd"].as_str().map(str::to_string));
-    let mut entry = json!({ "who": who, "cmd": cmd, "took_ms": ms(started) });
+/// One request to `socket` and its reply: the request's `cmd`, how long the reply took, and the
+/// reply's frame numbers. `who`: `otto`, or another process the test drives.
+pub fn request(who: &str, socket: &Path, request: &str, started: Instant, reply: Option<&Value>) {
+    let mut entry = json!({ "who": who, "cmd": cmd(request), "took_ms": ms(started), "ok": null });
     if let Some(reply) = reply {
         entry["ok"] = reply["ok"].clone();
         if let Some(frame) = reply.get("frame") {
@@ -73,14 +85,18 @@ pub fn request(who: &str, request: &str, started: Instant, reply: Option<&Value>
         if reply.get("stale").is_some() {
             entry["stale"] = json!(true);
         }
-    } else {
-        entry["ok"] = json!(null);
     }
     LOG.with_borrow_mut(|log| {
         let at = log.launched.map_or(0, ms);
         entry["ms"] = json!(at.saturating_sub(entry["took_ms"].as_u64().unwrap_or(0)));
+        if let Some(app) = log.apps.iter_mut().find(|app| app.socket == socket) {
+            entry["pid"] = json!(app.pid);
+            if reply.is_some_and(|r| r.get("frame").is_some()) {
+                app.last_state = reply.cloned();
+            }
+        }
         // Launch to the first reply that shows a drawn frame.
-        if who == "otto" && log.first_frame_ms.is_none() && entry["frame"].as_u64() > Some(0) {
+        if log.first_frame_ms.is_none() && entry["frame"].as_u64() > Some(0) {
             log.first_frame_ms = Some(at);
         }
         log.timeline.push(entry);
@@ -97,34 +113,37 @@ pub fn waited(what: &str, started: Instant, met: bool) {
     });
 }
 
-/// A wait or a reply timed out: writes the failure folder with a stack sample of the app, and
-/// returns the panic message, which names the folder.
+/// A wait or a reply timed out: writes the failure folders with a stack sample of each app,
+/// and returns the panic message, which names them.
 pub fn timed_out(what: &str, started: Instant, detail: &str) -> String {
     waited(what, started, false);
     let headline = format!("timed out after {} ms waiting for {what}", ms(started));
-    let summary = write_folder(&headline, detail, true);
+    let summary = write_folders(&headline, detail, true);
     format!("{headline}\n{summary}")
 }
 
-/// A test that fails without a timeout (an assert): the folder, without a stack sample. Call it
-/// while the app still runs, before it is killed.
-pub fn failed_without_timeout() {
-    if LOG.with_borrow(|log| log.folder.is_none() && log.app.is_some()) {
-        let summary = write_folder("the test failed (see its panic above)", "", false);
-        eprintln!("{summary}");
-    }
+/// No reply came from `socket` to `line`: records it, writes the folders, and returns the panic
+/// message.
+pub fn no_reply(who: &str, socket: &Path, line: &str, started: Instant, err: &std::io::Error) -> String {
+    request(who, socket, line, started, None);
+    timed_out(&format!("{who}'s reply to {}", cmd(line)), started, &err.to_string())
 }
 
-/// The app is gone (killed at the end of the test, or on a failure): its result goes in
-/// `results.jsonl`.
-pub fn finish(ok: bool) {
+/// The app `pid` is about to be killed, at the end of the test or on a failure. A failure
+/// writes the folders first, while it still runs. Its result goes in `results.jsonl`.
+pub fn exiting(pid: u32) {
+    let failed = std::thread::panicking();
+    if failed && LOG.with_borrow(|log| log.folders.is_empty()) {
+        eprintln!("{}", write_folders("the test failed (see its panic above)", "", false));
+    }
     let line = LOG.with_borrow_mut(|log| {
-        let (pid, _) = log.app.take()?;
+        let at = log.apps.iter().position(|app| app.pid == pid)?;
+        log.apps.remove(at);
         let calls = log.timeline.iter().filter(|e| e.get("cmd").is_some()).count();
         Some(json!({
-            "test": test_name(), "pid": pid, "ok": ok,
+            "test": test_name(), "pid": pid, "ok": !failed,
             "total_ms": log.launched.map(ms), "first_frame_ms": log.first_frame_ms,
-            "requests": calls, "waits": std::mem::take(&mut log.waits), "folder": log.folder,
+            "requests": calls, "waits": std::mem::take(&mut log.waits), "folders": log.folders,
         }))
     });
     let Some(line) = line else { return };
@@ -147,10 +166,50 @@ fn ask(socket: &Path, request: &str) -> Option<Value> {
     serde_json::from_str(&reply).ok()
 }
 
-/// Writes the failure folder; returns its summary: where it is, why, the last three requests.
-fn write_folder(headline: &str, detail: &str, sample: bool) -> String {
-    let (app, timeline) = LOG.with_borrow(|log| (log.app.clone(), log.timeline.clone()));
-    let Some((pid, socket)) = app else { return format!("{headline} (no app was launched)") };
+/// A folder for each app still running; returns the summary: where they are, why, the last
+/// three requests.
+fn write_folders(headline: &str, detail: &str, sample: bool) -> String {
+    let (apps, timeline) = LOG.with_borrow(|log| {
+        let apps: Vec<(u32, PathBuf, Option<Value>)> =
+            log.apps.iter().map(|a| (a.pid, a.socket.clone(), a.last_state.clone())).collect();
+        (apps, log.timeline.clone())
+    });
+    if apps.is_empty() {
+        return format!("{headline} (no app was running)");
+    }
+    let mut summary = vec![format!("  {headline}")];
+    if !detail.is_empty() {
+        summary.push(format!("  detail: {}", detail.chars().take(300).collect::<String>()));
+    }
+    let mut folders = Vec::new();
+    for (pid, socket, last_state) in apps {
+        let (dir, notes, frame) = write_folder(pid, &socket, last_state, &timeline, sample);
+        summary.insert(folders.len(), format!("e2e failure folder: {}", dir.display()));
+        summary.extend(
+            frame.map(|f| format!("  pid {pid}: frame {} drew seq {} of {}", f["number"], f["drawn"], f["seq"])),
+        );
+        summary.extend(notes.into_iter().map(|note| format!("  pid {pid}: {note}")));
+        folders.push(dir);
+    }
+    summary.push("  last requests:".to_string());
+    let calls: Vec<&Value> = timeline.iter().filter(|e| e.get("cmd").is_some()).collect();
+    summary.extend(calls.iter().rev().take(3).rev().map(|entry| format!("    {entry}")));
+    let summary = summary.join("\n");
+    for dir in &folders {
+        let _ = std::fs::write(dir.join("summary.txt"), format!("{summary}\n"));
+    }
+    LOG.with_borrow_mut(|log| log.folders = folders);
+    summary
+}
+
+/// One app's folder. Returns it, what could not be captured, and the state's frame numbers.
+fn write_folder(
+    pid: u32,
+    socket: &Path,
+    last_state: Option<Value>,
+    timeline: &[Value],
+    sample: bool,
+) -> (PathBuf, Vec<String>, Option<Value>) {
     let dir = out().join("failures").join(format!("{}-{pid}", test_name()));
     let _ = std::fs::create_dir_all(&dir);
     let mut notes = Vec::new();
@@ -162,12 +221,14 @@ fn write_folder(headline: &str, detail: &str, sample: bool) -> String {
             notes.push("sample: could not sample the app".to_string());
         }
     }
-    let state = ask(&socket, r#"{"cmd":"state"}"#);
-    match &state {
-        Some(state) => drop(std::fs::write(dir.join("state.json"), state.to_string())),
-        None => notes.push("state: no reply within 8 s".to_string()),
+    let state = ask(socket, r#"{"cmd":"state"}"#).or_else(|| {
+        notes.push("state: no reply within 8 s; state.json is the last state it sent".to_string());
+        last_state
+    });
+    if let Some(state) = &state {
+        let _ = std::fs::write(dir.join("state.json"), state.to_string());
     }
-    match ask(&socket, r#"{"cmd":"trace"}"#).and_then(|r| r["trace"].as_str().map(str::to_string)) {
+    match ask(socket, r#"{"cmd":"trace"}"#).and_then(|r| r["trace"].as_str().map(str::to_string)) {
         Some(trace) => drop(std::fs::write(dir.join("trace.jsonl"), trace)),
         // A stuck UI thread answers nothing: the app writes its trace beside the socket on SIGUSR1.
         None => {
@@ -192,21 +253,5 @@ fn write_folder(headline: &str, detail: &str, sample: bool) -> String {
             notes.push("screenshot: the window server refused".to_string());
         }
     }
-    let mut summary = vec![format!("e2e failure folder: {}", dir.display()), format!("  {headline}")];
-    if !detail.is_empty() {
-        summary.push(format!("  detail: {}", detail.chars().take(300).collect::<String>()));
-    }
-    if let Some(frame) = state.as_ref().map(|s| &s["frame"]) {
-        summary.push(format!("  frame {} drew seq {} of {}", frame["number"], frame["drawn"], frame["seq"]));
-    }
-    summary.push("  last requests:".to_string());
-    let calls: Vec<&Value> = timeline.iter().filter(|e| e.get("cmd").is_some()).collect();
-    for entry in calls.iter().rev().take(3).rev() {
-        summary.push(format!("    {entry}"));
-    }
-    summary.extend(notes.into_iter().map(|note| format!("  {note}")));
-    let summary = summary.join("\n");
-    let _ = std::fs::write(dir.join("summary.txt"), format!("{summary}\n"));
-    LOG.with_borrow_mut(|log| log.folder = Some(dir));
-    summary
+    (dir, notes, state.map(|s| s["frame"].clone()))
 }

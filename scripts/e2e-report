@@ -34,10 +34,8 @@ def outcomes(run):
         # The app's stderr can land between `test x ... ` and its `ok`: the names come from the
         # start of the line, the failures from libtest's closing list.
         lines = log.read_text(errors="replace").splitlines()
-        for line in lines:
-            m = LIBTEST.match(line)
-            if m:
-                found[m.group(1)] = "pass"
+        started = [m.group(1) for m in map(LIBTEST.match, lines) if m]
+        found.update((name, "pass") for name in started)
         listing = False
         for line in lines:
             if line == "failures:":
@@ -46,6 +44,13 @@ def outcomes(run):
                 found[line.strip()] = "fail"
             elif line.startswith("test result:"):
                 listing = False
+        # No closing line: the run died (an abort, a hang killed by a timeout). Tests run one at
+        # a time, so the last one started did not finish.
+        if not any(line.startswith("test result:") for line in lines):
+            if started:
+                found[started[-1]] = "fail"
+            else:
+                found[f"({run.name}: no test ran)"] = "fail"
     for junit in run.glob("**/junit.xml"):
         for case in ET.parse(junit).iter("testcase"):
             name = case.get("name", "")
@@ -80,7 +85,7 @@ def main(argv):
     runs = runs_of(out)
 
     tally = {}  # test: {"pass": n, "fail": n, "flaky": n, "folders": [..]}
-    totals, first_frames, waits = {}, [], []
+    totals, first_frames, waits = {}, [], {}  # waits: (test, what): [(ms, met)]
     for run in runs:
         for test, outcome in outcomes(run).items():
             tally.setdefault(test, {"pass": 0, "fail": 0, "flaky": 0, "folders": []})[outcome] += 1
@@ -90,14 +95,23 @@ def main(argv):
                 totals.setdefault(test, []).append(row["total_ms"])
             if row.get("first_frame_ms") is not None:
                 first_frames.append(row["first_frame_ms"])
-            if row.get("folder"):
-                tally.setdefault(test, {"pass": 0, "fail": 0, "flaky": 0, "folders": []})["folders"].append(row["folder"])
+            for folder in row.get("folders") or []:
+                tally.setdefault(test, {"pass": 0, "fail": 0, "flaky": 0, "folders": []})["folders"].append(folder)
             for wait in row.get("waits", []):
-                waits.append({"test": test, "what": wait.get("what"), "ms": wait.get("ms", 0), "met": wait.get("met")})
+                waits.setdefault((test, wait.get("what")), []).append((wait.get("ms", 0), wait.get("met")))
 
     shaky = {t: c for t, c in tally.items() if c["fail"] or c["flaky"]}
     slowest_tests = sorted(((max(v), statistics.median(v), t) for t, v in totals.items()), reverse=True)[:10]
-    slowest_waits = sorted(waits, key=lambda w: w["ms"], reverse=True)[:15]
+    # One row per wait of a test, across runs: slow every time is the test, once is the machine.
+    slowest_waits = sorted(
+        (
+            {"test": t, "what": what, "max_ms": max(ms for ms, _ in v), "median_ms": statistics.median(ms for ms, _ in v),
+             "count": len(v), "unmet": sum(1 for _, met in v if not met)}
+            for (t, what), v in waits.items()
+        ),
+        key=lambda w: w["max_ms"],
+        reverse=True,
+    )[:15]
     timings = {
         "runs": len(runs),
         "tests": {t: {**c, "total_ms": totals.get(t, [])} for t, c in sorted(tally.items())},
@@ -121,8 +135,11 @@ def main(argv):
         md += [f"| `{t}` | {mx} | {med:.0f} |" for mx, med, t in slowest_tests]
         md.append("")
     if slowest_waits:
-        md += ["| Slowest waits | Test | ms | Met |", "|---|---|---|---|"]
-        md += [f"| {w['what']} | `{w['test']}` | {w['ms']} | {'yes' if w['met'] else 'no'} |" for w in slowest_waits]
+        md += ["| Slowest waits | Test | Max ms | Median ms | Times | Timed out |", "|---|---|---|---|---|---|"]
+        md += [
+            f"| {w['what']} | `{w['test']}` | {w['max_ms']} | {w['median_ms']:.0f} | {w['count']} | {w['unmet']} |"
+            for w in slowest_waits
+        ]
         md.append("")
     text = "\n".join(md)
     print(text)

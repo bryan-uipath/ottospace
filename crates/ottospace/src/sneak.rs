@@ -185,22 +185,25 @@ impl Workspace {
                 }
                 cx.background_executor().timer(Duration::from_millis(8)).await;
             }
-            let answer = this.update_in(cx, |this, window, cx| {
+            // Gone: the reply is dropped with the closure, and the client is told the app is closing.
+            let _ = this.update_in(cx, |this, window, cx| {
                 if !drawn {
-                    return control::error("the window has not been drawn: sneak mode labels what is on screen");
+                    let why = "the window has not been drawn: sneak mode labels what is on screen";
+                    return drop(reply.send(control::error(why)));
                 }
                 // Enter only: if ⌘; / ⌘⌃G or another caller got here first, the mode stays on.
                 let targets = this.controls.targets();
                 this.dispatch(Action::SneakEnter { targets }, Origin::Socket, window, cx);
                 this.sync_sneak(window, cx);
                 match this.model.sneak {
-                    Some(_) => this.snapshot(window, cx),
-                    None => control::error(
-                        "sneak mode starts from normal, list or talk mode: leave the app or close the box",
-                    ),
+                    // In a test run, once the labels are drawn too.
+                    Some(_) => this.answer(reply, window, cx),
+                    None => {
+                        let why = "sneak mode starts from normal, list or talk mode: leave the app or close the box";
+                        drop(reply.send(control::error(why)))
+                    }
                 }
             });
-            let _ = reply.send(answer.unwrap_or_else(|_| control::error("ottospace is closing")));
         })
         .detach();
     }

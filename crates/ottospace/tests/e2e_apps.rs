@@ -52,11 +52,10 @@ impl Proc {
         writeln!(stream, "{request}").expect("send");
         let mut reply = String::new();
         if let Err(err) = BufReader::new(stream).read_line(&mut reply) {
-            support::request(self.who, &line, started, None);
-            panic!("{}", support::timed_out(&format!("{}'s reply to {line}", self.who), started, &err.to_string()));
+            panic!("{}", support::no_reply(self.who, &self.socket, &line, started, &err));
         }
         let reply: Value = serde_json::from_str(&reply).expect("reply is JSON");
-        support::request(self.who, &line, started, Some(&reply));
+        support::request(self.who, &self.socket, &line, started, Some(&reply));
         assert_eq!(reply["ok"], true, "{request} failed: {reply}");
         reply
     }
@@ -64,12 +63,8 @@ impl Proc {
 
 impl Drop for Proc {
     fn drop(&mut self) {
-        // While the app still runs: what it was showing when the test failed.
         if self.who == "otto" {
-            if std::thread::panicking() {
-                support::failed_without_timeout();
-            }
-            support::finish(!std::thread::panicking());
+            support::exiting(self.child.id());
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
