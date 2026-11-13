@@ -14,7 +14,8 @@ use serde::Deserialize;
 ///   "session_quiet_minutes": 3,
 ///   "agent_models": { "claude": ["claude-opus-5-5"], "codex": ["gpt-6-astra"] },
 ///   "capture_key": "ctrl-alt-cmd-space",
-///   "capture": { "keep_images": true, "ax": true } }
+///   "capture": { "keep_images": true, "ax": true },
+///   "workbook_scrollback_lines": 500 }
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -62,6 +63,10 @@ pub struct Settings {
     pub capture_key: Option<String>,
     #[serde(default)]
     pub capture: Capture,
+    /// How many of a terminal's last lines a workbook keeps when it is saved, shown again above
+    /// its prompt when it opens. Default: 500; at most 2000. 0: none is kept.
+    #[serde(default)]
+    pub workbook_scrollback_lines: Option<u32>,
 }
 
 /// The default capture key. Not ⌃⌥Space: macOS gives that to "Select next source in Input menu".

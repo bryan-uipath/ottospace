@@ -8,6 +8,7 @@ use std::os::fd::AsFd;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
@@ -19,16 +20,18 @@ use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::tty;
 use alacritty_terminal::vi_mode::ViMotion;
-use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor};
+use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor};
 use gpui::{
     App, Bounds, ContentMask, FontStyle, FontWeight, Hsla, Pixels, Size, TextRun, UnderlineStyle, Window, fill, font,
     point, px, rgb, size,
 };
 use ottospace_core::terminal::{
-    CellPoint, Motion, Proc, Processes, Scroll, SelectKind, Wheel, Work, paste, running, wheel_scrolls,
+    CellPoint, Motion, Proc, Processes, Scroll, SelectKind, Wheel, Work, paste, running, saved_command, wheel_scrolls,
 };
+use ottospace_core::workbook::{self, History};
 use ottospace_core::{palette, settings, theme};
 use ottospace_mac::process;
+use ottospace_mac::time::utc_offset;
 
 /// The font terminals draw with, once `choose_font` has run. Until then, the default.
 static FONT: OnceLock<settings::Terminal> = OnceLock::new();
@@ -138,13 +141,28 @@ pub struct Terminal {
     /// side: to ask what runs besides the shell.
     child: u32,
     pty: Option<File>,
+    /// A workbook's command, to type on the prompt once the shell is quiet there; never run.
+    typed: std::cell::RefCell<Option<Typed>>,
+    /// That command until the user types here: saving again keeps it, though nothing runs it yet.
+    offered: std::cell::RefCell<Option<String>>,
 }
+
+/// A command waiting for the shell's prompt, and when the terminal's output last came.
+struct Typed {
+    text: String,
+    heard: Option<Instant>,
+}
+
+/// The shell is at its prompt once it printed, was quiet this long, and nothing runs in front of it.
+const QUIET: Duration = Duration::from_millis(300);
 
 impl Terminal {
     /// Starts the user's default shell (or `$OTTOSPACE_SHELL`) in `cwd`, with `vars` added to its
     /// environment, e.g. `[("OTTOSPACE_PANE", "3")]`. Without `cwd`: the current directory, or
-    /// the home directory when that is `/` (an app started from Finder or the Dock).
-    pub fn spawn(vars: &[(&str, String)], cwd: Option<&str>) -> io::Result<Self> {
+    /// the home directory when that is `/` (an app started from Finder or the Dock). `history`:
+    /// a workbook's, shown above the prompt (written to the view, not the shell), its command
+    /// typed on the prompt once the shell is there, not run.
+    pub fn spawn(vars: &[(&str, String)], cwd: Option<&str>, history: Option<&History>) -> io::Result<Self> {
         let grid = Grid { cols: 80, rows: 24 };
         let shared = Arc::new(Shared::default());
         let listener = Listener(shared.clone());
@@ -162,11 +180,53 @@ impl Terminal {
         let pty = tty::new(&options, window_size(grid, size(px(8.), px(terminal_font().line_height()))), 0)?;
         let (child, master) = (pty.child().id(), pty.file().try_clone().ok());
         let term = Arc::new(FairMutex::new(Term::new(Config::default(), &grid, listener.clone())));
+        // Before the shell can print: the history comes first, its prompt below it.
+        if let Some(history) = history {
+            Processor::<alacritty_terminal::vte::ansi::StdSyncHandler>::new()
+                .advance(&mut *term.lock(), &workbook::history_view(history, utc_offset(history.saved as i64 / 1000)));
+        }
+        let offered = history.and_then(|history| history.kept(0).command);
+        let typed = offered.clone().map(|text| Typed { text, heard: None });
         let event_loop = EventLoop::new(term.clone(), listener, pty, false, false)?;
         let input = event_loop.channel();
         let _ = shared.input.set(input.clone());
         event_loop.spawn();
-        Ok(Self { term, shared, input, grid, wheel: Wheel::default(), child, pty: master })
+        let (typed, offered) = (typed.into(), offered.into());
+        Ok(Self { term, shared, input, grid, wheel: Wheel::default(), child, pty: master, typed, offered })
+    }
+
+    /// Types a workbook's command on the prompt, without ↵, once the shell has printed, gone
+    /// quiet, and nothing runs in front of it (a startup program asking a question is not typed
+    /// into). `output`: new output came since the last call. Keys the user typed first win: it
+    /// is dropped. No prompt, no typing: there is no deadline.
+    fn type_waiting(&self, output: bool) {
+        let mut waiting = self.typed.borrow_mut();
+        let Some(typed) = waiting.as_mut() else { return };
+        if output {
+            typed.heard = Some(Instant::now());
+        }
+        let quiet = typed.heard.is_some_and(|heard| heard.elapsed() >= QUIET);
+        if let Some(typed) = waiting.take_if(|_| quiet && self.running().is_none()) {
+            let _ = self.input.send(Msg::Input(typed.text.into_bytes().into()));
+        }
+    }
+
+    /// The command line of the program in front of the shell, e.g. "npm run dev". `None` at a
+    /// prompt, for a job in the background, or when it does not read. The process group's
+    /// leader's arguments as it was started: of `a | b`, `a` alone.
+    pub fn foreground_command(&self) -> Option<String> {
+        let work = self.running()?;
+        if work.background {
+            return None;
+        }
+        let foreground = self.pty.as_ref().and_then(|pty| process::foreground(pty.as_fd()))?;
+        // As the shell started it: `argv[0]` is the name as typed, `sleep` and not `/bin/sleep`.
+        saved_command(&process::args(foreground)?)
+    }
+
+    /// The workbook's command this terminal opened with, while the user has typed nothing here.
+    pub fn offered(&self) -> Option<String> {
+        self.offered.borrow().clone()
     }
 
     /// What quitting would end here: the program in front of the shell, or a job behind it.
@@ -194,7 +254,10 @@ impl Terminal {
     }
 
     /// Sends bytes to the shell, as if typed. Typing while scrolled back returns to the bottom.
+    /// A command still waiting to be typed is not: the user's own keys came first.
     pub fn write(&self, bytes: Vec<u8>) {
+        self.typed.take();
+        self.offered.take();
         self.scroll(Scroll::Bottom);
         let _ = self.input.send(Msg::Input(bytes.into()));
     }
@@ -358,9 +421,11 @@ impl Terminal {
         self.term.lock().resize(grid);
     }
 
-    /// True once since new output arrived.
+    /// True once since new output arrived. Also types a workbook's command once the prompt is there.
     pub fn take_dirty(&self) -> bool {
-        self.shared.dirty.swap(false, Relaxed)
+        let dirty = self.shared.dirty.swap(false, Relaxed);
+        self.type_waiting(dirty);
+        dirty
     }
 
     pub fn exited(&self) -> bool {

@@ -12,7 +12,7 @@ use crate::marks::{Mark, PaneRecord, RecordKind, TabRecord};
 use crate::repos::{MAX_DIRS, RepoDir, RepoDirs, Worktree};
 use crate::sessions::{Link, Seen};
 use crate::settings::ListChange;
-use crate::workbook::{self, Workbook, WorkbookId};
+use crate::workbook::{self, History, Workbook, WorkbookId};
 
 const WORDS: &[&str] = &["fix", "zoom", "flicker", "deploy", "x"];
 const REPOS: &[&str] = &["app", "canvas", "My Project", "2048", "Ottospace"];
@@ -24,6 +24,8 @@ const UIDS: &[&str] = &["u1", "u2", "u3", "u4", ""];
 /// A workbook's id is its file's name: three that may be one, and some that may not.
 const BOOK_UIDS: &[&str] = &["00000000000000a1", "00000000000000a2", "00000000000000a3", "../../x", "A1", ""];
 const SESSIONS: &[&str] = &["s1", "s2", "s3"];
+/// In every line of a terminal's saved history, and nowhere else.
+const SAVED: &str = "SAVEDHISTORY";
 const CONTROLS: &[&str] = &["rail:apps", "pane:1", "close:1", "tab:1", "tab-close:1", "mark-remove:1", "c0", "c1"];
 
 /// Arguments for an action: from the model as it is half the time, else anything.
@@ -366,6 +368,17 @@ impl Gen<'_> {
     /// What the shell read for some panes: a directory, or a title.
     fn read(&mut self, pool: &[&str]) -> Vec<(PaneId, String)> {
         (0..self.rng.below(3)).map(|_| (self.pane(), self.name(pool))).collect()
+    }
+
+    /// Terminals' histories as the shell reads them: each line and command holds `SAVED`, which
+    /// nothing else sends, so the state can be searched for it.
+    fn histories(&mut self) -> Vec<(PaneId, History)> {
+        let history = |g: &mut Self| History {
+            lines: (0..g.rng.below(4)).map(|n| format!("{SAVED}-{n} {}", g.text())).collect(),
+            command: g.rng.coin().then(|| format!("{SAVED} {}", g.text())),
+            saved: g.time(),
+        };
+        (0..self.rng.below(3)).map(|_| (self.pane(), history(self))).collect()
     }
 
     fn need(&mut self) -> Need {
@@ -739,9 +752,13 @@ const MAKERS: &[Make] = &[
         let read = |book: &Workbook| workbook::parse(&workbook::write(book), &book.uid).ok();
         Action::RestoreWorkbooks { workbooks: kept.iter().filter_map(read).collect() }
     },
-    |g| Action::WorkbookSave { uid: g.rng.pick(BOOK_UIDS).to_string(), cwds: g.read(DIRS) },
-    |g| Action::WorkbookAddTab { workbook: g.workbook(), cwds: g.read(DIRS) },
-    |g| Action::WorkbookSaveAll { uid: g.rng.pick(BOOK_UIDS).to_string(), cwds: g.read(DIRS) },
+    |g| Action::WorkbookSave { uid: g.rng.pick(BOOK_UIDS).to_string(), cwds: g.read(DIRS), histories: g.histories() },
+    |g| Action::WorkbookAddTab { workbook: g.workbook(), cwds: g.read(DIRS), histories: g.histories() },
+    |g| Action::WorkbookSaveAll {
+        uid: g.rng.pick(BOOK_UIDS).to_string(),
+        cwds: g.read(DIRS),
+        histories: g.histories(),
+    },
     |g| Action::WorkbookOpen { workbook: g.workbook(), tab: g.book_tab(), home: g.rng.coin().then(|| g.name(DIRS)) },
     |g| Action::WorkbookEdit { workbook: g.workbook(), tab: g.book_tab() },
     |g| Action::WorkbookRemove { workbook: g.workbook(), tab: g.book_tab() },
@@ -1212,6 +1229,9 @@ fn check_state(m: &Model) -> Result<(), String> {
     let _: Vec<Vec<String>> = m.workbooks.list.iter().map(|book| m.workbook_gone(book.id, None)).collect();
     let _: Vec<Option<String>> = m.workbooks.list.iter().map(|book| m.workbook_add_refusal(book.id)).collect();
     let _ = m.workbook_save_all_refusal();
+    // A terminal's saved history is kept, and never shown in the state: the rows count it only.
+    let rows = serde_json::to_string(&m.workbook_rows()).unwrap_or_default();
+    ensure!(!state.to_string().contains(SAVED) && !rows.contains(SAVED), "a saved history reached the state");
     let _ = (
         m.draft(m.compose_line().map(String::as_str).unwrap_or_default()),
         m.mark_refusal(MarkOf::Pane(None)),
@@ -1472,6 +1492,20 @@ impl Run {
                     self.shell.panes.retain(|id| *id != pane.id);
                     self.shell.live = self.shell.live.filter(|live| *live != pane.id);
                     self.shell.visual = self.shell.visual.filter(|visual| *visual != pane.id);
+                }
+                // A history goes to a terminal that has just started, of the user's opening, and is clean.
+                Effect::History { pane, history } => {
+                    let opened = effects.contains(&Effect::Opened(*pane));
+                    let terminal = m.pane(*pane).is_some_and(|p| p.kind == Kind::Terminal);
+                    ensure!(
+                        opened && terminal && user,
+                        "a history for pane {pane}, not a terminal just opened by the user"
+                    );
+                    // Plain, and nothing credential-shaped left in it.
+                    let plain = |text: &String| text.chars().all(crate::capture::shows);
+                    let hidden = history.lines.iter().all(|line| plain(line) && crate::secrets::hide(line) == *line);
+                    let command = history.command.as_ref().is_none_or(|c| plain(c) && !crate::secrets::holds_secret(c));
+                    ensure!(hidden && command, "a history not cleaned: {history:?}");
                 }
                 Effect::Live(pane) => {
                     ensure!(self.shell.live.is_none(), "pane {pane} goes live over {:?}", self.shell.live);
@@ -1900,6 +1934,7 @@ fn code(sent: &Envelope) -> String {
         "Entry",
         "TerminalInfo",
         "Facts",
+        "History",
     ];
     const ENUM_OF: &[(&str, &str)] = &[
         ("axis", "Axis"),

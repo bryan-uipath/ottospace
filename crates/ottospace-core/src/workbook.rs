@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::edit::{Edit, Field};
 use crate::layout::Node;
 use crate::marks::{self, Extra, MAX_NAME, MarkInput, Need, PaneRecord, RecordKind, TabRecord};
-use crate::model::{Effect, Model, PaneId, Section};
+use crate::model::{Effect, Kind, Model, PaneId, Section};
 use crate::tasks::NOTICE_MS;
 
 pub type WorkbookId = u32;
@@ -18,14 +18,185 @@ pub const VERSION: u32 = 2;
 pub const MAX_TABS: usize = 32;
 
 /// The largest file a workbook may have: the shell reads no larger one. A save that would
-/// write one is refused, so what is saved always reads back.
-pub const MAX_FILE_BYTES: usize = 262_144;
+/// write one is refused, so what is saved always reads back. Room for `MAX_BOOK_HISTORY` of
+/// terminal history, as JSON.
+pub const MAX_FILE_BYTES: usize = 4 * 1024 * 1024;
 
 const TOO_LARGE: &str = "the workbook would be too large to read back";
 const EMPTY: &str = "a tab with nothing in it has nothing to save";
 
 /// Why a client's workbook action does nothing: they are the user's files and apps.
 pub const USERS_ALONE: &str = "only the user saves, opens, renames or deletes a workbook";
+
+/// What the shell read of its terminals at a save: each one's directory, and its history.
+type Read<'a> = (&'a [(PaneId, String)], &'a [(PaneId, History)]);
+
+/// The lines of a terminal's history a workbook keeps by default (`workbook_scrollback_lines`), and at most.
+pub const HISTORY_LINES: usize = 500;
+pub const MAX_HISTORY_LINES: usize = 2000;
+/// The longest line kept, in characters, and the most bytes of one terminal's lines.
+const MAX_LINE: usize = 1000;
+const MAX_HISTORY_BYTES: usize = 64 * 1024;
+/// The most bytes of history one workbook keeps, its terminals together: its file stays small.
+pub const MAX_BOOK_HISTORY: usize = 1024 * 1024;
+/// The longest command kept, in characters. A longer one is not kept: cut, it would run something else.
+pub const MAX_COMMAND: usize = 1024;
+
+/// What a terminal showed when its workbook was saved, and the program it ran then: kept in its
+/// pane's record as `history`. Untrusted when read (another program may have written the
+/// file): cleaned when kept, and again whenever it is used. Never in the state.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct History {
+    #[serde(default)]
+    pub lines: Vec<String>,
+    /// The command line of the program in front, e.g. "npm run dev". Typed on the prompt when
+    /// the workbook opens, never run: the user presses ↵.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// When it was saved, in ms since 1970.
+    #[serde(default)]
+    pub saved: u64,
+}
+
+/// `text` without escape sequences (CSI, OSC, DCS and the like) and characters that do not
+/// show; a tab is a space. e.g. "\x1b[31mred\x1b[0m" → "red".
+fn plain_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\u{1b}' => match chars.next() {
+                // CSI: parameters, then one final byte from @ to ~.
+                Some('[') => {
+                    for c in chars.by_ref() {
+                        if ('@'..='~').contains(&c) {
+                            break;
+                        }
+                    }
+                }
+                // OSC, DCS, SOS, PM, APC: to BEL or ESC \.
+                Some(']' | 'P' | 'X' | '^' | '_') => {
+                    while let Some(c) = chars.next() {
+                        if c == '\u{7}' || (c == '\u{1b}' && chars.next_if_eq(&'\\').is_some()) {
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            },
+            '\t' => out.push(' '),
+            c if crate::capture::shows(c) => out.push(c),
+            _ => {}
+        }
+    }
+    out
+}
+
+impl History {
+    /// As a workbook keeps it: the last `most` lines (at most `MAX_HISTORY_LINES`), each plain,
+    /// cut to `MAX_LINE` and its secrets hidden, `MAX_HISTORY_BYTES` in all; and a command that is one plain line
+    /// of at most `MAX_COMMAND` characters with nothing credential-shaped in it, else none.
+    pub fn kept(&self, most: usize) -> History {
+        let most = most.min(MAX_HISTORY_LINES);
+        let lines = self.lines.iter().flat_map(|text| text.split(['\n', '\r']));
+        let lines: Vec<String> = lines.map(|line| plain_text(line).chars().take(MAX_LINE).collect()).collect();
+        // Credential-shaped text hidden, best effort (`secrets`).
+        let lines = crate::secrets::hide_lines(lines);
+        let mut lines: Vec<String> = lines[lines.len().saturating_sub(most)..].to_vec();
+        while lines.iter().map(String::len).sum::<usize>() > MAX_HISTORY_BYTES {
+            lines.remove(0);
+        }
+        let command = self.command.as_deref().map(str::trim).filter(|command| {
+            !command.is_empty()
+                && command.chars().count() <= MAX_COMMAND
+                && command.chars().all(crate::capture::shows)
+                && !crate::secrets::holds_secret(command)
+        });
+        History { lines, command: command.map(String::from), saved: self.saved }
+    }
+
+    fn bytes(&self) -> usize {
+        self.lines.iter().map(String::len).sum::<usize>() + self.command.as_ref().map_or(0, String::len)
+    }
+}
+
+/// A terminal record's history, as it is used: cleaned again. `None`: none, or none that reads.
+pub fn history_of(pane: &PaneRecord) -> Option<History> {
+    let kept: History = serde_json::from_value(pane.extra.get("history")?.clone()).ok()?;
+    let kept = kept.kept(MAX_HISTORY_LINES);
+    (pane.kind == RecordKind::Terminal && (!kept.lines.is_empty() || kept.command.is_some())).then_some(kept)
+}
+
+/// `ms` since 1970 as a minute of the time zone `offset` seconds east of UTC (the shell reads
+/// it): "2026-11-13 15:02".
+fn local_minute(ms: u64, offset: i64) -> String {
+    let at = (ms / 1000) as i64 + offset;
+    let (days, secs) = (at.div_euclid(86_400), at.rem_euclid(86_400));
+    // Days to a civil date (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year}-{month:02}-{day:02} {:02}:{:02}", secs / 3600, secs % 3600 / 60)
+}
+
+/// What the shell writes into a restored terminal's view, before its shell starts: the saved
+/// lines in grey, then a divider that says when, and what is typed on the prompt below it.
+/// Written to the view, never to the shell: nothing of it runs. `offset`: the local time zone's,
+/// in seconds east of UTC, for the date.
+pub fn history_view(history: &History, offset: i64) -> Vec<u8> {
+    let history = history.kept(MAX_HISTORY_LINES);
+    let mut text = String::new();
+    for line in &history.lines {
+        text.push_str(&format!("\x1b[90m{line}\x1b[0m\r\n"));
+    }
+    let typed = history.command.as_ref().map(|command| format!(" · on the prompt, ↵ runs: {command}"));
+    let divider = format!("── saved {}{} ──", local_minute(history.saved, offset), typed.unwrap_or_default());
+    text.push_str(&format!("\x1b[90m{divider}\x1b[0m\r\n"));
+    text.into_bytes()
+}
+
+/// A workbook's histories fitted: to `MAX_BOOK_HISTORY`, then the last ones dropped until its
+/// file is small enough to read back (JSON adds to each line). A file too large without any
+/// history is still too large: `sized` refuses it.
+fn fit(book: &mut Workbook) {
+    fit_history(&mut book.tabs);
+    while sized(book).is_err() {
+        let held = book
+            .tabs
+            .iter_mut()
+            .flat_map(|tab| tab.panes.iter_mut())
+            .rev()
+            .find(|pane| pane.extra.contains_key("history"));
+        match held {
+            Some(pane) => drop(pane.extra.remove("history")),
+            None => break,
+        }
+    }
+}
+
+/// Each terminal's history in `tabs`, cleaned, until `MAX_BOOK_HISTORY` is spent: later ones keep none.
+fn fit_history(tabs: &mut [TabRecord]) {
+    let mut left = MAX_BOOK_HISTORY;
+    for pane in tabs.iter_mut().flat_map(|tab| tab.panes.iter_mut()) {
+        let Some(history) = history_of(pane) else {
+            pane.extra.remove("history");
+            continue;
+        };
+        match history.bytes() <= left {
+            true => {
+                left -= history.bytes();
+                pane.extra.insert("history".into(), serde_json::json!(history));
+            }
+            false => drop(pane.extra.remove("history")),
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Workbook {
@@ -58,7 +229,12 @@ pub fn parse(text: &str, stem: &str) -> Result<Workbook, String> {
     if !matches!(book.version, 1 | VERSION) {
         return Err(format!("version {} is not one this build reads", book.version));
     }
+    // Stage 1 never saved a history: one in such a file was put there by something else.
+    if book.version == 1 {
+        book.tabs.iter_mut().flat_map(|tab| tab.panes.iter_mut()).for_each(|pane| drop(pane.extra.remove("history")));
+    }
     book.version = VERSION;
+    fit_history(&mut book.tabs);
     if !valid_uid(&book.uid) || book.uid != stem {
         return Err("its id is not its file's name".into());
     }
@@ -166,6 +342,16 @@ pub struct RowPane {
     /// An app pane's app, by name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app: Option<String>,
+    /// A terminal's saved history: how many lines, and whether a command waits on its prompt.
+    /// Counts only: the text is never in the state.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub lines: usize,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub has_command: bool,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 /// One tab of a workbook, as its row lists it when unfolded.
@@ -296,10 +482,14 @@ fn summary(panes: &[RowPane]) -> String {
 }
 
 fn row_pane(pane: &PaneRecord) -> RowPane {
+    // Counted where it is kept, cleaned when it was saved or read: rows are drawn every frame.
+    let history = pane.extra.get("history");
+    let lines = history.and_then(|history| history.get("lines")).and_then(|lines| lines.as_array()).map_or(0, Vec::len);
+    let has_command = history.and_then(|history| history.get("command")).is_some_and(|command| command.is_string());
     match &pane.kind {
-        RecordKind::Terminal => RowPane { kind: "terminal", app: None },
-        RecordKind::App { name, .. } => RowPane { kind: "app", app: Some(name.clone()) },
-        RecordKind::Empty => RowPane { kind: "empty", app: None },
+        RecordKind::Terminal => RowPane { kind: "terminal", app: None, lines, has_command },
+        RecordKind::App { name, .. } => RowPane { kind: "app", app: Some(name.clone()), lines: 0, has_command: false },
+        RecordKind::Empty => RowPane { kind: "empty", app: None, lines: 0, has_command: false },
     }
 }
 
@@ -319,11 +509,32 @@ impl Model {
                 1 => summary(&panes),
                 n => format!("{n} tabs · {}", summary(&panes)),
             };
+            // Saved terminal text is never a surprise: the row says it holds some.
+            let held = panes.iter().any(|pane| pane.lines > 0 || pane.has_command);
+            let summary = if held { format!("{summary} · history") } else { summary };
             let tab = tabs.iter().find_map(|tab| tab.tab);
             let (id, name, unfolded) = (book.id, book.name.clone(), self.workbooks.unfolded(book.id));
             WorkbookRow { id, name, panes, summary, open: tab.is_some(), tab, tabs, unfolded }
         };
         self.workbooks.list.iter().map(row).collect()
+    }
+
+    /// What the last save kept, for the status bar: `Saved "DRI": 2 tabs, 500 lines of history,
+    /// 1 command`. Of the tab on show's workbook, else of the one whose name is being typed.
+    pub fn workbook_saved_note(&self) -> Option<String> {
+        let typing = match &self.mark_input {
+            Some(MarkInput::Workbook { workbook, .. }) => Some(*workbook),
+            _ => None,
+        };
+        let book = self.workbooks.get(self.workbook_of_tab().or(typing)?)?;
+        let histories: Vec<History> =
+            book.tabs.iter().flat_map(|tab| tab.panes.iter()).filter_map(history_of).collect();
+        let lines: usize = histories.iter().map(|history| history.lines.len()).sum();
+        let commands = histories.iter().filter(|history| history.command.is_some()).count();
+        let count = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        let tabs = count(book.tabs.len(), "tab", "tabs");
+        let lines = count(lines, "line of history", "lines of history");
+        Some(format!("Saved \"{}\": {tabs}, {lines}, {}", book.name, count(commands, "command", "commands")))
     }
 
     /// The workbook the tab on show came from, or was saved into.
@@ -343,7 +554,13 @@ impl Model {
 
     /// The tab at `index` as a workbook keeps it: splits, directories, apps by bundle id and
     /// name. No window title: it can hold other people's text.
-    fn workbook_record(&self, index: usize, cwds: &[(PaneId, String)]) -> Result<TabRecord, String> {
+    /// `histories`: what each terminal showed, and ran, as the shell read it.
+    fn workbook_record(
+        &self,
+        index: usize,
+        cwds: &[(PaneId, String)],
+        histories: &[(PaneId, History)],
+    ) -> Result<TabRecord, String> {
         let tab = self.tabs.get(index).ok_or("no tab to save")?;
         let (layout, focused) = match index == self.active {
             true => (self.layout.clone(), self.focused),
@@ -364,6 +581,11 @@ impl Model {
                 title.clear();
                 extra.clear();
             }
+            let history =
+                histories.iter().find(|(id, _)| *id == pane.id).map(|(_, history)| history.kept(MAX_HISTORY_LINES));
+            if let Some(history) = history.filter(|_| pane.kind == RecordKind::Terminal) {
+                pane.extra.insert("history".into(), serde_json::json!(history));
+            }
         }
         if panes.iter().all(|pane| pane.kind == RecordKind::Empty) {
             return Err(EMPTY.into());
@@ -378,14 +600,18 @@ impl Model {
 
     /// Why the tab on show cannot be saved, for the shell to say.
     pub fn workbook_save_refusal(&self) -> Option<String> {
-        let record = match self.workbook_record(self.active, &[]) {
+        let record = match self.workbook_record(self.active, &[], &[]) {
             Ok(record) => record,
             Err(why) => return Some(why),
         };
         let tab = self.tabs.get(self.active)?;
         match self.workbooks.entry_of(tab.id) {
             Some((id, at)) => self.workbook_with(id, Some(at), record).err(),
-            None => sized(&Workbook::new(String::new(), tab.title.clone(), vec![record])).err(),
+            None => {
+                let mut book = Workbook::new(String::new(), tab.title.clone(), vec![record]);
+                fit(&mut book);
+                sized(&book).err()
+            }
         }
     }
 
@@ -393,7 +619,7 @@ impl Model {
     pub fn workbook_add_refusal(&self, id: WorkbookId) -> Option<String> {
         let tab = self.tabs.get(self.active).map(|tab| tab.id)?;
         let at = self.workbooks.get(id)?.place_of(tab);
-        match self.workbook_record(self.active, &[]) {
+        match self.workbook_record(self.active, &[], &[]) {
             Ok(record) => self.workbook_with(id, at, record).err(),
             Err(why) => Some(why),
         }
@@ -401,15 +627,15 @@ impl Model {
 
     /// Why the tabs on the bar cannot be saved as a workbook, for the shell to say.
     pub fn workbook_save_all_refusal(&self) -> Option<String> {
-        self.workbook_all_records(&[]).err()
+        self.workbook_all_records((&[], &[])).err()
     }
 
     /// Each tab on the bar as a workbook keeps it, in bar order, but those with nothing in them.
     /// Refused whole rather than saved in part: more than `MAX_TABS`, or one that cannot be kept.
-    fn workbook_all_records(&self, cwds: &[(PaneId, String)]) -> Result<Vec<(u32, TabRecord)>, String> {
+    fn workbook_all_records(&self, read: Read) -> Result<Vec<(u32, TabRecord)>, String> {
         let mut tabs = Vec::new();
         for at in self.visible_tabs() {
-            match self.workbook_record(at, cwds) {
+            match self.workbook_record(at, read.0, read.1) {
                 Ok(record) => tabs.push((self.tabs[at].id, record)),
                 Err(why) if why == EMPTY => {}
                 Err(why) => return Err(format!("{}: {why}", self.tabs[at].title)),
@@ -418,8 +644,12 @@ impl Model {
         match tabs.len() {
             0 => Err("no tab on the bar has anything to save".into()),
             n if n > MAX_TABS => Err(format!("{n} tabs on the bar; a workbook keeps {MAX_TABS} at most")),
-            _ => sized(&Workbook::new(String::new(), String::new(), tabs.iter().map(|(_, r)| r.clone()).collect()))
-                .map(|_| tabs),
+            _ => {
+                let mut book =
+                    Workbook::new(String::new(), String::new(), tabs.iter().map(|(_, r)| r.clone()).collect());
+                fit(&mut book);
+                sized(&book).map(|_| tabs)
+            }
         }
     }
 
@@ -442,6 +672,7 @@ impl Model {
             }
             None => return Err(format!("a workbook keeps {MAX_TABS} tabs at most")),
         }
+        fit(&mut book);
         sized(&book).map(|_| book)
     }
 
@@ -473,8 +704,8 @@ impl Model {
     /// Saves the tab on show: updates its tab of the workbook it came from (the old one is
     /// offered back), else adds a workbook of that tab, named for it, and starts typing its
     /// name. `uid`: a new one's file name.
-    pub(crate) fn workbook_save(&mut self, uid: String, cwds: &[(PaneId, String)], effects: &mut Vec<Effect>) {
-        let Ok(record) = self.workbook_record(self.active, cwds) else { return };
+    pub(crate) fn workbook_save(&mut self, uid: String, read: Read, effects: &mut Vec<Effect>) {
+        let Ok(record) = self.workbook_record(self.active, read.0, read.1) else { return };
         let Some((tab, title)) = self.tabs.get(self.active).map(|tab| (tab.id, tab.title.clone())) else { return };
         let saved = match self.workbooks.entry_of(tab) {
             Some((id, at)) => {
@@ -491,8 +722,8 @@ impl Model {
 
     /// Adds the tab on show to workbook `id`, or updates it there if it is one of its tabs.
     /// A tab of another workbook is that one's no longer: it stands for its tab here.
-    pub(crate) fn workbook_add_tab(&mut self, id: WorkbookId, cwds: &[(PaneId, String)]) {
-        let Ok(record) = self.workbook_record(self.active, cwds) else { return };
+    pub(crate) fn workbook_add_tab(&mut self, id: WorkbookId, read: Read) {
+        let Ok(record) = self.workbook_record(self.active, read.0, read.1) else { return };
         let Some(tab) = self.tabs.get(self.active).map(|tab| tab.id) else { return };
         let Some(at) = self.workbooks.get(id).map(|book| book.place_of(tab)) else { return };
         self.workbook_put(id, at, record, tab);
@@ -500,8 +731,8 @@ impl Model {
     }
 
     /// Saves every tab on the bar that has something in it as one new workbook, in bar order.
-    pub(crate) fn workbook_save_all(&mut self, uid: String, cwds: &[(PaneId, String)], effects: &mut Vec<Effect>) {
-        let Ok(tabs) = self.workbook_all_records(cwds) else { return };
+    pub(crate) fn workbook_save_all(&mut self, uid: String, read: Read, effects: &mut Vec<Effect>) {
+        let Ok(tabs) = self.workbook_all_records(read) else { return };
         if let Some(id) = self.workbook_new(uid, "Workbook".into(), tabs, effects) {
             self.show_workbook(id);
         }
@@ -519,8 +750,9 @@ impl Model {
             return None;
         }
         let live = tabs.iter().map(|(tab, _)| Some(*tab)).collect();
-        let book =
+        let mut book =
             Workbook { live, ..Workbook::new(uid, name, tabs.iter().map(|(_, record)| record.clone()).collect()) };
+        fit(&mut book);
         sized(&book).ok()?;
         for (tab, _) in &tabs {
             self.workbooks.forget_tab(*tab);
@@ -581,7 +813,15 @@ impl Model {
                 }
             }
             // Each tab asks for its windows as it is built; the shell parks those of tabs not on show.
+            let base = self.next_id;
             let tab = self.rebuild_tab(&record, effects);
+            // Each terminal that started shows its history, in panes numbered from `base` in reading order.
+            for (pane, kept) in (base + 1..).zip(record.shown()) {
+                let started = self.pane(pane).is_some_and(|open| open.kind == Kind::Terminal);
+                if let Some(history) = history_of(kept).filter(|_| started) {
+                    effects.push(Effect::History { pane, history });
+                }
+            }
             if let Some(book) = self.workbooks.get_mut(id) {
                 book.set_live(at, Some(tab));
             }
@@ -756,7 +996,7 @@ mod tests {
 
     fn save(m: &mut Model, uid: &str, cwds: &[(PaneId, &str)]) -> Vec<Effect> {
         let cwds = cwds.iter().map(|(pane, dir)| (*pane, dir.to_string())).collect();
-        m.update(Action::WorkbookSave { uid: uid.into(), cwds })
+        m.update(Action::WorkbookSave { uid: uid.into(), cwds, histories: Vec::new() })
     }
 
     /// A terminal beside Slack over an empty pane, saved as a workbook.
@@ -1017,7 +1257,7 @@ mod tests {
             m.update(Action::MarkCancel);
             m.update(Action::FocusList);
             let own = [
-                Action::WorkbookSave { uid: UID_2.into(), cwds: vec![] },
+                Action::WorkbookSave { uid: UID_2.into(), cwds: vec![], histories: Vec::new() },
                 Action::WorkbookOpen { workbook: 1, tab: None, home: None },
                 Action::WorkbookEdit { workbook: 1, tab: None },
                 Action::WorkbookRemove { workbook: 1, tab: None },
@@ -1090,7 +1330,11 @@ mod tests {
         m.update(Action::NewTab);
         m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
         m.update(Action::SelectTab { index: 0 });
-        m.update(Action::WorkbookSaveAll { uid: UID.into(), cwds: vec![(1, "/code/app".into()), (3, "/logs".into())] });
+        m.update(Action::WorkbookSaveAll {
+            uid: UID.into(),
+            cwds: vec![(1, "/code/app".into()), (3, "/logs".into())],
+            histories: Vec::new(),
+        });
         m.update(Action::FieldEdit { edit: Edit::Insert("DRI".into()) });
         m.update(Action::MarkSubmit);
         m
@@ -1164,10 +1408,10 @@ mod tests {
         // A tab with nothing in it is not added.
         m.update(Action::NewTab);
         assert!(m.workbook_add_refusal(1).is_some());
-        m.update(Action::WorkbookAddTab { workbook: 1, cwds: vec![] });
+        m.update(Action::WorkbookAddTab { workbook: 1, cwds: vec![], histories: Vec::new() });
         assert_eq!(m.workbooks.list[0].tabs.len(), 1);
         m.update(Action::CloseTab { index: None });
-        m.update(Action::WorkbookAddTab { workbook: 1, cwds: vec![(4, "/logs".into())] });
+        m.update(Action::WorkbookAddTab { workbook: 1, cwds: vec![(4, "/logs".into())], histories: Vec::new() });
         let book = &m.workbooks.list[0];
         assert_eq!((book.tabs.len(), book.tabs[1].panes[0].cwd.as_deref(), book.live(1)), (2, Some("/logs"), Some(2)));
         assert_eq!(
@@ -1178,9 +1422,9 @@ mod tests {
         m.update(Action::WorkbookUndo);
         assert_eq!((m.workbooks.list[0].tabs.len(), m.workbook_of_tab()), (1, None));
         // Saved as a new workbook, then added to the first: it is the first's only.
-        m.update(Action::WorkbookSave { uid: UID_2.into(), cwds: vec![] });
+        m.update(Action::WorkbookSave { uid: UID_2.into(), cwds: vec![], histories: Vec::new() });
         m.update(Action::MarkCancel);
-        m.update(Action::WorkbookAddTab { workbook: 1, cwds: vec![] });
+        m.update(Action::WorkbookAddTab { workbook: 1, cwds: vec![], histories: Vec::new() });
         let lives: Vec<Vec<Option<u32>>> = m.workbooks.list.iter().map(|book| book.live.clone()).collect();
         assert_eq!(lives, [vec![Some(1), Some(2)], vec![None]]);
         // A workbook is full at MAX_TABS.
@@ -1189,7 +1433,7 @@ mod tests {
         m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
         let full = format!("a workbook keeps {MAX_TABS} tabs at most");
         assert_eq!(m.workbook_add_refusal(1), Some(full));
-        m.update(Action::WorkbookAddTab { workbook: 1, cwds: vec![] });
+        m.update(Action::WorkbookAddTab { workbook: 1, cwds: vec![], histories: Vec::new() });
         assert_eq!(m.workbooks.list[0].tabs.len(), MAX_TABS);
     }
 
@@ -1249,6 +1493,138 @@ mod tests {
         assert_eq!(parse(&many, UID), Err("it has too many tabs".into()));
     }
 
+    fn history(lines: &[&str], command: Option<&str>) -> History {
+        History {
+            lines: lines.iter().map(|line| line.to_string()).collect(),
+            command: command.map(String::from),
+            saved: 0,
+        }
+    }
+
+    #[test]
+    fn saved_text_is_plain_and_capped_and_a_command_is_one_line_or_none() {
+        // Escape sequences, controls and characters that draw nothing go; a tab is a space.
+        let dirty =
+            history(&["\x1b[31mred\x1b[0m\tok", "\x1b]0;title\x07after", "a\u{202e}b\u{7}c\x1b]8;;u\x1b\\link"], None);
+        assert_eq!(dirty.kept(500).lines, ["red ok", "after", "abclink"]);
+        // A line break inside a line is two lines; the last `most` lines are kept.
+        let many = history(&["1\n2\r3", "4"], None);
+        assert_eq!(many.kept(2).lines, ["3", "4"]);
+        assert_eq!(many.kept(0).lines, Vec::<String>::new());
+        assert_eq!(many.kept(usize::MAX).lines.len(), 4);
+        // Lines are cut, and the oldest go past the byte cap.
+        let long = "x".repeat(5000);
+        let kept = history(&vec![long.as_str(); 200], None).kept(MAX_HISTORY_LINES);
+        assert!(kept.lines.iter().all(|line| line.len() == MAX_LINE) && kept.bytes() <= MAX_HISTORY_BYTES);
+        // A command of two lines, of controls, too long or blank is not kept; one line is, trimmed.
+        for wrong in ["make\nrm -rf ~", "ls\x1b[2J", "a\u{202e}b", " ", &"y".repeat(MAX_COMMAND + 1)] {
+            assert_eq!(history(&[], Some(wrong)).kept(500).command, None, "{wrong:?}");
+        }
+        assert_eq!(history(&[], Some(" npm run dev ")).kept(500).command.as_deref(), Some("npm run dev"));
+    }
+
+    #[test]
+    fn the_view_shows_the_lines_and_a_divider_naming_the_command_and_holds_no_escape_of_the_file() {
+        let saved = History { saved: 1_763_042_520_000, ..history(&["$ make", "\x1b[2Jbuilt"], Some("npm run dev")) };
+        let view = String::from_utf8(history_view(&saved, 3600)).unwrap();
+        assert_eq!(
+            view,
+            "\x1b[90m$ make\x1b[0m\r\n\x1b[90mbuilt\x1b[0m\r\n\
+             \x1b[90m── saved 2025-11-13 15:02 · on the prompt, ↵ runs: npm run dev ──\x1b[0m\r\n"
+        );
+        // Only its own colour codes: nothing that clears, moves or titles.
+        assert!(!view.replace("\x1b[90m", "").replace("\x1b[0m", "").contains('\x1b'));
+        assert_eq!(
+            (local_minute(0, 0), local_minute(951_782_400_000, 0), local_minute(0, -3600)),
+            ("1970-01-01 00:00".into(), "2000-02-29 00:00".into(), "1969-12-31 23:00".into())
+        );
+    }
+
+    #[test]
+    fn a_terminals_history_is_saved_with_its_pane_and_shown_when_it_opens_and_only_counted_in_the_state() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        m.update(Action::Open { kind: slack(7), axis: Right, beside: None });
+        // Slack's pane has no history, whatever the shell sends.
+        let histories =
+            vec![(1, history(&["secret-token-1", "$ "], Some("sleep 293"))), (2, history(&["x"], Some("y")))];
+        m.update(Action::WorkbookSave { uid: UID.into(), cwds: vec![(1, "/code/app".into())], histories });
+        m.update(Action::MarkCancel);
+        let text = write(&m.workbooks.list[0]);
+        assert!(text.contains("secret-token-1") && text.contains("sleep 293") && !text.contains("\"y\""), "{text}");
+        let rows = serde_json::to_string(&m.workbook_rows()).unwrap();
+        assert!(!rows.contains("secret") && !rows.contains("sleep"), "{rows}");
+        let pane = &m.workbook_rows()[0].panes[0];
+        assert_eq!((pane.lines, pane.has_command), (2, true));
+        assert!(rows.contains("\"lines\":2,\"has_command\":true"), "{rows}");
+        // Opened again, its terminal starts, then shows the history; nothing is typed by the core.
+        m.update(Action::CloseTab { index: None });
+        let effects = m.update(Action::WorkbookOpen { workbook: 1, tab: None, home: None });
+        let shown = history(&["secret-token-1", "$ "], Some("sleep 293"));
+        assert_eq!(
+            (&effects[0], effects.last()),
+            (&Effect::Opened(3), Some(&Effect::History { pane: 3, history: shown }))
+        );
+        assert!(!serde_json::to_string(&m).unwrap().contains("secret"));
+        // A setting of 0 lines: the shell sends none, and nothing is kept.
+        let mut m = Model::default();
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        m.update(Action::WorkbookSave { uid: UID.into(), cwds: vec![], histories: vec![] });
+        assert!(!write(&m.workbooks.list[0]).contains("history"));
+    }
+
+    #[test]
+    fn a_history_in_a_stage_1_file_is_dropped_and_one_from_another_program_is_cleaned() {
+        let file = |version: u32| {
+            format!(
+                r#"{{"version": {version}, "id": "{UID}", "name": "x", "tabs": [{{"title": "t", "layout": {{"leaf": 1}},
+                "panes": [{{"id": 1, "kind": {{"type": "terminal"}}, "history": {{"lines": ["\u001b[2Jhi"], "command": "rm -rf ~\nls"}}}}]}}]}}"#
+            )
+        };
+        let old = parse(&file(1), UID).expect("it reads");
+        assert_eq!(history_of(&old.tabs[0].panes[0]), None);
+        let new = parse(&file(2), UID).expect("it reads");
+        assert_eq!(history_of(&new.tabs[0].panes[0]), Some(history(&["hi"], None)));
+        assert!(!write(&new).contains("rm -rf"));
+    }
+
+    #[test]
+    fn a_workbook_keeps_so_much_history_in_all_and_later_terminals_keep_none() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        for _ in 0..19 {
+            m.update(Action::Split { axis: Down, kind: Kind::Terminal });
+        }
+        let line = "z".repeat(MAX_LINE);
+        let full = history(&vec![line.as_str(); 64], None);
+        let histories = (1..=20).map(|pane| (pane, full.clone())).collect();
+        m.update(Action::WorkbookSave { uid: UID.into(), cwds: vec![], histories });
+        let lines: Vec<usize> = m.workbook_rows()[0].panes.iter().map(|pane| pane.lines).collect();
+        let kept: usize = m.workbooks.list[0].tabs[0].panes.iter().filter_map(history_of).map(|h| h.bytes()).sum();
+        assert!(kept <= MAX_BOOK_HISTORY && lines[0] == 64 && lines[19] == 0, "{lines:?}");
+    }
+
+    #[test]
+    fn the_row_says_a_workbook_holds_history_and_the_save_says_how_much() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        let histories = vec![(1, history(&["a", "export API_TOKEN=s3cr3t", "b"], Some("psql postgres://u:pw@db")))];
+        m.update(Action::WorkbookSave { uid: UID.into(), cwds: vec![], histories });
+        assert_eq!(m.workbook_saved_note().as_deref(), Some("Saved \"Tab 1\": 1 tab, 3 lines of history, 0 commands"));
+        assert_eq!(m.workbook_rows()[0].summary, "1 terminal · history");
+        // The secret is hidden in the line, and a command holding one is not kept at all.
+        let text = write(&m.workbooks.list[0]);
+        assert!(text.contains("API_TOKEN=[hidden]") && !text.contains("s3cr3t") && !text.contains("psql"), "{text}");
+        let mut m = Model::default();
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        m.update(Action::WorkbookSave {
+            uid: UID.into(),
+            cwds: vec![],
+            histories: vec![(1, history(&[], Some("k9s")))],
+        });
+        assert_eq!(m.workbook_saved_note().as_deref(), Some("Saved \"Tab 1\": 1 tab, 0 lines of history, 1 command"));
+    }
+
     #[test]
     fn save_all_refuses_rather_than_leave_a_tab_out_and_no_save_writes_a_file_too_large_to_read() {
         let mut m = Model::default();
@@ -1258,7 +1634,7 @@ mod tests {
         }
         let refused = Some(format!("{} tabs on the bar; a workbook keeps {MAX_TABS} at most", MAX_TABS + 1));
         assert_eq!(m.workbook_save_all_refusal(), refused);
-        m.update(Action::WorkbookSaveAll { uid: UID.into(), cwds: vec![] });
+        m.update(Action::WorkbookSaveAll { uid: UID.into(), cwds: vec![], histories: Vec::new() });
         assert_eq!(names(&m), Vec::<&str>::new());
         // Long directories in many panes: the file would pass the reader's cap. Not saved.
         let mut m = Model::default();
@@ -1268,7 +1644,7 @@ mod tests {
         }
         let dir = format!("/{}", "d".repeat(1000));
         let cwds: Vec<(PaneId, String)> = (1..=40).map(|pane| (pane, dir.clone())).collect();
-        m.update(Action::WorkbookSave { uid: UID.into(), cwds: cwds.clone() });
+        m.update(Action::WorkbookSave { uid: UID.into(), cwds: cwds.clone(), histories: Vec::new() });
         let first = write(&m.workbooks.list[0]).len();
         assert!(first < MAX_FILE_BYTES, "{first}");
         // Added again and again under the cap, then refused with the reason.
@@ -1285,10 +1661,11 @@ mod tests {
             }
             let ids: Vec<PaneId> = m.layout.as_ref().map(Node::leaves).unwrap_or_default();
             let cwds: Vec<(PaneId, String)> = ids.iter().map(|id| (*id, dir.clone())).collect();
-            m.update(Action::WorkbookAddTab { workbook: 1, cwds });
+            m.update(Action::WorkbookAddTab { workbook: 1, cwds, histories: Vec::new() });
             added += 1;
         }
-        assert_eq!(m.workbook_add_refusal(1).as_deref(), Some(TOO_LARGE));
+        // With room for history, the tab cap comes first: the file still reads back.
+        assert_eq!(m.workbooks.list[0].tabs.len(), MAX_TABS);
         assert!(write(&m.workbooks.list[0]).len() <= MAX_FILE_BYTES);
     }
 }

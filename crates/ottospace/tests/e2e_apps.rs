@@ -1122,8 +1122,12 @@ fn a_workbook_hosts_its_apps_window_again_beside_its_terminal() {
     user_key("cmd-shift-s");
     let saved = user_key("enter");
     let book = &saved["workbooks"][0];
-    assert_eq!(book["panes"], json!([{"kind": "app", "app": CANARY}, {"kind": "terminal"}]), "{book}");
-    assert_eq!((&book["summary"], &book["open"]), (&json!(format!("1 terminal · {CANARY}")), &json!(true)));
+    // Kinds and the app; a terminal's kept history (`lines`, `· history`) depends on what its shell printed.
+    let saved_panes: Vec<(&Value, &Value)> =
+        book["panes"].as_array().unwrap().iter().map(|p| (&p["kind"], &p["app"])).collect();
+    assert_eq!(saved_panes, [(&json!("app"), &json!(CANARY)), (&json!("terminal"), &Value::Null)], "{book}");
+    let summary = book["summary"].as_str().unwrap_or_default();
+    assert!(summary.starts_with(&format!("1 terminal · {CANARY}")) && book["open"] == json!(true), "{book}");
 
     // Its tab closes: the window goes back to the app. The row opens it again: the same
     // split, the app's window in its pane (no title is kept to find it by) and a new shell.
