@@ -1,7 +1,8 @@
 # The task conversation
 
-Status: the core is built (`ottospace-core`: `agents.rs`, `talk.rs`, the model's `talk` state).
-The shell does not host an agent's terminal yet: see "What is built".
+Status: stage 1 is built: the drawer hosts the agent's terminal, the composer lives in it, the
+right rail lists open conversations, Codex sessions are found. Not built: the Tasks groups
+(next pull request). See "What is built".
 
 ## Three zones
 
@@ -15,8 +16,12 @@ The shell does not host an agent's terminal yet: see "What is built".
   the rail and the section list holds the traffic lights only.
 - The drawer's header names the task: state dot, title, model, elapsed, `Brief`, Stop, ×. The
   task label in the tab strip goes.
-- The right rail (48 pt) mirrors the left one. Its first button is the conversation, with a
-  state dot. It is there whenever a conversation exists. No button that does nothing.
+- The right rail (48 pt): a cell per open conversation (`Model::rail`: needs you, then running
+  in start order, then the last opened; at most 8), each a two-letter badge (`talk::monograms`,
+  told apart when two collide) ringed in the task's state colour, a steady dot while it works,
+  a tooltip (title, what it does now, where, who, how old). Then a divider and `+`. A click
+  shows that conversation; on the one shown, closes the drawer. ⌘⌃1…9: ⌥ is Meta in terminals.
+  Nothing on the rail moves.
 - Left rail cells are square and as wide as the rail; the active one has the panel's
   background, so it reads as joined to the panel.
 
@@ -84,15 +89,20 @@ The capture draft is the same drawer in its collecting state.
 
 ## What is built
 
-1. Core (done): the table, the prompt, `default_agent`; the model's `talk` (task, open, keys),
-   `talk_width`, `talk_wide`, `agents`; `TaskTalk`, `ComposeEnter`, `AgentStarted`,
-   `AgentExited`, `TaskStop`, `TalkToggle`, `TalkKeys`, `TalkResize`, `TalkWide`; `Mode::Talk`;
-   `Effect::StartAgent`, `Effect::StopAgent`. Unit and property tests.
-2. Shell (not done): today it answers every `StartAgent` with `AgentExited`, so nothing
-   starts and the keyboard stays where it is. To build: the drawer and its rail, the agent's
-   terminal in it, the header, the tab strip and rail cells, row clicks and ↵ sending
-   `TaskTalk` and `ComposeEnter`, the composer in the drawer, the empty state, the Tasks
-   groups, fake `claude` and `codex` for `cargo e2e`.
+1. Core: the table, the prompt, `default_agent`; the model's `talk` (task, open, keys),
+   `talk_width`, `talk_wide`, `agents`; `TaskTalk`, `TalkPick`, `ComposeEnter`, `ComposePick`,
+   `AgentStarted`, `AgentSessions`, `AgentExited`, `TaskStop`, `TalkToggle`, `TalkKeys`,
+   `TalkResize`, `TalkWide`; `Mode::Talk`; `Effect::StartAgent`, `Effect::StopAgent`;
+   `rail`, `compose_picks`, `compose_plan`, `welcome`. Unit and property tests.
+2. Shell (`talk.rs`, `new_task.rs`): the drawer and the right rail; the agent's terminal
+   (`Terminal::run`, through the login shell, program and arguments as positional
+   parameters); the header; the tab strip from the section list to the drawer; square rail
+   cells joined to their list; row clicks and ↵ as `TaskTalk`; the composer in the drawer (no
+   modal, no home-screen line); the empty state; Codex's session read on a thread of its own.
+   `cargo e2e` runs stand-in `claude` and `codex` (`OTTOSPACE_AGENTS_DIR`, test runs only;
+   without it a test run starts no agent).
+3. Not built: the Tasks groups (Needs you, Running, Later, Done) and rows that show the
+   session's live line and model.
 
 One seam: the drawer asks one function what to show for a conversation. Stage 1 answers "the
 agent's terminal".
@@ -108,14 +118,17 @@ agent's terminal".
 
 ## Open questions
 
-- Codex takes no session id when it starts, so a task started with Codex has no session to
-  follow: it runs until its terminal ends. Find its session by directory and start time?
+- **Codex's session** (built): `codex` takes no id at start (0.166 `--help`: no option names
+  one), so after starting it the shell reads the rollouts in the task's folder
+  (`ottospace-sessions`) and the core links the task to the first that started after the agent
+  and no task follows (`agents::find_sessions`). Two agents in one folder take two sessions.
+  Looked for a minute.
 - `claude --resume` looks for the session by the directory it runs in. A task's directory is
   its repository; an adopted session may have started in a folder below it.
 - A session that still runs in the user's own terminal: going on with it from the drawer
   starts a second program on it.
 - Tasks groups: Needs you, Running, To review, Later, Done. "To review" needs a state the core
-  does not have; until then it is part of Needs you.
+  does not have; until then it is part of Needs you. Not built in this pull request.
 - The quit question does not ask about agents in the drawer yet.
 - A sessions row (no task) in the drawer: `Talk.task` becomes a subject that may be a session.
 - Does a client ever start an agent? Not in stage 1.

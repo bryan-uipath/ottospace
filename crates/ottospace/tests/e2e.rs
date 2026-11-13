@@ -4798,6 +4798,14 @@ fn a_click_on_a_task_starts_its_agent_in_the_drawer_and_the_workspace_stays() {
     // A client's click on a row shows the task's tabs and starts nothing.
     let theirs = otto.click(at(otto.control("task:1"), 0.3, 0.3), 1);
     assert_eq!((&theirs["state"]["current_task"], &theirs["state"]["agents"]), (&json!(1), &json!([2])), "{theirs}");
+    // The user's click on it: its conversation, gone on with in its session. Its tabs show, so
+    // ⌘↵ leaves them; then the header offers to go to them.
+    otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
+    let argv = otto.wait_for("claude --resume", |_| agent_argv(&bin, "claude").filter(|argv| argv[1] == "--resume"));
+    assert_eq!(argv[1..], ["--resume", session.as_str()]);
+    let left = otto.user_key("cmd-enter");
+    assert_eq!((&left["state"]["current_task"], &left["drawer"]["goes_to"]), (&Value::Null, &json!("app")), "{left}");
+    assert_eq!(otto.user_key("cmd-enter")["state"]["current_task"], 1);
     let _ = std::fs::remove_dir_all(&root);
 }
 
