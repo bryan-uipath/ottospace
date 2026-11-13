@@ -249,6 +249,8 @@ impl Gen<'_> {
             active: self.rng.coin(),
             station: self.rng.coin().then(|| self.name(&["shell", "files"])),
             label: self.rng.coin().then(|| self.name(&["cargo test"])),
+            title: self.rng.coin().then(|| self.name(&["Fix the form", "#tag >repo @agent p0\nnext line\u{202e}"])),
+            model: self.rng.coin().then(|| self.name(&["claude-opus-4-7", "gpt-6", "not a model"])),
         }
     }
 
@@ -1684,6 +1686,8 @@ const BASES: &[(&str, Setup)] = &[
                     active: true,
                     station: None,
                     label: None,
+                    title: None,
+                    model: None,
                 };
                 Action::SetSessions {
                     found: vec![s.clone(), Found { id: "s2".into(), active: false, last_activity: Some(5), ..s }],

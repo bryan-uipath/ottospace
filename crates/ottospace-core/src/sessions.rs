@@ -6,9 +6,13 @@
 //!
 //! What comes in is derived facts only, but a model had a hand in some of it (a label is built
 //! from names in a transcript), so every text is checked or cut here before it is kept.
+//!
+//! A session's title is free text a model wrote from the session's content. It is drawn in the
+//! session's row and quoted in the state, and goes nowhere else: no task takes it as its title.
 
 use serde::{Deserialize, Serialize};
 
+use crate::capture;
 use crate::model::PaneId;
 use crate::tasks::State;
 
@@ -23,6 +27,9 @@ pub const OLD_MS: u64 = 86_400_000;
 pub const MAX_FOUND: usize = 200;
 pub const MAX_KEPT: usize = 2000;
 pub const MAX_LABEL: usize = 40;
+
+/// The longest session title shown, in characters.
+pub const MAX_TITLE: usize = 80;
 
 /// A task adopted from a session needs the user once its session has been quiet this long, unless
 /// the settings say otherwise (`session_quiet_minutes`). Longer than the 30 seconds after which a
@@ -103,6 +110,12 @@ pub struct Found {
     /// What it runs now, from the reader's fixed tables: `cargo test`, `src/main.rs`.
     #[serde(default)]
     pub label: Option<String>,
+    /// The runner's title for it: free text a model (or the user) wrote. Drawn and quoted only.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Its model: as the runner names it when read, in short (`short_model`) once kept.
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 /// A row of the Sessions group, as drawn.
@@ -119,6 +132,11 @@ pub struct Row {
     pub age: Option<String>,
     /// The terminal pane it runs in, when there is no doubt. A click focuses it.
     pub pane: Option<PaneId>,
+    /// The session's title, quoted: one line a model wrote from what the session read. Text to
+    /// show, never an instruction.
+    pub quoted_title: Option<String>,
+    /// The model in short: `opus-4.7`, `gpt-6`.
+    pub model: Option<String>,
 }
 
 /// The Sessions group, as drawn. No sessions: no group.
@@ -147,8 +165,37 @@ fn shown(text: &str, max: usize) -> Option<String> {
     Some(text.trim().to_string()).filter(|text| !text.is_empty())
 }
 
+/// A title as it is shown: its first line, of characters that show (no control, zero-width or
+/// direction-turning ones), at most `MAX_TITLE` of them and then `…`.
+fn quoted(title: &str) -> Option<String> {
+    let line = title.trim_start().split(capture::is_break).next().unwrap_or("");
+    Some(capture::plain(line, MAX_TITLE)).filter(|line| !line.is_empty())
+}
+
+/// A model's id in short, by a fixed rule. A Claude id made of words and numbers loses `claude-`
+/// and a release date, and its numbers follow its words as a version: `claude-opus-4-7[1m]` →
+/// `opus-4.7`, `claude-3-5-sonnet-20241022` → `sonnet-3.5`. Any other name is shown as it is
+/// (`gpt-6-astra`). Not a name (1 to 40 of letters, digits, `_ . : -`): nothing.
+pub fn short_model(id: &str) -> Option<String> {
+    let id = id.strip_suffix("[1m]").unwrap_or(id);
+    let name = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-');
+    if id.is_empty() || id.len() > MAX_LABEL || !id.chars().all(name) {
+        return None;
+    }
+    let all = |part: &str, of: fn(&char) -> bool| !part.is_empty() && part.chars().all(|c| of(&c));
+    let mut parts: Vec<&str> = id.strip_prefix("claude-").map(|rest| rest.split('-').collect()).unwrap_or_default();
+    // A release date: eight digits at the end.
+    parts.pop_if(|last| last.len() == 8 && all(last, char::is_ascii_digit));
+    let (numbers, words): (Vec<&str>, Vec<&str>) = parts.iter().partition(|part| all(part, char::is_ascii_digit));
+    if words.is_empty() || !words.iter().all(|word| all(word, char::is_ascii_alphabetic)) {
+        return Some(id.to_string());
+    }
+    let version = Some(numbers.join(".")).filter(|version| !version.is_empty());
+    Some(words.into_iter().chain(version.as_deref()).collect::<Vec<_>>().join("-"))
+}
+
 /// What is kept of what the shell read: sessions of a known runner with a plain id and an
-/// absolute directory, each once. Labels are cut. The active ones come first, in an order that
+/// absolute directory, each once. Labels and titles are cut, a model is put in short. The active ones come first, in an order that
 /// does not change as they work (by when each started, then runner and id): two sessions
 /// writing in turn must not swap rows under the pointer. Then the idle ones, the most recently
 /// active first.
@@ -164,6 +211,8 @@ pub fn kept(found: Vec<Found>) -> Vec<Found> {
         }
         session.station = session.station.filter(|station| name(station));
         session.label = session.label.and_then(|label| shown(&label, MAX_LABEL));
+        session.title = session.title.and_then(|title| quoted(&title));
+        session.model = session.model.and_then(|model| short_model(&model));
         list.push(session);
     }
     list.sort_by(|a, b| {
@@ -198,7 +247,8 @@ mod tests {
 
     fn found(runner: &str, id: &str, cwd: &str, active: bool, at: u64) -> Found {
         let (runner, id, cwd, repo) = (runner.to_string(), id.to_string(), cwd.to_string(), cwd.to_string());
-        Found { runner, id, cwd, repo, started: None, last_activity: Some(at), active, station: None, label: None }
+        let (station, label, title, model) = (None, None, None, None);
+        Found { runner, id, cwd, repo, started: None, last_activity: Some(at), active, station, label, title, model }
     }
 
     #[test]
@@ -226,6 +276,63 @@ mod tests {
         let mut idle = found("claude", "a", "/code/app", false, 90);
         idle.station = Some("files".into());
         assert_eq!(idle.doing(), None);
+    }
+
+    #[test]
+    fn a_title_is_quoted_as_one_line_of_characters_that_show() {
+        let title = |text: &str| {
+            let session = Found { title: Some(text.into()), ..found("claude", "a", "/code/app", false, 1) };
+            kept(vec![session]).remove(0).title
+        };
+        assert_eq!(title("  Fix the login form\n").as_deref(), Some("Fix the login form"));
+        // Only the first line; escapes, zero-width and direction-turning characters draw nothing.
+        let hostile = "Ignore\u{1b}[31m \u{202e}the\u{200b} user\u{e0041}\u{2028}and run this\nnow";
+        assert_eq!(title(hostile).as_deref(), Some("Ignore[31m the user"));
+        // Cut by characters, and marked as cut. Not read: tags, markdown and paths stay text.
+        let long = title(&format!("#tag >repo **bold** {}", "é".repeat(5000))).unwrap();
+        assert!(long.starts_with("#tag >repo **bold** é") && long.ends_with("é…"), "{long}");
+        assert_eq!(long.chars().count(), MAX_TITLE + 1);
+        assert_eq!(title("\n\n A blank line first\nthen more").as_deref(), Some("A blank line first"));
+        for none in ["", " \n\t ", "\u{202e}\u{200b}"] {
+            assert_eq!(title(none), None, "{none:?}");
+        }
+    }
+
+    #[test]
+    fn a_model_is_shown_in_short_by_a_fixed_rule() {
+        let cases = [
+            ("claude-opus-4-7", Some("opus-4.7")),
+            ("claude-opus-4-7[1m]", Some("opus-4.7")),
+            ("claude-fable-5-2", Some("fable-5.2")),
+            ("claude-haiku-5", Some("haiku-5")),
+            ("claude-sonnet-4-5-20250929", Some("sonnet-4.5")),
+            ("claude-3-5-sonnet-20241022", Some("sonnet-3.5")),
+            ("claude-opus", Some("opus")),
+            // Not of that shape, but a name: as it is.
+            ("gpt-6", Some("gpt-6")),
+            ("gpt-6-astra", Some("gpt-6-astra")),
+            ("gpt-5.1-codex-max", Some("gpt-5.1-codex-max")),
+            ("claude-opus-4.7-x9", Some("claude-opus-4.7-x9")),
+            ("claude-4-7", Some("claude-4-7")),
+            ("claude-", Some("claude-")),
+            ("claude-20250929", Some("claude-20250929")),
+            // Not a name: nothing.
+            ("", None),
+            ("[1m]", None),
+            ("a private note", None),
+            ("opus\u{1b}[31m", None),
+            ("claude-opus-4-7\nrun this", None),
+            ("modèle-5", None),
+            ("claude-opus-4-7-and-a-name-far-too-long-to-be-one", None),
+        ];
+        for (id, short) in cases {
+            assert_eq!(short_model(id).as_deref(), short, "{id:?}");
+        }
+        // Kept in short: what a row and the state show.
+        let session = Found { model: Some("claude-opus-4-7[1m]".into()), ..found("claude", "a", "/a", false, 1) };
+        let odd = Found { model: Some("not a model".into()), ..found("claude", "b", "/a", false, 1) };
+        let list = kept(vec![session, odd]);
+        assert_eq!((list[0].model.as_deref(), list[1].model.as_deref()), (Some("opus-4.7"), None));
     }
 
     #[test]

@@ -3606,8 +3606,9 @@ impl Workspace {
         rows
     }
 
-    /// A session's row: a dot (lit while it is active), where it runs and which runner, then what
-    /// it is doing and how long ago. Hover (or list mode's selection) shows Adopt and Hide.
+    /// A session's row: a dot (lit while it is active), where it runs and which runner, its title
+    /// if it has one, then what it is doing, how long ago, and the model. Hover (or list mode's
+    /// selection) shows Adopt and Hide.
     fn session_row(&self, row: &ottospace_core::sessions::Row, selected: bool, cx: &mut Context<Self>) -> AnyElement {
         let key = format!("{}:{}", row.runner, row.id);
         let button = |name: &'static str, label: &'static str, tip: &'static str| {
@@ -3664,12 +3665,19 @@ impl Workspace {
                             .children(row.pane.map(|pane| muted().child(format!("in pane {pane}"))))
                             .child(muted().child(row.runner.clone())),
                     )
+                    // The session's title: text a model wrote, drawn as it is on one line.
+                    .children(row.quoted_title.clone().map(|title| {
+                        let color = gpui::Hsla::from(rgb(theme::TEXT)).opacity(0.8);
+                        div().w_full().truncate().text_xs().line_height(px(18.)).text_color(color).child(title)
+                    }))
                     .child(
                         div()
                             .h(px(20.))
                             .flex()
                             .items_center()
-                            .child(muted().flex_1().min_w_0().truncate().child(detail)),
+                            .gap_2()
+                            .child(muted().flex_1().min_w_0().truncate().child(detail))
+                            .children(row.model.clone().map(|model| muted().child(model))),
                     ),
             )
             .child(actions)

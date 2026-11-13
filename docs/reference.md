@@ -26,7 +26,7 @@ it over the control socket. Session restore and the rest of the design are not b
 | Visual mode: select terminal text with vi keys | Works today |
 | Tasks inbox: what needs you first, then the other tasks with tabs open (Open), then Running, Captured, On hold, Done. Headings fold (click, or ↵ or space in list mode). A task that is done stays under Done with its tabs open. Each row shows its tags, what it has open and its age; hover it for start, snooze, hold and dismiss buttons. After one of those by mouse, a line at the top offers Undo for 6 seconds. Kept in `~/.ottospace/tasks` | Works today |
 | "Pop next" (⌘⇧N): open the next task that needs you | Works today |
-| Sessions in the Tasks section: the Claude Code and Codex sessions of the listed repositories that are no task's (one you started by hand in a terminal). Each row shows the runner, the repository, active or idle, what it does now, and when it was last active. Adopt makes a task of one; Hide removes it until the next start. Read-only: nothing is sent to a session | Works today |
+| Sessions in the Tasks section: the Claude Code and Codex sessions of the listed repositories that are no task's (one you started by hand in a terminal). Each row shows the runner, the repository, the session's title, active or idle, what it does now, when it was last active, and the model. Adopt makes a task of one; Hide removes it until the next start. Read-only: nothing is sent to a session | Works today |
 | New task box (⌘N): one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`. `@agent`, `/path` and `$skill` are stored and shown; nothing acts on them yet | Works today |
 | Home screen: a tab with no panes shows the new-task line, the tasks that need you, and each listed task as a node on a lattice (left to right by project; within a project the older task is farther). A click on a node or a row opens the task | Works today |
 | Tasks own their tabs: opening a task shows only its tabs; the others keep running off the bar | Works today |
@@ -301,6 +301,14 @@ included) that no task has adopted: for example a Claude Code you started by han
   is lit while the session is active (its file changed in the last 30 seconds), what it does now
   (`shell · cargo test`, `network · git push`, `files · src/main.rs`), and when it was last
   active. Idle sessions older than a day are behind "N older".
+- **Title and model.** Between the two lines a row shows the session's title, on one line, when
+  the runner keeps one: the name you gave a Claude Code session (`/rename`), else the title
+  Claude Code wrote for it; for Codex, the thread's name in its `session_index.jsonl`, which
+  not every session has. ottospace writes no title itself and calls no model. The last line
+  ends with the model in short: `claude-opus-4-7` shows as `opus-4.7`, another name as it is.
+  A title is text a model wrote from what the session read, so it is only drawn: one line, at
+  most 80 characters, no control or invisible characters. It never names a task, sets a tag or
+  reaches a terminal.
 - **Order.** Sessions at work come first, in the order they started, so a row does not move
   while you reach for it. Then the idle ones, the most recently active first.
 - **Adopt** makes a task of the session: named after the repository, with `>repo` set to that
@@ -332,7 +340,8 @@ included) that no task has adopted: for example a Claude Code you started by han
 - **Read-only.** ottospace reads the runners' own session files, every 5 seconds while the Tasks
   section is open and never while it is closed. It does not attach to a session, type into it or
   signal it. Only derived facts are shown: names from fixed tables, counts and times. Never a
-  prompt, a file's contents or a command line. Design: [sessions.md](ai/sessions.md).
+  prompt, a file's contents or a command line. The one free text is the session's title (above).
+  Design: [sessions.md](ai/sessions.md).
 - Turn it off with `"sessions": false`. See [Settings](#settings) for where sessions are read from.
 
 ## Workbooks

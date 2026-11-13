@@ -647,12 +647,12 @@ fn shows(c: char) -> bool {
 }
 
 /// Every character that ends a line somewhere: a quoted block must not end by one.
-fn is_break(c: char) -> bool {
+pub(crate) fn is_break(c: char) -> bool {
     matches!(c, '\n' | '\r' | '\u{b}' | '\u{c}' | '\u{85}' | '\u{2028}' | '\u{2029}')
 }
 
 /// `text` on one line, of characters that show, at most `max` of them.
-fn plain(text: &str, max: usize) -> String {
+pub(crate) fn plain(text: &str, max: usize) -> String {
     let one: String = text.chars().map(|c| if is_break(c) { ' ' } else { c }).filter(|c| shows(*c)).collect();
     ax::truncate(one.trim(), max)
 }

@@ -1,10 +1,11 @@
 //! Codex. Rollouts: `<codex home>/sessions/<yyyy>/<mm>/<dd>/rollout-<time>-<id>.jsonl`.
 //! Schema seen in codex-cli 0.166.0 and in rollouts from earlier 2026 versions.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde_json::Value;
 
@@ -40,6 +41,10 @@ pub struct Codex {
     /// How many rollouts `sessions` looks at, newest day first. Rollouts have no index by directory.
     pub max_files: usize,
     heads: Cache<Head>,
+    /// Thread names by session id, from `session_index.jsonl`: read again only when it changed.
+    names: Cache<Arc<HashMap<String, String>>>,
+    /// The last turn's model by rollout: read again only when the rollout changed.
+    models: Cache<Option<String>>,
 }
 
 /// What a rollout's first records say. They do not change as the file grows.
@@ -55,7 +60,7 @@ struct Head {
 impl Codex {
     /// A relative or empty `home` has no sessions.
     pub fn new(home: PathBuf) -> Self {
-        Self { home, max_files: 1000, heads: Cache::default() }
+        Self { home, max_files: 1000, heads: Cache::default(), names: Cache::default(), models: Cache::default() }
     }
 
     /// `$CODEX_HOME` if set and not empty, or `~/.codex`.
@@ -85,9 +90,25 @@ impl Runner for Codex {
                 sessions.push(SessionRef { kind, id, cwd, path, started, last_activity, model, pid, busy, parent });
             }
         }
-        self.heads.keep(&rollouts.into_iter().collect::<HashSet<_>>());
+        let rollouts = rollouts.into_iter().collect::<HashSet<_>>();
+        self.heads.keep(&rollouts);
+        self.models.keep(&rollouts);
         sessions.sort_by_key(|s| std::cmp::Reverse(s.last_activity));
         Ok(sessions)
+    }
+
+    /// The model of the last turn near the end of the rollout, else the first turn's.
+    fn model(&self, session: &SessionRef) -> Option<String> {
+        let last = self.models.get(&session.path, || Some(last_model(&session.path)));
+        last.and_then(|(model, _)| model).or(session.model.clone())
+    }
+
+    /// The thread's name in `<codex home>/session_index.jsonl`, for the sessions that have one.
+    /// A rollout itself records no title.
+    fn title(&self, session: &SessionRef) -> Option<String> {
+        let index = Some(self.home.join("session_index.jsonl")).filter(|_| self.home.is_absolute())?;
+        let (names, _) = self.names.get(&index, || Some(Arc::new(thread_names(&index))))?;
+        names.get(&session.id).cloned()
     }
 
     fn read(&self, session: &SessionRef, after: Cursor, budget: u64) -> io::Result<Batch> {
@@ -103,6 +124,29 @@ impl Runner for Codex {
         (cursor.offset, cursor.skipping) = (offset, skipping);
         Ok(Batch { events, cursor, restarted, more })
     }
+}
+
+/// The model of the last `turn_context` in the last 256 KiB of a rollout.
+fn last_model(path: &Path) -> Option<String> {
+    let lines = jsonl::tail(path, 256 << 10).ok()?;
+    let turns = lines.iter().rev().filter(|l| l.contains(r#""type":"turn_context""#));
+    let mut turns = turns.filter_map(|l| serde_json::from_str::<Value>(l).ok()).filter(|r| r["type"] == "turn_context");
+    turns.find_map(|r| name_of(&r["payload"]["model"]))
+}
+
+/// Thread names by session id: `{"id", "thread_name", "updated_at"}` a line, a later line for an
+/// id replacing an earlier one. Only the index's last 1 MiB is read.
+fn thread_names(index: &Path) -> HashMap<String, String> {
+    let mut names = HashMap::new();
+    for line in jsonl::tail(index, 1 << 20).unwrap_or_default() {
+        let Ok(record) = serde_json::from_str::<Value>(&line) else { continue };
+        let Some(id) = name_of(&record["id"]) else { continue };
+        match record["thread_name"].as_str().and_then(crate::title_text) {
+            Some(name) => names.insert(id, name),
+            None => names.remove(&id),
+        };
+    }
+    names
 }
 
 /// Collects up to `max` rollout files, walking `depth` levels of date folders with the newest names first.
