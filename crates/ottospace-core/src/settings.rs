@@ -57,6 +57,9 @@ pub struct Settings {
     /// runner's CLI takes them. `@claude-opus-5-5`, `@codex-gpt-6-astra`.
     #[serde(default)]
     pub agent_models: Option<AgentModels>,
+    /// The agent a task with no `@agent` starts with: a name `@` takes. Default: `claude`.
+    #[serde(default)]
+    pub default_agent: Option<String>,
     /// The key that captures the pane in use, from any app: modifiers and a key with `-`
     /// between them. Default: `ctrl-alt-cmd-space`. `"off"`: no key.
     #[serde(default)]
@@ -176,6 +179,14 @@ impl Settings {
         // Task files must have a folder of their own: beside other files they are read as tasks.
         if settings.tasks.as_deref().is_some_and(|dir| matches!(dir.trim().trim_end_matches('/'), "" | "~" | ".")) {
             return Err("\"tasks\" must name a folder of its own, e.g. \"~/notes/tasks\"".into());
+        }
+        // Only a runner, or a runner and a model, in small letters: a saved agent starts nothing
+        // yet. Whatever `agent_models` lists: each key is read by itself (`read`).
+        if let Some(name) = settings.default_agent.as_deref() {
+            let built_in = crate::sessions::RUNNERS.contains(&name) || crate::agents::typed(name).is_some();
+            if !built_in {
+                return Err(format!("{name:?} is not `claude`, `codex` or one with a model, as `codex-gpt-6-astra`"));
+            }
         }
         if let Some(id) = settings.agent_models.as_ref().and_then(AgentModels::wrong) {
             return Err(not_a_model(&format!("{id:?}")));
@@ -471,6 +482,14 @@ mod tests {
         assert_eq!((wrong.len(), settings.sessions), (2, Some(false)));
         assert!(wrong[0].starts_with(r#"agent_models: "--yolo" is not a model name"#), "{wrong:?}");
         assert!(Settings::parse(text).is_err());
+        let (settings, wrong) = Settings::read(r#"{ "default_agent": "ana", "sessions": false }"#);
+        assert_eq!((settings.default_agent, settings.sessions, wrong.len()), (None, Some(false), 1));
+        assert!(wrong[0].starts_with(r#"default_agent: "ana" is not `claude`"#), "{wrong:?}");
+        let (settings, wrong) = Settings::read(r#"{ "default_agent": "codex-gpt-6-astra" }"#);
+        assert_eq!((settings.default_agent.as_deref(), wrong.len()), (Some("codex-gpt-6-astra"), 0));
+        // The same answer with a list of models beside it, and from the file read whole.
+        let text = r#"{ "agent_models": { "codex": ["gpt-7"] }, "default_agent": "CODEX-GPT-7" }"#;
+        assert_eq!((Settings::read(text).0.default_agent, Settings::parse(text).is_err()), (None, true));
         // So does an entry that is no text. A runner nobody knows: the key takes its default.
         let (settings, wrong) = Settings::read(r#"{ "agent_models": { "claude": ["claude-next-1", 7] } }"#);
         assert_eq!(settings.agent_models.unwrap().claude.unwrap(), ["claude-next-1"]);

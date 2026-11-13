@@ -91,7 +91,17 @@ pub fn app_menus() -> Vec<Menu> {
         },
         Menu {
             name: "Tasks".into(),
-            items: vec![item("New Task", NewTask), item("Next Task", NextTask), item("Capture the Pane", CapturePane)],
+            items: vec![
+                item("New Task", NewTask),
+                item("Next Task", NextTask),
+                item("Capture the Pane", CapturePane),
+                MenuItem::separator(),
+                // The conversation in the drawer.
+                item("Type in the Conversation", TalkFocus),
+                item("Open or Close the Conversation", TalkToggle),
+                item("Go to the Task's Tabs", TalkGo),
+                item("Stop the Agent", StopAgent),
+            ],
         },
         Menu {
             name: "Developer".into(),

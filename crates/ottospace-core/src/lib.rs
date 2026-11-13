@@ -27,6 +27,7 @@ pub mod secrets;
 pub mod sessions;
 pub mod settings;
 pub mod sneak;
+pub mod talk;
 pub mod tasks;
 pub mod terminal;
 pub mod theme;

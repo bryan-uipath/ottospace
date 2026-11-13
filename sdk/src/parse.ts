@@ -149,7 +149,7 @@ function axis(value: unknown, at: string): Axis {
 function mode(value: unknown, at: string): Mode {
   if (value === "normal" || value === "app" || value === "pick" || value === "palette") return value;
   if (value === "visual" || value === "list" || value === "compose" || value === "sneak") return value;
-  if (value === "confirm" || value === "mark" || value === "annotate") return value;
+  if (value === "confirm" || value === "mark" || value === "annotate" || value === "talk") return value;
   throw wrong(at, "a mode", value);
 }
 
@@ -480,9 +480,58 @@ function composeMenu(value: unknown, at: string): ComposeMenu {
   };
 }
 
-function composeHost(value: unknown, at: string): "home" | "modal" | "bar" {
-  if (value === "home" || value === "modal" || value === "bar") return value;
-  throw wrong(at, "home, modal or bar", value);
+function composeHost(value: unknown, at: string): "drawer" | "bar" {
+  if (value === "drawer" || value === "bar") return value;
+  throw wrong(at, "drawer or bar", value);
+}
+
+function composePlan(value: unknown, at: string): Snapshot["compose_plan"] & object {
+  const o = fields(value, at);
+  return {
+    agent: str(o.agent, `${at}.agent`),
+    starts: bool(o.starts, `${at}.starts`),
+    dir: orNull(str)(o.dir, `${at}.dir`),
+    branch: orNull(str)(o.branch, `${at}.branch`),
+  };
+}
+
+function composePicks(value: unknown, at: string): Snapshot["compose_picks"] {
+  const o = fields(value, at);
+  return { wheres: list(str)(o.wheres, `${at}.wheres`), whos: list(str)(o.whos, `${at}.whos`) };
+}
+
+function railCell(value: unknown, at: string): Snapshot["drawer"]["rail"][number] {
+  const o = fields(value, at);
+  return {
+    task: num(o.task, `${at}.task`),
+    mono: str(o.mono, `${at}.mono`),
+    group: orNull(group)(o.group, `${at}.group`),
+    working: bool(o.working, `${at}.working`),
+    shown: bool(o.shown, `${at}.shown`),
+    tip: str(o.tip, `${at}.tip`),
+  };
+}
+
+function drawerDrawn(value: unknown, at: string): Snapshot["drawer"] {
+  const o = fields(value, at);
+  const agent = (value: unknown, at: string) => {
+    const a = fields(value, at);
+    return {
+      model: str(a.model, `${at}.model`),
+      ended: bool(a.ended, `${at}.ended`),
+      cols: num(a.cols, `${at}.cols`),
+      rows: num(a.rows, `${at}.rows`),
+      lines: list(str)(a.lines, `${at}.lines`),
+    };
+  };
+  return {
+    body: orNull(rect)(o.body, `${at}.body`),
+    width: num(o.width, `${at}.width`),
+    agents: map(agent)(o.agents, `${at}.agents`),
+    goes_to: orNull(str)(o.goes_to, `${at}.goes_to`),
+    note: orNull(str)(o.note, `${at}.note`),
+    rail: list(railCell)(o.rail, `${at}.rail`),
+  };
 }
 
 function sessionLink(value: unknown, at: string): { runner: string; id: string } {
@@ -787,7 +836,16 @@ function model(value: unknown, at: string): Model {
     capture: orNull(draft)(o.capture, `${at}.capture`),
     back_to: orNull(num)(o.back_to, `${at}.back_to`),
     brief: orNull(num)(o.brief, `${at}.brief`),
+    talk: orNull(talk)(o.talk, `${at}.talk`),
+    talk_width: num(o.talk_width, `${at}.talk_width`),
+    talk_wide: bool(o.talk_wide, `${at}.talk_wide`),
+    agents: list(num)(o.agents, `${at}.agents`),
   };
+}
+
+function talk(value: unknown, at: string): { task: number; open: boolean; keys: boolean } {
+  const o = fields(value, at);
+  return { task: num(o.task, `${at}.task`), open: bool(o.open, `${at}.open`), keys: bool(o.keys, `${at}.keys`) };
 }
 
 function terminal(value: unknown, at: string): Terminal {
@@ -957,6 +1015,9 @@ export function snapshot(value: unknown): Snapshot {
     needs_you: num(o.needs_you, "needs_you"),
     compose_read: bool(o.compose_read, "compose_read"),
     compose_host: orNull(composeHost)(o.compose_host, "compose_host"),
+    compose_plan: orNull(composePlan)(o.compose_plan, "compose_plan"),
+    compose_picks: composePicks(o.compose_picks, "compose_picks"),
+    welcome: bool(o.welcome, "welcome"),
     compose_menu: orNull(composeMenu)(o.compose_menu, "compose_menu"),
     compose_pointing: orNull(rect)(o.compose_pointing, "compose_pointing"),
     compose_note: orNull(str)(o.compose_note, "compose_note"),
@@ -977,6 +1038,7 @@ export function snapshot(value: unknown): Snapshot {
     workbook_offer: orNull(workbookOffer)(o.workbook_offer, "workbook_offer"),
     scrollbars: map(scrollbar)(o.scrollbars, "scrollbars"),
     capture: captureDrawn(o.capture, "capture"),
+    drawer: drawerDrawn(o.drawer, "drawer"),
   };
 }
 

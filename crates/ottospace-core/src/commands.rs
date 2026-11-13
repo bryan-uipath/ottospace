@@ -91,6 +91,10 @@ commands! {
     NewTask: "New Task", Tasks;
     NextTask: "Next Task", Tasks;
     CapturePane: "Capture the Pane", Tasks;
+    TalkFocus: "Type in the Conversation", Tasks;
+    TalkToggle: "Open or Close the Conversation", Tasks;
+    TalkGo: "Go to the Task's Tabs", Tasks;
+    StopAgent: "Stop the Agent", Tasks;
     SaveWorkbook: "Save Tab as Workbook", Workbook;
     AddTabToWorkbook: "Add Tab to Workbook…", Workbook;
     SaveAllWorkbook: "Save All Tabs as Workbook", Workbook;

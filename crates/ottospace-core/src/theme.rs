@@ -62,6 +62,8 @@ pub fn accent(mode: Mode) -> u32 {
         Mode::Mark => MARK,
         // The amber of what is drawn. Sneak mode, the other amber, is never on with it.
         Mode::Annotate => SNEAK,
+        // Keys go to another program, as in an app pane.
+        Mode::Talk => APP,
     }
 }
 

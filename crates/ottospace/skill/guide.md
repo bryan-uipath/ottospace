@@ -51,7 +51,7 @@ ottospace ctl '{"cmd":"state"}'
 
 | Field | Meaning |
 |---|---|
-| `mode` | `normal`, `app` (a hosted app has the keyboard), `pick` (the picker is open), `palette` (the user's command palette is open: wait for them to close it), `visual` (selecting terminal text with the keyboard), `list` (the secondary bar has the keyboard), `compose` (the new-task box is open), `confirm` (the quit question is up), `sneak` (labels are on ottospace's controls; a typed label activates one) `mark` (a mark waits for a letter or a name: `state.mark_input`) or `annotate` (a frozen picture of a pane is drawn on: `state.capture`) |
+| `mode` | `normal`, `app` (a hosted app has the keyboard), `pick` (the picker is open), `palette` (the user's command palette is open: wait for them to close it), `visual` (selecting terminal text with the keyboard), `list` (the secondary bar has the keyboard), `compose` (the new-task box is open), `confirm` (the quit question is up), `sneak` (labels are on ottospace's controls; a typed label activates one) `mark` (a mark waits for a letter or a name: `state.mark_input`), `annotate` (a frozen picture of a pane is drawn on: `state.capture`) or `talk` (the user's keys go to a task's agent in the right drawer; yours do not) |
 | `state.list` | Null, or the index of the selected row of the open section: the secondary bar has the keyboard (`mode` is `list`, or `pick` while the picker is open over it) |
 | `state.panes` | Every pane of every tab: `id`, `kind`, `cwd` for a terminal opened by `open_repo`, and `fit` for an app pane whose window kept another size than the pane's: `wants` (`[width, height]` in points, the size the window kept) `hint` (what the pane header says, e.g. `needs 120 pt more width` or `fixed size 232×320`) and, only when a `fit` request would move nothing, `stuck`: `no_split` (the pane spans the tab on that axis) or `at_limit` (the splits are at their 10%). No `fit`: the window has the pane's size, or is less than 24 pt smaller (an app that snaps its size), or the layout changed and the pane has not been measured since (within a second). `kind` is an object: `{"type":"terminal"}`, `{"type":"empty"}` or `{"type":"app","window":N,"title":"...","bundle":"com.apple.Safari","name":"Safari"}` (`bundle` is left out for an app that has none) |
 | `state.tabs`, `state.active` | Every tab (`id`, `title`, and `task`: the id of the task it belongs to, or null) and the index of the one showing. Requests take the index, not the `id` |
@@ -78,7 +78,9 @@ ottospace ctl '{"cmd":"state"}'
 | `state.tasks.list` | Every task: `id`, `title`, `state`, `priority`, `snoozed_until`, `dismissed`, `project` (from a `#tag`, or null), `repo` (a repository path, or null), `agent`, `paths`, `resolved`, `skills`, `created` (when it was filed, in milliseconds since 1970, or null) and `session` (null, or the session it was adopted from: `runner`, `id`, and `state`, the state the task last took from it) |
 | `compose_read` | True once the tags of the line in the new-task box have been looked up (names and paths are read on another thread, a moment after the line changes). Wait for it before pressing ↵ for the user |
 | `state.compose` | Null, or the text in the new-task box while it is open |
-| `compose_host` | Null, `modal` (the box is over the workspace), `home` (it is the home screen's own line, in place: there ↵ adds the task and the line stays open, empty) or `bar` (it is the title of the draft in the right bar: `state.capture`) |
+| `compose_host` | Null, `drawer` (the box is in the right drawer, beside the workspace) or `bar` (it is the title of the draft being collected: `state.capture`) |
+| `compose_plan`, `compose_picks`, `welcome` | What the user's ↵ would do (`agent`, `starts`, `dir`, `branch`), the drawer's repository and agent picks, and whether nothing is open yet |
+| `state.talk`, `state.agents`, `drawer` | The task the right drawer shows (`task`, `open`, `keys`), the tasks whose agent runs there, and what is drawn: `agents` by task (`model`, `ended`, `lines`), `rail` (its conversations in order, each with `tip`), `goes_to`, `note`. Only the user starts, stops or types to an agent |
 | `compose_menu` | Null, or the dropdown for the tag at the cursor: `mark`, `typed`, `rows` (each `name`, `kind`, `detail`, `matched`), `selected` (the highlighted row, or null) and `note` (`no match`, `new project`, or null). While `selected` is not null, ↵ takes that row instead of adding the task, unless the word is that name already |
 | `compose_pointing` | Null, or the rect of the tab or pane the user's ⌥-click would reference |
 | `compose_note` | Null, or what the box says it could not do: a name the line has no room for, files left out |
@@ -285,11 +287,11 @@ States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stal
   The rest is the title. A tag whose name is not known stays in the title where it was typed,
   so `ask @ana`, `costs $5` and `use > 3 workers` are safe. One `#project`, `>repo` and `@agent`
   per task: the last one counts. Every `/path` and `$skill` is kept. `@name` no longer names a
-  repository. The task keeps them as `repo` (a path), `agent`, `paths`, `skills`. Nothing acts
-  on `agent`, `paths` or `skills` yet: they are stored and shown. It replies like `task_add`.
-  A line with no title, or longer than 500 characters, is refused. `"open":true` also shows the
-  new task's tabs, as ⌘↵ in the box does: it changes what the user sees, so send it only when
-  asked. The reply then has `opened`: false if the task was added but not shown, because the
+  repository. The task keeps them as `repo` (a path), `agent`, `paths`, `skills`. `agent` is the
+  agent the user's click starts in the drawer; nothing acts on `paths` or `skills` yet. It
+  replies like `task_add`. A line with no title, or longer than 500 characters, is refused.
+  `"open":true` also shows the new task's tabs (it starts no agent: only the user does): it
+  changes what the user sees, so send it only when asked. The reply then has `opened`: false if the task was added but not shown, because the
   user was in the new-task box, the picker, the key reference or visual mode.
 - `task_add` takes `agent` and `skills` only if `task_new` would know the names (`claude`,
   `codex`, a runner's model as `codex-gpt-6-astra`, a saved agent; an installed skill): any other is refused, and the error names it.
@@ -517,8 +519,8 @@ ottospace ctl "{\"cmd\":\"task_brief\",\"id\":$OTTOSPACE_TASK}"
 ```
 
 `task_brief` replies `{"ok":true,"task":7,"dir":"..","path":"../brief.md","brief":{..}}`, not the
-state. Without `id` it is the task of the tab `tab` (`$OTTOSPACE_TAB`), else the task on show. It
-fails with "has no materials" for a task nothing was captured for. `brief` holds:
+state. Without `id` it is the task of the tab `tab` (`$OTTOSPACE_TAB`), else the task whose tabs
+are on show, else the task in the drawer. It fails with "has no materials" for a task nothing was captured for. `brief` holds:
 
 - `ask`: the user's own words: `title`, `priority`, `project`, `repo`, `agent`, `paths`, `skills`.
   `title_generated` true: nobody typed the title (the task was filed from captures alone); it

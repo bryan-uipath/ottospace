@@ -38,6 +38,10 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       capture: null,
       back_to: null,
       brief: null,
+      talk: null,
+      talk_width: 480,
+      talk_wide: false,
+      agents: [],
     },
     bounds: {},
     frames: {},
@@ -65,6 +69,9 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     needs_you: 0,
     compose_read: false,
     compose_host: null,
+    compose_plan: null,
+    compose_picks: { wheres: ["app"], whos: ["claude", "codex"] },
+    welcome: false,
     compose_menu: null,
     compose_pointing: null,
     compose_note: null,
@@ -85,6 +92,14 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     workbook_offer: null,
     scrollbars: {},
     capture: { key: null, bar: null, picture: null, encoded: [], pending: 0, dir: null, brief: null },
+    drawer: {
+      body: [880, 40, 470, 820],
+      width: 470,
+      agents: { "1": { model: "claude", ended: false, cols: 60, rows: 45, lines: ["fake claude ready"] } },
+      goes_to: null,
+      note: null,
+      rail: [{ task: 1, mono: "FL", group: "running", working: true, shown: true, tip: "fix login\nRunning\napp · @claude · now" }],
+    },
   };
 }
 

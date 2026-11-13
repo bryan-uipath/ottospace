@@ -195,9 +195,9 @@ impl Workspace {
                 this.sync_sneak(window, cx);
                 match this.model.sneak {
                     Some(_) => this.snapshot(window, cx),
-                    None => {
-                        control::error("sneak mode starts from normal or list mode: leave the app or close the box")
-                    }
+                    None => control::error(
+                        "sneak mode starts from normal, list or talk mode: leave the app or close the box",
+                    ),
                 }
             });
             let _ = reply.send(answer.unwrap_or_else(|_| control::error("ottospace is closing")));
@@ -283,6 +283,9 @@ impl Workspace {
         }
         let (kind, name) = id.split_once(':').unwrap_or((id, ""));
         let number = name.parse::<u32>().ok();
+        if self.activate_drawer(kind, name, window, cx) {
+            return;
+        }
         let action = match (kind, name) {
             ("rail", _) => {
                 let section = SECTIONS.iter().find(|(_, _, label)| label.eq_ignore_ascii_case(name));
@@ -312,6 +315,10 @@ impl Workspace {
                 None
             }
             ("repo", _) => Some(Action::OpenRepo { path: name.into(), axis: Axis::Right }),
+            // The one verb, as a click: the user's starts the conversation, a client's shows the tabs.
+            ("task" | "home-row" | "home-node", _) if self.input == ottospace_core::Origin::User => {
+                number.map(|id| Action::TaskTalk { id })
+            }
             ("task" | "home-row" | "home-node", _) => number.map(|id| Action::TaskOpen { id: Some(id) }),
             ("task-heading", _) => {
                 if let Ok(heading) = serde_json::from_value(serde_json::json!(name)) {
@@ -319,7 +326,7 @@ impl Workspace {
                 }
                 None
             }
-            ("task-start" | "task-snooze" | "task-hold" | "task-dismiss", _) => {
+            ("task-snooze" | "task-hold" | "task-dismiss", _) => {
                 if let Some(id) = number {
                     self.click_row_button(kind, id, window, cx);
                 }

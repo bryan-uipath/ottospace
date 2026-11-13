@@ -20,8 +20,9 @@ use it as you always do.
 ## Stay organized and on top of your tasks
 
 The inbox puts what needs you first, then what is running and what you saved for later. Press ⌘N
-and capture a task in one line, with a `#project`, a `>repo` and an `@agent`. Open a task and the tab bar
-shows only its tabs. Your repositories and their worktrees are one click away.
+and say a task in one line, with a `#project`, a `>repo` and an `@agent`: ↵ starts its agent in a
+drawer beside your workspace, and you see it work at once. Your repositories and their worktrees
+are one click away.
 
 ![The new-task box over the workspace, as it looked before tags changed: the typed line names its repository with an @ (it is > now, and @ names an agent). The Repos list is open on the left.](site/shots/newtask.png)
 

@@ -24,11 +24,13 @@ it over the control socket. Session restore and the rest of the design are not b
 | Terminal scrollback, mouse selection, copy and paste | Works today |
 | Scrollbars on every list that scrolls, the key reference and a terminal's scrollback: drag the thumb, click the track to page (in a terminal a click beside the thumb is the terminal's). They follow the system's "Show scroll bars" setting | Works today |
 | Visual mode: select terminal text with vi keys | Works today |
-| Tasks inbox: what needs you first, then the other tasks with tabs open (Open), then Running, Captured, On hold, Done. Headings fold (click, or ↵ or space in list mode). A task that is done stays under Done with its tabs open. Each row shows its tags, what it has open and its age; hover it for start, snooze, hold and dismiss buttons. After one of those by mouse, a line at the top offers Undo for 6 seconds. Kept in `~/.ottospace/tasks` | Works today |
+| Tasks inbox: what needs you first, then the other tasks with tabs open (Open), then Running, Captured, On hold, Done. Headings fold (click, or ↵ or space in list mode). A task that is done stays under Done with its tabs open. Each row shows its tags, what it has open and its age; a click opens its conversation; hover it for snooze, hold and dismiss buttons. After one of those by mouse, a line at the top offers Undo for 6 seconds. Kept in `~/.ottospace/tasks` | Works today |
 | "Pop next" (⌘⇧N): open the next task that needs you | Works today |
 | Sessions in the Tasks section: the Claude Code and Codex sessions of the listed repositories that are no task's (one you started by hand in a terminal). Each row shows the runner, the repository, the session's title, active or idle, what it does now, when it was last active, and the model. Adopt makes a task of one; Hide removes it until the next start. Read-only: nothing is sent to a session | Works today |
-| New task box (⌘N): one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`. `@agent`, `/path` and `$skill` are stored and shown; nothing acts on them yet | Works today |
-| Home screen: a tab with no panes shows the new-task line, the tasks that need you, and each listed task as a node on a lattice (left to right by project; within a project the older task is farther). A click on a node or a row opens the task | Works today |
+| A task's agent in the right drawer: a click or ↵ on a task starts its agent (`claude` or `codex`, by its `@agent`, else `default_agent`) in a terminal beside the workspace, which stays as it is. See [Flow of a task](#flow-of-a-task) | Works today |
+| Right rail: a badge per open conversation (needs you first, then running, then the last opened; at most 8), and `+` for a new task | Works today |
+| New task (⌘N), in the drawer: one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`, picks for where and who, and a line that says what ↵ will do. `/path` and `$skill` are stored and shown; nothing acts on them yet | Works today |
+| Home screen: a tab with no panes says what goes there (Open an app ⌘E, Terminal ⌘D), the tasks that need you, and each listed task as a node on a lattice (left to right by project; within a project the older task is farther). A click on a node or a row opens its conversation. With nothing open at all, the drawer shows a new task by itself | Works today |
 | Tasks own their tabs: opening a task shows only its tabs; the others keep running off the bar | Works today |
 | Tabs, each with its own split tree | Works today |
 | Pane picker: choose a terminal, a running app, or (once you type) any installed app for a new pane or tab | Works today |
@@ -38,7 +40,7 @@ it over the control socket. Session restore and the rest of the design are not b
 | Sneak mode (⌘⌃G): a letter label on each of ottospace's own controls; typing it clicks the control | Works today |
 | [Command palette](#command-palette) (⌘P): every command of the menu bar by name, with its key; a Developer group | Works today |
 | Marks (⌘B, ⌘⇧B, ⌘' and a letter): named ways back to a pane or a tab, kept in `~/.ottospace/marks.json` | Works today |
-| Capture (⌃⌥⌘Space, from any app): a frozen picture of the pane in use to circle and write on, collected in a draft in the right bar; the task it becomes has a brief with the pictures, the notes and the text under each annotation (`task_brief`). Kept in `~/.ottospace/materials`. Starting an agent with the brief is not built | Works today |
+| Capture (⌃⌥⌘Space, from any app): a frozen picture of the pane in use to circle and write on, collected in a draft in the drawer; the task it becomes has a brief with the pictures, the notes and the text under each annotation (`task_brief`), and its agent is told the brief's path. Kept in `~/.ottospace/materials` | Works today |
 | Workbooks (⌘⇧S): save tabs under a name (their splits, each terminal's directory, each app) and open them again from the Workbook section. Several tabs each: add a tab to one, or save all the tabs on the bar as one. Kept in `~/.ottospace/workbooks`. An app comes back as its window, not on the page or document it showed | Works today |
 | `settings.json`: terminal font, repository directories, tasks folder, apps to offer, window rules | Works today |
 
@@ -105,14 +107,18 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | Drag / double-click / triple-click | Select text / a word / a line in a terminal |
 | ⌘C | Copy the terminal's selection (nothing selected: does nothing). In a [text field](#keys): its selection |
 | ⌘V | Paste into the terminal, or into the open text field |
-| ⌘N | New task: a box opens over the workspace, or in place on the home screen. Type what needs doing, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `^reference`, `p1` to `p9`; a dropdown finishes the one at the cursor. ↵ adds the task; ⌘↵ adds it and starts it; Esc closes. [Its keys](#keys) |
+| ⌘N | New task, in the drawer. Type what needs doing, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `^reference`, `p1` to `p9`; a dropdown finishes the one at the cursor. ↵ adds the task and starts its agent; ⇧↵ adds it for later; Esc closes. [Its keys](#keys) |
+| ⌘L | The keyboard into the drawer's conversation, or back to the workspace |
+| ⌘⇧L | Close the drawer to the right rail, or open it again. The agent goes on |
+| ⌘↵ | With a conversation open: show its task's tabs in the workspace (Go to), or leave them |
+| ⌘⌃1 … ⌘⌃9 | Show the nth conversation of the right rail; on the one shown, close the drawer. Not ⌥1…⌥9: ⌥ is Meta in a terminal |
 | ⌘⇧N | Next task: shows the tabs of the first task that needs you |
-| ⌃⌥⌘Space | Capture, from any app: the pane in use (a hosted app you are in, else the focused pane) is frozen as a picture to draw on, and a draft opens in a bar on the right, with the new-task line as its title. A live app is parked first; "↩ back to …" in the bar returns to it. On the picture: drag circles, ⇧-drag draws a box, ⌥-drag a freehand line, a click places a note to type (↵ keeps it). ⌘Z and ⇧⌘Z go over the steps; a click on a shape's line selects it and ⌫ removes it. ↵ goes to the title, Esc leaves the picture; a click on another pane captures that one too. In the title ↵ adds the task and ⌘↵ adds and starts it; × or Esc cancels, after a question if anything was captured. The workspace stays in use beside the bar, and ⌘N goes to the draft's title. See [Capture](#capture) |
+| ⌃⌥⌘Space | Capture, from any app: the pane in use (a hosted app you are in, else the focused pane) is frozen as a picture to draw on, and a draft opens in the drawer on the right, with the new-task line as its title. A live app is parked first; "↩ back to …" in the bar returns to it. On the picture: drag circles, ⇧-drag draws a box, ⌥-drag a freehand line, a click places a note to type (↵ keeps it). ⌘Z and ⇧⌘Z go over the steps; a click on a shape's line selects it and ⌫ removes it. ↵ goes to the title, Esc leaves the picture; a click on another pane captures that one too. In the title ↵ adds the task and starts its agent, ⇧↵ adds it for later; × or Esc cancels, after a question if anything was captured. The workspace stays in use beside the drawer, and ⌘N goes to the draft's title. See [Capture](#capture) |
 | ⌘B / ⌘⇧B | Mark the focused pane / the tab on show; on one that is marked, take the mark off (the Marks section offers it back for six seconds, and ⌘B again within them puts the same mark back). The mark is named for the app, the terminal's directory or the tab's title. It records what to open, not a window or a process: a terminal's directory as it is then, an app's bundle id, name and window title, a tab's title, task and split tree. A marked pane or tab shows ◆ and its letter |
 | ⌘' then a letter | Go to the mark with that letter. The status bar shows `MARK?` while it waits; Esc, or a letter of no mark, ends the wait and nothing else happens. If the mark's pane or tab is open, its tab comes forward and the pane takes focus (an app pane is focused, not entered). Else it is opened: a terminal in the recorded directory, the app's window in a pane (the one with the recorded title, else its only window, else its main one; an app that is not running is started), or the tab with its splits. A tab opens with what can be opened: a pane whose directory is gone or whose window could not be hosted is empty and says why, and going to the tab again tries it again |
 | ⌘⌥1 … ⌘⌥9 | Go to one of the first nine marks, in the order of the Marks section |
 | ⌘⇧E | List mode: the bar (Apps, Workbook, Tasks, Repos, Marks) takes the keyboard. On a workbook ↵ opens its tabs, space lists them under it, `a` adds the tab on show to it, `r` renames it, `x` deletes it and `u` takes the last delete or update back; on one of its tabs ↵ opens that tab, `r` renames it and `x` takes it out. On a mark `x` removes it, `r` renames it, `m` gives it a letter, ⇧J / ⇧K move it down / up, and `u` puts the last removed mark back. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); in Tasks a heading is a row too, and ↵ or space on it folds or unfolds it; Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; on an app that is not running `p` pins or unpins it, `x` hides a suggestion and `u` takes the last of these back; in Apps `/` types in the filter of "All apps" (↵, ↓ or Esc gives the keys back to the rows); Esc or ⌘⇧E leaves |
-| ⌘⌃G | Sneak mode: every control ottospace draws (rail icons, bar rows, tabs and their ×, top-bar buttons, pane headers and their ×, each pane, the home screen's line, rows and nodes) gets a short label, home-row letters first. Type a label and the control does what a click does; a pane's label focuses it, or gives an app pane the keyboard. A × (pane or tab) always has a two-letter label. Two-letter labels narrow on the first letter; ⌫ takes it back. Esc, a click, a letter that goes on with no label, or any ⌘ shortcut leaves; the shortcut then runs (⌘C copies, ⌘V pastes). Other keys do nothing. The labels follow what is drawn: if a control moves its label moves, and if it goes its label goes. What happens by itself (a shell exits, an agent files a task) does not end the mode. Starting it hides the accessibility overlay (⌘⌃A). Not ⌃G alone: a terminal needs that key. On a keyboard layout with no Latin letters, the keys type the letters they have under ⌘. From `APP` mode return first. Controls inside a hosted app's window get no label. Sneak presses no control inside another app and sets no value; entering an app pane raises its window, as a click on the pane does |
+| ⌘⌃G | Sneak mode: every control ottospace draws (rail icons, bar rows, tabs and their ×, top-bar buttons, pane headers and their ×, each pane, the drawer's buttons and picks, the right rail's badges, the home screen's buttons, rows and nodes) gets a short label, home-row letters first. Type a label and the control does what a click does; a pane's label focuses it, or gives an app pane the keyboard. A × (pane or tab) always has a two-letter label. Two-letter labels narrow on the first letter; ⌫ takes it back. Esc, a click, a letter that goes on with no label, or any ⌘ shortcut leaves; the shortcut then runs (⌘C copies, ⌘V pastes). Other keys do nothing. The labels follow what is drawn: if a control moves its label moves, and if it goes its label goes. What happens by itself (a shell exits, an agent files a task) does not end the mode. Starting it hides the accessibility overlay (⌘⌃A). Not ⌃G alone: a terminal needs that key. On a keyboard layout with no Latin letters, the keys type the letters they have under ⌘. From `APP` mode return first. Controls inside a hosted app's window get no label. Sneak presses no control inside another app and sets no value; entering an app pane raises its window, as a click on the pane does |
 | ⌘⇧C | Visual mode on the terminal: `hjkl`/arrows, `w b e 0 ^ $`, `H M L` move; `v` / `V` select; `y` or ↵ copies and leaves; Esc leaves |
 
 **Text fields.** The new-task box's line and the picker's filter are the same field, with the
@@ -133,13 +139,16 @@ Typed text replaces the selection. Movement and deletion go by whole characters 
 A line wider than the field scrolls with the cursor. The picker's filter holds 200 characters.
 While the quit question is over a field, nothing edits it.
 
-**The new-task box.** ⌘N opens it over the workspace; while the home screen shows (a tab with
-no panes) the home screen's own line is the box, in place, and a click on that line opens it.
+**The new-task box.** ⌘N, the Tasks section's `+` and the right rail's `+` open it in the drawer,
+beside the workspace. Over it: picks for WHERE (the first listed repositories, "no repository")
+and WHO (the default agent, then each runner and its models), which set the line's `>repo` and
+`@agent`, and a line that says what ↵ will do: "↵ will start claude in app on main".
 
 | Key | Action |
 |---|---|
-| ↵ | Takes the dropdown's highlighted row. With no row highlighted, or when the word is that name already, adds the task. Over the workspace the box then closes; on the home screen the line stays, empty, for the next task |
-| ⌘↵ | Adds the task and starts it (shows its tabs), whatever is highlighted |
+| ↵ | Takes the dropdown's highlighted row. With no row highlighted, or when the word is that name already, adds the task and starts its agent: the drawer becomes its conversation |
+| ⇧↵ | Adds the task for later: the box closes, nothing starts |
+| ⌘↵ | Adds the task and starts it, whatever is highlighted |
 | Tab | Takes the highlighted row, or the first |
 | ↑ / ↓ or ⌃P / ⌃N | Move over the dropdown's rows. With no dropdown: to the line's start or end |
 | Esc | Closes the dropdown. With no dropdown open: closes the box |
@@ -189,6 +198,31 @@ question (status chip `QUIT?`). A quit ends every terminal and what runs in it, 
 
 Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
 
+## Flow of a task
+
+1. **Write it.** ⌘N opens the drawer on a new task. ↵ adds it and starts its agent; ⇧↵ files it
+   for later. With nothing open at all the drawer shows a new task by itself.
+2. **It starts at once.** The agent (`@claude`, `@codex-gpt-6-astra`, …; with no `@agent`, the
+   `default_agent` setting, else `claude`) runs in a terminal in the drawer, in the task's
+   repository (no `>repo`: the home folder), with the keyboard. It is asked `Task: <title>`; a
+   task with captures is told where its brief is. The workspace stays as it was.
+3. **One verb.** A click or ↵ on a task is its conversation: started if it never ran, its
+   session gone on with if it has one and no agent runs, shown if one runs. A saved agent
+   cannot be started yet: the drawer says so.
+4. **The drawer.** Its header: the task's state, title, model and time; Go to (⌘↵) shows its
+   tabs in the workspace when it has some; Brief (when it has captures); Stop ends the agent;
+   × (⌘⇧L) closes the drawer to the right rail and the agent goes on. ⌘L moves the keyboard in
+   and out. Drag its left edge to make it wider or narrower. Opening a conversation while a new
+   task is half written puts the line aside: the box gets it back when it opens again.
+5. **The right rail.** A badge per open conversation, its ring in the task's state colour and a
+   steady dot while its agent works; hover for the title, what it does now, where, who and how
+   old. A click shows it; on the one shown, closes the drawer.
+6. **Following.** The task runs while its agent works. Claude is given the session's id; Codex
+   names its own, and ottospace finds it where Codex wrote it. When the agent ends while the task
+   runs, the task needs you.
+7. **Who may.** Only you start or stop an agent: a client's `task_open` or ↵ files the task and
+   shows its tabs, and starts nothing.
+
 ## Command palette
 
 ⌘P, or View ▸ Command Palette…, opens a box with every command of the menu bar that needs no
@@ -206,6 +240,12 @@ The palette is the user's: a socket client cannot open it, type in it or choose 
 refused while it is open), and pane requests wait behind it as they do behind the picker. ⌘P is a
 key of ottospace's, so it does nothing while a hosted app has the keyboard (`APP` mode). Not ⌘K:
 in a terminal it clears the screen, and is kept for that.
+
+The Tasks group also holds the drawer's commands: Type in the Conversation (⌘L), Open or Close the
+Conversation (⌘⇧L), Go to the Task's Tabs (⌘↵) and Stop the Agent (the drawer's Stop), each for
+the conversation the drawer shows. ⌘P while you type in the conversation opens the palette over
+it: the agent gets no key while it is open, and when it closes the keyboard is the workspace's
+(⌘L goes back in).
 
 ## Tags
 
@@ -272,9 +312,10 @@ review the export PR >canvas-app @codex $code-review /src/export
   runner, or `claude-…` or `codex-…`, is not offered: the name means the runner or its model.
   Name saved agents otherwise.
 - **What they do today.** `#project` and `>repo` are used: the home screen groups by project, and
-  a task opens a terminal in its repository. `@agent`, `/path` and `$skill` are stored on the
-  task and shown on its row. Nothing starts an agent or loads a skill yet. What must be
-  checked before anything does: [routines.md](ai/routines.md#6-trust-and-safety).
+  a task's agent runs in its repository. `@agent` says which agent starts in the drawer
+  ([Flow of a task](#flow-of-a-task)). `/path` and `$skill` are stored on the task and shown
+  on its row; nothing loads a skill yet. What must be checked before anything does:
+  [routines.md](ai/routines.md#6-trust-and-safety).
 - **Reading is off the window's thread.** Names and paths are looked up on another thread, so a
   slow disk does not stop typing. A tag's chip shows a moment after the word is typed; ↵ files
   the line with the tags that have shown.
@@ -290,7 +331,7 @@ was (an app's name, bundle id and window title; a terminal's directory and the p
 and the text under each annotation: for an app pane the labelled accessibility nodes there (read
 once, read-only: nothing in the app is pressed or set), for a terminal the rows.
 
-- The task's row says how many materials it has. Opening the task shows its brief in the right bar.
+- The task's row says how many materials it has. Opening the task shows its brief in the drawer; so does Brief in its conversation's header.
 - The files are in `~/.ottospace/materials/<task id>-<a word of its own>/`, readable by you alone: `brief.md`,
   `brief.json`, and for each capture `1.png`, `1.annotated.png`, `1.json`. They are never in the
   tasks folder. A cancelled draft leaves nothing.
@@ -512,6 +553,7 @@ optional:
   "session_dirs": { "claude": ["~/.claude"], "codex": "~/.codex" },
   "session_quiet_minutes": 3,
   "agent_models": { "claude": ["claude-opus-5-5"], "codex": ["gpt-6-astra"] },
+  "default_agent": "claude",
   "capture_key": "ctrl-alt-cmd-space",
   "capture": { "keep_images": true, "ax": true },
   "workbook_scrollback_lines": 500,
@@ -532,6 +574,7 @@ optional:
 | `session_dirs` | Where the runners keep their sessions: `claude` is a list of Claude Code config directories (one for each account), `codex` is Codex's home. A runner left out keeps its default. An app started from the Dock does not see `CLAUDE_CONFIG_DIR` or `CODEX_HOME`: name other directories here | `~/.claude`, `~/.codex` |
 | `session_quiet_minutes` | A task adopted from a session moves to Needs you once the session has been quiet this many minutes. `0`: a quiet session never moves its task | `3` |
 | `agent_models` | The models the `@agent` dropdown offers after each runner, in place of the built-in list: ids as the runner's CLI takes them. `claude` and `codex` are each a list; a runner left out keeps its own, an empty list offers the runner alone. An id that does not start with the runner's name gets it in the tag: `gpt-6-astra` is `@codex-gpt-6-astra`, `opus` is `@claude-opus`. An entry that is not a name (letters and digits, with `.`, `-` or `_` between them one at a time; at most 64) is left out and named in the status bar | `claude-fable-5-2`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`; `gpt-6-astra` |
+| `default_agent` | The agent a task with no `@agent` starts: a runner (`claude`, `codex`) or a runner and a model (`claude-opus-5-5`, `codex-gpt-6-astra`). The first WHO pick in the drawer | `claude` |
 | `workbook_scrollback_lines` | How many of a terminal's last lines a [workbook](#workbooks) keeps when it is saved, shown again above its prompt when it opens. At most `2000`. `0`: none is kept | `500` |
 | `capture_key` | The key that captures the pane in use, from any app: modifiers (`ctrl`, `alt`, `cmd`, `shift`) and a key, with `-` between them. `"off"`: no key. `OTTOSPACE_CAPTURE_KEY` wins over it. Not `ctrl-alt-space`: macOS uses it to change the input source | `ctrl-alt-cmd-space` |
 | `capture.keep_images` | Keep a capture's pictures on disk. `false`: no picture is ever written | `true` |
@@ -617,6 +660,7 @@ first brainstorm:
 [marks.md](ai/marks.md): marks, what one records, and how they sit beside session restore, pins and tasks.
 [workbook.md](ai/workbook.md): workbooks beside tasks, marks and session restore; stages 1 and 2 as built, and what is later.
 [terminal-persistence.md](ai/terminal-persistence.md): terminals and agents that outlive a quit or an update, held outside the app; with session restore, tasks come back as they were.
+[task-conversation.md](ai/task-conversation.md): a task's agent in a right drawer, the three zones, how an agent is started; stage 1 as built (the agent's terminal in the drawer), and what is later.
 
 [routines.md](ai/routines.md): routines and agents from ottobot, in stages, toward ottospace subsuming it.
 

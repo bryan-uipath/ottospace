@@ -294,7 +294,8 @@ impl Model {
         }
         self.back_to = self.back_to.filter(|pane| self.pane(*pane).is_some());
         let briefed = |id: &TaskId| self.tasks.get(*id).is_some_and(|task| !task.materials.is_empty());
-        self.brief = self.brief.filter(|id| self.current_task == Some(*id) && briefed(id));
+        let shown = |id: &TaskId| self.current_task == Some(*id) || self.talk.is_some_and(|talk| talk.task == *id);
+        self.brief = self.brief.filter(|id| shown(id) && briefed(id));
     }
 }
 
@@ -690,7 +691,9 @@ mod tests {
         // A draft with a title and no capture is a plain task: nothing to keep.
         start(&mut m, Some(99));
         typed(&mut m, "plain");
-        assert_eq!(m.update(Action::ComposeSubmit { open: true }), [dropped(None)]);
+        let effects = m.update(Action::ComposeSubmit { open: true });
+        assert_eq!(effects[0], dropped(None));
+        assert!(matches!(effects[1..], [Effect::StartAgent { task: 2, cwd: None, brief: None, .. }]), "{effects:?}");
         assert_eq!(m.tasks.get(2).map(|task| task.materials.len()), Some(0));
         // With no title and no capture nothing is added, and the bar stays.
         start(&mut m, Some(99));

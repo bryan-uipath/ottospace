@@ -89,6 +89,11 @@ impl Gen<'_> {
         }
     }
 
+    /// A session's id as the shell makes one, or text that is none.
+    fn session_id(&mut self) -> String {
+        self.rng.pick(&["8f14e45f-ceea-467f-a8d3-0242ac130003", "--resume", ""]).to_string()
+    }
+
     fn task(&mut self) -> TaskId {
         let real: Vec<TaskId> = self.m.tasks.list.iter().map(|t| t.id).collect();
         self.one_of(&real, Self::stray)
@@ -567,6 +572,11 @@ const MAKERS: &[Make] = &[
     },
     |g| Action::ComposeRef { target: if g.rng.coin() { Pointed::Pane(g.pane()) } else { Pointed::Tab(g.tab_id()) } },
     |g| {
+        let mark = g.rng.pick(&['>', '@', '#']);
+        let name = g.rng.coin().then(|| g.name(&["app", "claude", "codex-gpt-6-astra", "ana", "--yolo"]));
+        Action::ComposePick { mark, name }
+    },
+    |g| {
         let info = |g: &mut Gen| TerminalInfo {
             pane: g.pane(),
             cwd: g.rng.coin().then(|| g.name(DIRS)),
@@ -768,6 +778,36 @@ const MAKERS: &[Make] = &[
     |g| Action::WorkbookRemove { workbook: g.workbook(), tab: g.book_tab() },
     |g| Action::WorkbookFold { workbook: g.workbook() },
     |_| Action::WorkbookUndo,
+    |g| Action::SetAgents {
+        claude: g.names(AGENTS, 2),
+        codex: Vec::new(),
+        default: g.rng.coin().then(|| g.name(AGENTS)),
+    },
+    |g| Action::TaskTalk { id: g.task() },
+    |g| Action::TalkPick { id: g.task() },
+    |_| Action::ComposeEnter,
+    |g| Action::AgentStarted {
+        task: g.task(),
+        session: g.rng.coin().then(|| g.session_id()),
+        at: g.rng.below(100) as u64,
+    },
+    |g| {
+        let started = |g: &mut Gen| agents::Started {
+            runner: g.rng.pick(&["codex", "claude"]).to_string(),
+            id: g.session_id(),
+            cwd: g.rng.pick(&["/code/app", "/Users/me", "/elsewhere"]).to_string(),
+            started: g.rng.below(200) as u64,
+        };
+        let found = (0..g.rng.below(3)).map(|_| started(g)).collect();
+        Action::AgentSessions { found, home: Some("/Users/me".into()), now: g.rng.below(100_000) as u64 }
+    },
+    |g| Action::AgentExited { task: g.task() },
+    |g| Action::SessionMissing { task: g.task(), id: g.session_id() },
+    |g| Action::TaskStop { id: g.task() },
+    |_| Action::TalkToggle,
+    |g| Action::TalkKeys { on: g.rng.coin() },
+    |g| Action::TalkResize { width: g.rng.pick(&[0., 400., 9e9, f32::NAN]) },
+    |_| Action::TalkWide,
 ];
 
 /// The way out of each box and mode. Picked one time in 8: with every action as likely as any
@@ -870,6 +910,22 @@ fn check(m: &Model) -> Result<(), String> {
     for (_, tab) in &m.last_tab {
         ensure!(tab_ids.contains(tab), "tab {tab} is remembered and gone");
     }
+
+    // The drawer is on a task there is; the keyboard is in it only while it is open, its agent
+    // runs, and no app, list or visual mode has the keyboard.
+    if let Some(talk) = m.talk {
+        ensure!(m.tasks.get(talk.task).is_some(), "the drawer is on task {}, which is gone", talk.task);
+        let free = m.live.is_none() && m.list.is_none() && m.visual.is_none() && m.annotated().is_none();
+        ensure!(
+            !talk.keys || (talk.open && m.agent_runs(talk.task) && free),
+            "the keyboard is in a conversation that is closed, has no agent, or under another: {talk:?}"
+        );
+    }
+    ensure!(m.mode() != Mode::Talk || m.talk.is_some_and(|talk| talk.keys), "talk mode with no conversation");
+    ensure!(unique(&m.agents), "an agent runs twice for one task: {:?}", m.agents);
+    ensure!(m.agents.iter().all(|id| m.tasks.get(*id).is_some()), "an agent runs for a task that is gone");
+    let width = m.talk_width;
+    ensure!((talk::MIN_WIDTH..=talk::MAX_WIDTH).contains(&width), "the drawer is {width} wide");
 
     // Who has the keyboard, and that what has it is there.
     // The new-task line in the right bar is no box; its title or a picture may have the keyboard.
@@ -996,8 +1052,8 @@ fn check(m: &Model) -> Result<(), String> {
         let _ = sneak.visible().count();
     }
     if let Some(confirm) = &m.confirm {
-        let loses = !confirm.running.is_empty() || m.quit_discards() > 0;
-        ensure!(loses, "the quit question names no terminal, and no draft holds a capture");
+        let loses = !confirm.running.is_empty() || m.quit_discards() > 0 || !m.agents.is_empty();
+        ensure!(loses, "the quit question names no terminal, no draft holds a capture, and no agent runs");
         ensure!(
             confirm.running.iter().all(|r| m.pane(r.pane).is_some()),
             "the quit question names a pane that is gone"
@@ -1094,8 +1150,18 @@ fn check(m: &Model) -> Result<(), String> {
         "the way back leads to pane {:?}, which is gone",
         m.back_to
     );
-    let briefed =
-        |id: TaskId| m.current_task == Some(id) && m.tasks.get(id).is_some_and(|task| !task.materials.is_empty());
+    // The right rail: at most its cap, each cell a task there is, told apart by its badge; the
+    // drawer's conversation is the one cell shown.
+    let rail = m.rail();
+    let mut badges: Vec<&str> = rail.iter().map(|cell| cell.mono.as_str()).collect();
+    badges.sort_unstable();
+    badges.dedup();
+    ensure!(rail.len() <= talk::RAIL && badges.len() == rail.len(), "the rail: {rail:?}");
+    ensure!(rail.iter().all(|cell| m.tasks.get(cell.task).is_some()), "a rail cell for a task that is gone");
+    let open = m.talk.filter(|talk| talk.open).map(|talk| talk.task);
+    ensure!(rail.iter().all(|cell| cell.shown == (open == Some(cell.task))), "the rail shows another cell: {rail:?}");
+    let shown = |id: TaskId| m.current_task == Some(id) || m.talk.is_some_and(|talk| talk.task == id);
+    let briefed = |id: TaskId| shown(id) && m.tasks.get(id).is_some_and(|task| !task.materials.is_empty());
     ensure!(m.brief.is_none_or(briefed), "the brief of task {:?} shows: not on show, or it has none", m.brief);
     for task in &m.tasks.list {
         let dir = task.materials_dir();
@@ -1316,7 +1382,7 @@ impl Run {
         let task_ids: Vec<TaskId> = m.tasks.list.iter().map(|task| task.id).collect();
         // ↵ on a highlighted row that would change the line takes the row: it files nothing.
         let takes = match (&action, m.dropdown().and_then(|menu| menu.selected)) {
-            (Action::ComposeSubmit { open: false }, Some(row)) => m.changes(row),
+            (Action::ComposeSubmit { open: false } | Action::ComposeEnter, Some(row)) => m.changes(row),
             _ => false,
         };
         // While the bar asks before discarding, ↵ is the answer: it files nothing.
@@ -1325,7 +1391,7 @@ impl Run {
         let filing = m.compose_line().filter(|_| submits && !takes && !answers && refused.is_none());
         // A draft with captures is filed under a name of its own when none was typed.
         let named = m.capture_title();
-        let filing = filing.map(|line| (line.clone(), m.draft(line), m.compose_host()));
+        let filing = filing.map(|line| (line.clone(), m.draft(line)));
         // A row taken reads back as the tag it is, of that very name.
         let taken = match (&action, m.dropdown()) {
             (Action::ComposeAccept { index }, Some(menu)) => {
@@ -1464,10 +1530,12 @@ impl Run {
             ensure!(reads, "{mark}{name} was taken, and {:?} reads as {draft:?}", m.compose_line());
         }
         // What only the box's own line takes does nothing while the line has no keyboard.
-        if matches!(action, Action::ComposeAttach { .. } | Action::ComposeRef { .. }) && !composing {
+        if matches!(action, Action::ComposeAttach { .. } | Action::ComposeRef { .. } | Action::ComposePick { .. })
+            && !composing
+        {
             ensure!(m.compose_line() == line_before.as_ref(), "the line changed with no keyboard: {line_before:?}");
         }
-        if let Some((line, draft, host)) = filing {
+        if let Some((line, draft)) = filing {
             let filed: Vec<&Task> = m.tasks.list.iter().filter(|task| !task_ids.contains(&task.id)).collect();
             if let Some(named) = named.filter(|_| draft.title.is_empty()) {
                 // Named by fixed words, and marked as not typed: nothing captured is in a title.
@@ -1482,10 +1550,12 @@ impl Run {
                     "a line with no title filed a task, or closed the box"
                 );
             } else {
-                // On the home screen the line stays for the next task, empty, unless the task is started.
-                let stays = host == Some(Host::Home) && !matches!(action, Action::ComposeSubmit { open: true });
-                let left = if stays { m.compose_line().is_some_and(String::is_empty) } else { m.compose.is_none() };
-                ensure!(filed.len() == 1 && left, "{line:?} filed {} tasks; the box is {:?}", filed.len(), m.compose);
+                ensure!(
+                    filed.len() == 1 && m.compose.is_none(),
+                    "{line:?} filed {} tasks; the box is {:?}",
+                    filed.len(),
+                    m.compose
+                );
                 ensure!(!filed[0].title_generated, "a title that was typed is marked as made up");
                 let task = filed[0];
                 let repo = draft.repo.as_deref().and_then(|name| m.repo_named(name));
@@ -1572,6 +1642,26 @@ impl Run {
                 Effect::Activate { id } => {
                     let own = format!("{:?}", Source::Own { id: id.clone() });
                     ensure!(labelled.contains(&own), "a control with no label is activated: {id:?}");
+                }
+                Effect::StartAgent { task, start, .. } => {
+                    // An agent runs with the user's rights: no client's action starts one.
+                    ensure!(user, "{origin:?} started an agent for task {task}");
+                    ensure!(m.tasks.get(*task).is_some() && m.agent_runs(*task), "an agent starts for no task: {task}");
+                    let uuid = "8f14e45f-ceea-467f-a8d3-0242ac130003";
+                    let command = match start {
+                        agents::Start::New(launch) => launch.command(uuid, None),
+                        agents::Start::Resume { runner, session } => agents::resume(runner, session),
+                    };
+                    ensure!(command.is_some(), "an agent that cannot be started is asked for: {start:?}");
+                    // Its prompt is the task's title alone: nothing captured from a pane or an app
+                    // (a title nobody typed is fixed words), and never the brief's text.
+                    if let agents::Start::New(launch) = start {
+                        let title = m.tasks.get(*task).map(|task| task.title.as_str());
+                        ensure!(title == Some(launch.title.as_str()), "task {task} starts with {:?}", launch.title);
+                    }
+                }
+                Effect::StopAgent { task } => {
+                    ensure!(user && m.agent_runs(*task), "{origin:?} stops the agent of task {task}, or none runs");
                 }
                 Effect::SaveApps { changes } => {
                     // The settings file is the user's: no client's action writes it.
@@ -1969,6 +2059,7 @@ fn code(sent: &Envelope) -> String {
         "Entry",
         "TerminalInfo",
         "Facts",
+        "Started",
         "History",
     ];
     const ENUM_OF: &[(&str, &str)] = &[
@@ -2603,6 +2694,7 @@ fn a_brief_goes_when_its_task_no_longer_names_a_capture() {
         Action::AnnotateLeave { title: true },
         Action::FieldEdit { edit: Edit::Insert("fix".into()) },
         Action::ComposeSubmit { open: true },
+        Action::BriefShow { id: 1 },
     ];
     steps.into_iter().for_each(|action| run.step(action.into()).unwrap());
     assert_eq!(run.m.brief, Some(1));
