@@ -1,5 +1,5 @@
 //! Canary: a tiny app whose windows ottospace can host in tests, so the tests never touch the
-//! user's real windows. Each window records the keys and clicks it receives. A control socket
+//! user's real windows. Each window records the keys, clicks and scrolls it receives. A control socket
 //! reports that record and opens or closes windows on request.
 //!
 //! One JSON request per line on `$CANARY_SOCKET`, one JSON reply per line:
@@ -14,9 +14,6 @@
 //! With `CANARY_BUTTON` set, the first window has a native button titled "Canary button" in
 //! its content: a control its accessibility tree names. Below it, a checkbox "Canary press"
 //! (`pressed` in the state: whether it is on) and a disabled one, "Canary disabled".
-//!
-//! With `CANARY_SCROLL` set, the first window has a native scroll view filling it below the top
-//! line, over a tall page: `scrolled` in the state is how far it is scrolled, in points.
 
 use std::cell::RefCell;
 use std::io::{BufRead, BufReader, Write};
@@ -27,8 +24,8 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 
 use gpui::{
-    App, Application, Bounds, Context, FocusHandle, KeyDownEvent, MouseButton, MouseDownEvent, TitlebarOptions, Window,
-    WindowBounds, WindowHandle, WindowOptions, div, prelude::*, px, rgb, size,
+    App, Application, Bounds, Context, FocusHandle, KeyDownEvent, MouseButton, MouseDownEvent, ScrollWheelEvent,
+    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, prelude::*, px, rgb, size,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -91,6 +88,8 @@ struct Canary {
     keys: Vec<String>,
     /// Click positions in window coordinates.
     clicks: Vec<[f32; 2]>,
+    /// The scroll wheel's vertical deltas received, in points, added up.
+    wheel: f32,
     focus: FocusHandle,
 }
 
@@ -116,6 +115,10 @@ impl Render for Canary {
                     cx.notify();
                 }),
             )
+            .on_scroll_wheel(cx.listener(|this, e: &ScrollWheelEvent, _, cx| {
+                this.wheel += f32::from(e.delta.pixel_delta(px(16.)).y);
+                cx.notify();
+            }))
             .child(div().text_xl().child(self.title.clone()))
             .child(format!("keys: {}", self.keys.join(" ")))
             .child(format!("clicks: {}", self.clicks.len()))
@@ -127,8 +130,6 @@ type Windows = Rc<RefCell<Vec<WindowHandle<Canary>>>>;
 thread_local! {
     /// The first window's checkboxes, with `CANARY_BUTTON`: "Canary press", "Canary disabled".
     static CHECKBOXES: RefCell<Vec<ottospace_mac::window::Checkbox>> = const { RefCell::new(Vec::new()) };
-    /// The first window's scroll view, with `CANARY_SCROLL`.
-    static SCROLL: RefCell<Option<ottospace_mac::window::ScrollView>> = const { RefCell::new(None) };
 }
 
 /// `at`: where its top left goes, as `move` puts it.
@@ -154,21 +155,10 @@ fn open(windows: &Windows, min: Option<[f32; 2]>, fixed: Option<[f32; 2]>, at: O
         cx.new(|cx| {
             let focus = cx.focus_handle();
             window.focus(&focus);
-            Canary { title, keys: Vec::new(), clicks: Vec::new(), focus }
+            Canary { title, keys: Vec::new(), clicks: Vec::new(), wheel: 0.0, focus }
         })
     });
     if let Ok(handle) = handle {
-        if number == 1 && std::env::var_os("CANARY_SCROLL").is_some() {
-            let _ = handle.update(cx, |_, window, _| {
-                use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-                if let Ok(RawWindowHandle::AppKit(appkit)) = HasWindowHandle::window_handle(window).map(|h| h.as_raw())
-                {
-                    let at = [0., 60., f64::from(width), f64::from(height) - 60.];
-                    let view = unsafe { ottospace_mac::window::add_scroll_view(appkit.ns_view.as_ptr(), at) };
-                    SCROLL.with_borrow_mut(|scroll| *scroll = view);
-                }
-            });
-        }
         if number == 1 && std::env::var_os("CANARY_BUTTON").is_some() {
             let _ = handle.update(cx, |_, window, _| {
                 if let Some(view) = ns_view(window) {
@@ -216,14 +206,13 @@ fn state(windows: &Windows, cx: &mut App) -> String {
             let active = window.is_window_active();
             // `frame`: as Accessibility has it, global, so a test can tell whether it is on a screen.
             let global = ns_view(window).and_then(|view| unsafe { ottospace_mac::window::frame(view) });
-            json!({ "title": canary.title, "keys": canary.keys, "clicks": canary.clicks, "bounds": frame, "frame": global, "active": active })
+            json!({ "title": canary.title, "keys": canary.keys, "clicks": canary.clicks, "wheel": canary.wheel, "bounds": frame, "frame": global, "active": active })
         });
         entry.map(|entry| open_windows.push(entry)).is_ok()
     });
     // Whether "Canary press" is on: a press reached it.
     let pressed = CHECKBOXES.with_borrow(|boxes| boxes.first().map(|b| b.on()));
-    let scrolled = SCROLL.with_borrow(|scroll| scroll.as_ref().map(|s| s.offset()));
-    json!({ "ok": true, "windows": open_windows, "pressed": pressed, "scrolled": scrolled }).to_string()
+    json!({ "ok": true, "windows": open_windows, "pressed": pressed }).to_string()
 }
 
 fn serve(calls: &Receiver<(Request, Sender<String>)>, windows: &Windows, cx: &mut App) {

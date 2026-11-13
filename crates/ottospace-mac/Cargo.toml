@@ -12,7 +12,7 @@ objc2-core-foundation = { version = "0.3", features = ["CFString", "CFDictionary
 objc2-application-services = { version = "0.3", features = ["HIServices", "AXUIElement", "AXError", "AXValue", "AXValueConstants"] }
 # macos_14_0: one-off screenshots (corner radius measurement).
 screencapturekit = { version = "11", features = ["macos_14_0"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "libc", "NSRunningApplication", "NSResponder", "NSEvent", "NSScreen", "NSView", "NSWindow", "NSApplication", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphicsContext", "NSGraphics", "NSWorkspace", "NSPasteboard", "NSPasteboardItem", "objc2-core-graphics", "NSBezierPath", "NSColor", "NSFont", "NSStringDrawing", "NSAttributedString", "NSControl", "NSButton", "NSCell", "NSScrollView", "NSClipView", "objc2-core-foundation"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "libc", "NSRunningApplication", "NSResponder", "NSEvent", "NSScreen", "NSView", "NSWindow", "NSApplication", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphicsContext", "NSGraphics", "NSWorkspace", "NSPasteboard", "NSPasteboardItem", "objc2-core-graphics", "NSBezierPath", "NSColor", "NSFont", "NSStringDrawing", "NSAttributedString", "NSControl", "NSButton", "NSCell", "objc2-core-foundation"] }
 # The Dock icon is handed to AppKit as NSData.
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSEnumerator", "NSError", "NSGeometry", "NSPropertyList", "NSString", "NSURL"] }

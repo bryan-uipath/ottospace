@@ -1461,15 +1461,10 @@ fn a_sneak_label_presses_a_control_in_the_hosted_app_and_a_disabled_one_has_none
 #[test]
 #[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
 fn the_users_wheel_over_a_parked_app_pane_scrolls_the_app_which_stays_in_the_back() {
-    // The canary's window is a scroll view over a tall page, which reports how far it scrolled.
-    let canary = Proc::launch(
-        env!("CARGO_BIN_EXE_ottospace-canary"),
-        "canary-wheel",
-        "CANARY_SOCKET",
-        &[("CANARY_SCROLL", "1")],
-    );
-    let scrolled = || canary.call(json!({"cmd": "state"}))["scrolled"].as_f64();
-    wait_for("the canary's scroll view", scrolled);
+    // The canary's window adds up the scrolls it receives.
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-wheel", "CANARY_SOCKET", &[]);
+    let scrolled = || canary.call(json!({"cmd": "state"}))["windows"][0]["wheel"].as_f64();
+    wait_for("the canary window", scrolled);
     assert_eq!(scrolled(), Some(0.0));
     let otto = Proc::launch(
         env!("CARGO_BIN_EXE_ottospace"),
@@ -1488,8 +1483,7 @@ fn the_users_wheel_over_a_parked_app_pane_scrolls_the_app_which_stays_in_the_bac
     });
     let shown =
         wait_for("a frame of its stream", || rect(&state()["shown"]["1"]).filter(|s| s[2] > 100.0 && s[3] > 200.0));
-    // Over the scroll view: below the window's top line.
-    let (x, y) = (shown[0] + shown[2] / 2.0, shown[1] + 160.0);
+    let (x, y) = (shown[0] + shown[2] / 2.0, shown[1] + shown[3] / 2.0);
     let wheel = |by_user: bool| {
         let mut request =
             json!({"cmd": "mouse", "action": "wheel", "x": x, "y": y, "dx": 0, "dy": -120, "precise": true});
@@ -1504,15 +1498,15 @@ fn the_users_wheel_over_a_parked_app_pane_scrolls_the_app_which_stays_in_the_bac
     std::thread::sleep(Duration::from_millis(800));
     assert_eq!(scrolled(), Some(0.0), "a client's scroll moved the app");
 
-    // The user's scrolls the canary's page, and the canary stays parked, in the back.
+    // The user's reaches the canary's window, and the canary stays parked, in the back.
     let reply = wheel(true);
     assert_eq!((&reply["mode"], &reply["state"]["live"]), (&json!("normal"), &Value::Null));
     let by = wait_or(
         "the canary to scroll",
         || format!("{:?} / {} / {}", scrolled(), state()["notice"], state()["counts"]),
-        || scrolled().filter(|by| *by > 0.0),
+        || scrolled().filter(|by| *by != 0.0),
     );
-    assert!(by <= 120.0 + 1.0, "scrolled {by}");
+    assert!(by.abs() <= 120.0 + 1.0, "scrolled {by}");
     assert_ne!(front_app().0, canary.child.id(), "the canary came to the front");
     assert_eq!(state()["state"]["live"], Value::Null);
 }

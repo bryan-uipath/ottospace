@@ -312,42 +312,6 @@ pub unsafe fn add_checkbox(ns_view: *mut c_void, title: &str, at: [f64; 4], enab
     Some(Checkbox(checkbox))
 }
 
-/// A native scroll view of the canary's, over a tall blank page.
-pub struct ScrollView(Retained<objc2_app_kit::NSScrollView>);
-
-/// The page's height, in points.
-const PAGE: f64 = 3000.0;
-
-impl ScrollView {
-    /// How far its page is scrolled, in points from the top. The page is not flipped: AppKit
-    /// counts its `y` from the bottom.
-    pub fn offset(&self) -> f64 {
-        let shown = self.0.contentView().bounds();
-        PAGE - shown.size.height - shown.origin.y
-    }
-}
-
-/// Adds a native scroll view to the view, `at` points from its top left, over a page 3000 points
-/// tall: something a test can scroll and then read. For the canary.
-///
-/// # Safety
-/// As `add_button`.
-pub unsafe fn add_scroll_view(ns_view: *mut c_void, at: [f64; 4]) -> Option<ScrollView> {
-    let mtm = MainThreadMarker::new()?;
-    let view = unsafe { &*(ns_view as *const NSView) };
-    let scroll = objc2_app_kit::NSScrollView::initWithFrame(mtm.alloc(), frame_in(view, at));
-    let page = objc2_foundation::NSRect::new(NSPoint::new(0., 0.), objc2_foundation::NSSize::new(at[2], PAGE));
-    let page = NSView::initWithFrame(mtm.alloc(), page);
-    scroll.setHasVerticalScroller(true);
-    scroll.setDocumentView(Some(&page));
-    // At the page's top, so a scroll down moves it.
-    let clip = scroll.contentView();
-    clip.scrollToPoint(NSPoint::new(0., PAGE - clip.bounds().size.height));
-    scroll.reflectScrolledClipView(&clip);
-    view.addSubview(&scroll);
-    Some(ScrollView(scroll))
-}
-
 /// Makes this process a background app: no Dock icon, no place in the app switcher, and it does
 /// not come to the front when it starts. For test runs, which must not take the user's keyboard.
 pub fn stay_in_background() {
