@@ -1389,3 +1389,71 @@ fn a_busy_app_keeps_its_pane_and_gets_its_window_back() {
         global_frame(&canary, 0).filter(|f| (0..4).all(|i| (f[i] - original[i]).abs() <= 1.0))
     });
 }
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn a_sneak_label_presses_a_control_in_the_hosted_app_and_a_disabled_one_has_none() {
+    // The canary's window has a button, a checkbox whose state it reports, and a disabled one.
+    let env = [("CANARY_BUTTON", "1")];
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-sneak", "CANARY_SOCKET", &env);
+    wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
+    assert_eq!(canary.call(json!({"cmd": "state"}))["pressed"], false);
+    let otto = Proc::launch(
+        env!("CARGO_BIN_EXE_ottospace"),
+        "otto-sneak",
+        "OTTOSPACE_SOCKET",
+        &[
+            ("OTTOSPACE_E2E", "1"),
+            ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string()),
+            ("OTTOSPACE_RETURN_KEY", "f19"),
+        ],
+    );
+    let state = || otto.call(json!({"cmd": "state"}));
+    let user_key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys, "as": "user"}));
+    otto.call(json!({"cmd": "open_app", "name": CANARY}));
+    wait_for("the window to park with its title bar cropped", || {
+        state()["crop"]["1"].as_f64().filter(|c| (16.0..=40.0).contains(c))
+    });
+    wait_for("a frame of its stream", || rect(&state()["shown"]["1"]).filter(|shown| shown[2] > 100.0));
+
+    // The tree, to tell the controls apart by their paths: the labels carry no text.
+    let tree = otto.call(json!({"cmd": "ax_tree", "pane": 1}));
+    let children = tree["tree"]["root"]["children"].as_array().cloned().unwrap_or_default();
+    let path_of = |title: &str| {
+        let at = children.iter().position(|node| node["title"] == title);
+        json!([at.unwrap_or_else(|| panic!("no {title} in {tree}"))])
+    };
+    let (press, disabled, button) = (path_of("Canary press"), path_of("Canary disabled"), path_of("Canary button"));
+
+    // The user's sneak key: ottospace's own labels at once, the app's when its tree is read.
+    assert_eq!(user_key("cmd-ctrl-g")["mode"], "sneak");
+    let labelled = wait_or(
+        "the app's labels",
+        || state().to_string(),
+        || Some(state()).filter(|s| s["sneak"]["app"]["controls"].as_u64().is_some_and(|n| n >= 2)),
+    );
+    let targets = labelled["sneak"]["targets"].as_array().cloned().unwrap_or_default();
+    let label_of = |path: &Value| {
+        let found = targets.iter().find(|t| t["source"]["type"] == "app" && &t["source"]["path"] == path);
+        found.and_then(|t| t["label"].as_str().map(str::to_string))
+    };
+    assert!(label_of(&button).is_some() && label_of(&disabled).is_none(), "{targets:?}");
+    let label = label_of(&press).unwrap_or_else(|| panic!("no label on the checkbox: {targets:?}"));
+    // The label lies over the pane, where the checkbox shows in its stream.
+    let shown = rect(&labelled["shown"]["1"]).expect("the stream");
+    let on = targets.iter().find(|t| t["label"] == label.as_str()).expect("its target")["frame"].clone();
+    let (x, y) = (on["x"].as_f64().unwrap_or(-1.0), on["y"].as_f64().unwrap_or(-1.0));
+    assert!(x >= shown[0] && y >= shown[1] && x < shown[0] + shown[2] && y < shown[1] + shown[3], "{on} in {shown:?}");
+
+    // Typing it presses the checkbox through accessibility: the canary reports it, the pane
+    // stays parked and ottospace keeps the keyboard.
+    let letters: Vec<String> = label.chars().map(String::from).collect();
+    let reply = user_key(&letters.join(" "));
+    assert_eq!((&reply["mode"], &reply["state"]["live"]), (&json!("normal"), &Value::Null), "{reply}");
+    wait_or(
+        "the canary to report the press",
+        || format!("{} / {}", canary.call(json!({"cmd": "state"})), state()["notice"]),
+        || (canary.call(json!({"cmd": "state"}))["pressed"] == true).then_some(()),
+    );
+    assert_eq!(state()["app_presses"], json!([[1, press]]));
+}

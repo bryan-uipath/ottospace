@@ -99,6 +99,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     ax_overlay: overlay,
     sneak: null,
     counts: { live: 0 },
+    app_presses: null,
     marks: [],
     mark_removed: null,
     workbooks: [],

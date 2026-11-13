@@ -807,6 +807,12 @@ pub enum Action {
     },
     SneakBackspace,
     LeaveSneak,
+    /// The focused app pane's window as just read, with no text (`read`), or `None`: it is gone or
+    /// not shown. Its elements get labels on the first read; later reads move or drop them.
+    SneakApp {
+        pane: PaneId,
+        read: Option<crate::sneak_apps::AppRead>,
+    },
     /// ⌘Q. `running`: the terminals with a program in front of their shell, as the shell crate
     /// sees them now. None: quit. Some: ask first. Asked again while the question is up: quit.
     QuitAsked {
@@ -1330,6 +1336,7 @@ impl Action {
             | Action::SneakType { .. }
             | Action::SneakBackspace
             | Action::LeaveSneak
+            | Action::SneakApp { .. }
             | Action::QuitConfirm
             | Action::QuitCancel
             | Action::Quit
@@ -1521,6 +1528,16 @@ pub enum Effect {
     /// it (e.g. `rail:apps`), and the control was in the last frame the shell reported.
     Activate {
         id: String,
+    },
+    /// The user typed a label in a hosted app: press the element at `path` in `pane`'s window
+    /// (`focus`: focus the text field, then `Enter` the pane as the user), if it is still the one
+    /// labelled (`sneak_apps::check` against `role` and `at`). Only ever for the user's own letters.
+    PressApp {
+        pane: PaneId,
+        path: Vec<usize>,
+        role: String,
+        at: crate::ax::Frame,
+        focus: bool,
     },
     /// End the app.
     Quit,
@@ -1924,6 +1941,10 @@ impl Model {
         let boxed = self.picker.is_some() || self.compose_keys();
         match action {
             _ if origin == Origin::User => None,
+            // A label in another app presses there: only the user's own letters spell one.
+            Action::SneakType { text } if self.sneak.as_ref().is_some_and(|s| s.reaches_app(text)) => {
+                Some(crate::sneak_apps::USERS_ALONE)
+            }
             // A pin, an unpin, a hidden suggestion and their undo write the user's settings
             // file: no client's key or label does that.
             Action::AppPin { .. } | Action::AppHide { .. } | Action::AppsUndo | Action::ListPin => {
@@ -2125,6 +2146,7 @@ impl Model {
                 | Action::SneakType { .. }
                 | Action::SneakBackspace
                 | Action::LeaveSneak
+                | Action::SneakApp { .. }
         );
         if user && !own {
             self.sneak = None;
@@ -2362,6 +2384,17 @@ impl Model {
             }
         }
         effects
+    }
+
+    /// A typed label in an app: press its element, or focus a text field. The shell gives the app
+    /// the keyboard only once the field took focus. Nothing if the pane is gone or its window is live.
+    fn press_app(&mut self, target: Target, effects: &mut Vec<Effect>) {
+        let crate::ax::Source::App { pane, path, role, at } = target.source else { return };
+        if self.pane(pane).is_none() || self.live == Some(pane) {
+            return;
+        }
+        let focus = crate::sneak_apps::focuses(&role);
+        effects.push(Effect::PressApp { pane, path, role, at, focus });
     }
 
     fn act(&mut self, action: Action, effects: &mut Vec<Effect>) {
@@ -3142,7 +3175,10 @@ impl Model {
             Action::SneakEnter { .. } if self.sneak.is_some() => {}
             Action::Sneak { targets } | Action::SneakEnter { targets } => {
                 if matches!(self.mode(), Mode::Normal | Mode::List | Mode::Talk) && !self.keys {
-                    self.sneak = Sneak::new(targets);
+                    // An app pane in focus: its elements get labels once read, beside these.
+                    let app =
+                        self.focused.and_then(|id| self.pane(id)).is_some_and(|p| matches!(p.kind, Kind::App { .. }));
+                    self.sneak = Sneak::leaving_room(targets, app);
                 }
                 // Two sets of chips from one alphabet would not say which a letter means.
                 if let Some(sneak) = &mut self.sneak {
@@ -3167,9 +3203,29 @@ impl Model {
                         self.sneak = None;
                         effects.push(Effect::Activate { id });
                     }
+                    Some(Typed::App(target)) => {
+                        self.sneak = None;
+                        self.press_app(target, effects);
+                    }
                     Some(Typed::NoLabel) => self.sneak = None,
                     Some(Typed::Narrowed) | None => {}
                 }
+            }
+            Action::SneakApp { pane, read } => {
+                let shown = self.pane(pane).is_some() && self.live != Some(pane);
+                let focused = self.focused == Some(pane);
+                let Some(sneak) = &mut self.sneak else { return };
+                // The focused pane on the first read; after that the pane labelled.
+                let ours = sneak.app.map_or(focused, |app| app.pane == pane);
+                match read {
+                    Some(read) if ours && shown => {
+                        let (found, total) = crate::sneak_apps::targets(pane, &read);
+                        sneak.read_app(pane, found, total);
+                    }
+                    _ if sneak.app.is_some_and(|app| app.pane == pane) => sneak.drop_app(),
+                    _ => {}
+                }
+                self.sneak = self.sneak.take().filter(|sneak| !sneak.targets.is_empty());
             }
             Action::SneakBackspace => {
                 if let Some(sneak) = &mut self.sneak {
@@ -5400,6 +5456,7 @@ mod tests {
         Action::SneakType { .. },
         Action::SneakBackspace,
         Action::LeaveSneak,
+        Action::SneakApp { .. },
         Action::QuitAsked { .. },
         Action::QuitConfirm,
         Action::QuitCancel,
@@ -5589,6 +5646,7 @@ mod tests {
             Action::SneakType { text: text() },
             Action::SneakBackspace,
             Action::LeaveSneak,
+            Action::SneakApp { pane: 1, read: None },
             Action::QuitAsked { running: Vec::new() },
             Action::QuitConfirm,
             Action::QuitCancel,
@@ -5809,7 +5867,8 @@ mod tests {
                     Action::SneakEnter { .. }
                     | Action::SneakDrawn { .. }
                     | Action::SneakType { .. }
-                    | Action::SneakBackspace => false,
+                    | Action::SneakBackspace
+                    | Action::SneakApp { .. } => false,
                     _ => origin == Origin::User,
                 };
                 assert_eq!(m.sneak.is_none(), ends, "{action:?} from {origin:?}");

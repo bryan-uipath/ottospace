@@ -1,8 +1,8 @@
 //! Sneak mode in the shell: where ottospace's own controls were drawn, the label pills over them,
 //! and what a typed label does. Labels, keys and leaving are the core's (`ottospace_core::sneak`).
 //!
-//! Sneak presses no control inside another app and sets no value. Entering an app pane raises its
-//! window, as a click on the pane does: see `docs/ai/1-initial-brainstorm/accessibility.md`.
+//! The focused app pane's elements get labels too, in the app's own tint (`sneak_apps`): the user's
+//! letter presses one there, and sets no value. See `docs/ai/sneak-apps.md`.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -130,7 +130,10 @@ pub fn labels(sneak: &Sneak) -> impl IntoElement + use<> {
     let pills = sneak.visible().map(|t| {
         let f = t.target.frame;
         let (typed, rest) = t.label.split_at(sneak.typed.len().min(t.label.len()));
+        // A label in another app is tinted as APP mode is: the press goes to that app.
+        let app = matches!(t.target.source, Source::App { .. });
         let pill = chip()
+            .when(app, |pill| pill.bg(rgb(theme::APP)))
             .flex()
             .line_height(px(15.))
             .font_weight(FontWeight::BOLD)
