@@ -163,6 +163,15 @@ pub enum Host {
     Bar,
 }
 
+/// A new-task line put aside, with what its tags pointed at.
+#[derive(Clone, Debug, PartialEq)]
+struct KeptDraft {
+    line: Field,
+    refs: Vec<Ref>,
+    attached: Vec<String>,
+    theirs: bool,
+}
+
 /// How many repositories the drawer offers as picks.
 pub const PICKS: usize = 4;
 
@@ -1434,6 +1443,9 @@ pub struct Model {
     /// was typed by the user.
     #[serde(skip)]
     pub(crate) compose_theirs: bool,
+    /// The new-task line a conversation's opening put aside: back when the box opens empty.
+    #[serde(skip)]
+    compose_kept: Option<KeptDraft>,
     #[serde(skip)]
     terminals: Vec<TerminalInfo>,
     #[serde(skip)]
@@ -1545,6 +1557,7 @@ impl Default for Model {
             compose_attached: Vec::new(),
             compose_note: None,
             compose_theirs: false,
+            compose_kept: None,
             terminals: Vec::new(),
             home: None,
             collapsed: Vec::new(),
@@ -2264,6 +2277,14 @@ impl Model {
                 (self.known.paths, self.known.entries, self.known_line) = (Vec::new(), Vec::new(), None);
                 self.known_typing = None;
                 self.compose_reset();
+                // An empty box takes back the line a conversation put aside, with what it pointed at.
+                if text.is_empty()
+                    && let Some(kept) = self.compose_kept.take()
+                {
+                    (self.compose, self.compose_refs, self.compose_attached) =
+                        (Some(kept.line), kept.refs, kept.attached);
+                    self.compose_theirs = kept.theirs;
+                }
             }
             // Not under the key reference or the quit question: the field is hidden there.
             Action::FieldEdit { .. } if self.field().is_none() => {}
@@ -3045,10 +3066,12 @@ impl Model {
         let (cwd, brief) = (task.repo.clone(), task.materials_dir().map(str::to_string));
         self.leave(effects);
         self.list = None;
-        // The drawer shows one thing: the new task being written gives way. A capture's draft
-        // is not the drawer's to close.
+        // The drawer shows one thing: the new task being written gives way, kept for the box's
+        // next opening. A capture's draft is not the drawer's to close.
         if self.compose_host() == Some(Host::Drawer) {
-            self.compose = None;
+            let line = self.compose.take().filter(|line| !line.text().is_empty());
+            let (refs, attached) = (std::mem::take(&mut self.compose_refs), std::mem::take(&mut self.compose_attached));
+            self.compose_kept = line.map(|line| KeptDraft { line, refs, attached, theirs: self.compose_theirs });
             self.compose_reset();
         }
         self.talk = Some(Talk { task: id, open: true, keys: self.agent_runs(id) || start.is_some() });
@@ -7186,6 +7209,14 @@ mod tests {
         m.update(Action::OpenCompose { text: "half".into() });
         m.update(Action::TaskTalk { id: 1 });
         assert_eq!((m.compose_host(), m.talk.map(|talk| talk.open)), (None, Some(true)));
+        // The line is kept: the box opened empty takes it back; one opened with text leaves it.
+        m.update(Action::OpenCompose { text: String::new() });
+        assert_eq!(m.compose_line().map(String::as_str), Some("half"));
+        m.update(Action::TaskTalk { id: 1 });
+        m.update(Action::OpenCompose { text: "other".into() });
+        m.update(Action::ComposeEscape);
+        m.update(Action::OpenCompose { text: String::new() });
+        assert_eq!(m.compose_line().map(String::as_str), Some("half"));
         // A repository whose name no tag can hold is no pick.
         let repo =
             |name: &str| Repo { name: name.into(), path: format!("/code/{name}"), branch: None, worktrees: Vec::new() };

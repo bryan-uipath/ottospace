@@ -770,6 +770,8 @@ export interface Snapshot {
   /** The right drawer: where its conversation is drawn, each task's agent by task id, the workspace ⌘↵ goes to, and why no agent runs for the task on show. */
   drawer: {
     body: Rect | null;
+    /** Its width in points as last drawn. */
+    width: number;
     agents: Record<string, { model: string; ended: boolean; cols: number; rows: number; lines: string[] }>;
     goes_to: string | null;
     note: string | null;

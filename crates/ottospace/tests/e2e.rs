@@ -2200,6 +2200,13 @@ fn with_nothing_open_the_drawer_offers_a_new_task() {
     );
     // ⌘N opens it again; Esc leaves.
     assert_eq!(key("cmd-n")["compose_host"], "drawer");
+    // Its left edge drags: 100 pt to the left widens it by 100.
+    let state = otto.drawn();
+    let (window, width) = (rect(&state["window"]), state["drawer"]["width"].as_f64().unwrap_or_default());
+    let edge = window[2] - 48. - width;
+    otto.drag([edge, 300.], [edge - 100., 300.]);
+    let wider = otto.drawn()["drawer"]["width"].as_f64().unwrap_or_default();
+    assert!((wider - width - 100.).abs() < 1.5, "{width} → {wider}");
     assert_eq!(key("escape")["compose_host"], Value::Null);
 }
 

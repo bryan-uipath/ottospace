@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use gpui::{
-    AnyElement, AnyView, Bounds, Context, Div, KeyDownEvent, MouseButton, MouseDownEvent, Pixels, ScrollWheelEvent,
-    Stateful, Window, canvas, div, prelude::*, px, rgb, svg,
+    AnyElement, AnyView, Bounds, Context, CursorStyle, Div, EmptyView, KeyDownEvent, MouseButton, MouseDownEvent,
+    Pixels, ScrollWheelEvent, Stateful, Window, canvas, div, prelude::*, px, rgb, svg,
 };
 use ottospace_core::agents::{self, Command, Start};
 use ottospace_core::keys::{self, Mods};
@@ -34,6 +34,9 @@ pub struct Agent {
     /// The core was told it ended.
     told: bool,
 }
+
+/// What a drag of the drawer's left edge carries.
+pub(crate) struct DraggedEdge;
 
 /// What the drawer holds, as last drawn.
 #[derive(Default)]
@@ -398,12 +401,23 @@ impl Workspace {
     }
 
     /// The drawer, if it shows: the new task being written (or, with nothing open yet, the one
-    /// to write), else the conversation, else a task's brief beside its tabs.
+    /// to write), else the conversation, else a task's brief beside its tabs. Its left edge
+    /// drags to set its width.
     pub(crate) fn render_drawer(&self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.model.compose.is_some() || self.model.welcome() {
-            return Some(self.render_new_task(width, cx).into_any_element());
-        }
-        self.render_talk(width, cx).or_else(|| self.render_brief(cx))
+        let drawer = if self.model.compose.is_some() || self.model.welcome() {
+            self.render_new_task(width, cx).into_any_element()
+        } else {
+            self.render_talk(width, cx).or_else(|| self.render_brief(cx))?
+        };
+        let edge = div().id("drawer-edge").absolute().top_0().bottom_0().left(px(-3.)).w(px(6.));
+        let edge = edge.cursor(CursorStyle::ResizeLeftRight).on_drag(DraggedEdge, |_, _, _, cx| cx.new(|_| EmptyView));
+        Some(div().relative().flex_none().h_full().flex().child(drawer).child(edge).into_any_element())
+    }
+
+    /// The drawer's edge dragged to `x` in the window: its width is what lies right of it, less the rail.
+    pub(crate) fn drawer_edge_moved(&mut self, x: f32, window: &mut Window, cx: &mut Context<Self>) {
+        let width = f32::from(window.viewport_size().width) - x - RAIL;
+        self.dispatch(Action::TalkResize { width }, self.input, window, cx);
     }
 
     /// The rail at the right edge: a cell per open conversation (`Model::rail`), then `+`.
@@ -557,6 +571,7 @@ impl Workspace {
         let shown = self.model.talk.is_some_and(|talk| talk.open);
         serde_json::json!({
             "body": shown.then(|| crate::rect(self.drawer.body.get())),
+            "width": self.drawer.width,
             "agents": agents,
             "goes_to": self.model.talk_goes_to(),
             // The right rail's conversations, in order: task, badge, state, at work, shown, tooltip.

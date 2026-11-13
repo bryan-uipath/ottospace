@@ -523,6 +523,7 @@ function drawerDrawn(value: unknown, at: string): Snapshot["drawer"] {
   };
   return {
     body: orNull(rect)(o.body, `${at}.body`),
+    width: num(o.width, `${at}.width`),
     agents: map(agent)(o.agents, `${at}.agents`),
     goes_to: orNull(str)(o.goes_to, `${at}.goes_to`),
     note: orNull(str)(o.note, `${at}.note`),

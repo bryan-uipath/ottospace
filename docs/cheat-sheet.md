@@ -102,7 +102,7 @@ what can be opened, and its other panes are empty and say why. Marks are kept in
 |---|---|
 | Start a task | ⌘N, type a line, ↵: its agent starts in the drawer on the right, beside your workspace. The + on the Tasks bar or the right rail opens the same box; its picks set where and who |
 | Add a task for later | ⌘N, type a line, ⇧↵ |
-| Talk to a task's agent | Click the task (or ↵ on it): its conversation opens in the drawer, started or gone on with. ⌘L moves the keyboard in and out; ⌘⇧L closes the drawer to the right rail; Stop ends the agent |
+| Talk to a task's agent | Click the task (or ↵ on it): its conversation opens in the drawer, started or gone on with. ⌘L moves the keyboard in and out; ⌘⇧L closes the drawer to the right rail; Stop ends the agent; drag its left edge to resize |
 | Switch between running agents | Click a badge on the right rail, or ⌘⌃1 … ⌘⌃9. Hover a badge for what it is doing |
 | See a task's tabs | Go to (⌘↵) in the drawer's header |
 | Point at something for a task ("this message", "this error") | ⌃⌥⌘Space, from any app: the pane in use freezes as a picture and a draft opens on the right. Drag to circle, ⇧-drag a box, ⌥-drag a line, click to type a note. ↵, type what you want, ↵ starts it (⇧↵ for later). Esc leaves the picture; Esc in the title cancels the draft. The task keeps the pictures and the text under what you circled as its brief: [Capture](reference.md#capture) |

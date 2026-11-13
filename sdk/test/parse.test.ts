@@ -92,6 +92,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     capture: { key: null, bar: null, picture: null, encoded: [], pending: 0, dir: null, brief: null },
     drawer: {
       body: [880, 40, 470, 820],
+      width: 470,
       agents: { "1": { model: "claude", ended: false, cols: 60, rows: 45, lines: ["fake claude ready"] } },
       goes_to: null,
       note: null,

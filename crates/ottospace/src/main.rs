@@ -4804,6 +4804,9 @@ impl Render for Workspace {
             .on_drag_move(cx.listener(|this, e: &gpui::DragMoveEvent<DraggedPane>, window, cx| {
                 this.pane_drag_move(e.drag(cx).0, e.event.position, window, cx);
             }))
+            .on_drag_move(cx.listener(|this, e: &gpui::DragMoveEvent<talk::DraggedEdge>, window, cx| {
+                this.drawer_edge_moved(f32::from(e.event.position.x), window, cx);
+            }))
             // A release ends the drag, so a later drag elsewhere does not extend this selection.
             // The user's release also ends a `mouse` request's hold.
             .on_mouse_up(

@@ -210,7 +210,8 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
 4. **The drawer.** Its header: the task's state, title, model and time; Go to (⌘↵) shows its
    tabs in the workspace when it has some; Brief (when it has captures); Stop ends the agent;
    × (⌘⇧L) closes the drawer to the right rail and the agent goes on. ⌘L moves the keyboard in
-   and out.
+   and out. Drag its left edge to make it wider or narrower. Opening a conversation while a new
+   task is half written puts the line aside: the box gets it back when it opens again.
 5. **The right rail.** A badge per open conversation, its ring in the task's state colour and a
    steady dot while its agent works; hover for the title, what it does now, where, who and how
    old. A click shows it; on the one shown, closes the drawer.
