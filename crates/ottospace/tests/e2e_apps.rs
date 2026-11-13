@@ -785,6 +785,9 @@ fn a_refused_size_is_named_in_the_pane_header_and_fit_gives_the_window_room() {
         reply["error"].as_str().unwrap_or_else(|| panic!("{request} was not refused: {reply}")).to_string()
     };
     let ratio = |path: &[&str]| path.iter().fold(state()["state"]["layout"].clone(), |at, key| at[*key].clone());
+    // The Repos section, open at start, closes: on a CI runner's small screen the panes need
+    // its room beside the right rail.
+    otto.call(json!({"cmd": "section", "section": "repos"}));
 
     // Three panes side by side, 1 | (2 | 3): ordinary, fixed size, a minimum width.
     otto.call(json!({"cmd": "open_app", "name": CANARY}));
@@ -982,6 +985,9 @@ fn a_hosted_window_is_captured_with_the_part_of_its_tree_under_the_circle() {
     );
     let state = || otto.call(json!({"cmd": "state"}));
     let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys, "as": "user"}));
+    // The Repos section closes: the draft takes the drawer's width, and on a CI runner's small
+    // screen the pane needs the room.
+    otto.call(json!({"cmd": "section", "section": "repos"}));
     otto.call(json!({"cmd": "open_app", "name": CANARY}));
     wait_for("the window to park with its title bar cropped", || {
         state()["crop"]["1"].as_f64().filter(|c| (16.0..=40.0).contains(c))
