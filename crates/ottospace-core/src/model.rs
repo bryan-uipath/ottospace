@@ -3487,9 +3487,14 @@ impl Model {
                     Some(link) if link.state == Some(State::Running) => None,
                     Some(link) => {
                         let read = found(&link.runner, &link.id);
-                        // Where it started, if it was read; else the task's repository.
-                        let cwd = read.and_then(|s| self.resume_dir(s)).or_else(|| task.repo.clone());
-                        read.is_none_or(|s| !s.held).then(|| resume(&link.runner, &link.id)).flatten().map(|r| (r, cwd))
+                        // Where it started, if it was read (outside the listed checkouts: not at
+                        // all); else the task's repository.
+                        let cwd = match read {
+                            Some(s) if s.held => return None,
+                            Some(s) => Some(self.resume_dir(s)?),
+                            None => task.repo.clone(),
+                        };
+                        resume(&link.runner, &link.id).map(|r| (r, cwd))
                     }
                     None => {
                         let default = self.default_agent.as_deref().unwrap_or(sessions::RUNNERS[0]);
@@ -3525,6 +3530,11 @@ impl Model {
             (false, Subject::Task(_)) => "this task's session cannot be gone on with from here".into(),
             (false, Subject::Session { .. }) => "this session cannot be gone on with from here".into(),
         })
+    }
+
+    /// True if the session is listed under Sessions: one Adopt can make a task of.
+    pub fn session_listed(&self, runner: &str, id: &str) -> bool {
+        self.session(runner, id).is_some()
     }
 
     /// A session conversation's name: the session's title, else its repository's, else its runner.
@@ -7867,6 +7877,11 @@ mod tests {
         m.update(Action::RestoreTasks { tasks: vec![serde_json::from_str(&kept).expect("a task as kept")], floor: 7 });
         assert_eq!(m.update(Action::TaskTalk { id: 7 }), []);
         assert!(m.talk_note().is_some_and(|note| note.contains("live in another terminal")));
+        // Read, and where it started is no longer listed: not gone on with in the repository instead.
+        let mut m = conversations();
+        m.update(Action::SetRepos { repos: Vec::new() });
+        m.update(Action::RestoreTasks { tasks: vec![serde_json::from_str(&kept).expect("a task as kept")], floor: 7 });
+        assert_eq!(m.update(Action::TaskTalk { id: 7 }), []);
     }
 
     #[test]

@@ -353,7 +353,8 @@ impl Workspace {
         });
         // A session's: Adopt makes it a task, its conversation and all.
         let adopt = match subject {
-            Subject::Session { runner, id } => {
+            // Only a listed session can be adopted: not with the Tasks section closed, nor hidden.
+            Subject::Session { runner, id } if self.model.session_listed(runner, id) => {
                 let (runner, id) = (runner.clone(), id.clone());
                 Some(self.talk_button("talk-adopt", "Adopt", "Make a task of this session").on_click(cx.listener(
                     move |this, _, window, cx| {
@@ -362,7 +363,7 @@ impl Workspace {
                     },
                 )))
             }
-            Subject::Task(_) => None,
+            _ => None,
         };
         let stop = runs.then(|| {
             let id = subject.clone();
