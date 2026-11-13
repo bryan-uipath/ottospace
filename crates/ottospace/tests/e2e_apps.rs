@@ -1062,11 +1062,9 @@ fn a_hosted_window_is_captured_with_the_part_of_its_tree_under_the_circle() {
     // No traffic light is listed: the title bar is not in the picture.
     assert!(nodes.iter().all(|node| node["frame"][1].as_f64() >= Some(0.0)), "{nodes:?}");
 
-    // Both pictures are kept, in the task's folder, and are pictures.
-    assert_eq!(
-        (&brief["materials"][0]["image"], &brief["materials"][0]["annotated"]),
-        (&json!("1.png"), &json!("1.annotated.png"))
-    );
+    // Both pictures are kept, in the task's folder, and are pictures: the reply gives their whole paths.
+    let path = |key: &str| brief["materials"][0][key].as_str().map(PathBuf::from);
+    assert_eq!((path("image"), path("annotated")), (Some(kept.join("1.png")), Some(kept.join("1.annotated.png"))));
     for name in ["1.png", "1.annotated.png"] {
         let png = std::fs::read(kept.join(name)).expect(name);
         assert!(png.starts_with(b"\x89PNG") && png.len() > 1000, "{name}: {} bytes", png.len());
