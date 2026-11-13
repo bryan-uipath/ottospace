@@ -4,34 +4,15 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Frame {
-    pub x: f64,
-    pub y: f64,
-    pub w: f64,
-    pub h: f64,
-}
+use crate::ax::Frame;
 
 /// Past this no frame is a window's. The record is a file the user can edit: its numbers are untrusted.
 const LIMIT: f64 = 100_000.0;
 
-impl Frame {
-    pub fn new(x: f64, y: f64, w: f64, h: f64) -> Self {
-        Self { x, y, w, h }
-    }
-
-    fn valid(&self) -> bool {
-        let coord = |v: f64| v.is_finite() && v.abs() <= LIMIT;
-        let size = |v: f64| v.is_finite() && v > 0.0 && v <= LIMIT;
-        coord(self.x) && coord(self.y) && size(self.w) && size(self.h)
-    }
-
-    fn overlaps(&self, other: &Frame) -> bool {
-        self.x < other.x + other.w
-            && other.x < self.x + self.w
-            && self.y < other.y + other.h
-            && other.y < self.y + self.h
-    }
+fn valid(f: &Frame) -> bool {
+    let coord = |v: f64| v.is_finite() && v.abs() <= LIMIT;
+    let size = |v: f64| v.is_finite() && v > 0.0 && v <= LIMIT;
+    coord(f.x) && coord(f.y) && size(f.w) && size(f.h)
 }
 
 /// How much of a window's top the user must see to take hold of it by its title bar.
@@ -50,7 +31,7 @@ pub fn reachable(frame: Frame, screens: &[Frame]) -> bool {
 
 /// True when no part of the window lies on any display.
 pub fn off_every(frame: Frame, displays: &[Frame]) -> bool {
-    !displays.iter().any(|d| frame.overlaps(d))
+    !displays.iter().any(|d| frame.intersects(d))
 }
 
 /// How far above the parking spot macOS may lift a parked window: it keeps a title bar above the Dock.
@@ -87,7 +68,7 @@ pub struct Entry {
 
 impl Entry {
     fn valid(&self) -> bool {
-        self.pid > 0 && self.window > 0 && self.frame.valid()
+        self.pid > 0 && self.window > 0 && valid(&self.frame)
     }
 }
 

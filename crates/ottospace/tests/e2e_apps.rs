@@ -1191,7 +1191,7 @@ fn global_frame(canary: &Proc, index: usize) -> Option<[f64; 4]> {
 /// True when the user can take hold of the window: its title bar on a screen.
 fn reachable(f: [f64; 4]) -> bool {
     let screens = ottospace_mac::recovery::screens();
-    ottospace_core::restore::reachable(ottospace_core::restore::Frame::new(f[0], f[1], f[2], f[3]), &screens.visible)
+    ottospace_core::restore::reachable(ottospace_core::ax::Frame::new(f[0], f[1], f[2], f[3]), &screens.visible)
 }
 
 /// An ottospace that hosts only the canary's windows. `env`: more of its environment.
@@ -1341,6 +1341,9 @@ fn a_window_the_app_remade_while_hosted_is_not_stranded() {
         panes.iter().filter_map(|p| p["kind"]["title"].as_str().map(str::to_string)).collect()
     };
     wait_for("the new window's pane alone", || (titles() == ["Canary 2"]).then_some(()));
+    // It was found off screen: what is recorded is the middle of the screen.
+    let state = otto.call(json!({"cmd": "state"}));
+    assert!(state["notice"].as_str().is_some_and(|n| n.contains("off screen")), "{}", state["notice"]);
     otto.call(json!({"cmd": "quit"}));
     wait_for("the new window on screen", || {
         let windows = canary.call(json!({"cmd": "state"}))["windows"].clone();

@@ -2526,8 +2526,12 @@ impl Workspace {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        // Cleared first: a notice hosting sets (a window found off screen) outlives a success.
+        self.error = None;
         let result = self.try_open_app(name, axis, new_tab, window, cx);
-        self.error = result.clone().err();
+        if let Err(err) = &result {
+            self.error = Some(err.clone());
+        }
         cx.notify();
         result
     }

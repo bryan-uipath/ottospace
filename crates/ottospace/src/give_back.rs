@@ -12,7 +12,8 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst};
 use std::time::Duration;
 
-use ottospace_core::restore::{self, Entry, Frame};
+use ottospace_core::ax::Frame;
+use ottospace_core::restore::{self, Entry};
 use ottospace_mac::recovery::{self, Screens};
 use ottospace_mac::{ax, process};
 
@@ -30,12 +31,32 @@ fn read() -> Vec<Entry> {
     text.map(|text| restore::parse(&text)).unwrap_or_default()
 }
 
-/// Whole or not at all (temp file and rename), 0600.
-fn write(entries: &[Entry]) {
-    if let Some(home) = home() {
-        let _ = config::write_private(home, NAME, restore::to_text(entries).as_bytes());
+/// Changes the record under a lock (`hosted.lock`): two ottospaces, or one and the last run's
+/// guardian, may change it at once. Written whole (temp file and rename), 0600.
+fn update(change: impl FnOnce(&mut Vec<Entry>)) {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    unsafe extern "C" {
+        fn flock(fd: c_int, operation: c_int) -> c_int;
+    }
+    let Some(home) = home() else { return };
+    let _ = fs::DirBuilder::new().recursive(true).mode(0o700).create(home);
+    // O_NOFOLLOW: a link in its place is refused, not followed.
+    let lock = fs::OpenOptions::new().create(true).write(true).mode(0o600).custom_flags(0x100).open(home.join(LOCK));
+    let Ok(lock) = lock else { return };
+    // LOCK_EX; released when `lock` closes.
+    if unsafe { flock(lock.as_raw_fd(), 2) } != 0 {
+        return;
+    }
+    let mut entries = read();
+    let before = entries.clone();
+    change(&mut entries);
+    if entries != before {
+        let _ = config::write_private(home, NAME, restore::to_text(&entries).as_bytes());
     }
 }
+
+const LOCK: &str = "hosted.lock";
 
 fn me() -> u32 {
     std::process::id()
@@ -46,23 +67,25 @@ pub fn remember(pid: i32, window: u32, frame: Frame) {
     if home().is_none() {
         return;
     }
-    let mut entries = read();
-    entries.retain(|e| !(e.owner == me() && e.window == window));
-    entries.push(Entry { owner: me(), pid, window, frame });
-    write(&entries);
+    update(|entries| {
+        entries.retain(|e| !(e.owner == me() && e.window == window));
+        entries.push(Entry { owner: me(), pid, window, frame });
+    });
     start_guard();
 }
 
 pub fn forget(window: u32) {
-    if home().is_none() {
-        return;
-    }
-    let mut entries = read();
-    let before = entries.len();
-    entries.retain(|e| !(e.owner == me() && e.window == window));
-    if entries.len() != before {
-        write(&entries);
-    }
+    update(|entries| entries.retain(|e| !(e.owner == me() && e.window == window)));
+}
+
+/// Drops `handled` from the record but for those `kept`, and adds the kept ones it lacks (read
+/// from the old file).
+fn settle(handled: &[Entry], kept: &[Entry]) {
+    update(|entries| {
+        entries.retain(|e| !handled.contains(e) || kept.contains(e));
+        let missing: Vec<Entry> = kept.iter().filter(|k| !entries.contains(k)).copied().collect();
+        entries.extend(missing);
+    });
 }
 
 /// True while the ottospace that wrote an entry runs (this one, or a live process named ottospace).
@@ -71,17 +94,20 @@ fn running(owner: u32) -> bool {
     owner == me() || i32::try_from(owner).is_ok_and(|pid| process::alive(pid) && named(pid))
 }
 
-/// Windows a running ottospace hosts: never moved here.
+/// Windows another running ottospace hosts: never moved here. (This one's are in its panes.)
 fn hosted_elsewhere(entries: &[Entry]) -> Vec<(i32, u32)> {
-    entries.iter().filter(|e| running(e.owner)).map(|e| (e.pid, e.window)).collect()
+    entries.iter().filter(|e| e.owner != me() && running(e.owner)).map(|e| (e.pid, e.window)).collect()
 }
 
 /// Puts each entry's window back, verified. Returns the entries to keep (a window found and not
 /// yet where the user can reach it) and how many windows it moved. Only `only`'s, if named.
-fn give_back(entries: Vec<Entry>, only: Option<i32>, screens: &Screens, skip: &[(i32, u32)]) -> (Vec<Entry>, usize) {
+fn give_back(entries: &[Entry], only: Option<i32>, screens: &Screens, skip: &[(i32, u32)]) -> (Vec<Entry>, usize) {
     let (mut kept, mut moved) = (Vec::new(), 0);
-    for e in entries {
-        if only.is_some_and(|only| only != e.pid) || e.pid == me() as i32 {
+    // A window another entry names goes back to its own frame, not this one's.
+    let named: Vec<(i32, u32)> = entries.iter().map(|e| (e.pid, e.window)).chain(skip.iter().copied()).collect();
+    for &e in entries {
+        let elsewhere = skip.contains(&(e.pid, e.window));
+        if only.is_some_and(|only| only != e.pid) || e.pid == me() as i32 || elsewhere {
             kept.push(e);
             continue;
         }
@@ -93,8 +119,13 @@ fn give_back(entries: Vec<Entry>, only: Option<i32>, screens: &Screens, skip: &[
         let back = match ax::Window::find(e.pid, e.window) {
             Some(window) => {
                 let now = window.frame().map(recovery::to_frame);
-                // Put back at the quit, or moved by the user since: left alone.
-                if now.is_some_and(|f| restore::reachable(f, &screens.visible)) {
+                // Put back by the quit: left alone. Elsewhere (parked, or live over its pane at
+                // a crash) it goes back.
+                let there = restore::destination(e.frame, &screens.visible, screens.main);
+                let near = |f: Frame| {
+                    [f.x - there.x, f.y - there.y, f.w - there.w, f.h - there.h].iter().all(|d| d.abs() <= 2.0)
+                };
+                if now.is_some_and(|f| near(f) && restore::reachable(f, &screens.visible)) {
                     true
                 } else {
                     let back = recovery::put_back(&window, e.frame, screens).is_some();
@@ -107,7 +138,7 @@ fn give_back(entries: Vec<Entry>, only: Option<i32>, screens: &Screens, skip: &[
                 let stranded = recovery::stranded_of(e.pid, screens);
                 let stranded: Vec<_> = stranded
                     .into_iter()
-                    .filter(|(w, _)| w.id().is_some_and(|id| !skip.contains(&(e.pid, id))))
+                    .filter(|(w, _)| w.id().is_some_and(|id| !named.contains(&(e.pid, id))))
                     .collect();
                 let back = stranded.iter().filter(|(w, _)| recovery::put_back(w, e.frame, screens).is_some()).count();
                 moved += back;
@@ -131,6 +162,11 @@ fn old_record() -> Option<PathBuf> {
 /// At start: puts back the windows an ottospace that is no longer running left hosted. Returns
 /// how many it moved. Entries whose window could not be verified back stay for the next try.
 pub fn leftovers(only: Option<i32>) -> usize {
+    left_by(only, |e| !running(e.owner))
+}
+
+/// As `leftovers`, for the entries `ended` picks.
+fn left_by(only: Option<i32>, ended: impl Fn(&Entry) -> bool) -> usize {
     if home().is_none() {
         return 0;
     }
@@ -138,12 +174,12 @@ pub fn leftovers(only: Option<i32>) -> usize {
     let old = old_record();
     let old_text = old.as_ref().and_then(|path| fs::read_to_string(path).ok());
     entries.extend(old_text.as_deref().map(restore::parse_old).unwrap_or_default());
-    let (live, dead): (Vec<Entry>, Vec<Entry>) = entries.into_iter().partition(|e| running(e.owner));
+    let dead: Vec<Entry> = entries.iter().filter(|e| ended(e)).copied().collect();
     if dead.is_empty() && old_text.is_none() {
         return 0;
     }
-    let (kept, moved) = give_back(dead, only, &recovery::screens(), &hosted_elsewhere(&live));
-    write(&[live, kept].concat());
+    let (kept, moved) = give_back(&dead, only, &recovery::screens(), &hosted_elsewhere(&entries));
+    settle(&dead, &kept);
     if let Some(path) = old.filter(|_| old_text.is_some()) {
         let _ = fs::remove_file(path);
     }
@@ -180,14 +216,15 @@ fn start_guard() {
 }
 
 /// `ottospace guard <pid>`: waits for ottospace `<pid>`, its parent, to end, then puts back the
-/// windows it left hosted. Ends early once the record holds none of that run's windows.
+/// windows it left hosted. It stays while the record holds none: one that left then could miss
+/// the next window the run hosts.
 pub fn guard(parent: Option<&String>) -> ! {
     let Some(parent) = parent.and_then(|p| p.parse::<u32>().ok()) else { std::process::exit(2) };
     while std::os::unix::process::parent_id() == parent {
-        if !read().iter().any(|e| e.owner == parent) {
-            std::process::exit(0);
-        }
         std::thread::sleep(Duration::from_millis(250));
+    }
+    if !read().iter().any(|e| e.owner == parent) {
+        std::process::exit(0);
     }
     // A moment for an app that moves its window again once ottospace lets go: checked after it.
     std::thread::sleep(Duration::from_secs(1));
@@ -195,9 +232,10 @@ pub fn guard(parent: Option<&String>) -> ! {
     if !ax::is_trusted(false) {
         std::process::exit(1);
     }
-    let (theirs, rest): (Vec<Entry>, Vec<Entry>) = read().into_iter().partition(|e| e.owner == parent);
-    let (kept, _) = give_back(theirs, host_only(), &recovery::screens(), &hosted_elsewhere(&rest));
-    write(&[rest, kept].concat());
+    let entries = read();
+    let theirs: Vec<Entry> = entries.iter().filter(|e| e.owner == parent).copied().collect();
+    let (kept, _) = give_back(&theirs, host_only(), &recovery::screens(), &hosted_elsewhere(&entries));
+    settle(&theirs, &kept);
     std::process::exit(0);
 }
 
@@ -209,7 +247,9 @@ fn host_only() -> Option<i32> {
 /// their own frames, then any other off every screen or in the parking spot, to the main
 /// screen. Never one a running ottospace hosts (`hosted`: this one's). Returns how many.
 pub fn rescue(only: Option<i32>, hosted: &[u32]) -> usize {
-    let back = leftovers(only);
+    // This run's own entries count too once their pane is gone: a close that could not put the
+    // window back (the app was busy) keeps its entry.
+    let back = left_by(only, |e| !running(e.owner) || (e.owner == me() && !hosted.contains(&e.window)));
     let elsewhere = hosted_elsewhere(&read());
     back + recovery::rescue(only, |pid, id| hosted.contains(&id) || elsewhere.contains(&(pid, id)))
 }

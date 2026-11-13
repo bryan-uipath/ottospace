@@ -7,7 +7,8 @@ use std::ffi::c_void;
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplicationActivationPolicy, NSScreen, NSWorkspace};
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
-use ottospace_core::restore::{self, Frame};
+use ottospace_core::ax::Frame;
+use ottospace_core::restore;
 
 use crate::{ax, display};
 

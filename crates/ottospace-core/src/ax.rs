@@ -15,7 +15,11 @@ pub struct Frame {
 }
 
 impl Frame {
-    fn intersects(&self, other: &Frame) -> bool {
+    pub fn new(x: f64, y: f64, w: f64, h: f64) -> Self {
+        Self { x, y, w, h }
+    }
+
+    pub(crate) fn intersects(&self, other: &Frame) -> bool {
         self.x < other.x + other.w
             && other.x < self.x + self.w
             && self.y < other.y + other.h
