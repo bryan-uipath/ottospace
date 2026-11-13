@@ -60,6 +60,7 @@ impl RepoDirs {
     pub fn to_remove(&self, path: &str) -> Result<RepoDir, String> {
         match (self.dirs.iter().find(|d| d.path == path), self.holder(path)) {
             _ if self.fixed => Err(FIXED.into()),
+            _ if path.is_empty() => Err("No repository to remove".into()),
             (Some(dir), _) => Ok(dir.clone()),
             (None, Some(holder)) => Err(format!(
                 "{} is listed through {}: take that directory out of `repos` in settings.json",

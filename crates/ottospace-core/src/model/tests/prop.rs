@@ -2616,6 +2616,20 @@ fn a_brief_goes_when_its_task_no_longer_names_a_capture() {
     assert_eq!(run.m.brief, None);
 }
 
+/// A directory of the settings with no path, under no repository, was written out as removed.
+#[test]
+fn removing_a_repository_with_no_path_writes_nothing() {
+    let dirs = vec![
+        RepoDir { text: "".into(), path: "".into() },
+        RepoDir { text: "relative".into(), path: "relative".into() },
+    ];
+    replay(&[
+        Action::SetRepoDirs { dirs: RepoDirs { dirs, fixed: false } }.sent_by(Origin::System),
+        Action::RepoRemove { path: "".into() }.sent_by(Origin::User),
+    ])
+    .unwrap();
+}
+
 // Known, and left: a decision to make, not a slip.
 
 /// A key this build does not know beside a terminal's or an empty pane's `type` is dropped: only
