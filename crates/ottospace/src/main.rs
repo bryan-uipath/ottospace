@@ -73,6 +73,7 @@ mod sneak;
 mod tags;
 mod talk;
 mod terminal;
+mod trace;
 mod workbook;
 use control::{Call, MouseAction, PaneKind, Request};
 use terminal::Terminal;
@@ -671,6 +672,15 @@ struct Workspace {
     /// are of the current layout only once it was rendered after that.
     renders: u64,
     dispatched_at: u64,
+    /// Actions dispatched, and how many of them the last frame drew. Test runs hold a reply with
+    /// the state until a frame has drawn what its request did (`answer`).
+    seq: u64,
+    drawn_seq: u64,
+    settles: bool,
+    /// Replies waiting for that frame: (the seq to draw, since when, where the reply goes).
+    settling: Vec<(u64, Instant, Sender<String>)>,
+    /// When the frame being drawn began, for the trace's frame time.
+    frame_start: Rc<Cell<Option<Instant>>>,
     /// What the home screen last drew, and the lattice lines kept between frames.
     home: home::Shared,
     /// ottospace's own controls as last painted: what sneak mode labels.
@@ -772,6 +782,8 @@ struct Launch {
 const LAUNCH_WAIT: Duration = Duration::from_secs(30);
 /// How long a `mouse` request's button stays down with no further request.
 const POINTER_IDLE: Duration = Duration::from_secs(5);
+/// Longest a test run's reply waits for the frame that draws its request.
+const SETTLE_LIMIT: Duration = Duration::from_secs(5);
 
 /// How much of a test run's window stays on screen, in points, at the corner it sits in.
 const E2E_SLIVER: f32 = 12.;
@@ -1000,6 +1012,11 @@ impl Workspace {
             frames: HashMap::new(),
             renders: 0,
             dispatched_at: 0,
+            seq: 0,
+            drawn_seq: 0,
+            settles: std::env::var_os("OTTOSPACE_E2E").is_some(),
+            settling: Vec::new(),
+            frame_start: Rc::default(),
             home: home::Shared::default(),
             controls: sneak::Controls::default(),
             sneak_spent: false,
@@ -1114,7 +1131,13 @@ impl Workspace {
         if files || row || unmarks || pins || captures {
             self.model.update(Action::Tick { now: now_ms() }.sent_by(Origin::System));
         }
+        let name = trace::name(&action);
         let effects = self.model.update(action.sent_by(origin));
+        self.seq += 1;
+        let made: Vec<String> = effects.iter().map(|effect| trace::name(effect)).collect();
+        let fields =
+            serde_json::json!({ "seq": self.seq, "name": name, "origin": trace::name(&origin), "effects": made });
+        trace::record("action", fields);
         if self.model.field().map(|(of, _)| of) != field {
             self.field_changed_hands();
         }
@@ -1177,10 +1200,13 @@ impl Workspace {
                             Effect::History { pane, history } if pane == id => Some(history),
                             _ => None,
                         });
+                        let spawned = Instant::now();
                         match Terminal::spawn(&vars, cwd, history) {
                             Ok(terminal) => drop(self.terminals.insert(*id, terminal)),
                             Err(err) => self.error = Some(format!("terminal: {err}")),
                         }
+                        let (took, ok) = (spawned.elapsed().as_millis() as u64, self.terminals.contains_key(id));
+                        trace::record("terminal_spawn", serde_json::json!({ "pane": id, "took_ms": took, "ok": ok }));
                     }
                 }
                 Effect::Closed(pane) => {
@@ -1197,6 +1223,7 @@ impl Workspace {
                 Effect::Parked(id) => {
                     self.live_since = None;
                     if let Some(hosted) = self.hosted.get_mut(id) {
+                        trace::record("park", serde_json::json!({ "pane": id, "window": hosted.window_id }));
                         let crop = hosted.crop_at(on_screen(hosted.bounds.get(), window, cx), top_limit(window, cx));
                         hosted.park(window.scale_factor() as f64, crop);
                         // Going live activated the app. If it still has the keyboard, take it
@@ -1261,6 +1288,7 @@ impl Workspace {
                     self.live_since = Some(Instant::now());
                     self.went_live += 1;
                     if let Some(hosted) = self.hosted.get_mut(id) {
+                        trace::record("unpark", serde_json::json!({ "pane": id, "window": hosted.window_id }));
                         let rect = on_screen(hosted.bounds.get(), window, cx);
                         hosted.place(rect, hosted.crop_at(rect, top_limit(window, cx)));
                         hosted.window.raise();
@@ -1423,8 +1451,39 @@ impl Workspace {
 
     /// Answers queued control-socket calls. Each reply is the state after the call.
     fn serve_control(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.settle(window, cx);
         // What a request reaches through a shared method (`open_app`, a click) is the client's too.
         self.with_origin(Origin::Socket, |this| this.serve_calls(window, cx));
+    }
+
+    /// Replies with the state. In a test run, not before a frame has drawn every action so far,
+    /// so the bounds in the reply are of the new layout, never the one before it.
+    fn answer(&mut self, reply: Sender<String>, window: &Window, cx: &mut Context<Self>) {
+        if self.settles && self.drawn_seq < self.seq {
+            self.settling.push((self.seq, Instant::now(), reply));
+            cx.notify();
+        } else {
+            let _ = reply.send(self.snapshot(window, cx));
+        }
+    }
+
+    /// Sends the replies a frame has drawn for. One that waited `SETTLE_LIMIT` goes as it is,
+    /// marked `"stale":true`: the window drew no frame (hidden, or stuck).
+    fn settle(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let (drawn, limit) = (self.drawn_seq, SETTLE_LIMIT);
+        let (due, waiting) = std::mem::take(&mut self.settling)
+            .into_iter()
+            .partition(|(seq, since, _)| drawn >= *seq || since.elapsed() >= limit);
+        self.settling = waiting;
+        for (seq, since, reply) in due {
+            let mut state = self.state(window, cx);
+            if drawn < seq {
+                state["stale"] = serde_json::json!(true);
+                trace::record("timeout", serde_json::json!({ "what": "settle", "seq": seq, "drawn": drawn }));
+            }
+            state["frame"]["waited_ms"] = serde_json::json!(since.elapsed().as_millis() as u64);
+            let _ = reply.send(state.to_string());
+        }
     }
 
     fn serve_calls(&mut self, window: &Window, cx: &mut Context<Self>) {
@@ -1839,6 +1898,10 @@ impl Workspace {
                     let _ = reply.send(serde_json::json!({ "ok": true, "marks": self.marks_json() }).to_string());
                     continue;
                 }
+                Request::Trace => {
+                    let _ = reply.send(serde_json::json!({ "ok": true, "trace": trace::jsonl() }).to_string());
+                    continue;
+                }
                 Request::MarkAdd { pane: Some(_), tab: Some(_), .. } => {
                     failure = Some("name a pane or a tab, not both".into());
                     None
@@ -1907,7 +1970,10 @@ impl Workspace {
                     failure = self.error.clone().or(Some("the shell did not start".into()));
                 }
             }
-            let _ = reply.send(failure.map_or_else(|| self.snapshot(window, cx), |message| control::error(&message)));
+            match failure {
+                Some(message) => drop(reply.send(control::error(&message))),
+                None => self.answer(reply, window, cx),
+            }
         }
     }
 
@@ -2057,6 +2123,7 @@ impl Workspace {
                     break serde_json::json!({ "ok": true, "pane": id, "line": line }).to_string();
                 }
                 if start.elapsed() >= limit {
+                    trace::record("timeout", serde_json::json!({ "what": "wait", "pane": id }));
                     break control::error(&format!("no match for the pattern in {} ms", limit.as_millis()));
                 }
                 cx.background_executor().timer(Duration::from_millis(50)).await;
@@ -2116,11 +2183,14 @@ impl Workspace {
                     break;
                 }
             }
-            let state = this.update(cx, |this, cx| {
+            // Gone: the reply is dropped with the closure, and the client is told the app is closing.
+            let _ = this.update(cx, |this, cx| {
                 this.input = before.unwrap_or(Origin::User);
-                refused.map_or_else(|| this.snapshot(window, cx), control::error)
+                match refused {
+                    Some(why) => drop(reply.send(control::error(why))),
+                    None => this.answer(reply, window, cx),
+                }
             });
-            let _ = reply.send(state.unwrap_or_else(|_| control::error("ottospace is closing")));
         });
     }
 
@@ -2172,11 +2242,10 @@ impl Workspace {
                 }
             }
             let _ = this.update(cx, |this, _| this.input = before.unwrap_or(Origin::User));
-            let state = match refused {
-                Some(why) => Ok(control::error(&why)),
-                None => this.update_in(cx, |this, window, cx| this.snapshot(window, cx)),
-            };
-            let _ = reply.send(state.unwrap_or_else(|_| control::error("ottospace is closing")));
+            match refused {
+                Some(why) => drop(reply.send(control::error(&why))),
+                None => drop(this.update_in(cx, |this, window, cx| this.answer(reply, window, cx))),
+            }
         })
         .detach();
     }
@@ -2255,17 +2324,20 @@ impl Workspace {
                 this.injected = false;
                 this.input = before.unwrap_or(Origin::User);
             });
-            let state = match made {
-                true => this.update_in(cx, |this, window, cx| this.snapshot(window, cx)),
-                false => Ok(control::error("the pointer event could not be made")),
-            };
-            let _ = reply.send(state.unwrap_or_else(|_| control::error("ottospace is closing")));
+            match made {
+                true => drop(this.update_in(cx, |this, window, cx| this.answer(reply, window, cx))),
+                false => drop(reply.send(control::error("the pointer event could not be made"))),
+            }
         })
         .detach();
     }
 
     /// State as JSON: the model, plus each pane's drawn bounds `[x, y, w, h]` in window points.
     fn snapshot(&self, window: &Window, cx: &App) -> String {
+        self.state(window, cx).to_string()
+    }
+
+    fn state(&self, window: &Window, cx: &App) -> serde_json::Value {
         let parking = display::parking_spot();
         let hosted: BTreeMap<PaneId, [f64; 4]> = self
             .hosted
@@ -2454,8 +2526,14 @@ impl Workspace {
             // (`model`, `ended`, its terminal's `lines`), the workspace ⌘↵ goes to, and why no
             // agent runs for the task on show (`note`).
             "drawer": self.talk_snapshot(),
+            // Frames drawn (`number`), actions dispatched (`seq`) and how many of them the last
+            // frame drew (`drawn`); `waited_ms`: how long a test run's reply waited for that frame.
+            // `window`: the window's number, for `screencapture -l`.
+            "frame": {
+                "number": self.renders, "seq": self.seq, "drawn": self.drawn_seq, "waited_ms": 0,
+                "window": ns_view(window).map(|view| unsafe { ottospace_mac::window::number(view) }),
+            },
         })
-        .to_string()
     }
 
     /// The hosted window behind `pane`, if it is an app pane.
@@ -2513,10 +2591,12 @@ impl Workspace {
                 self.error =
                     Some(format!("{}'s window was off screen: it goes back to the middle of the screen", hosted.app));
             }
+            trace::record("host", serde_json::json!({ "pane": id, "window": hosted.window_id }));
             self.cells.insert(*id, hosted.bounds.clone());
             self.hosted.insert(*id, hosted);
             return Some(*id);
         }
+        trace::record("host_refused", serde_json::json!({ "window": hosted.window_id }));
         hosted.release();
         None
     }
@@ -2724,6 +2804,7 @@ impl Workspace {
             eprintln!("pane {id}: window gone; closing");
             // Nothing to put back, so stop the stream here instead of `release` in `dispatch`.
             if let Some(hosted) = self.hosted.remove(&id) {
+                trace::record("window_gone", serde_json::json!({ "pane": id, "window": hosted.window_id }));
                 let _ = hosted.stream.stop_capture();
                 give_back::forget(hosted.window_id);
                 // Its app may still be frontmost with no window here: take the keyboard back.
@@ -2816,6 +2897,7 @@ impl Workspace {
             }
         }
         for id in exited {
+            trace::record("terminal_exit", serde_json::json!({ "pane": id }));
             self.dispatch(Action::Close { pane: Some(id) }, Origin::System, window, cx);
         }
         if redraw {
@@ -4933,6 +5015,9 @@ fn on_screen(body: Bounds<Pixels>, window: &Window, cx: &App) -> CGRect {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
+        // This frame draws every action so far: the replies held for it can go (`settle`).
+        self.drawn_seq = self.seq;
+        self.frame_start.set(Some(Instant::now()));
         for pane in &self.model.panes {
             self.cells.entry(pane.id).or_default();
             self.frames.entry(pane.id).or_default();
@@ -5224,7 +5309,20 @@ impl Render for Workspace {
             .children(self.render_pointing())
             .when(self.model.keys, |d| d.child(self.render_keys(cx)))
             .children(self.model.confirm.as_ref().map(|confirm| self.render_confirm(confirm, cx)))
+            .child(frame_probe(self.frame_start.clone(), self.renders, self.seq))
     }
+}
+
+/// Painted last: notes in the trace that frame `number` is drawn, and how long it took from
+/// `render` (layout, prepaint and paint).
+fn frame_probe(start: Rc<Cell<Option<Instant>>>, number: u64, seq: u64) -> impl IntoElement {
+    let paint = move |_, _, _: &mut Window, _: &mut App| {
+        if let Some(start) = start.take() {
+            let took = start.elapsed().as_micros() as f64 / 1000.0;
+            trace::record("frame", serde_json::json!({ "number": number, "seq": seq, "took_ms": took }));
+        }
+    };
+    canvas(|_, _, _| {}, paint).absolute().size_0()
 }
 
 /// `ottospace ctl '<json request>'`: sends one request to the running app, prints the reply.
@@ -5343,6 +5441,8 @@ fn main() {
     }
     // TERM, INT, HUP: a quit, so hosted windows go back.
     give_back::on_signals();
+    trace::arm();
+    trace::record("start", serde_json::json!({ "pid": std::process::id(), "hosting": hosting }));
     let control = control::serve().map_err(|err| eprintln!("control socket off: {err}")).ok();
     // For `osi`: which program the running app is.
     running::write();

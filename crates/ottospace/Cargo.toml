@@ -26,6 +26,8 @@ objc2-core-foundation = { version = "0.3", features = ["CFCGTypes"] }
 alacritty_terminal = "0.26"
 # `wait` matches terminal text against a pattern.
 regex = "1"
+# The trace is written on SIGUSR1: a test's timeout.
+libc = "0.2"
 
 [dev-dependencies]
 serde_json = "1"

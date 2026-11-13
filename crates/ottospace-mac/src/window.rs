@@ -42,6 +42,15 @@ pub enum MouseKind {
     Enter,
 }
 
+/// The window server's number for the view's window (a `CGWindowID`), or 0 if it has none.
+///
+/// # Safety
+/// `ns_view` must point to a live `NSView`, on the main thread.
+pub unsafe fn number(ns_view: *mut c_void) -> isize {
+    let view = unsafe { &*(ns_view as *const NSView) };
+    view.window().map_or(0, |window| window.windowNumber())
+}
+
 /// Hands the view a pointer event as AppKit would, by calling its own handler (`mouseDown:` and
 /// the like). The event is made here and never posted: the window server, other apps and the
 /// real pointer do not see it. The handler runs before this returns.

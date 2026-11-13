@@ -3785,6 +3785,7 @@ dependencies = [
  "core-foundation 0.10.0",
  "core-video",
  "gpui",
+ "libc",
  "objc2-core-foundation",
  "ottospace-core",
  "ottospace-mac",

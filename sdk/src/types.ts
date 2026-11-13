@@ -960,6 +960,20 @@ export interface Snapshot {
     /** The right rail's conversations, in order: badge, state, at work, shown, and the tooltip's text. */
     rail: { task: TaskId; mono: string; group: Group | null; working: boolean; shown: boolean; tip: string }[];
   };
+  /**
+   * Frames drawn (`number`), actions dispatched (`seq`) and how many of them the last frame drew
+   * (`drawn`). In a test run a reply waits for a frame that draws its request: `waited_ms`.
+   * `window`: the window's number, or null.
+   */
+  frame: { number: number; seq: number; drawn: number; waited_ms: number; window: number | null };
+  /** A test run's reply that no frame drew within 5 s: its drawn parts may be of the layout before. */
+  stale?: true;
+}
+
+export interface TraceReply {
+  ok: true;
+  /** One JSON event per line, oldest first: `{"ms":..,"ev":"action","name":"Split",..}`. */
+  trace: string;
 }
 
 /** A scroll area's bar, in window points. `opacity` 0: faded out, and it takes no press. */

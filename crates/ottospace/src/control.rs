@@ -425,6 +425,9 @@ pub enum Request {
         key: Option<char>,
         to: String,
     },
+    /// The app's recent events, oldest first, as JSONL: `{"ok":true,"trace":"{..}\n{..}\n"}`, not
+    /// the state. Names, counts, times and ids only. Read-only.
+    Trace,
     Quit,
 }
 
@@ -559,10 +562,18 @@ fn handle(stream: UnixStream, calls: Sender<Call>) {
         let reply = match serde_json::from_str(&line) {
             Ok(request) => {
                 let (reply, answer) = channel();
+                let (cmd, received) = (crate::trace::name(&request), std::time::Instant::now());
+                crate::trace::record("request", serde_json::json!({ "cmd": cmd }));
                 if calls.send(Call { request, reply }).is_err() {
                     return;
                 }
-                answer.recv().unwrap_or_else(|_| error("ottospace is closing"))
+                let reply = answer.recv().unwrap_or_else(|_| error("ottospace is closing"));
+                // Top-level keys only: text inside the reply has its quotes escaped.
+                let (failed, stale) = (reply.contains(r#""ok":false"#), reply.contains(r#""stale":true"#));
+                let took = received.elapsed().as_millis() as u64;
+                let fields = serde_json::json!({ "cmd": cmd, "took_ms": took, "ok": !failed, "stale": stale });
+                crate::trace::record("reply", fields);
+                reply
             }
             Err(err) => error(&err.to_string()),
         };
