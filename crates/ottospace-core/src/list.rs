@@ -2,6 +2,7 @@
 
 use crate::marks::MarkId;
 use crate::tasks::{Heading, TaskId};
+use crate::workbook::WorkbookId;
 
 /// What a row of the secondary bar stands for.
 #[derive(Clone, Debug, PartialEq)]
@@ -18,6 +19,7 @@ pub enum ListRow {
     /// "N older" under Sessions. Opening it shows or hides the older sessions.
     OlderSessions,
     Mark(MarkId),
+    Workbook(WorkbookId),
     /// An app that is not running, by its bundle path. Opening it starts it.
     Closed(String),
     /// "and N more" under the suggested apps, and the "All apps" heading. Opening one folds or unfolds it.

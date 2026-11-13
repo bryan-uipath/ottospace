@@ -384,7 +384,7 @@ export type PickItem =
 /** The text field that has the keyboard. Offsets are UTF-16 units: JavaScript string indexes. */
 export interface Field {
   /** Whose it is: the new-task line, the picker's or the Apps section's filter, a mark's name, or a note on a capture. */
-  of: "compose" | "picker" | "apps" | "mark" | "note";
+  of: "compose" | "picker" | "apps" | "mark" | "workbook" | "note";
   text: string;
   cursor: number;
   /** Start and end, in text order. Equal: only a cursor. */
@@ -427,7 +427,32 @@ export type MarkInput =
   /** The jump prefix was pressed: the next letter goes to that mark. */
   | { type: "jump" }
   | { type: "rename"; mark: number; text: string }
-  | { type: "set_key"; mark: number };
+  | { type: "set_key"; mark: number }
+  /** A workbook's name is being typed in its row. */
+  | { type: "workbook"; workbook: number; text: string };
+
+/** A pane of a workbook's tab. `app`: an app pane's app, by name. */
+export interface WorkbookPane {
+  kind: "terminal" | "app" | "empty";
+  app?: string;
+}
+
+/** A workbook: a saved, named tab. No directory is listed: `panes` names kinds only. */
+export interface Workbook {
+  /** This run's id for it. */
+  id: number;
+  name: string;
+  /** What its tab holds, in reading order. */
+  panes: WorkbookPane[];
+  /** e.g. "2 terminals · Chrome, Slack". */
+  summary: string;
+  /** Its tab is open now: `tab` is that tab's `id`. */
+  open: boolean;
+  tab: number | null;
+  /** Where the Workbook section drew its row and the row's words, or null. */
+  row: Rect | null;
+  buttons: { open: Rect | null; rename: Rect | null; delete: Rect | null };
+}
 
 /** A mark: a named, saved way back to a pane or a tab. */
 export interface Mark {
@@ -665,6 +690,10 @@ export interface Snapshot {
   marks: Mark[];
   /** The name of the mark just taken off, while the Marks section offers to put it back. */
   mark_removed: string | null;
+  /** The workbooks, by name. Only the user saves, opens, renames or deletes one. */
+  workbooks: Workbook[];
+  /** What the Workbook section offers to take back, while it offers. */
+  workbook_offer: "deleted" | "updated" | null;
   /** Each scroll area whose content does not fit, by id (`tasks`, `picker`, `keys`, `terminal:1`). */
   scrollbars: Record<string, Scrollbar>;
   /** The capture key, and what was drawn of the draft or the brief in the right bar. */

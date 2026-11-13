@@ -49,7 +49,7 @@ pub struct Kept {
 }
 
 /// A name for good for a new mark: 16 hex digits nobody else has.
-fn new_uid() -> String {
+pub(crate) fn new_uid() -> String {
     format!("{:016x}", std::collections::hash_map::RandomState::new().build_hasher().finish())
 }
 
@@ -81,7 +81,7 @@ fn row_button(id: (&'static str, usize), group: &str, label: &'static str, hover
 
 impl Workspace {
     /// Each terminal's directory now: the core records it when a pane or tab is marked.
-    fn cwds(&self) -> Vec<(PaneId, String)> {
+    pub(crate) fn cwds(&self) -> Vec<(PaneId, String)> {
         self.terminals.iter().filter_map(|(id, terminal)| Some((*id, terminal.cwd()?))).collect()
     }
 
@@ -165,7 +165,7 @@ impl Workspace {
     /// that hangs must not freeze the window. The answer reaches the core as an action. What was
     /// found is believed for `CHECK_EVERY`.
     pub(crate) fn check_marks(&mut self, cx: &mut Context<Self>) {
-        let needs = self.model.marks.needs();
+        let needs = self.model.needs();
         let fresh = |(at, checked): &(Instant, Vec<Need>)| *checked == needs && at.elapsed() < CHECK_EVERY;
         let nothing = needs.is_empty() && self.model.marks.missing().is_empty();
         if self.kept_marks.checking || nothing || self.kept_marks.checked.as_ref().is_some_and(fresh) {
@@ -305,7 +305,7 @@ impl Workspace {
     /// the mark), text for its name, ⌫, ↵ and Esc.
     pub(crate) fn mark_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
         let key = &event.keystroke;
-        let renaming = matches!(self.model.mark_input, Some(MarkInput::Rename { .. }));
+        let renaming = self.model.mark_input.as_ref().is_some_and(|input| input.text().is_some());
         if key.modifiers.platform && !renaming {
             return; // ⌘ shortcuts still reach their bindings, and end the wait
         }

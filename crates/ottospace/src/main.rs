@@ -66,6 +66,7 @@ mod sessions;
 mod sneak;
 mod tags;
 mod terminal;
+mod workbook;
 use control::{Call, MouseAction, PaneKind, Request};
 use terminal::Terminal;
 
@@ -381,6 +382,7 @@ const KEYS_TABS: &[(&str, &str)] = &[
     ("⌘⇧] / ⌘⇧[", "Next / previous tab"),
     ("⌃Tab / ⌃⇧Tab", "Next / previous tab"),
     ("⌘⇧W", "Close the tab and its panes"),
+    ("⌘⇧S", "Save the tab as a workbook; again updates it"),
 ];
 const KEYS_MARKS: &[(&str, &str)] = &[
     ("⌘B / ⌘⇧B", "Mark the pane / the tab; again unmarks"),
@@ -395,7 +397,7 @@ const KEYS_TERMINAL: &[(&str, &str)] = &[
     ("⌘C", "Copy the selection"),
     ("⌘V", "Paste"),
     ("⌘⇧C", "Visual mode: select with the keyboard"),
-    ("⌘⇧E", "List mode: keys for the bar (Apps, Tasks, Repos, Marks). ↵ or space on a heading folds it"),
+    ("⌘⇧E", "List mode: keys for the bar (Apps, Workbook, Tasks, Repos, Marks). ↵ or space on a heading folds it"),
     ("⌘⌃G", "Sneak mode: a letter label on every control"),
     ("⌘N", "New task: type a line, ↵ adds it. ↑↓ ↵ pick from its list; ⌘O adds files"),
     ("⌘⇧N", "Next task: show the tabs of the first that needs you"),
@@ -412,6 +414,7 @@ const KEYS_LIST: &[(&str, &str)] = &[
     ("U", "Task: undo the last of these"),
     ("R / M / X / U", "Mark: rename / letter / remove / put back"),
     ("⇧J ⇧K", "Mark: move down / up"),
+    ("R / X / U", "Workbook: rename / delete / undo"),
     ("P / X / U", "App not running: pin or unpin / hide a suggestion / undo"),
     ("/", "Apps: filter all apps"),
     ("Esc", "Leave"),
@@ -538,6 +541,8 @@ actions!(ottospace, [Cut, SelectAll, Undo, Redo]);
 actions!(ottospace, [CopySelection, PasteText, VisualMode, ListMode, SneakMode, NewTask, NextTask]);
 // Marks: mark the focused pane or the tab on show, and the jump prefix.
 actions!(ottospace, [MarkPane, MarkTab, MarkJump]);
+// Save the tab on show as a workbook.
+actions!(ottospace, [SaveWorkbook]);
 // What the capture key does, from the menu.
 actions!(ottospace, [CapturePane]);
 // App menu.
@@ -643,6 +648,8 @@ struct Workspace {
     stored: Vec<Task>,
     /// `marks.json` as last read and written, and what the marks were last found to be missing.
     kept_marks: marks::Kept,
+    /// The workbooks' files as last read and written.
+    kept_workbooks: workbook::Kept,
     /// Scroll position of the bar's list, so list mode can bring the selected row into view.
     list_scroll: ScrollHandle,
     /// Every scroll area's bar.
@@ -823,7 +830,7 @@ impl Workspace {
                             }
                             this.minute = minute;
                             // The Marks list says what is missing as it is now.
-                            if this.model.sidebar == Some(Section::Marks) {
+                            if matches!(this.model.sidebar, Some(Section::Marks | Section::Workbook)) {
                                 this.check_marks(cx);
                             }
                         }
@@ -947,6 +954,7 @@ impl Workspace {
             unsaved: None,
             stored: Vec::new(),
             kept_marks: marks::Kept::default(),
+            kept_workbooks: workbook::Kept::default(),
             hosting,
             host_only,
             control,
@@ -958,6 +966,7 @@ impl Workspace {
         this.refresh_apps();
         this.offer_installed(cx);
         this.stored = this.kept_tasks(); // what was read needs no writing back
+        this.restore_workbooks();
         this.restore_marks(cx);
         this
     }
@@ -1036,6 +1045,7 @@ impl Workspace {
         self.dispatched_at = self.renders;
         self.store_tasks();
         self.store_marks();
+        self.store_workbooks();
         // New marks need looking for; what was found is believed a while, so this is cheap.
         self.check_marks(cx);
         self.load_icons(cx);
@@ -1285,8 +1295,9 @@ impl Workspace {
             (Some(notice), Some(marks)) => Some(format!("{notice} · {marks}")),
             (notice, marks) => notice.clone().or(marks.clone()),
         };
-        let start = start.or(self.key_notice.clone());
-        self.error.clone().or(self.unsaved.clone()).or(self.kept_marks.unsaved.clone()).or(start)
+        let start = start.or(self.key_notice.clone()).or(self.kept_workbooks.notice.clone());
+        let unsaved = self.unsaved.clone().or(self.kept_marks.unsaved.clone()).or(self.kept_workbooks.unsaved.clone());
+        self.error.clone().or(unsaved).or(start)
     }
 
     /// The global return key: take the keyboard back from a live app, and bring ottospace to the
@@ -2240,6 +2251,12 @@ impl Workspace {
             "marks": self.marks_json(),
             // The name of the mark just taken off, while the Marks section offers to put it back.
             "mark_removed": self.mark_offered(),
+            // The workbooks by name: `name`, `panes` (each `kind`: `terminal`, `app` with the
+            // `app`'s name, or `empty`), `summary`, and `open` with its `tab`. No directory.
+            // `row` and `buttons`: where the Workbook section drew it, or null.
+            "workbooks": self.workbooks_json(),
+            // What the Workbook section offers to take back (`deleted`, `updated`), or null.
+            "workbook_offer": self.model.workbooks.offered(),
             // Each scroll area whose content does not fit, by its id (`tasks`, `repos`, `apps`,
             // `marks`, `picker`, `keys`, `terminal:<pane>`): its bar's `track` and `thumb` in
             // window points, and the bar's `opacity` (0 once it has faded).
@@ -2785,6 +2802,11 @@ impl Workspace {
         let repeats = |key: &ListKey| matches!(key, ListKey::Move(_) | ListKey::Reorder(_));
         let action = match pressed.filter(|key| !event.is_held || repeats(key)) {
             Some(ListKey::Move(delta)) => Action::ListMove { delta },
+            // A workbook's row opens as a click on it does.
+            Some(ListKey::Open { .. }) if self.model.selected_workbook().is_some() => {
+                let id = self.model.selected_workbook().unwrap_or_default();
+                return self.click_workbook("workbook", id, window, cx);
+            }
             Some(ListKey::Open { down }) => {
                 self.check_marks(cx); // a mark's row opens only what is there
                 Action::ListChoose { axis: if down { Axis::Down } else { Axis::Right } }
@@ -2831,6 +2853,7 @@ impl Workspace {
             Some(Section::Apps) => return Some(self.apps_child(at)),
             // The offer to put a mark back, if it shows, is above the rows.
             Some(Section::Marks) => return Some(at + usize::from(self.mark_offered().is_some())),
+            Some(Section::Workbook) => return Some(at + usize::from(self.model.workbooks.offered().is_some())),
             _ => return Some(at),
         }
         // The offer to undo, if it shows; how to add a task, if none is listed; then the headings
@@ -3304,6 +3327,7 @@ impl Workspace {
                     .child(self.controls.mark("bar:new_task"))
                     .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)))
             }))
+            .children((section == Section::Workbook).then(|| self.save_tab_button(cx)))
             // Reads the section's list again. Tasks and Workbook have nothing to read.
             .children(matches!(section, Section::Apps | Section::Repos).then(|| {
                 div()
@@ -3343,9 +3367,7 @@ impl Workspace {
             Section::Repos => self.render_repos(cx).into_any_element(),
             Section::Tasks => self.render_tasks(cx).into_any_element(),
             Section::Marks => self.render_marks(cx).into_any_element(),
-            _ => {
-                div().p_3().text_xs().text_color(rgb(theme::MUTED)).child("Designed, not built yet.").into_any_element()
-            }
+            Section::Workbook => self.render_workbooks(cx).into_any_element(),
         };
         div()
             .id("bar")
@@ -4249,6 +4271,7 @@ impl Workspace {
             Mode::Mark => match self.model.mark_input {
                 Some(MarkInput::Rename { .. }) => ("MARK", "type its name · ↵ keeps it · esc cancels"),
                 Some(MarkInput::SetKey { .. }) => ("MARK", "a letter for the mark · ⌫ for none · esc cancels"),
+                Some(MarkInput::Workbook { .. }) => ("WORKBOOK", "type its name · ↵ keeps it · esc cancels"),
                 _ => ("MARK?", "a mark's letter · esc cancels"),
             },
         };
@@ -4555,6 +4578,7 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &MarkPane, window, cx| this.toggle_mark(MarkOf::Pane(None), window, cx)))
             .on_action(cx.listener(|this, _: &MarkTab, window, cx| this.toggle_mark(MarkOf::Tab(None), window, cx)))
+            .on_action(cx.listener(|this, _: &SaveWorkbook, window, cx| this.save_workbook(window, cx)))
             .on_action(cx.listener(|this, _: &MarkJump, window, cx| {
                 this.dispatch(Action::MarkPrefix, this.input, window, cx);
             }))
@@ -4861,6 +4885,7 @@ fn main() {
             KeyBinding::new("ctrl-tab", NextTab, None),
             KeyBinding::new("ctrl-shift-tab", PrevTab, None),
             KeyBinding::new("cmd-shift-w", CloseTab, None),
+            KeyBinding::new("cmd-shift-s", SaveWorkbook, None),
             // Terminal selection. ⌘C never sends ^C: that is ⌃C.
             KeyBinding::new("cmd-c", CopySelection, None),
             KeyBinding::new("cmd-v", PasteText, None),

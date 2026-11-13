@@ -33,9 +33,10 @@ ottospace            # opens on the Repos list
 | Find an action by name | The menu bar |
 | Switch tab | ⌘1 … ⌘9 · ⌘⇧] ⌘⇧[ · ⌃Tab |
 | Close the tab and its panes | ⌘⇧W |
+| Save the tab as a workbook | ⌘⇧S |
 | Fill the screen | ⌘⌃F (again to restore) |
 
-## The bar on the left (Apps, Tasks, Repos)
+## The bar on the left (Apps, Workbook, Tasks, Repos, Marks)
 
 | I want to | Do |
 |---|---|
@@ -43,8 +44,6 @@ ottospace            # opens on the Repos list
 | Use it from the keyboard | ⌘⇧E, then `j` `k` move · ↵ open · ⇧↵ open below · Tab next section · Esc leave |
 | Read the lists again | ↻ in the bar's header |
 | Click anything without the mouse | ⌘⌃G: every control gets a letter label (a × gets two). Type it · ⌫ takes a letter back · Esc or a wrong letter leaves |
-
-The fourth icon, Workbook, is empty for now.
 
 ## Apps
 
@@ -60,6 +59,21 @@ The fourth icon, Workbook, is empty for now.
 | Give the window back to macOS | Come back to ottospace first, then ⌘W on its pane: the window returns to where it was |
 
 The badge on an app is how many windows it has open. A new window of a hosted app gets its own pane.
+
+## Workbooks
+
+A workbook is a saved, named tab, for a context that comes back. It is kept between runs.
+
+| I want to | Do |
+|---|---|
+| Save the tab on show | ⌘⇧S, or `Save tab` in Workbook on the rail. Type its name, ↵ |
+| Update it after changing the tab | ⌘⇧S again on that tab. Undo on the line at the top (six seconds) |
+| Open it | Workbook, click it. Or ⌘⇧E, ↵. If its tab is open (a dot), that tab is selected |
+| Rename or delete it | Hover its row: Rename, Delete. Or ⌘⇧E, then `r`, `x`; `u` puts a deleted one back |
+
+It keeps the splits, each terminal's directory and each app. Not what a terminal ran, nor the
+page or document an app showed. A directory that is gone: the terminal starts in your home
+folder. Kept in `~/.ottospace/workbooks`.
 
 ## Marks
 

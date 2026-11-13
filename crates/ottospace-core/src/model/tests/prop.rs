@@ -11,6 +11,7 @@ use crate::fuzz::{self, Rng};
 use crate::marks::{Mark, PaneRecord, RecordKind, TabRecord};
 use crate::repos::Worktree;
 use crate::sessions::{Link, Seen};
+use crate::workbook::{self, Workbook, WorkbookId};
 
 const WORDS: &[&str] = &["fix", "zoom", "flicker", "deploy", "x"];
 const REPOS: &[&str] = &["app", "canvas", "My Project", "2048", "Ottospace"];
@@ -19,6 +20,8 @@ const AGENTS: &[&str] = &["claude", "codex", "Claude Code"];
 const SKILLS: &[&str] = &["code-review", "deploy"];
 const APPS: &[&str] = &["Slack", "Safari", "Finder", "Sketch", "Slides", ""];
 const UIDS: &[&str] = &["u1", "u2", "u3", "u4", ""];
+/// A workbook's id is its file's name: three that may be one, and some that may not.
+const BOOK_UIDS: &[&str] = &["00000000000000a1", "00000000000000a2", "00000000000000a3", "../../x", "A1", ""];
 const SESSIONS: &[&str] = &["s1", "s2", "s3"];
 const CONTROLS: &[&str] = &["rail:apps", "pane:1", "close:1", "tab:1", "tab-close:1", "mark-remove:1", "c0", "c1"];
 
@@ -52,6 +55,30 @@ impl Gen<'_> {
     fn index(&mut self, len: usize) -> usize {
         let real: Vec<usize> = (0..len).collect();
         self.one_of(&real, |g| g.rng.pick(&[0, len, 99, usize::MAX]))
+    }
+
+    fn workbook(&mut self) -> WorkbookId {
+        let real: Vec<WorkbookId> = self.m.workbooks.list.iter().map(|book| book.id).collect();
+        self.one_of(&real, Self::stray)
+    }
+
+    /// A workbook as a file may hold it: sound or not, with keys this build does not know.
+    fn kept_workbook(&mut self) -> Workbook {
+        let panes = vec![self.record(1), self.record(2)];
+        let split =
+            Node::Split { axis: self.axis(), ratio: 0.5, a: Box::new(Node::Leaf(1)), b: Box::new(Node::Leaf(2)) };
+        let layout = self.rng.pick(&[Some(Node::Leaf(1)), Some(split), Some(Node::Leaf(9)), None]);
+        let tab =
+            TabRecord { title: self.name(WORDS), task: None, focused: Some(1), layout, panes, extra: self.extra() };
+        Workbook {
+            id: 0,
+            version: self.rng.pick(&[workbook::VERSION, workbook::VERSION, 2]),
+            uid: self.rng.pick(BOOK_UIDS).to_string(),
+            name: self.name(WORDS),
+            tabs: (0..self.rng.below(3)).map(|_| tab.clone()).collect(),
+            live: None,
+            extra: self.extra(),
+        }
     }
 
     fn task(&mut self) -> TaskId {
@@ -689,6 +716,17 @@ const MAKERS: &[Make] = &[
     |_| Action::CaptureBack,
     |g| Action::BriefShow { id: g.task() },
     |_| Action::BriefClose,
+    |g| {
+        // As the shell does: only what `workbook::parse` lets through, each under its own id.
+        let kept: Vec<Workbook> = (0..g.rng.below(3)).map(|_| g.kept_workbook()).collect();
+        let read = |book: &Workbook| workbook::parse(&workbook::write(book), &book.uid).ok();
+        Action::RestoreWorkbooks { workbooks: kept.iter().filter_map(read).collect() }
+    },
+    |g| Action::WorkbookSave { uid: g.rng.pick(BOOK_UIDS).to_string(), cwds: g.read(DIRS) },
+    |g| Action::WorkbookOpen { workbook: g.workbook(), home: g.rng.coin().then(|| g.name(DIRS)) },
+    |g| Action::WorkbookEdit { workbook: g.workbook() },
+    |g| Action::WorkbookRemove { workbook: g.workbook() },
+    |_| Action::WorkbookUndo,
 ];
 
 /// The way out of each box and mode. Picked one time in 8: with every action as likely as any
@@ -809,16 +847,13 @@ fn check(m: &Model) -> Result<(), String> {
     // The text field is the picker's filter, else the new-task box's line; with neither open
     // there is none. It has the keyboard in their modes only, and not under the key reference.
     // A mark's name being typed is a text field too, before either.
-    let renaming = match &m.mark_input {
-        Some(MarkInput::Rename { text, .. }) => Some(text),
-        _ => None,
-    };
+    let renaming = m.mark_input.as_ref().and_then(MarkInput::text);
     // Else a note being typed on a capture, unless the draft's title has the keyboard; else the
     // Apps section's filter, while it has the keyboard and no box does.
     let note = m.note().filter(|_| !m.compose_keys());
     let apps = m.app_lists.filtering && !m.compose_modal() && !m.compose_keys();
     let whose = match (m.open_field(), renaming, &m.picker, note, &m.compose) {
-        (Some(("mark", field)), Some(name), ..) => std::ptr::eq(field, name),
+        (Some(("mark" | "workbook", field)), Some(name), ..) => std::ptr::eq(field, name),
         (Some(("picker", field)), None, Some(picker), ..) => std::ptr::eq(field, &picker.query),
         (Some(("note", field)), None, None, Some(note), _) => std::ptr::eq(field, note),
         (Some(("apps", field)), None, None, None, _) => apps && std::ptr::eq(field, &m.app_lists.filter),
@@ -863,7 +898,7 @@ fn check(m: &Model) -> Result<(), String> {
     if let Some((of, field)) = m.open_field() {
         let most = match of {
             "compose" => MAX_TITLE,
-            "mark" => marks::MAX_NAME,
+            "mark" | "workbook" => marks::MAX_NAME,
             "note" => capture::MAX_NOTE,
             _ => MAX_FILTER,
         };
@@ -926,6 +961,9 @@ fn check(m: &Model) -> Result<(), String> {
         }
         Some(MarkInput::SetKey { mark }) => {
             ensure!(m.marks.get(*mark).is_some(), "mark {mark} waits for a letter and is gone")
+        }
+        Some(MarkInput::Workbook { workbook, .. }) => {
+            ensure!(m.workbooks.get(*workbook).is_some(), "a name is typed for workbook {workbook}, which is gone")
         }
         Some(MarkInput::Jump) | None => {}
     }
@@ -1082,6 +1120,22 @@ fn check(m: &Model) -> Result<(), String> {
             mark.name
         );
     }
+
+    // Workbooks: each is one file, named by its id, that reads back as it was written.
+    let books = &m.workbooks.list;
+    let book_ids: Vec<WorkbookId> = books.iter().map(|book| book.id).collect();
+    ensure!(unique(&book_ids) && !book_ids.contains(&0), "workbook ids {book_ids:?}");
+    let uids: Vec<&str> = books.iter().map(|book| book.uid.as_str()).collect();
+    ensure!(unique(&uids) && uids.iter().all(|uid| workbook::valid_uid(uid)), "workbook file names {uids:?}");
+    let names: Vec<&str> = books.iter().map(|book| book.name.as_str()).collect();
+    ensure!(unique(&names) && names.iter().all(named), "workbook names {names:?}");
+    let lives: Vec<u32> = books.iter().filter_map(|book| book.live).collect();
+    ensure!(unique(&lives) && lives.iter().all(|tab| tab_ids.contains(tab)), "workbooks stand for tabs {lives:?}");
+    for book in books {
+        let read = workbook::parse(&workbook::write(book), &book.uid);
+        let read = read.map_err(|why| format!("workbook {:?} does not read back: {why}", book.name))?;
+        ensure!(workbook::write(&read) == workbook::write(book), "workbook {:?} reads back changed", book.name);
+    }
     let waiting: Vec<PaneId> = m.marks.unfilled().iter().map(|empty| empty.pane).collect();
     let empty = |id: &PaneId| m.pane(*id).is_some_and(|p| p.kind == Kind::Empty);
     ensure!(
@@ -1128,7 +1182,9 @@ fn check_state(m: &Model) -> Result<(), String> {
     ensure!(m.panes.iter().all(|pane| round_trips(&pane.kind)), "a pane's kind does not read back as written");
     ensure!(round_trips(&(m.sidebar, m.collapsed.clone())), "the bar does not read back as written");
     let _ = (m.task_sections(m.now), m.sessions_bar(), m.compose_spans(), m.home(&[]), m.mark_rows());
-    let _ = (m.keyboard_terminal(), m.due(m.now), m.followed_sessions(), m.compose_read(), m.marks.needs());
+    let _ = (m.keyboard_terminal(), m.due(m.now), m.followed_sessions(), m.compose_read(), m.needs());
+    let _ = (m.workbook_rows(), m.workbook_save_refusal(), m.workbook_of_tab(), m.workbooks.offered());
+    let _: Vec<Vec<String>> = m.workbooks.list.iter().map(|book| m.workbook_gone(book.id)).collect();
     let _ = (
         m.draft(m.compose_line().map(String::as_str).unwrap_or_default()),
         m.mark_refusal(MarkOf::Pane(None)),
@@ -1268,10 +1324,13 @@ impl Run {
                 | Action::MarkBackspace
                 | Action::MarkSubmit
                 | Action::MarkCancel
+                // These start the typing of a workbook's name.
+                | Action::WorkbookSave { .. }
+                | Action::WorkbookEdit { .. }
         );
         // A name being typed is a text field: an edit of it is the wait's own, whoever sends it.
-        let mark_own =
-            mark_own || matches!((&action, &mark_input), (Action::FieldEdit { .. }, Some(MarkInput::Rename { .. })));
+        let typing = mark_input.as_ref().is_some_and(|input| input.text().is_some());
+        let mark_own = mark_own || (typing && matches!(action, Action::FieldEdit { .. }));
         // Only the user, or the mode's own keys, end sneak mode, the quit question or a mark's wait.
         if sneak.is_some() && !sneak_own {
             let now = m.sneak.as_ref().map(|sneak| sneak.typed.clone());
@@ -1288,6 +1347,8 @@ impl Run {
         }
         if mark_input.is_some() && !mark_own {
             let gone = matches!(&mark_input, Some(MarkInput::Rename { mark, .. } | MarkInput::SetKey { mark }) if m.marks.get(*mark).is_none());
+            let gone = gone
+                || matches!(&mark_input, Some(MarkInput::Workbook { workbook, .. }) if m.workbooks.get(*workbook).is_none());
             let kept = if user { m.mark_input.is_none() } else { m.mark_input == mark_input || gone };
             ensure!(kept, "a mark's wait: {mark_input:?} before, {:?} after", m.mark_input);
         }
@@ -1827,6 +1888,10 @@ fn code(sent: &Envelope) -> String {
             (serde_json::to_string(marks).unwrap_or_default(), serde_json::to_string(extra).unwrap_or_default());
         return format!("restore_marks({marks:?}, {extra:?}).sent_by(Origin::{:?})", sent.origin);
     }
+    if let Action::RestoreWorkbooks { workbooks } = &sent.action {
+        let workbooks = serde_json::to_string(workbooks).unwrap_or_default();
+        return format!("restore_workbooks({workbooks:?}).sent_by(Origin::{:?})", sent.origin);
+    }
     let text: Vec<char> = format!("{:?}", sent.action).chars().collect();
     let (mut out, mut at) = (String::new(), 0);
     // The field being read, and the fields of what encloses it.
@@ -1889,6 +1954,11 @@ fn restore_marks(marks: &str, extra: &str) -> Action {
         marks: serde_json::from_str(marks).expect(read),
         extra: serde_json::from_str(extra).expect(read),
     }
+}
+
+/// `RestoreWorkbooks` from the JSON of its workbooks, as `code` writes it.
+fn restore_workbooks(workbooks: &str) -> Action {
+    Action::RestoreWorkbooks { workbooks: serde_json::from_str(workbooks).expect("a regression's workbooks are JSON") }
 }
 
 #[test]
@@ -2441,4 +2511,23 @@ fn marks_json_keeps_an_unknown_key_of_a_terminals_kind() {
     let text = r#"{"version": 1, "marks": [{"id": "u1", "name": "a", "target": {"pane": {"kind": {"type": "terminal", "future": 7}}}}]}"#;
     let loaded = marks::parse(text).unwrap();
     assert!(marks::write(&loaded.marks, &loaded.extra).contains("future"));
+}
+
+#[test]
+fn a_workbook_whose_file_names_a_task_opens_as_a_tab_of_no_task() {
+    let mut m = Model::default();
+    m.update(Action::TaskAdd {
+        title: "t".into(),
+        priority: 3,
+        state: State::Captured,
+        tab: None,
+        assign: Assign::default(),
+    });
+    let kept = r#"[{"version": 1, "id": "00000000000000a1", "name": "dri", "tabs": [{"title": "x", "task": 1,
+        "layout": {"leaf": 1}, "panes": [{"id": 1, "kind": {"type": "terminal"}, "command": "rm -rf ~"}]}]}]"#;
+    m.update(by(Origin::System, restore_workbooks(kept)));
+    let effects = m.update(Action::WorkbookOpen { workbook: 1, home: None });
+    // A terminal and nothing typed into it: no effect carries a command.
+    assert_eq!(effects, vec![Effect::Opened(1)]);
+    assert_eq!((m.tabs[m.active].task, m.current_task, m.tabs[m.active].title.as_str()), (None, None, "dri"));
 }

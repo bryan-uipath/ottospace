@@ -1093,3 +1093,50 @@ fn a_hosted_window_is_captured_with_the_part_of_its_tree_under_the_circle() {
     );
     let _ = std::fs::remove_dir_all(&home);
 }
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn a_workbook_hosts_its_apps_window_again_beside_its_terminal() {
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-workbook", "CANARY_SOCKET", &[]);
+    wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
+    let otto = Proc::launch(
+        env!("CARGO_BIN_EXE_ottospace"),
+        "otto-workbook",
+        "OTTOSPACE_SOCKET",
+        &[
+            ("OTTOSPACE_E2E", "1"),
+            ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string()),
+            ("OTTOSPACE_SHELL", "/bin/sh"),
+        ],
+    );
+    let state = || otto.call(json!({"cmd": "state"}));
+    let user_key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys, "as": "user"}));
+    let kinds = |state: &Value| -> Vec<String> {
+        let panes = state["state"]["panes"].as_array().cloned().unwrap_or_default();
+        panes.iter().filter_map(|pane| pane["kind"]["type"].as_str().map(str::to_string)).collect()
+    };
+
+    // The app's window beside a terminal, saved by the user's key under the tab's name.
+    otto.call(json!({"cmd": "open_app", "name": CANARY}));
+    otto.call(json!({"cmd": "split"}));
+    user_key("cmd-shift-s");
+    let saved = user_key("enter");
+    let book = &saved["workbooks"][0];
+    assert_eq!(book["panes"], json!([{"kind": "app", "app": CANARY}, {"kind": "terminal"}]), "{book}");
+    assert_eq!((&book["summary"], &book["open"]), (&json!(format!("1 terminal · {CANARY}")), &json!(true)));
+
+    // Its tab closes: the window goes back to the app. The row opens it again: the same
+    // split, the app's window in its pane (no title is kept to find it by) and a new shell.
+    let closed = otto.call(json!({"cmd": "close_tab", "index": 0}));
+    assert_eq!((kinds(&closed), closed["hosted"].as_object().map(|h| h.len())), (vec![], Some(0)));
+    let row = wait_for("the workbook's row", || rect(&state()["workbooks"][0]["row"]));
+    for action in ["down", "up"] {
+        let [x, y] = middle(row);
+        otto.call(json!({"cmd": "mouse", "action": action, "x": x, "y": y, "as": "user"}));
+    }
+    let built =
+        wait_for("the window in the workbook's pane", || Some(state()).filter(|s| kinds(s) == ["app", "terminal"]));
+    assert_eq!(built["hosted"].as_object().map(|h| h.len()), Some(1), "{}", built["state"]["panes"]);
+    assert_eq!(built["state"]["panes"][0]["kind"]["title"], "Canary 1");
+    assert_eq!((&built["workbooks"][0]["open"], &built["notice"]), (&json!(true), &Value::Null));
+}

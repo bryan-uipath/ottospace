@@ -11,6 +11,7 @@ use crate::layout::{Axis, MIN_SHARE, Node};
 use crate::list::ListRow;
 use crate::model::{Effect, Kind, Mode, Model, Pane, PaneId};
 use crate::tasks::{Moved, NOTICE_MS, Notice, TaskId};
+use crate::workbook::WorkbookId;
 
 pub type MarkId = u32;
 
@@ -40,7 +41,7 @@ pub enum RecordKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         bundle: Option<String>,
         name: String,
-        /// A hint: titles change. e.g. "general - Slack".
+        /// A hint: titles change. e.g. "general - Slack". A workbook keeps none.
         #[serde(default)]
         title: String,
         #[serde(flatten)]
@@ -178,6 +179,25 @@ pub enum MarkInput {
     Rename { mark: MarkId, text: crate::edit::Field },
     /// A mark waits for its letter.
     SetKey { mark: MarkId },
+    /// A workbook's name is being typed, as a mark's is.
+    Workbook { workbook: WorkbookId, text: crate::edit::Field },
+}
+
+impl MarkInput {
+    /// The name being typed, a mark's or a workbook's.
+    pub fn text(&self) -> Option<&crate::edit::Field> {
+        match self {
+            MarkInput::Rename { text, .. } | MarkInput::Workbook { text, .. } => Some(text),
+            MarkInput::Jump | MarkInput::SetKey { .. } => None,
+        }
+    }
+
+    pub(crate) fn text_mut(&mut self) -> Option<&mut crate::edit::Field> {
+        match self {
+            MarkInput::Rename { text, .. } | MarkInput::Workbook { text, .. } => Some(text),
+            MarkInput::Jump | MarkInput::SetKey { .. } => None,
+        }
+    }
 }
 
 /// A pane of a tab built from a mark that could not be given what its record names. It is an
@@ -275,14 +295,26 @@ pub fn letter(c: char) -> Option<char> {
 }
 
 /// A name as it is kept: one line, trimmed, at most `MAX_NAME` characters.
-fn clean(name: &str) -> String {
+pub(crate) fn clean(name: &str) -> String {
     let line: String = name.chars().filter(|c| !c.is_control()).collect();
     line.trim().chars().take(MAX_NAME).collect::<String>().trim_end().to_string()
 }
 
+/// `name` cleaned (`unnamed` if nothing is left), or `name 2`, `name 3`: the first not `taken`.
+pub(crate) fn unique_name(name: &str, unnamed: &str, taken: impl Fn(&str) -> bool) -> String {
+    let name = Some(clean(name)).filter(|name| !name.is_empty()).unwrap_or_else(|| unnamed.into());
+    // The number fits too: a name of `MAX_NAME` characters gives up its last two for " 2".
+    let numbered = (2..).map(|n: u32| {
+        let number = format!(" {n}");
+        let kept: String = name.chars().take(MAX_NAME.saturating_sub(number.len())).collect();
+        format!("{}{number}", kept.trim_end())
+    });
+    std::iter::once(name.clone()).chain(numbered).find(|name| !taken(name)).unwrap_or(name)
+}
+
 /// A title as a record keeps it: one line of at most `most` characters. A window's title may
 /// be any length and hold line breaks; `marks.json` takes neither (`PaneRecord::unsound`).
-fn kept_title(title: &str, most: usize) -> String {
+pub(crate) fn kept_title(title: &str, most: usize) -> String {
     title.chars().filter(|c| !c.is_control()).take(most).collect()
 }
 
@@ -297,7 +329,7 @@ fn plain(text: &str, most: usize) -> bool {
 }
 
 impl PaneRecord {
-    fn needs(&self) -> Option<Need> {
+    pub(crate) fn needs(&self) -> Option<Need> {
         match &self.kind {
             RecordKind::Terminal => self.cwd.clone().map(Need::Dir),
             RecordKind::App { bundle, name, .. } => Some(Need::App { bundle: bundle.clone(), name: name.clone() }),
@@ -338,13 +370,13 @@ impl PaneRecord {
 
 impl TabRecord {
     /// The recorded panes the layout shows, in reading order.
-    fn shown(&self) -> Vec<&PaneRecord> {
+    pub(crate) fn shown(&self) -> Vec<&PaneRecord> {
         let leaves = self.layout.as_ref().map(Node::leaves).unwrap_or_default();
         leaves.iter().filter_map(|id| self.panes.iter().find(|pane| pane.id == *id)).collect()
     }
 
     /// What is wrong with a record read from disk, if anything.
-    fn unsound(&self) -> Option<&'static str> {
+    pub(crate) fn unsound(&self) -> Option<&'static str> {
         let leaves = self.layout.as_ref().map(Node::leaves).unwrap_or_default();
         let mut seen = leaves.clone();
         seen.sort_unstable();
@@ -549,15 +581,7 @@ impl Marks {
 
     /// `name`, or `name 2`, `name 3`: no two marks share a name, so a name finds one mark.
     fn unique_name(&self, name: &str, but: Option<MarkId>) -> String {
-        let name = Some(clean(name)).filter(|name| !name.is_empty()).unwrap_or_else(|| "mark".into());
-        let taken = |name: &str| self.list.iter().any(|mark| Some(mark.id) != but && mark.name == name);
-        // The number fits too: a name of `MAX_NAME` characters gives up its last two for " 2".
-        let numbered = (2..).map(|n: u32| {
-            let number = format!(" {n}");
-            let kept: String = name.chars().take(MAX_NAME.saturating_sub(number.len())).collect();
-            format!("{}{number}", kept.trim_end())
-        });
-        std::iter::once(name.clone()).chain(numbered).find(|name| !taken(name)).unwrap_or(name)
+        unique_name(name, "mark", |name| self.list.iter().any(|mark| Some(mark.id) != but && mark.name == name))
     }
 
     /// Adds a mark at the end, with a name no other has. Its letter moves to it. `id` 0: a new id.
@@ -753,7 +777,7 @@ impl Model {
         }
     }
 
-    fn record(&self, pane: &Pane, cwds: &[(PaneId, String)]) -> PaneRecord {
+    pub(crate) fn record(&self, pane: &Pane, cwds: &[(PaneId, String)]) -> PaneRecord {
         let kind = match &pane.kind {
             Kind::Empty => RecordKind::Empty,
             Kind::Terminal => RecordKind::Terminal,
@@ -953,7 +977,7 @@ impl Model {
     /// A new tab from a record, on show: its splits, a terminal in each recorded directory, and
     /// an empty pane for each app window, which the shell fills. A pane whose directory is gone
     /// or whose app is not installed stays empty and says so. Returns the tab's `id`.
-    fn rebuild_tab(&mut self, record: &TabRecord, effects: &mut Vec<Effect>) -> u32 {
+    pub(crate) fn rebuild_tab(&mut self, record: &TabRecord, effects: &mut Vec<Effect>) -> u32 {
         self.list = None;
         self.leave(effects);
         self.remember_tab();
@@ -984,7 +1008,7 @@ impl Model {
 
     /// Fills the empty panes of the tab on show that a mark's record names: a terminal starts
     /// if its directory is there; the shell is asked for each app's window, terminals first.
-    fn retry_unfilled(&mut self, effects: &mut Vec<Effect>) {
+    pub(crate) fn retry_unfilled(&mut self, effects: &mut Vec<Effect>) {
         let shown = self.layout.as_ref().map(Node::leaves).unwrap_or_default();
         let mut hosts = Vec::new();
         for empty in self.marks.unfilled.clone().into_iter().filter(|empty| shown.contains(&empty.pane)) {
@@ -1074,7 +1098,7 @@ impl Model {
     }
 
     /// A mark may take the keyboard from normal and list mode only, as sneak mode does.
-    fn mark_input_may_start(&self) -> bool {
+    pub(crate) fn mark_input_may_start(&self) -> bool {
         matches!(self.mode(), Mode::Normal | Mode::List | Mode::Mark) && !self.keys
     }
 
@@ -1112,7 +1136,7 @@ impl Model {
                 None => self.mark_input = Some(MarkInput::SetKey { mark }),
             },
             // A name is typed in its text field (`FieldEdit`), not here.
-            renaming @ Some(MarkInput::Rename { .. }) => self.mark_input = renaming,
+            renaming @ Some(MarkInput::Rename { .. } | MarkInput::Workbook { .. }) => self.mark_input = renaming,
             None => {}
         }
     }
@@ -1121,7 +1145,7 @@ impl Model {
     pub(crate) fn mark_backspace(&mut self) {
         match &mut self.mark_input {
             // A name's ⌫ is its text field's.
-            Some(MarkInput::Rename { .. }) => {}
+            Some(MarkInput::Rename { .. } | MarkInput::Workbook { .. }) => {}
             Some(MarkInput::SetKey { mark }) => {
                 let mark = *mark;
                 self.marks.set_key(mark, None);
@@ -1133,10 +1157,18 @@ impl Model {
 
     /// ↵: keeps the typed name.
     pub(crate) fn mark_submit(&mut self) {
-        if let Some(MarkInput::Rename { mark, text }) = &self.mark_input {
-            let (mark, text) = (*mark, text.text().to_string());
-            self.marks.rename(mark, &text);
-            self.mark_input = None;
+        match &self.mark_input {
+            Some(MarkInput::Rename { mark, text }) => {
+                let (mark, text) = (*mark, text.text().to_string());
+                self.marks.rename(mark, &text);
+                self.mark_input = None;
+            }
+            Some(MarkInput::Workbook { workbook, text }) => {
+                let (workbook, text) = (*workbook, text.text().to_string());
+                self.workbook_rename(workbook, &text);
+                self.mark_input = None;
+            }
+            _ => {}
         }
     }
 }

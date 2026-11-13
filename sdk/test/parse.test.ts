@@ -77,6 +77,8 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     counts: { live: 0 },
     marks: [],
     mark_removed: null,
+    workbooks: [],
+    workbook_offer: null,
     scrollbars: {},
     capture: { key: null, bar: null, picture: null, encoded: [], pending: 0, dir: null, brief: null },
   };

@@ -28,6 +28,7 @@ pub mod tasks;
 pub mod terminal;
 pub mod theme;
 pub mod titlebar;
+pub mod workbook;
 
 pub use layout::{Axis, Dir, Node, Rect, Zone};
 pub use model::{Action, Effect, Envelope, Kind, Mode, Model, Origin, Pane, PaneId, PickItem, Picker, Section, Tab};
