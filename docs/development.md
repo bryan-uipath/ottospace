@@ -71,6 +71,7 @@ sets `OTTOSPACE_E2E`, which turns window hosting off, so tests never touch your 
 | `crates/ottospace-core` | State and rules: `Model::update(Envelope { action, origin }) -> Vec<Effect>`. Split tree, key encoding. No I/O |
 | `crates/ottospace-mac` | macOS calls: AX window control, SCK lookup, display geometry, HID clicks, crash recovery |
 | `crates/ottospace-sessions` | Reads Claude Code and Codex session files, read-only: sessions of a directory, events, snapshot. See `docs/ai/sessions.md` |
+| `crates/ottospace-agents` | Speaks to Claude Code (`claude -p`, stream-json) and Codex (`codex app-server`) in their structured modes: starts, sends, reads events. Not wired into the app yet. See `docs/ai/agent-runners.md` |
 | `crates/ottospace` | The app: GPUI views, terminal, control socket, `ctl` client. Turns input into `Action`s, carries out `Effect`s |
 | `sdk/` | TypeScript client for the control socket: [`sdk/README.md`](../sdk/README.md). Tests: `npm test` in `sdk/`, after `cargo build -p ottospace` |
 | `harness/` | Local input test page (`python3 -m http.server 8765 -d harness`) |

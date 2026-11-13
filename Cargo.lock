@@ -3797,6 +3797,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ottospace-agents"
+version = "0.1.0"
+dependencies = [
+ "ottospace-core",
+ "ottospace-sessions",
+ "serde_json",
+]
+
+[[package]]
 name = "ottospace-core"
 version = "0.1.0"
 dependencies = [

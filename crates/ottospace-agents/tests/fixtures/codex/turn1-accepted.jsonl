@@ -1,0 +1,5 @@
+{"method":"_fixture","params":{"note":"HAND-WRITTEN from the app-server v2 schema. Not a recording."}}
+{"method":"serverRequest/resolved","params":{"threadId":"019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b","requestId":"srv-fixture-1"}}
+{"method":"item/completed","params":{"threadId":"019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b","turnId":"turn-fixture-1","completedAtMs":1794480241000,"item":{"type":"commandExecution","id":"item-fixture-2","command":"cargo test","commandActions":[],"cwd":"/work/app","status":"completed","exitCode":0,"aggregatedOutput":"test result: ok"}}}
+{"method":"thread/tokenUsage/updated","params":{"threadId":"019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b","turnId":"turn-fixture-1","tokenUsage":{"last":{"inputTokens":12000,"cachedInputTokens":8000,"outputTokens":300,"reasoningOutputTokens":100,"totalTokens":12300},"total":{"inputTokens":12000,"cachedInputTokens":8000,"outputTokens":300,"reasoningOutputTokens":100,"totalTokens":12300},"modelContextWindow":272000}}}
+{"method":"turn/completed","params":{"threadId":"019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b","turn":{"id":"turn-fixture-1","status":"completed","items":[]}}}

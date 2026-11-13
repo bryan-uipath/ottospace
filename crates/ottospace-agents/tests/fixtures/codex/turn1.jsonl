@@ -1,0 +1,9 @@
+{"method":"_fixture","params":{"note":"HAND-WRITTEN from the app-server v2 schema. Not a recording."}}
+{"id":2,"result":{"turn":{"id":"turn-fixture-1","status":"inProgress","items":[]}}}
+{"method":"turn/started","params":{"threadId":"019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b","turn":{"id":"turn-fixture-1","status":"inProgress","items":[]}}}
+{"method":"item/started","params":{"threadId":"019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b","turnId":"turn-fixture-1","startedAtMs":1794480240000,"item":{"type":"agentMessage","id":"item-fixture-1","text":""}}}
+{"method":"item/agentMessage/delta","params":{"threadId":"019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b","turnId":"turn-fixture-1","itemId":"item-fixture-1","delta":"Checking "}}
+{"method":"item/agentMessage/delta","params":{"threadId":"019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b","turnId":"turn-fixture-1","itemId":"item-fixture-1","delta":"the tests."}}
+{"method":"item/completed","params":{"threadId":"019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b","turnId":"turn-fixture-1","completedAtMs":1794480240100,"item":{"type":"agentMessage","id":"item-fixture-1","text":"Checking the tests."}}}
+{"method":"item/started","params":{"threadId":"019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b","turnId":"turn-fixture-1","startedAtMs":1794480240200,"item":{"type":"commandExecution","id":"item-fixture-2","command":"cargo test","commandActions":[],"cwd":"/work/app","status":"inProgress"}}}
+{"id":"srv-fixture-1","method":"item/commandExecution/requestApproval","params":{"threadId":"019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b","turnId":"turn-fixture-1","itemId":"item-fixture-2","startedAtMs":1794480240300,"command":"cargo test","cwd":"/work/app","reason":"Run the tests"}}

@@ -1,0 +1,16 @@
+#!/bin/sh
+# Fake `claude -p` for tests: records argv and stdin under $FAKE_DIR, and answers each line
+# on stdin by replaying a fixture from $FAKE_FIXTURES. Starts no model session.
+printf '%s\n' "$@" >"$FAKE_DIR/argv"
+replay() { grep -v '"_fixture"' "$FAKE_FIXTURES/$1"; }
+turn=0
+while IFS= read -r line; do
+  printf '%s\n' "$line" >>"$FAKE_DIR/stdin"
+  case "$line" in
+    *'"type":"user"'*) turn=$((turn + 1)); replay "turn$turn.jsonl" ;;
+    *'"behavior":"allow"'*) replay turn1-allowed.jsonl ;;
+    *'"subtype":"interrupt"'*) replay turn2-interrupted.jsonl ;;
+  esac
+done
+echo "fake claude: stdin closed" >&2
+exit 3
