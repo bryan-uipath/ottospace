@@ -3800,6 +3800,7 @@ dependencies = [
 name = "ottospace-agents"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "ottospace-core",
  "ottospace-sessions",
  "serde_json",

@@ -2,6 +2,7 @@
 //! events and writes the protocol's replies, one keeps the end of stderr. Sends go from the caller.
 
 use std::io::{self, Read, Write};
+use std::os::unix::process::CommandExt;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -34,41 +35,74 @@ fn write_lines(stdin: &Stdin, lines: &[String]) -> io::Result<()> {
 
 /// One running agent CLI.
 pub struct Driver {
-    child: Arc<Mutex<Child>>,
+    /// The CLI's process group: its own id. Killing it ends the tools and servers it started too.
+    group: i32,
+    /// True once the CLI is reaped: its id may then name another group, so nothing is killed.
+    reaped: Arc<Mutex<bool>>,
     stdin: Stdin,
     protocol: Arc<Mutex<dyn Protocol>>,
     events: Receiver<Event>,
 }
 
 impl Driver {
-    /// Starts `command` (its program, argv and directory already set) with piped stdio and
-    /// writes the protocol's opening lines.
+    /// Starts `command` (its program, argv and directory already set) with piped stdio, in a
+    /// process group of its own, and writes the protocol's opening lines.
     pub fn spawn(mut command: Command, protocol: impl Protocol) -> io::Result<Self> {
-        let mut child = command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+        command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
+        let mut child = command.spawn()?;
+        let group = i32::try_from(child.id()).map_err(|_| io::Error::other("pid out of range"))?;
         let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
         let stdin: Stdin = Arc::new(Mutex::new(child.stdin.take()));
         let protocol: Arc<Mutex<dyn Protocol>> = Arc::new(Mutex::new(protocol));
-        let child = Arc::new(Mutex::new(child));
+        let reaped = Arc::new(Mutex::new(false));
+        let (exit_tx, exit) = mpsc::channel();
+        let waiting = reaped.clone();
+        thread::spawn(move || {
+            let _ = exit_tx.send(wait(child, group, &waiting));
+        });
         let opening = lock(&protocol).opening();
         let (tx, events) = mpsc::channel();
-        let tail = thread::spawn(move || stderr.map(keep_tail).unwrap_or_default());
-        let (reading, replies, waiting) = (protocol.clone(), stdin.clone(), child.clone());
-        thread::spawn(move || read(stdout, &reading, &replies, &tx, tail, &waiting));
+        // Read after the exit, not joined: a process that kept stderr open must not hold `Exited` back.
+        let tail = Arc::new(Mutex::new(Vec::new()));
+        let keeping = tail.clone();
+        let tailing = stderr.map(|stderr| thread::spawn(move || keep_tail(stderr, &keeping)));
+        let (reading, replies) = (protocol.clone(), stdin.clone());
+        thread::spawn(move || read(stdout, &reading, &replies, &tx, (&tail, tailing), &exit));
         // A CLI that exits at once gives an error here; its `Exited` still comes.
         let _ = write_lines(&stdin, &opening);
-        Ok(Self { child, stdin, protocol, events })
+        Ok(Self { group, reaped, stdin, protocol, events })
     }
 }
 
-/// The last `STDERR_TAIL` bytes the child wrote to stderr.
-fn keep_tail(mut stderr: impl Read) -> Vec<u8> {
-    let (mut tail, mut buffer) = (Vec::new(), [0; 4096]);
+/// Waits for the CLI to exit, kills what it left in its group, then reaps it and gives its code.
+/// Until it is reaped its id cannot be reused, so the group named by it is still the CLI's.
+fn wait(mut child: Child, group: i32, reaped: &Mutex<bool>) -> Option<i32> {
+    let pid = libc::id_t::try_from(group).unwrap_or_default();
+    loop {
+        // SAFETY: `info` is a zeroed `siginfo_t` that `waitid` writes into; `WNOWAIT` leaves the child unreaped.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let waited = unsafe { libc::waitid(libc::P_PID, pid, &mut info, libc::WEXITED | libc::WNOWAIT) };
+        if waited == 0 || io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+            break;
+        }
+    }
+    let mut reaped = lock(reaped);
+    // SAFETY: plain integers. What the CLI left behind (a background command holding its stdout) ends here.
+    unsafe { libc::killpg(group, libc::SIGKILL) };
+    let code = child.wait().ok().and_then(|status| status.code());
+    *reaped = true;
+    code
+}
+
+/// Keeps the last `STDERR_TAIL` bytes the child wrote to stderr.
+fn keep_tail(mut stderr: impl Read, tail: &Mutex<Vec<u8>>) {
+    let mut buffer = [0; 4096];
     while let Some(n) = read_some(&mut stderr, &mut buffer) {
+        let mut tail = lock(tail);
         tail.extend_from_slice(&buffer[..n]);
         let extra = tail.len().saturating_sub(STDERR_TAIL);
         tail.drain(..extra);
     }
-    tail
 }
 
 /// The next bytes read, retrying when a signal cut a read short. `None` at the end or on an error.
@@ -83,14 +117,14 @@ fn read_some(from: &mut impl Read, buffer: &mut [u8]) -> Option<usize> {
     }
 }
 
-/// Reads stdout to its end, then waits for the child and sends `Exited`.
+/// Reads stdout to its end, then takes the exit code from `wait` and sends `Exited`.
 fn read(
     stdout: Option<impl Read>,
     protocol: &Mutex<dyn Protocol>,
     stdin: &Stdin,
     tx: &Sender<Event>,
-    tail: thread::JoinHandle<Vec<u8>>,
-    child: &Mutex<Child>,
+    (tail, tailing): (&Mutex<Vec<u8>>, Option<thread::JoinHandle<()>>),
+    exit: &Receiver<Option<i32>>,
 ) {
     let mut lines = Lines::new(MAX_LINE);
     let mut each = |line: Line| {
@@ -115,16 +149,15 @@ fn read(
     }
     lines.finish().into_iter().for_each(&mut each);
     lock(stdin).take();
-    let stderr = tail.join().unwrap_or_default();
-    // Stdout closed; the process may take a moment to exit. Polled so `kill` can take the lock.
-    let code = loop {
-        match lock(child).try_wait() {
-            Ok(Some(status)) => break status.code(),
-            Ok(None) => thread::sleep(Duration::from_millis(10)),
-            Err(_) => break None,
+    let code = exit.recv().ok().flatten();
+    // Stderr's last words, given half a second to arrive: a process left behind may hold it open.
+    for _ in 0..50 {
+        if tailing.as_ref().is_none_or(thread::JoinHandle::is_finished) {
+            break;
         }
-    };
-    let stderr = Untrusted::new(&String::from_utf8_lossy(&stderr), STDERR_TAIL);
+        thread::sleep(Duration::from_millis(10));
+    }
+    let stderr = Untrusted::new(&String::from_utf8_lossy(&lock(tail)), STDERR_TAIL);
     let _ = tx.send(Event::Exited { code, stderr });
 }
 
@@ -144,8 +177,16 @@ impl Runner for Driver {
         lock(&self.stdin).take();
     }
 
+    /// Kills the CLI's whole process group: its shell commands and MCP servers with it.
     fn kill(&mut self) -> io::Result<()> {
-        lock(&self.child).kill()
+        // Held while killing, so the CLI is not reaped (and its id freed) in between.
+        let reaped = lock(&self.reaped);
+        // SAFETY: `killpg` takes plain integers and touches no memory of ours.
+        if *reaped || unsafe { libc::killpg(self.group, libc::SIGKILL) } == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
     }
 }
 

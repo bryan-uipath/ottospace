@@ -12,3 +12,5 @@ ottospace-sessions = { path = "../ottospace-sessions" }
 # `agents::is_name`: the one check of a model id that goes into argv.
 ottospace-core = { path = "../ottospace-core" }
 serde_json = "1"
+# `killpg`: a CLI is killed with the commands and servers it started. Already in the lock file.
+libc = "0.2"

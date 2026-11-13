@@ -60,13 +60,36 @@ session: the drawer stops its structured process first.
   client's request to answer is refused (`agents::USERS_ALONE`), and `capture_start`'s
   test-only gate is the precedent for an E2E-only way in. A `Ticket` is made only by a parser,
   so an answer always names a request the CLI really asked; the shell maps it to an index.
-- The drawer shows the request in the transcript where the call is: tool, label, the full
-  command or path as untrusted text, and four answers: **Allow** (↵), **Always this session**,
+- **What the user approves is derived from the request's payload, never from text the model
+  describes it with. What cannot be shown in full is not approvable in one step.**
+  - The payload: Claude Bash/PowerShell, the command and every option but `description`
+    (`run_in_background`, `dangerouslyDisableSandbox`, …); any other Claude tool, its whole
+    input as JSON (a `Write`'s content included). Codex command, the command and its `cwd`;
+    Codex file change, every changed path (those outside the working directory flagged), a
+    `grantRoot` if asked, then every diff (kept from `item/started` and
+    `item/fileChange/patchUpdated`).
+  - Shown sanitised: control characters (but newline, tab) and bidirectional controls become
+    `�`, so `rm x\u{202e}gnp.y` cannot read as something else.
+  - `Event::Permission.detail` is the payload whole, or its first 4 KB and `… [N more bytes]`
+    with `cut: true`; `ticket.full()` holds all of it. **UI rule: no one-click Allow on a cut
+    request.** The drawer shows the full text (scrollable) first; Allow is enabled after it.
+  - Over 1 MB (`MAX_APPROVABLE`) a request is denied unseen (`Event::AutoDenied`), as is a Codex
+    approval with no command or for changes never announced.
+  - The model's description (Claude's `description`, Codex's `reason`) is `claim`: shown apart,
+    smaller, labelled as the agent's words, never as what is approved.
+- The drawer shows the request in the transcript where the call is: tool, label, the payload as
+  untrusted text, the claim, and four answers: **Allow** (↵), **Always this session**,
   **Deny**, **Deny and stop** (⎋). A request the CLI withdraws (`control_cancel_request`,
   `serverRequest/resolved`) disappears.
-- "Always" is **this session only**. Claude: the CLI's own `permission_suggestions`, each with
-  `destination` set to `session`, so nothing is written to `settings.local.json`. Codex:
-  `acceptForSession`. Writing a lasting rule stays a TUI or settings act.
+- "Always" is **this session only**, and offered only with what it grants shown
+  (`Event::Permission.always`). Claude: the CLI's `permission_suggestions` are never forwarded
+  (they could `setMode`, add directories or replace rules). We build one `addRules`/`allow`/
+  `session` rule from exactly what was shown: `Bash(<the command>)`, `Edit(//<absolute path>)`,
+  `WebFetch(domain:<host>)`. None when no exact rule can be: a pattern character (`* ? [ ] { }
+  ! \`), a relative path or `..`, options beyond `timeout`, any other tool; then only Allow is
+  offered and "always" is refused. Codex: `acceptForSession`, which the server scopes to the
+  same command or the same files; `always` shows that command or those paths. Writing a lasting
+  rule stays a TUI or settings act.
 - Neither CLI times out a prompt: the task shows "Needs you" while one waits.
 - The permission mode and approval policy are the user's own settings, as in the TUI. ottospace
   does not pass `--dangerously-skip-permissions`, `--permission-mode` or `approvalPolicy`.
@@ -99,7 +122,8 @@ enum Event {
     Started { session, model }, TurnStarted,
     TextDelta { text: Untrusted }, Text { text: Untrusted },
     ToolStart { id, parent, tool, station, label, detail: Untrusted }, ToolEnd { id, failed },
-    Permission { ticket, tool, station, label, detail: Untrusted }, PermissionClosed { ticket },
+    Permission { ticket, tool, station, label, detail: Untrusted, len, cut, claim: Untrusted,
+                 always: Option<Untrusted> }, PermissionClosed { ticket }, AutoDenied { tool, label, reason },
     Usage { context, window, cost_micro_usd }, Compaction,
     TurnFinished { outcome }, Error { kind, retrying }, Unknown { kind },
     Exited { code, stderr: Untrusted },
@@ -117,13 +141,18 @@ enum Event {
   waits on a question the drawer cannot show.
 - Lines are capped at 32 MB (Claude's tool results carry images as base64); a longer one is
   dropped as it streams and reported as `Unknown { kind: "oversized" }`.
-- The driver: piped stdio, one reader thread (stdout → protocol → events, replies), one thread
-  keeping stderr's last 4 KB. Dropping a driver kills its process. No clock decisions: the one
-  sleep is a 10 ms poll for the exit status after stdout closed.
+- The driver: piped stdio, the CLI in a process group of its own. One thread reads stdout
+  (→ protocol → events, replies), one keeps stderr's last 4 KB, one waits for the exit
+  (`waitid` with `WNOWAIT`), kills what the CLI left in its group (a background command, an MCP
+  server) while the group's id is still held, then reaps it. `kill` and dropping a driver kill
+  the whole group. No clock decisions: the one sleep gives stderr up to half a second to finish.
+- Turns: Claude names no turn start, so its first output after a `result` is `TurnStarted`. An
+  interrupt with no turn running sends nothing; a Codex interrupt before the turn has an id is
+  sent when the id comes. A Codex thread or turn that fails to start ends as a failed turn.
 
-Tests: 19 unit, 3 driver tests against fake `claude` and `codex` scripts (`tests/fakes`) that
+Tests: 24 unit (incl. the three approval rules: exact session rule, cut and auto-deny, every changed path), 4 driver tests against fake `claude` and `codex` scripts (`tests/fakes`) that
 replay hand-written fixtures and record argv and stdin (a turn with a permission asked and
-allowed, a turn interrupted, stdin closed), and 4 property tests (every fixture value swapped
+allowed, a turn interrupted, stdin closed; and a background command ended with its CLI), and 4 property tests (every fixture value swapped
 for 15 other values and types, every line cut at every character, random bytes; a sentinel never
 reaches a label or `Debug`). Two ignored probes of the real CLIs (`tests/real.rs`, below).
 
@@ -199,9 +228,10 @@ UNVERIFIED, and what settles each:
 
 | What | Why it matters |
 |---|---|
-| Claude's `control_request`/`control_response` wire shape (`request_id`, `request.subtype: can_use_tool`, `tool_name`, `input`, `permission_suggestions`; response `{subtype: success, request_id, response: PermissionResult}`) | The docs give `PermissionResult` and say a `control_response` must echo `request_id`, but not the envelope. Written from the SDKs' behaviour |
+| Claude's `control_request`/`control_response` wire shape (`request_id`, `request.subtype: can_use_tool`, `tool_name`, `input`; response `{subtype: success, request_id, response: PermissionResult}`) | The docs give `PermissionResult` and say a `control_response` must echo `request_id`, but not the envelope. Written from the SDKs' behaviour |
 | `--permission-prompt-tool stdio` accepted by 2.1.323 | The docs describe `--permission-prompt-tool` as an MCP tool name; `stdio` is what the SDKs pass |
 | `updatedInput` required or optional on allow | We send the original input back, which both accept |
+| That our session rule (`addRules`, `destination: session`, `ruleContent` the exact command, `//path` or `domain:host`) is honoured for the request's tool | If not, "always" falls back to asking again: safe, less useful |
 | When Claude prints `system/init` (at start or after the first message) | Only ordering; the parser does not care |
 | The `result` after an interrupt, and the interrupt's `control_response` | The parser marks the turn interrupted itself |
 | Codex app-server message order, and whether it needs `"jsonrpc":"2.0"` | The schema does not require the field; we omit it |

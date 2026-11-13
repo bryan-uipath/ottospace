@@ -51,6 +51,10 @@ pub const MAX_DETAIL: usize = 4096;
 /// The most of one message's text kept.
 pub const MAX_TEXT: usize = 1 << 20;
 
+/// The longest payload a permission request may have: the most a user can be shown in full.
+/// A longer request is denied unseen (`Event::AutoDenied`).
+pub const MAX_APPROVABLE: usize = 1 << 20;
+
 /// A permission request, to be answered once. Only a parser makes one, so an answer names a
 /// request the CLI really asked. `Debug` shows nothing of it.
 #[derive(Clone)]
@@ -58,12 +62,27 @@ pub struct Ticket {
     /// The CLI's own request id, echoed back as it came.
     id: Value,
     kind: TicketKind,
+    /// Everything the request asks to do, sanitised. At most `MAX_APPROVABLE` bytes.
+    full: Untrusted,
+}
+
+impl Ticket {
+    fn new(id: Value, kind: TicketKind) -> Self {
+        Self { id, kind, full: Untrusted::default() }
+    }
+
+    /// The whole payload the user approves, when `Event::Permission` said `cut`: a UI shows it
+    /// before it offers Allow.
+    pub fn full(&self) -> &Untrusted {
+        &self.full
+    }
 }
 
 #[derive(Clone)]
 enum TicketKind {
-    /// Claude's `can_use_tool`: the tool's input and the CLI's "always allow" rules, both sent back.
-    Claude { input: Value, suggestions: Vec<Value> },
+    /// Claude's `can_use_tool`: the tool's input, sent back as it came, and the one rule "always
+    /// this session" grants, built by us from that input (`None`: no exact rule can be).
+    Claude { input: Value, rule: Option<Value> },
     /// Codex's command and file-change approvals: the decision is all the answer says.
     Codex,
     /// A request the CLI withdrew: equal to the one it closes, answered by nothing.
@@ -221,13 +240,27 @@ pub enum Event {
         id: String,
         failed: bool,
     },
-    /// The CLI waits for the user. Only `Origin::User` answers it.
+    /// The CLI waits for the user. Only `Origin::User` answers it. `detail` is what is approved,
+    /// from the request's payload: whole, or when `cut`, its first `MAX_DETAIL` bytes and
+    /// `… [N more bytes]` (`len`: the whole payload's bytes; `ticket.full()` has all of it).
+    /// `claim` is the model's own description of why: secondary, never what is approved.
+    /// `always`: what "always this session" grants; `None`: it is not offered.
     Permission {
         ticket: Ticket,
         tool: String,
         station: Station,
         label: String,
         detail: Untrusted,
+        len: usize,
+        cut: bool,
+        claim: Untrusted,
+        always: Option<Untrusted>,
+    },
+    /// A request denied without asking: it could not be shown in full (`reason`, fixed words).
+    AutoDenied {
+        tool: String,
+        label: String,
+        reason: &'static str,
     },
     /// The CLI no longer waits for that answer.
     PermissionClosed {
@@ -316,11 +349,54 @@ pub fn is_uuid(id: &str) -> bool {
     id.len() == 36 && id.bytes().enumerate().all(|(at, c)| if dash(at) { c == b'-' } else { c.is_ascii_hexdigit() })
 }
 
-/// An id made opaque: 16 hex digits of an FNV-1a hash, as `ottospace-sessions` does. `None` for none.
+/// Text with what could hide or fake what is shown replaced by `�`: control characters but
+/// newline and tab, and bidirectional controls (`rm x\u{202e}gnp.y` must not read as `rm xy.png`).
+fn sanitise(text: &str) -> String {
+    let hidden = |c: char| {
+        (c.is_control() && c != '\n' && c != '\t')
+            || matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+    };
+    text.chars().map(|c| if hidden(c) { '\u{fffd}' } else { c }).collect()
+}
+
+/// Why a request was denied unseen.
+const TOO_LONG: &str = "too long to show in full";
+
+/// A permission request's event and its ticket's payload, from the payload it asks to approve.
+/// `AutoDenied`: longer than `MAX_APPROVABLE`, so the caller denies it unseen. A cut detail ends with `… [N more bytes]`.
+struct Ask<'a> {
+    tool: String,
+    station: Station,
+    label: String,
+    payload: &'a str,
+    claim: &'a str,
+    always: Option<String>,
+}
+
+impl Ask<'_> {
+    fn event(self, mut ticket: Ticket) -> Event {
+        let (tool, label) = (self.tool, self.label);
+        if self.payload.len() > MAX_APPROVABLE {
+            return Event::AutoDenied { tool, label, reason: TOO_LONG };
+        }
+        let full = sanitise(self.payload);
+        let shown = Untrusted::new(&full, MAX_DETAIL);
+        let cut = shown.0.len() < full.len();
+        let detail = match cut {
+            true => Untrusted(format!("{}… [{} more bytes]", shown.0, full.len() - shown.0.len())),
+            false => shown,
+        };
+        let len = full.len();
+        ticket.full = Untrusted(full);
+        let claim = Untrusted::new(&sanitise(self.claim), MAX_DETAIL);
+        let always = self.always.map(|text| Untrusted::new(&sanitise(&text), MAX_DETAIL));
+        Event::Permission { ticket, tool, station: self.station, label, detail, len, cut, claim, always }
+    }
+}
+
+/// An id made opaque by `ottospace-sessions`' hash: the same id pairs the same in both. `None` for none.
 fn opaque(id: &Value) -> Option<String> {
-    let id = id.as_str().filter(|id| !id.is_empty())?;
-    let step = |hash: u64, byte: u8| (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
-    Some(format!("{:016x}", id.bytes().fold(0xcbf2_9ce4_8422_2325, step)))
+    ottospace_sessions::opaque(id.as_str()?)
 }
 
 /// A record's type as a label: a name, else `unknown`.
@@ -331,7 +407,9 @@ fn kind_of(text: Option<&str>) -> String {
 /// A model id as a label: a name in the core's sense (no option-like or credential-like text).
 fn model_of(value: &Value) -> Option<String> {
     let id = value.as_str()?;
-    (ottospace_core::agents::is_name(id) && ottospace_sessions::station::is_name(id)).then(|| id.to_string())
+    // `[1m]` marks a 1M-token window, as in `ottospace-sessions`: `claude-opus-5-5[1m]`.
+    let bare = id.strip_suffix("[1m]").unwrap_or(id);
+    (ottospace_core::agents::is_name(bare) && ottospace_sessions::station::is_name(bare)).then(|| id.to_string())
 }
 
 /// A session id as a label: a UUID, else `None`.
@@ -356,6 +434,13 @@ mod tests {
         assert_eq!(Media::sniff(b"RIFF1234WEBPVP8"), Some(Media::Webp));
         assert_eq!(Media::sniff(b"<svg"), None);
         assert_eq!(Media::sniff(b""), None);
+    }
+
+    #[test]
+    fn models_may_say_their_1m_window() {
+        let model = |id: &str| model_of(&serde_json::json!(id));
+        assert_eq!(model("claude-opus-5-5[1m]").as_deref(), Some("claude-opus-5-5[1m]"));
+        assert_eq!((model("[1m]"), model("<synthetic>"), model("--yolo")), (None, None, None));
     }
 
     #[test]

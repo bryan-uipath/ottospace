@@ -73,6 +73,10 @@ const DENIED: &str = "The user denied this tool call.";
 pub struct Claude {
     /// An interrupt was sent and its turn has not finished: that turn ends interrupted.
     interrupting: bool,
+    /// Messages sent whose `result` has not come: with none, there is nothing to interrupt.
+    pending: usize,
+    /// `TurnStarted` was said for the turn running now.
+    announced: bool,
     /// Our own control requests are numbered.
     next: u64,
 }
@@ -86,6 +90,10 @@ impl Claude {
         let kind = record["type"].as_str();
         let main = record["parent_tool_use_id"].is_null();
         let emit = &mut out.events;
+        // Claude names no turn start: the first of its output after a `result` is one.
+        if matches!(kind, Some("stream_event" | "assistant")) && !std::mem::replace(&mut self.announced, true) {
+            emit.push(Event::TurnStarted);
+        }
         match kind {
             Some("system") => match record["subtype"].as_str() {
                 Some("init") => emit.push(Event::Started {
@@ -122,6 +130,8 @@ impl Claude {
                 let window = window.filter_map(|(_, usage)| usage["contextWindow"].as_u64()).max();
                 let cost = record["total_cost_usd"].as_f64().filter(|usd| usd.is_finite() && *usd >= 0.0);
                 emit.push(Event::Usage { context: None, window, cost_micro_usd: cost.map(|usd| (usd * 1e6) as u64) });
+                self.pending = self.pending.saturating_sub(1);
+                self.announced = false;
                 let outcome = if std::mem::take(&mut self.interrupting) {
                     Outcome::Interrupted
                 } else if record["subtype"] == "success" && record["is_error"] != true {
@@ -135,7 +145,7 @@ impl Claude {
             Some("control_request") => self.control(record, out),
             Some("control_cancel_request") => {
                 if let Some(id) = request_id(record) {
-                    emit.push(Event::PermissionClosed { ticket: Ticket { id, kind: TicketKind::Closed } });
+                    emit.push(Event::PermissionClosed { ticket: Ticket::new(id, TicketKind::Closed) });
                 }
             }
             // The answer to our interrupt.
@@ -159,15 +169,73 @@ impl Claude {
         let tool = request["tool_name"].as_str().unwrap_or("");
         let input = request["input"].clone();
         let (station, label) = describe(tool, &input);
-        let suggestions = request["permission_suggestions"].as_array().cloned().unwrap_or_default();
-        out.events.push(Event::Permission {
-            tool: station::tool_label(tool),
-            station,
-            label,
-            detail: detail(tool, &input),
-            ticket: Ticket { id, kind: TicketKind::Claude { input, suggestions } },
-        });
+        // The CLI's `permission_suggestions` are never forwarded: "always" grants only a rule
+        // built here from what the user is shown.
+        let (payload, claim) = payload(tool, &input);
+        let rule = session_rule(tool, &input);
+        let always = rule.as_ref().map(|(_, shown)| shown.clone());
+        let tool_label = station::tool_label(tool);
+        let ask = crate::Ask { tool: tool_label, station, label, payload: &payload, claim: &claim, always };
+        let ticket = Ticket::new(id.clone(), TicketKind::Claude { input, rule: rule.map(|(rule, _)| rule) });
+        let event = ask.event(ticket);
+        if matches!(event, Event::AutoDenied { .. }) {
+            let deny = json!({"behavior": "deny", "message": TOO_LONG_DENIED});
+            let reply = json!({"type": "control_response",
+                    "response": {"subtype": "success", "request_id": id, "response": deny}});
+            out.replies.push(reply.to_string());
+        }
+        out.events.push(event);
     }
+}
+
+/// What a denial unseen tells the model. Fixed words.
+const TOO_LONG_DENIED: &str = "ottospace denied this tool call: it is too long to show the user in full.";
+
+/// What a `can_use_tool` request asks to approve, and the model's own description of it. A
+/// shell command and every option besides its description; any other tool, its whole input.
+fn payload(tool: &str, input: &Value) -> (String, String) {
+    let claim = input["description"].as_str().unwrap_or("").to_string();
+    match (tool, input["command"].as_str(), input.as_object()) {
+        ("Bash" | "PowerShell", Some(command), Some(fields)) => {
+            let options = fields.iter().filter(|(key, _)| !matches!(key.as_str(), "command" | "description"));
+            let options: String = options.map(|(key, value)| format!("\n{key}: {value}")).collect();
+            (format!("{command}{options}"), claim)
+        }
+        _ => (serde_json::to_string_pretty(input).unwrap_or_default(), String::new()),
+    }
+}
+
+/// Characters that make a permission rule's content a pattern, not one exact command or path.
+const PATTERN: &[char] = &['*', '?', '[', ']', '{', '}', '!', '\\'];
+
+/// The one rule "always this session" grants, and how it reads (`Bash(git status)`): exactly
+/// the shown command, the shown absolute path, or the shown host. `None` when no exact rule can
+/// be built: a pattern character, a relative path, extra options, or another tool.
+fn session_rule(tool: &str, input: &Value) -> Option<(Value, String)> {
+    let text = |key: &str| input[key].as_str();
+    let plain = |text: &str| !text.is_empty() && !text.contains(PATTERN) && !text.chars().any(char::is_control);
+    let fields = input.as_object()?;
+    let content = match tool {
+        "Bash" | "PowerShell" => {
+            let only = fields.keys().all(|key| matches!(key.as_str(), "command" | "description" | "timeout"));
+            text("command").filter(|command| only && plain(command))?.to_string()
+        }
+        "Read" | "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => {
+            let path = text("file_path").or(text("notebook_path"))?;
+            let absolute =
+                std::path::Path::new(path).is_absolute() && !path.split('/').any(|part| part == ".." || part == ".");
+            // `//` starts an absolute path in a permission rule.
+            (absolute && plain(path)).then(|| format!("/{path}"))?
+        }
+        "WebFetch" => {
+            let host = station::host_label(text("url")?);
+            (host != "web").then(|| format!("domain:{host}"))?
+        }
+        _ => return None,
+    };
+    let rule = json!({"type": "addRules", "rules": [{"toolName": tool, "ruleContent": content}],
+        "behavior": "allow", "destination": "session"});
+    Some((rule, format!("{tool}({content})")))
 }
 
 fn assistant(record: &Value, main: bool, emit: &mut Vec<Event>) {
@@ -275,21 +343,19 @@ impl Protocol for Claude {
                 });
                 let text = (!text.is_empty()).then(|| json!({"type": "text", "text": text}));
                 let content: Vec<Value> = text.into_iter().chain(images).collect();
+                self.pending += 1;
                 json!({"type": "user", "message": {"role": "user", "content": content}, "parent_tool_use_id": null, "session_id": ""})
             }
             Input::Answer { ticket, answer } => {
-                let TicketKind::Claude { input, suggestions } = ticket.kind else {
+                let TicketKind::Claude { input, rule } = ticket.kind else {
                     return Err(Refused("not a Claude Code request"));
                 };
                 let result = match answer {
                     Answer::Allow => json!({"behavior": "allow", "updatedInput": input}),
-                    // The CLI's own suggested rules, kept to this session: never written to settings.
+                    // Our one exact rule, for this session: never written to settings.
                     Answer::AllowForSession => {
-                        let session = suggestions.into_iter().filter(Value::is_object).map(|mut rule| {
-                            rule["destination"] = json!("session");
-                            rule
-                        });
-                        json!({"behavior": "allow", "updatedInput": input, "updatedPermissions": session.collect::<Vec<_>>()})
+                        let rule = rule.ok_or(Refused("no exact rule for this request: answer Allow"))?;
+                        json!({"behavior": "allow", "updatedInput": input, "updatedPermissions": [rule]})
                     }
                     Answer::Deny => json!({"behavior": "deny", "message": DENIED}),
                     Answer::DenyAndStop => {
@@ -300,6 +366,8 @@ impl Protocol for Claude {
                 json!({"type": "control_response",
                     "response": {"subtype": "success", "request_id": ticket.id, "response": result}})
             }
+            // Idle: nothing to interrupt, and no flag left to mark the next turn interrupted.
+            Input::Interrupt if self.pending == 0 => return Ok(Vec::new()),
             Input::Interrupt => {
                 self.interrupting = true;
                 self.next += 1;
@@ -356,22 +424,81 @@ mod tests {
         );
     }
 
-    #[test]
-    fn always_allow_keeps_the_rules_to_this_session() {
-        let mut claude = Claude::new();
+    fn ask(tool: &str, input: Value, suggestions: Value) -> Output {
         let request = json!({"type": "control_request", "request_id": "r1", "request": {"subtype": "can_use_tool",
-            "tool_name": "Bash", "input": {"command": "git push"},
-            "permission_suggestions": [{"type": "addRules", "behavior": "allow", "destination": "localSettings",
-                "rules": [{"toolName": "Bash", "ruleContent": "git push:*"}]}, "junk"]}});
-        let out = claude.read(&request.to_string());
-        let Some(Event::Permission { ticket, tool, label, detail, .. }) = out.events.first().cloned() else { panic!() };
-        assert_eq!((tool.as_str(), label.as_str(), detail.text()), ("Bash", "git push", "git push"));
-        let line = claude.write(Input::Answer { ticket, answer: Answer::AllowForSession }).unwrap();
-        let answer: Value = serde_json::from_str(&line[0]).unwrap();
-        assert_eq!(answer["response"]["request_id"], "r1");
-        let permissions = &answer["response"]["response"]["updatedPermissions"];
-        assert_eq!(permissions.as_array().map(Vec::len), Some(1));
-        assert_eq!(permissions[0]["destination"], "session");
+            "tool_name": tool, "input": input, "permission_suggestions": suggestions}});
+        Claude::new().read(&request.to_string())
+    }
+
+    fn answered(claude: &mut Claude, out: &Output, answer: Answer) -> Result<Value, Refused> {
+        let Some(Event::Permission { ticket, .. }) = out.events.first().cloned() else { panic!("{out:?}") };
+        let line = claude.write(Input::Answer { ticket, answer })?;
+        Ok(serde_json::from_str(&line[0]).unwrap())
+    }
+
+    /// The CLI's suggestions could set a mode, add directories or replace rules: never forwarded.
+    /// "Always" grants the one exact rule built from what the user was shown, and says so first.
+    #[test]
+    fn always_allow_grants_only_the_exact_shown_rule() {
+        let hostile = json!([
+            {"type": "setMode", "mode": "bypassPermissions", "destination": "session"},
+            {"type": "addDirectories", "directories": ["/"], "destination": "session"},
+            {"type": "replaceRules", "rules": [{"toolName": "Bash"}], "behavior": "allow", "destination": "session"},
+            {"type": "addRules", "rules": [{"toolName": "Bash", "ruleContent": "*"}], "behavior": "allow", "destination": "session"}
+        ]);
+        let out = ask("Bash", json!({"command": "git status --short", "description": "Show changes"}), hostile);
+        let Some(Event::Permission { detail, claim, always, cut, .. }) = out.events.first().cloned() else { panic!() };
+        assert_eq!((detail.text(), claim.text(), cut), ("git status --short", "Show changes", false));
+        assert_eq!(always.as_ref().map(Untrusted::text), Some("Bash(git status --short)"));
+        let answer = answered(&mut Claude::new(), &out, Answer::AllowForSession).unwrap();
+        let rule = json!({"type": "addRules", "rules": [{"toolName": "Bash", "ruleContent": "git status --short"}],
+            "behavior": "allow", "destination": "session"});
+        assert_eq!(answer["response"]["response"]["updatedPermissions"], json!([rule]));
+        // Files and hosts: the exact absolute path, the exact host.
+        let rule_of = |tool: &str, input: Value| session_rule(tool, &input).map(|(_, shown)| shown);
+        assert_eq!(rule_of("Edit", json!({"file_path": "/w/a.rs"})).as_deref(), Some("Edit(//w/a.rs)"));
+        assert_eq!(
+            rule_of("WebFetch", json!({"url": "https://docs.rs/x"})).as_deref(),
+            Some("WebFetch(domain:docs.rs)")
+        );
+        // Nothing exact to build: no "always", and the answer is refused.
+        let none = [
+            ("Bash", json!({"command": "rm *"})),
+            ("Bash", json!({"command": "ls", "dangerouslyDisableSandbox": true})),
+            ("Edit", json!({"file_path": "src/a.rs"})),
+            ("Edit", json!({"file_path": "/w/../etc/passwd"})),
+            ("WebFetch", json!({"url": "https://user:pw@example.com"})),
+            ("mcp__db__query", json!({"sql": "select 1"})),
+        ];
+        for (tool, input) in none {
+            let out = ask(tool, input.clone(), json!([]));
+            let Some(Event::Permission { always: None, .. }) = out.events.first() else { panic!("{tool} {input}") };
+            assert!(answered(&mut Claude::new(), &out, Answer::AllowForSession).is_err(), "{tool} {input}");
+        }
+    }
+
+    /// What is approved is shown whole, or marked cut with its full text on the ticket; past the
+    /// hard cap it is denied without asking.
+    #[test]
+    fn a_long_command_is_marked_cut_and_a_huge_one_denied() {
+        let long = format!("echo {}", "a".repeat(MAX_DETAIL * 2));
+        let out = ask("Bash", json!({"command": long, "run_in_background": true}), json!([]));
+        let Some(Event::Permission { ticket, detail, len, cut, .. }) = out.events.first().cloned() else { panic!() };
+        let whole = format!("{long}\nrun_in_background: true");
+        assert!(cut && len == whole.len() && ticket.full().text() == whole);
+        assert!(detail.text().ends_with(&format!("… [{} more bytes]", whole.len() - MAX_DETAIL)), "{detail:?}");
+        // Another tool: its whole input, so a Write's content is part of what is approved.
+        let out = ask("Write", json!({"file_path": "/w/a", "content": "x\u{1b}[2J\u{202e}y"}), json!([]));
+        let Some(Event::Permission { detail, .. }) = out.events.first() else { panic!() };
+        assert!(detail.text().contains("\"content\"") && detail.text().contains("x\\u001b[2J\u{fffd}y"));
+        // Past the hard cap: denied at once, nothing to answer.
+        let out = ask("Bash", json!({"command": "a".repeat(crate::MAX_APPROVABLE + 1)}), json!([]));
+        assert!(matches!(&out.events[..], [Event::AutoDenied { reason: "too long to show in full", .. }]));
+        let reply: Value = serde_json::from_str(&out.replies[0]).unwrap();
+        assert_eq!(
+            (&reply["response"]["request_id"], &reply["response"]["response"]["behavior"]),
+            (&json!("r1"), &json!("deny"))
+        );
     }
 
     #[test]
@@ -386,10 +513,18 @@ mod tests {
     #[test]
     fn an_interrupted_turn_ends_interrupted() {
         let mut claude = Claude::new();
+        // Idle: nothing is sent, and the next turn is not marked.
+        assert_eq!(claude.write(Input::Interrupt), Ok(vec![]));
+        let send = || Input::Send { text: "go".into(), images: vec![] };
+        claude.write(send()).unwrap();
+        let out = claude.read(r#"{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"message_start"}}"#);
+        assert_eq!(out.events, [Event::TurnStarted]);
         let line = claude.write(Input::Interrupt).unwrap();
         assert!(line[0].contains(r#""subtype":"interrupt""#));
         let out = claude.read(r#"{"type":"result","subtype":"error_during_execution","is_error":true}"#);
         assert_eq!(out.events.last(), Some(&Event::TurnFinished { outcome: Outcome::Interrupted }));
+        assert_eq!(claude.write(Input::Interrupt), Ok(vec![]), "the turn is over");
+        claude.write(send()).unwrap();
         let out = claude.read(r#"{"type":"result","subtype":"error_max_turns","is_error":true}"#);
         let failed = Outcome::Failed { kind: "error_max_turns".into() };
         assert_eq!(out.events.last(), Some(&Event::TurnFinished { outcome: failed }));
@@ -397,7 +532,7 @@ mod tests {
 
     #[test]
     fn a_codex_ticket_is_refused() {
-        let ticket = Ticket { id: json!(1), kind: TicketKind::Codex };
+        let ticket = Ticket::new(json!(1), TicketKind::Codex);
         assert!(Claude::new().write(Input::Answer { ticket, answer: Answer::Allow }).is_err());
     }
 
@@ -406,7 +541,7 @@ mod tests {
         let out = Claude::new().read(
             r#"{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"t","name":"Read","input":{"file_path":"/a/b/c.rs"}}]}}"#,
         );
-        let Some(Event::ToolStart { station, label, .. }) = out.events.first() else { panic!("{out:?}") };
+        let Some(Event::ToolStart { station, label, .. }) = out.events.get(1) else { panic!("{out:?}") };
         assert_eq!((*station, label.as_str()), (station::Station::Files, "b/c.rs"));
     }
 }

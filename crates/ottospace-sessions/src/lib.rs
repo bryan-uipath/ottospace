@@ -252,7 +252,7 @@ fn title_text(text: &str) -> Option<String> {
 
 /// An id from a session file, made opaque: 16 hex digits of a hash of it (FNV-1a). Ids only pair
 /// a start with its end, so the text a file put there is never passed on. `None` for an empty id.
-fn opaque(id: &str) -> Option<String> {
+pub fn opaque(id: &str) -> Option<String> {
     let step = |hash: u64, byte: u8| (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
     (!id.is_empty()).then(|| format!("{:016x}", id.bytes().fold(0xcbf2_9ce4_8422_2325, step)))
 }
