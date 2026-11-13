@@ -736,8 +736,8 @@ function inspector(value: unknown, at: string): Inspector {
       sparse: bool(c.sparse, `${at}.counts.sparse`),
     },
     millis: orNull(num)(o.millis, `${at}.millis`),
-    rows: list(inspectorRow)(o.rows, `${at}.rows`),
-    row_count: num(o.row_count, `${at}.row_count`),
+    rows: orNull(list(inspectorRow))(o.rows, `${at}.rows`),
+    row_count: orNull(num)(o.row_count, `${at}.row_count`),
     selected: orNull(num)(o.selected, `${at}.selected`),
     outline: orNull(frame)(o.outline, `${at}.outline`),
   };

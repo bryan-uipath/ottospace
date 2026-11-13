@@ -266,15 +266,15 @@ ottospace reads it. Again, × or closing the pane closes it.
   covers ottospace), and the strip at the bottom shows its role, subrole, identifier, frame and
   its actions' names.
 - The filter (click it) keeps the rows whose role or text holds what is typed, and those above
-  them. While it has the keyboard (`INSPECT`), ↑/↓ select, ↵ folds the selected node, Esc gives
-  the keyboard back.
+  them. While it has the keyboard (`INSPECT`), ↑/↓ select, ↵ or Esc gives the keyboard back.
 - Read again every 2 seconds while it shows (Refresh reads at once), off the main thread, within
   30 levels, 2000 nodes and 750 ms, each call to the app 0.5 s at most. The header says when a
   read stopped at one of them.
 
 Read-only: it presses nothing and sets nothing in the app. The tree holds the app's text (names,
 messages): it is shown on screen only. The state snapshot has the counts, the roles and each
-row's flags, never a title, label or value, and a socket client cannot open the inspector or move
+row's flags (no rows while a filter is typed: which match would tell the text), never a title,
+label or value, and a socket client cannot open the inspector or move
 in it.
 
 ## Tags

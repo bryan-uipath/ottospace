@@ -491,12 +491,12 @@ export interface Inspector {
     sparse: boolean;
   };
   millis: number | null;
-  /** At most 400. */
-  rows: InspectorRow[];
-  row_count: number;
+  /** At most 400. Null while a filter is typed: which rows match would tell the app's text. */
+  rows: InspectorRow[] | null;
+  row_count: number | null;
   /** An index into `rows`, or null. */
   selected: number | null;
-  /** Where the selected node is outlined on the pane, in window points, or null. */
+  /** Where the selected node is outlined on the pane, in window points, or null (also while filtering). */
   outline: Frame | null;
 }
 

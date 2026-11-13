@@ -89,17 +89,13 @@ impl Workspace {
         }
     }
 
-    /// While the filter has the keyboard: it types, ↑↓ select, ↵ folds the selected node, Esc
-    /// gives the keyboard back. ⌘ shortcuts the field does not use reach their bindings.
+    /// While the filter has the keyboard: it types, ↑↓ select, ↵ or Esc gives the keyboard back. ⌘ shortcuts the field does not use reach their bindings.
     pub fn inspector_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
         let action = match event.keystroke.key.as_str() {
             "escape" => Action::InspectorFilter { on: false },
             "down" => Action::InspectorMove { delta: 1 },
             "up" => Action::InspectorMove { delta: -1 },
-            "enter" => match self.model.inspector.as_ref().and_then(|i| i.selected.clone()) {
-                Some(path) => Action::InspectorFold { path },
-                None => Action::InspectorFilter { on: false },
-            },
+            "enter" => Action::InspectorFilter { on: false },
             _ => {
                 if self.field_key(event, window, cx) {
                     cx.stop_propagation();
@@ -153,19 +149,23 @@ impl Workspace {
         Some(outline)
     }
 
-    /// For the state snapshot: counts and roles, never the app's text.
+    /// For the state snapshot: counts and roles, never the app's text. While a filter is typed
+    /// the rows are left out: which rows match would tell what text the app holds.
     pub fn inspector_snapshot(&self) -> Option<serde_json::Value> {
         let inspector = self.model.inspector.as_ref()?;
-        let rows = inspector.rows();
-        let selected = inspector.selected.as_ref().and_then(|path| rows.iter().position(|r| r.path == *path));
+        let rows = Some(inspector.rows()).filter(|_| inspector.filter.text().is_empty());
+        let selected = |rows: &Vec<Row>| {
+            let path = inspector.selected.as_ref()?;
+            rows.iter().position(|r| r.path == *path)
+        };
         Some(serde_json::json!({
             "pane": inspector.pane,
             "counts": inspector.counts(),
             "millis": inspector.read.as_ref().map(|read| read.millis),
-            "rows": rows.iter().take(inspect::MAX_ROWS).collect::<Vec<_>>(),
-            "row_count": rows.len(),
-            "selected": selected,
-            "outline": self.inspector_outline(),
+            "rows": rows.as_ref().map(|rows| rows.iter().take(inspect::MAX_ROWS).collect::<Vec<_>>()),
+            "row_count": rows.as_ref().map(Vec::len),
+            "selected": rows.as_ref().and_then(selected),
+            "outline": rows.as_ref().and_then(|_| self.inspector_outline()),
         }))
     }
 
@@ -352,6 +352,8 @@ impl Workspace {
         let Some(inspector) = &self.model.inspector else { return };
         let row = |at: &str| inspector.rows().into_iter().nth(at.parse().ok()?).map(|row| row.path);
         let action = match (kind, name) {
+            // A read on demand is the user's: a client's label does not hurry the app.
+            ("inspector", "refresh") if self.input != Origin::User => return,
             ("inspector", "refresh") => {
                 LAST.set(None);
                 return self.read_inspected(window, cx);

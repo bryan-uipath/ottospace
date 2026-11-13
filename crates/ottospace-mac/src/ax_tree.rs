@@ -120,7 +120,7 @@ fn read_node(
         actions: actions(element)?,
         identifier: text(9),
         focused: flag(values[10].as_deref()),
-        settable: (values[4].is_some() || INPUT.contains(&role.as_str())) && settable(element)?,
+        settable: INPUT.contains(&role.as_str()) && settable(element),
         children: Vec::new(),
     };
     Ok((node, children(values[8].as_deref())))
@@ -174,24 +174,19 @@ fn attr(element: &AXUIElement, name: &str) -> Result<Option<CFRetained<CFType>>,
     owned(err, out)
 }
 
-/// Roles whose value may be settable with none read: asked only of these and of nodes with a value.
+/// Roles whose value may be settable: asked only of these, so other nodes cost no extra call.
 const INPUT: [&str; 5] = ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField", "AXSlider"];
 
 fn flag(value: Option<&CFType>) -> bool {
     value.and_then(|v| v.downcast_ref::<CFBoolean>()).is_some_and(CFBoolean::as_bool)
 }
 
-/// Whether the node's value can be set. Only asked, never set.
-fn settable(element: &AXUIElement) -> Result<bool, Failed> {
+/// Whether the node's value can be set. Only asked, never set. Any failure: no, and the walk goes on.
+fn settable(element: &AXUIElement) -> bool {
     let name = CFString::from_str("AXValue");
     let mut settable: u8 = 0;
     let err = unsafe { element.is_attribute_settable(&name, NonNull::from(&mut settable).cast()) };
-    match err {
-        AXError::Success => Ok(settable != 0),
-        AXError::CannotComplete => Err(Failed::Busy),
-        AXError::InvalidUIElement => Err(Failed::Gone),
-        _ => Ok(false),
-    }
+    err == AXError::Success && settable != 0
 }
 
 fn actions(element: &AXUIElement) -> Result<Vec<String>, Failed> {

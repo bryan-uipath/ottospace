@@ -4556,7 +4556,7 @@ impl Workspace {
             Mode::Normal => ("NORMAL", "⌘/ keys"),
             Mode::Pick => ("PICK", ""),
             Mode::Palette => ("COMMAND", ""),
-            Mode::Inspect => ("INSPECT", "type to filter · ↑↓ select · ↵ folds · esc leaves"),
+            Mode::Inspect => ("INSPECT", "type to filter · ↑↓ select · esc leaves"),
             Mode::App => ("APP", app_hint.as_str()),
             Mode::Visual => ("VISUAL", "esc leaves · ⌘/ keys"),
             Mode::List => ("LIST", "esc leaves · ⌘/ keys"),

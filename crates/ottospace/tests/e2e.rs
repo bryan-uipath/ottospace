@@ -5140,10 +5140,12 @@ fn the_inspector_shows_a_trees_counts_and_roles_never_its_text() {
     // A fold hides the group's rows, and takes the selection up to it.
     let reply = press("inspector-fold:1");
     assert_eq!((rows(&reply).len(), &reply["inspector"]["selected"]), (3, &json!(1)));
-    // The filter takes the keyboard: it narrows to the matches and what is above them, folds or not.
+    // The filter takes the keyboard. Which rows match is not in the state: it would tell the text.
     assert_eq!(press("inspector:filter")["mode"], "inspect");
     let reply = otto.user_key("p l a y");
-    assert_eq!(rows(&reply).len(), 4, "{:?}", rows(&reply)); // Window, Group, Button, and "Now playing"
+    let filtered =
+        (&reply["inspector"]["rows"], &reply["inspector"]["outline"], &reply["inspector"]["counts"]["nodes"]);
+    assert_eq!(filtered, (&Value::Null, &Value::Null, &json!(5)));
     // A client's key types nothing in it.
     assert_eq!(otto.call(json!({"cmd": "key", "keys": "x"}))["state"]["inspector"]["filter"], "play");
     assert_eq!(otto.user_key("escape")["mode"], "normal");
