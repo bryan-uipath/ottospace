@@ -194,7 +194,9 @@ impl Hosted {
         let latest = Arc::new(Latest::default());
         let radius = capture::corner_radius(&sc_window, 2.0).unwrap_or(0.0);
         let bar = title_bar(&window);
-        eprintln!("hosting window {id}: corner radius {radius:.1}pt, title bar {bar}pt");
+        eprintln!(
+            "hosting window {id}: corner radius {radius:.1}pt, title bar {bar}pt, found at {found:?}, off screen {off_screen}"
+        );
         let filter = SCContentFilter::create().with_window(&sc_window).build().map_err(|e| format!("{e:?}"))?;
         // Resized to the pane on park.
         let config = stream_config(original.size, 0.0, 2.0);

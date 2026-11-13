@@ -120,7 +120,8 @@ impl Render for Canary {
 
 type Windows = Rc<RefCell<Vec<WindowHandle<Canary>>>>;
 
-fn open(windows: &Windows, min: Option<[f32; 2]>, fixed: Option<[f32; 2]>, cx: &mut App) {
+/// `at`: where its top left goes, as `move` puts it.
+fn open(windows: &Windows, min: Option<[f32; 2]>, fixed: Option<[f32; 2]>, at: Option<[f64; 2]>, cx: &mut App) {
     let number = windows.borrow().len() + 1;
     let title = format!("Canary {number}");
     // Stagger the windows so each one is partly visible.
@@ -137,6 +138,10 @@ fn open(windows: &Windows, min: Option<[f32; 2]>, fixed: Option<[f32; 2]>, cx: &
         ..Default::default()
     };
     let handle = cx.open_window(options, |window, cx| {
+        // Here, after GPUI has shown and placed the window.
+        if let (Some(at), Some(view)) = (at, ns_view(window)) {
+            unsafe { ottospace_mac::window::move_to(view, at[0], at[1]) };
+        }
         cx.new(|cx| {
             let focus = cx.focus_handle();
             window.focus(&focus);
@@ -178,7 +183,7 @@ fn serve(calls: &Receiver<(Request, Sender<String>)>, windows: &Windows, cx: &mu
     for (request, reply) in calls.try_iter() {
         match request {
             Request::State => {}
-            Request::OpenWindow { min, fixed } => open(windows, min, fixed, cx),
+            Request::OpenWindow { min, fixed } => open(windows, min, fixed, None, cx),
             Request::CloseWindow { index } => {
                 let handle = windows.borrow().get(index).copied();
                 if let Some(handle) = handle {
@@ -205,11 +210,7 @@ fn serve(calls: &Receiver<(Request, Sender<String>)>, windows: &Windows, cx: &mu
                 let handle = windows.borrow().get(index).copied();
                 if let Some(handle) = handle {
                     let _ = handle.update(cx, |_, window, _| window.remove_window());
-                    open(windows, None, None, cx);
-                    let new = windows.borrow().last().copied();
-                    if let Some(new) = new {
-                        move_window(new, at, cx);
-                    }
+                    open(windows, None, None, Some(at), cx);
                 }
             }
             Request::Hang { ms } => {
@@ -272,7 +273,7 @@ fn main() {
     }
     Application::new().run(move |cx: &mut App| {
         let windows: Windows = Rc::default();
-        open(&windows, None, None, cx);
+        open(&windows, None, None, None, cx);
         cx.spawn(async move |cx| {
             loop {
                 cx.background_executor().timer(Duration::from_millis(16)).await;

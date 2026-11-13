@@ -1335,7 +1335,10 @@ fn a_window_the_app_remade_while_hosted_is_not_stranded() {
     let otto = otto_for(&canary, "otto-remade", &[]);
     let spot = host_and_park(&otto);
     // The app closes its window and opens a new one where the old one stood: parked.
-    canary.call(json!({"cmd": "recreate", "index": 0, "at": [spot[0], spot[1] - 200.0]}));
+    let made = canary.call(json!({"cmd": "recreate", "index": 0, "at": [spot[0], spot[1] - 200.0]}));
+    let made = made["windows"].as_array().and_then(|w| w.iter().find(|w| w["title"] == "Canary 2")).cloned();
+    let at = made.as_ref().and_then(|w| rect(&w["frame"]));
+    assert!(at.is_some_and(|f| !reachable(f)), "the new window off screen: {made:?}");
     let titles = || -> Vec<String> {
         let panes = otto.call(json!({"cmd": "state"}))["state"]["panes"].as_array().cloned().unwrap_or_default();
         panes.iter().filter_map(|p| p["kind"]["title"].as_str().map(str::to_string)).collect()
