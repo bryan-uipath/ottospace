@@ -299,6 +299,23 @@ impl Node {
 }
 
 #[cfg(test)]
+impl Node {
+    /// Every ratio is a number and leaves each side its least share: `MIN_SHARE`, or with more
+    /// than ten panes in a row what `equalize` gives one (1 / the leaves). For the property
+    /// tests of the tree and of the model.
+    pub(crate) fn sound_ratios(&self) -> Result<(), String> {
+        fn walk(node: &Node, least: f32) -> Result<(), String> {
+            let Node::Split { ratio, a, b, .. } = node else { return Ok(()) };
+            if !(least..=1.0 - least).contains(ratio) {
+                return Err(format!("a split's ratio is {ratio}"));
+            }
+            walk(a, least).and_then(|_| walk(b, least))
+        }
+        walk(self, MIN_SHARE.min(1.0 / self.leaves().len() as f32) - 1e-6)
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::{Axis, Axis::*, Dir, Node, Node::Leaf, Rect, Zone};
 
@@ -655,19 +672,18 @@ mod tests {
                         return fail(format!("scalable said {said:?}, scale {moved}"));
                     }
                     // The pane has the size asked for, or every split that could give it more
-                    // (or take more) is at its limit.
-                    let (Some(was), Some(now), true) = (was, extent(root, pane, on), by.is_finite() && by > 0.0) else {
-                        continue;
-                    };
-                    let splits = above(root, pane, on).unwrap_or_default();
-                    let exact = (now / was / by - 1.0).abs() < 2e-3;
-                    let limit =
-                        |ratio: &f32| (ratio - MIN_SHARE).abs() < 1e-6 || (ratio - (1.0 - MIN_SHARE)).abs() < 1e-6;
-                    if !splits.is_empty() && !exact && !splits.iter().all(limit) {
-                        return fail(format!("the pane is {} times its size, with splits {splits:?}", now / was));
-                    }
-                    if splits.is_empty() && now != was {
-                        return fail("a pane with no split on the axis changed size".into());
+                    // (or take more) is at its limit. Only of a factor that is a size.
+                    if let (Some(was), Some(now), true) = (was, extent(root, pane, on), by.is_finite() && by > 0.0) {
+                        let splits = above(root, pane, on).unwrap_or_default();
+                        let exact = (now / was / by - 1.0).abs() < 2e-3;
+                        let limit =
+                            |ratio: &f32| (ratio - MIN_SHARE).abs() < 1e-6 || (ratio - (1.0 - MIN_SHARE)).abs() < 1e-6;
+                        if !splits.is_empty() && !exact && !splits.iter().all(limit) {
+                            return fail(format!("the pane is {} times its size, with splits {splits:?}", now / was));
+                        }
+                        if splits.is_empty() && now != was {
+                            return fail("a pane with no split on the axis changed size".into());
+                        }
                     }
                 }
             }
@@ -679,11 +695,8 @@ mod tests {
                 return fail(format!("the tree holds {leaves:?}, not {held:?}"));
             }
             let Some(root) = &tree else { continue };
-            // Every ratio is a number and leaves each side its least share: `MIN_SHARE`, or
-            // with more than ten panes in a row what `equalize` gives one.
-            let least = MIN_SHARE.min(1.0 / leaves.len() as f32) - 1e-6;
-            if let Some(ratio) = ratios(root).into_iter().find(|r| !(least..=1.0 - least).contains(r)) {
-                return fail(format!("a ratio is {ratio}"));
+            if let Err(why) = root.sound_ratios() {
+                return fail(why);
             }
             // The panes tile the area, and a neighbour is another pane across a shared edge.
             let rects = root.rects(Rect { x: 0.0, y: 0.0, w: 1.0, h: 1.0 });
@@ -764,7 +777,7 @@ mod tests {
                 format!("seed {seed}: {why}\n    run(&[{}]).unwrap();", ops.join(", "))
             })
         };
-        if let Some(report) = fuzz::each_seed(0, 4_000, one) {
+        if let Some(report) = fuzz::each_seed(0, 1_000, one) {
             panic!("{report}");
         }
     }

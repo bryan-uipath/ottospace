@@ -228,6 +228,14 @@ pub fn suggest<'a>(typed: &str, names: impl IntoIterator<Item = &'a str>) -> Vec
     names.into_iter().take(MAX_SUGGESTIONS).map(str::to_string).collect()
 }
 
+/// The entries that may finish a path: at most `MAX_SUGGESTIONS`, and only those `escape` can
+/// write as one word. One with a backslash, a tab or a line break in a name would read as
+/// another path, or as two words.
+pub fn path_suggestions(entries: &[String]) -> Vec<String> {
+    let writable = |entry: &&String| !entry.chars().any(|c| c == '\\' || (c.is_whitespace() && c != ' '));
+    entries.iter().filter(writable).take(MAX_SUGGESTIONS).cloned().collect()
+}
+
 /// The line with the word being typed replaced by `name`, and a space to go on typing. No space
 /// after a directory (`/src/`): the path goes on. A space in a path gets a backslash, so the
 /// path stays one word: `~/Library/Application\ Support/`.
@@ -482,12 +490,13 @@ mod tests {
         // Every name offered for the word being typed finishes it as that tag, wherever the cursor is.
         for cursor in (0..=line.len()).filter(|at| line.is_char_boundary(*at)) {
             let Some((mark, start)) = completing(&line[..cursor]) else { continue };
-            let offered = if mark == '/' { names.to_vec() } else { suggest(&start, names.iter().map(String::as_str)) };
-            // A path the shell lists is path-shaped. KNOWN (see the ignored test below): not one
-            // with a backslash, a tab or a line break in a name, which `escape` does not keep.
-            let typable = |name: &&String| !name.chars().any(|c| c == '\\' || (c.is_whitespace() && c != ' '));
-            let listed = |name: &&String| mark != '/' || (!path_candidates(name).is_empty() && typable(name));
-            for name in offered.iter().filter(listed) {
+            // A path the shell lists is path-shaped.
+            let shaped: Vec<String> = names.iter().filter(|name| !path_candidates(name).is_empty()).cloned().collect();
+            let offered = match mark {
+                '/' => path_suggestions(&shaped),
+                _ => suggest(&start, names.iter().map(String::as_str)),
+            };
+            for name in &offered {
                 let (word, text) = completion_at(line, cursor, name);
                 let done = format!("{}{text}{}", &line[..word.start], &line[word.end..]);
                 // Up to the finished word: of two `@agent` the last counts, and one may follow.
@@ -517,15 +526,13 @@ mod tests {
     }
 
     /// Found by the test below. `escape` puts a backslash before a space and nothing else, so a
-    /// path whose name holds a backslash before a space, a tab or a line break is offered and
-    /// then reads as another path, or as two words.
+    /// path whose name holds a backslash, a tab or a line break was offered and then read as
+    /// another path, or as two words. It is not offered.
     #[test]
-    #[ignore = "a decision: how a path with a backslash, a tab or a line break in a name is typed"]
-    fn a_path_with_a_backslash_or_a_tab_in_a_name_completes_to_itself() {
-        for name in ["~/a\\ b", "/src/a\tb", "/src/a\nb"] {
-            let done = complete("see /", name);
-            assert_eq!(draft_all(&done).paths, [name], "{done:?}");
-        }
+    fn a_path_with_a_backslash_or_a_tab_in_a_name_is_not_offered() {
+        let entries = ["~/a\\ b", "/src/a\tb", "/src/a\nb", "/src/My Dir/"].map(str::to_string);
+        assert_eq!(path_suggestions(&entries), ["/src/My Dir/"]);
+        assert_eq!(draft_all(&complete("see /", "/src/My Dir/")).paths, ["/src/My Dir/"]);
     }
 
     /// Random lines of hostile pieces, tags and words. A failure prints the least pieces that

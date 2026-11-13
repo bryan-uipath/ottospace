@@ -8,7 +8,6 @@ use super::*;
 use crate::ax::{Frame, Source};
 use crate::compose::{Known, Names, PathFound};
 use crate::fuzz::{self, Rng};
-use crate::layout::MIN_SHARE;
 use crate::marks::{Mark, PaneRecord, RecordKind, TabRecord};
 use crate::repos::Worktree;
 use crate::sessions::{Link, Seen};
@@ -576,17 +575,6 @@ fn unique<T: PartialEq>(list: &[T]) -> bool {
     list.iter().enumerate().all(|(i, item)| !list[..i].contains(item))
 }
 
-/// Every ratio is a number, and leaves each side its least share: `MIN_SHARE`, or with more
-/// than ten panes in a row what `equalize` gives each (1 / the leaves under the split's tree).
-fn ratios(tree: &Node, least: f32) -> Result<(), String> {
-    if let Node::Split { ratio, a, b, .. } = tree {
-        ensure!(ratio.is_finite() && (least - 1e-6..=1.0 - least + 1e-6).contains(ratio), "a split's ratio is {ratio}");
-        ratios(a, least)?;
-        ratios(b, least)?;
-    }
-    Ok(())
-}
-
 /// What must hold of a model at rest, whatever was done to it.
 fn check(m: &Model) -> Result<(), String> {
     // Tabs, their trees and the panes.
@@ -612,7 +600,7 @@ fn check(m: &Model) -> Result<(), String> {
             None => ensure!(leaves.is_empty(), "tab {} has panes and focuses none", tab.id),
         }
         if let Some(tree) = tree {
-            ratios(tree, MIN_SHARE.min(1.0 / leaves.len() as f32)).map_err(|why| format!("tab {}: {why}", tab.id))?;
+            tree.sound_ratios().map_err(|why| format!("tab {}: {why}", tab.id))?;
         }
         ensure!(
             tab.task.is_none_or(|id| m.tasks.get(id).is_some()),
@@ -657,8 +645,8 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(!boxed, "visual mode is on under a box");
     }
     ensure!(!(m.picker.is_some() && m.compose.is_some()), "the picker and the new-task box are both open");
-    // KNOWN (see `the_key_reference_closes_the_new_task_box`): the user's ⌘/ leaves the
-    // new-task box open under the key reference. The picker it closes.
+    // The user's ⌘/ closes the picker. The new-task box it leaves open under the reference,
+    // with its line kept and its field out of reach (below) until the reference closes.
     ensure!(!(m.keys && m.picker.is_some()), "the key reference is open over the picker");
     if let Some(picker) = &m.picker {
         let matches = picker.matches().len();
@@ -816,15 +804,7 @@ fn check_file(m: &Model) -> Result<(), String> {
     let list = &m.marks.list;
     let loaded = marks::parse(&marks::write(list, &m.marks.extra))
         .map_err(|why| format!("marks.json does not read back: {why}"))?;
-    // KNOWN (see `a_mark_made_here_reads_back`): a mark made in this run may be one `parse`
-    // skips. Until that is decided, such a mark must at least be named as skipped, not lost.
-    ensure!(
-        loaded.marks.len() + loaded.skipped.len() == list.len(),
-        "a mark is neither read back nor named as skipped"
-    );
-    if !loaded.skipped.is_empty() {
-        return Ok(());
-    }
+    ensure!(loaded.skipped.is_empty(), "a mark does not read back: {:?}", loaded.skipped);
     ensure!(loaded.extra == m.marks.extra, "marks.json loses the file's own keys");
     // As text: a ratio is kept to three places. A mark the shell gave no id yet gets one when read.
     let named = |(kept, read): (&Mark, &Mark)| {
@@ -882,6 +862,8 @@ struct Run {
     steps: Vec<Envelope>,
     /// The marks before the last step, if all it did was take one off.
     before_removal: Option<Vec<Mark>>,
+    /// Each mark's `live`, and whether it was a pane's id when it was set (else a tab's).
+    live: Vec<(MarkId, u32, bool)>,
     /// Write the state and the marks' file out after every eighth step only: nine tenths of a
     /// run's time is spent there. A replay, and the long run, do it after every step.
     sparse: bool,
@@ -1086,6 +1068,25 @@ impl Run {
             self.shell.visual,
             m.visual
         );
+
+        // An id a mark stands for is a pane's or a tab's for as long as the mark keeps it: it
+        // is never read as the other, though the two count from 1 alike.
+        let mut live = Vec::new();
+        for mark in &m.marks.list {
+            let Some(id) = mark.live else { continue };
+            let pane = matches!(mark.target, marks::Target::Pane(_));
+            let was = self.live.iter().find(|(of, kept, _)| (*of, *kept) == (mark.id, id)).map(|(.., was)| *was);
+            let kinds = |pane: bool| if pane { "pane" } else { "tab" };
+            ensure!(
+                was.is_none_or(|was| was == pane),
+                "mark {:?} kept {id}, a {}'s id, as a {}'s",
+                mark.name,
+                kinds(!pane),
+                kinds(pane)
+            );
+            live.push((mark.id, id, pane));
+        }
+        self.live = live;
 
         // A mark taken off and put straight back is the mark it was, where it was.
         let undone = m.marks.removed().is_none() && removed.is_some();
@@ -1296,9 +1297,17 @@ fn sequence(seed: u64, actions: usize, sparse: bool) -> Result<(), String> {
         let why = why.split_once(": ").filter(|(step, _)| step.starts_with("step ")).map_or(why, |(_, why)| why);
         why.split('"').step_by(2).flat_map(str::chars).filter(|c| !c.is_ascii_digit()).collect::<String>()
     };
-    let same = |steps: &[Envelope]| replay(steps).is_err_and(|fails| kind(&fails) == kind(&why));
-    let least = fuzz::shrink(run.steps.clone(), same);
-    let fails = replay(&least).err().unwrap_or_default();
+    // Replayed, every check runs after every step: a sparse run's failure may come second to
+    // another. Then any failure is shrunk, and both are named.
+    let replayed = replay(&run.steps).err();
+    let other = replayed.as_ref().filter(|fails| kind(fails) != kind(&why));
+    let same = |steps: &[Envelope]| replay(steps).is_err_and(|fails| other.is_some() || kind(&fails) == kind(&why));
+    let least = if replayed.is_some() { fuzz::shrink(run.steps.clone(), same) } else { run.steps.clone() };
+    let fails = match (replay(&least).err(), other) {
+        (None, _) => "the replay does not fail: not shrunk".to_string(),
+        (Some(fails), None) => fails,
+        (Some(fails), Some(other)) => format!("{fails}; not the failure above: the replay fails first at {other}"),
+    };
     let steps: String = least.iter().map(|sent| format!("            {},\n", code(sent))).collect();
     Err(format!(
         "seed {seed} (start: {base}, {mode:?} mode) failed at step {}: {why}\n\
@@ -1721,43 +1730,75 @@ fn marks_json_keeps_the_keys_it_does_not_know() {
     assert_eq!(json(&marks::write(&loaded.marks, &loaded.extra)), json(text));
 }
 
-// Known, and left: each is a decision to make, not a slip. `check` is weaker where it says KNOWN.
-
-/// The user's ⌘/ closes the picker and not the new-task box: the box stays open under the key
-/// reference, in compose mode, with its field hidden. The socket's `ToggleKeys` is refused there.
+/// The second half of 12: a pane's id and a tab's count from 1 alike, and a mark restored as
+/// the other sort of mark kept the number: pane 1's mark, now a tab's, was open on tab 1.
 #[test]
-#[ignore = "a decision: ⌘/ over the new-task box closes it, waits, or shows over it"]
-fn the_key_reference_closes_the_new_task_box() {
+fn a_restored_mark_of_the_other_sort_does_not_keep_an_id_that_happens_to_exist() {
+    let tab = r#"[{"id":"u1","name":"x","target":{"tab":{"title":"t","layout":{"leaf":1},"panes":[{"id":1,"kind":{"type":"terminal"}}]}}}]"#;
+    let pane = r#"[{"id":"u1","name":"x","target":{"pane":{"kind":{"type":"terminal"}}}}]"#;
+    for (of, file) in [(MarkOf::Pane(None), tab), (MarkOf::Tab(None), pane)] {
+        // Pane 1 is a terminal in tab 1, so either id would pass for the other.
+        let steps = [terminal().into(), mark(of, 'a', "u1").into(), by(Origin::System, restore_marks(file, "{}"))];
+        replay(&steps).unwrap();
+        let mut m = Model::default();
+        steps.into_iter().for_each(|step| drop(m.update(step)));
+        assert_eq!((m.marks.list[0].live, m.mark_rows()[0].open), (None, false), "{file}");
+    }
+}
+
+/// A mark made here was one `marks::parse` skips at the next start, and a file with a skipped
+/// mark is never written again. A title is now cut to what the file takes; an app with no name
+/// and a directory that is not absolute are not marked, and `mark_refusal` says why.
+#[test]
+fn a_mark_made_here_reads_back() {
+    let app = |title: &str, name: &str| Kind::App { window: 1, title: title.into(), bundle: None, name: name.into() };
+    let marked = |kind: Kind, cwd: &str| {
+        let mut m = Model::default();
+        m.update(Action::Open { kind, axis: Axis::Right, beside: None });
+        let add = |of| Action::MarkAdd { of, name: None, key: None, uid: String::new(), cwds: vec![(1, cwd.into())] };
+        m.update(add(MarkOf::Pane(None)));
+        m.update(add(MarkOf::Tab(None)));
+        check_file(&m).unwrap();
+        m
+    };
+    // Cut: 600 characters to 512, and a line break out.
+    let title = |m: &Model| match &m.marks.list[0].target {
+        marks::Target::Pane(PaneRecord { kind: RecordKind::App { title, .. }, .. }) => title.clone(),
+        other => panic!("{other:?}"),
+    };
+    let long = marked(app(&"t".repeat(600), "Safari"), "/");
+    assert_eq!((long.marks.list.len(), title(&long).len()), (2, 512));
+    assert_eq!(title(&marked(app("a\nb", "Safari"), "/")), "ab");
+    // Refused, pane and tab both.
+    let nameless = marked(app("t", ""), "/");
+    assert_eq!(nameless.marks.list, []);
+    assert_eq!(nameless.mark_refusal(MarkOf::Pane(None)), Some("pane 1 cannot be marked: its app has no name".into()));
+    assert_eq!(nameless.mark_refusal(MarkOf::Tab(None)), Some("tab 1 cannot be marked: its app has no name".into()));
+    assert_eq!(marked(Kind::Terminal, "relative").marks.list, []);
+    // An open mark's title follows its window, cut the same way.
+    let mut m = marked(app("t", "Safari"), "/");
+    m.update(Action::Titles { titles: vec![(1, "n\n".repeat(600))] });
+    m.update(Action::MarkGo { mark: MarkRef::Place(0), axis: Axis::Right });
+    assert_eq!(title(&m), "n".repeat(512));
+    check_file(&m).unwrap();
+}
+
+/// ⌘/ over the new-task box. No slip: the picker closes for the key reference, the box stays
+/// open under it. Its line is kept and nothing edits it there (the shell sends the reference
+/// its keys), and Esc gives the box the keyboard back.
+#[test]
+fn the_new_task_box_keeps_its_line_under_the_key_reference() {
     let mut m = Model::default();
     m.update(Action::OpenCompose { text: "fix".into() });
     m.update(Action::ToggleKeys);
-    assert!(!(m.keys && m.compose.is_some()), "the key reference is open over the new-task box");
+    assert_eq!((m.keys, m.mode(), m.field().is_none()), (true, Mode::Compose, true));
+    m.update(Action::FieldEdit { edit: Edit::Insert("x".into()) });
+    m.update(Action::CloseKeys);
+    assert_eq!((m.keys, m.field().map(|(of, field)| (of, field.text()))), (false, Some(("compose", "fix"))));
+    check(&m).unwrap();
 }
 
-/// A mark made here can be one `marks::parse` skips at the next start, and a file with a
-/// skipped mark is never written again: a window title of more than 512 characters or with a
-/// line break in it, a tab titled by a task with a control character in its title, an app
-/// pane with no name, a directory that is not absolute.
-#[test]
-#[ignore = "a decision: such a mark is refused, or its record is cut to what the file takes"]
-fn a_mark_made_here_reads_back() {
-    let long = Kind::App { window: 1, title: "t".repeat(600), bundle: None, name: "Safari".into() };
-    let lines = Kind::App { window: 2, title: "a\nb".into(), bundle: None, name: "Safari".into() };
-    let nameless = Kind::App { window: 3, title: "t".into(), bundle: None, name: String::new() };
-    for kind in [long, lines, nameless, Kind::Terminal] {
-        let mut m = Model::default();
-        m.update(Action::Open { kind, axis: Axis::Right, beside: None });
-        m.update(Action::MarkAdd {
-            of: MarkOf::Pane(None),
-            name: None,
-            key: None,
-            uid: "u1".into(),
-            cwds: vec![(1, "relative".into())],
-        });
-        let loaded = marks::parse(&marks::write(&m.marks.list, &m.marks.extra)).unwrap();
-        assert_eq!((loaded.marks.len(), loaded.skipped), (1, Vec::<String>::new()));
-    }
-}
+// Known, and left: a decision to make, not a slip.
 
 /// A key this build does not know beside a terminal's or an empty pane's `type` is dropped: only
 /// an app's `kind` keeps its own. Every other level of the file keeps them.

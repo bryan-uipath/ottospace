@@ -2142,7 +2142,7 @@ impl Model {
             Some(('@', typed)) => compose::suggest(&typed, self.known.names.agents.iter().map(String::as_str)),
             Some(('$', typed)) => compose::suggest(&typed, self.known.names.skills.iter().map(String::as_str)),
             // The shell listed them for what is typed.
-            Some(('/', _)) => self.known.entries.iter().take(compose::MAX_SUGGESTIONS).cloned().collect(),
+            Some(('/', _)) => compose::path_suggestions(&self.known.entries),
             Some((_, typed)) => compose::suggest(&typed, self.tasks.projects()),
             None => Vec::new(),
         }

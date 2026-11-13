@@ -170,7 +170,29 @@ pub fn each_seed<F: Send>(first: u64, count: u64, one: impl Fn(u64) -> Option<F>
                 })
             })
             .collect();
-        handles.into_iter().filter_map(|handle| handle.join().ok().flatten()).collect()
+        // A worker that panicked (in `one`, or in making its report) fails the run: it is not
+        // a seed that passed.
+        let joined =
+            handles.into_iter().map(|handle| handle.join().unwrap_or_else(|panic| panic::resume_unwind(panic)));
+        joined.flatten().collect()
     });
     failures.into_iter().min_by_key(|(seed, _)| *seed).map(|(_, failure)| failure)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_seed_that_panics_fails_the_run() {
+        let run = || {
+            each_seed(0, 40, |seed| -> Option<u64> {
+                if seed == 7 { panic!("seed {seed}") } else { None }
+            })
+        };
+        assert_eq!(caught(run), Err("panicked: seed 7".to_string()));
+        // The failure of the lowest seed, and none when every seed passes.
+        assert_eq!(each_seed(0, 40, |seed| (seed % 10 == 3).then_some(seed)), Some(3));
+        assert_eq!(each_seed(0, 40, |_| None::<u64>), None);
+    }
 }
