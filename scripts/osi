@@ -23,6 +23,8 @@ main_tag="main-latest"
 workflow="build.yml"
 # The label that makes build.yml build a pull request. Must match .github/workflows/build.yml.
 build_label="pr-build"
+# jq: "true" when a pull request carries $build_label.
+has_label='([.labels[].name] | index("'"$build_label"'") != null | tostring)'
 # Second line of this file. install.sh and self-update replace only an osi that carries it.
 marker="# ottospace-installer"
 
@@ -179,7 +181,7 @@ pr_read() {
   # empty: `read` would skip it and shift the rest.
   line="$(gh_run pr view "$1" -R "github.com/$repo" \
     --json state,author,headRefOid,headRepository,isCrossRepository,labels \
-    --jq '[.state, (.author.login // "unknown"), .headRefOid, (.headRepository.nameWithOwner // "deleted"), (.isCrossRepository | tostring), ([.labels[].name] | index("'"$build_label"'") != null | tostring)] | @tsv' |
+    --jq '[.state, (.author.login // "unknown"), .headRefOid, (.headRepository.nameWithOwner // "deleted"), (.isCrossRepository | tostring), '"$has_label"'] | @tsv' |
     clean)" || line=""
   IFS="$(printf '\t')" read -r pr_state pr_author pr_sha pr_head pr_cross pr_labelled <<EOF
 $line
@@ -233,7 +235,7 @@ run_query() {
   run_sha="$1"
   shift
   gh_run run list -R "github.com/$repo" --workflow "$workflow" --commit "$run_sha" --event pull_request \
-    --limit 5 --json databaseId,status,conclusion "$@" \
+    --limit 20 --json databaseId,status,conclusion "$@" \
     --jq '[.[] | select(.conclusion != "skipped")][0] // empty | [(.databaseId | tostring), .status, (if (.conclusion // "") == "" then "none" else .conclusion end)] | @tsv' \
     >"$tmp/run" 2>/dev/null
 }
@@ -633,7 +635,7 @@ cmd_list() {
   # to the terminal.
   gh_run pr list -R "github.com/$repo" --state open --limit 51 \
     --json number,headRefOid,isCrossRepository,labels,title \
-    --jq '.[] | [(.number | tostring), .headRefOid, (.isCrossRepository | tostring), ([.labels[].name] | index("'"$build_label"'") != null | tostring), (.title | gsub("[\t\n\r]"; " "))] | @tsv' \
+    --jq '.[] | [(.number | tostring), .headRefOid, (.isCrossRepository | tostring), '"$has_label"', (.title | gsub("[\t\n\r]"; " "))] | @tsv' \
     >"$tmp/prs" 2>/dev/null &
   spin_quiet $! "Reading open pull requests" || die "could not list the pull requests of $repo (is gh signed in? gh auth status)"
   [ -s "$tmp/prs" ] || {
