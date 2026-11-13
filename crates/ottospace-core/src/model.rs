@@ -3340,7 +3340,10 @@ impl Model {
 
     pub(crate) fn push_tab(&mut self) {
         self.next_tab += 1;
-        let title = format!("Tab {}", self.next_tab);
+        // The lowest number no tab on this bar has: closing "Tab 5" and opening one gives "Tab 5" again.
+        let scope = self.current_task;
+        let taken = |n: &u32| self.tabs.iter().any(|t| t.task == scope && t.title == format!("Tab {n}"));
+        let title = format!("Tab {}", (1..).find(|n| !taken(n)).unwrap_or(self.next_tab));
         self.tabs.push(Tab { id: self.next_tab, title, task: self.current_task, layout: None, focused: None });
         self.active = self.tabs.len() - 1;
     }
@@ -4721,6 +4724,21 @@ mod tests {
         m.update(Action::FocusCycle { delta: -1 });
         assert_eq!(m.focused, Some(2));
         assert_eq!(Model::default().update(Action::FocusCycle { delta: 1 }), []);
+    }
+
+    #[test]
+    fn a_new_tab_takes_the_lowest_free_number() {
+        let mut m = Model::default();
+        m.update(Action::NewTab);
+        m.update(Action::NewTab);
+        assert_eq!(tab_titles(&m), ["Tab 1", "Tab 2", "Tab 3"]);
+        // Close the middle one: the next tab is "Tab 2" again, not "Tab 4".
+        m.update(Action::CloseTab { index: Some(1) });
+        m.update(Action::NewTab);
+        assert_eq!(tab_titles(&m), ["Tab 1", "Tab 3", "Tab 2"]);
+        // Ids stay unique: they are not the number in the title.
+        let ids: std::collections::HashSet<u32> = m.tabs.iter().map(|t| t.id).collect();
+        assert_eq!(ids.len(), m.tabs.len());
     }
 
     fn tab_titles(m: &Model) -> Vec<&str> {
