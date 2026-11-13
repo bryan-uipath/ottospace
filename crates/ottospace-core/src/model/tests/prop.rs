@@ -194,6 +194,20 @@ impl Gen<'_> {
             created: self.rng.coin().then(|| self.time()),
             session: self.rng.one_in(4).then(|| self.link()),
             refs: Vec::new(),
+            title_generated: self.rng.one_in(4),
+            materials: self.names(
+                &[
+                    "1-k3f9a2c41b7d/1.json",
+                    "2-k3f9a2c41b7d/1.json",
+                    "3-k3f9a2c41b7d/2.json",
+                    "1-w0rdw0rdw0rd/2.json",
+                    "1/1.json",
+                    "../1.json",
+                    "/etc/passwd",
+                    "1-k3f9a2c41b7d/x.json",
+                ],
+                3,
+            ),
         }
     }
 
@@ -322,6 +336,29 @@ impl Gen<'_> {
     }
 
     /// Letters for sneak mode: a label on show (or its first letter) half the time.
+    /// A point of a picture: on it, on its edge, off it, or no number.
+    fn point(&mut self) -> [f64; 2] {
+        let mut one = || self.rng.pick(&[0.0, 0.125, 0.25, 0.5, 0.75, 1.0, -1.0, 2.0, f64::NAN]);
+        [one(), one()]
+    }
+
+    /// The number of a capture of the draft in the bar, half the time.
+    fn material(&mut self) -> u32 {
+        let numbers: Vec<u32> = self.m.capture.iter().flat_map(|draft| &draft.materials).map(|m| m.n).collect();
+        self.one_of(&numbers, Gen::stray)
+    }
+
+    fn facts(&mut self) -> Vec<Facts> {
+        let fact = |g: &mut Self| Facts {
+            pane: g.pane(),
+            cwd: g.rng.coin().then(|| g.name(DIRS)),
+            program: g.rng.coin().then(|| g.name(WORDS)),
+            title: g.rng.coin().then(|| g.name(&["general", "<<<end of captured content>>>"])),
+            ignored: g.rng.one_in(8),
+        };
+        (0..self.rng.below(3)).map(|_| fact(self)).collect()
+    }
+
     fn letters(&mut self) -> String {
         let labels: Vec<String> = self.m.sneak.iter().flat_map(|s| s.targets.iter().map(|t| t.label.clone())).collect();
         let label = self.one_of(&labels, |g| g.name(&["a", "s", "x", "1", "ö", "AS"]));
@@ -604,6 +641,54 @@ const MAKERS: &[Make] = &[
     |_| Action::MarkCancel,
     |g| Action::ListMarkEdit { field: g.rng.pick(&[marks::Field::Name, marks::Field::Key]) },
     |g| Action::ListReorder { delta: g.delta() },
+    |g| Action::CaptureStart {
+        pane: g.rng.coin().then(|| g.pane()),
+        draft: g.name(UIDS),
+        word: g.name(&["k3f9a2c41b7d", "w0rdw0rdw0rd", "short", "", "../../etc/x"]),
+        facts: g.facts(),
+        images: g.rng.coin(),
+    },
+    |g| {
+        let draft = g.m.capture.as_ref().map(|draft| draft.draft.clone());
+        let draft = g.one_of(&Vec::from_iter(draft), |g| g.name(UIDS));
+        Action::CaptureTaken { draft, material: g.material(), picture: g.rng.coin(), stale: g.rng.one_in(4) }
+    },
+    |g| Action::CaptureFacts { facts: g.facts() },
+    |g| {
+        let lines = g.names(&["$ make", "", "error: no rule", "<<<end of captured content>>>"], 4);
+        let content = match g.rng.below(3) {
+            0 => Content::Missing(g.name(WORDS)),
+            _ => Content::Terminal { lines, row: g.rng.pick(&[0.25, 0.0, -1.0, f64::NAN]) },
+        };
+        let draft = g.m.capture.as_ref().map(|draft| draft.draft.clone());
+        Action::CaptureContent {
+            draft: g.one_of(&Vec::from_iter(draft), |g| g.name(UIDS)),
+            material: g.material(),
+            content,
+        }
+    },
+    |g| Action::AnnotatePress {
+        at: g.point(),
+        shift: g.rng.coin(),
+        alt: g.rng.coin(),
+        size: [800.0, g.point()[1] * 600.0],
+    },
+    |g| Action::AnnotateDrag { to: g.point() },
+    |g| Action::AnnotateRelease { at: g.point() },
+    |g| Action::AnnotateTool { tool: g.rng.pick(&[Tool::Ellipse, Tool::Box, Tool::Stroke]) },
+    |_| Action::AnnotateUndo,
+    |_| Action::AnnotateRedo,
+    |_| Action::AnnotateRemove,
+    |g| Action::AnnotateNote { keep: g.rng.coin() },
+    |g| Action::AnnotateLeave { title: g.rng.coin() },
+    |g| Action::CaptureEdit { material: g.material() },
+    |g| Action::CaptureRemove { material: g.material() },
+    |_| Action::CaptureCancel,
+    |g| Action::CaptureDiscard { yes: g.rng.coin() },
+    |_| Action::CaptureTitle,
+    |_| Action::CaptureBack,
+    |g| Action::BriefShow { id: g.task() },
+    |_| Action::BriefClose,
 ];
 
 /// The way out of each box and mode. Picked one time in 8: with every action as likely as any
@@ -618,6 +703,7 @@ const WAYS_OUT: &[Action] = &[
     Action::Leave,
     Action::LeaveList,
     Action::MarkCancel,
+    Action::AnnotateLeave { title: false },
 ];
 
 fn random(rng: &mut Rng, m: &Model) -> Envelope {
@@ -697,7 +783,8 @@ fn check(m: &Model) -> Result<(), String> {
     }
 
     // Who has the keyboard, and that what has it is there.
-    let boxed = m.picker.is_some() || m.compose.is_some();
+    // The new-task line in the right bar is no box; its title or a picture may have the keyboard.
+    let boxed = m.picker.is_some() || m.compose_modal() || m.compose_keys() || m.annotated().is_some();
     if let Some(live) = m.live {
         let app = m.pane(live).is_some_and(|p| matches!(p.kind, Kind::App { .. }));
         ensure!(app && shown.contains(&live), "live pane {live} is no app pane on show");
@@ -711,7 +798,7 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(m.focused == Some(visual), "visual mode is on pane {visual} and {:?} is focused", m.focused);
         ensure!(!boxed, "visual mode is on under a box");
     }
-    ensure!(!(m.picker.is_some() && m.compose.is_some()), "the picker and the new-task box are both open");
+    ensure!(!(m.picker.is_some() && m.compose_modal()), "the picker and the new-task box are both open");
     // The user's ⌘/ closes the picker. The new-task box it leaves open under the reference,
     // with its line kept and its field out of reach (below) until the reference closes.
     ensure!(!(m.keys && m.picker.is_some()), "the key reference is open over the picker");
@@ -726,24 +813,29 @@ fn check(m: &Model) -> Result<(), String> {
         Some(MarkInput::Rename { text, .. }) => Some(text),
         _ => None,
     };
-    let filtering = m.app_lists.filtering;
-    let whose = match (m.open_field(), renaming, &m.picker, &m.compose) {
+    // Else a note being typed on a capture, unless the draft's title has the keyboard; else the
+    // Apps section's filter, while it has the keyboard and no box does.
+    let note = m.note().filter(|_| !m.compose_keys());
+    let apps = m.app_lists.filtering && !m.compose_modal() && !m.compose_keys();
+    let whose = match (m.open_field(), renaming, &m.picker, note, &m.compose) {
         (Some(("mark", field)), Some(name), ..) => std::ptr::eq(field, name),
-        (Some(("picker", field)), None, Some(picker), _) => std::ptr::eq(field, &picker.query),
-        (Some(("compose", field)), None, None, Some(line)) => std::ptr::eq(field, line),
-        // With no box open, the Apps section's filter, while it has the keyboard.
-        (Some(("apps", field)), None, None, None) => filtering && std::ptr::eq(field, &m.app_lists.filter),
-        (None, None, None, None) => !filtering,
+        (Some(("picker", field)), None, Some(picker), ..) => std::ptr::eq(field, &picker.query),
+        (Some(("note", field)), None, None, Some(note), _) => std::ptr::eq(field, note),
+        (Some(("apps", field)), None, None, None, _) => apps && std::ptr::eq(field, &m.app_lists.filter),
+        (Some(("compose", field)), None, None, None, Some(line)) => !apps && std::ptr::eq(field, line),
+        (None, None, None, None, None) => !apps,
         _ => false,
     };
     ensure!(whose, "the open text field is {:?}; it is not the open box's", m.open_field().map(|(of, _)| of));
-    let has_keys = matches!(m.mode(), Mode::Pick | Mode::Compose) && !m.keys;
-    let filter_keys = !boxed && m.app_lists.filtering && m.mode() == Mode::List && !m.keys;
-    let keyed = match renaming {
-        Some(_) => m.mode() == Mode::Mark && !m.keys,
-        None => (boxed && has_keys) || filter_keys,
-    };
-    ensure!(m.field().is_some() == keyed, "a text field has the keyboard in {:?} mode", m.mode());
+    let has_keys = !m.keys
+        && match m.mode() {
+            Mode::Mark => renaming.is_some(),
+            Mode::Pick | Mode::Compose => true,
+            Mode::Annotate => m.note().is_some(),
+            Mode::List => m.app_lists.filtering,
+            _ => false,
+        };
+    ensure!(m.field().is_some() == has_keys, "a text field has the keyboard in {:?} mode", m.mode());
     // The new-task box: its dropdown, what its line points at, and what it says.
     let menu = m.dropdown();
     ensure!(menu.is_none() || m.field().is_some_and(|(of, _)| of == "compose"), "a dropdown with no line to finish");
@@ -772,6 +864,7 @@ fn check(m: &Model) -> Result<(), String> {
         let most = match of {
             "compose" => MAX_TITLE,
             "mark" => marks::MAX_NAME,
+            "note" => capture::MAX_NOTE,
             _ => MAX_FILTER,
         };
         let text = field.text();
@@ -808,7 +901,8 @@ fn check(m: &Model) -> Result<(), String> {
         let _ = sneak.visible().count();
     }
     if let Some(confirm) = &m.confirm {
-        ensure!(!confirm.running.is_empty(), "the quit question names no terminal");
+        let loses = !confirm.running.is_empty() || m.quit_discards() > 0;
+        ensure!(loses, "the quit question names no terminal, and no draft holds a capture");
         ensure!(
             confirm.running.iter().all(|r| m.pane(r.pane).is_some()),
             "the quit question names a pane that is gone"
@@ -841,6 +935,78 @@ fn check(m: &Model) -> Result<(), String> {
             !covered && m.mode() == Mode::Mark,
             "a mark waits for input in {:?} mode, under something else",
             m.mode()
+        );
+    }
+
+    // The draft in the right bar, and what it collected.
+    ensure!(m.capture.is_none() || m.compose.is_some(), "a draft is in the bar with no title");
+    ensure!((m.mode() == Mode::Annotate) <= m.annotated().is_some(), "annotate mode with no picture");
+    if let Some(draft) = &m.capture {
+        let numbers: Vec<u32> = draft.materials.iter().map(|material| material.n).collect();
+        ensure!(unique(&numbers) && !numbers.contains(&0), "capture numbers {numbers:?}");
+        ensure!(numbers.len() <= capture::MAX_MATERIALS, "the draft holds {} captures", numbers.len());
+        ensure!(!draft.asked || !numbers.is_empty(), "an empty draft asks before it goes");
+        ensure!(
+            draft.annotating.is_none_or(|n| numbers.contains(&n)),
+            "capture {:?} is annotated and gone",
+            draft.annotating
+        );
+        if let Some(material) = m.annotated() {
+            let pane = material.pane;
+            ensure!(shown.contains(&pane) && m.live != Some(pane), "pane {pane} is annotated: not on show, or live");
+        }
+        for material in &draft.materials {
+            let marks = &material.marks;
+            ensure!(
+                marks.shapes.len() <= capture::MAX_SHAPES,
+                "capture {} holds {} shapes",
+                material.n,
+                marks.shapes.len()
+            );
+            ensure!(
+                marks.selected.is_none_or(|at| at < marks.shapes.len()),
+                "capture {} selects no shape of its own",
+                material.n
+            );
+            let typed = marks.note.is_some() || marks.drawing();
+            ensure!(
+                !typed || draft.annotating == Some(material.n),
+                "capture {} is drawn on and not annotated",
+                material.n
+            );
+            for shape in &marks.shapes {
+                let (region, points) = (
+                    shape.region(),
+                    matches!(shape, capture::Shape::Stroke { points } if points.len() > capture::MAX_POINTS + 1),
+                );
+                let on = |v: f64| (0.0..=1.0).contains(&v);
+                let inside = on(region.x) && on(region.y) && on(region.x + region.w) && on(region.y + region.h);
+                ensure!(inside && !points, "capture {} holds a shape off its picture: {shape:?}", material.n);
+                ensure!(
+                    shape
+                        .note()
+                        .is_none_or(|text| !text.trim().is_empty() && text.chars().count() <= capture::MAX_NOTE),
+                    "a note: {shape:?}"
+                );
+            }
+        }
+    }
+    ensure!(
+        m.back_to.is_none_or(|pane| m.pane(pane).is_some()),
+        "the way back leads to pane {:?}, which is gone",
+        m.back_to
+    );
+    let briefed =
+        |id: TaskId| m.current_task == Some(id) && m.tasks.get(id).is_some_and(|task| !task.materials.is_empty());
+    ensure!(m.brief.is_none_or(briefed), "the brief of task {:?} shows: not on show, or it has none", m.brief);
+    for task in &m.tasks.list {
+        let dir = task.materials_dir();
+        let own = |file: &String| tasks::material_file(task.id, file).map(|(dir, _)| dir) == dir && dir.is_some();
+        ensure!(
+            task.materials.iter().all(own) && unique(&task.materials),
+            "task {} names captures {:?}",
+            task.id,
+            task.materials
         );
     }
 
@@ -979,6 +1145,8 @@ struct Shell {
     panes: Vec<PaneId>,
     live: Option<PaneId>,
     visual: Option<PaneId>,
+    /// What it keeps of the draft in the bar: (the draft, the capture's number).
+    kept: Vec<(String, u32)>,
 }
 
 /// A model, the shell's view of it, and every step taken.
@@ -1025,7 +1193,12 @@ impl Run {
             (Action::ComposeSubmit { open: false }, Some(row)) => m.changes(row),
             _ => false,
         };
-        let filing = m.compose_line().filter(|_| matches!(action, Action::ComposeSubmit { .. }) && !takes);
+        // While the bar asks before discarding, ↵ is the answer: it files nothing.
+        let answers = m.capture.as_ref().is_some_and(|draft| draft.asked);
+        let submits = matches!(action, Action::ComposeSubmit { .. });
+        let filing = m.compose_line().filter(|_| submits && !takes && !answers);
+        // A draft with captures is filed under a name of its own when none was typed.
+        let named = m.capture_title();
         let filing = filing.map(|line| (line.clone(), m.draft(line), m.compose_host()));
         // A row taken reads back as the tag it is, of that very name.
         let taken = match (&action, m.dropdown()) {
@@ -1039,6 +1212,10 @@ impl Run {
             _ => None,
         };
         let taken = taken.filter(|(.., at)| m.taking(*at).is_some());
+        // Esc or × on a draft with captures asks first: it never drops them at once.
+        let cancels = matches!(action, Action::ComposeEscape | Action::CloseCompose | Action::CaptureCancel);
+        let unasked =
+            m.capture.as_ref().filter(|draft| cancels && !draft.asked).map(|draft| draft.materials.len()).unwrap_or(0);
         let line_before = m.compose_line().cloned();
         let composing = m.composing();
 
@@ -1049,6 +1226,11 @@ impl Run {
             check_file(m)?;
         }
 
+        let held = m.capture.as_ref().map_or(0, |draft| draft.materials.len());
+        ensure!(unasked == 0 || held == unasked, "a draft's {unasked} captures went with no question");
+        // Only the user starts a capture: a client's or a timer's is refused, whatever the mode.
+        let foreign = matches!(action, Action::CaptureStart { .. }) && origin != Origin::User;
+        ensure!(!foreign || refused.is_some(), "a capture that is not the user's was not refused");
         // An action refused for who sent it changes nothing at all.
         if let Some(before) = &refused {
             ensure!(
@@ -1135,7 +1317,14 @@ impl Run {
         }
         if let Some((line, draft, host)) = filing {
             let filed: Vec<&Task> = m.tasks.list.iter().filter(|task| !task_ids.contains(&task.id)).collect();
-            if draft.title.is_empty() || draft.title.chars().count() > MAX_TITLE {
+            if let Some(named) = named.filter(|_| draft.title.is_empty()) {
+                // Named by fixed words, and marked as not typed: nothing captured is in a title.
+                let fixed = ["Capture from an app", "Capture from a terminal"].contains(&named.as_str());
+                ensure!(
+                    filed.len() == 1 && filed[0].title == named && filed[0].title_generated && fixed,
+                    "a draft with captures and no title filed {filed:?}"
+                );
+            } else if draft.title.is_empty() || draft.title.chars().count() > MAX_TITLE {
                 ensure!(
                     filed.is_empty() && m.compose_line() == Some(&line),
                     "a line with no title filed a task, or closed the box"
@@ -1145,6 +1334,7 @@ impl Run {
                 let stays = host == Some(Host::Home) && !matches!(action, Action::ComposeSubmit { open: true });
                 let left = if stays { m.compose_line().is_some_and(String::is_empty) } else { m.compose.is_none() };
                 ensure!(filed.len() == 1 && left, "{line:?} filed {} tasks; the box is {:?}", filed.len(), m.compose);
+                ensure!(!filed[0].title_generated, "a title that was typed is marked as made up");
                 let task = filed[0];
                 let repo = draft.repo.as_deref().and_then(|name| m.repo_named(name));
                 let read = (&draft.title, draft.priority.unwrap_or(3), &draft.project, &repo, &draft.agent);
@@ -1233,8 +1423,58 @@ impl Run {
                         "a quit by {action:?}"
                     )
                 }
+                Effect::Snapshot { draft, material, pane } => {
+                    let empty = m.pane(*pane).is_none_or(|p| p.kind == Kind::Empty);
+                    ensure!(!empty && m.live != Some(*pane), "a picture of pane {pane}: empty, gone or live");
+                    let fresh = !self.shell.kept.contains(&(draft.clone(), *material));
+                    ensure!(fresh, "capture {material} of {draft:?} is taken twice");
+                    self.shell.kept.push((draft.clone(), *material));
+                }
+                Effect::CaptureDropped { draft, material } => {
+                    let goes = |kept: &(String, u32)| kept.0 == *draft && material.is_none_or(|n| n == kept.1);
+                    ensure!(
+                        material.is_none() || self.shell.kept.iter().any(goes),
+                        "a capture that was not kept is dropped"
+                    );
+                    self.shell.kept.retain(|kept| !goes(kept));
+                }
+                Effect::CaptureKept { draft, dir, brief } => {
+                    let task = m.tasks.get(brief.task).ok_or("a brief for a task that is gone")?;
+                    let mut numbers: Vec<u32> = brief.materials.iter().map(|kept| kept.n).collect();
+                    let mut held: Vec<u32> =
+                        self.shell.kept.iter().filter(|kept| kept.0 == *draft).map(|kept| kept.1).collect();
+                    (numbers.sort_unstable(), held.sort_unstable());
+                    ensure!(
+                        numbers == held && !numbers.is_empty(),
+                        "the brief keeps captures {numbers:?}; the shell holds {held:?}"
+                    );
+                    let own = dir.strip_prefix(&format!("{}-", task.id)).is_some_and(|word| !word.contains(['/', '.']));
+                    ensure!(own && task.materials_dir() == Some(dir), "task {} keeps its captures in {dir:?}", task.id);
+                    let files: Vec<String> =
+                        brief.materials.iter().map(|kept| format!("{dir}/{}.json", kept.n)).collect();
+                    ensure!(
+                        task.materials == files,
+                        "task {} names {:?}; its brief keeps {files:?}",
+                        task.id,
+                        task.materials
+                    );
+                    let text = capture::markdown(brief);
+                    let last = capture::fence_lines(&brief.fence).1;
+                    let ends = text.lines().filter(|line| **line == last).count();
+                    ensure!(ends == brief.materials.len() + 1, "a quoted block of the brief ends twice, or not at all");
+                    self.shell.kept.retain(|kept| kept.0 != *draft);
+                }
             }
         }
+        // What the shell keeps of a draft is what the draft holds: a draft that is gone leaves nothing.
+        let mut holds: Vec<(String, u32)> = m
+            .capture
+            .iter()
+            .flat_map(|draft| draft.materials.iter().map(|material| (draft.draft.clone(), material.n)))
+            .collect();
+        let mut kept = self.shell.kept.clone();
+        (holds.sort(), kept.sort());
+        ensure!(holds == kept, "the draft holds {holds:?}; the shell keeps {kept:?}");
         // The shell was told of every pane that shows something. (Not of an empty pane of a
         // tab built from a mark: it hears of that one when it is filled.)
         let unknown = |pane: &&Pane| pane.kind != Kind::Empty && !self.shell.panes.contains(&pane.id);
@@ -1454,6 +1694,19 @@ const MODES: &[(Mode, Setup)] = &[
         ],
     ),
     (Mode::Mark, &[|_| Action::Leave, |_| Action::MarkPrefix]),
+    (
+        Mode::Annotate,
+        &[
+            |_| terminal(),
+            |_| Action::CaptureStart {
+                pane: None,
+                draft: "d1".into(),
+                word: "k3f9a2c41b7d".into(),
+                facts: Vec::new(),
+                images: true,
+            },
+        ],
+    ),
 ];
 
 /// The base and the mode sequence `seed` starts from.
@@ -1534,6 +1787,7 @@ fn code(sent: &Envelope) -> String {
         "Installed",
         "Entry",
         "TerminalInfo",
+        "Facts",
     ];
     const ENUM_OF: &[(&str, &str)] = &[
         ("axis", "Axis"),
@@ -1553,6 +1807,8 @@ fn code(sent: &Envelope) -> String {
         ("group", "crate::apps::Group"),
         ("missing", "Need"),
         ("target", "Pointed"),
+        ("tool", "Tool"),
+        ("content", "Content"),
     ];
     // A mark is long, and half of it is JSON already: it is given as its file's text.
     if let Action::RestoreMarks { marks, extra } = &sent.action {
@@ -1585,7 +1841,7 @@ fn code(sent: &Envelope) -> String {
         match c {
             '"' => out += &format!("{token}.into()"),
             '[' | '{' | '(' => {
-                let sizes = matches!(field.as_deref(), Some("content" | "outer" | "window"));
+                let sizes = matches!(field.as_deref(), Some("content" | "outer" | "window" | "at" | "to" | "size"));
                 out += if c == '[' && !sizes { "vec![" } else { &token };
                 outer.push(field.clone());
             }
@@ -2080,6 +2336,88 @@ fn a_name_the_line_cannot_hold_is_not_offered() {
     m.update(Action::ComposeComplete);
     assert_eq!(m.draft(m.compose_line().unwrap()).repo.as_deref(), Some("app"));
     check(&m).unwrap();
+}
+
+/// Annotate mode ended (its pane's tab left the stage) with the button still down on the
+/// picture: the drag went on under no mode.
+#[test]
+fn a_drag_on_a_picture_ends_with_annotate_mode() {
+    let press = Action::AnnotatePress { at: [0.75, 0.5], shift: true, alt: false, size: [800.0, f64::NAN] };
+    replay(&[
+        Action::TaskAdd {
+            title: "zoom".into(),
+            priority: 1,
+            state: State::Cleaned,
+            tab: Some(1),
+            assign: Assign::default(),
+        }
+        .into(),
+        split(Axis::Down, Kind::Terminal),
+        capture(None).into(),
+        by(Origin::Socket, press),
+        by(Origin::System, Action::TaskLeave),
+    ])
+    .unwrap();
+}
+
+fn capture(pane: Option<PaneId>) -> Action {
+    Action::CaptureStart { pane, draft: "u2".into(), word: "k3f9a2c41b7d".into(), facts: vec![], images: false }
+}
+
+/// ↵ in annotate mode gave the draft's title the keyboard while another pane's app was live.
+#[test]
+fn the_drafts_title_takes_the_keyboard_from_a_live_app() {
+    replay(&[
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.into(),
+        capture(None).into(),
+        Action::Open { kind: slack(4), axis: Axis::Down, beside: None }.into(),
+        by(Origin::Socket, Action::Enter { pane: 2 }),
+        by(Origin::System, Action::AnnotateLeave { title: true }),
+    ])
+    .unwrap();
+}
+
+/// The way back entered its app under the key reference, and with a row of the list selected.
+#[test]
+fn the_way_back_to_an_app_waits_and_leaves_the_list_as_entering_it_does() {
+    let live = [Action::Open { kind: slack(1), axis: Axis::Right, beside: None }, Action::Enter { pane: 1 }];
+    let live = || live.iter().cloned().map(Envelope::from);
+    let under =
+        |over: Envelope| live().chain([capture(None).into(), over, Action::CaptureBack.into()]).collect::<Vec<_>>();
+    replay(&under(by(Origin::Socket, Action::ToggleKeys))).unwrap();
+    replay(&under(Action::FocusList.into())).unwrap();
+}
+
+/// "Add and start" on the draft in the bar changed tabs under visual mode's cursor.
+#[test]
+fn add_and_start_from_the_bar_waits_where_opening_a_task_waits() {
+    replay(&[
+        terminal().into(),
+        capture(Some(99)).into(),
+        Action::FieldEdit { edit: Edit::Insert("fix".into()) }.into(),
+        Action::Focus { pane: 1 }.into(),
+        Action::ToggleVisual.into(),
+        Action::ComposeSubmit { open: true }.into(),
+    ])
+    .unwrap();
+}
+
+/// A task's brief stayed on show when the tasks were read again without its captures.
+#[test]
+fn a_brief_goes_when_its_task_no_longer_names_a_capture() {
+    let mut run = Run::default();
+    let steps = [
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None },
+        capture(None),
+        Action::AnnotateLeave { title: true },
+        Action::FieldEdit { edit: Edit::Insert("fix".into()) },
+        Action::ComposeSubmit { open: true },
+    ];
+    steps.into_iter().for_each(|action| run.step(action.into()).unwrap());
+    assert_eq!(run.m.brief, Some(1));
+    let bare = Task { materials: Vec::new(), ..run.m.tasks.list[0].clone() };
+    run.step(Action::RestoreTasks { tasks: vec![bare], floor: 0 }.into()).unwrap();
+    assert_eq!(run.m.brief, None);
 }
 
 // Known, and left: a decision to make, not a slip.

@@ -107,9 +107,27 @@ impl Workspace {
         true
     }
 
+    /// What the last paint drew of the field `of`. Each has its own: two can show at once (the
+    /// draft's title in the bar, and a note or the picker's filter).
+    fn drawn_of(&self, of: &str) -> Shared {
+        match of {
+            "note" => self.note_field.clone(),
+            "picker" => self.picker_field.clone(),
+            "apps" => self.apps_field.clone(),
+            "mark" => self.mark_field.clone(),
+            _ => self.field.clone(),
+        }
+    }
+
+    /// That of the field that has the keyboard.
+    fn drawn(&self) -> Shared {
+        self.drawn_of(self.model.field().map_or("compose", |(of, _)| of))
+    }
+
     /// The byte of the text nearest window position `x`.
     fn field_index(&self, x: Pixels) -> usize {
-        let drawn = self.field.borrow();
+        let drawn = self.drawn();
+        let drawn = drawn.borrow();
         let empty = self.model.field().is_none_or(|(_, field)| field.text().is_empty());
         match &drawn.line {
             Some(line) if !empty => line.closest_index_for_x(x - drawn.bounds.left() + drawn.scroll),
@@ -119,11 +137,12 @@ impl Workspace {
 
     /// A field opened, closed or lost the keyboard: a drag begun before is over.
     pub fn field_changed_hands(&mut self) {
-        let mut drawn = self.field.borrow_mut();
-        drawn.selecting = false;
+        for of in ["compose", "note", "picker", "apps", "mark"] {
+            self.drawn_of(of).borrow_mut().selecting = false;
+        }
         // The new-task box closed: its panel is nowhere, and nothing is pointed at.
         if self.model.compose.is_none() {
-            (drawn.panel, self.pointing) = (Bounds::default(), None);
+            (self.field.borrow_mut().panel, self.pointing) = (Bounds::default(), None);
         }
     }
 
@@ -131,7 +150,7 @@ impl Workspace {
     /// places the cursor, and does not end the typing.
     pub fn in_mark_name(&self, position: gpui::Point<Pixels>) -> bool {
         let renaming = self.model.field().is_some_and(|(of, _)| of == "mark");
-        renaming && self.field.borrow().bounds.contains(&position)
+        renaming && self.drawn_of("mark").borrow().bounds.contains(&position)
     }
 
     /// The Edit menu's Cut, Select All, Undo and Redo, and their keys when no handler took them.
@@ -162,13 +181,13 @@ impl Workspace {
         if self.model.field().is_none() {
             return;
         }
-        self.field.borrow_mut().selecting = true;
+        self.drawn().borrow_mut().selecting = true;
         self.edit(Edit::Click { at: self.field_index(x), count, shift }, window, cx);
     }
 
     /// The pressed mouse moved to window `x`, inside the field or past its edge.
     pub fn field_drag(&mut self, x: Pixels, window: &Window, cx: &mut Context<Self>) {
-        if self.field.borrow().selecting && self.model.field().is_some() {
+        if self.drawn().borrow().selecting && self.model.field().is_some() {
             self.edit(Edit::Drag { to: self.field_index(x) }, window, cx);
         }
     }
@@ -178,7 +197,8 @@ impl Workspace {
     /// window points.
     pub fn field_snapshot(&self) -> serde_json::Value {
         let Some((of, field)) = self.model.field() else { return serde_json::Value::Null };
-        let drawn = self.field.borrow();
+        let drawn = self.drawn();
+        let drawn = drawn.borrow();
         let (b, selection) = (drawn.bounds, field.selection());
         let x = match &drawn.line {
             Some(line) if !field.text().is_empty() => line.x_for_index(field.cursor()),
@@ -198,18 +218,33 @@ impl Workspace {
 
     /// The open field as an element: as wide as its parent lets it be, one line tall.
     pub fn render_field(&self, placeholder: &'static str, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let (of, field) = self.model.open_field().map(|(of, field)| (of, field.clone())).unwrap_or_default();
+        let of = self.model.open_field().map_or("compose", |(of, _)| of);
+        self.render_field_of(of, placeholder, cx)
+    }
+
+    /// The field `of` (`compose`, `note`, `picker`, `apps` or `mark`), whether or not it has the keyboard.
+    pub fn render_field_of(
+        &self,
+        of: &'static str,
+        placeholder: &'static str,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let field = self.model.field_of(of).cloned().unwrap_or_default();
         // The new-task line shows which of its tags are understood.
         let spans = if of == "compose" { self.model.compose_spans() } else { Vec::new() };
         let spans = spans.into_iter().map(|span| (span.range, crate::new_task::tag_color(span.mark))).collect();
         div()
-            .id("field")
+            .id(("field", of.len()))
             .flex_1()
             .min_w_0()
             .cursor(CursorStyle::IBeam)
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    // The draft's title in the bar takes the keyboard by a click on it.
+                    if of == "compose" && this.model.capture.is_some() && !this.model.compose_keys() {
+                        this.dispatch(Action::CaptureTitle, this.input, window, cx);
+                    }
                     this.field_press(event.position.x, event.click_count, event.modifiers.shift, window, cx);
                     // A mark's name sits in its row: the row's click would go to the mark, and
                     // the section's take the keyboard back. Either ends the rename.
@@ -221,9 +256,9 @@ impl Workspace {
             .child(FieldElement {
                 workspace: cx.entity(),
                 spans,
-                active: self.model.field().is_some(),
+                active: self.model.field().is_some_and(|(has, _)| has == of),
                 focus: self.focus.clone(),
-                drawn: self.field.clone(),
+                drawn: self.drawn_of(of),
                 text: field.text().to_string().into(),
                 selection: field.selection(),
                 cursor: field.cursor(),
@@ -298,7 +333,8 @@ impl EntityInputHandler for Workspace {
         _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let (_, field) = self.model.field()?;
-        let drawn = self.field.borrow();
+        let drawn = self.drawn();
+        let drawn = drawn.borrow();
         let line = drawn.line.as_ref().filter(|_| !field.text().is_empty())?;
         let x = |utf16| bounds.left() + line.x_for_index(field.byte(utf16)) - drawn.scroll;
         Some(Bounds::from_corners(point(x(range.start), bounds.top()), point(x(range.end), bounds.bottom())))
@@ -438,7 +474,8 @@ impl Element for FieldElement {
             drawn.since = Some(now);
         }
         let caret_on = ((now - drawn.since.unwrap_or(now)).as_millis() / BLINK.as_millis()).is_multiple_of(2);
-        if !drawn.ticking {
+        // Only the field with the keyboard blinks: one that only shows asks for no redraw.
+        if self.active && !drawn.ticking {
             drawn.ticking = true;
             let (shared, workspace) = (self.drawn.clone(), self.workspace.downgrade());
             cx.spawn(async move |cx| {

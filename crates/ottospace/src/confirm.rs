@@ -52,7 +52,13 @@ impl Workspace {
 
     /// The question, centred over the workspace. A click outside it cancels.
     pub fn render_confirm(&self, confirm: &Confirm, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let lines = confirm.lines().into_iter().map(|line| div().child(line));
+        // A draft in the right bar goes with the app: its captures are named with the terminals.
+        let draft = match self.model.quit_discards() {
+            0 => None,
+            1 => Some("a draft with 1 material will be discarded".to_string()),
+            n => Some(format!("a draft with {n} materials will be discarded")),
+        };
+        let lines = confirm.lines().into_iter().chain(draft).map(|line| div().child(line));
         let panel = crate::dialog::panel(theme::BORDER_STRONG)
             .w(px(320.))
             .flex()

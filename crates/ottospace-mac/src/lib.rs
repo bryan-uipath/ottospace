@@ -7,6 +7,7 @@ pub mod display;
 pub mod dock;
 pub mod hotkey;
 pub mod icon;
+pub mod image;
 pub mod input;
 pub mod pasteboard;
 pub mod process;

@@ -33,6 +33,9 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       visual: null,
       ax_overlay: overlay !== null,
       mark_input: null,
+      capture: null,
+      back_to: null,
+      brief: null,
     },
     bounds: {},
     frames: {},
@@ -75,6 +78,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     marks: [],
     mark_removed: null,
     scrollbars: {},
+    capture: { key: null, bar: null, picture: null, encoded: [], pending: 0, dir: null, brief: null },
   };
 }
 
@@ -100,7 +104,8 @@ test("the field of each owner parses: the Apps section's filter too", () => {
   const field = (of: string) => ({
     of, text: "sk", cursor: 2, selection: [2, 2], selected: "", marked: null, bounds: [0, 0, 100, 20], cursor_x: 12,
   });
-  for (const owner of ["compose", "picker", "apps"]) {
+  // `note`: a note being typed on a capture. Every reply has it while one is.
+  for (const owner of ["compose", "picker", "apps", "note"]) {
     assert.equal(snapshot({ ...replyWith(null), field: field(owner) }).field?.of, owner);
   }
   assert.throws(() => snapshot({ ...replyWith(null), field: field("elsewhere") }), /field\.of should be/);

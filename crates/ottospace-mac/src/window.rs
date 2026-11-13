@@ -229,6 +229,24 @@ pub unsafe fn order_front(ns_view: *mut c_void) {
     }
 }
 
+/// Adds a native push button titled `title` to the view, `at` points from its top left: a
+/// control with a label in the window's accessibility tree, which a GPUI view has none of.
+/// For the canary, so a test can circle something an app's tree names.
+///
+/// # Safety
+/// `ns_view` must point to a live `NSView`, and this must run on the main thread.
+pub unsafe fn add_button(ns_view: *mut c_void, title: &str, at: [f64; 4]) {
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let view = unsafe { &*(ns_view as *const NSView) };
+    let button = unsafe {
+        objc2_app_kit::NSButton::buttonWithTitle_target_action(&objc2_foundation::NSString::from_str(title), None, None, mtm)
+    };
+    // AppKit measures from the bottom-left, unless the view says it is flipped (GPUI's is).
+    let y = if view.isFlipped() { at[1] } else { view.frame().size.height - at[1] - at[3] };
+    button.setFrame(objc2_foundation::NSRect::new(NSPoint::new(at[0], y), objc2_foundation::NSSize::new(at[2], at[3])));
+    view.addSubview(&button);
+}
+
 /// Makes this process a background app: no Dock icon, no place in the app switcher, and it does
 /// not come to the front when it starts. For test runs, which must not take the user's keyboard.
 pub fn stay_in_background() {

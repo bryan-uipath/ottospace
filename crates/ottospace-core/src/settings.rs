@@ -11,7 +11,9 @@ use serde::Deserialize;
 ///   "tasks": "~/notes/tasks",
 ///   "sessions": true,
 ///   "session_dirs": { "claude": ["~/.claude"], "codex": "~/.codex" },
-///   "session_quiet_minutes": 3 }
+///   "session_quiet_minutes": 3,
+///   "capture_key": "ctrl-alt-cmd-space",
+///   "capture": { "keep_images": true, "ax": true } }
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -49,6 +51,37 @@ pub struct Settings {
     /// minutes. Default: 3. 0: a quiet session never moves its task.
     #[serde(default)]
     pub session_quiet_minutes: Option<u32>,
+    /// The key that captures the pane in use, from any app: modifiers and a key with `-`
+    /// between them. Default: `ctrl-alt-cmd-space`. `"off"`: no key.
+    #[serde(default)]
+    pub capture_key: Option<String>,
+    #[serde(default)]
+    pub capture: Capture,
+}
+
+/// The default capture key. Not ⌃⌥Space: macOS gives that to "Select next source in Input menu".
+pub const CAPTURE_KEY: &str = "ctrl-alt-cmd-space";
+
+/// What a capture keeps besides what the user drew and typed.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Capture {
+    /// Keep the pictures on disk. False: none is ever written.
+    #[serde(default = "yes")]
+    pub keep_images: bool,
+    /// Read an app pane's accessibility tree with its picture. False: it is never read for a capture.
+    #[serde(default = "yes")]
+    pub ax: bool,
+}
+
+impl Default for Capture {
+    fn default() -> Self {
+        Self { keep_images: true, ax: true }
+    }
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// A runner left out keeps its default.

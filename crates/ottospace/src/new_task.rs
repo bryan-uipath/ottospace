@@ -309,7 +309,7 @@ impl Workspace {
             .border_1()
             .border_color(rgb(theme::BACKGROUND))
             .text_base()
-            .child(self.render_field("What needs doing?", cx));
+            .child(self.render_field_of("compose", "What needs doing?", cx));
         div()
             .id("compose-content")
             .relative()

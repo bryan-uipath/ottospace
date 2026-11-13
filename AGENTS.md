@@ -70,6 +70,9 @@ Rules:
     client that passed for the user could quit over running programs, end the mode the user is
     typing in, or write their settings. A test run hosts no window and is the test's own
     instance, on its own socket.
+  - `capture_start`: the user's capture key, pressed by the test (`"pane"` optional). Outside a
+    test run only the user starts a capture; the core also refuses a `CaptureStart` of any other
+    origin, so a client's key, click or sneak label starts none in a test run either.
   - `"repeat":true` on `key`: each key as one still held down. A key that types is a real repeat
     to `keyDown:`: `enter`, `tab`, `space`, or a character the layout types with no modifier on
     key codes 0 to 50 (`a`, `7`, `/`; not `A`). A `cmd-` shortcut, by the flag alone, is pressed as
@@ -139,7 +142,12 @@ the SDK's tests compare the typed state with a real reply. Design: `docs/ai/sdk.
 
 Agents use the same socket to inspect and drive ottospace. Keep `Request` a closed set, and
 keep the socket same-user only: `type` sends keys to a terminal, which is as strong as a shell.
-`ax_tree` and `ax_overlay` only read. Requests that press or set values in another app are a
+`ax_tree` and `ax_overlay` only read. A capture reads a hosted window's picture and its tree
+once and keeps what lies under the user's annotations. Only the user starts one (the capture
+key, the menu, the bar): the core refuses a `CaptureStart` of any other origin, and
+`capture_start` on the socket answers only under `OTTOSPACE_E2E` (`control::test_refusal`).
+In a task's brief (`task_brief`) everything captured is quoted and labelled as untrusted: see
+`docs/ai/capture.md`. Requests that press or set values in another app are a
 separate trust decision: see `docs/ai/1-initial-brainstorm/accessibility.md`.
 
 ## App bundle

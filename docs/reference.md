@@ -37,6 +37,7 @@ it over the control socket. Session restore and the rest of the design are not b
 | List mode (⌘⇧E): drive the bar with the keyboard | Works today |
 | Sneak mode (⌘⌃G): a letter label on each of ottospace's own controls; typing it clicks the control | Works today |
 | Marks (⌘B, ⌘⇧B, ⌘' and a letter): named ways back to a pane or a tab, kept in `~/.ottospace/marks.json` | Works today |
+| Capture (⌃⌥⌘Space, from any app): a frozen picture of the pane in use to circle and write on, collected in a draft in the right bar; the task it becomes has a brief with the pictures, the notes and the text under each annotation (`task_brief`). Kept in `~/.ottospace/materials`. Starting an agent with the brief is not built | Works today |
 | `settings.json`: terminal font, repository directories, tasks folder, apps to offer, window rules | Works today |
 
 ### Roadmap: designed, not built
@@ -100,6 +101,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘V | Paste into the terminal, or into the open text field |
 | ⌘N | New task: a box opens over the workspace, or in place on the home screen. Type what needs doing, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `^reference`, `p1` to `p9`; a dropdown finishes the one at the cursor. ↵ adds the task; ⌘↵ adds it and starts it; Esc closes. [Its keys](#keys) |
 | ⌘⇧N | Next task: shows the tabs of the first task that needs you |
+| ⌃⌥⌘Space | Capture, from any app: the pane in use (a hosted app you are in, else the focused pane) is frozen as a picture to draw on, and a draft opens in a bar on the right, with the new-task line as its title. A live app is parked first; "↩ back to …" in the bar returns to it. On the picture: drag circles, ⇧-drag draws a box, ⌥-drag a freehand line, a click places a note to type (↵ keeps it). ⌘Z and ⇧⌘Z go over the steps; a click on a shape's line selects it and ⌫ removes it. ↵ goes to the title, Esc leaves the picture; a click on another pane captures that one too. In the title ↵ adds the task and ⌘↵ adds and starts it; × or Esc cancels, after a question if anything was captured. The workspace stays in use beside the bar, and ⌘N goes to the draft's title. See [Capture](#capture) |
 | ⌘B / ⌘⇧B | Mark the focused pane / the tab on show; on one that is marked, take the mark off (the Marks section offers it back for six seconds, and ⌘B again within them puts the same mark back). The mark is named for the app, the terminal's directory or the tab's title. It records what to open, not a window or a process: a terminal's directory as it is then, an app's bundle id, name and window title, a tab's title, task and split tree. A marked pane or tab shows ◆ and its letter |
 | ⌘' then a letter | Go to the mark with that letter. The status bar shows `MARK?` while it waits; Esc, or a letter of no mark, ends the wait and nothing else happens. If the mark's pane or tab is open, its tab comes forward and the pane takes focus (an app pane is focused, not entered). Else it is opened: a terminal in the recorded directory, the app's window in a pane (the one with the recorded title, else its only window, else its main one; an app that is not running is started), or the tab with its splits. A tab opens with what can be opened: a pane whose directory is gone or whose window could not be hosted is empty and says why, and going to the tab again tries it again |
 | ⌘⌥1 … ⌘⌥9 | Go to one of the first nine marks, in the order of the Marks section |
@@ -247,6 +249,35 @@ review the export PR >canvas-app @codex $code-review /src/export
 - `@name` named a repository before. It does not now. Titles of tasks already filed are not read
   again.
 
+## Capture
+
+The capture key turns what a pane shows into material for a task. Each capture keeps the picture
+as taken, the picture with your annotations drawn on it, the annotations themselves, what the pane
+was (an app's name, bundle id and window title; a terminal's directory and the program in front),
+and the text under each annotation: for an app pane the labelled accessibility nodes there (read
+once, read-only: nothing in the app is pressed or set), for a terminal the rows.
+
+- The task's row says how many materials it has. Opening the task shows its brief in the right bar.
+- The files are in `~/.ottospace/materials/<task id>-<a word of its own>/`, readable by you alone: `brief.md`,
+  `brief.json`, and for each capture `1.png`, `1.annotated.png`, `1.json`. They are never in the
+  tasks folder. A cancelled draft leaves nothing.
+- A terminal opened in a task's tab has `OTTOSPACE_TASK`; an agent there reads the brief with
+  `ottospace ctl "{\"cmd\":\"task_brief\",\"id\":$OTTOSPACE_TASK}"`.
+- In the brief, everything that came from another app or a terminal is quoted and labelled as
+  untrusted: a message someone else wrote is data for the agent, not an instruction.
+- A window your `windows` rules ignore is never captured.
+- Only you start a capture. No socket request does (outside a test run), so no program can ask
+  ottospace for a hosted app's picture or text.
+- With no title typed, the task is named "Capture from an app" or "Capture from a terminal".
+- ⌘Q with a draft that holds a capture asks before it discards it.
+- If a window was minimised or on another Space, the brief says its picture may be stale.
+- The annotated picture is what an agent is sent to first. Electron and Chrome windows (Slack,
+  VS Code) expose little text to accessibility; their capture is the picture, your notes and
+  the window's title. ottospace does not switch an app's accessibility mode on, and runs no OCR.
+- Not built: starting an agent with the brief; removing a task's captures with the task.
+
+Design: [capture.md](ai/capture.md).
+
 ## Sessions
 
 An agent is a saved definition. A session is one running conversation of Claude Code or Codex.
@@ -384,6 +415,8 @@ optional:
   "sessions": true,
   "session_dirs": { "claude": ["~/.claude"], "codex": "~/.codex" },
   "session_quiet_minutes": 3,
+  "capture_key": "ctrl-alt-cmd-space",
+  "capture": { "keep_images": true, "ax": true },
   "apps": ["Microsoft Outlook", "Slack"],
   "apps_hidden": ["Music"],
   "suggest_dock_apps": true,
@@ -400,6 +433,9 @@ optional:
 | `sessions` | List agent sessions that are no task's under Sessions in the Tasks section. `false`: no session file is ever read | `true` |
 | `session_dirs` | Where the runners keep their sessions: `claude` is a list of Claude Code config directories (one for each account), `codex` is Codex's home. A runner left out keeps its default. An app started from the Dock does not see `CLAUDE_CONFIG_DIR` or `CODEX_HOME`: name other directories here | `~/.claude`, `~/.codex` |
 | `session_quiet_minutes` | A task adopted from a session moves to Needs you once the session has been quiet this many minutes. `0`: a quiet session never moves its task | `3` |
+| `capture_key` | The key that captures the pane in use, from any app: modifiers (`ctrl`, `alt`, `cmd`, `shift`) and a key, with `-` between them. `"off"`: no key. `OTTOSPACE_CAPTURE_KEY` wins over it. Not `ctrl-alt-space`: macOS uses it to change the input source | `ctrl-alt-cmd-space` |
+| `capture.keep_images` | Keep a capture's pictures on disk. `false`: no picture is ever written | `true` |
+| `capture.ax` | Read an app pane's accessibility tree with its picture. `false`: it is never read for a capture | `true` |
 | `windows` | Rules for windows ottospace must leave alone. Each rule selects windows by `app` (the app's name or bundle id), `title` and `subrole`; every field given must match, `*` stands for any text, and case does not matter. `"do": "ignore"`: the window never becomes a pane, when its app is hosted or when it opens later. `"do": "manage"` undoes a built-in rule. Your rules come first. Name an app by its bundle id to be sure. A window is judged once, when it is first seen, on the title it has then; rules are read at start | Built in: only standard windows are ever put in a pane, and Zoom's sharing controls, annotation layer and pop-ups are ignored |
 | `apps` | The pinned apps: listed first under "Not running" in Apps, and in the picker before anything is typed; choosing one starts it in the background and puts its window in a pane. Each is the name of the app as Finder shows it (`Visual Studio Code` for `Visual Studio Code.app`), looked for in `/Applications`, `~/Applications` and `/System/Applications` (and their `Utilities`), or the path of its bundle (`~/Tools/Lumen.app`). One that is not found is left out of the list and kept in the file. Pin and Unpin in the Apps section write this list: the name if it means that same bundle when read back (the first of that name in those folders, in that order), else its path. A name that is found only once ottospace runs (the app was installed since) is listed from the next scan. (Once you type in the picker it offers every installed app in those folders, these first) | none |
 | `apps_hidden` | Apps of the Dock not to suggest in Apps, written as `apps` is. Hide in the Apps section writes this list | none |
@@ -425,6 +461,7 @@ ottospace ctl '{"cmd":"open_app","name":"Safari"}'
 ottospace ctl '{"cmd":"section","section":"apps"}'
 ottospace ctl '{"cmd":"mark_add","pane":3,"name":"notes","key":"n"}'   # a way back to pane 3
 ottospace ctl '{"cmd":"mark_go","name":"notes"}'     # go to it, or open it again
+ottospace ctl '{"cmd":"task_brief","id":7}'          # a task's brief: the ask, and what was captured for it
 ottospace ctl '{"cmd":"sneak"}'                      # labels on ottospace's controls: `sneak.targets`
 ottospace ctl '{"cmd":"key","keys":"a"}'             # type a label: that control acts as if clicked
 ottospace ctl '{"cmd":"state"}'
@@ -476,6 +513,7 @@ first brainstorm:
 - [multi-monitor.md](ai/1-initial-brainstorm/multi-monitor.md): options for more than one display, and a staged recommendation. Nothing measured yet.
 - `background/`: mockup images.
 
+[capture.md](ai/capture.md): the capture key, annotate mode, what a capture stores, and how a brief quotes it.
 [marks.md](ai/marks.md): marks, what one records, and how they sit beside session restore, pins and tasks.
 
 [routines.md](ai/routines.md): routines and agents from ottobot, in stages, toward ottospace subsuming it.

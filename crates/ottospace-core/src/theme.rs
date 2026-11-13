@@ -57,6 +57,8 @@ pub fn accent(mode: Mode) -> u32 {
         Mode::Sneak => SNEAK,
         Mode::Confirm => CONFIRM,
         Mode::Mark => MARK,
+        // The amber of what is drawn. Sneak mode, the other amber, is never on with it.
+        Mode::Annotate => SNEAK,
     }
 }
 

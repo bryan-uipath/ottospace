@@ -49,6 +49,12 @@ fn read(pid: i32, id: u32, limits: Limits) -> Result<Read, String> {
     Ok(Read { window, tree, millis: start.elapsed().as_secs_f64() * 1000.0 })
 }
 
+/// For a capture: the window's frame and its tree, read as `ax_tree` reads them. Read-only,
+/// within the reader's limits. Blocking: for a thread of its own.
+pub fn read_window(pid: i32, window: u32) -> Result<(Frame, Tree), String> {
+    read(pid, window, Limits::default()).map(|read| (read.window, read.tree))
+}
+
 /// Answers `ax_tree` from a background thread, so a slow app does not stall the UI.
 pub fn serve_tree(
     hosted: Option<Hosted>,
