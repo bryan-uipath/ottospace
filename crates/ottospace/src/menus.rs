@@ -52,6 +52,7 @@ pub fn app_menus() -> Vec<Menu> {
                 item("Drive the Bar with the Keyboard", ListMode),
                 item("Label the Controls", SneakMode),
                 item("Fill the Screen", Zoom),
+                item("Command Palette…", commands::CommandPalette),
                 MenuItem::separator(),
                 item("Mark Tab", MarkTab),
                 item("Go to Mark…", MarkJump),
@@ -90,7 +91,26 @@ pub fn app_menus() -> Vec<Menu> {
         },
         Menu {
             name: "Tasks".into(),
-            items: vec![item("New Task", NewTask), item("Next Task", NextTask), item("Capture the Pane", CapturePane)],
+            items: vec![
+                item("New Task", NewTask),
+                item("Next Task", NextTask),
+                item("Capture the Pane", CapturePane),
+                MenuItem::separator(),
+                // The conversation in the drawer.
+                item("Type in the Conversation", TalkFocus),
+                item("Open or Close the Conversation", TalkToggle),
+                item("Go to the Task's Tabs", TalkGo),
+                item("Stop the Agent", StopAgent),
+            ],
+        },
+        Menu {
+            name: "Developer".into(),
+            items: vec![
+                item("Accessibility Overlay", AxOverlay),
+                item("Copy State as JSON", commands::CopyState),
+                item("Open the Settings File", commands::OpenSettings),
+                item("Open the ottospace Folder", commands::OpenFolder),
+            ],
         },
         Menu { name: "Help".into(), items: vec![item("Keys", ShowKeys)] },
     ]

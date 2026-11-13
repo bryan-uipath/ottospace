@@ -56,11 +56,13 @@ impl RepoDirs {
     }
 
     /// The directory to take off the settings so the repository at `path` is no longer listed.
-    /// `Err`: why none is. One that holds other repositories too is the user's to remove.
+    /// `Err`: why none is. One that holds other repositories too is the user's to remove. A
+    /// repository's path is absolute: an entry the settings could not resolve (`""`) is no
+    /// repository's, and is not removed in its name.
     pub fn to_remove(&self, path: &str) -> Result<RepoDir, String> {
         match (self.dirs.iter().find(|d| d.path == path), self.holder(path)) {
             _ if self.fixed => Err(FIXED.into()),
-            _ if path.is_empty() => Err("No repository to remove".into()),
+            _ if !path.starts_with('/') => Err(format!("Not a directory: {path}")),
             (Some(dir), _) => Ok(dir.clone()),
             (None, Some(holder)) => Err(format!(
                 "{} is listed through {}: take that directory out of `repos` in settings.json",
@@ -218,6 +220,9 @@ mod tests {
         let through = "app is listed through ~/code: take that directory out of `repos` in settings.json";
         assert_eq!(dirs.to_remove("/home/code/app"), Err(through.into()));
         assert_eq!(dirs.to_remove("/else/app"), Err("app is not listed by the settings".into()));
+        // An entry that did not resolve (`"repos": [""]`) is no repository's: not removed for one.
+        let unresolved = RepoDirs { dirs: vec![dir("", "")], fixed: false };
+        assert_eq!(unresolved.to_remove(""), Err("Not a directory: ".into()));
         // No more than the settings may hold; and none while the environment names them.
         dirs.dirs = (0..MAX_DIRS).map(|n| dir(&format!("/d{n}"), &format!("/d{n}"))).collect();
         assert_eq!(dirs.may_add("/tmp/new", 1, false), Err("The settings name 64 directories already".into()));

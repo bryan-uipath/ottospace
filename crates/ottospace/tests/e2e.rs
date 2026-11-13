@@ -216,8 +216,10 @@ fn panes_resize_swap_and_change_tab_from_the_keyboard() {
     let reply = otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-left"}));
     assert_eq!(reply["state"]["layout"]["split"]["ratio"], 0.45, "{reply}");
     otto.call(json!({"cmd": "resize", "dir": "left"}));
-    let narrow = otto.wait_for("pane 1 to shrink", |o| Some(o.bounds(&[1])[0]).filter(|b| b[2] < one[2] - 10.0));
-    assert!((narrow[2] / total - 0.4).abs() < 0.02, "1 has 40% of the row: {narrow:?} of {total}");
+    // The frame of both moves, not the first: 45% is narrower too.
+    otto.wait_for("pane 1 at 40% of the row", |o| {
+        Some(o.bounds(&[1])[0]).filter(|b| (b[2] / total - 0.4).abs() < 0.02)
+    });
 
     // ⌘⌃= makes the halves equal again.
     otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-="}));
@@ -259,8 +261,8 @@ fn panes_resize_swap_and_change_tab_from_the_keyboard() {
     assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-shift-alt-1"}))["tab_panes"], json!([[1, 2], []]));
     let reply = otto.call(json!({"cmd": "move_pane", "pane": 1, "tab": 1}));
     assert_eq!(reply["tab_panes"], json!([[2], [1]]));
-    let full = otto.bounds(&[1])[0];
-    assert!(full[2] >= total, "1 fills the other tab: {full:?}");
+    // A frame of the other tab, where 1 is alone: the last one drawn may be of 1 beside 2.
+    otto.wait_for("1 to fill the other tab", |o| Some(o.bounds(&[1])[0]).filter(|b| b[2] >= total));
     assert_eq!(otto.raw(r#"{"cmd":"move_pane","tab":5}"#)["ok"], false);
 }
 
@@ -392,9 +394,10 @@ fn a_header_dragged_with_the_mouse_splits_or_swaps_where_it_is_released() {
     let inner = |a, b| split("right", &half, leaf(a), leaf(b));
     assert_eq!(layout(&reply), split("right", &outer, inner(3, 1), leaf(2)));
     assert_eq!((reply["state"]["focused"].as_u64(), reply["tab_panes"].clone()), (Some(3), json!([[3, 1, 2]])));
-    // Drawn there too: 3, 1, 2 from the left.
-    let b = otto.bounds(&[3, 1, 2]);
-    assert!(b[0][0] < b[1][0] && b[1][0] < b[2][0], "{b:?}");
+    // Drawn there too: 3, 1, 2 from the left, once a frame of the drop is drawn.
+    otto.wait_for("3, 1, 2 from the left", |o| {
+        Some(o.bounds(&[3, 1, 2])).filter(|b| b[0][0] < b[1][0] && b[1][0] < b[2][0])
+    });
 
     // Where it already is: nothing moves.
     assert_eq!(layout(&otto.drag_pane(3, 1, 0.1, 0.5)), split("right", &outer, inner(3, 1), leaf(2)));
@@ -3637,8 +3640,9 @@ fn a_pane_dropped_on_a_terminals_scrollbar_lands() {
     // 1 over 2. Pane 2, dropped on the right edge of 1 where its bar is, goes right of it.
     let from = at(rect(&otto.drawn()["headers"]["2"]), 0.5, 0.5);
     otto.drag(from, at(track, 0.5, 0.5));
-    let [one, two] = otto.bounds(&[1, 2])[..] else { panic!("two panes") };
-    assert!(one[0] + one[2] <= two[0] && (one[1] - two[1]).abs() < 2.0, "2 is right of 1: {one:?} {two:?}");
+    // Once a frame of the drop is drawn: before it, 2 is still below 1.
+    let right_of = |b: &Vec<[f64; 4]>| b[0][0] + b[0][2] <= b[1][0] && (b[0][1] - b[1][1]).abs() < 2.0;
+    otto.wait_for("2 right of 1", |o| Some(o.bounds(&[1, 2])).filter(right_of));
 }
 
 #[test]
@@ -5020,4 +5024,56 @@ fn a_workbooks_terminal_comes_back_with_its_lines_and_its_command_typed_not_run(
     assert!(left.is_empty(), "{left:?}");
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_command_palette_runs_a_command_by_name_for_the_user_alone() {
+    let otto = Otto::launch("palette");
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    let state = || otto.call(json!({"cmd": "state"}));
+    // A client's ⌘P opens nothing: the palette runs any command as the user's.
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-p"}));
+    assert_eq!((&reply["mode"], &reply["palette_rows"]), (&json!("normal"), &Value::Null));
+    // The user's opens it with every command, its group and its key.
+    let reply = otto.user_key("cmd-p");
+    assert_eq!(reply["mode"], "palette");
+    let rows = reply["palette_rows"].as_array().expect("rows").clone();
+    assert!(rows.len() > 30, "{rows:?}");
+    let first = json!({"command": "split_right", "name": "Terminal Right", "group": "Panes", "key": "⌘D"});
+    assert_eq!(rows[0], first);
+    // Typing narrows the rows, best first. A client's key is refused, and its split waits.
+    let reply = otto.user_key("t e r m space b e l");
+    let typed = (&reply["state"]["palette"]["query"], &reply["palette_rows"][0]["name"]);
+    assert_eq!(typed, (&json!("term bel"), &json!("Terminal Below")));
+    assert_eq!(otto.raw(r#"{"cmd":"key","keys":"x"}"#)["error"], "only the user runs the command palette");
+    let split = otto.call(json!({"cmd": "split"}));
+    assert_eq!((pane_ids(&split).len(), &split["state"]["palette"]["query"]), (1, &json!("term bel")));
+    // ↵ runs it as its menu item does, and the palette closes.
+    otto.user_key("enter");
+    let two = |o: &Otto| Some(o.call(json!({"cmd": "state"}))).filter(|r| pane_ids(r).len() == 2);
+    let reply = otto.wait_for("a terminal below", two);
+    assert_eq!((&reply["mode"], &reply["palette_rows"]), (&json!("normal"), &Value::Null));
+    let [top, below] = otto.bounds(&[1, 2])[..] else { panic!("two panes") };
+    assert!(top[1] + top[3] <= below[1], "2 is below 1: {top:?} {below:?}");
+    // A Developer command: the state, copied (a test run's clipboard is its own).
+    otto.user_key("cmd-p c o p y space s t a t e");
+    assert_eq!(state()["palette_rows"][0]["group"], "Developer");
+    otto.user_key("enter");
+    let copied = |o: &Otto| o.call(json!({"cmd": "state"}))["copied"].as_str().map(String::from);
+    let copied = otto.wait_for("the state copied", copied);
+    assert!(copied.starts_with("{\"ok\":true") && copied.contains("\"palette_rows\""), "{copied}");
+    // ↑ from the first row wraps to the last; Esc closes it.
+    otto.user_key("cmd-p up");
+    assert_eq!(state()["state"]["palette"]["selected"], rows.len() - 1);
+    // The highlighted row is in view: at the end of the list, then back at its top once typing moves it.
+    let thumb = |o: &Otto| {
+        let bar = &o.call(json!({"cmd": "state"}))["scrollbars"]["palette"];
+        let (track, thumb) = (rect(&bar["track"]), rect(&bar["thumb"]));
+        (track[1] + track[3] - thumb[1] - thumb[3] < 1.0, thumb[1] - track[1] < 1.0)
+    };
+    otto.wait_for("the last row in view", |o| Some(()).filter(|_| thumb(o).0));
+    otto.user_key("space");
+    otto.wait_for("the first row in view", |o| Some(()).filter(|_| thumb(o).1));
+    assert_eq!(otto.user_key("escape")["mode"], "normal");
 }

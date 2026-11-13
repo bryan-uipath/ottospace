@@ -38,6 +38,7 @@ it over the control socket. Session restore and the rest of the design are not b
 | Repos: each repository's name over its checkouts (the branch, then `Default` or a linked worktree's directory); open a terminal in one. + in the header adds a directory to `repos` in the settings; Remove on a name takes it off | Works today |
 | List mode (⌘⇧E): drive the bar with the keyboard | Works today |
 | Sneak mode (⌘⌃G): a letter label on each of ottospace's own controls; typing it clicks the control | Works today |
+| [Command palette](#command-palette) (⌘P): every command of the menu bar by name, with its key; a Developer group | Works today |
 | Marks (⌘B, ⌘⇧B, ⌘' and a letter): named ways back to a pane or a tab, kept in `~/.ottospace/marks.json` | Works today |
 | Capture (⌃⌥⌘Space, from any app): a frozen picture of the pane in use to circle and write on, collected in a draft in the drawer; the task it becomes has a brief with the pictures, the notes and the text under each annotation (`task_brief`), and its agent is told the brief's path. Kept in `~/.ottospace/materials` | Works today |
 | Workbooks (⌘⇧S): save tabs under a name (their splits, each terminal's directory, each app) and open them again from the Workbook section. Several tabs each: add a tab to one, or save all the tabs on the bar as one. Kept in `~/.ottospace/workbooks`. An app comes back as its window, not on the page or document it showed | Works today |
@@ -92,6 +93,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⌃F | Zoom the window to fill the screen; again to restore |
 | ⌘⌃A | Debug: outline the focused app pane's accessibility targets (parked panes only) |
 | ⌘/ | Show every key. In a small window the list scrolls: J / K or the arrows, space or Page Down / Page Up, Home / End |
+| ⌘P | [Command palette](#command-palette): run any command of the menu bar by name. Type to filter, ↑/↓ or ⌃N/⌃P move, ↵ runs, Esc or ⌘P closes |
 | F18 | From any app: take the keyboard back and bring ottospace forward |
 | ⌘T | New tab: pick what opens in it |
 | ⌘1 … ⌘9 | Select a tab on the bar |
@@ -220,6 +222,30 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    runs, the task needs you.
 7. **Who may.** Only you start or stop an agent: a client's `task_open` or ↵ files the task and
    shows its tabs, and starts nothing.
+
+## Command palette
+
+⌘P, or View ▸ Command Palette…, opens a box with every command of the menu bar that needs no
+argument: its group (Panes, Tabs, Tasks, Workbook, Marks, View, Developer, App), its name and its
+key. Type to filter: the letters in order, ignoring case and spaces (`tr` finds Terminal Right);
+a word's first letter and letters side by side rank first, then a group's name (`dev` lists the
+Developer group). ↑/↓ or ⌃N/⌃P move, a click or ↵ runs the command as its menu item does, Esc, ⌘P
+or a click outside closes it. A command that nothing matches keeps the box open.
+
+The Developer group, also the Developer menu: Accessibility Overlay (⌘⌃A), Copy State as JSON
+(the reply of `{"cmd":"state"}`, to the clipboard), Open the Settings File and Open the ottospace
+Folder (in the Finder; a test run that named no folder has none).
+
+The palette is the user's: a socket client cannot open it, type in it or choose (its keys are
+refused while it is open), and pane requests wait behind it as they do behind the picker. ⌘P is a
+key of ottospace's, so it does nothing while a hosted app has the keyboard (`APP` mode). Not ⌘K:
+in a terminal it clears the screen, and is kept for that.
+
+The Tasks group also holds the drawer's commands: Type in the Conversation (⌘L), Open or Close the
+Conversation (⌘⇧L), Go to the Task's Tabs (⌘↵) and Stop the Agent (the drawer's Stop), each for
+the conversation the drawer shows. ⌘P while you type in the conversation opens the palette over
+it: the agent gets no key while it is open, and when it closes the keyboard is the workspace's
+(⌘L goes back in).
 
 ## Tags
 

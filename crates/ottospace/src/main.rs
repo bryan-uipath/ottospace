@@ -52,6 +52,7 @@ use screencapturekit::prelude::*;
 mod apps;
 mod ax_debug;
 mod collect;
+mod commands;
 mod config;
 mod confirm;
 mod control;
@@ -561,7 +562,7 @@ actions!(ottospace, [SaveWorkbook, AddTabToWorkbook, SaveAllWorkbook]);
 // What the capture key does, from the menu.
 actions!(ottospace, [CapturePane]);
 // The right drawer: the keyboard in or out, closed to the rail or open, the task's workspace.
-actions!(ottospace, [TalkFocus, TalkToggle, TalkGo]);
+actions!(ottospace, [TalkFocus, TalkToggle, TalkGo, StopAgent]);
 // App menu.
 actions!(ottospace, [Quit, Hide]);
 
@@ -1178,6 +1179,7 @@ impl Workspace {
                     }
                 }
                 Effect::Activate { id } => self.activate(id, window, cx),
+                Effect::Run { command } => self.run_command(*command, window, cx),
                 Effect::HostWindow { mark, bundle, name, title, into, axis } => {
                     let (bundle, name, title) = (bundle.clone(), name.clone(), title.clone());
                     let wanted = marks::Wanted { mark: *mark, bundle, name, title, into: *into, axis: *axis };
@@ -2001,8 +2003,11 @@ impl Workspace {
         if self.model.sneak.is_some() && !sneak::takes(key) {
             return Some(sneak::ON);
         }
-        let unanswered = self.model.confirm.is_some() && self.confirm_answer(key, Origin::Socket).is_none();
-        unanswered.then_some(CONFIRM_UP)
+        if self.model.confirm.is_some() {
+            return self.confirm_answer(key, Origin::Socket).is_none().then_some(CONFIRM_UP);
+        }
+        // The palette types, moves and runs for the user alone.
+        self.model.palette.is_some().then_some(ottospace_core::commands::USERS_ALONE)
     }
 
     /// Presses `keystrokes` as if typed, once this update is done, then replies with the state.
@@ -2286,6 +2291,8 @@ impl Workspace {
             // The picker's rows as drawn, or null: `state.picker.items` narrowed by its filter,
             // then, once something is typed, the installed apps that are not running (`closed`).
             "picker_rows": self.model.picker.as_ref().map(Picker::matches),
+            // The command palette's rows as drawn, or null: each `command`, `name`, `group` and `key`.
+            "palette_rows": self.palette_rows(cx),
             // The text field that has the keyboard (the new-task box's line or the picker's
             // filter), or null: its text, cursor and selection.
             "field": self.field_snapshot(),
@@ -2603,7 +2610,10 @@ impl Workspace {
         // forward either, which would only take the app away from the user. Sneak mode waits
         // too: the core keeps the keyboard under the labels.
         if self.model.keys
-            || matches!(self.model.mode(), Mode::Pick | Mode::Compose | Mode::Visual | Mode::Sneak | Mode::Confirm)
+            || matches!(
+                self.model.mode(),
+                Mode::Pick | Mode::Palette | Mode::Compose | Mode::Visual | Mode::Sneak | Mode::Confirm
+            )
             || self.model.mode() == Mode::Mark
         {
             return;
@@ -2801,6 +2811,10 @@ impl Workspace {
         }
         if self.model.picker.is_some() {
             self.picker_key(event, window, cx);
+            return;
+        }
+        if self.model.palette.is_some() {
+            self.palette_key(event, window, cx);
             return;
         }
         if self.model.compose_keys() {
@@ -3155,6 +3169,7 @@ impl Workspace {
                             ("⌘⌃F".into(), "Zoom the window"),
                             (capture_key, "From any app: capture the pane in use"),
                             ("⌘⌃A".into(), "Accessibility overlay (debug)"),
+                            ("⌘P".into(), "Command palette: any command by name"),
                             ("⌘/".into(), "This list"),
                         ],
                     ))
@@ -4515,6 +4530,7 @@ impl Workspace {
             // by accident also says how to leave. The picker and the new-task box show theirs.
             Mode::Normal => ("NORMAL", "⌘/ keys"),
             Mode::Pick => ("PICK", ""),
+            Mode::Palette => ("COMMAND", ""),
             Mode::App => ("APP", app_hint.as_str()),
             Mode::Visual => ("VISUAL", "esc leaves · ⌘/ keys"),
             Mode::List => ("LIST", "esc leaves · ⌘/ keys"),
@@ -4822,6 +4838,7 @@ impl Render for Workspace {
             .text_color(rgb(theme::TEXT))
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key_down))
+            .map(|root| self.command_actions(root, cx))
             // On the root, so a selection drag keeps going over other panes.
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
                 this.mouse_move(e, cx);
@@ -4895,6 +4912,12 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &TalkToggle, window, cx| {
                 this.dispatch(Action::TalkToggle, this.input, window, cx);
+            }))
+            // The drawer's Stop, for the conversation it shows.
+            .on_action(cx.listener(|this, _: &StopAgent, window, cx| {
+                if let Some(id) = this.model.talk.filter(|talk| talk.open).map(|talk| talk.task) {
+                    this.dispatch(Action::TaskStop { id }, this.input, window, cx);
+                }
             }))
             // ⌘↵ is the new-task box's "start" while it has the keyboard: the binding comes first.
             .on_action(cx.listener(|this, _: &TalkGo, window, cx| {
@@ -5071,6 +5094,7 @@ impl Render for Workspace {
             // Over everything of ottospace's own. It is never on while an app's window is.
             .children(self.model.sneak.as_ref().map(sneak::labels))
             .children(self.model.picker.as_ref().map(|picker| self.render_picker(picker, cx)))
+            .children(self.model.palette.as_ref().map(|palette| self.render_palette(palette, cx)))
             .children(self.render_pointing())
             .when(self.model.keys, |d| d.child(self.render_keys(cx)))
             .children(self.model.confirm.as_ref().map(|confirm| self.render_confirm(confirm, cx)))
@@ -5196,6 +5220,7 @@ fn main() {
             KeyBinding::new("cmd-shift-d", SplitDown, None),
             KeyBinding::new("cmd-e", PickPane, None),
             KeyBinding::new("cmd-/", ShowKeys, None),
+            KeyBinding::new("cmd-p", commands::CommandPalette, None),
             KeyBinding::new("cmd-w", ClosePane, None),
             KeyBinding::new("cmd-alt-left", FocusLeft, None),
             KeyBinding::new("cmd-alt-right", FocusRight, None),

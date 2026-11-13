@@ -494,6 +494,10 @@ const MAKERS: &[Make] = &[
     },
     |g| Action::PickerChoose { index: g.rng.coin().then(|| g.index(3)) },
     |_| Action::ClosePicker,
+    |_| Action::PaletteOpen,
+    |g| Action::PaletteMove { delta: g.delta() },
+    |g| Action::PaletteChoose { index: g.rng.coin().then(|| g.index(50)) },
+    |_| Action::ClosePalette,
     |_| Action::ToggleKeys,
     |_| Action::CloseKeys,
     |_| Action::ToggleVisual,
@@ -810,6 +814,7 @@ const MAKERS: &[Make] = &[
 /// other, a run would sit behind the key reference for 40 steps.
 const WAYS_OUT: &[Action] = &[
     Action::ClosePicker,
+    Action::ClosePalette,
     Action::CloseKeys,
     Action::LeaveVisual,
     Action::CloseCompose,
@@ -946,6 +951,14 @@ fn check(m: &Model) -> Result<(), String> {
         let matches = picker.matches().len();
         ensure!(picker.selected < matches.max(1), "the picker selects {} of {matches}", picker.selected);
     }
+    // The palette opens over nothing that has the keyboard, and nothing takes it from under it
+    // but the quit question.
+    if let Some(palette) = &m.palette {
+        let matches = palette.matches().len();
+        ensure!(palette.selected < matches.max(1), "the palette selects {} of {matches}", palette.selected);
+        ensure!(!boxed && !m.keys && m.visual.is_none() && m.live.is_none(), "the palette is open with {:?}", m.mode());
+        ensure!(matches!(m.mode(), Mode::Palette | Mode::Confirm), "the palette is open in {:?} mode", m.mode());
+    }
     // The text field is the picker's filter, else the new-task box's line; with neither open
     // there is none. It has the keyboard in their modes only, and not under the key reference.
     // A mark's name being typed is a text field too, before either.
@@ -957,6 +970,7 @@ fn check(m: &Model) -> Result<(), String> {
     let whose = match (m.open_field(), renaming, &m.picker, note, &m.compose) {
         (Some(("mark" | "workbook", field)), Some(name), ..) => std::ptr::eq(field, name),
         (Some(("picker", field)), None, Some(picker), ..) => std::ptr::eq(field, &picker.query),
+        (Some(("palette", field)), None, None, ..) => m.palette.as_ref().is_some_and(|p| std::ptr::eq(field, &p.query)),
         (Some(("note", field)), None, None, Some(note), _) => std::ptr::eq(field, note),
         (Some(("apps", field)), None, None, None, _) => apps && std::ptr::eq(field, &m.app_lists.filter),
         (Some(("compose", field)), None, None, None, Some(line)) => !apps && std::ptr::eq(field, line),
@@ -967,7 +981,7 @@ fn check(m: &Model) -> Result<(), String> {
     let has_keys = !m.keys
         && match m.mode() {
             Mode::Mark => renaming.is_some(),
-            Mode::Pick | Mode::Compose => true,
+            Mode::Pick | Mode::Palette | Mode::Compose => true,
             Mode::Annotate => m.note().is_some(),
             Mode::List => m.app_lists.filtering,
             _ => false,
@@ -1398,6 +1412,7 @@ impl Run {
             m.capture.as_ref().map(|draft| (m.compose_line().cloned(), draft.materials.iter().map(drawn).collect()));
         let line_before = m.compose_line().cloned();
         let composing = m.composing();
+        let palette_typing = m.field().is_some_and(|(of, _)| of == "palette");
 
         let effects = m.update(sent);
         check(m)?;
@@ -1418,6 +1433,15 @@ impl Run {
         // Only the user starts a capture: a client's or a timer's is refused, whatever the mode.
         let foreign = matches!(action, Action::CaptureStart { .. }) && origin != Origin::User;
         ensure!(!foreign || refused.is_some(), "a capture that is not the user's was not refused");
+        // Only the user opens the palette, types or moves in it, or chooses.
+        let palette_own = matches!(
+            action,
+            Action::PaletteOpen | Action::PaletteMove { .. } | Action::PaletteChoose { .. } | Action::ClosePalette
+        ) || (palette_typing && matches!(action, Action::FieldEdit { .. }));
+        ensure!(
+            origin == Origin::User || !palette_own || refused.is_some(),
+            "a client's {action:?} reached the palette"
+        );
         // An action refused for who sent it changes nothing at all.
         if let Some(before) = &refused {
             ensure!(
@@ -1656,6 +1680,9 @@ impl Run {
                     ensure!(m.repo_dirs.dirs.len() <= MAX_DIRS, "more directories than the settings may name");
                 }
                 Effect::Notice { text } => ensure!(user && !text.is_empty(), "{origin:?} is told {text:?}"),
+                Effect::Run { command } => {
+                    ensure!(user && matches!(action, Action::PaletteChoose { .. }), "{command:?} run by {action:?}")
+                }
                 Effect::Quit => {
                     ensure!(
                         matches!(action, Action::QuitAsked { .. } | Action::QuitConfirm | Action::Quit),
@@ -1922,6 +1949,7 @@ const MODES: &[(Mode, Setup)] = &[
         ],
     ),
     (Mode::Compose, &[|_| Action::OpenCompose { text: "fix zoom >ap".into() }]),
+    (Mode::Palette, &[|_| Action::Leave, |_| Action::PaletteOpen]),
     (Mode::Sneak, &[|_| Action::Leave, |_| Action::Sneak { targets: controls(5) }]),
     (
         Mode::Confirm,
@@ -2675,20 +2703,6 @@ fn a_brief_goes_when_its_task_no_longer_names_a_capture() {
     assert_eq!(run.m.brief, None);
 }
 
-/// A directory of the settings with no path, under no repository, was written out as removed.
-#[test]
-fn removing_a_repository_with_no_path_writes_nothing() {
-    let dirs = vec![
-        RepoDir { text: "".into(), path: "".into() },
-        RepoDir { text: "relative".into(), path: "relative".into() },
-    ];
-    replay(&[
-        Action::SetRepoDirs { dirs: RepoDirs { dirs, fixed: false } }.sent_by(Origin::System),
-        Action::RepoRemove { path: "".into() }.sent_by(Origin::User),
-    ])
-    .unwrap();
-}
-
 // Known, and left: a decision to make, not a slip.
 
 /// A key this build does not know beside a terminal's or an empty pane's `type` is dropped: only
@@ -2754,6 +2768,26 @@ fn closing_a_tab_by_the_system_leaves_a_drafts_title_and_drawings_as_they_are() 
         Action::AnnotateRelease { at: [f32::NAN as _, 0.75] }.sent_by(Origin::User),
         Action::FieldEdit { edit: Edit::Insert("x\t$,\t  ".into()) }.sent_by(Origin::User),
         Action::CloseTab { index: Some(0) }.sent_by(Origin::System),
+    ])
+    .unwrap();
+}
+
+/// Seed 2563: a settings entry that did not resolve (`""`) was removed as a repository's
+/// directory, and the settings were to be written for a change that names nothing.
+#[test]
+fn a_repository_is_never_removed_by_a_path_that_is_no_directory() {
+    replay(&[
+        Action::SetRepoDirs {
+            dirs: RepoDirs {
+                dirs: vec![
+                    RepoDir { text: "".into(), path: "".into() },
+                    RepoDir { text: "  S'".into(), path: "  S'".into() },
+                ],
+                fixed: false,
+            },
+        }
+        .sent_by(Origin::User),
+        Action::RepoRemove { path: "".into() }.sent_by(Origin::User),
     ])
     .unwrap();
 }

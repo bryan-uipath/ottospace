@@ -10,7 +10,7 @@ ottospace            # opens on the Repos list
 
 - First run: grant your terminal Accessibility (ottospace will not start without it) and Screen Recording (for app panes), in System Settings ▸ Privacy & Security.
 - Repos lists each repository's name over its checkouts: the branch, then `Default` (its own directory) or a worktree's directory. Click one: a terminal opens there, in the empty pane or else in a split to the right (⇧-click: below).
-- The status bar (bottom left) shows who has the keyboard: `NORMAL`, `APP`, `PICK`, `LIST`, `TASK`, `VISUAL`, `SNEAK`, `QUIT?`.
+- The status bar (bottom left) shows who has the keyboard: `NORMAL`, `APP`, `PICK`, `COMMAND`, `LIST`, `TASK`, `VISUAL`, `SNEAK`, `QUIT?`.
 - Stuck in an app? Click ottospace's rail or top bar. Or press the return key: F18, which most keyboards lack, so map Caps Lock to it (see [the return key](reference.md#the-return-key)) or start with `OTTOSPACE_RETURN_KEY=f13` (f13 to f20). The status bar names the key in use.
 
 ## Panes and tabs
@@ -30,7 +30,7 @@ ottospace            # opens on the Repos list
 | New tab | ⌘T |
 | Hide ottospace | ⌘H |
 | Quit | ⌘Q, or the window's close button. While a terminal runs something (a program, or a background job) it asks first: ↵, Q or ⌘Q again quits; Esc, any other key or shortcut cancels and does nothing else. Shells at a prompt do not count. Dock ▸ Quit and logout do not ask |
-| Find an action by name | The menu bar |
+| Find an action by name | ⌘P: type part of its name, ↵ runs it. Or the menu bar |
 | Switch tab | ⌘1 … ⌘9 · ⌘⇧] ⌘⇧[ · ⌃Tab |
 | Close the tab and its panes | ⌘⇧W |
 | Save the tab as a workbook | ⌘⇧S |
