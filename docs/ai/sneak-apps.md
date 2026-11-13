@@ -95,9 +95,11 @@ pane, after the sneak label.
   and the property test checks that no `Effect::AppWheel` comes from anything else. No socket
   request scrolls an app; the test-only `mouse` `wheel` without `"as":"user"` does not.
 - **Off.** `"wheel_to_apps": false` in `settings.json`.
-- **Which apps.** AppKit apps take scrolls posted to their process while in the back. Chromium
-  and Electron apps may ignore a scroll for a window that is not key, or that is parked off
-  screen; not verified here. The accessibility route (a scroll area's scroll bar `AXValue`) would
+- **What CI found.** On GitHub's runner the user's scroll is posted (`counts.wheel_posted`), and
+  the canary, a GPUI app parked off screen, receives nothing: neither its native scroll view nor
+  its GPUI view saw it. So posting to the process with the window-under-pointer fields set does
+  not reach a parked GPUI window. AppKit apps, Chromium and Electron are not verified. Until a
+  delivery that works is found, this is experimental, and the docs say so. The accessibility route (a scroll area's scroll bar `AXValue`) would
   set a value, which the user has not approved, so it is not used.
 
 ## Open questions
