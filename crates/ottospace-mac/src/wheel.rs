@@ -24,9 +24,12 @@ impl Scroll {
     /// queued, leaves AppKit's current event as it was.
     pub fn current(delta: [f64; 2]) -> Option<Self> {
         let event = NSApplication::sharedApplication(MainThreadMarker::new()?).currentEvent()?;
+        // The type first: asking another kind of event for its deltas raises.
+        if event.r#type() != NSEventType::ScrollWheel {
+            return None;
+        }
         let same = |a: f64, b: f64| (a - b).abs() < 0.01;
-        let ours = same(event.scrollingDeltaX(), delta[0]) && same(event.scrollingDeltaY(), delta[1]);
-        if event.r#type() != NSEventType::ScrollWheel || !ours {
+        if !same(event.scrollingDeltaX(), delta[0]) || !same(event.scrollingDeltaY(), delta[1]) {
             return None;
         }
         CGEvent::new_copy(Some(&*event.CGEvent()?)).map(Self)
