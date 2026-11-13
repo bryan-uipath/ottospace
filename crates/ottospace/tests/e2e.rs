@@ -136,6 +136,16 @@ fn fake_repo(at: &Path) {
     std::fs::write(at.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
 }
 
+/// A linked worktree of `root/repo` at `root/name`, on `branch`, as git writes one. `root` is resolved.
+fn fake_worktree(root: &Path, repo: &str, name: &str, branch: &str) {
+    let admin = root.join(repo).join(".git/worktrees").join(name);
+    std::fs::create_dir_all(&admin).unwrap();
+    std::fs::create_dir_all(root.join(name)).unwrap();
+    std::fs::write(admin.join("HEAD"), format!("ref: refs/heads/{branch}\n")).unwrap();
+    std::fs::write(admin.join("gitdir"), format!("{}\n", root.join(name).join(".git").display())).unwrap();
+    std::fs::write(root.join(name).join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+}
+
 /// Waits for the app's process to end.
 fn exits(otto: &mut Otto) {
     let start = Instant::now();
@@ -678,9 +688,6 @@ fn repos_are_listed_and_open_a_terminal_there() {
     let root = std::env::temp_dir().join(format!("ottospace-e2e-repos-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     fake_repo(&root.join("app"));
-    let admin = root.join("app/.git/worktrees/app-2");
-    std::fs::create_dir_all(&admin).unwrap();
-    std::fs::create_dir_all(root.join("app-2")).unwrap();
     std::fs::create_dir_all(root.join("plain")).unwrap();
     std::fs::create_dir_all(root.join("app/.git/worktrees/app-3")).unwrap();
     std::fs::create_dir_all(root.join("app-3")).unwrap();
@@ -688,9 +695,7 @@ fn repos_are_listed_and_open_a_terminal_there() {
     let unresolved = root.to_string_lossy().into_owned();
     let root = root.canonicalize().unwrap(); // the path `pwd` prints
     let at = |rest: &str| root.join(rest).to_string_lossy().into_owned();
-    std::fs::write(root.join("app/.git/worktrees/app-2/HEAD"), "ref: refs/heads/fix/zoom\n").unwrap();
-    std::fs::write(root.join("app/.git/worktrees/app-2/gitdir"), format!("{}\n", at("app-2/.git"))).unwrap();
-    std::fs::write(root.join("app-2/.git"), format!("gitdir: {}\n", at("app/.git/worktrees/app-2"))).unwrap();
+    fake_worktree(&root, "app", "app-2", "fix/zoom");
 
     // A second worktree linked with relative paths (git's `worktree.useRelativePaths`).
     std::fs::write(root.join("app/.git/worktrees/app-3/HEAD"), "ref: refs/heads/feat/map\n").unwrap();
@@ -734,11 +739,7 @@ fn a_long_repos_list_keeps_each_name_over_its_checkouts() {
     }
     let root = root.canonicalize().unwrap();
     let at = |rest: &str| root.join(rest).to_string_lossy().into_owned();
-    std::fs::create_dir_all(root.join("repo-02/.git/worktrees/zoom")).unwrap();
-    std::fs::create_dir_all(root.join("zoom")).unwrap();
-    std::fs::write(root.join("repo-02/.git/worktrees/zoom/HEAD"), "ref: refs/heads/fix/zoom\n").unwrap();
-    std::fs::write(root.join("repo-02/.git/worktrees/zoom/gitdir"), format!("{}\n", at("zoom/.git"))).unwrap();
-    std::fs::write(root.join("zoom/.git"), format!("gitdir: {}\n", at("repo-02/.git/worktrees/zoom"))).unwrap();
+    fake_worktree(&root, "repo-02", "zoom", "fix/zoom");
 
     let otto = Otto::launch_with("repos-list", &[("OTTOSPACE_REPOS", &root.to_string_lossy())]);
     otto.call(json!({"cmd": "repos"}));

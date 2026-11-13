@@ -2855,7 +2855,7 @@ impl Workspace {
                 let mut rows = 0;
                 let headings = self.model.repos.iter().take_while(|repo| {
                     let starts_before = rows <= at;
-                    rows += 1 + repo.worktrees.len();
+                    rows += repo.checkouts().len();
                     starts_before
                 });
                 return Some(at + headings.count());
