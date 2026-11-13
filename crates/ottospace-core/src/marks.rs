@@ -48,6 +48,19 @@ pub enum RecordKind {
     },
 }
 
+impl RecordKind {
+    /// True if a pane showing `kind` is what this records: a terminal, or a window of the same app.
+    fn is(&self, kind: &Kind) -> bool {
+        match (self, kind) {
+            (RecordKind::Terminal, Kind::Terminal) => true,
+            (RecordKind::App { bundle, name, .. }, Kind::App { bundle: b, name: n, .. }) => {
+                same_app((bundle.as_deref(), name), (b.as_deref(), n))
+            }
+            _ => false,
+        }
+    }
+}
+
 fn is_zero(id: &u32) -> bool {
     *id == 0
 }
@@ -265,6 +278,12 @@ pub fn letter(c: char) -> Option<char> {
 fn clean(name: &str) -> String {
     let line: String = name.chars().filter(|c| !c.is_control()).collect();
     line.trim().chars().take(MAX_NAME).collect::<String>().trim_end().to_string()
+}
+
+/// A title as a record keeps it: one line of at most `most` characters. A window's title may
+/// be any length and hold line breaks; `marks.json` takes neither (`PaneRecord::unsound`).
+fn kept_title(title: &str, most: usize) -> String {
+    title.chars().filter(|c| !c.is_control()).take(most).collect()
 }
 
 /// The last part of a path, e.g. "notes" for "/Users/me/notes".
@@ -516,8 +535,13 @@ impl Marks {
     pub fn restore(&mut self, marks: Vec<Mark>) {
         let before = std::mem::take(&mut self.list);
         for mut mark in marks {
+            // Of two that share a `uid`, the first: an id is one mark's.
             let was = before.iter().find(|old| !mark.uid.is_empty() && old.uid == mark.uid);
-            mark.live = mark.live.or(was.and_then(|old| old.live));
+            let was = was.filter(|old| self.get(old.id).is_none());
+            // What it stood for, while it is still a pane's mark or still a tab's: a pane's id
+            // says nothing of tabs. (`Model::restore_marks` then asks if the pane is of its kind.)
+            let same = |old: &&Mark| std::mem::discriminant(&old.target) == std::mem::discriminant(&mark.target);
+            mark.live = mark.live.or(was.filter(same).and_then(|old| old.live));
             mark.id = was.map_or(0, |old| old.id);
             self.add(mark);
         }
@@ -527,7 +551,12 @@ impl Marks {
     fn unique_name(&self, name: &str, but: Option<MarkId>) -> String {
         let name = Some(clean(name)).filter(|name| !name.is_empty()).unwrap_or_else(|| "mark".into());
         let taken = |name: &str| self.list.iter().any(|mark| Some(mark.id) != but && mark.name == name);
-        let numbered = (2..).map(|n| format!("{name} {n}"));
+        // The number fits too: a name of `MAX_NAME` characters gives up its last two for " 2".
+        let numbered = (2..).map(|n: u32| {
+            let number = format!(" {n}");
+            let kept: String = name.chars().take(MAX_NAME.saturating_sub(number.len())).collect();
+            format!("{}{number}", kept.trim_end())
+        });
         std::iter::once(name.clone()).chain(numbered).find(|name| !taken(name)).unwrap_or(name)
     }
 
@@ -601,8 +630,20 @@ impl Marks {
 
     /// A closed tab is no mark's any more: a later tab may get its id.
     pub(crate) fn forget_tab(&mut self, tab: u32) {
-        let marks = self.list.iter_mut().filter(|mark| matches!(mark.target, Target::Tab(_)));
-        marks.filter(|mark| mark.live == Some(tab)).for_each(|mark| mark.live = None);
+        self.forget(tab, false);
+    }
+
+    /// Nor is a closed pane: a mark stands for a pane that is there, or for none.
+    pub(crate) fn forget_pane(&mut self, pane: PaneId) {
+        self.forget(pane, true);
+    }
+
+    /// No mark of a pane (`is_pane`), or of a tab, stands for `live` any more. Nor does the
+    /// removed mark, which `undo_remove` may put back.
+    fn forget(&mut self, live: u32, is_pane: bool) {
+        let marks = self.list.iter_mut().chain(self.removed.as_mut().map(|(_, mark)| mark));
+        let marks = marks.filter(|mark| matches!(mark.target, Target::Pane(_)) == is_pane);
+        marks.filter(|mark| mark.live == Some(live)).for_each(|mark| mark.live = None);
     }
 
     fn bind(&mut self, id: MarkId, live: u32) {
@@ -663,13 +704,7 @@ impl Model {
     /// window was closed and hosted again under a new id).
     pub fn mark_pane(&self, mark: &Mark) -> Option<PaneId> {
         let Target::Pane(record) = &mark.target else { return None };
-        let same = |pane: &&Pane| match (&record.kind, &pane.kind) {
-            (RecordKind::Terminal, Kind::Terminal) => true,
-            (RecordKind::App { bundle, name, .. }, Kind::App { bundle: b, name: n, .. }) => {
-                same_app((bundle.as_deref(), name), (b.as_deref(), n))
-            }
-            _ => false,
-        };
+        let same = |pane: &&Pane| record.kind.is(&pane.kind);
         let titled = |pane: &&Pane| match (&record.kind, &pane.kind) {
             (RecordKind::App { title, .. }, Kind::App { title: t, .. }) => same(pane) && title == t,
             _ => false,
@@ -723,7 +758,7 @@ impl Model {
             Kind::Empty => RecordKind::Empty,
             Kind::Terminal => RecordKind::Terminal,
             Kind::App { title, bundle, name, .. } => {
-                let (bundle, name, title) = (bundle.clone(), name.clone(), title.clone());
+                let (bundle, name, title) = (bundle.clone(), name.clone(), kept_title(title, 512));
                 RecordKind::App { bundle, name, title, extra: Extra::new() }
             }
         };
@@ -744,6 +779,11 @@ impl Model {
                     return Err("an empty pane has nothing to mark".into());
                 }
                 let record = self.record(pane, cwds);
+                // What the file would not read back is not marked: an app with no name, a
+                // directory that is not absolute.
+                if let Some(wrong) = record.unsound() {
+                    return Err(format!("pane {id} cannot be marked: {wrong}"));
+                }
                 let name = record.default_name();
                 Ok((Target::Pane(record), name, id))
             }
@@ -761,8 +801,11 @@ impl Model {
                 if panes.iter().all(|pane| pane.kind == RecordKind::Empty) {
                     return Err("a tab with nothing in it has nothing to mark".into());
                 }
-                let (title, task, layout) = (tab.title.clone(), tab.task, layout.clone());
+                let (title, task, layout) = (kept_title(&tab.title, 256), tab.task, layout.clone());
                 let record = TabRecord { title: title.clone(), task, focused, layout, panes, extra: Extra::new() };
+                if let Some(wrong) = record.unsound() {
+                    return Err(format!("tab {} cannot be marked: {wrong}", tab.id));
+                }
                 Ok((Target::Tab(record), title, tab.id))
             }
         }
@@ -903,7 +946,7 @@ impl Model {
         if let Some(Mark { target: Target::Pane(PaneRecord { kind: RecordKind::App { title, .. }, .. }), .. }) =
             self.marks.get_mut(id)
         {
-            *title = now;
+            *title = kept_title(&now, 512);
         }
     }
 
@@ -985,9 +1028,38 @@ impl Model {
         self.marks.unfilled.retain(|empty| panes.iter().any(|p| p.id == empty.pane && p.kind == Kind::Empty));
     }
 
+    /// Replaces the marks (`Marks::restore`). A mark goes on standing for its pane or tab only
+    /// while that is there and is what the file now says the mark is of: a file may say it is
+    /// another app's, or a tab's. A mark that is not among them no longer waits for its name
+    /// or letter.
+    pub(crate) fn restore_marks(&mut self, marks: Vec<Mark>, extra: Extra) {
+        self.marks.restore(marks);
+        self.marks.extra = extra;
+        let stale = |mark: &&Mark| match (&mark.target, mark.live) {
+            (_, None) => false,
+            (Target::Tab(_), Some(tab)) => !self.tabs.iter().any(|open| open.id == tab),
+            (Target::Pane(record), Some(pane)) => !self.pane(pane).is_some_and(|pane| record.kind.is(&pane.kind)),
+        };
+        let stale: Vec<MarkId> = self.marks.list.iter().filter(stale).map(|mark| mark.id).collect();
+        for mark in self.marks.list.iter_mut().filter(|mark| stale.contains(&mark.id)) {
+            mark.live = None;
+        }
+        if let Some(MarkInput::Rename { mark, .. } | MarkInput::SetKey { mark }) = &self.mark_input
+            && self.marks.get(*mark).is_none()
+        {
+            self.mark_input = None;
+        }
+    }
+
     /// The window the shell hosted for a pane mark is in `pane`.
     pub(crate) fn mark_bind(&mut self, id: MarkId, pane: PaneId) {
-        if self.pane(pane).is_some() {
+        // Only a pane mark, and only to a pane of its kind: a tab mark would read the pane's
+        // id as a tab's.
+        let record = self.marks.get(id).and_then(|mark| match &mark.target {
+            Target::Pane(record) => Some(&record.kind),
+            Target::Tab(_) => None,
+        });
+        if record.is_some_and(|record| self.pane(pane).is_some_and(|pane| record.is(&pane.kind))) {
             self.marks.bind(id, pane);
         }
     }
@@ -1317,7 +1389,7 @@ mod tests {
         assert_eq!(m.mark_rows()[0].pane, Some(hosted));
         let shell = open(&mut m, Kind::Terminal);
         m.update(Action::MarkBind { mark: id, pane: shell }.sent_by(Origin::System));
-        assert!(!m.mark_rows()[0].open);
+        assert_eq!(m.mark_rows()[0].pane, Some(hosted), "it keeps the window it had");
     }
 
     fn window(id: u32, title: &str, main: bool, pane: Option<PaneId>) -> Window {

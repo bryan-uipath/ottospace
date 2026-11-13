@@ -219,6 +219,10 @@ impl Node {
     /// at that limit could not give is asked of the next split above on the axis. False if no
     /// such split holds the pane, or none moved.
     pub fn scale(&mut self, pane: u32, on: Axis, by: f32) -> bool {
+        // Not a number (a measure of nothing): no ratio may become one.
+        if !by.is_finite() {
+            return false;
+        }
         let (mut left, mut moved) = (by, false);
         self.climb(pane, on, &mut |ratio, first| {
             // The pane's side of the split.
@@ -295,8 +299,25 @@ impl Node {
 }
 
 #[cfg(test)]
+impl Node {
+    /// Every ratio is a number and leaves each side its least share: `MIN_SHARE`, or with more
+    /// than ten panes in a row what `equalize` gives one (1 / the leaves). For the property
+    /// tests of the tree and of the model.
+    pub(crate) fn sound_ratios(&self) -> Result<(), String> {
+        fn walk(node: &Node, least: f32) -> Result<(), String> {
+            let Node::Split { ratio, a, b, .. } = node else { return Ok(()) };
+            if !(least..=1.0 - least).contains(ratio) {
+                return Err(format!("a split's ratio is {ratio}"));
+            }
+            walk(a, least).and_then(|_| walk(b, least))
+        }
+        walk(self, MIN_SHARE.min(1.0 / self.leaves().len() as f32) - 1e-6)
+    }
+}
+
+#[cfg(test)]
 mod tests {
-    use super::{Axis::*, Dir, Node, Node::Leaf, Rect, Zone};
+    use super::{Axis, Axis::*, Dir, Node, Node::Leaf, Rect, Zone};
 
     #[test]
     fn a_drop_zone_is_the_centre_or_the_nearest_edge() {
@@ -502,5 +523,262 @@ mod tests {
         tree.resize(4, Dir::Up);
         tree.equalize();
         assert_eq!(widths(&tree), [(1, 33.0, 100.0), (2, 33.0, 100.0), (3, 33.0, 50.0), (4, 33.0, 50.0)]);
+    }
+
+    /// One change to a tree. A new leaf's id is the next unused one.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Op {
+        Insert(Option<u32>, Axis),
+        Split(u32, Axis, bool),
+        Remove(u32),
+        Resize(u32, Dir),
+        Swap(u32, u32),
+        Equalize,
+        /// As the model drops a pane on another: an edge splits the target, the centre swaps.
+        Drop(u32, u32, Zone),
+        /// A fit: the pane's extent on the axis times this.
+        Scale(u32, Axis, f32),
+    }
+
+    /// The ratios of the splits on `on` above `pane`, nearest first.
+    fn above(tree: &Node, pane: u32, on: Axis) -> Option<Vec<f32>> {
+        match tree {
+            Node::Leaf(id) => (*id == pane).then(Vec::new),
+            Node::Split { axis, ratio, a, b } => {
+                let mut found = above(a, pane, on).or_else(|| above(b, pane, on))?;
+                found.extend((*axis == on).then_some(*ratio));
+                Some(found)
+            }
+        }
+    }
+
+    fn extent(tree: &Node, pane: u32, on: Axis) -> Option<f32> {
+        let rects = tree.rects(Rect { x: 0.0, y: 0.0, w: 1.0, h: 1.0 });
+        rects.iter().find(|(id, _)| *id == pane).map(|(_, r)| if on == Right { r.w } else { r.h })
+    }
+
+    fn ratios(tree: &Node) -> Vec<f32> {
+        match tree {
+            Node::Leaf(_) => Vec::new(),
+            Node::Split { ratio, a, b, .. } => [vec![*ratio], ratios(a), ratios(b)].concat(),
+        }
+    }
+
+    /// The ops from an empty tree, with what must hold after each. The error names the op.
+    fn run(ops: &[Op]) -> Result<(), String> {
+        use super::MIN_SHARE;
+        let (mut tree, mut next): (Option<Node>, u32) = (None, 0);
+        // The leaves the tree must hold.
+        let mut held: Vec<u32> = Vec::new();
+        for (at, op) in ops.iter().enumerate() {
+            let fail = |why: String| Err(format!("op {at} {op:?}: {why}"));
+            let before = tree.clone();
+            match *op {
+                Op::Insert(beside, axis) => {
+                    next += 1;
+                    tree = Some(tree.take().map_or(Leaf(next), |root| root.insert(beside, next, axis)));
+                    let split = beside.is_some_and(|beside| held.contains(&beside));
+                    if split && !tree.as_ref().is_some_and(|t| t.is_split(beside.unwrap_or(0), next, axis, false)) {
+                        return fail("the new leaf is not beside the one named".into());
+                    }
+                    held.push(next);
+                }
+                Op::Split(target, axis, first) => {
+                    let Some(root) = &mut tree else { continue };
+                    let done = root.split(target, next + 1, axis, first);
+                    if done != held.contains(&target) || (done && !root.is_split(target, next + 1, axis, first)) {
+                        return fail(format!("split said {done}"));
+                    }
+                    if done {
+                        next += 1;
+                        held.push(next);
+                    }
+                }
+                Op::Remove(id) => {
+                    tree = tree.take().and_then(|root| root.remove(id));
+                    held.retain(|leaf| *leaf != id);
+                }
+                Op::Resize(pane, dir) => {
+                    let Some(root) = &mut tree else { continue };
+                    let moved = root.resize(pane, dir);
+                    // A border at its limit may settle on it by a rounding's worth: that is no move.
+                    let was = before.as_ref().map(ratios).unwrap_or_default();
+                    if moved == ratios(root).iter().zip(&was).all(|(now, was)| (now - was).abs() < 1e-6) {
+                        return fail(format!("resize said {moved}"));
+                    }
+                }
+                Op::Swap(x, y) => {
+                    // Only ids given out: a leaf must not take one a later leaf will get.
+                    let Some(root) = tree.as_mut().filter(|_| x.max(y) <= next) else { continue };
+                    let was = root.leaves();
+                    root.swap(x, y);
+                    let trade = |id: &u32| {
+                        if *id == x {
+                            y
+                        } else if *id == y {
+                            x
+                        } else {
+                            *id
+                        }
+                    };
+                    // A tree that holds one of the two gets the other.
+                    if root.leaves() != was.iter().map(trade).collect::<Vec<_>>() {
+                        return fail(format!("{was:?} became {:?}", root.leaves()));
+                    }
+                    held = root.leaves();
+                }
+                Op::Equalize => {
+                    let Some(root) = &mut tree else { continue };
+                    root.equalize();
+                    let once = root.clone();
+                    root.equalize();
+                    if *root != once {
+                        return fail("a second equalize moved a split".into());
+                    }
+                }
+                Op::Drop(source, target, zone) => {
+                    let Some(root) = tree.take() else { continue };
+                    if source == target || !held.contains(&source) || !held.contains(&target) {
+                        tree = Some(root);
+                        continue;
+                    }
+                    let (axis, first) = match zone {
+                        Zone::Left => (Right, true),
+                        Zone::Right => (Right, false),
+                        Zone::Top => (Down, true),
+                        Zone::Bottom => (Down, false),
+                        Zone::Center => {
+                            let mut root = root;
+                            root.swap(source, target);
+                            tree = Some(root);
+                            continue;
+                        }
+                    };
+                    let mut root =
+                        if root.is_split(target, source, axis, first) { Some(root) } else { root.remove(source) };
+                    let there = root.as_mut().is_some_and(|root| {
+                        root.is_split(target, source, axis, first) || root.split(target, source, axis, first)
+                    });
+                    if !there || !root.as_ref().is_some_and(|root| root.is_split(target, source, axis, first)) {
+                        return fail("the dropped pane is not where it was dropped".into());
+                    }
+                    tree = root;
+                }
+                Op::Scale(pane, on, by) => {
+                    let Some(root) = &mut tree else { continue };
+                    let (said, was) = (root.scalable(pane, on, by), extent(root, pane, on));
+                    let moved = root.scale(pane, on, by);
+                    if said.unwrap_or(false) != moved || (said.is_none() && Some(&*root) != before.as_ref()) {
+                        return fail(format!("scalable said {said:?}, scale {moved}"));
+                    }
+                    // The pane has the size asked for, or every split that could give it more
+                    // (or take more) is at its limit. Only of a factor that is a size.
+                    if let (Some(was), Some(now), true) = (was, extent(root, pane, on), by.is_finite() && by > 0.0) {
+                        let splits = above(root, pane, on).unwrap_or_default();
+                        let exact = (now / was / by - 1.0).abs() < 2e-3;
+                        let limit =
+                            |ratio: &f32| (ratio - MIN_SHARE).abs() < 1e-6 || (ratio - (1.0 - MIN_SHARE)).abs() < 1e-6;
+                        if !splits.is_empty() && !exact && !splits.iter().all(limit) {
+                            return fail(format!("the pane is {} times its size, with splits {splits:?}", now / was));
+                        }
+                        if splits.is_empty() && now != was {
+                            return fail("a pane with no split on the axis changed size".into());
+                        }
+                    }
+                }
+            }
+            // Every leaf once, and no other.
+            let mut leaves = tree.as_ref().map(Node::leaves).unwrap_or_default();
+            leaves.sort_unstable();
+            held.sort_unstable();
+            if leaves != held || leaves.windows(2).any(|pair| pair[0] == pair[1]) {
+                return fail(format!("the tree holds {leaves:?}, not {held:?}"));
+            }
+            let Some(root) = &tree else { continue };
+            if let Err(why) = root.sound_ratios() {
+                return fail(why);
+            }
+            // The panes tile the area, and a neighbour is another pane across a shared edge.
+            let rects = root.rects(Rect { x: 0.0, y: 0.0, w: 1.0, h: 1.0 });
+            let area: f32 = rects.iter().map(|(_, r)| r.w * r.h).sum();
+            if rects.iter().any(|(_, r)| r.w <= 0.0 || r.h <= 0.0 || r.x < -1e-4 || r.y < -1e-4)
+                || (area - 1.0).abs() > 1e-3
+            {
+                return fail(format!("the panes do not tile the area: {rects:?}"));
+            }
+            for (pane, mine) in &rects {
+                for dir in [Dir::Left, Dir::Right, Dir::Up, Dir::Down] {
+                    let Some(other) = root.neighbor(*pane, dir) else { continue };
+                    let Some((_, theirs)) = rects.iter().find(|(id, _)| *id == other && id != pane) else {
+                        return fail(format!("pane {pane}'s neighbour {dir:?} is {other}"));
+                    };
+                    let gap = match dir {
+                        Dir::Left => mine.x - (theirs.x + theirs.w),
+                        Dir::Right => theirs.x - (mine.x + mine.w),
+                        Dir::Up => mine.y - (theirs.y + theirs.h),
+                        Dir::Down => theirs.y - (mine.y + mine.h),
+                    };
+                    if gap.abs() > 1e-3 {
+                        return fail(format!("pane {pane}'s neighbour {dir:?}, {other}, does not touch it"));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// An op as Rust, for a failure's report.
+    fn code(op: &Op) -> String {
+        match op {
+            Op::Insert(beside, axis) => format!("Op::Insert({beside:?}, {axis:?})"),
+            Op::Split(at, axis, first) => format!("Op::Split({at}, {axis:?}, {first})"),
+            Op::Resize(pane, dir) => format!("Op::Resize({pane}, Dir::{dir:?})"),
+            Op::Drop(source, target, zone) => format!("Op::Drop({source}, {target}, Zone::{zone:?})"),
+            Op::Scale(pane, axis, by) if by.is_nan() => format!("Op::Scale({pane}, {axis:?}, f32::NAN)"),
+            Op::Scale(pane, axis, by) if by.is_infinite() => format!("Op::Scale({pane}, {axis:?}, f32::INFINITY)"),
+            op => format!("Op::{op:?}"),
+        }
+    }
+
+    /// Random splits, closes, resizes, swaps, drops, fits and equalizes, in any order. A failure
+    /// prints the least ops that still fail, as the argument of `run`.
+    #[test]
+    fn any_changes_in_any_order_leave_a_sound_tree() {
+        use crate::fuzz::{self, Rng};
+        let one = |seed: u64| {
+            let mut rng = Rng::new(seed);
+            // Ids near the ones in use: most name a leaf, some name none.
+            let mut ops: Vec<Op> = Vec::new();
+            for _ in 0..80 {
+                let grown = ops.iter().filter(|op| matches!(op, Op::Insert(..) | Op::Split(..))).count() as u32;
+                let leaf = |rng: &mut Rng| rng.below(grown as usize + 2) as u32;
+                let axis = rng.pick(&[Right, Down]);
+                let dir = rng.pick(&[Dir::Left, Dir::Right, Dir::Up, Dir::Down]);
+                let by = rng.pick(&[1.2, 0.8, 2.0, 0.5, 1.0, 1.0001, 10.0, 0.01, 0.0, -1.0, f32::NAN, f32::INFINITY]);
+                ops.push(match rng.below(12) {
+                    0 | 1 => Op::Insert(rng.coin().then(|| leaf(&mut rng)), axis),
+                    2 | 3 => Op::Split(leaf(&mut rng), axis, rng.coin()),
+                    4 => Op::Remove(leaf(&mut rng)),
+                    5 | 6 => Op::Resize(leaf(&mut rng), dir),
+                    7 => Op::Swap(leaf(&mut rng), leaf(&mut rng)),
+                    8 => Op::Equalize,
+                    9 => {
+                        let zone = rng.pick(&[Zone::Left, Zone::Right, Zone::Top, Zone::Bottom, Zone::Center]);
+                        Op::Drop(leaf(&mut rng), leaf(&mut rng), zone)
+                    }
+                    _ => Op::Scale(leaf(&mut rng), axis, by),
+                });
+            }
+            let fails = |ops: &[Op]| fuzz::caught(|| run(ops)).unwrap_or_else(Err).is_err();
+            fails(&ops).then(|| {
+                let least = fuzz::shrink(ops, fails);
+                let why = fuzz::caught(|| run(&least)).unwrap_or_else(Err).err().unwrap_or_default();
+                let ops: Vec<String> = least.iter().map(code).collect();
+                format!("seed {seed}: {why}\n    run(&[{}]).unwrap();", ops.join(", "))
+            })
+        };
+        if let Some(report) = fuzz::each_seed(0, 1_000, one) {
+            panic!("{report}");
+        }
     }
 }

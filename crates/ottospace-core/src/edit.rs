@@ -465,7 +465,7 @@ fn clean(text: &str, breaks: bool) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::Motion::*;
     use super::*;
 
@@ -680,8 +680,8 @@ mod tests {
         assert_eq!(show(&field), "e\u{301}|a");
     }
 
-    /// xorshift64: the same edits on every run.
-    struct Rng(u64);
+    /// xorshift64: the same edits on every run. The model's property test draws its edits here too.
+    pub(crate) struct Rng(pub(crate) u64);
 
     impl Rng {
         fn below(&mut self, n: usize) -> usize {
@@ -724,7 +724,7 @@ mod tests {
             (self.below(3) > 0).then_some(a.min(b)..a.max(b))
         }
 
-        fn edit(&mut self, len: usize) -> Edit {
+        pub(crate) fn edit(&mut self, len: usize) -> Edit {
             let to = [Left, Right, WordLeft, WordRight, Start, End][self.below(6)];
             // Bytes and UTF-16 offsets from anywhere, inside a character and past the end too.
             let at = self.below(len + 3);

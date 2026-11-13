@@ -96,6 +96,10 @@ pub struct Fit {
 
 /// The misfit of a `window` in a pane, or `None` when it has the pane's `content` size.
 pub fn fit(content: [f32; 2], outer: [f32; 2], window: [f32; 2]) -> Option<Fit> {
+    // A measure that is no number is no measure.
+    if !content.iter().chain(&outer).chain(&window).all(|size| size.is_finite()) {
+        return None;
+    }
     let hint = hint(content, window)?;
     Some(Fit { wants: window, hint, stuck: None, content, outer })
 }
