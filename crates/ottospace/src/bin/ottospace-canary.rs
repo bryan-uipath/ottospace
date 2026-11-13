@@ -1,5 +1,5 @@
 //! Canary: a tiny app whose windows ottospace can host in tests, so the tests never touch the
-//! user's real windows. Each window records the keys and clicks it receives. A control socket
+//! user's real windows. Each window records the keys, clicks and scrolls it receives. A control socket
 //! reports that record and opens or closes windows on request.
 //!
 //! One JSON request per line on `$CANARY_SOCKET`, one JSON reply per line:
@@ -24,8 +24,8 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 
 use gpui::{
-    App, Application, Bounds, Context, FocusHandle, KeyDownEvent, MouseButton, MouseDownEvent, TitlebarOptions, Window,
-    WindowBounds, WindowHandle, WindowOptions, div, prelude::*, px, rgb, size,
+    App, Application, Bounds, Context, FocusHandle, KeyDownEvent, MouseButton, MouseDownEvent, ScrollWheelEvent,
+    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, prelude::*, px, rgb, size,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -88,6 +88,8 @@ struct Canary {
     keys: Vec<String>,
     /// Click positions in window coordinates.
     clicks: Vec<[f32; 2]>,
+    /// The scroll wheel's vertical deltas received, in points, added up.
+    wheel: f32,
     focus: FocusHandle,
 }
 
@@ -113,6 +115,10 @@ impl Render for Canary {
                     cx.notify();
                 }),
             )
+            .on_scroll_wheel(cx.listener(|this, e: &ScrollWheelEvent, _, cx| {
+                this.wheel += f32::from(e.delta.pixel_delta(px(16.)).y);
+                cx.notify();
+            }))
             .child(div().text_xl().child(self.title.clone()))
             .child(format!("keys: {}", self.keys.join(" ")))
             .child(format!("clicks: {}", self.clicks.len()))
@@ -149,7 +155,7 @@ fn open(windows: &Windows, min: Option<[f32; 2]>, fixed: Option<[f32; 2]>, at: O
         cx.new(|cx| {
             let focus = cx.focus_handle();
             window.focus(&focus);
-            Canary { title, keys: Vec::new(), clicks: Vec::new(), focus }
+            Canary { title, keys: Vec::new(), clicks: Vec::new(), wheel: 0.0, focus }
         })
     });
     if let Ok(handle) = handle {
@@ -200,7 +206,7 @@ fn state(windows: &Windows, cx: &mut App) -> String {
             let active = window.is_window_active();
             // `frame`: as Accessibility has it, global, so a test can tell whether it is on a screen.
             let global = ns_view(window).and_then(|view| unsafe { ottospace_mac::window::frame(view) });
-            json!({ "title": canary.title, "keys": canary.keys, "clicks": canary.clicks, "bounds": frame, "frame": global, "active": active })
+            json!({ "title": canary.title, "keys": canary.keys, "clicks": canary.clicks, "wheel": canary.wheel, "bounds": frame, "frame": global, "active": active })
         });
         entry.map(|entry| open_windows.push(entry)).is_ok()
     });

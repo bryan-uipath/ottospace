@@ -778,6 +778,10 @@ const MAKERS: &[Make] = &[
         Action::SneakApp { pane, read: (!g.rng.one_in(5)).then(|| g.app_read()) }
     },
     |g| {
+        let delta = |g: &mut Gen| g.rng.pick(&[0., -40., 3.5, 1e9, f64::NAN]);
+        Action::AppWheel { pane: g.pane(), dx: delta(g), dy: delta(g) }
+    },
+    |g| {
         let one = |g: &mut Gen| Running {
             pane: g.pane(),
             program: g.rng.coin().then(|| g.name(&["cargo"])),
@@ -1748,6 +1752,7 @@ impl Run {
                 | Action::SneakBackspace
                 | Action::LeaveSneak
                 | Action::SneakApp { .. }
+                | Action::AppWheel { .. }
         );
         let mark_own = matches!(
             action,
@@ -1758,6 +1763,7 @@ impl Run {
                 | Action::MarkBackspace
                 | Action::MarkSubmit
                 | Action::MarkCancel
+                | Action::AppWheel { .. }
                 // These start the typing of a workbook's name.
                 | Action::WorkbookSave { .. }
                 | Action::WorkbookSaveAll { .. }
@@ -1983,6 +1989,17 @@ impl Run {
                         m.agent_runs(to) && !m.agent_runs(from),
                         "{from:?} moved to {to:?}, and it runs for neither"
                     );
+                }
+                Effect::AppWheel { pane, dx, dy } => {
+                    // Only the user's own scroll reaches an app, capped, and only a parked app pane on show.
+                    ensure!(
+                        user && matches!(action, Action::AppWheel { .. }),
+                        "{origin:?} scrolled an app: {action:?}"
+                    );
+                    let max = crate::app_wheel::MAX_POINTS;
+                    ensure!(dx.abs() <= max && dy.abs() <= max, "an uncapped scroll: {dx} {dy}");
+                    let app = m.pane(*pane).is_some_and(|p| matches!(p.kind, Kind::App { .. }));
+                    ensure!(app && m.live != Some(*pane), "a scroll reached pane {pane}, no parked app pane");
                 }
                 Effect::PressApp { pane, path, role, at, .. } => {
                     // Only the user's own letter presses in another app, and only what was labelled.

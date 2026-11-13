@@ -74,6 +74,34 @@ and what it allows.
 - `cargo e2e-apps`: the canary's checkbox pressed through its label (the canary reports it), its
   disabled checkbox unlabelled.
 
+## The wheel in a parked app pane
+
+2026-11-13. The user: "can we forward mousewheel events to the app without needing to foreground
+it?". The second kind of the user's own input that reaches another app without entering its
+pane, after the sneak label.
+
+- **What.** The user's wheel or trackpad over a parked app pane's picture scrolls that app's
+  window. The window is not raised or activated, and the real pointer does not move. Nothing else
+  is passed on: a click, a key or a drag still enters the pane first.
+- **How.** The system's own scroll event is copied (its phases and momentum with it), added up
+  per frame (same pane, window and phase), capped at 600 points each way by the core
+  (`app_wheel::cap`), placed at the point of the parked window under the pointer (the picture
+  shows the window unscaled from its top left, below the cropped title bar), marked for that
+  window (`kCGMouseEventWindowUnderMousePointer…`), and posted to the app's process alone with
+  `CGEventPostToPid`, never to the system's event stream. At post time the pane must still
+  host that window of that process, parked. A test's injected scroll, which the system never
+  queued, is made from its deltas instead.
+- **Who.** `Origin::User` only: `Model::refusal` refuses `AppWheel` from a client or the system,
+  and the property test checks that no `Effect::AppWheel` comes from anything else. No socket
+  request scrolls an app; the test-only `mouse` `wheel` without `"as":"user"` does not.
+- **Off.** `"wheel_to_apps": false` in `settings.json`.
+- **What CI found.** On GitHub's runner the user's scroll is posted (`counts.wheel_posted`), and
+  the canary, a GPUI app parked off screen, receives nothing: neither its native scroll view nor
+  its GPUI view saw it. So posting to the process with the window-under-pointer fields set does
+  not reach a parked GPUI window. AppKit apps, Chromium and Electron are not verified. Until a
+  delivery that works is found, this is experimental, and the docs say so. The accessibility route (a scroll area's scroll bar `AXValue`) would
+  set a value, which the user has not approved, so it is not used.
+
 ## Open questions
 
 - A per-app, user-initiated request for the full tree (`AXManualAccessibility` /

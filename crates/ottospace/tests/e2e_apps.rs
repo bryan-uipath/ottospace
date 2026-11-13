@@ -1457,3 +1457,58 @@ fn a_sneak_label_presses_a_control_in_the_hosted_app_and_a_disabled_one_has_none
     );
     assert_eq!(state()["app_presses"], json!([[1, press]]));
 }
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn only_the_users_wheel_over_a_parked_app_pane_is_posted_to_the_app_which_stays_in_the_back() {
+    // The canary's window adds up the scrolls it receives.
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-wheel", "CANARY_SOCKET", &[]);
+    let scrolled = || canary.call(json!({"cmd": "state"}))["windows"][0]["wheel"].as_f64();
+    wait_for("the canary window", scrolled);
+    assert_eq!(scrolled(), Some(0.0));
+    let otto = Proc::launch(
+        env!("CARGO_BIN_EXE_ottospace"),
+        "otto-wheel",
+        "OTTOSPACE_SOCKET",
+        &[
+            ("OTTOSPACE_E2E", "1"),
+            ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string()),
+            ("OTTOSPACE_RETURN_KEY", "f19"),
+        ],
+    );
+    let state = || otto.call(json!({"cmd": "state"}));
+    otto.call(json!({"cmd": "open_app", "name": CANARY}));
+    wait_for("the window to park with its title bar cropped", || {
+        state()["crop"]["1"].as_f64().filter(|c| (16.0..=40.0).contains(c))
+    });
+    let shown =
+        wait_for("a frame of its stream", || rect(&state()["shown"]["1"]).filter(|s| s[2] > 100.0 && s[3] > 200.0));
+    let (x, y) = (shown[0] + shown[2] / 2.0, shown[1] + shown[3] / 2.0);
+    let wheel = |by_user: bool| {
+        let mut request =
+            json!({"cmd": "mouse", "action": "wheel", "x": x, "y": y, "dx": 0, "dy": -120, "precise": true});
+        if by_user {
+            request["as"] = json!("user");
+        }
+        otto.call(request)
+    };
+
+    let posted = || state()["counts"]["wheel_posted"].as_u64();
+    // A client's scroll is kept over the picture but never posted: the core refuses it.
+    wheel(false);
+    std::thread::sleep(Duration::from_millis(800));
+    assert_eq!((posted(), scrolled()), (Some(0), Some(0.0)), "a client's scroll reached the app");
+
+    // The user's is posted to the canary's process, and the canary stays parked, in the back.
+    let reply = wheel(true);
+    assert_eq!((&reply["mode"], &reply["state"]["live"]), (&json!("normal"), &Value::Null));
+    wait_or("the user's scroll to be posted", || state()["counts"].to_string(), || posted().filter(|n| *n == 1));
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_ne!(front_app().0, canary.child.id(), "the canary came to the front");
+    assert_eq!(state()["state"]["live"], Value::Null);
+    // Whether the parked window received it is what this test finds out, not yet a promise:
+    // on GitHub's runner a GPUI window parked off screen did not (`docs/ai/sneak-apps.md`).
+    let by = scrolled().unwrap_or(0.0);
+    eprintln!("the canary's window received {by} points of the user's scroll");
+    assert!(by.abs() <= 120.0 + 1.0, "scrolled {by}");
+}

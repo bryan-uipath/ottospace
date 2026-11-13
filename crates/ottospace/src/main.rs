@@ -51,6 +51,7 @@ use ottospace_mac::{ax, capture, display, hotkey, icon, input, recovery};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use screencapturekit::prelude::*;
 
+mod app_wheel;
 mod apps;
 mod ax_debug;
 mod collect;
@@ -183,6 +184,8 @@ struct Hosted {
     preview: Rc<Cell<Bounds<Pixels>>>,
     /// Last pane content rect the live window was placed over, to re-place only on change.
     placed: CGRect,
+    /// Where the window's top left landed when parked, global: a scroll is posted there.
+    parked_at: CGPoint,
 }
 
 impl Hosted {
@@ -238,6 +241,7 @@ impl Hosted {
             refused: None,
             preview: Rc::default(),
             placed: CGRect::default(),
+            parked_at: original.origin,
         })
     }
 
@@ -279,7 +283,8 @@ impl Hosted {
         self.parked_size = size;
         self.crop = crop;
         self.show(scale);
-        let _ = self.window.set_position(display::parking_spot());
+        let spot = display::parking_spot();
+        self.parked_at = self.window.set_position(spot).unwrap_or(spot);
         self.placed = CGRect::default();
     }
 
@@ -290,6 +295,10 @@ impl Hosted {
     fn show(&mut self, scale: f64) -> Option<CGSize> {
         let pane = to_cg(self.bounds.get().size);
         let frame = self.window_frame().filter(|_| pane.width >= 1.0)?;
+        // Parked (not placed over a pane): where it is now, should it have moved.
+        if self.placed == CGRect::default() {
+            self.parked_at = frame.origin;
+        }
         let content = CGSize::new(frame.size.width, frame.size.height - self.crop);
         let shown = CGSize::new(pane.width.min(content.width), pane.height.min(content.height));
         let asked = (shown, self.crop);
@@ -694,6 +703,8 @@ struct Workspace {
     sneak_spent: bool,
     /// Reads of the focused app pane's tree while sneak mode is on.
     sneak_reads: sneak_apps::Reads,
+    /// The wheel over parked app panes, this frame.
+    wheel: app_wheel::Wheel,
     /// Whose key, click or request is being handled now: the person's, unless the control socket
     /// is being served (also a key or click it injects) or the tick is doing its own work.
     input: Origin,
@@ -935,6 +946,7 @@ impl Workspace {
                         }
                         this.sync_sneak(window, cx);
                         this.read_sneak_app(window, cx);
+                        this.flush_wheel(window, cx);
                     });
                     this.take_snapshots(window, cx);
                     if this.hosted.values().any(|h| h.latest.dirty.swap(false, Relaxed)) {
@@ -1031,6 +1043,7 @@ impl Workspace {
             controls: sneak::Controls::default(),
             sneak_spent: false,
             sneak_reads: sneak_apps::Reads::default(),
+            wheel: app_wheel::Wheel::default(),
             input: Origin::User,
             apps: Vec::new(),
             launching: Vec::new(),
@@ -1271,6 +1284,7 @@ impl Workspace {
                 Effect::Activate { id } => self.activate(id, window, cx),
                 Effect::Run { command } => self.run_command(*command, window, cx),
                 Effect::PressApp { pane, path, role, at, .. } => self.press_app(*pane, path, role, *at, window, cx),
+                Effect::AppWheel { pane, dx, dy } => self.post_wheel(*pane, *dx, *dy),
                 Effect::HostWindow { mark, bundle, name, title, into, axis } => {
                     let (bundle, name, title) = (bundle.clone(), name.clone(), title.clone());
                     let wanted = marks::Wanted { mark: *mark, bundle, name, title, into: *into, axis: *axis };
@@ -2534,6 +2548,9 @@ impl Workspace {
             "counts": std::env::var_os("OTTOSPACE_E2E").map(|_| serde_json::json!({
                 "live": self.went_live,
                 "frame_reads": self.hosted.values().map(|h| h.frame_reads).sum::<u64>(),
+                // Scrolls over an app pane's picture kept, and posted to the app.
+                "wheel_kept": self.wheel.kept,
+                "wheel_posted": self.wheel.posted,
             })),
             // Test runs only: each press in an app a sneak label asked for, `[pane, path]`; else null.
             "app_presses": std::env::var_os("OTTOSPACE_E2E").map(|_| &self.sneak_reads.presses),
@@ -4429,6 +4446,8 @@ impl Workspace {
                         .left_0()
                         .w(px(hosted.shown.width as f32))
                         .h(px(hosted.shown.height as f32))
+                        // The wheel scrolls the app, which stays parked.
+                        .on_scroll_wheel(cx.listener(move |this, e: &ScrollWheelEvent, _, _| this.app_wheel(id, e)))
                         .child(surface(buffer).size_full())
                         // Record where the preview is drawn (e2e reads it), and mask the window's
                         // corners there: the ring is the whole window's, clipped to the preview,

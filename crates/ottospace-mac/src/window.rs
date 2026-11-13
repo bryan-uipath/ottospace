@@ -238,6 +238,13 @@ pub unsafe fn order_front(ns_view: *mut c_void) {
     }
 }
 
+/// `at` (x, y, width, height in points from the view's top left) as a frame in `view`: AppKit
+/// measures from the bottom left, unless the view says it is flipped (GPUI's is).
+fn frame_in(view: &NSView, at: [f64; 4]) -> objc2_foundation::NSRect {
+    let y = if view.isFlipped() { at[1] } else { view.frame().size.height - at[1] - at[3] };
+    objc2_foundation::NSRect::new(NSPoint::new(at[0], y), objc2_foundation::NSSize::new(at[2], at[3]))
+}
+
 /// Adds a native push button titled `title` to the view, `at` points from its top left: a
 /// control with a label in the window's accessibility tree, which a GPUI view has none of.
 /// For the canary, so a test can circle something an app's tree names.
@@ -250,9 +257,7 @@ pub unsafe fn add_button(ns_view: *mut c_void, title: &str, at: [f64; 4]) {
     let button = unsafe {
         objc2_app_kit::NSButton::buttonWithTitle_target_action(&objc2_foundation::NSString::from_str(title), None, None, mtm)
     };
-    // AppKit measures from the bottom-left, unless the view says it is flipped (GPUI's is).
-    let y = if view.isFlipped() { at[1] } else { view.frame().size.height - at[1] - at[3] };
-    button.setFrame(objc2_foundation::NSRect::new(NSPoint::new(at[0], y), objc2_foundation::NSSize::new(at[2], at[3])));
+    button.setFrame(frame_in(view, at));
     view.addSubview(&button);
 }
 
@@ -301,8 +306,7 @@ pub unsafe fn add_checkbox(ns_view: *mut c_void, title: &str, at: [f64; 4], enab
     let view = unsafe { &*(ns_view as *const NSView) };
     let title = objc2_foundation::NSString::from_str(title);
     let checkbox = unsafe { objc2_app_kit::NSButton::checkboxWithTitle_target_action(&title, None, None, mtm) };
-    let y = if view.isFlipped() { at[1] } else { view.frame().size.height - at[1] - at[3] };
-    checkbox.setFrame(objc2_foundation::NSRect::new(NSPoint::new(at[0], y), objc2_foundation::NSSize::new(at[2], at[3])));
+    checkbox.setFrame(frame_in(view, at));
     checkbox.setEnabled(enabled);
     view.addSubview(&checkbox);
     Some(Checkbox(checkbox))
