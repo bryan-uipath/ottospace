@@ -4872,8 +4872,7 @@ fn a_click_on_a_task_starts_its_agent_in_the_drawer_and_the_workspace_stays() {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_click_on_a_session_goes_on_with_it_in_the_drawer() {
-    let root = std::env::temp_dir().join(format!("ottospace-e2e-session-open-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    let root = support::temp(&format!("ottospace-e2e-session-open-{}", std::process::id()));
     let (bin, repos, sessions) = (root.join("bin"), root.join("repos"), root.join("sessions"));
     fake_agents(&bin, &sessions);
     fake_repo(&repos.join("app"));
