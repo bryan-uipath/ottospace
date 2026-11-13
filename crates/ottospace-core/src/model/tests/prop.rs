@@ -779,6 +779,15 @@ fn unique<T: PartialEq>(list: &[T]) -> bool {
 }
 
 /// What must hold of a model at rest, whatever was done to it.
+/// A capture's drawings, a note still being typed among them as the note it becomes: when
+/// annotate mode ends (its pane is gone or live), the note is kept, and that is no change.
+fn drawn(material: &crate::capture::Material) -> Vec<crate::capture::Shape> {
+    let marks = &material.marks;
+    let typed = marks.note.as_ref().map(|(at, field)| (*at, field.text().trim().to_string()));
+    let typed = typed.filter(|(_, text)| !text.is_empty()).map(|(at, text)| crate::capture::Shape::Note { at, text });
+    marks.shapes.iter().cloned().chain(typed).collect()
+}
+
 fn check(m: &Model) -> Result<(), String> {
     // Tabs, their trees and the panes.
     ensure!(!m.tabs.is_empty(), "no tabs");
@@ -1284,10 +1293,8 @@ impl Run {
         let cancels = matches!(action, Action::ComposeEscape | Action::CloseCompose | Action::CaptureCancel);
         let unasked =
             m.capture.as_ref().filter(|draft| cancels && !draft.asked).map(|draft| draft.materials.len()).unwrap_or(0);
-        let drafted: Option<(Option<String>, Vec<Vec<crate::capture::Shape>>)> = m
-            .capture
-            .as_ref()
-            .map(|draft| (m.compose_line().cloned(), draft.materials.iter().map(|m| m.marks.shapes.clone()).collect()));
+        let drafted: Option<(Option<String>, Vec<Vec<crate::capture::Shape>>)> =
+            m.capture.as_ref().map(|draft| (m.compose_line().cloned(), draft.materials.iter().map(drawn).collect()));
         let line_before = m.compose_line().cloned();
         let composing = m.composing();
 
@@ -1301,7 +1308,7 @@ impl Run {
         // A draft's title and drawings are the user's: nobody else changes them, and a line
         // someone else wrote is never a draft's title.
         if let (Some(before), Some(draft), false) = (&drafted, &m.capture, origin == Origin::User) {
-            let now = (m.compose_line().cloned(), draft.materials.iter().map(|m| m.marks.shapes.clone()).collect());
+            let now = (m.compose_line().cloned(), draft.materials.iter().map(drawn).collect());
             ensure!(*before == now, "a draft's title or drawings changed, and not by the user: {before:?}");
         }
         ensure!(m.capture.is_none() || !m.compose_theirs, "a draft's title holds what a client wrote");
@@ -2553,4 +2560,42 @@ fn a_workbook_whose_file_names_a_task_opens_as_a_tab_of_no_task() {
     // A terminal and nothing typed into it: no effect carries a command.
     assert_eq!(effects, vec![Effect::Opened(1)]);
     assert_eq!((m.tabs[m.active].task, m.current_task, m.tabs[m.active].title.as_str()), (None, None, "dri"));
+}
+
+/// A system `CloseTab` took the capture's pane off show, which ends annotate mode and keeps the
+/// note being typed: the check took that for a change to the drawings. A note being typed is one.
+#[test]
+fn closing_a_tab_by_the_system_leaves_a_drafts_title_and_drawings_as_they_are() {
+    replay(&[
+        Action::Open {
+            kind: Kind::App { window: 9, title: "w9".into(), bundle: None, name: "app".into() },
+            axis: Axis::Right,
+            beside: None,
+        }
+        .sent_by(Origin::User),
+        Action::Adopt {
+            kind: Kind::App {
+                window: 3,
+                title: "general".into(),
+                bundle: Some("com.safari".into()),
+                name: "Slack".into(),
+            },
+            beside: None,
+        }
+        .sent_by(Origin::Socket),
+        Action::CaptureStart {
+            pane: Some(2),
+            draft: "".into(),
+            word: "w0rdw0rdw0rd".into(),
+            facts: vec![],
+            images: false,
+        }
+        .sent_by(Origin::User),
+        Action::AnnotatePress { at: [0.5, 0.75], shift: true, alt: true, size: [800.0, f32::NAN as _] }
+            .sent_by(Origin::User),
+        Action::AnnotateRelease { at: [f32::NAN as _, 0.75] }.sent_by(Origin::User),
+        Action::FieldEdit { edit: Edit::Insert("x\t$,\t  ".into()) }.sent_by(Origin::User),
+        Action::CloseTab { index: Some(0) }.sent_by(Origin::System),
+    ])
+    .unwrap();
 }
