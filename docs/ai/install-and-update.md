@@ -79,6 +79,24 @@ kept 14 days. `osi install pr <n>` asks `gh` for the pull request, finds the
 is waited for (state, jobs and time on one line; `--no-wait` stops instead, an hour is the limit);
 a failed one is named with its link.
 
+Pull requests are built on request (2026-11-13). Every push to every pull request started five
+macOS jobs, and with several pull requests open the queue held back `main-latest`. `build.yml`
+builds a pull request only while it carries the label `pr-build`; then every push builds again.
+Without it the run's jobs are skipped and use no runner, and osi ignores such a run. Adding
+another label builds nothing, and such a run cannot cancel a build (its concurrency group is its
+own). `scripts.yml` still tests `scripts/test-osi.sh` on a pull request that changes the scripts.
+
+- `osi install pr <n>` with no build: if the label is missing, osi adds it
+  (`gh pr edit --add-label`) and says so, then waits as for a queued build. A run takes a moment
+  to appear: "no build" while labelled is waited for up to two minutes (`OSI_START_MAX`), then osi
+  gives up with the reasons (not started, docs only, older than 14 days).
+- Adding a label needs write access. When it fails (a fork's author, say) osi stops and says to
+  ask a maintainer; it does not retry.
+- `--no-wait` still adds the label, says the build was requested, and exits non-zero.
+- `osi list` shows an unlabelled pull request without a build as "no build (to build it: osi
+  install pr <n>)": not a failure.
+- The label's name is a constant in osi, never input.
+
 - Artifacts need a signed-in `gh` even on a public repository. That is acceptable here: someone
   installing a pull request build has `gh`.
 - A prerelease per pull request would allow `curl`, but needs a write token in a run that a pull
@@ -140,7 +158,8 @@ and `codesign` only for `--app`. All ship with macOS except `gh`.
 - **gh is pinned to github.com**: every call passes `-R github.com/bryan-uipath/ottospace`, and
   `GH_HOST` and `GH_REPO` are dropped, so an enterprise host cannot stand in for the repository.
 - **Overrides**, for tests: `HOME`, `OSI_BIN_DIR`, `OSI_APP_DIR`, `OTTOSPACE_HOME`,
-  `OSI_RELEASES_URL` and `OSI_SELF_URL` (`file://` allowed), `OSI_GH`.
+  `OSI_RELEASES_URL` and `OSI_SELF_URL` (`file://` allowed), `OSI_GH`; `OSI_POLL`,
+  `OSI_WAIT_MAX` and `OSI_START_MAX` (seconds) for the waits.
 
 `install.sh` downloads `scripts/osi` from `main`, installs it as `~/.local/bin/osi`, and runs
 `osi install main`. `OTTOSPACE_CHANNEL=stable` or `=v0.1.0` picks another build;

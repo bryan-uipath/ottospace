@@ -2,9 +2,11 @@ name: Build
 
 # Builds what `scripts/osi` installs. A pull request's build is a workflow artifact
 # (`osi install pr <n>`); a push to main also replaces the assets of the `main-latest`
-# prerelease (`osi install main`). The file name and the artifact name are read by osi.
+# prerelease (`osi install main`). The file name, the artifact name and the label are read by osi.
 on:
   pull_request:
+    # A pull request is built only with the label pr-build (osi adds it): runners are scarce.
+    types: [opened, synchronize, reopened, labeled]
     # Text nobody compiles: no macOS runner for it. (`crates/**/*.md` is compiled in: not listed.)
     paths-ignore: ['docs/**', 'site/**', 'README.md', 'AGENTS.md', 'CLAUDE.md', 'LICENSE']
   push:
@@ -17,8 +19,10 @@ permissions: {}
 
 # A new push to a pull request cancels its older build. A build of main that has started
 # finishes; one still waiting is replaced by a newer push. publish-main publishes only a commit ahead of main-latest.
+# A pull request run that builds nothing (no label, or another label added) gets a group of its
+# own, so it cannot cancel a build.
 concurrency:
-  group: build-${{ github.event.pull_request.number || github.ref }}
+  group: build-${{ github.event.pull_request.number || github.ref }}${{ github.event_name == 'pull_request' && (!contains(github.event.pull_request.labels.*.name, 'pr-build') || (github.event.action == 'labeled' && github.event.label.name != 'pr-build')) && format('-skip-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -27,6 +31,8 @@ env:
 jobs:
   scripts:
     # install.sh and osi against fixture builds in a temp directory. No network.
+    # On a pull request, with the label only; scripts.yml tests a change to the scripts.
+    if: github.event_name == 'push' || (contains(github.event.pull_request.labels.*.name, 'pr-build') && (github.event.action != 'labeled' || github.event.label.name == 'pr-build'))
     runs-on: macos-26
     timeout-minutes: 10
     permissions:
@@ -39,6 +45,8 @@ jobs:
         run: scripts/test-osi.sh
 
   build:
+    # On a pull request, with the label only. Adding another label builds nothing.
+    if: github.event_name == 'push' || (contains(github.event.pull_request.labels.*.name, 'pr-build') && (github.event.action != 'labeled' || github.event.label.name == 'pr-build'))
     runs-on: macos-26
     timeout-minutes: 60
     permissions:
