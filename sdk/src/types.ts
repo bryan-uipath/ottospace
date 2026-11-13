@@ -45,6 +45,7 @@ export type Focus =
   | { list: number }
   | { rail: Section }
   | "drawer"
+  | "inspector"
   | { right: number }
   | "nothing";
 

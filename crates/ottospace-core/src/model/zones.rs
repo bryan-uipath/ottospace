@@ -31,6 +31,8 @@ pub enum Target {
     Rail(Section),
     /// The drawer: the agent's terminal or the new task.
     Drawer,
+    /// The accessibility inspector in the drawer's place: its rows.
+    Inspector,
     Right(usize),
     /// No pane, and nothing else has it.
     Nothing,
@@ -57,6 +59,7 @@ impl Model {
             Some(RailFocus::Left(section)) => Target::Rail(section),
             Some(RailFocus::Right(at)) => Target::Right(at),
             None if self.list.is_some() => Target::List(self.list.unwrap_or_default()),
+            None if self.inspector.as_ref().is_some_and(|inspector| inspector.filtering) => Target::Inspector,
             None if self.talk.is_some_and(|talk| talk.keys) || self.drawer_compose() => Target::Drawer,
             None => self.focused.map_or(Target::Nothing, Target::Pane),
         }
@@ -96,14 +99,12 @@ impl Model {
             (Action::FocusDir { dir: Dir::Right }, None) if self.list.is_some() => {
                 self.back_to_pane(Dir::Left, effects)
             }
-            (Action::FocusDir { dir: Dir::Right }, None) if self.focus_target() == Target::Drawer => {
-                self.talk_keys(false, effects);
-                self.compose_aside();
+            (Action::FocusDir { dir: Dir::Right }, None) if self.in_right_zone() => {
+                self.leave_right_zone(effects);
                 self.rail_focus = Some(RailFocus::Right(self.shown_cell()));
             }
-            (Action::FocusDir { dir: Dir::Left }, None) if self.focus_target() == Target::Drawer => {
-                self.talk_keys(false, effects);
-                self.compose_aside();
+            (Action::FocusDir { dir: Dir::Left }, None) if self.in_right_zone() => {
+                self.leave_right_zone(effects);
                 self.back_to_pane(Dir::Right, effects);
             }
             // A pane at the edge: on into the zone beside it.
@@ -113,6 +114,9 @@ impl Model {
                         Some(section) => self.open_section(section, effects),
                         None => self.rail_focus = Some(RailFocus::Left(Section::Apps)),
                     }
+                } else if self.inspector.is_some() {
+                    // The inspector has the drawer's place: its rows take the keys.
+                    self.act(Action::InspectorFilter { on: true }, effects);
                 } else if self.talk.is_some_and(|talk| talk.open) && self.talk.is_some_and(|t| self.agent_runs(t.task))
                 {
                     self.talk_keys(true, effects);
@@ -130,6 +134,20 @@ impl Model {
         match (self.focused, &self.layout) {
             (Some(from), Some(layout)) => layout.neighbor(from, dir).is_none(),
             _ => true,
+        }
+    }
+
+    /// The keyboard is in what the drawer's place shows: the conversation, the new task, or the inspector.
+    pub(super) fn in_right_zone(&self) -> bool {
+        matches!(self.focus_target(), Target::Drawer | Target::Inspector)
+    }
+
+    /// The drawer's place gives up the keyboard: a new task's line is put aside.
+    fn leave_right_zone(&mut self, effects: &mut Vec<Effect>) {
+        self.talk_keys(false, effects);
+        self.compose_aside();
+        if let Some(inspector) = &mut self.inspector {
+            inspector.filtering = false;
         }
     }
 
@@ -314,5 +332,21 @@ mod tests {
         assert_eq!(user(&mut m, Dir::Left), Target::Rail(Section::Apps));
         m.update(Action::LeaveList.sent_by(Origin::User));
         assert_eq!(m.focus_target(), Target::Pane(1));
+    }
+
+    #[test]
+    fn with_the_inspector_open_right_goes_into_its_rows_then_the_right_rail() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
+        m.update(Action::InspectorOpen { pane: 2, app: "Notes".into() });
+        assert_eq!((user(&mut m, Dir::Right), m.mode()), (Target::Inspector, Mode::Inspect));
+        assert_eq!(user(&mut m, Dir::Right), Target::Right(0));
+        assert!(m.inspector.as_ref().is_some_and(|inspector| !inspector.filtering));
+        // Back: the inspector's rows, then the pane.
+        user(&mut m, Dir::Right);
+        m.update(Action::LeaveList.sent_by(Origin::User));
+        assert_eq!(user(&mut m, Dir::Right), Target::Inspector);
+        assert_eq!(user(&mut m, Dir::Left), Target::Pane(2));
     }
 }

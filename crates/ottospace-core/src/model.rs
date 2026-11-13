@@ -2129,8 +2129,14 @@ impl Model {
             self.mark_input = None;
         }
         // The inspector's filter gives the keyboard back on the user's other moves.
-        let own_filter = matches!(action, Action::InspectorFilter { .. } | Action::InspectorMove { .. })
-            || (matches!(action, Action::FieldEdit { .. }) && self.field().is_some_and(|(of, _)| of == "inspector"));
+        // ← and → leave it by the zones (`zones`), which know it had the keyboard.
+        let own_filter = matches!(
+            action,
+            Action::InspectorFilter { .. }
+                | Action::InspectorMove { .. }
+                | Action::FocusDir { dir: Dir::Left | Dir::Right }
+        ) || (matches!(action, Action::FieldEdit { .. })
+            && self.field().is_some_and(|(of, _)| of == "inspector"));
         if let Some(inspector) = self.inspector.as_mut().filter(|_| user && !own_filter) {
             inspector.filtering = false;
         }
@@ -2202,7 +2208,7 @@ impl Model {
         let action = self.capture_route(action);
         // From the new task in the drawer, focus moves on, as the box waits pane actions.
         let across = matches!(action, Action::FocusDir { dir: Dir::Left | Dir::Right });
-        let drawer = across && self.focus_target() == zones::Target::Drawer;
+        let drawer = across && self.in_right_zone();
         if self.waits(&action).is_some() && !(user && drawer) {
             return effects;
         }

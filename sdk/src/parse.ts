@@ -186,7 +186,7 @@ function group(value: unknown, at: string): Group {
 }
 
 function focus(value: unknown, at: string): Focus {
-  if (value === "drawer" || value === "nothing") return value;
+  if (value === "drawer" || value === "inspector" || value === "nothing") return value;
   const o = fields(value, at);
   if (o.pane !== undefined) return { pane: num(o.pane, `${at}.pane`) };
   if (o.list !== undefined) return { list: num(o.list, `${at}.list`) };
