@@ -67,6 +67,7 @@ commands! {
     SplitRight: "Terminal Right", Panes;
     SplitDown: "Terminal Below", Panes;
     PickPane: "New Pane…", Panes;
+    PickPaneDown: "New Pane Below…", Panes;
     ClosePane: "Close Pane", Panes;
     FocusLeft: "Focus Left", Panes;
     FocusRight: "Focus Right", Panes;

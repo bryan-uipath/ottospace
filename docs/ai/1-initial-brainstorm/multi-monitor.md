@@ -39,7 +39,7 @@ not a spare display. (Derived from the geometry in `parking_spot`, not measured.
 | | A1. One window, sent to another display | A2. One window per display |
 |---|---|---|
 | User sees | The same window, on the other display | Each display has an ottospace window with its own tab bar and panes. One rail, on the primary window; the others have only a top bar |
-| Keys (proposals) | ⌘⌃←/→: move the window to the display on that side | ⌘⌃←/→: focus the window on that display. ⌘⌃⇧←/→: send the focused tab there. ⌘⌥ arrows and the planned pane-move key (`app-windows.md`) continue across the display edge |
+| Keys (proposals) | ⌘⌃←/→: move the window to the display on that side | ⌘⌃←/→: focus the window on that display. ⌘⌃⇧←/→: send the focused tab there. ⌘⌃ arrows (pane focus) and the planned pane-move key (`app-windows.md`) continue across the display edge |
 | Core | `Action::SetDisplays { displays }` (id, rect, scale, passed in by the shell). `Action::MoveWindow { dir }` → `Effect::MoveWindow(display)` | A `View` per display: `{ display, active tab, layout, focused }` replaces `Model::active / layout / focused`. `live` stays single: there is one keyboard. `Action::FocusDisplay`, `SendTab { display }`, `SendPane { display }` |
 | Shell | Move the window, then re-park (parking follows the window) | Model and `hosted` move from the `Workspace` view to a shared entity. One view per window. The tick runs once, not per window. Quit when the last window closes. `on_screen` and `top_limit` take the pane's own window |
 | Hosting | Parking must follow the window, or scale and Spaces differ between pane and window | Same, per window. A pane's window prefers the display that shows the pane; with no free corner there it falls back to another display, and the scale and Spaces risks return |
@@ -199,4 +199,4 @@ It takes an app name and seconds only: experiments 1, 3 and 12 need it to take a
 6. Do you run fullscreen apps on a display next to ottospace?
 7. When focus moves to another display by key, should the pointer follow?
 8. Is the menu bar item (B2) wanted, or is the status bar's "needs you" count enough?
-9. Keys: are ⌘⌃←/→ and ⌘⌃⇧←/→ free in your setup?
+9. Keys: ⌘⌃←/→ now focus a pane (#94), so these proposals need other keys. Is ⌘⌃⇧←/→ free in your setup?

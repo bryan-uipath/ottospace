@@ -864,8 +864,8 @@ fn a_refused_size_is_named_in_the_pane_header_and_fit_gives_the_window_room() {
     // it was on show: pane 3 is made 100 pt too narrow first.
     otto.call(json!({"cmd": "focus", "pane": 3}));
     let before = wait("pane 3", &|| pane(3));
-    otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-l"}));
-    otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-l"}));
+    otto.call(json!({"cmd": "key", "keys": "cmd-alt-l"}));
+    otto.call(json!({"cmd": "key", "keys": "cmd-alt-l"}));
     let cut = wait("pane 3 to be narrower", &|| pane(3).filter(|b| b[2] < before[2] - 20.0));
     wait("its hint", &|| fit(3)["hint"].as_str().is_some_and(|h| h.starts_with("needs ")).then_some(cut));
     let inner = ratio(&["split", "b", "split", "ratio"]);

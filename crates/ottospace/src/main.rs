@@ -360,23 +360,23 @@ const HEADER_TITLE_MIN: f32 = 72.;
 const SPLITS: [(&str, &str, &str, Axis, bool); 3] = [
     ("new_tab", "icons/plus.svg", "New tab…  ⌘T", Axis::Right, true),
     ("split_right", "icons/split-right.svg", "Split right…  ⌘E", Axis::Right, false),
-    ("split_down", "icons/split-down.svg", "Split down…", Axis::Down, false),
+    ("split_down", "icons/split-down.svg", "Split down…  ⌘⇧E", Axis::Down, false),
 ];
 
 /// The key reference, by group: keys and what they do. Keep in step with the bindings in `main`.
 const KEYS_PANES: &[(&str, &str)] = &[
-    ("⌘E", "Pick what opens in a new pane"),
+    ("⌘E / ⌘⇧E", "Pick what opens in a new pane: right / below"),
     ("⌘D", "Terminal to the right"),
     ("⌘⇧D", "Terminal below"),
     ("⌘W", "Close the pane"),
 ];
 const KEYS_MOVE: &[(&str, &str)] = &[
     ("⌘] / ⌘[", "Next / previous pane"),
-    ("⌘⌥ arrows", "Pane in that direction"),
-    ("⌘⌥ H J K L", "The same, on the home row"),
+    ("⌘⌃ arrows", "Pane in that direction"),
+    ("⌘⌃ H J K L", "The same, on the home row"),
 ];
 const KEYS_ARRANGE: &[(&str, &str)] = &[
-    ("⌘⌃ arrows / H J K L", "Resize: move the split that way"),
+    ("⌘⌥ arrows / H J K L", "Resize: move the split that way"),
     ("⌘⌃=", "Even out the splits"),
     ("⌘⌃0", "Fit the pane to its app's window"),
     ("⌘⇧⌥ arrows / H J K L", "Swap with the pane that way"),
@@ -410,8 +410,8 @@ const KEYS_TERMINAL: &[(&str, &str)] = &[
     ("⌘C", "Copy the selection"),
     ("⌘V", "Paste"),
     ("⌘⇧C", "Visual mode: select with the keyboard"),
-    ("⌘⇧E", "List mode: keys for the bar (Apps, Workbook, Tasks, Repos, Marks). ↵ or space on a heading folds it"),
-    ("⌘⌃G", "Sneak mode: a letter label on every control"),
+    ("⌘⌃E", "List mode: keys for the bar (Apps, Workbook, Tasks, Repos, Marks). ↵ or space on a heading folds it"),
+    ("⌘; or ⌘⌃G", "Sneak mode: a letter label on every control"),
     ("⌘N", "New task: type a line, ↵ adds it. ↑↓ ↵ pick from its list; ⌘O adds files"),
     ("⌘⇧N", "Next task: show the tabs of the first that needs you"),
     ("⌘H", "Hide ottospace"),
@@ -548,6 +548,8 @@ actions!(
         Zoom, NewTab, NextTab, PrevTab, CloseTab, ShowKeys, AxOverlay
     ]
 );
+// The picker for a pane below the focused one.
+actions!(ottospace, [PickPaneDown]);
 // Pane arrangement.
 actions!(
     ottospace,
@@ -2972,7 +2974,7 @@ impl Workspace {
             return self.apps_filter_key(event, window, cx);
         }
         if key.modifiers.platform {
-            return; // ⌘ shortcuts still reach their bindings; ⌘⇧E leaves
+            return; // ⌘ shortcuts still reach their bindings; ⌘⌃E leaves
         }
         cx.stop_propagation();
         // ⌃X is not `x`. A held key only moves: one press dismisses or opens one row.
@@ -3128,6 +3130,15 @@ impl Workspace {
         match self.system_clipboard {
             true => cx.read_from_clipboard().and_then(|item| item.text()),
             false => self.copied.clone(),
+        }
+    }
+
+    /// ⌘E / ⌘⇧E: the picker for a pane right of / below the focused one; either closes an open one.
+    fn toggle_picker(&mut self, axis: Axis, window: &Window, cx: &mut Context<Self>) {
+        if self.model.picker.is_some() {
+            self.dispatch(Action::ClosePicker, self.input, window, cx);
+        } else {
+            self.open_picker(axis, false, window, cx);
         }
     }
 
@@ -5027,13 +5038,8 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &SplitDown, window, cx| {
                 this.dispatch(Action::Split { axis: Axis::Down, kind: Kind::Terminal }, this.input, window, cx);
             }))
-            .on_action(cx.listener(|this, _: &PickPane, window, cx| {
-                if this.model.picker.is_some() {
-                    this.dispatch(Action::ClosePicker, this.input, window, cx);
-                } else {
-                    this.open_picker(Axis::Right, false, window, cx);
-                }
-            }))
+            .on_action(cx.listener(|this, _: &PickPane, window, cx| this.toggle_picker(Axis::Right, window, cx)))
+            .on_action(cx.listener(|this, _: &PickPaneDown, window, cx| this.toggle_picker(Axis::Down, window, cx)))
             .on_action(cx.listener(|this, _: &FocusNext, window, cx| {
                 this.dispatch(Action::FocusCycle { delta: 1 }, this.input, window, cx);
             }))
@@ -5298,29 +5304,30 @@ fn main() {
             KeyBinding::new("cmd-d", SplitRight, None),
             KeyBinding::new("cmd-shift-d", SplitDown, None),
             KeyBinding::new("cmd-e", PickPane, None),
+            KeyBinding::new("cmd-shift-e", PickPaneDown, None),
             KeyBinding::new("cmd-/", ShowKeys, None),
             KeyBinding::new("cmd-p", commands::CommandPalette, None),
             KeyBinding::new("cmd-w", ClosePane, None),
-            KeyBinding::new("cmd-alt-left", FocusLeft, None),
-            KeyBinding::new("cmd-alt-right", FocusRight, None),
-            KeyBinding::new("cmd-alt-up", FocusUp, None),
-            KeyBinding::new("cmd-alt-down", FocusDown, None),
+            KeyBinding::new("cmd-ctrl-left", FocusLeft, None),
+            KeyBinding::new("cmd-ctrl-right", FocusRight, None),
+            KeyBinding::new("cmd-ctrl-up", FocusUp, None),
+            KeyBinding::new("cmd-ctrl-down", FocusDown, None),
             // The same moves on the home row, and a cycle through every pane.
-            KeyBinding::new("cmd-alt-h", FocusLeft, None),
-            KeyBinding::new("cmd-alt-l", FocusRight, None),
-            KeyBinding::new("cmd-alt-k", FocusUp, None),
-            KeyBinding::new("cmd-alt-j", FocusDown, None),
+            KeyBinding::new("cmd-ctrl-h", FocusLeft, None),
+            KeyBinding::new("cmd-ctrl-l", FocusRight, None),
+            KeyBinding::new("cmd-ctrl-k", FocusUp, None),
+            KeyBinding::new("cmd-ctrl-j", FocusDown, None),
             KeyBinding::new("cmd-]", FocusNext, None),
             KeyBinding::new("cmd-[", FocusPrev, None),
             // Resize the focused pane's split, and even all splits out.
-            KeyBinding::new("cmd-ctrl-left", ResizeLeft, None),
-            KeyBinding::new("cmd-ctrl-right", ResizeRight, None),
-            KeyBinding::new("cmd-ctrl-up", ResizeUp, None),
-            KeyBinding::new("cmd-ctrl-down", ResizeDown, None),
-            KeyBinding::new("cmd-ctrl-h", ResizeLeft, None),
-            KeyBinding::new("cmd-ctrl-l", ResizeRight, None),
-            KeyBinding::new("cmd-ctrl-k", ResizeUp, None),
-            KeyBinding::new("cmd-ctrl-j", ResizeDown, None),
+            KeyBinding::new("cmd-alt-left", ResizeLeft, None),
+            KeyBinding::new("cmd-alt-right", ResizeRight, None),
+            KeyBinding::new("cmd-alt-up", ResizeUp, None),
+            KeyBinding::new("cmd-alt-down", ResizeDown, None),
+            KeyBinding::new("cmd-alt-h", ResizeLeft, None),
+            KeyBinding::new("cmd-alt-l", ResizeRight, None),
+            KeyBinding::new("cmd-alt-k", ResizeUp, None),
+            KeyBinding::new("cmd-alt-j", ResizeDown, None),
             KeyBinding::new("cmd-ctrl-=", Equalize, None),
             KeyBinding::new("cmd-ctrl-0", FitPane, None),
             // Swap the focused pane with its neighbour. ⌘⇧⌥1..9 move it to a tab (`key_down`).
@@ -5353,8 +5360,10 @@ fn main() {
             KeyBinding::new("cmd-z", Undo, None),
             KeyBinding::new("cmd-shift-z", Redo, None),
             KeyBinding::new("cmd-shift-c", VisualMode, None),
-            KeyBinding::new("cmd-shift-e", ListMode, None),
-            KeyBinding::new(sneak::KEY, SneakMode, None),
+            KeyBinding::new("cmd-ctrl-e", ListMode, None),
+            // The first is the one the menu shows.
+            KeyBinding::new(sneak::KEYS[0], SneakMode, None),
+            KeyBinding::new(sneak::KEYS[1], SneakMode, None),
             KeyBinding::new("cmd-n", NewTask, None),
             KeyBinding::new("cmd-shift-n", NextTask, None),
             KeyBinding::new("cmd-l", TalkFocus, None),

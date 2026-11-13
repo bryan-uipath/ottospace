@@ -96,3 +96,9 @@ app attaches again at start. Builds on [session-restore.md](session-restore.md) 
 layout file names each terminal's session) and replaces nothing there: after a reboot, layer 2
 (scrollback, directory) and agent resume still apply. Separate from workbooks
 ([workbook.md](workbook.md)), which are templates with no process in them.
+
+## 11. User-configurable key bindings in settings.json
+
+A `keys` map in `settings.json` (action name → chord, e.g. `"focus_left": "cmd-ctrl-h"`) that
+replaces or adds to the default bindings. The menus and the ⌘/ list show the bindings in force;
+a chord ottospace cannot parse, or one bound twice, is reported and the default kept.
