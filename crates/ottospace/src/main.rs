@@ -3436,6 +3436,12 @@ impl Workspace {
     /// listed already is known, and after, from the directories as they then are. If the
     /// settings were not written the directories are as before: the next try writes again.
     fn change_repos(&mut self, action: Action, origin: Origin, window: &Window, cx: &mut Context<Self>) {
+        // A refused one (a client's) leaves the status bar and the list alone.
+        if self.model.refusal(&action, origin).is_some() {
+            self.dispatch(action, origin, window, cx);
+            return;
+        }
+        self.model.update(Action::SetRepoDirs { dirs: config::repo_dirs() }.sent_by(Origin::System));
         let before = self.model.repo_dirs.clone();
         self.error = None; // what the last try said is not about this one
         self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));

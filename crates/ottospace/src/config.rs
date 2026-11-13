@@ -48,9 +48,9 @@ fn load() -> Config {
     Config { settings, home, error }
 }
 
-/// Where repositories are looked for at start: `$OTTOSPACE_REPOS` (directories, `:` between
-/// them), else `repos` in the settings, else `~/code` and `~/notes`. Each as named and resolved
-/// (links, `..`): a directory added later is compared with these.
+/// Where repositories are looked for: `$OTTOSPACE_REPOS` (directories, `:` between them), else
+/// the settings' `repos` as the Repos section last changed them, else `~/code` and `~/notes`.
+/// Each as named and resolved (links, `..`) now: a link may point elsewhere since the start.
 pub fn repo_dirs() -> RepoDirs {
     let resolved = |text: String, path: PathBuf| {
         let path = path.canonicalize().unwrap_or(path).to_string_lossy().into_owned();
@@ -60,27 +60,27 @@ pub fn repo_dirs() -> RepoDirs {
         let named = std::env::split_paths(&list).filter(|p| !p.as_os_str().is_empty());
         return RepoDirs { dirs: named.map(|p| resolved(p.to_string_lossy().into_owned(), p)).collect(), fixed: true };
     }
-    let listed = get().settings.repos.clone().unwrap_or_else(|| DEFAULT_REPOS.map(String::from).to_vec());
-    let dirs = listed.into_iter().map(|text| {
+    let changed = NAMED.lock().ok().and_then(|named| named.clone());
+    let settings = || get().settings.repos.clone().unwrap_or_else(|| DEFAULT_REPOS.map(String::from).to_vec());
+    let dirs = changed.unwrap_or_else(settings).into_iter().map(|text| {
         let path = PathBuf::from(expand_home(&text, &user_home()));
         resolved(text, path)
     });
     RepoDirs { dirs: dirs.collect(), fixed: false }
 }
 
-/// The directories as the Repos section last changed them, for `repo_roots`.
-static ROOTS: Mutex<Option<Vec<PathBuf>>> = Mutex::new(None);
+/// The settings' `repos` as the Repos section last changed them, by name.
+static NAMED: Mutex<Option<Vec<String>>> = Mutex::new(None);
 
 /// Where repositories are looked for now, on any thread.
 pub fn repo_roots() -> Vec<PathBuf> {
-    let changed = ROOTS.lock().ok().and_then(|roots| roots.clone());
-    changed.unwrap_or_else(|| repo_dirs().dirs.iter().map(|dir| PathBuf::from(&dir.path)).collect())
+    repo_dirs().dirs.into_iter().map(|dir| PathBuf::from(dir.path)).collect()
 }
 
 /// The model's directories changed: later reads of the list look there.
 pub fn set_repo_roots(dirs: &RepoDirs) {
-    if let Ok(mut roots) = ROOTS.lock() {
-        *roots = Some(dirs.dirs.iter().map(|dir| PathBuf::from(&dir.path)).collect());
+    if let Ok(mut named) = NAMED.lock() {
+        *named = Some(dirs.dirs.iter().map(|dir| dir.text.clone()).collect());
     }
 }
 
