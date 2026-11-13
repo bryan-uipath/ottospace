@@ -631,7 +631,7 @@ pub struct Brief {
 /// A character that shows: not a control character, and none of those that draw nothing or
 /// turn the direction of the text around (zero-width, bidi marks and overrides, tags, variation
 /// selectors, fillers that draw as blank, annotation marks).
-pub(crate) fn shows(c: char) -> bool {
+fn shows(c: char) -> bool {
     let hidden = matches!(
         c,
         '\u{ad}' | '\u{34f}' | '\u{61c}' | '\u{115f}' | '\u{1160}' | '\u{180e}' | '\u{3164}' | '\u{ffa0}' | '\u{feff}'
@@ -652,7 +652,7 @@ pub(crate) fn is_break(c: char) -> bool {
 }
 
 /// `text` on one line, of characters that show, at most `max` of them.
-fn plain(text: &str, max: usize) -> String {
+pub(crate) fn plain(text: &str, max: usize) -> String {
     let one: String = text.chars().map(|c| if is_break(c) { ' ' } else { c }).filter(|c| shows(*c)).collect();
     ax::truncate(one.trim(), max)
 }

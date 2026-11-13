@@ -306,8 +306,7 @@ fn read(
         }
         files.insert((runner_name.to_string(), session.id.clone()), session.path.clone());
         // From the end of the file, read again only when the file changed: not a transcript followed.
-        let titled = index < TITLED;
-        let (title, model) = (runner.title(session).filter(|_| titled), runner.model(session).filter(|_| titled));
+        let (title, model) = if index < TITLED { (runner.title(session), runner.model(session)) } else { (None, None) };
         found.push(Found {
             runner: runner_name.to_string(),
             id: session.id.clone(),

@@ -307,6 +307,9 @@ fn codex_lists_sessions_started_in_a_directory_or_below() {
     assert_eq!(new.model.as_deref(), Some("gpt-6-astra"));
     assert_eq!((new.pid, new.busy, new.parent.as_deref()), (None, None, None));
     assert_eq!(find(&codex, "/work/app", CODEX_CHILD).parent.as_deref(), Some(CODEX_NEW));
+    // The model now is the last turn's, not the first's that listing read.
+    assert_eq!(codex.model(&new).as_deref(), Some("gpt-6-nova"));
+    assert_eq!(codex.model(&find(&codex, "/work/app", CODEX_OLD)).as_deref(), Some("gpt-5.4"));
 
     // Only the newest rollouts are opened.
     codex.max_files = 2;

@@ -1390,7 +1390,7 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
     // Each row's title, quoted (the last one its file has), and its model in short.
     let named = |row: &Value| (row["quoted_title"].clone(), row["model"].clone());
     assert_eq!(named(&bar["rows"][0]), (json!("Greet the user"), json!("fable-5.2")));
-    assert_eq!(named(&bar["rows"][1]), (json!("Tidy the imports"), json!("gpt-6-astra")));
+    assert_eq!(named(&bar["rows"][1]), (json!("Tidy the imports"), json!("gpt-6-nova")));
     let reply = otto.call(json!({"cmd": "sessions_older"}));
     assert_eq!(rows(&reply)[2], row("codex", old, false));
     assert_eq!(named(&reply["sessions_bar"]["rows"][2]), (Value::Null, json!("gpt-5.4")), "no title: none shown");

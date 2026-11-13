@@ -12,9 +12,9 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::capture;
 use crate::model::PaneId;
 use crate::tasks::State;
-use crate::{ax, capture};
 
 /// The runners whose sessions are listed.
 pub const RUNNERS: [&str; 2] = ["claude", "codex"];
@@ -169,8 +169,7 @@ fn shown(text: &str, max: usize) -> Option<String> {
 /// direction-turning ones), at most `MAX_TITLE` of them and then `…`.
 fn quoted(title: &str) -> Option<String> {
     let line = title.trim_start().split(capture::is_break).next().unwrap_or("");
-    let line: String = line.chars().filter(|c| capture::shows(*c)).collect();
-    Some(ax::truncate(line.trim(), MAX_TITLE)).filter(|line| !line.is_empty())
+    Some(capture::plain(line, MAX_TITLE)).filter(|line| !line.is_empty())
 }
 
 /// A model's id in short, by a fixed rule. A Claude id made of words and numbers loses `claude-`
