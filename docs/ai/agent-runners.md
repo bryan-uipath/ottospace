@@ -61,13 +61,21 @@ session: the drawer stops its structured process first.
   test-only gate is the precedent for an E2E-only way in. A `Ticket` is made only by a parser,
   so an answer always names a request the CLI really asked; the shell maps it to an index.
 - **What the user approves is derived from the request's payload, never from text the model
-  describes it with. What cannot be shown in full is not approvable in one step.**
+  describes it with. What cannot be shown in full is not approvable in one step. A grant is
+  never wider than what was displayed.**
   - The payload: Claude Bash/PowerShell, the command and every option but `description`
     (`run_in_background`, `dangerouslyDisableSandbox`, …); any other Claude tool, its whole
-    input as JSON (a `Write`'s content included). Codex command, the command and its `cwd`;
-    Codex file change, every changed path (those outside the working directory flagged), a
-    `grantRoot` if asked, then every diff (kept from `item/started` and
+    input as JSON (a `Write`'s content included). Codex command: the command, its `cwd`, then
+    every other field of the request but its ids (`approvalId`, `itemId`, `threadId`,
+    `turnId`, `startedAtMs`) and `reason`, one a line (`networkApprovalContext: {…}`). Codex
+    file change: each change as `update|add|delete <path>` with a move's destination
+    (`-> <path>`), paths outside the working directory flagged; a `grantRoot` if asked; the
+    other fields as for a command; then every diff (kept from `item/started` and
     `item/fileChange/patchUpdated`).
+  - A field the client does not know (not in the 0.166 schema) is shown, named
+    `<field> (unknown field)`, and the request may then be allowed once but not "always": a
+    grant must not cover what we cannot describe. Chosen over declining, so a new Codex field
+    does not stop every approval.
   - Shown sanitised: control characters (but newline, tab) and bidirectional controls become
     `�`, so `rm x\u{202e}gnp.y` cannot read as something else.
   - `Event::Permission.detail` is the payload whole, or its first 4 KB and `… [N more bytes]`
@@ -84,12 +92,18 @@ session: the drawer stops its structured process first.
 - "Always" is **this session only**, and offered only with what it grants shown
   (`Event::Permission.always`). Claude: the CLI's `permission_suggestions` are never forwarded
   (they could `setMode`, add directories or replace rules). We build one `addRules`/`allow`/
-  `session` rule from exactly what was shown: `Bash(<the command>)`, `Edit(//<absolute path>)`,
-  `WebFetch(domain:<host>)`. None when no exact rule can be: a pattern character (`* ? [ ] { }
-  ! \`), a relative path or `..`, options beyond `timeout`, any other tool; then only Allow is
-  offered and "always" is refused. Codex: `acceptForSession`, which the server scopes to the
-  same command or the same files; `always` shows that command or those paths. Writing a lasting
-  rule stays a TUI or settings act.
+  `session` rule, and only `Bash(<the exact command shown>)`: the permission docs say a rule
+  without `*` "matches the exact command" (it also matches the command behind a fixed set of
+  wrappers such as `timeout`, and after known-safe env assignments, both of which run that same
+  command). Not for a command with `*` (a pattern, incl. `:*`), a control character (a newline
+  makes it compound) or an option beyond `timeout`. Never for other tools, because their rules
+  are wider than one shown call: file rules are gitignore patterns (a path that is a directory
+  covers everything under it, and the crate cannot tell without reading the disk) and "`Edit`
+  rules apply to all built-in tools that edit files"; `WebFetch(domain:…)` covers every URL on
+  the host; PowerShell rules match aliases, case-insensitively. Then only Allow is offered and
+  "always" is refused. Codex: `acceptForSession`, which the server scopes to the same command
+  or the same files; `always` shows that command or those paths, and is withheld when the
+  request has an unknown field. Writing a lasting rule stays a TUI or settings act.
 - Neither CLI times out a prompt: the task shows "Needs you" while one waits.
 - The permission mode and approval policy are the user's own settings, as in the TUI. ottospace
   does not pass `--dangerously-skip-permissions`, `--permission-mode` or `approvalPolicy`.
@@ -109,6 +123,7 @@ pub trait Protocol: Send + 'static {      // pure: lines in, lines and events ou
     fn opening(&mut self) -> Vec<String>;
     fn read(&mut self, line: &str) -> Output;          // events + replies to write at once
     fn write(&mut self, input: Input) -> Result<Vec<String>, Refused>;
+    fn awaits_answer(&self, head: &str) -> bool;       // may an unreadable line be a request?
 }
 pub trait Runner {                          // driver::Driver implements it
     fn send(&self, input: Input) -> io::Result<()>;
@@ -140,9 +155,12 @@ enum Event {
 - A control or server request nobody will answer gets an error reply at once, so a CLI never
   waits on a question the drawer cannot show.
 - Lines are capped at 32 MB (Claude's tool results carry images as base64); a longer one is
-  dropped as it streams and reported as `Unknown { kind: "oversized" }`.
+  dropped as it streams and reported as `Unknown { kind: "oversized" }`. If its first 1 KB says
+  it may be a request the CLI waits on (`awaits_answer`), it cannot be answered, so the driver
+  kills the session with `Error { kind: "oversized_request" }` rather than leave it waiting.
 - The driver: piped stdio, the CLI in a process group of its own. One thread reads stdout
-  (→ protocol → events, replies), one keeps stderr's last 4 KB, one waits for the exit
+  (→ protocol → events, replies), one writes stdin from a queue (a CLI that stops reading
+  stdin never blocks a send or a reply), one keeps stderr's last 4 KB, one waits for the exit
   (`waitid` with `WNOWAIT`), kills what the CLI left in its group (a background command, an MCP
   server) while the group's id is still held, then reaps it. `kill` and dropping a driver kill
   the whole group. No clock decisions: the one sleep gives stderr up to half a second to finish.
@@ -150,9 +168,12 @@ enum Event {
   interrupt with no turn running sends nothing; a Codex interrupt before the turn has an id is
   sent when the id comes. A Codex thread or turn that fails to start ends as a failed turn.
 
-Tests: 24 unit (incl. the three approval rules: exact session rule, cut and auto-deny, every changed path), 4 driver tests against fake `claude` and `codex` scripts (`tests/fakes`) that
-replay hand-written fixtures and record argv and stdin (a turn with a permission asked and
-allowed, a turn interrupted, stdin closed; and a background command ended with its CLI), and 4 property tests (every fixture value swapped
+Tests: 25 unit (incl. the approval rules: the exact Bash rule only, cut and auto-deny, every
+changed path and move, every exec field and unknown ones), 6 driver tests against fake
+`claude` and `codex` scripts (`tests/fakes`) that replay hand-written fixtures and record argv
+and stdin (a turn with a permission asked and allowed, a turn interrupted, stdin closed; a
+background command ended with its CLI; an unreadable request; a send to a CLI that reads
+nothing), and 4 property tests (every fixture value swapped
 for 15 other values and types, every line cut at every character, random bytes; a sentinel never
 reaches a label or `Debug`). Two ignored probes of the real CLIs (`tests/real.rs`, below).
 
@@ -215,7 +236,8 @@ words (a tool result, a file the model read, a web page it fetched).
 
 Sources: `claude --help` (2.1.323); code.claude.com/docs `headless`, `cli-reference`,
 `agent-sdk/typescript` (message types, `CanUseTool`, `PermissionResult`, `PermissionUpdate`,
-`ModelUsage`); `codex exec --help`, `codex exec resume --help`, `codex app-server --help`, and
+`ModelUsage`), `permissions` (rule grammar: exact Bash rules, gitignore file rules, `Edit` covering
+every edit tool, `domain:` rules); `codex exec --help`, `codex exec resume --help`, `codex app-server --help`, and
 `codex app-server generate-json-schema --out <dir>` (0.166.0, offline); learn.chatgpt.com/docs
 `non-interactive-mode` (exec's JSONL events).
 
@@ -231,7 +253,7 @@ UNVERIFIED, and what settles each:
 | Claude's `control_request`/`control_response` wire shape (`request_id`, `request.subtype: can_use_tool`, `tool_name`, `input`; response `{subtype: success, request_id, response: PermissionResult}`) | The docs give `PermissionResult` and say a `control_response` must echo `request_id`, but not the envelope. Written from the SDKs' behaviour |
 | `--permission-prompt-tool stdio` accepted by 2.1.323 | The docs describe `--permission-prompt-tool` as an MCP tool name; `stdio` is what the SDKs pass |
 | `updatedInput` required or optional on allow | We send the original input back, which both accept |
-| That our session rule (`addRules`, `destination: session`, `ruleContent` the exact command, `//path` or `domain:host`) is honoured for the request's tool | If not, "always" falls back to asking again: safe, less useful |
+| That our session rule (`addRules`, `toolName: Bash`, `ruleContent` the exact command, `destination: session`) is honoured | If not, "always" falls back to asking again: safe, less useful |
 | When Claude prints `system/init` (at start or after the first message) | Only ordering; the parser does not care |
 | The `result` after an interrupt, and the interrupt's `control_response` | The parser marks the turn interrupted itself |
 | Codex app-server message order, and whether it needs `"jsonrpc":"2.0"` | The schema does not require the field; we omit it |

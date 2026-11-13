@@ -84,7 +84,8 @@ enum TicketKind {
     /// this session" grants, built by us from that input (`None`: no exact rule can be).
     Claude { input: Value, rule: Option<Value> },
     /// Codex's command and file-change approvals: the decision is all the answer says.
-    Codex,
+    /// `session`: "always this session" may be answered (no field of the request was unknown).
+    Codex { session: bool },
     /// A request the CLI withdrew: equal to the one it closes, answered by nothing.
     Closed,
 }
@@ -311,6 +312,9 @@ pub trait Protocol: Send + 'static {
     fn read(&mut self, line: &str) -> Output;
     /// Lines that carry `input` to the process. May be none yet (queued until the session is ready).
     fn write(&mut self, input: Input) -> Result<Vec<String>, Refused>;
+    /// True if a line too long to read, of which `head` is the start, may be a request the CLI
+    /// waits on: the driver then ends the session rather than leave it waiting.
+    fn awaits_answer(&self, head: &str) -> bool;
 }
 
 /// A running agent CLI: what the shell talks to. `driver::Driver` is the one implementation.

@@ -4,13 +4,17 @@
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Line {
     Text(String),
-    /// Longer than the cap: skipped to its newline, never held whole.
-    Oversized,
+    /// Longer than the cap: skipped to its newline, never held whole. Its first `HEAD` bytes
+    /// (lossy), so a protocol can tell whether the CLI waits for an answer to it.
+    Oversized(String),
     NotUtf8,
 }
 
 /// The longest line read. Claude's tool results carry images as base64, so a line may be MBs.
 pub const MAX_LINE: usize = 32 << 20;
+
+/// How much of an oversized line is kept.
+pub const HEAD: usize = 1024;
 
 /// Bytes in, lines out. A line split across reads comes out once it ends.
 #[derive(Debug)]
@@ -36,9 +40,13 @@ impl Lines {
             if !self.skipping {
                 if self.held.len() + piece.len() > self.max {
                     // Said once, when it passes the cap; the rest of it is dropped as it comes.
-                    self.held = Vec::new();
+                    // The same head however the reads were cut: what passed the cap, at most `HEAD`.
+                    let keep = HEAD.min(self.max + 1);
+                    let mut head = std::mem::take(&mut self.held);
+                    head.extend_from_slice(&piece[..piece.len().min(keep.saturating_sub(head.len()))]);
+                    head.truncate(keep);
                     self.skipping = true;
-                    lines.push(Line::Oversized);
+                    lines.push(Line::Oversized(String::from_utf8_lossy(&head).into_owned()));
                 } else {
                     self.held.extend_from_slice(piece);
                 }
@@ -89,11 +97,11 @@ mod tests {
     fn a_long_line_is_dropped_as_it_comes_and_said_once() {
         let mut lines = Lines::new(4);
         assert_eq!(lines.push(b"abc"), []);
-        assert_eq!(lines.push(b"def"), [Line::Oversized]);
+        assert_eq!(lines.push(b"def"), [Line::Oversized("abcde".into())]);
         assert!(lines.held.is_empty());
         assert_eq!(lines.push(b"ghi"), []);
         assert_eq!(lines.push(b"j\nok\n"), text(&["ok"]));
-        assert_eq!(lines.push(b"12345"), [Line::Oversized]);
+        assert_eq!(lines.push(b"12345"), [Line::Oversized("12345".into())]);
         assert_eq!(lines.finish(), None);
     }
 

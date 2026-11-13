@@ -1,5 +1,6 @@
 //! Runs an agent CLI as a child process and speaks its protocol: one thread reads stdout into
-//! events and writes the protocol's replies, one keeps the end of stderr. Sends go from the caller.
+//! events and replies, one writes stdin from a queue (so neither a send nor a reply waits on the
+//! other), one keeps the end of stderr, one waits for the exit.
 
 use std::io::{self, Read, Write};
 use std::os::unix::process::CommandExt;
@@ -20,17 +21,29 @@ fn lock<T: ?Sized>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-type Stdin = Arc<Mutex<Option<ChildStdin>>>;
+/// Lines for stdin, in order. `None` closes it.
+type Writes = Sender<Option<Vec<String>>>;
 
-/// Writes lines to the child. Closed stdin: an error.
-fn write_lines(stdin: &Stdin, lines: &[String]) -> io::Result<()> {
-    let mut stdin = lock(stdin);
-    let pipe = stdin.as_mut().ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "stdin is closed"))?;
-    for line in lines {
-        pipe.write_all(line.as_bytes())?;
-        pipe.write_all(b"\n")?;
+/// Writes what is queued to the child's stdin until `None` or a write fails. A CLI that stops
+/// reading stdin stalls only this thread: stdout is still read, a send still returns.
+fn write(mut stdin: ChildStdin, queue: Receiver<Option<Vec<String>>>) {
+    for lines in queue {
+        let Some(lines) = lines else { return };
+        for line in lines {
+            let written = stdin.write_all(line.as_bytes()).and_then(|()| stdin.write_all(b"\n"));
+            if written.and_then(|()| stdin.flush()).is_err() {
+                return;
+            }
+        }
     }
-    pipe.flush()
+}
+
+/// Kills the CLI's process group, unless the CLI was reaped: its id may then name another group.
+fn kill_group(group: i32, reaped: &Mutex<bool>) -> io::Result<()> {
+    // Held while killing, so the CLI is not reaped (and its id freed) in between.
+    let reaped = lock(reaped);
+    // SAFETY: `killpg` takes plain integers and touches no memory of ours.
+    if *reaped || unsafe { libc::killpg(group, libc::SIGKILL) } == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
 }
 
 /// One running agent CLI.
@@ -39,7 +52,8 @@ pub struct Driver {
     group: i32,
     /// True once the CLI is reaped: its id may then name another group, so nothing is killed.
     reaped: Arc<Mutex<bool>>,
-    stdin: Stdin,
+    /// `None` once stopped.
+    writes: Option<Writes>,
     protocol: Arc<Mutex<dyn Protocol>>,
     events: Receiver<Event>,
 }
@@ -52,7 +66,10 @@ impl Driver {
         let mut child = command.spawn()?;
         let group = i32::try_from(child.id()).map_err(|_| io::Error::other("pid out of range"))?;
         let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
-        let stdin: Stdin = Arc::new(Mutex::new(child.stdin.take()));
+        let (writes, queue) = mpsc::channel();
+        if let Some(stdin) = child.stdin.take() {
+            thread::spawn(move || write(stdin, queue));
+        }
         let protocol: Arc<Mutex<dyn Protocol>> = Arc::new(Mutex::new(protocol));
         let reaped = Arc::new(Mutex::new(false));
         let (exit_tx, exit) = mpsc::channel();
@@ -66,11 +83,11 @@ impl Driver {
         let tail = Arc::new(Mutex::new(Vec::new()));
         let keeping = tail.clone();
         let tailing = stderr.map(|stderr| thread::spawn(move || keep_tail(stderr, &keeping)));
-        let (reading, replies) = (protocol.clone(), stdin.clone());
-        thread::spawn(move || read(stdout, &reading, &replies, &tx, (&tail, tailing), &exit));
-        // A CLI that exits at once gives an error here; its `Exited` still comes.
-        let _ = write_lines(&stdin, &opening);
-        Ok(Self { group, reaped, stdin, protocol, events })
+        let _ = writes.send(Some(opening));
+        let (reading, replies, killing) = (protocol.clone(), writes.clone(), reaped.clone());
+        let kill = move || drop(kill_group(group, &killing));
+        thread::spawn(move || read(stdout, &reading, &replies, &tx, (&tail, tailing), &exit, kill));
+        Ok(Self { group, reaped, writes: Some(writes), protocol, events })
     }
 }
 
@@ -121,24 +138,32 @@ fn read_some(from: &mut impl Read, buffer: &mut [u8]) -> Option<usize> {
 fn read(
     stdout: Option<impl Read>,
     protocol: &Mutex<dyn Protocol>,
-    stdin: &Stdin,
+    writes: &Writes,
     tx: &Sender<Event>,
     (tail, tailing): (&Mutex<Vec<u8>>, Option<thread::JoinHandle<()>>),
     exit: &Receiver<Option<i32>>,
+    kill: impl Fn(),
 ) {
     let mut lines = Lines::new(MAX_LINE);
     let mut each = |line: Line| {
+        let unknown =
+            |kind: &str| crate::Output { events: vec![Event::Unknown { kind: kind.into() }], replies: vec![] };
         let out = match line {
             Line::Text(text) => lock(protocol).read(&text),
-            Line::Oversized => {
-                crate::Output { events: vec![Event::Unknown { kind: "oversized".into() }], replies: vec![] }
+            // A request too long to read cannot be answered, and the CLI would wait on it for
+            // good: the session ends instead.
+            Line::Oversized(head) if lock(protocol).awaits_answer(&head) => {
+                kill();
+                let error = Event::Error { kind: "oversized_request".into(), retrying: false };
+                crate::Output { events: vec![error], replies: vec![] }
             }
-            Line::NotUtf8 => {
-                crate::Output { events: vec![Event::Unknown { kind: "not_utf8".into() }], replies: vec![] }
-            }
+            Line::Oversized(_) => unknown("oversized"),
+            Line::NotUtf8 => unknown("not_utf8"),
         };
         // Replies first: the CLI may be waiting on one.
-        let _ = write_lines(stdin, &out.replies);
+        if !out.replies.is_empty() {
+            let _ = writes.send(Some(out.replies));
+        }
         out.events.into_iter().for_each(|event| drop(tx.send(event)));
     };
     if let Some(mut stdout) = stdout {
@@ -148,7 +173,7 @@ fn read(
         }
     }
     lines.finish().into_iter().for_each(&mut each);
-    lock(stdin).take();
+    let _ = writes.send(None);
     let code = exit.recv().ok().flatten();
     // Stderr's last words, given half a second to arrive: a process left behind may hold it open.
     for _ in 0..50 {
@@ -163,37 +188,35 @@ fn read(
 
 impl Runner for Driver {
     fn send(&self, input: Input) -> io::Result<()> {
+        let closed = || io::Error::new(io::ErrorKind::BrokenPipe, "stdin is closed");
+        let writes = self.writes.as_ref().ok_or_else(closed)?;
         let lines = lock(&self.protocol)
             .write(input)
             .map_err(|refused| io::Error::new(io::ErrorKind::InvalidInput, refused.0))?;
-        write_lines(&self.stdin, &lines)
+        writes.send(Some(lines)).map_err(|_| closed())
     }
 
     fn events(&self) -> &Receiver<Event> {
         &self.events
     }
 
+    /// Closes stdin once what was sent before is written.
     fn stop(&mut self) {
-        lock(&self.stdin).take();
+        if let Some(writes) = self.writes.take() {
+            let _ = writes.send(None);
+        }
     }
 
     /// Kills the CLI's whole process group: its shell commands and MCP servers with it.
     fn kill(&mut self) -> io::Result<()> {
-        // Held while killing, so the CLI is not reaped (and its id freed) in between.
-        let reaped = lock(&self.reaped);
-        // SAFETY: `killpg` takes plain integers and touches no memory of ours.
-        if *reaped || unsafe { libc::killpg(self.group, libc::SIGKILL) } == 0 {
-            Ok(())
-        } else {
-            Err(io::Error::last_os_error())
-        }
+        kill_group(self.group, &self.reaped)
     }
 }
 
 /// A driver dropped takes its process with it: no CLI is left running unseen.
 impl Drop for Driver {
     fn drop(&mut self) {
-        self.stop();
         let _ = self.kill();
+        self.stop();
     }
 }

@@ -190,6 +190,30 @@ fn what_the_cli_started_ends_with_it() {
     }
 }
 
+/// A permission request too long to read cannot be answered: the session ends, not hangs.
+#[test]
+fn an_unreadable_request_ends_the_session() {
+    let driver = Driver::spawn(Command::new(here().join("fakes/huge-request")), Claude::new()).unwrap();
+    let events = until(&driver, |event| matches!(event, Event::Exited { .. }));
+    let error = Event::Error { kind: "oversized_request".into(), retrying: false };
+    assert!(events.contains(&error), "{events:#?}");
+    assert!(matches!(events.last(), Some(Event::Exited { code: None, .. })), "killed: {events:#?}");
+}
+
+/// A CLI that does not read its stdin never blocks a send: writes queue on their own thread.
+#[test]
+fn a_send_never_waits_on_the_cli() {
+    let mut command = Command::new("/bin/sh");
+    command.args(["-c", "exec sleep 1000"]);
+    let mut driver = Driver::spawn(command, Claude::new()).unwrap();
+    let big = "x".repeat(1 << 20);
+    for _ in 0..8 {
+        driver.send(Input::Send { text: big.clone(), images: vec![] }).unwrap();
+    }
+    driver.kill().unwrap();
+    until(&driver, |event| matches!(event, Event::Exited { .. }));
+}
+
 fn tool_start(event: &Event) -> Option<String> {
     match event {
         Event::ToolStart { tool, label, .. } => Some(format!("{tool} {label}")),

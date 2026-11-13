@@ -205,37 +205,28 @@ fn payload(tool: &str, input: &Value) -> (String, String) {
     }
 }
 
-/// Characters that make a permission rule's content a pattern, not one exact command or path.
-const PATTERN: &[char] = &['*', '?', '[', ']', '{', '}', '!', '\\'];
+/// Characters that make a Bash rule a pattern (`*`, `:*`) rather than one exact command.
+const PATTERN: &[char] = &['*'];
 
-/// The one rule "always this session" grants, and how it reads (`Bash(git status)`): exactly
-/// the shown command, the shown absolute path, or the shown host. `None` when no exact rule can
-/// be built: a pattern character, a relative path, extra options, or another tool.
+/// The one rule "always this session" grants, and how it reads: `Bash(git status)`, which the
+/// permission docs say matches that exact command. A grant is never wider than what was shown,
+/// so only this: file rules are gitignore patterns (a directory's covers all under it; an
+/// `Edit` rule covers every edit tool), a WebFetch rule covers a whole host, PowerShell rules
+/// match aliases. `None` too for a command with `*`, a control character (a newline splits it)
+/// or an option beyond `timeout`.
 fn session_rule(tool: &str, input: &Value) -> Option<(Value, String)> {
-    let text = |key: &str| input[key].as_str();
-    let plain = |text: &str| !text.is_empty() && !text.contains(PATTERN) && !text.chars().any(char::is_control);
     let fields = input.as_object()?;
-    let content = match tool {
-        "Bash" | "PowerShell" => {
-            let only = fields.keys().all(|key| matches!(key.as_str(), "command" | "description" | "timeout"));
-            text("command").filter(|command| only && plain(command))?.to_string()
-        }
-        "Read" | "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => {
-            let path = text("file_path").or(text("notebook_path"))?;
-            let absolute =
-                std::path::Path::new(path).is_absolute() && !path.split('/').any(|part| part == ".." || part == ".");
-            // `//` starts an absolute path in a permission rule.
-            (absolute && plain(path)).then(|| format!("/{path}"))?
-        }
-        "WebFetch" => {
-            let host = station::host_label(text("url")?);
-            (host != "web").then(|| format!("domain:{host}"))?
-        }
-        _ => return None,
-    };
-    let rule = json!({"type": "addRules", "rules": [{"toolName": tool, "ruleContent": content}],
+    let only = fields.keys().all(|key| matches!(key.as_str(), "command" | "description" | "timeout"));
+    let command = input["command"].as_str().filter(|command| {
+        tool == "Bash"
+            && only
+            && !command.is_empty()
+            && !command.contains(PATTERN)
+            && !command.chars().any(char::is_control)
+    })?;
+    let rule = json!({"type": "addRules", "rules": [{"toolName": "Bash", "ruleContent": command}],
         "behavior": "allow", "destination": "session"});
-    Some((rule, format!("{tool}({content})")))
+    Some((rule, format!("Bash({command})")))
 }
 
 fn assistant(record: &Value, main: bool, emit: &mut Vec<Event>) {
@@ -316,6 +307,10 @@ fn base64(bytes: &[u8]) -> String {
 impl Protocol for Claude {
     fn opening(&mut self) -> Vec<String> {
         Vec::new()
+    }
+
+    fn awaits_answer(&self, head: &str) -> bool {
+        head.contains("\"control_request\"")
     }
 
     fn read(&mut self, line: &str) -> Output {
@@ -454,20 +449,21 @@ mod tests {
         let rule = json!({"type": "addRules", "rules": [{"toolName": "Bash", "ruleContent": "git status --short"}],
             "behavior": "allow", "destination": "session"});
         assert_eq!(answer["response"]["response"]["updatedPermissions"], json!([rule]));
-        // Files and hosts: the exact absolute path, the exact host.
-        let rule_of = |tool: &str, input: Value| session_rule(tool, &input).map(|(_, shown)| shown);
-        assert_eq!(rule_of("Edit", json!({"file_path": "/w/a.rs"})).as_deref(), Some("Edit(//w/a.rs)"));
-        assert_eq!(
-            rule_of("WebFetch", json!({"url": "https://docs.rs/x"})).as_deref(),
-            Some("WebFetch(domain:docs.rs)")
-        );
-        // Nothing exact to build: no "always", and the answer is refused.
+        // A grant is never wider than what was shown. Only Bash's exact-command rule is: a file
+        // rule is a gitignore pattern (a directory's covers what is under it, and an `Edit` rule
+        // covers every edit tool), a host rule covers every URL on it, and PowerShell rules
+        // match aliases. None of those is offered; nor a command with a pattern, a newline or
+        // an option beyond `timeout`.
         let none = [
             ("Bash", json!({"command": "rm *"})),
+            ("Bash", json!({"command": "git log:*"})),
+            ("Bash", json!({"command": "ls\nrm -rf ~"})),
             ("Bash", json!({"command": "ls", "dangerouslyDisableSandbox": true})),
-            ("Edit", json!({"file_path": "src/a.rs"})),
-            ("Edit", json!({"file_path": "/w/../etc/passwd"})),
-            ("WebFetch", json!({"url": "https://user:pw@example.com"})),
+            ("PowerShell", json!({"command": "Remove-Item x"})),
+            ("Edit", json!({"file_path": "/w/a.rs"})),
+            ("Write", json!({"file_path": "/w/src/", "content": ""})),
+            ("Read", json!({"file_path": "/w/src"})),
+            ("WebFetch", json!({"url": "https://docs.rs/x"})),
             ("mcp__db__query", json!({"sql": "select 1"})),
         ];
         for (tool, input) in none {
@@ -532,7 +528,7 @@ mod tests {
 
     #[test]
     fn a_codex_ticket_is_refused() {
-        let ticket = Ticket::new(json!(1), TicketKind::Codex);
+        let ticket = Ticket::new(json!(1), TicketKind::Codex { session: true });
         assert!(Claude::new().write(Input::Answer { ticket, answer: Answer::Allow }).is_err());
     }
 

