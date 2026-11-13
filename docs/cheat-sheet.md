@@ -99,7 +99,7 @@ what can be opened, and its other panes are empty and say why. Marks are kept in
 | Snooze 1 hour / hold / dismiss / undo | ⌘⇧E on Tasks, then `s` / `h` / `x` / `u`. By mouse: the buttons on a row you hover; "Undo" then shows at the top for 6 seconds |
 
 The status bar shows how many tasks need you. Tasks are kept in `~/.ottospace/tasks`, or the `tasks` setting.
-A tag counts only if its name is known (`>repo` in the Repos list, `@claude` or `@codex`, a skill that is installed, a path that exists); any other word stays in the title.
+A tag counts only if its name is known (`>repo` in the Repos list, `@claude` or `@codex`, a runner with a model as `@claude-opus-5-5` or `@codex-gpt-6-astra`, a skill that is installed, a path that exists); any other word stays in the title.
 
 From a shell or an agent:
 
@@ -151,6 +151,7 @@ ottospace ctl '{"cmd":"state"}' | jq --argjson pane "$OTTOSPACE_PANE" '.state.ta
   "sessions": true,
   "session_dirs": { "claude": ["~/.claude"], "codex": "~/.codex" },
   "session_quiet_minutes": 3,
+  "agent_models": { "claude": ["claude-opus-5-5"], "codex": ["gpt-6-astra"] },
   "capture_key": "ctrl-alt-cmd-space",
   "capture": { "keep_images": true, "ax": true },
   "apps": ["Microsoft Outlook", "Slack"],
@@ -164,7 +165,7 @@ A mistake in a key (one that does not exist, or a wrong value) shows in the stat
 takes its default and the others still apply. If the file is not a JSON object at all, every
 setting takes its default.
 
-`sessions`: `false` reads no agent session files. `session_dirs` names where Claude Code and Codex keep them, if not `~/.claude` and `~/.codex`. `session_quiet_minutes`: a task adopted from a session moves to Needs you after the session has been quiet this long (default 3; 0 never).
+`sessions`: `false` reads no agent session files. `session_dirs` names where Claude Code and Codex keep them, if not `~/.claude` and `~/.codex`. `session_quiet_minutes`: a task adopted from a session moves to Needs you after the session has been quiet this long (default 3; 0 never). `agent_models`: the models `@` offers after each runner, as its CLI names them, in place of the built-in list.
 
 `apps`: the pinned apps, by name or bundle path. `apps_hidden`: Dock apps not to suggest. Pin, Unpin and Hide in Apps write these two and leave the rest of the file as it is. `suggest_dock_apps`: `false` lists no Dock apps.
 

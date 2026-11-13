@@ -8,6 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
+use ottospace_core::agents::{self, Models};
 use ottospace_core::complete::MAX_ROWS;
 use ottospace_core::compose::{self, Names, PathFound};
 
@@ -54,6 +55,7 @@ impl Reader {
         let (send, answers) = channel();
         let spawned = std::thread::Builder::new().name("tags".into()).spawn(move || {
             let (agents_dir, skill_dirs) = (agents_dir(), skill_dirs());
+            let models = Models::with(config::get().settings.agent_models.as_ref());
             // Ends when the window is gone.
             while let Ok(first) = queue.recv() {
                 let mut waiting: Vec<Job> = std::iter::once(first).chain(queue.try_iter()).collect();
@@ -68,7 +70,7 @@ impl Reader {
                 });
                 for mut job in waiting {
                     job.names |= job.call == 0 && names;
-                    if send.send(read(job, agents_dir.as_deref(), &skill_dirs)).is_err() {
+                    if send.send(read(job, &models, agents_dir.as_deref(), &skill_dirs)).is_err() {
                         return;
                     }
                 }
@@ -87,9 +89,9 @@ impl Reader {
     }
 }
 
-fn read(job: Job, agents_dir: Option<&Path>, skill_dirs: &[PathBuf]) -> Read {
+fn read(job: Job, models: &Models, agents_dir: Option<&Path>, skill_dirs: &[PathBuf]) -> Read {
     let repo = job.repo.as_deref().map(Path::new);
-    let names = job.names.then(|| Names { agents: agents(agents_dir), skills: skills(skill_dirs, repo) });
+    let names = job.names.then(|| Names { agents: agents(models, agents_dir), skills: skills(skill_dirs, repo) });
     let paths = paths(&compose::path_words(&job.line), repo, &job.whole);
     let entries = job.typing.as_deref().map(|typed| entries(typed, repo)).unwrap_or_default();
     Read { call: job.call, line: job.line, typing: job.typing, names, paths, entries }
@@ -117,17 +119,12 @@ fn skill_dirs() -> Vec<PathBuf> {
     runners.claude.into_iter().chain(runners.codex).map(|dir| dir.join("skills")).collect()
 }
 
-/// The built-in runners, then each `<name>.md` in `dir`, if there is one.
-fn agents(dir: Option<&Path>) -> Vec<String> {
-    let mut names = vec!["claude".to_string(), "codex".to_string()];
-    let mut files: Vec<String> = dir_names(dir, |path| path.is_file())
-        .into_iter()
-        .filter_map(|name| name.strip_suffix(".md").map(str::to_string))
-        .filter(|name| !names.contains(name))
-        .collect();
-    files.sort();
-    names.append(&mut files);
-    names
+/// The built-in runners and their models, then each `<name>.md` in `dir`, if there is one.
+fn agents(models: &Models, dir: Option<&Path>) -> Vec<String> {
+    let files = dir_names(dir, |path| path.is_file());
+    let mut saved: Vec<String> = files.iter().filter_map(|name| name.strip_suffix(".md").map(str::to_string)).collect();
+    saved.sort();
+    agents::names(models, saved)
 }
 
 /// The names in `dir` whose path passes `keep`. No folder: none.
@@ -253,14 +250,16 @@ mod tests {
     #[test]
     fn agents_and_skills_are_read_from_the_folders_given() {
         let dir = temp("names");
-        // No folder: the built-in runners.
-        assert_eq!(agents(None), ["claude", "codex"]);
-        assert_eq!(agents(Some(&dir.join("none"))), ["claude", "codex"]);
+        // No folder: the built-in runners, each with its models.
+        let models = Models { claude: vec!["claude-opus-5-5".into()], codex: Vec::new() };
+        assert_eq!(agents(&models, None), ["claude", "claude-opus-5-5", "codex"]);
+        assert_eq!(agents(&models, Some(&dir.join("none"))), ["claude", "claude-opus-5-5", "codex"]);
         std::fs::create_dir_all(dir.join("agents/sub.md")).unwrap();
-        for file in ["reviewer.md", "claude.md", "notes.txt", "ana.md"] {
+        for file in ["reviewer.md", "claude.md", "claude-opus-5-5.md", "notes.txt", "ana.md"] {
             std::fs::write(dir.join("agents").join(file), "").unwrap();
         }
-        assert_eq!(agents(Some(&dir.join("agents"))), ["claude", "codex", "ana", "reviewer"]);
+        let read = agents(&models, Some(&dir.join("agents")));
+        assert_eq!(read, ["claude", "claude-opus-5-5", "codex", "ana", "reviewer"]);
 
         // A skill is a folder with a `SKILL.md`: in the runners' folders and the repository's.
         let skill = |root: &str, name: &str| {

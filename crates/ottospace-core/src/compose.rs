@@ -231,6 +231,13 @@ pub fn spelled<'a>(names: &'a [String], typed: &str) -> Option<&'a String> {
     names.iter().find(|name| name.eq_ignore_ascii_case(typed))
 }
 
+/// The agent `typed` names: one that was read, as spelled there, else a runner's model typed
+/// outright (`claude-opus-9`), as typed: a new model needs no list.
+pub fn agent(names: &Names, typed: &str) -> Option<String> {
+    let model = || crate::agents::typed(typed).map(|_| typed.to_string());
+    spelled(&names.agents, typed).cloned().or_else(model)
+}
+
 /// Whether a tag names something, given what is known: `repo(name)` says if a repository of
 /// that name is listed, `pointed(name)` if something open has that name. A name longer than a
 /// task may keep (`MAX_TAG`) is no tag: it stays in the title, so nothing typed goes missing.
@@ -243,7 +250,7 @@ fn knows<'a>(
         name.chars().count() <= MAX_TAG
             && match mark {
                 '>' => repo(name),
-                '@' => spelled(&known.names.agents, name).is_some(),
+                '@' => agent(&known.names, name).is_some(),
                 '$' => spelled(&known.names.skills, name).is_some(),
                 '^' => pointed(name),
                 _ => known.paths.iter().any(|path| path.typed == name),
@@ -256,7 +263,7 @@ fn knows<'a>(
 pub fn read(line: &str, repo: impl Fn(&str) -> bool, pointed: impl Fn(&str) -> bool, known: &Known) -> Draft {
     let found = |typed: &str| known.paths.iter().find(|path| path.typed == typed);
     let mut draft = parse(line, knows(repo, pointed, known));
-    draft.agent = draft.agent.and_then(|typed| spelled(&known.names.agents, &typed).cloned());
+    draft.agent = draft.agent.and_then(|typed| agent(&known.names, &typed));
     let mut skills: Vec<String> = Vec::new();
     for skill in draft.skills.iter().filter_map(|typed| spelled(&known.names.skills, typed)) {
         if !skills.contains(skill) {
@@ -276,7 +283,7 @@ pub fn read_spans(line: &str, repo: impl Fn(&str) -> bool, pointed: impl Fn(&str
 /// The first of `agent` and `skills` that names nothing known, for a caller that gives them
 /// outright (the socket's `task_add`): such a task is refused, as `task_new` leaves the word in the title.
 pub fn unknown<'a>(names: &Names, agent: Option<&'a str>, skills: &'a [String]) -> Option<&'a str> {
-    let agent = agent.filter(|agent| spelled(&names.agents, agent).is_none());
+    let agent = agent.filter(|typed| self::agent(names, typed).is_none());
     agent.or_else(|| skills.iter().map(String::as_str).find(|skill| spelled(&names.skills, skill).is_none()))
 }
 
@@ -482,7 +489,8 @@ mod tests {
             paths: vec![found("/src/export", "/code/app/src/export"), found(&long, &long)],
             entries: Vec::new(),
         };
-        let line = format!("ship >app @Codex $Deploy $deploy $DEPLOY /src/export {long} >web @ana $nope");
+        let line =
+            format!("ship >app @claude-opus-9 @Codex $Deploy $deploy $DEPLOY /src/export {long} >web @ana $nope");
         let draft = read(&line, |name| name == "app", |_| false, &known);
         // Spelled as they were read, each skill once; the path with where it was found.
         assert_eq!(
@@ -497,6 +505,12 @@ mod tests {
         assert_eq!(unknown(&known.names, Some("CLAUDE"), &skills), Some("nope"));
         assert_eq!(unknown(&known.names, Some("ana"), &skills), Some("ana"));
         assert_eq!(unknown(&known.names, None, &skills[..1]), None);
+        // A runner's model typed outright is an agent, listed or not, as typed; `@claude-` is none.
+        let draft = read("try @codex @codex-gpt-7 on @claude- @Codex-x", |_| false, |_| false, &known);
+        assert_eq!((draft.agent.as_deref(), draft.title.as_str()), (Some("codex-gpt-7"), "try on @claude- @Codex-x"));
+        let alone = read("@claude-opus-9", |_| false, |_| false, &Known::default());
+        assert_eq!(alone.agent.as_deref(), Some("claude-opus-9"));
+        assert_eq!(unknown(&known.names, Some("claude-opus-9"), &[]), None);
     }
 
     #[test]
@@ -666,7 +680,7 @@ mod tests {
     #[test]
     fn any_line_reads_the_same_again_and_completes_to_its_tag() {
         use crate::fuzz::{self, HOSTILE, Rng};
-        const WORDS: [&str; 16] = [
+        const WORDS: [&str; 18] = [
             "fix",
             "zoom",
             "#canvas",
@@ -681,10 +695,13 @@ mod tests {
             "#",
             ">ap",
             "@Claude",
+            "@claude-opus-5-5",
+            "@codex-",
             "/",
             "$5",
         ];
-        const NAMES: [&str; 12] = [
+        const NAMES: [&str; 13] = [
+            "codex-gpt-6-astra",
             "app",
             "apollo",
             "Claude",

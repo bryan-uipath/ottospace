@@ -15,7 +15,7 @@ use crate::sessions::{Link, Seen};
 const WORDS: &[&str] = &["fix", "zoom", "flicker", "deploy", "x"];
 const REPOS: &[&str] = &["app", "canvas", "My Project", "2048", "Ottospace"];
 const DIRS: &[&str] = &["/code/app", "/code/canvas", "/code/app-2", "/tmp", "/Users/me/My Notes", "relative"];
-const AGENTS: &[&str] = &["claude", "codex", "Claude Code"];
+const AGENTS: &[&str] = &["claude", "codex", "Claude Code", "claude-opus-5-5", "codex-gpt-6-astra"];
 const SKILLS: &[&str] = &["code-review", "deploy"];
 const APPS: &[&str] = &["Slack", "Safari", "Finder", "Sketch", "Slides", ""];
 const UIDS: &[&str] = &["u1", "u2", "u3", "u4", ""];
