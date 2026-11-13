@@ -320,6 +320,18 @@ impl Workspace {
                 number.map(|id| Action::TaskTalk { id })
             }
             ("task" | "home-row" | "home-node", _) => number.map(|id| Action::TaskOpen { id: Some(id) }),
+            ("tasks-view", _) => {
+                if let Ok(view) = serde_json::from_value(serde_json::json!(name)) {
+                    self.click_tasks_view(view, window, cx);
+                }
+                None
+            }
+            // `project:` with no name is the group of no project.
+            ("project" | "project-done", _) => {
+                let project = Some(name.to_string()).filter(|name| !name.is_empty());
+                self.click_project(project, kind == "project-done", window, cx);
+                None
+            }
             ("task-heading", _) => {
                 if let Ok(heading) = serde_json::from_value(serde_json::json!(name)) {
                     self.click_heading(heading, window, cx);

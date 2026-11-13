@@ -39,7 +39,33 @@ export type TaskState =
 /** A heading of the inbox, in the order shown. */
 export type Group = "needs_you" | "running" | "captured" | "on_hold" | "done";
 /** A heading of the Tasks section, in the order drawn. `open`: tasks with tabs open that do not need the user. */
-export type Heading = "needs_you" | "open" | "running" | "captured" | "on_hold" | "done" | "sessions";
+export type Heading = "needs_you" | "running" | "later" | "done" | "sessions";
+
+/** How the Tasks section groups its tasks. */
+export type TasksView = "state" | "project";
+
+/** Tokens of one model, summed. `input` counts every prompt token, cached or not. */
+export interface Tokens {
+  /** In short: `opus-5.5`, `gpt-6-astra`. */
+  model: string;
+  /** A sub-agent's requests. */
+  sub: boolean;
+  input: number;
+  output: number;
+  cached: number;
+}
+
+/** What one session of a task's agent did, as last read. Times in milliseconds. */
+export interface Work {
+  runner: string;
+  session: string;
+  /** Time at work (`ms`), the last activity counted, and the day counted for (`day`, its start) with its time. */
+  clock: { ms: number; last: number | null; day: number; day_ms: number };
+  tokens: Tokens[];
+  /** Tokens in the context window after the main loop's last request, and the window. */
+  context: number | null;
+  window: number | null;
+}
 /** A program that runs agent sessions. */
 export type SessionRunner = "claude" | "codex";
 
@@ -108,6 +134,11 @@ export interface Task {
   materials: string[];
   /** What was open that the task points at (`^name`), as it was when the task was added. Nothing acts on it yet. */
   refs: Ref[];
+  /** When its agent first started, and when it was last done (milliseconds since 1970). Absent: not known. */
+  started_at?: number;
+  finished_at?: number;
+  /** What its agent's sessions did, the newest last. Absent: nothing yet. */
+  work?: Work[];
 }
 
 /** Something drawn on a capture. Positions are 0..1 of the picture, from its top left. */
@@ -371,6 +402,57 @@ export interface TaskRow {
   current: boolean;
   /** The muted line: tags, what is open, age. */
   detail: string;
+  /** What its session does now (`shell · cargo test`), while it works, and its model in short. */
+  live: string | null;
+  model: string | null;
+}
+
+/** A project's tasks by state: its bar's segments, in this order. */
+export interface Segments {
+  needs_you: number;
+  running: number;
+  later: number;
+  done: number;
+}
+
+/** A project of the Project view. `project` null: the tasks of no project, last. */
+export interface ProjectGroup {
+  project: string | null;
+  folded: boolean;
+  bar: Segments;
+  /** Its open tasks: needs you, running, later. None while folded. */
+  rows: TaskRow[];
+  done: number;
+  done_open: boolean;
+  done_rows: TaskRow[];
+}
+
+/** A task's hover card: numbers and names, and its title. */
+export interface Card {
+  id: TaskId;
+  title: string;
+  state: string;
+  group: Group | null;
+  live: string | null;
+  model: string | null;
+  /** `#project`, `>repo`, `@agent`. */
+  tags: string[];
+  /** How long ago its agent first started: `3h`. */
+  started: string | null;
+  agent_time: string;
+  /** `2 tabs · 3 panes`. */
+  workspace: string;
+  tokens: Tokens[];
+  context: number | null;
+  window: number | null;
+}
+
+/** The Tasks section's view, the Project view as drawn, the Today footer and each listed task's card. */
+export interface TasksProgress {
+  view: TasksView;
+  projects: ProjectGroup[];
+  today: { done: number; running: number; agent_ms: number; line: string };
+  cards: Record<string, Card>;
 }
 
 export interface TaskSection {
@@ -577,6 +659,10 @@ export interface Model {
   tasks: { list: Task[] };
   /** Headings of the Tasks section that are folded. */
   collapsed: Heading[];
+  tasks_view: TasksView;
+  /** Projects of the Project view that are folded, and those whose Done line is open (null: no project). */
+  folded_projects: (string | null)[];
+  open_done: (string | null)[];
   picker: Picker | null;
   palette: Palette | null;
   /** The quit question while it is up. */
@@ -771,6 +857,7 @@ export interface Snapshot {
   /** What the new-task box says it could not do ("no room in the line for that name"), or null. */
   compose_note: string | null;
   tasks_bar: TasksBar;
+  tasks_progress: TasksProgress;
   sessions_bar: SessionsBar;
   /** The Repos section: `state.repos` as its rows, and where each was laid out. */
   repos_bar: ReposGroup[];

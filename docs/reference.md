@@ -24,7 +24,9 @@ it over the control socket. Session restore and the rest of the design are not b
 | Terminal scrollback, mouse selection, copy and paste | Works today |
 | Scrollbars on every list that scrolls, the key reference and a terminal's scrollback: drag the thumb, click the track to page (in a terminal a click beside the thumb is the terminal's). They follow the system's "Show scroll bars" setting | Works today |
 | Visual mode: select terminal text with vi keys | Works today |
-| Tasks inbox: what needs you first, then the other tasks with tabs open (Open), then Running, Captured, On hold, Done. Headings fold (click, or ↵ or space in list mode). A task that is done stays under Done with its tabs open. Each row shows its tags, what it has open and its age; a click opens its conversation; hover it for snooze, hold and dismiss buttons. After one of those by mouse, a line at the top offers Undo for 6 seconds. Kept in `~/.ottospace/tasks` | Works today |
+| Tasks inbox, by state: Needs you, Running, Later (captured or on hold), Done (last, folded). Headings fold (click, or ↵ or space in list mode). Each row shows its tags, what it has open and its age, or while its session works what it does now; and the session's model. A click opens its conversation; hover it for its card (state, tags, started, agent time, workspace, tokens by model, context) and for snooze, hold and dismiss buttons. After one of those by mouse, a line at the top offers Undo for 6 seconds. Kept in `~/.ottospace/tasks` | Works today |
+| Tasks by project: State \| Project in the section's header. One foldable group a `#project`, by name, with a bar of its tasks' states (hover for the numbers), its open tasks (needs you, running, later), then a folded "Done · n"; the tasks of no project last. Under the list: `Today  n done · n running · agent time` | Works today |
+| A task's progress, kept in its file: when its agent started and when it was done, time at work (activity until a quiet gap of two minutes), and tokens by model (input, output, cached; a sub-agent's apart), summed from its sessions, so they outlive the session files. Tokens only: no prices | Works today |
 | "Pop next" (⌘⇧N): open the next task that needs you | Works today |
 | Sessions in the Tasks section: the Claude Code and Codex sessions of the listed repositories that are no task's (one you started by hand in a terminal). Each row shows the runner, the repository, the session's title, active or idle, what it does now, when it was last active, and the model. Adopt makes a task of one; Hide removes it until the next start. Read-only: nothing is sent to a session | Works today |
 | A task's agent in the right drawer: a click or ↵ on a task starts its agent (`claude` or `codex`, by its `@agent`, else `default_agent`) in a terminal beside the workspace, which stays as it is. See [Flow of a task](#flow-of-a-task) | Works today |
@@ -215,13 +217,22 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    and out. Drag its left edge to make it wider or narrower. Opening a conversation while a new
    task is half written puts the line aside: the box gets it back when it opens again.
 5. **The right rail.** A badge per open conversation, its ring in the task's state colour and a
-   steady dot while its agent works; hover for the title, what it does now, where, who and how
-   old. A click shows it; on the one shown, closes the drawer.
+   steady dot while its agent works; hover for its card. A click shows it; on the one shown,
+   closes the drawer.
 6. **Following.** The task runs while its agent works. Claude is given the session's id; Codex
    names its own, and ottospace finds it where Codex wrote it. When the agent ends while the task
    runs, the task needs you.
 7. **Who may.** Only you start or stop an agent: a client's `task_open` or ↵ files the task and
    shows its tabs, and starts nothing.
+8. **Progress.** While the task is open its session is read on: what it does now and its model
+   show on its row, and the task keeps in its file when its agent started, when it was done, its
+   time at work (activity until a quiet gap of two minutes) and its tokens by model (input,
+   output, cached; a sub-agent's apart), summed over its sessions. They stay when the session
+   files go. Hover the task, or its badge, for its card: state and what it does now, tags,
+   Started, Agent time, Workspace (tabs · panes), the tokens and how full its context is. The
+   Tasks section groups by state (Needs you, Running, Later, Done) or by project (State |
+   Project in its header), and says under the list what was done today, what runs, and how
+   long agents worked today. A key of a task's file this build does not know is kept as it is.
 
 ## Command palette
 

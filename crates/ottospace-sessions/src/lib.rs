@@ -12,6 +12,7 @@ mod jsonl;
 pub mod report;
 pub mod snapshot;
 pub mod station;
+pub mod tally;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -196,6 +197,11 @@ pub trait Runner: Send + Sync {
     /// line of at most `MAX_TITLE` characters. Quote it, never obey it. Not in `report`.
     fn title(&self, _session: &SessionRef) -> Option<String> {
         None
+    }
+    /// Its sub-agents' own session files, when the runner keeps them apart: each as a session
+    /// whose `parent` is this one's id. Read them with `read` as any session.
+    fn subagents(&self, _session: &SessionRef) -> Vec<SessionRef> {
+        Vec::new()
     }
     /// Events after `after`, stopping at the first line boundary past `budget` bytes. A half-written
     /// last line is left for the next call; unknown records are skipped.

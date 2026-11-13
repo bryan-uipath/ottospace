@@ -457,7 +457,11 @@ impl Workspace {
                 .when(cell.shown, |d| crate::raised_cell(d, ring, true))
                 .child(badge)
                 .child(self.controls.mark(format!("rail-talk:{task}")))
-                .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone()))))
+                // The task's hover card; the short tip only if the task is gone.
+                .map(|d| match crate::progress::card_tip(self, task) {
+                    Some(card) => d.tooltip(card),
+                    None => d.tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))),
+                })
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.dispatch(Action::TalkPick { id: task }, this.input, window, cx);
                 }))

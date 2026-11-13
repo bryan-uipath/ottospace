@@ -62,6 +62,7 @@ mod home;
 mod marks;
 mod menus;
 mod new_task;
+mod progress;
 mod repos;
 mod running;
 mod scrollbar;
@@ -1026,6 +1027,11 @@ impl Workspace {
     /// The one path that changes state: updates the model, then carries out its effects.
     /// `origin`: who sent the action. The person's own keys and clicks pass `self.input`.
     fn dispatch(&mut self, action: Action, origin: Origin, window: &Window, cx: &mut Context<Self>) -> Vec<Effect> {
+        // The time it happens at: a task done now is done now, not at the last read.
+        let now = now_ms();
+        if now.saturating_sub(self.model.now()) >= 1_000 && !matches!(action, Action::Tick { .. }) {
+            self.dispatch(Action::Tick { now }, Origin::System, window, cx);
+        }
         // Opening the Repos section reads the list again: repositories come and go on disk.
         let opens_repos = self.model.sidebar != Some(Section::Repos);
         if opens_repos && matches!(action, Action::ToggleSection { section: Section::Repos }) {
@@ -1917,14 +1923,19 @@ impl Workspace {
         // Closed, only the sessions that tasks still follow are looked at, and only their files.
         let Some(poller) = &mut self.sessions else { return };
         let model = &self.model;
-        poller.ask(open, || model.followed_sessions(), now);
+        poller.ask(open, || model.followed_sessions(), model.worked_sessions(), now, day_start(now));
         let (read, stopped) = (poller.take(), poller.stopped());
-        let (mut found, mut seen) = (None, None);
+        let (mut found, mut seen, mut worked) = (None, None, Vec::new());
         for read in read {
             match read {
                 sessions::Read::Found(list) => found = Some(list),
                 sessions::Read::Seen(list) => seen = Some(list),
+                sessions::Read::Work(list) => worked.extend(list),
             }
+        }
+        for work in worked {
+            self.dispatch(Action::SessionWork { work }, Origin::System, window, cx);
+            cx.notify();
         }
         if let Some(seen) = seen {
             // Adopted tasks follow their sessions by this, with the section closed.
@@ -2323,6 +2334,8 @@ impl Workspace {
             // collapsed). `empty`: no task is listed, so the section shows how to file one.
             // `undo`: the move the line at its top offers to take back ("Dismissed"), while it shows.
             "tasks_bar": self.tasks_bar(),
+            // The Project view, the Today footer and each listed task's hover card.
+            "tasks_progress": progress::snapshot(self),
             // Sessions that are no task's, as the Tasks section draws them below the tasks:
             // derived facts only (runner, id, repository name, active, station and label, age).
             "sessions_bar": self.sessions_bar(),
@@ -3492,6 +3505,7 @@ impl Workspace {
                 let badge = badge.items_center().justify_center().rounded_full().bg(rgb(theme::SELECTED));
                 badge.line_height(px(16.)).text_color(rgb(theme::task(Group::NeedsYou))).child(n.to_string())
             }))
+            .children((section == Section::Tasks).then(|| self.tasks_view_switch(cx)))
             .child(div().flex_1())
             .children(add.map(|(tip, mark)| {
                 button("bar-add", "icons/plus.svg", tip)
@@ -3726,7 +3740,6 @@ impl Workspace {
     ) -> AnyElement {
         let color = match heading {
             Heading::NeedsYou => theme::task(Group::NeedsYou),
-            Heading::Open => theme::TEXT,
             _ => theme::MUTED,
         };
         div()
@@ -3881,7 +3894,11 @@ impl Workspace {
     fn render_tasks(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut rows: Vec<AnyElement> = Vec::new();
         let mut listed = 0; // rows of the list so far: a heading is one, as list mode walks them
-        for section in self.model.task_sections(now_ms()) {
+        let by_state = self.model.tasks_view == ottospace_core::model::TasksView::State;
+        if !by_state {
+            rows = self.render_projects(&self.model.project_groups(now_ms()), &mut listed, cx);
+        }
+        for section in self.model.task_sections(now_ms()).into_iter().filter(|_| by_state) {
             let selected = self.model.list == Some(listed);
             rows.push(self.heading_row(section.heading, section.count, section.collapsed, selected, cx));
             listed += 1;
@@ -3913,7 +3930,10 @@ impl Workspace {
         let sessions = self.render_sessions(listed, cx);
         let list = div().id("tasks").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
         let list = list.track_scroll(&self.list_scroll).children(notice).children(empty).children(rows);
-        self.bars.tracked("tasks", list.children(sessions), &self.list_scroll)
+        let list = self.bars.tracked("tasks", list.children(sessions), &self.list_scroll);
+        // The footer stays under the list as it scrolls.
+        let footer = (!self.model.tasks.list.is_empty()).then(|| self.render_today());
+        div().flex_1().min_h_0().flex().flex_col().child(list).children(footer)
     }
 
     /// A task's row: a dot in its state's colour, priority and title, then a muted line of where
@@ -3991,17 +4011,24 @@ impl Workspace {
                                 },
                             )),
                     )
+                    // What its session does now, while it works, else its tags and age; its model.
                     .child(
                         div()
                             .h(px(20.))
                             .flex()
                             .items_center()
                             .gap_1()
-                            .child(detail.child(row.detail.clone()))
+                            .child(detail.child(row.live.clone().unwrap_or_else(|| row.detail.clone())))
+                            .children(
+                                row.model.clone().map(|model| {
+                                    div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(model)
+                                }),
+                            )
                             .child(actions),
                     ),
             )
             .child(self.controls.mark(format!("task:{id}")))
+            .when_some(progress::card_tip(self, id), |row, tip| row.tooltip(tip))
             .on_click(open_task(id, cx))
             .into_any_element()
     }
@@ -4690,6 +4717,21 @@ fn list_row(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
 }
 
 /// The time now, in milliseconds since 1970. The core has no clock: actions carry this.
+/// When the local day of `now` began (milliseconds since 1970), by the system's time zone: with
+/// the offset at that midnight, not now's, so a clock change during the day does not move it.
+fn day_start(now: u64) -> u64 {
+    use core_foundation::date::CFDate;
+    use core_foundation::timezone::CFTimeZone;
+    const SINCE_2001: f64 = 978_307_200.;
+    let zone = CFTimeZone::system();
+    let offset_at = |ms: i64| (zone.seconds_from_gmt(CFDate::new(ms as f64 / 1000. - SINCE_2001)) * 1000.) as i64;
+    let midnight = |offset: i64| {
+        let local = now as i64 + offset;
+        local - local.rem_euclid(86_400_000) - offset
+    };
+    midnight(offset_at(midnight(offset_at(now as i64)))).max(0) as u64
+}
+
 fn now_ms() -> u64 {
     let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
     since.map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))

@@ -16,12 +16,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 
+use ottospace_core::progress::{Clock, Tokens, Work};
 use ottospace_core::repos::Repo;
 use ottospace_core::sessions::{Found, Seen};
 use ottospace_sessions::claude::Claude;
 use ottospace_sessions::codex::Codex;
 use ottospace_sessions::report::IDLE_AFTER_MS;
 use ottospace_sessions::snapshot::Snapshot;
+use ottospace_sessions::tally;
 use ottospace_sessions::{Cursor, Kind, Runner, SessionRef};
 
 use crate::{config, repos};
@@ -42,18 +44,24 @@ fn recent(at: u64, now: u64) -> bool {
 /// A session, by runner and id.
 type Key = (String, String);
 
-/// What the window asks the reading thread for.
+/// A session whose work is read for its task: runner, id, and the task's repository (where a
+/// Claude session's file is when no listing found it; none: the home folder).
+pub type WorkKey = (String, String, Option<String>);
+
+/// What the window asks the reading thread for. Each round also reads on in the transcripts of
+/// the sessions given as work, counting time at work from `day` (the start of the local day).
 enum Ask {
     /// Every session of the listed repositories, at this time.
-    All(u64),
+    All(u64, Vec<WorkKey>, u64),
     /// Only when the files of these sessions last changed.
-    Adopted(u64, Vec<Key>),
+    Adopted(u64, Vec<Key>, Vec<WorkKey>, u64),
 }
 
 /// What a round read.
 pub enum Read {
     Found(Vec<Found>),
     Seen(Vec<Seen>),
+    Work(Vec<Work>),
 }
 
 /// The most bytes of one session read in one round. A long transcript is caught up over several.
@@ -100,6 +108,7 @@ impl Poller {
         let (reads, slow_reads) = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)));
         let (count, slow_count) = (reads.clone(), slow_reads.clone());
         let spawned = std::thread::Builder::new().name("sessions".into()).spawn(move || {
+            let claude_dirs = dirs.claude.clone();
             let claude = Claude::new(dirs.claude);
             let codex = dirs.codex.map(Codex::new);
             let mut runners: Vec<&dyn Runner> = vec![&claude];
@@ -113,10 +122,15 @@ impl Poller {
             let mut sought: HashSet<Key> = HashSet::new();
             // When each adopted session's file had last changed, at the last slow round.
             let mut last: HashMap<Key, u64> = HashMap::new();
+            // How far each task's session was read for its work, and what it added up to.
+            let mut tallies: HashMap<Key, (tally::Reader, Clock, Vec<u64>)> = HashMap::new();
             // Ends when the window is gone.
             while let Ok(ask) = asked.recv() {
+                let (work, day) = match &ask {
+                    Ask::All(_, work, day) | Ask::Adopted(_, _, work, day) => (work.clone(), *day),
+                };
                 let read = match ask {
-                    Ask::All(now) => {
+                    Ask::All(now, ..) => {
                         // The repositories as they are on disk now, read here: not on the window's thread.
                         let found = read(&runners, &repos::scan(), now, &mut follows, &mut files);
                         count.fetch_add(1, Ordering::Relaxed);
@@ -124,7 +138,7 @@ impl Poller {
                         sought.clear();
                         Read::Found(found)
                     }
-                    Ask::Adopted(now, keys) => {
+                    Ask::Adopted(now, keys, ..) => {
                         // A session adopted in an earlier run has no known file yet. One listing
                         // for all of those at once finds where their files are: it lists the
                         // session folders and reads each file's first records, as any listing
@@ -141,6 +155,10 @@ impl Poller {
                     }
                 };
                 if send.send(read).is_err() {
+                    break;
+                }
+                let worked = works(&runners, &work, &files, &claude_dirs, &mut tallies, day);
+                if !worked.is_empty() && send.send(Read::Work(worked)).is_err() {
                     break;
                 }
             }
@@ -161,16 +179,16 @@ impl Poller {
     /// the section opens, then every `EVERY_MS`. With it closed: only the files of the sessions
     /// tasks still follow, at once when it closes, then every `SLOW_MS`; and nothing at all
     /// when there are none. `adopted` says which those are: asked only when a slow round is due.
-    pub fn ask(&mut self, open: bool, adopted: impl FnOnce() -> Vec<Key>, now: u64) {
+    pub fn ask(&mut self, open: bool, adopted: impl FnOnce() -> Vec<Key>, work: Vec<WorkKey>, now: u64, day: u64) {
         if open != self.open {
             (self.open, self.asked) = (open, None);
         }
         let every = if open { EVERY_MS } else { SLOW_MS };
         let due = self.asked.is_none_or(|at| now.saturating_sub(at) >= every);
         if due && !self.waiting && !self.stopped {
-            let ask = if open { Ask::All(now) } else { Ask::Adopted(now, adopted()) };
+            let ask = if open { Ask::All(now, work, day) } else { Ask::Adopted(now, adopted(), work, day) };
             // No task follows a session: nothing to look at until the next slow round is due.
-            if matches!(&ask, Ask::Adopted(_, keys) if keys.is_empty()) {
+            if matches!(&ask, Ask::Adopted(_, keys, work, _) if keys.is_empty() && work.is_empty()) {
                 self.asked = Some(now);
                 return;
             }
@@ -322,6 +340,81 @@ fn read(
         });
     }
     found
+}
+
+/// What each task's session did, read on from where the last round stopped: tokens by model
+/// and time at work (`progress::Clock`, from `day`). Only those read to their end are given:
+/// half a transcript's tokens would replace the whole count the task keeps.
+fn works(
+    runners: &[&dyn Runner],
+    keys: &[WorkKey],
+    files: &HashMap<Key, PathBuf>,
+    claude_dirs: &[PathBuf],
+    tallies: &mut HashMap<Key, (tally::Reader, Clock, Vec<u64>)>,
+    day: u64,
+) -> Vec<Work> {
+    tallies.retain(|key, _| keys.iter().any(|(runner, id, _)| (runner, id) == (&key.0, &key.1)));
+    let mut out = Vec::new();
+    for (runner_name, id, repo) in keys {
+        let key = (runner_name.clone(), id.clone());
+        let kind = match runner_name.as_str() {
+            "claude" => Kind::Claude,
+            "codex" => Kind::Codex,
+            _ => continue,
+        };
+        let Some(runner) = runners.iter().find(|r| r.kind() == kind) else { continue };
+        // Where a listing found it; else, for Claude, where it keeps the sessions of the task's folder.
+        let cwd = repo.clone().or_else(|| std::env::var("HOME").ok()).map(PathBuf::from).unwrap_or_default();
+        let path = files.get(&key).cloned().or_else(|| {
+            let folder = ottospace_sessions::claude::slug(&cwd.canonicalize().ok()?);
+            let file = format!("{id}.jsonl");
+            let found = claude_dirs.iter().map(|dir| dir.join("projects").join(&folder).join(&file));
+            found.into_iter().find(|path| kind == Kind::Claude && path.is_file())
+        });
+        let Some(path) = path else { continue };
+        let session = SessionRef {
+            kind,
+            id: id.clone(),
+            cwd,
+            path,
+            started: None,
+            last_activity: None,
+            model: None,
+            pid: None,
+            busy: None,
+            parent: None,
+        };
+        // Times wait until every file is read to its end: a long transcript takes several rounds,
+        // and a sub-agent's later times must not come before the main loop's earlier ones.
+        let (reader, clock, waiting) = tallies.entry(key).or_default();
+        let Ok(read) = reader.advance(*runner, &session, BUDGET) else { continue };
+        if read.restarted {
+            (*clock, *waiting) = (Clock::default(), Vec::new());
+        }
+        waiting.extend(read.times);
+        if !read.caught_up {
+            continue;
+        }
+        waiting.sort_unstable();
+        waiting.drain(..).for_each(|at| clock.tick(at, day));
+        let tally = &reader.tally;
+        let tokens = tally.models.iter().map(|((model, sub), usage)| Tokens {
+            model: model.clone(),
+            sub: *sub,
+            input: usage.input,
+            output: usage.output,
+            cached: usage.cached,
+        });
+        out.push(Work {
+            runner: runner_name.clone(),
+            session: id.clone(),
+            clock: *clock,
+            tokens: tokens.collect(),
+            context: tally.context,
+            window: tally.window,
+        });
+    }
+    out
 }
 
 /// Reads on from where the last round stopped, at most `BUDGET` bytes.

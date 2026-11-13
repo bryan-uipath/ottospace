@@ -17,6 +17,7 @@ use crate::keys::Mods;
 use crate::layout::{Axis, Dir, Node, Rect, Zone};
 use crate::list::ListRow;
 use crate::marks::{self, Extra, MarkId, MarkInput, MarkOf, MarkRef, Marks, Need};
+use crate::progress;
 use crate::repos::{self, Repo};
 use crate::sessions::{self, Found};
 use crate::settings::{Installed, closed_apps};
@@ -638,6 +639,20 @@ pub enum Action {
     ToggleGroup {
         heading: Heading,
     },
+    /// The Tasks section by state, or by project.
+    TasksView {
+        view: TasksView,
+    },
+    /// Fold or unfold a project of the Project view (`None`: the tasks of no project), or with
+    /// `done` its "Done" line.
+    ToggleProject {
+        project: Option<String>,
+        done: bool,
+    },
+    /// What a session of a task's agent did, as the shell last read it (`progress`).
+    SessionWork {
+        work: progress::Work,
+    },
     /// Replace the sessions the shell found on this machine for the listed repositories.
     SetSessions {
         found: Vec<Found>,
@@ -1208,6 +1223,9 @@ impl Action {
             | Action::ComposeComplete
             | Action::ComposeSubmit { .. }
             | Action::ToggleGroup { .. }
+            | Action::TasksView { .. }
+            | Action::ToggleProject { .. }
+            | Action::SessionWork { .. }
             | Action::SetSessions { .. }
             | Action::SessionQuiet { .. }
             | Action::SessionsSeen { .. }
@@ -1315,9 +1333,72 @@ struct TaskPlace<'a> {
     heading: Heading,
     group: tasks::Group,
     task: &'a Task,
-    /// Tabs and panes it has open.
-    tabs: usize,
-    panes: usize,
+}
+
+/// How the Tasks section groups its tasks.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TasksView {
+    /// Needs you, Running, Later, Done.
+    #[default]
+    State,
+    /// A group a `#project`.
+    Project,
+}
+
+/// A project of the Project view, as drawn.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ProjectGroup {
+    /// `None`: the tasks of no project, last.
+    pub project: Option<String>,
+    pub folded: bool,
+    /// Its tasks by state: the bar's segments.
+    pub bar: tasks::Segments,
+    /// Its open tasks, needs you first, then running, then later. None while folded.
+    pub rows: Vec<TaskRow>,
+    /// How many are done, and those while the "Done" line is open.
+    pub done: usize,
+    pub done_open: bool,
+    pub done_rows: Vec<TaskRow>,
+}
+
+/// The Tasks section's footer: today's work.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Today {
+    pub done: usize,
+    pub running: usize,
+    pub agent_ms: u64,
+}
+
+impl Today {
+    /// `2 done · 1 running · 1h 05m`.
+    pub fn line(&self) -> String {
+        format!("{} done · {} running · {}", self.done, self.running, progress::duration(self.agent_ms))
+    }
+}
+
+/// A task's hover card: numbers and names, and its title, which is the user's own.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Card {
+    pub id: TaskId,
+    pub title: String,
+    /// Its state's heading, and what its session does now with its model.
+    pub state: &'static str,
+    pub group: Option<tasks::Group>,
+    pub live: Option<String>,
+    pub model: Option<String>,
+    /// `#project`, `>repo`, `@agent`.
+    pub tags: Vec<String>,
+    /// How long ago its agent first started: `3h`.
+    pub started: Option<String>,
+    pub agent_time: String,
+    /// `2 tabs · 3 panes`.
+    pub workspace: String,
+    /// By model, its sub-agents' apart, over all its sessions.
+    pub tokens: Vec<progress::Tokens>,
+    /// Tokens in the context window of its newest session, and the window, when known.
+    pub context: Option<u64>,
+    pub window: Option<u64>,
 }
 
 /// What the shell must do after an update.
@@ -1509,6 +1590,11 @@ pub struct Model {
     home: Option<String>,
     /// Headings of the Tasks section that are collapsed. Not kept between runs.
     pub collapsed: Vec<Heading>,
+    /// How the Tasks section groups its tasks. Not kept between runs, as `collapsed`.
+    pub tasks_view: TasksView,
+    /// Projects of the Project view that are folded, and those whose "Done" line is open.
+    pub folded_projects: Vec<Option<String>>,
+    pub open_done: Vec<Option<String>>,
     /// The offer to take back a snooze, hold or dismiss made with the mouse, while it shows.
     /// In the snapshot it is `tasks_bar.undo`: `notice` there is the status bar's.
     #[serde(skip)]
@@ -1619,7 +1705,11 @@ impl Default for Model {
             compose_kept: None,
             terminals: Vec::new(),
             home: None,
-            collapsed: Vec::new(),
+            // Done is at the bottom, folded: what is finished is counted, not listed.
+            collapsed: vec![Heading::Done],
+            tasks_view: TasksView::State,
+            folded_projects: Vec::new(),
+            open_done: Vec::new(),
             undo_offer: None,
             found: Vec::new(),
             session_quiet_ms: sessions::QUIET_MS,
@@ -1870,7 +1960,9 @@ impl Model {
     pub fn update(&mut self, sent: impl Into<Envelope>) -> Vec<Effect> {
         let sent = sent.into();
         let (origin, line) = (sent.origin, self.compose_line().cloned());
+        let states: Vec<(TaskId, State)> = self.tasks.list.iter().map(|task| (task.id, task.state)).collect();
         let effects = self.step(sent);
+        self.tasks.finished(&states, self.now);
         // A line anyone but the user changed is theirs until it is empty or gone.
         let changed = origin != Origin::User && self.compose_line() != line.as_ref();
         self.compose_theirs = (self.compose_theirs || changed) && self.compose_line().is_some_and(|l| !l.is_empty());
@@ -2538,6 +2630,7 @@ impl Model {
                     self.tasks.tag(task, None, Some(session.repo));
                     self.tasks.assign(task, Assign { agent: Some(runner.clone()), ..Assign::default() });
                     self.tasks.link(task, sessions::Link { runner, id, state: Some(state) });
+                    self.tasks.started(task, session.started);
                 }
             }
             Action::SessionHide { runner, id } => {
@@ -2568,6 +2661,24 @@ impl Model {
                 self.collapsed.retain(|h| *h != heading);
                 if open {
                     self.collapsed.push(heading);
+                }
+            }
+            // List mode's selection follows its task into the other view.
+            Action::TasksView { view } => self.tasks_view = view,
+            Action::ToggleProject { project, done } => {
+                let list = if done { &mut self.open_done } else { &mut self.folded_projects };
+                match list.iter().position(|p| *p == project) {
+                    Some(at) => drop(list.remove(at)),
+                    None => list.push(project),
+                }
+            }
+            Action::SessionWork { work } => {
+                let Some(work) = work.kept() else { return };
+                let of = |task: &Task| {
+                    task.session.as_ref().is_some_and(|link| (&link.runner, &link.id) == (&work.runner, &work.session))
+                };
+                if let Some(task) = self.tasks.list.iter_mut().find(|task| of(task)) {
+                    progress::record(&mut task.work, work);
                 }
             }
             Action::SetApps { names } => self.apps = names,
@@ -2618,6 +2729,8 @@ impl Model {
                 }
                 // The selection stays on the heading: the same key unfolds it again.
                 Some(ListRow::Heading(heading)) => self.act(Action::ToggleGroup { heading }, effects),
+                Some(ListRow::Project(project)) => self.act(Action::ToggleProject { project, done: false }, effects),
+                Some(ListRow::ProjectDone(project)) => self.act(Action::ToggleProject { project, done: true }, effects),
                 // As a click: the pane it runs in, if that is known. Nothing else is done to a session.
                 Some(ListRow::Session(runner, id)) => {
                     if self.session(&runner, &id).is_some_and(|s| self.session_pane(s).is_some()) {
@@ -2996,6 +3109,7 @@ impl Model {
                 if let Some(place) = self.starting.iter().position(|(id, _)| *id == task) {
                     let (_, runner) = self.starting.remove(place);
                     self.agents.push(task);
+                    self.tasks.started(task, Some(at).filter(|at| *at > 0));
                     // A runner that names its own session: look for it (`AgentSessions`).
                     if let Some(runner) = runner.filter(|runner| !agents::names_session(runner)) {
                         let cwd = self.tasks.get(task).and_then(|task| task.repo.clone());
@@ -3743,51 +3857,126 @@ impl Model {
         }
     }
 
-    /// Where each listed task goes in the Tasks section, in the order drawn: under which heading,
-    /// with what open. No text is made here: `list_rows` asks for the order alone.
+    /// Where each listed task goes in the State view, in the order drawn: under its state's
+    /// heading, most urgent first, then oldest first. `list_rows` asks for the order alone.
     fn task_places(&self) -> Vec<TaskPlace<'_>> {
-        let panes = self.tab_panes();
         let mut places: Vec<TaskPlace> = Vec::new();
         for (group, task) in self.tasks.inbox() {
-            let mine = || self.tabs.iter().zip(&panes).filter(|(tab, _)| tab.task == Some(task.id));
-            let (tabs, panes) = (mine().count(), mine().map(|(_, panes)| panes.len()).sum());
-            // What needs the user stays under Needs you, and what is finished under Done, open or not.
-            let own = matches!(group, tasks::Group::NeedsYou | tasks::Group::Done);
-            let heading = if tabs > 0 && !own { Heading::Open } else { group.into() };
-            places.push(TaskPlace { heading, group, task, tabs, panes });
+            places.push(TaskPlace { heading: group.into(), group, task });
         }
-        // Under every heading, Open too: most urgent first, then oldest first.
         places.sort_by_key(|place| (place.heading, place.task.priority, place.task.id));
         places
     }
 
-    /// The Tasks section as drawn: what needs the user first, then the other tasks with tabs
-    /// open under "Open", then the rest of the inbox under its groups. A task is listed once: one
-    /// that is open and needs the user is under "Needs you", and a finished one under "Done".
-    /// No empty headings.
+    /// How many tabs and panes a task has open.
+    fn task_open(&self, id: TaskId) -> (usize, usize) {
+        let panes = self.tab_panes();
+        let mine = || self.tabs.iter().zip(&panes).filter(|(tab, _)| tab.task == Some(id));
+        (mine().count(), mine().map(|(_, panes)| panes.len()).sum())
+    }
+
+    /// The session a task follows, as last listed: what it does now, and its model.
+    fn task_session(&self, task: &Task) -> Option<&Found> {
+        let link = task.session.as_ref()?;
+        self.found.iter().find(|s| (&s.runner, &s.id) == (&link.runner, &link.id))
+    }
+
+    /// A task's row as drawn, at `now`.
+    fn task_row(&self, task: &Task, group: tasks::Group, now: u64) -> TaskRow {
+        let (tabs, panes) = self.task_open(task.id);
+        let plural = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
+        let open = (tabs > 0).then(|| format!("{}, {}", plural(tabs, "tab"), plural(panes, "pane")));
+        let tags = Some(self.task_tags(task)).filter(|tags| !tags.is_empty());
+        // What was captured for it: its brief shows when it is opened.
+        let kept = Some(task.materials.len()).filter(|n| *n > 0).map(|n| plural(n, "material"));
+        let age = task.created.map(|created| tasks::age(created, now));
+        let detail = [tags, kept, open, age].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+        let current = self.current_task == Some(task.id);
+        let session = self.task_session(task);
+        let (live, model) = (session.and_then(Found::doing), session.and_then(|s| s.model.clone()));
+        TaskRow { live, model, id: task.id, group, tabs, panes, current, detail }
+    }
+
+    /// The Tasks section's State view as drawn: Needs you, Running, Later (captured and on hold),
+    /// Done (folded at first). A task is listed once. No empty headings.
     pub fn task_sections(&self, now: u64) -> Vec<TaskSection> {
         let mut sections: Vec<TaskSection> = Vec::new();
-        for TaskPlace { heading, group, task, tabs, panes } in self.task_places() {
+        for TaskPlace { heading, group, task } in self.task_places() {
             if sections.last().is_none_or(|s| s.heading != heading) {
                 let collapsed = self.collapsed.contains(&heading);
                 sections.push(TaskSection { heading, count: 0, collapsed, rows: Vec::new() });
             }
             let Some(section) = sections.last_mut() else { continue };
             section.count += 1;
-            if section.collapsed {
-                continue;
+            if !section.collapsed {
+                section.rows.push(self.task_row(task, group, now));
             }
-            let plural = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
-            let open = (tabs > 0).then(|| format!("{}, {}", plural(tabs, "tab"), plural(panes, "pane")));
-            let tags = Some(self.task_tags(task)).filter(|tags| !tags.is_empty());
-            // What was captured for it: its brief shows when it is opened.
-            let kept = Some(task.materials.len()).filter(|n| *n > 0).map(|n| plural(n, "material"));
-            let age = task.created.map(|created| tasks::age(created, now));
-            let detail = [tags, kept, open, age].into_iter().flatten().collect::<Vec<_>>().join(" · ");
-            let current = self.current_task == Some(task.id);
-            section.rows.push(TaskRow { id: task.id, group, tabs, panes, current, detail });
         }
         sections
+    }
+
+    /// The Project view as drawn: a group a project, by name, then the tasks of none
+    /// (`tasks::by_project`). In each, the open tasks by state, then a "Done" line folded at first.
+    pub fn project_groups(&self, now: u64) -> Vec<ProjectGroup> {
+        let groups = tasks::by_project(self.tasks.inbox());
+        let row = |(group, task): &(tasks::Group, &Task)| self.task_row(task, *group, now);
+        groups
+            .into_iter()
+            .map(|(project, places)| {
+                let (done, open): (Vec<_>, Vec<_>) = places.iter().partition(|(g, _)| *g == tasks::Group::Done);
+                let folded = self.folded_projects.contains(&project);
+                let done_open = self.open_done.contains(&project);
+                ProjectGroup {
+                    bar: tasks::Segments::of(&places),
+                    rows: if folded { Vec::new() } else { open.into_iter().map(row).collect() },
+                    done: done.len(),
+                    done_rows: if folded || !done_open { Vec::new() } else { done.into_iter().map(row).collect() },
+                    project,
+                    folded,
+                    done_open,
+                }
+            })
+            .collect()
+    }
+
+    /// The footer of the Tasks section: of the day that started at `day` (the shell's local
+    /// midnight), the tasks finished, those running now, and the time agents were at work.
+    pub fn today(&self, day: u64) -> Today {
+        let list = &self.tasks.list;
+        let done = list.iter().filter(|t| t.state == State::Done && t.finished_at.is_some_and(|at| at >= day)).count();
+        let running = list.iter().filter(|t| t.group() == Some(tasks::Group::Running)).count();
+        let agent_ms = list.iter().flat_map(|t| &t.work).map(|w| w.clock.on(day)).sum();
+        Today { done, running, agent_ms }
+    }
+
+    /// What the hover card of a task says, at `now`.
+    pub fn card(&self, id: TaskId, now: u64) -> Option<Card> {
+        let task = self.tasks.get(id)?;
+        let session = self.task_session(task);
+        let (tabs, panes) = self.task_open(id);
+        let plural = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
+        let mut tags: Vec<String> = Vec::new();
+        tags.extend(task.project.as_ref().map(|p| format!("#{p}")));
+        tags.extend(
+            task.repo.as_ref().map(|path| format!(">{}", self.repo_name(path).unwrap_or_else(|| repos::name_of(path)))),
+        );
+        tags.extend(task.agent.as_ref().map(|a| format!("@{a}")));
+        let last = task.work.last();
+        Some(Card {
+            id,
+            title: task.title.clone(),
+            state: task.group().map_or("Not listed", tasks::Group::title),
+            group: task.group(),
+            live: session.and_then(Found::doing),
+            model: session.and_then(|s| s.model.clone()),
+            tags,
+            started: task.started_at.map(|at| tasks::age(at, now)),
+            agent_time: progress::duration(task.work.iter().map(|w| w.clock.ms).sum()),
+            workspace: format!("{} · {}", plural(tabs, "tab"), plural(panes, "pane")),
+            tokens: progress::merged(task.work.iter().flat_map(|w| &w.tokens)),
+            context: last.and_then(|w| w.context),
+            window: last.and_then(|w| w.window),
+        })
     }
 
     /// Tasks adopted from sessions follow them (`sessions::follow`), by the time of the last
@@ -3814,6 +4003,29 @@ impl Model {
             Some((link.runner.clone(), link.id.clone()))
         };
         self.tasks.list.iter().filter_map(follows).collect()
+    }
+
+    /// The time of the last `Tick` (milliseconds since 1970).
+    pub fn now(&self) -> u64 {
+        self.now
+    }
+
+    /// The sessions whose work the shell reads (`SessionWork`), as (runner, id, the task's
+    /// repository): of the tasks that are listed and not done, or done in the last
+    /// `progress::LAST_READ_MS` (what came after the last read). Those that need you or run come
+    /// first; at most `progress::MAX_SESSIONS`.
+    pub fn worked_sessions(&self) -> Vec<(String, String, Option<String>)> {
+        let lately =
+            |task: &Task| task.finished_at.is_some_and(|at| self.now.saturating_sub(at) <= progress::LAST_READ_MS);
+        let read = |task: &&Task| match task.group() {
+            Some(tasks::Group::Done) => lately(task),
+            group => group.is_some(),
+        };
+        let mut linked: Vec<&Task> = self.tasks.list.iter().filter(read).filter(|t| t.session.is_some()).collect();
+        linked.sort_by_key(|task| task.group().map(Heading::from));
+        let key =
+            |task: &Task| task.session.as_ref().map(|link| (link.runner.clone(), link.id.clone(), task.repo.clone()));
+        linked.into_iter().filter_map(key).take(progress::MAX_SESSIONS).collect()
     }
 
     /// The sessions that are no task's and not hidden, in the order listed. At most `MAX_FOUND`.
@@ -3960,33 +4172,7 @@ impl Model {
             Some(Section::Repos) => {
                 self.repos.iter().flat_map(Repo::checkouts).map(|checkout| ListRow::Repo(checkout.path)).collect()
             }
-            // As drawn: each heading, then its rows unless it is folded. A heading is a row, so
-            // a section that is all folded can be unfolded from the keyboard.
-            Some(Section::Tasks) => {
-                let mut rows: Vec<ListRow> = Vec::new();
-                for place in self.task_places() {
-                    if rows.iter().all(|row| *row != ListRow::Heading(place.heading)) {
-                        rows.push(ListRow::Heading(place.heading));
-                    }
-                    if !self.collapsed.contains(&place.heading) {
-                        rows.push(ListRow::Task(place.task.id));
-                    }
-                }
-                // Then the sessions that are no task's, as drawn: the heading, those of the last
-                // day, "N older", and the older ones while they are shown.
-                let bar = self.sessions_bar();
-                if bar.count > 0 {
-                    rows.push(ListRow::Heading(Heading::Sessions));
-                    let session = |row: &sessions::Row| ListRow::Session(row.runner.clone(), row.id.clone());
-                    let (recent, old) = bar.rows.split_at(bar.recent());
-                    rows.extend(recent.iter().map(session));
-                    if bar.older > 0 && !bar.collapsed {
-                        rows.push(ListRow::OlderSessions);
-                    }
-                    rows.extend(old.iter().map(session));
-                }
-                rows
-            }
+            Some(Section::Tasks) => self.task_list_rows(self.tasks_view, false),
             Some(Section::Marks) => self.marks.list.iter().map(|mark| ListRow::Mark(mark.id)).collect(),
             // Each workbook, and the tabs of an unfolded one under it.
             Some(Section::Workbook) => {
@@ -4001,6 +4187,58 @@ impl Model {
             }
             None => Vec::new(),
         }
+    }
+
+    /// The Tasks section's rows in `view`, as drawn: each heading (or project, and its "Done"
+    /// line), then its rows unless it is folded. A heading is a row, so a section that is all
+    /// folded can be unfolded from the keyboard. `unfolded`: as if nothing were folded.
+    pub(crate) fn task_list_rows(&self, view: TasksView, unfolded: bool) -> Vec<ListRow> {
+        let collapsed = |heading: &Heading| !unfolded && self.collapsed.contains(heading);
+        let folded = |project: &Option<String>| !unfolded && self.folded_projects.contains(project);
+        let done_open = |project: &Option<String>| unfolded || self.open_done.contains(project);
+        let mut rows: Vec<ListRow> = Vec::new();
+        match view {
+            TasksView::State => {
+                for place in self.task_places() {
+                    if rows.iter().all(|row| *row != ListRow::Heading(place.heading)) {
+                        rows.push(ListRow::Heading(place.heading));
+                    }
+                    if !collapsed(&place.heading) {
+                        rows.push(ListRow::Task(place.task.id));
+                    }
+                }
+            }
+            TasksView::Project => {
+                for (project, places) in tasks::by_project(self.tasks.inbox()) {
+                    rows.push(ListRow::Project(project.clone()));
+                    if folded(&project) {
+                        continue;
+                    }
+                    let done = |(group, _): &&(tasks::Group, &Task)| *group == tasks::Group::Done;
+                    rows.extend(places.iter().filter(|p| !done(p)).map(|(_, task)| ListRow::Task(task.id)));
+                    if places.iter().any(|p| done(&p)) {
+                        rows.push(ListRow::ProjectDone(project.clone()));
+                        if done_open(&project) {
+                            rows.extend(places.iter().filter(done).map(|(_, task)| ListRow::Task(task.id)));
+                        }
+                    }
+                }
+            }
+        }
+        // Then the sessions that are no task's, as drawn: the heading, those of the last
+        // day, "N older", and the older ones while they are shown.
+        let bar = self.sessions_bar();
+        if bar.count > 0 {
+            rows.push(ListRow::Heading(Heading::Sessions));
+            let session = |row: &sessions::Row| ListRow::Session(row.runner.clone(), row.id.clone());
+            let (recent, old) = bar.rows.split_at(bar.recent());
+            rows.extend(recent.iter().map(session));
+            if bar.older > 0 && !bar.collapsed {
+                rows.push(ListRow::OlderSessions);
+            }
+            rows.extend(old.iter().map(session));
+        }
+        rows
     }
 
     fn selected_task(&self) -> Option<TaskId> {
@@ -4714,6 +4952,9 @@ mod tests {
         Action::CloseCompose,
         Action::TaskFromLine { .. },
         Action::ToggleGroup { .. },
+        Action::TasksView { .. },
+        Action::ToggleProject { .. },
+        Action::SessionWork { .. },
         Action::SetSessions { .. },
         Action::SessionQuiet { .. },
         Action::SessionsSeen { .. },
@@ -4987,6 +5228,9 @@ mod tests {
             Action::TalkResize { width: 400. },
             Action::TalkWide,
             Action::TalkPick { id: 1 },
+            Action::TasksView { view: TasksView::Project },
+            Action::ToggleProject { project: None, done: false },
+            Action::SessionWork { work: progress::Work::default() },
         ];
         let mut places: Vec<usize> = samples.iter().map(index).collect();
         places.sort_unstable();
@@ -5772,10 +6016,10 @@ mod tests {
         m.update(Action::ListMove { delta: 1 });
         m.update(Action::ListDismiss);
         assert_eq!((m.list_rows(), m.list), (vec![heading(Heading::NeedsYou), task(1), task(3)], Some(2)));
-        // Hold it: it goes under On hold, and the heading that came is under the selection. The
+        // Hold it: it goes under Later, and the heading that came is under the selection. The
         // task keys do nothing on a heading.
         m.update(Action::ListHold);
-        let held = vec![heading(Heading::NeedsYou), task(1), heading(Heading::OnHold), task(3)];
+        let held = vec![heading(Heading::NeedsYou), task(1), heading(Heading::Later), task(3)];
         assert_eq!((m.list_rows(), m.list), (held.clone(), Some(2)));
         m.update(Action::ListSnooze { until: 9 });
         assert_eq!(m.list_rows(), held);
@@ -5821,7 +6065,7 @@ mod tests {
         assert_eq!((m.list, m.list_rows()[2].clone()), (Some(2), ListRow::Task(3)));
         // The selected task is taken away by someone else: the selection stays on a row.
         m.update(Action::TaskSetState { id: 3, state: State::Cleaned });
-        assert_eq!((m.list, m.list_rows()[2].clone()), (Some(2), ListRow::Heading(Heading::OnHold)));
+        assert_eq!((m.list, m.list_rows()[2].clone()), (Some(2), ListRow::Heading(Heading::Later)));
         // ↵ opens the task's conversation: the keyboard goes to it, and the list gives it up.
         m.update(Action::ListMove { delta: 1 });
         m.update(Action::ListChoose { axis: Right });
@@ -6688,40 +6932,174 @@ mod tests {
             known: Default::default(),
             open: false,
         });
-        assert_eq!(
-            sections(&m),
-            [(Heading::NeedsYou, 1, vec![1]), (Heading::Running, 1, vec![2]), (Heading::Captured, 2, vec![4, 3])]
-        );
-        // A task with a tab moves under Open, and leaves its own group. An empty group has no heading.
-        // One that needs you stays under Needs you, open or not: attention wins.
+        // Under its state's heading, open or not; within one, most urgent first, then oldest.
         m.update(Action::TaskOpen { id: Some(4) });
         m.update(Action::NewTab);
-        m.update(Action::TaskOpen { id: Some(2) });
         m.update(Action::TaskOpen { id: Some(1) });
+        m.update(Action::TaskSetState { id: 3, state: State::Parked });
         assert_eq!(
             sections(&m),
-            [(Heading::NeedsYou, 1, vec![1]), (Heading::Open, 2, vec![4, 2]), (Heading::Captured, 1, vec![3])],
-            "under Open as under any heading: most urgent first, then oldest"
+            [(Heading::NeedsYou, 1, vec![1]), (Heading::Running, 1, vec![2]), (Heading::Later, 2, vec![4, 3])],
+            "Later holds what is captured and what is on hold"
         );
         // Each row: its tags, what it has open, how old it is. The one on show is marked.
         let sections = m.task_sections(1_000 + 3 * 3_600_000);
-        let (needs, open) = (&sections[0].rows[0], &sections[1].rows[0]);
+        let (needs, later) = (&sections[0].rows[0], &sections[2].rows[0]);
         assert_eq!(
             (needs.detail.as_str(), needs.tabs, needs.current, needs.group),
             ("1 tab, 0 panes · 3h", 1, true, tasks::Group::NeedsYou)
         );
-        assert_eq!((open.detail.as_str(), open.current), ("#canvas · >app-2 · 2 tabs, 1 pane · 3h", false));
+        assert_eq!((later.detail.as_str(), later.current), ("#canvas · >app-2 · 2 tabs, 1 pane · 3h", false));
         // List mode walks the headings and rows in the order drawn.
         m.update(Action::ToggleSection { section: Section::Tasks });
         let (heading, task) = (ListRow::Heading, ListRow::Task);
-        let drawn = [heading(Heading::NeedsYou), task(1), heading(Heading::Open), task(4), task(2)];
-        assert_eq!(m.list_rows(), [&drawn[..], &[heading(Heading::Captured), task(3)]].concat());
-        // A finished task is under Done, with its tabs open or not: Open is for work going on.
+        let drawn = [heading(Heading::NeedsYou), task(1), heading(Heading::Running), task(2)];
+        assert_eq!(m.list_rows(), [&drawn[..], &[heading(Heading::Later), task(4), task(3)]].concat());
+        // A finished task is under Done, last and folded: counted, not listed, until unfolded.
         m.update(Action::TaskSetState { id: 2, state: State::Done });
-        let sections = m.task_sections(0);
-        let done = sections.last().unwrap();
-        assert_eq!((done.heading, done.rows[0].id, done.rows[0].tabs), (Heading::Done, 2, 1));
-        assert_eq!(sections[1].rows.iter().map(|row| row.id).collect::<Vec<_>>(), [4]);
+        let done = m.task_sections(0).pop().unwrap();
+        assert_eq!((done.heading, done.count, done.collapsed, done.rows.len()), (Heading::Done, 1, true, 0));
+        m.update(Action::ToggleGroup { heading: Heading::Done });
+        assert_eq!(m.task_sections(0).pop().unwrap().rows[0].id, 2);
+    }
+
+    /// Tasks with these (title, project, state), filed in this order.
+    fn filed(m: &mut Model, tasks: &[(&str, Option<&str>, State)]) {
+        for (title, project, state) in tasks {
+            let tags = project.map(|p| format!(" #{p}")).unwrap_or_default();
+            m.update(Action::TaskFromLine { line: format!("{title}{tags}"), known: Default::default(), open: false });
+            let id = m.tasks.list.last().map(|t| t.id).unwrap_or_default();
+            m.update(Action::TaskSetState { id, state: *state });
+        }
+    }
+
+    #[test]
+    fn the_project_view_groups_by_project_with_no_project_last_and_a_bar_of_states() {
+        let mut m = Model::default();
+        use State::*;
+        filed(
+            &mut m,
+            &[
+                ("a", Some("web"), Done),
+                ("b", None, Captured),
+                ("c", Some("api"), Running),
+                ("d", Some("web"), NeedsYou),
+                ("e", Some("Beta"), Parked),
+                ("f", Some("web"), Captured),
+                ("g", Some("web"), Running),
+            ],
+        );
+        let groups = m.project_groups(0);
+        let names: Vec<Option<&str>> = groups.iter().map(|g| g.project.as_deref()).collect();
+        assert_eq!(names, [Some("api"), Some("Beta"), Some("web"), None], "by name, whatever the case; none last");
+        let web = &groups[2];
+        // Needs you, running, later; Done is a folded line under them.
+        assert_eq!(web.rows.iter().map(|r| r.id).collect::<Vec<_>>(), [4, 7, 6]);
+        assert_eq!((web.done, web.done_open, web.done_rows.len()), (1, false, 0));
+        assert_eq!(web.bar, tasks::Segments { needs_you: 1, running: 1, later: 1, done: 1 });
+        assert_eq!(web.bar.shares(), [0.25; 4]);
+        assert_eq!(tasks::Segments::default().shares(), [0.; 4]);
+        assert_eq!(web.bar.tip(), "1 needs you · 1 running · 1 later · 1 done");
+        // List mode walks the projects, their tasks and their Done lines; ↵ on one folds it.
+        m.update(Action::ToggleSection { section: Section::Tasks });
+        m.update(Action::FocusList);
+        m.update(Action::TasksView { view: TasksView::Project });
+        let (project, task) = (|p: Option<&str>| ListRow::Project(p.map(String::from)), ListRow::Task);
+        let web_done = ListRow::ProjectDone(Some("web".into()));
+        assert_eq!(
+            m.list_rows()[..9],
+            [
+                project(Some("api")),
+                task(3),
+                project(Some("Beta")),
+                task(5),
+                project(Some("web")),
+                task(4),
+                task(7),
+                task(6),
+                web_done.clone()
+            ]
+        );
+        assert_eq!(m.list, Some(5), "still on the task it was on: d, which needs you");
+        m.update(Action::ListMove { delta: 3 });
+        m.update(Action::ListChoose { axis: Axis::Right });
+        assert_eq!((m.open_done.as_slice(), m.list_rows()[9].clone()), (&[Some("web".to_string())][..], task(1)));
+        m.update(Action::ToggleProject { project: Some("web".into()), done: false });
+        assert_eq!(m.project_groups(0)[2].rows.len(), 0);
+        assert_eq!(m.list_rows()[4..6], [project(Some("web")), project(None)]);
+    }
+
+    #[test]
+    fn the_sessions_read_for_work_are_of_open_tasks_and_those_done_just_now_running_first() {
+        let mut m = Model::default();
+        m.update(Action::Tick { now: 1_000_000 });
+        filed(&mut m, &[("a", None, State::Captured), ("b", None, State::Running), ("c", None, State::Running)]);
+        for id in 1..=3 {
+            m.tasks.link(id, sessions::Link { runner: "claude".into(), id: format!("s{id}"), state: None });
+        }
+        let ids = |m: &Model| m.worked_sessions().into_iter().map(|(_, id, _)| id).collect::<Vec<_>>();
+        assert_eq!(ids(&m), ["s2", "s3", "s1"]);
+        // Done: read a while longer, for what it wrote after the last read. Then no more.
+        m.update(Action::TaskSetState { id: 3, state: State::Done });
+        assert_eq!(ids(&m), ["s2", "s1", "s3"]);
+        m.update(Action::Tick { now: 1_000_000 + progress::LAST_READ_MS + 1 });
+        assert_eq!(ids(&m), ["s2", "s1"]);
+    }
+
+    #[test]
+    fn a_tasks_time_and_tokens_come_from_its_sessions_work() {
+        const UUID: &str = "8f14e45f-ceea-467f-a8d3-0242ac130003";
+        let mut m = Model::default();
+        m.update(Action::Tick { now: 5_000 });
+        filed(&mut m, &[("ship it", Some("web"), State::Captured)]);
+        let link = sessions::Link { runner: "claude".into(), id: UUID.into(), state: None };
+        m.tasks.link(1, link);
+        let tokens =
+            |model: &str, sub, input| progress::Tokens { model: model.into(), sub, input, output: 2, cached: 1 };
+        let work = |session: &str, ms, day, day_ms, rows| progress::Work {
+            runner: "claude".into(),
+            session: session.into(),
+            clock: progress::Clock { ms, last: None, day, day_ms },
+            tokens: rows,
+            context: Some(50_000),
+            window: Some(200_000),
+        };
+        // Another session's work, or a runner not listed: no task takes it.
+        m.update(Action::SessionWork { work: work("other", 9, 0, 0, Vec::new()) });
+        assert!(m.tasks.list[0].work.is_empty());
+        let rows = vec![tokens("claude-opus-5-5", false, 10), tokens("claude-haiku-5", true, 4)];
+        m.update(Action::SessionWork { work: work(UUID, 60_000, 0, 0, rows.clone()) });
+        // Read again: it replaces what was kept of that session, it does not add to it.
+        m.update(Action::SessionWork { work: work(UUID, 90_000, 1_000, 30_000, rows) });
+        let task = &m.tasks.list[0];
+        assert_eq!(
+            (task.work.len(), task.work[0].clock.ms, task.work[0].tokens[0].model.as_str()),
+            (1, 90_000, "opus-5.5")
+        );
+        // It started when its agent did; it is finished when it is done, and not when reopened.
+        m.tasks.started(1, Some(4_000));
+        m.update(Action::Tick { now: 7_000 });
+        m.update(Action::TaskSetState { id: 1, state: State::Done });
+        assert_eq!(m.tasks.list[0].finished_at, Some(7_000));
+        // The footer: what was done since the day began, what runs, and today's time at work.
+        assert_eq!(m.today(1_000).line(), "1 done · 0 running · 30s");
+        assert_eq!(m.today(8_000), Today { done: 0, running: 0, agent_ms: 0 });
+        // The card: its state, tags, times, workspace and tokens.
+        let card = m.card(1, 4_000 + 3 * 3_600_000).unwrap();
+        assert_eq!(
+            (card.state, card.tags.as_slice(), card.started.as_deref()),
+            ("Done", &["#web".to_string()][..], Some("3h"))
+        );
+        assert_eq!((card.agent_time.as_str(), card.workspace.as_str()), ("1m", "0 tabs · 0 panes"));
+        let table: Vec<_> = card.tokens.iter().map(|t| (t.model.as_str(), t.sub, t.input)).collect();
+        assert_eq!(table, [("opus-5.5", false, 10), ("haiku-5", true, 4)]);
+        assert_eq!((card.context, card.window), (Some(50_000), Some(200_000)));
+        m.update(Action::TaskSetState { id: 1, state: State::Running });
+        assert_eq!(m.tasks.list[0].finished_at, None);
+        // A key this build does not know is written back as it was.
+        let text = r#"{"id":1,"title":"t","state":"done","workspace":{"tabs":[1]}}"#;
+        let read: Task = serde_json::from_str(text).unwrap();
+        assert!(serde_json::to_string(&read).unwrap().contains(r#""workspace":{"tabs":[1]}"#));
     }
 
     #[test]
@@ -6747,7 +7125,7 @@ mod tests {
         m.update(Action::ToggleGroup { heading: Heading::NeedsYou });
         assert_eq!(
             (m.list_rows(), m.list, m.collapsed.as_slice()),
-            (vec![needs.clone(), running.clone(), task(3)], Some(2), &[Heading::NeedsYou][..])
+            (vec![needs.clone(), running.clone(), task(3)], Some(2), &[Heading::Done, Heading::NeedsYou][..])
         );
         // All folded is no dead end: a heading is a row, and ↵ on it unfolds it. The selection stays on it.
         m.update(Action::ToggleGroup { heading: Heading::Running });
@@ -6758,9 +7136,9 @@ mod tests {
             (vec![needs.clone(), running.clone(), task(3)], Some(1), Mode::List)
         );
         m.update(Action::ListChoose { axis: Right });
-        assert_eq!(m.collapsed.as_slice(), &[Heading::NeedsYou, Heading::Running]);
+        assert_eq!(m.collapsed.as_slice(), &[Heading::Done, Heading::NeedsYou, Heading::Running]);
         m.update(Action::ToggleGroup { heading: Heading::NeedsYou });
-        assert_eq!((sections(&m)[0].2.len(), m.collapsed.len()), (2, 1));
+        assert_eq!((sections(&m)[0].2.len(), m.collapsed.len()), (2, 2));
     }
 
     fn session(runner: &str, id: &str, cwd: &str, active: bool, at: u64) -> Found {
@@ -6830,7 +7208,7 @@ mod tests {
         });
         m.update(Action::ToggleSection { section: Section::Tasks });
         let row = |id: &str, runner: &str| ListRow::Session(runner.into(), id.into());
-        let tasks = [ListRow::Heading(Heading::Captured), ListRow::Task(1), ListRow::Heading(Heading::Sessions)];
+        let tasks = [ListRow::Heading(Heading::Later), ListRow::Task(1), ListRow::Heading(Heading::Sessions)];
         let sessions = [row("busy", "claude"), row("idle", "codex"), ListRow::OlderSessions];
         assert_eq!(m.list_rows(), [&tasks[..], &sessions[..]].concat());
         // ↵ on "1 older" shows the older ones after it; ↵ on the heading folds the group.

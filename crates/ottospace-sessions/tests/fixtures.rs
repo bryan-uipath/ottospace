@@ -11,7 +11,8 @@ use ottospace_sessions::git::checkouts;
 use ottospace_sessions::report::report;
 use ottospace_sessions::snapshot::Snapshot;
 use ottospace_sessions::station::Station;
-use ottospace_sessions::{Cursor, Kind, Runner, SessionRef, What, read_all};
+use ottospace_sessions::tally::{Reader, Tally};
+use ottospace_sessions::{Cursor, Kind, Runner, SessionRef, Usage, What, read_all};
 
 const CLAUDE_MAIN: &str = "11111111-1111-4111-8111-111111111111";
 const CLAUDE_WORKTREE: &str = "22222222-2222-4222-8222-222222222222";
@@ -765,4 +766,98 @@ fn checkouts_are_the_main_checkout_and_its_worktrees() {
     let plain = root.join("plain");
     fs::create_dir_all(&plain).unwrap();
     assert_eq!(checkouts(&plain).unwrap(), std::slice::from_ref(&plain), "not a repository");
+}
+
+/// (model, sub-agent's, input, output, cached), as a tally sums them.
+fn tokens(tally: &Tally) -> Vec<(&str, bool, u64, u64, u64)> {
+    tally
+        .models
+        .iter()
+        .map(|((model, sub), u): (&(String, bool), &Usage)| (model.as_str(), *sub, u.input, u.output, u.cached))
+        .collect()
+}
+
+#[test]
+fn claude_tally_sums_tokens_by_model_with_sub_agents_apart() {
+    let claude = claude();
+    let session = find(&claude, "/work/app", CLAUDE_MAIN);
+    let mut reader = Reader::default();
+    let read = reader.advance(&claude, &session, ALL).unwrap();
+    assert!(read.caught_up && !read.restarted);
+    // One request per message id; the inline sidechain record is not the main loop's, and the
+    // sub-agent's own file is counted as a sub-agent's.
+    assert_eq!(
+        tokens(&reader.tally),
+        [
+            ("claude-fable-5-2", false, 60_500, 500, 60_000),
+            ("claude-haiku-5", true, 4_250, 100, 4_100),
+            ("claude-opus-5-5", false, 84_800, 240, 82_000),
+        ]
+    );
+    assert_eq!(reader.tally.context, Some(61_000), "after the main loop's last request");
+    // Activity from every file, oldest first: the sub-agent's at 09:00:12 among the main loop's.
+    assert!(read.times.windows(2).all(|pair| pair[0] <= pair[1]));
+    assert!(read.times.contains(&1_794_474_012_000), "{:?}", read.times);
+    // Nothing new: nothing more is counted.
+    let again = reader.advance(&claude, &session, ALL).unwrap();
+    assert!(again.times.is_empty() && again.caught_up);
+    assert_eq!(tokens(&reader.tally)[2], ("claude-opus-5-5", false, 84_800, 240, 82_000));
+}
+
+#[test]
+fn codex_tally_counts_a_child_rollout_as_a_sub_agent() {
+    let codex = codex();
+    let session = find(&codex, "/work/app", CODEX_NEW);
+    assert_eq!(ids(&codex.subagents(&session)), [CODEX_CHILD]);
+    let mut reader = Reader::default();
+    assert!(reader.advance(&codex, &session, ALL).unwrap().caught_up);
+    assert_eq!(
+        tokens(&reader.tally),
+        [("gpt-6-astra", false, 30_000, 2_000, 20_000), ("gpt-6-astra", true, 8_000, 300, 6_000)]
+    );
+    assert_eq!((reader.tally.context, reader.tally.window), (Some(32_000), Some(400_000)));
+}
+
+#[test]
+fn a_tally_goes_on_from_its_cursor_and_starts_again_with_a_new_file() {
+    let dir = temp("tally");
+    let path = dir.join("s.jsonl");
+    let step = |id: &str, at: &str, input: u64| {
+        format!(
+            r#"{{"type":"assistant","message":{{"id":"{id}","model":"claude-opus-5-5","content":[],"usage":{{"input_tokens":{input},"output_tokens":1}}}},"timestamp":"2026-11-12T09:00:{at}.000Z","cwd":"/w"}}"#
+        )
+    };
+    fs::write(&path, step("m1", "01", 10) + "\n").unwrap();
+    let session = SessionRef {
+        kind: Kind::Claude,
+        id: "s".into(),
+        cwd: "/w".into(),
+        path: path.clone(),
+        started: None,
+        last_activity: None,
+        model: None,
+        pid: None,
+        busy: None,
+        parent: None,
+    };
+    let claude = claude();
+    let mut reader = Reader::default();
+    reader.advance(&claude, &session, ALL).unwrap();
+    let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+    writeln!(file, "{}", step("m2", "02", 20)).unwrap();
+    let read = reader.advance(&claude, &session, ALL).unwrap();
+    assert_eq!((read.times.len(), tokens(&reader.tally)[0].2), (1, 30), "only the new line");
+    // Gone for one read: the cursor stays, so nothing is counted twice when it is back.
+    fs::rename(&path, path.with_extension("away")).unwrap();
+    assert!(reader.advance(&claude, &session, ALL).is_err());
+    fs::rename(path.with_extension("away"), &path).unwrap();
+    reader.advance(&claude, &session, ALL).unwrap();
+    assert_eq!(tokens(&reader.tally)[0].2, 30);
+    // Another file at the path: counted from its start alone.
+    fs::remove_file(&path).unwrap();
+    fs::write(&path, step("m3", "03", 5) + "\n").unwrap();
+    let read = reader.advance(&claude, &session, ALL).unwrap();
+    assert!(read.restarted);
+    assert_eq!(tokens(&reader.tally)[0].2, 5);
+    let _ = fs::remove_dir_all(dir);
 }

@@ -27,6 +27,12 @@ import type {
   Frame,
   Group,
   Heading,
+  Card,
+  ProjectGroup,
+  TasksProgress,
+  TasksView,
+  Tokens,
+  Work,
   Home,
   HomeDrawn,
   HomeNode,
@@ -173,7 +179,97 @@ function group(value: unknown, at: string): Group {
 }
 
 function heading(value: unknown, at: string): Heading {
-  return value === "open" || value === "sessions" ? value : group(value, at);
+  if (value === "needs_you" || value === "running" || value === "later") return value;
+  if (value === "done" || value === "sessions") return value;
+  throw wrong(at, "a heading", value);
+}
+
+function tasksView(value: unknown, at: string): TasksView {
+  if (value === "state" || value === "project") return value;
+  throw wrong(at, "state or project", value);
+}
+
+function tokens(value: unknown, at: string): Tokens {
+  const o = fields(value, at);
+  return {
+    model: str(o.model, `${at}.model`),
+    sub: bool(o.sub, `${at}.sub`),
+    input: num(o.input, `${at}.input`),
+    output: num(o.output, `${at}.output`),
+    cached: num(o.cached, `${at}.cached`),
+  };
+}
+
+function work(value: unknown, at: string): Work {
+  const o = fields(value, at);
+  const c = fields(o.clock, `${at}.clock`);
+  return {
+    runner: str(o.runner, `${at}.runner`),
+    session: str(o.session, `${at}.session`),
+    clock: {
+      ms: num(c.ms, `${at}.clock.ms`),
+      last: orNull(num)(c.last, `${at}.clock.last`),
+      day: num(c.day, `${at}.clock.day`),
+      day_ms: num(c.day_ms, `${at}.clock.day_ms`),
+    },
+    tokens: list(tokens)(o.tokens, `${at}.tokens`),
+    context: orNull(num)(o.context, `${at}.context`),
+    window: orNull(num)(o.window, `${at}.window`),
+  };
+}
+
+function projectGroup(value: unknown, at: string): ProjectGroup {
+  const o = fields(value, at);
+  const b = fields(o.bar, `${at}.bar`);
+  return {
+    project: orNull(str)(o.project, `${at}.project`),
+    folded: bool(o.folded, `${at}.folded`),
+    bar: {
+      needs_you: num(b.needs_you, `${at}.bar.needs_you`),
+      running: num(b.running, `${at}.bar.running`),
+      later: num(b.later, `${at}.bar.later`),
+      done: num(b.done, `${at}.bar.done`),
+    },
+    rows: list(taskRow)(o.rows, `${at}.rows`),
+    done: num(o.done, `${at}.done`),
+    done_open: bool(o.done_open, `${at}.done_open`),
+    done_rows: list(taskRow)(o.done_rows, `${at}.done_rows`),
+  };
+}
+
+function card(value: unknown, at: string): Card {
+  const o = fields(value, at);
+  return {
+    id: num(o.id, `${at}.id`),
+    title: str(o.title, `${at}.title`),
+    state: str(o.state, `${at}.state`),
+    group: orNull(group)(o.group, `${at}.group`),
+    live: orNull(str)(o.live, `${at}.live`),
+    model: orNull(str)(o.model, `${at}.model`),
+    tags: list(str)(o.tags, `${at}.tags`),
+    started: orNull(str)(o.started, `${at}.started`),
+    agent_time: str(o.agent_time, `${at}.agent_time`),
+    workspace: str(o.workspace, `${at}.workspace`),
+    tokens: list(tokens)(o.tokens, `${at}.tokens`),
+    context: orNull(num)(o.context, `${at}.context`),
+    window: orNull(num)(o.window, `${at}.window`),
+  };
+}
+
+function tasksProgress(value: unknown, at: string): TasksProgress {
+  const o = fields(value, at);
+  const t = fields(o.today, `${at}.today`);
+  return {
+    view: tasksView(o.view, `${at}.view`),
+    projects: list(projectGroup)(o.projects, `${at}.projects`),
+    today: {
+      done: num(t.done, `${at}.today.done`),
+      running: num(t.running, `${at}.today.running`),
+      agent_ms: num(t.agent_ms, `${at}.today.agent_ms`),
+      line: str(t.line, `${at}.today.line`),
+    },
+    cards: map(card)(o.cards, `${at}.cards`),
+  };
 }
 
 function taskRow(value: unknown, at: string): TaskRow {
@@ -185,6 +281,8 @@ function taskRow(value: unknown, at: string): TaskRow {
     panes: num(o.panes, `${at}.panes`),
     current: bool(o.current, `${at}.current`),
     detail: str(o.detail, `${at}.detail`),
+    live: orNull(str)(o.live, `${at}.live`),
+    model: orNull(str)(o.model, `${at}.model`),
   };
 }
 
@@ -279,6 +377,10 @@ function task(value: unknown, at: string): Task {
     refs: list(ref)(o.refs, `${at}.refs`),
     title_generated: bool(o.title_generated, `${at}.title_generated`),
     materials: list(str)(o.materials, `${at}.materials`),
+    // Written only when known.
+    ...(o.started_at === undefined ? {} : { started_at: num(o.started_at, `${at}.started_at`) }),
+    ...(o.finished_at === undefined ? {} : { finished_at: num(o.finished_at, `${at}.finished_at`) }),
+    ...(o.work === undefined ? {} : { work: list(work)(o.work, `${at}.work`) }),
   };
 }
 
@@ -826,6 +928,9 @@ function model(value: unknown, at: string): Model {
     repo_dirs: repoDirs(o.repo_dirs, `${at}.repo_dirs`),
     tasks: { list: list(task)(fields(o.tasks, `${at}.tasks`).list, `${at}.tasks.list`) },
     collapsed: list(heading)(o.collapsed, `${at}.collapsed`),
+    tasks_view: tasksView(o.tasks_view, `${at}.tasks_view`),
+    folded_projects: list(orNull(str))(o.folded_projects, `${at}.folded_projects`),
+    open_done: list(orNull(str))(o.open_done, `${at}.open_done`),
     picker: orNull(picker)(o.picker, `${at}.picker`),
     palette: orNull(palette)(o.palette, `${at}.palette`),
     confirm: orNull(confirm)(o.confirm, `${at}.confirm`),
@@ -1022,6 +1127,7 @@ export function snapshot(value: unknown): Snapshot {
     compose_pointing: orNull(rect)(o.compose_pointing, "compose_pointing"),
     compose_note: orNull(str)(o.compose_note, "compose_note"),
     tasks_bar: tasksBar(o.tasks_bar, "tasks_bar"),
+    tasks_progress: tasksProgress(o.tasks_progress, "tasks_progress"),
     sessions_bar: sessionsBar(o.sessions_bar, "sessions_bar"),
     repos_bar: list(reposGroup)(o.repos_bar, "repos_bar"),
     home: orNull(home)(o.home, "home"),
