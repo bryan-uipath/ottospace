@@ -420,7 +420,7 @@ export type PickItem =
 /** The text field that has the keyboard. Offsets are UTF-16 units: JavaScript string indexes. */
 export interface Field {
   /** Whose it is: the new-task line, the picker's or the Apps section's filter, a mark's name, or a note on a capture. */
-  of: "compose" | "picker" | "apps" | "mark" | "workbook" | "note";
+  of: "compose" | "picker" | "palette" | "apps" | "mark" | "workbook" | "note";
   text: string;
   cursor: number;
   /** Start and end, in text order. Equal: only a cursor. */

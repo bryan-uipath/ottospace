@@ -111,7 +111,7 @@ test("the field of each owner parses: the Apps section's filter too", () => {
     of, text: "sk", cursor: 2, selection: [2, 2], selected: "", marked: null, bounds: [0, 0, 100, 20], cursor_x: 12,
   });
   // `note`: a note being typed on a capture. Every reply has it while one is.
-  for (const owner of ["compose", "picker", "apps", "note"]) {
+  for (const owner of ["compose", "picker", "palette", "apps", "note"]) {
     assert.equal(snapshot({ ...replyWith(null), field: field(owner) }).field?.of, owner);
   }
   assert.throws(() => snapshot({ ...replyWith(null), field: field("elsewhere") }), /field\.of should be/);

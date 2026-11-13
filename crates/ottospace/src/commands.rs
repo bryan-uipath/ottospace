@@ -118,7 +118,9 @@ impl Workspace {
         let action = match event.keystroke.key.as_str() {
             "escape" => Action::ClosePalette,
             "enter" => Action::PaletteChoose { index: None },
-            "down" | "tab" => Action::PaletteMove { delta: 1 },
+            "down" => Action::PaletteMove { delta: 1 },
+            // ⌃Tab is Next Tab's: it reaches its binding, and waits.
+            "tab" if !m.control => Action::PaletteMove { delta: if m.shift { -1 } else { 1 } },
             "up" => Action::PaletteMove { delta: -1 },
             "n" if m.control => Action::PaletteMove { delta: 1 },
             "p" if m.control => Action::PaletteMove { delta: -1 },

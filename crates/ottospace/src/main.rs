@@ -1953,12 +1953,11 @@ impl Workspace {
         if self.model.sneak.is_some() && !sneak::takes(key) {
             return Some(sneak::ON);
         }
-        // The palette types, moves and runs for the user alone.
-        if self.model.palette.is_some() {
-            return Some(ottospace_core::commands::USERS_ALONE);
+        if self.model.confirm.is_some() {
+            return self.confirm_answer(key, Origin::Socket).is_none().then_some(CONFIRM_UP);
         }
-        let unanswered = self.model.confirm.is_some() && self.confirm_answer(key, Origin::Socket).is_none();
-        unanswered.then_some(CONFIRM_UP)
+        // The palette types, moves and runs for the user alone.
+        self.model.palette.is_some().then_some(ottospace_core::commands::USERS_ALONE)
     }
 
     /// Presses `keystrokes` as if typed, once this update is done, then replies with the state.

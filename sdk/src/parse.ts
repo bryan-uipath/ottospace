@@ -608,7 +608,7 @@ function pickItem(value: unknown, at: string): PickItem {
 
 function field(value: unknown, at: string): Field {
   const o = fields(value, at);
-  const owners = ["compose", "picker", "apps", "mark", "workbook", "note"];
+  const owners = ["compose", "picker", "palette", "apps", "mark", "workbook", "note"];
   if (typeof o.of !== "string" || !owners.includes(o.of)) {
     throw wrong(`${at}.of`, "compose, picker, apps, mark, workbook or note", o.of);
   }
