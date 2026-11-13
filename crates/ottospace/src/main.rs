@@ -2548,6 +2548,9 @@ impl Workspace {
             "counts": std::env::var_os("OTTOSPACE_E2E").map(|_| serde_json::json!({
                 "live": self.went_live,
                 "frame_reads": self.hosted.values().map(|h| h.frame_reads).sum::<u64>(),
+                // Scrolls over an app pane's picture kept, and posted to the app.
+                "wheel_kept": self.wheel.kept,
+                "wheel_posted": self.wheel.posted,
             })),
             // Test runs only: each press in an app a sneak label asked for, `[pane, path]`; else null.
             "app_presses": std::env::var_os("OTTOSPACE_E2E").map(|_| &self.sneak_reads.presses),

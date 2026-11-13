@@ -1509,7 +1509,7 @@ fn the_users_wheel_over_a_parked_app_pane_scrolls_the_app_which_stays_in_the_bac
     assert_eq!((&reply["mode"], &reply["state"]["live"]), (&json!("normal"), &Value::Null));
     let by = wait_or(
         "the canary to scroll",
-        || format!("{:?} / {}", scrolled(), state()["notice"]),
+        || format!("{:?} / {} / {}", scrolled(), state()["notice"], state()["counts"]),
         || scrolled().filter(|by| *by > 0.0),
     );
     assert!(by <= 120.0 + 1.0, "scrolled {by}");

@@ -26,6 +26,10 @@ struct Pending {
 pub struct Wheel {
     pending: Vec<Pending>,
     posting: Option<Pending>,
+    /// Scrolls over an app pane's picture that were kept, and scrolls posted to an app: for a
+    /// test to tell where one stopped (the state's `counts`).
+    pub kept: u64,
+    pub posted: u64,
 }
 
 impl Workspace {
@@ -48,6 +52,7 @@ impl Workspace {
         let made = || Scroll::new(delta[0], delta[1], precise);
         let Some(scroll) = Scroll::current(delta).or_else(made) else { return };
         let (origin, pid, window) = (self.input, h.pid, h.window_id);
+        self.wheel.kept += 1;
         // Added to the last one of the same pane, window, sender and phase: one event a frame.
         match self.wheel.pending.last_mut() {
             Some(last)
@@ -81,6 +86,7 @@ impl Workspace {
         if same && self.model.live != Some(pane) {
             pending.scroll.limit([dx, dy]);
             pending.scroll.post(pending.pid, pending.window, pending.at);
+            self.wheel.posted += 1;
         }
     }
 }
