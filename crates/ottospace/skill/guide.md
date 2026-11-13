@@ -271,7 +271,7 @@ States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stal
   |---|---|---|
   | `#project` | the project the task serves | always |
   | `>repo` | the repository it works in, from `state.repos` by name | the repository (or worktree) is listed |
-  | `@agent` | who works it | `claude`, `codex`, or a file `agents/<name>.md` in the user's folder |
+  | `@agent` | who works it | `claude`, `codex`, a runner and a model (`claude-opus-5-5`, `codex-gpt-6-astra`: any `claude-<name>` or `codex-<name>`, listed or not), or a file `agents/<name>.md` in the user's folder |
   | `/path` | a path it is about: a word starting with `/` or `~/` | the file or directory exists, at the root or inside the `>repo` |
   | `$skill` | a skill to load for it | a skill folder of that name exists (the runners' `skills/`, the repository's `.claude/skills`) |
   | `^reference` | something open it points at (a space in the name has a backslash: `^Tab\ 1`) | a tab has that title, a pane that name (a terminal's directory, an app pane's app), a mark that name, or an installed app that is not running has it |
@@ -287,7 +287,7 @@ States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stal
   asked. The reply then has `opened`: false if the task was added but not shown, because the
   user was in the new-task box, the picker, the key reference or visual mode.
 - `task_add` takes `agent` and `skills` only if `task_new` would know the names (`claude`,
-  `codex`, a saved agent; an installed skill): any other is refused, and the error names it.
+  `codex`, a runner's model as `codex-gpt-6-astra`, a saved agent; an installed skill): any other is refused, and the error names it.
   They are kept as their file or folder spells them. `paths` are kept as given, without
   checking them (at most 20 of each, 200 characters each).
 - A task's `paths` are as typed. `resolved` holds, in the same order, the absolute path each

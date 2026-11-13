@@ -1774,6 +1774,57 @@ fn menu(reply: &Value) -> (Vec<String>, Option<u64>) {
     (names, reply["compose_menu"]["selected"].as_u64())
 }
 
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn an_agent_tag_names_a_runner_and_a_model() {
+    let offered = |otto: &Otto, text: &str, want: &[&str]| {
+        otto.call(json!({"cmd": "compose", "text": text}));
+        otto.wait_for("the agents", |o| {
+            let reply = o.call(json!({"cmd": "state"}));
+            (menu(&reply).0 == want).then_some(reply)
+        })
+    };
+    let details = |reply: &Value| -> Vec<String> {
+        let rows = reply["compose_menu"]["rows"].as_array().unwrap();
+        rows.iter().filter_map(|row| row["detail"].as_str().map(str::to_string)).collect()
+    };
+    {
+        let otto = Otto::launch("agent-models");
+        let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+        // Each runner, then its models.
+        let claude = ["claude", "claude-fable-5-2", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"];
+        let reply = offered(&otto, "fix @", &[&claude[..], &["codex", "codex-gpt-6-astra"]].concat());
+        let said = details(&reply);
+        assert_eq!((said[0].as_str(), said[2].as_str(), said[5].as_str()), ("runner", "claude model", "runner"));
+        assert_eq!(said[6], "codex model");
+        // A word of the name finds it. Tab takes it; ↵ files the task with the tag as it is.
+        assert_eq!(menu(&key("o p u s")), (vec!["claude-opus-5-5".to_string()], Some(0)));
+        assert_eq!(field(&key("tab")).0, "fix @claude-opus-5-5 ");
+        let reply = key("enter");
+        let task = &reply["state"]["tasks"]["list"][0];
+        assert_eq!((&task["title"], &task["agent"]), (&json!("fix"), &json!("claude-opus-5-5")));
+        // A model that is not listed is a tag as typed; a listed one, as it is listed.
+        let filed = otto.call(json!({"cmd": "task_new", "line": "try @codex-gpt-7 on @codex-"}));
+        let task = &filed["task"];
+        assert_eq!((&task["title"], &task["agent"]), (&json!("try on @codex-"), &json!("codex-gpt-7")));
+        let filed = otto.call(json!({"cmd": "task_add", "title": "t", "agent": "Codex-GPT-6-Astra"}));
+        assert_eq!(filed["task"]["agent"], "codex-gpt-6-astra");
+    }
+    // The settings replace a runner's models. A saved agent named as a built-in is offered once.
+    let models = json!({"claude": ["claude-next-1", "--yolo"], "codex": []});
+    let home = user_folder("agent-models", &json!({"repos": [], "agent_models": models}).to_string());
+    std::fs::create_dir_all(home.join("agents")).unwrap();
+    for file in ["ana.md", "claude-next-1.md"] {
+        std::fs::write(home.join("agents").join(file), "").unwrap();
+    }
+    let otto = Otto::launch_with("agent-models-set", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    let reply = offered(&otto, "@", &["claude", "claude-next-1", "codex", "ana"]);
+    assert_eq!(details(&reply), ["runner", "claude model", "runner", "saved agent"]);
+    let notice = reply["notice"].as_str().unwrap_or_default();
+    assert!(notice.starts_with(r#"settings.json: agent_models: "--yolo" is not a model name"#), "{notice}");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// A folder of repositories for a test of the new-task box: `flow-app`, with `src/export/a.md`
 /// and `src/extra.rs` in it.
 fn compose_fixture(name: &str) -> PathBuf {
@@ -1822,7 +1873,7 @@ fn the_new_task_dropdown_finishes_the_tag_at_the_cursor() {
         ("fix #canvas >flow-app ", Some("compose"), Some(3))
     );
     // Esc closes the dropdown and keeps the box; Esc again closes the box.
-    assert_eq!(menu(&key("@ c")).0, ["claude", "codex"]);
+    assert_eq!(menu(&key("@ c o d")).0, ["codex", "codex-gpt-6-astra"]);
     let reply = key("escape");
     assert_eq!((&reply["compose_menu"], reply["mode"].as_str()), (&Value::Null, Some("compose")));
     assert_eq!(key("escape")["mode"], "normal");

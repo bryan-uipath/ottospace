@@ -12,6 +12,7 @@ use serde::Deserialize;
 ///   "sessions": true,
 ///   "session_dirs": { "claude": ["~/.claude"], "codex": "~/.codex" },
 ///   "session_quiet_minutes": 3,
+///   "agent_models": { "claude": ["claude-opus-5-5"], "codex": ["gpt-6-astra"] },
 ///   "capture_key": "ctrl-alt-cmd-space",
 ///   "capture": { "keep_images": true, "ax": true } }
 /// ```
@@ -51,6 +52,10 @@ pub struct Settings {
     /// minutes. Default: 3. 0: a quiet session never moves its task.
     #[serde(default)]
     pub session_quiet_minutes: Option<u32>,
+    /// The models `@` offers after each runner, in place of the built-in list: ids as the
+    /// runner's CLI takes them. `@claude-opus-5-5`, `@codex-gpt-6-astra`.
+    #[serde(default)]
+    pub agent_models: Option<AgentModels>,
     /// The key that captures the pane in use, from any app: modifiers and a key with `-`
     /// between them. Default: `ctrl-alt-cmd-space`. `"off"`: no key.
     #[serde(default)]
@@ -94,6 +99,28 @@ pub struct SessionDirs {
     /// Codex's home.
     #[serde(default)]
     pub codex: Option<String>,
+}
+
+/// A runner left out keeps its built-in models. An empty list: the runner alone.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentModels {
+    #[serde(default)]
+    pub claude: Option<Vec<String>>,
+    #[serde(default)]
+    pub codex: Option<Vec<String>>,
+}
+
+impl AgentModels {
+    /// The first id that is not a model's name.
+    fn wrong(&self) -> Option<&String> {
+        self.claude.iter().chain(&self.codex).flatten().find(|id| !crate::agents::is_name(id))
+    }
+}
+
+/// What is said of an `agent_models` entry that is not a name.
+fn not_a_model(id: &str) -> String {
+    format!("{id} is not a model name: letters, digits, `.`, `-` and `_`, at most {}", crate::agents::MAX_MODEL)
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -145,6 +172,9 @@ impl Settings {
         if settings.tasks.as_deref().is_some_and(|dir| matches!(dir.trim().trim_end_matches('/'), "" | "~" | ".")) {
             return Err("\"tasks\" must name a folder of its own, e.g. \"~/notes/tasks\"".into());
         }
+        if let Some(id) = settings.agent_models.as_ref().and_then(AgentModels::wrong) {
+            return Err(not_a_model(&format!("{id:?}")));
+        }
         Ok(settings)
     }
 
@@ -166,6 +196,17 @@ impl Settings {
         // Each key by itself, through the same checks as a whole file. The position in the
         // message is in the one-key copy, not the user's file: leave it out.
         let mut wrong = Vec::new();
+        // A model that is not a name goes by itself: the runner's other models stay.
+        let runners = keys.get_mut("agent_models").and_then(serde_json::Value::as_object_mut);
+        for list in runners.into_iter().flat_map(|runners| runners.values_mut()).filter_map(|list| list.as_array_mut())
+        {
+            list.retain(|id| {
+                let named = id.as_str().is_some_and(crate::agents::is_name);
+                let said = id.as_str().map_or_else(|| id.to_string(), |id| format!("{id:?}"));
+                wrong.extend((!named).then(|| format!("agent_models: {}", not_a_model(&said))));
+                named
+            });
+        }
         keys.retain(|key, value| {
             let alone = serde_json::json!({ key.as_str(): value }).to_string();
             let Err(err) = Self::parse(&alone) else { return true };
@@ -407,6 +448,21 @@ mod tests {
         assert!(kept.session_quiet_minutes.is_none() && wrong[0].starts_with("session_quiet_minutes:"), "{wrong:?}");
         let (_, wrong) = Settings::read(r#"{ "session_dirs": { "gemini": "~/.gemini" } }"#);
         assert!(wrong[0].starts_with("session_dirs: unknown field"), "{wrong:?}");
+        // A model that is not a name is left out and named; the others and the other keys stay.
+        let text =
+            r#"{ "agent_models": { "claude": ["claude-next-1", "--yolo", "a b"], "codex": [] }, "sessions": false }"#;
+        let (settings, wrong) = Settings::read(text);
+        let models = settings.agent_models.unwrap();
+        assert_eq!((models.claude.unwrap(), models.codex.unwrap()), (vec!["claude-next-1".to_string()], Vec::new()));
+        assert_eq!((wrong.len(), settings.sessions), (2, Some(false)));
+        assert!(wrong[0].starts_with(r#"agent_models: "--yolo" is not a model name"#), "{wrong:?}");
+        assert!(Settings::parse(text).is_err());
+        // So does an entry that is no text. A runner nobody knows: the key takes its default.
+        let (settings, wrong) = Settings::read(r#"{ "agent_models": { "claude": ["claude-next-1", 7] } }"#);
+        assert_eq!(settings.agent_models.unwrap().claude.unwrap(), ["claude-next-1"]);
+        assert_eq!(wrong, ["agent_models: 7 is not a model name: letters, digits, `.`, `-` and `_`, at most 64"]);
+        let (settings, wrong) = Settings::read(r#"{ "agent_models": { "gemini": [] } }"#);
+        assert_eq!((settings.agent_models, wrong.len()), (None, 1));
     }
 
     #[test]

@@ -2757,8 +2757,8 @@ impl Model {
             }
             '>' => self.repo_names().map(|(name, path)| of("repo", name, short(self.home.as_deref(), path))).collect(),
             '@' => {
-                let detail = |name: &str| if matches!(name, "claude" | "codex") { "runner" } else { "saved agent" };
-                self.known.names.agents.iter().map(|name| of("agent", name, detail(name).to_string())).collect()
+                let agents = self.known.names.agents.iter();
+                agents.map(|name| of("agent", name, crate::agents::kind(name).to_string())).collect()
             }
             '$' => self.known.names.skills.iter().map(|name| of("skill", name, String::new())).collect(),
             '/' => {
@@ -5047,6 +5047,39 @@ mod tests {
         m.update(Action::ComposeEscape);
         m.update(Action::ComposeEscape);
         assert_eq!(m.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn the_agent_dropdown_offers_each_runner_and_its_models() {
+        let mut m = composing();
+        let agents = crate::agents::names(&Default::default(), vec!["ana".into()]);
+        let names = compose::Names { agents, skills: Vec::new() };
+        m.update(Action::SetKnown {
+            line: String::new(),
+            typing: None,
+            names: Some(names),
+            paths: vec![],
+            entries: vec![],
+        });
+        keys(&mut m, "fix @");
+        let rows = m.dropdown().unwrap().rows;
+        let details: Vec<&str> = rows.iter().map(|row| row.detail.as_str()).collect();
+        assert_eq!(offered(&m)[..3], ["claude", "claude-fable-5-2", "claude-opus-5-5"]);
+        assert_eq!(
+            (details[0], details[1], details[6], details[7]),
+            ("runner", "claude model", "codex model", "saved agent")
+        );
+        // A word of the name finds it: `opus`, `gpt`.
+        keys(&mut m, "opus");
+        assert_eq!(offered(&m), ["claude-opus-5-5"]);
+        m.update(Action::ComposeComplete);
+        // A model that is not listed is a tag as typed.
+        keys(&mut m, "@codex-gpt-7");
+        assert_eq!(offered(&m), Vec::<String>::new());
+        m.update(Action::ComposeSubmit { open: false });
+        let task = m.tasks.list.last().unwrap();
+        assert_eq!((task.title.as_str(), task.agent.as_deref()), ("fix", Some("codex-gpt-7")));
+        assert_eq!(m.task_tags(task), "@codex-gpt-7");
     }
 
     #[test]

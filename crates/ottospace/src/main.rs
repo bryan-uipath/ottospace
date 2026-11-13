@@ -1203,7 +1203,7 @@ impl Workspace {
                             let spell = |names: &[String], given: String| {
                                 compose::spelled(names, &given).cloned().unwrap_or(given)
                             };
-                            let agent = assign.agent.map(|agent| spell(&known.names.agents, agent));
+                            let agent = assign.agent.map(|agent| compose::agent(&known.names, &agent).unwrap_or(agent));
                             let skills =
                                 assign.skills.into_iter().map(|skill| spell(&known.names.skills, skill)).collect();
                             let assign = Assign { agent, skills, ..assign };

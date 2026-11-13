@@ -192,7 +192,7 @@ read out of the line; the rest is the title.
 |---|---|---|
 | `#project` | The project the task serves | Projects other tasks name |
 | `>repo` | The repository the task works in | The Repos list (repositories and worktrees) |
-| `@agent` | Who works it | `claude` and `codex`, then each `~/.ottospace/agents/<name>.md` if that folder exists |
+| `@agent` | Who works it: a runner (`@claude`, `@codex`: its default model), a runner and a model (`@claude-opus-5-5`, `@codex-gpt-6-astra`), or a saved agent | `claude`, its models, `codex`, its models, then each `~/.ottospace/agents/<name>.md` if that folder exists |
 | `/path` | A path the task is about: a word that starts with `/` or `~/` | The files and directories under what is typed |
 | `$skill` | A skill to load for the task | Skill folders (those with a `SKILL.md`) in `~/.claude/skills`, `$CLAUDE_CONFIG_DIR/skills`, `~/.codex/skills` (or `$CODEX_HOME/skills` if that is set), and the `.claude/skills` of the task's `>repo` |
 | `^reference` | Something open that the task points at. A space in the name has a backslash before it: `^Tab\ 1` | What is open now: each tab (its title), each pane (a terminal by its directory's name, an app pane by the app's), each [mark](#marks), and the installed apps that are not running. Two of one name: the later one is `name-2` |
@@ -238,6 +238,15 @@ review the export PR >canvas-app @codex $code-review /src/export
 - **How many.** One `#project`, one `>repo`, one `@agent`, one priority: of two, the last one
   counts. Every `/path` and `$skill` is kept, each once (at most 20 of each). `@agent` and
   `$skill` are kept as their file or folder spells them, whatever the case typed.
+- **A runner and a model.** `@claude-opus-5-5` is Claude Code with the model `claude-opus-5-5`
+  (Claude's ids start with `claude-`, so the tag is the id); `@codex-gpt-6-astra` is Codex with
+  `gpt-6-astra`. The dropdown offers `claude-fable-5-2`, `claude-opus-5-5`, `claude-sonnet-5-5`,
+  `claude-haiku-5-5` and `codex-gpt-6-astra`; the `agent_models` [setting](#settings) replaces a
+  runner's list. A word of the name finds a row: `@opus`. A model that is not listed works by
+  typing it: any `@claude-<name>` or `@codex-<name>` (small letters; then letters, digits, `.`,
+  `-`, `_`) is a runner and a model, kept as typed. So a saved agent whose file is named as a
+  runner, or `claude-…` or `codex-…`, is not offered: the name means the runner or its model.
+  Name saved agents otherwise.
 - **What they do today.** `#project` and `>repo` are used: the home screen groups by project, and
   a task opens a terminal in its repository. `@agent`, `/path` and `$skill` are stored on the
   task and shown on its row. Nothing starts an agent or loads a skill yet. What must be
@@ -415,6 +424,7 @@ optional:
   "sessions": true,
   "session_dirs": { "claude": ["~/.claude"], "codex": "~/.codex" },
   "session_quiet_minutes": 3,
+  "agent_models": { "claude": ["claude-opus-5-5"], "codex": ["gpt-6-astra"] },
   "capture_key": "ctrl-alt-cmd-space",
   "capture": { "keep_images": true, "ax": true },
   "apps": ["Microsoft Outlook", "Slack"],
@@ -433,6 +443,7 @@ optional:
 | `sessions` | List agent sessions that are no task's under Sessions in the Tasks section. `false`: no session file is ever read | `true` |
 | `session_dirs` | Where the runners keep their sessions: `claude` is a list of Claude Code config directories (one for each account), `codex` is Codex's home. A runner left out keeps its default. An app started from the Dock does not see `CLAUDE_CONFIG_DIR` or `CODEX_HOME`: name other directories here | `~/.claude`, `~/.codex` |
 | `session_quiet_minutes` | A task adopted from a session moves to Needs you once the session has been quiet this many minutes. `0`: a quiet session never moves its task | `3` |
+| `agent_models` | The models the `@agent` dropdown offers after each runner, in place of the built-in list: ids as the runner's CLI takes them. `claude` and `codex` are each a list; a runner left out keeps its own, an empty list offers the runner alone. An id that does not start with the runner's name gets it in the tag: `gpt-6-astra` is `@codex-gpt-6-astra`, `opus` is `@claude-opus`. An entry that is not a name (letters and digits, with `.`, `-` or `_` between them one at a time; at most 64) is left out and named in the status bar | `claude-fable-5-2`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`; `gpt-6-astra` |
 | `capture_key` | The key that captures the pane in use, from any app: modifiers (`ctrl`, `alt`, `cmd`, `shift`) and a key, with `-` between them. `"off"`: no key. `OTTOSPACE_CAPTURE_KEY` wins over it. Not `ctrl-alt-space`: macOS uses it to change the input source | `ctrl-alt-cmd-space` |
 | `capture.keep_images` | Keep a capture's pictures on disk. `false`: no picture is ever written | `true` |
 | `capture.ax` | Read an app pane's accessibility tree with its picture. `false`: it is never read for a capture | `true` |
