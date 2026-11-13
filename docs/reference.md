@@ -39,7 +39,7 @@ it over the control socket. Session restore and the rest of the design are not b
 | List mode (⌘⇧E): drive the bar with the keyboard | Works today |
 | Sneak mode (⌘⌃G): a letter label on each of ottospace's own controls; typing it clicks the control | Works today |
 | [Command palette](#command-palette) (⌘P): every command of the menu bar by name, with its key; a Developer group | Works today |
-| [Accessibility inspector](#accessibility-inspector): a hosted app's accessibility tree in a panel beside it, read-only | Works today |
+| [Accessibility inspector](#accessibility-inspector): a hosted app's accessibility tree in the right drawer's place, read-only | Works today |
 | Marks (⌘B, ⌘⇧B, ⌘' and a letter): named ways back to a pane or a tab, kept in `~/.ottospace/marks.json` | Works today |
 | Capture (⌃⌥⌘Space, from any app): a frozen picture of the pane in use to circle and write on, collected in a draft in the drawer; the task it becomes has a brief with the pictures, the notes and the text under each annotation (`task_brief`), and its agent is told the brief's path. Kept in `~/.ottospace/materials` | Works today |
 | Workbooks (⌘⇧S): save tabs under a name (their splits, each terminal's directory, each app) and open them again from the Workbook section. Several tabs each: add a tab to one, or save all the tabs on the bar as one. Kept in `~/.ottospace/workbooks`. An app comes back as its window, not on the page or document it showed | Works today |
@@ -252,8 +252,12 @@ it: the agent gets no key while it is open, and when it closes the keyboard is t
 ## Accessibility inspector
 
 Developer ▸ Accessibility Inspector, or "inspector" in the [command palette](#command-palette),
-with an app pane focused: a panel on the right shows that app's accessibility tree, as
-ottospace reads it. Again, × or closing the pane closes it.
+with an app pane focused: that app's accessibility tree, as ottospace reads it, in the right
+drawer's place. The drawer (a conversation, the new-task box, a draft, a brief) is covered, not
+closed, and comes back as it was when the inspector closes; the right rail stays. Showing
+something in the drawer (⌘N, a conversation from the rail, a capture) closes the inspector.
+Again, ×, or closing the pane closes it. "Filter the Accessibility Inspector" and "Read the
+Inspected App Again" are in the palette and the Developer menu too.
 
 - The header names the app and counts what it exposes: "Spotify: 3 nodes, 0 pressable", then
   the most common roles. An app that exposes fewer than 25 nodes says so: Electron and Chromium

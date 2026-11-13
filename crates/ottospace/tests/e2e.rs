@@ -5103,7 +5103,7 @@ fn the_inspector_shows_a_trees_counts_and_roles_never_its_text() {
     });
     let truncated = json!({"depth": false, "nodes": false, "timeout": false});
     let tree = json!({"root": root, "count": 5, "truncated": truncated});
-    let reply = otto.call(json!({"cmd": "inspector_fixture", "app": "Fixture", "tree": tree}));
+    let reply = otto.call(json!({"cmd": "inspector_fixture", "app": "Fixture", "tree": tree.clone()}));
     let inspector = &reply["inspector"];
     let counts = &inspector["counts"];
     let numbers = (&counts["nodes"], &counts["pressable"], &counts["settable"], &counts["sparse"]);
@@ -5150,5 +5150,9 @@ fn the_inspector_shows_a_trees_counts_and_roles_never_its_text() {
     assert_eq!(otto.call(json!({"cmd": "key", "keys": "x"}))["state"]["inspector"]["filter"], "play");
     assert_eq!(otto.user_key("escape")["mode"], "normal");
     // It goes with its pane.
+    // It sits in the drawer's place: the new-task box (⌘N) takes the place back.
+    assert!(otto.user_key("cmd-n")["inspector"].is_null());
+    otto.user_key("escape");
+    otto.call(json!({"cmd": "inspector_fixture", "app": "Fixture", "tree": tree}));
     assert!(otto.call(json!({"cmd": "close", "pane": 1}))["inspector"].is_null());
 }

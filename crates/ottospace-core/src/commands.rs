@@ -108,6 +108,8 @@ commands! {
     ShowKeys: "Keys", View;
     AxOverlay: "Accessibility Overlay", Developer;
     AxInspector: "Accessibility Inspector", Developer;
+    InspectorFilter: "Filter the Accessibility Inspector", Developer;
+    InspectorRefresh: "Read the Inspected App Again", Developer;
     CopyState: "Copy State as JSON", Developer;
     OpenSettings: "Open the Settings File", Developer;
     OpenFolder: "Open the ottospace Folder", Developer;

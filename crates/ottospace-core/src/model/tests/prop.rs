@@ -1006,6 +1006,9 @@ fn check(m: &Model) -> Result<(), String> {
         let selected = inspector.selected.as_ref();
         ensure!(selected.is_none() || inspector.selected_node().is_some(), "the inspector selects {selected:?}");
         ensure!(!(inspector.filtering && m.live.is_some()), "the inspector's filter has the keyboard over a live app");
+        // It covers the drawer: nothing there has the keyboard.
+        let covered = m.talk.is_some_and(|talk| talk.keys) || m.capture.as_ref().is_some_and(|draft| draft.typing);
+        ensure!(!covered, "the drawer under the inspector has the keyboard");
         for row in &rows {
             let shown = format!("{}{}", row.role, row.text);
             ensure!(shown.chars().all(|c| !c.is_control() && c != '\u{202e}'), "a row shows {shown:?}");

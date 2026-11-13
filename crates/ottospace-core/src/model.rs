@@ -1082,6 +1082,21 @@ pub enum Action {
     },
 }
 
+/// What the right drawer shows (see `Model::drawer_view`).
+#[derive(PartialEq)]
+struct DrawerView {
+    talk: Option<(TaskId, bool)>,
+    compose: Option<bool>,
+    capture: Option<bool>,
+    brief: Option<TaskId>,
+}
+
+impl DrawerView {
+    fn shows(&self) -> bool {
+        self.talk.is_some() || self.compose.is_some() || self.capture.is_some() || self.brief.is_some()
+    }
+}
+
 /// Who sent an action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Origin {
@@ -1723,6 +1738,16 @@ impl Model {
         self.panes.iter().find(|p| p.id == id)
     }
 
+    /// What the right drawer shows, and whether it has the keyboard.
+    fn drawer_view(&self) -> DrawerView {
+        DrawerView {
+            talk: self.talk.filter(|talk| talk.open).map(|talk| (talk.task, talk.keys)),
+            compose: self.compose.is_some().then(|| self.compose_keys()),
+            capture: self.capture.as_ref().map(|draft| draft.typing),
+            brief: self.brief,
+        }
+    }
+
     pub fn mode(&self) -> Mode {
         if self.confirm.is_some() {
             Mode::Confirm
@@ -1912,7 +1937,8 @@ impl Model {
         // A draft in the right bar is not a box: the workspace stays in use beside it.
         let modal = self.compose.is_some() && self.capture.is_none();
         // The palette opens over nothing that has the keyboard, and holds it as the picker does.
-        let opens = matches!(action, Action::PaletteOpen | Action::InspectorFilter { on: true });
+        let opens =
+            matches!(action, Action::PaletteOpen | Action::InspectorFilter { on: true } | Action::InspectorOpen { .. });
         if opens && (self.holds_keyboard() || self.mark_input.is_some()) {
             return Some("something else has the keyboard");
         }
@@ -2126,7 +2152,13 @@ impl Model {
             draft.typing = false;
         }
         self.by_user = user;
+        // The inspector shows in the drawer's place: what the drawer is asked to show next takes it back.
+        let (drawer, inspecting) = (self.drawer_view(), matches!(action, Action::InspectorOpen { .. }));
         self.act(action, &mut effects);
+        let view = self.drawer_view();
+        if !inspecting && view != drawer && view.shows() {
+            self.inspector = None;
+        }
         self.by_user = false;
         self.settle_capture(&mut effects);
         // Nor is there one to offer once it is taken back, or an agent's report made it stale.
@@ -2824,6 +2856,13 @@ impl Model {
             Action::InspectorOpen { pane, app } => {
                 if self.pane(pane).is_some() {
                     self.inspector = Some(Inspector::new(pane, &app));
+                    // The drawer it covers keeps its state, but not the keyboard.
+                    if self.talk.is_some_and(|talk| talk.keys) {
+                        self.talk_keys(false, effects);
+                    }
+                    if let Some(draft) = &mut self.capture {
+                        draft.typing = false;
+                    }
                 }
             }
             Action::InspectorRead { pane, tree, window, millis } => {
@@ -3105,7 +3144,10 @@ impl Model {
                 self.default_agent = default;
             }
             Action::TaskTalk { id } => self.talk_to(id, effects),
-            Action::TalkPick { id } if self.talk.is_some_and(|talk| talk.open && talk.task == id) => {
+            // Under the inspector the rail's cell shows its conversation, as on a closed drawer.
+            Action::TalkPick { id }
+                if self.talk.is_some_and(|talk| talk.open && talk.task == id) && self.inspector.is_none() =>
+            {
                 self.talk = self.talk.map(|talk| Talk { open: false, keys: false, ..talk });
             }
             Action::TalkPick { id } => self.talk_to(id, effects),
@@ -5174,6 +5216,22 @@ mod tests {
                     | Action::InspectorMove { .. }
                     | Action::InspectorFilter { on: false }
             )
+    }
+
+    #[test]
+    fn the_inspector_takes_the_drawers_place_and_gives_it_back() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        // Not over the new-task box while it has the keyboard: the box would type unseen.
+        m.update(Action::OpenCompose { text: "fix".into() });
+        m.update(Action::InspectorOpen { pane: 1, app: "A".into() });
+        assert!(m.inspector.is_none());
+        m.update(Action::CloseCompose);
+        // A drawer that closes under it leaves it there; what the drawer is asked to show next takes the place back.
+        m.update(Action::InspectorOpen { pane: 1, app: "A".into() });
+        assert!(m.inspector.is_some());
+        m.update(Action::OpenCompose { text: "fix".into() });
+        assert_eq!((m.inspector.is_none(), m.compose_line().cloned()), (true, Some("fix".into())));
     }
 
     #[test]

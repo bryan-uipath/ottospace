@@ -346,6 +346,15 @@ impl Workspace {
             )
     }
 
+    /// The palette's or the menu's inspector command: as its control in the panel, if it is open.
+    pub fn inspector_command(&mut self, control: &str, window: &Window, cx: &mut Context<Self>) {
+        if self.model.inspector.is_none() {
+            self.error = Some("the accessibility inspector is not open".into());
+            return cx.notify();
+        }
+        self.click_inspector("inspector", control, window, cx);
+    }
+
     /// A click on one of the panel's controls, or its sneak label: `inspector:refresh`,
     /// `inspector:close`, `inspector:filter`, `inspector-row:3` (select) or `inspector-fold:3`.
     pub fn click_inspector(&mut self, kind: &str, name: &str, window: &Window, cx: &mut Context<Self>) {
