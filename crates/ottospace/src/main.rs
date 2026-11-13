@@ -316,10 +316,6 @@ impl AssetSource for Assets {
             "icons/split-right.svg" => Some(include_bytes!("../assets/icons/split-right.svg")),
             "icons/split-down.svg" => Some(include_bytes!("../assets/icons/split-down.svg")),
             "icons/plus.svg" => Some(include_bytes!("../assets/icons/plus.svg")),
-            "icons/start.svg" => Some(include_bytes!("../assets/icons/start.svg")),
-            "icons/snooze.svg" => Some(include_bytes!("../assets/icons/snooze.svg")),
-            "icons/hold.svg" => Some(include_bytes!("../assets/icons/hold.svg")),
-            "icons/dismiss.svg" => Some(include_bytes!("../assets/icons/dismiss.svg")),
             _ => None,
         };
         Ok(bytes.map(Into::into))
@@ -3674,25 +3670,25 @@ impl Workspace {
     /// keys do, as buttons.
     fn task_row(&self, task: &Task, row: &TaskRow, selected: bool, cx: &mut Context<Self>) -> AnyElement {
         let id = task.id;
-        let button = |name: &'static str, icon: &'static str, tip: &'static str| {
+        // Words, as on a session's row: the icons said too little.
+        let button = |name: &'static str, label: &'static str, tip: &'static str| {
             div()
                 .id((name, id as usize))
                 .relative()
                 .child(self.controls.mark(format!("{name}:{id}")))
-                .size(px(20.))
-                .flex()
-                .items_center()
-                .justify_center()
+                .px_1()
                 .rounded_sm()
+                .text_xs()
+                .text_color(rgb(theme::TEXT))
                 .hover(|s| s.bg(rgb(theme::BORDER_STRONG)))
-                .child(svg().path(icon).size(px(14.)).text_color(rgb(theme::TEXT)))
+                .child(label)
                 .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     cx.stop_propagation(); // not a click on the row, which opens the task
                     this.click_row_button(name, id, window, cx);
                 }))
         };
-        let start = if row.tabs == 0 { "Start (↵)" } else { "Show (↵)" };
+        let (start, start_tip) = if row.tabs == 0 { ("Start", "Start (↵)") } else { ("Show", "Show its tabs (↵)") };
         // Over the end of the muted line, on the row's own colour: hidden, they take no room from it.
         let actions = div()
             .absolute()
@@ -3703,15 +3699,15 @@ impl Workspace {
             .pl_1()
             .bg(rgb(theme::SELECTED))
             .when(!selected, |d| d.invisible().group_hover("task-row", |s| s.visible()))
-            .child(button("task-start", "icons/start.svg", start))
-            .child(button("task-snooze", "icons/snooze.svg", "Snooze 1 hour (S)"))
+            // The task on show has its tabs on the bar already: no Show for it.
+            .children((!(row.current && row.tabs > 0)).then(|| button("task-start", start, start_tip)))
+            .child(button("task-snooze", "Snooze", "Snooze 1 hour (S)"))
             // A finished task cannot be put on hold, and one on hold is there already: no button
             // for a move that would change nothing.
             .children(
-                (!matches!(row.group, Group::Done | Group::OnHold))
-                    .then(|| button("task-hold", "icons/hold.svg", "Hold (H)")),
+                (!matches!(row.group, Group::Done | Group::OnHold)).then(|| button("task-hold", "Hold", "Hold (H)")),
             )
-            .child(button("task-dismiss", "icons/dismiss.svg", "Dismiss (X)"));
+            .child(button("task-dismiss", "Dismiss", "Dismiss (X)"));
         // The task on show: a bar at the row's edge, and its title in bold.
         let bar = div().absolute().left(px(-1.)).top(px(5.)).bottom(px(5.)).w(px(3.)).rounded_full();
         let detail = div().flex_1().min_w_0().truncate().text_xs().text_color(rgb(theme::MUTED));
@@ -4123,8 +4119,16 @@ impl Workspace {
                     .border_r_1()
                     .border_color(rgb(theme::BORDER))
                     .text_xs()
-                    .text_color(rgb(theme::COMPOSE))
-                    .child(div().max_w(px(220.)).truncate().child(task.title.to_uppercase()))
+                    .text_color(rgb(theme::MUTED))
+                    .child(svg().path("icons/tasks.svg").size(px(12.)).flex_none().text_color(rgb(theme::MUTED)))
+                    .child(div().max_w(px(220.)).truncate().child(task.title.clone()))
+                    // It names a task, it is no tab: a click shows the task in the Tasks section.
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if this.model.sidebar != Some(Section::Tasks) {
+                            this.dispatch(Action::ToggleSection { section: Section::Tasks }, this.input, window, cx);
+                        }
+                    }))
                     .child(
                         div()
                             .id("task-leave")
