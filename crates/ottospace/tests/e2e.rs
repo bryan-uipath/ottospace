@@ -4508,9 +4508,10 @@ impl Otto {
 
 /// Stand-ins for `claude` and `codex` in a folder of their own: each writes where it ran and its
 /// arguments to `<name>.argv` (separated by NUL), says it is ready, then echoes what it is sent.
-/// With `CODEX_HOME` set, `codex` writes a session there as Codex does: `session_meta` with a
-/// new id, where it ran and when, in `sessions/<y>/<m>/<d>/rollout-…-<id>.jsonl`.
-fn fake_agents(dir: &Path) {
+/// `codex` writes a session in `sessions` as Codex does (`session_meta` with a new id, where it
+/// ran and when, in `<codex>/sessions/<y>/<m>/<d>/rollout-…-<id>.jsonl`), and `claude` the file
+/// of the session it is given (`<claude>/projects/<folder>/<id>.jsonl`).
+fn fake_agents(dir: &Path, sessions: &Path) {
     use std::os::unix::fs::PermissionsExt;
     std::fs::create_dir_all(dir).unwrap();
     for name in ["claude", "codex"] {
@@ -4518,20 +4519,27 @@ fn fake_agents(dir: &Path) {
         let script = format!(
             "#!/bin/sh\n{{ printf '%s\\0' \"$PWD\"; for a in \"$@\"; do printf '%s\\0' \"$a\"; done; }} > '{}'\n{}echo 'fake {name} ready'\nexec cat\n",
             log.display(),
-            if name == "codex" { CODEX_SESSION } else { "" }
-        );
+            if name == "codex" { CODEX_SESSION } else { CLAUDE_SESSION }
+        )
+        .replace("$SESSIONS", &sessions.to_string_lossy());
         let path = dir.join(name);
         std::fs::write(&path, script).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 }
 
-/// What the stand-in `codex` writes when `CODEX_HOME` is set: its session, as Codex does.
-const CODEX_SESSION: &str = r#"if [ -n "$CODEX_HOME" ]; then
-  id=$(uuidgen | tr A-Z a-z); at=$(date -u +%Y-%m-%dT%H:%M:%S.000Z); day="$CODEX_HOME/sessions/2026/01/01"
-  mkdir -p "$day"
-  printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s","timestamp":"%s"}}\n' "$id" "$(pwd -P)" "$at" > "$day/rollout-2026-01-01T00-00-00-$id.jsonl"
-  printf '%s' "$id" > "$CODEX_HOME/last-id"
+/// What the stand-in `codex` writes: its session, as Codex does.
+const CODEX_SESSION: &str = r#"id=$(uuidgen | tr A-Z a-z); at=$(date -u +%Y-%m-%dT%H:%M:%S.000Z); day="$SESSIONS/codex/sessions/2026/01/01"
+mkdir -p "$day"
+printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s","timestamp":"%s"}}\n' "$id" "$(pwd -P)" "$at" > "$day/rollout-2026-01-01T00-00-00-$id.jsonl"
+printf '%s' "$id" > "$SESSIONS/codex/last-id"
+"#;
+
+/// What the stand-in `claude` writes when it is given a new session's id: that session's file.
+const CLAUDE_SESSION: &str = r#"if [ "$1" = "--session-id" ]; then
+  folder="$SESSIONS/claude/projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"
+  mkdir -p "$folder"
+  printf '{"type":"user","sessionId":"%s"}\n' "$2" > "$folder/$2.jsonl"
 fi
 "#;
 
@@ -4719,16 +4727,18 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
 fn a_click_on_a_task_starts_its_agent_in_the_drawer_and_the_workspace_stays() {
     let root = std::env::temp_dir().join(format!("ottospace-e2e-talk-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
-    let (bin, repos) = (root.join("bin"), root.join("repos"));
-    fake_agents(&bin);
+    let (bin, repos, sessions) = (root.join("bin"), root.join("repos"), root.join("sessions"));
+    fake_agents(&bin, &sessions);
     fake_repo(&repos.join("app"));
     let app = repos.join("app").canonicalize().unwrap().to_string_lossy().into_owned();
-    let codex_home = root.join("codex");
-    let env = [
-        ("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()),
-        ("OTTOSPACE_REPOS", repos.to_str().unwrap()),
-        ("CODEX_HOME", codex_home.to_str().unwrap()),
-    ];
+    // Sessions are read from the test's own folders, named in its settings.
+    let codex_home = sessions.join("codex");
+    let settings = json!({
+        "repos": [repos],
+        "session_dirs": {"claude": [sessions.join("claude")], "codex": codex_home},
+    });
+    let home = user_folder("talk", &settings.to_string());
+    let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
     let otto = Otto::launch_with("talk", &env);
     otto.call(json!({"cmd": "split", "kind": "empty"}));
     otto.call(json!({"cmd": "task_new", "line": "fix login >app"}));
@@ -4764,7 +4774,10 @@ fn a_click_on_a_task_starts_its_agent_in_the_drawer_and_the_workspace_stays() {
     assert_eq!((&cell["task"], &cell["mono"], &cell["shown"]), (&json!(1), &json!("FL"), &json!(true)), "{cell}");
     assert_eq!(cell["tip"], "fix login\nRunning\napp · @claude · now");
     otto.control("rail-talk:1");
-    // Keys go to the agent.
+    // A client's keys do not reach it: it runs with the user's rights.
+    let theirs = otto.call(json!({"cmd": "key", "keys": "x ctrl-d"}));
+    assert_eq!(theirs["notice"], "only the user starts or stops a task's agent", "{theirs}");
+    // The user's keys go to the agent.
     otto.user_key("h i enter");
     otto.wait_for("the agent to echo", |o| {
         let state = o.call(json!({"cmd": "state"}));
@@ -4807,6 +4820,7 @@ fn a_click_on_a_task_starts_its_agent_in_the_drawer_and_the_workspace_stays() {
     assert_eq!((&left["state"]["current_task"], &left["drawer"]["goes_to"]), (&Value::Null, &json!("app")), "{left}");
     assert_eq!(otto.user_key("cmd-enter")["state"]["current_task"], 1);
     let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// The window's buttons sit at its top left, 80 points wide and as tall as the tab strip (28).

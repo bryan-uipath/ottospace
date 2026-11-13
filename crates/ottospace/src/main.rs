@@ -1112,10 +1112,7 @@ impl Workspace {
                         }
                     }
                 }
-                Effect::StopAgent { task } => {
-                    self.stop_agent(*task);
-                    agents.push(Action::AgentExited { task: *task });
-                }
+                Effect::StopAgent { task } => agents.extend(self.stop_agent(*task)),
                 Effect::Opened(id) => {
                     if self.model.pane(*id).is_some_and(|p| p.kind == Kind::Terminal) {
                         // The shell learns where it runs, so a program in it can name its own pane.
@@ -3035,6 +3032,10 @@ impl Workspace {
     /// ⌘V: pastes the clipboard's text into the open text field, else the focused terminal.
     fn paste(&mut self, window: &Window, cx: &mut Context<Self>) {
         if self.field_paste(window, cx) {
+            return;
+        }
+        let text = self.clipboard_text(cx);
+        if self.talk_paste(text) {
             return;
         }
         let Some(terminal) = self.model.keyboard_terminal().and_then(|id| self.terminals.get(&id)) else { return };

@@ -773,6 +773,7 @@ const MAKERS: &[Make] = &[
         Action::AgentSessions { found, home: Some("/Users/me".into()), now: g.rng.below(100_000) as u64 }
     },
     |g| Action::AgentExited { task: g.task() },
+    |g| Action::SessionMissing { task: g.task(), id: g.session_id() },
     |g| Action::TaskStop { id: g.task() },
     |_| Action::TalkToggle,
     |g| Action::TalkKeys { on: g.rng.coin() },
@@ -1003,8 +1004,8 @@ fn check(m: &Model) -> Result<(), String> {
         let _ = sneak.visible().count();
     }
     if let Some(confirm) = &m.confirm {
-        let loses = !confirm.running.is_empty() || m.quit_discards() > 0;
-        ensure!(loses, "the quit question names no terminal, and no draft holds a capture");
+        let loses = !confirm.running.is_empty() || m.quit_discards() > 0 || !m.agents.is_empty();
+        ensure!(loses, "the quit question names no terminal, no draft holds a capture, and no agent runs");
         ensure!(
             confirm.running.iter().all(|r| m.pane(r.pane).is_some()),
             "the quit question names a pane that is gone"

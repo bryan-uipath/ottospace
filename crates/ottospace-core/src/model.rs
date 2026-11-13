@@ -968,6 +968,13 @@ pub enum Action {
     AgentExited {
         task: TaskId,
     },
+    /// The session id an agent was started with has no file now its agent is gone: it never
+    /// wrote one (`claude` not found, stopped at once). The task stops following it, so the
+    /// next click starts a new session, not one that cannot be gone on with.
+    SessionMissing {
+        task: TaskId,
+        id: String,
+    },
     /// Stop a task's agent. Only the user's.
     TaskStop {
         id: TaskId,
@@ -1228,6 +1235,7 @@ impl Action {
             | Action::ComposeEnter
             | Action::AgentStarted { .. }
             | Action::AgentSessions { .. }
+            | Action::SessionMissing { .. }
             | Action::AgentExited { .. }
             | Action::TaskStop { .. }
             | Action::TalkToggle
@@ -1755,7 +1763,9 @@ impl Model {
         // The draft's title or a picture taking the keyboard is the box opening, in the bar.
         let opens = matches!(action, Action::OpenCompose { .. } | Action::CaptureTitle | Action::CaptureEdit { .. });
         let over_other = (modal && picker) || (boxed && opens);
-        if (boxed && for_panes && !named_close) || over_other {
+        // A conversation the user opens takes the drawer from the new task being written.
+        let talks = matches!(action, Action::TaskTalk { .. } | Action::TalkPick { .. }) && self.picker.is_none();
+        if (boxed && for_panes && !named_close && !talks) || over_other {
             return Some(if self.picker.is_some() { "the picker is open" } else { "the new-task box is open" });
         }
         let no_box_now = opens && (self.keys || self.visual.is_some());
@@ -1983,9 +1993,9 @@ impl Model {
         let panes = &self.panes;
         if let Some(confirm) = &mut self.confirm {
             confirm.running.retain(|r| panes.iter().any(|p| p.id == r.pane));
-            // Nor is there one once the draft it would discard is gone too.
+            // Nor is there one once the draft it would discard, and every agent, is gone too.
             let discards = self.capture.as_ref().is_some_and(|bar| !bar.materials.is_empty());
-            if confirm.running.is_empty() && !discards {
+            if confirm.running.is_empty() && !discards && self.agents.is_empty() {
                 self.confirm = None;
             }
         }
@@ -2666,7 +2676,8 @@ impl Model {
             Action::LeaveSneak => self.sneak = None,
             // Nothing to lose: no terminal runs anything, and no draft holds a capture.
             Action::QuitAsked { running }
-                if (running.is_empty() && self.quit_discards() == 0) || self.confirm.is_some() =>
+                if (running.is_empty() && self.quit_discards() == 0 && self.agents.is_empty())
+                    || self.confirm.is_some() =>
             {
                 effects.push(Effect::Quit)
             }
@@ -2875,8 +2886,19 @@ impl Model {
                 // Not found in a while: the task runs, with no session to follow.
                 self.seeking.retain(|seek| now.saturating_sub(seek.since) <= agents::SEEK_MS);
             }
+            Action::SessionMissing { task, id } => {
+                if self.tasks.get(task).and_then(|task| task.session.as_ref()).is_some_and(|link| link.id == id) {
+                    self.tasks.unlink(task);
+                }
+            }
             Action::AgentExited { task } => {
+                // No longer looked for: a later agent's session must not be taken for its.
+                self.seeking.retain(|seek| seek.task != task);
                 let ran = self.agents.contains(&task);
+                // Its program is gone: the session is no longer at work there.
+                if ran && self.tasks.get(task).is_some_and(|task| task.session.is_some()) {
+                    self.tasks.followed(task, State::NeedsYou);
+                }
                 self.agents.retain(|id| *id != task);
                 self.starting.retain(|(id, _)| *id != task);
                 // It was at work and is gone: the task is the user's to look at.
@@ -2918,6 +2940,8 @@ impl Model {
     /// runner can go on with: nothing is started.
     fn agent_start(&self, task: &Task) -> Option<agents::Start> {
         match &task.session {
+            // At work elsewhere (a terminal of the user's): a second program on it would clash.
+            Some(link) if link.state == Some(State::Running) => None,
             Some(link) => {
                 let known = sessions::RUNNERS.contains(&link.runner.as_str()) && agents::is_uuid(&link.id);
                 known.then(|| agents::Start::Resume { runner: link.runner.clone(), session: link.id.clone() })
@@ -2936,6 +2960,9 @@ impl Model {
             (Some(_), _) => None,
             (None, Some(agent)) if task.session.is_none() => {
                 Some(format!("@{agent} is a saved agent: starting one is not built yet"))
+            }
+            _ if task.session.as_ref().is_some_and(|link| link.state == Some(State::Running)) => {
+                Some("its session is at work elsewhere: go on with it there".into())
             }
             _ => Some("this task's session cannot be gone on with from here".into()),
         }
@@ -3018,6 +3045,12 @@ impl Model {
         let (cwd, brief) = (task.repo.clone(), task.materials_dir().map(str::to_string));
         self.leave(effects);
         self.list = None;
+        // The drawer shows one thing: the new task being written gives way. A capture's draft
+        // is not the drawer's to close.
+        if self.compose_host() == Some(Host::Drawer) {
+            self.compose = None;
+            self.compose_reset();
+        }
         self.talk = Some(Talk { task: id, open: true, keys: self.agent_runs(id) || start.is_some() });
         self.opened.retain(|seen| *seen != id);
         self.opened.push(id);
@@ -3245,7 +3278,8 @@ impl Model {
     /// The drawer's one-click picks for the new-task line: WHERE, the first listed repositories;
     /// WHO, the default agent, then each runner and its models.
     pub fn compose_picks(&self) -> Picks {
-        let wheres = self.repos.iter().take(PICKS).map(|repo| repo.name.clone()).collect();
+        let names = self.repos.iter().map(|repo| repo.name.clone()).filter(|name| compose::taggable('>', name));
+        let wheres = names.take(PICKS).collect();
         let default = self.default_agent.clone().unwrap_or_else(|| sessions::RUNNERS[0].to_string());
         let mut whos = vec![default];
         for name in agents::names(&self.models, Vec::new()) {
@@ -4608,6 +4642,7 @@ mod tests {
         Action::ComposeEnter,
         Action::AgentStarted { .. },
         Action::AgentSessions { .. },
+        Action::SessionMissing { .. },
         Action::AgentExited { .. },
         Action::TaskStop { .. },
         Action::TalkToggle,
@@ -4775,6 +4810,7 @@ mod tests {
             Action::ComposeEnter,
             Action::AgentStarted { task: 1, session: None, at: 0 },
             Action::AgentSessions { found: Vec::new(), home: None, now: 0 },
+            Action::SessionMissing { task: 1, id: String::new() },
             Action::AgentExited { task: 1 },
             Action::TaskStop { id: 1 },
             Action::TalkToggle,
@@ -7109,6 +7145,52 @@ mod tests {
         system(&mut m, Action::AgentStarted { task: 4, session: None, at: 5_000 });
         system(&mut m, Action::AgentSessions { found: Vec::new(), home: None, now: 5_000 + agents::SEEK_MS + 1 });
         assert!(m.seeking().is_empty() && link(&m, 4).is_none());
+        // An agent gone before its session was found takes none started after it.
+        m.update(Action::TaskTalk { id: 3 });
+        system(&mut m, Action::AgentStarted { task: 3, session: None, at: 70_000 });
+        assert_eq!(m.seeking().len(), 0, "task 3 is Claude's: its id is its own");
+        m.update(Action::TaskFromLine { line: "gone >app @codex".into(), known: known.clone(), open: false });
+        m.update(Action::TaskTalk { id: 5 });
+        system(&mut m, Action::AgentStarted { task: 5, session: None, at: 80_000 });
+        system(&mut m, Action::AgentExited { task: 5 });
+        system(&mut m, Action::AgentSessions { found: vec![started(9, 81_000)], home: None, now: 82_000 });
+        assert!(m.seeking().is_empty() && link(&m, 5).is_none());
+    }
+
+    #[test]
+    fn a_conversation_neither_clashes_with_a_session_at_work_nor_goes_on_with_one_never_written() {
+        const UUID: &str = "8f14e45f-ceea-467f-a8d3-0242ac130003";
+        let system = |m: &mut Model, action: Action| m.update(action.sent_by(Origin::System));
+        let mut m = Model::default();
+        m.update(Action::TaskFromLine { line: "mine".into(), known: Default::default(), open: false });
+        // Adopted from a session at work in the user's own terminal: no second program on it.
+        let link = sessions::Link { runner: "claude".into(), id: UUID.into(), state: Some(State::Running) };
+        m.tasks.link(1, link);
+        assert_eq!(m.update(Action::TaskTalk { id: 1 }), []);
+        assert!(m.talk_note().is_some_and(|note| note.contains("at work elsewhere")));
+        // Ours: started, then gone. Its session never written: the next click starts a new one.
+        m.tasks.unlink(1);
+        assert!(matches!(m.update(Action::TaskTalk { id: 1 })[..], [Effect::StartAgent { .. }]));
+        system(&mut m, Action::AgentStarted { task: 1, session: Some(UUID.into()), at: 0 });
+        // Quitting asks while it runs, with no terminal running anything.
+        m.update(Action::QuitAsked { running: Vec::new() });
+        assert!(m.confirm.is_some());
+        m.update(Action::QuitCancel);
+        system(&mut m, Action::AgentExited { task: 1 });
+        system(&mut m, Action::SessionMissing { task: 1, id: "another".into() });
+        assert!(m.tasks.get(1).unwrap().session.is_some(), "another id: not this task's");
+        system(&mut m, Action::SessionMissing { task: 1, id: UUID.into() });
+        let effects = m.update(Action::TaskTalk { id: 1 });
+        assert!(matches!(&effects[..], [Effect::StartAgent { start: agents::Start::New(_), .. }]), "{effects:?}");
+        // The drawer shows one thing: opening a conversation closes the new task being written.
+        m.update(Action::OpenCompose { text: "half".into() });
+        m.update(Action::TaskTalk { id: 1 });
+        assert_eq!((m.compose_host(), m.talk.map(|talk| talk.open)), (None, Some(true)));
+        // A repository whose name no tag can hold is no pick.
+        let repo =
+            |name: &str| Repo { name: name.into(), path: format!("/code/{name}"), branch: None, worktrees: Vec::new() };
+        m.update(Action::SetRepos { repos: vec![repo("2048-game"), repo("my app"), repo("app")] });
+        assert_eq!(m.compose_picks().wheres, ["app"]);
     }
 
     #[test]

@@ -58,7 +58,13 @@ impl Workspace {
             1 => Some("a draft with 1 material will be discarded".to_string()),
             n => Some(format!("a draft with {n} materials will be discarded")),
         };
-        let lines = confirm.lines().into_iter().chain(draft).map(|line| div().child(line));
+        // So do the drawer's agents.
+        let agents = match self.drawer.agents.values().filter(|agent| !agent.terminal.exited()).count() {
+            0 => None,
+            1 => Some("1 task's agent will be stopped".to_string()),
+            n => Some(format!("{n} tasks' agents will be stopped")),
+        };
+        let lines = confirm.lines().into_iter().chain(draft).chain(agents).map(|line| div().child(line));
         let panel = crate::dialog::panel(theme::BORDER_STRONG)
             .w(px(320.))
             .flex()

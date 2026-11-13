@@ -491,6 +491,13 @@ impl Tasks {
         }
     }
 
+    /// The task follows no session any more.
+    pub fn unlink(&mut self, id: TaskId) {
+        if let Some(task) = self.list.iter_mut().find(|t| t.id == id) {
+            task.session = None;
+        }
+    }
+
     /// Notes the state a task just took from the session it was adopted from.
     pub fn followed(&mut self, id: TaskId, state: State) {
         if let Some(link) = self.list.iter_mut().find(|t| t.id == id).and_then(|task| task.session.as_mut()) {

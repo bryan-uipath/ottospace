@@ -28,6 +28,9 @@ pub struct Agent {
     since: Instant,
     /// What the header names: the model, else the runner.
     pub model: String,
+    /// The id it was started with (Claude's), and where it runs: to see if its session was written.
+    session: Option<String>,
+    cwd: Option<String>,
     /// The core was told it ended.
     told: bool,
 }
@@ -96,14 +99,31 @@ impl Workspace {
         let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
         let cwd = cwd.or(home.as_deref());
         let terminal = Terminal::run(&program(name)?, &args, &vars, cwd).map_err(|err| format!("{name}: {err}"))?;
-        let agent = Agent { terminal, since: Instant::now(), model, told: false };
+        let (given, cwd) = (session.clone(), cwd.map(str::to_string));
+        let agent = Agent { terminal, since: Instant::now(), model, told: false, session: given, cwd };
         self.drawer.agents.insert(task, agent);
         Ok(session)
     }
 
-    /// Ends a task's agent: dropping its terminal hangs up on it.
-    pub(crate) fn stop_agent(&mut self, task: TaskId) {
+    /// Ends a task's agent: dropping its terminal hangs up on it. Returns what the core is told.
+    pub(crate) fn stop_agent(&mut self, task: TaskId) -> Vec<Action> {
+        let missing = self.session_missing(task);
         self.drawer.agents.remove(&task);
+        missing.into_iter().chain([Action::AgentExited { task }]).collect()
+    }
+
+    /// The session id a gone agent was started with, if no Claude folder holds its file
+    /// (`projects/<folder>/<id>.jsonl`): it was never written. `None` too when sessions are not
+    /// read (`"sessions": false`): nothing is known.
+    fn session_missing(&self, task: TaskId) -> Option<Action> {
+        let agent = self.drawer.agents.get(&task)?;
+        let (id, cwd) = (agent.session.clone()?, agent.cwd.as_ref()?);
+        let dirs = crate::config::session_dirs()?;
+        let real = std::fs::canonicalize(cwd).ok()?;
+        let folder = ottospace_sessions::claude::slug(&real);
+        let file = format!("{id}.jsonl");
+        let written = dirs.claude.iter().any(|dir| dir.join("projects").join(&folder).join(&file).is_file());
+        (!written).then_some(Action::SessionMissing { task, id })
     }
 
     /// Fits the conversation's terminal to the drawer, redraws on its output, and tells the
@@ -122,7 +142,10 @@ impl Workspace {
             }
         }
         for task in ended {
-            self.dispatch(Action::AgentExited { task }, Origin::System, window, cx);
+            let news = self.session_missing(task).into_iter().chain([Action::AgentExited { task }]);
+            for action in news.collect::<Vec<_>>() {
+                self.dispatch(action, Origin::System, window, cx);
+            }
         }
         if redraw {
             cx.notify();
@@ -132,6 +155,11 @@ impl Workspace {
     /// A key while the conversation has the keyboard: to the agent, as a terminal pane's keys go
     /// to its program. Esc too: it is the agent's. ⌘ shortcuts fall through to their bindings.
     pub(crate) fn talk_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        // An agent runs with the user's rights: a client types nothing into it (⌃C, ⌃D included).
+        if self.input != Origin::User {
+            self.error = Some(agents::USERS_ALONE.into());
+            return cx.stop_propagation();
+        }
         let Some(agent) = self.model.talk.and_then(|talk| self.drawer.agents.get(&talk.task)) else { return };
         let terminal = &agent.terminal;
         let (key, m) = (&event.keystroke, event.keystroke.modifiers);
@@ -463,8 +491,7 @@ impl Workspace {
 
     /// About once a second while an agent's session is not known (`Model::seeking`): reads, on a
     /// thread of its own, the sessions Codex wrote in those folders, and tells the core
-    /// (`AgentSessions`), which links each agent to its own. A test run reads only a
-    /// `CODEX_HOME` it names.
+    /// (`AgentSessions`), which links each agent to its own.
     pub(crate) fn seek_sessions(&mut self, window: &Window, cx: &mut Context<Self>) {
         if let Some(found) = self.drawer.reading.as_ref().and_then(|read| read.try_recv().ok()) {
             self.drawer.reading = None;
@@ -473,8 +500,10 @@ impl Workspace {
             self.dispatch(news, Origin::System, window, cx);
         }
         let seeking = self.model.seeking();
-        let test = std::env::var_os("OTTOSPACE_E2E").is_some() && std::env::var_os("CODEX_HOME").is_none();
-        if seeking.is_empty() || self.drawer.reading.is_some() || test {
+        // Read only where sessions are read: not with `"sessions": false`, nor in a test run
+        // whose settings name no folder.
+        let Some(codex_home) = crate::config::session_dirs().and_then(|dirs| dirs.codex) else { return };
+        if seeking.is_empty() || self.drawer.reading.is_some() {
             return;
         }
         let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
@@ -483,7 +512,7 @@ impl Workspace {
         self.drawer.reading = Some(read);
         std::thread::spawn(move || {
             use ottospace_sessions::Runner;
-            let codex = ottospace_sessions::codex::Codex::from_env();
+            let codex = ottospace_sessions::codex::Codex::new(codex_home);
             // A folder as the core names it: Codex writes where it ran with links resolved.
             let named = |cwd: &std::path::Path| {
                 dirs.iter().find(|dir| std::fs::canonicalize(dir).is_ok_and(|real| real == cwd)).cloned()
@@ -497,6 +526,17 @@ impl Workspace {
             });
             let _ = send.send(found.collect());
         });
+    }
+
+    /// ⌘V while the conversation has the keyboard: the clipboard's text to the agent, bracketed
+    /// if it asked for that. False: the conversation does not have the keyboard.
+    pub(crate) fn talk_paste(&mut self, text: Option<String>) -> bool {
+        let shown = self.model.talk.filter(|_| self.model.mode() == Mode::Talk).map(|talk| talk.task);
+        let Some(agent) = shown.and_then(|task| self.drawer.agents.get(&task)) else { return false };
+        if let Some(text) = text.filter(|_| self.input == Origin::User) {
+            agent.terminal.paste(&text);
+        }
+        true
     }
 
     /// What the state reply says of the drawer: where it is drawn, and each agent's terminal.

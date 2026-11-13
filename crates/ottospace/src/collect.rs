@@ -29,7 +29,6 @@ use crate::{Frame, Hosted, Workspace, ax_debug, config, control, now_ms, sneak, 
 /// The capture key's name once it is registered, e.g. `CTRL-ALT-CMD-SPACE`. Unset: there is none.
 pub static KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
-/// How wide the right bar is.
 /// How long an app may take to answer for its tree before the capture goes without it.
 const AX_LIMIT: Duration = Duration::from_secs(8);
 /// A picture is taken once the pane is drawn beside the bar: this long after the key at least
