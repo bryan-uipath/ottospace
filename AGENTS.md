@@ -96,10 +96,13 @@ Rules:
   Prefer it to a local run, which takes the keyboard.
 - Not in CI: rustfmt on
   `ottospace-mac` (not formatted yet), clippy `-D warnings` (main has warnings).
-- `.github/workflows/build.yml`, on pull requests and pushes to `main`: `scripts/test-osi.sh`, and
-  `scripts/package.sh` (release binary, `.app` zip, `BUILD`, `SHA256SUMS`) uploaded as a workflow
+- `.github/workflows/build.yml`, on pushes to `main` and on pull requests that carry the label
+  `pr-build` (`osi install pr <n>` adds it; without it the jobs are skipped): `scripts/test-osi.sh`,
+  and `scripts/package.sh` (release binary, `.app` zip, `BUILD`, `SHA256SUMS`) uploaded as a workflow
   artifact. On `main` a third job, the only one with a write token, replaces the assets of the
   `main-latest` prerelease and moves its tag. Not a required check.
+- `.github/workflows/scripts.yml`, on pull requests that change `scripts/**` or `install.sh`:
+  `scripts/test-osi.sh`.
 - `.github/workflows/release.yml`, on a `v*` tag: `scripts/package.sh`, GitHub Release.
 - `.github/workflows/pages.yml`, on pushes to `main` that touch `site/**`: deploys `site/` to GitHub
   Pages. Never on pull requests. Only its deploy job has `pages: write` and `id-token: write`.
@@ -110,7 +113,8 @@ Rules:
 
 - `install.sh` installs `scripts/osi`; `osi` installs builds (`main`, `pr <n>`, a release) into
   `~/.local/bin` and records them in `~/.ottospace/install`. Design: `docs/ai/install-and-update.md`.
-- `osi` reads the asset names, the `main-latest` tag, the workflow file name and the artifact name.
+- `osi` reads the asset names, the `main-latest` tag, the workflow file name, the artifact name and
+  the label `pr-build`.
   Change them in `scripts/package.sh`, `build.yml` and `scripts/osi` together.
 - Test with `scripts/test-osi.sh`: fixture builds, a temp `HOME`, no network. Never run
   `install.sh` or `osi` against the real `HOME` in a test; every path has an override.

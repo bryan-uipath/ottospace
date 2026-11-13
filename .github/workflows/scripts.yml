@@ -1,0 +1,28 @@
+name: Scripts
+
+# install.sh and osi against fixture builds in a temp directory, for a pull request that changes
+# them. build.yml runs the same test on main and on a pull request with the label pr-build.
+on:
+  pull_request:
+    paths: ['scripts/**', 'install.sh', '.github/workflows/scripts.yml']
+
+# pull_request, never pull_request_target: a fork's run gets a read-only token and no secrets.
+permissions: {}
+
+concurrency:
+  group: scripts-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  scripts:
+    # macOS: the test signs a fixture app with codesign. No network.
+    runs-on: macos-26
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test osi
+        run: scripts/test-osi.sh

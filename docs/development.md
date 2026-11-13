@@ -82,8 +82,11 @@ sets `OTTOSPACE_E2E`, which turns window hosting off, so tests never touch your 
   formatted crates, `cargo clippy`, `cargo test --workspace`, and the SDK's type check and the
   tests that need no app. `cargo e2e` runs in a separate job that may fail without blocking; the
   same job then runs the SDK's tests against a private instance.
-- `.github/workflows/build.yml`, on pull requests and pushes to `main`: tests the installer and
-  packages a build. On `main` it publishes the `main-latest` prerelease.
+- `.github/workflows/build.yml`, on pushes to `main` and on pull requests with the label
+  `pr-build`: tests the installer and packages a build. On `main` it publishes the `main-latest`
+  prerelease. `osi install pr <n>` adds the label.
+- `.github/workflows/scripts.yml`, on pull requests that change `scripts/` or `install.sh`: tests
+  the installer.
 - `.github/workflows/release.yml`, on a `v*` tag: the GitHub Release.
 - `.github/workflows/pages.yml`, on pushes to `main` that change `site/`: deploys `site/` to
   GitHub Pages. Pages must be on for the repository, with GitHub Actions as its source.

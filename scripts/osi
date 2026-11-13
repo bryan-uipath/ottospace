@@ -21,6 +21,10 @@ appzip="ottospace-$target.app.zip"
 artifact="ottospace-$target"
 main_tag="main-latest"
 workflow="build.yml"
+# The label that makes build.yml build a pull request. Must match .github/workflows/build.yml.
+build_label="pr-build"
+# jq: "true" when a pull request carries $build_label.
+has_label='([.labels[].name] | index("'"$build_label"'") != null | tostring)'
 # Second line of this file. install.sh and self-update replace only an osi that carries it.
 marker="# ottospace-installer"
 
@@ -55,7 +59,7 @@ usage: osi <command>
   --app          also install ottospace.app into ~/Applications
   --force        replace an `ottospace` command or app that osi did not install
   --allow-fork   allow a pull request from a fork (asks you to type its commit)
-  --no-wait      do not wait for a pull request build that is queued or running
+  --no-wait      do not wait for a pull request build (a missing one is still requested)
 
 A pull request build runs that pull request's code with your terminal's permissions.
 EOF
@@ -169,16 +173,17 @@ release_base() {
   esac
 }
 
-# Reads pull request $1 from GitHub. Sets pr_state, pr_author, pr_sha, pr_head, pr_cross.
+# Reads pull request $1 from GitHub. Sets pr_state, pr_author, pr_sha, pr_head, pr_cross, and
+# pr_labelled (true when it carries $build_label).
 pr_read() {
   gh_find
   # Control characters are dropped, so a field cannot write to the terminal. No field may be
   # empty: `read` would skip it and shift the rest.
   line="$(gh_run pr view "$1" -R "github.com/$repo" \
-    --json state,author,headRefOid,headRepository,isCrossRepository \
-    --jq '[.state, (.author.login // "unknown"), .headRefOid, (.headRepository.nameWithOwner // "deleted"), (.isCrossRepository | tostring)] | @tsv' |
+    --json state,author,headRefOid,headRepository,isCrossRepository,labels \
+    --jq '[.state, (.author.login // "unknown"), .headRefOid, (.headRepository.nameWithOwner // "deleted"), (.isCrossRepository | tostring), '"$has_label"'] | @tsv' |
     clean)" || line=""
-  IFS="$(printf '\t')" read -r pr_state pr_author pr_sha pr_head pr_cross <<EOF
+  IFS="$(printf '\t')" read -r pr_state pr_author pr_sha pr_head pr_cross pr_labelled <<EOF
 $line
 EOF
   is_sha "$pr_sha" 40 || die "could not read pull request $1 of $repo (is gh signed in? gh auth status)"
@@ -225,12 +230,13 @@ elapsed() { printf '%dm %02ds' $(($1 / 60)) $(($1 % 60)); }
 clean() { LC_ALL=C tr -cd '\011\040-\176'; }
 
 # One build of commit $1 as "id<TAB>status<TAB>conclusion" in $tmp/run. $2..: more gh options.
+# A run whose jobs were skipped (a pull request without the label) is not a build.
 run_query() {
   run_sha="$1"
   shift
   gh_run run list -R "github.com/$repo" --workflow "$workflow" --commit "$run_sha" --event pull_request \
-    --limit 1 --json databaseId,status,conclusion "$@" \
-    --jq '.[0] // empty | [(.databaseId | tostring), .status, (if (.conclusion // "") == "" then "none" else .conclusion end)] | @tsv' \
+    --limit 20 --json databaseId,status,conclusion "$@" \
+    --jq '[.[] | select(.conclusion != "skipped")][0] // empty | [(.databaseId | tostring), .status, (if (.conclusion // "") == "" then "none" else .conclusion end)] | @tsv' \
     >"$tmp/run" 2>/dev/null
 }
 
@@ -263,11 +269,15 @@ build_state() {
 
 # Finds the build of pull request $1's head commit and sets run. A build that is queued or
 # running is waited for, with its state on one line; --no-wait says the state and stops.
+# With no build, osi adds the label that asks for one and waits for the run to appear.
 pr_build() {
   poll="${OSI_POLL:-10}"
   limit="${OSI_WAIT_MAX:-3600}"
+  # How long a labelled pull request may show no run before osi gives up.
+  start_max="${OSI_START_MAX:-120}"
   is_number "$poll" || poll=10
   is_number "$limit" || limit=3600
+  is_number "$start_max" || start_max=120
   began="$(date +%s)"
   waited=0
   did_wait=0
@@ -295,7 +305,19 @@ pr_build() {
         ;;
       "no build")
         spin_clear
-        die "no build for commit $(short "$pr_sha"): it has not started (gh pr checks $1 -R $repo), it changes only docs, or it is older than 14 days."
+        if [ "$pr_labelled" != true ]; then
+          gh_run pr edit "$1" -R "github.com/$repo" --add-label "$build_label" >/dev/null 2>&1 ||
+            die "could not add the label $build_label to pull request $1 (needs write access to $repo): ask a maintainer to add it, then run this again."
+          pr_labelled=true
+          say "Asked GitHub to build pull request $1 (label $build_label)"
+          [ "$no_wait" = 0 ] || die "the build of commit $(short "$pr_sha") is requested: run this again in a few minutes."
+        fi
+        # A run takes a little while to appear after a label or a push.
+        if [ "$no_wait" = 1 ] || [ $(($(date +%s) - began)) -ge "$start_max" ]; then
+          die "no build for commit $(short "$pr_sha"): it has not started (gh pr checks $1 -R $repo), it changes only docs, or it is older than 14 days."
+        fi
+        state=requested
+        url="https://github.com/$repo/pull/$1/checks"
         ;;
       "failed (cancelled)")
         spin_clear
@@ -313,9 +335,10 @@ pr_build() {
       die "the build is still $state after $(elapsed "$waited"): $url"
     fi
     did_wait=1
+    jobs=""
     if [ -t 1 ]; then
       # Which jobs are done, when gh can say.
-      jobs="$(gh_run run view "$run" -R "github.com/$repo" --json jobs \
+      is_number "$run" && jobs="$(gh_run run view "$run" -R "github.com/$repo" --json jobs \
         --jq '[.jobs[] | "\(.name) \(if (.conclusion // "") == "" then .status else .conclusion end)"] | join(", ")' 2>/dev/null |
         clean | cut -c 1-80)" || jobs=""
       i=0
@@ -608,10 +631,11 @@ cmd_list() {
     say "Pull request builds need the GitHub CLI: https://cli.github.com (then: gh auth login)"
     return 0
   fi
-  # One line each: number, head commit, fork or not, title. A title cannot write to the terminal.
+  # One line each: number, head commit, fork or not, labelled or not, title. A title cannot write
+  # to the terminal.
   gh_run pr list -R "github.com/$repo" --state open --limit 51 \
-    --json number,headRefOid,isCrossRepository,title \
-    --jq '.[] | [(.number | tostring), .headRefOid, (.isCrossRepository | tostring), (.title | gsub("[\t\n\r]"; " "))] | @tsv' \
+    --json number,headRefOid,isCrossRepository,labels,title \
+    --jq '.[] | [(.number | tostring), .headRefOid, (.isCrossRepository | tostring), '"$has_label"', (.title | gsub("[\t\n\r]"; " "))] | @tsv' \
     >"$tmp/prs" 2>/dev/null &
   spin_quiet $! "Reading open pull requests" || die "could not list the pull requests of $repo (is gh signed in? gh auth status)"
   [ -s "$tmp/prs" ] || {
@@ -621,7 +645,7 @@ cmd_list() {
   }
   say ""
   listed=0
-  while IFS="$(printf '\t')" read -r number sha cross title; do
+  while IFS="$(printf '\t')" read -r number sha cross labelled title; do
     is_number "$number" || continue
     is_sha "$sha" 40 || continue
     title="$(printf '%s' "$title" | clean | cut -c 1-60)"
@@ -633,12 +657,14 @@ cmd_list() {
     spin "pr $number"
     if build_read_run "$sha"; then state="$(build_state)"; else state="unknown (gh failed)"; fi
     spin_clear
+    # Builds are made on request: install asks for one.
+    if [ "$state" = "no build" ] && [ "$labelled" != true ]; then state="no build (to build it: osi install pr $number)"; fi
     if [ "$cross" != false ]; then state="$state, from a fork"; fi
     say "$(printf 'pr %-6s %.7s  %s' "$number" "$sha" "$state")$(mark "$sha")"
     say "          $title"
   done <"$tmp/prs"
   say ""
-  say "Install one: osi install pr <n>. A build that is queued or running is waited for."
+  say "Install one: osi install pr <n>. A build that is missing is requested, and waited for."
 }
 
 cmd_current() {

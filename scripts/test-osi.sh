@@ -85,12 +85,25 @@ make_pr() {
   printf 'OPEN\t%s\t%s\t%s\t%s\n' "$5" "$2" "$3" "$4" >"$FAKE_GH_DIR/pr-$1"
 }
 
-# Answers the three gh calls osi makes, from files in $FAKE_GH_DIR.
+# Answers the gh calls osi makes, from files in $FAKE_GH_DIR. A pull request carries the label
+# pr-build when label-<n> exists; `pr edit --add-label` makes it (fails if edit-fails exists).
 cat >"$OSI_GH" <<'EOF'
 #!/bin/sh
 printf '%s|%s|%s\n' "${GH_HOST:-}" "${GH_REPO:-}" "$*" >>"$FAKE_GH_DIR/log"
 case "$1 $2" in
-  "pr view") cat "$FAKE_GH_DIR/pr-$3" ;;
+  "pr view")
+    if [ -e "$FAKE_GH_DIR/label-$3" ]; then labelled=true; else labelled=false; fi
+    printf '%s\t%s\n' "$(cat "$FAKE_GH_DIR/pr-$3")" "$labelled"
+    ;;
+  "pr edit")
+    [ ! -e "$FAKE_GH_DIR/edit-fails" ] || exit 1
+    n="$3"
+    while [ $# -gt 0 ]; do
+      if [ "$1" = --add-label ]; then echo "$n $2" >>"$FAKE_GH_DIR/edits"; fi
+      shift
+    done
+    touch "$FAKE_GH_DIR/label-$n"
+    ;;
   "run list")
     while [ $# -gt 0 ]; do
       if [ "$1" = --commit ]; then sha="$2"; fi
@@ -205,7 +218,8 @@ check "state records the pull request" state_has "ref=30"
 run "$osi" update
 check "pull request unchanged: up to date" says "Up to date"
 make_pr 30 "$(commit f)" bryan-uipath/ottospace false bryan-uipath
-run "$osi" update
+touch "$FAKE_GH_DIR/label-30"
+run env OSI_START_MAX=0 "$osi" update
 check "new head without a build fails" says "no build for commit ffffffffffff"
 check "the old binary is still installed" installed_is PR30
 publish_pr "$(commit f)" PR30b
@@ -433,16 +447,54 @@ check "a failed build is named with its run" says "failed (failure): https://git
 check "the old binary is still installed" installed_is PR35
 rm -f "$FAKE_GH_DIR/run-$(commit 5)"
 
+echo "# a pull request without the label pr-build"
+make_pr 37 "$(commit 0)" bryan-uipath/ottospace false bryan-uipath
+publish_pr "$(commit 0)" PR37
+# The run appears two polls after the label.
+printf '\n\n80\tqueued\tnone\n80\tcompleted\tsuccess\n' >"$FAKE_GH_DIR/run-$(commit 0)"
+run env OSI_POLL=0 "$osi" install pr 37
+check "adds the label" [ "$(cat "$FAKE_GH_DIR/edits")" = "37 pr-build" ]
+check "says it asked for a build" says "Asked GitHub to build pull request 37 (label pr-build)"
+check "waits for the run to appear" says "Build requested; waiting"
+check "then for the build" says "Build queued; waiting"
+check "and installs it" installed_is PR37
+make_pr 37 "$(commit 8)" bryan-uipath/ottospace false bryan-uipath
+publish_pr "$(commit 8)" PR37b
+printf '\n81\tcompleted\tsuccess\n' >"$FAKE_GH_DIR/run-$(commit 8)"
+run env OSI_POLL=0 "$osi" update
+check "already labelled: the label is not added again" [ "$(wc -l <"$FAKE_GH_DIR/edits" | tr -d ' ')" = 1 ]
+check "waits for the run of the new head and installs it" installed_is PR37b
+make_pr 38 "$(commit 9)" bryan-uipath/ottospace false bryan-uipath
+touch "$FAKE_GH_DIR/edit-fails"
+: >"$FAKE_GH_DIR/log"
+run env OSI_POLL=0 "$osi" install pr 38
+rm "$FAKE_GH_DIR/edit-fails"
+check "a label that cannot be added fails" [ "$status" != 0 ]
+check "and says to ask a maintainer" says "ask a maintainer to add it"
+check "it tries once" [ "$(grep -c '|pr edit 38' "$FAKE_GH_DIR/log")" = 1 ]
+check "nothing was installed" installed_is PR37b
+make_pr 39 "$(commit 9)" bryan-uipath/ottospace false bryan-uipath
+run "$osi" install pr 39 --no-wait
+check "--no-wait adds the label" [ -e "$FAKE_GH_DIR/label-39" ]
+check "and says the build was requested" says "is requested: run this again in a few minutes"
+check "and exits non-zero" [ "$status" != 0 ]
+run "$osi" install pr 39 --no-wait
+check "--no-wait, labelled, no run yet: says there is no build" says "no build for commit 999999999999"
+# Back to pull request 35, which the list below marks as installed.
+publish_pr "$(commit 5)" PR35
+run "$osi" install pr 35
+
 echo "# list"
-printf '35\t%s\tfalse\tA title\twith a tab\n36\t%s\tfalse\tFails\n32\t%s\ttrue\tFrom a fork\n' \
-  "$(commit 5)" "$(commit 6)" "$(commit 3)" >"$FAKE_GH_DIR/prs"
+printf '35\t%s\tfalse\ttrue\tA title\twith a tab\n36\t%s\tfalse\ttrue\tFails\n32\t%s\ttrue\ttrue\tFrom a fork\n41\t%s\tfalse\tfalse\tNot asked\n' \
+  "$(commit 5)" "$(commit 6)" "$(commit 3)" "$(commit b)" >"$FAKE_GH_DIR/prs"
 run "$osi" list
 check "list shows main" says "osi install main"
 check "list marks the installed build" says "pr 35     5555555  ready  (installed)"
 check "list shows a failed build" says "pr 36     6666666  failed (failure)"
 check "list marks a fork" says "ready, from a fork"
 check "list shows titles" says "From a fork"
-printf '40\t%s\tfalse\tBad \033[31m\302\233title \342\200\256x\n' "$(commit 6)" >"$FAKE_GH_DIR/prs"
+check "list says how to build an unlabelled pull request" says "pr 41     bbbbbbb  no build (to build it: osi install pr 41)"
+printf '40\t%s\tfalse\ttrue\tBad \033[31m\302\233title \342\200\256x\n' "$(commit 6)" >"$FAKE_GH_DIR/prs"
 out="$("$osi" list 2>&1)" || true
 only_plain() { ! printf '%s' "$out" | LC_ALL=C grep -q '[^[:print:][:space:]]'; }
 check "a title cannot send escape, C1 or bidi bytes to the terminal" only_plain

@@ -20,8 +20,9 @@ Accessibility and Screen Recording once (see [Permissions](reference.md#requirem
 
 ```sh
 osi install main      # the latest build of main
-osi install pr 30     # the build of a pull request. Needs gh, signed in. Waits for a build
-                      # that is queued or running (--no-wait: say its state and stop)
+osi install pr 30     # the build of a pull request. Needs gh, signed in. Without a build it
+                      # adds the label pr-build, which asks for one. Waits for a build that is
+                      # requested, queued or running (--no-wait: say its state and stop)
 osi list              # builds you can install: main, and each open pull request with its state
 osi install stable    # the latest release; osi install v0.1.0 for one release
 osi current           # what is installed: channel, version, commit, date
