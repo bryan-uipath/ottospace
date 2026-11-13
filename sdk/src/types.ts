@@ -773,6 +773,8 @@ export interface Snapshot {
     agents: Record<string, { model: string; ended: boolean; cols: number; rows: number; lines: string[] }>;
     goes_to: string | null;
     note: string | null;
+    /** The right rail's conversations, in order: badge, state, at work, shown, and the tooltip's text. */
+    rail: { task: TaskId; mono: string; group: Group | null; working: boolean; shown: boolean; tip: string }[];
   };
 }
 

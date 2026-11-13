@@ -4292,9 +4292,9 @@ fn a_pane_is_captured_annotated_and_becomes_a_task_with_a_brief() {
     // The markdown sends the reader to the picture first, by its whole path.
     let annotated = kept.join("1.annotated.png");
     assert!(text.contains(&format!("Look at the picture first: `{}`.", annotated.display())), "{text}");
-    // No id: the task on show. Opening the task shows its brief in the bar; a terminal opened
-    // there names the task, so an agent started in it can ask.
-    assert_eq!(otto.raw(r#"{"cmd":"task_brief"}"#)["ok"], false);
+    // No id: the task on show, else the drawer's, where ↵ started it. Opening the task shows
+    // its brief in the bar; a terminal opened there names the task, so an agent in it can ask.
+    assert_eq!(otto.call(json!({"cmd": "task_brief"}))["task"], 1);
     let reply = otto.call(json!({"cmd": "task_open", "id": 1}));
     assert_eq!((&reply["state"]["brief"], &reply["capture"]["brief"]["task"]), (&json!(1), &json!(1)));
     assert_eq!(otto.call(json!({"cmd": "task_brief"}))["task"], 1);
@@ -4742,6 +4742,11 @@ fn a_click_on_a_task_starts_its_agent_in_the_drawer_and_the_workspace_stays() {
     let tab = state["tabs"][0].as_array().expect("a tab");
     assert!(tab[0].as_f64().unwrap() + tab[2].as_f64().unwrap() <= body[0].as_f64().unwrap(), "{tab:?} {body:?}");
 
+    // Its cell on the right rail: a badge, and the tooltip names it, its state, where and who.
+    let cell = &state["drawer"]["rail"][0];
+    assert_eq!((&cell["task"], &cell["mono"], &cell["shown"]), (&json!(1), &json!("FL"), &json!(true)), "{cell}");
+    assert_eq!(cell["tip"], "fix login\nRunning\napp · @claude · now");
+    otto.control("rail-talk:1");
     // Keys go to the agent.
     otto.user_key("h i enter");
     otto.wait_for("the agent to echo", |o| {
@@ -4753,6 +4758,9 @@ fn a_click_on_a_task_starts_its_agent_in_the_drawer_and_the_workspace_stays() {
     let closed = otto.user_key("cmd-shift-l");
     assert_eq!((&closed["state"]["talk"]["open"], &closed["drawer"]["body"]), (&json!(false), &json!(null)));
     assert_eq!(otto.user_key("cmd-shift-l")["state"]["talk"]["open"], true);
+    // ⌘⌃1, the rail's first conversation, and a click on its cell: the one shown closes, then opens.
+    assert_eq!(otto.user_key("cmd-ctrl-1")["state"]["talk"]["open"], false);
+    assert_eq!(otto.user_click(at(otto.control("rail-talk:1"), 0.5, 0.5))["state"]["talk"]["open"], true);
 
     // Stop ends it: the task needs the user.
     let stopped = otto.user_click(at(otto.control("talk:talk-stop"), 0.5, 0.5));

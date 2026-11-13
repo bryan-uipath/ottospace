@@ -869,6 +869,9 @@ impl Workspace {
                         if runs && tick % 30 == 0 {
                             cx.notify();
                         }
+                        if tick % 30 == 0 {
+                            this.blink(cx);
+                        }
                         this.sync_sneak(window, cx);
                     });
                     this.take_snapshots(window, cx);
@@ -924,7 +927,7 @@ impl Workspace {
             model,
             hosted: HashMap::new(),
             terminals: HashMap::new(),
-            drawer: talk::Drawer::default(),
+            drawer: talk::Drawer { still: display::reduce_motion(), ..Default::default() },
             cell: terminal::cell_size(window),
             dragging: None,
             drop_at: None,
@@ -1046,6 +1049,7 @@ impl Workspace {
             Action::TaskAdd { .. }
                 | Action::TaskFromLine { .. }
                 | Action::ComposeSubmit { .. }
+                | Action::ComposeEnter
                 | Action::SessionAdopt { .. }
         );
         // So is a capture. And what is open is read again just before a draft is added.
@@ -2763,6 +2767,12 @@ impl Workspace {
         let digit = key.key.parse::<usize>().ok().filter(|d| (1..=9).contains(d));
         if let Some(digit) = digit.filter(|_| m.platform && m.alt && !m.shift && !m.control) {
             let _ = self.go_to_mark(MarkRef::Place(digit - 1), Axis::Right, window, cx);
+            cx.stop_propagation();
+            return;
+        }
+        // ⌘⌃1..⌘⌃9 show one of the right rail's conversations.
+        if let Some(digit) = digit.filter(|_| m.platform && m.control && !m.alt && !m.shift) {
+            self.rail_key(digit - 1, window, cx);
             cx.stop_propagation();
             return;
         }

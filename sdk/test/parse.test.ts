@@ -95,6 +95,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       agents: { "1": { model: "claude", ended: false, cols: 60, rows: 45, lines: ["fake claude ready"] } },
       goes_to: null,
       note: null,
+      rail: [{ task: 1, mono: "FL", group: "running", working: true, shown: true, tip: "fix login\nRunning\napp · @claude · now" }],
     },
   };
 }

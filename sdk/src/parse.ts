@@ -497,6 +497,18 @@ function composePicks(value: unknown, at: string): Snapshot["compose_picks"] {
   return { wheres: list(str)(o.wheres, `${at}.wheres`), whos: list(str)(o.whos, `${at}.whos`) };
 }
 
+function railCell(value: unknown, at: string): Snapshot["drawer"]["rail"][number] {
+  const o = fields(value, at);
+  return {
+    task: num(o.task, `${at}.task`),
+    mono: str(o.mono, `${at}.mono`),
+    group: orNull(group)(o.group, `${at}.group`),
+    working: bool(o.working, `${at}.working`),
+    shown: bool(o.shown, `${at}.shown`),
+    tip: str(o.tip, `${at}.tip`),
+  };
+}
+
 function drawerDrawn(value: unknown, at: string): Snapshot["drawer"] {
   const o = fields(value, at);
   const agent = (value: unknown, at: string) => {
@@ -514,6 +526,7 @@ function drawerDrawn(value: unknown, at: string): Snapshot["drawer"] {
     agents: map(agent)(o.agents, `${at}.agents`),
     goes_to: orNull(str)(o.goes_to, `${at}.goes_to`),
     note: orNull(str)(o.note, `${at}.note`),
+    rail: list(railCell)(o.rail, `${at}.rail`),
   };
 }
 

@@ -755,6 +755,7 @@ const MAKERS: &[Make] = &[
         default: g.rng.coin().then(|| g.name(AGENTS)),
     },
     |g| Action::TaskTalk { id: g.task() },
+    |g| Action::TalkPick { id: g.task() },
     |_| Action::ComposeEnter,
     |g| Action::AgentStarted { task: g.task(), session: g.rng.coin().then(|| g.session_id()) },
     |g| Action::AgentExited { task: g.task() },
@@ -1086,6 +1087,16 @@ fn check(m: &Model) -> Result<(), String> {
         "the way back leads to pane {:?}, which is gone",
         m.back_to
     );
+    // The right rail: at most its cap, each cell a task there is, told apart by its badge; the
+    // drawer's conversation is the one cell shown.
+    let rail = m.rail();
+    let mut badges: Vec<&str> = rail.iter().map(|cell| cell.mono.as_str()).collect();
+    badges.sort_unstable();
+    badges.dedup();
+    ensure!(rail.len() <= talk::RAIL && badges.len() == rail.len(), "the rail: {rail:?}");
+    ensure!(rail.iter().all(|cell| m.tasks.get(cell.task).is_some()), "a rail cell for a task that is gone");
+    let open = m.talk.filter(|talk| talk.open).map(|talk| talk.task);
+    ensure!(rail.iter().all(|cell| cell.shown == (open == Some(cell.task))), "the rail shows another cell: {rail:?}");
     let shown = |id: TaskId| m.current_task == Some(id) || m.talk.is_some_and(|talk| talk.task == id);
     let briefed = |id: TaskId| shown(id) && m.tasks.get(id).is_some_and(|task| !task.materials.is_empty());
     ensure!(m.brief.is_none_or(briefed), "the brief of task {:?} shows: not on show, or it has none", m.brief);
@@ -1545,6 +1556,12 @@ impl Run {
                         agents::Start::Resume { runner, session } => agents::resume(runner, session),
                     };
                     ensure!(command.is_some(), "an agent that cannot be started is asked for: {start:?}");
+                    // Its prompt is the task's title alone: nothing captured from a pane or an app
+                    // (a title nobody typed is fixed words), and never the brief's text.
+                    if let agents::Start::New(launch) = start {
+                        let title = m.tasks.get(*task).map(|task| task.title.as_str());
+                        ensure!(title == Some(launch.title.as_str()), "task {task} starts with {:?}", launch.title);
+                    }
                 }
                 Effect::StopAgent { task } => {
                     ensure!(user && m.agent_runs(*task), "{origin:?} stops the agent of task {task}, or none runs");

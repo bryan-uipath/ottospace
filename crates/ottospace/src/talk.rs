@@ -40,6 +40,9 @@ pub struct Drawer {
     pub body: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
     /// Its width at the last render: the draft's collecting state takes the same.
     pub width: f32,
+    /// The working dots are lit, in their blink; `still`: the system asks for less motion.
+    pub blink: bool,
+    pub still: bool,
 }
 
 /// A new session's id: a random (version 4) UUID. `None`: no random bytes could be read.
@@ -158,7 +161,11 @@ impl Workspace {
             ("talk", "talk-brief", Some(id)) if self.model.brief == Some(id) => Action::BriefClose,
             ("talk", "talk-brief", Some(id)) => Action::BriefShow { id },
             ("talk", "talk-stop", Some(id)) => Action::TaskStop { id },
-            ("talk", "talk-close", _) | ("rail", "talk-rail", _) => Action::TalkToggle,
+            ("talk", "talk-close", _) => Action::TalkToggle,
+            ("rail-talk", id, _) => match id.parse() {
+                Ok(id) => Action::TalkPick { id },
+                Err(_) => return true,
+            },
             ("talk", "", _) => Action::TalkKeys { on: true },
             ("drawer", "close", _) => Action::CloseCompose,
             ("home", "open_app", _) => {
@@ -369,34 +376,68 @@ impl Workspace {
         self.render_talk(width, cx).or_else(|| self.render_brief(cx))
     }
 
-    /// The rail at the right edge: the conversation (with its state's dot) and a new task.
+    /// The rail at the right edge: a cell per open conversation (`Model::rail`), then `+`.
+    /// A click on a cell shows its conversation; on the one shown, closes the drawer.
     pub(crate) fn render_right_rail(&self, cx: &mut Context<Self>) -> Stateful<Div> {
-        let cell = |name: &'static str, tip: &'static str, active: bool| {
-            div()
-                .id(name)
+        let cells = self.model.rail().into_iter().map(|cell| {
+            let (task, tip) = (cell.task, gpui::SharedString::from(cell.tip.clone()));
+            let ring = cell.group.map_or(theme::MUTED, theme::task);
+            let badge = div()
                 .relative()
+                .size(px(30.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(7.))
+                .border_2()
+                .border_color(rgb(ring))
+                .bg(rgb(theme::SELECTED))
+                .text_xs()
+                .text_color(rgb(theme::TEXT))
+                .child(cell.mono.clone())
+                // At work: a dot at the corner that blinks, unless the system asks for less motion.
+                .children(cell.working.then(|| {
+                    let lit = self.drawer.blink || self.drawer.still;
+                    home::dot(theme::PICK)
+                        .absolute()
+                        .top(px(-3.))
+                        .right(px(-3.))
+                        .border_1()
+                        .border_color(rgb(theme::BACKGROUND))
+                        .when(!lit, |d| d.opacity(0.25))
+                }));
+            div()
+                .id(("rail-talk", task as usize))
+                .relative()
+                .flex_none()
                 .size(px(RAIL))
                 .flex()
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
-                .when(active, |d| crate::raised_cell(d, theme::PRIMARY, true))
                 .hover(|s| s.bg(rgb(theme::SELECTED)))
-                .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
-                .child(self.controls.mark(format!("rail:{name}")))
-        };
-        let talk = self.model.talk.and_then(|talk| Some((talk, self.model.tasks.get(talk.task)?)));
-        let conversation = talk.map(|(talk, task)| {
-            let color = theme::task(task.group().unwrap_or(Group::Captured));
-            let dot = home::dot(color).absolute().top(px(10.)).right(px(10.));
-            cell("talk-rail", "The task's conversation (⌘⇧L)", talk.open)
-                .child(svg().path("icons/tasks.svg").size(px(20.)).text_color(rgb(theme::TEXT)))
-                .child(dot)
-                .on_click(
-                    cx.listener(|this, _, window, cx| drop(this.dispatch(Action::TalkToggle, this.input, window, cx))),
-                )
+                .when(cell.shown, |d| crate::raised_cell(d, ring, true))
+                .child(badge)
+                .child(self.controls.mark(format!("rail-talk:{task}")))
+                .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone()))))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.dispatch(Action::TalkPick { id: task }, this.input, window, cx);
+                }))
         });
-        let new = cell("new-task", "New task (⌘N)", false)
+        let cells: Vec<_> = cells.collect();
+        let divider = (!cells.is_empty()).then(|| div().mx_3().my_1().h(px(1.)).bg(rgb(theme::BORDER_STRONG)));
+        let new = div()
+            .id("new-task")
+            .relative()
+            .flex_none()
+            .size(px(RAIL))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .hover(|s| s.bg(rgb(theme::SELECTED)))
+            .tooltip(|_, cx| AnyView::from(cx.new(|_| Tooltip("New task (⌘N)".into()))))
+            .child(self.controls.mark("rail:new-task"))
             .child(svg().path("icons/plus.svg").size(px(16.)).text_color(rgb(theme::MUTED)))
             .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)));
         div()
@@ -412,8 +453,24 @@ impl Workspace {
             .border_color(rgb(theme::BORDER))
             // The title strip runs on over the rail.
             .child(div().h(px(crate::TOP_BAR)).flex_none().border_b_1().border_color(rgb(theme::BORDER)))
-            .children(conversation)
+            .children(cells)
+            .children(divider)
             .child(new)
+    }
+
+    /// ⌘⌃1 … ⌘⌃9: the nth conversation of the right rail, as a click on its cell.
+    pub(crate) fn rail_key(&mut self, n: usize, window: &Window, cx: &mut Context<Self>) {
+        if let Some(cell) = self.model.rail().get(n) {
+            self.dispatch(Action::TalkPick { id: cell.task }, self.input, window, cx);
+        }
+    }
+
+    /// Every half second while a rail cell's agent is at work: its dot blinks.
+    pub(crate) fn blink(&mut self, cx: &mut Context<Self>) {
+        if !self.drawer.still && self.model.rail().iter().any(|cell| cell.working) {
+            self.drawer.blink = !self.drawer.blink;
+            cx.notify();
+        }
     }
 
     /// What the state reply says of the drawer: where it is drawn, and each agent's terminal.
@@ -436,6 +493,8 @@ impl Workspace {
             "body": shown.then(|| crate::rect(self.drawer.body.get())),
             "agents": agents,
             "goes_to": self.model.talk_goes_to(),
+            // The right rail's conversations, in order: task, badge, state, at work, shown, tooltip.
+            "rail": self.model.rail(),
             "note": self.model.talk_note(),
         })
     }

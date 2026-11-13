@@ -975,6 +975,11 @@ pub enum Action {
     },
     /// Widen the drawer to half the window, or back.
     TalkWide,
+    /// A click on a conversation's cell of the right rail (or ⌘⌃1…9): that conversation in the
+    /// drawer, as `TaskTalk`; the one the drawer shows closes to the rail. Only the user's.
+    TalkPick {
+        id: TaskId,
+    },
 }
 
 /// Who sent an action.
@@ -1043,6 +1048,7 @@ impl Action {
                 | Action::WorkbookOpen { .. }
                 | Action::WorkbookEdit { .. }
                 | Action::TaskTalk { .. }
+                | Action::TalkPick { .. }
                 | Action::TalkToggle
                 | Action::TalkKeys { .. }
         )
@@ -1074,6 +1080,7 @@ impl Action {
             | Action::WorkbookSave { .. }
             | Action::WorkbookEdit { .. } => true,
             | Action::TaskTalk { .. }
+            | Action::TalkPick { .. }
             | Action::TalkKeys { on: true } => true,
             Action::Split { .. }
             | Action::Open { .. }
@@ -1472,8 +1479,11 @@ pub struct Model {
     /// The drawer's width in points, and whether it is widened to half the window.
     pub talk_width: f32,
     pub talk_wide: bool,
-    /// The tasks whose agent runs in a terminal of the drawer's.
+    /// The tasks whose agent runs in a terminal of the drawer's, in the order they started.
     pub agents: Vec<TaskId>,
+    /// The conversations the user opened in this run, the last opened last.
+    #[serde(skip)]
+    opened: Vec<TaskId>,
     /// Those asked for and not yet started, each with the runner of a new session.
     #[serde(skip)]
     starting: Vec<(TaskId, Option<&'static str>)>,
@@ -1541,6 +1551,7 @@ impl Default for Model {
             talk_width: talk::WIDTH,
             talk_wide: false,
             agents: Vec::new(),
+            opened: Vec::new(),
             starting: Vec::new(),
             models: agents::Models::default(),
             default_agent: None,
@@ -1650,7 +1661,7 @@ impl Model {
             }
             // An agent runs with the user's rights: no client's request, key or label starts
             // or stops one. A client's ↵ in the box files the task and starts none (`start`).
-            Action::TaskTalk { .. } | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
+            Action::TaskTalk { .. } | Action::TalkPick { .. } | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
             action if self.sneak.is_some() && action.takes_keyboard() => Some("sneak mode is on"),
             // A capture hands over a pane's picture and its text: no client's request, key or
             // label asks for one. Sneak mode and the quit question say their own reason first.
@@ -1879,6 +1890,7 @@ impl Model {
                 | Action::CaptureTitle
                 | Action::CaptureBack
                 | Action::TaskTalk { .. }
+                | Action::TalkPick { .. }
                 | Action::TalkKeys { on: true }
         );
         if leaves_list {
@@ -2806,6 +2818,10 @@ impl Model {
                 self.default_agent = default;
             }
             Action::TaskTalk { id } => self.talk_to(id, effects),
+            Action::TalkPick { id } if self.talk.is_some_and(|talk| talk.open && talk.task == id) => {
+                self.talk = self.talk.map(|talk| Talk { open: false, keys: false, ..talk });
+            }
+            Action::TalkPick { id } => self.talk_to(id, effects),
             Action::ComposeEnter => {
                 if let Some(row) = self.dropdown().and_then(|menu| menu.selected) {
                     self.accept(row);
@@ -2886,6 +2902,67 @@ impl Model {
         }
     }
 
+    /// The right rail's conversations, in order: those that need the user, then those whose agent
+    /// runs, in the order they started, then the rest, the last opened first. At most
+    /// `talk::RAIL`: past it the oldest idle ones drop off.
+    pub fn rail(&self) -> Vec<talk::Cell> {
+        let mut ids: Vec<TaskId> = self.opened.iter().rev().copied().collect();
+        let live = self.agents.iter().copied().chain(self.starting.iter().map(|(id, _)| *id));
+        for id in live {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        let needs = |task: &Task| task.group() == Some(tasks::Group::NeedsYou);
+        let rank = |task: &Task, recent: usize| match self.agents.iter().position(|id| *id == task.id) {
+            _ if needs(task) => (0, recent),
+            Some(started) => (1, started),
+            None if self.agent_runs(task.id) => (1, usize::MAX),
+            None => (2, recent),
+        };
+        let mut listed: Vec<(usize, &Task)> =
+            ids.iter().filter_map(|id| self.tasks.get(*id)).enumerate().collect::<Vec<_>>();
+        listed.sort_by_key(|(recent, task)| rank(task, *recent));
+        listed.truncate(talk::RAIL);
+        let titles: Vec<&str> = listed.iter().map(|(_, task)| task.title.as_str()).collect();
+        let shown = self.talk.filter(|talk| talk.open).map(|talk| talk.task);
+        let cells = listed.iter().zip(talk::monograms(&titles)).map(|((_, task), mono)| {
+            let found = task.session.as_ref().and_then(|link| {
+                self.found.iter().find(|found| (&found.runner, &found.id) == (&link.runner, &link.id))
+            });
+            let working =
+                self.agent_runs(task.id) && task.state == State::Running || found.is_some_and(|found| found.active);
+            talk::Cell {
+                task: task.id,
+                mono,
+                group: task.group(),
+                working,
+                shown: shown == Some(task.id),
+                tip: self.rail_tip(task, found.and_then(|found| found.label.as_deref())),
+            }
+        });
+        cells.collect()
+    }
+
+    /// A rail cell's tooltip: the title; what its agent does now, else its state; and where,
+    /// with which agent, how old.
+    fn rail_tip(&self, task: &Task, live: Option<&str>) -> String {
+        let state = task.group().map_or("Not listed", tasks::Group::title);
+        let line = match (self.talk_note().filter(|_| self.talk.is_some_and(|t| t.task == task.id)), live) {
+            (Some(note), _) => note,
+            (None, Some(live)) => live.to_string(),
+            (None, None) => state.to_string(),
+        };
+        let place = task.repo.as_deref().map_or_else(
+            || "home folder".to_string(),
+            |path| self.repo_name(path).unwrap_or_else(|| path.rsplit('/').next().unwrap_or(path).to_string()),
+        );
+        let default = self.default_agent.as_deref().unwrap_or(sessions::RUNNERS[0]);
+        let agent = task.agent.as_deref().unwrap_or(default);
+        let age = task.created.map(|created| format!(" · {}", tasks::age(created, self.now))).unwrap_or_default();
+        format!("{}\n{line}\n{place} · @{agent}{age}", task.title)
+    }
+
     /// The workspace the drawer's header offers to go to (⌘↵): the name of the first tab of
     /// the conversation's task, while the center shows other tabs. `None`: no such offer.
     pub fn talk_goes_to(&self) -> Option<&str> {
@@ -2903,6 +2980,8 @@ impl Model {
         self.leave(effects);
         self.list = None;
         self.talk = Some(Talk { task: id, open: true, keys: self.agent_runs(id) || start.is_some() });
+        self.opened.retain(|seen| *seen != id);
+        self.opened.push(id);
         if let Some(start) = start {
             let runner = match &start {
                 agents::Start::New(launch) => Some(launch.runner),
@@ -2930,6 +3009,7 @@ impl Model {
     fn settle_talk(&mut self) {
         let tasks = &self.tasks;
         self.agents.retain(|id| tasks.get(*id).is_some());
+        self.opened.retain(|id| tasks.get(*id).is_some());
         self.starting.retain(|(id, _)| tasks.get(*id).is_some());
         self.talk = self.talk.filter(|talk| self.tasks.get(talk.task).is_some());
         // A picture being drawn on keeps the keyboard, as an app, the list and visual mode do.
@@ -4487,7 +4567,8 @@ mod tests {
         Action::TalkToggle,
         Action::TalkKeys { .. },
         Action::TalkResize { .. },
-        Action::TalkWide
+        Action::TalkWide,
+        Action::TalkPick { .. }
     );
 
     /// One of each action.
@@ -4653,6 +4734,7 @@ mod tests {
             Action::TalkKeys { on: true },
             Action::TalkResize { width: 400. },
             Action::TalkWide,
+            Action::TalkPick { id: 1 },
         ];
         let mut places: Vec<usize> = samples.iter().map(index).collect();
         places.sort_unstable();
@@ -4692,7 +4774,9 @@ mod tests {
                     _ if origin == Origin::User => None,
                     _ if writes_settings(action) => Some(apps::USERS_ALONE),
                     _ if of_workbooks(action) => Some(workbook::USERS_ALONE),
-                    Action::TaskTalk { .. } | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
+                    Action::TaskTalk { .. } | Action::TalkPick { .. } | Action::TaskStop { .. } => {
+                        Some(agents::USERS_ALONE)
+                    }
                     _ => action.takes_keyboard().then_some("sneak mode is on"),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");
@@ -6896,6 +6980,51 @@ mod tests {
     }
 
     #[test]
+    fn the_right_rail_lists_open_conversations_needs_you_then_running_then_the_last_opened() {
+        let system = |m: &mut Model, action: Action| m.update(action.sent_by(Origin::System));
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        for i in 1..=12 {
+            m.update(Action::TaskFromLine { line: format!("task {i} >app"), known: Default::default(), open: false });
+        }
+        let order = |m: &Model| m.rail().iter().map(|cell| cell.task).collect::<Vec<_>>();
+        assert!(order(&m).is_empty(), "nothing opened: the rail has only its +");
+        // Opened and started: 1, 2 and 3 run, in the order they started.
+        for id in [1, 2, 3] {
+            m.update(Action::TaskTalk { id });
+            system(&mut m, Action::AgentStarted { task: id, session: None });
+        }
+        assert_eq!(order(&m), [1, 2, 3]);
+        // 2 needs the user: first. 3 ends while at work, so it needs the user too: the last
+        // opened first.
+        system(&mut m, Action::TaskSetState { id: 2, state: State::NeedsYou });
+        system(&mut m, Action::AgentExited { task: 3 });
+        assert_eq!(order(&m), [3, 2, 1]);
+        // Opened and never started (a saved agent's, or one that failed): idle, the last opened first.
+        for id in 4..=12 {
+            m.update(Action::TaskTalk { id });
+            system(&mut m, Action::AgentExited { task: id });
+        }
+        // At most eight: the oldest idle ones drop off; what needs the user and what runs stay.
+        assert_eq!(order(&m), [3, 2, 1, 12, 11, 10, 9, 8]);
+        let rail = m.rail();
+        assert_eq!((rail[3].shown, rail[0].shown), (true, false));
+        // `task 12` would be `T1`, as `task 1` is; `T2` is taken too: its place tells it apart.
+        assert_eq!((rail[0].mono.as_str(), rail[2].mono.as_str(), rail[3].mono.as_str()), ("T3", "T1", "T4"));
+        assert_eq!(rail[1].tip, "task 2\nNeeds you\napp · @claude");
+        // A click on the shown cell closes the drawer; on another, that one shows. Only the user's.
+        m.update(Action::TalkPick { id: 12 });
+        assert_eq!(m.talk, Some(Talk { task: 12, open: false, keys: false }));
+        assert!(m.rail().iter().all(|cell| !cell.shown));
+        assert_eq!(m.refusal(&Action::TalkPick { id: 2 }, Origin::Socket), Some(agents::USERS_ALONE));
+        m.update(Action::TalkPick { id: 2 });
+        assert_eq!(m.talk.map(|talk| (talk.task, talk.open)), Some((2, true)));
+        // A task that goes is off the rail.
+        m.update(Action::RestoreTasks { tasks: Vec::new(), floor: 12 });
+        assert!(order(&m).is_empty());
+    }
+
+    #[test]
     fn enter_in_the_box_takes_a_row_or_adds_and_starts() {
         let mut m = composing();
         keys(&mut m, "fix #ca");
@@ -7741,7 +7870,9 @@ mod tests {
                     _ if user => None,
                     _ if writes_settings(action) => Some(apps::USERS_ALONE),
                     _ if of_workbooks(action) => Some(workbook::USERS_ALONE),
-                    Action::TaskTalk { .. } | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
+                    Action::TaskTalk { .. } | Action::TalkPick { .. } | Action::TaskStop { .. } => {
+                        Some(agents::USERS_ALONE)
+                    }
                     _ => action.takes_keyboard().then_some(CONFIRM_UP),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");
