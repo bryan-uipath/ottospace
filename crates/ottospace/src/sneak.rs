@@ -353,9 +353,20 @@ impl Workspace {
                 None
             }
             ("mark-undo", _) => Some(Action::MarkUndo),
-            ("workbook" | "workbook-open" | "workbook-rename" | "workbook-delete", _) => {
+            (
+                "workbook" | "workbook-open" | "workbook-add" | "workbook-fold" | "workbook-rename" | "workbook-delete",
+                _,
+            ) => {
                 if let Some(id) = number {
-                    self.click_workbook(kind, id, window, cx);
+                    self.click_workbook(kind, id, None, window, cx);
+                }
+                None
+            }
+            // A tab of a workbook: `workbook-tab-open:3:1`.
+            ("workbook-tab" | "workbook-tab-open" | "workbook-tab-rename" | "workbook-tab-remove", _) => {
+                let place = name.split_once(':').and_then(|(id, at)| Some((id.parse().ok()?, at.parse().ok()?)));
+                if let Some((id, at)) = place {
+                    self.click_workbook(kind, id, Some(at), window, cx);
                 }
                 None
             }

@@ -39,6 +39,7 @@ import type {
   MarksReply,
   Workbook,
   WorkbookPane,
+  WorkbookTab,
   Mode,
   Model,
   Pane,
@@ -651,7 +652,8 @@ function markInput(value: unknown, at: string): MarkInput {
   if (o.type === "rename") return { type: "rename", mark: num(o.mark, `${at}.mark`), text: str(o.text, `${at}.text`) };
   if (o.type === "set_key") return { type: "set_key", mark: num(o.mark, `${at}.mark`) };
   if (o.type === "workbook") {
-    return { type: "workbook", workbook: num(o.workbook, `${at}.workbook`), text: str(o.text, `${at}.text`) };
+    const typing = { type: "workbook" as const, workbook: num(o.workbook, `${at}.workbook`), text: str(o.text, `${at}.text`) };
+    return o.tab === undefined ? typing : { ...typing, tab: num(o.tab, `${at}.tab`) };
   }
   throw wrong(`${at}.type`, "what a mark waits for", o.type);
 }
@@ -696,6 +698,23 @@ function workbook(value: unknown, at: string): Workbook {
     if (kind !== "terminal" && kind !== "app" && kind !== "empty") throw wrong(`${at}.kind`, "a pane's kind", kind);
     return p.app === undefined ? { kind } : { kind, app: str(p.app, `${at}.app`) };
   };
+  const tab = (value: unknown, at: string): WorkbookTab => {
+    const t = fields(value, at);
+    const words = fields(t.buttons, `${at}.buttons`);
+    return {
+      title: str(t.title, `${at}.title`),
+      panes: list(pane)(t.panes, `${at}.panes`),
+      summary: str(t.summary, `${at}.summary`),
+      open: bool(t.open, `${at}.open`),
+      tab: orNull(num)(t.tab, `${at}.tab`),
+      row: orNull(rect)(t.row, `${at}.row`),
+      buttons: {
+        open: orNull(rect)(words.open, `${at}.buttons.open`),
+        rename: orNull(rect)(words.rename, `${at}.buttons.rename`),
+        remove: orNull(rect)(words.remove, `${at}.buttons.remove`),
+      },
+    };
+  };
   return {
     id: num(o.id, `${at}.id`),
     name: str(o.name, `${at}.name`),
@@ -703,9 +722,13 @@ function workbook(value: unknown, at: string): Workbook {
     summary: str(o.summary, `${at}.summary`),
     open: bool(o.open, `${at}.open`),
     tab: orNull(num)(o.tab, `${at}.tab`),
+    tabs: list(tab)(o.tabs, `${at}.tabs`),
+    unfolded: bool(o.unfolded, `${at}.unfolded`),
     row: orNull(rect)(o.row, `${at}.row`),
     buttons: {
       open: orNull(rect)(buttons.open, `${at}.buttons.open`),
+      add: orNull(rect)(buttons.add, `${at}.buttons.add`),
+      fold: orNull(rect)(buttons.fold, `${at}.buttons.fold`),
       rename: orNull(rect)(buttons.rename, `${at}.buttons.rename`),
       delete: orNull(rect)(buttons.delete, `${at}.buttons.delete`),
     },
