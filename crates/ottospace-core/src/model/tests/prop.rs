@@ -855,7 +855,7 @@ fn check(m: &Model) -> Result<(), String> {
     // runs, and no app, list or visual mode has the keyboard.
     if let Some(talk) = m.talk {
         ensure!(m.tasks.get(talk.task).is_some(), "the drawer is on task {}, which is gone", talk.task);
-        let free = m.live.is_none() && m.list.is_none() && m.visual.is_none();
+        let free = m.live.is_none() && m.list.is_none() && m.visual.is_none() && m.annotated().is_none();
         ensure!(
             !talk.keys || (talk.open && m.agent_runs(talk.task) && free),
             "the keyboard is in a conversation that is closed, has no agent, or under another: {talk:?}"

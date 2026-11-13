@@ -1028,7 +1028,7 @@ impl Workspace {
         );
         // So is a capture. And what is open is read again just before a draft is added.
         let captures = matches!(action, Action::CaptureStart { .. });
-        if matches!(action, Action::ComposeSubmit { .. }) && self.model.capture.is_some() {
+        if matches!(action, Action::ComposeSubmit { .. } | Action::ComposeEnter) && self.model.capture.is_some() {
             self.model.update(Action::CaptureFacts { facts: self.pane_facts() }.sent_by(Origin::System));
         }
         let row = matches!(action, Action::RowSnooze { .. } | Action::RowHold { .. } | Action::RowDismiss { .. });

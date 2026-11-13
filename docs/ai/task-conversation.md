@@ -70,7 +70,8 @@ The capture draft is the same drawer in its collecting state.
   The shell is to run it through the user's login shell for its `PATH`, with the program and
   arguments as positional parameters (`"$SHELL" -lic 'exec "$@"' -- claude …`): the script is
   fixed text, and nothing of a task is ever part of it.
-- **The prompt** is the task's title and, if the task has a brief, the path of `brief.md` and
+- **The prompt** is `Task: ` and the task's title (the fixed start keeps a title such as
+  `/logout fails` from being read as a command of the runner's own) and, if the task has a brief, the path of `brief.md` and
   fixed words that tell the agent to read it and to treat what it quotes as data. The
   brief's text, which holds what was captured from the screen, never goes into argv. A task
   filed from captures alone has a title made of fixed words.

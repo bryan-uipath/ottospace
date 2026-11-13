@@ -1653,6 +1653,7 @@ impl Model {
             Action::OpenCompose { .. }
             | Action::CloseCompose
             | Action::ComposeSubmit { .. }
+            | Action::ComposeEnter
             | Action::ComposeComplete
             | Action::ComposeEscape
             | Action::ComposeMove { .. }
@@ -2882,7 +2883,7 @@ impl Model {
     /// The keyboard goes into the open conversation, if its agent runs, or leaves it.
     fn talk_keys(&mut self, on: bool, effects: &mut Vec<Effect>) {
         let Some(talk) = self.talk else { return };
-        let on = on && self.agent_runs(talk.task);
+        let on = on && self.agent_runs(talk.task) && self.annotated().is_none();
         if on {
             self.leave(effects);
             self.list = None;
@@ -2897,7 +2898,9 @@ impl Model {
         self.agents.retain(|id| tasks.get(*id).is_some());
         self.starting.retain(|(id, _)| tasks.get(*id).is_some());
         self.talk = self.talk.filter(|talk| self.tasks.get(talk.task).is_some());
-        let elsewhere = self.live.is_some() || self.list.is_some() || self.visual.is_some();
+        // A picture being drawn on keeps the keyboard, as an app, the list and visual mode do.
+        let drawing = self.annotated().is_some();
+        let elsewhere = self.live.is_some() || self.list.is_some() || self.visual.is_some() || drawing;
         if let Some(talk) = self.talk {
             let keys = talk.keys && talk.open && self.agent_runs(talk.task) && !elsewhere;
             self.talk = Some(Talk { keys, ..talk });
