@@ -146,7 +146,7 @@ function axis(value: unknown, at: string): Axis {
 function mode(value: unknown, at: string): Mode {
   if (value === "normal" || value === "app" || value === "pick") return value;
   if (value === "visual" || value === "list" || value === "compose" || value === "sneak") return value;
-  if (value === "confirm" || value === "mark" || value === "annotate") return value;
+  if (value === "confirm" || value === "mark" || value === "annotate" || value === "talk") return value;
   throw wrong(at, "a mode", value);
 }
 
@@ -743,7 +743,16 @@ function model(value: unknown, at: string): Model {
     capture: orNull(draft)(o.capture, `${at}.capture`),
     back_to: orNull(num)(o.back_to, `${at}.back_to`),
     brief: orNull(num)(o.brief, `${at}.brief`),
+    talk: orNull(talk)(o.talk, `${at}.talk`),
+    talk_width: num(o.talk_width, `${at}.talk_width`),
+    talk_wide: bool(o.talk_wide, `${at}.talk_wide`),
+    agents: list(num)(o.agents, `${at}.agents`),
   };
+}
+
+function talk(value: unknown, at: string): { task: number; open: boolean; keys: boolean } {
+  const o = fields(value, at);
+  return { task: num(o.task, `${at}.task`), open: bool(o.open, `${at}.open`), keys: bool(o.keys, `${at}.keys`) };
 }
 
 function terminal(value: unknown, at: string): Terminal {

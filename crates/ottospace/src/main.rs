@@ -1073,8 +1073,13 @@ impl Workspace {
         // Every window of this pass that could not be hosted, not only the last.
         let asked = effects.iter().any(|effect| matches!(effect, Effect::HostWindow { .. }));
         let mut unhosted: Vec<String> = Vec::new();
+        let mut unstarted: Vec<u32> = Vec::new();
         for effect in effects {
             match effect {
+                // The drawer does not host an agent's terminal yet: none is started, and the
+                // core is told so, so no task waits for one and the keyboard stays where it is.
+                Effect::StartAgent { task, .. } => unstarted.push(*task),
+                Effect::StopAgent { task } => unstarted.push(*task),
                 Effect::Opened(id) => {
                     if self.model.pane(*id).is_some_and(|p| p.kind == Kind::Terminal) {
                         // The shell learns where it runs, so a program in it can name its own pane.
@@ -1173,6 +1178,9 @@ impl Workspace {
         }
         if asked {
             self.error = (!unhosted.is_empty()).then(|| unhosted.join("; "));
+        }
+        for task in unstarted {
+            self.dispatch(Action::AgentExited { task }, Origin::System, window, cx);
         }
     }
 
@@ -1852,6 +1860,15 @@ impl Workspace {
             self.sessions_quiet_told = true;
             let ms = config::session_quiet_ms();
             self.dispatch(Action::SessionQuiet { ms }, Origin::System, window, cx);
+            // Told with it, once: the models and the default agent a task starts with.
+            let settings = &config::get().settings;
+            let models = ottospace_core::agents::Models::with(settings.agent_models.as_ref());
+            let agents = Action::SetAgents {
+                claude: models.claude,
+                codex: models.codex,
+                default: settings.default_agent.clone(),
+            };
+            self.dispatch(agents, Origin::System, window, cx);
         }
         // Closed, only the sessions that tasks still follow are looked at, and only their files.
         let Some(poller) = &mut self.sessions else { return };
@@ -4401,6 +4418,7 @@ impl Workspace {
             Mode::Sneak => ("SNEAK", "type a label · esc leaves"),
             Mode::Confirm => ("QUIT?", ""),
             Mode::Annotate => ("ANNOTATE", "drag to circle · click for a note · ↵ title · esc leaves"),
+            Mode::Talk => ("TALK", "keys go to the task's agent"),
             Mode::Mark => match self.model.mark_input {
                 Some(MarkInput::Rename { .. }) => ("MARK", "type its name · ↵ keeps it · esc cancels"),
                 Some(MarkInput::SetKey { .. }) => ("MARK", "a letter for the mark · ⌫ for none · esc cancels"),

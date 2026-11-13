@@ -690,7 +690,9 @@ mod tests {
         // A draft with a title and no capture is a plain task: nothing to keep.
         start(&mut m, Some(99));
         typed(&mut m, "plain");
-        assert_eq!(m.update(Action::ComposeSubmit { open: true }), [dropped(None)]);
+        let effects = m.update(Action::ComposeSubmit { open: true });
+        assert_eq!(effects[0], dropped(None));
+        assert!(matches!(effects[1..], [Effect::StartAgent { task: 2, cwd: None, brief: None, .. }]), "{effects:?}");
         assert_eq!(m.tasks.get(2).map(|task| task.materials.len()), Some(0));
         // With no title and no capture nothing is added, and the bar stays.
         start(&mut m, Some(99));

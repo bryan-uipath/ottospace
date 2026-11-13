@@ -571,6 +571,7 @@ first brainstorm:
 [marks.md](ai/marks.md): marks, what one records, and how they sit beside session restore, pins and tasks.
 [workbook.md](ai/workbook.md): workbooks beside tasks, marks and session restore; stage 1 as built, and what is later.
 [terminal-persistence.md](ai/terminal-persistence.md): terminals and agents that outlive a quit or an update, held outside the app; with session restore, tasks come back as they were.
+[task-conversation.md](ai/task-conversation.md): a task's agent in a right drawer, the three zones, how an agent is started, and what of it is built. Designed; the core only.
 
 [routines.md](ai/routines.md): routines and agents from ottobot, in stages, toward ottospace subsuming it.
 

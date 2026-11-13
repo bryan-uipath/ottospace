@@ -82,6 +82,11 @@ impl Gen<'_> {
         }
     }
 
+    /// A session's id as the shell makes one, or text that is none.
+    fn session_id(&mut self) -> String {
+        self.rng.pick(&["8f14e45f-ceea-467f-a8d3-0242ac130003", "--resume", ""]).to_string()
+    }
+
     fn task(&mut self) -> TaskId {
         let real: Vec<TaskId> = self.m.tasks.list.iter().map(|t| t.id).collect();
         self.one_of(&real, Self::stray)
@@ -739,6 +744,20 @@ const MAKERS: &[Make] = &[
     |g| Action::WorkbookEdit { workbook: g.workbook() },
     |g| Action::WorkbookRemove { workbook: g.workbook() },
     |_| Action::WorkbookUndo,
+    |g| Action::SetAgents {
+        claude: g.names(AGENTS, 2),
+        codex: Vec::new(),
+        default: g.rng.coin().then(|| g.name(AGENTS)),
+    },
+    |g| Action::TaskTalk { id: g.task() },
+    |_| Action::ComposeEnter,
+    |g| Action::AgentStarted { task: g.task(), session: g.rng.coin().then(|| g.session_id()) },
+    |g| Action::AgentExited { task: g.task() },
+    |g| Action::TaskStop { id: g.task() },
+    |_| Action::TalkToggle,
+    |g| Action::TalkKeys { on: g.rng.coin() },
+    |g| Action::TalkResize { width: g.rng.pick(&[0., 400., 9e9, f32::NAN]) },
+    |_| Action::TalkWide,
 ];
 
 /// The way out of each box and mode. Picked one time in 8: with every action as likely as any
@@ -831,6 +850,22 @@ fn check(m: &Model) -> Result<(), String> {
     for (_, tab) in &m.last_tab {
         ensure!(tab_ids.contains(tab), "tab {tab} is remembered and gone");
     }
+
+    // The drawer is on a task there is; the keyboard is in it only while it is open, its agent
+    // runs, and no app, list or visual mode has the keyboard.
+    if let Some(talk) = m.talk {
+        ensure!(m.tasks.get(talk.task).is_some(), "the drawer is on task {}, which is gone", talk.task);
+        let free = m.live.is_none() && m.list.is_none() && m.visual.is_none();
+        ensure!(
+            !talk.keys || (talk.open && m.agent_runs(talk.task) && free),
+            "the keyboard is in a conversation that is closed, has no agent, or under another: {talk:?}"
+        );
+    }
+    ensure!(m.mode() != Mode::Talk || m.talk.is_some_and(|talk| talk.keys), "talk mode with no conversation");
+    ensure!(unique(&m.agents), "an agent runs twice for one task: {:?}", m.agents);
+    ensure!(m.agents.iter().all(|id| m.tasks.get(*id).is_some()), "an agent runs for a task that is gone");
+    let width = m.talk_width;
+    ensure!((talk::MIN_WIDTH..=talk::MAX_WIDTH).contains(&width), "the drawer is {width} wide");
 
     // Who has the keyboard, and that what has it is there.
     // The new-task line in the right bar is no box; its title or a picture may have the keyboard.
@@ -1258,7 +1293,7 @@ impl Run {
         let task_ids: Vec<TaskId> = m.tasks.list.iter().map(|task| task.id).collect();
         // ↵ on a highlighted row that would change the line takes the row: it files nothing.
         let takes = match (&action, m.dropdown().and_then(|menu| menu.selected)) {
-            (Action::ComposeSubmit { open: false }, Some(row)) => m.changes(row),
+            (Action::ComposeSubmit { open: false } | Action::ComposeEnter, Some(row)) => m.changes(row),
             _ => false,
         };
         // While the bar asks before discarding, ↵ is the answer: it files nothing.
@@ -1490,6 +1525,20 @@ impl Run {
                 Effect::Activate { id } => {
                     let own = format!("{:?}", Source::Own { id: id.clone() });
                     ensure!(labelled.contains(&own), "a control with no label is activated: {id:?}");
+                }
+                Effect::StartAgent { task, start, .. } => {
+                    // An agent runs with the user's rights: no client's action starts one.
+                    ensure!(user, "{origin:?} started an agent for task {task}");
+                    ensure!(m.tasks.get(*task).is_some() && m.agent_runs(*task), "an agent starts for no task: {task}");
+                    let uuid = "8f14e45f-ceea-467f-a8d3-0242ac130003";
+                    let command = match start {
+                        agents::Start::New(launch) => launch.command(uuid, None),
+                        agents::Start::Resume { runner, session } => agents::resume(runner, session),
+                    };
+                    ensure!(command.is_some(), "an agent that cannot be started is asked for: {start:?}");
+                }
+                Effect::StopAgent { task } => {
+                    ensure!(user && m.agent_runs(*task), "{origin:?} stops the agent of task {task}, or none runs");
                 }
                 Effect::SaveApps { changes } => {
                     // The settings file is the user's: no client's action writes it.

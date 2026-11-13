@@ -22,7 +22,8 @@ export type Mode =
   | "sneak"
   | "confirm"
   | "mark"
-  | "annotate";
+  | "annotate"
+  | "talk";
 
 export type TaskState =
   | "captured"
@@ -550,6 +551,17 @@ export interface Model {
   back_to: PaneId | null;
   /** The task whose brief the right bar shows. */
   brief: TaskId | null;
+  /**
+   * The conversation the right drawer is on, or null. `open` false: closed to the right rail.
+   * `keys`: the keyboard is in it, and keys go to the task's agent.
+   */
+  talk: { task: TaskId; open: boolean; keys: boolean } | null;
+  /** The drawer's width in points. */
+  talk_width: number;
+  /** The drawer is widened to half the window. */
+  talk_wide: boolean;
+  /** The tasks whose agent runs in the drawer. */
+  agents: TaskId[];
 }
 
 export interface Terminal {
