@@ -4240,7 +4240,9 @@ fn a_pane_is_captured_annotated_and_becomes_a_task_with_a_brief() {
     key("escape");
     let reply = key("enter");
     assert_eq!((&reply["state"]["capture"], &reply["mode"], dir.exists()), (&Value::Null, &json!("normal"), false));
-    let left = ["1-0ldw0rd0ldw0rd".to_string(), name.to_string()];
+    // `names_in` sorts, and the task's folder name is random: it may sort before the old one.
+    let mut left = ["1-0ldw0rd0ldw0rd".to_string(), name.to_string()];
+    left.sort();
     assert_eq!(names_in(&materials).as_deref(), Some(&left[..]), "the task's folder, and the old one as it was");
     assert_eq!(std::fs::read_to_string(old.join("brief.json")).ok().as_deref(), Some(r#"{"task":1,"old":true}"#));
     assert_eq!(reply["state"]["tasks"]["list"].as_array().map(Vec::len), Some(2));
