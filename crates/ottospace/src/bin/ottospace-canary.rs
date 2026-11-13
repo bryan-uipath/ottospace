@@ -135,13 +135,11 @@ fn open(windows: &Windows, min: Option<[f32; 2]>, fixed: Option<[f32; 2]>, at: O
         titlebar: Some(TitlebarOptions { title: Some(title.clone().into()), ..Default::default() }),
         is_resizable: fixed.is_none(),
         window_min_size: min.map(|[width, height]| size(px(width), px(height))),
+        // Placed at `at` before it is first seen: nothing reads it where GPUI put it.
+        show: at.is_none(),
         ..Default::default()
     };
     let handle = cx.open_window(options, |window, cx| {
-        // Here, after GPUI has shown and placed the window.
-        if let (Some(at), Some(view)) = (at, ns_view(window)) {
-            unsafe { ottospace_mac::window::move_to(view, at[0], at[1]) };
-        }
         cx.new(|cx| {
             let focus = cx.focus_handle();
             window.focus(&focus);
@@ -158,6 +156,23 @@ fn open(windows: &Windows, min: Option<[f32; 2]>, fixed: Option<[f32; 2]>, at: O
             });
         }
         windows.borrow_mut().push(handle);
+        // A moment later, once GPUI is done placing it: moved, shown, and moved again in case
+        // showing it put it on screen.
+        if let Some(at) = at {
+            cx.spawn(async move |cx| {
+                cx.background_executor().timer(Duration::from_millis(50)).await;
+                let _ = handle.update(cx, |_, window, _| {
+                    if let Some(view) = ns_view(window) {
+                        unsafe {
+                            ottospace_mac::window::move_to(view, at[0], at[1]);
+                            ottospace_mac::window::order_front(view);
+                            ottospace_mac::window::move_to(view, at[0], at[1]);
+                        }
+                    }
+                });
+            })
+            .detach();
+        }
     }
 }
 
