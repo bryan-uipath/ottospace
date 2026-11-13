@@ -318,6 +318,7 @@ impl AssetSource for Assets {
             "icons/split-right.svg" => Some(include_bytes!("../assets/icons/split-right.svg")),
             "icons/split-down.svg" => Some(include_bytes!("../assets/icons/split-down.svg")),
             "icons/plus.svg" => Some(include_bytes!("../assets/icons/plus.svg")),
+            "icons/dismiss.svg" => Some(include_bytes!("../assets/icons/dismiss.svg")),
             _ => None,
         };
         Ok(bytes.map(Into::into))
