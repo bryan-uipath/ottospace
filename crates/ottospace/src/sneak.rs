@@ -347,7 +347,7 @@ impl Workspace {
                 }
                 None
             }
-            ("session" | "session-adopt" | "session-hide", _) => {
+            ("session" | "session-open" | "session-adopt" | "session-hide", _) => {
                 if let Some((runner, id)) = name.split_once(':') {
                     self.click_session_control(kind, runner.into(), id.into(), window, cx);
                 }

@@ -337,6 +337,8 @@ fn read(
             label,
             title,
             model,
+            // A pid used again by another program reads as alive: then it is not gone on with.
+            held: session.pid.is_some_and(crate::running::alive),
         });
     }
     found

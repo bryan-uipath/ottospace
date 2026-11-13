@@ -116,6 +116,16 @@ pub struct Found {
     /// Its model: as the runner names it when read, in short (`short_model`) once kept.
     #[serde(default)]
     pub model: Option<String>,
+    /// The runner records a live process for it: idle or not, a program has it open.
+    #[serde(default)]
+    pub held: bool,
+}
+
+/// `dir` is `root` or below it, part by part, with no `..` in it. A check of the words only:
+/// the shell resolves links before it starts anything there.
+pub fn below(dir: &str, root: &str) -> bool {
+    let dir = std::path::Path::new(dir);
+    dir.starts_with(root) && !dir.components().any(|part| part == std::path::Component::ParentDir)
 }
 
 /// A row of the Sessions group, as drawn.
@@ -247,8 +257,9 @@ mod tests {
 
     fn found(runner: &str, id: &str, cwd: &str, active: bool, at: u64) -> Found {
         let (runner, id, cwd, repo) = (runner.to_string(), id.to_string(), cwd.to_string(), cwd.to_string());
-        let (station, label, title, model) = (None, None, None, None);
-        Found { runner, id, cwd, repo, started: None, last_activity: Some(at), active, station, label, title, model }
+        let (station, label, title, model, held) = (None, None, None, None, false);
+        let (started, last_activity) = (None, Some(at));
+        Found { runner, id, cwd, repo, started, last_activity, active, station, label, title, model, held }
     }
 
     #[test]

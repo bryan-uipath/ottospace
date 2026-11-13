@@ -129,11 +129,26 @@ agent's terminal".
   (`ottospace-sessions`) and the core links the task to the first that started after the agent
   and no task follows (`agents::find_sessions`). Two agents in one folder take two sessions.
   Looked for a minute.
-- `claude --resume` looks for the session by the directory it runs in. A task's directory is
-  its repository; an adopted session may have started in a folder below it.
-- A session that still runs in the user's own terminal: going on with it from the drawer
-  starts a second program on it.
+- **Where a session is gone on with** (built): `claude --resume <id>` looks in the directory it
+  runs in first (since 2.1.223 then in every project), and the agent works there, so a session
+  is resumed in the folder it started in (`Found.cwd`), when
+  that is inside a listed repository or worktree (`sessions::below`, then again in the shell
+  with links resolved). Not read (the Tasks section was never open this run): the task's
+  repository.
+- **A session in use elsewhere** (built): one at work (its file changed in the last 30 s), or
+  held (Claude Code records a live process for it: `sessions/<pid>.json` and a pid that
+  exists), is not gone on with: the drawer opens on it and says it is live in another
+  terminal. Claude Code's docs (code.claude.com/docs/en/sessions): "If you resume the same
+  session in two terminals without forking, messages from both interleave into one
+  transcript"; a running *background* session is attached to instead (since 2.1.285). Not
+  tried against a live session. Codex records no process: an idle Codex session open in
+  another terminal is gone on with.
 - "To review" needs a state the core does not have; until then a review is under Running.
 - The quit question does not ask about agents in the drawer yet.
-- A sessions row (no task) in the drawer: `Talk.task` becomes a subject that may be a session.
+- **A session that is no task's** (built): `talk::Subject` is a task's id or a session's
+  runner and id. A click on its row opens it as `TaskTalk` does, with no task; it has a rail
+  cell (badge from its title, else its repository; ring only while at work) and Adopt in the
+  header. Adopt moves its conversation to the new task (`Effect::AgentMoved`): the same program
+  if it runs. Only the user's `SessionOpen` and Adopt start one; a client's `session_adopt`
+  makes the task only.
 - Does a client ever start an agent? Not in stage 1.

@@ -294,7 +294,9 @@ impl Model {
         }
         self.back_to = self.back_to.filter(|pane| self.pane(*pane).is_some());
         let briefed = |id: &TaskId| self.tasks.get(*id).is_some_and(|task| !task.materials.is_empty());
-        let shown = |id: &TaskId| self.current_task == Some(*id) || self.talk.is_some_and(|talk| talk.task == *id);
+        let shown = |id: &TaskId| {
+            self.current_task == Some(*id) || self.talk.as_ref().is_some_and(|talk| talk.task.task() == Some(*id))
+        };
         self.brief = self.brief.filter(|id| shown(id) && briefed(id));
     }
 }
@@ -693,7 +695,13 @@ mod tests {
         typed(&mut m, "plain");
         let effects = m.update(Action::ComposeSubmit { open: true });
         assert_eq!(effects[0], dropped(None));
-        assert!(matches!(effects[1..], [Effect::StartAgent { task: 2, cwd: None, brief: None, .. }]), "{effects:?}");
+        assert!(
+            matches!(
+                effects[1..],
+                [Effect::StartAgent { task: crate::talk::Subject::Task(2), cwd: None, brief: None, .. }]
+            ),
+            "{effects:?}"
+        );
         assert_eq!(m.tasks.get(2).map(|task| task.materials.len()), Some(0));
         // With no title and no capture nothing is added, and the bar stays.
         start(&mut m, Some(99));

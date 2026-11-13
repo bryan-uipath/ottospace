@@ -922,7 +922,7 @@ impl Workspace {
                         this.sync_terminals(window, cx);
                         this.sync_agents(window, cx);
                         // The header's time goes on while an agent runs.
-                        let runs = this.model.talk.is_some_and(|t| t.open && this.model.agent_runs(t.task));
+                        let runs = this.model.talk.as_ref().is_some_and(|t| t.open && this.model.agent_runs(&t.task));
                         if runs && tick % 30 == 0 {
                             cx.notify();
                         }
@@ -1181,15 +1181,16 @@ impl Workspace {
         for effect in effects {
             match effect {
                 Effect::StartAgent { task, start, cwd, brief } => {
-                    match self.start_agent(*task, start, cwd.as_deref(), brief.as_deref()) {
-                        Ok(session) => agents.push(Action::AgentStarted { task: *task, session, at: now_ms() }),
+                    match self.start_agent(task, start, cwd.as_deref(), brief.as_deref()) {
+                        Ok(session) => agents.push(Action::AgentStarted { task: task.clone(), session, at: now_ms() }),
                         Err(why) => {
                             self.error = Some(format!("agent: {why}"));
-                            agents.push(Action::AgentExited { task: *task });
+                            agents.push(Action::AgentExited { task: task.clone() });
                         }
                     }
                 }
-                Effect::StopAgent { task } => agents.extend(self.stop_agent(*task)),
+                Effect::StopAgent { task } => agents.extend(self.stop_agent(task)),
+                Effect::AgentMoved { from, to } => self.move_agent(from, to),
                 Effect::Opened(id) => {
                     if self.model.pane(*id).is_some_and(|p| p.kind == Kind::Terminal) {
                         // The shell learns where it runs, so a program in it can name its own pane.
@@ -3885,9 +3886,9 @@ impl Workspace {
         cx.notify();
     }
 
-    /// A click on a session's row or on one of its buttons, by the control's name: `session`
-    /// (its pane, if that is known; else the row is selected), `session-adopt` (a task is made
-    /// of it) or `session-hide`. Nothing is ever sent to the session.
+    /// A click on a session's row or on one of its buttons, by the control's name: `session` or
+    /// `session-open` (its conversation in the drawer), `session-adopt` (a task is made of it)
+    /// or `session-hide`.
     pub(crate) fn click_session_control(
         &mut self,
         control: &str,
@@ -3897,7 +3898,9 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let action = match control {
-            "session" => Action::SessionClick { runner, id },
+            // A client's click on the row is the one it always was: the pane, else the row.
+            "session" if self.input != Origin::User => Action::SessionClick { runner, id },
+            "session" | "session-open" => Action::SessionOpen { runner, id },
             "session-adopt" => Action::SessionAdopt { runner, id },
             "session-hide" => Action::SessionHide { runner, id },
             _ => return,
@@ -3992,7 +3995,7 @@ impl Workspace {
 
     /// A session's row: a dot (lit while it is active), where it runs and which runner, its title
     /// if it has one, then what it is doing, how long ago, and the model. Hover (or list mode's
-    /// selection) shows Adopt and Hide.
+    /// selection) shows Open, Adopt and Hide.
     fn session_row(&self, row: &ottospace_core::sessions::Row, selected: bool, cx: &mut Context<Self>) -> AnyElement {
         let key = format!("{}:{}", row.runner, row.id);
         let button = |name: &'static str, label: &'static str, tip: &'static str| {
@@ -4022,6 +4025,7 @@ impl Workspace {
             .pl_1()
             .bg(rgb(theme::SELECTED))
             .when(!selected, |d| d.invisible().group_hover("session-row", |s| s.visible()))
+            .child(button("session-open", "Open", "Its conversation, in the drawer"))
             .child(button("session-adopt", "Adopt", "Make a task of this session"))
             .child(button("session-hide", "Hide", "Hide until ottospace starts again"));
         let state = if row.active { row.doing.clone().unwrap_or_else(|| "active".into()) } else { "idle".into() };
@@ -5144,7 +5148,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &SneakMode, window, cx| this.toggle_sneak(window, cx)))
             .on_action(cx.listener(|this, _: &NewTask, window, cx| this.new_task(window, cx)))
             .on_action(cx.listener(|this, _: &TalkFocus, window, cx| {
-                let on = !this.model.talk.is_some_and(|talk| talk.keys);
+                let on = !this.model.talk.as_ref().is_some_and(|talk| talk.keys);
                 this.dispatch(Action::TalkKeys { on }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &TalkToggle, window, cx| {
@@ -5152,7 +5156,7 @@ impl Render for Workspace {
             }))
             // The drawer's Stop, for the conversation it shows.
             .on_action(cx.listener(|this, _: &StopAgent, window, cx| {
-                if let Some(id) = this.model.talk.filter(|talk| talk.open).map(|talk| talk.task) {
+                if let Some(id) = this.model.talk.as_ref().filter(|talk| talk.open).map(|talk| talk.task.clone()) {
                     this.dispatch(Action::TaskStop { id }, this.input, window, cx);
                 }
             }))

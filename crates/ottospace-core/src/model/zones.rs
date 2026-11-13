@@ -60,7 +60,7 @@ impl Model {
             Some(RailFocus::Right(at)) => Target::Right(at),
             None if self.list.is_some() => Target::List(self.list.unwrap_or_default()),
             None if self.inspector.as_ref().is_some_and(|inspector| inspector.filtering) => Target::Inspector,
-            None if self.talk.is_some_and(|talk| talk.keys) || self.drawer_compose() => Target::Drawer,
+            None if self.talk.as_ref().is_some_and(|talk| talk.keys) || self.drawer_compose() => Target::Drawer,
             None => self.focused.map_or(Target::Nothing, Target::Pane),
         }
     }
@@ -117,8 +117,7 @@ impl Model {
                 } else if self.inspector.is_some() {
                     // The inspector has the drawer's place: its rows take the keys.
                     self.act(Action::InspectorFilter { on: true }, effects);
-                } else if self.talk.is_some_and(|talk| talk.open) && self.talk.is_some_and(|t| self.agent_runs(t.task))
-                {
+                } else if self.talk.as_ref().is_some_and(|talk| talk.open && self.agent_runs(&talk.task)) {
                     self.talk_keys(true, effects);
                 } else {
                     self.rail_focus = Some(RailFocus::Right(self.shown_cell()));
@@ -197,10 +196,12 @@ impl Model {
         self.rail_focus = None;
         match self.rail().get(at) {
             Some(cell) if cell.shown => {
-                self.talk = self.talk.map(|talk| crate::talk::Talk { open: true, ..talk });
+                if let Some(talk) = &mut self.talk {
+                    talk.open = true;
+                }
                 self.talk_keys(true, effects);
             }
-            Some(cell) => self.act(Action::TalkPick { id: cell.task }, effects),
+            Some(cell) => self.act(Action::TalkPick { id: cell.task.clone() }, effects),
             None => self.act(Action::OpenCompose { text: String::new() }, effects),
         }
     }
@@ -225,7 +226,7 @@ impl Model {
         let taken = self.list.is_some()
             || self.holds_keyboard()
             || self.live.is_some()
-            || self.talk.is_some_and(|talk| talk.keys)
+            || self.talk.as_ref().is_some_and(|talk| talk.keys)
             || self.mark_input.is_some();
         if taken {
             self.rail_focus = None;

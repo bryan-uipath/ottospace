@@ -28,7 +28,7 @@ it over the control socket. Session restore and the rest of the design are not b
 | Tasks by project: State \| Project in the section's header, kept in `tasks_view` in the settings. One foldable group a `#project`, by name, with a bar of its tasks' states (hover for the numbers), its open tasks (needs you, running, later), then a folded "Done · n"; the tasks of no project last. Under the list: `Today  n done · n running · agent time` | Works today |
 | A task's progress, kept in its file: when its agent started and when it was done, time at work (activity until a quiet gap of two minutes), and tokens by model (input, output, cached; a sub-agent's apart), summed from its sessions, so they outlive the session files. Tokens only: no prices | Works today |
 | "Pop next" (⌘⇧N): open the next task that needs you | Works today |
-| Sessions in the Tasks section: the Claude Code and Codex sessions of the listed repositories that are no task's (one you started by hand in a terminal). Each row shows the runner, the repository, the session's title, active or idle, what it does now, when it was last active, and the model. Adopt makes a task of one; Hide removes it until the next start. Read-only: nothing is sent to a session | Works today |
+| Sessions in the Tasks section: the Claude Code and Codex sessions of the listed repositories that are no task's (one you started by hand in a terminal). Each row shows the runner, the repository, the session's title, active or idle, what it does now, when it was last active, and the model. A click opens its conversation in the drawer (`claude --resume`, `codex resume`), unless it is at work in another terminal; Adopt makes a task of one; Hide removes it until the next start | Works today |
 | A task's agent in the right drawer: a click or ↵ on a task starts its agent (`claude` or `codex`, by its `@agent`, else `default_agent`) in a terminal beside the workspace, which stays as it is. See [Flow of a task](#flow-of-a-task) | Works today |
 | Right rail: a badge per open conversation (needs you first, then running, then the last opened; at most 8), and `+` for a new task | Works today |
 | New task (⌘N), in the drawer: one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`, picks for where and who, and a line that says what ↵ will do. `/path` and `$skill` are stored and shown; nothing acts on them yet | Works today |
@@ -210,8 +210,10 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    repository (no `>repo`: the home folder), with the keyboard. It is asked `Task: <title>`; a
    task with captures is told where its brief is. The workspace stays as it was.
 3. **One verb.** A click or ↵ on a task is its conversation: started if it never ran, its
-   session gone on with if it has one and no agent runs, shown if one runs. A saved agent
-   cannot be started yet: the drawer says so.
+   session gone on with if it has one and no agent runs, shown if one runs. A session is gone
+   on with in the folder it started in, which may be below the repository. One at work in
+   another terminal, or held open by another Claude Code, is not: the drawer says so. A saved
+   agent cannot be started yet: the drawer says so too.
 4. **The drawer.** Its header: the task's state, title, model and time; Go to (⌘↵) shows its
    tabs in the workspace when it has some; Brief (when it has captures); Stop ends the agent;
    × (⌘⇧L) closes the drawer to the right rail and the agent goes on. ⌘L moves the keyboard in
@@ -223,9 +225,14 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
 6. **Following.** The task runs while its agent works. Claude is given the session's id; Codex
    names its own, and ottospace finds it where Codex wrote it. When the agent ends while the task
    runs, the task needs you.
-7. **Who may.** Only you start or stop an agent: a client's `task_open` or ↵ files the task and
-   shows its tabs, and starts nothing.
-8. **Progress.** While the task is open its session is read on: what it does now and its model
+7. **A session that is no task's.** A click or ↵ on its row under Sessions opens its
+   conversation the same way, with no task: it gets a badge on the rail (from its title, else
+   its repository) and Adopt in the drawer's header. Adopt, there or on the row, makes the task,
+   and the conversation is the task's: the same agent if it runs, else gone on with. Adopt opens
+   no terminal tab.
+8. **Who may.** Only you start or stop an agent: a client's `task_open` or ↵ files the task and
+   shows its tabs, a client's `session_adopt` makes the task, and neither starts anything.
+9. **Progress.** While the task is open its session is read on: what it does now and its model
    show on its row, and the task keeps in its file when its agent started, when it was done, its
    time at work (activity until a quiet gap of two minutes) and its tokens by model (input,
    output, cached; a sub-agent's apart), summed over its sessions. They stay when the session
@@ -417,10 +424,17 @@ included) that no task has adopted: for example a Claude Code you started by han
   reaches a terminal.
 - **Order.** Sessions at work come first, in the order they started, so a row does not move
   while you reach for it. Then the idle ones, the most recently active first.
+- **Open** (a click on the row, or ↵ in list mode) shows its conversation in the drawer, and the
+  workspace stays as it is. No task is made. An idle session is gone on with there: `claude
+  --resume <id>` or `codex resume <id>`, in the folder the session started in, which must be in
+  a listed repository or worktree. One at work (its dot lit) or held by a live Claude Code
+  process is not: the drawer says it is live in another terminal, and nothing is started. When
+  the row says "in pane N", that pane is focused too.
 - **Adopt** makes a task of the session: named after the repository, with `>repo` set to that
   repository (wherever in it the session started) and `@agent` to its runner. The session is
   that task's from then on and leaves the group. Rename the task later. The task keeps the
-  session's runner and id, and no path from the session's file.
+  session's runner and id, and no path from the session's file. Its conversation opens in the
+  drawer as the task's (see [Flow of a task](#flow-of-a-task)).
 - **An adopted task follows its session.** While the session works, the task is Running. When
   the session has been quiet for 3 minutes (`session_quiet_minutes`), the task moves to Needs
   you, once. When it works again, Running again. If you or an agent set the task's state (hold
@@ -436,18 +450,19 @@ included) that no task has adopted: for example a Claude Code you started by han
   you open the Tasks section. With no adopted task, or with `"sessions": false`, nothing is
   read.
 - **Hide** removes the row until ottospace starts again.
-- **A click** focuses the session's pane when the row says "in pane N", and selects the row
-  otherwise. "In pane N" shows only when there is no doubt: the session is at work, exactly one
+- **"In pane N"** shows only when there is no doubt: the session is at work, exactly one
   terminal on the tab on show was opened in its directory, and no other listed session at work
-  started there.
+  started there. A client's click on a row (`session_click`) focuses that pane, else selects the
+  row: it never opens a conversation.
 - **Fresh or not shown.** The list is emptied when the Tasks section closes and read again when
   it opens, so nothing shows what a session did a while ago. If the reader stops, the status
   bar says so once.
-- **Read-only.** ottospace reads the runners' own session files, every 5 seconds while the Tasks
-  section is open and never while it is closed. It does not attach to a session, type into it or
-  signal it. Only derived facts are shown: names from fixed tables, counts and times. Never a
-  prompt, a file's contents or a command line. The one free text is the session's title (above).
-  Design: [sessions.md](ai/sessions.md).
+- **Read, then gone on with only by you.** ottospace reads the runners' own session files, every
+  5 seconds while the Tasks section is open and never while it is closed. It does not attach to
+  a session, type into it or signal it. Only Open or Adopt, by you, starts the runner's own
+  resume command on it. Only derived facts are shown: names from fixed tables, counts and
+  times. Never a prompt, a file's contents or a command line. The one free text is the
+  session's title (above). Design: [sessions.md](ai/sessions.md).
 - Turn it off with `"sessions": false`. See [Settings](#settings) for where sessions are read from.
 
 ## Workbooks

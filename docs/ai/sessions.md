@@ -300,6 +300,27 @@ a debug build and 1 to 3 s in a release build, on one thread. The shell must rea
 thread (`Runner` is `Send + Sync`), give `read` a byte budget so the first read comes in slices,
 and keep the cursor.
 
+## Conversations
+
+A click on a session's row opens its conversation in the right drawer (see
+`task-conversation.md`); Adopt makes it a task's. Rules, each with a core test and a property
+check on every `StartAgent`:
+
+- **The user alone.** `SessionOpen` from a client or a timer is refused (`Model::refusal`). A
+  client's `session_adopt` makes the task and starts nothing.
+- **The command** is the launcher's table (`agents::resume`): `claude --resume <id>`, `codex
+  resume <id>`, the id a UUID, as argv. Nothing else from a session file; never the title.
+- **The directory** is where the session started, if it is inside a listed repository or
+  worktree with no `..` (`sessions::below`); the shell checks again with links resolved
+  before it starts anything.
+- **No second program.** A session at work, or held (`Found.held`: Claude Code's
+  `sessions/<pid>.json` names a pid that exists), is not resumed. One whose agent runs in the
+  drawer is shown, not started again.
+
+Known gaps: Codex records no process, so an idle Codex session open in another terminal is
+resumed. For up to 30 s after a drawer agent ends its session reads "at work", and "held" is
+as of the last read, so opening it again may say it is live elsewhere until the next read.
+
 ## Privacy
 
 Session files hold prompts, source code, command output and whatever secrets passed through.

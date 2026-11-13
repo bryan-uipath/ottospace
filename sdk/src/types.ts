@@ -5,6 +5,8 @@
 
 export type PaneId = number;
 export type TaskId = number;
+/** Whose a conversation is: a task's id, or a session no task owns, by its runner and id. */
+export type Subject = TaskId | { runner: string; id: string };
 
 export type Axis = "right" | "down";
 export type Dir = "left" | "right" | "up" | "down";
@@ -745,15 +747,15 @@ export interface Model {
   brief: TaskId | null;
   /**
    * The conversation the right drawer is on, or null. `open` false: closed to the right rail.
-   * `keys`: the keyboard is in it, and keys go to the task's agent.
+   * `keys`: the keyboard is in it, and keys go to its agent.
    */
-  talk: { task: TaskId; open: boolean; keys: boolean } | null;
+  talk: { task: Subject; open: boolean; keys: boolean } | null;
   /** The drawer's width in points. */
   talk_width: number;
   /** The drawer is widened to half the window. */
   talk_wide: boolean;
-  /** The tasks whose agent runs in the drawer. */
-  agents: TaskId[];
+  /** The conversations whose agent runs in the drawer. */
+  agents: Subject[];
 }
 
 export interface Terminal {
@@ -966,7 +968,7 @@ export interface Snapshot {
     dir: string | null;
     brief: { task: TaskId; dir: string | null } | null;
   };
-  /** The right drawer: where its conversation is drawn, each task's agent by task id, the workspace ⌘↵ goes to, and why no agent runs for the task on show. */
+  /** The right drawer: where its conversation is drawn, each agent by task id (a session's: `<runner>:<id>`), the workspace ⌘↵ goes to, and why no agent runs for the conversation on show. */
   drawer: {
     body: Rect | null;
     /** Its width in points as last drawn. */
@@ -975,7 +977,7 @@ export interface Snapshot {
     goes_to: string | null;
     note: string | null;
     /** The right rail's conversations, in order: badge, state, at work, shown, and the tooltip's text. */
-    rail: { task: TaskId; mono: string; group: Group | null; working: boolean; shown: boolean; tip: string }[];
+    rail: { task: Subject; mono: string; group: Group | null; working: boolean; shown: boolean; tip: string }[];
   };
   /**
    * Frames drawn (`number`), actions dispatched (`seq`) and how many of them the last frame drew

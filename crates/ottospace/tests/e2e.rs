@@ -4869,6 +4869,116 @@ fn a_click_on_a_task_starts_its_agent_in_the_drawer_and_the_workspace_stays() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_click_on_a_session_goes_on_with_it_in_the_drawer() {
+    let root = support::temp(&format!("ottospace-e2e-session-open-{}", std::process::id()));
+    let (bin, repos, sessions) = (root.join("bin"), root.join("repos"), root.join("sessions"));
+    fake_agents(&bin, &sessions);
+    fake_repo(&repos.join("app"));
+    let repo = repos.join("app").canonicalize().unwrap();
+    // Made-up sessions only: `idle` started in a folder below the repository two hours ago,
+    // `held` is idle with a live Claude Code process recorded for it (this test's own pid),
+    // `busy` is a Codex at work now.
+    let below = repo.join("crates/core");
+    std::fs::create_dir_all(&below).unwrap();
+    let (idle, held, busy) = (
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+        "c0de0001-0000-4000-8000-000000000001",
+    );
+    let (claude, codex) = (sessions.join("claude"), sessions.join("codex"));
+    let hours = |n: u64| Duration::from_secs(n * 3600);
+    let fixture = "claude/projects/-work-app/11111111-1111-4111-8111-111111111111.jsonl";
+    let project = |dir: &Path| claude.join("projects").join(ottospace_sessions::claude::slug(dir));
+    session_fixture(fixture, &project(&below).join(format!("{idle}.jsonl")), &below, hours(2));
+    session_fixture(fixture, &project(&repo).join(format!("{held}.jsonl")), &repo, hours(3));
+    let live = json!({"pid": std::process::id(), "sessionId": held, "status": "idle"});
+    std::fs::create_dir_all(claude.join("sessions")).unwrap();
+    std::fs::write(claude.join("sessions/1.json"), live.to_string()).unwrap();
+    let rollout = format!("sessions/2026/11/12/rollout-2026-11-12T09-30-00-{busy}.jsonl");
+    session_fixture(&format!("codex/{rollout}"), &codex.join(&rollout), &repo, hours(0));
+    let settings = json!({"repos": [repos], "session_dirs": {"claude": [claude], "codex": codex}});
+    let home = user_folder("session-open", &settings.to_string());
+    let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let otto = Otto::launch_with("session-open", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.wait_for("the sessions to be read", |o| {
+        (o.call(json!({"cmd": "state"}))["sessions_bar"]["count"] == 3).then_some(())
+    });
+    let before = otto.call(json!({"cmd": "state"}));
+    let row = |id: &str| {
+        let runner = if id == busy { "codex" } else { "claude" };
+        at(otto.control(&format!("session:{runner}:{id}")), 0.3, 0.3)
+    };
+
+    // A client's click on a row starts nothing: no pane to show, so the row is selected.
+    let theirs = otto.click(row(idle), 1);
+    assert_eq!((&theirs["state"]["talk"], &theirs["mode"]), (&Value::Null, &json!("list")), "{theirs}");
+    otto.user_key("escape");
+
+    // The user's click: the conversation in the drawer, gone on with by `claude --resume <id>`
+    // in the folder the session started in. No task, and the workspace is as it was.
+    let reply = otto.user_click(row(idle));
+    let talk = json!({"runner": "claude", "id": idle});
+    assert_eq!((&reply["mode"], &reply["state"]["talk"]["task"]), (&json!("talk"), &talk), "{reply}");
+    let argv = otto.wait_for("claude --resume", |_| agent_argv(&bin, "claude"));
+    assert_eq!(argv, [below.to_str().unwrap(), "--resume", idle]);
+    let key = format!("claude:{idle}");
+    let state = otto.wait_for("the agent to say it is ready", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        let lines = state["drawer"]["agents"][&key]["lines"].as_array()?.clone();
+        lines.iter().any(|l| l == "fake claude ready").then_some(state)
+    });
+    assert_eq!(state["state"]["tasks"]["list"], json!([]), "no task is made");
+    assert_eq!(
+        (&state["state"]["tabs"], &state["state"]["focused"]),
+        (&before["state"]["tabs"], &before["state"]["focused"])
+    );
+    // On the right rail like a task's conversation: its title's badge, named by runner and id.
+    let cell = &state["drawer"]["rail"][0];
+    assert_eq!((&cell["task"], &cell["mono"], &cell["shown"]), (&talk, &json!("GT"), &json!(true)), "{cell}");
+    otto.control(&format!("rail-talk:{key}"));
+    // A second click shows the same one: no second program on it.
+    std::fs::remove_file(bin.join("claude.argv")).unwrap();
+    otto.user_click(row(idle));
+    let codex_argv = bin.join("codex.argv");
+
+    // At work elsewhere, or held by a live process: the drawer opens on it, says so, and starts nothing.
+    let now = std::fs::File::options().write(true).open(codex.join(&rollout)).unwrap();
+    now.set_modified(std::time::SystemTime::now()).unwrap();
+    otto.wait_for("the Codex session at work", |o| {
+        let rows = o.call(json!({"cmd": "state"}))["sessions_bar"]["rows"].clone();
+        rows.as_array()?.iter().any(|row| row["id"] == busy && row["active"] == true).then_some(())
+    });
+    for id in [busy, held] {
+        let reply = otto.user_click(row(id));
+        assert_eq!(reply["state"]["talk"]["task"]["id"], id, "{reply}");
+        assert_eq!(reply["drawer"]["note"], "its session is live in another terminal: go on with it there");
+    }
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(agent_argv(&bin, "claude").is_none() && !codex_argv.exists(), "nothing more was started");
+
+    // Adopt, from the drawer's header: a task, and the conversation running there is its own.
+    otto.user_click(row(idle));
+    let adopted = otto.user_click(at(otto.control("talk:talk-adopt"), 0.5, 0.5));
+    let task = &adopted["state"]["tasks"]["list"][0];
+    assert_eq!(task["session"]["id"], idle, "{adopted}");
+    assert_eq!((&adopted["state"]["talk"]["task"], &adopted["state"]["agents"]), (&json!(1), &json!([1])));
+    assert!(
+        adopted["drawer"]["agents"]["1"]["lines"]
+            .as_array()
+            .is_some_and(|l| l.iter().any(|l| l == "fake claude ready"))
+    );
+    assert_eq!(adopted["state"]["tabs"], before["state"]["tabs"], "no shell tab");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(agent_argv(&bin, "claude").is_none(), "the same program, not a second one");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// The window's buttons sit at its top left, 80 points wide and as tall as the tab strip (28).
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
