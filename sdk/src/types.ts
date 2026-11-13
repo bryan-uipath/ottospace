@@ -464,8 +464,8 @@ export type MarkInput =
   | { type: "jump" }
   | { type: "rename"; mark: number; text: string }
   | { type: "set_key"; mark: number }
-  /** A workbook's name is being typed in its row. */
-  | { type: "workbook"; workbook: number; text: string };
+  /** A workbook's name is being typed in its row; with `tab`, the title of that tab of it. */
+  | { type: "workbook"; workbook: number; tab?: number; text: string };
 
 /** A pane of a workbook's tab. `app`: an app pane's app, by name. */
 export interface WorkbookPane {
@@ -473,21 +473,39 @@ export interface WorkbookPane {
   app?: string;
 }
 
-/** A workbook: a saved, named tab. No directory is listed: `panes` names kinds only. */
+/** One tab of a workbook. */
+export interface WorkbookTab {
+  title: string;
+  /** What it holds, in reading order. */
+  panes: WorkbookPane[];
+  /** e.g. "2 terminals · Chrome". */
+  summary: string;
+  /** It is open now: `tab` is that tab's `id`. */
+  open: boolean;
+  tab: number | null;
+  /** Where the Workbook section drew its row and the row's words (while unfolded), or null. */
+  row: Rect | null;
+  buttons: { open: Rect | null; rename: Rect | null; remove: Rect | null };
+}
+
+/** A workbook: a saved, named set of tabs. No directory is listed: `panes` names kinds only. */
 export interface Workbook {
   /** This run's id for it. */
   id: number;
   name: string;
-  /** What its tab holds, in reading order. */
+  /** What its tabs hold, tab by tab, in reading order. */
   panes: WorkbookPane[];
-  /** e.g. "2 terminals · Chrome, Slack". */
+  /** e.g. "3 tabs · 4 terminals · Chrome, Slack"; one tab: "2 terminals · Chrome, Slack". */
   summary: string;
-  /** Its tab is open now: `tab` is that tab's `id`. */
+  /** One of its tabs is open now: `tab` is the first open one's `id`. */
   open: boolean;
   tab: number | null;
+  tabs: WorkbookTab[];
+  /** Its tabs are listed under its row. */
+  unfolded: boolean;
   /** Where the Workbook section drew its row and the row's words, or null. */
   row: Rect | null;
-  buttons: { open: Rect | null; rename: Rect | null; delete: Rect | null };
+  buttons: { open: Rect | null; add: Rect | null; fold: Rect | null; rename: Rect | null; delete: Rect | null };
 }
 
 /** A mark: a named, saved way back to a pane or a tab. */

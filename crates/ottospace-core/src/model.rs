@@ -921,23 +921,43 @@ pub enum Action {
     RestoreWorkbooks {
         workbooks: Vec<Workbook>,
     },
-    /// Save the tab on show as a workbook, or update the one it came from. `uid`: a new one's
-    /// file name, made up by the shell. `cwds`: each terminal's directory now.
+    /// Save the tab on show as a workbook, or update its tab of the one it came from. `uid`: a
+    /// new one's file name, made up by the shell. `cwds`: each terminal's directory now.
     WorkbookSave {
         uid: String,
         cwds: Vec<(PaneId, String)>,
     },
-    /// Open a workbook in a new tab, or select its tab if that is open. `home`: the user's
-    /// folder, where a terminal starts whose directory is gone.
+    /// Add the tab on show to a workbook, or update it there.
+    WorkbookAddTab {
+        workbook: WorkbookId,
+        cwds: Vec<(PaneId, String)>,
+    },
+    /// Save the tabs on the bar as one new workbook.
+    WorkbookSaveAll {
+        uid: String,
+        cwds: Vec<(PaneId, String)>,
+    },
+    /// Open a workbook's tabs (`tab`: that one, by place) in new tabs, keeping those that are
+    /// open, and select the first. `home`: the user's folder, where a terminal starts whose
+    /// directory is gone.
     WorkbookOpen {
         workbook: WorkbookId,
+        tab: Option<usize>,
         home: Option<String>,
     },
-    /// Start typing a workbook's name in its row. `MarkSubmit` keeps it, `MarkCancel` does not.
+    /// Start typing a workbook's name in its row (`tab`: that tab's title). `MarkSubmit` keeps
+    /// it, `MarkCancel` does not.
     WorkbookEdit {
         workbook: WorkbookId,
+        tab: Option<usize>,
     },
+    /// Delete a workbook, or (`tab`) one tab of it.
     WorkbookRemove {
+        workbook: WorkbookId,
+        tab: Option<usize>,
+    },
+    /// List a workbook's tabs under its row, or stop.
+    WorkbookFold {
         workbook: WorkbookId,
     },
     /// Take the last delete or update of a workbook back.
@@ -1070,6 +1090,8 @@ impl Action {
                 | Action::ListReorder { .. }
                 | Action::CaptureBack
                 | Action::WorkbookSave { .. }
+                | Action::WorkbookAddTab { .. }
+                | Action::WorkbookSaveAll { .. }
                 | Action::WorkbookOpen { .. }
                 | Action::WorkbookEdit { .. }
                 | Action::TaskTalk { .. }
@@ -1103,6 +1125,7 @@ impl Action {
             | Action::CaptureBack
             // A new workbook's name is typed in its row.
             | Action::WorkbookSave { .. }
+            | Action::WorkbookSaveAll { .. }
             | Action::WorkbookEdit { .. } => true,
             | Action::TaskTalk { .. }
             | Action::TalkPick { .. }
@@ -1237,8 +1260,10 @@ impl Action {
             | Action::BriefShow { .. }
             | Action::BriefClose
             | Action::RestoreWorkbooks { .. }
+            | Action::WorkbookAddTab { .. }
             | Action::WorkbookOpen { .. }
             | Action::WorkbookRemove { .. }
+            | Action::WorkbookFold { .. }
             | Action::WorkbookUndo => false,
             | Action::SetAgents { .. }
             | Action::ComposeEnter
@@ -1674,6 +1699,8 @@ impl Model {
             Action::ListDismiss | Action::ListUndo if self.sidebar == Some(Section::Apps) => Some(apps::USERS_ALONE),
             // A workbook is the user's file, and opening one starts their apps.
             Action::WorkbookSave { .. }
+            | Action::WorkbookAddTab { .. }
+            | Action::WorkbookSaveAll { .. }
             | Action::WorkbookOpen { .. }
             | Action::WorkbookEdit { .. }
             | Action::WorkbookRemove { .. }
@@ -2536,7 +2563,8 @@ impl Model {
                 }
                 Some(ListRow::OlderSessions) => self.act(Action::ToggleOlderSessions, effects),
                 Some(ListRow::Mark(id)) => self.mark_go(id, axis, effects),
-                Some(ListRow::Workbook(id)) => self.workbook_open(id, self.home.clone(), effects),
+                Some(ListRow::Workbook(id)) => self.workbook_open(id, None, self.home.clone(), effects),
+                Some(ListRow::WorkbookTab(id, at)) => self.workbook_open(id, Some(at), self.home.clone(), effects),
                 Some(ListRow::Closed(path)) => self.app_launch(&path, axis, effects),
                 Some(ListRow::MoreApps) => self.apps_toggle(apps::Group::More),
                 Some(ListRow::AllApps) => self.apps_toggle(apps::Group::All),
@@ -2560,9 +2588,9 @@ impl Model {
                 if let Some(id) = self.selected_mark() {
                     self.mark_remove(id);
                 }
-                // On a workbook's row it deletes the workbook.
-                if let Some(id) = self.selected_workbook() {
-                    self.workbook_remove(id);
+                // On a workbook's row it deletes the workbook; on one of its tabs, that tab.
+                if let Some((id, tab)) = self.selected_workbook() {
+                    self.workbook_remove(id, tab);
                 }
                 // On a suggested app's row it hides the suggestion.
                 self.list_hide(effects);
@@ -2758,16 +2786,19 @@ impl Model {
                 if let Some(id) = self.selected_mark() {
                     self.mark_edit(id, field);
                 }
-                // A workbook has a name and no letter.
-                if let Some(id) = self.selected_workbook().filter(|_| field == marks::Field::Name) {
-                    self.workbook_edit(id);
+                // A workbook has a name and no letter, and so has each of its tabs.
+                if let Some((id, tab)) = self.selected_workbook().filter(|_| field == marks::Field::Name) {
+                    self.workbook_edit(id, tab);
                 }
             }
             Action::RestoreWorkbooks { workbooks } => self.restore_workbooks(workbooks),
             Action::WorkbookSave { uid, cwds } => self.workbook_save(uid, &cwds, effects),
-            Action::WorkbookOpen { workbook, home } => self.workbook_open(workbook, home, effects),
-            Action::WorkbookEdit { workbook } => self.workbook_edit(workbook),
-            Action::WorkbookRemove { workbook } => self.workbook_remove(workbook),
+            Action::WorkbookAddTab { workbook, cwds } => self.workbook_add_tab(workbook, &cwds),
+            Action::WorkbookSaveAll { uid, cwds } => self.workbook_save_all(uid, &cwds, effects),
+            Action::WorkbookOpen { workbook, tab, home } => self.workbook_open(workbook, tab, home, effects),
+            Action::WorkbookEdit { workbook, tab } => self.workbook_edit(workbook, tab),
+            Action::WorkbookRemove { workbook, tab } => self.workbook_remove(workbook, tab),
+            Action::WorkbookFold { workbook } => self.workbook_fold(workbook),
             Action::WorkbookUndo => self.workbook_undo(),
             Action::ListReorder { delta } => match self.selected_mark() {
                 // The selection goes with the mark.
@@ -3866,7 +3897,17 @@ impl Model {
                 rows
             }
             Some(Section::Marks) => self.marks.list.iter().map(|mark| ListRow::Mark(mark.id)).collect(),
-            Some(Section::Workbook) => self.workbooks.list.iter().map(|book| ListRow::Workbook(book.id)).collect(),
+            // Each workbook, and the tabs of an unfolded one under it.
+            Some(Section::Workbook) => {
+                let mut rows = Vec::new();
+                for book in &self.workbooks.list {
+                    rows.push(ListRow::Workbook(book.id));
+                    if self.workbooks.unfolded(book.id) {
+                        rows.extend((0..book.tabs.len()).map(|at| ListRow::WorkbookTab(book.id, at)));
+                    }
+                }
+                rows
+            }
             None => Vec::new(),
         }
     }
@@ -4656,6 +4697,8 @@ mod tests {
         Action::BriefClose,
         Action::RestoreWorkbooks { .. },
         Action::WorkbookSave { .. },
+        Action::WorkbookAddTab { .. },
+        Action::WorkbookSaveAll { .. },
         Action::WorkbookOpen { .. },
         Action::WorkbookEdit { .. },
         Action::WorkbookRemove { .. },
@@ -4672,7 +4715,8 @@ mod tests {
         Action::TalkKeys { .. },
         Action::TalkResize { .. },
         Action::TalkWide,
-        Action::TalkPick { .. }
+        Action::TalkPick { .. },
+        Action::WorkbookFold { .. }
     );
 
     /// One of each action.
@@ -4824,9 +4868,12 @@ mod tests {
             Action::BriefClose,
             Action::RestoreWorkbooks { workbooks: Vec::new() },
             Action::WorkbookSave { uid: text(), cwds: Vec::new() },
-            Action::WorkbookOpen { workbook: 1, home: None },
-            Action::WorkbookEdit { workbook: 1 },
-            Action::WorkbookRemove { workbook: 1 },
+            Action::WorkbookAddTab { workbook: 1, cwds: Vec::new() },
+            Action::WorkbookSaveAll { uid: text(), cwds: Vec::new() },
+            Action::WorkbookOpen { workbook: 1, tab: None, home: None },
+            Action::WorkbookEdit { workbook: 1, tab: None },
+            Action::WorkbookRemove { workbook: 1, tab: None },
+            Action::WorkbookFold { workbook: 1 },
             Action::WorkbookUndo,
             Action::SetAgents { claude: Vec::new(), codex: Vec::new(), default: None },
             Action::TaskTalk { id: 1 },
@@ -4860,6 +4907,8 @@ mod tests {
         matches!(
             action,
             Action::WorkbookSave { .. }
+                | Action::WorkbookAddTab { .. }
+                | Action::WorkbookSaveAll { .. }
                 | Action::WorkbookOpen { .. }
                 | Action::WorkbookEdit { .. }
                 | Action::WorkbookRemove { .. }

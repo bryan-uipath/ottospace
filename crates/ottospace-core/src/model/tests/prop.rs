@@ -63,6 +63,11 @@ impl Gen<'_> {
         self.one_of(&real, Self::stray)
     }
 
+    /// A place among a workbook's tabs, or none: the whole workbook.
+    fn book_tab(&mut self) -> Option<usize> {
+        self.rng.coin().then(|| self.rng.pick(&[0, 1, 2, 5, usize::MAX]))
+    }
+
     /// A workbook as a file may hold it: sound or not, with keys this build does not know.
     fn kept_workbook(&mut self) -> Workbook {
         let panes = vec![self.record(1), self.record(2)];
@@ -73,11 +78,11 @@ impl Gen<'_> {
             TabRecord { title: self.name(WORDS), task: None, focused: Some(1), layout, panes, extra: self.extra() };
         Workbook {
             id: 0,
-            version: self.rng.pick(&[workbook::VERSION, workbook::VERSION, 2]),
+            version: self.rng.pick(&[workbook::VERSION, 1, 3]),
             uid: self.rng.pick(BOOK_UIDS).to_string(),
             name: self.name(WORDS),
             tabs: (0..self.rng.below(3)).map(|_| tab.clone()).collect(),
-            live: None,
+            live: Vec::new(),
             extra: self.extra(),
         }
     }
@@ -745,9 +750,12 @@ const MAKERS: &[Make] = &[
         Action::RestoreWorkbooks { workbooks: kept.iter().filter_map(read).collect() }
     },
     |g| Action::WorkbookSave { uid: g.rng.pick(BOOK_UIDS).to_string(), cwds: g.read(DIRS) },
-    |g| Action::WorkbookOpen { workbook: g.workbook(), home: g.rng.coin().then(|| g.name(DIRS)) },
-    |g| Action::WorkbookEdit { workbook: g.workbook() },
-    |g| Action::WorkbookRemove { workbook: g.workbook() },
+    |g| Action::WorkbookAddTab { workbook: g.workbook(), cwds: g.read(DIRS) },
+    |g| Action::WorkbookSaveAll { uid: g.rng.pick(BOOK_UIDS).to_string(), cwds: g.read(DIRS) },
+    |g| Action::WorkbookOpen { workbook: g.workbook(), tab: g.book_tab(), home: g.rng.coin().then(|| g.name(DIRS)) },
+    |g| Action::WorkbookEdit { workbook: g.workbook(), tab: g.book_tab() },
+    |g| Action::WorkbookRemove { workbook: g.workbook(), tab: g.book_tab() },
+    |g| Action::WorkbookFold { workbook: g.workbook() },
     |_| Action::WorkbookUndo,
     |g| Action::SetAgents {
         claude: g.names(AGENTS, 2),
@@ -1207,9 +1215,14 @@ fn check(m: &Model) -> Result<(), String> {
     ensure!(unique(&uids) && uids.iter().all(|uid| workbook::valid_uid(uid)), "workbook file names {uids:?}");
     let names: Vec<&str> = books.iter().map(|book| book.name.as_str()).collect();
     ensure!(unique(&names) && names.iter().all(named), "workbook names {names:?}");
-    let lives: Vec<u32> = books.iter().filter_map(|book| book.live).collect();
+    let lives: Vec<u32> = books.iter().flat_map(|book| book.live.iter().flatten().copied()).collect();
     ensure!(unique(&lives) && lives.iter().all(|tab| tab_ids.contains(tab)), "workbooks stand for tabs {lives:?}");
     for book in books {
+        ensure!(book.live.len() <= book.tabs.len(), "workbook {:?} stands for tabs it does not have", book.name);
+        let tabs = book.tabs.len();
+        ensure!((1..=workbook::MAX_TABS).contains(&tabs), "workbook {:?} has {tabs} tabs", book.name);
+        let size = workbook::write(book).len();
+        ensure!(size <= workbook::MAX_FILE_BYTES, "workbook {:?} is {size} bytes: too large to read back", book.name);
         let read = workbook::parse(&workbook::write(book), &book.uid);
         let read = read.map_err(|why| format!("workbook {:?} does not read back: {why}", book.name))?;
         ensure!(workbook::write(&read) == workbook::write(book), "workbook {:?} reads back changed", book.name);
@@ -1262,7 +1275,9 @@ fn check_state(m: &Model) -> Result<(), String> {
     let _ = (m.task_sections(m.now), m.sessions_bar(), m.compose_spans(), m.home(&[]), m.mark_rows());
     let _ = (m.keyboard_terminal(), m.due(m.now), m.followed_sessions(), m.compose_read(), m.needs());
     let _ = (m.workbook_rows(), m.workbook_save_refusal(), m.workbook_of_tab(), m.workbooks.offered());
-    let _: Vec<Vec<String>> = m.workbooks.list.iter().map(|book| m.workbook_gone(book.id)).collect();
+    let _: Vec<Vec<String>> = m.workbooks.list.iter().map(|book| m.workbook_gone(book.id, None)).collect();
+    let _: Vec<Option<String>> = m.workbooks.list.iter().map(|book| m.workbook_add_refusal(book.id)).collect();
+    let _ = m.workbook_save_all_refusal();
     let _ = (
         m.draft(m.compose_line().map(String::as_str).unwrap_or_default()),
         m.mark_refusal(MarkOf::Pane(None)),
@@ -1404,6 +1419,7 @@ impl Run {
                 | Action::MarkCancel
                 // These start the typing of a workbook's name.
                 | Action::WorkbookSave { .. }
+                | Action::WorkbookSaveAll { .. }
                 | Action::WorkbookEdit { .. }
         );
         // A name being typed is a text field: an edit of it is the wait's own, whoever sends it.
@@ -1426,7 +1442,8 @@ impl Run {
         if mark_input.is_some() && !mark_own {
             let gone = matches!(&mark_input, Some(MarkInput::Rename { mark, .. } | MarkInput::SetKey { mark }) if m.marks.get(*mark).is_none());
             let gone = gone
-                || matches!(&mark_input, Some(MarkInput::Workbook { workbook, .. }) if m.workbooks.get(*workbook).is_none());
+                || matches!(&mark_input, Some(MarkInput::Workbook { workbook, tab, .. })
+                    if m.workbooks.get(*workbook).is_none_or(|book| tab.is_some_and(|at| at >= book.tabs.len() || book.tabs.len() < 2)));
             let kept = if user { m.mark_input.is_none() } else { m.mark_input == mark_input || gone };
             ensure!(kept, "a mark's wait: {mark_input:?} before, {:?} after", m.mark_input);
         }
@@ -2652,10 +2669,10 @@ fn a_workbook_whose_file_names_a_task_opens_as_a_tab_of_no_task() {
         tab: None,
         assign: Assign::default(),
     });
-    let kept = r#"[{"version": 1, "id": "00000000000000a1", "name": "dri", "tabs": [{"title": "x", "task": 1,
+    let kept = r#"[{"version": 2, "id": "00000000000000a1", "name": "dri", "tabs": [{"title": "x", "task": 1,
         "layout": {"leaf": 1}, "panes": [{"id": 1, "kind": {"type": "terminal"}, "command": "rm -rf ~"}]}]}]"#;
     m.update(by(Origin::System, restore_workbooks(kept)));
-    let effects = m.update(Action::WorkbookOpen { workbook: 1, home: None });
+    let effects = m.update(Action::WorkbookOpen { workbook: 1, tab: None, home: None });
     // A terminal and nothing typed into it: no effect carries a command.
     assert_eq!(effects, vec![Effect::Opened(1)]);
     assert_eq!((m.tabs[m.active].task, m.current_task, m.tabs[m.active].title.as_str()), (None, None, "dri"));

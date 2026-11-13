@@ -4621,7 +4621,7 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
         let kept: Value = serde_json::from_str(&std::fs::read_to_string(&files[0]).unwrap()).unwrap();
         let stem = files[0].file_stem().and_then(|stem| stem.to_str()).unwrap_or_default().to_string();
         assert!(stem.len() == 16 && stem.chars().all(|c| c.is_ascii_hexdigit()), "{stem}");
-        assert_eq!((&kept["id"], &kept["name"], &kept["version"]), (&json!(stem), &json!("dri"), &json!(1)));
+        assert_eq!((&kept["id"], &kept["name"], &kept["version"]), (&json!(stem), &json!("dri"), &json!(2)));
         let tab = &kept["tabs"][0];
         let cwds: Vec<&str> = tab["panes"].as_array().unwrap().iter().filter_map(|pane| pane["cwd"].as_str()).collect();
         assert_eq!(cwds, [one.to_str().unwrap(), two.to_str().unwrap()]);
@@ -4857,4 +4857,84 @@ fn nothing_is_drawn_over_the_window_buttons_with_a_section_or_the_drawer_open_or
     clear("the drawer");
     otto.call(json!({"cmd": "section", "section": "tasks"}));
     clear("the drawer, no section");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_workbook_keeps_several_tabs_and_opens_them_in_order() {
+    let home = user_folder("workbook-tabs", r#"{"repos": []}"#);
+    let dir = |name: &str| {
+        std::fs::create_dir_all(home.join(name)).unwrap();
+        home.join(name).canonicalize().unwrap()
+    };
+    let (one, two) = (dir("one"), dir("two"));
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let cd = |otto: &Otto, pane: u64, to: &Path| {
+        let text = format!("cd '{}' && echo in-$((6*7))\r", to.display());
+        otto.call(json!({"cmd": "type", "pane": pane, "text": text}));
+        otto.call(json!({"cmd": "wait", "pane": pane, "pattern": "^in-42$"}));
+    };
+    let book = |reply: &Value| reply["workbooks"][0].clone();
+    let tabs = |reply: &Value| book(reply)["tabs"].as_array().map(Vec::len);
+    let titles = |reply: &Value| -> Vec<String> {
+        let tabs = reply["state"]["tabs"].as_array().cloned().unwrap_or_default();
+        tabs.iter().filter_map(|tab| tab["title"].as_str().map(str::to_string)).collect()
+    };
+    {
+        let otto = Otto::launch_with("workbook-tabs-1", &env);
+        otto.call(json!({"cmd": "split"}));
+        cd(&otto, 1, &one);
+        otto.user_key("cmd-shift-s");
+        otto.user_key("o p s enter");
+        otto.call(json!({"cmd": "new_tab"}));
+        let split = otto.call(json!({"cmd": "split"}));
+        let pane = *pane_ids(&split).last().unwrap();
+        cd(&otto, pane, &two);
+        // List mode on the workbook's row: a client's A adds nothing, the user's adds the tab on show.
+        assert_eq!(otto.user_key("cmd-shift-e")["state"]["list"], 0);
+        let refused = otto.call(json!({"cmd": "key", "keys": "a"}));
+        assert_eq!(tabs(&refused), Some(1), "{refused}");
+        let added = otto.user_key("a");
+        let row = book(&added);
+        assert_eq!(
+            (&row["summary"], &added["workbook_offer"], &row["tabs"][1]["tab"], &row["tabs"][0]["title"]),
+            (&json!("2 tabs · 2 terminals"), &json!("updated"), &json!(2), &json!("ops")),
+            "{row}"
+        );
+        // The file keeps both, in order, as version 2.
+        let files = workbook_files(&home);
+        let kept: Value = serde_json::from_str(&std::fs::read_to_string(&files[0]).unwrap()).unwrap();
+        let cwd = |tab: usize| kept["tabs"][tab]["panes"][0]["cwd"].clone();
+        assert_eq!((&kept["version"], cwd(0), cwd(1)), (&json!(2), json!(one), json!(two)), "{kept}");
+    }
+
+    // Another run: the row opens both tabs in order and selects the first; again, it builds none.
+    let otto = Otto::launch_with("workbook-tabs-2", &env);
+    let listed = otto.call(json!({"cmd": "section", "section": "workbook"}));
+    assert_eq!((&book(&listed)["summary"], &book(&listed)["open"]), (&json!("2 tabs · 2 terminals"), &json!(false)));
+    let row = at(rect(&otto.drawn()["workbooks"][0]["row"]), 0.3, 0.3);
+    let opened = otto.user_click(row);
+    let want: Vec<String> = ["Tab 1", "ops", "Tab 1"].map(String::from).into();
+    assert_eq!((titles(&opened), &opened["state"]["active"]), (want, &json!(1)));
+    let panes = pane_ids(&opened);
+    assert_eq!(panes.len(), 2, "{opened}");
+    shell_is_in(&otto, panes[0], &one);
+    shell_is_in(&otto, panes[1], &two);
+    assert_eq!(titles(&otto.user_click(row)).len(), 3);
+
+    // Unfolded, it lists its tabs: one closed is opened alone from its row.
+    let fold = at(rect(&otto.drawn()["workbooks"][0]["buttons"]["fold"]), 0.5, 0.5);
+    assert_eq!(book(&otto.user_click(fold))["unfolded"], true);
+    otto.call(json!({"cmd": "close_tab", "index": 2}));
+    let tab_row = at(rect(&otto.drawn()["workbooks"][0]["tabs"][1]["row"]), 0.3, 0.3);
+    let alone = otto.user_click(tab_row);
+    assert_eq!((titles(&alone).len(), &book(&alone)["tabs"][1]["open"]), (3, &json!(true)));
+    // List mode: X on a tab's row takes it out of the workbook, U puts it back.
+    otto.user_key("cmd-shift-e");
+    otto.user_key("j j");
+    let removed = otto.user_key("x");
+    assert_eq!((tabs(&removed), &removed["workbook_offer"]), (Some(1), &json!("updated")));
+    assert_eq!(tabs(&otto.user_key("u")), Some(2));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
 }

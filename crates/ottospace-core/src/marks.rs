@@ -179,8 +179,13 @@ pub enum MarkInput {
     Rename { mark: MarkId, text: crate::edit::Field },
     /// A mark waits for its letter.
     SetKey { mark: MarkId },
-    /// A workbook's name is being typed, as a mark's is.
-    Workbook { workbook: WorkbookId, text: crate::edit::Field },
+    /// A workbook's name is being typed, as a mark's is. `tab`: the title of that tab of it.
+    Workbook {
+        workbook: WorkbookId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tab: Option<usize>,
+        text: crate::edit::Field,
+    },
 }
 
 impl MarkInput {
@@ -1178,9 +1183,9 @@ impl Model {
                 self.marks.rename(mark, &text);
                 self.mark_input = None;
             }
-            Some(MarkInput::Workbook { workbook, text }) => {
-                let (workbook, text) = (*workbook, text.text().to_string());
-                self.workbook_rename(workbook, &text);
+            Some(MarkInput::Workbook { workbook, tab, text }) => {
+                let (workbook, tab, text) = (*workbook, *tab, text.text().to_string());
+                self.workbook_rename(workbook, tab, &text);
                 self.mark_input = None;
             }
             _ => {}
