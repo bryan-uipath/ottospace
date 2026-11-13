@@ -2052,6 +2052,23 @@ fn a_pane_closed_from_a_long_even_row_leaves_every_side_its_share() {
     .unwrap();
 }
 
+/// Found by the random run once the Apps filter and a mark's wait met: a jump to a mark asked
+/// for while the filter was typed in left the filter with the keyboard, in the mark's mode.
+#[test]
+fn a_mark_that_waits_for_a_letter_is_over_the_apps_filter() {
+    let mut m = Model::default();
+    m.update(Action::ToggleSection { section: Section::Apps });
+    m.update(Action::AppsFilter { on: true });
+    assert_eq!(m.field().map(|(of, _)| of), Some("apps"));
+    m.update(Action::MarkPrefix.sent_by(Origin::Socket));
+    assert_eq!((m.mode(), m.field().map(|(of, _)| of)), (Mode::Mark, None));
+    check(&m).unwrap();
+    // Found by the long run: an edit then ends the wait, and types nothing into the filter under it.
+    m.update(Action::FieldEdit { edit: Edit::Insert("x".into()) });
+    assert_eq!((m.mode(), m.field().map(|(of, field)| (of, field.text()))), (Mode::List, Some(("apps", ""))));
+    check(&m).unwrap();
+}
+
 /// Found by the long random run: a repository whose name holds a control character was
 /// offered, and taken it read as another name. It is not offered.
 #[test]

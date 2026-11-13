@@ -1335,6 +1335,9 @@ impl Model {
         let Envelope { action, origin } = sent.into();
         let user = origin == Origin::User;
         let mut effects = Vec::new();
+        // An edit is for the field that has the keyboard now. With none (a mark waits for a
+        // letter over the filter), it ends the wait as any move of the user's does, and types nothing.
+        let unfielded = matches!(action, Action::FieldEdit { .. }) && self.field().is_none();
         // Sneak mode ends on the user's own moves. A socket client's request and news never end
         // it, or the next letter of a label would reach a terminal: the labels follow what is
         // drawn instead. Its own actions say below what they do to it, whoever sent them: a
@@ -1368,7 +1371,7 @@ impl Model {
         if user && !own_mark {
             self.mark_input = None;
         }
-        if self.refusal(&action, origin).is_some() {
+        if self.refusal(&action, origin).is_some() || unfielded {
             return effects;
         }
         // "Add and start" from anyone but the user adds the task and leaves the tabs on show
@@ -2775,9 +2778,16 @@ impl Model {
     /// The open text field, if it has the keyboard: keys, the clipboard and the input method
     /// edit it. Not while the key reference, the quit question or sneak mode is over it.
     pub fn field(&self) -> Option<(&'static str, &Field)> {
-        // List mode is the mode of the Apps section's filter, Mark of a mark's name being typed.
-        let modes = matches!(self.mode(), Mode::Pick | Mode::Compose | Mode::List | Mode::Mark);
-        self.open_field().filter(|_| !self.keys && modes)
+        // Each field in its own mode: the Apps section's filter in list mode, a mark's name
+        // while it is typed. A mark that waits for a letter is over the filter, not in it.
+        let mode = self.mode();
+        let its_mode = |of: &str| match of {
+            "mark" => mode == Mode::Mark,
+            "picker" => mode == Mode::Pick,
+            "compose" => mode == Mode::Compose,
+            _ => mode == Mode::List,
+        };
+        self.open_field().filter(|(of, _)| !self.keys && its_mode(of))
     }
 
     /// The line in the new-task box.
