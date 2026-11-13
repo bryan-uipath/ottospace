@@ -57,7 +57,9 @@ pub fn monograms(titles: &[&str]) -> Vec<String> {
                 .filter(|i| theirs.get(*i) != Some(&mine[*i]))
                 .map(|i| format!("{first}{}", mine[i]))
                 .find(|candidate| !out.contains(candidate));
-            mono = parted.unwrap_or_else(|| format!("{first}{}", at + 1));
+            // Else its place, or the first number after it no cell has.
+            let numbered = (at + 1..).map(|n| format!("{first}{n}")).find(|candidate| !out.contains(candidate));
+            mono = parted.or(numbered).unwrap_or_default();
         }
         out.push(mono);
     }
@@ -113,6 +115,8 @@ mod tests {
         assert_eq!(monograms(&titles), ["FT", "FO", "FE", "F4", "RE"]);
         assert_eq!(monograms(&["été", "étage"]), ["ÉT", "ÉA"]);
         assert_eq!(monograms(&[]), Vec::<String>::new());
+        // A place already taken as a badge: the next number.
+        assert_eq!(monograms(&["a3", "a", "a"]), ["A3", "A", "A4"]);
     }
 
     #[test]

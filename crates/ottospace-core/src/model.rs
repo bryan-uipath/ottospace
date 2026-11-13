@@ -3269,10 +3269,15 @@ impl Model {
             return;
         }
         let Some(field) = self.compose.as_mut() else { return };
-        let kept = field.text().split(' ').filter(|word| !word.starts_with(mark) && !word.is_empty());
-        let mut words: Vec<String> = kept.map(str::to_string).collect();
-        words.extend(name.map(|name| format!("{mark}{name}")));
-        let text = format!("{} ", words.join(" "));
+        // Only words that are such a tag go, each with the space after it; the rest is as typed.
+        let tag = |word: &str| word.strip_prefix(mark).is_some_and(|rest| compose::taggable(mark, rest));
+        let mut text: String = field.text().split_inclusive(' ').filter(|piece| !tag(piece.trim_end())).collect();
+        if let Some(name) = name {
+            if !text.is_empty() && !text.ends_with(' ') {
+                text.push(' ');
+            }
+            text.push_str(&format!("{mark}{name} "));
+        }
         let all = 0..field.text().len();
         if field.fits(all.clone(), &text) {
             field.splice(all, &text);
@@ -6209,13 +6214,19 @@ mod tests {
         assert_eq!(m.compose_plan(), Some(plan));
         m.update(Action::ComposePick { mark: '>', name: None });
         assert_eq!(line(&m), "fix zoom @codex-gpt-6-astra ");
+        // A word that only starts with the mark is no tag: it stays, spaces and all.
+        m.update(Action::FieldEdit { edit: Edit::Insert("  >= 3".into()) });
+        m.update(Action::ComposePick { mark: '>', name: Some("app".into()) });
+        assert_eq!(line(&m), "fix zoom @codex-gpt-6-astra   >= 3 >app ");
+        m.update(Action::ComposePick { mark: '>', name: None });
         // Only what the picks offer: nothing else is written into the line.
         for (mark, name) in [('>', "elsewhere"), ('@', "ana"), ('#', "app"), ('@', "--yolo")] {
             m.update(Action::ComposePick { mark, name: Some(name.into()) });
-            assert_eq!(line(&m), "fix zoom @codex-gpt-6-astra ", "{mark}{name}");
+            assert_eq!(line(&m), "fix zoom @codex-gpt-6-astra   >= 3 ", "{mark}{name}");
         }
         // No tag: the default agent, in the home folder. A saved agent starts nothing.
         m.update(Action::ComposePick { mark: '@', name: None });
+        assert_eq!(line(&m), "fix zoom   >= 3 ");
         assert_eq!(
             m.compose_plan().map(|plan| (plan.agent, plan.starts, plan.dir)),
             Some(("claude".into(), true, None))
