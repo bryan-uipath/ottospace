@@ -61,6 +61,8 @@ usage: osi <command>
   --allow-fork   allow a pull request from a fork (asks you to type its commit)
   --no-wait      do not wait for a pull request build (a missing one is still requested)
 
+Run `ottospace` from a terminal: it uses that terminal's Accessibility and Screen Recording
+permissions, so an update does not ask for them again. Undo an install: osi rollback.
 A pull request build runs that pull request's code with your terminal's permissions.
 EOF
 }
@@ -68,7 +70,11 @@ EOF
 # Runs on any exit: drops temp files and anything staged but not yet moved into place, and
 # puts back an app that was moved aside if its replacement never arrived.
 cleanup() {
-  if [ -n "$bg" ]; then kill "$bg" 2>/dev/null || true; fi
+  # Its children too: a download in a subshell runs curl, which ignores ^C in the background.
+  if [ -n "$bg" ]; then
+    pkill -P "$bg" 2>/dev/null || true
+    kill "$bg" 2>/dev/null || true
+  fi
   if [ -n "$staged" ]; then rm -f "$staged"; fi
   if [ -n "$staged_app" ]; then rm -rf "$staged_app"; fi
   if [ -n "$aside_app" ] && [ -e "$aside_app" ] && [ ! -e "$app" ]; then mv "$aside_app" "$app"; fi
@@ -212,14 +218,6 @@ spin_quiet() {
   spin_clear
   bg=""
   wait "$1"
-}
-
-# The same, and then "$2" stays as a plain line.
-spin_while() {
-  spin_status=0
-  spin_quiet "$@" || spin_status=$?
-  say "$2"
-  return "$spin_status"
 }
 
 # "1m 05s" for $1 seconds.
@@ -376,7 +374,7 @@ pr_download() {
 
   pr_build "$1"
   gh_run run download "$run" -R "github.com/$repo" -n "$artifact" -D "$dl" 2>"$dl.err" &
-  spin_while $! "Downloading the build from run $run" || die "could not download the build of run $run: $(clean <"$dl.err")"
+  spin_quiet $! "Downloading the build from run $run" || die "could not download the build of run $run: $(clean <"$dl.err")"
   # gh puts a lone artifact straight into the directory; older versions used a subdirectory.
   if [ ! -f "$dl/BUILD" ] && [ -f "$dl/$artifact/BUILD" ]; then dl="$dl/$artifact"; fi
   [ -f "$dl/BUILD" ] && [ -f "$dl/SHA256SUMS" ] && [ -f "$dl/$tarball" ] || die "the build of run $run is incomplete"
@@ -400,25 +398,49 @@ write_state() {
   mv -f "$state_file.new" "$state_file"
 }
 
-# True when the ottospace osi installed is running: a process whose program is the installed
-# command or the installed app's. Not any process called ottospace: a build run from a checkout
-# or by a test is not this one. OSI_PS names another lister of program paths, for tests.
+# True when the app osi installed is running. The app writes its pid and program path to
+# `running` in its folder; a stale file (pid gone, or reused by another program) does not count,
+# nor does a subcommand (`ottospace ctl`), which writes none. OSI_PS names another program that
+# prints a pid's executable, for tests.
 is_running() {
-  running_app="${app:+$app/Contents/MacOS/ottospace}"
-  ${OSI_PS:-ps -axo comm=} 2>/dev/null | while IFS= read -r program; do
-    if [ "$program" = "$cmd" ] || { [ -n "$running_app" ] && [ "$program" = "$running_app" ]; }; then
-      echo yes
-      break
-    fi
-  done | grep -q yes
+  run_file="$(dirname "$state_dir")/running"
+  [ -f "$run_file" ] && [ ! -L "$run_file" ] && [ "$(wc -c <"$run_file")" -le 4096 ] || return 1
+  run_pid="$(sed -n 1p "$run_file")"
+  run_program="$(sed -n 2p "$run_file")"
+  is_number "$run_pid" || return 1
+  [ "$run_program" = "$(resolved "$cmd")" ] ||
+    { [ -n "$app" ] && [ "$run_program" = "$(resolved "$app/Contents/MacOS/ottospace")" ]; } || return 1
+  kill -0 "$run_pid" 2>/dev/null || return 1
+  if [ -n "${OSI_PS:-}" ]; then
+    exe="$("$OSI_PS" "$run_pid" 2>/dev/null)" || return 1
+  else
+    # The first `txt` file of a process is its executable, resolved (`ps` shows argv[0]).
+    exe="$(lsof -a -p "$run_pid" -d txt -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)"
+  fi
+  [ "$exe" = "$run_program" ]
 }
 
+# Path $1 with its folder's symlinks resolved, as the app records it (`~/.local/bin` may be one).
+resolved() { printf '%s/%s' "$(cd -P "$(dirname "$1")" 2>/dev/null && pwd)" "$(basename "$1")"; }
+
+# After a swap: $was_running, asked before it.
 note_running() {
-  if is_running; then
-    say ""
-    say "ottospace is running and keeps the build it started with. To use this one, quit and start it again:"
-    say "  ottospace ctl '{\"cmd\":\"quit\"}'"
-    say "Quit puts hosted windows back; terminal panes and what runs in them close."
+  if [ "$was_running" = 1 ]; then say "ottospace is running the old build: quit it and start it again."; fi
+}
+
+# Says when main has a newer commit than the build installed, commit $1. Silent when the lookup
+# fails: it never fails an install. OSI_MAIN_URL names another source, for tests.
+note_behind() {
+  main_url="${OSI_MAIN_URL:-https://api.github.com/repos/$repo/commits/main}"
+  case "$main_url" in
+    https://*) proto='=https' ;;
+    file://*) proto='=file' ;;
+    *) return 0 ;;
+  esac
+  tip="$(curl -fsS --proto "$proto" --tlsv1.2 --max-time 5 -H 'Accept: application/vnd.github.sha' "$main_url" 2>/dev/null |
+    head -c 40)" || return 0
+  if is_sha "$tip" 40 && [ "$tip" != "$1" ]; then
+    say "main has newer commits ($(printf '%.7s' "$tip")) than this build."
   fi
 }
 
@@ -442,12 +464,18 @@ install_build() {
     pr_download "$ref"
   else
     release_base "$channel" "$ref"
-    say "Downloading $base/$tarball"
-    fetch "$base/BUILD" "$dl/BUILD" || die "no build at $base (download failed)"
-    fetch "$base/SHA256SUMS" "$dl/SHA256SUMS" || die "download failed: $base/SHA256SUMS"
-    fetch "$base/$tarball" "$dl/$tarball" || die "download failed: $base/$tarball"
-    if [ "$want_app" = 1 ]; then
-      fetch "$base/$appzip" "$dl/$appzip" || die "download failed: $base/$appzip"
+    # Behind a spinner; what went wrong is said after it.
+    (
+      fetch "$base/BUILD" "$dl/BUILD" || die "no build at $base (download failed)"
+      fetch "$base/SHA256SUMS" "$dl/SHA256SUMS" || die "download failed: $base/SHA256SUMS"
+      fetch "$base/$tarball" "$dl/$tarball" || die "download failed: $base/$tarball"
+      if [ "$want_app" = 1 ]; then
+        fetch "$base/$appzip" "$dl/$appzip" || die "download failed: $base/$appzip"
+      fi
+    ) 2>"$tmp/fetch.err" &
+    if ! spin_quiet $! "Downloading $(describe "$channel" "$ref")"; then
+      cat "$tmp/fetch.err" >&2
+      exit 1
     fi
   fi
 
@@ -490,6 +518,9 @@ install_build() {
     keep=1
   fi
 
+  # Asked before the swap: once a running app is moved aside, its executable's path changes.
+  was_running=0
+  if is_running; then was_running=1; fi
   # Everything is staged: from here on only renames. A failure puts the old app back.
   if [ "$want_app" = 1 ]; then
     if [ -e "$app" ] || [ -L "$app" ]; then
@@ -524,25 +555,28 @@ install_build() {
     aside_app=""
     write_state "$state_dir/app" "path=$app" "version=$b_version" "commit=$b_commit"
   fi
+  # A first install says how to run ottospace; later ones do not.
+  first=0
+  if [ ! -f "$state_dir/current" ]; then first=1; fi
   write_state "$state_dir/current" "channel=$channel" "ref=$ref" "version=$b_version" "commit=$b_commit" \
     "date=$b_date" "binary_sha256=$(sha256_of "$cmd")" "installed=$(now)"
 
-  say ""
-  say "Installed ottospace $b_version ($(short "$b_commit"), $b_date) from $(describe "$channel" "$ref")"
-  say "  command: $cmd"
+  say "Installed ottospace $b_version ($(printf '%.7s' "$b_commit")) from $(describe "$channel" "$ref")"
   if [ "$want_app" = 1 ]; then
-    say "  app:     $app"
-    say "The app is its own identity to macOS, and a new one with every build: expect to grant"
-    say "Accessibility and Screen Recording again after each update."
+    if [ "$owned" != 1 ]; then
+      say "The app is a new identity to macOS with every build: grant it Accessibility and Screen Recording after each install."
+    fi
   elif [ "$owned" = 1 ] && [ -e "$app" ]; then
-    say "  $app is build $(short "$(get commit "$state_dir/app")") and was left as it is (add --app to update it)."
+    say "$app is build $(short "$(get commit "$state_dir/app")") and was left as it is (add --app to update it)."
   fi
   case ":$user_path:" in
     *":$bin_dir:"*) ;;
-    *) say "  $bin_dir is not on your PATH. Add it, e.g. in ~/.zshrc: export PATH=\"$bin_dir:\$PATH\"" ;;
+    *) say "$bin_dir is not on your PATH. Add it, e.g. in ~/.zshrc: export PATH=\"$bin_dir:\$PATH\"" ;;
   esac
-  say "Run \`ottospace\` from a terminal: it uses that terminal's Accessibility and Screen Recording"
-  say "permissions, so an update does not ask for them again. Undo this install: osi rollback"
+  if [ "$first" = 1 ]; then
+    say "Run \`ottospace\` from a terminal: it uses that terminal's Accessibility and Screen Recording permissions."
+  fi
+  if [ "$channel" = main ]; then note_behind "$b_commit"; fi
   note_running
 }
 
@@ -730,10 +764,11 @@ cmd_update() {
 
   if [ "$latest" = "$have" ]; then
     say "Up to date: $(state_line "$state_dir/current")"
+    if [ "$channel" = main ]; then note_behind "$have"; fi
     return 0
   fi
-  say "$(describe "$channel" "$ref") is at $(short "$latest"); installed is $(short "$have")."
   if [ "$check" = 1 ]; then
+    say "$(describe "$channel" "$ref") is at $(short "$latest"); installed is $(short "$have")."
     say "Run: osi update"
     return 0
   fi
@@ -746,6 +781,8 @@ cmd_rollback() {
   setup
   [ -f "$state_dir/previous" ] && [ -f "$state_dir/previous.bin" ] || die "there is no previous build to go back to"
   [ -f "$state_dir/current" ] || die "the state file is missing: $state_dir/current"
+  was_running=0
+  if is_running; then was_running=1; fi
   mkdir -p "$bin_dir"
   staged="$bin_dir/.ottospace.new.$$"
   cp -p "$state_dir/previous.bin" "$staged"
@@ -803,6 +840,8 @@ cmd_rollback() {
 cmd_uninstall() {
   setup
   [ -f "$state_dir/current" ] || die "nothing is installed by osi"
+  was_running=0
+  if is_running; then was_running=1; fi
   rm -f "$cmd"
   say "Removed $cmd"
   if app_owned && [ -d "$app" ]; then
@@ -816,7 +855,7 @@ cmd_uninstall() {
     say "Removed $bin_dir/osi"
   fi
   say "Kept: settings and tasks in $(dirname "$state_dir")."
-  if is_running; then
+  if [ "$was_running" = 1 ]; then
     say "ottospace is still running. Quit it: use its window, or the control socket request {\"cmd\":\"quit\"}."
   fi
 }

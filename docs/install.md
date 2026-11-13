@@ -39,7 +39,13 @@ osi self-update       # replace osi with the one on main
 - `install.sh` and `osi self-update` fetch `osi` from `main` over HTTPS with no checksum at all.
   You trust this repository and GitHub, as with any `curl | sh`.
 - The new binary replaces the old one by rename. A running ottospace keeps the build it started
-  with: quit it (`ottospace ctl '{"cmd":"quit"}'` puts hosted windows back) and start it again.
+  with: quit it (`ottospace ctl '{"cmd":"quit"}'` puts hosted windows back; terminal panes and
+  what runs in them close) and start it again. osi says so when the app is running: the app
+  records its pid and program in `~/.ottospace/running`. `ottospace ctl` and other subcommands
+  do not count.
+- After installing `main`, osi says when `main` has a newer commit than the build: its build is
+  not published yet, or it changed only docs (which publish none).
+- Undo an install: `osi rollback`.
 - **A pull request build runs that pull request's code with your terminal's permissions.** `osi`
   shows the author and the head commit first. It refuses a pull request from a fork unless you
   pass `--allow-fork` and type the commit. Read the diff before you do.
