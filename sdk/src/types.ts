@@ -331,6 +331,29 @@ export interface SessionsBar {
   slow_reads: number;
 }
 
+/** A repository of the Repos section: its name as a heading, then its checkouts. */
+export interface ReposGroup {
+  name: string;
+  path: string;
+  /** Where the heading was laid out, scrolled out of view or not. Null while the section is not drawn. */
+  header: Rect | null;
+  rows: CheckoutRow[];
+}
+
+/** A checkout's row in the Repos section. */
+export interface CheckoutRow {
+  /** What `openRepo` takes. */
+  path: string;
+  /** The branch, a short commit id, or `(no branch)`. */
+  branch: string;
+  /** True for the repository's own directory; false for a linked worktree. */
+  default: boolean;
+  /** The line under the branch: `Default`, or a linked worktree's directory name. */
+  label: string;
+  /** Where the row was laid out, scrolled out of view or not. Null while the section is not drawn. */
+  row: Rect | null;
+}
+
 /** A row of the Tasks section, as drawn. */
 export interface TaskRow {
   id: TaskId;
@@ -649,6 +672,8 @@ export interface Snapshot {
   compose_note: string | null;
   tasks_bar: TasksBar;
   sessions_bar: SessionsBar;
+  /** The Repos section: `state.repos` as its rows, and where each was laid out. */
+  repos_bar: ReposGroup[];
   /** Null while the tab on show has a pane. */
   home: Home | null;
   home_drawn: HomeDrawn;

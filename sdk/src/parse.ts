@@ -52,6 +52,8 @@ import type {
   SessionRow,
   SessionRunner,
   SessionsBar,
+  ReposGroup,
+  CheckoutRow,
   AppsBar,
   ClosedApp,
   Sneak,
@@ -514,6 +516,27 @@ function sessionsBar(value: unknown, at: string): SessionsBar {
   };
 }
 
+function reposGroup(value: unknown, at: string): ReposGroup {
+  const o = fields(value, at);
+  return {
+    name: str(o.name, `${at}.name`),
+    path: str(o.path, `${at}.path`),
+    header: orNull(rect)(o.header, `${at}.header`),
+    rows: list(checkoutRow)(o.rows, `${at}.rows`),
+  };
+}
+
+function checkoutRow(value: unknown, at: string): CheckoutRow {
+  const o = fields(value, at);
+  return {
+    path: str(o.path, `${at}.path`),
+    branch: str(o.branch, `${at}.branch`),
+    default: bool(o.default, `${at}.default`),
+    label: str(o.label, `${at}.label`),
+    row: orNull(rect)(o.row, `${at}.row`),
+  };
+}
+
 function closedApp(value: unknown, at: string): ClosedApp {
   const o = fields(value, at);
   return {
@@ -846,6 +869,7 @@ export function snapshot(value: unknown): Snapshot {
     compose_note: orNull(str)(o.compose_note, "compose_note"),
     tasks_bar: tasksBar(o.tasks_bar, "tasks_bar"),
     sessions_bar: sessionsBar(o.sessions_bar, "sessions_bar"),
+    repos_bar: list(reposGroup)(o.repos_bar, "repos_bar"),
     home: orNull(home)(o.home, "home"),
     home_drawn: homeDrawn(o.home_drawn, "home_drawn"),
     closed_apps: list(str)(o.closed_apps, "closed_apps"),

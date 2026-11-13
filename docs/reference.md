@@ -33,7 +33,7 @@ it over the control socket. Session restore and the rest of the design are not b
 | Tabs, each with its own split tree | Works today |
 | Pane picker: choose a terminal, a running app, or (once you type) any installed app for a new pane or tab | Works today |
 | Icon rail with a secondary bar; Apps lists running apps with their icons | Works today |
-| Repos: repositories and their worktrees; open a terminal in one | Works today |
+| Repos: each repository's name over its checkouts (the branch, then `Default` or a linked worktree's directory); open a terminal in one | Works today |
 | List mode (⌘⇧E): drive the bar with the keyboard | Works today |
 | Sneak mode (⌘⌃G): a letter label on each of ottospace's own controls; typing it clicks the control | Works today |
 | Marks (⌘B, ⌘⇧B, ⌘' and a letter): named ways back to a pane or a tab, kept in `~/.ottospace/marks.json` | Works today |

@@ -20,6 +20,32 @@ pub struct Worktree {
     pub branch: Option<String>,
 }
 
+/// One checkout as the Repos section lists it: a row under its repository's name.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Checkout {
+    pub path: String,
+    /// The branch, a short commit id, or `(no branch)` if `HEAD` could not be read.
+    pub branch: String,
+    /// True for the repository's own directory. A linked worktree is not the default.
+    pub default: bool,
+    /// The line under the branch: `Default`, or a linked worktree's directory name.
+    pub label: String,
+}
+
+impl Repo {
+    /// The repository's rows: its own directory first, then its worktrees in their order.
+    pub fn checkouts(&self) -> Vec<Checkout> {
+        let row = |path: &str, branch: &Option<String>, worktree: Option<&str>| Checkout {
+            path: path.to_string(),
+            branch: branch.clone().unwrap_or_else(|| "(no branch)".into()),
+            default: worktree.is_none(),
+            label: worktree.unwrap_or("Default").to_string(),
+        };
+        let linked = self.worktrees.iter().map(|w| row(&w.path, &w.branch, Some(&w.name)));
+        std::iter::once(row(&self.path, &self.branch, None)).chain(linked).collect()
+    }
+}
+
 /// What a `HEAD` file says is checked out: `ref: refs/heads/fix/zoom` → `fix/zoom`; a bare
 /// commit id (detached) → its first 7 characters.
 pub fn branch_of(head: &str) -> Option<String> {
@@ -96,6 +122,26 @@ mod tests {
         assert_eq!(names, ["App", "zed"]);
         let worktrees: Vec<&str> = arranged[0].worktrees.iter().map(|w| w.name.as_str()).collect();
         assert_eq!(worktrees, ["app-2", "app-3"]);
+    }
+
+    #[test]
+    fn a_repository_lists_its_own_directory_as_default_then_its_worktrees() {
+        let mut app = repo("app", &["app-2", "Default"]);
+        app.branch = Some("main".into());
+        app.worktrees[0].branch = Some("fix/zoom".into());
+        let row = |path: &str, branch: &str, default: bool, label: &str| Checkout {
+            path: path.into(),
+            branch: branch.into(),
+            default,
+            label: label.into(),
+        };
+        // A worktree whose directory is named `Default` is still not the default: the flag says which.
+        let expected = [
+            row("/code/app", "main", true, "Default"),
+            row("/code/app-2", "fix/zoom", false, "app-2"),
+            row("/code/Default", "(no branch)", false, "Default"),
+        ];
+        assert_eq!(app.checkouts(), expected);
     }
 
     #[test]

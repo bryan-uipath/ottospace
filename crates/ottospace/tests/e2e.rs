@@ -136,6 +136,16 @@ fn fake_repo(at: &Path) {
     std::fs::write(at.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
 }
 
+/// A linked worktree of `root/repo` at `root/name`, on `branch`, as git writes one. `root` is resolved.
+fn fake_worktree(root: &Path, repo: &str, name: &str, branch: &str) {
+    let admin = root.join(repo).join(".git/worktrees").join(name);
+    std::fs::create_dir_all(&admin).unwrap();
+    std::fs::create_dir_all(root.join(name)).unwrap();
+    std::fs::write(admin.join("HEAD"), format!("ref: refs/heads/{branch}\n")).unwrap();
+    std::fs::write(admin.join("gitdir"), format!("{}\n", root.join(name).join(".git").display())).unwrap();
+    std::fs::write(root.join(name).join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+}
+
 /// Waits for the app's process to end.
 fn exits(otto: &mut Otto) {
     let start = Instant::now();
@@ -678,9 +688,6 @@ fn repos_are_listed_and_open_a_terminal_there() {
     let root = std::env::temp_dir().join(format!("ottospace-e2e-repos-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     fake_repo(&root.join("app"));
-    let admin = root.join("app/.git/worktrees/app-2");
-    std::fs::create_dir_all(&admin).unwrap();
-    std::fs::create_dir_all(root.join("app-2")).unwrap();
     std::fs::create_dir_all(root.join("plain")).unwrap();
     std::fs::create_dir_all(root.join("app/.git/worktrees/app-3")).unwrap();
     std::fs::create_dir_all(root.join("app-3")).unwrap();
@@ -688,9 +695,7 @@ fn repos_are_listed_and_open_a_terminal_there() {
     let unresolved = root.to_string_lossy().into_owned();
     let root = root.canonicalize().unwrap(); // the path `pwd` prints
     let at = |rest: &str| root.join(rest).to_string_lossy().into_owned();
-    std::fs::write(root.join("app/.git/worktrees/app-2/HEAD"), "ref: refs/heads/fix/zoom\n").unwrap();
-    std::fs::write(root.join("app/.git/worktrees/app-2/gitdir"), format!("{}\n", at("app-2/.git"))).unwrap();
-    std::fs::write(root.join("app-2/.git"), format!("gitdir: {}\n", at("app/.git/worktrees/app-2"))).unwrap();
+    fake_worktree(&root, "app", "app-2", "fix/zoom");
 
     // A second worktree linked with relative paths (git's `worktree.useRelativePaths`).
     std::fs::write(root.join("app/.git/worktrees/app-3/HEAD"), "ref: refs/heads/feat/map\n").unwrap();
@@ -720,6 +725,62 @@ fn repos_are_listed_and_open_a_terminal_there() {
     std::fs::remove_dir_all(root.join("app-3")).unwrap();
     let gone = otto.raw(&json!({"cmd": "open_repo", "path": at("app-3")}).to_string());
     assert!(gone["error"].as_str().is_some_and(|e| e.contains("not a directory")), "{gone}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_long_repos_list_keeps_each_name_over_its_checkouts() {
+    // More repositories than the bar is tall; the third has a linked worktree.
+    let root = std::env::temp_dir().join(format!("ottospace-e2e-repos-list-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    for n in 0..40 {
+        fake_repo(&root.join(format!("repo-{n:02}")));
+    }
+    let root = root.canonicalize().unwrap();
+    let at = |rest: &str| root.join(rest).to_string_lossy().into_owned();
+    fake_worktree(&root, "repo-02", "zoom", "fix/zoom");
+
+    let otto = Otto::launch_with("repos-list", &[("OTTOSPACE_REPOS", &root.to_string_lossy())]);
+    otto.call(json!({"cmd": "repos"}));
+    otto.call(json!({"cmd": "section", "section": "repos"}));
+    let drawn =
+        |o: &Otto| Some(o.call(json!({"cmd": "state"}))).filter(|reply| !reply["repos_bar"][39]["header"].is_null());
+    let reply = otto.wait_for("the Repos list to be drawn", drawn);
+    assert!(!reply["scrollbars"]["repos"].is_null(), "the list does not overflow: {}", reply["scrollbars"]);
+
+    // What each row says: the repository's own directory is the default, a worktree shows its directory.
+    let groups = reply["repos_bar"].as_array().unwrap();
+    assert_eq!(groups.len(), 40);
+    let said = |row: &Value| (row["branch"].clone(), row["default"].clone(), row["label"].clone());
+    assert_eq!(said(&groups[2]["rows"][0]), (json!("main"), json!(true), json!("Default")));
+    assert_eq!(said(&groups[2]["rows"][1]), (json!("fix/zoom"), json!(false), json!("zoom")));
+    // Every name is drawn, however long the list: over its rows, each row under the one before.
+    let mut bottom = 0.0;
+    for group in groups {
+        let name = &group["name"];
+        let header = rect(&group["header"]);
+        assert!(header[3] >= 12.0, "{name}: its heading has no room: {header:?}");
+        assert!(header[1] >= bottom, "{name}: its heading is over the rows before it: {header:?}");
+        bottom = header[1] + header[3];
+        for row in group["rows"].as_array().unwrap() {
+            let row = rect(&row["row"]);
+            assert!(row[1] >= bottom && (30.0..=40.0).contains(&row[3]), "{name}: a row at {row:?}, after {bottom}");
+            bottom = row[1] + row[3];
+        }
+    }
+
+    // List mode walks the rows, not the names: the worktree is the fourth row, and ↵ opens it.
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-shift-e j j j"}));
+    assert_eq!((reply["mode"].as_str(), reply["state"]["list"].as_u64()), (Some("list"), Some(3)));
+    let reply = otto.call(json!({"cmd": "key", "keys": "enter"}));
+    assert_eq!(reply["state"]["panes"][0]["cwd"], at("zoom"));
+    // With the bar closed nothing of it is drawn.
+    otto.call(json!({"cmd": "section", "section": "repos"}));
+    let shut =
+        |o: &Otto| Some(o.call(json!({"cmd": "state"}))).filter(|reply| reply["repos_bar"][0]["header"].is_null());
+    let reply = otto.wait_for("the Repos list to go", shut);
+    assert!(reply["repos_bar"][0]["rows"][0]["row"].is_null(), "{}", reply["repos_bar"][0]);
     let _ = std::fs::remove_dir_all(&root);
 }
 

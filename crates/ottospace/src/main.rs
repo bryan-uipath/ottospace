@@ -33,6 +33,7 @@ use ottospace_core::keys::{self, Mods};
 use ottospace_core::list::{ListKey, list_key};
 use ottospace_core::marks::{Field, MarkInput, MarkOf, MarkRef, letter};
 use ottospace_core::model::CONFIRM_UP;
+use ottospace_core::repos::{Checkout, Repo};
 use ottospace_core::rules::{self, Facts};
 use ottospace_core::scrollbar::{Extent, key_step};
 use ottospace_core::settings::Installed;
@@ -502,6 +503,10 @@ enum Mark {
     Header(PaneId),
     Close(PaneId),
     Tab(usize),
+    /// A repository's name in the Repos section, by its place in `model.repos`.
+    Repo(usize),
+    /// A checkout's row in the Repos section, by its place in the list.
+    Checkout(usize),
 }
 
 type Marks = Rc<RefCell<HashMap<Mark, Bounds<Pixels>>>>;
@@ -1785,6 +1790,26 @@ impl Workspace {
         self.model.tasks.inbox().into_iter().map(row).collect()
     }
 
+    /// The Repos section as laid out: each repository's `name` and `path` with its `header`, and
+    /// its `rows` (a checkout's `path`, `branch`, `default`, `label`) each with its `row`. Rects
+    /// are in window points, scrolled out of view or not; null while the section is not drawn.
+    fn repos_bar(&self) -> Vec<serde_json::Value> {
+        let marks = self.marks.borrow();
+        let drawn = |mark: Mark| marks.get(&mark).copied().map(rect);
+        let mut index = 0;
+        let group = |(n, repo): (usize, &Repo)| {
+            let row = |checkout: Checkout| {
+                let mut row = serde_json::json!(checkout);
+                row["row"] = serde_json::json!(drawn(Mark::Checkout(index)));
+                index += 1;
+                row
+            };
+            let rows: Vec<serde_json::Value> = repo.checkouts().into_iter().map(row).collect();
+            serde_json::json!({ "name": repo.name, "path": repo.path, "header": drawn(Mark::Repo(n)), "rows": rows })
+        };
+        self.model.repos.iter().enumerate().map(group).collect()
+    }
+
     /// The Sessions group as drawn, and how often sessions were read: `reads` stays 0 while
     /// reading is off (`"sessions": false`) or the Tasks section was never open.
     fn sessions_bar(&self) -> serde_json::Value {
@@ -2207,6 +2232,9 @@ impl Workspace {
             // Sessions that are no task's, as the Tasks section draws them below the tasks:
             // derived facts only (runner, id, repository name, active, station and label, age).
             "sessions_bar": self.sessions_bar(),
+            // The Repos section: each repository's name with where its heading was laid out
+            // (`header`), and its checkouts (`rows`: `path`, `branch`, `default`, `label`, `row`).
+            "repos_bar": self.repos_bar(),
             // The home screen, or null while the tab on show has a pane: each task's node (its
             // lane, depth and crossing of the lattice) and the rows under "Needs you".
             "home": self.model.home(&self.home.borrow().keep_out()),
@@ -2823,7 +2851,7 @@ impl Workspace {
                 let mut rows = 0;
                 let headings = self.model.repos.iter().take_while(|repo| {
                     let starts_before = rows <= at;
-                    rows += 1 + repo.worktrees.len();
+                    rows += repo.checkouts().len();
                     starts_before
                 });
                 return Some(at + headings.count());
@@ -3350,6 +3378,10 @@ impl Workspace {
         div()
             .id("bar")
             .w(px(260.))
+            // Min and max too: the layout first sizes a flex item by its content, ignoring `w`. Text
+            // measured then with no width is never cut, and `truncate` shows no ellipsis.
+            .min_w(px(260.))
+            .max_w(px(260.))
             .h_full()
             .flex()
             .flex_col()
@@ -3760,32 +3792,35 @@ impl Workspace {
     /// Repositories, each with its worktrees under it. A click opens a terminal there: it fills
     /// the focused pane if that is empty, else splits it (right, or down with shift).
     fn render_repos(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        // One checkout: the branch it is on, and for a linked worktree its directory's name.
-        let row = |index: usize, path: &str, branch: Option<&str>, directory: Option<&str>| {
-            let target = path.to_string();
-            let branch = branch.unwrap_or("(no branch)").to_string();
+        // One checkout: the branch it is on; under it "Default", or a linked worktree's directory.
+        let row = |index: usize, checkout: Checkout| {
+            let place = if checkout.default { theme::PRIMARY } else { theme::MUTED };
+            let icon = svg().path("icons/repos.svg").size(px(12.)).text_color(rgb(theme::MUTED));
+            let label = div().truncate().text_xs().line_height(px(15.)).text_color(rgb(place));
             list_row(("repo", index), self.model.list == Some(index))
-                .child(div().flex_1().min_w_0().truncate().child(branch))
-                .children(directory.map(|name| {
-                    div().max_w(px(110.)).truncate().text_xs().text_color(rgb(theme::MUTED)).child(name.to_string())
-                }))
-                .child(self.controls.mark(format!("repo:{path}")))
+                // Beside the lines, not in a flex row with them: text in a flex row's cell is
+                // first measured with no width, and is then never cut.
+                .child(icon.absolute().left(px(8.)).top(px(5.)))
+                .child(div().truncate().child(checkout.branch))
+                .child(label.child(checkout.label))
+                .child(mark(&self.marks, Mark::Checkout(index)))
+                .child(self.controls.mark(format!("repo:{}", checkout.path)))
                 .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                     let axis = if e.modifiers().shift { Axis::Down } else { Axis::Right };
-                    this.dispatch(Action::OpenRepo { path: target.clone(), axis }, this.input, window, cx);
+                    this.dispatch(Action::OpenRepo { path: checkout.path.clone(), axis }, this.input, window, cx);
                 }))
         };
         // The repository's name as a heading, then its checkouts: its own directory first.
         let mut items: Vec<AnyElement> = Vec::new();
         let mut index = 0;
-        for repo in &self.model.repos {
-            let name = div().px_2().pt_2().text_sm().font_weight(FontWeight::SEMIBOLD).truncate();
-            items.push(name.child(repo.name.clone()).into_any_element());
-            items.push(row(index, &repo.path, repo.branch.as_deref(), None).into_any_element());
-            index += 1;
-            for worktree in &repo.worktrees {
-                let branch = worktree.branch.as_deref();
-                items.push(row(index, &worktree.path, branch, Some(&worktree.name)).into_any_element());
+        for (n, repo) in self.model.repos.iter().enumerate() {
+            // `flex_none`: a heading that may shrink is squeezed to nothing once the list overflows.
+            let name = div().flex_none().px_2().pb_0p5().text_xs().font_weight(FontWeight::SEMIBOLD);
+            let name = name.text_color(rgb(theme::MUTED)).map(|d| if n == 0 { d.pt_1() } else { d.pt_3() });
+            let name = name.child(mark(&self.marks, Mark::Repo(n))).child(div().truncate().child(repo.name.clone()));
+            items.push(name.into_any_element());
+            for checkout in repo.checkouts() {
+                items.push(row(index, checkout).into_any_element());
                 index += 1;
             }
         }
@@ -4329,16 +4364,18 @@ fn open_task(id: TaskId, cx: &mut Context<Workspace>) -> Box<dyn Fn(&ClickEvent,
 fn list_row(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
     div()
         .id(id)
-        .px_2()
-        .py_1()
-        .flex()
-        .items_center()
-        .gap_2()
+        .flex_none()
+        .relative()
+        // Room on the left for the row's icon.
+        .pl(px(26.))
+        .pr_2()
+        .py_0p5()
         .rounded_md()
         // Always there, so a row does not shift by a point when it is selected.
         .border_1()
         .border_color(transparent_black())
-        .text_sm()
+        .text_size(px(13.))
+        .line_height(px(17.))
         .text_color(rgb(theme::MUTED))
         .cursor_pointer()
         .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
@@ -4467,6 +4504,8 @@ impl Render for Workspace {
         }
         self.controls.begin();
         self.bars.begin();
+        // The Repos list is noted again only while it is drawn.
+        self.marks.borrow_mut().retain(|mark, _| !matches!(mark, Mark::Repo(_) | Mark::Checkout(_)));
         // The pane drag is over, however it ended (a drop, Esc, a release outside the window):
         // no drop zone may stay drawn.
         if !cx.has_active_drag() {
