@@ -17,8 +17,9 @@ between two requests and hides it; a loaded CI runner does not.
 
 The shell counts actions (`seq`, bumped in `dispatch`) and records in `render` how many the frame
 drew (`drawn_seq`). In a test run (`OTTOSPACE_E2E`) every reply that carries the state, `state`
-included, waits until `drawn_seq >= seq` as it was when the request was done. The 60 Hz tick
-sends what a frame has drawn for. After 5 s with no frame the reply goes anyway, marked
+included, waits until `drawn_seq >= seq`: the reply carries the current state, so an action
+dispatched after its own must be drawn too. The 60 Hz tick sends what a frame has drawn for;
+`quit` sends what is held before the app exits. After 5 s with no frame the reply goes anyway, marked
 `"stale": true`, so a hidden or stuck window fails a test with a reason instead of hanging it.
 Replies that carry no state (`capture`, `wait`, `task_list`, `trace`, ..) never wait.
 
