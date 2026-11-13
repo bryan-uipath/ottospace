@@ -56,6 +56,7 @@ None of these is in the app today.
 | TypeScript scripting, with contextual quick actions in an action deck (Zoom meeting layout, spin for stand-up) | Designed |
 | Hide private panes while screen sharing | Designed |
 | Session restore | Designed |
+| Terminals survive quitting and updating | Designed |
 
 ## Requirements and permissions
 
@@ -560,6 +561,7 @@ first brainstorm:
 [capture.md](ai/capture.md): the capture key, annotate mode, what a capture stores, and how a brief quotes it.
 [marks.md](ai/marks.md): marks, what one records, and how they sit beside session restore, pins and tasks.
 [workbook.md](ai/workbook.md): workbooks beside tasks, marks and session restore; stage 1 as built, and what is later.
+[terminal-persistence.md](ai/terminal-persistence.md): terminals and agents that outlive a quit or an update, held outside the app; with session restore, tasks come back as they were.
 
 [routines.md](ai/routines.md): routines and agents from ottobot, in stages, toward ottospace subsuming it.
 
