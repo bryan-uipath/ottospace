@@ -765,6 +765,13 @@ fn a_directory_is_added_to_the_repos_list_and_removed_in_the_settings() {
     let reply = add(&dir("code/app/.git/HEAD"));
     assert!(reply["notice"].as_str().is_some_and(|notice| notice.starts_with("Not a directory")), "{reply}");
     assert_eq!((names(&reply), file()), (vec!["app".to_string(), "web".into()], settings.clone()));
+    // A file that does not read as settings is left alone, and the list is as before: the next try writes.
+    std::fs::write(home.join("settings.json"), "{ not json").unwrap();
+    let reply = add(&dir("elsewhere/zed"));
+    assert!(reply["notice"].as_str().is_some_and(|n| n.starts_with("settings.json was not written")), "{reply}");
+    let dirs = reply["state"]["repo_dirs"]["dirs"].as_array().map(Vec::len);
+    assert_eq!((names(&reply), dirs, file().as_str()), (vec!["app".to_string(), "web".into()], Some(1), "{ not json"));
+    std::fs::write(home.join("settings.json"), &settings).unwrap();
 
     // A repository, by a path with `..` in it: written resolved, listed, and its row selected.
     let reply = add(&format!("{}/plain/../elsewhere/zed", root.display()));
@@ -798,6 +805,11 @@ fn a_directory_is_added_to_the_repos_list_and_removed_in_the_settings() {
     let notice = reply["notice"].as_str().unwrap_or_default();
     assert!(notice.starts_with("app is listed through ") && file() == settings, "{notice}");
     assert_eq!(names(&reply), ["app", "web"]);
+    // One made inside `code` since the list was read: found through it, selected, nothing written.
+    fake_repo(&root.join("code/new"));
+    let reply = add(&dir("code/new"));
+    assert_eq!((names(&reply), file()), (vec!["app".to_string(), "new".into(), "web".into()], settings));
+    assert_eq!(reply["state"]["list"].as_u64(), Some(1));
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&home);
 }

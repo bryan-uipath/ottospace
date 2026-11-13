@@ -46,7 +46,7 @@ impl RepoDirs {
     /// listed already, as a directory of the settings or (`listed`) through one.
     pub fn may_add(&self, dir: &str, found: usize, listed: bool) -> Result<bool, String> {
         match () {
-            _ if !dir.starts_with('/') => Err(format!("Not a directory: {dir:?}")),
+            _ if !dir.starts_with('/') => Err(format!("Not a directory: {dir}")),
             _ if found == 0 => Err(format!("No repository in {dir}")),
             _ if listed || self.dirs.iter().any(|d| d.path == dir) => Ok(false),
             _ if self.fixed => Err(FIXED.into()),
@@ -58,8 +58,7 @@ impl RepoDirs {
     /// The directory to take off the settings so the repository at `path` is no longer listed.
     /// `Err`: why none is. One that holds other repositories too is the user's to remove.
     pub fn to_remove(&self, path: &str) -> Result<RepoDir, String> {
-        let parent = path.rsplit_once('/').map_or("", |(parent, _)| parent);
-        match (self.dirs.iter().find(|d| d.path == path), self.dirs.iter().find(|d| d.path == parent)) {
+        match (self.dirs.iter().find(|d| d.path == path), self.holder(path)) {
             _ if self.fixed => Err(FIXED.into()),
             (Some(dir), _) => Ok(dir.clone()),
             (None, Some(holder)) => Err(format!(
@@ -69,6 +68,12 @@ impl RepoDirs {
             )),
             (None, None) => Err(format!("{} is not listed by the settings", name_of(path))),
         }
+    }
+
+    /// The directory that lists `path` as one of the repositories it holds: its parent.
+    pub fn holder(&self, path: &str) -> Option<&RepoDir> {
+        let parent = path.rsplit_once('/').map_or("", |(parent, _)| parent);
+        self.dirs.iter().find(|d| d.path == parent)
     }
 }
 

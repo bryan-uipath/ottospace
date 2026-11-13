@@ -3576,8 +3576,7 @@ impl Model {
                 let change = crate::settings::ListChange { key: "repos", add: false, text: dir.text.clone() };
                 effects.push(Effect::SaveRepos { changes: vec![change] });
                 self.repo_dirs.dirs.retain(|d| *d != dir);
-                let held =
-                    self.repo_dirs.dirs.iter().any(|d| path.rsplit_once('/').is_some_and(|(up, _)| up == d.path));
+                let held = self.repo_dirs.holder(path).is_some();
                 self.repos.retain(|repo| held || repo.path != path);
             }
         }

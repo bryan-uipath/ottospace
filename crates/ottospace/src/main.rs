@@ -1119,11 +1119,7 @@ impl Workspace {
                 }
                 Effect::LaunchApp { name, path, axis, new_tab } => self.launch_picked(name, path, *axis, *new_tab),
                 Effect::SaveApps { changes } => self.save_apps(changes),
-                Effect::SaveRepos { changes } => {
-                    // Lists read from now on, on any thread, look in the directories as they are.
-                    config::set_repo_roots(&self.model.repo_dirs);
-                    self.save_apps(changes);
-                }
+                Effect::SaveRepos { changes } => self.save_apps(changes),
                 Effect::Notice { text } => self.error = Some(text.clone()),
                 // A picture of the pane is asked for: the cursor's going scrolls the terminal to
                 // its bottom, so it waits until the picture of what is on show is taken.
@@ -3428,14 +3424,27 @@ impl Workspace {
             return;
         };
         let found = repos::found_in(Path::new(dir));
-        self.error = None; // what the last try said is not about this one
-        self.dispatch(Action::RepoAdd { dir: dir.into(), found }, origin, window, cx);
+        self.change_repos(Action::RepoAdd { dir: dir.into(), found }, origin, window, cx);
     }
 
     /// "Remove" on a repository's name in the Repos section.
     pub(crate) fn remove_repo(&mut self, path: &str, window: &Window, cx: &mut Context<Self>) {
-        self.error = None;
-        self.dispatch(Action::RepoRemove { path: path.into() }, self.input, window, cx);
+        self.change_repos(Action::RepoRemove { path: path.into() }, self.input, window, cx);
+    }
+
+    /// A directory added to the Repos list or taken off it. The list is read before, so what is
+    /// listed already is known, and after, from the directories as they then are. If the
+    /// settings were not written the directories are as before: the next try writes again.
+    fn change_repos(&mut self, action: Action, origin: Origin, window: &Window, cx: &mut Context<Self>) {
+        let before = self.model.repo_dirs.clone();
+        self.error = None; // what the last try said is not about this one
+        self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
+        self.dispatch(action, origin, window, cx);
+        if self.error.as_ref().is_some_and(|error| error.starts_with(Self::NOT_WRITTEN)) {
+            self.model.update(Action::SetRepoDirs { dirs: before }.sent_by(Origin::System));
+        }
+        config::set_repo_roots(&self.model.repo_dirs);
+        self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
     }
 
     /// Secondary bar: the open section's list. Closable.

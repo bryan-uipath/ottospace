@@ -198,19 +198,23 @@ impl Workspace {
         self.model.apps_bar().not_running.into_iter().filter(|app| app.pinned)
     }
 
+    /// How the status bar starts when a change did not reach the settings file.
+    pub(crate) const NOT_WRITTEN: &str = "settings.json was not written: ";
+
     /// Carries out `Effect::SaveApps`: makes the change to `apps` or `apps_hidden` in
     /// `settings.json` as it is now. A file that cannot be read as settings, or whose list is
     /// not a list of names, is left alone, and the status bar says so; the pin then lasts
     /// until ottospace quits.
     pub fn save_apps(&mut self, changes: &[ottospace_core::settings::ListChange]) {
-        const NOT_WRITTEN: &str = "settings.json was not written: ";
         // The lists of a run that hosts only its test app are not the user's.
         if self.host_only.is_some() {
             return;
         }
         match config::save_apps(changes) {
-            Err(why) => self.error = Some(format!("{NOT_WRITTEN}{why}")),
-            Ok(()) if self.error.as_ref().is_some_and(|error| error.starts_with(NOT_WRITTEN)) => self.error = None,
+            Err(why) => self.error = Some(format!("{}{why}", Self::NOT_WRITTEN)),
+            Ok(()) if self.error.as_ref().is_some_and(|error| error.starts_with(Self::NOT_WRITTEN)) => {
+                self.error = None
+            }
             Ok(()) => {}
         }
     }

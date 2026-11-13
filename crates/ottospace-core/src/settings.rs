@@ -298,6 +298,10 @@ pub fn with_changes(text: &str, changes: &[ListChange]) -> Result<String, String
         let kept = before.iter().filter(|text| list.contains(text));
         let added = list.iter().filter(|text| !before.contains(text));
         let list: Vec<String> = kept.chain(added).cloned().collect();
+        // Counted in the file as it is now: another ottospace may have added since the start.
+        if key == "repos" && list.len() > before.len() && list.len() > crate::repos::MAX_DIRS {
+            return Err(format!("`repos` names {} directories already", before.len()));
+        }
         if list != before {
             new = with_list(&new, key, &list)?;
         }
@@ -668,6 +672,12 @@ mod tests {
         assert_eq!(after(r#"{"apps": []}"#, false, "~/notes"), r#"{"apps": [], "repos": ["~/code"]}"#);
         // Taking off what is not there writes nothing.
         assert_eq!(after(r#"{"apps": []}"#, false, "/src/app"), r#"{"apps": []}"#);
+        // A full list takes no more, whoever filled it; one can still be taken off.
+        let full =
+            serde_json::json!({"repos": (0..crate::repos::MAX_DIRS).map(|n| format!("/d{n}")).collect::<Vec<_>>()});
+        let refused = with_changes(&full.to_string(), &change(true, "/src/app")).unwrap_err();
+        assert_eq!(refused, "`repos` names 64 directories already");
+        assert!(!after(&full.to_string(), false, "/d1").contains("\"/d1\""));
     }
 
     #[test]
