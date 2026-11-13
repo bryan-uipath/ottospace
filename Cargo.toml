@@ -7,3 +7,11 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 license = "MIT"
+
+# Smaller build folders: several worktrees build at once. Line numbers in backtraces stay for
+# our crates; dependencies carry no debug info.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

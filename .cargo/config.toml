@@ -3,3 +3,7 @@
 e2e = "test -p ottospace --test e2e -- --ignored --test-threads=1"
 # App-window loop: hosts real windows of the canary app only. Needs Accessibility and Screen Recording.
 e2e-apps = "test -p ottospace --test e2e_apps -- --ignored --test-threads=1"
+
+[build]
+# No incremental cache: it was a third of each build folder (2.5 to 4.5 GB per worktree).
+incremental = false
