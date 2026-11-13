@@ -98,7 +98,8 @@ that named no folder). Folder 0700, files 0600, written whole and renamed into p
 **Who.** Saving, renaming and deleting write the user's files, and opening starts their apps:
 all four are `Origin::User` only (`Model::refusal`, `workbook::USERS_ALONE`), by key, click,
 label or list mode. No `Request` was added. The state lists `workbooks`: name, pane kinds and
-app names, whether it is open. Not the directories.
+app names, whether it is open. Not the directories; only the status bar (the state's
+`notice`) names one that is gone, when the user opens its workbook.
 
 **Privacy.** A window title can hold other people's text (a chat, a document's name). A
 workbook is long-lived and may be copied between machines, so it holds none.

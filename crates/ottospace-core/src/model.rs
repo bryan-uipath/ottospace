@@ -1479,7 +1479,13 @@ impl Model {
             {
                 Some(workbook::USERS_ALONE)
             }
-            Action::FieldEdit { .. } | Action::MarkSubmit | Action::MarkType { .. } | Action::MarkBackspace
+            Action::FieldEdit { .. }
+            | Action::MarkSubmit
+            | Action::MarkType { .. }
+            | Action::MarkBackspace
+            | Action::MarkCancel
+            | Action::MarkPrefix
+            | Action::MarkEdit { .. }
                 if matches!(self.mark_input, Some(MarkInput::Workbook { .. })) =>
             {
                 Some(workbook::USERS_ALONE)

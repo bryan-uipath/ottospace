@@ -323,6 +323,17 @@ pub(crate) fn directory_name(path: &str) -> Option<&str> {
     path.trim_end_matches('/').rsplit('/').next().filter(|name| !name.is_empty())
 }
 
+/// The most splits on one path from a tab's root: `serde_json` reads 128 levels at most.
+const MAX_DEPTH: usize = 48;
+
+/// The splits on the longest path from `tree` to a leaf.
+fn depth(tree: &Node) -> usize {
+    match tree {
+        Node::Leaf(_) => 0,
+        Node::Split { a, b, .. } => 1 + depth(a).max(depth(b)),
+    }
+}
+
 /// Text from the file that is short enough and one line: it is drawn, and looked up on disk.
 fn plain(text: &str, most: usize) -> bool {
     text.chars().count() <= most && !text.chars().any(char::is_control)
@@ -390,6 +401,10 @@ impl TabRecord {
         }
         if leaves.len() > 64 || !plain(&self.title, 256) {
             return Some("its title is too long or not one line, or it has too many panes");
+        }
+        // Each split is two levels of JSON: deeper than this, the file would not read back.
+        if self.layout.as_ref().is_some_and(|tree| depth(tree) > MAX_DEPTH) {
+            return Some("its splits are nested too deep");
         }
         self.panes.iter().find_map(PaneRecord::unsound)
     }

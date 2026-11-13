@@ -258,9 +258,12 @@ impl Model {
             None => self.record(pane, cwds),
         };
         let mut panes: Vec<PaneRecord> = leaves.iter().filter_map(|id| self.pane(*id)).map(record).collect();
+        // A saved pane is a new record: no keys a waiting one kept from its file (a URL, say).
         for pane in &mut panes {
-            if let RecordKind::App { title, .. } = &mut pane.kind {
+            pane.extra.clear();
+            if let RecordKind::App { title, extra, .. } = &mut pane.kind {
                 title.clear();
+                extra.clear();
             }
         }
         if panes.iter().all(|pane| pane.kind == RecordKind::Empty) {
@@ -285,7 +288,8 @@ impl Model {
         let Ok(record) = self.workbook_record(cwds) else { return };
         let Some((tab, title)) = self.tabs.get(self.active).map(|tab| (tab.id, tab.title.clone())) else { return };
         let until = self.now.saturating_add(NOTICE_MS);
-        match self.workbook_of_tab().and_then(|id| self.workbooks.list.iter().position(|book| book.id == id)) {
+        let at = self.workbook_of_tab().and_then(|id| self.workbooks.list.iter().position(|book| book.id == id));
+        let saved = match at {
             Some(at) => {
                 let book = &mut self.workbooks.list[at];
                 let before = book.clone();
@@ -295,6 +299,7 @@ impl Model {
                     None => book.tabs.push(record),
                 }
                 self.workbooks.offer = Some(Offer { change: Change::Updated, before, until });
+                book.id
             }
             None => {
                 if !valid_uid(&uid) || self.workbooks.list.iter().any(|book| book.uid == uid) {
@@ -306,11 +311,13 @@ impl Model {
                 self.workbooks.offer = None;
                 self.leave(effects);
                 self.workbook_edit(id);
+                id
             }
-        }
-        // The section shows what was saved.
+        };
+        // The section shows what was saved, its row selected in list mode.
         self.sidebar = Some(Section::Workbook);
-        self.list = self.list.map(|_| 0);
+        let row = self.list_rows().iter().position(|row| *row == crate::list::ListRow::Workbook(saved));
+        self.list = self.list.map(|_| row.unwrap_or(0));
     }
 
     /// The directories of a closed workbook's terminals that are gone, for the shell to say.
@@ -487,6 +494,26 @@ mod tests {
     }
 
     #[test]
+    fn a_tab_split_too_deep_to_read_back_is_not_saved() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        for _ in 0..63 {
+            m.update(Action::Split { axis: Down, kind: Kind::Terminal });
+        }
+        save(&mut m, UID, &[]);
+        let refused = Some("this tab cannot be saved: its splits are nested too deep");
+        assert_eq!((m.workbook_save_refusal().as_deref(), names(&m)), (refused, vec![]));
+        // As deep as is kept, it reads back.
+        let mut m = Model::default();
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        for _ in 0..48 {
+            m.update(Action::Split { axis: Down, kind: Kind::Terminal });
+        }
+        save(&mut m, UID, &[]);
+        assert!(parse(&write(&m.workbooks.list[0]), UID).is_ok());
+    }
+
+    #[test]
     fn a_tab_with_nothing_in_it_is_not_saved_nor_one_with_an_id_that_is_no_file_name() {
         let mut m = Model::default();
         save(&mut m, UID, &[]);
@@ -565,6 +592,7 @@ mod tests {
         // app asked of the shell as a mark's tab asks, and the empty pane empty.
         m.update(Action::CloseTab { index: Some(0) });
         assert_eq!(m.workbook_rows()[0].open, false);
+        m.workbooks.list[0].tabs[0].panes[1].extra.insert("url".into(), serde_json::json!("https://x"));
         let effects = m.update(Action::WorkbookOpen { workbook: 1, home: None });
         assert_eq!(effects, opened(4, 5));
         let tab = &m.tabs[m.active];
@@ -588,6 +616,8 @@ mod tests {
             (kinds, tab.extra.get("pinned")),
             (vec!["terminal", "app", "empty"], Some(&serde_json::json!(true)))
         );
+        // The waiting pane is a new record: the URL its file held is not kept.
+        assert!(!write(&m.workbooks.list[0]).contains("https://x"));
     }
 
     #[test]
@@ -639,13 +669,37 @@ mod tests {
     }
 
     #[test]
+    fn saving_from_another_sections_list_selects_the_row_saved() {
+        let mut m = saved();
+        m.update(Action::FieldEdit { edit: Edit::Insert("Beta".into()) });
+        m.update(Action::MarkSubmit);
+        m.update(Action::NewTab);
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        save(&mut m, UID_2, &[]);
+        m.update(Action::FieldEdit { edit: Edit::Insert("Alpha".into()) });
+        m.update(Action::MarkSubmit);
+        // List mode in Tasks, Beta's tab on show: the section turns to Beta's row, not Alpha's.
+        m.update(Action::SelectTab { index: 0 });
+        m.update(Action::ToggleSection { section: Section::Tasks });
+        m.update(Action::FocusList);
+        save(&mut m, UID, &[]);
+        assert_eq!((m.sidebar, m.workbooks.offered()), (Some(Section::Workbook), Some(Change::Updated)));
+        assert_eq!(m.selected_workbook(), Some(1));
+    }
+
+    #[test]
     fn only_the_user_saves_opens_renames_or_deletes() {
         for origin in [Origin::Socket, Origin::System] {
             let mut m = saved();
             let before = format!("{m:?}");
-            // A client's key in the name being typed, and its ↵, are refused as well.
-            let typed =
-                [Action::FieldEdit { edit: Edit::Insert("x".into()) }, Action::MarkSubmit, Action::MarkBackspace];
+            // A client's key in the name being typed, its ↵ and its Esc, are refused as well.
+            let typed = [
+                Action::FieldEdit { edit: Edit::Insert("x".into()) },
+                Action::MarkSubmit,
+                Action::MarkBackspace,
+                Action::MarkCancel,
+                Action::MarkPrefix,
+            ];
             for action in typed {
                 assert_eq!(m.refusal(&action, origin), Some(USERS_ALONE), "{action:?}");
             }
