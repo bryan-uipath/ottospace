@@ -1283,8 +1283,7 @@ fn every_way_out_gives_the_window_back_where_it_was() {
 #[test]
 #[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
 fn a_killed_ottospace_has_its_guardian_give_the_window_back() {
-    let home = std::env::temp_dir().join(format!("otto-apps-guard-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&home);
+    let home = support::temp(&format!("otto-apps-guard-{}", std::process::id()));
     std::fs::create_dir_all(&home).expect("make the folder");
     let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-guard", "CANARY_SOCKET", &[]);
     let original = wait_for("the canary window", || global_frame(&canary, 0));
