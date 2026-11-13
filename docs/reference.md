@@ -22,7 +22,7 @@ it over the control socket. Session restore and the rest of the design are not b
 | Key bindings and a status bar showing `NORMAL` / `APP` mode | Works today |
 | Control socket and `ottospace ctl` for agents and tests | Works today |
 | Terminal scrollback, mouse selection, copy and paste | Works today |
-| Scrollbars on every list that scrolls, the key reference and a terminal's scrollback: drag the thumb, click the track to page. They follow the system's "Show scroll bars" setting | Works today |
+| Scrollbars on every list that scrolls, the key reference and a terminal's scrollback: drag the thumb, click the track to page (in a terminal a click beside the thumb is the terminal's). They follow the system's "Show scroll bars" setting | Works today |
 | Visual mode: select terminal text with vi keys | Works today |
 | Tasks inbox: what needs you first, then the other tasks with tabs open (Open), then Running, Captured, On hold, Done. Headings fold (click, or ↵ or space in list mode). A task that is done stays under Done with its tabs open. Each row shows its tags, what it has open and its age; hover it for start, snooze, hold and dismiss buttons. After one of those by mouse, a line at the top offers Undo for 6 seconds. Kept in `~/.ottospace/tasks` | Works today |
 | "Pop next" (⌘⇧N): open the next task that needs you | Works today |
@@ -85,7 +85,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | Drag a pane's header | Onto another pane's edge: split there. Onto its centre: swap. Onto a tab: move there. Esc cancels. An app you are in is parked: click it to go back in |
 | ⌘⌃F | Zoom the window to fill the screen; again to restore |
 | ⌘⌃A | Debug: outline the focused app pane's accessibility targets (parked panes only) |
-| ⌘/ | Show every key |
+| ⌘/ | Show every key. In a small window the list scrolls: J / K or the arrows, space or Page Down / Page Up, Home / End |
 | F18 | From any app: take the keyboard back and bring ottospace forward |
 | ⌘T | New tab: pick what opens in it |
 | ⌘1 … ⌘9 | Select a tab on the bar |

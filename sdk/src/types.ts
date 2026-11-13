@@ -448,7 +448,7 @@ export interface Snapshot {
   scrollbars: Record<string, Scrollbar>;
 }
 
-/** A scroll area's bar, in window points. `opacity` 0: faded out; a press on it still lands. */
+/** A scroll area's bar, in window points. `opacity` 0: faded out, and it takes no press. */
 export interface Scrollbar {
   track: Rect;
   thumb: Rect;

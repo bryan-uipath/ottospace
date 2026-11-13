@@ -31,7 +31,7 @@ use ottospace_core::list::{ListKey, list_key};
 use ottospace_core::marks::{Field, MarkInput, MarkOf, MarkRef, letter};
 use ottospace_core::model::CONFIRM_UP;
 use ottospace_core::rules::{self, Facts};
-use ottospace_core::scrollbar::Extent;
+use ottospace_core::scrollbar::{Extent, key_step};
 use ottospace_core::settings::{Installed, closed_apps};
 use ottospace_core::tasks::{Assign, Group, Heading, MAX_TITLE, State, Task, TaskId, TaskRow};
 use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, scroll_key, select_kind, visual_key};
@@ -2364,8 +2364,13 @@ impl Workspace {
         // terminal or the picker behind it. (⌘ shortcuts go to their bindings; the core ignores
         // pane actions while it is open, and ⌘/ closes it.)
         if self.model.keys {
+            let plain = !(key.modifiers.platform || key.modifiers.control || key.modifiers.alt);
             if key.key == "escape" {
                 self.dispatch(Action::CloseKeys, self.input, window, cx);
+            } else if let Some(step) = key_step(&key.key, key.modifiers.shift).filter(|_| plain) {
+                // The list is longer than a small window: these keys scroll it.
+                self.bars.step("keys", step);
+                cx.notify();
             }
             cx.stop_propagation();
             return;
@@ -3749,10 +3754,13 @@ impl Workspace {
                 content: (history + rows) as f32 * line,
                 offset: history.saturating_sub(back) as f32 * line,
             };
-            let scroll_to = terminal.scroller();
+            // Shown by the user's own scrolls, not by output arriving. A press beside the thumb
+            // is the terminal's: a selection, or the program's own mouse.
+            let (scroll_to, scrolls) = (terminal.scroller(), terminal.scrolls() as f32);
             let scrollbar = self.bars.overlay(
                 &format!("terminal:{id}"),
-                move || (extent, back as f32),
+                false,
+                move || (extent, scrolls),
                 move |offset| scroll_to(history.saturating_sub((offset / line).round() as usize)),
             );
             div()

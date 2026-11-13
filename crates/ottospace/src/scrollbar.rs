@@ -9,11 +9,14 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     AnyElement, Bounds, DispatchPhase, Div, HitboxBehavior, Hsla, IntoElement, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, ScrollHandle, Stateful, StatefulInteractiveElement, Styled,
-    canvas, div, fill, point, px, rgb, size,
+    MouseExitEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, ScrollHandle, Stateful,
+    StatefulInteractiveElement, Styled, canvas, div, fill, point, px, rgb, size,
 };
-use ottospace_core::scrollbar::{self as rules, Extent};
+use ottospace_core::scrollbar::{self as rules, Extent, Step};
 use ottospace_core::theme;
+
+/// How far a line step from the keyboard scrolls a list.
+const LINE: f32 = 40.;
 
 /// One scroll area's bar, kept between frames.
 #[derive(Default)]
@@ -27,6 +30,8 @@ struct Bar {
     active: Option<Instant>,
     engaged: bool,
     over_track: bool,
+    /// The pointer left the window: wherever it was last seen, it is over nothing.
+    left: bool,
     /// The thumb is held: how far below its start.
     grab: Option<f32>,
     /// When the pending redraw is due.
@@ -38,6 +43,16 @@ struct Bar {
 /// Every scroll area's bar, by the area's id.
 #[derive(Clone, Default)]
 pub struct Bars(Rc<RefCell<BTreeMap<String, Bar>>>);
+
+/// A list's extent as last laid out.
+fn extent(handle: &ScrollHandle) -> Extent {
+    let (viewport, offset) = (f32::from(handle.bounds().size.height), -f32::from(handle.offset().y));
+    Extent { viewport, content: viewport + f32::from(handle.max_offset().height), offset }
+}
+
+fn scroll_to(handle: &ScrollHandle, offset: f32) {
+    handle.set_offset(point(handle.offset().x, px(-offset)));
+}
 
 impl Bars {
     /// A frame starts: forgets the areas the last one did not render.
@@ -55,19 +70,29 @@ impl Bars {
     /// As `area`, for a list that already scrolls under `handle`.
     pub fn tracked(&self, id: &str, list: impl IntoElement, handle: &ScrollHandle) -> Div {
         let (read, write) = (handle.clone(), handle.clone());
-        let extent = move || {
-            let (viewport, offset) = (f32::from(read.bounds().size.height), -f32::from(read.offset().y));
-            (Extent { viewport, content: viewport + f32::from(read.max_offset().height), offset }, offset)
+        let read = move || {
+            let extent = extent(&read);
+            (extent, extent.offset)
         };
-        let scroll = move |offset: f32| write.set_offset(point(write.offset().x, px(-offset)));
-        div().relative().flex_1().min_h_0().flex().flex_col().child(list).child(self.overlay(id, extent, scroll))
+        let bar = self.overlay(id, true, read, move |offset| scroll_to(&write, offset));
+        div().relative().flex_1().min_h_0().flex().flex_col().child(list).child(bar)
     }
 
-    /// The bar alone, over its parent. `read`: the area as laid out this frame, and the number
-    /// a scroll changes (a change of it shows the bar). `scroll` moves the area to an offset.
+    /// A step from the keyboard through an `area`.
+    pub fn step(&self, id: &str, step: Step) {
+        if let Some(bar) = self.0.borrow().get(id) {
+            scroll_to(&bar.handle, extent(&bar.handle).stepped(step, LINE));
+        }
+    }
+
+    /// The bar alone, over its parent. `read`: the area as laid out this frame, and a number
+    /// that changes when the user scrolls (a change of it shows the bar). `scroll` moves the
+    /// area to an offset. `pages`: a press on the track beside the thumb pages; without it,
+    /// that press goes to what is under the track.
     pub fn overlay(
         &self,
         id: &str,
+        pages: bool,
         read: impl Fn() -> (Extent, f32) + 'static,
         scroll: impl Fn(f32) + 'static,
     ) -> AnyElement {
@@ -82,9 +107,10 @@ impl Bars {
                     size(px(rules::TRACK), area.size.height - inset * 2.),
                 );
                 let thumb = extent.thumb(track.size.height.into())?;
-                // The track takes presses from what is under it; the wheel still scrolls the list.
+                // Neither blocks what is under it: the root, the pane and the list still see the
+                // pointer there. A press the bar takes is stopped in its own listener.
                 let over = window.insert_hitbox(area, HitboxBehavior::Normal);
-                let bar = window.insert_hitbox(track, HitboxBehavior::BlockMouseExceptScroll);
+                let bar = window.insert_hitbox(track, HitboxBehavior::Normal);
                 Some((extent, moved_by, thumb, over, bar))
             },
             move |_, laid_out, window, cx| {
@@ -96,8 +122,8 @@ impl Bars {
                 let always = !cx.should_auto_hide_scrollbars() && std::env::var_os("OTTOSPACE_E2E").is_none();
                 let mut all = bars.0.borrow_mut();
                 let Some(bar) = all.get_mut(&id) else { return };
-                let engaged = over.is_hovered(window) || bar.grab.is_some();
-                let over_track = hitbox.is_hovered(window);
+                let over_track = !bar.left && hitbox.is_hovered(window);
+                let engaged = over_track || (!bar.left && over.is_hovered(window)) || bar.grab.is_some();
                 // A scroll shows the bar; so does the pointer, until a moment after it leaves.
                 if (moved_by - bar.moved_by).abs() > 0.01 || (bar.engaged && !engaged) {
                     bar.active = Some(now);
@@ -137,12 +163,13 @@ impl Bars {
                 }
 
                 // A press on the thumb holds it; one on the track pages. Nothing under the bar
-                // gets the press: no row click, no selection, no pane drag.
+                // gets that press: no row click, no selection, no pane drag. A bar that has
+                // faded out takes none: what shows there does.
                 let scroll = Rc::new(scroll);
                 window.on_mouse_event({
                     let (bars, id, scroll, hitbox) = (bars.clone(), id.clone(), scroll.clone(), hitbox.clone());
                     move |event: &MouseDownEvent, phase, window, cx| {
-                        if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
+                        if phase != DispatchPhase::Bubble || event.button != MouseButton::Left || opacity <= 0. {
                             return;
                         }
                         if !hitbox.is_hovered(window) {
@@ -153,8 +180,10 @@ impl Bars {
                             if let Some(bar) = bars.0.borrow_mut().get_mut(&id) {
                                 bar.grab = Some(at - start);
                             }
-                        } else {
+                        } else if pages {
                             scroll(extent.paged(track_length, at));
+                        } else {
+                            return;
                         }
                         cx.stop_propagation();
                         window.refresh();
@@ -168,6 +197,7 @@ impl Bars {
                         }
                         let mut all = bars.0.borrow_mut();
                         let Some(bar) = all.get_mut(&id) else { return };
+                        let back = std::mem::take(&mut bar.left);
                         match bar.grab {
                             // The thumb follows the pointer, also past the area's edge.
                             Some(grab) if event.pressed_button == Some(MouseButton::Left) => {
@@ -178,12 +208,26 @@ impl Bars {
                             }
                             // Released where no release was seen, e.g. outside the window.
                             Some(_) => (bar.grab, bar.active) = (None, Some(Instant::now())),
-                            None if over.is_hovered(window) == engaged && hitbox.is_hovered(window) == over_track => {
-                                return;
+                            None => {
+                                let hovered = hitbox.is_hovered(window);
+                                if !back && (hovered || over.is_hovered(window)) == engaged && hovered == over_track {
+                                    return;
+                                }
                             }
-                            None => {}
                         }
                         window.refresh();
+                    }
+                });
+                window.on_mouse_event({
+                    let (bars, id) = (bars.clone(), id.clone());
+                    move |_: &MouseExitEvent, phase, window, _| {
+                        if phase != DispatchPhase::Capture {
+                            return;
+                        }
+                        if let Some(bar) = bars.0.borrow_mut().get_mut(&id) {
+                            bar.left = true;
+                            window.refresh();
+                        }
                     }
                 });
                 window.on_mouse_event(move |event: &MouseUpEvent, phase, window, _| {
@@ -205,15 +249,13 @@ impl Bars {
     }
 
     /// For the state dump: each area that can scroll, with its bar's `track` and `thumb` as
-    /// `[x, y, w, h]` in window points and its `opacity` (0: faded out, but a press still lands).
+    /// `[x, y, w, h]` in window points and its `opacity` (0: faded out, and it takes no press).
     pub fn snapshot(&self) -> serde_json::Value {
-        let rect = |b: Bounds<Pixels>| -> [f32; 4] {
-            [b.origin.x.into(), b.origin.y.into(), b.size.width.into(), b.size.height.into()]
-        };
         let bars = self.0.borrow();
         let drawn = bars.iter().filter_map(|(id, bar)| {
             let (track, thumb, opacity) = bar.drawn?;
-            Some((id.clone(), serde_json::json!({"track": rect(track), "thumb": rect(thumb), "opacity": opacity})))
+            let bar = serde_json::json!({"track": crate::rect(track), "thumb": crate::rect(thumb), "opacity": opacity});
+            Some((id.clone(), bar))
         });
         serde_json::Value::Object(drawn.collect())
     }
