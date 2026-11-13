@@ -23,6 +23,7 @@ use crate::tasks::{
     self, Assign, Heading, MAX_TITLE, Moved, NOTICE_MS, Notice, Ref, RefKind, State, Task, TaskId, TaskRow,
     TaskSection, Tasks,
 };
+use crate::workbook::{self, Workbook, WorkbookId, Workbooks};
 
 /// The axes of a `Fit`'s sizes, in their order: width, height.
 const AXES: [Axis; 2] = [Axis::Right, Axis::Down];
@@ -864,6 +865,31 @@ pub enum Action {
         id: TaskId,
     },
     BriefClose,
+    /// Replace the workbooks with those kept on disk, at start.
+    RestoreWorkbooks {
+        workbooks: Vec<Workbook>,
+    },
+    /// Save the tab on show as a workbook, or update the one it came from. `uid`: a new one's
+    /// file name, made up by the shell. `cwds`: each terminal's directory now.
+    WorkbookSave {
+        uid: String,
+        cwds: Vec<(PaneId, String)>,
+    },
+    /// Open a workbook in a new tab, or select its tab if that is open. `home`: the user's
+    /// folder, where a terminal starts whose directory is gone.
+    WorkbookOpen {
+        workbook: WorkbookId,
+        home: Option<String>,
+    },
+    /// Start typing a workbook's name in its row. `MarkSubmit` keeps it, `MarkCancel` does not.
+    WorkbookEdit {
+        workbook: WorkbookId,
+    },
+    WorkbookRemove {
+        workbook: WorkbookId,
+    },
+    /// Take the last delete or update of a workbook back.
+    WorkbookUndo,
 }
 
 /// Who sent an action.
@@ -928,6 +954,9 @@ impl Action {
                 | Action::ListMarkEdit { .. }
                 | Action::ListReorder { .. }
                 | Action::CaptureBack
+                | Action::WorkbookSave { .. }
+                | Action::WorkbookOpen { .. }
+                | Action::WorkbookEdit { .. }
         )
     }
 
@@ -952,7 +981,10 @@ impl Action {
             | Action::CaptureStart { .. }
             | Action::CaptureEdit { .. }
             | Action::CaptureTitle
-            | Action::CaptureBack => true,
+            | Action::CaptureBack
+            // A new workbook's name is typed in its row.
+            | Action::WorkbookSave { .. }
+            | Action::WorkbookEdit { .. } => true,
             Action::Split { .. }
             | Action::Open { .. }
             | Action::Adopt { .. }
@@ -1077,7 +1109,11 @@ impl Action {
             | Action::CaptureCancel
             | Action::CaptureDiscard { .. }
             | Action::BriefShow { .. }
-            | Action::BriefClose => false,
+            | Action::BriefClose
+            | Action::RestoreWorkbooks { .. }
+            | Action::WorkbookOpen { .. }
+            | Action::WorkbookRemove { .. }
+            | Action::WorkbookUndo => false,
         }
     }
 }
@@ -1292,7 +1328,10 @@ pub struct Model {
     /// The marks. Not in the state as they are kept: `mark_rows` is what it shows.
     #[serde(skip)]
     pub marks: Marks,
-    /// What a mark waits for, while one has the keyboard.
+    /// The workbooks. Not in the state as they are kept: `workbook_rows` is what it shows.
+    #[serde(skip)]
+    pub workbooks: Workbooks,
+    /// What a mark waits for, while one has the keyboard. Also a workbook's name being typed.
     pub mark_input: Option<MarkInput>,
     /// The draft in the right bar, while there is one: `compose` is its title.
     pub capture: Option<Collection>,
@@ -1347,6 +1386,7 @@ impl Default for Model {
             ax_overlay: false,
             sneak: None,
             marks: Marks::default(),
+            workbooks: Workbooks::default(),
             mark_input: None,
             capture: None,
             back_to: None,
@@ -1428,6 +1468,28 @@ impl Model {
                 Some(apps::USERS_ALONE)
             }
             Action::ListDismiss | Action::ListUndo if self.sidebar == Some(Section::Apps) => Some(apps::USERS_ALONE),
+            // A workbook is the user's file, and opening one starts their apps.
+            Action::WorkbookSave { .. }
+            | Action::WorkbookOpen { .. }
+            | Action::WorkbookEdit { .. }
+            | Action::WorkbookRemove { .. }
+            | Action::WorkbookUndo => Some(workbook::USERS_ALONE),
+            Action::ListChoose { .. } | Action::ListDismiss | Action::ListUndo | Action::ListMarkEdit { .. }
+                if self.sidebar == Some(Section::Workbook) =>
+            {
+                Some(workbook::USERS_ALONE)
+            }
+            Action::FieldEdit { .. }
+            | Action::MarkSubmit
+            | Action::MarkType { .. }
+            | Action::MarkBackspace
+            | Action::MarkCancel
+            | Action::MarkPrefix
+            | Action::MarkEdit { .. }
+                if matches!(self.mark_input, Some(MarkInput::Workbook { .. })) =>
+            {
+                Some(workbook::USERS_ALONE)
+            }
             action if self.sneak.is_some() && action.takes_keyboard() => Some("sneak mode is on"),
             // A capture hands over a pane's picture and its text: no client's request, key or
             // label asks for one. Sneak mode and the quit question say their own reason first.
@@ -1557,7 +1619,7 @@ impl Model {
                 | Action::MarkCancel
         );
         // A name being typed is a text field: an edit of it is the wait's own, too.
-        let renaming = matches!(self.mark_input, Some(MarkInput::Rename { .. }));
+        let renaming = self.mark_input.as_ref().is_some_and(|input| input.text().is_some());
         let own_mark = own_mark || (renaming && matches!(action, Action::FieldEdit { .. }));
         if user && !own_mark {
             self.mark_input = None;
@@ -1783,6 +1845,7 @@ impl Model {
             Action::Tick { now } => {
                 self.now = now;
                 self.tasks.tick(now);
+                self.workbooks.tick(now);
                 self.undo_offer = self.undo_offer.filter(|offer| offer.until > now);
             }
             Action::TaskOpen { id } => {
@@ -1872,6 +1935,7 @@ impl Model {
                 let tab = self.tabs.remove(index);
                 self.last_tab.retain(|(_, id)| *id != tab.id);
                 self.marks.forget_tab(tab.id);
+                self.workbooks.forget_tab(tab.id);
                 for id in tab.layout.as_ref().map(Node::leaves).unwrap_or_default() {
                     self.close_pane(id, effects);
                 }
@@ -1992,8 +2056,8 @@ impl Model {
             // To the field that has the keyboard: more than one can be open (the draft's title in
             // the right bar beside a note, a filter or a mark's name).
             Action::FieldEdit { edit } => match self.field().map(|(of, _)| of) {
-                Some("mark") => {
-                    if let Some(MarkInput::Rename { text, .. }) = &mut self.mark_input {
+                Some("mark" | "workbook") => {
+                    if let Some(text) = self.mark_input.as_mut().and_then(MarkInput::text_mut) {
                         text.apply(edit);
                     }
                 }
@@ -2210,8 +2274,8 @@ impl Model {
                 }
             }
             Action::ListSection { delta } => {
-                // Workbook has no rows yet, so the keys pass over it.
-                const ORDER: [Section; 4] = [Section::Apps, Section::Tasks, Section::Repos, Section::Marks];
+                const ORDER: [Section; 5] =
+                    [Section::Apps, Section::Workbook, Section::Tasks, Section::Repos, Section::Marks];
                 let at = ORDER.iter().position(|s| Some(*s) == self.sidebar).unwrap_or(0) as i64;
                 if self.list.is_some() {
                     self.sidebar = Some(ORDER[(at + i64::from(delta)).rem_euclid(ORDER.len() as i64) as usize]);
@@ -2236,6 +2300,7 @@ impl Model {
                 }
                 Some(ListRow::OlderSessions) => self.act(Action::ToggleOlderSessions, effects),
                 Some(ListRow::Mark(id)) => self.mark_go(id, axis, effects),
+                Some(ListRow::Workbook(id)) => self.workbook_open(id, self.home.clone(), effects),
                 Some(ListRow::Closed(path)) => self.app_launch(&path, axis, effects),
                 Some(ListRow::MoreApps) => self.apps_toggle(apps::Group::More),
                 Some(ListRow::AllApps) => self.apps_toggle(apps::Group::All),
@@ -2258,6 +2323,10 @@ impl Model {
                 // On a mark's row the same key removes the mark.
                 if let Some(id) = self.selected_mark() {
                     self.mark_remove(id);
+                }
+                // On a workbook's row it deletes the workbook.
+                if let Some(id) = self.selected_workbook() {
+                    self.workbook_remove(id);
                 }
                 // On a suggested app's row it hides the suggestion.
                 self.list_hide(effects);
@@ -2412,6 +2481,7 @@ impl Model {
             Action::MarkUndo => self.mark_undo(),
             Action::ListUndo if self.sidebar == Some(Section::Marks) => self.mark_undo(),
             Action::ListUndo if self.sidebar == Some(Section::Apps) => self.apps_undo(effects),
+            Action::ListUndo if self.sidebar == Some(Section::Workbook) => self.workbook_undo(),
             Action::ListUndo => self.tasks.undo(),
             Action::MarkRemove { mark } => {
                 if let Some(id) = self.marks.find(&mark) {
@@ -2451,7 +2521,17 @@ impl Model {
                 if let Some(id) = self.selected_mark() {
                     self.mark_edit(id, field);
                 }
+                // A workbook has a name and no letter.
+                if let Some(id) = self.selected_workbook().filter(|_| field == marks::Field::Name) {
+                    self.workbook_edit(id);
+                }
             }
+            Action::RestoreWorkbooks { workbooks } => self.restore_workbooks(workbooks),
+            Action::WorkbookSave { uid, cwds } => self.workbook_save(uid, &cwds, effects),
+            Action::WorkbookOpen { workbook, home } => self.workbook_open(workbook, home, effects),
+            Action::WorkbookEdit { workbook } => self.workbook_edit(workbook),
+            Action::WorkbookRemove { workbook } => self.workbook_remove(workbook),
+            Action::WorkbookUndo => self.workbook_undo(),
             Action::ListReorder { delta } => match self.selected_mark() {
                 // The selection goes with the mark.
                 Some(id) => {
@@ -2939,7 +3019,19 @@ impl Model {
     /// True if a `Tick` now would change what shows: a snoozed task's time has come, or the
     /// offer to undo has run out. The shell asks; it does not look at the times itself.
     pub fn due(&self, now: u64) -> bool {
-        self.tasks.due(now) || self.undo_offer.is_some_and(|offer| offer.until <= now)
+        self.tasks.due(now) || self.undo_offer.is_some_and(|offer| offer.until <= now) || self.workbooks.due(now)
+    }
+
+    /// Everything the marks and the workbooks need, each once: what the shell looks for on
+    /// this machine (`Action::MarksChecked` says what it did not find).
+    pub fn needs(&self) -> Vec<Need> {
+        let mut needs = self.marks.needs();
+        for need in self.workbooks.needs() {
+            if !needs.contains(&need) {
+                needs.push(need);
+            }
+        }
+        needs
     }
 
     /// The row list mode starts on: the first that is not a heading.
@@ -3122,8 +3214,10 @@ impl Model {
     /// The text field that is open, and whose it is: a mark's name being typed, the picker's
     /// filter, else the new-task box. It may be under the key reference or the quit question: see `field`.
     pub fn open_field(&self) -> Option<(&'static str, &Field)> {
-        if let Some(MarkInput::Rename { text, .. }) = &self.mark_input {
-            return Some(("mark", text));
+        match &self.mark_input {
+            Some(MarkInput::Rename { text, .. }) => return Some(("mark", text)),
+            Some(MarkInput::Workbook { text, .. }) => return Some(("workbook", text)),
+            _ => {}
         }
         let picker = self.picker.as_ref().map(|picker| ("picker", &picker.query));
         // A note being typed on a capture, unless the draft's title has the keyboard.
@@ -3145,6 +3239,10 @@ impl Model {
                 Some(MarkInput::Rename { text, .. }) => Some(text),
                 _ => None,
             },
+            "workbook" => match &self.mark_input {
+                Some(MarkInput::Workbook { text, .. }) => Some(text),
+                _ => None,
+            },
             _ => self.compose.as_ref(),
         }
     }
@@ -3156,6 +3254,7 @@ impl Model {
         // while it is typed, a note on a capture in annotate mode. A mark that waits for a
         // letter is over the filter, not in it.
         let of = match self.mode() {
+            Mode::Mark if matches!(self.mark_input, Some(MarkInput::Workbook { .. })) => "workbook",
             Mode::Mark => "mark",
             Mode::Pick => "picker",
             Mode::Compose => "compose",
@@ -3206,7 +3305,8 @@ impl Model {
                 rows
             }
             Some(Section::Marks) => self.marks.list.iter().map(|mark| ListRow::Mark(mark.id)).collect(),
-            Some(Section::Workbook) | None => Vec::new(),
+            Some(Section::Workbook) => self.workbooks.list.iter().map(|book| ListRow::Workbook(book.id)).collect(),
+            None => Vec::new(),
         }
     }
 
@@ -3949,7 +4049,13 @@ mod tests {
         Action::CaptureTitle,
         Action::CaptureBack,
         Action::BriefShow { .. },
-        Action::BriefClose
+        Action::BriefClose,
+        Action::RestoreWorkbooks { .. },
+        Action::WorkbookSave { .. },
+        Action::WorkbookOpen { .. },
+        Action::WorkbookEdit { .. },
+        Action::WorkbookRemove { .. },
+        Action::WorkbookUndo
     );
 
     /// One of each action.
@@ -4095,6 +4201,12 @@ mod tests {
             Action::CaptureBack,
             Action::BriefShow { id: 1 },
             Action::BriefClose,
+            Action::RestoreWorkbooks { workbooks: Vec::new() },
+            Action::WorkbookSave { uid: text(), cwds: Vec::new() },
+            Action::WorkbookOpen { workbook: 1, home: None },
+            Action::WorkbookEdit { workbook: 1 },
+            Action::WorkbookRemove { workbook: 1 },
+            Action::WorkbookUndo,
         ];
         let mut places: Vec<usize> = samples.iter().map(index).collect();
         places.sort_unstable();
@@ -4105,6 +4217,18 @@ mod tests {
     /// A pin, a hide or their undo: refused from all but the user on its own ground.
     fn writes_settings(action: &Action) -> bool {
         matches!(action, Action::AppPin { .. } | Action::AppHide { .. } | Action::AppsUndo | Action::ListPin)
+    }
+
+    /// A workbook saved, opened, renamed, deleted or put back: the user's alone, as those are.
+    fn of_workbooks(action: &Action) -> bool {
+        matches!(
+            action,
+            Action::WorkbookSave { .. }
+                | Action::WorkbookOpen { .. }
+                | Action::WorkbookEdit { .. }
+                | Action::WorkbookRemove { .. }
+                | Action::WorkbookUndo
+        )
     }
 
     /// Every action from every origin. The origin decides, not the action: only the user's own
@@ -4119,6 +4243,7 @@ mod tests {
                 let refused = match action {
                     _ if origin == Origin::User => None,
                     _ if writes_settings(action) => Some(apps::USERS_ALONE),
+                    _ if of_workbooks(action) => Some(workbook::USERS_ALONE),
                     _ => action.takes_keyboard().then_some("sneak mode is on"),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");
@@ -4869,8 +4994,8 @@ mod tests {
         // The shell hosts the app; until it opens a pane, the list keeps the keyboard.
         let host = Effect::HostApp { name: "Safari".into(), axis: Right, new_tab: false };
         assert_eq!((m.update(Action::ListChoose { axis: Right }), m.mode()), (vec![host], Mode::List));
-        // Tab passes over Workbook, which has no rows: Apps, then Tasks. Nothing to move to or open there.
-        m.update(Action::ListSection { delta: 1 });
+        // Tab: Apps, Workbook, then Tasks. Nothing to move to or open there.
+        m.update(Action::ListSection { delta: 2 });
         m.update(Action::ListMove { delta: 1 });
         assert_eq!(
             (m.sidebar, m.list, m.update(Action::ListChoose { axis: Right })),
@@ -6958,6 +7083,7 @@ mod tests {
                 let refused = match action {
                     _ if user => None,
                     _ if writes_settings(action) => Some(apps::USERS_ALONE),
+                    _ if of_workbooks(action) => Some(workbook::USERS_ALONE),
                     _ => action.takes_keyboard().then_some(CONFIRM_UP),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");

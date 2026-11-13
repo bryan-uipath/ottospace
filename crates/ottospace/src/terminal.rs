@@ -154,8 +154,9 @@ impl Terminal {
         // profile can take a minute to reach a prompt on a busy machine.
         let shell = std::env::var("OTTOSPACE_SHELL").ok().map(|program| tty::Shell::new(program, Vec::new()));
         let at_root = std::env::current_dir().is_ok_and(|dir| dir.parent().is_none());
-        let home = std::env::var_os("HOME").filter(|_| at_root).map(PathBuf::from);
-        // A `cwd` that is gone falls back too: never to `/`.
+        // A `cwd` that is gone starts in the user's folder: never in `/`, nor where ottospace started.
+        let gone = cwd.is_some_and(|dir| !std::path::Path::new(dir).is_dir());
+        let home = std::env::var_os("HOME").filter(|_| at_root || gone).map(PathBuf::from);
         let working_directory = cwd.map(PathBuf::from).filter(|dir| dir.is_dir()).or(home).filter(|dir| dir.is_dir());
         let options = tty::Options { shell, env, working_directory, ..Default::default() };
         let pty = tty::new(&options, window_size(grid, size(px(8.), px(terminal_font().line_height()))), 0)?;

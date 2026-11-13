@@ -348,6 +348,20 @@ impl Workspace {
                 None
             }
             ("mark-undo", _) => Some(Action::MarkUndo),
+            ("workbook" | "workbook-open" | "workbook-rename" | "workbook-delete", _) => {
+                if let Some(id) = number {
+                    self.click_workbook(kind, id, window, cx);
+                }
+                None
+            }
+            ("workbook-undo", _) => {
+                self.undo_workbook(window, cx);
+                None
+            }
+            ("bar", "save_tab") | ("workbook-save", _) => {
+                self.save_workbook(window, cx);
+                None
+            }
             ("top", "task_leave") => Some(Action::TaskLeave),
             ("top", _) => {
                 if let Some((.., axis, new_tab)) = SPLITS.iter().find(|(top, ..)| *top == name) {

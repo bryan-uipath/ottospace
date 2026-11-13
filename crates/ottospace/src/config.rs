@@ -23,7 +23,7 @@ pub fn get() -> &'static Config {
     CONFIG.get_or_init(load)
 }
 
-fn user_home() -> String {
+pub fn user_home() -> String {
     std::env::var("HOME").unwrap_or_default()
 }
 
@@ -254,4 +254,69 @@ pub fn read_marks() -> Result<Option<String>, String> {
 pub fn save_marks(text: &str) -> io::Result<()> {
     let Some(home) = get().home.as_ref() else { return Ok(()) };
     write_whole(home, "marks.json", text)
+}
+
+/// The most workbook files read, and the largest one read: a folder is input, not trusted text.
+const MAX_WORKBOOKS: usize = 512;
+const MAX_WORKBOOK_BYTES: u64 = 262_144;
+
+/// Where workbooks are kept: `workbooks` in the user's folder. `None`: nothing is kept.
+fn workbooks_dir() -> Option<PathBuf> {
+    Some(get().home.as_ref()?.join("workbooks"))
+}
+
+/// A workbook's file name. `None` unless `uid` is 16 hex digits: no other id becomes a path.
+fn workbook_file(uid: &str) -> Option<String> {
+    ottospace_core::workbook::valid_uid(uid).then(|| format!("{uid}.json"))
+}
+
+/// What the workbooks folder held at start.
+#[derive(Default)]
+pub struct KeptWorkbooks {
+    /// Each `<id>.json`: the id in its name, and its text.
+    pub files: Vec<(String, String)>,
+    /// Files named `*.json` that are not that: another name, a link, a pipe, too large.
+    pub unread: usize,
+    pub error: Option<String>,
+}
+
+/// Reads the workbooks folder. Only a small regular file named for an id: not a link or a pipe.
+pub fn load_workbooks() -> KeptWorkbooks {
+    let Some(dir) = workbooks_dir() else { return KeptWorkbooks::default() };
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return KeptWorkbooks::default(),
+        Err(err) => return KeptWorkbooks { error: Some(format!("workbooks: {err}")), ..KeptWorkbooks::default() },
+    };
+    let json = |path: &PathBuf| path.extension().is_some_and(|ext| ext == "json");
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).filter(json).collect();
+    paths.sort();
+    let mut kept = KeptWorkbooks::default();
+    for path in paths {
+        let uid = path.file_stem().and_then(|stem| stem.to_str()).filter(|stem| workbook_file(stem).is_some());
+        let read = || String::from_utf8(crate::collect::read_plain(&path, MAX_WORKBOOK_BYTES)?).ok();
+        let text = uid.filter(|_| kept.files.len() < MAX_WORKBOOKS).and_then(|_| read());
+        match (uid, text) {
+            (Some(uid), Some(text)) => kept.files.push((uid.to_string(), text)),
+            _ => kept.unread += 1,
+        }
+    }
+    kept
+}
+
+/// Writes one workbook to `<uid>.json` in the workbooks folder, as `save_task` writes a task.
+pub fn save_workbook(uid: &str, text: &str) -> io::Result<()> {
+    let Some(dir) = workbooks_dir() else { return Ok(()) };
+    let name = workbook_file(uid).ok_or_else(|| io::Error::other("not a workbook's id"))?;
+    write_whole(&dir, &name, text)
+}
+
+/// Removes a workbook's file. One that is gone already is removed.
+pub fn remove_workbook(uid: &str) -> io::Result<()> {
+    let Some(dir) = workbooks_dir() else { return Ok(()) };
+    let name = workbook_file(uid).ok_or_else(|| io::Error::other("not a workbook's id"))?;
+    match fs::remove_file(dir.join(name)) {
+        Err(err) if err.kind() != io::ErrorKind::NotFound => Err(err),
+        _ => Ok(()),
+    }
 }

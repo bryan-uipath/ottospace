@@ -4392,3 +4392,183 @@ fn only_the_user_starts_a_capture() {
     let reply = otto.call(json!({"cmd": "capture_start", "pane": 1}));
     assert_eq!((count(&reply), &reply["state"]["compose"]), (1, &json!("")), "{reply}");
 }
+
+/// The files in the workbooks folder of `home`, by name.
+fn workbook_files(home: &Path) -> Vec<PathBuf> {
+    let entries = std::fs::read_dir(home.join("workbooks")).into_iter().flatten().flatten();
+    let mut files: Vec<PathBuf> = entries.map(|entry| entry.path()).collect();
+    files.sort();
+    files
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_saved_tab_is_a_workbook_kept_between_runs() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = user_folder("workbook", r#"{"repos": []}"#);
+    let dir = |name: &str| {
+        std::fs::create_dir_all(home.join(name)).unwrap();
+        home.join(name).canonicalize().unwrap()
+    };
+    let (one, two, me) = (dir("one"), dir("two"), dir("me"));
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let names = |state: &Value| -> Vec<String> {
+        let rows = state["workbooks"].as_array().cloned().unwrap_or_default();
+        rows.iter().filter_map(|row| row["name"].as_str().map(str::to_string)).collect()
+    };
+    let titles = |state: &Value| -> Vec<String> {
+        let tabs = state["state"]["tabs"].as_array().cloned().unwrap_or_default();
+        tabs.iter().filter_map(|tab| tab["title"].as_str().map(str::to_string)).collect()
+    };
+    let users = |reply: &Value| reply["notice"].as_str().is_some_and(|why| why.contains("only the user"));
+    let ratio = {
+        let otto = Otto::launch_with("workbook-1", &env);
+        otto.call(json!({"cmd": "split"}));
+        otto.call(json!({"cmd": "split", "axis": "down"}));
+        for (pane, to) in [(1, &one), (2, &two)] {
+            let cd = format!("cd '{}' && echo in-$((6*7))\r", to.display());
+            otto.call(json!({"cmd": "type", "pane": pane, "text": cd}));
+            otto.call(json!({"cmd": "wait", "pane": pane, "pattern": "^in-42$"}));
+        }
+        let resized = otto.call(json!({"cmd": "resize", "dir": "up"}));
+        let ratio = resized["state"]["layout"]["split"]["ratio"].clone();
+        assert!(ratio.as_f64().is_some_and(|ratio| ratio < 0.5), "{resized}");
+
+        // A client's ⌘⇧S saves nothing: a workbook is the user's file.
+        let refused = otto.call(json!({"cmd": "key", "keys": "cmd-shift-s"}));
+        assert!(names(&refused).is_empty() && users(&refused) && workbook_files(&home).is_empty(), "{refused}");
+        // The user's saves the tab on show. The section opens on it, with its name to type over.
+        let saved = otto.user_key("cmd-shift-s");
+        assert_eq!(
+            (&saved["mode"], &saved["state"]["sidebar"], &saved["state"]["mark_input"]["type"], &saved["field"]["of"]),
+            (&json!("mark"), &json!("workbook"), &json!("workbook"), &json!("workbook")),
+            "{saved}"
+        );
+        assert_eq!(names(&saved), ["Tab 1"]);
+        let named = otto.user_key("d r i enter");
+        let row = &named["workbooks"][0];
+        assert_eq!(
+            (&row["name"], &row["summary"], &row["open"], &row["tab"], &named["mode"]),
+            (&json!("dri"), &json!("2 terminals"), &json!(true), &json!(1), &json!("normal")),
+            "{row}"
+        );
+        assert_eq!(row["panes"], json!([{"kind": "terminal"}, {"kind": "terminal"}]));
+        assert_eq!(titles(&named), ["dri"], "its tab takes the name");
+        // The state names kinds, never a directory.
+        assert!(!named["workbooks"].to_string().contains("/one"), "{}", named["workbooks"]);
+
+        // One file, the user's alone, named for its id: the splits, the ratio and each directory.
+        let files = workbook_files(&home);
+        assert_eq!(files.len(), 1, "{files:?}");
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!((mode(&home.join("workbooks")), mode(&files[0])), (0o700, 0o600));
+        let kept: Value = serde_json::from_str(&std::fs::read_to_string(&files[0]).unwrap()).unwrap();
+        let stem = files[0].file_stem().and_then(|stem| stem.to_str()).unwrap_or_default().to_string();
+        assert!(stem.len() == 16 && stem.chars().all(|c| c.is_ascii_hexdigit()), "{stem}");
+        assert_eq!((&kept["id"], &kept["name"], &kept["version"]), (&json!(stem), &json!("dri"), &json!(1)));
+        let tab = &kept["tabs"][0];
+        let cwds: Vec<&str> = tab["panes"].as_array().unwrap().iter().filter_map(|pane| pane["cwd"].as_str()).collect();
+        assert_eq!(cwds, [one.to_str().unwrap(), two.to_str().unwrap()]);
+        assert_eq!((&tab["layout"]["split"]["ratio"], &tab["layout"]["split"]["axis"]), (&ratio, &json!("down")));
+        ratio
+    };
+
+    // Another run lists it. A client's click on its row opens nothing; the user's opens a tab
+    // of that name with the same splits, each shell in its directory.
+    let otto = Otto::launch_with("workbook-2", &env);
+    let listed = otto.call(json!({"cmd": "section", "section": "workbook"}));
+    assert_eq!((names(&listed), &listed["workbooks"][0]["open"]), (vec!["dri".to_string()], &json!(false)));
+    let row = at(rect(&otto.drawn()["workbooks"][0]["row"]), 0.3, 0.3);
+    let refused = otto.click(row, 1);
+    assert!(pane_ids(&refused).is_empty() && users(&refused), "{refused}");
+    let opened = otto.user_click(row);
+    assert_eq!(
+        (titles(&opened), &opened["state"]["active"], pane_ids(&opened)),
+        (vec!["Tab 1".into(), "dri".to_string()], &json!(1), vec![1, 2])
+    );
+    let split = &opened["state"]["layout"]["split"];
+    assert_eq!((&split["ratio"], &split["axis"], &opened["workbooks"][0]["tab"]), (&ratio, &json!("down"), &json!(2)));
+    shell_is_in(&otto, 1, &one);
+    shell_is_in(&otto, 2, &two);
+    // Its tab is open: the row selects it, and opens no second one.
+    otto.call(json!({"cmd": "select_tab", "index": 0}));
+    let again = otto.user_click(row);
+    assert_eq!((titles(&again).len(), &again["state"]["active"], pane_ids(&again)), (2, &json!(1), vec![1, 2]));
+
+    // Saving its tab again updates the workbook, and the section offers the old one back.
+    otto.call(json!({"cmd": "split"}));
+    let updated = otto.user_key("cmd-shift-s");
+    assert_eq!(
+        (&updated["workbooks"][0]["summary"], &updated["workbook_offer"], &updated["mode"]),
+        (&json!("3 terminals"), &json!("updated"), &json!("normal"))
+    );
+    assert_eq!((names(&updated), workbook_files(&home).len()), (vec!["dri".to_string()], 1));
+    // List mode: U takes it back, R renames, X deletes and U puts back. Not for a client's keys.
+    assert_eq!(otto.user_key("cmd-shift-e")["state"]["list"], 0);
+    let undone = otto.user_key("u");
+    assert_eq!((&undone["workbooks"][0]["summary"], &undone["workbook_offer"]), (&json!("2 terminals"), &Value::Null));
+    assert_eq!(otto.user_key("r")["state"]["mark_input"]["type"], "workbook");
+    let renamed = otto.user_key("o p s enter");
+    assert_eq!(
+        (names(&renamed), titles(&renamed)[1].as_str(), &renamed["mode"]),
+        (vec!["ops".to_string()], "ops", &json!("list"))
+    );
+    let on_disk = || std::fs::read_to_string(&workbook_files(&home)[0]).unwrap_or_default();
+    assert!(on_disk().contains("\"name\": \"ops\""), "{}", on_disk());
+    for keys in ["x", "r", "enter"] {
+        let reply = otto.call(json!({"cmd": "key", "keys": keys}));
+        assert_eq!(
+            (names(&reply), &reply["state"]["mark_input"], titles(&reply).len()),
+            (vec!["ops".to_string()], &Value::Null, 2),
+            "a client's {keys}"
+        );
+    }
+    let deleted = otto.user_key("x");
+    assert_eq!((names(&deleted).len(), &deleted["workbook_offer"], titles(&deleted).len()), (0, &json!("deleted"), 2));
+    assert!(workbook_files(&home).is_empty(), "the file goes with it");
+    let back = otto.user_key("u");
+    assert_eq!(
+        (names(&back), &back["workbooks"][0]["open"], workbook_files(&home).len()),
+        (vec!["ops".to_string()], &json!(true), 1)
+    );
+    // The selected row shows its words: Rename types the name in the row.
+    let words = otto.drawn()["workbooks"][0]["buttons"].clone();
+    assert_eq!(otto.user_click(at(rect(&words["rename"]), 0.5, 0.5))["field"]["of"], "workbook");
+    assert_eq!(names(&otto.user_key("escape")), ["ops"]);
+    drop(otto);
+
+    // A directory that is gone: its terminal starts in the user's folder, and the status bar
+    // says so. Files that are no workbook are counted, and left as they are.
+    std::fs::remove_dir_all(&two).unwrap();
+    for (name, text) in [("notes.json", "mine"), ("00000000000000aa.json", "{ not a workbook")] {
+        std::fs::write(home.join("workbooks").join(name), text).unwrap();
+    }
+    let env = [env[0], ("HOME", me.to_str().unwrap())];
+    let otto = Otto::launch_with("workbook-3", &env);
+    let listed = otto.call(json!({"cmd": "section", "section": "workbook"}));
+    let notice = listed["notice"].as_str().unwrap_or_default();
+    assert!(names(&listed) == ["ops"] && notice.contains("workbooks: 2 file(s) could not be read"), "{listed}");
+    let row = at(rect(&otto.drawn()["workbooks"][0]["row"]), 0.3, 0.3);
+    let said = "is gone; its terminal starts in your home folder";
+    let opened = otto.wait_for("the missing directory to be noticed", |o| {
+        let opened = o.user_click(row);
+        if opened["notice"].as_str().is_some_and(|notice| notice.contains(said)) {
+            return Some(opened);
+        }
+        o.call(json!({"cmd": "close_tab", "index": 1}));
+        None
+    });
+    let panes = pane_ids(&opened);
+    assert_eq!(panes.len(), 2, "{opened}");
+    shell_is_in(&otto, panes[0], &one);
+    shell_is_in(&otto, panes[1], &me);
+    // Delete, by the word in its row. The other files are still there, as they were.
+    otto.user_key("cmd-shift-e");
+    let delete = at(rect(&otto.drawn()["workbooks"][0]["buttons"]["delete"]), 0.5, 0.5);
+    assert!(names(&otto.user_click(delete)).is_empty());
+    let left: Vec<String> =
+        workbook_files(&home).iter().filter_map(|path| std::fs::read_to_string(path).ok()).collect();
+    assert_eq!(left, ["{ not a workbook", "mine"]);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}

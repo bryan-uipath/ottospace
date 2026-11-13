@@ -24,6 +24,7 @@ pub fn app_menus() -> Vec<Menu> {
             name: "File".into(),
             items: vec![
                 item("New Tab", NewTab),
+                item("Save Tab as Workbook", SaveWorkbook),
                 MenuItem::separator(),
                 item("Close Pane", ClosePane),
                 item("Close Tab", CloseTab),

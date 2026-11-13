@@ -37,6 +37,8 @@ import type {
   MarkInput,
   MarkReply,
   MarksReply,
+  Workbook,
+  WorkbookPane,
   Mode,
   Model,
   Pane,
@@ -591,9 +593,9 @@ function pickItem(value: unknown, at: string): PickItem {
 
 function field(value: unknown, at: string): Field {
   const o = fields(value, at);
-  const owners = ["compose", "picker", "apps", "mark", "note"];
+  const owners = ["compose", "picker", "apps", "mark", "workbook", "note"];
   if (typeof o.of !== "string" || !owners.includes(o.of)) {
-    throw wrong(`${at}.of`, "compose, picker, apps, mark or note", o.of);
+    throw wrong(`${at}.of`, "compose, picker, apps, mark, workbook or note", o.of);
   }
   return {
     of: o.of as Field["of"],
@@ -636,6 +638,9 @@ function markInput(value: unknown, at: string): MarkInput {
   if (o.type === "jump") return { type: "jump" };
   if (o.type === "rename") return { type: "rename", mark: num(o.mark, `${at}.mark`), text: str(o.text, `${at}.text`) };
   if (o.type === "set_key") return { type: "set_key", mark: num(o.mark, `${at}.mark`) };
+  if (o.type === "workbook") {
+    return { type: "workbook", workbook: num(o.workbook, `${at}.workbook`), text: str(o.text, `${at}.text`) };
+  }
   throw wrong(`${at}.type`, "what a mark waits for", o.type);
 }
 
@@ -668,6 +673,36 @@ function mark(value: unknown, at: string): Mark {
       remove: orNull(rect)(buttons.remove, `${at}.buttons.remove`),
     },
   };
+}
+
+function workbook(value: unknown, at: string): Workbook {
+  const o = fields(value, at);
+  const buttons = fields(o.buttons, `${at}.buttons`);
+  const pane = (value: unknown, at: string): WorkbookPane => {
+    const p = fields(value, at);
+    const kind = p.kind;
+    if (kind !== "terminal" && kind !== "app" && kind !== "empty") throw wrong(`${at}.kind`, "a pane's kind", kind);
+    return p.app === undefined ? { kind } : { kind, app: str(p.app, `${at}.app`) };
+  };
+  return {
+    id: num(o.id, `${at}.id`),
+    name: str(o.name, `${at}.name`),
+    panes: list(pane)(o.panes, `${at}.panes`),
+    summary: str(o.summary, `${at}.summary`),
+    open: bool(o.open, `${at}.open`),
+    tab: orNull(num)(o.tab, `${at}.tab`),
+    row: orNull(rect)(o.row, `${at}.row`),
+    buttons: {
+      open: orNull(rect)(buttons.open, `${at}.buttons.open`),
+      rename: orNull(rect)(buttons.rename, `${at}.buttons.rename`),
+      delete: orNull(rect)(buttons.delete, `${at}.buttons.delete`),
+    },
+  };
+}
+
+function workbookOffer(value: unknown, at: string): "deleted" | "updated" {
+  if (value === "deleted" || value === "updated") return value;
+  throw wrong(at, "deleted or updated", value);
 }
 
 function model(value: unknown, at: string): Model {
@@ -880,6 +915,8 @@ export function snapshot(value: unknown): Snapshot {
     counts: orNull(map(num))(o.counts, "counts"),
     marks: list(mark)(o.marks, "marks"),
     mark_removed: orNull(str)(o.mark_removed, "mark_removed"),
+    workbooks: list(workbook)(o.workbooks, "workbooks"),
+    workbook_offer: orNull(workbookOffer)(o.workbook_offer, "workbook_offer"),
     scrollbars: map(scrollbar)(o.scrollbars, "scrollbars"),
     capture: captureDrawn(o.capture, "capture"),
   };
