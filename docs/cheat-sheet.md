@@ -65,13 +65,16 @@ The badge on an app is how many windows it has open. A new window of a hosted ap
 
 ## Workbooks
 
-A workbook is a saved, named tab, for a context that comes back. It is kept between runs.
+A workbook is a saved, named set of tabs, for a context that comes back. It is kept between runs.
 
 | I want to | Do |
 |---|---|
 | Save the tab on show | ⌘⇧S, or + in the Workbook section's header. Type its name, ↵ |
-| Update it after changing the tab | ⌘⇧S again on that tab. Undo on the line at the top (six seconds) |
-| Open it | Workbook, click it. Or ⌘⇧E, ↵. If its tab is open (a dot), that tab is selected |
+| Add the tab on show to one | `Add tab` on its row, or ⌘⇧E, then `a` on it |
+| Save every tab on the bar as one | File ▸ Save All Tabs as Workbook |
+| Update a tab of it after changing it | ⌘⇧S again on that tab. Undo on the line at the top (six seconds) |
+| Open it | Workbook, click it. Or ⌘⇧E, ↵. Its tabs open in order; one already open is kept |
+| See, open, rename or remove one of its tabs | ▸ on its row (⌘⇧E: space), then the tab's row: click, Rename, Remove |
 | Rename or delete it | Hover its row: Rename, Delete. Or ⌘⇧E, then `r`, `x`; `u` puts a deleted one back |
 
 It keeps the splits, each terminal's directory and each app. Not what a terminal ran, nor the

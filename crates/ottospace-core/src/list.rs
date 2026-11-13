@@ -20,6 +20,8 @@ pub enum ListRow {
     OlderSessions,
     Mark(MarkId),
     Workbook(WorkbookId),
+    /// A tab of an unfolded workbook, by its place in the workbook.
+    WorkbookTab(WorkbookId, usize),
     /// An app that is not running, by its bundle path. Opening it starts it.
     Closed(String),
     /// "and N more" under the suggested apps, and the "All apps" heading. Opening one folds or unfolds it.
@@ -52,6 +54,8 @@ pub enum ListKey {
     Pin,
     /// Type in the filter of "All apps".
     Filter,
+    /// Add the tab on show to the selected workbook.
+    Add,
     Leave,
 }
 
@@ -59,6 +63,7 @@ pub enum ListKey {
 /// heading that folds), Tab changes section, `s` `h` `x` `u` act on a task, Esc leaves. On a mark: `x` removes it, `r` renames
 /// it, `m` gives it a letter, ⇧J ⇧K (or ⇧↓ ⇧↑) move it. On an app that is not running: `p` pins or
 /// unpins it, `x` hides a suggestion, `u` takes that back; `/` types in the filter of "All apps".
+/// On a workbook: `a` adds the tab on show to it.
 pub fn list_key(key: &str, shift: bool) -> Option<ListKey> {
     Some(match key {
         "down" | "j" if shift => ListKey::Reorder(1),
@@ -76,6 +81,7 @@ pub fn list_key(key: &str, shift: bool) -> Option<ListKey> {
         "m" => ListKey::Letter,
         "p" => ListKey::Pin,
         "/" => ListKey::Filter,
+        "a" => ListKey::Add,
         "escape" => ListKey::Leave,
         _ => return None,
     })

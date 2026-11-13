@@ -386,6 +386,7 @@ const KEYS_TABS: &[(&str, &str)] = &[
     ("⌃Tab / ⌃⇧Tab", "Next / previous tab"),
     ("⌘⇧W", "Close the tab and its panes"),
     ("⌘⇧S", "Save the tab as a workbook; again updates it"),
+    ("File menu", "Add the tab to a workbook · save all tabs as one"),
 ];
 const KEYS_MARKS: &[(&str, &str)] = &[
     ("⌘B / ⌘⇧B", "Mark the pane / the tab; again unmarks"),
@@ -417,7 +418,8 @@ const KEYS_LIST: &[(&str, &str)] = &[
     ("U", "Task: undo the last of these"),
     ("R / M / X / U", "Mark: rename / letter / remove / put back"),
     ("⇧J ⇧K", "Mark: move down / up"),
-    ("R / X / U", "Workbook: rename / delete / undo"),
+    ("R / X / U", "Workbook: rename / delete / undo; on a tab's row, that tab"),
+    ("A / space", "Workbook: add this tab / list its tabs"),
     ("P / X / U", "App not running: pin or unpin / hide a suggestion / undo"),
     ("/", "Apps: filter all apps"),
     ("Esc", "Leave"),
@@ -548,8 +550,8 @@ actions!(ottospace, [Cut, SelectAll, Undo, Redo]);
 actions!(ottospace, [CopySelection, PasteText, VisualMode, ListMode, SneakMode, NewTask, NextTask]);
 // Marks: mark the focused pane or the tab on show, and the jump prefix.
 actions!(ottospace, [MarkPane, MarkTab, MarkJump]);
-// Save the tab on show as a workbook.
-actions!(ottospace, [SaveWorkbook]);
+// Save the tab on show as a workbook, add it to one, or save all the tabs as one.
+actions!(ottospace, [SaveWorkbook, AddTabToWorkbook, SaveAllWorkbook]);
 // What the capture key does, from the menu.
 actions!(ottospace, [CapturePane]);
 // App menu.
@@ -2291,8 +2293,9 @@ impl Workspace {
             // The name of the mark just taken off, while the Marks section offers to put it back.
             "mark_removed": self.mark_offered(),
             // The workbooks by name: `name`, `panes` (each `kind`: `terminal`, `app` with the
-            // `app`'s name, or `empty`), `summary`, and `open` with its `tab`. No directory.
-            // `row` and `buttons`: where the Workbook section drew it, or null.
+            // `app`'s name, or `empty`), `summary`, `open` with its first open `tab`, and `tabs`
+            // (each `title`, `panes`, `summary`, `open`, `tab`), `unfolded`. No directory.
+            // `row` and `buttons`: where the Workbook section drew it, or null; so for each tab.
             "workbooks": self.workbooks_json(),
             // What the Workbook section offers to take back (`deleted`, `updated`), or null.
             "workbook_offer": self.model.workbooks.offered(),
@@ -2841,11 +2844,20 @@ impl Workspace {
         let repeats = |key: &ListKey| matches!(key, ListKey::Move(_) | ListKey::Reorder(_));
         let action = match pressed.filter(|key| !event.is_held || repeats(key)) {
             Some(ListKey::Move(delta)) => Action::ListMove { delta },
-            // A workbook's row opens as a click on it does.
+            // A workbook's row opens as a click on it does; space lists its tabs. A tab's row opens that tab.
             Some(ListKey::Open { .. }) if self.model.selected_workbook().is_some() => {
-                let id = self.model.selected_workbook().unwrap_or_default();
-                return self.click_workbook("workbook", id, window, cx);
+                let Some((id, tab)) = self.model.selected_workbook() else { return };
+                let control = match (tab, key.key.as_str()) {
+                    (Some(_), _) => "workbook-tab",
+                    (None, "space") => "workbook-fold",
+                    (None, _) => "workbook",
+                };
+                return self.click_workbook(control, id, tab, window, cx);
             }
+            Some(ListKey::Add) => match self.model.selected_workbook() {
+                Some((id, _)) => return self.click_workbook("workbook-add", id, None, window, cx),
+                None => return,
+            },
             Some(ListKey::Open { down }) => {
                 self.check_marks(cx); // a mark's row opens only what is there
                 Action::ListChoose { axis: if down { Axis::Down } else { Axis::Right } }
@@ -4337,6 +4349,13 @@ impl Workspace {
                                     .mark_of(MarkOf::Tab(Some(id)))
                                     .map(|_| div().text_color(rgb(theme::MARK)).child("◆")),
                             )
+                            // A tab of a workbook: its icon, and the workbook's name on hover.
+                            .when_some(self.workbook_of(id), |d, book| {
+                                let icon = svg().path("icons/workbook.svg").size(px(12.)).flex_none();
+                                d.child(icon.text_color(rgb(theme::MUTED))).tooltip(move |_, cx| {
+                                    AnyView::from(cx.new(|_| Tooltip(format!("Workbook: {book}").into())))
+                                })
+                            })
                             .child(tab.title.clone())
                             .child(self.controls.mark(format!("tab:{}", tab.id)))
                             .child(
@@ -4716,6 +4735,8 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &MarkPane, window, cx| this.toggle_mark(MarkOf::Pane(None), window, cx)))
             .on_action(cx.listener(|this, _: &MarkTab, window, cx| this.toggle_mark(MarkOf::Tab(None), window, cx)))
             .on_action(cx.listener(|this, _: &SaveWorkbook, window, cx| this.save_workbook(window, cx)))
+            .on_action(cx.listener(|this, _: &AddTabToWorkbook, window, cx| this.pick_workbook(window, cx)))
+            .on_action(cx.listener(|this, _: &SaveAllWorkbook, window, cx| this.save_all_workbook(window, cx)))
             .on_action(cx.listener(|this, _: &MarkJump, window, cx| {
                 this.dispatch(Action::MarkPrefix, this.input, window, cx);
             }))

@@ -38,7 +38,7 @@ it over the control socket. Session restore and the rest of the design are not b
 | Sneak mode (⌘⌃G): a letter label on each of ottospace's own controls; typing it clicks the control | Works today |
 | Marks (⌘B, ⌘⇧B, ⌘' and a letter): named ways back to a pane or a tab, kept in `~/.ottospace/marks.json` | Works today |
 | Capture (⌃⌥⌘Space, from any app): a frozen picture of the pane in use to circle and write on, collected in a draft in the right bar; the task it becomes has a brief with the pictures, the notes and the text under each annotation (`task_brief`). Kept in `~/.ottospace/materials`. Starting an agent with the brief is not built | Works today |
-| Workbooks (⌘⇧S): save a tab under a name (its splits, each terminal's directory, each app) and open it again from the Workbook section. Kept in `~/.ottospace/workbooks`. One tab each; an app comes back as its window, not on the page or document it showed | Works today |
+| Workbooks (⌘⇧S): save tabs under a name (their splits, each terminal's directory, each app) and open them again from the Workbook section. Several tabs each: add a tab to one, or save all the tabs on the bar as one. Kept in `~/.ottospace/workbooks`. An app comes back as its window, not on the page or document it showed | Works today |
 | `settings.json`: terminal font, repository directories, tasks folder, apps to offer, window rules | Works today |
 
 ### Roadmap: designed, not built
@@ -52,7 +52,7 @@ None of these is in the app today.
 | Quick capture (⌘⌘): turn something on screen into a task and dispatch it to an agent | Designed |
 | Focus blocks: hide Slack, with an agent that can break through | Designed |
 | Fast app switcher | Designed |
-| Workbooks: several tabs in one; the URL, channel or document each app showed; a workbook on the rail | Designed |
+| Workbooks: the URL, channel or document each app showed; a workbook on the rail; its tabs as a scope on the tab bar | Designed |
 | TypeScript scripting, with contextual quick actions in an action deck (Zoom meeting layout, spin for stand-up) | Designed |
 | Hide private panes while screen sharing | Designed |
 | Session restore | Designed |
@@ -95,7 +95,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘1 … ⌘9 | Select a tab on the bar |
 | ⌘⇧] / ⌘⇧[ or ⌃Tab / ⌃⇧Tab | Next / previous tab |
 | ⌘⇧W | Close the tab and its panes |
-| ⌘⇧S | Save the tab on show as a [workbook](#workbooks). On a tab that came from one, or was saved as one: update it |
+| ⌘⇧S | Save the tab on show as a [workbook](#workbooks). On a tab that came from one, or was saved into one: update its tab there |
 | ⌘Q | Quit. While a terminal runs something (a program in front of its shell, or a background or stopped job) it asks first, and lists them: ↵, Q or ⌘Q again quits; Esc, any other key or any other shortcut cancels and does nothing else |
 | Wheel / trackpad | Scroll a terminal back through its history |
 | ⇧PageUp / ⇧PageDown | Scroll a terminal a page |
@@ -109,7 +109,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘B / ⌘⇧B | Mark the focused pane / the tab on show; on one that is marked, take the mark off (the Marks section offers it back for six seconds, and ⌘B again within them puts the same mark back). The mark is named for the app, the terminal's directory or the tab's title. It records what to open, not a window or a process: a terminal's directory as it is then, an app's bundle id, name and window title, a tab's title, task and split tree. A marked pane or tab shows ◆ and its letter |
 | ⌘' then a letter | Go to the mark with that letter. The status bar shows `MARK?` while it waits; Esc, or a letter of no mark, ends the wait and nothing else happens. If the mark's pane or tab is open, its tab comes forward and the pane takes focus (an app pane is focused, not entered). Else it is opened: a terminal in the recorded directory, the app's window in a pane (the one with the recorded title, else its only window, else its main one; an app that is not running is started), or the tab with its splits. A tab opens with what can be opened: a pane whose directory is gone or whose window could not be hosted is empty and says why, and going to the tab again tries it again |
 | ⌘⌥1 … ⌘⌥9 | Go to one of the first nine marks, in the order of the Marks section |
-| ⌘⇧E | List mode: the bar (Apps, Workbook, Tasks, Repos, Marks) takes the keyboard. On a workbook `r` renames it, `x` deletes it and `u` takes the last delete or update back. On a mark `x` removes it, `r` renames it, `m` gives it a letter, ⇧J / ⇧K move it down / up, and `u` puts the last removed mark back. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); in Tasks a heading is a row too, and ↵ or space on it folds or unfolds it; Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; on an app that is not running `p` pins or unpins it, `x` hides a suggestion and `u` takes the last of these back; in Apps `/` types in the filter of "All apps" (↵, ↓ or Esc gives the keys back to the rows); Esc or ⌘⇧E leaves |
+| ⌘⇧E | List mode: the bar (Apps, Workbook, Tasks, Repos, Marks) takes the keyboard. On a workbook ↵ opens its tabs, space lists them under it, `a` adds the tab on show to it, `r` renames it, `x` deletes it and `u` takes the last delete or update back; on one of its tabs ↵ opens that tab, `r` renames it and `x` takes it out. On a mark `x` removes it, `r` renames it, `m` gives it a letter, ⇧J / ⇧K move it down / up, and `u` puts the last removed mark back. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); in Tasks a heading is a row too, and ↵ or space on it folds or unfolds it; Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; on an app that is not running `p` pins or unpins it, `x` hides a suggestion and `u` takes the last of these back; in Apps `/` types in the filter of "All apps" (↵, ↓ or Esc gives the keys back to the rows); Esc or ⌘⇧E leaves |
 | ⌘⌃G | Sneak mode: every control ottospace draws (rail icons, bar rows, tabs and their ×, top-bar buttons, pane headers and their ×, each pane, the home screen's line, rows and nodes) gets a short label, home-row letters first. Type a label and the control does what a click does; a pane's label focuses it, or gives an app pane the keyboard. A × (pane or tab) always has a two-letter label. Two-letter labels narrow on the first letter; ⌫ takes it back. Esc, a click, a letter that goes on with no label, or any ⌘ shortcut leaves; the shortcut then runs (⌘C copies, ⌘V pastes). Other keys do nothing. The labels follow what is drawn: if a control moves its label moves, and if it goes its label goes. What happens by itself (a shell exits, an agent files a task) does not end the mode. Starting it hides the accessibility overlay (⌘⌃A). Not ⌃G alone: a terminal needs that key. On a keyboard layout with no Latin letters, the keys type the letters they have under ⌘. From `APP` mode return first. Controls inside a hosted app's window get no label. Sneak presses no control inside another app and sets no value; entering an app pane raises its window, as a click on the pane does |
 | ⌘⇧C | Visual mode on the terminal: `hjkl`/arrows, `w b e 0 ^ $`, `H M L` move; `v` / `V` select; `y` or ↵ copies and leaves; Esc leaves |
 
@@ -346,33 +346,44 @@ included) that no task has adopted: for example a Claude Code you started by han
 
 ## Workbooks
 
-A workbook is a saved, named tab for a context that comes back, e.g. "Maestro DRI". It is not a
-task: no agent works it and it is never done.
+A workbook is a saved, named set of tabs for a context that comes back, e.g. "Maestro DRI": a
+tab of dashboards, a tab of docs. It is not a task: no agent works it and it is never done.
 
 - **Save**: ⌘⇧S, File ▸ Save Tab as Workbook, or + in the Workbook section's header. It records
   the tab's splits and their sizes, each terminal's directory as it is then, and each app pane's
   app (bundle id and name). It records no scrollback, no command, and no window title, URL or
   document. A tab with nothing in it is not saved.
-- The new workbook is named for the tab, and the section opens with the name selected: type
-  over it, ↵ keeps it, Esc keeps the tab's name. No two workbooks share a name (`DRI`, `DRI 2`).
-- **Save again** on that tab, or on a tab opened from a workbook, updates the workbook. The
-  section says `Updated · Undo` for six seconds.
-- **Open**: click its row, or ⌘⇧E and ↵. A new tab with that name and layout. Each terminal
-  starts in its directory; if the directory is gone it starts in your home folder, and the
-  status bar says so. Each app pane gets a window of its app as a tab's mark does: one no pane
-  holds (the only one, else the main one); an app that is not running is started. A pane whose
-  app is not installed, or whose window is in another pane, stays empty and says why. If the
-  workbook's tab is open already, it is selected: a dot marks the row.
+- **Add a tab**: `Add tab` on a workbook's row, `a` on it in list mode, or File ▸ Add Tab to
+  Workbook… (it opens the section in list mode: pick the row, `a`). **All tabs**: File ▸ Save All
+  Tabs as Workbook saves every tab on the bar that has something in it, in bar order, as one new
+  workbook (at most 32; with more it saves none and says so). A tab stands for one workbook's tab at most: added to another, it leaves the first.
+- A new workbook is named for the tab (all tabs: "Workbook"), and the section opens with the
+  name selected: type over it, ↵ keeps it, Esc keeps it as it is. No two workbooks share a name
+  (`DRI`, `DRI 2`).
+- **Save again** on a tab that came from a workbook, or was saved into one, updates that tab of
+  it. The section says `Updated · Undo` for six seconds.
+- **Open**: click its row, or ⌘⇧E and ↵. Each of its tabs opens in a new tab, in order, and the
+  first is selected; a tab of it that is open already is kept, not opened twice. A workbook of
+  one tab opens under the workbook's name; of several, each tab under its own title. Each
+  terminal starts in its directory; if the directory is gone it starts in your home folder, and
+  the status bar says so. Each app pane gets a window of its app as a tab's mark does: one no
+  pane holds (the only one, else the main one); an app that is not running is started. A pane
+  whose app is not installed, or whose window is in another pane, stays empty and says why. A
+  dot marks the row while a tab of it is open, and the tab bar marks its tabs with the workbook
+  icon (hover: its name).
+- **Its tabs**: ▸ before a workbook of several tabs (space in list mode) lists them under it.
+  Each opens alone (click, ↵), and has `Rename` (its title, `r`) and `Remove` (`x`: out of the
+  workbook; the last one deletes the workbook).
 - **Rename, Delete**: the words on its row (hover it, or select it in list mode), or `r` and
-  `x` in list mode. Deleting leaves the open tab alone; `Workbook deleted · Undo` shows for six
+  `x` in list mode. Deleting leaves the open tabs alone; `Workbook deleted · Undo` shows for six
   seconds (`u` in list mode).
 - Kept in `~/.ottospace/workbooks`, one file each, readable by you alone. A file there that
   ottospace cannot read is counted in the status bar and left as it is.
 - Only you save, open, rename or delete a workbook: a socket client's key, click or label is
-  refused. The state lists them (`workbooks`: names and pane kinds, no directories).
+  refused. The state lists them (`workbooks`: names, tabs and pane kinds, no directories).
 
-Not built: several tabs in one workbook, and bringing an app back on the URL, channel or
-document it showed. Design: [workbook.md](ai/workbook.md).
+Not built: bringing an app back on the URL, channel or document it showed, and a workbook's
+tabs as a scope of their own on the tab bar. Design: [workbook.md](ai/workbook.md).
 
 ## Terminal panes
 
@@ -569,7 +580,7 @@ first brainstorm:
 
 [capture.md](ai/capture.md): the capture key, annotate mode, what a capture stores, and how a brief quotes it.
 [marks.md](ai/marks.md): marks, what one records, and how they sit beside session restore, pins and tasks.
-[workbook.md](ai/workbook.md): workbooks beside tasks, marks and session restore; stage 1 as built, and what is later.
+[workbook.md](ai/workbook.md): workbooks beside tasks, marks and session restore; stages 1 and 2 as built, and what is later.
 [terminal-persistence.md](ai/terminal-persistence.md): terminals and agents that outlive a quit or an update, held outside the app; with session restore, tasks come back as they were.
 
 [routines.md](ai/routines.md): routines and agents from ottobot, in stages, toward ottospace subsuming it.
