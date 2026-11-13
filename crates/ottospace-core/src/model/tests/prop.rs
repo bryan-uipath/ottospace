@@ -24,7 +24,8 @@ const APPS: &[&str] = &["Slack", "Safari", "Finder", "Sketch", "Slides", ""];
 const UIDS: &[&str] = &["u1", "u2", "u3", "u4", ""];
 /// A workbook's id is its file's name: three that may be one, and some that may not.
 const BOOK_UIDS: &[&str] = &["00000000000000a1", "00000000000000a2", "00000000000000a3", "../../x", "A1", ""];
-const SESSIONS: &[&str] = &["s1", "s2", "s3"];
+/// The last one a session a runner can go on with: its id is a UUID.
+const SESSIONS: &[&str] = &["s1", "s2", "s3", "8f14e45f-ceea-467f-a8d3-0242ac130004"];
 /// In every line of a terminal's saved history, and nowhere else.
 const SAVED: &str = "SAVEDHISTORY";
 const CONTROLS: &[&str] = &["rail:apps", "pane:1", "close:1", "tab:1", "tab-close:1", "mark-remove:1", "c0", "c1"];
@@ -98,6 +99,15 @@ impl Gen<'_> {
     fn task(&mut self) -> TaskId {
         let real: Vec<TaskId> = self.m.tasks.list.iter().map(|t| t.id).collect();
         self.one_of(&real, Self::stray)
+    }
+
+    /// A conversation's subject: a task's, or a session's.
+    fn subject(&mut self) -> Subject {
+        if self.rng.coin() {
+            return Subject::Task(self.task());
+        }
+        let (runner, id) = self.session();
+        Subject::Session { runner, id }
     }
 
     /// The bundle of an app of the pool, or a path that is no app's.
@@ -304,6 +314,7 @@ impl Gen<'_> {
             label: self.rng.coin().then(|| self.name(&["cargo test"])),
             title: self.rng.coin().then(|| self.name(&["Fix the form", "#tag >repo @agent p0\nnext line\u{202e}"])),
             model: self.rng.coin().then(|| self.name(&["claude-opus-4-7", "gpt-6", "not a model"])),
+            held: self.rng.coin(),
         }
     }
 
@@ -873,10 +884,14 @@ const MAKERS: &[Make] = &[
         default: g.rng.coin().then(|| g.name(AGENTS)),
     },
     |g| Action::TaskTalk { id: g.task() },
-    |g| Action::TalkPick { id: g.task() },
+    |g| Action::TalkPick { id: g.subject() },
+    |g| {
+        let (runner, id) = g.session();
+        Action::SessionOpen { runner, id }
+    },
     |_| Action::ComposeEnter,
     |g| Action::AgentStarted {
-        task: g.task(),
+        task: g.subject(),
         session: g.rng.coin().then(|| g.session_id()),
         at: g.rng.below(100) as u64,
     },
@@ -890,9 +905,9 @@ const MAKERS: &[Make] = &[
         let found = (0..g.rng.below(3)).map(|_| started(g)).collect();
         Action::AgentSessions { found, home: Some("/Users/me".into()), now: g.rng.below(100_000) as u64 }
     },
-    |g| Action::AgentExited { task: g.task() },
+    |g| Action::AgentExited { task: g.subject() },
     |g| Action::SessionMissing { task: g.task(), id: g.session_id() },
-    |g| Action::TaskStop { id: g.task() },
+    |g| Action::TaskStop { id: g.subject() },
     |_| Action::TalkToggle,
     |g| Action::TalkKeys { on: g.rng.coin() },
     |g| Action::TalkResize { width: g.rng.pick(&[0., 400., 9e9, f32::NAN]) },
@@ -1003,17 +1018,24 @@ fn check(m: &Model) -> Result<(), String> {
 
     // The drawer is on a task there is; the keyboard is in it only while it is open, its agent
     // runs, and no app, list or visual mode has the keyboard.
-    if let Some(talk) = m.talk {
-        ensure!(m.tasks.get(talk.task).is_some(), "the drawer is on task {}, which is gone", talk.task);
+    let gone = |subject: &Subject| subject.task().is_some_and(|id| m.tasks.get(id).is_none());
+    if let Some(talk) = &m.talk {
+        ensure!(!gone(&talk.task), "the drawer is on task {:?}, which is gone", talk.task);
         let free = m.live.is_none() && m.list.is_none() && m.visual.is_none() && m.annotated().is_none();
         ensure!(
-            !talk.keys || (talk.open && m.agent_runs(talk.task) && free),
+            !talk.keys || (talk.open && m.agent_runs(&talk.task) && free),
             "the keyboard is in a conversation that is closed, has no agent, or under another: {talk:?}"
         );
     }
-    ensure!(m.mode() != Mode::Talk || m.talk.is_some_and(|talk| talk.keys), "talk mode with no conversation");
-    ensure!(unique(&m.agents), "an agent runs twice for one task: {:?}", m.agents);
-    ensure!(m.agents.iter().all(|id| m.tasks.get(*id).is_some()), "an agent runs for a task that is gone");
+    ensure!(m.mode() != Mode::Talk || m.talk.as_ref().is_some_and(|talk| talk.keys), "talk mode with no conversation");
+    ensure!(unique(&m.agents), "an agent runs twice for one conversation: {:?}", m.agents);
+    ensure!(!m.agents.iter().any(gone), "an agent runs for a task that is gone");
+    // A session's conversation is never also a task's: adopting it moved it.
+    let adopted = |subject: &Subject| match subject {
+        Subject::Session { runner, id } => m.tasks.adopted(runner, id),
+        Subject::Task(_) => false,
+    };
+    ensure!(!m.agents.iter().any(adopted), "an agent runs for a session a task owns: {:?}", m.agents);
     let width = m.talk_width;
     ensure!((talk::MIN_WIDTH..=talk::MAX_WIDTH).contains(&width), "the drawer is {width} wide");
 
@@ -1049,7 +1071,8 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(selected.is_none() || inspector.selected_node().is_some(), "the inspector selects {selected:?}");
         ensure!(!(inspector.filtering && m.live.is_some()), "the inspector's filter has the keyboard over a live app");
         // It covers the drawer: nothing there has the keyboard.
-        let covered = m.talk.is_some_and(|talk| talk.keys) || m.capture.as_ref().is_some_and(|draft| draft.typing);
+        let covered =
+            m.talk.as_ref().is_some_and(|talk| talk.keys) || m.capture.as_ref().is_some_and(|draft| draft.typing);
         ensure!(!covered, "the drawer under the inspector has the keyboard");
         for row in &rows {
             let shown = format!("{}{}", row.role, row.text);
@@ -1265,10 +1288,11 @@ fn check(m: &Model) -> Result<(), String> {
     badges.sort_unstable();
     badges.dedup();
     ensure!(rail.len() <= talk::RAIL && badges.len() == rail.len(), "the rail: {rail:?}");
-    ensure!(rail.iter().all(|cell| m.tasks.get(cell.task).is_some()), "a rail cell for a task that is gone");
-    let open = m.talk.filter(|talk| talk.open).map(|talk| talk.task);
-    ensure!(rail.iter().all(|cell| cell.shown == (open == Some(cell.task))), "the rail shows another cell: {rail:?}");
-    let shown = |id: TaskId| m.current_task == Some(id) || m.talk.is_some_and(|talk| talk.task == id);
+    ensure!(!rail.iter().any(|cell| gone(&cell.task)), "a rail cell for a task that is gone");
+    let open = m.talk.as_ref().filter(|talk| talk.open).map(|talk| &talk.task);
+    ensure!(rail.iter().all(|cell| cell.shown == (open == Some(&cell.task))), "the rail shows another cell: {rail:?}");
+    let shown =
+        |id: TaskId| m.current_task == Some(id) || m.talk.as_ref().is_some_and(|talk| talk.task.task() == Some(id));
     let briefed = |id: TaskId| shown(id) && m.tasks.get(id).is_some_and(|task| !task.materials.is_empty());
     ensure!(m.brief.is_none_or(briefed), "the brief of task {:?} shows: not on show, or it has none", m.brief);
     for task in &m.tasks.list {
@@ -1835,10 +1859,21 @@ impl Run {
                     let own = format!("{:?}", Source::Own { id: id.clone() });
                     ensure!(labelled.contains(&own), "a control with no label is activated: {id:?}");
                 }
-                Effect::StartAgent { task, start, .. } => {
+                Effect::StartAgent { task: subject, start, cwd, .. } => {
+                    let gone = |subject: &Subject| subject.task().is_some_and(|id| m.tasks.get(id).is_none());
                     // An agent runs with the user's rights: no client's action starts one.
-                    ensure!(user, "{origin:?} started an agent for task {task}");
-                    ensure!(m.tasks.get(*task).is_some() && m.agent_runs(*task), "an agent starts for no task: {task}");
+                    ensure!(user, "{origin:?} started an agent for {subject:?}");
+                    ensure!(!gone(subject) && m.agent_runs(subject), "an agent starts for nothing: {subject:?}");
+                    // A session no task owns is gone on with only where it started, in a listed
+                    // checkout, and only if nothing has it: not at work, held by no process.
+                    if let Subject::Session { runner, id } = subject {
+                        let found = m.found.iter().find(|s| (&s.runner, &s.id) == (runner, id));
+                        let free = found.is_some_and(|s| !s.active && !s.held && Some(&s.cwd) == cwd.as_ref());
+                        let listed =
+                            cwd.as_ref().is_some_and(|cwd| m.repo_names().any(|(_, path)| sessions::below(cwd, path)));
+                        ensure!(free && listed, "session {id} gone on with in {cwd:?}: at work, held, or outside");
+                    }
+                    let task = subject.task().unwrap_or_default();
                     let uuid = "8f14e45f-ceea-467f-a8d3-0242ac130003";
                     let command = match start {
                         agents::Start::New(launch) => launch.command(uuid, None),
@@ -1848,12 +1883,20 @@ impl Run {
                     // Its prompt is the task's title alone: nothing captured from a pane or an app
                     // (a title nobody typed is fixed words), and never the brief's text.
                     if let agents::Start::New(launch) = start {
-                        let title = m.tasks.get(*task).map(|task| task.title.as_str());
+                        let title = m.tasks.get(task).map(|task| task.title.as_str());
                         ensure!(title == Some(launch.title.as_str()), "task {task} starts with {:?}", launch.title);
                     }
                 }
                 Effect::StopAgent { task } => {
-                    ensure!(user && m.agent_runs(*task), "{origin:?} stops the agent of task {task}, or none runs");
+                    ensure!(user && m.agent_runs(task), "{origin:?} stops the agent of {task:?}, or none runs");
+                }
+                Effect::AgentMoved { from, to } => {
+                    let task = to.task().and_then(|id| m.tasks.get(id));
+                    ensure!(matches!(from, Subject::Session { .. }) && task.is_some(), "{from:?} moved to {to:?}");
+                    ensure!(
+                        m.agent_runs(to) && !m.agent_runs(from),
+                        "{from:?} moved to {to:?}, and it runs for neither"
+                    );
                 }
                 Effect::SaveApps { changes } => {
                     // The settings file is the user's: no client's action writes it.
@@ -2076,6 +2119,7 @@ const BASES: &[(&str, Setup)] = &[
                     label: None,
                     title: None,
                     model: None,
+                    held: false,
                 };
                 Action::SetSessions {
                     found: vec![s.clone(), Found { id: "s2".into(), active: false, last_activity: Some(5), ..s }],
@@ -2290,6 +2334,9 @@ fn code(sent: &Envelope) -> String {
         ("tool", "Tool"),
         ("content", "Content"),
         ("view", "TasksView"),
+        // A conversation's: `TalkPick { id: Task(1) }`.
+        ("task", "Subject"),
+        ("id", "Subject"),
     ];
     // A mark is long, and half of it is JSON already: it is given as its file's text.
     if let Action::RestoreMarks { marks, extra } = &sent.action {

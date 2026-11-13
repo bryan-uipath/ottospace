@@ -111,7 +111,11 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       agents: { "1": { model: "claude", ended: false, cols: 60, rows: 45, lines: ["fake claude ready"] } },
       goes_to: null,
       note: null,
-      rail: [{ task: 1, mono: "FL", group: "running", working: true, shown: true, tip: "fix login\nRunning\napp · @claude · now" }],
+      rail: [
+        { task: 1, mono: "FL", group: "running", working: true, shown: true, tip: "fix login\nRunning\napp · @claude · now" },
+        // A session no task owns, by its runner and id.
+        { task: { runner: "claude", id: "8f14e45f-ceea-467f-a8d3-0242ac130003" }, mono: "GT", group: null, working: false, shown: false, tip: "Greet the user\nSession\napp · @claude · 2h" },
+      ],
     },
     frame: { number: 3, seq: 2, drawn: 2, waited_ms: 0, window: 41 },
   };

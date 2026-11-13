@@ -23,7 +23,7 @@ use crate::repos::{self, Repo};
 use crate::sessions::{self, Found};
 use crate::settings::{Installed, closed_apps};
 use crate::sneak::{Sneak, Typed};
-use crate::talk::{self, Talk};
+use crate::talk::{self, Subject, Talk};
 use crate::tasks::{
     self, Assign, Heading, MAX_TITLE, Moved, NOTICE_MS, Notice, Ref, RefKind, State, Task, TaskId, TaskRow,
     TaskSection, Tasks,
@@ -720,6 +720,12 @@ pub enum Action {
         runner: String,
         id: String,
     },
+    /// The user's click or ↵ on a session's row: its conversation in the right drawer, gone on
+    /// with there unless it is at work elsewhere. No task is made. Only the user's.
+    SessionOpen {
+        runner: String,
+        id: String,
+    },
     /// Show or hide the idle sessions older than a day.
     ToggleOlderSessions,
     /// Replace the Apps list with the apps the shell can host now.
@@ -1051,7 +1057,7 @@ pub enum Action {
     /// The shell started the agent a `StartAgent` asked for, at `at` (ms since 1970).
     /// `session`: the id it gave the new session, if the runner's CLI takes one.
     AgentStarted {
-        task: TaskId,
+        task: Subject,
         session: Option<String>,
         at: u64,
     },
@@ -1065,7 +1071,7 @@ pub enum Action {
     },
     /// A task's agent is gone: it ended, was stopped, or could not be started.
     AgentExited {
-        task: TaskId,
+        task: Subject,
     },
     /// The session id an agent was started with has no file now its agent is gone: it never
     /// wrote one (`claude` not found, stopped at once). The task stops following it, so the
@@ -1074,9 +1080,9 @@ pub enum Action {
         task: TaskId,
         id: String,
     },
-    /// Stop a task's agent. Only the user's.
+    /// Stop a conversation's agent. Only the user's.
     TaskStop {
-        id: TaskId,
+        id: Subject,
     },
     /// Close the drawer to the right rail, or open it again on the same conversation.
     TalkToggle,
@@ -1093,14 +1099,14 @@ pub enum Action {
     /// A click on a conversation's cell of the right rail (or ⌘⌃1…9): that conversation in the
     /// drawer, as `TaskTalk`; the one the drawer shows closes to the rail. Only the user's.
     TalkPick {
-        id: TaskId,
+        id: Subject,
     },
 }
 
 /// What the right drawer shows (see `Model::drawer_view`).
 #[derive(PartialEq)]
 struct DrawerView {
-    talk: Option<(TaskId, bool)>,
+    talk: Option<(Subject, bool)>,
     compose: Option<bool>,
     capture: Option<bool>,
     brief: Option<TaskId>,
@@ -1180,6 +1186,7 @@ impl Action {
                 | Action::WorkbookOpen { .. }
                 | Action::WorkbookEdit { .. }
                 | Action::TaskTalk { .. }
+                | Action::SessionOpen { .. }
                 | Action::TalkPick { .. }
                 | Action::TalkToggle
                 | Action::TalkKeys { .. }
@@ -1215,6 +1222,7 @@ impl Action {
             | Action::WorkbookSaveAll { .. }
             | Action::WorkbookEdit { .. } => true,
             | Action::TaskTalk { .. }
+            | Action::SessionOpen { .. }
             | Action::TalkPick { .. }
             | Action::TalkKeys { on: true } => true,
             Action::Split { .. }
@@ -1560,14 +1568,20 @@ pub enum Effect {
     /// materials folder, if it has captures. The shell makes the session's id and asks
     /// `agents` for the command: nothing else goes into it.
     StartAgent {
-        task: TaskId,
+        task: Subject,
         start: agents::Start,
         cwd: Option<String>,
         brief: Option<String>,
     },
     /// End `task`'s agent, and answer `AgentExited`.
     StopAgent {
-        task: TaskId,
+        task: Subject,
+    },
+    /// The agent started for `from` (a session, since adopted) is `to`'s now: keep its terminal
+    /// under that name.
+    AgentMoved {
+        from: Subject,
+        to: Subject,
     },
 }
 
@@ -1731,17 +1745,17 @@ pub struct Model {
     /// The drawer's width in points, and whether it is widened to half the window.
     pub talk_width: f32,
     pub talk_wide: bool,
-    /// The tasks whose agent runs in a terminal of the drawer's, in the order they started.
-    pub agents: Vec<TaskId>,
+    /// The conversations whose agent runs in a terminal of the drawer's, in the order they started.
+    pub agents: Vec<Subject>,
     /// The conversations the user opened in this run, the last opened last.
     #[serde(skip)]
-    opened: Vec<TaskId>,
+    opened: Vec<Subject>,
     /// Agents started whose session's id is not known yet: their runner names it.
     #[serde(skip)]
     seeking: Vec<agents::Seek>,
     /// Those asked for and not yet started, each with the runner of a new session.
     #[serde(skip)]
-    starting: Vec<(TaskId, Option<&'static str>)>,
+    starting: Vec<(Subject, Option<&'static str>)>,
     #[serde(skip)]
     models: agents::Models,
     #[serde(skip)]
@@ -1848,7 +1862,7 @@ impl Model {
     /// What the right drawer shows, and whether it has the keyboard.
     fn drawer_view(&self) -> DrawerView {
         DrawerView {
-            talk: self.talk.filter(|talk| talk.open).map(|talk| (talk.task, talk.keys)),
+            talk: self.talk.as_ref().filter(|talk| talk.open).map(|talk| (talk.task.clone(), talk.keys)),
             compose: self.compose.is_some().then(|| self.compose_keys()),
             capture: self.capture.as_ref().map(|draft| draft.typing),
             brief: self.brief,
@@ -1868,7 +1882,7 @@ impl Model {
             Mode::Palette
         } else if self.compose_keys() {
             Mode::Compose
-        } else if self.talk.is_some_and(|talk| talk.keys) {
+        } else if self.talk.as_ref().is_some_and(|talk| talk.keys) {
             Mode::Talk
         } else if self.inspector.as_ref().is_some_and(|i| i.filtering) {
             Mode::Inspect
@@ -1944,7 +1958,10 @@ impl Model {
             }
             // An agent runs with the user's rights: no client's request, key or label starts
             // or stops one. A client's ↵ in the box files the task and starts none (`start`).
-            Action::TaskTalk { .. } | Action::TalkPick { .. } | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
+            Action::TaskTalk { .. }
+            | Action::SessionOpen { .. }
+            | Action::TalkPick { .. }
+            | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
             // On a rail list keys move over the rail: the user's, as the move that got there.
             Action::ListMove { .. } | Action::ListChoose { .. } | Action::LeaveList if self.rail_focus.is_some() => {
                 Some(zones::RAILS_USERS)
@@ -2058,7 +2075,8 @@ impl Model {
         let opens = matches!(action, Action::OpenCompose { .. } | Action::CaptureTitle | Action::CaptureEdit { .. });
         let over_other = ((modal || self.palette.is_some()) && picker) || (boxed && opens);
         // A conversation the user opens takes the drawer from the new task being written.
-        let talks = matches!(action, Action::TaskTalk { .. } | Action::TalkPick { .. }) && self.picker.is_none();
+        let talks = matches!(action, Action::TaskTalk { .. } | Action::SessionOpen { .. } | Action::TalkPick { .. })
+            && self.picker.is_none();
         if (boxed && for_panes && !named_close && !talks) || over_other {
             return Some(match (self.picker.is_some(), self.palette.is_some()) {
                 (true, _) => "the picker is open",
@@ -2245,6 +2263,7 @@ impl Model {
                 | Action::CaptureTitle
                 | Action::CaptureBack
                 | Action::TaskTalk { .. }
+                | Action::SessionOpen { .. }
                 | Action::TalkPick { .. }
                 | Action::TalkKeys { on: true }
         );
@@ -2789,8 +2808,15 @@ impl Model {
                     // terminal in its repository, and its tag names it.
                     self.tasks.tag(task, None, Some(session.repo));
                     self.tasks.assign(task, Assign { agent: Some(runner.clone()), ..Assign::default() });
-                    self.tasks.link(task, sessions::Link { runner, id, state: Some(state) });
+                    self.tasks
+                        .link(task, sessions::Link { runner: runner.clone(), id: id.clone(), state: Some(state) });
                     self.tasks.started(task, session.started);
+                    // Its conversation is the task's: one open in the drawer stays there. The
+                    // user's adopt shows it, gone on with if nothing runs it.
+                    self.talk_moves(Subject::Session { runner, id }, Subject::Task(task), effects);
+                    if self.by_user {
+                        self.talk_to(Subject::Task(task), effects);
+                    }
                 }
             }
             Action::SessionHide { runner, id } => {
@@ -2813,6 +2839,14 @@ impl Model {
                         self.list = Some(row);
                     }
                     (None, None) => {}
+                }
+            }
+            Action::SessionOpen { runner, id } => {
+                let pane = self.session(&runner, &id).and_then(|s| self.session_pane(s));
+                self.talk_to(Subject::Session { runner, id }, effects);
+                // It runs in a terminal of the tab on show: that one is focused too.
+                if let Some(pane) = pane {
+                    self.focus(pane, effects);
                 }
             }
             Action::ToggleOlderSessions => self.older_sessions = !self.older_sessions,
@@ -2888,7 +2922,7 @@ impl Model {
                 Some(ListRow::App(name)) => effects.push(Effect::HostApp { name, axis, new_tab: false }),
                 Some(ListRow::Repo(path)) => self.act(Action::OpenRepo { path, axis }, effects),
                 // The user's ↵ on a task is a click on it: its conversation. A client's shows its tabs.
-                Some(ListRow::Task(id)) if self.by_user => self.talk_to(id, effects),
+                Some(ListRow::Task(id)) if self.by_user => self.talk_to(Subject::Task(id), effects),
                 Some(ListRow::Task(id)) => {
                     self.list = None;
                     self.act(Action::TaskOpen { id: Some(id) }, effects);
@@ -2897,7 +2931,10 @@ impl Model {
                 Some(ListRow::Heading(heading)) => self.act(Action::ToggleGroup { heading }, effects),
                 Some(ListRow::Project(project)) => self.act(Action::ToggleProject { project, done: false }, effects),
                 Some(ListRow::ProjectDone(project)) => self.act(Action::ToggleProject { project, done: true }, effects),
-                // As a click: the pane it runs in, if that is known. Nothing else is done to a session.
+                // The user's ↵ is a click: its conversation. A client's: the pane it runs in, if known.
+                Some(ListRow::Session(runner, id)) if self.by_user => {
+                    self.act(Action::SessionOpen { runner, id }, effects)
+                }
                 Some(ListRow::Session(runner, id)) => {
                     if self.session(&runner, &id).is_some_and(|s| self.session_pane(s).is_some()) {
                         self.act(Action::SessionClick { runner, id }, effects);
@@ -2997,7 +3034,7 @@ impl Model {
             }
             Action::ClosePicker => self.picker = None,
             Action::PaletteOpen => {
-                self.palette_over_talk = self.talk.is_some_and(|talk| talk.keys);
+                self.palette_over_talk = self.talk.as_ref().is_some_and(|talk| talk.keys);
                 self.leave(effects);
                 self.palette = Some(Palette { query: Field::new("", MAX_FILTER), selected: 0 });
             }
@@ -3029,7 +3066,7 @@ impl Model {
                 if self.pane(pane).is_some() {
                     self.inspector = Some(Inspector::new(pane, &app));
                     // The drawer it covers keeps its state, but not the keyboard.
-                    if self.talk.is_some_and(|talk| talk.keys) {
+                    if self.talk.as_ref().is_some_and(|talk| talk.keys) {
                         self.talk_keys(false, effects);
                     }
                     if let Some(draft) = &mut self.capture {
@@ -3307,7 +3344,8 @@ impl Model {
             }
             Action::BriefShow { id } => {
                 let briefed = self.tasks.get(id).is_some_and(|task| !task.materials.is_empty());
-                let shown = self.current_task == Some(id) || self.talk.is_some_and(|talk| talk.task == id);
+                let shown = self.current_task == Some(id)
+                    || self.talk.as_ref().is_some_and(|talk| talk.task.task() == Some(id));
                 self.brief = Some(id).filter(|_| briefed && shown);
             }
             Action::BriefClose => self.brief = None,
@@ -3315,12 +3353,14 @@ impl Model {
                 self.models = agents::Models { claude, codex };
                 self.default_agent = default;
             }
-            Action::TaskTalk { id } => self.talk_to(id, effects),
+            Action::TaskTalk { id } => self.talk_to(Subject::Task(id), effects),
             // Under the inspector the rail's cell shows its conversation, as on a closed drawer.
             Action::TalkPick { id }
-                if self.talk.is_some_and(|talk| talk.open && talk.task == id) && self.inspector.is_none() =>
+                if self.talk.as_ref().is_some_and(|talk| talk.open && talk.task == id) && self.inspector.is_none() =>
             {
-                self.talk = self.talk.map(|talk| Talk { open: false, keys: false, ..talk });
+                if let Some(talk) = &mut self.talk {
+                    (talk.open, talk.keys) = (false, false);
+                }
             }
             Action::TalkPick { id } => self.talk_to(id, effects),
             Action::ComposeEnter => {
@@ -3328,10 +3368,12 @@ impl Model {
                     self.accept(row);
                 }
             }
-            Action::AgentStarted { task, session, at } => {
-                if let Some(place) = self.starting.iter().position(|(id, _)| *id == task) {
+            Action::AgentStarted { task: subject, session, at } => {
+                if let Some(place) = self.starting.iter().position(|(id, _)| *id == subject) {
                     let (_, runner) = self.starting.remove(place);
-                    self.agents.push(task);
+                    self.agents.push(subject.clone());
+                    // A session's conversation is gone on with: nothing of a task to change.
+                    let Some(task) = subject.task() else { return };
                     self.tasks.started(task, Some(at).filter(|at| *at > 0));
                     // A runner that names its own session: look for it (`AgentSessions`).
                     if let Some(runner) = runner.filter(|runner| !agents::names_session(runner)) {
@@ -3368,16 +3410,17 @@ impl Model {
                     self.tasks.unlink(task);
                 }
             }
-            Action::AgentExited { task } => {
+            Action::AgentExited { task: subject } => {
+                let ran = self.agents.contains(&subject);
+                self.agents.retain(|id| *id != subject);
+                self.starting.retain(|(id, _)| *id != subject);
+                let Some(task) = subject.task() else { return };
                 // No longer looked for: a later agent's session must not be taken for its.
                 self.seeking.retain(|seek| seek.task != task);
-                let ran = self.agents.contains(&task);
                 // Its program is gone: the session is no longer at work there.
                 if ran && self.tasks.get(task).is_some_and(|task| task.session.is_some()) {
                     self.tasks.followed(task, State::NeedsYou);
                 }
-                self.agents.retain(|id| *id != task);
-                self.starting.retain(|(id, _)| *id != task);
                 // It was at work and is gone: the task is the user's to look at.
                 if ran && self.tasks.get(task).is_some_and(|task| task.state == State::Running) {
                     self.tasks.set_state(task, State::NeedsYou);
@@ -3385,14 +3428,16 @@ impl Model {
                 }
             }
             Action::TaskStop { id } => {
-                if self.agents.contains(&id) || self.starting.iter().any(|(task, _)| *task == id) {
+                if self.agent_runs(&id) {
                     effects.push(Effect::StopAgent { task: id });
                 }
             }
             Action::TalkToggle => {
-                if let Some(open) = self.talk.map(|talk| !talk.open) {
+                if let Some(open) = self.talk.as_ref().map(|talk| !talk.open) {
                     self.talk_keys(open, effects);
-                    self.talk = self.talk.map(|talk| Talk { open, ..talk });
+                    if let Some(talk) = &mut self.talk {
+                        talk.open = open;
+                    }
                 }
             }
             Action::TalkKeys { on } => self.talk_keys(on, effects),
@@ -3407,82 +3452,148 @@ impl Model {
         self.seeking.iter().map(|seek| (seek.runner, seek.cwd.clone())).collect()
     }
 
-    /// True if the task's agent runs in the drawer, or is about to.
-    pub fn agent_runs(&self, task: TaskId) -> bool {
-        self.agents.contains(&task) || self.starting.iter().any(|(id, _)| *id == task)
+    /// True if the conversation's agent runs in the drawer, or is about to.
+    pub fn agent_runs(&self, subject: &Subject) -> bool {
+        self.agents.contains(subject) || self.starting.iter().any(|(id, _)| id == subject)
     }
 
-    /// How a task's agent would come up now: its session gone on with, else a new one by its
-    /// `@agent` (none: the default agent). `None`: a saved agent, or a session no built-in
-    /// runner can go on with: nothing is started.
-    fn agent_start(&self, task: &Task) -> Option<agents::Start> {
-        match &task.session {
-            // At work elsewhere (a terminal of the user's): a second program on it would clash.
-            Some(link) if link.state == Some(State::Running) => None,
-            Some(link) => {
-                let known = sessions::RUNNERS.contains(&link.runner.as_str()) && agents::is_uuid(&link.id);
-                known.then(|| agents::Start::Resume { runner: link.runner.clone(), session: link.id.clone() })
+    /// Where a session is gone on with: the directory it started in (`claude --resume` looks
+    /// for a session by it), if that is in a listed repository or worktree. `None`: outside.
+    fn resume_dir(&self, found: &Found) -> Option<String> {
+        let inside = self.repo_listed(&found.repo) && sessions::below(&found.cwd, &found.repo);
+        inside.then(|| found.cwd.clone())
+    }
+
+    /// How a conversation's agent would come up now, and where: a task's session gone on with,
+    /// else a new one by its `@agent` (none: the default agent); a listed session's gone on
+    /// with. `None`: a saved agent, a session at work elsewhere, or one no built-in runner can
+    /// go on with: nothing is started.
+    fn agent_start(&self, subject: &Subject) -> Option<(agents::Start, Option<String>)> {
+        let resume = |runner: &str, id: &str| {
+            let known = sessions::RUNNERS.contains(&runner) && agents::is_uuid(id);
+            known.then(|| agents::Start::Resume { runner: runner.into(), session: id.into() })
+        };
+        let found = |runner: &str, id: &str| self.found.iter().find(|s| s.runner == runner && s.id == id);
+        match subject {
+            // Idle, and no process holds it: else a second program on it would clash.
+            Subject::Session { runner, id } => {
+                let session = self.session(runner, id).filter(|s| !s.active && !s.held)?;
+                Some((resume(runner, id)?, Some(self.resume_dir(session)?)))
             }
-            None => {
-                let default = self.default_agent.as_deref().unwrap_or(sessions::RUNNERS[0]);
-                agents::launch(task.agent.as_deref(), default, &self.models, task.title.clone()).map(agents::Start::New)
+            Subject::Task(id) => {
+                let task = self.tasks.get(*id)?;
+                match &task.session {
+                    // At work elsewhere (a terminal of the user's): a second program on it would clash.
+                    Some(link) if link.state == Some(State::Running) => None,
+                    Some(link) => {
+                        let read = found(&link.runner, &link.id);
+                        // Where it started, if it was read; else the task's repository.
+                        let cwd = read.and_then(|s| self.resume_dir(s)).or_else(|| task.repo.clone());
+                        read.is_none_or(|s| !s.held).then(|| resume(&link.runner, &link.id)).flatten().map(|r| (r, cwd))
+                    }
+                    None => {
+                        let default = self.default_agent.as_deref().unwrap_or(sessions::RUNNERS[0]);
+                        let launch = agents::launch(task.agent.as_deref(), default, &self.models, task.title.clone());
+                        launch.map(|launch| (agents::Start::New(launch), task.repo.clone()))
+                    }
+                }
             }
         }
     }
 
-    /// Why the drawer has no agent for the task it is on, if that is so: for the shell to say.
+    /// Why the drawer has no agent for the conversation it is on, if that is so: for the shell to say.
     pub fn talk_note(&self) -> Option<String> {
-        let task = self.tasks.get(self.talk?.task).filter(|task| !self.agent_runs(task.id))?;
-        match (self.agent_start(task), &task.agent) {
-            (Some(_), _) => None,
-            (None, Some(agent)) if task.session.is_none() => {
-                Some(format!("@{agent} is a saved agent: starting one is not built yet"))
-            }
-            _ if task.session.as_ref().is_some_and(|link| link.state == Some(State::Running)) => {
-                Some("its session is at work elsewhere: go on with it there".into())
-            }
-            _ => Some("this task's session cannot be gone on with from here".into()),
+        let subject = &self.talk.as_ref()?.task;
+        if self.agent_runs(subject) || self.agent_start(subject).is_some() {
+            return None;
         }
+        let found = |runner: &str, id: &str| self.found.iter().find(|s| s.runner == runner && s.id == id);
+        let live = match subject {
+            Subject::Session { runner, id } => found(runner, id).is_some_and(|s| s.active || s.held),
+            Subject::Task(id) => {
+                let task = self.tasks.get(*id)?;
+                if let (Some(agent), None) = (&task.agent, &task.session) {
+                    return Some(format!("@{agent} is a saved agent: starting one is not built yet"));
+                }
+                task.session.as_ref().is_some_and(|link| {
+                    link.state == Some(State::Running) || found(&link.runner, &link.id).is_some_and(|s| s.held)
+                })
+            }
+        };
+        Some(match (live, subject) {
+            (true, _) => "its session is live in another terminal: go on with it there".into(),
+            (false, Subject::Task(_)) => "this task's session cannot be gone on with from here".into(),
+            (false, Subject::Session { .. }) => "this session cannot be gone on with from here".into(),
+        })
+    }
+
+    /// A session conversation's name: the session's title, else its repository's, else its runner.
+    pub fn session_title(&self, runner: &str, id: &str) -> String {
+        let found = self.found.iter().find(|s| s.runner == runner && s.id == id);
+        found.map_or_else(|| runner.to_string(), |s| s.title.clone().unwrap_or_else(|| self.session_name(s)))
     }
 
     /// The right rail's conversations, in order: those that need the user, then those whose agent
     /// runs, in the order they started, then the rest, the last opened first. At most
-    /// `talk::RAIL`: past it the oldest idle ones drop off.
+    /// `talk::RAIL`: past it the oldest idle ones drop off. A session's shows while it is listed
+    /// or its agent runs.
     pub fn rail(&self) -> Vec<talk::Cell> {
-        let mut ids: Vec<TaskId> = self.opened.iter().rev().copied().collect();
-        let live = self.agents.iter().copied().chain(self.starting.iter().map(|(id, _)| *id));
+        let mut ids: Vec<Subject> = self.opened.iter().rev().cloned().collect();
+        let live = self.agents.iter().chain(self.starting.iter().map(|(id, _)| id));
         for id in live {
-            if !ids.contains(&id) {
-                ids.push(id);
+            if !ids.contains(id) {
+                ids.push(id.clone());
             }
         }
-        let needs = |task: &Task| task.group() == Some(tasks::Group::NeedsYou);
-        let rank = |task: &Task, recent: usize| match self.agents.iter().position(|id| *id == task.id) {
-            _ if needs(task) => (0, recent),
+        let shows = |subject: &Subject| match subject {
+            Subject::Task(id) => self.tasks.get(*id).is_some(),
+            Subject::Session { runner, id } => self.agent_runs(subject) || self.session(runner, id).is_some(),
+        };
+        let needs = |subject: &Subject| {
+            subject
+                .task()
+                .and_then(|id| self.tasks.get(id))
+                .is_some_and(|task| task.group() == Some(tasks::Group::NeedsYou))
+        };
+        let rank = |subject: &Subject, recent: usize| match self.agents.iter().position(|id| id == subject) {
+            _ if needs(subject) => (0, recent),
             Some(started) => (1, started),
-            None if self.agent_runs(task.id) => (1, usize::MAX),
+            None if self.agent_runs(subject) => (1, usize::MAX),
             None => (2, recent),
         };
-        let mut listed: Vec<(usize, &Task)> =
-            ids.iter().filter_map(|id| self.tasks.get(*id)).enumerate().collect::<Vec<_>>();
-        listed.sort_by_key(|(recent, task)| rank(task, *recent));
+        let mut listed: Vec<(usize, Subject)> = ids.into_iter().filter(shows).enumerate().collect();
+        listed.sort_by_key(|(recent, subject)| rank(subject, *recent));
         listed.truncate(talk::RAIL);
-        let titles: Vec<&str> = listed.iter().map(|(_, task)| task.title.as_str()).collect();
-        let shown = self.talk.filter(|talk| talk.open).map(|talk| talk.task);
-        let cells = listed.iter().zip(talk::monograms(&titles)).map(|((_, task), mono)| {
-            let found = task.session.as_ref().and_then(|link| {
-                self.found.iter().find(|found| (&found.runner, &found.id) == (&link.runner, &link.id))
-            });
-            let working =
-                self.agent_runs(task.id) && task.state == State::Running || found.is_some_and(|found| found.active);
-            talk::Cell {
-                task: task.id,
-                mono,
-                group: task.group(),
-                working,
-                shown: shown == Some(task.id),
-                tip: self.rail_tip(task, found.and_then(|found| found.label.as_deref())),
-            }
+        let titles: Vec<String> = listed
+            .iter()
+            .map(|(_, subject)| match subject {
+                Subject::Task(id) => self.tasks.get(*id).map(|task| task.title.clone()).unwrap_or_default(),
+                Subject::Session { runner, id } => self.session_title(runner, id),
+            })
+            .collect();
+        let monos = talk::monograms(&titles.iter().map(String::as_str).collect::<Vec<_>>());
+        let shown = self.talk.as_ref().filter(|talk| talk.open).map(|talk| &talk.task);
+        let cells = listed.into_iter().zip(monos).map(|((_, subject), mono)| {
+            let (runner, id) = match &subject {
+                Subject::Task(id) => match self.tasks.get(*id).and_then(|task| task.session.as_ref()) {
+                    Some(link) => (link.runner.as_str(), link.id.as_str()),
+                    None => ("", ""),
+                },
+                Subject::Session { runner, id } => (runner.as_str(), id.as_str()),
+            };
+            let found = self.found.iter().find(|found| (found.runner.as_str(), found.id.as_str()) == (runner, id));
+            let active = found.is_some_and(|found| found.active);
+            let (group, working, tip) = match subject.task().and_then(|id| self.tasks.get(id)) {
+                Some(task) => {
+                    let runs = self.agent_runs(&subject) && task.state == State::Running;
+                    (task.group(), runs || active, self.rail_tip(task, found.and_then(|found| found.label.as_deref())))
+                }
+                None => {
+                    let group = active.then_some(tasks::Group::Running);
+                    (group, active, self.session_tip(&subject, runner, found))
+                }
+            };
+            talk::Cell { shown: shown == Some(&subject), task: subject, mono, group, working, tip }
         });
         cells.collect()
     }
@@ -3491,7 +3602,8 @@ impl Model {
     /// with which agent, how old.
     fn rail_tip(&self, task: &Task, live: Option<&str>) -> String {
         let state = task.group().map_or("Not listed", tasks::Group::title);
-        let line = match (self.talk_note().filter(|_| self.talk.is_some_and(|t| t.task == task.id)), live) {
+        let shown = self.talk.as_ref().is_some_and(|t| t.task == Subject::Task(task.id));
+        let line = match (self.talk_note().filter(|_| shown), live) {
             (Some(note), _) => note,
             (None, Some(live)) => live.to_string(),
             (None, None) => state.to_string(),
@@ -3506,20 +3618,42 @@ impl Model {
         format!("{}\n{line}\n{place} · @{agent}{age}", task.title)
     }
 
+    /// A session cell's tooltip: its title; what it does now, else whether it is at work; where,
+    /// with which runner, how long ago it was last at work.
+    fn session_tip(&self, subject: &Subject, runner: &str, found: Option<&Found>) -> String {
+        let Subject::Session { id, .. } = subject else { return String::new() };
+        let shown = self.talk.as_ref().is_some_and(|t| t.task == *subject);
+        let state = if found.is_some_and(|s| s.active) { "Session at work" } else { "Session" };
+        let line = match (self.talk_note().filter(|_| shown), found.and_then(|s| s.label.as_deref())) {
+            (Some(note), _) => note,
+            (None, Some(live)) => live.to_string(),
+            (None, None) => state.to_string(),
+        };
+        let place = found.map_or_else(String::new, |s| format!("{} · ", self.session_name(s)));
+        let age = found.and_then(|s| s.last_activity).map(|at| format!(" · {}", tasks::age(at, self.now)));
+        format!("{}\n{line}\n{place}@{runner}{}", self.session_title(runner, id), age.unwrap_or_default())
+    }
+
     /// The workspace the drawer's header offers to go to (⌘↵): the name of the first tab of
     /// the conversation's task, while the center shows other tabs. `None`: no such offer.
     pub fn talk_goes_to(&self) -> Option<&str> {
-        let task = self.talk?.task;
+        let task = self.talk.as_ref()?.task.task()?;
         let tab = self.tabs.iter().find(|tab| tab.task == Some(task))?;
         (self.current_task != Some(task)).then_some(tab.title.as_str())
     }
 
-    /// Opens the drawer on a task's conversation, with the keyboard if its agent runs, and
-    /// starts the agent if it does not.
-    fn talk_to(&mut self, id: TaskId, effects: &mut Vec<Effect>) {
-        let Some(task) = self.tasks.get(id) else { return };
-        let start = Some(task).filter(|_| !self.agent_runs(id)).and_then(|task| self.agent_start(task));
-        let (cwd, brief) = (task.repo.clone(), task.materials_dir().map(str::to_string));
+    /// Opens the drawer on a conversation, with the keyboard if its agent runs, and starts the
+    /// agent if it does not. A session's opens while it is listed or its agent runs.
+    fn talk_to(&mut self, subject: Subject, effects: &mut Vec<Effect>) {
+        let brief = match &subject {
+            Subject::Task(id) => match self.tasks.get(*id) {
+                Some(task) => task.materials_dir().map(str::to_string),
+                None => return,
+            },
+            Subject::Session { runner, id } if self.session(runner, id).is_some() || self.agent_runs(&subject) => None,
+            Subject::Session { .. } => return,
+        };
+        let start = Some(&subject).filter(|subject| !self.agent_runs(subject)).and_then(|s| self.agent_start(s));
         self.leave(effects);
         self.list = None;
         // The drawer shows one thing: the new task being written gives way, kept for the box's
@@ -3527,17 +3661,36 @@ impl Model {
         if self.compose_host() == Some(Host::Drawer) {
             self.put_compose_aside();
         }
-        self.talk = Some(Talk { task: id, open: true, keys: self.agent_runs(id) || start.is_some() });
-        self.opened.retain(|seen| *seen != id);
-        self.opened.push(id);
-        if let Some(start) = start {
+        let keys = self.agent_runs(&subject) || start.is_some();
+        self.talk = Some(Talk { task: subject.clone(), open: true, keys });
+        self.opened.retain(|seen| *seen != subject);
+        self.opened.push(subject.clone());
+        if let Some((start, cwd)) = start {
             let runner = match &start {
                 agents::Start::New(launch) => Some(launch.runner),
                 agents::Start::Resume { .. } => None,
             };
             let brief = brief.filter(|_| runner.is_some());
-            self.starting.push((id, runner));
-            effects.push(Effect::StartAgent { task: id, start, cwd, brief });
+            self.starting.push((subject.clone(), runner));
+            effects.push(Effect::StartAgent { task: subject, start, cwd, brief });
+        }
+    }
+
+    /// A session became a task's: its conversation, open or with an agent running, is the
+    /// task's from now on, and the shell keeps its terminal under the task (`AgentMoved`).
+    fn talk_moves(&mut self, from: Subject, to: Subject, effects: &mut Vec<Effect>) {
+        let runs = self.agent_runs(&from);
+        let rename = |subject: &mut Subject| {
+            if *subject == from {
+                *subject = to.clone();
+            }
+        };
+        self.agents.iter_mut().for_each(rename);
+        self.opened.iter_mut().for_each(rename);
+        self.starting.iter_mut().for_each(|(subject, _)| rename(subject));
+        self.talk.iter_mut().for_each(|talk| rename(&mut talk.task));
+        if runs {
+            effects.push(Effect::AgentMoved { from, to });
         }
     }
 
@@ -3558,30 +3711,33 @@ impl Model {
 
     /// The keyboard goes into the open conversation, if its agent runs, or leaves it.
     fn talk_keys(&mut self, on: bool, effects: &mut Vec<Effect>) {
-        let Some(talk) = self.talk else { return };
-        let on = on && self.agent_runs(talk.task) && self.annotated().is_none();
+        let Some(talk) = &self.talk else { return };
+        let on = on && self.agent_runs(&talk.task) && self.annotated().is_none();
         if on {
             self.leave(effects);
             self.list = None;
         }
-        self.talk = Some(Talk { open: talk.open || on, keys: on, ..talk });
+        if let Some(talk) = &mut self.talk {
+            (talk.open, talk.keys) = (talk.open || on, on);
+        }
     }
 
-    /// The drawer is on a task there is, and the keyboard is in it only while it is open, its
-    /// agent runs and nothing else has taken the keyboard.
+    /// The drawer is on a conversation there is, and the keyboard is in it only while it is
+    /// open, its agent runs and nothing else has taken the keyboard.
     fn settle_talk(&mut self) {
         let tasks = &self.tasks;
-        self.agents.retain(|id| tasks.get(*id).is_some());
-        self.opened.retain(|id| tasks.get(*id).is_some());
+        let gone = |subject: &Subject| subject.task().is_some_and(|id| tasks.get(id).is_none());
+        self.agents.retain(|id| !gone(id));
+        self.opened.retain(|id| !gone(id));
         self.seeking.retain(|seek| tasks.get(seek.task).is_some_and(|task| task.session.is_none()));
-        self.starting.retain(|(id, _)| tasks.get(*id).is_some());
-        self.talk = self.talk.filter(|talk| self.tasks.get(talk.task).is_some());
+        self.starting.retain(|(id, _)| !gone(id));
+        self.talk = self.talk.take().filter(|talk| !gone(&talk.task));
         // A picture being drawn on keeps the keyboard, as an app, the list and visual mode do.
         let drawing = self.annotated().is_some();
         let elsewhere = self.live.is_some() || self.list.is_some() || self.visual.is_some() || drawing;
-        if let Some(talk) = self.talk {
-            let keys = talk.keys && talk.open && self.agent_runs(talk.task) && !elsewhere;
-            self.talk = Some(Talk { keys, ..talk });
+        let runs = self.talk.as_ref().is_some_and(|talk| self.agent_runs(&talk.task));
+        if let Some(talk) = &mut self.talk {
+            talk.keys = talk.keys && talk.open && runs && !elsewhere;
         }
     }
 
@@ -4085,7 +4241,7 @@ impl Model {
         // Only the user's own ↵ starts an agent, in the drawer: the workspace stays. A client's
         // "open" shows the task's tabs, as before.
         if open && self.by_user {
-            self.talk_to(id, effects);
+            self.talk_to(Subject::Task(id), effects);
         } else if open {
             self.list = None;
             self.act(Action::TaskOpen { id: Some(id) }, effects);
@@ -4325,7 +4481,7 @@ impl Model {
     }
 
     /// Every listed repository and worktree, as (name, path).
-    fn repo_names(&self) -> impl Iterator<Item = (&str, &str)> {
+    pub fn repo_names(&self) -> impl Iterator<Item = (&str, &str)> {
         self.repos.iter().flat_map(|r| {
             let worktrees = r.worktrees.iter().map(|w| (w.name.as_str(), w.path.as_str()));
             std::iter::once((r.name.as_str(), r.path.as_str())).chain(worktrees)
@@ -4859,7 +5015,9 @@ impl Model {
             effects.push(Effect::Parked(id));
         }
         // Whatever takes the keyboard from an app takes it from the conversation too.
-        self.talk = self.talk.map(|talk| Talk { keys: false, ..talk });
+        if let Some(talk) = &mut self.talk {
+            talk.keys = false;
+        }
     }
 }
 
@@ -5207,6 +5365,7 @@ mod tests {
         Action::SessionAdopt { .. },
         Action::SessionHide { .. },
         Action::SessionClick { .. },
+        Action::SessionOpen { .. },
         Action::ToggleOlderSessions,
         Action::SetApps { .. },
         Action::SetAppSettings { .. },
@@ -5391,6 +5550,7 @@ mod tests {
             Action::SessionAdopt { runner: text(), id: text() },
             Action::SessionHide { runner: text(), id: text() },
             Action::SessionClick { runner: text(), id: text() },
+            Action::SessionOpen { runner: text(), id: text() },
             Action::ToggleOlderSessions,
             Action::RowSnooze { id: 1, until: 0 },
             Action::RowHold { id: 1 },
@@ -5477,16 +5637,16 @@ mod tests {
             Action::SetAgents { claude: Vec::new(), codex: Vec::new(), default: None },
             Action::TaskTalk { id: 1 },
             Action::ComposeEnter,
-            Action::AgentStarted { task: 1, session: None, at: 0 },
+            Action::AgentStarted { task: Subject::Task(1), session: None, at: 0 },
             Action::AgentSessions { found: Vec::new(), home: None, now: 0 },
             Action::SessionMissing { task: 1, id: String::new() },
-            Action::AgentExited { task: 1 },
-            Action::TaskStop { id: 1 },
+            Action::AgentExited { task: Subject::Task(1) },
+            Action::TaskStop { id: Subject::Task(1) },
             Action::TalkToggle,
             Action::TalkKeys { on: true },
             Action::TalkResize { width: 400. },
             Action::TalkWide,
-            Action::TalkPick { id: 1 },
+            Action::TalkPick { id: Subject::Task(1) },
             Action::TasksView { view: TasksView::Project },
             Action::ToggleProject { project: None, done: false },
             Action::SessionWork { work: progress::Work::default() },
@@ -5589,7 +5749,8 @@ mod tests {
             assign: Assign::default(),
         });
         let id = m.tasks.list[0].id;
-        (m.talk, m.agents) = (Some(talk::Talk { task: id, open: true, keys: true }), vec![id]);
+        (m.talk, m.agents) =
+            (Some(talk::Talk { task: Subject::Task(id), open: true, keys: true }), vec![Subject::Task(id)]);
         assert_eq!(m.mode(), Mode::Talk);
         m.update(Action::PaletteOpen);
         assert_eq!(m.mode(), Mode::Palette);
@@ -5619,9 +5780,10 @@ mod tests {
                     _ if origin == Origin::User => None,
                     _ if writes_settings(action) => Some(apps::USERS_ALONE),
                     _ if of_workbooks(action) => Some(workbook::USERS_ALONE),
-                    Action::TaskTalk { .. } | Action::TalkPick { .. } | Action::TaskStop { .. } => {
-                        Some(agents::USERS_ALONE)
-                    }
+                    Action::TaskTalk { .. }
+                    | Action::SessionOpen { .. }
+                    | Action::TalkPick { .. }
+                    | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
                     _ if in_palette(action) && action_is_palettes(action) => Some(commands::USERS_ALONE),
                     _ if in_palette(action) => Some(inspect::USERS_ALONE),
                     Action::InspectorRead { .. } | Action::InspectorFailed { .. } if origin == Origin::Socket => {
@@ -6326,7 +6488,7 @@ mod tests {
         assert_eq!(m.tasks.get(3).map(|t| (t.state, t.snoozed_until)), Some((State::Parked, None)));
         // ↵ on a task opens its conversation, with the keyboard; the workspace stays.
         m.update(Action::ListChoose { axis: Right });
-        assert_eq!((m.active, m.mode(), m.talk.map(|talk| talk.task)), (0, Mode::Talk, Some(1)));
+        assert_eq!((m.active, m.mode(), m.talk.as_ref().and_then(|talk| talk.task.task())), (0, Mode::Talk, Some(1)));
     }
 
     #[test]
@@ -6364,7 +6526,10 @@ mod tests {
         // ↵ opens the task's conversation: the keyboard goes to it, and the list gives it up.
         m.update(Action::ListMove { delta: 1 });
         m.update(Action::ListChoose { axis: Right });
-        assert_eq!((m.mode(), m.current_task, m.talk.map(|talk| talk.task)), (Mode::Talk, None, Some(2)));
+        assert_eq!(
+            (m.mode(), m.current_task, m.talk.as_ref().and_then(|talk| talk.task.task())),
+            (Mode::Talk, None, Some(2))
+        );
     }
 
     #[test]
@@ -6998,7 +7163,7 @@ mod tests {
         // ↵ adds and starts: its conversation opens, so the box goes.
         m.update(Action::OpenCompose { text: "start me".into() });
         m.update(Action::ComposeEnter);
-        assert_eq!((m.compose_host(), m.talk.map(|talk| talk.task)), (None, Some(2)));
+        assert_eq!((m.compose_host(), m.talk.as_ref().and_then(|talk| talk.task.task())), (None, Some(2)));
         // With a pane showing it is the drawer too.
         term(&mut m);
         m.update(Action::OpenCompose { text: "over panes".into() });
@@ -7443,8 +7608,9 @@ mod tests {
 
     fn session(runner: &str, id: &str, cwd: &str, active: bool, at: u64) -> Found {
         let (runner, id, cwd, repo) = (runner.to_string(), id.to_string(), cwd.to_string(), cwd.to_string());
-        let (station, label, title, model) = (None, None, None, None);
-        Found { runner, id, cwd, repo, started: None, last_activity: Some(at), active, station, label, title, model }
+        let (station, label, title, model, held) = (None, None, None, None, false);
+        let (started, last_activity) = (None, Some(at));
+        Found { runner, id, cwd, repo, started, last_activity, active, station, label, title, model, held }
     }
 
     /// The Sessions group as (count, ids of the rows drawn, how many are older).
@@ -7548,6 +7714,159 @@ mod tests {
         assert_eq!((task.title.as_str(), task.project.as_deref()), ("app", None));
         assert_eq!((task.repo.as_deref(), task.agent.as_deref()), (Some("/code/app"), Some("claude")));
         assert!(!serde_json::to_string(&m.tasks).unwrap().contains("Rename it"));
+    }
+
+    /// Sessions of the listed checkouts, for the conversation tests: `idle` started below its
+    /// repository, `busy` at work, `held` idle with a live process, `astray` left the checkout,
+    /// `plain` with an id that is no UUID.
+    fn conversations() -> Model {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        m.update(Action::ToggleSection { section: Section::Tasks });
+        m.update(Action::Tick { now: 9_000_000 });
+        let below = |runner: &str, id: &str, cwd: &str| Found {
+            repo: "/code/app".into(),
+            ..session(runner, id, cwd, false, 1_000)
+        };
+        let found = vec![
+            Found { title: Some("Fix the login".into()), ..below("claude", IDLE, "/code/app/crates/core") },
+            session("codex", BUSY, "/code/app-2", true, 9_000_000),
+            Found { held: true, ..session("claude", HELD, "/code/app", false, 2_000) },
+            below("claude", ASTRAY, "/code/app/../other"),
+            session("claude", "plain", "/code/app", false, 500),
+        ];
+        m.update(Action::SetSessions { found });
+        m
+    }
+
+    const IDLE: &str = "8f14e45f-ceea-467f-a8d3-0242ac130001";
+    const BUSY: &str = "8f14e45f-ceea-467f-a8d3-0242ac130002";
+    const HELD: &str = "8f14e45f-ceea-467f-a8d3-0242ac130003";
+    const ASTRAY: &str = "8f14e45f-ceea-467f-a8d3-0242ac130004";
+
+    fn of_session(runner: &str, id: &str) -> Subject {
+        Subject::Session { runner: runner.into(), id: id.into() }
+    }
+
+    /// `claude --resume <id>` (or Codex's) for `subject`, in `cwd`.
+    fn resumed(subject: Subject, runner: &str, id: &str, cwd: &str) -> Effect {
+        let start = agents::Start::Resume { runner: runner.into(), session: id.into() };
+        Effect::StartAgent { task: subject, start, cwd: Some(cwd.into()), brief: None }
+    }
+
+    #[test]
+    fn opening_a_session_goes_on_with_it_in_the_drawer_where_it_started() {
+        let mut m = conversations();
+        let open = |m: &mut Model, runner: &str, id: &str| {
+            m.update(Action::SessionOpen { runner: runner.into(), id: id.into() })
+        };
+        let idle = of_session("claude", IDLE);
+        // Gone on with in the folder it started in, below the repository: `claude --resume`
+        // finds a session by its directory. No task, no pane, no tab: the workspace stays.
+        assert_eq!(open(&mut m, "claude", IDLE), [resumed(idle.clone(), "claude", IDLE, "/code/app/crates/core")]);
+        assert_eq!((m.tasks.list.len(), m.panes.len(), m.tabs.len(), m.mode()), (0, 0, 1, Mode::Talk));
+        assert_eq!(m.talk, Some(Talk { task: idle.clone(), open: true, keys: true }));
+        // Once: a second open, before the shell says it started and after, starts nothing.
+        assert_eq!(open(&mut m, "claude", IDLE), []);
+        m.update(Action::AgentStarted { task: idle.clone(), session: None, at: 1 }.sent_by(Origin::System));
+        assert_eq!((open(&mut m, "claude", IDLE), m.agents.clone()), (vec![], vec![idle.clone()]));
+        // On the rail like a task's: its title's badge, a ring only while at work, no task.
+        let cell = &m.rail()[0];
+        assert_eq!((&cell.task, cell.mono.as_str(), cell.group, cell.shown), (&idle, "FT", None, true));
+        assert_eq!(cell.tip, "Fix the login\nSession\napp · @claude · 2h");
+        // Stop ends it; a click goes on with it again.
+        assert_eq!(m.update(Action::TaskStop { id: idle.clone() }), [Effect::StopAgent { task: idle.clone() }]);
+        m.update(Action::AgentExited { task: idle.clone() }.sent_by(Origin::System));
+        assert_eq!(open(&mut m, "claude", IDLE).len(), 1);
+        // At work elsewhere, or idle and held by a live process: the drawer says so, and no
+        // second program is started on it.
+        for (runner, id) in [("codex", BUSY), ("claude", HELD)] {
+            assert_eq!(open(&mut m, runner, id), [], "{id}");
+            assert_eq!(m.talk.as_ref().map(|talk| (&talk.task, talk.keys)), Some((&of_session(runner, id), false)));
+            let note = m.talk_note().unwrap_or_default();
+            assert_eq!(note, "its session is live in another terminal: go on with it there");
+        }
+        // Out of the listed checkout, or an id no command is built from: nothing started.
+        for id in [ASTRAY, "plain"] {
+            assert_eq!(open(&mut m, "claude", id), [], "{id}");
+            assert_eq!(m.talk_note().as_deref(), Some("this session cannot be gone on with from here"));
+        }
+        // Not listed (hidden, never read): nothing opens.
+        m.update(Action::SessionHide { runner: "codex".into(), id: BUSY.into() });
+        let before = m.talk.clone();
+        assert_eq!((open(&mut m, "codex", BUSY), open(&mut m, "claude", "nope")), (vec![], vec![]));
+        assert_eq!(m.talk, before);
+    }
+
+    #[test]
+    fn only_the_user_opens_a_sessions_conversation() {
+        for origin in [Origin::Socket, Origin::System] {
+            let mut m = conversations();
+            let open = Action::SessionOpen { runner: "claude".into(), id: IDLE.into() };
+            assert_eq!(m.refusal(&open, origin), Some(agents::USERS_ALONE));
+            assert_eq!((m.update(open.sent_by(origin)), m.talk.clone()), (vec![], None));
+            // A client's adopt makes the task, as before, and starts nothing.
+            let adopt = Action::SessionAdopt { runner: "claude".into(), id: IDLE.into() };
+            assert_eq!((m.update(adopt.sent_by(origin)), m.tasks.list.len(), m.talk.clone()), (vec![], 1, None));
+        }
+    }
+
+    #[test]
+    fn adopting_a_session_makes_its_conversation_the_tasks() {
+        let mut m = conversations();
+        let adopt = |m: &mut Model, runner: &str, id: &str| {
+            m.update(Action::SessionAdopt { runner: runner.into(), id: id.into() })
+        };
+        // Open in the drawer: the conversation becomes the task's, the same program, no second one.
+        let idle = of_session("claude", IDLE);
+        m.update(Action::SessionOpen { runner: "claude".into(), id: IDLE.into() });
+        m.update(Action::AgentStarted { task: idle.clone(), session: None, at: 1 }.sent_by(Origin::System));
+        assert_eq!(adopt(&mut m, "claude", IDLE), [Effect::AgentMoved { from: idle, to: Subject::Task(1) }]);
+        assert_eq!(
+            (m.agents.clone(), m.talk.clone()),
+            (vec![Subject::Task(1)], Some(Talk { task: Subject::Task(1), open: true, keys: true }))
+        );
+        assert_eq!((m.panes.len(), m.tabs.len(), m.current_task), (0, 1, None), "no shell tab");
+        assert_eq!(m.rail().iter().map(|cell| cell.task.clone()).collect::<Vec<_>>(), [Subject::Task(1)]);
+        // Not open: the task's conversation, gone on with where the session started.
+        m.update(Action::SetSessions {
+            found: vec![Found { repo: "/code/app".into(), ..session("claude", HELD, "/code/app/web", false, 2_000) }],
+        });
+        assert_eq!(adopt(&mut m, "claude", HELD), [resumed(Subject::Task(2), "claude", HELD, "/code/app/web")]);
+        assert_eq!(m.tasks.get(2).and_then(|task| task.repo.as_deref()), Some("/code/app"));
+        // At work elsewhere: the task, its conversation with the note, no second program.
+        let mut m = conversations();
+        assert_eq!(adopt(&mut m, "codex", BUSY), []);
+        assert_eq!(m.talk.as_ref().map(|talk| &talk.task), Some(&Subject::Task(1)));
+        assert!(m.talk_note().is_some_and(|note| note.contains("live in another terminal")));
+    }
+
+    /// A task kept on disk before conversations were gone on with in the drawer: a click on it
+    /// goes on with its session there, where the session started.
+    #[test]
+    fn a_task_adopted_before_goes_on_with_its_session_in_the_drawer() {
+        let mut m = conversations();
+        let kept = format!(
+            r#"{{"id":7,"title":"app","state":"needs_you","priority":3,"repo":"/code/app","agent":"claude","created":1,
+                "session":{{"runner":"claude","id":"{IDLE}","state":"needs_you"}}}}"#
+        );
+        let task: Task = serde_json::from_str(&kept).expect("a task as kept");
+        m.update(Action::RestoreTasks { tasks: vec![task], floor: 7 });
+        assert_eq!(
+            m.update(Action::TaskTalk { id: 7 }),
+            [resumed(Subject::Task(7), "claude", IDLE, "/code/app/crates/core")]
+        );
+        // Not read since (the Sessions group was never open): in the task's repository.
+        let mut m = Model::default();
+        m.update(Action::RestoreTasks { tasks: vec![serde_json::from_str(&kept).expect("a task as kept")], floor: 7 });
+        assert_eq!(m.update(Action::TaskTalk { id: 7 }), [resumed(Subject::Task(7), "claude", IDLE, "/code/app")]);
+        // A live process holds it: not gone on with.
+        let mut m = conversations();
+        let found = m.found.iter().map(|s| Found { held: s.id == IDLE, ..s.clone() }).collect();
+        m.update(Action::SetSessions { found });
+        m.update(Action::RestoreTasks { tasks: vec![serde_json::from_str(&kept).expect("a task as kept")], floor: 7 });
+        assert_eq!(m.update(Action::TaskTalk { id: 7 }), []);
+        assert!(m.talk_note().is_some_and(|note| note.contains("live in another terminal")));
     }
 
     #[test]
@@ -7709,9 +8028,13 @@ mod tests {
         m.update(Action::ToggleSection { section: Section::Tasks });
         assert_eq!(click(&mut m, "there"), []);
         assert_eq!((m.list, m.mode(), m.focused), (Some(2), Mode::List, Some(2)), "after the heading and the first");
+        // Choosing it: its conversation in the drawer, no pane, no task. A client's opens nothing.
+        m.update(Action::ListChoose { axis: Right }.sent_by(Origin::Socket));
+        assert_eq!((m.list, m.panes.len(), m.talk.is_none()), (Some(2), 2, true), "a client's opens nothing");
         m.update(Action::ListChoose { axis: Right });
-        assert_eq!((m.list, m.panes.len()), (Some(2), 2), "choosing it opens nothing");
-        m.update(Action::LeaveList);
+        let there = Subject::Session { runner: "claude".into(), id: "there".into() };
+        assert_eq!((m.list, m.panes.len(), m.tasks.list.len()), (None, 2, 0));
+        assert_eq!(m.talk.as_ref().map(|talk| &talk.task), Some(&there));
         // A click on one row, then on another: the selection is on the one clicked last.
         m.update(Action::SetSessions {
             found: vec![
@@ -7877,7 +8200,7 @@ mod tests {
         m.update(Action::TaskLeave);
         m.update(Action::OpenCompose { text: "mine".into() });
         m.update(Action::ComposeSubmit { open: true });
-        let talk = m.talk.map(|talk| talk.task);
+        let talk = m.talk.as_ref().and_then(|talk| talk.task.task());
         assert_eq!((m.current_task, talk, m.compose.as_ref().map(Field::text)), (None, Some(2), None));
     }
 
@@ -7896,64 +8219,70 @@ mod tests {
         // A client starts nothing, and is told why.
         let theirs = Action::TaskTalk { id: 1 };
         assert_eq!(m.refusal(&theirs, Origin::Socket), Some(agents::USERS_ALONE));
-        assert_eq!((m.update(theirs.sent_by(Origin::Socket)), m.talk), (vec![], None));
+        assert_eq!((m.update(theirs.sent_by(Origin::Socket)), m.talk.clone()), (vec![], None));
         // The user's click: the conversation opens with the keyboard, the agent the tag names
         // is asked for in the task's repository, and the workspace stays as it is.
         let launch = |runner, model: Option<&str>, title: &str| {
             agents::Start::New(agents::Launch { runner, model: model.map(str::to_string), title: title.into() })
         };
         let asked = |task, start, cwd: Option<&str>| Effect::StartAgent {
-            task,
+            task: Subject::Task(task),
             start,
             cwd: cwd.map(str::to_string),
             brief: None,
         };
         let codex = launch("codex", Some("gpt-6-astra"), "fix zoom");
         assert_eq!(m.update(Action::TaskTalk { id: 1 }), [asked(1, codex, Some("/code/app"))]);
-        assert_eq!(m.talk, Some(Talk { task: 1, open: true, keys: true }));
+        assert_eq!(m.talk.clone(), Some(Talk { task: Subject::Task(1), open: true, keys: true }));
         assert_eq!((m.mode(), m.current_task, m.tabs.len()), (Mode::Talk, None, 1));
         // Started: the task runs. Codex names its own session, so there is none to follow.
-        system(&mut m, Action::AgentStarted { task: 1, session: Some(UUID.into()), at: 0 });
+        system(&mut m, Action::AgentStarted { task: Subject::Task(1), session: Some(UUID.into()), at: 0 });
         let task = m.tasks.get(1).unwrap();
-        assert_eq!((m.agents.clone(), task.state, task.session.is_none()), (vec![1], State::Running, true));
+        assert_eq!(
+            (m.agents.clone(), task.state, task.session.is_none()),
+            (vec![Subject::Task(1)], State::Running, true)
+        );
         // A second click starts no second agent.
         assert_eq!(m.update(Action::TaskTalk { id: 1 }), []);
         // The keyboard goes back to the workspace and in again; closing to the rail takes it out.
         m.update(Action::TalkKeys { on: false });
-        assert_eq!((m.mode(), m.talk.map(|talk| talk.open)), (Mode::Normal, Some(true)));
+        assert_eq!((m.mode(), m.talk.as_ref().map(|talk| talk.open)), (Mode::Normal, Some(true)));
         m.update(Action::TalkKeys { on: true });
         assert_eq!(m.mode(), Mode::Talk);
         m.update(Action::Focus { pane: 1 });
         assert_eq!(m.mode(), Mode::Normal, "a click on a pane takes the keyboard");
         m.update(Action::TalkToggle);
-        assert_eq!(m.talk, Some(Talk { task: 1, open: false, keys: false }));
+        assert_eq!(m.talk.clone(), Some(Talk { task: Subject::Task(1), open: false, keys: false }));
         m.update(Action::TalkToggle);
-        assert_eq!(m.talk, Some(Talk { task: 1, open: true, keys: true }));
+        assert_eq!(m.talk.clone(), Some(Talk { task: Subject::Task(1), open: true, keys: true }));
         // Stop asks the shell; the agent gone, the task needs the user.
-        assert_eq!(m.update(Action::TaskStop { id: 1 }.sent_by(Origin::Socket)), []);
-        assert_eq!(m.update(Action::TaskStop { id: 1 }), [Effect::StopAgent { task: 1 }]);
-        system(&mut m, Action::AgentExited { task: 1 });
+        assert_eq!(m.update(Action::TaskStop { id: Subject::Task(1) }.sent_by(Origin::Socket)), []);
+        assert_eq!(m.update(Action::TaskStop { id: Subject::Task(1) }), [Effect::StopAgent { task: Subject::Task(1) }]);
+        system(&mut m, Action::AgentExited { task: Subject::Task(1) });
         assert_eq!((m.agents.len(), m.tasks.get(1).unwrap().state, m.mode()), (0, State::NeedsYou, Mode::Normal));
-        assert_eq!(m.update(Action::TaskStop { id: 1 }), []);
+        assert_eq!(m.update(Action::TaskStop { id: Subject::Task(1) }), []);
 
         // No `@agent`: the default agent, in the home folder. Claude takes the session's id:
         // the task follows that session from the start.
         assert_eq!(m.update(Action::TaskTalk { id: 2 }), [asked(2, launch("claude", None, "plain"), None)]);
-        system(&mut m, Action::AgentStarted { task: 2, session: Some(UUID.into()), at: 0 });
+        system(&mut m, Action::AgentStarted { task: Subject::Task(2), session: Some(UUID.into()), at: 0 });
         let link = sessions::Link { runner: "claude".into(), id: UUID.into(), state: Some(State::Running) };
         assert_eq!(m.tasks.get(2).unwrap().session, Some(link));
         assert_eq!(m.followed_sessions(), [("claude".to_string(), UUID.to_string())]);
         // Its terminal gone, a click goes on with that session: nothing of the task is sent again.
-        system(&mut m, Action::AgentExited { task: 2 });
+        system(&mut m, Action::AgentExited { task: Subject::Task(2) });
         let resume = agents::Start::Resume { runner: "claude".into(), session: UUID.into() };
         assert_eq!(m.update(Action::TaskTalk { id: 2 }), [asked(2, resume, None)]);
         // An agent the shell could not start is not running: the keyboard is not left in nothing.
-        system(&mut m, Action::AgentExited { task: 2 });
-        assert_eq!((m.agent_runs(2), m.mode(), m.talk_note().is_some()), (false, Mode::Normal, false));
+        system(&mut m, Action::AgentExited { task: Subject::Task(2) });
+        assert_eq!((m.agent_runs(&Subject::Task(2)), m.mode(), m.talk_note().is_some()), (false, Mode::Normal, false));
 
         // A saved agent names no runner: the drawer says so and starts nothing.
         assert_eq!(m.update(Action::TaskTalk { id: 3 }), []);
-        assert_eq!((m.talk, m.mode()), (Some(Talk { task: 3, open: true, keys: false }), Mode::Normal));
+        assert_eq!(
+            (m.talk.clone(), m.mode()),
+            (Some(Talk { task: Subject::Task(3), open: true, keys: false }), Mode::Normal)
+        );
         assert!(m.talk_note().is_some_and(|note| note.starts_with("@ana is a saved agent")));
         // The settings name the default agent.
         system(&mut m, Action::SetAgents { claude: Vec::new(), codex: Vec::new(), default: Some("codex".into()) });
@@ -7965,8 +8294,8 @@ mod tests {
         let row = m.list_rows().iter().position(|row| *row == ListRow::Task(1)).unwrap();
         m.update(Action::ListMove { delta: row as i32 - m.list.unwrap() as i32 });
         let effects = m.update(Action::ListChoose { axis: Right });
-        assert!(matches!(effects[..], [Effect::StartAgent { task: 1, .. }]), "{effects:?}");
-        assert_eq!((m.talk.map(|talk| talk.task), m.list, m.current_task), (Some(1), None, None));
+        assert!(matches!(effects[..], [Effect::StartAgent { task: Subject::Task(1), .. }]), "{effects:?}");
+        assert_eq!((m.talk.as_ref().and_then(|talk| talk.task.task()), m.list, m.current_task), (Some(1), None, None));
         m.update(Action::TalkResize { width: 9e9 });
         m.update(Action::TalkWide);
         assert_eq!((m.talk_width, m.talk_wide), (talk::MAX_WIDTH, true));
@@ -7986,23 +8315,23 @@ mod tests {
         for i in 1..=12 {
             m.update(Action::TaskFromLine { line: format!("task {i} >app"), known: Default::default(), open: false });
         }
-        let order = |m: &Model| m.rail().iter().map(|cell| cell.task).collect::<Vec<_>>();
+        let order = |m: &Model| m.rail().iter().filter_map(|cell| cell.task.task()).collect::<Vec<_>>();
         assert!(order(&m).is_empty(), "nothing opened: the rail has only its +");
         // Opened and started: 1, 2 and 3 run, in the order they started.
         for id in [1, 2, 3] {
             m.update(Action::TaskTalk { id });
-            system(&mut m, Action::AgentStarted { task: id, session: None, at: 0 });
+            system(&mut m, Action::AgentStarted { task: Subject::Task(id), session: None, at: 0 });
         }
         assert_eq!(order(&m), [1, 2, 3]);
         // 2 needs the user: first. 3 ends while at work, so it needs the user too: the last
         // opened first.
         system(&mut m, Action::TaskSetState { id: 2, state: State::NeedsYou });
-        system(&mut m, Action::AgentExited { task: 3 });
+        system(&mut m, Action::AgentExited { task: Subject::Task(3) });
         assert_eq!(order(&m), [3, 2, 1]);
         // Opened and never started (a saved agent's, or one that failed): idle, the last opened first.
         for id in 4..=12 {
             m.update(Action::TaskTalk { id });
-            system(&mut m, Action::AgentExited { task: id });
+            system(&mut m, Action::AgentExited { task: Subject::Task(id) });
         }
         // At most eight: the oldest idle ones drop off; what needs the user and what runs stay.
         assert_eq!(order(&m), [3, 2, 1, 12, 11, 10, 9, 8]);
@@ -8012,12 +8341,12 @@ mod tests {
         assert_eq!((rail[0].mono.as_str(), rail[2].mono.as_str(), rail[3].mono.as_str()), ("T3", "T1", "T4"));
         assert_eq!(rail[1].tip, "task 2\nNeeds you\napp · @claude");
         // A click on the shown cell closes the drawer; on another, that one shows. Only the user's.
-        m.update(Action::TalkPick { id: 12 });
-        assert_eq!(m.talk, Some(Talk { task: 12, open: false, keys: false }));
+        m.update(Action::TalkPick { id: Subject::Task(12) });
+        assert_eq!(m.talk.clone(), Some(Talk { task: Subject::Task(12), open: false, keys: false }));
         assert!(m.rail().iter().all(|cell| !cell.shown));
-        assert_eq!(m.refusal(&Action::TalkPick { id: 2 }, Origin::Socket), Some(agents::USERS_ALONE));
-        m.update(Action::TalkPick { id: 2 });
-        assert_eq!(m.talk.map(|talk| (talk.task, talk.open)), Some((2, true)));
+        assert_eq!(m.refusal(&Action::TalkPick { id: Subject::Task(2) }, Origin::Socket), Some(agents::USERS_ALONE));
+        m.update(Action::TalkPick { id: Subject::Task(2) });
+        assert_eq!(m.talk.as_ref().map(|talk| (talk.task.task(), talk.open)), Some((Some(2), true)));
         // A task that goes is off the rail.
         m.update(Action::RestoreTasks { tasks: Vec::new(), floor: 12 });
         assert!(order(&m).is_empty());
@@ -8035,7 +8364,7 @@ mod tests {
         }
         for (task, at) in [(1, 1_000), (2, 2_000), (3, 3_000)] {
             m.update(Action::TaskTalk { id: task });
-            system(&mut m, Action::AgentStarted { task, session: None, at });
+            system(&mut m, Action::AgentStarted { task: Subject::Task(task), session: None, at });
         }
         // Codex names its own sessions: they are looked for in the repository. Claude's is not.
         let app = ("codex", Some("/code/app".to_string()));
@@ -8052,17 +8381,17 @@ mod tests {
         system(&mut m, Action::AgentSessions { found, home: None, now: 4_000 });
         assert_eq!((link(&m, 1), link(&m, 2)), (Some(id(8)), Some(id(7))));
         m.update(Action::TaskTalk { id: 4 });
-        system(&mut m, Action::AgentStarted { task: 4, session: None, at: 5_000 });
+        system(&mut m, Action::AgentStarted { task: Subject::Task(4), session: None, at: 5_000 });
         system(&mut m, Action::AgentSessions { found: Vec::new(), home: None, now: 5_000 + agents::SEEK_MS + 1 });
         assert!(m.seeking().is_empty() && link(&m, 4).is_none());
         // An agent gone before its session was found takes none started after it.
         m.update(Action::TaskTalk { id: 3 });
-        system(&mut m, Action::AgentStarted { task: 3, session: None, at: 70_000 });
+        system(&mut m, Action::AgentStarted { task: Subject::Task(3), session: None, at: 70_000 });
         assert_eq!(m.seeking().len(), 0, "task 3 is Claude's: its id is its own");
         m.update(Action::TaskFromLine { line: "gone >app @codex".into(), known: known.clone(), open: false });
         m.update(Action::TaskTalk { id: 5 });
-        system(&mut m, Action::AgentStarted { task: 5, session: None, at: 80_000 });
-        system(&mut m, Action::AgentExited { task: 5 });
+        system(&mut m, Action::AgentStarted { task: Subject::Task(5), session: None, at: 80_000 });
+        system(&mut m, Action::AgentExited { task: Subject::Task(5) });
         system(&mut m, Action::AgentSessions { found: vec![started(9, 81_000)], home: None, now: 82_000 });
         assert!(m.seeking().is_empty() && link(&m, 5).is_none());
     }
@@ -8077,16 +8406,16 @@ mod tests {
         let link = sessions::Link { runner: "claude".into(), id: UUID.into(), state: Some(State::Running) };
         m.tasks.link(1, link);
         assert_eq!(m.update(Action::TaskTalk { id: 1 }), []);
-        assert!(m.talk_note().is_some_and(|note| note.contains("at work elsewhere")));
+        assert!(m.talk_note().is_some_and(|note| note.contains("live in another terminal")));
         // Ours: started, then gone. Its session never written: the next click starts a new one.
         m.tasks.unlink(1);
         assert!(matches!(m.update(Action::TaskTalk { id: 1 })[..], [Effect::StartAgent { .. }]));
-        system(&mut m, Action::AgentStarted { task: 1, session: Some(UUID.into()), at: 0 });
+        system(&mut m, Action::AgentStarted { task: Subject::Task(1), session: Some(UUID.into()), at: 0 });
         // Quitting asks while it runs, with no terminal running anything.
         m.update(Action::QuitAsked { running: Vec::new() });
         assert!(m.confirm.is_some());
         m.update(Action::QuitCancel);
-        system(&mut m, Action::AgentExited { task: 1 });
+        system(&mut m, Action::AgentExited { task: Subject::Task(1) });
         system(&mut m, Action::SessionMissing { task: 1, id: "another".into() });
         assert!(m.tasks.get(1).unwrap().session.is_some(), "another id: not this task's");
         system(&mut m, Action::SessionMissing { task: 1, id: UUID.into() });
@@ -8095,7 +8424,7 @@ mod tests {
         // The drawer shows one thing: opening a conversation closes the new task being written.
         m.update(Action::OpenCompose { text: "half".into() });
         m.update(Action::TaskTalk { id: 1 });
-        assert_eq!((m.compose_host(), m.talk.map(|talk| talk.open)), (None, Some(true)));
+        assert_eq!((m.compose_host(), m.talk.as_ref().map(|talk| talk.open)), (None, Some(true)));
         // The line is kept: the box opened empty takes it back; one opened with text leaves it.
         m.update(Action::OpenCompose { text: String::new() });
         assert_eq!(m.compose_line().map(String::as_str), Some("half"));
@@ -8119,12 +8448,15 @@ mod tests {
         assert_eq!((m.update(Action::ComposeEnter), line(&m), m.tasks.list.len()), (vec![], "fix #canvas ", 4));
         // Nothing to take: the task is added and its agent started, with the keyboard.
         let effects = m.update(Action::ComposeEnter);
-        assert!(matches!(effects[..], [Effect::StartAgent { task: 5, .. }]), "{effects:?}");
-        assert_eq!((m.tasks.list.len(), m.mode(), m.talk.map(|talk| talk.task)), (5, Mode::Talk, Some(5)));
+        assert!(matches!(effects[..], [Effect::StartAgent { task: Subject::Task(5), .. }]), "{effects:?}");
+        assert_eq!(
+            (m.tasks.list.len(), m.mode(), m.talk.as_ref().and_then(|talk| talk.task.task())),
+            (5, Mode::Talk, Some(5))
+        );
         // A client's ↵ files the task and shows its tabs, as its "open" does: no agent.
         m.update(Action::OpenCompose { text: "theirs".into() }.sent_by(Origin::Socket));
         assert_eq!(m.update(Action::ComposeEnter.sent_by(Origin::Socket)), []);
-        assert_eq!((m.tasks.list.len(), m.current_task, m.agent_runs(6)), (6, Some(6), false));
+        assert_eq!((m.tasks.list.len(), m.current_task, m.agent_runs(&Subject::Task(6))), (6, Some(6), false));
     }
 
     #[test]
@@ -8135,7 +8467,7 @@ mod tests {
         // Its agent, in the drawer, with the keyboard, in its repository. No tab opens.
         let launch = agents::Launch { runner: "claude", model: None, title: "fix zoom".into() };
         let start = agents::Start::New(launch);
-        let agent = Effect::StartAgent { task: 1, start, cwd: Some("/code/app".into()), brief: None };
+        let agent = Effect::StartAgent { task: Subject::Task(1), start, cwd: Some("/code/app".into()), brief: None };
         assert_eq!(m.update(Action::ComposeSubmit { open: true }), [agent]);
         assert_eq!((m.compose.as_ref().map(Field::text), m.current_task, m.mode()), (None, None, Mode::Talk));
         assert_eq!((m.tabs.len(), m.layout.is_none()), (1, true));
@@ -8957,9 +9289,10 @@ mod tests {
                     _ if user => None,
                     _ if writes_settings(action) => Some(apps::USERS_ALONE),
                     _ if of_workbooks(action) => Some(workbook::USERS_ALONE),
-                    Action::TaskTalk { .. } | Action::TalkPick { .. } | Action::TaskStop { .. } => {
-                        Some(agents::USERS_ALONE)
-                    }
+                    Action::TaskTalk { .. }
+                    | Action::SessionOpen { .. }
+                    | Action::TalkPick { .. }
+                    | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
                     _ if in_palette(action) && action_is_palettes(action) => Some(commands::USERS_ALONE),
                     _ if in_palette(action) => Some(inspect::USERS_ALONE),
                     Action::InspectorRead { .. } | Action::InspectorFailed { .. } if origin == Origin::Socket => {

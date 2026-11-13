@@ -18,6 +18,7 @@ import type {
   Draft,
   Material,
   Shape,
+  Subject,
   TaskBriefReply,
   Confirm,
   ComposeMenu,
@@ -627,7 +628,7 @@ function composePicks(value: unknown, at: string): Snapshot["compose_picks"] {
 function railCell(value: unknown, at: string): Snapshot["drawer"]["rail"][number] {
   const o = fields(value, at);
   return {
-    task: num(o.task, `${at}.task`),
+    task: subject(o.task, `${at}.task`),
     mono: str(o.mono, `${at}.mono`),
     group: orNull(group)(o.group, `${at}.group`),
     working: bool(o.working, `${at}.working`),
@@ -1018,13 +1019,19 @@ function model(value: unknown, at: string): Model {
     talk: orNull(talk)(o.talk, `${at}.talk`),
     talk_width: num(o.talk_width, `${at}.talk_width`),
     talk_wide: bool(o.talk_wide, `${at}.talk_wide`),
-    agents: list(num)(o.agents, `${at}.agents`),
+    agents: list(subject)(o.agents, `${at}.agents`),
   };
 }
 
-function talk(value: unknown, at: string): { task: number; open: boolean; keys: boolean } {
+function talk(value: unknown, at: string): { task: Subject; open: boolean; keys: boolean } {
   const o = fields(value, at);
-  return { task: num(o.task, `${at}.task`), open: bool(o.open, `${at}.open`), keys: bool(o.keys, `${at}.keys`) };
+  return { task: subject(o.task, `${at}.task`), open: bool(o.open, `${at}.open`), keys: bool(o.keys, `${at}.keys`) };
+}
+
+function subject(value: unknown, at: string): Subject {
+  if (typeof value === "number") return num(value, at);
+  const o = fields(value, at);
+  return { runner: str(o.runner, `${at}.runner`), id: str(o.id, `${at}.id`) };
 }
 
 function terminal(value: unknown, at: string): Terminal {

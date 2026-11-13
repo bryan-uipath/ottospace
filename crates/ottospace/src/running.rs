@@ -27,7 +27,7 @@ fn recorded(dir: &Path) -> Option<u32> {
 }
 
 /// True while process `pid` exists, ours or another user's.
-fn alive(pid: u32) -> bool {
+pub(crate) fn alive(pid: u32) -> bool {
     i32::try_from(pid).is_ok_and(ottospace_mac::process::alive)
 }
 

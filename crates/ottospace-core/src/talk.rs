@@ -11,11 +11,30 @@ pub const WIDTH: f32 = 480.;
 pub const MIN_WIDTH: f32 = 320.;
 pub const MAX_WIDTH: f32 = 1600.;
 
+/// Whose a conversation is: a task's, or a session's that no task owns, by runner and id.
+/// Drawn as the task's id, or as `{"runner": "claude", "id": "<uuid>"}`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(untagged)]
+pub enum Subject {
+    Task(TaskId),
+    Session { runner: String, id: String },
+}
+
+impl Subject {
+    /// The task it is the conversation of, if it is a task's.
+    pub fn task(&self) -> Option<TaskId> {
+        match self {
+            Subject::Task(id) => Some(*id),
+            Subject::Session { .. } => None,
+        }
+    }
+}
+
 /// The conversation the drawer is on.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Talk {
-    /// Whose it is. A session that is no task's will be a second kind of subject here.
-    pub task: TaskId,
+    /// Whose it is.
+    pub task: Subject,
     /// False: closed to the right rail. The agent goes on; the rail's button opens it again.
     pub open: bool,
     /// The keyboard is in it: keys go to the agent, as in an app pane they go to the app.
@@ -69,10 +88,11 @@ pub fn monograms(titles: &[&str]) -> Vec<String> {
 /// A conversation's cell on the right rail.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Cell {
-    pub task: TaskId,
+    pub task: Subject,
     /// Its badge: two letters, told apart from the other cells' (`monograms`).
     pub mono: String,
-    /// The state its ring is coloured by. `None`: a task not listed (snoozed, dismissed).
+    /// The state its ring is coloured by. `None`: a task not listed (snoozed, dismissed), or a
+    /// session's that is idle.
     pub group: Option<Group>,
     /// Its agent is at work: the badge's dot blinks.
     pub working: bool,

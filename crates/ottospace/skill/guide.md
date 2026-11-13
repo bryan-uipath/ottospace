@@ -82,7 +82,7 @@ ottospace ctl '{"cmd":"state"}'
 | `state.compose` | Null, or the text in the new-task box while it is open |
 | `compose_host` | Null, `drawer` (the box is in the right drawer, beside the workspace) or `bar` (it is the title of the draft being collected: `state.capture`) |
 | `compose_plan`, `compose_picks`, `welcome` | What the user's ↵ would do (`agent`, `starts`, `dir`, `branch`), the drawer's repository and agent picks, and whether nothing is open yet |
-| `state.talk`, `state.agents`, `drawer` | The task the right drawer shows (`task`, `open`, `keys`), the tasks whose agent runs there, and what is drawn: `agents` by task (`model`, `ended`, `lines`), `rail` (its conversations in order, each with `tip`), `goes_to`, `note`. Only the user starts, stops or types to an agent |
+| `state.talk`, `state.agents`, `drawer` | The conversation the right drawer shows (`task`, `open`, `keys`), the conversations whose agent runs there, and what is drawn: `agents` by task (`model`, `ended`, `lines`), `rail` (its conversations in order, each with `tip`), `goes_to`, `note`. A conversation is a task's id, or `{"runner","id"}` for a session the user opened that is no task's (in `drawer.agents` keyed `<runner>:<id>`). Only the user starts, stops or types to an agent |
 | `compose_menu` | Null, or the dropdown for the tag at the cursor: `mark`, `typed`, `rows` (each `name`, `kind`, `detail`, `matched`), `selected` (the highlighted row, or null) and `note` (`no match`, `new project`, or null). While `selected` is not null, ↵ takes that row instead of adding the task, unless the word is that name already |
 | `compose_pointing` | Null, or the rect of the tab or pane the user's ⌥-click would reference |
 | `compose_note` | Null, or what the box says it could not do: a name the line has no room for, files left out |
@@ -344,7 +344,8 @@ States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stal
 - **Sessions.** An agent is a saved definition; a session is one running conversation. The
   Tasks section lists sessions that are no task's (`sessions_bar`), read from the runners' own
   files every 5 seconds while the section is open. ottospace never types into a session or
-  signals it, and neither do these requests. The list is kept only while the section is
+  signals it, and neither do these requests. Only the user's click on a row, or Adopt, goes on
+  with a session in the drawer (`claude --resume`, `codex resume`); no request does. The list is kept only while the section is
   open: closed, `sessions_bar` is empty and `session_adopt` finds nothing, so nothing acts on
   what a session did a while ago. `session_adopt` makes a task of one (named after its
   repository, `repo` that repository, `agent` its runner, `session` the link), so it leaves
