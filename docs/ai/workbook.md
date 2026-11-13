@@ -51,7 +51,9 @@ layout back.
 workbook, with the recorded splits:
 
 - a terminal starts in its directory. A directory that is gone: the terminal starts in the
-  user's home folder, and the status bar names the directory;
+  user's home folder, and the status bar names the directory. Directories are looked for off
+  the UI thread and believed for two seconds: one removed inside that time still starts its
+  terminal in the home folder, with no line;
 - an app pane asks the shell for the app's window with `Effect::HostWindow`, as a tab's mark
   does. That is the one path that fills a given pane; the Apps section's `HostApp` always
   makes a new pane, so it cannot keep a layout. The hosting rules are the same: a running
