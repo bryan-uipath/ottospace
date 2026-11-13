@@ -90,6 +90,49 @@ export interface Task {
   created: number | null;
   /** The session it was adopted from, or null. */
   session: { runner: string; id: string } | null;
+  /** What was open that the task points at (`^name`), as it was when the task was added. Nothing acts on it yet. */
+  refs: Ref[];
+}
+
+/** Something a task points at. Ids do not last past a quit: the other keys say what it was. */
+export interface Ref {
+  kind: "tab" | "pane" | "mark" | "app";
+  /** The name it was typed by. */
+  name: string;
+  /** The tab's, pane's or mark's id then. */
+  id?: number;
+  /** A tab's title, or an app pane's window title. */
+  title?: string;
+  /** The app of an app pane, or the app itself. */
+  app?: string;
+  /** A terminal pane's directory, and the program in front of its shell. */
+  cwd?: string;
+  program?: string;
+  /** Where an app that was not running is installed. */
+  bundle?: string;
+}
+
+/** A row of the new-task box's dropdown. */
+export interface MenuRow {
+  /** What goes into the line after the mark. */
+  name: string;
+  /** `project`, `repo`, `agent`, `skill`, `folder`, `file`, `tab`, `pane`, `mark` or `app`. */
+  kind: string;
+  detail: string;
+  /** The characters of `name`, by index, that match what is typed. */
+  matched: number[];
+}
+
+/** The dropdown that finishes the tag at the cursor of the new-task box. */
+export interface ComposeMenu {
+  /** `#`, `>`, `@`, `$`, `/` or `^`. */
+  mark: string;
+  typed: string;
+  rows: MenuRow[];
+  /** The highlighted row: ↵ and Tab take it. Null: ↵ adds the task. */
+  selected: number | null;
+  /** What it says with no row: `no match` or `new project`. */
+  note: string | null;
 }
 
 /** A session no task has adopted, as the Tasks section draws it. */
@@ -206,8 +249,8 @@ export type PickItem =
 
 /** The text field that has the keyboard. Offsets are UTF-16 units: JavaScript string indexes. */
 export interface Field {
-  /** Whose it is: the new-task box's line or the picker's filter. */
-  of: "compose" | "picker" | "apps";
+  /** Whose it is: the new-task box's line, the picker's filter, the Apps section's filter, or a mark's name being typed. */
+  of: "compose" | "picker" | "apps" | "mark";
   text: string;
   cursor: number;
   /** Start and end, in text order. Equal: only a cursor. */
@@ -457,6 +500,11 @@ export interface Snapshot {
   needs_you: number;
   /** The tags of the line in the new-task box have been looked up. */
   compose_read: boolean;
+  /** Where the new-task box is: in place of the home screen's line, over the workspace, or closed. */
+  compose_host: "home" | "modal" | null;
+  compose_menu: ComposeMenu | null;
+  /** The tab or pane an ⌥-click would reference in the new-task box, while ⌥ is held over it. */
+  compose_pointing: Rect | null;
   tasks_bar: TasksBar;
   sessions_bar: SessionsBar;
   /** Null while the tab on show has a pane. */

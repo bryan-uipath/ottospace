@@ -12,7 +12,10 @@ import type {
   Axis,
   CaptureReply,
   Confirm,
+  ComposeMenu,
   Field,
+  MenuRow,
+  Ref,
   Frame,
   Group,
   Heading,
@@ -257,7 +260,46 @@ function task(value: unknown, at: string): Task {
     skills: list(str)(o.skills, `${at}.skills`),
     created: orNull(num)(o.created, `${at}.created`),
     session: orNull(sessionLink)(o.session, `${at}.session`),
+    refs: list(ref)(o.refs, `${at}.refs`),
   };
+}
+
+function ref(value: unknown, at: string): Ref {
+  const o = fields(value, at);
+  const kind = o.kind;
+  if (kind !== "tab" && kind !== "pane" && kind !== "mark" && kind !== "app") throw wrong(`${at}.kind`, "a reference kind", kind);
+  const out: Ref = { kind, name: str(o.name, `${at}.name`) };
+  // Keys that are not there stay out: the typed value is the reply, key for key.
+  if (o.id !== undefined) out.id = num(o.id, `${at}.id`);
+  for (const key of ["title", "app", "cwd", "program", "bundle"] as const) {
+    if (o[key] !== undefined) out[key] = str(o[key], `${at}.${key}`);
+  }
+  return out;
+}
+
+function composeMenu(value: unknown, at: string): ComposeMenu {
+  const o = fields(value, at);
+  const row = (value: unknown, at: string): MenuRow => {
+    const r = fields(value, at);
+    return {
+      name: str(r.name, `${at}.name`),
+      kind: str(r.kind, `${at}.kind`),
+      detail: str(r.detail, `${at}.detail`),
+      matched: list(num)(r.matched, `${at}.matched`),
+    };
+  };
+  return {
+    mark: str(o.mark, `${at}.mark`),
+    typed: str(o.typed, `${at}.typed`),
+    rows: list(row)(o.rows, `${at}.rows`),
+    selected: orNull(num)(o.selected, `${at}.selected`),
+    note: orNull(str)(o.note, `${at}.note`),
+  };
+}
+
+function composeHost(value: unknown, at: string): "home" | "modal" {
+  if (value === "home" || value === "modal") return value;
+  throw wrong(at, "home or modal", value);
 }
 
 function sessionLink(value: unknown, at: string): { runner: string; id: string } {
@@ -351,7 +393,8 @@ function pickItem(value: unknown, at: string): PickItem {
 
 function field(value: unknown, at: string): Field {
   const o = fields(value, at);
-  if (o.of !== "compose" && o.of !== "picker" && o.of !== "apps") throw wrong(`${at}.of`, "compose, picker or apps", o.of);
+  const owners = ["compose", "picker", "apps", "mark"];
+  if (typeof o.of !== "string" || !owners.includes(o.of)) throw wrong(`${at}.of`, "compose, picker, apps or mark", o.of);
   return {
     of: o.of,
     text: str(o.text, `${at}.text`),
@@ -617,6 +660,9 @@ export function snapshot(value: unknown): Snapshot {
     inbox: list(inboxRow)(o.inbox, "inbox"),
     needs_you: num(o.needs_you, "needs_you"),
     compose_read: bool(o.compose_read, "compose_read"),
+    compose_host: orNull(composeHost)(o.compose_host, "compose_host"),
+    compose_menu: orNull(composeMenu)(o.compose_menu, "compose_menu"),
+    compose_pointing: orNull(rect)(o.compose_pointing, "compose_pointing"),
     tasks_bar: tasksBar(o.tasks_bar, "tasks_bar"),
     sessions_bar: sessionsBar(o.sessions_bar, "sessions_bar"),
     home: orNull(home)(o.home, "home"),

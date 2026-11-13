@@ -98,7 +98,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | Drag / double-click / triple-click | Select text / a word / a line in a terminal |
 | ⌘C | Copy the terminal's selection (nothing selected: does nothing). In a [text field](#keys): its selection |
 | ⌘V | Paste into the terminal, or into the open text field |
-| ⌘N | New task: a box opens over the workspace. Type what needs doing, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1` to `p9` (Tab completes the one being typed). ↵ adds the task and closes the box; ⌘↵ adds it and starts it (shows its tabs); Esc closes |
+| ⌘N | New task: a box opens over the workspace, or in place on the home screen. Type what needs doing, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `^reference`, `p1` to `p9`; a dropdown finishes the one at the cursor. ↵ adds the task; ⌘↵ adds it and starts it; Esc closes. [Its keys](#keys) |
 | ⌘⇧N | Next task: shows the tabs of the first task that needs you |
 | ⌘B / ⌘⇧B | Mark the focused pane / the tab on show; on one that is marked, take the mark off (the Marks section offers it back for six seconds, and ⌘B again within them puts the same mark back). The mark is named for the app, the terminal's directory or the tab's title. It records what to open, not a window or a process: a terminal's directory as it is then, an app's bundle id, name and window title, a tab's title, task and split tree. A marked pane or tab shows ◆ and its letter |
 | ⌘' then a letter | Go to the mark with that letter. The status bar shows `MARK?` while it waits; Esc, or a letter of no mark, ends the wait and nothing else happens. If the mark's pane or tab is open, its tab comes forward and the pane takes focus (an app pane is focused, not entered). Else it is opened: a terminal in the recorded directory, the app's window in a pane (the one with the recorded title, else its only window, else its main one; an app that is not running is started), or the tab with its splits. A tab opens with what can be opened: a pane whose directory is gone or whose window could not be hosted is empty and says why, and going to the tab again tries it again |
@@ -124,6 +124,34 @@ Typed text replaces the selection. Movement and deletion go by whole characters 
 (an emoji, a letter with its accent). Input methods and dead keys compose in place, underlined.
 A line wider than the field scrolls with the cursor. The picker's filter holds 200 characters.
 While the quit question is over a field, nothing edits it.
+
+**The new-task box.** ⌘N opens it over the workspace; while the home screen shows (a tab with
+no panes) the home screen's own line is the box, in place, and a click on that line opens it.
+
+| Key | Action |
+|---|---|
+| ↵ | Takes the dropdown's highlighted row. With no row highlighted, or when the word is that name already, adds the task. Over the workspace the box then closes; on the home screen the line stays, empty, for the next task |
+| ⌘↵ | Adds the task and starts it (shows its tabs), whatever is highlighted |
+| Tab | Takes the highlighted row, or the first |
+| ↑ / ↓ or ⌃P / ⌃N | Move over the dropdown's rows. With no dropdown: to the line's start or end |
+| Esc | Closes the dropdown. With no dropdown open: closes the box |
+| ⌘O, or `+ file` | The system's file picker: what is chosen goes into the line as `/path` words |
+| ⌥-click on a tab or a pane | Puts its `^reference` into the line. The tab is not selected, the pane not focused. While ⌥ is held the tab or pane under the pointer is outlined |
+
+- **The dropdown** opens when the cursor is in a tag: up to 8 names for it, with what each is
+  and a word of detail. Names that start with what is typed come first, then those where a
+  word of the name does (`flow-app` for `ap`), then those that have its letters in order. The
+  letters matched are drawn stronger. A bare mark (`#`) lists what there is and highlights
+  nothing; once a letter of the name is typed the first row is highlighted. Typing narrows it;
+  a click on a row takes it.
+- **Taking a row** replaces the whole word under the cursor with the name and a space. A
+  folder takes no space: the dropdown stays open on what is inside it. A space typed after a
+  name that is one of the rows takes that row, spelled as it is kept.
+- **Tags that are understood** are drawn in their colour on a faint chip, in the line itself;
+  a word that names nothing stays plain.
+- **Files.** Files and folders dragged from Finder onto the box, picked with ⌘O, or copied in
+  Finder and pasted (⌘V), each go in at the cursor as a `/path` word: one inside the home
+  folder as `~/..`, a space with a backslash before it.
 
 **The quit question.** ⌘Q, Quit in the menu and the window's red close button all ask the same
 question (status chip `QUIT?`). A quit ends every terminal and what runs in it, so it asks when:
@@ -154,13 +182,14 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
 One line in the new-task box (⌘N), or in `task_new`, becomes a task. Words with a tag mark are
 read out of the line; the rest is the title.
 
-| Tag | Means | Tab completes from |
+| Tag | Means | The dropdown offers |
 |---|---|---|
 | `#project` | The project the task serves | Projects other tasks name |
 | `>repo` | The repository the task works in | The Repos list (repositories and worktrees) |
 | `@agent` | Who works it | `claude` and `codex`, then each `~/.ottospace/agents/<name>.md` if that folder exists |
 | `/path` | A path the task is about: a word that starts with `/` or `~/` | The files and directories under what is typed |
 | `$skill` | A skill to load for the task | Skill folders (those with a `SKILL.md`) in `~/.claude/skills`, `$CLAUDE_CONFIG_DIR/skills`, `~/.codex/skills` (or `$CODEX_HOME/skills` if that is set), and the `.claude/skills` of the task's `>repo` |
+| `^reference` | Something open that the task points at. A space in the name has a backslash before it: `^Tab\ 1` | What is open now: each tab (its title), each pane (a terminal by its directory's name, an app pane by the app's), each [mark](#marks), and the installed apps that are not running. Two of one name: the later one is `name-2` |
 | `p1` to `p9` | The priority. 1 is most urgent; 3 when none is given | |
 
 ```
@@ -168,6 +197,12 @@ fix zoom flicker #canvas >canvas-app @claude p2
 review the export PR >canvas-app @codex $code-review /src/export
 ```
 
+- **A `^reference`** is kept on the task as it was when the task was added: what it is (a
+  tab, a pane, a mark, an app), its name, its id then, and what tells it apart (a tab's title,
+  an app pane's app and window title, a terminal's directory and program, an app's bundle).
+  Ids do not last past a quit. One taken from the dropdown or by ⌥-click is kept even if
+  what it names closes before ↵. Nothing acts on a reference yet: it is stored, counted in
+  the task's row, and in the state as `refs`. Opening a task does not open what it points at.
 - **A tag counts only if its name is known.** A `>word`, `@word` or `$word` that names nothing
   stays in the title where it was typed, and so does a `/word` that is not a file or directory.
   `ask @ana`, `costs $5` and `use > 3 workers` are safe. A name starts with a letter, so `#123`,

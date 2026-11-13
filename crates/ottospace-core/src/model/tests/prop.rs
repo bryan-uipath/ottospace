@@ -383,7 +383,7 @@ const MAKERS: &[Make] = &[
         // Edits of every kind, from the field's own test: offsets inside a character and past
         // the end too. One time in 4 a line with tags, for `ComposeSubmit` to read.
         let len = g.m.open_field().map_or(0, |(_, field)| field.text().len());
-        let edit = crate::edit::tests::Rng(g.rng.next() | 1).edit(len);
+        let edit = crate::edit::fuzz::Rng(g.rng.next() | 1).edit(len);
         Action::FieldEdit { edit: if g.rng.one_in(4) { Edit::Insert(g.line()) } else { edit } }
     },
     |g| {

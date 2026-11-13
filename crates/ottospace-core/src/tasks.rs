@@ -212,6 +212,47 @@ pub struct Task {
     /// The session it was adopted from, if it was: that session is this task's.
     #[serde(default)]
     pub session: Option<crate::sessions::Link>,
+    /// What was open that the task points at, from `^name` words, as it was when the task was
+    /// added. Stored and shown; nothing acts on it yet.
+    #[serde(default)]
+    pub refs: Vec<Ref>,
+}
+
+/// What a reference points at.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RefKind {
+    Tab,
+    Pane,
+    Mark,
+    /// An installed app that was not running.
+    App,
+}
+
+/// Something a task points at, as it was when the task was added: ids do not last past a
+/// quit, so the words that told it apart are kept with it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Ref {
+    pub kind: RefKind,
+    /// The name it was typed by: `Tab 1`, `flow-app`, `Sketchpad`.
+    pub name: String,
+    /// The tab's, pane's or mark's id then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<u32>,
+    /// A tab's title, or an app pane's window title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// The app of an app pane, or the app itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+    /// A terminal pane's directory, and the program in front of its shell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program: Option<String>,
+    /// Where an app that was not running is installed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle: Option<String>,
 }
 
 /// Who works a task, the paths it is about and the skills it loads.
@@ -333,6 +374,7 @@ impl Tasks {
             skills,
             created: None,
             session: None,
+            refs: Vec::new(),
         });
         self.next_id
     }
@@ -347,6 +389,19 @@ impl Tasks {
     /// Names who works a task, the paths it is about and the skills it loads. Names too long to
     /// keep, and those past the twentieth, are dropped. Where the paths were found is kept only
     /// if it is known for every one of them.
+    /// Sets what a task points at: at most `MAX_TAGS`, each name once.
+    pub fn point(&mut self, id: TaskId, refs: Vec<Ref>) {
+        let mut kept: Vec<Ref> = Vec::new();
+        for reference in refs.into_iter().filter(|r| !r.name.is_empty() && r.name.chars().count() <= MAX_TAG) {
+            if kept.len() < MAX_TAGS && kept.iter().all(|k| k.name != reference.name) {
+                kept.push(reference);
+            }
+        }
+        if let Some(task) = self.list.iter_mut().find(|t| t.id == id) {
+            task.refs = kept;
+        }
+    }
+
     pub fn assign(&mut self, id: TaskId, assign: Assign) {
         let Assign { agent, paths, resolved, skills } = assign;
         let fits = |name: &String| !name.is_empty() && name.chars().count() <= MAX_TAG;
@@ -620,6 +675,7 @@ mod tests {
             skills: Vec::new(),
             created: None,
             session: None,
+            refs: Vec::new(),
         };
         let mut tasks = Tasks::default();
         tasks.restore(vec![task(7, "late"), task(2, "early"), task(7, "twin")], 0);

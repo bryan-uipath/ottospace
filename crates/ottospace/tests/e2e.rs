@@ -1023,7 +1023,8 @@ fn the_new_task_box_files_a_line() {
     for (typed, completed) in finished {
         compose(typed);
         assert_eq!(key("tab")["state"]["compose"], completed, "{typed}");
-        key("escape");
+        // Esc closes the dropdown first, if a folder's entries have opened it again.
+        while key("escape")["mode"] == "compose" {}
     }
     // An amount of money is no skill being typed: Tab leaves the line alone.
     compose("costs $5");
@@ -1747,11 +1748,13 @@ fn the_text_field_moves_selects_and_undoes() {
     // The selection is replaced by what is typed next, and ↵ adds the task.
     key("cmd-a");
     key("t i d y");
+    // No pane is open: the box is the home screen's line, and stays for the next task.
     let reply = key("enter");
     assert_eq!(
-        (reply["mode"].as_str(), reply["state"]["tasks"]["list"][0]["title"].as_str()),
-        (Some("normal"), Some("tidy"))
+        (reply["mode"].as_str(), reply["state"]["tasks"]["list"][0]["title"].as_str(), field(&reply).0.as_str()),
+        (Some("compose"), Some("tidy"), "")
     );
+    key("escape");
 
     // A line wider than the box scrolls: the caret stays inside it.
     let long = "a long line of words that goes on and on ".repeat(4);
@@ -1761,6 +1764,204 @@ fn the_text_field_moves_selects_and_undoes() {
     assert!(x > b[0] + b[2] - 20.0 && x <= b[0] + b[2], "the caret is at the right edge: {}", drawn["field"]);
     key("cmd-left");
     assert_eq!(otto.drawn()["field"]["cursor_x"].as_f64(), Some(b[0]));
+}
+
+/// The dropdown of the new-task box as the state gives it: (the names on its rows, the highlighted row).
+fn menu(reply: &Value) -> (Vec<String>, Option<u64>) {
+    let rows = reply["compose_menu"]["rows"].as_array().cloned().unwrap_or_default();
+    let names = rows.iter().filter_map(|row| row["name"].as_str().map(str::to_string)).collect();
+    (names, reply["compose_menu"]["selected"].as_u64())
+}
+
+/// A folder of repositories for a test of the new-task box: `flow-app`, with `src/export/a.md`
+/// and `src/extra.rs` in it.
+fn compose_fixture(name: &str) -> PathBuf {
+    let root = std::env::temp_dir().join(format!("ottospace-e2e-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("flow-app/.git")).unwrap();
+    std::fs::write(root.join("flow-app/.git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::create_dir_all(root.join("flow-app/src/export")).unwrap();
+    std::fs::write(root.join("flow-app/src/export/a.md"), "").unwrap();
+    std::fs::write(root.join("flow-app/src/extra.rs"), "").unwrap();
+    root
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_new_task_dropdown_finishes_the_tag_at_the_cursor() {
+    let root = compose_fixture("complete");
+    let otto = Otto::launch_with("complete", &[("OTTOSPACE_REPOS", root.to_str().unwrap())]);
+    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+    let list = |names: &[&str]| names.iter().map(|name| name.to_string()).collect::<Vec<_>>();
+    for line in ["a #canvas", "b #cables", "c #canvas"] {
+        otto.call(json!({"cmd": "task_new", "line": line}));
+    }
+    // With a pane showing, ⌘N opens the box over the workspace.
+    otto.call(json!({"cmd": "split"}));
+    assert_eq!(key("cmd-n")["compose_host"], "modal");
+    // A bare mark lists what there is and highlights nothing; a letter narrows, and
+    // highlights the first row; ↓ ↑ move.
+    otto.call(json!({"cmd": "key", "keys": "f i x space"}));
+    assert_eq!(menu(&key("#")), (list(&["canvas", "cables"]), None));
+    let reply = key("c a");
+    assert_eq!(menu(&reply), (list(&["canvas", "cables"]), Some(0)));
+    let row = &reply["compose_menu"]["rows"][0];
+    assert_eq!((&row["kind"], &row["detail"], &row["matched"]), (&json!("project"), &json!("2 tasks"), &json!([0, 1])));
+    assert_eq!(menu(&key("down")).1, Some(1));
+    assert_eq!(menu(&key("ctrl-p")).1, Some(0));
+    assert_eq!(menu(&key("n")), (list(&["canvas"]), Some(0)));
+    // Tab takes the row: the word, a space, and the dropdown is gone.
+    let reply = key("tab");
+    assert_eq!((field(&reply).0.as_str(), &reply["compose_menu"]), ("fix #canvas ", &Value::Null));
+    // ↵ on a highlighted row takes it too, and adds no task.
+    assert_eq!(menu(&key(">")), (list(&["flow-app"]), None));
+    let reply = key("f enter");
+    assert_eq!(
+        (field(&reply).0.as_str(), reply["mode"].as_str(), reply["state"]["tasks"]["list"].as_array().map(Vec::len)),
+        ("fix #canvas >flow-app ", Some("compose"), Some(3))
+    );
+    // Esc closes the dropdown and keeps the box; Esc again closes the box.
+    assert_eq!(menu(&key("@ c")).0, ["claude", "codex"]);
+    let reply = key("escape");
+    assert_eq!((&reply["compose_menu"], reply["mode"].as_str()), (&Value::Null, Some("compose")));
+    assert_eq!(key("escape")["mode"], "normal");
+    // A space after a name that is a row's takes it, spelled as it is kept. The name is then
+    // spelled out: ↵ has nothing to take, and adds the task.
+    otto.call(json!({"cmd": "compose", "text": "fix #CABLES"}));
+    assert_eq!(field(&key("space")).0, "fix #cables ");
+    let reply = key("backspace enter");
+    let tasks = reply["state"]["tasks"]["list"].as_array().unwrap();
+    assert_eq!(
+        (reply["mode"].as_str(), tasks.len(), tasks[3]["project"].as_str()),
+        (Some("normal"), 4, Some("cables"))
+    );
+
+    // A path: its folder's entries are read on another thread. Taking a folder keeps the
+    // dropdown open on what is inside it.
+    otto.call(json!({"cmd": "compose", "text": "see >flow-app /sr"}));
+    let rows = |want: &[&str]| {
+        otto.wait_for("the entries of the path", |o| {
+            let reply = o.call(json!({"cmd": "state"}));
+            (menu(&reply).0 == want).then_some(reply)
+        })
+    };
+    assert_eq!(rows(&["/src/"])["compose_menu"]["rows"][0]["kind"], "folder");
+    assert_eq!(field(&key("tab")).0, "see >flow-app /src/");
+    assert_eq!(menu(&rows(&["/src/export/", "/src/extra.rs"])).1, None, "nothing of a name is typed yet");
+    key("e x p");
+    rows(&["/src/export/"]);
+    assert_eq!(field(&key("enter")).0, "see >flow-app /src/export/");
+    assert_eq!(rows(&["/src/export/a.md"])["compose_menu"]["rows"][0]["kind"], "file");
+    assert_eq!(field(&key("down enter")).0, "see >flow-app /src/export/a.md ");
+    otto.wait_for("the line's tags", |o| {
+        o.call(json!({"cmd": "state"}))["compose_read"].as_bool().filter(|read| *read)
+    });
+    let reply = key("enter");
+    let task = &reply["state"]["tasks"]["list"][4];
+    assert_eq!((task["title"].as_str(), &task["paths"]), (Some("see"), &json!(["/src/export/a.md"])));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn files_dropped_on_the_new_task_box_and_what_is_pointed_at_go_into_the_line() {
+    let root = compose_fixture("drop");
+    std::fs::create_dir_all(root.join("My Notes")).unwrap();
+    std::fs::write(root.join("My Notes/plan b.md"), "").unwrap();
+    let otto = Otto::launch_with("drop", &[("OTTOSPACE_REPOS", root.to_str().unwrap())]);
+    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+    let read = || {
+        otto.wait_for("the line's tags", |o| o.call(json!({"cmd": "state"}))["compose_read"].as_bool().filter(|r| *r))
+    };
+    otto.call(json!({"cmd": "split"}));
+    // Nothing to drop on while the box is closed.
+    assert_eq!(otto.raw(r#"{"cmd":"compose_drop","paths":["/tmp"]}"#)["ok"], false);
+
+    // A file and a folder, dropped as Finder drops them: each a path word at the cursor, a
+    // space in a name kept with a backslash.
+    otto.call(json!({"cmd": "compose", "text": "read"}));
+    let (file, folder) = (root.join("My Notes/plan b.md"), root.join("flow-app/src"));
+    let (file, folder) = (file.to_str().unwrap(), folder.to_str().unwrap());
+    let reply = otto.call(json!({"cmd": "compose_drop", "paths": [file, folder]}));
+    assert_eq!(field(&reply).0, format!("read {} {folder} ", file.replace(' ', "\\ ")));
+    read();
+    let reply = key("enter");
+    let task = &reply["state"]["tasks"]["list"][0];
+    assert_eq!(
+        (task["title"].as_str(), &task["paths"], &task["resolved"]),
+        (Some("read"), &json!([file, folder]), &json!([file, folder]))
+    );
+
+    // `^` names what is open: the tab, the terminal pane. ↓ ↵ takes the first.
+    otto.call(json!({"cmd": "compose", "text": "compare ^"}));
+    let reply = otto.call(json!({"cmd": "state"}));
+    let kinds: Vec<&str> =
+        reply["compose_menu"]["rows"].as_array().unwrap().iter().filter_map(|r| r["kind"].as_str()).collect();
+    assert_eq!((kinds, menu(&reply).1), (vec!["tab", "pane"], None));
+    let pane_name = reply["compose_menu"]["rows"][1]["name"].as_str().unwrap().to_string();
+    assert_eq!(field(&key("down enter")).0, r"compare ^Tab\ 1 ");
+    // ⌥ over the pane behind the box outlines it; an ⌥-click puts its reference in the line.
+    // The box stays open, and the pane is not clicked.
+    let frame = rect(&otto.drawn()["frames"]["1"]);
+    let below = at(frame, 0.5, 0.9);
+    let alt = |action: &str| {
+        otto.call(json!({"cmd": "mouse", "action": action, "x": below[0], "y": below[1], "modifiers": ["alt"]}))
+    };
+    assert_eq!(rect(&alt("move")["compose_pointing"]), frame);
+    alt("down");
+    let reply = alt("up");
+    let escaped = pane_name.replace(' ', "\\ ");
+    assert_eq!((field(&reply).0, reply["mode"].as_str()), (format!(r"compare ^Tab\ 1 ^{escaped} "), Some("compose")));
+    assert_eq!(otto.mouse("move", below)["compose_pointing"], Value::Null, "no ⌥: nothing is outlined");
+    // The task keeps what each pointed at, as it was.
+    let reply = key("enter");
+    let task = &reply["state"]["tasks"]["list"][1];
+    assert_eq!((reply["mode"].as_str(), task["title"].as_str()), (Some("normal"), Some("compare")));
+    assert_eq!((&task["refs"][0]["kind"], &task["refs"][0]["title"]), (&json!("tab"), &json!("Tab 1")));
+    assert_eq!(
+        (&task["refs"][1]["kind"], &task["refs"][1]["id"], task["refs"][1]["name"].as_str()),
+        (&json!("pane"), &json!(1), Some(pane_name.as_str()))
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn on_the_home_screen_the_new_task_line_is_the_box() {
+    let otto = Otto::launch("home-compose");
+    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+    // A click on the line: the box opens in its place. No panel over the workspace.
+    let resting = rect(&otto.drawn()["home_drawn"]["panel"]);
+    let reply = otto.click([resting[0] + resting[2] / 2.0, resting[1] + 24.0], 1);
+    assert_eq!((reply["mode"].as_str(), reply["compose_host"].as_str()), (Some("compose"), Some("home")));
+    // Typing goes into it. Its dropdown opens under the line, and what the lattice keeps
+    // clear grows with it.
+    let open = rect(&otto.drawn()["home_drawn"]["panel"]);
+    let reply = key("t i d y space # x");
+    assert_eq!((field(&reply).0.as_str(), reply["compose_menu"]["note"].as_str()), ("tidy #x", Some("new project")));
+    let grown = rect(&otto.drawn()["home_drawn"]["panel"]);
+    assert!(
+        grown[3] > open[3] + 10.0 && (grown[0], grown[2]) == (resting[0], resting[2]),
+        "{resting:?} {open:?} {grown:?}"
+    );
+    // ↵ adds the task and the line stays, empty, on the home screen.
+    let reply = key("enter");
+    assert_eq!(
+        (
+            reply["state"]["tasks"]["list"][0]["title"].as_str(),
+            reply["compose_host"].as_str(),
+            field(&reply).0.as_str()
+        ),
+        (Some("tidy"), Some("home"), "")
+    );
+    assert!(reply["home"]["nodes"].as_array().is_some_and(|nodes| nodes.len() == 1), "the task has its node");
+    // Esc goes back to the resting line; ⌘N opens it in place again.
+    assert_eq!(key("escape")["compose_host"], Value::Null);
+    assert_eq!(key("cmd-n")["compose_host"], "home");
+    key("escape");
+    // With a pane showing, ⌘N is the box over the workspace.
+    otto.call(json!({"cmd": "split"}));
+    assert_eq!(key("cmd-n")["compose_host"], "modal");
 }
 
 #[test]

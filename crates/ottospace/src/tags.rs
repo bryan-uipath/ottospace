@@ -18,6 +18,8 @@ pub struct Job {
     /// call's own number: every one of those is answered, in order.
     pub call: u64,
     pub line: String,
+    /// The path being typed at the cursor, to list what finishes it.
+    pub typing: Option<String>,
     /// The repository the line names with `>name`: a `/path` may be inside it, and its
     /// `.claude/skills` count.
     pub repo: Option<String>,
@@ -30,6 +32,7 @@ pub struct Job {
 pub struct Read {
     pub call: u64,
     pub line: String,
+    pub typing: Option<String>,
     pub names: Option<Names>,
     pub paths: Vec<PathFound>,
     pub entries: Vec<String>,
@@ -84,11 +87,8 @@ fn read(job: Job, agents_dir: Option<&Path>, skill_dirs: &[PathBuf]) -> Read {
     let repo = job.repo.as_deref().map(Path::new);
     let names = job.names.then(|| Names { agents: agents(agents_dir), skills: skills(skill_dirs, repo) });
     let paths = paths(&compose::path_words(&job.line), repo);
-    let entries = match compose::completing(&job.line) {
-        Some(('/', typed)) => entries(&typed, repo),
-        _ => Vec::new(),
-    };
-    Read { call: job.call, line: job.line, names, paths, entries }
+    let entries = job.typing.as_deref().map(|typed| entries(typed, repo)).unwrap_or_default();
+    Read { call: job.call, line: job.line, typing: job.typing, names, paths, entries }
 }
 
 fn home() -> Option<PathBuf> {

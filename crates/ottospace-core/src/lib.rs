@@ -3,6 +3,7 @@
 
 pub mod apps;
 pub mod ax;
+pub mod complete;
 pub mod compose;
 pub mod edit;
 #[cfg(test)]

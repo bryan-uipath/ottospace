@@ -354,6 +354,10 @@ export class Client {
   compose(args: { text?: string } = {}): Promise<Snapshot> {
     return this.snapshot({ cmd: "compose", ...args });
   }
+  /** For tests, as `mouse`: files or folders dropped on the open new-task box. */
+  composeDrop(args: { paths: string[] }): Promise<Snapshot> {
+    return this.snapshot({ cmd: "compose_drop", ...args });
+  }
   /** Shows the tabs of the first task that needs the user. */
   async taskPop(): Promise<TaskPopReply> {
     return taskPopReply(await this.send({ cmd: "task_pop" }));

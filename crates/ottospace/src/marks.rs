@@ -313,11 +313,19 @@ impl Workspace {
     /// the mark), text for its name, ⌫, ↵ and Esc.
     pub(crate) fn mark_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
         let key = &event.keystroke;
-        if key.modifiers.platform {
+        let renaming = matches!(self.model.mark_input, Some(MarkInput::Rename { .. }));
+        if key.modifiers.platform && !renaming {
             return; // ⌘ shortcuts still reach their bindings, and end the wait
         }
+        // A name is a text field: it edits as the others do, and what types text is left to
+        // the input method.
+        if renaming && !matches!(key.key.as_str(), "escape" | "enter") {
+            if self.field_key(event, window, cx) {
+                cx.stop_propagation();
+            }
+            return;
+        }
         cx.stop_propagation();
-        let renaming = matches!(self.model.mark_input, Some(MarkInput::Rename { .. }));
         // A held key types only into a name: one press, one jump.
         if event.is_held && !renaming {
             return;
@@ -454,15 +462,14 @@ impl Workspace {
                 "app" => ("APP", theme::APP),
                 _ => ("TAB", theme::TEXT),
             };
-            let renaming = match input {
-                Some(MarkInput::Rename { mark, text }) if *mark == id => Some(text.clone()),
-                _ => None,
-            };
+            let renaming = matches!(input, Some(MarkInput::Rename { mark, .. }) if *mark == id);
             let lettering = input == Some(&MarkInput::SetKey { mark: id });
             let name = match renaming {
-                // The name being typed, with a caret.
-                Some(text) => div().text_color(rgb(theme::MARK)).child(format!("{text}▏")),
-                None => div().when(!row.available, |d| d.text_color(rgb(theme::MUTED))).child(row.name.clone()),
+                // The name being typed: the text field.
+                true => {
+                    div().flex_1().min_w_0().flex().text_color(rgb(theme::MARK)).child(self.render_field("name", cx))
+                }
+                false => div().when(!row.available, |d| d.text_color(rgb(theme::MUTED))).child(row.name.clone()),
             };
             let letter = match (lettering, row.key) {
                 (true, _) => "?".to_string(),
@@ -540,6 +547,7 @@ impl Workspace {
                     this.choose_mark(id, axis, window, cx);
                 }))
         });
+        let rows: Vec<_> = rows.collect();
         // After a mark is taken off, a line at the top offers to put it back, as Tasks does.
         let notice = self.mark_offered().map(|_| {
             self.undo_line("mark-undo", Moved::MarkRemoved.title())

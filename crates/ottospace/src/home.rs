@@ -359,6 +359,29 @@ impl Workspace {
                     .child("click, or ⌘N from anywhere"),
             );
 
+        // While the new-task box is open here, the line is the box itself: the same content
+        // the modal shows, in place. The text column grows with its dropdown, and with it
+        // what the lattice keeps clear.
+        let composing = self.model.compose_host() == Some(ottospace_core::model::Host::Home);
+        let line = match composing {
+            true => crate::dialog::panel(theme::COMPOSE)
+                .id("home-new-task")
+                .occlude()
+                .p_3()
+                .child(self.new_task_content(cx))
+                .into_any_element(),
+            false => line.into_any_element(),
+        };
+        // A click anywhere else on the home screen puts the line back; no node under it is clicked.
+        let away = composing.then(|| {
+            div().id("home-compose-away").absolute().size_full().occlude().on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.dispatch(ottospace_core::Action::CloseCompose, this.input, window, cx);
+                }),
+            )
+        });
+
         let rows: Vec<_> = (home.needs_you.iter().enumerate())
             .map(|(i, task)| {
                 div()
@@ -490,6 +513,7 @@ impl Workspace {
             .overflow_hidden()
             .child(lines.absolute().size_full())
             .children(nodes)
+            .children(away)
             .child(panel)
             .children(legend)
             .into_any_element()

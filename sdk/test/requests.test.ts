@@ -75,6 +75,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.sessionClick({ runner: "claude", id: "11111111-1111-4111-8111-111111111111" }),
   (c) => c.sessionsOlder(),
   (c) => c.compose({ text: "a draft" }),
+  (c) => c.composeDrop({ paths: ["/tmp/a.txt"] }),
   (c) => c.taskPop(),
   (c) => c.taskOpen({ id: 1 }),
   (c) => c.taskLeave(),

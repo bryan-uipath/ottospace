@@ -8,6 +8,7 @@ pub mod dock;
 pub mod hotkey;
 pub mod icon;
 pub mod input;
+pub mod pasteboard;
 pub mod process;
 pub mod recovery;
 pub mod window;
