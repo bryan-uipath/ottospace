@@ -61,6 +61,7 @@ ottospace            # opens on the Repos list
 | Type in the app | Click its pane. The status bar turns `APP`; ottospace keys stop |
 | Come back | Click ottospace itself, or the return key |
 | Give the window back to macOS | Come back to ottospace first, then ⌘W on its pane: the window returns to where it was |
+| Find a window lost off screen | `ottospace rescue` in a terminal, or Developer ▸ Bring All Windows Back |
 
 The badge on an app is how many windows it has open. A new window of a hosted app gets its own pane.
 

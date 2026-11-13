@@ -51,7 +51,9 @@ Rules:
   `OTTOSPACE_E2E_SHOW`: it opens in the middle of the screen and takes clicks, still without
   taking the keyboard by itself.
 - **App-window loop:** `cargo e2e-apps`. Hosts real windows of `ottospace-canary`, a test app
-  built from this package (`src/bin`). `OTTOSPACE_HOST_ONLY=<pid>` limits hosting to that process, and turns the recovery file off.
+  built from this package (`src/bin`). `OTTOSPACE_HOST_ONLY=<pid>` limits hosting (and `ottospace rescue`) to that process. A test
+  run keeps the record of hosted windows (`hosted.json`) only in a folder it names with
+  `OTTOSPACE_HOME`, and starts the guardian only with `OTTOSPACE_GUARD` set.
   The run takes keyboard focus while it lasts. Needs
   Accessibility and Screen Recording for the terminal. Use it for anything that moves, parks,
   adopts or restores a real window.

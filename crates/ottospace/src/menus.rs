@@ -113,6 +113,7 @@ pub fn app_menus() -> Vec<Menu> {
                 item("Copy State as JSON", commands::CopyState),
                 item("Open the Settings File", commands::OpenSettings),
                 item("Open the ottospace Folder", commands::OpenFolder),
+                item("Bring All Windows Back", commands::BringBack),
             ],
         },
         Menu { name: "Help".into(), items: vec![item("Keys", ShowKeys)] },

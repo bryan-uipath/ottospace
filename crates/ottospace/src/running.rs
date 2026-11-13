@@ -28,13 +28,7 @@ fn recorded(dir: &Path) -> Option<u32> {
 
 /// True while process `pid` exists, ours or another user's.
 fn alive(pid: u32) -> bool {
-    unsafe extern "C" {
-        fn kill(pid: i32, signal: i32) -> i32;
-    }
-    // 0 and negative pids name process groups, not one process.
-    let Ok(pid) = i32::try_from(pid) else { return false };
-    // SAFETY: signal 0 sends nothing; it only checks that the process exists.
-    pid > 0 && (unsafe { kill(pid, 0) } == 0 || io::Error::last_os_error().raw_os_error() == Some(1)) // EPERM
+    i32::try_from(pid).is_ok_and(ottospace_mac::process::alive)
 }
 
 /// Records process `pid` running `program` in `dir`, unless the file names another live process:

@@ -247,6 +247,32 @@ pub unsafe fn add_button(ns_view: *mut c_void, title: &str, at: [f64; 4]) {
     view.addSubview(&button);
 }
 
+/// Moves the view's window so its top left is at `x`, `y`, in Accessibility's coordinates
+/// (global, from the main screen's top left). Unconstrained: off screen if asked. For the canary.
+///
+/// # Safety
+/// `ns_view` must point to a live `NSView`, and this must run on the main thread.
+pub unsafe fn move_to(ns_view: *mut c_void, x: f64, y: f64) {
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let view = unsafe { &*(ns_view as *const NSView) };
+    let height = NSScreen::screens(mtm).firstObject().map_or(0.0, |s| s.frame().size.height);
+    if let Some(window) = view.window() {
+        window.setFrameTopLeftPoint(NSPoint::new(x, height - y));
+    }
+}
+
+/// The view's window frame `[x, y, w, h]` in Accessibility's coordinates. For the canary.
+///
+/// # Safety
+/// `ns_view` must point to a live `NSView`, and this must run on the main thread.
+pub unsafe fn frame(ns_view: *mut c_void) -> Option<[f64; 4]> {
+    let mtm = MainThreadMarker::new()?;
+    let view = unsafe { &*(ns_view as *const NSView) };
+    let height = NSScreen::screens(mtm).firstObject().map_or(0.0, |s| s.frame().size.height);
+    let f = view.window()?.frame();
+    Some([f.origin.x, height - f.origin.y - f.size.height, f.size.width, f.size.height])
+}
+
 /// Makes this process a background app: no Dock icon, no place in the app switcher, and it does
 /// not come to the front when it starts. For test runs, which must not take the user's keyboard.
 pub fn stay_in_background() {

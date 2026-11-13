@@ -23,6 +23,7 @@ pub mod model;
 pub mod palette;
 pub mod progress;
 pub mod repos;
+pub mod restore;
 pub mod rules;
 pub mod scrollbar;
 pub mod secrets;

@@ -113,6 +113,7 @@ commands! {
     CopyState: "Copy State as JSON", Developer;
     OpenSettings: "Open the Settings File", Developer;
     OpenFolder: "Open the ottospace Folder", Developer;
+    BringBack: "Bring All Windows Back", Developer;
     Hide: "Hide ottospace", App;
     Quit: "Quit ottospace", App;
 }

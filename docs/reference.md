@@ -247,7 +247,8 @@ or a click outside closes it. A command that nothing matches keeps the box open.
 The Developer group, also the Developer menu: Accessibility Overlay (⌘⌃A), [Accessibility
 Inspector](#accessibility-inspector), Copy State as JSON
 (the reply of `{"cmd":"state"}`, to the clipboard), Open the Settings File and Open the ottospace
-Folder (in the Finder; a test run that named no folder has none).
+Folder (in the Finder; a test run that named no folder has none), and Bring All Windows Back
+(see [Getting a window back](#getting-a-window-back)).
 
 The palette is the user's: a socket client cannot open it, type in it or choose (its keys are
 refused while it is open), and pane requests wait behind it as they do behind the picker. ⌘P is a
@@ -549,7 +550,8 @@ it is still among all apps. Each of these writes `~/.ottospace/settings.json` (`
   (one in another folder, or the second of two with one name) is written by its path.
 - Only your own key or click pins, unpins, hides or undoes: a socket client's key or sneak
   label is refused ("settings are the user's to change").
-A running app has no Pin button yet. Original window frames are saved to disk and restored on quit or after a crash.
+A running app has no Pin button yet. Original window frames are saved to disk and restored on
+every way out: see [Getting a window back](#getting-a-window-back).
 
 Click an app pane to give it the keyboard (`APP` mode). If you bring a hosted app forward from
 outside (its Dock icon, ⌘Tab) and the window it shows is one ottospace holds, ottospace comes
@@ -686,6 +688,32 @@ macOS cannot reparent another process's window, so ottospace fakes embedding wit
 a display, and its pane shows an SCK stream of it. Clicking the pane moves the real window over it
 and replays the click, so input is native. A pane shows one title bar: the stream leaves out the
 app's own, and the live window's covers the pane header. Measurements and risks: [docs/ai/hosting-windows.md](ai/hosting-windows.md).
+
+### Getting a window back
+
+ottospace records each hosted window's original frame in `~/.ottospace/hosted.json` (pids,
+window ids and frames; no titles) and puts the window back on every way out:
+
+| How ottospace ends | What puts the window back |
+|---|---|
+| ⌘Q, Quit in the menu, the close button, Dock ▸ Quit, logout, `ottospace ctl '{"cmd":"quit"}'` | The quit itself |
+| `kill`, ^C in the terminal that started it, that terminal closing (TERM, INT, HUP) | The same quit. A second signal ends it at once, and the guardian takes over |
+| A crash, `kill -9`, a hang ended by Force Quit | The guardian: a small `ottospace guard` process the app starts, which waits for it to end and puts its windows back within about two seconds |
+| None of these ran (the guardian lacked Accessibility, say) | The next start |
+
+A window goes back to its original frame, read back to be sure. If it would not be reachable
+there (at least 120×60 points of its top inside a screen's visible area: an original on a display
+since unplugged, say) or the app refuses, it goes to the middle of the main screen, at its own size
+or the screen's. A window found already off screen when hosted is recorded at the middle of the
+main screen, and the status bar says so. If an app replaced its window while hosted, its windows
+left in the parking spot come back instead. ottospace only moves and sizes windows: it never
+minimises or hides them, nor moves them to another Space.
+
+To bring back any window stranded off screen, whatever left it there: `ottospace rescue` in a
+terminal (no app need run), or Developer ▸ Bring All Windows Back (also in the ⌘P palette). Each
+standard window of a running app that lies wholly off every display, or in ottospace's parking
+spot, moves to the middle of the main screen. Visible windows, and windows a running ottospace
+hosts, are left alone. A socket client cannot run it.
 
 ## Design docs
 
