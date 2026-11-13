@@ -174,10 +174,33 @@ mod tests {
     use super::*;
     use std::io::Cursor;
     use std::io::Write;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
-    fn temp(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("ottospace-sessions-{}-{name}", std::process::id()))
+    /// A file path in the temp dir, removed when the test ends, pass or fail.
+    fn temp(name: &str) -> Scratch {
+        Scratch(std::env::temp_dir().join(format!("ottospace-sessions-{}-{name}", std::process::id())))
+    }
+
+    struct Scratch(PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    impl std::ops::Deref for Scratch {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl AsRef<Path> for Scratch {
+        fn as_ref(&self) -> &Path {
+            &self.0
+        }
     }
 
     #[test]
@@ -248,7 +271,7 @@ mod tests {
         // A FIFO with no writer would block `File::open` for good.
         let path = temp("pipe.jsonl");
         let _ = std::fs::remove_file(&path);
-        let made = std::process::Command::new("mkfifo").arg(&path).status().is_ok_and(|s| s.success());
+        let made = std::process::Command::new("mkfifo").arg(&*path).status().is_ok_and(|s| s.success());
         assert!(made, "mkfifo");
         assert_eq!(open(&path).unwrap_err().kind(), io::ErrorKind::InvalidInput);
         assert!(head(&path, 1, 100).is_err() && tail(&path, 100).is_err() && small(&path).is_none());

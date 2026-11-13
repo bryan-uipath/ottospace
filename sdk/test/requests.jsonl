@@ -68,4 +68,5 @@
 {"cmd":"mark_go","name":"notes","axis":"down"}
 {"cmd":"mark_remove","key":"n"}
 {"cmd":"mark_rename","name":"notes","to":"journal"}
+{"cmd":"trace"}
 {"cmd":"quit"}

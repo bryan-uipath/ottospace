@@ -30,11 +30,35 @@ fn allowed() -> bool {
     std::env::var("OTTOSPACE_REAL_CLI").is_ok_and(|value| value == "1")
 }
 
-fn empty_dir(name: &str) -> PathBuf {
+/// Removed when the test ends, pass or fail.
+fn empty_dir(name: &str) -> Scratch {
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let dir = std::env::temp_dir().join(format!("ottospace-real-{name}-{nanos}"));
     std::fs::create_dir_all(&dir).unwrap();
-    dir
+    Scratch(dir)
+}
+
+/// A folder removed on drop. Use it as a `&Path`.
+struct Scratch(PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+impl std::ops::Deref for Scratch {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for Scratch {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
 }
 
 /// A protocol name worth printing: name-shaped (`station::is_name`, plus `/`), else `?`.

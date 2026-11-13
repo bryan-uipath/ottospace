@@ -108,6 +108,7 @@ ottospace ctl '{"cmd":"state"}'
 | `capture` | `key` (the registered capture key, or null), `bar` and `picture` (where the right bar and the picture being annotated are drawn), `encoded`, `pending` (pictures asked for and not taken yet), `dir` (the draft's folder, or null) and `brief` |
 | `state.mark_input` | Null, or what a mark waits for while `mode` is `mark`: `{"type":"jump"}` (⌘' was pressed: the next letter goes to that mark), `{"type":"rename","mark":1,"text":".."}` or `{"type":"set_key","mark":1}`. Also `{"type":"workbook","workbook":1,"text":".."}` (with `"tab":0`: the title of that tab of it): the user is typing a workbook's name, and your keys are refused until they finish |
 | `bounds.<id>` | Where each pane of the active tab is drawn: `[x, y, w, h]` |
+| `frame` | `number` (frames drawn), `seq` (actions handled), `drawn` (how many of them the last frame drew), `waited_ms` and `window` (the window's number, or null). While `drawn` is below `seq`, what is drawn (`bounds`, `headers`, rows) may be a frame old |
 
 ## Requests
 
@@ -619,6 +620,18 @@ while `mode` is `sneak`:
 Controls inside a hosted app's window get no label. Sneak presses no control inside another app and sets no value; entering an app pane raises its window, as a click on the pane does. A request with its own name
 (`focus`, `select_tab`, `section`) is simpler when there is one; `close` and `tab-close` labels end
 shells, as `close` and `close_tab` do.
+
+What ottospace did lately, to explain something that went wrong:
+
+```sh
+ottospace ctl '{"cmd":"trace"}'
+```
+
+It replies `{"ok":true,"trace":".."}`, not the state: the last 2,000 events, one JSON object per
+line, oldest first. Each has `ms` (since the app started) and `ev`: `action` (`name`, `origin`,
+`effects`, `seq`), `frame` (`number`, `seq`, `took_ms`), `request` and `reply` (`cmd`, `took_ms`),
+`terminal_spawn`, `terminal_exit`, `host`, `park`, `unpark`, `window_gone` (pane and window ids),
+`timeout`. Names, times and ids only: never text, titles or paths. It only reads.
 
 ## Recipes
 

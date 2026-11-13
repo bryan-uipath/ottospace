@@ -36,12 +36,36 @@ fn codex() -> Codex {
     Codex::new(fixtures().join("codex"))
 }
 
-/// A fresh folder under the system temp dir, as a resolved path.
-fn temp(name: &str) -> PathBuf {
+/// A fresh folder under the system temp dir, as a resolved path. Removed when the test ends,
+/// pass or fail.
+fn temp(name: &str) -> Scratch {
     let dir = std::env::temp_dir().join(format!("ottospace-sessions-{}-{name}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
-    dir.canonicalize().unwrap()
+    Scratch(dir.canonicalize().unwrap())
+}
+
+/// A folder removed on drop. Use it as a `&Path`.
+struct Scratch(PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+impl std::ops::Deref for Scratch {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for Scratch {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
 }
 
 fn list(runner: &dyn Runner, dir: &str) -> Vec<SessionRef> {
@@ -170,7 +194,8 @@ fn read_is_incremental_and_waits_for_a_whole_line() {
     let (first, last) = (lines[..lines.len() - 1].join("\n"), lines[lines.len() - 1]);
 
     // All lines but the last, then half of the last one, as a runner in the middle of a write leaves it.
-    let path = temp("partial").join("session.jsonl");
+    let dir = temp("partial");
+    let path = dir.join("session.jsonl");
     let (half, rest) = last.split_at(last.len() / 2);
     fs::write(&path, format!("{first}\n{half}")).unwrap();
     let session = SessionRef { path: path.clone(), ..original };
@@ -263,7 +288,7 @@ fn claude_finds_the_cwd_behind_a_long_head() {
     text += r#"{"type":"user","message":{"role":"user","content":"made-up"},"timestamp":"2026-11-12T09:00:00.000Z","cwd":"/work/far"}"#;
     text += "\n";
     fs::write(project.join("44444444-4444-4444-8444-444444444444.jsonl"), text).unwrap();
-    let claude = Claude::new(vec![config]);
+    let claude = Claude::new(vec![config.to_path_buf()]);
     let sessions = list(&claude, "/work/far");
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].started, Some(1_794_474_000_000));
@@ -282,7 +307,7 @@ fn listing_rereads_a_file_only_when_it_changed() {
         )
     };
     fs::write(&path, meta("/work/one")).unwrap();
-    let codex = Codex::new(home);
+    let codex = Codex::new(home.to_path_buf());
     assert_eq!(list(&codex, "/work/one").len(), 1);
     // Rewritten with another cwd of the same length: the new time or length is noticed.
     std::thread::sleep(std::time::Duration::from_millis(20));
@@ -430,7 +455,7 @@ fn report_skips_a_session_whose_file_vanished() {
     let meta = r#"{"timestamp":"2026-11-12T09:00:00.000Z","type":"session_meta","payload":{"id":"c0de0008-0000-4000-8000-000000000008","cwd":"/work/gone"}}"#;
     fs::write(day.join("rollout-2026-11-12T09-00-00-c0de0008-0000-4000-8000-000000000008.jsonl"), format!("{meta}\n"))
         .unwrap();
-    let report = report(&[&Vanishing(Codex::new(home))], &[PathBuf::from("/work/gone")], 0, 5).unwrap();
+    let report = report(&[&Vanishing(Codex::new(home.to_path_buf()))], &[PathBuf::from("/work/gone")], 0, 5).unwrap();
     assert_eq!(report["sessions"].as_array().unwrap().len(), 0);
 }
 
@@ -595,7 +620,8 @@ fn a_title_is_the_last_written_and_a_name_given_by_hand_comes_first() {
 
 #[test]
 fn a_hostile_title_is_one_cut_line_and_only_a_title_record_counts() {
-    let path = temp("title").join("session.jsonl");
+    let dir = temp("title");
+    let path = dir.join("session.jsonl");
     let session = SessionRef { path: path.clone(), ..find(&claude(), "/work/app", CLAUDE_MAIN) };
     let record = |kind: &str, key: &str, text: &str| serde_json::json!({ "type": kind, key: text }).to_string();
     let title = |lines: &[String]| {
@@ -626,7 +652,8 @@ fn a_hostile_title_is_one_cut_line_and_only_a_title_record_counts() {
 
 #[test]
 fn a_title_is_read_again_only_when_the_file_changed() {
-    let path = temp("title-cache").join("session.jsonl");
+    let dir = temp("title-cache");
+    let path = dir.join("session.jsonl");
     let session = SessionRef { path: path.clone(), ..find(&claude(), "/work/app", CLAUDE_MAIN) };
     let line = |text: &str| format!("{{\"type\":\"ai-title\",\"aiTitle\":\"{text}\"}}\n");
     let claude = Claude::new(Vec::new());

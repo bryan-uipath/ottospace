@@ -1,0 +1,41 @@
+#!/bin/bash
+# Runs the e2e suite N times in a row and tallies each test's failures: a flaky test shows up
+# as failed in some runs and passed in others.
+#
+# usage: scripts/e2e-repeat N [filter] [--apps]
+#   --apps   cargo e2e-apps instead of cargo e2e. It takes the keyboard: prefer the
+#            Reliability workflow on GitHub.
+# Results go to $OTTOSPACE_E2E_OUT (default: a new folder in $TMPDIR): run-1, run-2, .. each with
+# `log`, `results.jsonl` and `failures/`, then `timings.json` and `summary.md` for all of them.
+# Exits 1 if any test failed in any run.
+set -uo pipefail
+
+n="${1:-}"
+case "$n" in '' | *[!0-9]*) sed -n '2,10p' "$0" >&2; exit 2 ;; esac
+shift
+filter="" suite="e2e"
+for arg in "$@"; do
+  case "$arg" in
+    --apps) suite="e2e_apps" ;;
+    *) filter="$arg" ;;
+  esac
+done
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+out="${OTTOSPACE_E2E_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/ottospace-e2e-repeat.XXXXXX")}"
+mkdir -p "$out"
+cd "$root" || exit 2
+cargo test -p ottospace --test "$suite" --no-run --locked || exit 2
+
+start=$(date +%s)
+for i in $(seq 1 "$n"); do
+  run="$out/run-$i"
+  mkdir -p "$run"
+  began=$(date +%s)
+  # Every test runs, whatever failed before it. `--exact` is not used: the filter is a substring.
+  OTTOSPACE_E2E_OUT="$run" cargo test -p ottospace --test "$suite" --locked -- --ignored --test-threads=1 ${filter:+"$filter"} \
+    >"$run/log" 2>&1
+  echo "run $i of $n: exit $?, $(($(date +%s) - began)) s"
+done
+echo "$n runs in $(($(date +%s) - start)) s; results in $out"
+python3 -I "$root/scripts/e2e-report" "$out" --markdown "$out/summary.md"

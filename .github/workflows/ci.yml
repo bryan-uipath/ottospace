@@ -74,8 +74,32 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: cargo-nextest@0.9.149
+      # `cargo e2e` under nextest (`.config/nextest.toml`): each test in its own process, one at a
+      # time, up to three tries. One that passes on a retry is flaky: the summary says so.
       - name: E2E
-        run: cargo e2e
+        env:
+          OTTOSPACE_E2E_OUT: ${{ runner.temp }}/e2e
+        run: cargo nextest run -p ottospace --test e2e --run-ignored only --profile e2e --locked
+      - name: E2E summary
+        if: ${{ !cancelled() }}
+        env:
+          OUT: ${{ runner.temp }}/e2e
+        run: |
+          mkdir -p "$OUT"
+          cp target/nextest/e2e/junit.xml "$OUT/" || true
+          python3 -I scripts/e2e-report "$OUT" --markdown "$OUT/summary.md" || true
+          cat "$OUT/summary.md" >> "$GITHUB_STEP_SUMMARY"
+      # Each failed attempt's folder: state, timeline, trace, stack sample, screenshot.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: e2e-failures
+          path: ${{ runner.temp }}/e2e/failures
+          if-no-files-found: ignore
+          retention-days: 14
       # The TypeScript client against a private instance, as cargo e2e runs one: hosting off, its
       # own socket, no user folder. No npm install: the SDK has no runtime dependencies.
       - name: SDK tests

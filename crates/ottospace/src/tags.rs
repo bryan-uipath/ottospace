@@ -196,11 +196,8 @@ mod tests {
     use super::*;
 
     /// A folder of this test's own, empty.
-    fn temp(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ottospace-tags-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn temp(name: &str) -> crate::scratch::Scratch {
+        crate::scratch::Scratch::dir(&format!("ottospace-tags-{name}-{}", std::process::id()))
     }
 
     fn words(line: &str) -> Vec<Vec<String>> {
@@ -217,7 +214,7 @@ mod tests {
         std::fs::write(repo.join("src/v1."), "").unwrap();
         // `/tmp` is at the root of every Mac; inside the repository it is the repository's.
         std::fs::create_dir_all(repo.join("tmp")).unwrap();
-        let inside = Some(repo.as_path());
+        let inside = Some(&*repo);
         let at = |part: &str| repo.join(part).to_string_lossy().into_owned();
         let found = |typed: &str, resolved: String| PathFound { typed: typed.into(), resolved };
 

@@ -111,6 +111,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       note: null,
       rail: [{ task: 1, mono: "FL", group: "running", working: true, shown: true, tip: "fix login\nRunning\napp · @claude · now" }],
     },
+    frame: { number: 3, seq: 2, drawn: 2, waited_ms: 0, window: 41 },
   };
 }
 

@@ -1,0 +1,15 @@
+# cargo-nextest, for the e2e job in CI (`.github/workflows/ci.yml`). Locally `cargo e2e` and
+# `scripts/e2e-repeat` need no nextest.
+
+[profile.e2e]
+# One app at a time: each test's window takes the same free corner of the screens.
+test-threads = 1
+# A test that fails and then passes is reported flaky, not passed silently; three failures fail it.
+retries = 2
+fail-fast = false
+# A wait gives up after 40 s; a test still running after 5 minutes is stuck.
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+[profile.e2e.junit]
+# target/nextest/e2e/junit.xml: `scripts/e2e-report` reads which tests were flaky from it.
+path = "junit.xml"

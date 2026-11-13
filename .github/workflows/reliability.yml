@@ -1,0 +1,127 @@
+name: Reliability
+
+# Runs `cargo e2e` and `cargo e2e-apps` several times over and tallies, test by test, how often
+# each failed: a flaky test fails in some runs and passes in others. Nightly on main, and by hand.
+# Never on pull requests or pushes: macOS runners are scarce. The nightly run keeps one issue,
+# "Flaky tests", listing the tests that failed in its last run.
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      repeat:
+        description: Runs of each suite
+        default: '5'
+      test:
+        description: Only tests whose name contains this (empty for all)
+        default: ''
+
+permissions: {}
+
+# One at a time; a second waits.
+concurrency:
+  group: reliability
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  repeat:
+    strategy:
+      fail-fast: false
+      matrix:
+        # e2e-apps hosts real canary windows: the image grants bash Accessibility and Screen
+        # Recording, as for app-windows.yml.
+        suite: [e2e, e2e-apps]
+    runs-on: macos-26
+    timeout-minutes: 150
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: cliclick
+        if: ${{ matrix.suite == 'e2e-apps' }}
+        run: command -v cliclick || HOMEBREW_NO_AUTO_UPDATE=1 brew install cliclick
+      - name: Repeat
+        env:
+          REPEAT: ${{ inputs.repeat || '5' }}
+          TEST: ${{ inputs.test }}
+          SUITE: ${{ matrix.suite }}
+          OTTOSPACE_E2E_OUT: ${{ runner.temp }}/out
+        run: |
+          flag=""
+          [ "$SUITE" = "e2e-apps" ] && flag="--apps"
+          scripts/e2e-repeat "$REPEAT" ${TEST:+"$TEST"} $flag
+      - name: Report
+        if: ${{ !cancelled() }}
+        env:
+          OUT: ${{ runner.temp }}/out
+          SUITE: ${{ matrix.suite }}
+        run: |
+          python3 -I scripts/e2e-report "$OUT" --markdown "$OUT/summary.md" --flaky "$OUT/flaky.md" || true
+          { echo "## $SUITE"; cat "$OUT/summary.md"; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: reliability-${{ matrix.suite }}
+          # The tally, the timings and every failed test's folder; not the logs' terminal text.
+          path: |
+            ${{ runner.temp }}/out/summary.md
+            ${{ runner.temp }}/out/flaky.md
+            ${{ runner.temp }}/out/timings.json
+            ${{ runner.temp }}/out/run-*/failures
+          if-no-files-found: ignore
+          retention-days: 14
+
+  issue:
+    # The nightly run only: a run by hand on a branch must not speak for main.
+    if: ${{ github.event_name == 'schedule' && !cancelled() }}
+    needs: repeat
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: reliability-*
+          path: ${{ runner.temp }}/in
+      - name: Open or update "Flaky tests"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          IN: ${{ runner.temp }}/in
+        run: |
+          # No flaky.md: nothing failed (a run that did not start lists itself). No folder: no report.
+          listed() {
+            if [ ! -d "$1" ]; then echo "no report: the job did not finish"; else cat "$1/flaky.md" 2>/dev/null || true; fi
+          }
+          FLAKY_E2E="$(listed "$IN/reliability-e2e")"
+          FLAKY_APPS="$(listed "$IN/reliability-e2e-apps")"
+          body="$(mktemp)"
+          {
+            echo "Tests that failed at least once in the last nightly [Reliability run]($RUN_URL)."
+            echo "Each failure's folder (state, timeline, trace, stack sample) is in the run's artifacts."
+            echo
+            echo "### cargo e2e"
+            echo "${FLAKY_E2E:-none}"
+            echo
+            echo "### cargo e2e-apps"
+            echo "${FLAKY_APPS:-none}"
+          } > "$body"
+          number="$(gh issue list --state open --search 'in:title "Flaky tests"' --json number,title \
+            --jq '[.[] | select(.title == "Flaky tests")][0].number // empty')"
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --body-file "$body"
+          elif [ -n "$FLAKY_E2E$FLAKY_APPS" ]; then
+            gh issue create --title "Flaky tests" --body-file "$body"
+          fi

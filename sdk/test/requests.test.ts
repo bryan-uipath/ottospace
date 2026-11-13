@@ -111,6 +111,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.markGo({ name: "notes", axis: "down" }),
   (c) => c.markRemove({ key: "n" }),
   (c) => c.markRename({ name: "notes", to: "journal" }),
+  (c) => c.trace(),
   (c) => c.quit(),
 ];
 

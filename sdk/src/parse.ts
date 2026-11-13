@@ -43,6 +43,7 @@ import type {
   MarkInput,
   MarkReply,
   MarksReply,
+  TraceReply,
   Workbook,
   WorkbookPane,
   WorkbookTab,
@@ -1201,7 +1202,29 @@ export function snapshot(value: unknown): Snapshot {
     scrollbars: map(scrollbar)(o.scrollbars, "scrollbars"),
     capture: captureDrawn(o.capture, "capture"),
     drawer: drawerDrawn(o.drawer, "drawer"),
+    frame: frameNumbers(o.frame, "frame"),
+    ...(o.stale === undefined ? {} : { stale: staleMark(o.stale, "stale") }),
   };
+}
+
+function frameNumbers(value: unknown, at: string): Snapshot["frame"] {
+  const o = fields(value, at);
+  return {
+    number: num(o.number, `${at}.number`),
+    seq: num(o.seq, `${at}.seq`),
+    drawn: num(o.drawn, `${at}.drawn`),
+    waited_ms: num(o.waited_ms, `${at}.waited_ms`),
+    window: orNull(num)(o.window, `${at}.window`),
+  };
+}
+
+function staleMark(value: unknown, at: string): true {
+  if (value === true) return true;
+  throw wrong(at, "true", value);
+}
+
+export function traceReply(value: unknown): TraceReply {
+  return { ok: true, trace: str(fields(value, "reply").trace, "trace") };
 }
 
 function scrollbar(value: unknown, at: string): Scrollbar {

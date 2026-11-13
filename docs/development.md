@@ -64,6 +64,23 @@ tests use `/bin/sh`). `cargo install` also installs the test app; use `--bin ott
 `cargo e2e` is an alias in `.cargo/config.toml`. Each test opens a window on a private socket. It
 sets `OTTOSPACE_E2E`, which turns window hosting off, so tests never touch your real windows.
 
+### When an e2e test fails or is flaky
+
+Design: [docs/ai/e2e-reliability.md](ai/e2e-reliability.md).
+
+- In a test run, a reply that carries the state waits until a frame has drawn what the request
+  did, so its `bounds` are never of the layout before. `frame` in the state has the numbers.
+- A failed test writes a folder under `$OTTOSPACE_E2E_OUT` (default `$TMPDIR/ottospace-e2e`),
+  `failures/<test>-<pid>/`, and its panic message names it: `summary.txt`, `state.json`,
+  `timeline.jsonl` (every request, its time and frame numbers), `trace.jsonl` (the app's own
+  events), on a timeout `sample.txt` (where every thread of the app was), and `screenshot.png`
+  when the window server allows it. `results.jsonl` beside it holds each test's times and waits.
+- `scripts/e2e-repeat 5 [filter]` runs the suite 5 times and tallies each test's failures,
+  the slowest tests and the slowest waits (`--apps` for `cargo e2e-apps`, which takes the
+  keyboard: prefer the Reliability workflow). `scripts/e2e-report <folder>` tallies again.
+- `ottospace ctl '{"cmd":"trace"}'` reads the trace of any running app. `OTTOSPACE_TRACE=1` also
+  writes it to `~/.ottospace/trace.jsonl` on a panic or on `kill -USR1`.
+
 ## Crates
 
 | Path | Role |
@@ -81,8 +98,12 @@ sets `OTTOSPACE_E2E`, which turns window hosting off, so tests never touch your 
 
 - `.github/workflows/ci.yml`, on pull requests and pushes to `main`: `cargo fmt --check` on the
   formatted crates, `cargo clippy`, `cargo test --workspace`, and the SDK's type check and the
-  tests that need no app. `cargo e2e` runs in a separate job that may fail without blocking; the
-  same job then runs the SDK's tests against a private instance.
+  tests that need no app. `cargo e2e` runs in a separate job that may fail without blocking, under
+  cargo-nextest: a failed test is tried twice more, and one that then passes is listed as flaky in
+  the job's summary, with the slowest tests and waits. Failure folders are an artifact. The same
+  job then runs the SDK's tests against a private instance.
+- `.github/workflows/reliability.yml`, nightly and by hand (`repeat`, `test`): `cargo e2e` and
+  `cargo e2e-apps` five times each, tallied. The nightly run keeps the issue "Flaky tests".
 - `.github/workflows/build.yml`, on pushes to `main` and on pull requests with the label
   `pr-build`: tests the installer and packages a build. On `main` it publishes the `main-latest`
   prerelease. `osi install pr <n>` adds the label.

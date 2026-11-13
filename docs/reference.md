@@ -656,7 +656,11 @@ ottospace ctl '{"cmd":"task_brief","id":7}'          # a task's brief: the ask, 
 ottospace ctl '{"cmd":"sneak"}'                      # labels on ottospace's controls: `sneak.targets`
 ottospace ctl '{"cmd":"key","keys":"a"}'             # type a label: that control acts as if clicked
 ottospace ctl '{"cmd":"state"}'
+ottospace ctl '{"cmd":"trace"}'                      # the last 2,000 events: names, times and ids, never text
 ```
+
+`OTTOSPACE_TRACE=1` also writes the trace to `~/.ottospace/trace.jsonl` when the app panics or gets
+`kill -USR1`.
 
 `ottospace skill` prints every request with an example, and what the state fields mean. Fields are
 in `Request` in [`crates/ottospace/src/control.rs`](../crates/ottospace/src/control.rs). Unknown commands and
@@ -737,6 +741,8 @@ first brainstorm:
 [task-conversation.md](ai/task-conversation.md): a task's agent in a right drawer, the three zones, how an agent is started; stage 1 as built (the agent's terminal in the drawer), and what is later.
 
 [routines.md](ai/routines.md): routines and agents from ottobot, in stages, toward ottospace subsuming it.
+
+[e2e-reliability.md](ai/e2e-reliability.md): replies that wait for the frame that draws them, failure folders, the trace, and repeated runs to find flaky tests.
 
 [agent-runners.md](ai/agent-runners.md): a native (non-terminal) agent conversation: driving Claude Code and Codex in their structured modes, permission prompts, trust rules. Not wired in yet.
 

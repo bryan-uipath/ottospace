@@ -16,6 +16,7 @@ import {
   taskNewReply,
   taskPopReply,
   taskReply,
+  traceReply,
   waitReply,
 } from "./parse.ts";
 import { checkOwned, defaultSocketPath } from "./socket.ts";
@@ -38,6 +39,7 @@ import type {
   MarkRenameArgs,
   MarkReply,
   MarksReply,
+  TraceReply,
   KeyArgs,
   MouseArgs,
   MouseDownArgs,
@@ -455,6 +457,10 @@ export class Client {
   }
   markRename(args: MarkRenameArgs): Promise<Snapshot> {
     return this.snapshot({ cmd: "mark_rename", ...args });
+  }
+  /** The app's recent events, oldest first, as JSONL: names, counts, times and ids only. */
+  async trace(): Promise<TraceReply> {
+    return traceReply(await this.send({ cmd: "trace" }));
   }
   /** Quits the app. */
   quit(): Promise<Snapshot> {

@@ -425,6 +425,9 @@ pub enum Request {
         key: Option<char>,
         to: String,
     },
+    /// The app's recent events, oldest first, as JSONL: `{"ok":true,"trace":"{..}\n{..}\n"}`, not
+    /// the state. Names, counts, times and ids only. Read-only.
+    Trace,
     Quit,
 }
 
@@ -528,14 +531,8 @@ pub fn serve() -> io::Result<Receiver<Call>> {
     if lock.try_lock().is_err() || UnixStream::connect(&path).is_ok() {
         return Err(io::Error::new(io::ErrorKind::AddrInUse, "another ottospace owns the socket"));
     }
-    // Remove only a stale socket. Never delete some other file the path happens to name.
-    match fs::symlink_metadata(&path) {
-        Ok(meta) if meta.file_type().is_socket() => fs::remove_file(&path)?,
-        Ok(_) => return Err(io::Error::new(io::ErrorKind::AlreadyExists, "socket path is an existing file")),
-        Err(_) => {}
-    }
-    let listener = UnixListener::bind(&path)?;
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+    // The lock is ours from here: a failure below removes its file, which nobody else holds.
+    let listener = bind(&path).inspect_err(|_| drop(fs::remove_file(path.with_extension("lock"))))?;
     let (calls, receiver) = channel();
     thread::spawn(move || {
         let _lock = lock; // held until the process exits
@@ -553,16 +550,37 @@ pub fn serve() -> io::Result<Receiver<Call>> {
     Ok(receiver)
 }
 
+/// Listens at `path`, mode 0600.
+fn bind(path: &Path) -> io::Result<UnixListener> {
+    // Remove only a stale socket. Never delete some other file the path happens to name.
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_socket() => fs::remove_file(path)?,
+        Ok(_) => return Err(io::Error::new(io::ErrorKind::AlreadyExists, "socket path is an existing file")),
+        Err(_) => {}
+    }
+    let listener = UnixListener::bind(path)?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    Ok(listener)
+}
+
 fn handle(stream: UnixStream, calls: Sender<Call>) {
     let Ok(mut out) = stream.try_clone() else { return };
     for line in BufReader::new(stream).lines().map_while(Result::ok) {
         let reply = match serde_json::from_str(&line) {
             Ok(request) => {
                 let (reply, answer) = channel();
+                let (cmd, received) = (crate::trace::name(&request), std::time::Instant::now());
+                crate::trace::record("request", serde_json::json!({ "cmd": cmd }));
                 if calls.send(Call { request, reply }).is_err() {
                     return;
                 }
-                answer.recv().unwrap_or_else(|_| error("ottospace is closing"))
+                let reply = answer.recv().unwrap_or_else(|_| error("ottospace is closing"));
+                // Top-level keys only: text inside the reply has its quotes escaped.
+                let (failed, stale) = (reply.contains(r#""ok":false"#), reply.contains(r#""stale":true"#));
+                let took = received.elapsed().as_millis() as u64;
+                let fields = serde_json::json!({ "cmd": cmd, "took_ms": took, "ok": !failed, "stale": stale });
+                crate::trace::record("reply", fields);
+                reply
             }
             Err(err) => error(&err.to_string()),
         };
