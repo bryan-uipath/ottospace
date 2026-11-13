@@ -3645,10 +3645,9 @@ impl Workspace {
                 listed += 1;
             }
         }
-        // Nothing listed: how to file a task, the keyboard way first.
+        // Nothing listed: say so, with the button that files a task.
         let empty = rows.is_empty().then(|| {
             let title = if self.model.tasks.list.is_empty() { "No tasks yet" } else { "Nothing in the inbox" };
-            let muted = |text: &'static str| div().px_2().text_xs().text_color(rgb(theme::MUTED)).child(text);
             let plus = svg().path("icons/plus.svg").size(px(14.)).text_color(rgb(theme::TEXT));
             let new = list_button("task-new", false)
                 .py_1p5()
@@ -3658,16 +3657,7 @@ impl Workspace {
                 .relative()
                 .child(self.controls.mark("task-new"))
                 .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)));
-            let agents = "Agents: ottospace ctl '{\"cmd\":\"task_new\",\"line\":\"...\"}'";
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(div().px_2().pt_1().text_sm().child(title))
-                .child(new)
-                .child(muted(TAG_HINT))
-                .child(muted(KEYS_HINT))
-                .child(div().px_2().pt_2().text_xs().text_color(rgb(theme::BORDER_STRONG)).child(agents))
+            div().flex().flex_col().gap_2().child(div().px_2().pt_1().text_sm().child(title)).child(new)
         });
         let notice = self.task_offer().map(|notice| {
             self.undo_line("task-undo", notice.moved.title())
