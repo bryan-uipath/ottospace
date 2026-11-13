@@ -377,8 +377,21 @@ write_state() {
   mv -f "$state_file.new" "$state_file"
 }
 
+# True when the ottospace osi installed is running: a process whose program is the installed
+# command or the installed app's. Not any process called ottospace: a build run from a checkout
+# or by a test is not this one. OSI_PS names another lister of program paths, for tests.
+is_running() {
+  running_app="${app:+$app/Contents/MacOS/ottospace}"
+  ${OSI_PS:-ps -axo comm=} 2>/dev/null | while IFS= read -r program; do
+    if [ "$program" = "$cmd" ] || { [ -n "$running_app" ] && [ "$program" = "$running_app" ]; }; then
+      echo yes
+      break
+    fi
+  done | grep -q yes
+}
+
 note_running() {
-  if pgrep -x ottospace >/dev/null 2>&1; then
+  if is_running; then
     say ""
     say "ottospace is running and keeps the build it started with. To use this one, quit and start it again:"
     say "  ottospace ctl '{\"cmd\":\"quit\"}'"
@@ -777,7 +790,7 @@ cmd_uninstall() {
     say "Removed $bin_dir/osi"
   fi
   say "Kept: settings and tasks in $(dirname "$state_dir")."
-  if pgrep -x ottospace >/dev/null 2>&1; then
+  if is_running; then
     say "ottospace is still running. Quit it: use its window, or the control socket request {\"cmd\":\"quit\"}."
   fi
 }

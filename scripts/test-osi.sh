@@ -452,6 +452,17 @@ run "$osi" update --no-wait
 check "update takes --no-wait" says "is running: https://github.com/bryan-uipath/ottospace/actions/runs/77"
 check "and installs nothing" installed_is PR35
 
+echo "# a running ottospace"
+# Only the installed command counts as running: not a build from a checkout or a test's.
+printf '#!/bin/sh\necho /somewhere/target/debug/ottospace\n' >"$work/ps-other"
+printf '#!/bin/sh\necho %s\n' "$bin/ottospace" >"$work/ps-ours"
+chmod 755 "$work/ps-other" "$work/ps-ours"
+run env OSI_PS="$work/ps-other" "$osi" install main --force
+not_said_running() { ! says "is running and keeps"; }
+check "another ottospace is not ours" not_said_running
+run env OSI_PS="$work/ps-ours" "$osi" install main --force
+check "the installed one running is said" says "is running and keeps the build it started with"
+
 echo "# overrides"
 run env OSI_BIN_DIR="$work/elsewhere/bin" OTTOSPACE_HOME="$work/elsewhere/home" "$osi" install main
 check "OSI_BIN_DIR moves the command" [ -x "$work/elsewhere/bin/ottospace" ]
