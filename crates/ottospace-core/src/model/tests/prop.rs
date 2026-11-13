@@ -2651,3 +2651,23 @@ fn closing_a_tab_by_the_system_leaves_a_drafts_title_and_drawings_as_they_are() 
     ])
     .unwrap();
 }
+
+/// Seed 2563: a settings entry that did not resolve (`""`) was removed as a repository's
+/// directory, and the settings were to be written for a change that names nothing.
+#[test]
+fn a_repository_is_never_removed_by_a_path_that_is_no_directory() {
+    replay(&[
+        Action::SetRepoDirs {
+            dirs: RepoDirs {
+                dirs: vec![
+                    RepoDir { text: "".into(), path: "".into() },
+                    RepoDir { text: "  S'".into(), path: "  S'".into() },
+                ],
+                fixed: false,
+            },
+        }
+        .sent_by(Origin::User),
+        Action::RepoRemove { path: "".into() }.sent_by(Origin::User),
+    ])
+    .unwrap();
+}
