@@ -59,6 +59,8 @@ pub enum ListKey {
     Filter,
     /// Add the tab on show to the selected workbook.
     Add,
+    /// ← or →: across zones, from a rail (`model::zones`).
+    Side(i32),
     Leave,
 }
 
@@ -86,6 +88,8 @@ pub fn list_key(key: &str, shift: bool) -> Option<ListKey> {
         "/" => ListKey::Filter,
         "a" => ListKey::Add,
         "escape" => ListKey::Leave,
+        "left" => ListKey::Side(-1),
+        "right" => ListKey::Side(1),
         _ => return None,
     })
 }

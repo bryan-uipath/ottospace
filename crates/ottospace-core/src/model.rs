@@ -1586,6 +1586,8 @@ pub struct Tab {
     pub(crate) focused: Option<PaneId>,
 }
 
+pub mod zones;
+
 #[derive(Debug, Serialize)]
 pub struct Model {
     /// Panes of every tab.
@@ -1612,6 +1614,11 @@ pub struct Model {
     pub compose: Option<Field>,
     /// The selected row, while the secondary bar has the keyboard.
     pub list: Option<usize>,
+    /// A rail that has the keyboard (`zones`). In list mode, as the section list.
+    pub rail_focus: Option<zones::RailFocus>,
+    /// The row a section's list was left on.
+    #[serde(skip)]
+    list_kept: zones::KeptRow,
     /// The Apps section's list: names of the apps the shell can host.
     #[serde(skip)]
     pub apps: Vec<String>,
@@ -1685,6 +1692,9 @@ pub struct Model {
     pub palette: Option<Palette>,
     /// The accessibility inspector, while it is open.
     pub inspector: Option<Inspector>,
+    /// The palette was opened over the conversation with the keyboard: closing it gives it back.
+    #[serde(skip)]
+    palette_over_talk: bool,
     /// The apps found installed and the bundles running, as the shell last said (`SetInstalled`).
     #[serde(skip)]
     pub(crate) installed: (Vec<Installed>, Vec<String>),
@@ -1757,6 +1767,8 @@ impl Default for Model {
             sidebar: None,
             compose: None,
             list: None,
+            rail_focus: None,
+            list_kept: zones::KeptRow::default(),
             apps: Vec::new(),
             repos: Vec::new(),
             repo_dirs: repos::RepoDirs::default(),
@@ -1786,6 +1798,7 @@ impl Default for Model {
             picker: None,
             palette: None,
             inspector: None,
+            palette_over_talk: false,
             installed: (Vec::new(), Vec::new()),
             app_lists: apps::Lists::default(),
             confirm: None,
@@ -1865,7 +1878,7 @@ impl Model {
             Mode::Annotate
         } else if self.visual.is_some() {
             Mode::Visual
-        } else if self.list.is_some() {
+        } else if self.list.is_some() || self.rail_focus.is_some() {
             Mode::List
         } else {
             Mode::Normal
@@ -1932,6 +1945,10 @@ impl Model {
             // An agent runs with the user's rights: no client's request, key or label starts
             // or stops one. A client's ↵ in the box files the task and starts none (`start`).
             Action::TaskTalk { .. } | Action::TalkPick { .. } | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
+            // On a rail list keys move over the rail: the user's, as the move that got there.
+            Action::ListMove { .. } | Action::ListChoose { .. } | Action::LeaveList if self.rail_focus.is_some() => {
+                Some(zones::RAILS_USERS)
+            }
             action if self.sneak.is_some() && action.takes_keyboard() => Some("sneak mode is on"),
             // A capture hands over a pane's picture and its text: no client's request, key or
             // label asks for one. Sneak mode and the quit question say their own reason first.
@@ -2057,8 +2074,14 @@ impl Model {
         let sent = sent.into();
         let (origin, line) = (sent.origin, self.compose_line().cloned());
         let states: Vec<(TaskId, State)> = self.tasks.list.iter().map(|task| (task.id, task.state)).collect();
+        let listed = self.sidebar.zip(self.list);
         let effects = self.step(sent);
         self.tasks.finished(&states, self.now);
+        // However the list was left (Esc, a click on a pane), ⌘⌃← comes back to its row.
+        if self.list.is_none() && listed.is_some() {
+            self.list_kept = zones::KeptRow(listed);
+        }
+        self.settle_zone();
         // A line anyone but the user changed is theirs until it is empty or gone.
         let changed = origin != Origin::User && self.compose_line() != line.as_ref();
         self.compose_theirs = (self.compose_theirs || changed) && self.compose_line().is_some_and(|l| !l.is_empty());
@@ -2106,8 +2129,14 @@ impl Model {
             self.mark_input = None;
         }
         // The inspector's filter gives the keyboard back on the user's other moves.
-        let own_filter = matches!(action, Action::InspectorFilter { .. } | Action::InspectorMove { .. })
-            || (matches!(action, Action::FieldEdit { .. }) && self.field().is_some_and(|(of, _)| of == "inspector"));
+        // ← and → leave it by the zones (`zones`), which know it had the keyboard.
+        let own_filter = matches!(
+            action,
+            Action::InspectorFilter { .. }
+                | Action::InspectorMove { .. }
+                | Action::FocusDir { dir: Dir::Left | Dir::Right }
+        ) || (matches!(action, Action::FieldEdit { .. })
+            && self.field().is_some_and(|(of, _)| of == "inspector"));
         if let Some(inspector) = self.inspector.as_mut().filter(|_| user && !own_filter) {
             inspector.filtering = false;
         }
@@ -2177,8 +2206,20 @@ impl Model {
             (self.keys, self.picker, self.palette) = (false, None, None);
         }
         let action = self.capture_route(action);
-        if self.waits(&action).is_some() {
+        // From the new task in the drawer, focus moves on, as the box waits pane actions.
+        let across = matches!(action, Action::FocusDir { dir: Dir::Left | Dir::Right });
+        let drawer = across && self.in_right_zone();
+        if self.waits(&action).is_some() && !(user && drawer) {
             return effects;
+        }
+        // Focus past the panes' edge, and keys over a rail: the user's alone.
+        if user {
+            self.by_user = true;
+            let crossed = self.zones(&action, &mut effects);
+            self.by_user = false;
+            if crossed {
+                return effects;
+            }
         }
         // The keyboard goes to a pane or a tab: the list gives it up.
         let leaves_list = matches!(
@@ -2208,7 +2249,7 @@ impl Model {
                 | Action::TalkKeys { on: true }
         );
         if leaves_list {
-            self.list = None;
+            (self.list, self.rail_focus) = (None, None);
         }
         // The user's own move in the list keeps the selection where it is, so the next row comes
         // under it (hold one task, then the next). Any other change (an agent files a task, a
@@ -2956,6 +2997,7 @@ impl Model {
             }
             Action::ClosePicker => self.picker = None,
             Action::PaletteOpen => {
+                self.palette_over_talk = self.talk.is_some_and(|talk| talk.keys);
                 self.leave(effects);
                 self.palette = Some(Palette { query: Field::new("", MAX_FILTER), selected: 0 });
             }
@@ -2970,12 +3012,19 @@ impl Model {
             Action::PaletteChoose { index } => {
                 let Some(palette) = self.palette.take() else { return };
                 match palette.matches().get(index.unwrap_or(palette.selected)) {
-                    Some(&command) => effects.push(Effect::Run { command }),
+                    // The command runs from where the keyboard was.
+                    Some(&command) => {
+                        self.palette_closed(effects);
+                        effects.push(Effect::Run { command })
+                    }
                     // Nothing there: it stays open, so the query can be fixed.
                     None => self.palette = Some(palette),
                 }
             }
-            Action::ClosePalette => self.palette = None,
+            Action::ClosePalette => {
+                self.palette = None;
+                self.palette_closed(effects);
+            }
             Action::InspectorOpen { pane, app } => {
                 if self.pane(pane).is_some() {
                     self.inspector = Some(Inspector::new(pane, &app));
@@ -3476,10 +3525,7 @@ impl Model {
         // The drawer shows one thing: the new task being written gives way, kept for the box's
         // next opening. A capture's draft is not the drawer's to close.
         if self.compose_host() == Some(Host::Drawer) {
-            let line = self.compose.take().filter(|line| !line.text().is_empty());
-            let (refs, attached) = (std::mem::take(&mut self.compose_refs), std::mem::take(&mut self.compose_attached));
-            self.compose_kept = line.map(|line| KeptDraft { line, refs, attached, theirs: self.compose_theirs });
-            self.compose_reset();
+            self.put_compose_aside();
         }
         self.talk = Some(Talk { task: id, open: true, keys: self.agent_runs(id) || start.is_some() });
         self.opened.retain(|seen| *seen != id);
@@ -3493,6 +3539,21 @@ impl Model {
             self.starting.push((id, runner));
             effects.push(Effect::StartAgent { task: id, start, cwd, brief });
         }
+    }
+
+    /// The palette closed: the keyboard goes back into the conversation it was taken from.
+    fn palette_closed(&mut self, effects: &mut Vec<Effect>) {
+        if std::mem::take(&mut self.palette_over_talk) && self.palette.is_none() {
+            self.talk_keys(true, effects);
+        }
+    }
+
+    /// Closes the new-task box, its line kept for the box's next opening (`OpenCompose` empty).
+    fn put_compose_aside(&mut self) {
+        let line = self.compose.take().filter(|line| !line.text().is_empty());
+        let (refs, attached) = (std::mem::take(&mut self.compose_refs), std::mem::take(&mut self.compose_attached));
+        self.compose_kept = line.map(|line| KeptDraft { line, refs, attached, theirs: self.compose_theirs });
+        self.compose_reset();
     }
 
     /// The keyboard goes into the open conversation, if its agent runs, or leaves it.
@@ -5518,8 +5579,7 @@ mod tests {
         m.update(Action::FieldEdit { edit: Edit::Insert("zzz".into()) });
         assert!(m.update(Action::PaletteChoose { index: None }).is_empty());
         assert!(m.palette.is_some());
-        // Over the conversation: the palette takes the keys, and closing it leaves them with the
-        // workspace (⌘L goes back), as any box over the drawer does.
+        // Over the conversation: the palette takes the keys, and closing it gives them back.
         m.update(Action::ClosePalette);
         m.update(Action::TaskAdd {
             title: "t".into(),
@@ -5534,7 +5594,7 @@ mod tests {
         m.update(Action::PaletteOpen);
         assert_eq!(m.mode(), Mode::Palette);
         m.update(Action::ClosePalette);
-        assert_eq!((m.mode(), m.talk.map(|talk| talk.open)), (Mode::Normal, Some(true)));
+        assert_eq!(m.mode(), Mode::Talk);
         // Not over the key reference.
         m.update(Action::ClosePalette);
         m.update(Action::ToggleKeys);

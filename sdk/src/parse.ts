@@ -33,6 +33,8 @@ import type {
   TasksView,
   Tokens,
   Work,
+  Focus,
+  RailFocus,
   Home,
   HomeDrawn,
   HomeNode,
@@ -181,6 +183,21 @@ function group(value: unknown, at: string): Group {
   if (value === "needs_you" || value === "running" || value === "captured") return value;
   if (value === "on_hold" || value === "done") return value;
   throw wrong(at, "an inbox group", value);
+}
+
+function focus(value: unknown, at: string): Focus {
+  if (value === "drawer" || value === "inspector" || value === "nothing") return value;
+  const o = fields(value, at);
+  if (o.pane !== undefined) return { pane: num(o.pane, `${at}.pane`) };
+  if (o.list !== undefined) return { list: num(o.list, `${at}.list`) };
+  if (o.rail !== undefined) return { rail: section(o.rail, `${at}.rail`) };
+  return { right: num(o.right, `${at}.right`) };
+}
+
+function railFocus(value: unknown, at: string): RailFocus {
+  const o = fields(value, at);
+  if (o.left !== undefined) return { left: section(o.left, `${at}.left`) };
+  return { right: num(o.right, `${at}.right`) };
 }
 
 function heading(value: unknown, at: string): Heading {
@@ -979,6 +996,7 @@ function model(value: unknown, at: string): Model {
     sidebar: orNull(section)(o.sidebar, `${at}.sidebar`),
     compose: orNull(str)(o.compose, `${at}.compose`),
     list: orNull(num)(o.list, `${at}.list`),
+    rail_focus: orNull(railFocus)(o.rail_focus, `${at}.rail_focus`),
     repos: list(repo)(o.repos, `${at}.repos`),
     repo_dirs: repoDirs(o.repo_dirs, `${at}.repo_dirs`),
     tasks: { list: list(task)(fields(o.tasks, `${at}.tasks`).list, `${at}.tasks.list`) },
@@ -1149,6 +1167,7 @@ export function snapshot(value: unknown): Snapshot {
   return {
     ok: true,
     mode: mode(o.mode, "mode"),
+    focus: focus(o.focus, "focus"),
     state: model(o.state, "state"),
     bounds: map(rect)(o.bounds, "bounds"),
     frames: map(rect)(o.frames, "frames"),

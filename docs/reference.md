@@ -85,7 +85,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⇧D | Split down, new terminal |
 | ⌘E / ⌘⇧E | Pick what goes in a new pane, right of / below the focused one: a terminal or a running app. Type to filter: then every installed app that matches is offered too, under "Not running" (those of the `apps` setting first); choosing one starts it in the background. ↑/↓ or ⌃N/⌃P move, ↵ opens, Esc closes |
 | ⌘W | Close the focused pane |
-| ⌘⌃←/→/↑/↓ or ⌘⌃H/L/K/J | Focus the pane in that direction |
+| ⌘⌃←/→/↑/↓ or ⌘⌃H/L/K/J | Focus the pane in that direction. Past the leftmost pane, ← goes to the open section's list (on the row it was left on), then to the left rail; with no section open, straight to the rail. Past the rightmost pane, → goes into the drawer's conversation (as ⌘L), or the accessibility inspector's rows while it has the drawer's place, then to the right rail; with no conversation, straight to the right rail. On a rail ↑/↓ move (its cell gets a pink ring), → (left rail) or ← (right rail) and ↵ open it; the other way, or Esc, goes back to the pane you came from. Only your own keys cross: a client's move stops at the panes |
 | ⌘] / ⌘[ | Focus the next / previous pane |
 | ⌘⌥←/→/↑/↓ or ⌘⌥H/L/K/J | Resize: move the focused pane's split that way |
 | ⌘⌃= | Even out the splits of the tab |
@@ -258,8 +258,7 @@ in a terminal it clears the screen, and is kept for that.
 The Tasks group also holds the drawer's commands: Type in the Conversation (⌘L), Open or Close the
 Conversation (⌘⇧L), Go to the Task's Tabs (⌘↵) and Stop the Agent (the drawer's Stop), each for
 the conversation the drawer shows. ⌘P while you type in the conversation opens the palette over
-it: the agent gets no key while it is open, and when it closes the keyboard is the workspace's
-(⌘L goes back in).
+it: the agent gets no key while it is open, and when it closes the keyboard goes back to it.
 
 ## Accessibility inspector
 

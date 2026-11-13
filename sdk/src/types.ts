@@ -39,6 +39,19 @@ export type TaskState =
   | "cleaned";
 /** A heading of the inbox, in the order shown. */
 export type Group = "needs_you" | "running" | "captured" | "on_hold" | "done";
+/** Where the keyboard is (the reply's `focus`). */
+export type Focus =
+  | { pane: PaneId }
+  | { list: number }
+  | { rail: Section }
+  | "drawer"
+  | "inspector"
+  | { right: number }
+  | "nothing";
+
+/** A rail that has the keyboard (in list mode): a left-rail section, or a right-rail place. */
+export type RailFocus = { left: Section } | { right: number };
+
 /** A heading of the Tasks section, in the order drawn. `open`: tasks with tabs open that do not need the user. */
 export type Heading = "needs_you" | "running" | "later" | "done" | "sessions";
 
@@ -702,6 +715,8 @@ export interface Model {
   compose: string | null;
   /** The selected row while the secondary bar has the keyboard. */
   list: number | null;
+  /** A rail that has the keyboard, or null. */
+  rail_focus: RailFocus | null;
   repos: Repo[];
   repo_dirs: RepoDirs;
   tasks: { list: Task[] };
@@ -846,6 +861,8 @@ export interface AppEntry {
 export interface Snapshot {
   ok: true;
   mode: Mode;
+  /** Where the keyboard is: a pane, a row of the section list, a left-rail cell, the drawer, a right-rail place (its `+` last), or nothing. */
+  focus: Focus;
   state: Model;
   /** Where each pane of the active tab is drawn, by pane id. */
   bounds: Record<string, Rect>;

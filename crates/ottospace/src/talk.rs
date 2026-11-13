@@ -423,7 +423,12 @@ impl Workspace {
     /// The rail at the right edge: a cell per open conversation (`Model::rail`), then `+`.
     /// A click on a cell shows its conversation; on the one shown, closes the drawer.
     pub(crate) fn render_right_rail(&self, cx: &mut Context<Self>) -> Stateful<Div> {
-        let cells = self.model.rail().into_iter().map(|cell| {
+        // The cell the keyboard is on, when the right rail has it (`zones`).
+        let focused = match self.model.rail_focus {
+            Some(ottospace_core::model::zones::RailFocus::Right(at)) => Some(at),
+            _ => None,
+        };
+        let cells = self.model.rail().into_iter().enumerate().map(|(at, cell)| {
             let (task, tip) = (cell.task, gpui::SharedString::from(cell.tip.clone()));
             let ring = cell.group.map_or(theme::MUTED, theme::task);
             let badge = div()
@@ -455,6 +460,7 @@ impl Workspace {
                 .cursor_pointer()
                 .hover(|s| s.bg(rgb(theme::SELECTED)))
                 .when(cell.shown, |d| crate::raised_cell(d, ring, true))
+                .when(focused == Some(at), crate::focus_ring)
                 .child(badge)
                 .child(self.controls.mark(format!("rail-talk:{task}")))
                 // The task's hover card; the short tip only if the task is gone.
@@ -482,6 +488,7 @@ impl Workspace {
             .child(self.controls.mark("rail:new-task"))
             .child(svg().path("icons/plus.svg").size(px(16.)).text_color(rgb(theme::MUTED)))
             .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)));
+        let new = new.when(focused.is_some_and(|at| at == cells.len()), crate::focus_ring);
         div()
             .id("right-rail")
             // The raised cell's shadow falls on its neighbours, never over the drawer.
