@@ -123,6 +123,9 @@ Rules:
 - The app writes `<home>/running` (its pid and resolved executable) at start and removes it on a
   clean quit; subcommands and test runs (`OTTOSPACE_E2E`) write none. `osi` reads it to say the
   old build is still running (`crates/ottospace/src/running.rs`).
+- Each build's tarball carries `scripts/osi`; an install replaces the installed `osi` with it
+  when its `OSI_VERSION` is higher. **Bump `OSI_VERSION` in `scripts/osi` on every change to it**,
+  or installs will not deliver the change.
 - Test with `scripts/test-osi.sh`: fixture builds, a temp `HOME`, no network. Never run
   `install.sh` or `osi` against the real `HOME` in a test; every path has an override.
 
