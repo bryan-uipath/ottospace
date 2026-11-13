@@ -15,7 +15,7 @@ import type { Transport } from "../src/client.ts";
 const FIXTURE = join(import.meta.dirname, "requests.jsonl");
 const CONTROL_RS = join(import.meta.dirname, "..", "..", "crates", "ottospace", "src", "control.rs");
 
-/** Every method once, with every field the request has. */
+/** Every method, with every field the request has. */
 const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.state(),
   (c) => c.split({ axis: "down", kind: "empty" }),
@@ -45,11 +45,25 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.pickerClose(),
   (c) => c.keys(),
   (c) => c.key({ keys: "cmd-c" }),
+  (c) => c.key({ keys: "cmd-c", as: "user", repeat: true }),
   (c) => c.mouseDown({ pane: 1, x: 2.5, y: 5, clicks: 2 }),
   (c) => c.mouseDrag({ pane: 1, x: 20, y: 5 }),
   (c) => c.scroll({ pane: 1, lines: 40 }),
   (c) => c.mouse({ action: "down", x: 300, y: 60, clicks: 1, modifiers: ["shift"] }),
+  (c) =>
+    c.mouse({
+      action: "wheel",
+      x: 300,
+      y: 60,
+      clicks: 1,
+      modifiers: ["shift"],
+      dx: 0,
+      dy: -3,
+      precise: true,
+      as: "user",
+    }),
   (c) => c.drag({ from: [300, 60], to: [900, 400], steps: 8 }),
+  (c) => c.drag({ from: [300, 60], to: [900, 400], steps: 8, as: "user" }),
   (c) => c.repos(),
   (c) => c.openRepo({ path: "/Users/me/code/app", axis: "down" }),
   (c) =>
@@ -129,9 +143,10 @@ test("the fixture holds what the client sends", async () => {
   assert.equal(sent, readFileSync(FIXTURE, "utf8"), "run `UPDATE_FIXTURE=1 npm test` and commit requests.jsonl");
 });
 
-test("every client method is in the fixture, once", async () => {
+test("every client method is in the fixture", async () => {
   const methods = Object.getOwnPropertyNames(Client.prototype).filter((name) => !NOT_REQUESTS.includes(name));
-  const sent = (await record()).map(command);
+  // `key`, `mouse` and `drag` are there twice: plain, and with the fields for tests.
+  const sent = [...new Set((await record()).map(command))];
   assert.deepEqual(sent.toSorted(), methods.map(snake).toSorted());
 });
 

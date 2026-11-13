@@ -36,6 +36,7 @@ import type {
   MarkRenameArgs,
   MarkReply,
   MarksReply,
+  KeyArgs,
   MouseArgs,
   MouseDownArgs,
   MovePaneArgs,
@@ -269,7 +270,7 @@ export class Client {
     return this.snapshot({ cmd: "keys" });
   }
   /** Presses keys through the app's bindings: `"cmd-c"`, `"shift-pageup"`. Space between keystrokes. */
-  key(args: { keys: string }): Promise<Snapshot> {
+  key(args: KeyArgs): Promise<Snapshot> {
     return this.snapshot({ cmd: "key", ...args });
   }
   mouseDown(args: MouseDownArgs): Promise<Snapshot> {
@@ -282,7 +283,8 @@ export class Client {
     return this.snapshot({ cmd: "scroll", ...args });
   }
   /**
-   * For tests: refused unless ottospace runs under `OTTOSPACE_E2E`. One left-button pointer event
+   * For tests: refused unless ottospace runs under `OTTOSPACE_E2E`. One pointer event (the left
+   * button, the wheel, or the pointer leaving the window)
    * in ottospace's own window. The event never leaves ottospace, but a click does what the control
    * under it does (a click on a parked app pane raises that app's window, as `enter` does).
    * Every `down` needs its `up`.

@@ -2071,7 +2071,12 @@ fn the_apps_section_lists_pinned_then_dock_then_all_apps_and_a_pin_is_written_to
         ("OTTOSPACE_DOCK_APPS", dock.as_str()),
     ];
     let otto = Otto::launch_with("apps-bar", &env);
-    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+    // A pin writes the settings file: the user's keys and labels, never a client's.
+    let key = |keys: &str| otto.user_key(keys);
+    let label = |id: &str| {
+        let (_, labels) = sneak(&otto);
+        otto.user_key(&letters(&labels[id]))
+    };
     let file = || std::fs::read_to_string(home.join("settings.json")).unwrap();
     let names = |rows: &Value| -> Vec<String> {
         let name = |row: &Value| {
@@ -2103,9 +2108,21 @@ fn the_apps_section_lists_pinned_then_dock_then_all_apps_and_a_pin_is_written_to
     let notice = reply["notice"].as_str().unwrap_or_default();
     assert!(notice.starts_with("settings.json: colour: unknown field"), "{notice}");
 
-    // List mode: no app runs in a test, so the first row is the pinned app. `p` on the Dock's
-    // Kestrel Mail pins it: by its path, as it is in no folder the names are looked for in.
-    let reply = key("cmd-shift-e j j p");
+    // List mode: no app runs in a test, so the first row is the pinned app. A client's `p`, `x`
+    // or `u` there does nothing: the list and the file stay as they are.
+    let client = otto.call(json!({"cmd": "key", "keys": "cmd-shift-e j j p x u"}));
+    assert_eq!(names(&client["apps_bar"]["not_running"]), ["Sketchpad*", "Quill", "Kestrel Mail", "Harbor"]);
+    assert_eq!(
+        (&client["apps_bar"]["undo"], client["state"]["list"].as_u64(), file()),
+        (&Value::Null, Some(2), settings.to_string())
+    );
+    // Nor does a row's button by its label, typed by a client.
+    let client = sneak_to(&otto, &format!("app-pin:{}", kestrel));
+    assert_eq!(names(&client["apps_bar"]["not_running"]), ["Sketchpad*", "Quill", "Kestrel Mail", "Harbor"]);
+    assert_eq!((client["mode"].as_str(), file()), (Some("list"), settings.to_string()));
+    // The user's `p` on the Dock's Kestrel Mail pins it: by its path, as it is in no folder
+    // the names are looked for in.
+    let reply = key("p");
     assert_eq!(names(&reply["apps_bar"]["not_running"]), ["Sketchpad*", "Kestrel Mail*", "Quill", "Harbor"]);
     assert_eq!((reply["apps_bar"]["undo"].as_str(), reply["mode"].as_str()), (Some("Pinned"), Some("list")));
     let pinned = settings.replace("[\"Sketchpad\"]", &format!("[\"Sketchpad\", {}]", json!(kestrel)));
@@ -2134,17 +2151,17 @@ fn the_apps_section_lists_pinned_then_dock_then_all_apps_and_a_pin_is_written_to
     assert_eq!(file(), hidden);
 
     // The undo line is a control, and so are a row's buttons: a label does what a click does.
-    let reply = sneak_to(&otto, "apps-undo");
+    let reply = label("apps-undo");
     assert_eq!(names(&reply["apps_bar"]["not_running"]), ["Sketchpad*", "Quill", "Kestrel Mail", "Harbor"]);
     assert_eq!(file(), settings.replace("false\n", "false,\n    \"apps_hidden\": []\n"));
     // A row's buttons show on the row list mode has selected (and under the pointer). The
     // selection went with Kestrel Mail's row; Harbor is the next, and Quill two above that.
     assert_eq!((reply["mode"].as_str(), reply["state"]["list"].as_u64()), (Some("list"), Some(2)));
     key("j");
-    let reply = sneak_to(&otto, &format!("app-hide:{}", path("Harbor")));
+    let reply = label(&format!("app-hide:{}", path("Harbor")));
     assert_eq!(names(&reply["apps_bar"]["not_running"]), ["Sketchpad*", "Quill", "Kestrel Mail"]);
     key("k k");
-    let reply = sneak_to(&otto, &format!("app-pin:{}", path("Quill")));
+    let reply = label(&format!("app-pin:{}", path("Quill")));
     assert_eq!(names(&reply["apps_bar"]["not_running"]), ["Sketchpad*", "Quill*", "Kestrel Mail"]);
     let kept: Value = serde_json::from_str(&file()).unwrap();
     assert_eq!(kept["apps"], json!(["Sketchpad", "Quill"]));
@@ -2154,7 +2171,7 @@ fn the_apps_section_lists_pinned_then_dock_then_all_apps_and_a_pin_is_written_to
     );
 
     // "All apps" unfolds from its heading, by name; `/` gives the filter the keyboard.
-    let reply = sneak_to(&otto, "apps-all");
+    let reply = label("apps-all");
     assert_eq!(names(&reply["apps_bar"]["all"]), ["Harbor", "Lumen Desk", "Skylark", "Tally"]);
     let reply = key("/");
     assert_eq!((reply["field"]["of"].as_str(), reply["mode"].as_str()), (Some("apps"), Some("list")));
@@ -2177,7 +2194,7 @@ fn the_apps_section_lists_pinned_then_dock_then_all_apps_and_a_pin_is_written_to
         (vec!["Lumen Desk".to_string()], &json!(3))
     );
     // Folding the group clears the filter. No row was opened: nothing is ever started in a test.
-    let reply = sneak_to(&otto, "apps-all");
+    let reply = label("apps-all");
     assert_eq!(
         (&reply["apps_bar"]["all_open"], &reply["apps_bar"]["filter"], &reply["state"]["panes"]),
         (&json!(false), &json!(""), &json!([]))
@@ -2228,7 +2245,7 @@ fn a_settings_file_that_cannot_be_read_is_not_written_and_dock_suggestions_can_b
     let reply = listed(&otto, 2);
     assert_eq!(reply["apps_bar"]["not_running"][0]["name"], "Quill");
     // A pin shows for this run, the file stays as it was, and the status bar says so.
-    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-shift-e p"}));
+    let reply = otto.user_key("cmd-shift-e p");
     assert_eq!(reply["apps_bar"]["not_running"][0]["pinned"], true);
     assert!(
         reply["notice"]
@@ -2248,7 +2265,7 @@ fn a_settings_file_that_cannot_be_read_is_not_written_and_dock_suggestions_can_b
     let reply = listed(&otto, 2);
     assert_eq!((&reply["apps_bar"]["not_running"], &reply["apps_bar"]["all_count"]), (&json!([]), &json!(2)));
     // With no row above it, list mode starts on the heading: ↵ unfolds it, and `p` pins Harbor.
-    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-shift-e enter j p"}));
+    let reply = otto.user_key("cmd-shift-e enter j p");
     assert_eq!(reply["apps_bar"]["not_running"][0]["name"], "Harbor");
     let kept = std::fs::read_to_string(off.join("settings.json")).unwrap();
     assert_eq!(kept, "{\"suggest_dock_apps\": false, \"apps\": [\"Harbor\"]}");
@@ -2262,7 +2279,7 @@ fn a_settings_file_that_cannot_be_read_is_not_written_and_dock_suggestions_can_b
     let vars: Vec<(&str, &str)> = vars.iter().map(|(name, value)| (*name, value.as_str())).collect();
     let otto = Otto::launch_with("apps-mixed", &vars);
     listed(&otto, 2);
-    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-shift-e p"}));
+    let reply = otto.user_key("cmd-shift-e p");
     let notice = reply["notice"].as_str().unwrap_or_default();
     assert!(notice.contains("was not written") && notice.contains("`apps` is not a list of names"), "{notice}");
     assert_eq!(std::fs::read_to_string(mixed.join("settings.json")).unwrap(), odd);
@@ -2276,18 +2293,18 @@ fn a_settings_file_that_cannot_be_read_is_not_written_and_dock_suggestions_can_b
     let otto = Otto::launch_with("apps-live", &vars);
     listed(&otto, 2);
     std::fs::write(live.join("settings.json"), "{\"apps\": [\"Harbor\", \"Some Other App\"]}").unwrap();
-    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-shift-e p"}));
+    let reply = otto.user_key("cmd-shift-e p");
     assert_eq!(reply["apps_bar"]["not_running"][0]["name"], "Quill");
     let kept = std::fs::read_to_string(live.join("settings.json")).unwrap();
     assert_eq!(kept, "{\"apps\": [\"Harbor\", \"Some Other App\", \"Quill\"]}");
     // The undo takes its own line off, and no other.
-    otto.call(json!({"cmd": "key", "keys": "u"}));
+    otto.user_key("u");
     let kept = std::fs::read_to_string(live.join("settings.json")).unwrap();
     assert_eq!(kept, "{\"apps\": [\"Harbor\", \"Some Other App\"]}");
     // A `settings.json` that is a link to nowhere is not replaced by a file.
     std::fs::remove_file(live.join("settings.json")).unwrap();
     std::os::unix::fs::symlink(live.join("gone.json"), live.join("settings.json")).unwrap();
-    let reply = otto.call(json!({"cmd": "key", "keys": "p"}));
+    let reply = otto.user_key("p");
     assert!(reply["notice"].as_str().is_some_and(|notice| notice.contains("a link to a file that is not there")));
     assert!(std::fs::symlink_metadata(live.join("settings.json")).unwrap().file_type().is_symlink());
     drop(otto);
@@ -3471,4 +3488,403 @@ fn the_pickers_list_has_a_scrollbar() {
     assert!(scrollbar(&reply, "picker").unwrap().1[1] < bottom[1], "the track click pages up");
     assert!(reply["state"]["picker"].is_object() && pane_ids(&reply).is_empty(), "{}", reply["state"]);
     let _ = std::fs::remove_dir_all(&root);
+}
+
+impl Otto {
+    /// Turns the wheel at `p` by `dy`: lines of a mouse wheel, or with `precise` points of a trackpad.
+    fn wheel(&self, p: [f64; 2], dy: f64, precise: bool) -> Value {
+        self.call(json!({"cmd": "mouse", "action": "wheel", "x": p[0], "y": p[1], "dy": dy, "precise": precise}))
+    }
+
+    /// A press and a release at `p`, the user's own.
+    fn user_click(&self, p: [f64; 2]) -> Value {
+        let event = |action: &str| json!({"cmd": "mouse", "action": action, "x": p[0], "y": p[1], "as": "user"});
+        self.call(event("down"));
+        self.call(event("up"))
+    }
+
+    /// Opens the Tasks section with 60 tasks in it: more than its list shows.
+    fn long_task_list(&self) {
+        self.call(json!({"cmd": "section", "section": "tasks"}));
+        for i in 0..60 {
+            self.call(json!({"cmd": "task_add", "title": format!("task {i}")}));
+        }
+    }
+
+    /// `keys` pressed as the user's own, not a client's.
+    fn user_key(&self, keys: &str) -> Value {
+        self.call(json!({"cmd": "key", "keys": keys, "as": "user"}))
+    }
+
+    /// `keys` as the user's keys still held down: each a repeat.
+    fn user_holds(&self, keys: &str) -> Value {
+        self.call(json!({"cmd": "key", "keys": keys, "as": "user", "repeat": true}))
+    }
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_wheel_over_a_scrollbar_scrolls_what_is_under_it() {
+    let otto = Otto::launch("wheel");
+    // 1 | 2    two shells with a history; a long Tasks list beside them.
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "split", "axis": "right"}));
+    otto.long_task_list();
+    otto.bounds(&[1, 2]);
+    for pane in [1, 2] {
+        let lines = "i=1; while [ $i -le 200 ]; do echo line-$i; i=$((i+1)); done\r";
+        otto.call(json!({"cmd": "type", "pane": pane, "text": lines}));
+        otto.call(json!({"cmd": "wait", "pane": pane, "pattern": "^line-200$", "timeout_ms": 30000}));
+    }
+    let offset = |reply: &Value, pane: &str| reply["terminals"][pane]["display_offset"].as_u64().unwrap();
+    let (tasks, thumb, _) = otto.wait_for("the list's bar", |o| scrollbar(&o.drawn(), "tasks"));
+    let (one, ..) = scrollbar(&otto.drawn(), "terminal:1").unwrap();
+    let (two, ..) = scrollbar(&otto.drawn(), "terminal:2").unwrap();
+
+    // A mouse wheel over a terminal's track: three lines back, in that terminal and no other.
+    let reply = otto.wheel(at(one, 0.5, 0.5), 3.0, false);
+    assert_eq!((offset(&reply, "1"), offset(&reply, "2")), (3, 0), "{}", reply["terminals"]);
+    // The wheel shows the bar; it did not move the list's.
+    assert_eq!(scrollbar(&reply, "terminal:1").unwrap().2, 1.0);
+    assert_eq!(scrollbar(&reply, "tasks").unwrap().1[1], thumb[1]);
+    // A trackpad counts points: two cells' worth is two lines. Down again is forward.
+    let cell = reply["cell"][1].as_f64().unwrap();
+    let reply = otto.wheel(at(two, 0.5, 0.5), cell * 2.0, true);
+    assert_eq!((offset(&reply, "1"), offset(&reply, "2")), (3, 2), "{}", reply["terminals"]);
+    let reply = otto.wheel(at(one, 0.5, 0.5), -3.0, false);
+    assert_eq!((offset(&reply, "1"), offset(&reply, "2")), (0, 2), "{}", reply["terminals"]);
+
+    // Over the list's track, the list scrolls: forward by the points turned, and no terminal.
+    let extent = |reply: &Value| scrollbar(reply, "tasks").unwrap().1;
+    let reply = otto.wheel(at(tasks, 0.5, 0.5), -90.0, true);
+    let moved = extent(&reply);
+    assert!(moved[1] > thumb[1] && (offset(&reply, "1"), offset(&reply, "2")) == (0, 2), "{thumb:?} {moved:?}");
+    // The thumb moves by its share of the 90 points: track / content, which is thumb / viewport.
+    let share = 90.0 * thumb[3] / tasks[3];
+    assert!((moved[1] - thumb[1] - share).abs() < 1.5, "{thumb:?} {moved:?} {share}");
+    assert_eq!(scrollbar(&reply, "tasks").unwrap().2, 1.0);
+    // Back past the top stops at the top.
+    assert_eq!(extent(&otto.wheel(at(tasks, 0.5, 0.5), 5000.0, true))[1], tasks[1]);
+    // A mouse wheel's line is a line of text there.
+    assert!(extent(&otto.wheel(at(tasks, 0.5, 0.5), -2.0, false))[1] > tasks[1]);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_wheel_scrolls_the_key_reference() {
+    let otto = Otto::launch("wheel-keys");
+    otto.call(json!({"cmd": "keys"}));
+    let (track, thumb, _) = otto.wait_for("the bar", |o| scrollbar(&o.drawn(), "keys"));
+    assert_eq!(thumb[1], track[1]);
+    // Over the list, and over its bar's track.
+    let reply = otto.wheel([track[0] - 100.0, track[1] + track[3] / 2.0], -60.0, true);
+    let (_, down, opacity) = scrollbar(&reply, "keys").unwrap();
+    assert!(down[1] > thumb[1] && opacity == 1.0, "{thumb:?} {down:?} {opacity}");
+    let (_, further, _) = scrollbar(&otto.wheel(at(track, 0.5, 0.9), -60.0, true), "keys").unwrap();
+    assert!(further[1] > down[1], "{down:?} {further:?}");
+    // Beside the panel it scrolls nothing, and closes nothing.
+    let reply = otto.wheel([2.0, track[1] + track[3] / 2.0], -60.0, true);
+    assert_eq!((scrollbar(&reply, "keys").unwrap().1[1], &reply["state"]["keys"]), (further[1], &json!(true)));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_scrollbar_fades_when_the_pointer_leaves_the_window() {
+    let otto = Otto::launch("pointer-exit");
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.long_task_list();
+    otto.bounds(&[1]);
+    let bar = |reply: &Value| scrollbar(reply, "tasks");
+    let (track, ..) = otto.wait_for("the bar", |o| bar(&o.drawn()));
+    let over = [track[0] - 100.0, track[1] + 200.0];
+    let opacity = |o: &Otto| bar(&o.call(json!({"cmd": "state"}))).unwrap().2;
+    // The pointer rests over the list: the bar stays.
+    assert_eq!(bar(&otto.mouse("move", over)).unwrap().2, 1.0);
+    std::thread::sleep(Duration::from_millis(1600));
+    assert_eq!(opacity(&otto), 1.0);
+    // It leaves the window from there. No move follows: where it was last seen, it is not.
+    // The fade is due 1.2 s later: 5 s is late.
+    otto.mouse("exit", over);
+    let left = Instant::now();
+    while opacity(&otto) > 0.0 {
+        assert!(left.elapsed() < Duration::from_secs(5), "the bar stayed after the pointer left");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // Back in, the next move finds it over the list again.
+    otto.mouse("enter", over);
+    assert_eq!(bar(&otto.mouse("move", over)).unwrap().2, 1.0);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_users_click_on_a_scrollbar_leaves_sneak_mode_and_scrolls() {
+    let otto = Otto::launch("sneak-bar");
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.long_task_list();
+    otto.bounds(&[1]);
+    let bar = |reply: &Value| scrollbar(reply, "tasks").unwrap();
+    let (track, thumb, _) = otto.wait_for("the bar", |o| scrollbar(&o.drawn(), "tasks"));
+    let below = at(track, 0.5, 0.9);
+    // The pointer rests on the track, so the bar shows under the labels.
+    otto.mouse("move", below);
+    let (labelled, _) = sneak(&otto);
+    assert_eq!(bar(&labelled).2, 1.0);
+    // A client's click is refused: the labels are the user's.
+    let down = json!({"cmd": "mouse", "action": "down", "x": below[0], "y": below[1]});
+    assert_eq!(otto.raw(&down.to_string())["error"], "sneak mode is on");
+    let still = otto.call(json!({"cmd": "state"}));
+    assert_eq!((&still["mode"], bar(&still).1[1]), (&json!("sneak"), thumb[1]));
+    // The user's is the choice: the mode ends, and the track pages down by a thumb's length.
+    let paged = otto.user_click(below);
+    assert_eq!((&paged["mode"], &paged["sneak"]), (&json!("normal"), &Value::Null), "{paged}");
+    let (_, down, _) = bar(&paged);
+    assert!((down[1] - thumb[1] - thumb[3]).abs() < 1.0, "{thumb:?} {down:?}");
+    let untouched =
+        (pane_ids(&paged), &paged["state"]["current_task"], paged["state"]["tabs"].as_array().map(Vec::len));
+    assert_eq!(untouched, (vec![1], &Value::Null, Some(1)), "no row was clicked");
+
+    // So is a drag of the thumb: to the bottom, and out of the mode.
+    otto.mouse("move", at(down, 0.5, 0.5));
+    sneak(&otto);
+    let to = [down[0], track[1] + track[3] + 200.0];
+    let reply = otto.call(json!({"cmd": "drag", "from": at(down, 0.5, 0.5), "to": to, "as": "user"}));
+    let (_, bottom, _) = bar(&reply);
+    assert_eq!(reply["mode"], "normal");
+    assert!((bottom[1] + bottom[3] - (track[1] + track[3])).abs() < 0.5, "{track:?} {bottom:?}");
+    assert_eq!(reply["state"]["current_task"], Value::Null);
+
+    // A click on a row itself opens its task: that is what the bar's clicks did not do.
+    let (labelled, _) = sneak(&otto);
+    let row = |t: &&Value| t["source"]["id"].as_str().is_some_and(|id| id.starts_with("task:"));
+    let frame = &labelled["sneak"]["targets"].as_array().unwrap().iter().find(row).expect("a row")["frame"];
+    let f = |side: &str| frame[side].as_f64().unwrap();
+    let opened = otto.user_click([f("x") + f("w") * 0.3, f("y") + f("h") / 2.0]);
+    assert!(opened["mode"] == "normal" && opened["state"]["current_task"].is_u64(), "{}", opened["state"]);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_users_shortcut_leaves_sneak_mode_and_runs_and_a_wrong_letter_cancels() {
+    let otto = Otto::launch("sneak-user");
+    otto.call(json!({"cmd": "split"}));
+    otto.bounds(&[1]);
+    otto.call(json!({"cmd": "type", "text": "echo ready-$((40+2))\r"}));
+    otto.call(json!({"cmd": "wait", "pattern": "^ready-42$", "timeout_ms": 40000}));
+
+    // A client's ⌘D is refused under the labels; the user's leaves the mode, then splits.
+    sneak(&otto);
+    assert_eq!(otto.raw(r#"{"cmd":"key","keys":"cmd-d"}"#)["error"], "sneak mode is on");
+    let reply = otto.user_key("cmd-d");
+    assert_eq!((&reply["mode"], &reply["sneak"], pane_ids(&reply)), (&json!("normal"), &Value::Null, vec![1, 2]));
+    // Also a shortcut whose handler changes no state: ⌘C with nothing selected.
+    otto.call(json!({"cmd": "close", "pane": 2}));
+    sneak(&otto);
+    let reply = otto.user_key("cmd-c");
+    assert_eq!((&reply["mode"], &reply["copied"], pane_ids(&reply)), (&json!("normal"), &Value::Null, vec![1]));
+
+    // A letter of no label cancels. The key is still down: its repeats are not for the shell.
+    sneak(&otto);
+    assert_eq!(otto.user_key("z")["mode"], "normal");
+    otto.user_holds("z z z");
+    // The next key the user presses is typed, and so are its repeats.
+    otto.user_key("x");
+    otto.user_holds("x");
+    otto.call(json!({"cmd": "wait", "pattern": "xx$", "timeout_ms": 40000}));
+    let text = otto.call(json!({"cmd": "capture"}))["text"].as_str().unwrap().to_string();
+    assert!(!text.contains('z'), "{text}");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn under_the_quit_question_the_users_shortcut_only_cancels_and_a_second_cmd_q_quits() {
+    let mut otto = Otto::launch("quit-user");
+    // Pane 1 at its prompt, with "beta" copied from it. Pane 2 runs `cat`, which would show
+    // what is pasted; it has the keyboard, and "go" is selected in it.
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "split"}));
+    otto.bounds(&[1, 2]);
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "echo alpha beta gamma\r"}));
+    otto.call(json!({"cmd": "type", "pane": 2, "text": "sh -c 'echo go; exec cat'\r"}));
+    otto.call(json!({"cmd": "wait", "pane": 2, "pattern": "^go$", "timeout_ms": 30000}));
+    let word = |pane: u64, line: &str, x: f32| {
+        let lines = otto.call(json!({"cmd": "state"}))["terminals"][pane.to_string()]["lines"].clone();
+        let row = lines.as_array().unwrap().iter().position(|l| l == line).expect(line) as f32 + 0.5;
+        otto.call(json!({"cmd": "mouse_down", "pane": pane, "x": x, "y": row, "clicks": 2}))
+    };
+    otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^alpha beta gamma$", "timeout_ms": 30000}));
+    word(1, "alpha beta gamma", 7.5);
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-c"}))["copied"], "beta");
+    let selected = word(2, "go", 0.5);
+    assert_eq!((&selected["terminals"]["2"]["selection"], &selected["state"]["focused"]), (&json!("go"), &json!(2)));
+    let cat = json!([{"pane": 2, "program": "cat", "background": false}]);
+    asks(&otto, &cat);
+    otto.call(json!({"cmd": "key", "keys": "escape"}));
+
+    // The user's ⌘Q asks. Their ⌘V, ⌘C or ⌘W cancels, and does nothing else: nothing pasted
+    // into `cat`, "go" not copied over "beta", no pane closed.
+    for shortcut in ["cmd-v", "cmd-c", "cmd-w"] {
+        let asked = otto.user_key("cmd-q");
+        assert_eq!((&asked["mode"], &asked["state"]["confirm"]["running"]), (&json!("confirm"), &cat), "{asked}");
+        let reply = otto.user_key(shortcut);
+        assert_eq!((&reply["mode"], &reply["state"]["confirm"]), (&json!("normal"), &Value::Null), "{shortcut}");
+        assert_eq!((&reply["copied"], pane_ids(&reply)), (&json!("beta"), vec![1, 2]), "{shortcut}");
+        std::thread::sleep(Duration::from_millis(200));
+        let text = otto.call(json!({"cmd": "capture", "pane": 2}))["text"].to_string();
+        assert!(!text.contains("beta"), "{shortcut}: {text}");
+    }
+    // With no question up, the same ⌘V pastes there.
+    otto.user_key("cmd-v");
+    otto.call(json!({"cmd": "wait", "pane": 2, "pattern": "^beta$", "timeout_ms": 30000}));
+
+    // The ⌘Q that asked is still held: its repeats answer nothing.
+    otto.user_key("cmd-q");
+    let held = otto.user_holds("cmd-q cmd-q cmd-q");
+    assert_eq!((&held["mode"], &held["state"]["confirm"]["running"]), (&json!("confirm"), &cat), "{held}");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(otto.child.try_wait().expect("wait").is_none(), "a held cmd-q answered its own question");
+    // Pressed again, it quits.
+    otto.raw(r#"{"cmd":"key","keys":"cmd-q","as":"user"}"#);
+    exits(&mut otto);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_key_still_held_after_a_marks_wait_reaches_nothing() {
+    let otto = Otto::launch("marks-held");
+    let wait = |pattern: &str| otto.call(json!({"cmd": "wait", "pane": 1, "pattern": pattern, "timeout_ms": 40000}));
+    let text = || otto.call(json!({"cmd": "capture", "pane": 1}))["text"].as_str().unwrap().to_string();
+    // 1 | 2    two shells; pane 1 is marked `n`.
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "split", "axis": "right"}));
+    otto.bounds(&[1, 2]);
+    otto.call(json!({"cmd": "mark_add", "pane": 1, "name": "one", "key": "n"}));
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "echo ready-$((40+2))\r"}));
+    wait("^ready-42$");
+
+    // ⌘' n jumps to pane 1. The `n` is still down: its repeats are not typed there.
+    assert_eq!(otto.user_key("cmd-'")["mode"], "mark");
+    let jumped = otto.user_key("n");
+    assert_eq!((&jumped["mode"], &jumped["state"]["focused"]), (&json!("normal"), &json!(1)));
+    otto.user_holds("n n n");
+    // A key pressed after it is typed, and repeats.
+    otto.user_key("y");
+    otto.user_holds("y");
+    wait("yy$");
+    assert!(!text().contains("nn"), "{}", text());
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "\u{15}echo ran-$((40+2))"}));
+
+    // A rename from the row's pencil ends with ↵. Held, it does not run what is at the prompt.
+    otto.call(json!({"cmd": "section", "section": "marks"}));
+    let rows = otto.wait_for("the rows to be drawn", |o| Some(o.drawn()).filter(|s| s["marks"][0]["row"].is_array()));
+    let pencil = otto.click(at(rect(&mark_named(&rows, "one")["buttons"]["rename"]), 0.5, 0.5), 1);
+    assert_eq!(pencil["state"]["mark_input"]["type"], "rename");
+    // While it waits, a held ↵ does not end it. (A held letter in the name is the input
+    // method's to repeat: not something a test can send.)
+    otto.user_key("s s");
+    let typing = otto.user_holds("enter");
+    assert_eq!((&typing["mode"], &typing["state"]["mark_input"]["text"]), (&json!("mark"), &json!("oness")));
+    let renamed = otto.user_key("enter");
+    assert_eq!((mark_names(&renamed), renamed["mode"].as_str()), (vec!["oness".to_string()], Some("normal")));
+    otto.user_holds("enter enter");
+    std::thread::sleep(Duration::from_millis(400));
+    assert!(!text().contains("ran-42"), "{}", text());
+    // Pressed again, it runs.
+    otto.user_key("enter");
+    wait("^ran-42$");
+
+    // List mode: M, then a letter gives the mark that letter. Held, the letter does no more:
+    // `j` would move down the list.
+    otto.call(json!({"cmd": "mark_add", "pane": 2, "name": "two"}));
+    assert_eq!(otto.user_key("cmd-shift-e")["state"]["list"], 0);
+    assert_eq!(otto.user_key("m")["state"]["mark_input"]["type"], "set_key");
+    // While it waits a held letter gives none.
+    assert_eq!(otto.user_holds("q")["state"]["mark_input"]["type"], "set_key");
+    let lettered = otto.user_key("j");
+    assert_eq!((&lettered["mode"], &lettered["marks"][0]["key"]), (&json!("list"), &json!("j")), "{lettered}");
+    assert_eq!(otto.user_holds("j j")["state"]["list"], 0);
+    // In list mode itself a held `j` goes on moving, and a held ↵ opens nothing.
+    assert_eq!(otto.user_key("j")["state"]["list"], 1);
+    assert_eq!(otto.user_key("k")["state"]["list"], 0);
+    assert_eq!(otto.user_holds("j")["state"]["list"], 1);
+    let focused = otto.user_key("k")["state"]["focused"].clone();
+    let held = otto.user_holds("enter");
+    assert_eq!((&held["mode"], &held["state"]["focused"]), (&json!("list"), &focused));
+
+    // A click of the user's ends a wait, also one that nothing else acts on: a press on a
+    // scrollbar's thumb goes no further. A client's is refused.
+    otto.user_key("escape");
+    otto.call(
+        json!({"cmd": "type", "pane": 2, "text": "i=1; while [ $i -le 200 ]; do echo line-$i; i=$((i+1)); done\r"}),
+    );
+    let (_, thumb, _) = otto.wait_for("the bar", |o| scrollbar(&o.drawn(), "terminal:2"));
+    let on = at(thumb, 0.5, 0.5);
+    otto.mouse("move", on);
+    let waiting = otto.user_key("cmd-'");
+    assert_eq!((&waiting["mode"], scrollbar(&waiting, "terminal:2").unwrap().2), (&json!("mark"), 1.0));
+    let down = json!({"cmd": "mouse", "action": "down", "x": on[0], "y": on[1]});
+    assert_eq!(otto.raw(&down.to_string())["error"], "a mark is waiting for a letter or a name");
+    let clicked = otto.user_click(on);
+    assert_eq!((&clicked["mode"], &clicked["state"]["mark_input"]), (&json!("normal"), &Value::Null));
+    assert_eq!(clicked["state"]["focused"], waiting["state"]["focused"], "the press went no further");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_held_key_is_sent_only_for_keys_that_exist() {
+    let otto = Otto::launch("held-keys");
+    let reply = otto.raw(r#"{"cmd":"key","keys":"f20","repeat":true}"#);
+    assert_eq!(reply["error"], "no key to hold down: f20");
+    // A client's held key is the client's: refused under the labels like its press.
+    sneak(&otto);
+    assert_eq!(otto.raw(r#"{"cmd":"key","keys":"cmd-t","repeat":true}"#)["error"], "sneak mode is on");
+    assert_eq!(otto.call(json!({"cmd": "state"}))["mode"], "sneak");
+    // And the keys after the one that ends the mode were for labels: none is typed into the shell.
+    // (Left by its shortcut: Esc would mark its own repeats as spent, and hide what follows.)
+    otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-g"}));
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "type", "text": "echo ready-$((40+2))\r"}));
+    otto.call(json!({"cmd": "wait", "pattern": "^ready-42$", "timeout_ms": 40000}));
+    sneak(&otto);
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-g x x", "repeat": true}));
+    assert_eq!(reply["mode"], "normal");
+    std::thread::sleep(Duration::from_millis(300));
+    let text = otto.call(json!({"cmd": "capture"}))["text"].as_str().unwrap().to_string();
+    assert!(!text.contains('x'), "{text}");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_users_click_in_a_marks_name_keeps_the_rename_and_one_outside_ends_it() {
+    let otto = Otto::launch("marks-field");
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "mark_add", "pane": 2, "name": "notes"}));
+    otto.call(json!({"cmd": "section", "section": "marks"}));
+    let rows = otto.wait_for("the row to be drawn", |o| Some(o.drawn()).filter(|s| s["marks"][0]["row"].is_array()));
+    let pencil = at(rect(&rows["marks"][0]["buttons"]["rename"]), 0.5, 0.5);
+    otto.click(pencil, 1);
+    // The name is a text field, with the cursor at its end.
+    let renaming = otto.wait_for("the field to be drawn", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        Some(state).filter(|s| s["field"]["bounds"][2].as_f64().is_some_and(|w| w > 1.0))
+    });
+    let (text, cursor, ..) = field(&renaming);
+    assert_eq!((renaming["state"]["mark_input"]["type"].as_str(), text.as_str()), (Some("rename"), "notes"));
+    assert_eq!(cursor, 5);
+    // The user's click in the name places the cursor there, and the rename goes on.
+    let bounds = rect(&renaming["field"]["bounds"]);
+    let inside = otto.user_click([bounds[0] + 2.0, bounds[1] + bounds[3] / 2.0]);
+    let (text, cursor, ..) = field(&inside);
+    assert_eq!(
+        (inside["mode"].as_str(), inside["state"]["mark_input"]["type"].as_str()),
+        (Some("mark"), Some("rename"))
+    );
+    assert_eq!((text.as_str(), cursor), ("notes", 0));
+    // What is typed goes in at the cursor.
+    assert_eq!(field(&otto.user_key("x")).0, "xnotes");
+    // The user's click outside the name ends the rename, and the name stays as it was.
+    let pane = at(rect(&inside["frames"]["1"]), 0.5, 0.5);
+    let outside = otto.user_click(pane);
+    assert_eq!((outside["mode"].as_str(), &outside["state"]["mark_input"]), (Some("normal"), &Value::Null));
+    assert_eq!((mark_names(&outside), &outside["state"]["focused"]), (vec!["notes".to_string()], &json!(1)));
 }

@@ -704,6 +704,14 @@ const SNOOZE_MS: u64 = 3_600_000;
 /// Longest a `wait` request may run: 10 minutes.
 const MAX_WAIT_MS: u64 = 600_000;
 
+/// The window's `NSView`, for the test requests that hand it an event.
+fn ns_view(window: &Window) -> Option<*mut std::ffi::c_void> {
+    match HasWindowHandle::window_handle(window).ok()?.as_raw() {
+        RawWindowHandle::AppKit(appkit) => Some(appkit.ns_view.as_ptr()),
+        _ => None,
+    }
+}
+
 impl Workspace {
     fn new(
         hosting: bool,
@@ -1233,24 +1241,36 @@ impl Workspace {
             self.check_marks(cx);
         }
         for Call { request, reply } in calls {
+            if let Some(why) = control::test_refusal(&request, std::env::var_os("OTTOSPACE_E2E").is_some()) {
+                let _ = reply.send(control::error(why));
+                continue;
+            }
+            // A test's `"as":"user"`: the event is the user's, and nothing kept from a client applies.
+            let sender = |by: &Option<control::By>| by.map_or(Origin::Socket, |control::By::User| Origin::User);
             // Keys go through GPUI's own dispatch, after this update: their handlers update `self`.
-            if let Request::Key { keys } = &request {
+            if let Request::Key { keys, by, repeat } = &request {
                 let parsed: Result<Vec<Keystroke>, _> = keys.split_whitespace().map(Keystroke::parse).collect();
                 match parsed {
-                    Ok(keystrokes) => self.press(keystrokes, reply, window, cx),
+                    Ok(keystrokes) if *repeat => self.hold(keystrokes, sender(by), reply, window, cx),
+                    Ok(keystrokes) => self.press(keystrokes, sender(by), reply, window, cx),
                     Err(err) => drop(reply.send(control::error(&err.to_string()))),
                 }
                 continue;
             }
+            let origin = match &request {
+                Request::Mouse { by, .. } | Request::Drag { by, .. } => sender(by),
+                _ => Origin::Socket,
+            };
             // `compose_drop` is a drop from the pointer: refused where a click is.
-            let pointer = matches!(
-                request,
-                Request::Mouse { .. }
-                    | Request::Drag { .. }
-                    | Request::MouseDown { .. }
-                    | Request::MouseDrag { .. }
-                    | Request::ComposeDrop { .. }
-            );
+            let pointer = origin == Origin::Socket
+                && matches!(
+                    request,
+                    Request::Mouse { .. }
+                        | Request::Drag { .. }
+                        | Request::MouseDown { .. }
+                        | Request::MouseDrag { .. }
+                        | Request::ComposeDrop { .. }
+                );
             if pointer && self.model.sneak.is_some() {
                 let _ = reply.send(control::error(sneak::ON));
                 continue;
@@ -1265,16 +1285,19 @@ impl Workspace {
                 let _ = reply.send(control::error(CONFIRM_UP));
                 continue;
             }
-            if let Some(why) = control::pointer_refusal(&request, std::env::var_os("OTTOSPACE_E2E").is_some()) {
-                let _ = reply.send(control::error(why));
-                continue;
-            }
             // So do pointer events, through the window's own handlers: a drag is GPUI's state.
             let events = match &request {
-                Request::Mouse { action, x, y, clicks, modifiers } => {
+                Request::Mouse { action, x, y, clicks, modifiers, dx, dy, precise, .. } => {
                     let has = |m: control::Modifier| modifiers.contains(&m);
                     let mouse = Mouse {
-                        kind: MouseKind::Move,
+                        kind: match action {
+                            MouseAction::Wheel => {
+                                MouseKind::Wheel { dx: f64::from(*dx), dy: f64::from(*dy), precise: *precise }
+                            }
+                            MouseAction::Exit => MouseKind::Exit,
+                            MouseAction::Enter => MouseKind::Enter,
+                            _ => MouseKind::Move,
+                        },
                         x: f64::from(*x),
                         y: f64::from(*y),
                         clicks: (*clicks).min(3) as isize,
@@ -1287,7 +1310,7 @@ impl Workspace {
                     self.abandoned = self.held.then(|| self.release_later(window, cx));
                     Some(vec![event])
                 }
-                Request::Drag { from, to, steps } => {
+                Request::Drag { from, to, steps, .. } => {
                     // At most 256 moves: more adds nothing, and each draws a frame.
                     let steps = (*steps).clamp(1, 256);
                     let along = |i: usize| {
@@ -1304,7 +1327,7 @@ impl Workspace {
                 _ => None,
             };
             if let Some(events) = events {
-                self.inject(events, reply, window, cx);
+                self.inject(events, origin, reply, window, cx);
                 continue;
             }
             let mut failure: Option<String> = None;
@@ -1783,27 +1806,39 @@ impl Workspace {
         .detach();
     }
 
+    /// Why a client's key is not pressed: under the user's labels it types a label or leaves,
+    /// and nothing else (its ⌘ shortcut would end the mode, and the user's next letter reach a
+    /// terminal); under the quit question it answers (↵, Q, Esc), and nothing else.
+    fn key_refusal(&self, key: &Keystroke) -> Option<&'static str> {
+        if self.model.sneak.is_some() && !sneak::takes(key) {
+            return Some(sneak::ON);
+        }
+        let unanswered = self.model.confirm.is_some() && self.confirm_answer(key, Origin::Socket).is_none();
+        unanswered.then_some(CONFIRM_UP)
+    }
+
     /// Presses `keystrokes` as if typed, once this update is done, then replies with the state.
-    fn press(&self, keystrokes: Vec<Keystroke>, reply: Sender<String>, window: &Window, cx: &mut Context<Self>) {
+    /// `origin`: the client, or in a test run the user.
+    fn press(
+        &self,
+        keystrokes: Vec<Keystroke>,
+        origin: Origin,
+        reply: Sender<String>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
         let this = cx.entity().downgrade();
         window.defer(cx, move |window, cx| {
             let labelled = |cx: &App| this.read_with(cx, |this, _| this.model.sneak.is_some()).unwrap_or(false);
+            let client = origin == Origin::Socket;
             // The key handlers run as for a real key, outside this call, but the client presses.
-            let before = this.update(cx, |this, _| this.swap_origin(Origin::Socket));
+            let before = this.update(cx, |this, _| this.swap_origin(origin));
             let mut refused = None;
             for keystroke in keystrokes {
                 let was = labelled(cx);
-                // Under the user's labels a client types a label or leaves, and nothing else:
-                // its ⌘ shortcut would end the mode, and the user's next letter reach a terminal.
-                // Under the quit question it answers (↵, Q, Esc), and nothing else.
-                let unanswered = |this: &Self| {
-                    this.model.confirm.is_some() && this.confirm_answer(&keystroke, Origin::Socket).is_none()
-                };
-                refused = if was && !sneak::takes(&keystroke) {
-                    Some(sneak::ON)
-                } else {
-                    this.read_with(cx, |this, _| unanswered(this)).unwrap_or(false).then_some(CONFIRM_UP)
-                };
+                if client {
+                    refused = this.read_with(cx, |this, _| this.key_refusal(&keystroke)).unwrap_or(None);
+                }
                 if refused.is_some() {
                     break;
                 }
@@ -1814,7 +1849,7 @@ impl Workspace {
                 }
                 window.dispatch_keystroke(keystroke, cx);
                 // The keys after the one that ended sneak mode were for labels, not a terminal.
-                if was && !labelled(cx) {
+                if client && was && !labelled(cx) {
                     break;
                 }
             }
@@ -1826,6 +1861,63 @@ impl Workspace {
         });
     }
 
+    /// For tests: each of `keystrokes` as a key held down, repeating, then replies with the
+    /// state. A key that types goes through the window's own `keyDown:`, never posted, as
+    /// `inject`. A ⌘ shortcut reaches GPUI through the input method, which tells it of no repeat
+    /// and takes no event the system did not queue: it is pressed as `press` does, while
+    /// `key_repeating` says it is held.
+    fn hold(
+        &self,
+        keystrokes: Vec<Keystroke>,
+        origin: Origin,
+        reply: Sender<String>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(view) = ns_view(window) else {
+            return drop(reply.send(control::error("no window to send the key to")));
+        };
+        cx.spawn_in(window, async move |this, cx| {
+            let before = this.update(cx, |this, _| this.swap_origin(origin));
+            let mut refused = None;
+            for key in keystrokes {
+                let was = this.read_with(cx, |this, _| this.model.sneak.is_some()).unwrap_or(false);
+                if origin == Origin::Socket {
+                    refused = this.read_with(cx, |this, _| this.key_refusal(&key).map(String::from)).unwrap_or(None);
+                }
+                // A frame first, as between a press and its repeat: the keys go to what it drew.
+                if refused.is_some() || cx.update(|window, cx| window.draw(cx).clear()).is_err() {
+                    break;
+                }
+                let m = key.modifiers;
+                let sent = if m.platform {
+                    let pressed = |window: &mut Window, cx: &mut App| {
+                        ottospace_mac::window::while_held(|| window.dispatch_keystroke(key.clone(), cx));
+                    };
+                    cx.update(pressed).is_ok()
+                } else {
+                    unsafe { ottospace_mac::window::send_held_key(view, &key.key, m.control, m.alt, m.shift) }
+                };
+                if !sent {
+                    refused = Some(format!("no key to hold down: {}", key.key));
+                    break;
+                }
+                // As `press`: a client's keys after the one that ended sneak mode were for labels.
+                let labelled = this.read_with(cx, |this, _| this.model.sneak.is_some()).unwrap_or(false);
+                if origin == Origin::Socket && was && !labelled {
+                    break;
+                }
+            }
+            let _ = this.update(cx, |this, _| this.input = before.unwrap_or(Origin::User));
+            let state = match refused {
+                Some(why) => Ok(control::error(&why)),
+                None => this.update_in(cx, |this, window, cx| this.snapshot(window, cx)),
+            };
+            let _ = reply.send(state.unwrap_or_else(|_| control::error("ottospace is closing")));
+        })
+        .detach();
+    }
+
     /// `mouse` as the press, release or move `action` asks for. A press holds the button until
     /// the release, and a move in between is a drag.
     fn pointer(&mut self, action: MouseAction, mouse: Mouse) -> Mouse {
@@ -1834,11 +1926,13 @@ impl Workspace {
             MouseAction::Move if self.held => MouseKind::Drag,
             MouseAction::Move => MouseKind::Move,
             MouseAction::Up => MouseKind::Up,
+            // The wheel, and the pointer leaving or coming back: as the caller made it.
+            MouseAction::Wheel | MouseAction::Exit | MouseAction::Enter => mouse.kind,
         };
         self.held = match action {
             MouseAction::Down => true,
-            MouseAction::Move => self.held,
             MouseAction::Up => false,
+            _ => self.held,
         };
         Mouse { kind, ..mouse }
     }
@@ -1854,7 +1948,7 @@ impl Workspace {
                 }
                 let (kind, clicks, off) = (MouseKind::Up, 1, false);
                 let up = Mouse { kind, x: -1.0, y: -1.0, clicks, cmd: off, ctrl: off, alt: off, shift: off };
-                this.inject(vec![up], std::sync::mpsc::channel().0, window, cx);
+                this.inject(vec![up], Origin::Socket, std::sync::mpsc::channel().0, window, cx);
             });
         })
     }
@@ -1864,31 +1958,44 @@ impl Workspace {
     /// type is private.) A frame is drawn before each, as between real events: GPUI finds what
     /// is under the pointer in the last frame drawn. The events are never posted: no other app's
     /// window gets them, and the real pointer stays where it is.
-    fn inject(&self, events: Vec<Mouse>, reply: Sender<String>, window: &Window, cx: &mut Context<Self>) {
-        let view = match HasWindowHandle::window_handle(window).map(|handle| handle.as_raw()) {
-            Ok(RawWindowHandle::AppKit(appkit)) => appkit.ns_view.as_ptr(),
-            _ => return drop(reply.send(control::error("no window to send the pointer to"))),
+    fn inject(
+        &self,
+        events: Vec<Mouse>,
+        origin: Origin,
+        reply: Sender<String>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(view) = ns_view(window) else {
+            return drop(reply.send(control::error("no window to send the pointer to")));
         };
         // A task of its own: the handlers update the app, which this update holds.
         cx.spawn_in(window, async move |this, cx| {
-            // The handlers run outside any call of ours: the client is the sender until the last one.
+            // The handlers run outside any call of ours: `origin` is the sender until the last one.
             let before = this.update(cx, |this, _| {
                 this.injected = true;
-                this.swap_origin(Origin::Socket)
+                this.swap_origin(origin)
             });
+            let mut made = true;
             for event in events {
                 // An error: the window is gone, and `view` with it.
                 if cx.update(|window, cx| window.draw(cx).clear()).is_err() {
                     break;
                 }
-                unsafe { ottospace_mac::window::send_mouse(view, event) };
+                made = unsafe { ottospace_mac::window::send_mouse(view, event) };
+                if !made {
+                    break;
+                }
             }
             let _ = cx.update(|window, cx| window.draw(cx).clear());
             let _ = this.update(cx, |this, _| {
                 this.injected = false;
                 this.input = before.unwrap_or(Origin::User);
             });
-            let state = this.update_in(cx, |this, window, cx| this.snapshot(window, cx));
+            let state = match made {
+                true => this.update_in(cx, |this, window, cx| this.snapshot(window, cx)),
+                false => Ok(control::error("the pointer event could not be made")),
+            };
             let _ = reply.send(state.unwrap_or_else(|_| control::error("ottospace is closing")));
         })
         .detach();

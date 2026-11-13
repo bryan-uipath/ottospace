@@ -653,20 +653,37 @@ export interface MouseDownArgs extends CellArgs {
   /** 2 selects a word, 3 a line. */
   clicks?: number;
 }
+export interface KeyArgs {
+  /** Space-separated keystrokes, e.g. `"cmd-shift-c"`, `"a s"`. */
+  keys: string;
+  /** @internal For ottospace's own tests: refused outside a test run. */
+  as?: "user";
+  /** @internal For ottospace's own tests: refused outside a test run. */
+  repeat?: boolean;
+}
 export interface MouseArgs {
-  action: "down" | "move" | "up";
+  /** `wheel` turns the scroll wheel; `exit` and `enter`: the pointer leaves the window, and comes back. */
+  action: "down" | "move" | "up" | "wheel" | "exit" | "enter";
   /** In points from the top-left of ottospace's window, as the state's rects are. */
   x: number;
   y: number;
   /** At most 3. */
   clicks?: number;
   modifiers?: Array<"cmd" | "ctrl" | "alt" | "shift">;
+  /** For `wheel`: lines of a mouse wheel, or with `precise` points of a trackpad. Positive `dy` scrolls back. */
+  dx?: number;
+  dy?: number;
+  precise?: boolean;
+  /** @internal For ottospace's own tests. */
+  as?: "user";
 }
 export interface DragArgs {
   from: [number, number];
   to: [number, number];
   /** Moves between the press and the release, 1 to 256. Default: 8. */
   steps?: number;
+  /** @internal For ottospace's own tests. */
+  as?: "user";
 }
 export interface ScrollArgs {
   pane?: PaneId;

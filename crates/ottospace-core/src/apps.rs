@@ -81,9 +81,6 @@ pub struct Lists {
     pub filtering: bool,
     /// `pinned` and `hidden` before the last pin, unpin or hide.
     before: Option<(Vec<Entry>, Vec<Entry>)>,
-    /// A client may pin, hide and undo, which write the user's settings file: only in a test
-    /// run, which says so. Otherwise those are the user's alone (`Model::refusal`).
-    pub clients_write: bool,
 }
 
 impl Default for Lists {
@@ -98,7 +95,6 @@ impl Default for Lists {
             filter: Field::new("", MAX_FILTER),
             filtering: false,
             before: None,
-            clients_write: false,
         }
     }
 }
@@ -654,7 +650,7 @@ mod tests {
     fn model() -> Model {
         let mut m = Model::default();
         let (pinned, hidden) = (vec![entry("Zed")], Vec::new());
-        m.update(Action::SetAppSettings { pinned, hidden, suggest: true, clients_write: false });
+        m.update(Action::SetAppSettings { pinned, hidden, suggest: true });
         m.update(Action::SetDock { apps: vec![app("Slack"), app("Notes")] });
         m.update(Action::SetInstalled { apps: ["Bear", "Arc", "Zed", "Slack"].map(app).into(), running: Vec::new() });
         m.update(Action::SetApps { names: vec!["Finder".into()] });
@@ -718,8 +714,7 @@ mod tests {
         // By path, as a click does. An app nothing lists is neither pinned nor hidden nor started.
         assert_eq!(m.update(Action::AppPin { path: path("Arc") }), saved(&["+apps:Arc"]));
         assert_eq!(m.update(Action::AppHide { path: path("Slack") }), saved(&["+hidden:Slack"]));
-        // A client's key or label does none of it: the settings file is the user's. A test
-        // run says its clients may.
+        // A client's key or label does none of it: the settings file is the user's.
         for action in [Action::AppPin { path: path("Bear") }, Action::AppHide { path: path("Notes") }, Action::AppsUndo]
         {
             assert_eq!(m.refusal(&action, Origin::Socket), Some(USERS_ALONE));
@@ -731,10 +726,7 @@ mod tests {
         for action in [Action::ListPin, Action::ListDismiss, Action::ListUndo] {
             assert_eq!(m.refusal(&action, Origin::Socket), Some(USERS_ALONE));
         }
-        m.app_lists.clients_write = true;
-        assert_eq!(m.update(Action::AppsUndo.sent_by(Origin::Socket)), saved(&["-hidden:Slack"]));
         // In another section a client's `x` and `u` are what they were.
-        m.app_lists.clients_write = false;
         m.update(Action::ToggleSection { section: Section::Tasks });
         assert_eq!(m.refusal(&Action::ListDismiss, Origin::Socket), None);
         m.update(Action::ToggleSection { section: Section::Apps });

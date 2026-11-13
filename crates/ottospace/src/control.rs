@@ -126,8 +126,21 @@ pub enum Request {
     Keys,
     /// Presses keys as if typed, through the key bindings: `{"cmd":"key","keys":"shift-pageup"}`.
     /// Space-separated keystrokes in GPUI's syntax.
+    ///
+    /// For tests (`test_refusal`), never for an agent:
+    /// - `"as":"user"`: the keys are the user's own (`Origin::User`), not a client's. None of
+    ///   what keeps a client out of sneak mode, a mark's wait or the quit question applies.
+    /// - `"repeat":true`: each key as one still held down, repeating. A key that types goes to
+    ///   the window's own `keyDown:` as a repeat: `enter`, `tab`, `space`, or a character the
+    ///   layout types with no modifier on key codes 0 to 50 (`a`, `7`, `/`; not `A`). A `cmd-`
+    ///   shortcut (any key, by the flag alone) is pressed as without `repeat`, while the app
+    ///   reads the key as held. `escape`, `backspace`, arrows: "no key to hold down".
     Key {
         keys: String,
+        #[serde(default, rename = "as")]
+        by: Option<By>,
+        #[serde(default)]
+        repeat: bool,
     },
     /// Presses the mouse on a terminal pane (default: the focused one) at `x`, `y` in cells from its
     /// top-left. A fraction picks a side of a cell. `clicks`: 2 selects a word, 3 a line.
@@ -153,13 +166,18 @@ pub enum Request {
         pane: Option<PaneId>,
         lines: f32,
     },
-    /// For tests (`pointer_refusal`). One left-button pointer event at `x`, `y`, in points from
+    /// For tests (`test_refusal`). One left-button pointer event at `x`, `y`, in points from
     /// the top-left of ottospace's window, as the state gives rects:
     /// `{"cmd":"mouse","action":"down","x":300,"y":60}`. A `move` between a `down` and its `up`
     /// is a drag; every `down` needs its `up`. The event never leaves ottospace: it is not
     /// posted, the real pointer does not move, and no other app's window gets it. But a click
     /// does what the control under it does, with the outside effects of `open_app`, `enter`,
     /// `leave` or `close`: a click on a parked app pane raises that app's window.
+    ///
+    /// `wheel` turns the scroll wheel there by `dx`, `dy`: lines of a mouse wheel, or with
+    /// `precise` points of a trackpad, both rounded to whole numbers; positive `dy` scrolls
+    /// back. `exit` and `enter`: the pointer leaves the window, and comes back. `"as":"user"`:
+    /// the user's event, not a client's, as on `key`.
     Mouse {
         action: MouseAction,
         x: f32,
@@ -168,6 +186,14 @@ pub enum Request {
         clicks: usize,
         #[serde(default)]
         modifiers: Vec<Modifier>,
+        #[serde(default)]
+        dx: f32,
+        #[serde(default)]
+        dy: f32,
+        #[serde(default)]
+        precise: bool,
+        #[serde(default, rename = "as")]
+        by: Option<By>,
     },
     /// A whole left-button drag: a press at `from`, `steps` moves along the line, a release at
     /// `to`. For tests, as `mouse`.
@@ -176,6 +202,8 @@ pub enum Request {
         to: [f32; 2],
         #[serde(default = "eight")]
         steps: usize,
+        #[serde(default, rename = "as")]
+        by: Option<By>,
     },
     /// Reads the repository list from disk again. It is `state.repos` in the reply.
     Repos,
@@ -265,7 +293,7 @@ pub enum Request {
         #[serde(default)]
         text: String,
     },
-    /// For tests (`pointer_refusal`): files or folders dropped on the open new-task box, as a
+    /// For tests (`test_refusal`): files or folders dropped on the open new-task box, as a
     /// drag from Finder drops them: `{"cmd":"compose_drop","paths":["/tmp/a.txt"]}`. Each goes
     /// into the line at the cursor as a `/path` word.
     ComposeDrop {
@@ -388,6 +416,16 @@ pub enum MouseAction {
     Down,
     Move,
     Up,
+    Wheel,
+    Exit,
+    Enter,
+}
+
+/// `"as":"user"`: whose input an injected key or pointer event is. For tests (`test_refusal`).
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum By {
+    User,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
@@ -399,12 +437,21 @@ pub enum Modifier {
     Shift,
 }
 
-/// Why a request is refused, if it is: `mouse` and `drag` answer only in a test run (`e2e`:
-/// `OTTOSPACE_E2E` is set). Coordinates would reach every control with no request of its own.
-pub fn pointer_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
-    let pointer = matches!(request, Request::Mouse { .. } | Request::Drag { .. } | Request::ComposeDrop { .. });
-    (pointer && !e2e)
-        .then_some("pointer requests are for tests (OTTOSPACE_E2E); use drop_pane, focus, close, enter and the like")
+/// Why a request is refused, if it is: what only a test run answers (`e2e`: `OTTOSPACE_E2E` is
+/// set). `mouse`, `drag` and `compose_drop`: coordinates would reach every control with no
+/// request of its own. `as` and `repeat` on `key`: a client's key would pass for the user's
+/// own, and end sneak mode or answer the quit question in their place.
+pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
+    match request {
+        _ if e2e => None,
+        Request::Mouse { .. } | Request::Drag { .. } | Request::ComposeDrop { .. } => {
+            Some("pointer requests are for tests (OTTOSPACE_E2E); use drop_pane, focus, close, enter and the like")
+        }
+        Request::Key { by, repeat, .. } if by.is_some() || *repeat => {
+            Some("`as` and `repeat` are for tests (OTTOSPACE_E2E): a client's key is never the user's")
+        }
+        _ => None,
+    }
 }
 
 /// Pane kinds a client may create. App panes come from `open_app`.
@@ -498,16 +545,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pointer_requests_answer_only_in_a_test_run() {
+    fn what_is_for_tests_answers_only_in_a_test_run() {
         let parse = |line: &str| serde_json::from_str::<Request>(line).expect(line);
-        let mouse = parse(r#"{"cmd":"mouse","action":"down","x":300,"y":60}"#);
-        let drag = parse(r#"{"cmd":"drag","from":[300,60],"to":[900,400]}"#);
-        let drop = parse(r#"{"cmd":"drop_pane","source":3,"target":1,"zone":"left"}"#);
-        for pointer in [&mouse, &drag] {
-            assert!(pointer_refusal(pointer, false).expect("refused").contains("drop_pane"));
-            assert_eq!(pointer_refusal(pointer, true), None);
+        let pointer = [
+            r#"{"cmd":"mouse","action":"down","x":300,"y":60}"#,
+            r#"{"cmd":"mouse","action":"down","x":300,"y":60,"as":"user"}"#,
+            r#"{"cmd":"mouse","action":"wheel","x":300,"y":60,"dy":3}"#,
+            r#"{"cmd":"mouse","action":"exit","x":300,"y":60}"#,
+            r#"{"cmd":"drag","from":[300,60],"to":[900,400]}"#,
+            r#"{"cmd":"drag","from":[300,60],"to":[900,400],"as":"user"}"#,
+            r#"{"cmd":"compose_drop","paths":["/tmp/a.txt"]}"#,
+        ];
+        for line in pointer {
+            assert!(test_refusal(&parse(line), false).expect(line).contains("drop_pane"));
+            assert_eq!(test_refusal(&parse(line), true), None);
         }
-        assert_eq!(pointer_refusal(&drop, false), None);
-        assert_eq!(pointer_refusal(&parse(r#"{"cmd":"state"}"#), false), None);
+        // A key as the user, or held: never outside a test run, whatever else it carries.
+        let user = [
+            r#"{"cmd":"key","keys":"cmd-q","as":"user"}"#,
+            r#"{"cmd":"key","keys":"q","repeat":true}"#,
+            r#"{"cmd":"key","keys":"enter","as":"user","repeat":true}"#,
+        ];
+        for line in user {
+            assert!(test_refusal(&parse(line), false).expect(line).contains("never the user's"));
+            assert_eq!(test_refusal(&parse(line), true), None);
+        }
+        // Nobody but the user: no other sender has a name, and no other request takes one.
+        for line in [
+            r#"{"cmd":"key","keys":"q","as":"system"}"#,
+            r#"{"cmd":"key","keys":"q","as":"socket"}"#,
+            r#"{"cmd":"type","text":"q","as":"user"}"#,
+            r#"{"cmd":"split","as":"user"}"#,
+            r#"{"cmd":"mouse_down","x":1,"y":1,"as":"user"}"#,
+        ] {
+            assert!(serde_json::from_str::<Request>(line).is_err(), "{line}");
+        }
+        let ordinary = [
+            r#"{"cmd":"drop_pane","source":3,"target":1,"zone":"left"}"#,
+            r#"{"cmd":"key","keys":"cmd-q"}"#,
+            r#"{"cmd":"state"}"#,
+        ];
+        for line in ordinary {
+            assert_eq!(test_refusal(&parse(line), false), None);
+        }
     }
 }

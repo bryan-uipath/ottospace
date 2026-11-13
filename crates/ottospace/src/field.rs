@@ -211,6 +211,11 @@ impl Workspace {
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, window, cx| {
                     this.field_press(event.position.x, event.click_count, event.modifiers.shift, window, cx);
+                    // A mark's name sits in its row: the row's click would go to the mark, and
+                    // the section's take the keyboard back. Either ends the rename.
+                    if this.in_mark_name(event.position) {
+                        cx.stop_propagation();
+                    }
                 }),
             )
             .child(FieldElement {

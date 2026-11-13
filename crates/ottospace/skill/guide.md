@@ -169,6 +169,8 @@ ottospace ctl '{"cmd":"mouse","action":"move","x":600,"y":400}'
 ottospace ctl '{"cmd":"mouse","action":"up","x":600,"y":400}'
 ottospace ctl '{"cmd":"mouse","action":"down","x":300,"y":60,"clicks":2,"modifiers":["shift"]}'
 ottospace ctl '{"cmd":"drag","from":[300,60],"to":[600,400],"steps":8}'
+ottospace ctl '{"cmd":"mouse","action":"wheel","x":600,"y":400,"dy":-3}'
+ottospace ctl '{"cmd":"mouse","action":"exit","x":600,"y":400}'
 ```
 
 - `mouse` is one left-button pointer event at `x`, `y`: points from the top-left of ottospace's
@@ -177,6 +179,10 @@ ottospace ctl '{"cmd":"drag","from":[300,60],"to":[600,400],"steps":8}'
   `action` is `down`, `move` or `up`; `modifiers` are `cmd`, `ctrl`, `alt`, `shift`. A `move`
   between a `down` and its `up` is a drag. `drag` is a press at `from`, `steps` moves (default
   8) and a release at `to`.
+- `wheel` turns the scroll wheel at `x`, `y` by `dx`, `dy`: lines of a mouse wheel, or with
+  `"precise":true` points of a trackpad. Positive `dy` scrolls back, as `scroll`'s `lines`.
+  `exit`: the pointer leaves the window, and is over nothing until the next `move`. `enter`: it
+  comes back; ottospace acts on the `move` that follows, not on this.
 - Caps: `clicks` is at most 3, `steps` is 1 to 256.
 - A `down` must be followed by an `up`. Esc ends the hold, and so does 5 s with no `mouse`
   request: the button is released outside the window, which drops nothing.
@@ -186,6 +192,8 @@ ottospace ctl '{"cmd":"drag","from":[300,60],"to":[600,400],"steps":8}'
   it does, with the same effects outside ottospace as `open_app`, `enter`, `leave` and `close`:
   a click on a parked app pane raises that app's window. Only the replay of the click inside
   the app is left out.
+
+Some requests and fields are for ottospace's own tests and are refused outside a test run.
 
 Terminals:
 
