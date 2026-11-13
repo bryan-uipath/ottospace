@@ -909,6 +909,9 @@ impl Workspace {
         window.focus(&focus);
         let mut model = Model::default();
         model.update(Action::SetRepoDirs { dirs: config::repo_dirs() }.sent_by(Origin::System));
+        // The Tasks section as the user last grouped it.
+        let view = config::get().settings.tasks_view.unwrap_or_default();
+        model.update(Action::TasksView { view }.sent_by(Origin::System));
         model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
         let kept = config::load_tasks();
         let unread = kept.unread;
@@ -1174,6 +1177,11 @@ impl Workspace {
                 }
                 Effect::LaunchApp { name, path, axis, new_tab } => self.launch_picked(name, path, *axis, *new_tab),
                 Effect::SaveApps { changes } => self.save_apps(changes),
+                Effect::SaveTasksView { view } => {
+                    if let Err(why) = config::save_value("tasks_view", &serde_json::json!(view)) {
+                        self.error = Some(format!("{}{why}", Self::NOT_WRITTEN));
+                    }
+                }
                 Effect::SaveRepos { changes } => self.save_apps(changes),
                 Effect::Notice { text } => self.error = Some(text.clone()),
                 // A picture of the pane is asked for: the cursor's going scrolls the terminal to

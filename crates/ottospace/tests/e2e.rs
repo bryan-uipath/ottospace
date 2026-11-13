@@ -5087,7 +5087,14 @@ fn tasks_show_by_state_or_project_with_time_tokens_a_footer_and_a_card() {
     assert!(!otto.call(json!({"cmd": "state"})).to_string().contains("made-up"));
 
     // By project: `#web` (needs you; its Done line folded), then no project, each with a bar of states.
-    let reply = otto.click(at(otto.control("tasks-view:project"), 0.5, 0.5), 1);
+    // A client's click switches it for this run and writes nothing; the user's is written.
+    otto.click(at(otto.control("tasks-view:project"), 0.5, 0.5), 1);
+    let read = || std::fs::read_to_string(home.join("settings.json")).unwrap_or_default();
+    assert!(!read().contains("tasks_view"), "{}", read());
+    otto.click(at(otto.control("tasks-view:state"), 0.5, 0.5), 1);
+    let reply = otto.user_click(at(otto.control("tasks-view:project"), 0.5, 0.5));
+    let written: Value = serde_json::from_str(&read()).unwrap();
+    assert_eq!((&written["tasks_view"], &written["repos"]), (&json!("project"), &settings["repos"]));
     let progress = &reply["tasks_progress"];
     assert_eq!(progress["view"], "project");
     let groups = progress["projects"].as_array().unwrap();
@@ -5107,6 +5114,10 @@ fn tasks_show_by_state_or_project_with_time_tokens_a_footer_and_a_card() {
     assert_eq!((&today["done"], &today["running"]), (&json!(1), &json!(1)));
     assert!(today["line"].as_str().unwrap().starts_with("1 done · 1 running · "), "{today}");
     drop(otto);
+    // The next run groups by project, as the user left it.
+    let again = Otto::launch_with("progress-2", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    assert_eq!(again.call(json!({"cmd": "state"}))["tasks_progress"]["view"], "project");
+    drop(again);
     let _ = std::fs::remove_dir_all(&home);
 }
 

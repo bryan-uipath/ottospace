@@ -1772,6 +1772,10 @@ impl Run {
                     ensure!(m.repo_dirs.dirs.len() <= MAX_DIRS, "more directories than the settings may name");
                 }
                 Effect::Notice { text } => ensure!(user && !text.is_empty(), "{origin:?} is told {text:?}"),
+                // The settings file is the user's.
+                Effect::SaveTasksView { view } => {
+                    ensure!(user && m.tasks_view == *view, "{origin:?} wrote tasks_view {view:?}")
+                }
                 Effect::Run { command } => {
                     ensure!(user && matches!(action, Action::PaletteChoose { .. }), "{command:?} run by {action:?}")
                 }

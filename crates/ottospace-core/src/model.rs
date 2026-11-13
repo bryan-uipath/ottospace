@@ -1417,6 +1417,10 @@ pub enum Effect {
         axis: Axis,
         new_tab: bool,
     },
+    /// The user picked how the Tasks section groups: write `tasks_view` in the settings file.
+    SaveTasksView {
+        view: TasksView,
+    },
     /// The pinned or hidden apps changed: make these changes to `apps` and `apps_hidden` in
     /// the settings file, as it is then.
     SaveApps {
@@ -2663,8 +2667,14 @@ impl Model {
                     self.collapsed.push(heading);
                 }
             }
-            // List mode's selection follows its task into the other view.
-            Action::TasksView { view } => self.tasks_view = view,
+            // List mode's selection follows its task into the other view. The user's pick is
+            // written to the settings; anyone else's lasts this run.
+            Action::TasksView { view } => {
+                if self.by_user && view != self.tasks_view {
+                    effects.push(Effect::SaveTasksView { view });
+                }
+                self.tasks_view = view;
+            }
             Action::ToggleProject { project, done } => {
                 let list = if done { &mut self.open_done } else { &mut self.folded_projects };
                 match list.iter().position(|p| *p == project) {
@@ -7003,7 +7013,12 @@ mod tests {
         // List mode walks the projects, their tasks and their Done lines; ↵ on one folds it.
         m.update(Action::ToggleSection { section: Section::Tasks });
         m.update(Action::FocusList);
-        m.update(Action::TasksView { view: TasksView::Project });
+        // A client's switch is not written; the user's is, once.
+        assert_eq!(m.update(Action::TasksView { view: TasksView::Project }.sent_by(Origin::Socket)), []);
+        m.update(Action::TasksView { view: TasksView::State }.sent_by(Origin::Socket));
+        let saved = m.update(Action::TasksView { view: TasksView::Project });
+        assert_eq!(saved, [Effect::SaveTasksView { view: TasksView::Project }]);
+        assert_eq!(m.update(Action::TasksView { view: TasksView::Project }), []);
         let (project, task) = (|p: Option<&str>| ListRow::Project(p.map(String::from)), ListRow::Task);
         let web_done = ListRow::ProjectDone(Some("web".into()));
         assert_eq!(
