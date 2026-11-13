@@ -13,6 +13,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
   return {
     ok: true,
     mode: "normal",
+    focus: "nothing",
     state: {
       panes: [],
       tabs: [{ id: 1, title: "Tab 1", task: null }],
@@ -24,6 +25,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       sidebar: null,
       compose: null,
       list: null,
+      rail_focus: null,
       repos: [],
       repo_dirs: { dirs: [], fixed: false },
       tasks: { list: [] },

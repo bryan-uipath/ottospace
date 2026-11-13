@@ -33,6 +33,7 @@ use ottospace_core::keys::{self, Mods};
 use ottospace_core::list::{ListKey, list_key};
 use ottospace_core::marks::{Field, MarkInput, MarkOf, MarkRef, letter};
 use ottospace_core::model::CONFIRM_UP;
+use ottospace_core::model::zones::RailFocus;
 use ottospace_core::repos::{Checkout, Repo};
 use ottospace_core::rules::{self, Facts};
 use ottospace_core::scrollbar::{Extent, key_step};
@@ -2401,6 +2402,8 @@ impl Workspace {
         serde_json::json!({
             "ok": true,
             "mode": self.model.mode(),
+            // Where the keyboard is: a pane, the list, a rail's cell, the drawer.
+            "focus": self.model.focus_target(),
             "state": self.model,
             "bounds": bounds,
             // Each drawn pane's bounds inside its border.
@@ -3146,7 +3149,11 @@ impl Workspace {
             Some(ListKey::Pin) => Action::ListPin,
             Some(ListKey::Filter) => Action::AppsFilter { on: true },
             Some(ListKey::Leave) => Action::LeaveList,
-            None => return,
+            // On a rail ← and → cross zones; on a row they do nothing.
+            Some(ListKey::Side(side)) if self.model.rail_focus.is_some() => {
+                Action::FocusDir { dir: if side < 0 { Dir::Left } else { Dir::Right } }
+            }
+            Some(ListKey::Side(_)) | None => return,
         };
         self.dispatch(action, self.input, window, cx);
         if let Some(child) = self.selected_child() {
@@ -3609,6 +3616,7 @@ impl Workspace {
                         let tasks = section == Section::Tasks && needs_you;
                         raised_cell(d, if tasks { theme::SNEAK } else { theme::PRIMARY }, false)
                     })
+                    .when(self.model.rail_focus == Some(RailFocus::Left(section)), |d| focus_ring(d.relative()))
                     .child(svg().path(*icon).size(px(20.)).text_color(rgb(if active {
                         theme::TEXT
                     } else {
@@ -4855,7 +4863,7 @@ fn title_shadow() -> Div {
 
 /// A rail's open cell, raised: the panel's background, a soft shadow above and below it, a
 /// lighter line along its top, and an accent bar at the window's edge (`right`: the right rail's).
-fn raised_cell(cell: Stateful<Div>, accent: u32, right: bool) -> Stateful<Div> {
+pub(crate) fn raised_cell(cell: Stateful<Div>, accent: u32, right: bool) -> Stateful<Div> {
     let shadow = |y: f32| BoxShadow {
         color: black().opacity(0.85),
         offset: point(px(0.), px(y)),
@@ -4868,6 +4876,11 @@ fn raised_cell(cell: Stateful<Div>, accent: u32, right: bool) -> Stateful<Div> {
         .shadow(vec![shadow(-7.), shadow(7.)])
         .child(div().absolute().top_0().left_0().w_full().h(px(1.)).bg(rgb(0x303036)))
         .child(if right { bar.right_0() } else { bar.left_0() })
+}
+
+/// A rail cell with the keyboard (`zones`): a ring in list mode's colour, apart from "open".
+pub(crate) fn focus_ring(cell: Stateful<Div>) -> Stateful<Div> {
+    cell.child(div().absolute().inset(px(4.)).rounded(px(8.)).border_2().border_color(rgb(theme::LIST)))
 }
 
 /// A row under a heading (a repository's checkout): no outline at rest, so a long list stays

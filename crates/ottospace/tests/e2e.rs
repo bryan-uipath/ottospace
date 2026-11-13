@@ -5156,6 +5156,35 @@ fn tasks_show_by_state_or_project_with_time_tokens_a_footer_and_a_card() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn focus_moves_across_the_zones_to_the_rails_and_back() {
+    let otto = Otto::launch("zones");
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "split", "axis": "right", "kind": "empty"}));
+    let focus = |reply: &Value| reply["focus"].clone();
+    // A client's move stops at the panes.
+    otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-left"}));
+    assert_eq!(focus(&otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-left"}))), json!({"pane": 1}));
+    // The user's goes on: the left rail (no section open), its cells by ↓, a section's list by →.
+    let rail = otto.user_key("cmd-ctrl-left");
+    assert_eq!((focus(&rail), &rail["mode"]), (json!({"rail": "apps"}), &json!("list")));
+    assert_eq!(focus(&otto.user_key("down")), json!({"rail": "workbook"}));
+    let list = otto.user_key("right");
+    assert_eq!((list["focus"].get("list").is_some(), &list["state"]["sidebar"]), (true, &json!("workbook")), "{list}");
+    assert_eq!(focus(&otto.user_key("cmd-ctrl-left")), json!({"rail": "workbook"}));
+    otto.user_key("cmd-ctrl-right");
+    // Back to the pane it came from, then across to the right rail (no conversation: its +).
+    assert_eq!(focus(&otto.user_key("cmd-ctrl-right")), json!({"pane": 1}));
+    otto.user_key("cmd-ctrl-right");
+    assert_eq!(focus(&otto.user_key("cmd-ctrl-right")), json!({"right": 0}));
+    // Esc returns to the pane.
+    assert_eq!(focus(&otto.user_key("escape")), json!({"pane": 2}));
+    // The rail cell with the keyboard is drawn, with a ring apart from the open one.
+    otto.user_key("cmd-ctrl-right");
+    assert_eq!(otto.drawn()["mode"], "list");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn the_command_palette_runs_a_command_by_name_for_the_user_alone() {
     let otto = Otto::launch("palette");
     otto.call(json!({"cmd": "split", "kind": "empty"}));

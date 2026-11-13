@@ -1384,6 +1384,27 @@ fn check(m: &Model) -> Result<(), String> {
     Ok(())
 }
 
+/// The keyboard is on one place there is: a pane on show, a row of the list, a rail's cell.
+fn check_zones(m: &Model) -> Result<(), String> {
+    use crate::model::zones::{RailFocus, Target};
+    let leaves = m.layout.as_ref().map(Node::leaves).unwrap_or_default();
+    match m.focus_target() {
+        Target::Pane(pane) => ensure!(leaves.contains(&pane), "the keyboard is on pane {pane}, not on show"),
+        Target::Right(at) => ensure!(at <= m.rail().len(), "right rail cell {at} of {}", m.rail().len()),
+        Target::Nothing => {
+            ensure!(leaves.is_empty() || m.mode() != Mode::Normal, "panes on show, and the keyboard on none")
+        }
+        _ => {}
+    }
+    if m.rail_focus.is_some() {
+        ensure!(m.list.is_none() && m.mode() == Mode::List, "a rail and {:?} have the keyboard", m.mode());
+    }
+    if let Some(RailFocus::Right(at)) = m.rail_focus {
+        ensure!(at <= m.rail().len(), "right rail place {at}");
+    }
+    Ok(())
+}
+
 /// The marks' file: written and read again, every mark is there as it was, and so are the keys
 /// this build does not know.
 /// Each view of the Tasks section lists every task of the inbox once, in the groups and order
@@ -1573,6 +1594,7 @@ impl Run {
 
         let effects = m.update(sent);
         check(m)?;
+        check_zones(m)?;
         if !self.sparse || self.steps.len().is_multiple_of(8) {
             check_state(m)?;
             check_file(m)?;
@@ -2905,6 +2927,18 @@ fn a_brief_goes_when_its_task_no_longer_names_a_capture() {
     let bare = Task { materials: Vec::new(), ..run.m.tasks.list[0].clone() };
     run.step(Action::RestoreTasks { tasks: vec![bare], floor: 0 }.into()).unwrap();
     assert_eq!(run.m.brief, None);
+}
+
+/// → from the Apps list left the filter with the keyboard and no list.
+#[test]
+fn the_apps_filter_keeps_its_keys_when_focus_moves() {
+    replay(&[
+        Action::FocusDir { dir: Dir::Left }.sent_by(Origin::User),
+        Action::FocusDir { dir: Dir::Right }.sent_by(Origin::User),
+        Action::AppsFilter { on: true }.sent_by(Origin::User),
+        Action::FocusDir { dir: Dir::Right }.sent_by(Origin::User),
+    ])
+    .unwrap();
 }
 
 // Known, and left: a decision to make, not a slip.

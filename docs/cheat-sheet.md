@@ -21,6 +21,7 @@ ottospace            # opens on the Repos list
 | Choose what goes in a new pane (terminal or app) | ⌘E (right) or ⌘⇧E (below), type to filter, ↵. Typing also offers installed apps that are not running |
 | Edit the picker's filter or the new-task line | As any Mac text field: ⌥←/→ words, ⌘←/→ line, ⇧ selects, ⌘A, ⌘C/⌘X/⌘V, ⌘Z/⇧⌘Z, ⌥⌫ a word, ⌘⌫ the line; click, drag, double click |
 | Move between panes | ⌘⌃ arrows or ⌘⌃ H J K L · ⌘] ⌘[ cycle |
+| Move to the rails and back | ⌘⌃← past the leftmost pane: the section list, then the left rail. ⌘⌃→ past the rightmost: the conversation, then the right rail. On a rail ↑↓ move, ↵ opens, Esc goes back |
 | Resize the pane | ⌘⌥ arrows or ⌘⌥ H J K L: the split moves that way · ⌘⌃= evens all out |
 | Give an app the room its window needs | ⌘⌃0, or `fit` in the pane header: shown when the app refused the pane's size and a split can move |
 | Swap the pane with its neighbour | ⌘⇧⌥ arrows or ⌘⇧⌥ H J K L |

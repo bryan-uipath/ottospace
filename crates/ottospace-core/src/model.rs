@@ -1586,6 +1586,8 @@ pub struct Tab {
     pub(crate) focused: Option<PaneId>,
 }
 
+pub mod zones;
+
 #[derive(Debug, Serialize)]
 pub struct Model {
     /// Panes of every tab.
@@ -1612,6 +1614,11 @@ pub struct Model {
     pub compose: Option<Field>,
     /// The selected row, while the secondary bar has the keyboard.
     pub list: Option<usize>,
+    /// A rail that has the keyboard (`zones`). In list mode, as the section list.
+    pub rail_focus: Option<zones::RailFocus>,
+    /// The row a section's list was left on.
+    #[serde(skip)]
+    list_kept: zones::KeptRow,
     /// The Apps section's list: names of the apps the shell can host.
     #[serde(skip)]
     pub apps: Vec<String>,
@@ -1757,6 +1764,8 @@ impl Default for Model {
             sidebar: None,
             compose: None,
             list: None,
+            rail_focus: None,
+            list_kept: zones::KeptRow::default(),
             apps: Vec::new(),
             repos: Vec::new(),
             repo_dirs: repos::RepoDirs::default(),
@@ -1865,7 +1874,7 @@ impl Model {
             Mode::Annotate
         } else if self.visual.is_some() {
             Mode::Visual
-        } else if self.list.is_some() {
+        } else if self.list.is_some() || self.rail_focus.is_some() {
             Mode::List
         } else {
             Mode::Normal
@@ -1932,6 +1941,10 @@ impl Model {
             // An agent runs with the user's rights: no client's request, key or label starts
             // or stops one. A client's ↵ in the box files the task and starts none (`start`).
             Action::TaskTalk { .. } | Action::TalkPick { .. } | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
+            // On a rail list keys move over the rail: the user's, as the move that got there.
+            Action::ListMove { .. } | Action::ListChoose { .. } | Action::LeaveList if self.rail_focus.is_some() => {
+                Some(zones::RAILS_USERS)
+            }
             action if self.sneak.is_some() && action.takes_keyboard() => Some("sneak mode is on"),
             // A capture hands over a pane's picture and its text: no client's request, key or
             // label asks for one. Sneak mode and the quit question say their own reason first.
@@ -2057,8 +2070,14 @@ impl Model {
         let sent = sent.into();
         let (origin, line) = (sent.origin, self.compose_line().cloned());
         let states: Vec<(TaskId, State)> = self.tasks.list.iter().map(|task| (task.id, task.state)).collect();
+        let listed = self.sidebar.zip(self.list);
         let effects = self.step(sent);
         self.tasks.finished(&states, self.now);
+        // However the list was left (Esc, a click on a pane), ⌘⌃← comes back to its row.
+        if self.list.is_none() && listed.is_some() {
+            self.list_kept = zones::KeptRow(listed);
+        }
+        self.settle_zone();
         // A line anyone but the user changed is theirs until it is empty or gone.
         let changed = origin != Origin::User && self.compose_line() != line.as_ref();
         self.compose_theirs = (self.compose_theirs || changed) && self.compose_line().is_some_and(|l| !l.is_empty());
@@ -2177,8 +2196,20 @@ impl Model {
             (self.keys, self.picker, self.palette) = (false, None, None);
         }
         let action = self.capture_route(action);
-        if self.waits(&action).is_some() {
+        // From the new task in the drawer, focus moves on, as the box waits pane actions.
+        let across = matches!(action, Action::FocusDir { dir: Dir::Left | Dir::Right });
+        let drawer = across && self.focus_target() == zones::Target::Drawer;
+        if self.waits(&action).is_some() && !(user && drawer) {
             return effects;
+        }
+        // Focus past the panes' edge, and keys over a rail: the user's alone.
+        if user {
+            self.by_user = true;
+            let crossed = self.zones(&action, &mut effects);
+            self.by_user = false;
+            if crossed {
+                return effects;
+            }
         }
         // The keyboard goes to a pane or a tab: the list gives it up.
         let leaves_list = matches!(
@@ -2208,7 +2239,7 @@ impl Model {
                 | Action::TalkKeys { on: true }
         );
         if leaves_list {
-            self.list = None;
+            (self.list, self.rail_focus) = (None, None);
         }
         // The user's own move in the list keeps the selection where it is, so the next row comes
         // under it (hold one task, then the next). Any other change (an agent files a task, a
@@ -3476,10 +3507,7 @@ impl Model {
         // The drawer shows one thing: the new task being written gives way, kept for the box's
         // next opening. A capture's draft is not the drawer's to close.
         if self.compose_host() == Some(Host::Drawer) {
-            let line = self.compose.take().filter(|line| !line.text().is_empty());
-            let (refs, attached) = (std::mem::take(&mut self.compose_refs), std::mem::take(&mut self.compose_attached));
-            self.compose_kept = line.map(|line| KeptDraft { line, refs, attached, theirs: self.compose_theirs });
-            self.compose_reset();
+            self.put_compose_aside();
         }
         self.talk = Some(Talk { task: id, open: true, keys: self.agent_runs(id) || start.is_some() });
         self.opened.retain(|seen| *seen != id);
@@ -3493,6 +3521,14 @@ impl Model {
             self.starting.push((id, runner));
             effects.push(Effect::StartAgent { task: id, start, cwd, brief });
         }
+    }
+
+    /// Closes the new-task box, its line kept for the box's next opening (`OpenCompose` empty).
+    fn put_compose_aside(&mut self) {
+        let line = self.compose.take().filter(|line| !line.text().is_empty());
+        let (refs, attached) = (std::mem::take(&mut self.compose_refs), std::mem::take(&mut self.compose_attached));
+        self.compose_kept = line.map(|line| KeptDraft { line, refs, attached, theirs: self.compose_theirs });
+        self.compose_reset();
     }
 
     /// The keyboard goes into the open conversation, if its agent runs, or leaves it.
