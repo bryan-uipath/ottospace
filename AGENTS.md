@@ -38,6 +38,9 @@ Rules:
 - **Outer loop:** `cargo e2e`. Launches the real app and drives it over the control socket
   (`crates/ottospace/tests/e2e.rs`). Use it for anything the core cannot prove: drawing, layout
   bounds, key bindings, socket protocol.
+- In an E2E run a reply with the state waits for the frame that draws its request: read bounds
+  from it, no poll needed. A failed test writes a folder that explains it (its panic names it),
+  and `scripts/e2e-repeat N [filter]` tallies flaky tests. See `docs/ai/e2e-reliability.md`.
 - An E2E run reads no `settings.json` and keeps no tasks on disk, unless the test names its own
   folder with `OTTOSPACE_HOME`. Tests must never read or write the user's `~/.ottospace`.
 - E2E runs set `OTTOSPACE_E2E`, which turns window hosting off. Tests must never move the
@@ -92,8 +95,13 @@ Rules:
 - `.github/workflows/ci.yml`, on pull requests and pushes to `main`, macOS arm64:
   `cargo fmt -p ottospace -p ottospace-core -p ottospace-sessions -p ottospace-agents --check`, `cargo
   clippy` (errors fail, warnings do not), `cargo test --workspace`, and the SDK's type check and request-fixture
-  tests (`sdk/`, Node). `cargo e2e` runs in a separate job that may fail without blocking; the
-  same job then runs the SDK's tests against a private instance.
+  tests (`sdk/`, Node). `cargo e2e` runs in a separate job that may fail without blocking, under
+  cargo-nextest (`.config/nextest.toml`): up to three tries, a test that passes on a retry is
+  listed as flaky in the job summary. The same job then runs the SDK's tests against a private
+  instance.
+- `.github/workflows/reliability.yml`, nightly and by hand: `cargo e2e` and `cargo e2e-apps` five
+  times each, tallied; the nightly run keeps the issue "Flaky tests" (`issues: write` on that job
+  only). Never on pull requests.
 - A change that touches only `docs/`, `site/`, `README.md`, `AGENTS.md` or `LICENSE` runs neither
   workflow: macOS runners are scarce. Such a pull request has no checks to wait for, and
   after such a push `main-latest` trails `main` by docs commits.
