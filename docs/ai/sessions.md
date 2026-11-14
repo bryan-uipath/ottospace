@@ -315,11 +315,18 @@ check on every `StartAgent`:
   before it starts anything.
 - **No second program.** A session at work, or held (`Found.held`: Claude Code's
   `sessions/<pid>.json` names a pid that exists), is not resumed. One whose agent runs in the
-  drawer is shown, not started again.
+  drawer is shown, not started again. What the drawer's own agent left behind is not another's:
+  for a minute after it ends (`ENDED_MS`), a file last written no later than 2 s after that
+  (`ENDED_GRACE_MS`) is taken for ours (`Model::in_use`), and a task does not follow that
+  work; for two rounds (`ENDED_HELD_MS`) a listing's record of a process is too. A read made
+  for a resume is newer than the end: what it records is believed.
+- **Facts at the moment of a resume.** A task's session that is not listed (the Tasks section
+  is closed) is read first, alone (`Effect::ReadSession`, `sessions::read_one` on a thread of
+  its own, one listing as a round makes): where it started, at work, held. The resume waits on
+  `SessionRead`, which only answers a resume the user asked for (property check).
 
-Known gaps: Codex records no process, so an idle Codex session open in another terminal is
-resumed. For up to 30 s after a drawer agent ends its session reads "at work", and "held" is
-as of the last read, so opening it again may say it is live elsewhere until the next read.
+Known gap: Codex records no process, so an idle Codex session open in another terminal is
+resumed.
 
 ## Privacy
 

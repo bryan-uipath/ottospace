@@ -199,6 +199,8 @@ impl Model {
                 if let Some(talk) = &mut self.talk {
                     talk.open = true;
                 }
+                // The conversation takes its place back from the inspector, as a pick of it does.
+                self.inspector = None;
                 self.talk_keys(true, effects);
             }
             Some(cell) => self.act(Action::TalkPick { id: cell.task.clone() }, effects),

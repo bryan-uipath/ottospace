@@ -952,6 +952,19 @@ const MAKERS: &[Make] = &[
         Action::AgentSessions { found, home: Some("/Users/me".into()), now: g.rng.below(100_000) as u64 }
     },
     |g| Action::AgentExited { task: g.subject() },
+    |g| {
+        // A task's session half the time: what a resume waits on.
+        let links: Vec<(String, String)> =
+            g.m.tasks
+                .list
+                .iter()
+                .filter_map(|t| t.session.as_ref())
+                .map(|l| (l.runner.clone(), l.id.clone()))
+                .collect();
+        let (runner, id) = g.one_of(&links, Gen::session);
+        let found = g.rng.coin().then(|| Found { runner: runner.clone(), id: id.clone(), ..g.found() });
+        Action::SessionRead { runner, id, found }
+    },
     |g| Action::SessionMissing { task: g.task(), id: g.session_id() },
     |g| Action::TaskStop { id: g.subject() },
     |_| Action::TalkToggle,
@@ -1069,7 +1082,7 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(!gone(&talk.task), "the drawer is on task {:?}, which is gone", talk.task);
         let free = m.live.is_none() && m.list.is_none() && m.visual.is_none() && m.annotated().is_none();
         ensure!(
-            !talk.keys || (talk.open && m.agent_runs(&talk.task) && free),
+            !talk.keys || (talk.open && m.talk_live(&talk.task) && free),
             "the keyboard is in a conversation that is closed, has no agent, or under another: {talk:?}"
         );
     }
@@ -1634,6 +1647,7 @@ impl Run {
         let drawn_before = self.drawn_before.clone();
         let m = &mut self.m;
         let refused = m.refusal(&action, origin).map(|_| format!("{m:?}"));
+        let awaiting = m.awaiting.clone();
         let panes: Vec<PaneId> = m.panes.iter().map(|p| p.id).collect();
         let sneak = m.sneak.as_ref().map(|sneak| sneak.typed.clone());
         let labelled: Vec<String> =
@@ -1735,6 +1749,9 @@ impl Run {
             _ => false,
         };
         ensure!(!inspector_own || refused.is_some(), "a client's {action:?} reached the inspector");
+        // A resume waits on a read only when the user asked for it.
+        let waits_more = m.awaiting.iter().any(|subject| !awaiting.contains(subject));
+        ensure!(origin == Origin::User || !waits_more, "{origin:?}'s {action:?} asked for a resume");
         // An action refused for who sent it changes nothing at all.
         if let Some(before) = &refused {
             ensure!(
@@ -1953,14 +1970,17 @@ impl Run {
                 }
                 Effect::StartAgent { task: subject, start, cwd, .. } => {
                     let gone = |subject: &Subject| subject.task().is_some_and(|id| m.tasks.get(id).is_none());
-                    // An agent runs with the user's rights: no client's action starts one.
-                    ensure!(user, "{origin:?} started an agent for {subject:?}");
+                    // An agent runs with the user's rights: no client's action starts one. A
+                    // session read answers a resume the user asked for, and only that.
+                    let asked = awaiting.contains(subject) && matches!(action, Action::SessionRead { .. });
+                    let resumes = matches!(start, agents::Start::Resume { .. });
+                    ensure!(user || (asked && resumes), "{origin:?} started an agent for {subject:?}");
                     ensure!(!gone(subject) && m.agent_runs(subject), "an agent starts for nothing: {subject:?}");
                     // A session no task owns is gone on with only where it started, in a listed
                     // checkout, and only if nothing has it: not at work, held by no process.
                     if let Subject::Session { runner, id } = subject {
                         let found = m.found.iter().find(|s| (&s.runner, &s.id) == (runner, id));
-                        let free = found.is_some_and(|s| !s.active && !s.held && Some(&s.cwd) == cwd.as_ref());
+                        let free = found.is_some_and(|s| !m.in_use(s) && Some(&s.cwd) == cwd.as_ref());
                         let listed =
                             cwd.as_ref().is_some_and(|cwd| m.repo_names().any(|(_, path)| sessions::below(cwd, path)));
                         ensure!(free && listed, "session {id} gone on with in {cwd:?}: at work, held, or outside");
@@ -1978,6 +1998,12 @@ impl Run {
                         let title = m.tasks.get(task).map(|task| task.title.as_str());
                         ensure!(title == Some(launch.title.as_str()), "task {task} starts with {:?}", launch.title);
                     }
+                }
+                Effect::ReadSession { runner, id } => {
+                    // Read for a resume the user asks for now: a task's session, not listed.
+                    let waits = m.awaiting.iter().any(|s| m.session_of(s) == Some((runner.clone(), id.clone())));
+                    let listed = m.found.iter().any(|s| (&s.runner, &s.id) == (runner, id));
+                    ensure!(user && waits && !listed, "{origin:?} read {runner} {id}: no resume waits on it");
                 }
                 Effect::StopAgent { task } => {
                     ensure!(user && m.agent_runs(task), "{origin:?} stops the agent of {task:?}, or none runs");
@@ -2653,6 +2679,23 @@ fn by(origin: Origin, action: Action) -> Envelope {
 
 fn split(axis: Axis, kind: Kind) -> Envelope {
     Action::Split { axis, kind }.into()
+}
+
+/// ← from the right rail's cell of the conversation on show gave the keyboard to the drawer
+/// under the inspector, which still covered it.
+#[test]
+fn back_from_the_rail_under_the_inspector_shows_the_conversation() {
+    let slack =
+        Kind::App { window: 7, title: "general".into(), bundle: Some("com.slack".into()), name: "Slack".into() };
+    replay(&[
+        Action::Open { kind: slack, axis: Axis::Right, beside: None }.into(),
+        by(Origin::System, Action::OpenCompose { text: "flicker".into() }),
+        Action::ComposeSubmit { open: true }.into(),
+        Action::FocusDir { dir: Dir::Right }.into(),
+        Action::InspectorOpen { pane: 1, app: "Slack".into() }.into(),
+        Action::FocusDir { dir: Dir::Left }.into(),
+    ])
+    .unwrap();
 }
 
 /// An app's tree arrived after the user's first letter, and a new app label went on with it: the

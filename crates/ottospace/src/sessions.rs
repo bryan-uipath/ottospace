@@ -308,10 +308,7 @@ fn read(
     let mut found = Vec::new();
     for (index, (runner, session)) in sessions.iter().enumerate() {
         let Some(runner_name) = runner_name(&session.kind) else { continue };
-        // The longest listed checkout the session started in or below: a worktree inside its
-        // repository's folder is the worktree's.
-        let inside = checkouts.iter().filter(|dir| session.cwd.starts_with(dir));
-        let Some(repo) = inside.max_by_key(|dir| dir.as_os_str().len()) else { continue };
+        let Some(repo) = repo_of(&checkouts, session) else { continue };
         let (mut station, mut label) = (None, None);
         if active(session) && index < FOLLOWED {
             let follow = follows.entry(session.path.clone()).or_default();
@@ -325,23 +322,50 @@ fn read(
         files.insert((runner_name.to_string(), session.id.clone()), session.path.clone());
         // From the end of the file, read again only when the file changed: not a transcript followed.
         let (title, model) = if index < TITLED { (runner.title(session), runner.model(session)) } else { (None, None) };
-        found.push(Found {
-            runner: runner_name.to_string(),
-            id: session.id.clone(),
-            cwd: session.cwd.to_string_lossy().into_owned(),
-            repo: repo.to_string_lossy().into_owned(),
-            started: session.started,
-            last_activity: session.last_activity,
-            active: active(session),
-            station,
-            label,
-            title,
-            model,
-            // A pid used again by another program reads as alive: then it is not gone on with.
-            held: session.pid.is_some_and(crate::running::alive),
-        });
+        found.push(Found { station, label, title, model, ..as_found(runner_name, session, repo, now) });
     }
     found
+}
+
+/// The longest listed checkout the session started in or below: a worktree inside its
+/// repository's folder is the worktree's.
+fn repo_of<'a>(checkouts: &'a [PathBuf], session: &SessionRef) -> Option<&'a PathBuf> {
+    checkouts.iter().filter(|dir| session.cwd.starts_with(dir)).max_by_key(|dir| dir.as_os_str().len())
+}
+
+/// What a listing says of a session in `repo`: where and when, at work, held. Nothing it runs.
+fn as_found(runner: &str, session: &SessionRef, repo: &std::path::Path, now: u64) -> Found {
+    Found {
+        runner: runner.to_string(),
+        id: session.id.clone(),
+        cwd: session.cwd.to_string_lossy().into_owned(),
+        repo: repo.to_string_lossy().into_owned(),
+        started: session.started,
+        last_activity: session.last_activity,
+        active: session.last_activity.is_some_and(|at| recent(at, now)),
+        station: None,
+        label: None,
+        title: None,
+        model: None,
+        // A pid used again by another program reads as alive: then it is not gone on with.
+        held: session.pid.is_some_and(crate::running::alive),
+    }
+}
+
+/// One session, read for a resume the user asked for: where it started, if it is at work or a
+/// process holds it, its title. One listing of the listed checkouts' session folders, as a round
+/// makes; no transcript is followed. Called off the window's thread. `None`: no checkout has it.
+pub fn read_one(runner: &str, id: &str, now: u64) -> Option<Found> {
+    let dirs = config::session_dirs()?;
+    // Only that runner's folders.
+    let claude = (runner == "claude").then(|| Claude::new(dirs.claude));
+    let codex = dirs.codex.filter(|_| runner == "codex").map(Codex::new);
+    let mut runners: Vec<&dyn Runner> = claude.iter().map(|claude| claude as &dyn Runner).collect();
+    runners.extend(codex.as_ref().map(|codex| codex as &dyn Runner));
+    let (checkouts, sessions) = list(&runners, &repos::scan());
+    let (reader, session) = sessions.iter().find(|(_, s)| runner_name(&s.kind) == Some(runner) && s.id == id)?;
+    let repo = repo_of(&checkouts, session)?;
+    Some(Found { title: reader.title(session), ..as_found(runner, session, repo, now) })
 }
 
 /// What each task's session did, read on from where the last round stopped: tokens by model

@@ -212,9 +212,11 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    task with captures is told where its brief is. The workspace stays as it was.
 3. **One verb.** A click or ↵ on a task is its conversation: started if it never ran, its
    session gone on with if it has one and no agent runs, shown if one runs. A session is gone
-   on with in the folder it started in, which may be below the repository. One at work in
-   another terminal, or held open by another Claude Code, is not: the drawer says so. A saved
-   agent cannot be started yet: the drawer says so too.
+   on with in the folder it started in, which may be below the repository; with the Tasks
+   section closed that one session is read first. One at work in another terminal, or held
+   open by another Claude Code, is not: the drawer says so. An agent you just stopped there is
+   not another terminal's: it is gone on with at once. Going on with a session, the task runs.
+   A saved agent cannot be started yet: the drawer says so too.
 4. **The drawer.** Its header: the task's state, title, model and time; Go to (⌘↵) shows its
    tabs in the workspace when it has some; Brief (when it has captures); Stop ends the agent;
    × (⌘⇧L) closes the drawer to the right rail and the agent goes on. ⌘L moves the keyboard in
@@ -224,8 +226,10 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    steady dot while its agent works; hover for its card. A click shows it; on the one shown,
    closes the drawer.
 6. **Following.** The task runs while its agent works. Claude is given the session's id; Codex
-   names its own, and ottospace finds it where Codex wrote it. When the agent ends while the task
-   runs, the task needs you.
+   names its own, and ottospace finds it where Codex wrote it: the one session that started in
+   the task's folder after the agent did and before the next agent there, that nothing else
+   has. When two could be its (another Codex started there at the same moment), neither is
+   taken: the task runs, following none. When the agent ends while the task runs, the task needs you.
 7. **A session that is no task's.** A click or ↵ on its row under Sessions opens its
    conversation the same way, with no task: it gets a badge on the rail (from its title, else
    its repository) and Adopt in the drawer's header. Adopt, there or on the row, makes the task,

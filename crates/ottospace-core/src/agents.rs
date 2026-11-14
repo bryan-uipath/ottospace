@@ -215,7 +215,8 @@ pub struct Seek {
     pub runner: &'static str,
     /// Where it runs: the task's repository; `None`, the home folder.
     pub cwd: Option<String>,
-    /// When it was started, in ms since 1970.
+    /// When it was started, in ms since 1970: taken before the program was, so its session
+    /// cannot say it started earlier.
     pub since: u64,
 }
 
@@ -232,37 +233,53 @@ pub struct Started {
 /// How long a started agent's session is looked for.
 pub const SEEK_MS: u64 = 60_000;
 
-/// A runner may write its start time to the second: a session that says it started this much
-/// before the agent did may still be its.
-const SLACK_MS: u64 = 1_000;
+/// True if a session that says it started at `started` can be an agent's started at `since`:
+/// not before it, in ms; a time written to the whole second, not before that second.
+fn after(started: u64, since: u64) -> bool {
+    started >= since || (started.is_multiple_of(1_000) && started >= since - since % 1_000)
+}
 
-/// Which session is each agent's: the first (by its start) of its runner's sessions that started
-/// in its folder (`home` for none) since it was started, whose id is a UUID, that no task follows
-/// (`linked`) and that no agent started before it took. Agents in their start order: two started
-/// in one folder take two sessions, the earlier the earlier.
+/// Which session is each agent's. A session may be an agent's if it is its runner's, started in
+/// its folder (`home` for none) after it (`after`) and within `SEEK_MS`, its id is a UUID, and
+/// nothing has it (`taken`: the sessions of tasks and of open conversations). An agent is linked
+/// to a session only if that is the one session that may be its and started before the next
+/// agent there did, and no other agent's it may be. Else it waits: one more may be another
+/// terminal's, started at that moment, or a slow agent's.
 pub fn find_sessions(
     seeking: &[Seek],
     found: &[Started],
     home: Option<&str>,
-    linked: &[(String, String)],
+    taken: &[(String, String)],
 ) -> Vec<(crate::tasks::TaskId, String)> {
-    let mut seeks: Vec<&Seek> = seeking.iter().collect();
-    seeks.sort_by_key(|seek| seek.since);
-    let mut taken: Vec<(crate::tasks::TaskId, String)> = Vec::new();
-    for seek in seeks {
-        let Some(dir) = seek.cwd.as_deref().or(home) else { continue };
-        let free = |session: &&Started| {
-            let ours = session.runner == seek.runner && session.cwd == dir && is_uuid(&session.id);
-            let followed = linked.iter().any(|(runner, id)| (runner, id) == (&session.runner, &session.id));
-            let after = session.started + SLACK_MS >= seek.since;
-            ours && after && !followed && !taken.iter().any(|(_, id)| *id == session.id)
-        };
-        let first = found.iter().filter(free).min_by_key(|session| (session.started, session.id.clone()));
-        if let Some(session) = first {
-            taken.push((seek.task, session.id.clone()));
-        }
+    let dir = |seek: &Seek| seek.cwd.clone().or(home.map(str::to_string));
+    let may = |seek: &Seek, session: &Started| {
+        let here = session.runner == seek.runner && dir(seek).is_some_and(|dir| session.cwd == *dir);
+        let soon = after(session.started, seek.since) && session.started <= seek.since + SEEK_MS;
+        let had = taken.iter().any(|(runner, id)| (runner, id) == (&session.runner, &session.id));
+        here && soon && is_uuid(&session.id) && !had
+    };
+    let (mut seeks, mut links): (Vec<&Seek>, Vec<(crate::tasks::TaskId, String)>) = (seeking.iter().collect(), vec![]);
+    // One link can make the next clear: its agent and its session are out of the running.
+    loop {
+        let free = |session: &&Started| !links.iter().any(|(_, id)| *id == session.id);
+        let link = seeks.iter().find_map(|seek| {
+            let next = seeks.iter().filter(|other| (other.runner, dir(other)) == (seek.runner, dir(seek)));
+            let next = next.map(|other| other.since).filter(|since| *since > seek.since).min();
+            let first = |session: &&Started| next.is_none_or(|next| !after(session.started, next));
+            let mut ids: Vec<&str> =
+                found.iter().filter(free).filter(first).filter(|s| may(seek, s)).map(|s| s.id.as_str()).collect();
+            ids.sort_unstable();
+            ids.dedup();
+            let [only] = ids[..] else { return None };
+            let session = found.iter().find(|s| s.id == only)?;
+            let theirs = seeks.iter().any(|other| other.task != seek.task && may(other, session));
+            (!theirs).then(|| (seek.task, only.to_string()))
+        });
+        let Some((task, id)) = link else { break };
+        seeks.retain(|seek| seek.task != task);
+        links.push((task, id));
     }
-    taken
+    links
 }
 
 /// What tells the agent of a brief. Fixed words: the brief's own text never goes into argv.
@@ -421,25 +438,59 @@ mod tests {
         let found = [
             session("codex", 1, "/code/app", 4_000),   // before either agent started
             session("codex", 2, "/code/app", 10_400),  // the first's
-            session("codex", 3, "/code/app", 10_900),  // the second's, started after it
+            session("codex", 3, "/code/app", 11_700),  // the second's, started after it
             session("claude", 4, "/code/app", 10_100), // another runner's
             session("codex", 5, "/elsewhere", 10_050), // another folder
             session("codex", 6, "/Users/me", 12_000),  // the home folder's
         ];
-        // Two agents started in one folder take two sessions, the earlier the earlier, whatever
-        // the order they are listed in.
-        let seeking = [seek(2, Some("/code/app"), 10_300), seek(1, Some("/code/app"), 10_000), seek(3, None, 11_000)];
+        // Two agents started in one folder, one after the other: each its own, whatever the
+        // order they are listed in.
+        let seeking = [seek(2, Some("/code/app"), 11_500), seek(1, Some("/code/app"), 10_000), seek(3, None, 11_000)];
         let links = find_sessions(&seeking, &found, Some("/Users/me"), &[]);
         assert_eq!(links, [(1, id(2)), (2, id(3)), (3, id(6))]);
-        // A session another task follows is not taken again; nothing new: nothing linked.
-        let linked = [("codex".to_string(), id(2))];
-        assert_eq!(find_sessions(&seeking[1..2], &found, None, &linked), [(1, id(3))]);
+        // A session a task or an open conversation has is not taken again; nothing new: nothing.
+        let taken = [("codex".to_string(), id(2))];
+        assert_eq!(find_sessions(&seeking[1..2], &found, None, &taken), [(1, id(3))]);
         assert_eq!(find_sessions(&[seek(1, Some("/code/app"), 20_000)], &found, None, &[]), []);
         // No home folder known: an agent with no repository is not matched.
         assert_eq!(find_sessions(&[seek(3, None, 11_000)], &found, None, &[]), []);
         // An id that is not a UUID is never linked.
         let bad = [Started { id: "--resume".into(), ..found[2].clone() }];
-        assert_eq!(find_sessions(&seeking[1..2], &bad, None, &[]), []);
+        assert_eq!(find_sessions(&[seek(1, Some("/code/app"), 11_000)], &bad, None, &[]), []);
+    }
+
+    /// What could make a task follow a session it did not start: each links nothing, or the right one.
+    #[test]
+    fn a_codex_agent_is_never_linked_to_a_session_it_may_not_have_started() {
+        let id = |n: u8| format!("8f14e45f-ceea-467f-a8d3-0242ac1300{n:02}");
+        let at = |n, started| Started { runner: "codex".into(), id: id(n), cwd: "/code/app".into(), started };
+        let seek = |task, since| Seek { task, runner: "codex", cwd: Some("/code/app".into()), since };
+        let links = |seeking: &[Seek], found: &[Started]| find_sessions(seeking, found, None, &[]);
+        // Two sessions after it: another terminal started Codex there too. It waits.
+        assert_eq!(links(&[seek(1, 10_000)], &[at(1, 10_200), at(2, 10_300)]), []);
+        // The clock of a session 2 s behind ours, or one that started before and is written to
+        // now (a later mtime): not its. Its own, after it, is.
+        assert_eq!(links(&[seek(1, 10_000)], &[at(1, 8_000)]), []);
+        assert_eq!(links(&[seek(1, 10_000)], &[at(1, 9_999), at(2, 10_500)]), [(1, id(2))]);
+        // A time written to the whole second: in the second it started, or after.
+        assert_eq!(links(&[seek(1, 10_300)], &[at(1, 10_000)]), [(1, id(1))]);
+        assert_eq!(links(&[seek(1, 10_300)], &[at(1, 9_000)]), []);
+        // Not later than `SEEK_MS` after it.
+        assert_eq!(links(&[seek(1, 10_000)], &[at(1, 10_001 + SEEK_MS)]), []);
+        // Two agents started before either wrote: which is whose cannot be told. Neither is linked.
+        let both = [seek(1, 10_000), seek(2, 10_300)];
+        assert_eq!(links(&both, &[at(1, 10_400), at(2, 10_900)]), []);
+        assert_eq!(links(&both, &[at(1, 10_400)]), []);
+        // Another terminal's, then its own, then the next agent's: the first may not choose, and
+        // the next waits while the first, slow, may have written the last.
+        let three = [at(1, 10_200), at(2, 10_400), at(3, 12_100)];
+        assert_eq!(links(&[seek(1, 10_000), seek(2, 12_000)], &three), []);
+        // Started at the same moment: neither.
+        assert_eq!(links(&[seek(1, 10_000), seek(2, 10_000)], &[at(1, 10_400)]), []);
+        // The first wrote before the second started: it is the first's, and the second's comes later.
+        let apart = [seek(1, 10_000), seek(2, 12_000)];
+        assert_eq!(links(&apart, &[at(1, 10_400)]), [(1, id(1))]);
+        assert_eq!(links(&apart[1..], &[at(1, 10_400), at(2, 12_100)]), [(2, id(2))]);
     }
 
     /// Whatever a title holds, argv is the table's flags, a model that is a name, the session's
