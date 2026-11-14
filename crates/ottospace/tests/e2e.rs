@@ -1522,10 +1522,10 @@ fn open_settings_edits_the_file_and_the_status_bar_says_what_is_wrong_until_it_i
     let reply = otto.wait_for("the problem said", said);
     assert_eq!(reply["notice"], "settings.json:3:1 trailing comma");
     assert_eq!(reply["state"]["tasks_view"], "state");
-    // Briefly gone, as an editor's rename leaves it: still what was said.
+    // Removed: as at a start with no file, the defaults, and nothing to say.
     std::fs::remove_file(&file).unwrap();
-    std::thread::sleep(Duration::from_millis(700));
-    assert_eq!(otto.call(json!({"cmd": "state"}))["notice"], "settings.json:3:1 trailing comma");
+    let gone = |o: &Otto| Some(o.call(json!({"cmd": "state"}))).filter(|reply| reply["settings_errors"] == 0);
+    assert_eq!(otto.wait_for("the defaults", gone)["notice"], Value::Null);
     // Right: it applies, and the status bar clears.
     std::fs::write(&file, "{\n  \"tasks_view\": \"project\"\n}\n").unwrap();
     let applied = |o: &Otto| {

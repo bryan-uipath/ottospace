@@ -343,13 +343,20 @@ const MAX_PROBLEM: usize = 240;
 impl Watch {
     /// Takes the file's text as it is now. `Some`: the settings to apply, the file has no
     /// problem. `None`: something is wrong, and the last good settings stay.
-    pub fn read(&mut self, text: &str) -> Option<Settings> {
+    /// `written`: the app has just written the file itself, so its lists there (`repos`, `apps`,
+    /// `apps_hidden`) are the ones it holds.
+    pub fn read(&mut self, text: &str, written: bool) -> Option<Settings> {
         let (settings, problems) = problems(text);
         // At start what is right applies, as `Settings::read` says: that is what was applied.
         let started = self.started.get_or_insert_with(|| settings.clone());
         self.problems = problems;
         if !self.problems.is_empty() {
             return None;
+        }
+        if written {
+            started.repos.clone_from(&settings.repos);
+            started.apps.clone_from(&settings.apps);
+            started.apps_hidden.clone_from(&settings.apps_hidden);
         }
         self.restart = restart_keys(started, &settings);
         Some(settings)
@@ -403,13 +410,13 @@ fn problems(text: &str) -> (Settings, Vec<String>) {
 fn restart_keys(started: &Settings, now: &Settings) -> Vec<&'static str> {
     let Settings {
         terminal,
-        // Kept by the app itself (the Repos and Apps sections write them): applied at the next start.
-        repos: _,
+        // Kept by the app (the Repos and Apps sections write them): `started` follows its own writes.
+        repos,
         tasks,
         // Read each time they are used.
         windows: _,
-        apps: _,
-        apps_hidden: _,
+        apps,
+        apps_hidden,
         suggest_dock_apps,
         wheel_to_apps: _,
         sessions,
@@ -435,6 +442,9 @@ fn restart_keys(started: &Settings, now: &Settings) -> Vec<&'static str> {
     } = now;
     let changed = [
         ("terminal", *terminal != started.terminal),
+        ("repos", *repos != started.repos),
+        ("apps", *apps != started.apps),
+        ("apps_hidden", *apps_hidden != started.apps_hidden),
         ("tasks", *tasks != started.tasks),
         ("suggest_dock_apps", *suggest_dock_apps != started.suggest_dock_apps),
         ("sessions", *sessions != started.sessions),
@@ -1013,46 +1023,52 @@ mod tests {
     fn a_watched_file_says_its_first_problem_with_its_place_until_it_is_right() {
         let mut watch = Watch::default();
         // Started with a wrong key: what is right applied, and the status bar says it.
-        assert_eq!(watch.read(r#"{"tasks_view": "project", "calendar_refresh_minutes": 0}"#), None);
+        assert_eq!(watch.read(r#"{"tasks_view": "project", "calendar_refresh_minutes": 0}"#, false), None);
         assert_eq!(
             watch.line().as_deref(),
             Some("settings.json: calendar_refresh_minutes: calendar_refresh_minutes must be at least 1")
         );
         assert_eq!(watch.errors(), 1);
         // Broken mid-edit: the line and column, our own words, no text of the file.
-        assert_eq!(watch.read("{\n  \"tasks\": \"x\",\n    \n}"), None);
+        assert_eq!(watch.read("{\n  \"tasks\": \"x\",\n    \n}", false), None);
         assert_eq!(watch.line().as_deref(), Some("settings.json:4:1 trailing comma"));
         assert_eq!(watch.errors(), 1);
         // Several: the first (by key, or in the file's order with serde_json's `preserve_order`),
         // and how many more.
-        assert_eq!(watch.read(r#"{"calendar_window_hours": 30, "colour": 1, "default_agent": "x"}"#), None);
+        assert_eq!(watch.read(r#"{"calendar_window_hours": 30, "colour": 1, "default_agent": "x"}"#, false), None);
         let first = "settings.json: calendar_window_hours: calendar_window_hours must be 1 to 24 (+2 more)";
         assert_eq!(watch.line().as_deref(), Some(first));
         assert_eq!(watch.errors(), 3);
         // Right again: applied, and nothing to say. Started with `tasks_view` as now.
-        let good = watch.read(r#"{"tasks_view": "project", "default_agent": "codex"}"#).unwrap();
+        let good = watch.read(r#"{"tasks_view": "project", "default_agent": "codex"}"#, false).unwrap();
         assert_eq!((good.default_agent.as_deref(), watch.line(), watch.errors()), (Some("codex"), None, 0));
         // An empty file is the defaults: no problem.
-        assert!(watch.read("").is_some());
+        assert!(watch.read("", false).is_some());
     }
 
     #[test]
     fn a_key_read_only_at_start_says_restart_and_a_live_one_does_not() {
         let mut watch = Watch::default();
-        assert!(watch.read(r#"{"terminal": {"font_size": 14}, "default_agent": "claude"}"#).is_some());
+        assert!(watch.read(r#"{"terminal": {"font_size": 14}, "default_agent": "claude"}"#, false).is_some());
         assert_eq!(watch.line(), None);
-        // Live keys and the app's own lists: nothing to say.
-        let live = r#"{"terminal": {"font_size": 14}, "default_agent": "codex", "repos": [], "wheel_to_apps": false}"#;
-        assert!(watch.read(live).is_some());
+        // Live keys: nothing to say.
+        let live = r#"{"terminal": {"font_size": 14}, "default_agent": "codex", "wheel_to_apps": false}"#;
+        assert!(watch.read(live, false).is_some());
         assert_eq!(watch.line(), None);
-        let later = r#"{"terminal": {"font_size": 16}, "tasks": "~/t", "calendar_window_hours": 2}"#;
-        assert!(watch.read(later).is_some());
+        // A list the app keeps: by hand, at the next start; as the app wrote it, nothing to say.
+        let pinned = r#"{"terminal": {"font_size": 14}, "apps": ["Slack"]}"#;
+        assert!(watch.read(pinned, false).is_some());
+        assert_eq!(watch.line().as_deref(), Some("settings.json: restart to apply apps"));
+        assert!(watch.read(pinned, true).is_some());
+        assert_eq!(watch.line(), None);
+        let later = r#"{"terminal": {"font_size": 16}, "tasks": "~/t", "apps": ["Slack"], "calendar_window_hours": 2}"#;
+        assert!(watch.read(later, false).is_some());
         let restart = "settings.json: restart to apply terminal, tasks, calendar_window_hours";
         assert_eq!(watch.line().as_deref(), Some(restart));
         // A problem goes first; put back as at start, there is nothing to restart for.
-        assert_eq!(watch.read("{"), None);
+        assert_eq!(watch.read("{", false), None);
         assert!(watch.line().unwrap().starts_with("settings.json:1:1 EOF"), "{:?}", watch.line());
-        assert!(watch.read(r#"{"terminal": {"font_size": 14}}"#).is_some());
+        assert!(watch.read(r#"{"terminal": {"font_size": 14}, "apps": ["Slack"]}"#, false).is_some());
         assert_eq!(watch.line(), None);
     }
 
@@ -1060,7 +1076,7 @@ mod tests {
     fn a_problem_has_no_control_character_and_is_cut_short() {
         let mut watch = Watch::default();
         let key = format!("a\u{1b}[31m{}", "b".repeat(400));
-        watch.read(&serde_json::json!({ key: 1 }).to_string());
+        watch.read(&serde_json::json!({ key: 1 }).to_string(), false);
         let line = watch.line().unwrap();
         assert!(!line.chars().any(char::is_control) && line.ends_with('…'), "{line}");
         assert_eq!(line.chars().count(), MAX_PROBLEM + 1);

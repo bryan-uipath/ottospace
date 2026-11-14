@@ -1012,6 +1012,7 @@ const MAKERS: &[Make] = &[
             .rng
             .pick(&["", "{}", "{", r#"{"tasks_view": "project", "default_agent": "codex"}"#, r#"{"x": 1}"#])
             .into(),
+        written: g.rng.coin(),
     },
     |g| Action::UnfilledOpen { pane: g.pane() },
     |g| Action::WorkbookSave { uid: g.rng.pick(BOOK_UIDS).to_string(), cwds: g.read(DIRS), histories: g.histories() },

@@ -983,7 +983,7 @@ impl Workspace {
                             this.seek_sessions(window, cx);
                         }
                         if tick % 15 == 7 {
-                            this.watch_settings(cx);
+                            this.watch_settings(window, cx);
                         }
                         this.sync_sneak(window, cx);
                         this.read_sneak_app(window, cx);
@@ -1044,7 +1044,7 @@ impl Workspace {
         // What `settings.json` says at start: what is wrong in it stays in the status bar until mended.
         let settings_read = config::settings_stamp();
         if let Some(text) = config::get().home.as_ref().map(|_| config::settings_text().unwrap_or_default()) {
-            model.update(Action::SettingsRead { text }.sent_by(Origin::System));
+            model.update(Action::SettingsRead { text, written: false }.sent_by(Origin::System));
         }
         let mut this = Self {
             model,
@@ -1425,7 +1425,7 @@ impl Workspace {
             )
         });
         if wrote {
-            self.read_settings_now();
+            self.read_settings_now(true, window, cx);
         }
         for news in agents {
             self.dispatch(news, Origin::System, window, cx);
@@ -1568,30 +1568,34 @@ impl Workspace {
         self.error.clone().or(unsaved).or(start)
     }
 
-    /// Reads `settings.json` again once a change to it has held for one look. A file that is
-    /// briefly gone (an editor's rename) is not read: what was read last stays.
-    fn watch_settings(&mut self, cx: &mut Context<Self>) {
+    /// Reads `settings.json` again once a change to it has held for one look: a file an editor
+    /// is still writing, or has briefly renamed away, is not read.
+    fn watch_settings(&mut self, window: &Window, cx: &mut Context<Self>) {
         let now = config::settings_stamp();
-        let held = now.is_some() && now == self.settings_looked;
+        let held = now == self.settings_looked;
         self.settings_looked = now;
-        if held && self.read_settings_now() {
-            cx.notify();
+        if held {
+            self.read_settings_now(false, window, cx);
         }
     }
 
-    /// Reads `settings.json` into the core if it changed since the last read. True: it did.
-    fn read_settings_now(&mut self) -> bool {
+    /// Reads `settings.json` into the core if it changed since the last read. Gone: as at a
+    /// start with no file, the defaults. `written`: the app has just written it.
+    fn read_settings_now(&mut self, written: bool, window: &Window, cx: &mut Context<Self>) {
         let now = config::settings_stamp();
-        let Some(text) = config::settings_text().filter(|_| now.is_some() && now != self.settings_read) else {
-            return false;
+        if now == self.settings_read || config::get().home.is_none() {
+            return;
+        }
+        let text = match now {
+            Some(_) => match config::settings_text() {
+                Some(text) => text,
+                None => return,
+            },
+            None => String::new(),
         };
         (self.settings_looked, self.settings_read) = (now, now);
-        for effect in self.model.update(Action::SettingsRead { text }.sent_by(Origin::System)) {
-            if let Effect::ApplySettings { settings } = effect {
-                config::set_live(*settings);
-            }
-        }
-        true
+        drop(self.dispatch(Action::SettingsRead { text, written }, Origin::System, window, cx));
+        cx.notify();
     }
 
     /// Open Settings: the user's editor on `settings.json` in a tab of its own, made `{}` first

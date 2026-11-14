@@ -1062,8 +1062,10 @@ pub enum Action {
     EditSettings,
     /// `settings.json` as the shell read it: at start, then each time it changed. The shell's
     /// alone: what is right applies, what is wrong is said in the status bar.
+    /// `written`: just after the app wrote it itself.
     SettingsRead {
         text: String,
+        written: bool,
     },
     /// "Open <App>" on a restored app pane that waits for its window.
     UnfilledOpen {
@@ -3775,7 +3777,7 @@ impl Model {
                 effects.push(Effect::ForgetLayout);
             }
             Action::EditSettings => self.edit_settings(effects),
-            Action::SettingsRead { text } => self.settings_read(&text, effects),
+            Action::SettingsRead { text, written } => self.settings_read(&text, written, effects),
             Action::UnfilledOpen { pane } => self.unfilled_open(pane, effects),
             Action::WorkbookSave { uid, cwds, histories } => self.workbook_save(uid, (&cwds, &histories), effects),
             Action::WorkbookAddTab { workbook, cwds, histories } => {
@@ -5703,8 +5705,8 @@ impl Model {
 
     /// `settings.json` read again: right, what applies as the app runs is told again; wrong,
     /// the last good settings stay. The status bar says which (`settings_line`).
-    fn settings_read(&mut self, text: &str, effects: &mut Vec<Effect>) {
-        let Some(settings) = self.settings_file.read(text) else { return };
+    fn settings_read(&mut self, text: &str, written: bool, effects: &mut Vec<Effect>) {
+        let Some(settings) = self.settings_file.read(text, written) else { return };
         self.act(Action::TasksView { view: settings.tasks_view.unwrap_or_default() }, effects);
         self.act(Action::SessionsRange { range: settings.sessions_range.unwrap_or_default() }, effects);
         self.act(Action::SessionQuiet { ms: settings.quiet_ms() }, effects);
@@ -6616,7 +6618,7 @@ mod tests {
             },
             Action::StartFresh,
             Action::EditSettings,
-            Action::SettingsRead { text: "{}".into() },
+            Action::SettingsRead { text: "{}".into(), written: false },
             Action::UnfilledOpen { pane: 1 },
             Action::WorkbookSave { uid: text(), cwds: Vec::new(), histories: Vec::new() },
             Action::WorkbookAddTab { workbook: 1, cwds: Vec::new(), histories: Vec::new() },
@@ -7344,16 +7346,19 @@ mod tests {
     fn a_settings_file_read_again_applies_when_right_and_keeps_the_last_good_when_wrong() {
         let mut m = Model::default();
         // At start: as the shell applied it.
-        m.update(Action::SettingsRead { text: r#"{"default_agent": "claude"}"#.into() }.sent_by(Origin::System));
+        m.update(
+            Action::SettingsRead { text: r#"{"default_agent": "claude"}"#.into(), written: false }
+                .sent_by(Origin::System),
+        );
         assert_eq!((m.settings_line(), m.settings_errors()), (None, 0));
         // Wrong: nothing applies, and the status bar says where.
         let wrong = r#"{"tasks_view": "project",}"#;
-        assert_eq!(m.update(Action::SettingsRead { text: wrong.into() }.sent_by(Origin::System)), []);
+        assert_eq!(m.update(Action::SettingsRead { text: wrong.into(), written: false }.sent_by(Origin::System)), []);
         assert_eq!((m.tasks_view, m.settings_errors()), (TasksView::State, 1));
         assert_eq!(m.settings_line().as_deref(), Some("settings.json:1:26 trailing comma"));
         // A client never reads it for the app.
         let right = r#"{"tasks_view": "project", "default_agent": "codex", "session_quiet_minutes": 1}"#;
-        let read = Action::SettingsRead { text: right.into() };
+        let read = Action::SettingsRead { text: right.into(), written: false };
         assert_eq!(m.refusal(&read, Origin::Socket), Some("only ottospace reads settings.json"));
         assert_eq!(m.update(read.clone().sent_by(Origin::Socket)), []);
         // Right again: what applies as the app runs applies now, and the status bar clears.
