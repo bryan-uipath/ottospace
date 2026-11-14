@@ -1414,6 +1414,49 @@ fn the_users_own_keys_are_counted_and_kept_in_keys_json() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn the_key_reference_lists_what_is_not_known_and_folds_what_is() {
+    let home = user_folder("keyref", r#"{"repos": [], "restore_layout": false}"#);
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let otto = Otto::launch_with("keyref", &env);
+    let reference = |o: &Otto| o.call(json!({"cmd": "state"}))["key_reference"].clone();
+    let groups = |r: &Value| -> Vec<String> {
+        r["groups"].as_array().unwrap().iter().map(|g| g["group"].as_str().unwrap().to_string()).collect()
+    };
+    let rows = |r: &Value, group: &str| {
+        r["groups"].as_array().unwrap().iter().find(|g| g["group"] == group).unwrap()["rows"].clone()
+    };
+    // A fresh home: nothing known, every group, and no Known header. No return key: no row for it.
+    otto.user_key("cmd-/");
+    let fresh = reference(&otto);
+    assert_eq!(groups(&fresh), ["panes", "tabs", "tasks", "text", "modes", "app"], "{fresh}");
+    assert_eq!((&fresh["known"], &fresh["known_header"]), (&json!([]), &Value::Null), "{fresh}");
+    assert!(!rows(&fresh, "app").as_array().unwrap().contains(&json!("return_key")), "{fresh}");
+    // ⌘/ five times, a second apart: it is known, and out of its group. A client's key counts nothing.
+    for _ in 0..4 {
+        std::thread::sleep(Duration::from_millis(1100));
+        otto.user_key("cmd-/");
+    }
+    otto.call(json!({"cmd": "key", "keys": "cmd-t"}));
+    let used = reference(&otto);
+    assert_eq!((&used["known"], &used["known_open"]), (&json!(["show_keys"]), &json!(false)), "{used}");
+    assert!(!rows(&used, "app").as_array().unwrap().contains(&json!("show_keys")), "{used}");
+    // ↵ opens Known; a click on its header folds it again.
+    otto.user_key("enter");
+    let open = reference(&otto);
+    assert_eq!(open["known_open"], json!(true), "{open}");
+    let header: Vec<f64> = serde_json::from_value(open["known_header"].clone()).unwrap();
+    otto.user_click(at([header[0], header[1], header[2], header[3]], 0.2, 0.5));
+    assert_eq!(reference(&otto)["known_open"], json!(false));
+    // In list mode the mode's own keys come first.
+    otto.user_key("escape");
+    otto.user_key("cmd-ctrl-e");
+    otto.user_key("cmd-/");
+    let list = reference(&otto);
+    assert_eq!(groups(&list)[0], "list", "{list}");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn tasks_are_kept_between_runs() {
     // Each run after the first starts with nothing open: no layout is restored.
     let home = user_folder("tasks", r#"{"repos": [], "restore_layout": false}"#); // no repositories: not the user's own
@@ -4380,20 +4423,13 @@ fn the_wheel_over_a_scrollbar_scrolls_what_is_under_it() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn the_wheel_scrolls_the_key_reference() {
+fn the_key_reference_fits_the_window_and_the_wheel_closes_nothing() {
     let otto = Otto::launch("wheel-keys");
-    otto.call(json!({"cmd": "keys"}));
-    let (track, thumb, _) = otto.wait_for("the bar", |o| scrollbar(&o.drawn(), "keys"));
-    assert_eq!(thumb[1], track[1]);
-    // Over the list, and over its bar's track.
-    let reply = otto.wheel([track[0] - 100.0, track[1] + track[3] / 2.0], -60.0, true);
-    let (_, down, opacity) = scrollbar(&reply, "keys").unwrap();
-    assert!(down[1] > thumb[1] && opacity == 1.0, "{thumb:?} {down:?} {opacity}");
-    let (_, further, _) = scrollbar(&otto.wheel(at(track, 0.5, 0.9), -60.0, true), "keys").unwrap();
-    assert!(further[1] > down[1], "{down:?} {further:?}");
-    // Beside the panel it scrolls nothing, and closes nothing.
-    let reply = otto.wheel([2.0, track[1] + track[3] / 2.0], -60.0, true);
-    assert_eq!((scrollbar(&reply, "keys").unwrap().1[1], &reply["state"]["keys"]), (further[1], &json!(true)));
+    let reply = otto.call(json!({"cmd": "keys"}));
+    // What is not known yet fits a window of this size whole: no bar. A smaller one scrolls it.
+    assert!(scrollbar(&reply, "keys").is_none(), "{}", reply["scrollbars"]);
+    let reply = otto.wheel([700.0, 450.0], -60.0, true);
+    assert_eq!(reply["state"]["keys"], json!(true));
 }
 
 #[test]

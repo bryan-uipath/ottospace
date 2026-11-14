@@ -566,6 +566,8 @@ pub enum Action {
     },
     /// Reset Key Counts: every key unused again. The user's alone.
     ResetKeyUse,
+    /// Open or fold the key reference's `Known` group.
+    KeysKnown,
     /// `keys.json` as the shell read it at start.
     RestoreKeyUse {
         uses: KeyUse,
@@ -1471,6 +1473,7 @@ impl Action {
             | Action::KeyUsed { .. }
             | Action::ResetKeyUse
             | Action::RestoreKeyUse { .. }
+            | Action::KeysKnown
             | Action::LeaveVisual
             | Action::SetRepos { .. }
             | Action::SetRepoDirs { .. }
@@ -2071,6 +2074,9 @@ pub struct Model {
     /// How much the user uses each key. Never in the snapshot: it describes the user's habits.
     #[serde(skip)]
     pub key_use: KeyUse,
+    /// The key reference's `Known` group is open.
+    #[serde(skip)]
+    pub keys_known_open: bool,
     /// The terminal pane in visual mode.
     pub visual: Option<PaneId>,
     /// The accessibility debug overlay is showing.
@@ -2215,6 +2221,7 @@ impl Default for Model {
             paste_confirm: clip::PasteConfirm::default(),
             keys: false,
             key_use: KeyUse::default(),
+            keys_known_open: false,
             visual: None,
             ax_overlay: false,
             sneak: None,
@@ -2600,6 +2607,7 @@ impl Model {
         // Only the user's own undo links a dismissed task's tabs again.
         self.settle_tasks(undo && origin == Origin::User);
         self.follow_tab(shown, origin, drawer_keys);
+        self.settle_brief();
         // However the list was left (Esc, a click on a pane), ⌘⌃← comes back to its row.
         if self.list.is_none() && listed.is_some() {
             self.list_kept = zones::KeptRow(listed);
@@ -3678,12 +3686,15 @@ impl Model {
             Action::ToggleKeys => {
                 self.keys = !self.keys;
                 if self.keys {
+                    // It opens with what is known folded.
+                    self.keys_known_open = false;
                     // One overlay at a time, and the overlay needs the keyboard to be dismissed.
                     (self.picker, self.palette) = (None, None);
                     self.leave(effects);
                 }
             }
             Action::CloseKeys => self.keys = false,
+            Action::KeysKnown => self.keys_known_open = self.keys && !self.keys_known_open,
             // Taken by `update` before any step.
             Action::KeyUsed { .. } | Action::ResetKeyUse | Action::RestoreKeyUse { .. } => {}
             Action::ToggleVisual => {
@@ -5479,6 +5490,19 @@ impl Model {
         })
     }
 
+    /// The key reference as it lists the keys now: the mode's own first (list, visual mode), then
+    /// each group's keys not yet known, least used first, then the known ones. `has_key`: whether a
+    /// binding has a key in this run (the return key may be unset).
+    pub fn key_reference(&self, has_key: impl Fn(Binding) -> bool) -> key_use::Reference {
+        let mode = match self.mode() {
+            Mode::List => Some(key_use::Group::List),
+            Mode::Visual => Some(key_use::Group::Visual),
+            _ => None,
+        };
+        let listed = |binding| has_key(binding) && self.binding_on(binding);
+        self.key_use.reference(self.now, mode, listed, self.keys_known_open)
+    }
+
     /// Whether `binding`'s keys are on: counted, and listed. Every binding, until feature flags
     /// (#134): then a binding whose commands are of a feature that is off is not.
     pub fn binding_on(&self, binding: Binding) -> bool {
@@ -6516,6 +6540,7 @@ mod tests {
         Action::KeyUsed { .. },
         Action::ResetKeyUse,
         Action::RestoreKeyUse { .. },
+        Action::KeysKnown,
         Action::ToggleVisual,
         Action::LeaveVisual,
         Action::ToggleAxOverlay,
@@ -6741,6 +6766,7 @@ mod tests {
             Action::KeyUsed { binding: Binding::Copy, at: 1 },
             Action::ResetKeyUse,
             Action::RestoreKeyUse { uses: KeyUse::default() },
+            Action::KeysKnown,
             Action::ToggleVisual,
             Action::LeaveVisual,
             Action::ToggleAxOverlay,

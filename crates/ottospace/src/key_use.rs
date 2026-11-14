@@ -4,12 +4,14 @@
 
 use std::time::{Duration, Instant};
 
-use gpui::{Context, Window};
-use ottospace_core::commands::{ALL, Command};
-use ottospace_core::key_use::{Binding, KeyUse, Unread};
-use ottospace_core::{Action, Origin};
+use std::collections::HashMap;
 
-use crate::{CopySelection, PasteText, Workspace, commands, config, now_ms};
+use gpui::{App, Context, Div, Keymap, ParentElement, Styled, Window, div, px, rgb, rgba};
+use ottospace_core::commands::{ALL, Command};
+use ottospace_core::key_use::{self, Binding, KeyUse, Line, Reference, Unread};
+use ottospace_core::{Action, Origin, theme};
+
+use crate::{CopySelection, PasteText, RETURN_KEY, Workspace, collect, commands, config, now_ms};
 
 /// A burst of keys makes one write.
 const SETTLE: Duration = Duration::from_secs(5);
@@ -24,6 +26,15 @@ pub struct Kept {
     stored: String,
 }
 
+/// The bindings whose action is no command's.
+fn extras() -> [(Binding, Box<dyn gpui::Action>); 3] {
+    [
+        (Binding::Copy, Box::new(CopySelection)),
+        (Binding::Paste, Box::new(PasteText)),
+        (Binding::Palette, Box::new(commands::CommandPalette)),
+    ]
+}
+
 /// The binding a key's action counts for. `None`: no key to learn (a debug key, a text edit).
 pub fn binding_of(action: &dyn gpui::Action) -> Option<Binding> {
     let name = action.name();
@@ -31,14 +42,86 @@ pub fn binding_of(action: &dyn gpui::Action) -> Option<Binding> {
     if let Some(command) = ALL.iter().find(command) {
         return Binding::of(*command);
     }
-    let named = |of: &dyn gpui::Action| of.name() == name;
-    [
-        (Binding::Copy, &CopySelection as &dyn gpui::Action),
-        (Binding::Paste, &PasteText),
-        (Binding::Palette, &commands::CommandPalette),
-    ]
-    .into_iter()
-    .find_map(|(binding, of)| named(of).then_some(binding))
+    extras().into_iter().find_map(|(binding, of)| (of.name() == name).then_some(binding))
+}
+
+/// A binding's keys as the key reference shows them, from the keymap: `⌘⌃←→↑↓`, `⌘] ⌘[`.
+/// `None`: it has no key in this run (an unset return key).
+pub fn keys_text(keymap: &Keymap, binding: Binding) -> Option<String> {
+    if let Some(keys) = binding.keys() {
+        return Some(keys.into());
+    }
+    match binding {
+        Binding::ReturnKey => return RETURN_KEY.get().cloned(),
+        Binding::CaptureKey => return collect::KEY.get().map(|key| collect::key_label(key)),
+        _ => {}
+    }
+    let extra = extras().into_iter().filter(|(of, _)| *of == binding).map(|(_, action)| action);
+    let actions = binding.commands().iter().map(|c| commands::action(*c)).chain(extra);
+    // Each action's first key, as the menus show it.
+    let first = |action: Box<dyn gpui::Action>| {
+        let binding = keymap.bindings_for_action(action.as_ref()).next()?;
+        binding.keystrokes().first().map(|stroke| commands::key_parts(stroke.inner()))
+    };
+    let strokes: Vec<(String, String)> = actions.filter_map(first).collect();
+    let (mods, _) = strokes.first()?;
+    // Arrows with one set of modifiers: the modifiers once, e.g. ⌘⌃←→↑↓.
+    let arrows = strokes.iter().all(|(m, key)| m == mods && ["←", "→", "↑", "↓"].contains(&key.as_str()));
+    Some(match arrows {
+        true => mods.clone() + &strokes.iter().map(|(_, key)| key.as_str()).collect::<String>(),
+        false => strokes.iter().map(|(m, key)| format!("{m}{key}")).collect::<Vec<_>>().join(" "),
+    })
+}
+
+/// A row's bar of recent use: 2 by 24 points, filled to `fill`. None at 0: an unused key is a
+/// plain row. Always its room, so rows line up.
+pub fn bar(fill: f32) -> Div {
+    let bar = div().w(px(24.)).h(px(2.)).rounded_full();
+    if fill <= 0. {
+        return bar;
+    }
+    // The primary colour at 60%.
+    let filled = div().h_full().rounded_full().w(px(24. * fill.min(1.))).bg(rgba(theme::PRIMARY << 8 | 0x99));
+    bar.bg(rgb(theme::BORDER)).child(filled)
+}
+
+/// `groups` in `n` columns, in order, each column about as long as the others.
+pub fn columns<'a, T: Clone, L>(groups: &[(T, &'a [L])], n: usize) -> Vec<Vec<(T, &'a [L])>> {
+    // A heading counts as a line.
+    let total: usize = groups.iter().map(|(_, lines)| lines.len() + 1).sum();
+    let per = total.div_ceil(n.max(1));
+    let mut columns: Vec<Vec<(T, &'a [L])>> = vec![Vec::new()];
+    let mut length = 0;
+    for (title, lines) in groups {
+        if length >= per && columns.len() < n {
+            columns.push(Vec::new());
+            length = 0;
+        }
+        length += lines.len() + 1;
+        if let Some(column) = columns.last_mut() {
+            column.push((title.clone(), *lines));
+        }
+    }
+    columns
+}
+
+/// The key reference for a test run's state: binding ids and notes' keys, no scores.
+pub fn snapshot(reference: &Reference, known_at: Option<[f32; 4]>) -> serde_json::Value {
+    let id = |line: &Line| match line {
+        Line::Key { binding, .. } => binding.id(),
+        Line::Note { keys, .. } => keys.to_string(),
+    };
+    let groups: Vec<serde_json::Value> = reference
+        .groups
+        .iter()
+        .map(|(group, lines)| serde_json::json!({ "group": group, "rows": lines.iter().map(id).collect::<Vec<_>>() }))
+        .collect();
+    serde_json::json!({
+        "groups": groups,
+        "known": reference.known.iter().map(id).collect::<Vec<_>>(),
+        "known_open": reference.known_open,
+        "known_header": known_at,
+    })
 }
 
 impl Workspace {
@@ -71,6 +154,15 @@ impl Workspace {
     pub(crate) fn reset_key_use(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.dispatch(Action::ResetKeyUse, self.input, window, cx);
         self.key_use_changed();
+    }
+
+    /// The key reference as the core lays it out, and each listed binding's keys.
+    pub(crate) fn key_reference(&self, cx: &App) -> (Reference, HashMap<Binding, String>) {
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        let texts: HashMap<Binding, String> =
+            key_use::ALL.iter().filter_map(|b| Some((*b, keys_text(&keymap, *b)?))).collect();
+        (self.model.key_reference(|binding| texts.contains_key(&binding)), texts)
     }
 
     /// The ids of the bindings the user knows now, for a test run's state.
@@ -115,6 +207,30 @@ mod tests {
             let counted = Binding::of(*command).is_some();
             assert_eq!(keyed && *command != Command::AxOverlay, counted, "{command:?}");
         }
+    }
+
+    #[test]
+    fn a_bindings_keys_come_from_the_keymap() {
+        let keymap = gpui::Keymap::new(crate::keymap());
+        let keys = |binding| keys_text(&keymap, binding);
+        assert_eq!(keys(Binding::FocusDir).as_deref(), Some("⌘⌃←→↑↓"));
+        assert_eq!(keys(Binding::FocusNext).as_deref(), Some("⌘] ⌘["));
+        assert_eq!(keys(Binding::PickPane).as_deref(), Some("⌘E ⌘⇧E"));
+        assert_eq!(keys(Binding::Copy).as_deref(), Some("⌘C"));
+        assert_eq!(keys(Binding::TabNumber).as_deref(), Some("⌘1–9"));
+        // Every other binding has a key; the return and capture keys only once set.
+        for binding in key_use::ALL.iter().filter(|b| ![Binding::ReturnKey, Binding::CaptureKey].contains(b)) {
+            assert!(keys(*binding).is_some(), "{binding:?}");
+        }
+    }
+
+    #[test]
+    fn groups_are_cut_into_columns_of_about_one_length_in_order() {
+        let (a, b, c): (&[u8], &[u8], &[u8]) = (&[0; 6], &[0; 2], &[0; 3]);
+        let cut = columns(&[("a", a), ("b", b), ("c", c)], 2);
+        let titles: Vec<Vec<&str>> = cut.iter().map(|column| column.iter().map(|(t, _)| *t).collect()).collect();
+        assert_eq!(titles, [vec!["a"], vec!["b", "c"]]);
+        assert_eq!(columns::<&str, u8>(&[], 3).len(), 1);
     }
 
     #[test]

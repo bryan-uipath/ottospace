@@ -107,19 +107,26 @@ pub fn key_of(keymap: &Keymap, command: Command) -> Option<String> {
 }
 
 fn key_text(stroke: &Keystroke) -> String {
+    let (mods, key) = key_parts(stroke);
+    mods + &key
+}
+
+/// A keystroke's modifiers and key, as the docs write them: ("⌘⌥", "←").
+pub fn key_parts(stroke: &Keystroke) -> (String, String) {
     let m = stroke.modifiers;
     let mods = [(m.platform, "⌘"), (m.control, "⌃"), (m.alt, "⌥"), (m.shift, "⇧")];
-    let mut text: String = mods.iter().filter(|(on, _)| *on).map(|(_, sign)| *sign).collect();
-    text += &match stroke.key.as_str() {
+    let text: String = mods.iter().filter(|(on, _)| *on).map(|(_, sign)| *sign).collect();
+    let key = match stroke.key.as_str() {
         "left" => "←".to_string(),
         "right" => "→".to_string(),
         "up" => "↑".to_string(),
         "down" => "↓".to_string(),
         "tab" => "Tab".to_string(),
+        "enter" => "↵".to_string(),
         "space" => "Space".to_string(),
         key => key.to_uppercase(),
     };
-    text
+    (text, key)
 }
 
 impl Workspace {

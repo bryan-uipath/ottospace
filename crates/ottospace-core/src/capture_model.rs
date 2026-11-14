@@ -293,6 +293,12 @@ impl Model {
             bar.stop_annotating();
         }
         self.back_to = self.back_to.filter(|pane| self.pane(*pane).is_some());
+        self.settle_brief();
+    }
+
+    /// A brief shows only with its task's tabs or chat, and while it has captures. Again after the
+    /// drawer follows the tab on show (`follow_tab`).
+    pub(crate) fn settle_brief(&mut self) {
         let briefed = |id: &TaskId| self.tasks.get(*id).is_some_and(|task| !task.materials.is_empty());
         let shown = |id: &TaskId| {
             self.tab_task() == Some(*id) || self.talk.as_ref().is_some_and(|talk| talk.task.task() == Some(*id))

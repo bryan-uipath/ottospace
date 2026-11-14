@@ -721,6 +721,7 @@ const MAKERS: &[Make] = &[
     |_| Action::CloseKeys,
     |g| Action::KeyUsed { binding: g.rng.pick(crate::key_use::ALL), at: g.key_time() },
     |_| Action::ResetKeyUse,
+    |_| Action::KeysKnown,
     |g| {
         let mut uses = KeyUse::default();
         for _ in 0..g.rng.below(12) {
@@ -1230,6 +1231,11 @@ fn check(m: &Model) -> Result<(), String> {
     let scored =
         |used: &crate::key_use::Use| used.score.is_finite() && (0.0..=crate::key_use::MOST).contains(&used.score);
     ensure!(m.key_use.uses().all(|(_, used)| scored(&used)), "key counts out of range: {:?}", m.key_use);
+    // The key reference lists every binding once: in its group, or known.
+    let reference = m.key_reference(|_| true);
+    let keys =
+        reference.groups.iter().flat_map(|(_, lines)| lines).filter(|l| matches!(l, crate::key_use::Line::Key { .. }));
+    ensure!(keys.count() + reference.known.len() == crate::key_use::ALL.len(), "the key reference: {reference:?}");
     // The Calendar is open, or has the rail's keyboard, only while a feed is set.
     let calendar_shown =
         m.sidebar == Some(Section::Calendar) || m.rail_focus == Some(zones::RailFocus::Left(Section::Calendar));
@@ -3294,6 +3300,44 @@ fn a_permission_after_its_agent_exited_puts_up_no_card() {
                 at: 5000,
             },
         ),
+    ])
+    .unwrap();
+}
+
+/// A mark's jump moved the tab on show off the task whose brief showed, after the brief was
+/// checked: the drawer followed the tab and the brief stayed up over another task.
+#[test]
+fn a_brief_goes_when_the_drawer_follows_the_tab_away_from_its_task() {
+    let app = |window: u32, title: &str| Kind::App { window, title: title.into(), bundle: None, name: "app".into() };
+    let slack =
+        Kind::App { window: 2, title: "general".into(), bundle: Some("com.slack".into()), name: "Slack".into() };
+    let known = Known {
+        names: Names { agents: vec!["codex-gpt-6-astra".into()], skills: vec![] },
+        paths: vec![],
+        entries: vec!["~/My Notes/".into()],
+    };
+    replay(&[
+        Action::Open { kind: app(1, "w1"), axis: Axis::Right, beside: None }.into(),
+        split(Axis::Right, Kind::Terminal),
+        Action::Open { kind: slack, axis: Axis::Down, beside: Some(1) }.into(),
+        Action::Open { kind: app(3, "w3"), axis: Axis::Right, beside: None }.into(),
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.into(),
+        Action::CaptureStart {
+            pane: None,
+            draft: "d1".into(),
+            word: "k3f9a2c41b7d".into(),
+            facts: vec![],
+            images: true,
+        }
+        .into(),
+        Action::TaskFromLine { line: "x  $\u{feff},".into(), known, open: true }.into(),
+        by(Origin::System, Action::Open { kind: Kind::Terminal, axis: Axis::Down, beside: Some(1) }),
+        Action::MarkToggle { of: MarkOf::Pane(Some(6)), uid: "u2".into(), cwds: vec![(7, "/code/app-2".into())] }
+            .into(),
+        Action::ComposeEnter.into(),
+        Action::NewTabOf { task: Some(2) }.into(),
+        by(Origin::Socket, Action::BriefShow { id: 2 }),
+        by(Origin::System, Action::MarkGo { mark: MarkRef::Name("shell".into()), axis: Axis::Down }),
     ])
     .unwrap();
 }
