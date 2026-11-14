@@ -55,6 +55,9 @@ pub struct Look {
     open: HashSet<u64>,
     /// Each reply's blocks, by entry, with the length of text they were made from.
     parsed: HashMap<u64, (usize, Rc<Vec<Block>>)>,
+    /// The user opened the ended agent's stderr (`Drawer::details`), or the lines not understood.
+    details: bool,
+    unread: bool,
 }
 
 /// A local image's thumbnail: being read, read, or not to be drawn.
@@ -240,6 +243,10 @@ impl Workspace {
         if let Some(task) = subject.task() {
             command.env("OTTOSPACE_TASK", task.to_string());
         }
+        // An empty key is no key: passed on, the CLI could take it for one and fail.
+        if std::env::var_os("ANTHROPIC_API_KEY").is_some_and(|key| key.is_empty()) {
+            command.env_remove("ANTHROPIC_API_KEY");
+        }
         let name = runner.name();
         let driver = Driver::spawn(command, wire).map_err(|err| format!("{name}: {err}"))?;
         if let Some(text) = prompt {
@@ -286,13 +293,19 @@ impl Workspace {
     pub(crate) fn sync_native(&mut self, window: &Window, cx: &mut Context<Self>) {
         let mut news: Vec<(Subject, Vec<Event>)> = Vec::new();
         let mut ended = Vec::new();
+        let mut details = Vec::new();
         for (subject, native) in &mut self.drawer.native {
             let mut events = Vec::new();
             while let Ok(said) = native.driver.events().try_recv() {
-                if matches!(said, Said::Exited { .. }) {
+                let mut kept = false;
+                if let Said::Exited { stderr, .. } = &said {
                     ended.push(subject.clone());
+                    // Its stderr may hold tokens: kept here for the user's click, never in the core.
+                    let shown = ottospace_core::transcript::details(stderr.text());
+                    kept = !shown.is_empty();
+                    details.push((subject.clone(), shown));
                 }
-                events.extend(translate(native, said));
+                events.extend(translate(native, said, kept));
                 if events.len() >= BATCH {
                     break;
                 }
@@ -302,6 +315,13 @@ impl Workspace {
             }
         }
         let changed = !news.is_empty() || !ended.is_empty();
+        for (subject, shown) in details {
+            self.drawer.looks.entry(subject.clone()).or_default().details = false;
+            match shown.is_empty() {
+                true => self.drawer.details.remove(&subject),
+                false => self.drawer.details.insert(subject, shown),
+            };
+        }
         for (task, events) in news {
             self.dispatch(Action::AgentEvents { task, events, at: crate::now_ms() }, Origin::System, window, cx);
         }
@@ -385,8 +405,8 @@ impl Workspace {
         true
     }
 
-    /// The repository a conversation's links and images may be in.
-    fn repo_of(&self, subject: &Subject) -> Option<String> {
+    /// The repository a conversation's links and images may be in, and its agent runs in.
+    pub(crate) fn repo_of(&self, subject: &Subject) -> Option<String> {
         match subject {
             Subject::Task(id) => self.model.tasks.get(*id)?.repo.clone(),
             Subject::Session { runner, id } => self.model.session_repo(runner, id),
@@ -396,7 +416,7 @@ impl Workspace {
     /// A key while a native conversation has the keyboard. Only the user's: a client's key
     /// reaches nothing here, as in the terminal.
     pub(crate) fn chat_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
-        let Some(chat) = self.model.shown_chat() else { return };
+        let Some(chat) = self.model.shown_draft_chat() else { return };
         let card = chat.transcript.cards.front().map(|card| card.ticket).filter(|_| !chat.deny);
         let (key, mods) = (&event.keystroke.key, crate::mods(event.keystroke.modifiers));
         match chat::key(key, mods, card) {
@@ -513,6 +533,7 @@ impl Workspace {
             .gap_2()
             .children(dropped)
             .children(items)
+            .children((t.unread_lines() > 0).then(|| self.chat_unread(subject, t, cx)))
             .on_scroll_wheel(cx.listener({
                 let subject = subject.clone();
                 move |this, _: &ScrollWheelEvent, _, cx| this.chat_wheel(&subject, cx)
@@ -537,8 +558,88 @@ impl Workspace {
             .children(latest.map(|button| div().flex().justify_center().py_0p5().child(button)))
             .children(self.chat_working(chat, cx))
             .children(self.chat_card(subject, chat, cx))
+            .children(self.chat_ended(subject, chat, cx))
             .child(self.chat_composer(chat, cx))
             .into_any_element()
+    }
+
+    /// Lines the runner sent that no rule reads: counted, their kinds (labels) on a click.
+    fn chat_unread(
+        &self,
+        subject: &Subject,
+        t: &ottospace_core::transcript::Transcript,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let open = self.drawer.looks.get(subject).is_some_and(|look| look.unread);
+        let n = t.unread_lines();
+        let line = format!(
+            "{n} line{} from the agent not understood {}",
+            if n == 1 { "" } else { "s" },
+            if open { "▾" } else { "▸" }
+        );
+        let subject = subject.clone();
+        let kinds = open.then(|| t.unread.iter().map(|(kind, n)| muted(format!("{} × {n}", clean(kind))).ml_4()));
+        div()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .id("chat-unread")
+                    .relative()
+                    .cursor_pointer()
+                    .child(muted(line))
+                    .child(self.controls.mark("talk:chat-unread".to_string()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let look = this.drawer.looks.entry(subject.clone()).or_default();
+                        look.unread = !look.unread;
+                        cx.notify();
+                    })),
+            )
+            .children(kinds.into_iter().flatten())
+    }
+
+    /// Under a transcript whose agent ended: Show details, which opens the end of its stderr,
+    /// cleaned and its tokens hidden. Only on the user's click: it may say what the model must not.
+    fn chat_ended(&self, subject: &Subject, chat: &chat::Chat, cx: &mut Context<Self>) -> Option<Div> {
+        let t = &chat.transcript;
+        if t.live || t.watched {
+            return None;
+        }
+        let start = self.start_button(cx);
+        let details = self.drawer.details.get(subject);
+        if start.is_none() && details.is_none() {
+            return None;
+        }
+        let open = details.is_some() && self.drawer.looks.get(subject).is_some_and(|look| look.details);
+        let label = if open { "Hide details" } else { "Show details" };
+        let who = subject.clone();
+        let button = self
+            .talk_button("chat-details", label, "What the agent's program printed last (stderr)")
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if this.input != Origin::User {
+                    this.error = Some("only the user's click shows an agent's details".into());
+                    return cx.notify();
+                }
+                let look = this.drawer.looks.entry(who.clone()).or_default();
+                look.details = !look.details;
+                cx.notify();
+            }));
+        let button = details.is_some().then_some(button);
+        let body = details.filter(|_| open).map(|details| {
+            div()
+                .id("chat-details-text")
+                .max_h(px(160.))
+                .overflow_y_scroll()
+                .mt_1()
+                .p_1()
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(theme::BORDER))
+                .bg(rgb(theme::RAISED))
+                .children(details.lines().map(code_text))
+        });
+        let row = div().flex().items_center().gap_1().children(start).children(button);
+        Some(div().px_3().py_1().flex().flex_col().child(row).children(body))
     }
 
     /// Over a watched transcript: it is read-only, and Take over goes on with the session here
@@ -549,12 +650,8 @@ impl Workspace {
         let subject = subject.clone();
         let take = self.talk_button("chat-take-over", "Take over", tip).when(!ready, |b| b.opacity(0.4)).on_click(
             cx.listener(move |this, _, window, cx| {
-                let action = match &subject {
-                    Subject::Task(id) => Action::TaskTalk { id: *id },
-                    Subject::Session { runner, id } => Action::SessionOpen { runner: runner.clone(), id: id.clone() },
-                };
                 if this.model.take_over_ready(&subject) {
-                    this.dispatch(action, this.input, window, cx);
+                    this.dispatch(Action::TalkStart, this.input, window, cx);
                 }
             }),
         );
@@ -1097,10 +1194,15 @@ impl Workspace {
             _ if chat.transcript.turn.is_some() => {
                 ("Write the next message", "↵ sends once the turn ends · esc esc stops")
             }
-            _ if !chat.transcript.live => ("The agent ended", "a click on its task goes on with its session"),
+            _ if chat.queued.is_some() => ("Starting the agent…", "your message goes once it runs"),
+            _ if !chat.transcript.live && self.model.shown_draft_chat().is_some() => {
+                ("Write to go on with it", "↵ resumes the session and sends · ⇧↵ new line")
+            }
+            _ if !chat.transcript.live => ("The agent ended", "it cannot be gone on with from here"),
             _ => ("Message the agent", "↵ send · ⇧↵ new line · esc leave"),
         };
-        let field = (!card || chat.deny).then(|| self.render_field_of("talk", placeholder, cx));
+        let open = chat.transcript.live || self.model.shown_draft_chat().is_some();
+        let field = (open && (!card || chat.deny)).then(|| self.render_field_of("talk", placeholder, cx));
         div()
             .flex_none()
             .px_3()
@@ -1168,6 +1270,10 @@ impl Workspace {
                     "deny": chat.deny,
                     "armed": chat.armed,
                     "away": look.is_some_and(|look| look.away),
+                    // That the ended agent left details, and whether they show: never what they say.
+                    "details": self.drawer.details.contains_key(&subject),
+                    "details_open": look.is_some_and(|look| look.details),
+                    "unread_open": look.is_some_and(|look| look.unread),
                 }),
             );
         }
@@ -1190,7 +1296,7 @@ impl Native {
 }
 
 /// A runner's event as the core's, its requests numbered. `None`: nothing the drawer shows.
-fn translate(native: &mut Native, said: Said) -> Option<Event> {
+fn translate(native: &mut Native, said: Said, details: bool) -> Option<Event> {
     let text = |u: &ottospace_agents::Untrusted| Text::new(u.text());
     Some(match said {
         Said::Started { session, model, mode } => {
@@ -1230,9 +1336,10 @@ fn translate(native: &mut Native, said: Said) -> Option<Event> {
         Said::Compaction => Event::Compaction,
         Said::TurnFinished { outcome } => Event::TurnFinished { outcome },
         Said::Error { kind, retrying } => Event::Error { kind, retrying },
-        // Its stderr may hold tokens: it stays in the driver, never in the core or the state.
-        Said::Exited { code, .. } => Event::Exited { code },
-        Said::Unknown { .. } => return None,
+        // Its stderr may hold tokens: the core hears only that there is some.
+        Said::Exited { code, signal, .. } => Event::Exited { code, signal, details },
+        Said::Unknown { kind } if ottospace_agents::QUIET.contains(&kind.as_str()) => return None,
+        Said::Unknown { kind } => Event::Unknown { kind },
     })
 }
 
@@ -1309,16 +1416,25 @@ fn shape(blocks: &[Block]) -> serde_json::Value {
 fn notice_text(notice: &Notice) -> String {
     match notice {
         Notice::Interrupted => "Stopped. The session goes on.".into(),
-        Notice::Failed { kind } => format!("The turn failed: {kind}."),
+        Notice::Failed { kind } => format!("The agent reported: {kind}. The turn failed."),
         Notice::Error { kind, retrying: true } => format!("{kind}: trying again."),
-        Notice::Error { kind, .. } => format!("Error: {kind}."),
+        Notice::Error { kind, .. } => format!("The agent reported: {kind}."),
         Notice::Compacted => "The context was compacted.".into(),
         Notice::Allowed { tool, label } => format!("You allowed {tool} · {label}."),
         Notice::Denied { tool, label } => format!("You denied {tool} · {label}."),
         Notice::Resumed => "Session resumed. Earlier turns are in its file: Terminal shows them.".into(),
         Notice::MessageElsewhere => "A message, in the other terminal.".into(),
-        Notice::Ended { code: Some(code) } if *code != 0 => format!("The agent ended (exit {code})."),
-        Notice::Ended { .. } => "The agent ended.".into(),
+        Notice::Ended { code, signal, replied, .. } => {
+            let how = match (code, signal) {
+                (_, Some(signal)) => format!(" (signal {signal})"),
+                (Some(code), None) => format!(" (exit {code})"),
+                (None, None) => String::new(),
+            };
+            match replied {
+                true => format!("The agent ended{how}."),
+                false => format!("The agent ended before replying{how}. Terminal view may show why."),
+            }
+        }
     }
 }
 

@@ -135,7 +135,8 @@ impl Gen<'_> {
                 ]),
             },
             10 => Said::Usage { context: Some(10), window: None, cost_micro_usd: None },
-            _ => Said::Exited { code: None },
+            11 if self.rng.coin() => Said::Unknown { kind: self.name(WORDS) },
+            _ => Said::Exited { code: None, signal: None, details: self.rng.coin() },
         }
     }
 
@@ -1057,6 +1058,7 @@ const MAKERS: &[Make] = &[
     |g| Action::TalkView { shows: g.rng.pick(&[View::Native, View::Terminal]) },
     |g| Action::TaskTalk { id: g.task() },
     |g| Action::TalkPick { id: g.subject() },
+    |_| Action::TalkStart,
     |g| {
         let (runner, id) = g.session();
         Action::SessionOpen { runner, id }
@@ -2022,6 +2024,19 @@ impl Run {
                 | Action::TalkPick { .. }
         );
 
+        // Selecting a conversation, a tab or a row only shows: never an agent, never a transcript.
+        let selects = matches!(
+            action,
+            Action::TaskTalk { .. }
+                | Action::TalkPick { .. }
+                | Action::SessionOpen { .. }
+                | Action::TaskGo { .. }
+                | Action::ListChoose { .. }
+                | Action::SelectTab { .. }
+                | Action::SelectVisibleTab { .. }
+                | Action::CycleTab { .. }
+        );
+
         let peek_before = m.peek.as_ref().map(|peek| peek.pane);
         let effects = m.update(sent);
         check(m)?;
@@ -2031,6 +2046,10 @@ impl Run {
             let back = effects.iter().any(|e| [Effect::Parked(pane), Effect::Live(pane)].contains(e) || closed(e));
             ensure!(back, "the peek of pane {pane} ended with {effects:?}");
         }
+        let acts =
+            |e: &Effect| matches!(e, Effect::StartAgent { .. } | Effect::ReadSession { .. } | Effect::AgentSend { .. });
+        ensure!(!selects || !effects.iter().any(acts), "{origin:?}'s {action:?} started an agent: {effects:?}");
+        ensure!(!selects || m.chats == chats_before, "{origin:?}'s {action:?} changed a transcript");
         check_zones(m)?;
         if !self.sparse || self.steps.len().is_multiple_of(8) {
             check_state(m)?;
@@ -3040,7 +3059,10 @@ fn event_code(event: &Said) -> String {
             format!("Said::TurnFinished {{ outcome: {outcome} }}")
         }
         Said::Error { kind, retrying } => format!("Said::Error {{ kind: {kind:?}.into(), retrying: {retrying} }}"),
-        Said::Exited { code } => format!("Said::Exited {{ code: {code:?} }}"),
+        Said::Exited { code, signal, details } => {
+            format!("Said::Exited {{ code: {code:?}, signal: {signal:?}, details: {details} }}")
+        }
+        Said::Unknown { kind } => format!("Said::Unknown {{ kind: {kind:?}.into() }}"),
         Said::MessageElsewhere => "Said::MessageElsewhere".into(),
         Said::WatchFromStart => "Said::WatchFromStart".into(),
     }

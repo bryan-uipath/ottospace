@@ -3,7 +3,7 @@
 //! other), one keeps the end of stderr, one waits for the exit.
 
 use std::io::{self, Read, Write};
-use std::os::unix::process::CommandExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -62,7 +62,13 @@ impl Driver {
     /// Starts `command` (its program, argv and directory already set) with piped stdio, in a
     /// process group of its own, and writes the protocol's opening lines.
     pub fn spawn(mut command: Command, protocol: impl Wire) -> io::Result<Self> {
-        command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
+        command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        // A session of its own, so its group too, and no controlling terminal: an interactive
+        // login shell (`zsh -i`) cannot take the terminal ottospace was started from.
+        // SAFETY: `setsid` is async-signal-safe and touches no memory of ours.
+        unsafe {
+            command.pre_exec(|| if libc::setsid() == -1 { Err(io::Error::last_os_error()) } else { Ok(()) });
+        }
         let mut child = command.spawn()?;
         let group = i32::try_from(child.id()).map_err(|_| io::Error::other("pid out of range"))?;
         let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
@@ -93,7 +99,7 @@ impl Driver {
 
 /// Waits for the CLI to exit, kills what it left in its group, then reaps it and gives its code.
 /// Until it is reaped its id cannot be reused, so the group named by it is still the CLI's.
-fn wait(mut child: Child, group: i32, reaped: &Mutex<bool>) -> Option<i32> {
+fn wait(mut child: Child, group: i32, reaped: &Mutex<bool>) -> (Option<i32>, Option<i32>) {
     let pid = libc::id_t::try_from(group).unwrap_or_default();
     loop {
         // SAFETY: `info` is a zeroed `siginfo_t` that `waitid` writes into; `WNOWAIT` leaves the child unreaped.
@@ -106,9 +112,9 @@ fn wait(mut child: Child, group: i32, reaped: &Mutex<bool>) -> Option<i32> {
     let mut reaped = lock(reaped);
     // SAFETY: plain integers. What the CLI left behind (a background command holding its stdout) ends here.
     unsafe { libc::killpg(group, libc::SIGKILL) };
-    let code = child.wait().ok().and_then(|status| status.code());
+    let status = child.wait().ok();
     *reaped = true;
-    code
+    (status.and_then(|status| status.code()), status.and_then(|status| status.signal()))
 }
 
 /// Keeps the last `STDERR_TAIL` bytes the child wrote to stderr.
@@ -141,7 +147,7 @@ fn read(
     writes: &Writes,
     tx: &Sender<Event>,
     (tail, tailing): (&Mutex<Vec<u8>>, Option<thread::JoinHandle<()>>),
-    exit: &Receiver<Option<i32>>,
+    exit: &Receiver<(Option<i32>, Option<i32>)>,
     kill: impl Fn(),
 ) {
     let mut lines = Lines::new(MAX_LINE);
@@ -174,7 +180,7 @@ fn read(
     }
     lines.finish().into_iter().for_each(&mut each);
     let _ = writes.send(None);
-    let code = exit.recv().ok().flatten();
+    let (code, signal) = exit.recv().unwrap_or_default();
     // Stderr's last words, given half a second to arrive: a process left behind may hold it open.
     for _ in 0..50 {
         if tailing.as_ref().is_none_or(thread::JoinHandle::is_finished) {
@@ -183,7 +189,7 @@ fn read(
         thread::sleep(Duration::from_millis(10));
     }
     let stderr = Untrusted::new(&String::from_utf8_lossy(&lock(tail)), STDERR_TAIL);
-    let _ = tx.send(Event::Exited { code, stderr });
+    let _ = tx.send(Event::Exited { code, signal, stderr });
 }
 
 impl Process for Driver {

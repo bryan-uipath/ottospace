@@ -80,6 +80,14 @@ pub fn clean(text: &str) -> String {
     out
 }
 
+/// The end of an agent's stderr as the drawer shows it on the user's click: cleaned as any
+/// text (`clean`), then each line with its credential-shaped parts hidden (`secrets`). Empty:
+/// nothing worth showing. Never kept in the model or the state.
+pub fn details(stderr: &str) -> String {
+    let lines = clean(stderr).lines().map(str::to_string).collect();
+    crate::secrets::hide_lines(lines).join("\n").trim().to_string()
+}
+
 /// How the drawer shows a conversation: drawn natively, or the agent's own TUI in a terminal.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -162,8 +170,17 @@ pub enum Event {
         kind: String,
         retrying: bool,
     },
+    /// Its process ended: by its code, or a signal. `details`: the shell keeps its stderr's end,
+    /// shown on the user's click (never here: it may hold tokens).
     Exited {
         code: Option<i32>,
+        signal: Option<i32>,
+        details: bool,
+    },
+    /// A line the runner sent that no rule reads, and not one known to be quiet: its kind, a
+    /// label. Counted, never silent.
+    Unknown {
+        kind: String,
     },
     /// A watched session's file says a message was sent there: its words stay in the file.
     MessageElsewhere,
@@ -224,8 +241,13 @@ pub enum Notice {
     Resumed,
     /// A message was sent in the terminal that runs the watched session.
     MessageElsewhere,
+    /// Its process ended. `replied`: anything came back from it since it started; `details`:
+    /// its stderr's end can be shown.
     Ended {
         code: Option<i32>,
+        signal: Option<i32>,
+        replied: bool,
+        details: bool,
     },
 }
 
@@ -326,7 +348,14 @@ pub struct Transcript {
     pub live: bool,
     /// Built from a session another program runs (`Model::watch_target`): read-only.
     pub watched: bool,
+    /// Something came back from its process since it started: a turn, text, a call, a request.
+    pub replied: bool,
+    /// Lines not understood, by kind, in the order first seen: at most `MAX_KINDS` kinds.
+    pub unread: Vec<(String, usize)>,
 }
+
+/// The most kinds of line not understood kept apart; past it they count under the last.
+pub const MAX_KINDS: usize = 8;
 
 impl Transcript {
     pub fn items(&self) -> impl DoubleEndedIterator<Item = &Item> + ExactSizeIterator {
@@ -384,7 +413,7 @@ impl Transcript {
 
     /// A process for this conversation started (again).
     pub fn started(&mut self, resumed: bool) {
-        (self.live, self.watched) = (true, false);
+        (self.live, self.watched, self.replied) = (true, false, false);
         if resumed {
             self.push(Entry::Notice(Notice::Resumed));
         }
@@ -407,8 +436,26 @@ impl Transcript {
         Some(card.ticket)
     }
 
+    /// How many lines were not understood.
+    pub fn unread_lines(&self) -> usize {
+        self.unread.iter().map(|(_, n)| n).sum()
+    }
+
     /// Folds one event in, at `at` (ms since 1970).
     pub fn fold(&mut self, event: Event, at: u64) {
+        if matches!(
+            event,
+            Event::TurnStarted
+                | Event::TextDelta { .. }
+                | Event::Text { .. }
+                | Event::ToolStart { .. }
+                | Event::Permission { .. }
+                | Event::AutoDenied { .. }
+                | Event::TurnFinished { .. }
+                | Event::Error { .. }
+        ) {
+            self.replied = true;
+        }
         match event {
             Event::Started { session, model, mode } => {
                 self.session = session.or(self.session.take());
@@ -481,11 +528,18 @@ impl Transcript {
                 }
             }
             Event::Error { kind, retrying } => self.push(Entry::Notice(Notice::Error { kind, retrying })),
-            Event::Exited { code } => {
+            Event::Exited { code, signal, details } => {
                 self.settle();
                 self.end_calls();
                 (self.turn, self.cards, self.live) = (None, VecDeque::new(), false);
-                self.push(Entry::Notice(Notice::Ended { code }));
+                self.push(Entry::Notice(Notice::Ended { code, signal, replied: self.replied, details }));
+            }
+            Event::Unknown { kind } => {
+                let seen = self.unread.iter().position(|(of, _)| *of == kind);
+                match seen.or((self.unread.len() >= MAX_KINDS).then_some(MAX_KINDS - 1)) {
+                    Some(at) => self.unread[at].1 += 1,
+                    None => self.unread.push((kind, 1)),
+                }
             }
             // Only a watched transcript is rebuilt; a live one is the stream's.
             Event::WatchFromStart if !self.live => *self = Transcript { watched: true, ..Transcript::default() },
@@ -528,6 +582,7 @@ impl Transcript {
             window: self.window,
             live: self.live,
             watched: self.watched,
+            not_understood: self.unread_lines(),
         }
     }
 }
@@ -547,6 +602,8 @@ pub struct Summary {
     pub window: Option<u64>,
     pub live: bool,
     pub watched: bool,
+    /// Lines the runner sent that no rule reads: a count, never what they said.
+    pub not_understood: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -661,8 +718,42 @@ mod tests {
         t.fold(Event::TurnFinished { outcome: Outcome::Interrupted }, 4);
         assert_eq!(texts(&t), ["user:go", "tool:a.rs:Failed", "Interrupted"]);
         assert!(t.cards.is_empty(), "no request outlives its turn");
-        t.fold(Event::Exited { code: Some(0) }, 5);
+        t.fold(Event::Exited { code: Some(0), signal: None, details: false }, 5);
         assert!(!t.live && matches!(t.items().last().map(|i| &i.entry), Some(Entry::Notice(Notice::Ended { .. }))));
+    }
+
+    #[test]
+    fn details_are_cleaned_and_tokens_hidden() {
+        let stderr = "\u{1b}[31mError:\u{1b}[0m bad key sk-ant-api03-abcdefghijklmnop\nAuthorization: Bearer x\n";
+        assert_eq!(details(stderr), "Error: bad key [hidden]\nAuthorization: [hidden]");
+        assert_eq!(details("  \n"), "");
+    }
+
+    /// An end says whether anything came back since the process started; lines not understood
+    /// are counted by kind, and the summary has their count alone.
+    #[test]
+    fn an_end_says_if_it_replied_and_unread_lines_are_counted() {
+        let mut t = Transcript::default();
+        t.started(false);
+        t.send("Task: plan", 1);
+        for kind in ["made_up", "made_up", "system.other"] {
+            t.fold(Event::Unknown { kind: kind.into() }, 2);
+        }
+        t.fold(Event::Exited { code: Some(0), signal: None, details: true }, 3);
+        let ended = Notice::Ended { code: Some(0), signal: None, replied: false, details: true };
+        assert_eq!(texts(&t).last(), Some(&format!("{ended:?}")));
+        assert_eq!(t.unread, [("made_up".to_string(), 2), ("system.other".to_string(), 1)]);
+        assert_eq!(t.summary().not_understood, 3);
+        // Started again, it replies: the next end says so.
+        t.started(true);
+        t.fold(Event::TurnStarted, 4);
+        t.fold(Event::Exited { code: None, signal: Some(9), details: false }, 5);
+        let ended = Notice::Ended { code: None, signal: Some(9), replied: true, details: false };
+        assert_eq!(texts(&t).last(), Some(&format!("{ended:?}")));
+        for n in 0..MAX_KINDS + 3 {
+            t.fold(Event::Unknown { kind: format!("k{n}") }, 6);
+        }
+        assert_eq!((t.unread.len(), t.unread_lines()), (MAX_KINDS, 3 + MAX_KINDS + 3));
     }
 
     /// A cut request is not allowed until opened in full; each is answered once; a second

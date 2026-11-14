@@ -248,3 +248,119 @@ fn codex_real() {
     let codex = Codex::new(&dir, None, &Start::New { id: String::new() }).unwrap();
     probe(Driver::spawn(command, Tap(codex)).unwrap(), &dir);
 }
+
+/// Values kept as recorded: protocol names and enums. Every other value is made up.
+const KEPT: &[&str] = &[
+    "type",
+    "subtype",
+    "hook_event",
+    "outcome",
+    "permissionMode",
+    "apiKeySource",
+    "claude_code_version",
+    "output_style",
+    "fast_mode_state",
+    "status",
+    "thinking_display",
+    "stop_reason",
+    "terminal_reason",
+    "role",
+    "service_tier",
+    "speed",
+    "rateLimitType",
+    "overageStatus",
+    "inference_geo",
+];
+
+/// A recorded line with its structure, order and keys as they came, and made-up values: ids,
+/// paths, text, hook output, counts and account fields. A model's id is `claude-haiku-5-5`.
+fn scrub(value: &Value, key: &str, ids: &mut Vec<String>) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, v)| {
+                    (if k.starts_with("claude-") { "claude-haiku-5-5".into() } else { k.clone() }, scrub(v, k, ids))
+                })
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(|v| scrub(v, key, ids)).collect()),
+        Value::Number(n) if n.is_f64() => serde_json::json!(if n.as_f64() == Some(0.0) { 0.0 } else { 0.001 }),
+        Value::Number(n) => serde_json::json!(if n.as_u64() == Some(0) { 0 } else { 1 }),
+        Value::String(_) if KEPT.contains(&key) => value.clone(),
+        Value::String(text) => Value::String(match key {
+            "model" => "claude-haiku-5-5".into(),
+            "session_id" => "8f14e45f-ceea-467f-a8d3-0242ac130003".into(),
+            _ if ottospace_core::agents::is_uuid(text) => {
+                let n = ids.iter().position(|id| id == text).unwrap_or_else(|| {
+                    ids.push(text.clone());
+                    ids.len() - 1
+                });
+                format!("00000000-0000-4000-8000-{:012}", n + 1)
+            }
+            "cwd" | "original_cwd" => "/Users/me/scratch".into(),
+            "text" | "result" => "ok".into(),
+            "output" | "stdout" | "stderr" => String::new(),
+            "hook_name" => "SessionStart:startup".into(),
+            "timestamp" => "2026-11-14T00:00:00.000Z".into(),
+            _ => format!("made-up-{key}"),
+        }),
+        _ => value.clone(),
+    }
+}
+
+/// Records one turn of the real CLI as the fixtures the fake `claude` and the parser tests
+/// replay: `real-<version>-turn.jsonl` (the whole turn) and `real-<version>-no-reply.jsonl`
+/// (its hook lines alone, as a run whose stdin closes first prints), scrubbed by `scrub`.
+/// Read them through before committing. See docs/ai/agent-runners.md, Fixtures.
+#[test]
+#[ignore = "starts a real Claude Code session: OTTOSPACE_REAL_CLI=1"]
+fn claude_record() {
+    use std::io::{BufRead, Write};
+    if !allowed() {
+        return;
+    }
+    let dir = empty_dir("record");
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let session = format!("{:08x}-0000-4000-8000-{:012x}", std::process::id(), nanos & 0xffff_ffff_ffff);
+    let argv = claude::argv(Some("haiku"), &Start::New { id: session }).unwrap();
+    let mut child = Command::new(argv.program)
+        .args(&argv.args)
+        .current_dir(&dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let line = serde_json::json!({"type": "user", "message": {"role": "user", "content": [{"type": "text",
+        "text": "Reply with the word ok."}]}, "parent_tool_use_id": null, "session_id": ""});
+    writeln!(child.stdin.as_mut().unwrap(), "{line}").unwrap();
+    let mut lines = Vec::new();
+    for line in std::io::BufReader::new(child.stdout.take().unwrap()).lines() {
+        let line = line.unwrap();
+        let done = line.contains(r#""type":"result""#);
+        lines.push(serde_json::from_str::<Value>(&line).unwrap());
+        if done {
+            break;
+        }
+    }
+    drop(child.stdin.take());
+    let _ = child.wait();
+    let version = lines.iter().find_map(|v| v["claude_code_version"].as_str()).unwrap_or("unknown").to_string();
+    let mut ids = Vec::new();
+    let scrubbed: Vec<String> = lines.iter().map(|v| scrub(v, "", &mut ids).to_string()).collect();
+    let header = |note: &str| serde_json::json!({"type": "_fixture", "note": note, "cli_version": version}).to_string();
+    let out = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/claude");
+    let turn = format!(
+        "RECORDED from Claude Code {version} (claude -p, stream-json, --model haiku): one turn that answers ok, then scrubbed: every id, path, hook output, count and account field made up; structure, order and field names as recorded. Re-record: docs/ai/agent-runners.md, Fixtures."
+    );
+    let hooks: Vec<&String> = scrubbed.iter().filter(|line| line.contains(r#""subtype":"hook_"#)).collect();
+    let none = format!(
+        "The SessionStart hook lines of real-{version}-turn.jsonl: all a run prints when its stdin closes before any message; it then exits 0."
+    );
+    let write = |name: String, head: String, body: Vec<&String>| {
+        let text: String = std::iter::once(&head).chain(body).map(|line| format!("{line}\n")).collect();
+        std::fs::write(out.join(name), text).unwrap();
+    };
+    write(format!("real-{version}-turn.jsonl"), header(&turn), scrubbed.iter().collect());
+    write(format!("real-{version}-no-reply.jsonl"), header(&none), hooks);
+    println!("recorded {} lines of Claude Code {version}", scrubbed.len());
+}

@@ -703,12 +703,16 @@ function nativeChat(value: unknown, at: string): NativeChat {
       window: orNull(num)(t.window, `${at}.transcript.window`),
       live: bool(t.live, `${at}.transcript.live`),
       watched: bool(t.watched, `${at}.transcript.watched`),
+      not_understood: num(t.not_understood, `${at}.transcript.not_understood`),
     },
     replies: list(reply)(o.replies, `${at}.replies`),
     draft_chars: num(o.draft_chars, `${at}.draft_chars`),
     deny: bool(o.deny, `${at}.deny`),
     armed: bool(o.armed, `${at}.armed`),
     away: bool(o.away, `${at}.away`),
+    details: bool(o.details, `${at}.details`),
+    details_open: bool(o.details_open, `${at}.details_open`),
+    unread_open: bool(o.unread_open, `${at}.unread_open`),
   };
 }
 

@@ -30,7 +30,7 @@ running, and the rest of the design is not built: see the
 | A task's progress, kept in its file: when its agent started and when it was done, time at work (activity until a quiet gap of two minutes), and tokens by model (input, output, cached; a sub-agent's apart), summed from its sessions, so they outlive the session files. Tokens only: no prices | Works today |
 | "Pop next" (⌘⇧N): the conversation of the next task that needs you; the tab on show stays | Works today |
 | Sessions in the Tasks section: the Claude Code and Codex sessions of the listed repositories that are no task's (one you started by hand in a terminal). Each row shows the runner, the repository, the session's title, active or idle, what it does now, when it was last active, and the model. A click opens its conversation in the drawer (`claude --resume`, `codex resume`), unless it is at work in another terminal; Adopt makes a task of one; Hide removes it until the next start | Works today |
-| A task's agent in the right drawer: a click or ↵ on a task starts its agent (`claude` or `codex`, by its `@agent`, else `default_agent`) beside the workspace, which stays as it is. See [Flow of a task](#flow-of-a-task) | Works today |
+| A task's agent in the right drawer: ↵ in the new-task box, or Start agent in the drawer, starts its agent (`claude` or `codex`, by its `@agent`, else `default_agent`) beside the workspace, which stays as it is. A click on a task only shows its conversation; Resume session goes on with one that ended. See [Flow of a task](#flow-of-a-task) | Works today |
 | Native conversation for Claude Code: the drawer drives `claude -p` (stream-json) and draws the reply itself: markdown (headings, emphasis, lists, quotes, tables), code blocks with Copy, links that open only on your click (web pages in the browser; files of the task's repository revealed in Finder), local images of the repository as thumbnails, tool calls as compact rows, a file edit's change as a diff card under its call, a working row while a turn runs, Copy and Copy as Markdown on each message, and a composer (↵ send, ⇧↵ new line). Permission requests are cards: Allow this one request as shown, or Deny (with a message if you like); a request too long to show is opened in full before Allow is offered. `Chat \| Terminal` in the header switches to the CLI's own TUI and back on the same session. A session at work in another terminal is watched read-only (what it calls and edits, not what it says; "Watching · updates per message" in the header), with Take over once it is idle. Codex stays in a terminal. No text selection by dragging yet: copy by message or block | Works today |
 | Right rail: a badge per open conversation of a live task (needs you first, then running, then the last opened; at most 8), and `+` for a new task. A dismissed task leaves it; a done one stays only while shown or its agent runs | Works today |
 | New task (⌘N), in the drawer: one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`, picks for where and who, and a line that says what ↵ will do. A `/path` stays in the title the agent reads, and a folder taken from its dropdown is where the agent runs; `$skill` is stored and shown, nothing acts on it yet | Works today |
@@ -223,15 +223,18 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    for later. With nothing open at all the drawer shows a new task by itself.
 2. **It starts at once.** The agent (`@claude`, `@codex-gpt-6-astra`, …; with no `@agent`, the
    `default_agent` setting, else `claude`) runs in the drawer, in the task's repository (no
-   `>repo`: the home folder), with the keyboard: Claude Code drawn natively (its structured
-   mode, see step 11), Codex in a terminal (its TUI); `conversation_view: "terminal"` puts
-   Claude Code in a terminal too. It is asked `Task: <title>`; a
+   `>repo`: the home folder), with the keyboard, in a terminal (the CLI's own TUI);
+   `conversation_view: "native"`, or Chat in the drawer's header, draws Claude Code natively
+   (its structured mode, see step 11). Terminal is the default until the native view has
+   passed a check against the real CLI. It is asked `Task: <title>`; a
    task with captures is told where its brief is. The workspace stays as it was: the same tab,
    panes and focus. That tab, if it is no task's and has panes, becomes the task's and gains its
    badge; on a tab of another task, or with nothing open, the task starts with no tab.
-3. **One verb.** A click or ↵ on a task is its conversation: started if it never ran, its
-   session gone on with if it has one and no agent runs, shown if one runs. A session is gone
-   on with in the folder it started in, which may be below the repository; with the Tasks
+3. **Selecting shows; starting is a button.** A click or ↵ on a task, its rail cell or its tab
+   shows its conversation and starts nothing. Not running, the drawer offers Start agent (it
+   never ran: its task is sent once) or Resume session (it has a session: gone on with, nothing
+   sent again; a session never written starts afresh). ↵ in an ended conversation's composer
+   resumes it and sends the message. A session is gone on with in the folder it started in, which may be below the repository; with the Tasks
    section closed that one session is read first. One at work in another terminal, or held
    open by another Claude Code, is not: the drawer says so. An agent you just stopped there is
    not another terminal's: it is gone on with at once. Going on with a session, the task runs.
@@ -240,7 +243,7 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    shows the one of them shown last; a task with none offers Claim this tab (the tab on show is
    no task's) or New tab (a shell in its repository); Brief (when it has captures); Stop ends the agent;
    × (⌘⇧L) closes the drawer to the right rail and the agent goes on. ⌘L moves the keyboard in
-   and out. Drag its left edge to make it wider or narrower. Opening a conversation while a new
+   and out. Drag its left edge to make it wider or narrower. Opening a conversation, or a click on a tab, while a new
    task is half written puts the line aside: the box gets it back when it opens again.
 5. **The right rail.** The task's badge per open conversation: its border in the task's own
    colour, its state as the corner dot; hover for its card. A click shows it, and the tab stays;
@@ -497,7 +500,7 @@ unfolds it. A session at work does not unfold it.
 - **Order.** Sessions at work come first, in the order they started, so a row does not move
   while you reach for it. Then the idle ones, the most recently active first.
 - **Open** (a click on the row, or ↵ in list mode) shows its conversation in the drawer, and the
-  workspace stays as it is. No task is made. An idle session is gone on with there: `claude
+  workspace stays as it is. No task is made. Resume session goes on with an idle one there: `claude
   --resume <id>` or `codex resume <id>`, in the folder the session started in, which must be in
   a listed repository or worktree. One at work (its dot lit) or held by a live Claude Code
   process is not: the drawer says it is live in another terminal, and nothing is started. When
@@ -617,8 +620,8 @@ written a second after a change and at quit, readable by you alone.
   goes back in its pane; an app that is not running is not started: its pane says so and offers
   `Open <App>`. `restore_apps: true` starts it instead. Opening a workbook starts its apps: you
   asked for them; a start does not.
-- **The drawer** shows the task's conversation again, not running: a click on its task goes on
-  with its session, as always. No agent starts by itself.
+- **The drawer** shows the task's conversation again, not running: Resume session in the drawer
+  goes on with its session. No agent starts by itself.
 - A tab whose task no longer exists comes back as a tab of no task, so nothing is lost.
 - A file that cannot be read is set aside as `layout.json.bad`, and ottospace starts empty and
   says so. A file a newer build wrote is left as it is and not written over. A pane of a kind
@@ -810,7 +813,7 @@ A change is read when the file is saved: what is wrong in it is said in the stat
   "session_quiet_minutes": 3,
   "agent_models": { "claude": ["claude-opus-5-5"], "codex": ["gpt-6-astra"] },
   "default_agent": "claude",
-  "conversation_view": "native",
+  "conversation_view": "terminal",
   "capture_key": "ctrl-alt-cmd-space",
   "capture": { "keep_images": true, "ax": true },
   "workbook_scrollback_lines": 500,
@@ -835,7 +838,7 @@ A change is read when the file is saved: what is wrong in it is said in the stat
 | `session_quiet_minutes` | A task adopted from a session moves to Needs you once the session has been quiet this many minutes. `0`: a quiet session never moves its task | `3` |
 | `agent_models` | The models the `@agent` dropdown offers after each runner, in place of the built-in list: ids as the runner's CLI takes them. `claude` and `codex` are each a list; a runner left out keeps its own, an empty list offers the runner alone. An id that does not start with the runner's name gets it in the tag: `gpt-6-astra` is `@codex-gpt-6-astra`, `opus` is `@claude-opus`. An entry that is not a name (letters and digits, with `.`, `-` or `_` between them one at a time; at most 64) is left out and named in the status bar | `claude-fable-5-2`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`; `gpt-6-astra` |
 | `default_agent` | The agent a task with no `@agent` starts: a runner (`claude`, `codex`) or a runner and a model (`claude-opus-5-5`, `codex-gpt-6-astra`). The first WHO pick in the drawer | `claude` |
-| `conversation_view` | How the drawer shows a Claude Code conversation: `native` (drawn by ottospace: markdown, cards for permission requests, a composer) or `terminal` (the CLI's own TUI). The header's `Chat \| Terminal` switches one conversation, and the layout keeps the pick. Codex always shows in a terminal for now | `native` |
+| `conversation_view` | How the drawer shows a Claude Code conversation: `native` (drawn by ottospace: markdown, cards for permission requests, a composer) or `terminal` (the CLI's own TUI). The header's `Chat \| Terminal` switches one conversation, and the layout keeps the pick. Codex always shows in a terminal for now. Terminal is the default until the native view has passed a check against the real CLI | `terminal` |
 | `workbook_scrollback_lines` | How many of a terminal's last lines a [workbook](#workbooks), and the [restored layout](#restoring-the-layout), keeps, shown again above its prompt when it opens. At most `2000`. `0`: none is kept | `500` |
 | `restore_layout` | [Restore the layout](#restoring-the-layout) at start and keep it in `layout.json`. `false`: every start is empty | `true` |
 | `restore_apps` | At a restore, start an app a pane names that is not running. `false`: its pane waits and offers `Open <App>` | `false` |

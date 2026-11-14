@@ -33,7 +33,7 @@ pub struct Agent {
     /// The runner and id it was started with, if the id was chosen here, and where it runs: to
     /// see if its session was written.
     session: Option<(RunnerId, String)>,
-    cwd: Option<String>,
+    pub(crate) cwd: Option<String>,
     /// The core was told it ended.
     told: bool,
 }
@@ -63,6 +63,9 @@ pub struct Drawer {
     pub stopping: Vec<(Subject, crate::conversation::Stopping)>,
     /// The watched session's file being followed (`Model::watch_target`).
     pub watch: Option<crate::conversation::Watch>,
+    /// The end of each ended native agent's stderr, cleaned and its tokens hidden
+    /// (`transcript::details`): drawn on the user's click only, never in the state or a log.
+    pub details: HashMap<Subject, String>,
 }
 
 /// A new session's id: a random (version 4) UUID. `None`: no random bytes could be read.
@@ -287,7 +290,7 @@ impl Workspace {
             self.error = Some(agents::USERS_ALONE.into());
             return cx.stop_propagation();
         }
-        if self.model.shown_chat().is_some() {
+        if self.model.shown_draft_chat().is_some() {
             return self.chat_key(event, window, cx);
         }
         let Some(agent) = self.model.talk.as_ref().and_then(|talk| self.drawer.agents.get(&talk.task)) else { return };
@@ -316,6 +319,7 @@ impl Workspace {
                 return true;
             }
             ("talk", "talk-go", _) => Action::TalkGo,
+            ("talk", "talk-start", _) => Action::TalkStart,
             ("talk", "talk-brief", Some(id)) if self.model.brief == Some(id) => Action::BriefClose,
             ("talk", "talk-brief", Some(id)) => Action::BriefShow { id },
             ("talk", "talk-stop", _) => match shown {
@@ -437,6 +441,20 @@ impl Workspace {
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
     }
 
+    /// Resume session (or Start agent) for the conversation shown, while `TalkStart` would do
+    /// something: the one way to start or go on with an agent once it is not running.
+    pub(crate) fn start_button(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        let resumes = self.model.talk_resumes()?;
+        let (label, tip) = match resumes {
+            true => ("Resume session", "Go on with this session here: nothing is sent again"),
+            false => ("Start agent", "Start this task's agent: its task is sent once"),
+        };
+        let button = self.talk_button("talk-start", label, tip).text_color(rgb(theme::PRIMARY));
+        Some(button.on_click(
+            cx.listener(|this, _, window, cx| drop(this.dispatch(Action::TalkStart, this.input, window, cx))),
+        ))
+    }
+
     /// The conversation's header: state, title, model and time, then what can be done.
     fn talk_header(&self, subject: &Subject, cx: &mut Context<Self>) -> Option<Div> {
         let shown = match subject {
@@ -458,6 +476,17 @@ impl Workspace {
         let agent = self.drawer.agents.get(subject).map(|agent| (agent.model.clone(), agent.since)).or(native);
         let runs = self.model.agent_runs(subject);
         let muted = |text: String| div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(text);
+        // Where the agent runs (or would): what it can see. Its process's folder, else the task's
+        // (`Task::dir`), else the home folder.
+        let ran = self.drawer.native.get(subject).and_then(|native| native.cwd.clone());
+        let ran = ran.or_else(|| self.drawer.agents.get(subject).and_then(|agent| agent.cwd.clone()));
+        let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
+        let dir = shown.and_then(|task| task.dir().cloned()).or_else(|| self.repo_of(subject));
+        let folder = ran.or(dir).or_else(|| home.clone()).map(|dir| {
+            let rest = home.as_deref().and_then(|home| dir.strip_prefix(home));
+            let short = rest.filter(|rest| rest.is_empty() || rest.starts_with('/')).map(|rest| format!("~{rest}"));
+            short.unwrap_or(dir)
+        });
         let elapsed = agent.as_ref().filter(|_| runs).map(|(_, since)| {
             let secs = since.elapsed().as_secs();
             if secs < 3600 { format!("{}:{:02}", secs / 60, secs % 60) } else { format!("{}h", secs / 3600) }
@@ -525,6 +554,15 @@ impl Workspace {
                 .child(div().flex_1().min_w(px(72.)).truncate().text_sm().child(title))
                 // The model gives way before the title does.
                 .children(agent.map(|(model, _)| muted(model).flex_shrink().min_w_0().truncate()))
+                .children(folder.map(|folder| {
+                    let tip: gpui::SharedString = format!("The agent runs in {folder}").into();
+                    muted(folder)
+                        .id("talk-folder")
+                        .flex_shrink()
+                        .min_w_0()
+                        .truncate()
+                        .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone()))))
+                }))
                 .children(elapsed.map(muted))
                 .children(self.watch_chip(subject))
                 .children(self.view_switch(subject, cx))
@@ -564,12 +602,8 @@ impl Workspace {
             // Nothing either while its session is read for a resume.
             let none = self.model.talk_note().is_none() && !self.model.talk_live(subject);
             // A task with a session (a conversation shown again at start, say) is gone on with by the user only.
-            let session = subject.task().and_then(|id| self.model.tasks.get(id)).is_some_and(|t| t.session.is_some());
-            let why = match session {
-                true => "Not running. A click on its task goes on with its session.",
-                false => "no agent runs for this conversation",
-            };
-            let why = none.then(|| muted(why.into()));
+            let why =
+                none.then(|| muted("Not running.".into()).child(div().pt_1().flex().children(self.start_button(cx))));
             return div().relative().flex_1().child(record).children(why).into_any_element();
         };
         let (screen, cell) = (agent.terminal.screen(), self.cell);
@@ -581,14 +615,15 @@ impl Workspace {
             div()
                 .px_3()
                 .py_1()
+                .flex()
+                .items_center()
+                .gap_2()
                 .text_xs()
                 .text_color(rgb(theme::MUTED))
                 .border_t_1()
                 .border_color(rgb(theme::BORDER))
-                .child(match subject {
-                    Subject::Task(_) => "The agent ended. A click on its task goes on with its session.",
-                    Subject::Session { .. } => "The agent ended. A click on its row goes on with its session.",
-                })
+                .child("The agent ended.")
+                .children(self.start_button(cx))
         });
         div()
             .flex_1()

@@ -25,17 +25,23 @@ view, time and tokens on the task, the hover card. See "What is built".
 - Left rail cells are square and as wide as the rail; the active one has the panel's
   background, so it reads as joined to the panel.
 
-## One verb
+## Selecting is not acting
 
-There is no Show, Open or Start. A click on a task, or ↵ on it, always does something a
-person can see:
+A click on a task, its rail cell or its tab, or ↵ on its row, shows its conversation and
+nothing else: no agent starts or is gone on with, nothing is sent, the transcript does not
+change (0.1.0 started one on each click: the prompt and "The agent ended" again each time).
+Starting is its own act, the user's only (`TalkStart`):
 
-| The task | A click or ↵ does |
-|---|---|
-| Never started | Starts its agent; the conversation opens with the keyboard |
-| Has a session, no live terminal | Goes on with that session; the conversation opens |
-| Its agent runs | The conversation opens with the keyboard |
-| `@agent` is a saved agent | The conversation opens and says a saved agent cannot be started yet |
+| The task | A click shows | Then |
+|---|---|---|
+| Never started | the conversation, Not running | Start agent: its task is sent once |
+| Has a session, no live terminal | the conversation, ended | Resume session: gone on with, nothing sent again. A session never written (`SessionMissing`) starts afresh with its prompt once |
+| Its agent runs | the conversation, with the keyboard | |
+| `@agent` is a saved agent | the conversation; it says a saved agent cannot be started yet | |
+
+↵ in the new-task box ("add and start") files the task and starts it; Adopt goes on with its
+session; Take over on a watched session is `TalkStart` too. The property test checks that no
+selection, from any origin, makes a start or changes a transcript.
 
 The tab on show does not change. The header offers `Go to its tabs` (⌘↵); a task with no tab
 is offered `Claim this tab` (the tab on show is no task's) or `New tab`. See "Tasks and tabs".

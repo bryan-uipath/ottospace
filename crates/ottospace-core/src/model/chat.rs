@@ -33,6 +33,8 @@ pub struct Chat {
     pub deny: bool,
     /// Esc was pressed once while a turn ran: a second stops the turn.
     pub armed: bool,
+    /// A message ↵ sent while its agent was not running: sent once the agent it started has.
+    pub queued: Option<String>,
 }
 
 impl Chat {
@@ -43,7 +45,15 @@ impl Chat {
 
     fn new(subject: Subject) -> Self {
         let (transcript, draft) = (Transcript::default(), Field::lines(MAX_DRAFT));
-        Self { subject, transcript, draft, deny: false, armed: false }
+        Self { subject, transcript, draft, deny: false, armed: false, queued: None }
+    }
+}
+
+/// A message that waited on a start back in the composer, unless the user wrote another since.
+fn unqueue(chat: &mut Chat) {
+    if let Some(text) = chat.queued.take().filter(|_| chat.draft.text().is_empty()) {
+        chat.draft = Field::lines(MAX_DRAFT);
+        chat.draft.apply(crate::edit::Edit::Paste(text));
     }
 }
 
@@ -107,19 +117,40 @@ impl Model {
         self.chat_mut(&subject).filter(|chat| chat.transcript.live)
     }
 
+    /// The shown native conversation whose composer takes a message: its agent runs, or it
+    /// ended and ↵ can go on with it (`talk_resumes`). Not a watched one.
+    pub fn shown_draft_chat(&self) -> Option<&Chat> {
+        let talk = self.talk.as_ref().filter(|talk| talk.open)?;
+        let chat = self.chat(&talk.task)?;
+        let native = self.talk_view(&talk.task) == View::Native;
+        (chat.transcript.live || (native && !chat.transcript.watched && self.talk_resumes().is_some())).then_some(chat)
+    }
+
+    fn shown_draft_chat_mut(&mut self) -> Option<&mut Chat> {
+        let subject = self.shown_draft_chat()?.subject.clone();
+        self.chat_mut(&subject)
+    }
+
+    /// True if the keyboard may go into the conversation: its agent runs, or its native
+    /// composer can go on with it.
+    pub(super) fn talk_writable(&self, subject: &Subject) -> bool {
+        let shown = self.talk.as_ref().is_some_and(|talk| talk.open && talk.task == *subject);
+        self.talk_live(subject) || (shown && self.shown_draft_chat().is_some())
+    }
+
     /// The composer takes keys: the shown native conversation has the keyboard, and no card
     /// waits (or the user writes a Deny's message).
     pub fn talk_typing(&self) -> bool {
         let keys = self.talk.as_ref().is_some_and(|talk| talk.keys);
-        keys && self.shown_chat().is_some_and(|chat| chat.transcript.cards.is_empty() || chat.deny)
+        keys && self.shown_draft_chat().is_some_and(|chat| chat.transcript.cards.is_empty() || chat.deny)
     }
 
     pub(super) fn talk_draft(&self) -> Option<&Field> {
-        self.shown_chat().map(|chat| &chat.draft)
+        self.shown_draft_chat().map(|chat| &chat.draft)
     }
 
     pub(super) fn talk_draft_mut(&mut self) -> Option<&mut Field> {
-        self.shown_chat_mut().map(|chat| &mut chat.draft)
+        self.shown_draft_chat_mut().map(|chat| &mut chat.draft)
     }
 
     /// The runner a conversation's agent is or would be: its session's, else its `@agent`'s.
@@ -160,9 +191,14 @@ impl Model {
     }
 
     /// An agent started: drawn natively, its conversation gets a live transcript (kept from
-    /// before, if it had one). `resumed`: its session was gone on with.
-    pub(super) fn chat_started(&mut self, subject: &Subject, resumed: bool) {
+    /// before, if it had one), and the message that waited on it is sent. `resumed`: its
+    /// session was gone on with.
+    pub(super) fn chat_started(&mut self, subject: &Subject, resumed: bool, effects: &mut Vec<Effect>) {
         if self.talk_view(subject) != View::Native {
+            // In a terminal now: a message that waited is not typed into its TUI; it goes back.
+            if let Some(chat) = self.chat_mut(subject) {
+                unqueue(chat);
+            }
             return;
         }
         if self.chat(subject).is_none() {
@@ -183,6 +219,10 @@ impl Model {
             if let Some(title) = title.filter(|_| !resumed) {
                 chat.transcript.send(&agents::prompt(&title, None), now);
             }
+            if let Some(text) = chat.queued.take() {
+                chat.transcript.send(&text, now);
+                effects.push(Effect::AgentSend { task: subject.clone(), text });
+            }
         }
     }
 
@@ -192,7 +232,7 @@ impl Model {
         if let Some(chat) = self.chat_mut(subject)
             && chat.transcript.live
         {
-            chat.transcript.fold(crate::transcript::Event::Exited { code: None }, 0);
+            chat.transcript.fold(crate::transcript::Event::Exited { code: None, signal: None, details: false }, 0);
         }
         if let Some(chat) = self.chat_mut(subject) {
             (chat.deny, chat.armed) = (false, false);
@@ -278,8 +318,17 @@ impl Model {
         }
     }
 
-    /// The conversations gone with their tasks take their transcripts with them.
+    /// The conversations gone with their tasks take their transcripts with them. A message that
+    /// waited on a start that did not come (it failed, was stopped, or its session was busy when
+    /// read) goes back to its composer.
     pub(super) fn settle_chats(&mut self) {
+        let waiting = self.chats.iter().filter(|c| c.queued.is_some() && !self.talk_live(&c.subject));
+        let waiting: Vec<Subject> = waiting.map(|c| c.subject.clone()).collect();
+        for subject in waiting {
+            if let Some(chat) = self.chat_mut(&subject) {
+                unqueue(chat);
+            }
+        }
         let tasks = &self.tasks;
         let gone = |subject: &Subject| subject.task().is_some_and(|id| tasks.get(id).is_none());
         self.chats.retain(|chat| !gone(&chat.subject));
@@ -346,6 +395,17 @@ impl Model {
                 if let Some(ticket) = front {
                     self.chat_act(Action::TalkAnswer { allow: false, ticket }, effects)
                 }
+            }
+            // ↵ in an ended conversation: its agent goes on (or starts), then gets the message.
+            Action::TalkSend if self.shown_chat().is_none() => {
+                let Some(chat) = self.shown_draft_chat_mut() else { return };
+                let text = chat.draft.text().to_string();
+                if text.trim().is_empty() || chat.queued.is_some() {
+                    return;
+                }
+                (chat.queued, chat.draft) = (Some(text), Field::lines(MAX_DRAFT));
+                let subject = chat.subject.clone();
+                self.talk_to(subject, true, effects);
             }
             Action::TalkSend => {
                 let now = self.now;
@@ -436,6 +496,7 @@ impl Model {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::tests::started;
     use crate::model::{Action, Effect, Model, Origin};
     use crate::talk::Subject;
     use crate::tasks::State;
@@ -449,12 +510,14 @@ mod tests {
 
     fn two_live() -> Model {
         let mut m = Model::default();
+        assert_eq!(m.conversation_view, View::Terminal, "terminal until a real-CLI check passes");
+        m.update(Action::SetAgents { claude: vec![], codex: vec![], default: None, shows: View::Native });
         for title in ["fix login", "write docs"] {
             add(&mut m, title);
         }
         let ids: Vec<u32> = m.tasks.list.iter().map(|task| task.id).collect();
         for id in ids.iter().rev() {
-            m.update(Action::TaskTalk { id: *id });
+            started(&mut m, Action::TaskTalk { id: *id });
             let started = Action::AgentStarted { task: Subject::Task(*id), session: None, at: 1 };
             m.update(started.sent_by(Origin::System));
         }
@@ -646,6 +709,131 @@ mod tests {
         assert!(m.chat(&one).is_some_and(|chat| !chat.deny), "the message was for the withdrawn card");
         assert_eq!(m.update(Action::TalkAnswer { allow: true, ticket: 1 }), []);
         assert_eq!(m.chat(&one).map(|chat| chat.transcript.cards.len()), Some(1));
+    }
+
+    /// The bug of 0.1.0: "plan my week ~/notes folder" was filed as "plan my week folder", and
+    /// the agent was asked that alone. The `/path` stays in the title it is asked (#131).
+    #[test]
+    fn a_path_the_line_names_is_in_what_the_agent_is_asked() {
+        let mut m = Model::default();
+        m.update(Action::SetAgents { claude: vec![], codex: vec![], default: None, shows: View::Native });
+        let found = crate::compose::PathFound { typed: "~/notes".into(), resolved: "/Users/me/notes".into() };
+        let known = crate::compose::Known { paths: vec![found], ..Default::default() };
+        let line = "plan my week ~/notes folder".to_string();
+        m.update(Action::TaskFromLine { line, known, open: false });
+        let task = m.tasks.list[0].id;
+        assert_eq!(m.tasks.list[0].title, "plan my week ~/notes folder");
+        let effects = started(&mut m, Action::TaskTalk { id: task });
+        let Some(Effect::StartAgent { start: crate::agents::Start::New(launch), .. }) = effects.first() else {
+            panic!("{effects:?}")
+        };
+        assert_eq!(launch.title, "plan my week ~/notes folder");
+        m.update(Action::AgentStarted { task: Subject::Task(task), session: None, at: 1 }.sent_by(Origin::System));
+        let shown = m.chat(&Subject::Task(task)).and_then(|chat| chat.transcript.items().next().cloned());
+        let asked = shown.and_then(|item| match item.entry {
+            crate::transcript::Entry::User { text } => Some(text.text().to_string()),
+            _ => None,
+        });
+        assert_eq!(asked.as_deref(), Some("Task: plan my week ~/notes folder"));
+    }
+
+    /// The bug of 0.1.0: each click on an ended task started it again, its prompt and "ended"
+    /// added each time. A click shows it; Resume session (`TalkStart`) goes on with it once: a
+    /// session never written starts afresh with its prompt, once; one written is resumed with none.
+    #[test]
+    fn selecting_an_ended_conversation_only_shows_it_and_resume_is_explicit() {
+        let mut m = two_live();
+        let one = first(&m);
+        let id = one.task().unwrap_or_default();
+        let link = crate::sessions::Link {
+            runner: "claude".into(),
+            id: "8f14e45f-ceea-467f-a8d3-0242ac130003".into(),
+            state: None,
+        };
+        m.tasks.link(id, link.clone());
+        events(&mut m, &one, vec![Event::Exited { code: Some(0), signal: None, details: false }]);
+        m.update(Action::SessionMissing { task: id, id: link.id.clone() }.sent_by(Origin::System));
+        m.update(Action::AgentExited { task: one.clone() }.sent_by(Origin::System));
+        let entries = |m: &Model| m.chat(&one).map(|chat| chat.transcript.items().len());
+        let before = entries(&m);
+        for _ in 0..3 {
+            assert_eq!(m.update(Action::TaskTalk { id }), []);
+            assert_eq!(m.update(Action::TalkPick { id: second(&m) }), []);
+            assert_eq!(m.update(Action::TalkPick { id: one.clone() }), []);
+        }
+        assert_eq!((entries(&m), m.agent_runs(&one), m.talk_resumes()), (before, false, Some(false)));
+        // Never written: a new session, its prompt once.
+        let effects = m.update(Action::TalkStart);
+        assert!(
+            matches!(&effects[..], [Effect::StartAgent { start: crate::agents::Start::New(_), .. }]),
+            "{effects:?}"
+        );
+        assert_eq!(m.update(Action::TalkStart.sent_by(Origin::Socket)), []);
+        m.update(Action::AgentStarted { task: one.clone(), session: None, at: 2 }.sent_by(Origin::System));
+        assert_eq!(entries(&m), before.map(|n| n + 1), "the prompt, once");
+        // Written: resumed, nothing sent again.
+        let link_id = link.id.clone();
+        m.tasks.link(id, link);
+        events(&mut m, &one, vec![Event::Exited { code: Some(0), signal: None, details: false }]);
+        m.update(Action::AgentExited { task: one.clone() }.sent_by(Origin::System));
+        assert_eq!(m.talk_resumes(), Some(true));
+        // Not listed: where it started is read first, then it is gone on with.
+        assert!(matches!(&m.update(Action::TalkStart)[..], [Effect::ReadSession { .. }]));
+        let read = Action::SessionRead { runner: "claude".into(), id: link_id.clone(), found: None };
+        let effects = m.update(read.sent_by(Origin::System));
+        assert!(matches!(&effects[..], [Effect::StartAgent { start: crate::agents::Start::Resume { .. }, .. }]));
+        let shown = entries(&m);
+        m.update(Action::AgentStarted { task: one.clone(), session: None, at: 3 }.sent_by(Origin::System));
+        let users = m
+            .chat(&one)
+            .map(|c| c.transcript.items().filter(|i| matches!(i.entry, crate::transcript::Entry::User { .. })).count());
+        assert_eq!((entries(&m), users), (shown.map(|n| n + 1), Some(2)), "a notice that it resumed, no prompt");
+    }
+
+    /// The bug of 0.1.0: "say hello" after the agent ended went nowhere (the composer took no
+    /// keys). Now ↵ goes on with the session and sends the message once it runs; a start that
+    /// fails gives the message back; only the user's ↵.
+    #[test]
+    fn enter_in_an_ended_conversation_resumes_and_sends() {
+        let mut m = two_live();
+        let one = first(&m);
+        let id = one.task().unwrap_or_default();
+        let link = crate::sessions::Link {
+            runner: "claude".into(),
+            id: "8f14e45f-ceea-467f-a8d3-0242ac130003".into(),
+            state: None,
+        };
+        m.tasks.link(id, link);
+        m.update(Action::AgentExited { task: one.clone() }.sent_by(Origin::System));
+        m.update(Action::TalkKeys { on: true });
+        assert!(m.talk_typing() && m.field().is_some_and(|(of, _)| of == "talk"), "the composer takes keys");
+        typed(&mut m, "say hello");
+        assert_eq!(m.update(Action::TalkSend.sent_by(Origin::Socket)), []);
+        assert!(matches!(&m.update(Action::TalkSend)[..], [Effect::ReadSession { .. }]));
+        let read = Action::SessionRead {
+            runner: "claude".into(),
+            id: "8f14e45f-ceea-467f-a8d3-0242ac130003".into(),
+            found: None,
+        };
+        assert!(matches!(&m.update(read.sent_by(Origin::System))[..], [Effect::StartAgent { .. }]));
+        // A start that failed: the words come back.
+        m.update(Action::AgentExited { task: one.clone() }.sent_by(Origin::System));
+        assert_eq!(m.chat(&one).map(|chat| chat.draft.text()), Some("say hello"));
+        // The same when its read finds it at work elsewhere, or Stop comes first.
+        m.update(Action::TalkSend);
+        m.update(Action::TaskStop { id: one.clone() });
+        assert_eq!(m.chat(&one).map(|chat| (chat.draft.text(), chat.queued.is_some())), Some(("say hello", false)));
+        // Once it runs, the message goes.
+        m.update(Action::TalkSend);
+        let read = Action::SessionRead {
+            runner: "claude".into(),
+            id: "8f14e45f-ceea-467f-a8d3-0242ac130003".into(),
+            found: None,
+        };
+        m.update(read.sent_by(Origin::System));
+        let sent = m.update(Action::AgentStarted { task: one.clone(), session: None, at: 3 }.sent_by(Origin::System));
+        assert_eq!(sent, [Effect::AgentSend { task: one.clone(), text: "say hello".into() }]);
+        assert!(m.chat(&one).is_some_and(|chat| chat.draft.text().is_empty() && chat.transcript.turn.is_some()));
     }
 
     /// Stop while a switch waits for the process to end: nothing starts after.

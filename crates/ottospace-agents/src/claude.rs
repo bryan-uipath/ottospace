@@ -87,6 +87,8 @@ pub struct Claude {
     announced: bool,
     /// Our own control requests are numbered.
     next: u64,
+    /// The error code an assistant message of this turn carried: a failed `result` names it.
+    error: Option<String>,
 }
 
 impl Claude {
@@ -113,7 +115,7 @@ impl Claude {
                 Some("api_retry") => {
                     emit.push(Event::Error { kind: code(&record["error"], "api_error"), retrying: true })
                 }
-                other => emit.push(Event::Unknown { kind: format!("system.{}", kind_of(other)) }),
+                other => emit.push(unread(record, format!("system.{}", kind_of(other)))),
             },
             // Raw API stream events. Only text deltas are read: the whole message follows.
             Some("stream_event") => {
@@ -124,7 +126,11 @@ impl Claude {
                     emit.push(Event::TextDelta { text: Untrusted::new(text, MAX_TEXT) });
                 }
             }
-            Some("assistant") => assistant(record, main, emit),
+            Some("assistant") => {
+                if let Some(kind) = assistant(record, main, emit) {
+                    self.error = Some(kind);
+                }
+            }
             Some("user") => {
                 for block in record["message"]["content"].as_array().into_iter().flatten() {
                     if block["type"] == "tool_result"
@@ -146,13 +152,21 @@ impl Claude {
                 // one that arrives as the turn ends leaves it completed.
                 let aborted = record["terminal_reason"].as_str().is_some_and(|reason| reason.starts_with("aborted"));
                 let interrupted = std::mem::take(&mut self.interrupting) && record["subtype"] != "success";
+                let error = self.error.take();
+                let subtype = record["subtype"].as_str().unwrap_or("");
                 let outcome = if aborted || interrupted {
                     Outcome::Interrupted
-                } else if record["subtype"] == "success" && record["is_error"] != true {
+                } else if subtype == "success" && record["is_error"] != true {
                     Outcome::Completed
+                } else if FAILURES.contains(&subtype) {
+                    Outcome::Failed { kind: subtype.to_string() }
+                } else if subtype == "success" {
+                    // `is_error` on a "success": the CLI's own failure (an API key, say), named by
+                    // the assistant message's `error` if it had one.
+                    Outcome::Failed { kind: error.unwrap_or_else(|| "error".into()) }
                 } else {
-                    let subtype = record["subtype"].as_str().unwrap_or("");
-                    Outcome::Failed { kind: station::code(subtype, FAILURES, "error") }
+                    // A subtype no table has: its name, if it is one, so it is never silent.
+                    Outcome::Failed { kind: kind_of(Some(subtype)) }
                 };
                 emit.push(Event::TurnFinished { outcome });
             }
@@ -164,7 +178,7 @@ impl Claude {
             }
             // The answer to our interrupt.
             Some("control_response") => {}
-            other => emit.push(Event::Unknown { kind: kind_of(other) }),
+            other => emit.push(unread(record, kind_of(other))),
         }
     }
 
@@ -230,7 +244,18 @@ fn payload(tool: &str, input: &Value, blocked: &Value) -> (Payload, String) {
     (payload, claim)
 }
 
-fn assistant(record: &Value, main: bool, emit: &mut Vec<Event>) {
+/// A record no rule reads: an `Error` if it looks like one (`is_error`, an `error` field, or
+/// "error" in its kind), so a failure is never silent; else `Unknown`.
+fn unread(record: &Value, kind: String) -> Event {
+    let erring = record["is_error"] == true || !record["error"].is_null() || kind.contains("error");
+    match erring {
+        true => Event::Error { kind, retrying: false },
+        false => Event::Unknown { kind },
+    }
+}
+
+/// An assistant message's events. Returns its `error` code, if it had one.
+fn assistant(record: &Value, main: bool, emit: &mut Vec<Event>) -> Option<String> {
     let message = &record["message"];
     let parent = opaque(&record["parent_tool_use_id"]);
     for block in message["content"].as_array().into_iter().flatten() {
@@ -256,8 +281,9 @@ fn assistant(record: &Value, main: bool, emit: &mut Vec<Event>) {
             _ => {}
         }
     }
-    if let Some(error) = record.get("error").filter(|error| !error.is_null()) {
-        emit.push(Event::Error { kind: code(error, "api_error"), retrying: false });
+    let error = record.get("error").filter(|error| !error.is_null()).map(|error| code(error, "api_error"));
+    if let Some(kind) = &error {
+        emit.push(Event::Error { kind: kind.clone(), retrying: false });
     }
     let usage = &message["usage"];
     let parts = ["input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"];
@@ -265,6 +291,7 @@ fn assistant(record: &Value, main: bool, emit: &mut Vec<Event>) {
         let context = parts.iter().filter_map(|part| usage[*part].as_u64()).fold(0u64, u64::saturating_add);
         emit.push(Event::Usage { context: Some(context), window: None, cost_micro_usd: None });
     }
+    error
 }
 
 /// A control request's id: a non-empty string.
@@ -560,6 +587,70 @@ mod tests {
         assert!(matches!(&out.events[..], [Event::AutoDenied { reason: UNREADABLE, .. }]), "{out:?}");
         let reply: Value = serde_json::from_str(&out.replies[0]).unwrap();
         assert_eq!(reply["response"]["response"]["behavior"], "deny");
+    }
+
+    /// Each line of a fixture file read by one session, `_fixture` headers left out.
+    fn replay(fixture: &str) -> Vec<Event> {
+        let mut claude = Claude::new();
+        claude.write(Input::Send { text: "go".into(), images: vec![] }).unwrap();
+        fixture
+            .lines()
+            .filter(|line| !line.contains(r#""_fixture""#))
+            .flat_map(|line| claude.read(line).events)
+            .collect()
+    }
+
+    fn loud(events: &[Event]) -> Vec<&Event> {
+        events
+            .iter()
+            .filter(|e| !matches!(e, Event::Unknown { kind } if crate::QUIET.contains(&kind.as_str())))
+            .collect()
+    }
+
+    /// The recorded 2.1.325 turn: hooks and status are quiet; the reply, once, as a delta then
+    /// whole (the `assistant` comes before `content_block_stop`); the turn completes.
+    #[test]
+    fn a_recorded_turn_reads_whole() {
+        let events = replay(include_str!("../tests/fixtures/claude/real-2.1.325-turn.jsonl"));
+        let shown = loud(&events);
+        let kinds: Vec<String> =
+            shown.iter().map(|e| format!("{e:?}").split([' ', '{', '(']).next().unwrap_or("").to_string()).collect();
+        assert_eq!(
+            kinds,
+            ["Started", "TurnStarted", "TextDelta", "Text", "Usage", "Usage", "TurnFinished"],
+            "{shown:#?}"
+        );
+        let text: Vec<&str> =
+            shown.iter().filter_map(|e| if let Event::Text { text } = e { Some(text.text()) } else { None }).collect();
+        assert_eq!(text, ["ok"]);
+        assert_eq!(events.last(), Some(&Event::TurnFinished { outcome: Outcome::Completed }));
+        // A stdin closed before any message: hook lines alone, all quiet.
+        assert!(loud(&replay(include_str!("../tests/fixtures/claude/real-2.1.325-no-reply.jsonl"))).is_empty());
+    }
+
+    /// The CLI's own failures are never silent: an API key's failure names its code, a retry and
+    /// a failed turn say so, and a result or record no table has still says its kind.
+    #[test]
+    fn every_error_shape_is_shown() {
+        let events = replay(include_str!("../tests/fixtures/claude/synthetic-auth-failure.jsonl"));
+        let failed = Outcome::Failed { kind: "authentication_failed".into() };
+        assert!(
+            events.contains(&Event::Error { kind: "authentication_failed".into(), retrying: false }),
+            "{events:#?}"
+        );
+        assert_eq!(events.last(), Some(&Event::TurnFinished { outcome: failed }));
+        let events = replay(include_str!("../tests/fixtures/claude/synthetic-error-result.jsonl"));
+        let outcomes: Vec<&Event> = events.iter().filter(|e| !matches!(e, Event::Usage { .. })).collect();
+        let failed = |kind: &str| Event::TurnFinished { outcome: Outcome::Failed { kind: kind.into() } };
+        assert_eq!(
+            outcomes,
+            [
+                &Event::Error { kind: "overloaded".into(), retrying: true },
+                &failed("error_during_execution"),
+                &failed("error_made_up_kind"),
+                &Event::Error { kind: "made_up_error".into(), retrying: false },
+            ]
+        );
     }
 
     #[test]
