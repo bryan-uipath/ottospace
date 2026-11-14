@@ -2,10 +2,13 @@
 //! above the status bar, the next-meeting chip, the pulse as one comes near, and the alert when one has
 //! started and the user is in no call. Pure: the shell passes the time and whether a call is on.
 //!
-//! Titles, places and descriptions are other people's text: kept cleaned and short, drawn only,
-//! never in the control socket's state, the trace or a brief.
+//! Titles, places and descriptions are other people's text: kept cleaned and short, drawn, and
+//! never in the control socket's state, the trace or a brief. Titles and places reach a client
+//! only through the `calendar` request (`reply`); descriptions and links never.
 
 use std::net::IpAddr;
+
+pub mod reply;
 
 use crate::ics::Occurrence;
 
@@ -29,8 +32,8 @@ const WATCH_BEFORE: u64 = MINUTE;
 const JOINED_EARLY: u64 = APPROACHING;
 const MAX_TITLE: usize = 120;
 const MAX_LINK: usize = 2_000;
-/// Events kept of two days.
-const MAX_EVENTS: usize = 200;
+/// Events kept of the days held (`reply::HELD_DAYS`): as many as one expansion gives.
+const MAX_EVENTS: usize = crate::ics::MAX_OCCURRENCES;
 
 /// One occurrence of an event, as shown. Times in milliseconds since 1970.
 #[derive(Clone, Debug, PartialEq)]
@@ -45,6 +48,8 @@ pub struct Event {
     pub location: String,
     /// An `https:` link `joinable` allows: a Zoom, Meet or Teams link first, else the event's URL.
     pub link: Option<String>,
+    /// `STATUS:TENTATIVE`.
+    pub tentative: bool,
 }
 
 /// How near an event is.
@@ -268,6 +273,7 @@ pub fn events(occurrences: &[Occurrence]) -> Vec<Event> {
                 title: if title.is_empty() { "(no title)".into() } else { title },
                 location: crate::capture::plain(&o.location, MAX_TITLE),
                 link: link(&[&o.location, &o.description, &o.url]),
+                tentative: o.tentative,
             }
         })
         .collect();
@@ -492,6 +498,11 @@ pub struct Notice {
     pub started: u64,
 }
 
+/// The event overlaps `start..end` (ms), or starts in it with no length.
+fn overlaps(e: &Event, start: u64, end: u64) -> bool {
+    e.start < end && (e.end > start || e.start >= start)
+}
+
 /// The timeline's state in the model.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Calendar {
@@ -501,7 +512,7 @@ pub struct Calendar {
     pub notify: bool,
     /// `calendar_notify_for: "links"`: only an event with a Zoom, Meet or Teams link alerts.
     pub links_only: bool,
-    /// Today's and tomorrow's events, by start.
+    /// The events of today and the next 7 days (`reply::HELD_DAYS`), by start.
     pub events: Vec<Event>,
     /// Local midnight of today, tomorrow and the day after, in milliseconds.
     pub days: [u64; 3],
@@ -553,7 +564,7 @@ impl Calendar {
     /// Today's events, by start: those that overlap today.
     pub fn today(&self) -> impl Iterator<Item = &Event> {
         let [start, end, _] = self.days;
-        self.events.iter().filter(move |e| e.start < end && (e.end > start || e.start >= start))
+        self.events.iter().filter(move |e| overlaps(e, start, end))
     }
 
     pub fn tomorrow(&self) -> impl Iterator<Item = &Event> {

@@ -691,9 +691,17 @@ the way.
   and a filled amber badge while the banner is up. In list mode (⌘⌃E) `j`/`k` move and ↵ joins
   (or folds "Tomorrow"). The open Calendar is not kept in the restored layout: a build without
   the section could not read the file.
-- **Privacy**: titles and places are other people's text. They are shown, never sent anywhere,
-  never in the trace or a task's brief, and not in the control socket's state, which has only
-  counts, times and stages (`calendar`). An agent cannot read your calendar.
+- **Agents**: the `calendar` request gives an agent the meetings of a day, or of up to 7 from
+  it (`{"cmd":"calendar","day":"tomorrow","days":2}`; today and the next 7 days are held): start
+  and end (RFC 3339 with your offset), all day or not, title, place, whether it has a Zoom, Meet
+  or Teams link, tentative; busy time (meetings merged) and free time (the gaps in each day's
+  `calendar_workday`); when the feed was read and whether you are in a call. It reads only what the app holds and never makes it fetch.
+- **Privacy**: titles and places are other people's text. They are shown, and given to an agent
+  only by the `calendar` request, with links taken out; never sent anywhere, never in the trace
+  or a task's brief, and not in the control socket's state (every reply carries it), which has
+  only counts, times and stages. No request gives a meeting's link, description or attendees,
+  the feed's address or `calendar_email`. The agent's guide says to treat titles as data, never
+  as instructions.
 
 ## Terminal panes
 
@@ -877,6 +885,7 @@ ottospace ctl '{"cmd":"section","section":"apps"}'
 ottospace ctl '{"cmd":"mark_add","pane":3,"name":"notes","key":"n"}'   # a way back to pane 3
 ottospace ctl '{"cmd":"mark_go","name":"notes"}'     # go to it, or open it again
 ottospace ctl '{"cmd":"task_brief","id":7}'          # a task's brief: the ask, and what was captured for it
+ottospace ctl '{"cmd":"calendar","days":2}'          # today's and tomorrow's meetings, busy and free time
 ottospace ctl '{"cmd":"sneak"}'                      # labels on ottospace's controls: `sneak.targets`
 ottospace ctl '{"cmd":"key","keys":"a"}'             # type a label: that control acts as if clicked
 ottospace ctl '{"cmd":"state"}'

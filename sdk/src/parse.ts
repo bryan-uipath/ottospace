@@ -4,6 +4,9 @@
 
 import type {
   AppEntry,
+  CalendarReply,
+  Meeting,
+  TimeSpan,
   NativeChat,
   MeetingStage,
   AxNode,
@@ -1487,6 +1490,44 @@ export function axTreeReply(value: unknown): AxTreeReply {
       count: num(tree.count, "tree.count"),
       truncated: truncated(tree.truncated, "tree.truncated"),
     },
+  };
+}
+
+function timeSpan(value: unknown, at: string): TimeSpan {
+  const o = fields(value, at);
+  return { start: str(o.start, `${at}.start`), end: str(o.end, `${at}.end`) };
+}
+
+function meeting(value: unknown, at: string): Meeting {
+  const o = fields(value, at);
+  if (o.status !== undefined && o.status !== "tentative") throw wrong(`${at}.status`, "tentative", o.status);
+  return {
+    ...timeSpan(value, at),
+    all_day: bool(o.all_day, `${at}.all_day`),
+    title: str(o.title, `${at}.title`),
+    location: orNull(str)(o.location, `${at}.location`),
+    has_call_link: bool(o.has_call_link, `${at}.has_call_link`),
+    ...(o.status === "tentative" ? { status: o.status } : {}),
+  };
+}
+
+export function calendarReply(value: unknown): CalendarReply {
+  const o = fields(value, "reply");
+  if (bool(o.configured, "configured") === false) return { ok: true, configured: false };
+  return {
+    ok: true,
+    configured: true,
+    updated: orNull(str)(o.updated, "updated"),
+    stale: bool(o.stale, "stale"),
+    in_call: orNull(bool)(o.in_call, "in_call"),
+    from: str(o.from, "from"),
+    to: str(o.to, "to"),
+    meetings: list(meeting)(o.meetings, "meetings"),
+    more: num(o.more, "more"),
+    known_until: orNull(str)(o.known_until, "known_until"),
+    workday: str(o.workday, "workday"),
+    busy: list(timeSpan)(o.busy, "busy"),
+    free: list(timeSpan)(o.free, "free"),
   };
 }
 

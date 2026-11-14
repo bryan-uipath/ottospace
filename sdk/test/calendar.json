@@ -1,0 +1,40 @@
+{
+  "configured": true,
+  "updated": "2026-11-16T00:00:00-08:00",
+  "stale": false,
+  "in_call": false,
+  "from": "2026-11-16T00:00:00-08:00",
+  "to": "2026-11-17T00:00:00-08:00",
+  "meetings": [
+    {
+      "start": "2026-11-16T00:00:00-08:00",
+      "end": "2026-11-17T00:00:00-08:00",
+      "all_day": true,
+      "title": "Offsite week",
+      "location": null,
+      "has_call_link": false
+    },
+    {
+      "start": "2026-11-16T09:00:00-08:00",
+      "end": "2026-11-16T09:30:00-08:00",
+      "all_day": false,
+      "title": "Design review",
+      "location": "Room 4",
+      "has_call_link": true
+    },
+    {
+      "start": "2026-11-16T09:30:00-08:00",
+      "end": "2026-11-16T10:30:00-08:00",
+      "all_day": false,
+      "title": "Planning",
+      "location": null,
+      "has_call_link": false,
+      "status": "tentative"
+    }
+  ],
+  "more": 0,
+  "known_until": null,
+  "workday": "09:00-17:00",
+  "busy": [{ "start": "2026-11-16T09:00:00-08:00", "end": "2026-11-16T10:30:00-08:00" }],
+  "free": [{ "start": "2026-11-16T10:30:00-08:00", "end": "2026-11-16T17:00:00-08:00" }]
+}
