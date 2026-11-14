@@ -2377,6 +2377,10 @@ pub struct Model {
     /// Conversations whose agent was stopped for a switch of view: gone on with once it is gone.
     #[serde(skip)]
     switching: Vec<Subject>,
+    /// Conversations whose agent was asked to stop and has not ended yet: nothing starts on
+    /// its session until its process is gone (the shell says `AgentExited` only then).
+    #[serde(skip)]
+    ending: Vec<Subject>,
     /// The action being run is the user's own. False between actions.
     #[serde(skip)]
     by_user: bool,
@@ -2483,6 +2487,7 @@ impl Default for Model {
             views: Vec::new(),
             conversation_view: crate::settings::DEFAULT_VIEW,
             switching: Vec::new(),
+            ending: Vec::new(),
             by_user: false,
             next_id: 0,
             last_tab: Vec::new(),
@@ -4386,6 +4391,7 @@ impl Model {
                 self.agents.retain(|id| *id != subject);
                 self.starting.retain(|(id, _)| *id != subject);
                 self.awaiting.retain(|id| *id != subject);
+                self.ending.retain(|id| *id != subject);
                 let Some(task) = subject.task() else {
                     return if switched {
                         self.chat_restart(subject, effects)
@@ -4433,6 +4439,13 @@ impl Model {
                 self.awaiting.retain(|subject| *subject != id);
                 self.switching.retain(|subject| *subject != id);
                 if self.agent_runs(&id) {
+                    // Its end is the stop asked for, not an error; and it is not over until it exits.
+                    if let Some(chat) = self.chats.iter_mut().find(|chat| chat.subject == id) {
+                        chat.transcript.stopping = true;
+                    }
+                    if !self.ending.contains(&id) {
+                        self.ending.push(id.clone());
+                    }
                     effects.push(Effect::StopAgent { task: id });
                 }
             }
@@ -4890,6 +4903,7 @@ impl Model {
             }
         };
         self.agents.iter_mut().for_each(rename);
+        self.ending.iter_mut().for_each(rename);
         self.opened.iter_mut().for_each(rename);
         self.starting.iter_mut().for_each(|(subject, _)| rename(subject));
         self.talk.iter_mut().for_each(|talk| rename(&mut talk.task));
@@ -4938,6 +4952,7 @@ impl Model {
         self.seeking.retain(|seek| tasks.get(seek.task).is_some_and(|task| task.session.is_none()));
         self.starting.retain(|(id, _)| !gone(id));
         self.awaiting.retain(|id| !gone(id));
+        self.ending.retain(|id| !gone(id));
         self.talk = self.talk.take().filter(|talk| !gone(&talk.task));
         // A picture being drawn on keeps the keyboard, as an app, the list and visual mode do.
         let drawing = self.annotated().is_some();
@@ -6258,6 +6273,11 @@ impl Model {
     /// What the status bar says of `settings.json`: its first problem, or the keys that need a restart.
     pub fn settings_line(&self) -> Option<String> {
         self.settings_file.line()
+    }
+
+    /// How the status bar draws `settings_line`.
+    pub fn settings_level(&self) -> crate::settings::Level {
+        self.settings_file.level()
     }
 
     /// How many problems the last read of `settings.json` found.

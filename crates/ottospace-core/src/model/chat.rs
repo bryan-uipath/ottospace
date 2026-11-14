@@ -49,6 +49,17 @@ impl Chat {
     }
 }
 
+/// The button at the composer's right (`Model::composer_button`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Primary {
+    /// The turn: the session goes on (`TalkInterrupt`).
+    Stop,
+    /// `TalkStart`: go on with its session, or start its task's agent.
+    Resume,
+    Start,
+}
+
 /// A message that waited on a start back in the composer, unless the user wrote another since.
 fn unqueue(chat: &mut Chat) {
     if let Some(text) = chat.queued.take().filter(|_| chat.draft.text().is_empty()) {
@@ -277,6 +288,27 @@ impl Model {
     /// the shell waits for its process to exit before it says so (`AgentExited`).
     pub fn is_switching(&self, subject: &Subject) -> bool {
         self.switching.contains(subject)
+    }
+
+    /// The one button at the right of the shown native conversation's composer: Stop while a
+    /// turn runs, Resume (or Start) once its agent ended and it can be gone on with; none while
+    /// it stops, while it idles, or in a terminal (its header has Stop and its body Start).
+    pub fn composer_button(&self) -> Option<Primary> {
+        let subject = &self.talk.as_ref().filter(|talk| talk.open)?.task;
+        let chat = self.chat(subject).filter(|_| self.talk_view(subject) == View::Native)?;
+        if self.is_ending(subject) || chat.transcript.watched {
+            return None;
+        }
+        if chat.transcript.live {
+            return chat.transcript.turn.is_some().then_some(Primary::Stop);
+        }
+        self.talk_resumes().map(|resumes| if resumes { Primary::Resume } else { Primary::Start })
+    }
+
+    /// True if the conversation's agent was asked to stop and its process has not exited yet:
+    /// no Resume or Start until it has, and the composer says it is stopping.
+    pub fn is_ending(&self, subject: &Subject) -> bool {
+        self.ending.contains(subject)
     }
 
     /// The session to watch: the open drawer's conversation, when its agent does not run here,
@@ -585,6 +617,36 @@ mod tests {
         assert_eq!(m.talk_view(&second(&m)), View::Terminal);
     }
 
+    /// Stop is at the composer while a turn runs. The agent stopped: nothing can be started on
+    /// its session until its process is gone (no Resume, no "cannot"), then Resume is the
+    /// composer's button, and its end is the user's, not an error.
+    #[test]
+    fn a_stopped_agent_is_resumed_only_once_gone_and_its_end_is_no_error() {
+        use super::Primary;
+        let mut m = two_live();
+        let one = first(&m);
+        assert_eq!(m.composer_button(), None, "no turn: no Stop anywhere");
+        typed(&mut m, "go on");
+        m.update(Action::TalkSend);
+        assert_eq!(m.composer_button(), Some(Primary::Stop));
+        // The agent asked to stop: until its process exits, nothing to start and nothing to say.
+        assert_eq!(m.update(Action::TaskStop { id: one.clone() }), [Effect::StopAgent { task: one.clone() }]);
+        assert!(m.is_ending(&one));
+        assert_eq!((m.composer_button(), m.talk_resumes(), m.talk_note()), (None, None, None));
+        m.update(Action::AgentExited { task: one.clone() }.sent_by(Origin::System));
+        assert!(!m.is_ending(&one));
+        let link = m.tasks.get(one.task().unwrap_or_default()).and_then(|task| task.session.clone());
+        let resumes = link.is_some();
+        let primary = if resumes { Primary::Resume } else { Primary::Start };
+        assert_eq!((m.composer_button(), m.talk_note()), (Some(primary), None));
+        let end = m.chat(&one).and_then(|chat| chat.transcript.items().last()).map(|item| item.entry.clone());
+        let by_user = matches!(
+            end,
+            Some(crate::transcript::Entry::Notice(crate::transcript::Notice::Ended { by_user: true, .. }))
+        );
+        assert!(by_user, "{end:?}");
+    }
+
     #[test]
     fn the_composer_sends_once_per_turn_and_only_the_users() {
         let mut m = two_live();
@@ -804,7 +866,14 @@ mod tests {
         let users = m
             .chat(&one)
             .map(|c| c.transcript.items().filter(|i| matches!(i.entry, crate::transcript::Entry::User { .. })).count());
-        assert_eq!((entries(&m), users), (shown.map(|n| n + 1), Some(2)), "a notice that it resumed, no prompt");
+        // Its end gives way to one divider that it resumed, its turns above; no prompt again.
+        assert_eq!((entries(&m), users), (shown, Some(2)), "one divider in place of the end, no prompt");
+        let last = m.chat(&one).and_then(|c| c.transcript.items().last()).map(|i| i.entry.clone());
+        let divider = crate::transcript::Notice::Resumed {
+            here: true,
+            ended: Some(crate::transcript::End { code: Some(0), signal: None, by_user: false }),
+        };
+        assert_eq!(last, Some(crate::transcript::Entry::Notice(divider)));
     }
 
     /// The bug of 0.1.0: "say hello" after the agent ended went nowhere (the composer took no

@@ -237,18 +237,33 @@ pub enum Notice {
         tool: String,
         label: String,
     },
-    /// The session was gone on with: earlier turns are in its file, not here.
-    Resumed,
+    /// The session was gone on with. `here`: its earlier turns are on show above, and this is a
+    /// quiet divider, which takes the place of the end before it (`ended`); else they are in its
+    /// file, not here, and it says so.
+    Resumed {
+        here: bool,
+        ended: Option<End>,
+    },
     /// A message was sent in the terminal that runs the watched session.
     MessageElsewhere,
     /// Its process ended. `replied`: anything came back from it since it started; `details`:
     /// its stderr's end can be shown.
+    /// `by_user`: the user stopped it; no error, a quiet divider.
     Ended {
         code: Option<i32>,
         signal: Option<i32>,
         replied: bool,
         details: bool,
+        by_user: bool,
     },
+}
+
+/// How an agent ended, kept on the divider of the resume that followed: for its hover.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct End {
+    pub code: Option<i32>,
+    pub signal: Option<i32>,
+    pub by_user: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -352,6 +367,8 @@ pub struct Transcript {
     pub replied: bool,
     /// Lines not understood, by kind, in the order first seen: at most `MAX_KINDS` kinds.
     pub unread: Vec<(String, usize)>,
+    /// The user asked its process to stop: its end is theirs, not an error.
+    pub stopping: bool,
 }
 
 /// The most kinds of line not understood kept apart; past it they count under the last.
@@ -411,12 +428,22 @@ impl Transcript {
         self.turn = Some(Turn { since: at, tool: None });
     }
 
-    /// A process for this conversation started (again).
+    /// A process for this conversation started (again). A resume with its earlier turns on show
+    /// is one quiet divider, in place of the end just before it: one conversation, not two.
     pub fn started(&mut self, resumed: bool) {
-        (self.live, self.watched, self.replied) = (true, false, false);
-        if resumed {
-            self.push(Entry::Notice(Notice::Resumed));
+        (self.live, self.watched, self.replied, self.stopping) = (true, false, false, false);
+        if !resumed {
+            return;
         }
+        let ended = match self.items.back().map(|item| &item.entry) {
+            Some(&Entry::Notice(Notice::Ended { code, signal, by_user, .. })) => Some(End { code, signal, by_user }),
+            _ => None,
+        };
+        if ended.is_some() {
+            self.items.pop_back();
+        }
+        let here = self.items.iter().any(|item| !matches!(item.entry, Entry::Notice(_)));
+        self.push(Entry::Notice(Notice::Resumed { here, ended }));
     }
 
     /// Opens the first card's whole payload: Allow is possible from now on.
@@ -532,7 +559,8 @@ impl Transcript {
                 self.settle();
                 self.end_calls();
                 (self.turn, self.cards, self.live) = (None, VecDeque::new(), false);
-                self.push(Entry::Notice(Notice::Ended { code, signal, replied: self.replied, details }));
+                let by_user = std::mem::take(&mut self.stopping);
+                self.push(Entry::Notice(Notice::Ended { code, signal, replied: self.replied, details, by_user }));
             }
             Event::Unknown { kind } => {
                 let seen = self.unread.iter().position(|(of, _)| *of == kind);
@@ -722,6 +750,29 @@ mod tests {
         assert!(!t.live && matches!(t.items().last().map(|i| &i.entry), Some(Entry::Notice(Notice::Ended { .. }))));
     }
 
+    /// The user's stop and the resume after it, with the turns on show: one quiet divider in
+    /// place of the end; "earlier turns are in its file" only when none are on show.
+    #[test]
+    fn a_stop_then_a_resume_is_one_divider_in_one_conversation() {
+        let mut t = Transcript::default();
+        t.started(false);
+        t.send("Task: plan", 1);
+        t.fold(Event::TurnFinished { outcome: Outcome::Completed }, 2);
+        t.stopping = true;
+        t.fold(Event::Exited { code: None, signal: Some(9), details: false }, 3);
+        let stopped = Notice::Ended { code: None, signal: Some(9), replied: true, details: false, by_user: true };
+        assert_eq!(texts(&t).last(), Some(&format!("{stopped:?}")));
+        t.started(true);
+        let end = End { code: None, signal: Some(9), by_user: true };
+        let divider = Notice::Resumed { here: true, ended: Some(end) };
+        assert_eq!(texts(&t)[1..], [format!("{divider:?}")], "the end gives way: one line, not two");
+        assert!(!t.stopping, "a later end is not the user's unless asked again");
+        // A resume of a session not shown before: its turns are in its file, and it says so.
+        let mut fresh = Transcript::default();
+        fresh.started(true);
+        assert_eq!(texts(&fresh), [format!("{:?}", Notice::Resumed { here: false, ended: None })]);
+    }
+
     #[test]
     fn details_are_cleaned_and_tokens_hidden() {
         let stderr = "\u{1b}[31mError:\u{1b}[0m bad key sk-ant-api03-abcdefghijklmnop\nAuthorization: Bearer x\n";
@@ -740,7 +791,7 @@ mod tests {
             t.fold(Event::Unknown { kind: kind.into() }, 2);
         }
         t.fold(Event::Exited { code: Some(0), signal: None, details: true }, 3);
-        let ended = Notice::Ended { code: Some(0), signal: None, replied: false, details: true };
+        let ended = Notice::Ended { code: Some(0), signal: None, replied: false, details: true, by_user: false };
         assert_eq!(texts(&t).last(), Some(&format!("{ended:?}")));
         assert_eq!(t.unread, [("made_up".to_string(), 2), ("system.other".to_string(), 1)]);
         assert_eq!(t.summary().not_understood, 3);
@@ -748,7 +799,7 @@ mod tests {
         t.started(true);
         t.fold(Event::TurnStarted, 4);
         t.fold(Event::Exited { code: None, signal: Some(9), details: false }, 5);
-        let ended = Notice::Ended { code: None, signal: Some(9), replied: true, details: false };
+        let ended = Notice::Ended { code: None, signal: Some(9), replied: true, details: false, by_user: false };
         assert_eq!(texts(&t).last(), Some(&format!("{ended:?}")));
         for n in 0..MAX_KINDS + 3 {
             t.fold(Event::Unknown { kind: format!("k{n}") }, 6);

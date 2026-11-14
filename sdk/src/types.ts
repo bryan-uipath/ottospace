@@ -1019,6 +1019,8 @@ export interface Snapshot {
   cell: [number, number];
   /** The problem the status bar shows. Not an error of this request. */
   notice: string | null;
+  /** How the status bar draws `notice`: `info` (muted) or `error`. */
+  notice_level: "info" | "error" | null;
   /** How many problems the last read of `settings.json` found: the first is in `notice`. */
   settings_errors: number;
   /** Each hosted window's real frame, by pane id. */

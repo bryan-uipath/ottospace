@@ -1253,6 +1253,10 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(t.live || t.turn.is_none(), "{subject:?} has a turn and no agent");
         ensure!(!chat.armed || t.turn.is_some(), "{subject:?} waits for a second Esc with no turn");
     }
+    // A stop asked for is of an agent that runs, until its process is gone.
+    for subject in &m.ending {
+        ensure!(m.agent_runs(subject), "{subject:?} is ending with no agent");
+    }
     let chats: Vec<String> = m.chats.iter().map(|chat| format!("{:?}", chat.subject)).collect();
     ensure!(unique(&chats), "two transcripts for one conversation: {chats:?}");
     // Tabs, their trees and the panes.

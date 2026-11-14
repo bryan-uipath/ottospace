@@ -170,9 +170,9 @@ impl Workspace {
             .ok_or(format!("{dir} is in no listed repository"))
     }
 
-    /// Ends a conversation's agent: dropping its terminal hangs up on it. Returns what the core is told.
-    /// Stopped for a switch of view, it is told only once its process is gone, so the other
-    /// view never starts on a session still held.
+    /// Ends a conversation's agent: its terminal is hung up on, its native process killed. The
+    /// core is told it ended only once its process is gone (`Stopping`), so neither a resume
+    /// nor the other view starts on a session still held.
     pub(crate) fn stop_agent(&mut self, subject: &Subject) -> Vec<Action> {
         // Already ending for a switch: it says it ended once its process has, not before.
         if self.drawer.stopping.iter().any(|(of, _)| of == subject) {
@@ -181,7 +181,7 @@ impl Workspace {
         let missing = self.session_missing(subject);
         let terminal = self.drawer.agents.remove(subject).map(|agent| agent.terminal);
         let native = self.drawer.native.remove(subject);
-        if self.model.is_switching(subject) && (terminal.is_some() || native.is_some()) {
+        if terminal.is_some() || native.is_some() {
             let stopping = crate::conversation::Stopping::new(terminal, native);
             self.drawer.stopping.push((subject.clone(), stopping));
             return missing.into_iter().collect();
@@ -544,7 +544,9 @@ impl Workspace {
             }
             _ => None,
         };
-        let stop = runs.then(|| {
+        // Natively, Stop is the composer's while a turn runs (`composer_button`); in a terminal, here.
+        let terminal = self.model.talk_view(subject) != ottospace_core::transcript::View::Native;
+        let stop = (runs && terminal && !self.model.is_ending(subject)).then(|| {
             let id = subject.clone();
             self.talk_button("talk-stop", "Stop", "End this conversation's agent")
                 .text_color(rgb(theme::ERROR))
@@ -624,7 +626,14 @@ impl Workspace {
                 .into_any_element();
         }
         if self.drawer.stopping.iter().any(|(of, _)| of == subject) {
-            let wait = muted("Ending the other view's process before this one starts…".into());
+            let wait = muted(
+                if self.model.is_switching(subject) {
+                    "Ending the other view's process before this one starts…"
+                } else {
+                    "Stopping…"
+                }
+                .into(),
+            );
             return div().relative().flex_1().child(record).child(wait).into_any_element();
         }
         let Some(agent) = self.drawer.agents.get(subject) else {
