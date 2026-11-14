@@ -1,5 +1,5 @@
 //! Agent sessions found on this machine that no task has adopted: what the Tasks section lists
-//! under "Other sessions" (a Claude Code or Codex started by hand in some terminal). The shell reads
+//! under "Elsewhere" (a Claude Code or Codex started by hand in some terminal). The shell reads
 //! them, off the main thread, and passes them in. Pure.
 //!
 //! An "agent" is a saved definition; a running conversation is a "session".
@@ -17,7 +17,7 @@ use crate::model::PaneId;
 use crate::runner::RunnerId;
 use crate::tasks::State;
 
-/// A day, for the ranges of the Other sessions group.
+/// A day, for the ranges of the Elsewhere group.
 pub const DAY_MS: u64 = 86_400_000;
 
 /// The most sessions listed (after those that are a task's or hidden are left out), the most
@@ -157,7 +157,14 @@ pub struct Row {
     pub model: Option<String>,
 }
 
-/// The Other sessions group, as drawn. No sessions: no group.
+impl Row {
+    /// What its one line names: the session's title, else its repository or worktree.
+    pub fn title(&self) -> &str {
+        self.quoted_title.as_deref().unwrap_or(&self.name)
+    }
+}
+
+/// The Elsewhere group, as drawn. No sessions: no group.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Bar {
     /// Sessions in `range`, and listed in all.
@@ -169,14 +176,14 @@ pub struct Bar {
     pub rows: Vec<Row>,
 }
 
-/// Which sessions the Other sessions group lists, by when each was last active. A session at
-/// work is always in.
+/// Which sessions the Elsewhere group lists, by when each was last active. A session at work is
+/// always in. 7 days unless the settings say otherwise.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Range {
     /// Since the start of the local day.
-    #[default]
     Today,
+    #[default]
     Week,
     Month,
     All,
@@ -184,15 +191,6 @@ pub enum Range {
 
 impl Range {
     pub const EVERY: [Range; 4] = [Range::Today, Range::Week, Range::Month, Range::All];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Range::Today => "Today",
-            Range::Week => "7 days",
-            Range::Month => "30 days",
-            Range::All => "All",
-        }
-    }
 
     /// The earliest last activity in range at `now`. `day`: the start of the local day, which the
     /// shell knows. e.g. 7 days at day 10, noon: from day 3, noon.
@@ -432,6 +430,25 @@ mod tests {
         assert_eq!(follow(true, Some(now), Some(State::Captured), State::Captured, now, 0), Some(State::Running));
         // When the file last changed is not known: never quiet.
         assert_eq!(follow(false, None, Some(State::Running), State::Running, now, QUIET_MS), None);
+    }
+
+    #[test]
+    fn a_row_is_named_by_its_title_else_its_repository() {
+        let (runner, id, name) = ("claude".to_string(), "a".to_string(), "app".to_string());
+        let row = Row {
+            runner,
+            id,
+            name,
+            active: false,
+            doing: None,
+            age: None,
+            pane: None,
+            quoted_title: None,
+            model: None,
+        };
+        assert_eq!(row.title(), "app");
+        assert_eq!(Row { quoted_title: Some("Fix the form".into()), ..row }.title(), "Fix the form");
+        assert_eq!(Range::default(), Range::Week, "7 days unless the settings say otherwise");
     }
 
     #[test]

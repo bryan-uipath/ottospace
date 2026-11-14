@@ -357,7 +357,7 @@ export class Client {
   sessionClick(args: { runner: SessionRunner; id: string }): Promise<Snapshot> {
     return this.snapshot({ cmd: "session_click", ...args });
   }
-  /** Which sessions Other sessions lists, by when each was last active. For this run alone. */
+  /** Which sessions Elsewhere lists, by when each was last active. For this run alone. */
   sessionsRange(args: { range: SessionsRange }): Promise<Snapshot> {
     return this.snapshot({ cmd: "sessions_range", ...args });
   }

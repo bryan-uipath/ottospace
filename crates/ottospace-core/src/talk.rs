@@ -129,9 +129,75 @@ pub fn width(asked: f32) -> f32 {
     if asked.is_finite() { asked.clamp(MIN_WIDTH, MAX_WIDTH) } else { WIDTH }
 }
 
+/// What the drawer says of its agent apart from the title: the line at its foot, the folder in
+/// its header only when it is not the default, and the facts of the title's hover.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct AgentLine {
+    /// At the drawer's foot: the model in short and a mode that lets it act unasked, `haiku-5.5 · auto`.
+    pub foot: Option<String>,
+    /// That mode asks for nothing at all (`bypassPermissions`): the foot is drawn as a warning.
+    pub bypass: bool,
+    /// Where it runs, in the header: only when not `default` (the task's repository, else home).
+    pub folder: Option<String>,
+    /// The title's hover, as (name, value): model, mode, running for, folder.
+    pub facts: Vec<(&'static str, String)>,
+}
+
+/// Claude Code's permission modes that let the agent act without asking, by the word the foot
+/// shows. `default`, `plan` and `dontAsk` ask or refuse: they are in the hover only.
+const UNASKED: [(&str, &str); 3] = [("acceptEdits", "accept edits"), ("auto", "auto"), ("bypassPermissions", "bypass")];
+
+/// The drawer's agent line. `model`: the one the CLI reported, else the one it was started
+/// with (an id or a runner's name); `mode` as the CLI reported it; `secs` how long it has run,
+/// while it runs; `folder` where it runs (or would), `default` its task's own.
+pub fn agent_line(
+    model: Option<&str>,
+    mode: Option<&str>,
+    secs: Option<u64>,
+    folder: Option<&str>,
+    default: Option<&str>,
+) -> AgentLine {
+    let model = model.and_then(crate::sessions::short_model);
+    let unasked = mode.and_then(|mode| UNASKED.iter().find(|(name, _)| *name == mode)).map(|(_, word)| *word);
+    let foot = [model.as_deref(), unasked].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+    let elapsed = secs.map(|s| if s < 3600 { format!("{}:{:02}", s / 60, s % 60) } else { format!("{}h", s / 3600) });
+    let facts = [("Model", model.clone()), ("Mode", mode.map(str::to_string)), ("Running", elapsed)];
+    let facts = facts.into_iter().chain([("Folder", folder.map(str::to_string))]);
+    AgentLine {
+        foot: Some(foot).filter(|foot| !foot.is_empty()),
+        bypass: mode == Some("bypassPermissions"),
+        folder: folder.filter(|folder| Some(*folder) != default).map(str::to_string),
+        facts: facts.filter_map(|(name, value)| Some((name, value?))).collect(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_drawer_says_its_model_at_its_foot_and_the_rest_on_hover() {
+        // The model in short; a mode that asks is the hover's alone; the task's own folder too.
+        let line =
+            agent_line(Some("claude-haiku-5-5"), Some("default"), Some(20), Some("~/code/app"), Some("~/code/app"));
+        assert_eq!((line.foot.as_deref(), line.bypass, line.folder.as_deref()), (Some("haiku-5.5"), false, None));
+        let facts = [("Model", "haiku-5.5"), ("Mode", "default"), ("Running", "0:20"), ("Folder", "~/code/app")];
+        assert_eq!(line.facts, facts.map(|(n, v)| (n, v.to_string())));
+        // A mode that acts unasked stays in sight; bypass as a warning. Another folder is shown.
+        let line = agent_line(Some("claude-opus-5-5"), Some("auto"), None, Some("~/notes"), Some("~/code/app"));
+        assert_eq!((line.foot.as_deref(), line.folder.as_deref()), (Some("opus-5.5 · auto"), Some("~/notes")));
+        let foot = |mode| agent_line(Some("claude"), Some(mode), None, None, None);
+        assert_eq!(foot("acceptEdits").foot.as_deref(), Some("claude · accept edits"));
+        assert_eq!(
+            (foot("bypassPermissions").foot.as_deref(), foot("bypassPermissions").bypass),
+            (Some("claude · bypass"), true)
+        );
+        assert_eq!((foot("plan").foot.as_deref(), foot("dontAsk").foot.as_deref()), (Some("claude"), Some("claude")));
+        // Ended, nothing known but what it was started with: still said. An hour on: in hours.
+        let line = agent_line(None, None, Some(7300), None, None);
+        assert_eq!((line.foot, line.facts), (None, vec![("Running", "2h".to_string())]));
+        assert_eq!(agent_line(Some("not a model"), None, None, None, None).foot, None);
+    }
 
     #[test]
     fn a_monogram_takes_whole_letters_of_the_first_two_words() {
