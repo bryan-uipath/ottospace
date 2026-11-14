@@ -1196,6 +1196,8 @@ export function snapshot(value: unknown): Snapshot {
     headers: map(rect)(o.headers, "headers"),
     closes: map(rect)(o.closes, "closes"),
     tabs: list(rect)(o.tabs, "tabs"),
+    strip: orNull(rect)(o.strip, "strip"),
+    bar_header: orNull(rect)(o.bar_header, "bar_header"),
     drag: orNull(drag)(o.drag, "drag"),
     shown: map(rect)(o.shown, "shown"),
     tab_panes: list(list(num))(o.tab_panes, "tab_panes"),

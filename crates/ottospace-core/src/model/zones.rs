@@ -9,7 +9,7 @@ use crate::layout::{Dir, Node};
 use crate::model::PaneId;
 
 /// The left rail's sections, top to bottom, as the shell draws them.
-pub const SECTIONS: [Section; 5] = [Section::Apps, Section::Workbook, Section::Tasks, Section::Repos, Section::Marks];
+pub const SECTIONS: [Section; 5] = [Section::Tasks, Section::Apps, Section::Workbook, Section::Repos, Section::Marks];
 
 /// A rail that has the keyboard, in list mode as the section list does.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
@@ -112,7 +112,7 @@ impl Model {
                 if *dir == Dir::Left {
                     match self.sidebar {
                         Some(section) => self.open_section(section, effects),
-                        None => self.rail_focus = Some(RailFocus::Left(Section::Apps)),
+                        None => self.rail_focus = Some(RailFocus::Left(SECTIONS[0])),
                     }
                 } else if self.inspector.is_some() {
                     // The inspector has the drawer's place: its rows take the keys.
@@ -260,13 +260,13 @@ mod tests {
         m.update(Action::FocusDir { dir: Dir::Left }.sent_by(Origin::Socket));
         assert_eq!(m.focus_target(), Target::Pane(1));
         // No section open: the rail, on its first cell. ↓ moves; → opens that section's list.
-        assert_eq!((user(&mut m, Dir::Left), m.mode()), (Target::Rail(Section::Apps), Mode::List));
+        assert_eq!((user(&mut m, Dir::Left), m.mode()), (Target::Rail(Section::Tasks), Mode::List));
         m.update(Action::ListMove { delta: 1 }.sent_by(Origin::User));
-        assert_eq!(m.focus_target(), Target::Rail(Section::Workbook));
+        assert_eq!(m.focus_target(), Target::Rail(Section::Apps));
         assert!(matches!(user(&mut m, Dir::Right), Target::List(_)));
-        assert_eq!(m.sidebar, Some(Section::Workbook));
+        assert_eq!(m.sidebar, Some(Section::Apps));
         // ← goes back to the rail; → the list again; → once more the pane it came from.
-        assert_eq!(user(&mut m, Dir::Left), Target::Rail(Section::Workbook));
+        assert_eq!(user(&mut m, Dir::Left), Target::Rail(Section::Apps));
         assert!(matches!(user(&mut m, Dir::Right), Target::List(_)));
         assert_eq!(user(&mut m, Dir::Right), Target::Pane(1));
         // With the section open, left of the panes is its list.
@@ -279,7 +279,7 @@ mod tests {
         assert_eq!(m.refusal(&Action::ListMove { delta: 1 }, Origin::Socket), Some(RAILS_USERS));
         // Esc leaves to the pane.
         m.update(Action::LeaveList.sent_by(Origin::User));
-        assert_eq!((rail, m.focus_target()), (Target::Rail(Section::Workbook), Target::Pane(1)));
+        assert_eq!((rail, m.focus_target()), (Target::Rail(Section::Apps), Target::Pane(1)));
     }
 
     #[test]
@@ -332,7 +332,7 @@ mod tests {
         m.update(Action::LeaveList.sent_by(Origin::User));
         m.update(Action::CloseSidebar.sent_by(Origin::User));
         // Esc on the right rail goes back to a pane on the right: the one focused.
-        assert_eq!(user(&mut m, Dir::Left), Target::Rail(Section::Apps));
+        assert_eq!(user(&mut m, Dir::Left), Target::Rail(Section::Tasks));
         m.update(Action::LeaveList.sent_by(Origin::User));
         assert_eq!(m.focus_target(), Target::Pane(1));
     }

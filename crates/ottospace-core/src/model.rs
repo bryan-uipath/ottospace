@@ -3028,8 +3028,7 @@ impl Model {
                 }
             }
             Action::ListSection { delta } => {
-                const ORDER: [Section; 5] =
-                    [Section::Apps, Section::Workbook, Section::Tasks, Section::Repos, Section::Marks];
+                use zones::SECTIONS as ORDER;
                 let at = ORDER.iter().position(|s| Some(*s) == self.sidebar).unwrap_or(0) as i64;
                 if self.list.is_some() {
                     self.sidebar = Some(ORDER[(at + i64::from(delta)).rem_euclid(ORDER.len() as i64) as usize]);
@@ -6866,14 +6865,14 @@ mod tests {
         m.update(Action::FocusList);
         m.update(Action::ListSection { delta: 1 }); // after Repos comes Marks, with no rows yet
         assert_eq!((m.sidebar, m.list_rows()), (Some(Section::Marks), vec![]));
-        m.update(Action::ListSection { delta: 1 }); // then Apps again
+        m.update(Action::ListSection { delta: 2 }); // then Tasks again, and Apps
         m.update(Action::ListMove { delta: 1 });
         assert_eq!((m.sidebar, m.list), (Some(Section::Apps), Some(1)));
         // The shell hosts the app; until it opens a pane, the list keeps the keyboard.
         let host = Effect::HostApp { name: "Safari".into(), axis: Right, new_tab: false };
         assert_eq!((m.update(Action::ListChoose { axis: Right }), m.mode()), (vec![host], Mode::List));
-        // Tab: Apps, Workbook, then Tasks. Nothing to move to or open there.
-        m.update(Action::ListSection { delta: 2 });
+        // ⇧Tab: Apps, then Tasks. Nothing to move to or open there.
+        m.update(Action::ListSection { delta: -1 });
         m.update(Action::ListMove { delta: 1 });
         assert_eq!(
             (m.sidebar, m.list, m.update(Action::ListChoose { axis: Right })),

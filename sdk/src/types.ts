@@ -883,6 +883,9 @@ export interface Snapshot {
   closes: Record<string, Rect>;
   /** Each tab on the bar, by place. */
   tabs: Rect[];
+  /** The left column's title strip, and the open section's header (null: none open). */
+  strip: Rect | null;
+  bar_header: Rect | null;
   /** While a pane is dragged: where a drop would land, both null over anything else. */
   drag: { target: PaneId | null; zone: Zone | null } | null;
   /** Each drawn app pane's preview: the part of the window it shows, where it is drawn. */

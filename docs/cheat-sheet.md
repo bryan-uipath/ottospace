@@ -39,7 +39,7 @@ ottospace            # opens on the Repos list
 | Save the tab as a workbook | ⌘⇧S |
 | Fill the screen | ⌘⌃F (again to restore) |
 
-## The bar on the left (Apps, Workbook, Tasks, Repos, Marks)
+## The bar on the left (Tasks, Apps, Workbook, Repos, Marks)
 
 | I want to | Do |
 |---|---|
