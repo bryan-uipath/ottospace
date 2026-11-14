@@ -1006,6 +1006,13 @@ const MAKERS: &[Make] = &[
         Action::RestoreLayout { layout: Box::new(layout), gone, home, launch: g.rng.coin() }
     },
     |_| Action::StartFresh,
+    |_| Action::EditSettings,
+    |g| Action::SettingsRead {
+        text: g
+            .rng
+            .pick(&["", "{}", "{", r#"{"tasks_view": "project", "default_agent": "codex"}"#, r#"{"x": 1}"#])
+            .into(),
+    },
     |g| Action::UnfilledOpen { pane: g.pane() },
     |g| Action::WorkbookSave { uid: g.rng.pick(BOOK_UIDS).to_string(), cwds: g.read(DIRS), histories: g.histories() },
     |g| Action::WorkbookAddTab { workbook: g.workbook(), cwds: g.read(DIRS), histories: g.histories() },
@@ -1144,6 +1151,7 @@ fn selects_tab(action: &Action, origin: Origin) -> bool {
             | Action::NewTab
             | Action::NewEmptyTab
             | Action::NewTabOf { .. }
+            | Action::EditSettings
             | Action::TaskGo { .. }
             | Action::TalkGo
             | Action::DropPane { .. }
@@ -2241,6 +2249,20 @@ impl Run {
                     self.shell.panes.retain(|id| *id != pane.id);
                     self.shell.live = self.shell.live.filter(|live| *live != pane.id);
                     self.shell.visual = self.shell.visual.filter(|visual| *visual != pane.id);
+                }
+                // The editor runs on settings.json only in a terminal just opened by the user's Open Settings.
+                Effect::EditSettings { pane } => {
+                    let opened = effects.contains(&Effect::Opened(*pane));
+                    let terminal = m.pane(*pane).is_some_and(|p| p.kind == Kind::Terminal);
+                    ensure!(
+                        user && opened && terminal && matches!(action, Action::EditSettings),
+                        "{origin:?} ran the editor in pane {pane}: {action:?}"
+                    );
+                }
+                // Only the shell's read of the file applies settings, and only one with no problem.
+                Effect::ApplySettings { .. } => {
+                    let read = matches!(action, Action::SettingsRead { .. }) && origin != Origin::Socket;
+                    ensure!(read && m.settings_errors() == 0, "{origin:?} applied settings: {action:?}");
                 }
                 // A history goes to a terminal that has just started, of the user's opening, and is clean.
                 Effect::History { pane, history } => {

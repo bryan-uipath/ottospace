@@ -102,6 +102,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⌃A | Debug: outline the focused app pane's accessibility targets (parked panes only) |
 | ⌘/ | Show every key. In a small window the list scrolls: J / K or the arrows, space or Page Down / Page Up, Home / End |
 | ⌘P | [Command palette](#command-palette): run any command of the menu bar by name. Type to filter, ↑/↓ or ⌃N/⌃P move, ↵ runs, Esc or ⌘P closes |
+| ⌘, | Open Settings: `settings.json` in your editor, in a tab of its own (see [Settings](#settings)) |
 | F18 | From any app: take the keyboard back and bring ottospace forward |
 | ⌘T | New tab, with an empty pane: ⌘E picks what goes in it |
 | ⌘1 … ⌘9 | Select a tab on the bar |
@@ -295,6 +296,9 @@ key. Type to filter: the letters in order, ignoring case and spaces (`tr` finds 
 a word's first letter and letters side by side rank first, then a group's name (`dev` lists the
 Developer group). ↑/↓ or ⌃N/⌃P move, a click or ↵ runs the command as its menu item does, Esc, ⌘P
 or a click outside closes it. A command that nothing matches keeps the box open.
+
+Open Settings (App, also ottospace ▸ Open Settings, ⌘,) opens `settings.json` in your editor in a
+tab titled Settings; see [Settings](#settings).
 
 Move Tab to Task… (Tabs, also File ▸ Move Tab to Task…) turns the box into a list of the tasks
 not dismissed, in their order, then No task. Type to filter by title; ↵ or a click moves the
@@ -764,8 +768,16 @@ you already have. To undo it: `hidutil property --set '{"UserKeyMapping":[]}'`.
 ## Settings
 
 ottospace keeps its files in `~/.ottospace` (another folder: set `OTTOSPACE_HOME`). It reads
-`settings.json` there at start, so a change applies the next time you start it. Every key is
-optional:
+`settings.json` there at start. Every key is optional.
+
+Open Settings (⌘,, the palette, or ottospace ▸ Open Settings) opens the file in a tab titled
+Settings, whose terminal runs `$VISUAL`, else `$EDITOR`, else `vi`, as your login shell sets them
+(an editor that must wait, as `code -w`, needs its flag). A file that is not there is made `{}`
+first. Again while that tab is open brings it forward; quitting the editor closes its pane. Only
+you open it: a socket client's ⌘, does nothing.
+
+A change is read when the file is saved: what is wrong in it is said in the status bar (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify` and `calendar_notify_for` apply at once; `repos`, `apps` and `apps_hidden` (which the app writes itself) at the next start; any other key changed says "restart to apply" with its name.
+
 
 ```json
 {
@@ -811,7 +823,7 @@ optional:
 | `capture_key` | The key that captures the pane in use, from any app: modifiers (`ctrl`, `alt`, `cmd`, `shift`) and a key, with `-` between them. `"off"`: no key. `OTTOSPACE_CAPTURE_KEY` wins over it. Not `ctrl-alt-space`: macOS uses it to change the input source | `ctrl-alt-cmd-space` |
 | `capture.keep_images` | Keep a capture's pictures on disk. `false`: no picture is ever written | `true` |
 | `capture.ax` | Read an app pane's accessibility tree with its picture. `false`: it is never read for a capture | `true` |
-| `windows` | Rules for windows ottospace must leave alone. Each rule selects windows by `app` (the app's name or bundle id), `title` and `subrole`; every field given must match, `*` stands for any text, and case does not matter. `"do": "ignore"`: the window never becomes a pane, when its app is hosted or when it opens later. `"do": "manage"` undoes a built-in rule. Your rules come first. Name an app by its bundle id to be sure. A window is judged once, when it is first seen, on the title it has then; rules are read at start | Built in: only standard windows are ever put in a pane, and Zoom's sharing controls, annotation layer and pop-ups are ignored |
+| `windows` | Rules for windows ottospace must leave alone. Each rule selects windows by `app` (the app's name or bundle id), `title` and `subrole`; every field given must match, `*` stands for any text, and case does not matter. `"do": "ignore"`: the window never becomes a pane, when its app is hosted or when it opens later. `"do": "manage"` undoes a built-in rule. Your rules come first. Name an app by its bundle id to be sure. A window is judged once, when it is first seen, on the title it has then; a changed rule applies to windows seen after it | Built in: only standard windows are ever put in a pane, and Zoom's sharing controls, annotation layer and pop-ups are ignored |
 | `apps` | The pinned apps: listed first under "Not running" in Apps, and in the picker before anything is typed; choosing one starts it in the background and puts its window in a pane. Each is the name of the app as Finder shows it (`Visual Studio Code` for `Visual Studio Code.app`), looked for in `/Applications`, `~/Applications` and `/System/Applications` (and their `Utilities`), or the path of its bundle (`~/Tools/Lumen.app`). One that is not found is left out of the list and kept in the file. Pin and Unpin in the Apps section write this list: the name if it means that same bundle when read back (the first of that name in those folders, in that order), else its path. A name that is found only once ottospace runs (the app was installed since) is listed from the next scan. (Once you type in the picker it offers every installed app in those folders, these first) | none |
 | `apps_hidden` | Apps of the Dock not to suggest in Apps, written as `apps` is. Hide in the Apps section writes this list | none |
 | `wheel_to_apps` | The wheel or trackpad over an app pane you are not in brings its window up for the scroll (a peek). `false`: the wheel there does nothing | `true` |

@@ -13,6 +13,8 @@ pub fn app_menus() -> Vec<Menu> {
         Menu {
             name: "ottospace".into(),
             items: vec![
+                item("Open Settings", commands::EditSettings),
+                MenuItem::separator(),
                 MenuItem::os_submenu("Services", SystemMenuType::Services),
                 MenuItem::separator(),
                 item("Hide ottospace", Hide),
