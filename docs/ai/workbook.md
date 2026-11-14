@@ -16,7 +16,7 @@ It has no agent and is never done.
 | Workbook | Named tabs to open again: what to open, where | ⌘⇧S on a tab, Add tab, Save All Tabs | When the user deletes it |
 | Task | Work with a state, an agent, a brief | ⌘N, an agent, a session | Done, cleaned |
 | Mark | A way back to one pane or tab that is open now; opened again if it is not | ⌘B, ⌘⇧B | When taken off |
-| Session restore | Everything that was open at quit, back as it was | Nobody: automatic | Never (not built) |
+| Session restore | Everything that was open at quit, back as it was (`layout.json`: tabs and layout, built) | Nobody: automatic | Never |
 
 A tab's mark and a workbook record the same thing (`marks::TabRecord`) and are opened by the
 same code (`rebuild_tab`). They differ in what they are for:

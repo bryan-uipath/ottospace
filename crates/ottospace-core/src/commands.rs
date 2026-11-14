@@ -99,6 +99,7 @@ commands! {
     SaveWorkbook: "Save Tab as Workbook", Workbook;
     AddTabToWorkbook: "Add Tab to Workbook…", Workbook;
     SaveAllWorkbook: "Save All Tabs as Workbook", Workbook;
+    StartFresh: "Start Fresh", App;
     MarkPane: "Mark Pane", Marks;
     MarkTab: "Mark Tab", Marks;
     MarkJump: "Go to Mark…", Marks;

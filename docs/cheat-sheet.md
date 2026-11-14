@@ -31,6 +31,7 @@ ottospace            # opens on the Repos list
 | New tab | ⌘T |
 | Hide ottospace | ⌘H |
 | Quit | ⌘Q, or the window's close button. While a terminal runs something (a program, or a background job) it asks first: ↵, Q or ⌘Q again quits; Esc, any other key or shortcut cancels and does nothing else. Shells at a prompt do not count. Dock ▸ Quit and logout do not ask |
+| Start empty next time | File ▸ Start Fresh. Otherwise the tabs, splits, the tab on show and the drawer come back after quitting (`restore_layout`) |
 | Find an action by name | ⌘P: type part of its name, ↵ runs it. Or the menu bar |
 | See what an app exposes to accessibility | Focus its pane, ⌘P, "inspector": its tree in a panel on the right, counted by role. Click a row to outline it |
 | Switch tab | ⌘1 … ⌘9 · ⌘⇧] ⌘⇧[ · ⌃Tab |
@@ -206,6 +207,6 @@ setting takes its default.
 
 ## Not there yet
 
-- Quitting loses tabs, splits and terminals (tasks and settings are kept).
+- Quitting ends what runs in terminals: tabs, splits and folders come back, with their last lines and the command offered on the prompt, not the programs. An app that is not running is not started: its pane offers `Open <App>` (`restore_apps: true` starts it).
 - Filing a task starts nothing: no agent and no worktree. The task gets its first tab when you open it.
 - A running app cannot be pinned from the Apps section: pin it while it is closed, or name it in `apps`.

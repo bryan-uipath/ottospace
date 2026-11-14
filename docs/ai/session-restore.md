@@ -1,6 +1,7 @@
 # Session restore
 
-Status: design, not built. Replaces backlog item 5.
+Status: layer 1 (the layout file) is built: see "Layer 1, as built". Layers 2 to 4 are design.
+Replaces backlog item 5.
 
 Goal: quit ottospace (or restart the Mac) and get the same workspace back: tasks, their tabs, the
 splits, a terminal in the same directory with its output, the same app windows in the same panes,
@@ -26,7 +27,48 @@ Each layer ships by itself and is useful without the next.
 | 3. Apps that are not running | The app is started and its window put in the pane | `open -g`, as the `apps` setting does |
 | 4. App state | Chrome tabs and profile, Slack channel, Outlook view, VS Code folder | Capture and restore hooks, one per app, through the SDK |
 
-## Layer 1: `session.json`
+## Layer 1, as built
+
+The file is `layout.json`, not `session.json`, and a pane is kept as a workbook keeps one.
+
+- **Where**: `<home>/layout.json` (`OTTOSPACE_HOME`; none in a test run that named no folder).
+  0600, written whole and renamed into place, read only if it is a plain file of at most 4 MB
+  (no link, no pipe). Unknown keys of the file are kept; `version` 1.
+- **What**: one ordered list of tabs, each a workbook's `TabRecord` (title, `task`, split tree
+  with ratios, focused pane, panes: terminal with `cwd` and the workbook's `history`, app by
+  bundle id and name and never a title, empty), plus the workbook's tab it stands for and the
+  marks that stood for it or its panes (by the mark's `id`). Then `selected` (the tab on show,
+  by place), `section`, and `drawer` (`task`, `open`, `width`, `wide`). A session's
+  conversation that is no task's is not kept. No scope on show: per-task tab sets are going away;
+  restored on today's model, the tab on show brings its task's tabs with it.
+- **The core owns it** (`ottospace-core/src/layout_file.rs`): `Model::layout_file(cwds,
+  histories, lines)` makes it, `parse` checks it (caps of a workbook's tab, at most 256 tabs,
+  ids that are ids, absolute one-line directories), `Action::RestoreLayout` builds it into a
+  fresh model only, from the shell only (a client is refused). `Model::layout_moved` says when
+  it changed; the shell writes it a second later, and at quit with each terminal's directory
+  and text read again. Not an `Effect`: an effect on every change would sit in the result of
+  every action.
+- **Terminal text**: the workbook's rules exactly (`workbook_scrollback_lines`; `0` keeps no
+  text and no command; cleaned, credential shapes hidden, 64 KB a terminal, 1 MB in all). The
+  command is typed on the prompt, never run, and the divider names it. Never in the state.
+- **Restore** (`Workspace::new`, after tasks, workbooks and marks are read; the guardian's
+  leftovers were given back before the app started): each tab is built as a workbook's tab
+  (`rebuild_tab`), in order, each task's tabs together and tabs of no task last
+  (`layout_file::grouped`, the one function to swap for the core's own once tabs are one bar).
+  A tab whose task is gone is a tab of no task. A directory not found starts in the home
+  folder, with one status-bar line. App panes ask for their window as a workbook's do, but an
+  app that is not running is not started (`HostWindow { launch: false }`): the pane says so and
+  offers `Open <App>` (`Action::UnfilledOpen`, the user's only). `restore_apps: true` starts it.
+  The drawer shows its task's conversation with no agent: a click on the task goes on with it.
+- **Failures**: does not read or does not pass → `layout.json.bad`, an empty start, a line in
+  the status bar. A newer `version` → left as it is, not written this run. `restore_layout:
+  false` → neither read nor written. File ▸ Start Fresh → the file is removed and not written
+  again this run.
+- **Not built from the design below**: the second-instance lock, the placeholder `Kind` (an
+  empty pane that waits, `marks::Unfilled`, stands for it), window matching by id and title,
+  OSC 7.
+
+## Layer 1: `session.json` (the design)
 
 `~/.ottospace/session.json` (under `OTTOSPACE_HOME`). `Session` is its own serde type, not the
 model's state shape (`Node` and `Pane` do not deserialize, and `Kind::App` has no bundle):

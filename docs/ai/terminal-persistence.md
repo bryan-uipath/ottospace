@@ -1,6 +1,7 @@
 # Terminal persistence
 
-Status: design, not built. Backlog item 10. Written 2026-11-13.
+Status: design, not built. Backlog item 10. Written 2026-11-13. Its first piece, session
+restore's layout file, is built (`layout.json`, `session-restore.md`); the holders are not.
 
 Goal: quit, update or reopen ottospace and lose nothing that runs. Each terminal (a workspace
 tab's, a task's, the agent's in the conversation drawer, a workbook tab's) goes on running and
@@ -18,8 +19,9 @@ again, later, with no process in it (`workbook.md`). Session restore puts the la
   the master. The app ending closes the master, and the shell gets SIGHUP.
 - Quit (`Effect::Quit`) ends everything. `confirm.rs` asks first, listing what runs: "Quitting
   ends these". The task-start branch notes that the question does not cover drawer agents yet.
-- Tabs live only in memory (`Model::tabs`). A task file (`tasks::Task`) has no tabs, and nothing
-  writes `session.json`. So after quit a task comes back with no tabs and no terminals.
+- Tabs are kept in `layout.json` (session restore layer 1): after quit a task comes back with
+  its tabs and splits, and each terminal as a new shell in its folder under its last lines. What
+  ran in it is gone.
 - `osi` says after an install: "Quit puts hosted windows back; terminal panes and what runs in
   them close."
 
@@ -151,7 +153,7 @@ the shell, the shell starts the agent, and Accessibility and Screen Recording ar
 
 | Piece | Provides | Gone when |
 |---|---|---|
-| 1. `session.json` (session restore layer 1) | Tabs per task and of no task, splits, ratios, focus, the task and drawer conversation on show, each terminal's session id | Never; written at most once a second and at quit |
+| 1. `layout.json` (session restore layer 1, built) | Tabs with their tasks, splits, ratios, focus, the tab on show, the drawer's conversation. Each terminal's session id when holders come | Never; written a second after a change and at quit |
 | 2. Holders (this note) | The live processes, screen, scrollback, modes | Logout, reboot, holder crash |
 | 3. The agent's own session file | `--resume` when 2 is gone | Agent's own retention |
 | 4. Hosted app panes | App identity (bundle, name, pid, window id). On quit windows go back to the desktop (today). Reopening re-hosts them by layer 2's matching; documents and URLs are layer 4 | n/a |

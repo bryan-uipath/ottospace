@@ -364,3 +364,56 @@ pub fn remove_workbook(uid: &str) -> io::Result<()> {
         _ => Ok(()),
     }
 }
+
+/// `layout.json` in the user's folder: the tabs and layout kept between runs. `None`: nothing
+/// is kept (a test run that named no folder), or `restore_layout` is off.
+fn layout_file() -> Option<PathBuf> {
+    let on = get().settings.restore_layout.unwrap_or(true);
+    Some(get().home.as_ref().filter(|_| on)?.join("layout.json"))
+}
+
+/// True if the layout is kept between runs.
+pub fn keeps_layout() -> bool {
+    layout_file().is_some()
+}
+
+/// True if an app a restored pane names may be started: `restore_apps`, default off.
+pub fn restores_apps() -> bool {
+    get().settings.restore_apps.unwrap_or(false)
+}
+
+/// The text of `layout.json`. `None`: no file, or nothing is kept. The error: it is there and
+/// is not a small plain file (a link, a pipe, too large) or not text.
+pub fn read_layout() -> Result<Option<String>, String> {
+    let Some(file) = layout_file() else { return Ok(None) };
+    match fs::symlink_metadata(&file) {
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.to_string()),
+        Ok(_) => {}
+    }
+    let most = ottospace_core::layout_file::MAX_FILE_BYTES as u64;
+    let bytes = crate::collect::read_plain(&file, most).ok_or("not a plain file of at most 4 MB")?;
+    String::from_utf8(bytes).map(Some).map_err(|_| "not text".into())
+}
+
+/// Writes `layout.json`, as `save_task` writes a task: whole, 0600, renamed into place.
+pub fn save_layout(text: &str) -> io::Result<()> {
+    let Some(file) = layout_file() else { return Ok(()) };
+    let dir = file.parent().ok_or_else(|| io::Error::other("no folder"))?;
+    write_whole(dir, "layout.json", text)
+}
+
+/// Puts `layout.json` aside as `layout.json.<end>` (`bad`; an older one is replaced), or with
+/// `None` removes it and the copy set aside: both may hold terminal text.
+pub fn layout_aside(end: Option<&str>) -> io::Result<()> {
+    let Some(file) = layout_file() else { return Ok(()) };
+    let bad = file.with_extension("json.bad");
+    let gone = |result: io::Result<()>| match result {
+        Err(err) if err.kind() != io::ErrorKind::NotFound => Err(err),
+        _ => Ok(()),
+    };
+    match end {
+        Some(end) => gone(fs::rename(&file, file.with_extension(format!("json.{end}")))),
+        None => gone(fs::remove_file(&file)).and(gone(fs::remove_file(bad))),
+    }
+}

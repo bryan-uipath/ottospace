@@ -1520,7 +1520,9 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
     session_fixture("codex/session_index.jsonl", &codex.join("session_index.jsonl"), &repo, hours(2));
     let settings = |sessions: bool| {
         let dirs = json!({"claude": [claude], "codex": codex});
-        let settings = json!({"repos": [home.join("src")], "sessions": sessions, "session_dirs": dirs});
+        // Each run starts with the Tasks section closed: no layout is restored.
+        let settings =
+            json!({"repos": [home.join("src")], "sessions": sessions, "session_dirs": dirs, "restore_layout": false});
         std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
     };
     let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
@@ -3270,7 +3272,8 @@ fn kept_marks(home: &Path) -> Value {
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn marks_are_a_way_back_to_a_pane_and_a_tab_and_are_kept_between_runs() {
     use std::os::unix::fs::PermissionsExt;
-    let home = user_folder("marks", r#"{"repos": []}"#);
+    // The second run starts with nothing open: no layout is restored.
+    let home = user_folder("marks", r#"{"repos": [], "restore_layout": false}"#);
     std::fs::create_dir_all(home.join("notes")).unwrap();
     let notes = home.join("notes").canonicalize().unwrap();
     let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
@@ -5558,6 +5561,168 @@ fn the_inspector_shows_a_trees_counts_and_roles_never_its_text() {
 
 /// Two tests run again in a process of their own, with a `$TMPDIR` of their own: apps killed
 /// and one that quits, folders of settings, a file that is no socket. Nothing is left in it.
+/// The tabs as the bar has them: each one's title and task.
+fn tab_titles(reply: &Value) -> Vec<(String, Value)> {
+    let tabs = reply["state"]["tabs"].as_array().cloned().unwrap_or_default();
+    tabs.iter().map(|tab| (tab["title"].as_str().unwrap_or_default().to_string(), tab["task"].clone())).collect()
+}
+
+/// The split tree on show with its leaves' ids left out, its ratios to two places.
+fn tree_shape(tree: &Value) -> Value {
+    match tree.get("split") {
+        Some(split) => json!({
+            "axis": split["axis"],
+            "ratio": (split["ratio"].as_f64().unwrap_or_default() * 100.0).round() / 100.0,
+            "a": tree_shape(&split["a"]),
+            "b": tree_shape(&split["b"]),
+        }),
+        None => json!("leaf"),
+    }
+}
+
+/// Each terminal pane's directory, by the order of the panes.
+fn pane_dirs(reply: &Value) -> Vec<Value> {
+    let panes = reply["state"]["panes"].as_array().cloned().unwrap_or_default();
+    panes.iter().filter(|pane| pane["kind"]["type"] == "terminal").map(|pane| pane["cwd"].clone()).collect()
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn tabs_and_layout_come_back_after_quitting_and_no_agent_starts() {
+    let root = support::temp(&format!("ottospace-e2e-restore-{}", std::process::id()));
+    let (bin, repos, sessions) = (root.join("bin"), root.join("repos"), root.join("sessions"));
+    fake_agents(&bin, &sessions);
+    fake_repo(&repos.join("app"));
+    let (one, two) = (root.join("one"), root.join("two"));
+    std::fs::create_dir_all(&one).unwrap();
+    std::fs::create_dir_all(&two).unwrap();
+    let real = |dir: &Path| dir.canonicalize().unwrap().to_string_lossy().into_owned();
+    let (one, two) = (real(&one), real(&two));
+    let dirs = json!({"claude": [sessions.join("claude")], "codex": sessions.join("codex")});
+    let settings = json!({"repos": [repos], "session_dirs": dirs});
+    let home = user_folder("restore", &settings.to_string());
+    let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let mut otto = Otto::launch_with("restore-1", &env);
+
+    // No task: a tab of two terminals side by side, the split moved, each in its own folder;
+    // a second tab of two stacked.
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "split", "axis": "right"}));
+    for (pane, dir) in [(1, &one), (2, &two)] {
+        otto.call(json!({"cmd": "type", "pane": pane, "text": format!("cd '{dir}' && echo in-$((1+{pane}))\r")}));
+        otto.call(json!({"cmd": "wait", "pane": pane, "pattern": format!("^in-{}$", pane + 1), "timeout_ms": 30000}));
+    }
+    otto.call(json!({"cmd": "resize", "dir": "left"}));
+    let first = tree_shape(&otto.call(json!({"cmd": "state"}))["state"]["layout"]);
+    assert_ne!(first["ratio"], json!(0.5), "{first}");
+    otto.call(json!({"cmd": "new_tab"}));
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "split", "axis": "down"}));
+    let second = tree_shape(&otto.call(json!({"cmd": "state"}))["state"]["layout"]);
+    // A task whose agent the user started once: it has a session. Its own tab is on show.
+    otto.call(json!({"cmd": "task_new", "line": "fix login >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
+    otto.wait_for("the agent to start", |_| agent_argv(&bin, "claude"));
+    otto.call(json!({"cmd": "task_open", "id": 1}));
+    let before = otto.call(json!({"cmd": "state"}));
+    assert_eq!((&before["state"]["current_task"], &before["state"]["talk"]["task"]), (&json!(1), &json!(1)));
+    otto.call(json!({"cmd": "quit"}));
+    exits(&mut otto);
+
+    // The file is the user's alone and holds no agent's text.
+    use std::os::unix::fs::PermissionsExt;
+    let file = home.join("layout.json");
+    let mode = std::fs::metadata(&file).expect("layout.json written at quit").permissions().mode() & 0o777;
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(mode == 0o600 && !text.contains("fake claude ready"), "{mode:o} {text}");
+    std::fs::remove_file(bin.join("claude.argv")).unwrap();
+
+    let otto = Otto::launch_with("restore-2", &env);
+    let after = otto.wait_for("the tabs back", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        (state["terminals"].as_object()?.len() == 5).then_some(state)
+    });
+    // Each task's tabs together, then no task's, in their order; the task's tab on show.
+    let task_tab = tab_titles(&before).into_iter().find(|(_, task)| *task == json!(1)).unwrap();
+    let none = |tabs: Vec<(String, Value)>| tabs.into_iter().filter(|(_, task)| task.is_null()).collect::<Vec<_>>();
+    assert_eq!(tab_titles(&after)[0], task_tab);
+    assert_eq!(none(tab_titles(&after)), none(tab_titles(&before)));
+    assert_eq!((&after["state"]["current_task"], &after["state"]["sidebar"]), (&json!(1), &json!("tasks")));
+    // The drawer shows the task's conversation to go on with; no agent was started.
+    let talk = &after["state"]["talk"];
+    assert_eq!((&talk["task"], &talk["open"], &talk["keys"]), (&json!(1), &json!(true), &json!(false)), "{talk}");
+    assert_eq!((&after["state"]["agents"], &after["drawer"]["agents"]), (&json!([]), &json!({})));
+    // The splits, ratios within a point, and each terminal in its folder.
+    let tab = otto.call(json!({"cmd": "task_leave"}));
+    assert_eq!(tree_shape(&tab["state"]["layout"]), first);
+    assert_eq!(pane_dirs(&after)[1..3], [json!(one), json!(two)]);
+    otto.call(json!({"cmd": "type", "pane": 2, "text": "pwd\r"}));
+    otto.call(json!({"cmd": "wait", "pane": 2, "pattern": format!("^{one}$"), "timeout_ms": 30000}));
+    // By its place among all the tabs: the task's comes first.
+    assert_eq!(tree_shape(&otto.call(json!({"cmd": "select_tab", "index": 2}))["state"]["layout"]), second);
+    assert!(agent_argv(&bin, "claude").is_none(), "an agent was started at start");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_layout_file_that_does_not_read_is_set_aside_and_restore_layout_false_starts_empty() {
+    let pid = std::process::id();
+    let dir = support::temp(&format!("ottospace-e2e-restored-dir-{pid}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir = dir.canonicalize().unwrap().to_string_lossy().into_owned();
+    // Written by hand: one tab of one terminal, a command offered on its prompt.
+    let history = json!({"lines": ["built ok"], "command": "echo typed-not-run", "saved": 1});
+    let pane = json!({"id": 1, "kind": {"type": "terminal"}, "cwd": dir, "history": history});
+    let tab = json!({"title": "Hand", "layout": {"leaf": 1}, "panes": [pane]});
+    let layout = json!({"version": 1, "tabs": [tab]}).to_string();
+    let panes = |reply: &Value| reply["state"]["panes"].as_array().map_or(0, Vec::len);
+
+    // Read: the tab, its history above the prompt, its command typed and not run.
+    let home = user_folder("restore-hand", r#"{"repos": []}"#);
+    std::fs::write(home.join("layout.json"), &layout).unwrap();
+    let mut otto = Otto::launch_with("restore-hand", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!((tab_titles(&state), pane_dirs(&state)), (vec![("Hand".to_string(), Value::Null)], vec![json!(dir)]));
+    otto.call(
+        json!({"cmd": "wait", "pane": 1, "pattern": "on the prompt, ↵ runs: echo typed-not-run", "timeout_ms": 30000}),
+    );
+    otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "echo typed-not-run$", "timeout_ms": 30000}));
+    std::thread::sleep(Duration::from_millis(500));
+    let text = otto.call(json!({"cmd": "capture", "pane": 1, "history": true}))["text"].as_str().unwrap().to_string();
+    assert!(!text.lines().any(|line| line == "typed-not-run"), "the command ran: {text}");
+    // Start Fresh, a client's: refused. The user's: the file goes, and the quit writes none.
+    let theirs = otto.call(json!({"cmd": "key", "keys": "cmd-p"}));
+    assert_eq!(theirs["state"]["palette"], Value::Null);
+    otto.call(json!({"cmd": "key", "keys": "cmd-p s t a r t space f r e s h enter", "as": "user"}));
+    assert!(!home.join("layout.json").exists());
+    otto.call(json!({"cmd": "quit"}));
+    exits(&mut otto);
+    assert!(!home.join("layout.json").exists());
+
+    // Not JSON: an empty start, the file set aside, and the status bar says so.
+    let home = user_folder("restore-bad", r#"{"repos": []}"#);
+    std::fs::write(home.join("layout.json"), "{not json").unwrap();
+    let otto = Otto::launch_with("restore-bad", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!(panes(&state), 0);
+    assert!(state["notice"].as_str().is_some_and(|n| n.contains("layout.json.bad")), "{}", state["notice"]);
+    assert_eq!(std::fs::read_to_string(home.join("layout.json.bad")).unwrap(), "{not json");
+    assert!(!home.join("layout.json").exists());
+    drop(otto);
+
+    // Turned off: an empty start, and the file is neither read nor written.
+    let home = user_folder("restore-off", r#"{"repos": [], "restore_layout": false}"#);
+    std::fs::write(home.join("layout.json"), &layout).unwrap();
+    let mut otto = Otto::launch_with("restore-off", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    assert_eq!(panes(&otto.call(json!({"cmd": "split"}))), 1);
+    otto.call(json!({"cmd": "quit"}));
+    exits(&mut otto);
+    assert_eq!(std::fs::read_to_string(home.join("layout.json")).unwrap(), layout);
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_test_leaves_nothing_in_the_temp_dir() {

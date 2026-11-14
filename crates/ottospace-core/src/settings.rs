@@ -15,7 +15,9 @@ use serde::Deserialize;
 ///   "agent_models": { "claude": ["claude-opus-5-5"], "codex": ["gpt-6-astra"] },
 ///   "capture_key": "ctrl-alt-cmd-space",
 ///   "capture": { "keep_images": true, "ax": true },
-///   "workbook_scrollback_lines": 500 }
+///   "workbook_scrollback_lines": 500,
+///   "restore_layout": true,
+///   "restore_apps": false }
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -74,6 +76,14 @@ pub struct Settings {
     /// its prompt when it opens. Default: 500; at most 2000. 0: none is kept.
     #[serde(default)]
     pub workbook_scrollback_lines: Option<u32>,
+    /// Tabs and layout come back after quitting (`layout.json`). Default: true. False: each start
+    /// is empty, and the file is neither read nor written.
+    #[serde(default)]
+    pub restore_layout: Option<bool>,
+    /// At a restore, start an app a pane names that is not running. Default: false: the pane
+    /// waits and offers "Open <App>".
+    #[serde(default)]
+    pub restore_apps: Option<bool>,
     /// How the Tasks section groups its tasks: `state` (default) or `project`. Written when the
     /// user picks one in the section's header.
     #[serde(default)]

@@ -42,7 +42,7 @@ impl Workspace {
 
     /// Each terminal's last lines (`workbook_scrollback_lines`) and the command in front, for a
     /// workbook the user saves. Read only then: the text goes into the action, never the state.
-    fn histories(&self) -> Vec<(PaneId, History)> {
+    pub(crate) fn histories(&self) -> Vec<(PaneId, History)> {
         let (most, saved) = (config::workbook_lines(), now_ms());
         let history = |(id, terminal): (&PaneId, &crate::terminal::Terminal)| {
             let text = if most == 0 { String::new() } else { terminal.text(true) };

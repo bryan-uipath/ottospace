@@ -181,7 +181,7 @@ fn fit(book: &mut Workbook) {
 }
 
 /// Each terminal's history in `tabs`, cleaned, until `MAX_BOOK_HISTORY` is spent: later ones keep none.
-fn fit_history(tabs: &mut [TabRecord]) {
+pub(crate) fn fit_history(tabs: &mut [TabRecord]) {
     let mut left = MAX_BOOK_HISTORY;
     for pane in tabs.iter_mut().flat_map(|tab| tab.panes.iter_mut()) {
         let Some(history) = history_of(pane) else {
@@ -288,7 +288,7 @@ impl Workbook {
         self.live.get(at).copied().flatten()
     }
 
-    fn set_live(&mut self, at: usize, tab: Option<u32>) {
+    pub(crate) fn set_live(&mut self, at: usize, tab: Option<u32>) {
         if self.live.len() <= at {
             self.live.resize(at + 1, None);
         }
@@ -561,7 +561,25 @@ impl Model {
         cwds: &[(PaneId, String)],
         histories: &[(PaneId, History)],
     ) -> Result<TabRecord, String> {
-        let tab = self.tabs.get(index).ok_or("no tab to save")?;
+        let record = self.tab_record(index, cwds, histories).ok_or("no tab to save")?;
+        if record.panes.iter().all(|pane| pane.kind == RecordKind::Empty) {
+            return Err(EMPTY.into());
+        }
+        match record.unsound() {
+            Some(wrong) => Err(format!("this tab cannot be saved: {wrong}")),
+            None => Ok(record),
+        }
+    }
+
+    /// The tab at `index` as a record of no task, whatever is in it: what a workbook and the
+    /// layout file keep of a tab. No window title, no keys a waiting pane kept from its file.
+    pub(crate) fn tab_record(
+        &self,
+        index: usize,
+        cwds: &[(PaneId, String)],
+        histories: &[(PaneId, History)],
+    ) -> Option<TabRecord> {
+        let tab = self.tabs.get(index)?;
         let (layout, focused) = match index == self.active {
             true => (self.layout.clone(), self.focused),
             false => (tab.layout.clone(), tab.focused),
@@ -587,15 +605,8 @@ impl Model {
                 pane.extra.insert("history".into(), serde_json::json!(history));
             }
         }
-        if panes.iter().all(|pane| pane.kind == RecordKind::Empty) {
-            return Err(EMPTY.into());
-        }
         let title = marks::kept_title(&tab.title, 256);
-        let record = TabRecord { title, task: None, focused, layout, panes, extra: Extra::new() };
-        match record.unsound() {
-            Some(wrong) => Err(format!("this tab cannot be saved: {wrong}")),
-            None => Ok(record),
-        }
+        Some(TabRecord { title, task: None, focused, layout, panes, extra: Extra::new() })
     }
 
     /// Why the tab on show cannot be saved, for the shell to say.
@@ -1122,7 +1133,10 @@ mod tests {
     /// What opening `saved()`'s workbook asks of the shell, into panes `term` and `app`.
     fn opened(term: PaneId, app: PaneId) -> Vec<Effect> {
         let (bundle, name, title) = (Some("com.slack".to_string()), "Slack".to_string(), String::new());
-        vec![Effect::Opened(term), Effect::HostWindow { mark: None, bundle, name, title, into: Some(app), axis: Right }]
+        vec![
+            Effect::Opened(term),
+            Effect::HostWindow { mark: None, bundle, name, title, into: Some(app), axis: Right, launch: true },
+        ]
     }
 
     #[test]

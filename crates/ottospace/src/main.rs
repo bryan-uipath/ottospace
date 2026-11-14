@@ -64,6 +64,7 @@ mod field;
 mod give_back;
 mod home;
 mod inspector;
+mod layout_file;
 mod marks;
 mod menus;
 mod new_task;
@@ -604,6 +605,8 @@ actions!(ottospace, [CopySelection, PasteText, VisualMode, ListMode, SneakMode, 
 actions!(ottospace, [MarkPane, MarkTab, MarkJump]);
 // Save the tab on show as a workbook, add it to one, or save all the tabs as one.
 actions!(ottospace, [SaveWorkbook, AddTabToWorkbook, SaveAllWorkbook]);
+// The next start is empty: the layout is not kept this run.
+actions!(ottospace, [StartFresh]);
 // What the capture key does, from the menu.
 actions!(ottospace, [CapturePane]);
 // The right drawer: the keyboard in or out, closed to the rail or open, the task's workspace.
@@ -729,6 +732,7 @@ struct Workspace {
     kept_marks: marks::Kept,
     /// The workbooks' files as last read and written.
     kept_workbooks: workbook::Kept,
+    kept_layout: layout_file::Kept,
     /// Scroll position of the bar's list, so list mode can bring the selected row into view.
     list_scroll: ScrollHandle,
     /// Every scroll area's bar.
@@ -864,6 +868,8 @@ impl Workspace {
                     this.drop_capture(&draft, None);
                 }
                 // Every quit ends here: ⌘Q, the menu, the close button, `ctl quit`, a signal.
+                // The layout first, while its panes and terminals are all there.
+                this.store_layout(true);
                 this.hosted.drain().for_each(|(_, hosted)| {
                     hosted.give_back();
                 });
@@ -888,6 +894,7 @@ impl Workspace {
                     }
                     this.serve_control(window, cx);
                     this.take_tags(window, cx);
+                    this.store_layout(false);
                     if tick % 15 == 0 {
                         this.poll_sessions(window, cx);
                     }
@@ -992,15 +999,6 @@ impl Workspace {
         // The first problem found at start, for the status bar: settings, the font, then tasks.
         let unread = (unread > 0).then(|| format!("tasks: {unread} file(s) in the tasks folder could not be read"));
         let notice = config::get().error.clone().or(terminal::choose_font(window)).or(kept.error).or(unread);
-        if hosting {
-            // Repos is the way in while there are no panes: most work starts in a repository.
-            model.update(Action::ToggleSection { section: Section::Repos }.sent_by(Origin::System));
-            // Nothing open yet: the keyboard is in the drawer's new task. Not in a test run, the
-            // app-window loop's too: its tests start from normal mode.
-            if model.welcome() && std::env::var_os("OTTOSPACE_E2E").is_none() {
-                model.update(Action::OpenCompose { text: String::new() }.sent_by(Origin::System));
-            }
-        }
         let mut this = Self {
             model,
             hosted: HashMap::new(),
@@ -1075,6 +1073,7 @@ impl Workspace {
             stored: Vec::new(),
             kept_marks: marks::Kept::default(),
             kept_workbooks: workbook::Kept::default(),
+            kept_layout: layout_file::Kept::default(),
             hosting,
             host_only,
             control,
@@ -1088,6 +1087,16 @@ impl Workspace {
         this.stored = this.kept_tasks(); // what was read needs no writing back
         this.restore_workbooks();
         this.restore_marks(cx);
+        // After the tasks, workbooks and marks it names; the windows a run left were given back already.
+        if !this.restore_layout(window, cx) && hosting {
+            // Repos is the way in while there are no panes: most work starts in a repository.
+            this.model.update(Action::ToggleSection { section: Section::Repos }.sent_by(Origin::System));
+            // Nothing open yet: the keyboard is in the drawer's new task. Not in a test run, the
+            // app-window loop's too: its tests start from normal mode.
+            if this.model.welcome() && std::env::var_os("OTTOSPACE_E2E").is_none() {
+                this.model.update(Action::OpenCompose { text: String::new() }.sent_by(Origin::System));
+            }
+        }
         this
     }
 
@@ -1178,6 +1187,7 @@ impl Workspace {
         self.store_tasks();
         self.store_marks();
         self.store_workbooks();
+        self.layout_changed();
         // New marks need looking for; what was found is believed a while, so this is cheap.
         self.check_marks(cx);
         self.load_icons(cx);
@@ -1289,12 +1299,13 @@ impl Workspace {
                 Effect::Run { command } => self.run_command(*command, window, cx),
                 Effect::PressApp { pane, path, role, at, .. } => self.press_app(*pane, path, role, *at, window, cx),
                 Effect::AppWheel { pane, dx, dy } => self.post_wheel(*pane, *dx, *dy),
-                Effect::HostWindow { mark, bundle, name, title, into, axis } => {
+                Effect::HostWindow { mark, bundle, name, title, into, axis, launch } => {
                     let (bundle, name, title) = (bundle.clone(), name.clone(), title.clone());
-                    let wanted = marks::Wanted { mark: *mark, bundle, name, title, into: *into, axis: *axis };
+                    let (mark, into, axis, launch) = (*mark, *into, *axis, *launch);
+                    let wanted = marks::Wanted { mark, bundle, name, title, into, axis, launch };
                     if let Err(why) = self.host_window(wanted, window, cx) {
                         // A rebuilt tab's pane stays empty, and says why.
-                        if let Some(pane) = *into {
+                        if let Some(pane) = into {
                             self.model.update(Action::Unfilled { pane, why: why.clone() }.sent_by(Origin::System));
                         }
                         if !unhosted.contains(&why) {
@@ -1304,6 +1315,7 @@ impl Workspace {
                 }
                 // Carried out with its pane's `Opened`, before the shell starts.
                 Effect::History { .. } => {}
+                Effect::ForgetLayout => self.forget_layout(),
                 Effect::Snapshot { draft, material, pane } => self.ask_snapshot(draft, *material, *pane),
                 Effect::CaptureDropped { draft, material } => self.drop_capture(draft, *material),
                 Effect::CaptureKept { draft, dir, brief } => self.keep_capture(draft, dir, brief, cx),
@@ -1471,7 +1483,9 @@ impl Workspace {
             (notice, marks) => notice.clone().or(marks.clone()),
         };
         let start = start.or(self.key_notice.clone()).or(self.kept_workbooks.notice.clone());
+        let start = start.or(self.kept_layout.notice.clone());
         let unsaved = self.unsaved.clone().or(self.kept_marks.unsaved.clone()).or(self.kept_workbooks.unsaved.clone());
+        let unsaved = unsaved.or(self.kept_layout.unsaved.clone());
         self.error.clone().or(unsaved).or(start)
     }
 
@@ -4403,7 +4417,18 @@ impl Workspace {
                 _ => {
                     // A pane a mark's tab could not fill says why.
                     let hint = self.unfilled_why(id).unwrap_or_else(|| "⌘E to pick what goes here".into());
-                    home::empty_pane(hint.into(), id, &self.home).into_any_element()
+                    // A restored app pane that waits: the user's click hosts its app's window, started if need be.
+                    let open = self.unfilled_app(id).map(|name| {
+                        list_button(("unfilled-open", id as usize), false)
+                            .mt_2()
+                            .child(self.controls.mark(format!("unfilled-open:{id}")))
+                            .child(format!("Open {name}"))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                drop(this.dispatch(Action::UnfilledOpen { pane: id }, this.input, window, cx))
+                            }))
+                    });
+                    let empty = home::empty_pane(hint.into(), id, &self.home);
+                    div().flex().flex_col().items_center().child(empty).children(open).into_any_element()
                 }
             }
         };
@@ -5112,6 +5137,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &SaveWorkbook, window, cx| this.save_workbook(window, cx)))
             .on_action(cx.listener(|this, _: &AddTabToWorkbook, window, cx| this.pick_workbook(window, cx)))
             .on_action(cx.listener(|this, _: &SaveAllWorkbook, window, cx| this.save_all_workbook(window, cx)))
+            .on_action(cx.listener(|this, _: &StartFresh, window, cx| {
+                drop(this.dispatch(Action::StartFresh, this.input, window, cx))
+            }))
             .on_action(cx.listener(|this, _: &MarkJump, window, cx| {
                 this.dispatch(Action::MarkPrefix, this.input, window, cx);
             }))

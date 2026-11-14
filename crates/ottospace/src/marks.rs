@@ -24,6 +24,8 @@ pub struct Wanted {
     pub title: String,
     pub into: Option<PaneId>,
     pub axis: Axis,
+    /// An app that is not running may be started.
+    pub launch: bool,
 }
 
 /// How long what was found missing on this machine is believed before it is looked for again.
@@ -367,6 +369,10 @@ impl Workspace {
         if self.host_only.is_some() {
             return Err("this test run may host only the app it started".into());
         }
+        // A restored pane waits for the user's "Open": no app is started at start by itself.
+        if !wanted.launch {
+            return Err(format!("{} is not running", wanted.name));
+        }
         // Where the system has it: nothing written in `marks.json` is ever run.
         let path = icon::installed(wanted.bundle.as_deref(), &wanted.name);
         let path = path.ok_or_else(|| format!("{} is not installed", wanted.name))?;
@@ -425,6 +431,15 @@ impl Workspace {
             self.dispatch(Action::MarkBind { mark, pane }, Origin::System, window, cx);
         }
         Ok(())
+    }
+
+    /// The app a waiting pane names, for its "Open <App>".
+    pub(crate) fn unfilled_app(&self, pane: PaneId) -> Option<String> {
+        let empty = self.model.marks.unfilled().iter().find(|empty| empty.pane == pane)?;
+        match &empty.record.kind {
+            marks::RecordKind::App { name, .. } => Some(name.clone()),
+            _ => None,
+        }
     }
 
     /// Why an empty pane is empty, if a mark's tab left it so: drawn in the pane.

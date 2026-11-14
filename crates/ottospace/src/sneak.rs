@@ -415,6 +415,7 @@ impl Workspace {
                 None
             }
             ("header", _) => number.map(|pane| Action::Focus { pane }),
+            ("unfilled-open", _) => number.map(|pane| Action::UnfilledOpen { pane }),
             _ => {
                 match (kind, number) {
                     ("tab", Some(tab)) => self.select_tab(tab, window, cx),

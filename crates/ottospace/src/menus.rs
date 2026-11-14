@@ -28,6 +28,8 @@ pub fn app_menus() -> Vec<Menu> {
                 item("Add Tab to Workbook…", AddTabToWorkbook),
                 item("Save All Tabs as Workbook", SaveAllWorkbook),
                 MenuItem::separator(),
+                item("Start Fresh", StartFresh),
+                MenuItem::separator(),
                 item("Close Pane", ClosePane),
                 item("Close Tab", CloseTab),
             ],

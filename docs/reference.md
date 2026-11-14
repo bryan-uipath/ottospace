@@ -11,7 +11,8 @@ Agents and tests can drive it over a local control socket. Rust + [GPUI](https:/
 
 Early prototype, macOS only. Today you can split a window into panes, run your shell in a pane,
 host another app's window in a pane, move focus by keyboard, keep a tasks inbox, and drive all of
-it over the control socket. Session restore and the rest of the design are not built: see the
+it over the control socket. Tabs and layout come back after quitting; terminals do not keep
+running, and the rest of the design is not built: see the
 [roadmap](#roadmap-designed-not-built) and the [plan](ai/1-initial-brainstorm/plan.md).
 
 ### Works today
@@ -46,6 +47,7 @@ it over the control socket. Session restore and the rest of the design are not b
 | Marks (⌘B, ⌘⇧B, ⌘' and a letter): named ways back to a pane or a tab, kept in `~/.ottospace/marks.json` | Works today |
 | Capture (⌃⌥⌘Space, from any app): a frozen picture of the pane in use to circle and write on, collected in a draft in the drawer; the task it becomes has a brief with the pictures, the notes and the text under each annotation (`task_brief`), and its agent is told the brief's path. Kept in `~/.ottospace/materials` | Works today |
 | Workbooks (⌘⇧S): save tabs under a name (their splits, each terminal's directory, each app) and open them again from the Workbook section. Several tabs each: add a tab to one, or save all the tabs on the bar as one. Kept in `~/.ottospace/workbooks`. An app comes back as its window, not on the page or document it showed | Works today |
+| Tabs and layout come back after quitting: every tab (with its task and workbook), its splits and sizes, focus, the tab on show, the section and the drawer; terminals start again in their folders with their last lines and an offered command; running apps' windows go back in their panes. See [Restoring the layout](#restoring-the-layout) | Works today |
 | `settings.json`: terminal font, repository directories, tasks folder, apps to offer, window rules | Works today |
 
 ### Roadmap: designed, not built
@@ -62,8 +64,8 @@ None of these is in the app today.
 | Workbooks: the URL, channel or document each app showed; a workbook on the rail; its tabs as a scope on the tab bar | Designed |
 | TypeScript scripting, with contextual quick actions in an action deck (Zoom meeting layout, spin for stand-up) | Designed |
 | Hide private panes while screen sharing | Designed |
-| Session restore | Designed |
-| Terminals survive quitting and updating | Designed |
+| Session restore beyond the layout: what each app showed (URLs, channels, documents) | Designed |
+| Terminals survive quitting and updating (the programs in them keep running) | Designed |
 
 ## Requirements and permissions
 
@@ -524,6 +526,35 @@ tab of dashboards, a tab of docs. It is not a task: no agent works it and it is 
 Not built: bringing an app back on the URL, channel or document it showed, and a workbook's
 tabs as a scope of their own on the tab bar. Design: [workbook.md](ai/workbook.md).
 
+## Restoring the layout
+
+Quit ottospace and start it again: the workspace comes back. `~/.ottospace/layout.json` holds it,
+written a second after a change and at quit, readable by you alone.
+
+- **What comes back**: every tab in bar order, each with its task (a task's tabs together, tabs of
+  no task last) and the workbook it came from; its splits and their sizes; which pane had focus;
+  the tab on show; the section that was open; the drawer (the conversation it showed, open or
+  closed, its width). A task's tabs live here, keyed by the task's number, not in the task's file.
+- **Terminals** start a new shell in the folder they were in (one that is gone: your home folder,
+  and the status bar says so). As a [workbook](#workbooks)'s do, they show their last lines in
+  grey above the prompt, and a program that ran in front is typed on the prompt, not run: ↵ runs
+  it. The same setting (`workbook_scrollback_lines`; `0` keeps no terminal text) and the same
+  cleaning apply: escape sequences taken out, credential-shaped text hidden, capped. The program
+  itself did not survive.
+- **App panes** keep the app (bundle id and name), never a window title. A running app's window
+  goes back in its pane; an app that is not running is not started: its pane says so and offers
+  `Open <App>`. `restore_apps: true` starts it instead. Opening a workbook starts its apps: you
+  asked for them; a start does not.
+- **The drawer** shows the task's conversation again, not running: a click on its task goes on
+  with its session, as always. No agent starts by itself.
+- A tab whose task no longer exists comes back as a tab of no task, so nothing is lost.
+- A file that cannot be read is set aside as `layout.json.bad`, and ottospace starts empty and
+  says so. A file a newer build wrote is left as it is and not written over.
+- **File ▸ Start Fresh** (or the palette): the next start is empty. The file (and a
+  `layout.json.bad`) is removed and not written again this run. `restore_layout: false` turns it all off: the file is neither read nor
+  written (one that is there is left alone).
+- Marks that stood for a tab or a pane stand for it again.
+
 ## Terminal panes
 
 A terminal pane runs your shell on a PTY. The pane closes when the shell exits. It keeps 10,000
@@ -628,6 +659,8 @@ optional:
   "capture_key": "ctrl-alt-cmd-space",
   "capture": { "keep_images": true, "ax": true },
   "workbook_scrollback_lines": 500,
+  "restore_layout": true,
+  "restore_apps": false,
   "apps": ["Microsoft Outlook", "Slack"],
   "apps_hidden": ["Music"],
   "suggest_dock_apps": true,
@@ -647,7 +680,9 @@ optional:
 | `session_quiet_minutes` | A task adopted from a session moves to Needs you once the session has been quiet this many minutes. `0`: a quiet session never moves its task | `3` |
 | `agent_models` | The models the `@agent` dropdown offers after each runner, in place of the built-in list: ids as the runner's CLI takes them. `claude` and `codex` are each a list; a runner left out keeps its own, an empty list offers the runner alone. An id that does not start with the runner's name gets it in the tag: `gpt-6-astra` is `@codex-gpt-6-astra`, `opus` is `@claude-opus`. An entry that is not a name (letters and digits, with `.`, `-` or `_` between them one at a time; at most 64) is left out and named in the status bar | `claude-fable-5-2`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`; `gpt-6-astra` |
 | `default_agent` | The agent a task with no `@agent` starts: a runner (`claude`, `codex`) or a runner and a model (`claude-opus-5-5`, `codex-gpt-6-astra`). The first WHO pick in the drawer | `claude` |
-| `workbook_scrollback_lines` | How many of a terminal's last lines a [workbook](#workbooks) keeps when it is saved, shown again above its prompt when it opens. At most `2000`. `0`: none is kept | `500` |
+| `workbook_scrollback_lines` | How many of a terminal's last lines a [workbook](#workbooks), and the [restored layout](#restoring-the-layout), keeps, shown again above its prompt when it opens. At most `2000`. `0`: none is kept | `500` |
+| `restore_layout` | [Restore the layout](#restoring-the-layout) at start and keep it in `layout.json`. `false`: every start is empty | `true` |
+| `restore_apps` | At a restore, start an app a pane names that is not running. `false`: its pane waits and offers `Open <App>` | `false` |
 | `tasks_view` | How the Tasks section groups: `state` or `project`. Written when you pick one in the section's header | `state` |
 | `capture_key` | The key that captures the pane in use, from any app: modifiers (`ctrl`, `alt`, `cmd`, `shift`) and a key, with `-` between them. `"off"`: no key. `OTTOSPACE_CAPTURE_KEY` wins over it. Not `ctrl-alt-space`: macOS uses it to change the input source | `ctrl-alt-cmd-space` |
 | `capture.keep_images` | Keep a capture's pictures on disk. `false`: no picture is ever written | `true` |
@@ -765,6 +800,7 @@ first brainstorm:
 [capture.md](ai/capture.md): the capture key, annotate mode, what a capture stores, and how a brief quotes it.
 [marks.md](ai/marks.md): marks, what one records, and how they sit beside session restore, pins and tasks.
 [workbook.md](ai/workbook.md): workbooks beside tasks, marks and session restore; stages 1 and 2 as built, and what is later.
+[session-restore.md](ai/session-restore.md): the workspace back after quitting, in layers; layer 1, the layout file, as built.
 [terminal-persistence.md](ai/terminal-persistence.md): terminals and agents that outlive a quit or an update, held outside the app; with session restore, tasks come back as they were.
 [task-conversation.md](ai/task-conversation.md): a task's agent in a right drawer, the three zones, how an agent is started; stage 1 as built (the agent's terminal in the drawer), and what is later.
 
