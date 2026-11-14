@@ -361,6 +361,11 @@ mod tests {
         let mut m = two_live();
         let one = first(&m);
         assert!(m.talk_typing() && m.field().is_some_and(|(of, _)| of == "talk"));
+        // A client writes nothing the user would send.
+        let edit = Action::FieldEdit { edit: crate::edit::Edit::Replace { range: None, text: "rm -rf ~".into() } };
+        assert_eq!(m.refusal(&edit, Origin::Socket), Some(super::USERS_ALONE));
+        m.update(edit.sent_by(Origin::Socket));
+        assert_eq!(m.chat(&one).map(|chat| chat.draft.text()), Some(""));
         typed(&mut m, "hello");
         let sent = m.update(Action::TalkSend.sent_by(Origin::Socket));
         assert!(sent.is_empty() && m.refusal(&Action::TalkSend, Origin::Socket).is_some());

@@ -2288,6 +2288,9 @@ impl Model {
             | Action::TalkEscape
             | Action::TalkInterrupt
             | Action::TalkView { .. } => Some(chat::USERS_ALONE),
+            // So is the composer's text: what ↵ sends must be the user's own words.
+            Action::FieldEdit { .. } if self.field().is_some_and(|(of, _)| of == "talk") => Some(chat::USERS_ALONE),
+            // Only the shell's runner reports events (System); a client never does.
             Action::AgentEvents { .. } if origin == Origin::Socket => Some(chat::RUNNERS_ALONE),
             // On a rail list keys move over the rail: the user's, as the move that got there.
             Action::ListMove { .. } | Action::ListChoose { .. } | Action::LeaveList if self.rail_focus.is_some() => {

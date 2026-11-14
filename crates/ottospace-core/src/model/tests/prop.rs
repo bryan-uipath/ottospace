@@ -1889,6 +1889,8 @@ impl Run {
         let refused = m.refusal(&action, origin).map(|_| format!("{m:?}"));
         let awaiting = m.awaiting.clone();
         let switching = m.switching.clone();
+        let drafts: Vec<(Subject, String)> =
+            m.chats.iter().map(|chat| (chat.subject.clone(), chat.draft.text().to_string())).collect();
         let panes: Vec<PaneId> = m.panes.iter().map(|p| p.id).collect();
         let sneak = m.sneak.as_ref().map(|sneak| sneak.typed.clone());
         let labelled: Vec<String> =
@@ -2029,6 +2031,11 @@ impl Run {
             );
         }
         let user = origin == Origin::User;
+        // A composer's draft is the user's words alone: it starts empty, and only the user changes it.
+        for chat in m.chats.iter().filter(|_| !user) {
+            let before = drafts.iter().find(|(subject, _)| *subject == chat.subject).map(|(_, text)| text.as_str());
+            ensure!(before.unwrap_or("") == chat.draft.text(), "{origin:?} changed the draft of {:?}", chat.subject);
+        }
         let sneak_own = matches!(
             action,
             Action::Sneak { .. }
