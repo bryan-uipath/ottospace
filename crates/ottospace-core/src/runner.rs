@@ -176,7 +176,8 @@ const CLAUDE: RunnerSpec = RunnerSpec {
     attach: Attach {
         watch: Support::Yes,
         take_over_when_idle: Support::Yes,
-        // A running background session is attached to by `--resume` since 2.1.285: not tried.
+        // Probe 2026-11-13: `--resume` of a live interactive or `-p` session is not refused, it
+        // branches the same file. Only a `--bg` session is joined, by `claude attach <id>` (a TUI).
         attach_live: AttachLive::ViaOwnTerminal,
     },
 };
@@ -197,11 +198,14 @@ const CODEX: RunnerSpec = RunnerSpec {
     // No process is recorded; `session_meta` carries `cwd`.
     disk: Disk { held: false, cwd: true },
     attach: Attach {
-        // Whether a call's start is on disk before it ends was never measured.
-        watch: Support::Unverified,
+        // Probe 2026-11-13: the rollout grows per item; a call's start is on disk before it ends.
+        watch: Support::Yes,
+        // Once the holder is gone. A daemon-held thread stays refused to a private `app-server` for
+        // minutes after its clients leave; the TUI's `codex resume` goes through the daemon.
         take_over_when_idle: Support::Yes,
-        // `codex agents` and `codex queue` (0.166 `--help`): the shared app-server daemon.
-        attach_live: AttachLive::ViaDaemon { verified: false },
+        // Probe 2026-11-13: a second client of the shared daemon (`codex app-server proxy`) resumed a
+        // running thread and got its live events. A private `codex app-server` refuses it.
+        attach_live: AttachLive::ViaDaemon { verified: true },
     },
 };
 
