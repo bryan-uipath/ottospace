@@ -545,7 +545,7 @@ tab of dashboards, a tab of docs. It is not a task: no agent works it and it is 
 - **Save**: ⌘⇧S, File ▸ Save Tab as Workbook, or + in the Workbook section's header. It records
   the tab's splits and their sizes, and each app pane's app (bundle id and name); for each
   terminal, its directory as it is then, its last 500 lines (`workbook_scrollback_lines`; `0`
-  keeps none) and the command line of the program in front of its shell, if one runs. No window
+  keeps none; only once you typed in it: a shell left at its prompt keeps none) and the command line of the program in front of its shell, if one runs. No window
   title, URL or document. A tab with nothing in it is not saved.
 - **Add a tab**: `Add tab` on a workbook's row, `a` on it in list mode, or File ▸ Add Tab to
   Workbook… (it opens the section in list mode: pick the row, `a`). **All tabs**: File ▸ Save All
@@ -607,7 +607,8 @@ written a second after a change and at quit, readable by you alone.
   grey above the prompt, and a program that ran in front is typed on the prompt, not run: ↵ runs
   it. The same setting (`workbook_scrollback_lines`; `0` keeps no terminal text) and the same
   cleaning apply: escape sequences taken out, credential-shaped text hidden, capped. The program
-  itself did not survive.
+  itself did not survive. The grey lines are kept once: a start in which you typed nothing there
+  keeps them as they were; one in which you did adds what it printed below a second divider.
 - **The Settings tab** (Open Settings) is kept as a mark on its pane, never as a command and with
   none of its screen. It comes back running your editor on `settings.json` again, built as ⌘,
   builds it from `$VISUAL` or `$EDITOR` now; ⌘, brings it forward. An editor that is gone exits

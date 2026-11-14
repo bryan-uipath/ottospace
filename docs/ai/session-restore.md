@@ -55,6 +55,10 @@ The file is `layout.json`, not `session.json`, and a pane is kept as a workbook 
 - **Terminal text**: the workbook's rules exactly (`workbook_scrollback_lines`; `0` keeps no
   text and no command; cleaned, credential shapes hidden, 64 KB a terminal, 1 MB in all). The
   command is typed on the prompt, never run, and the divider names it. Never in the state.
+  The restored lines are saved again as they were, never read back off the view; what the run
+  printed below their divider is added, after a `── saved <date> ──` line, only if the user (or
+  a client's `type`) typed into the pane (`workbook::next_history`). A restart with no typing
+  saves the same history.
 - **Restore** (`Workspace::new`, after tasks, workbooks and marks are read; the guardian's
   leftovers were given back before the app started): each tab is built as a workbook's tab
   (`rebuild_tab`), in order, each task's tabs together and tabs of no task last

@@ -6142,6 +6142,52 @@ fn tabs_and_layout_come_back_after_quitting_and_no_agent_starts() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn a_restored_terminal_keeps_its_history_once_and_adds_a_block_only_after_typing() {
+    let home = user_folder("restore-once", r#"{"repos": []}"#);
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    // The restored pane's text once its divider shows: how often `line` is in it, and how many dividers.
+    let restored = |run: &str, lines: &[&str]| {
+        let otto = Otto::launch_with(run, &env);
+        let text = otto.wait_for("the history back", |o| {
+            let pane = pane_ids(&o.call(json!({"cmd": "state"}))).first().copied()?;
+            let text = o.call(json!({"cmd": "capture", "pane": pane, "history": true}))["text"].as_str()?.to_string();
+            text.contains("── saved ").then_some(text)
+        });
+        let count = |what: &dyn Fn(&str) -> bool| text.lines().filter(|line| what(line)).count();
+        let counts: Vec<usize> = lines.iter().map(|want| count(&|line| line == *want)).collect();
+        (otto, counts, count(&|line| line.starts_with("── saved ")), text)
+    };
+    let quit = |mut otto: Otto| {
+        otto.call(json!({"cmd": "quit"}));
+        exits(&mut otto);
+    };
+    let run = |otto: &Otto, word: &str| {
+        let pane = pane_ids(&otto.call(json!({"cmd": "state"})))[0];
+        otto.call(json!({"cmd": "type", "pane": pane, "text": format!("printf 'run-%s\\n' {word}\r")}));
+        otto.call(json!({"cmd": "wait", "pane": pane, "pattern": format!("^run-{word}$"), "timeout_ms": 30000}));
+    };
+    let otto = Otto::launch_with("restore-once-1", &env);
+    otto.call(json!({"cmd": "split"}));
+    run(&otto, "one");
+    quit(otto);
+    // Started twice, nothing typed: one copy, one divider, each time.
+    for start in ["restore-once-2", "restore-once-3"] {
+        let (otto, counts, dividers, text) = restored(start, &["run-one"]);
+        assert_eq!((counts, dividers), (vec![1], 1), "{text}");
+        quit(otto);
+    }
+    // A command run: one more block, and one more divider.
+    let (otto, ..) = restored("restore-once-4", &[]);
+    run(&otto, "two");
+    quit(otto);
+    let (otto, counts, dividers, text) = restored("restore-once-5", &["run-one", "run-two"]);
+    assert_eq!((counts, dividers), (vec![1, 1], 2), "{text}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn a_layout_file_that_does_not_read_is_set_aside_and_restore_layout_false_starts_empty() {
     let pid = std::process::id();
     let dir = support::temp(&format!("ottospace-e2e-restored-dir-{pid}"));
