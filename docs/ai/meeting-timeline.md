@@ -40,13 +40,14 @@ first:
 
 | Signal | Reads | Result |
 |---|---|---|
-| A microphone in use: CoreAudio's `kAudioDevicePropertyDeviceIsRunningSomewhere` on every input device | One flag per audio device. No window, title, log or other app; no permission prompt | **Chosen.** Checked on this machine with `ffmpeg -f avfoundation -i ":1" -t 3 -f null -` (3 seconds of the built-in microphone, discarded): `MacBook Pro Microphone` read `in use` during, `idle` before and after. Works for Zoom, Meet in a browser and Teams alike |
+| A process records: CoreAudio's `kAudioProcessPropertyIsRunningInput` on each audio process object (macOS 14.2) | One flag per audio process, no name. No window, title or log; no permission prompt | **Chosen.** Checked on this machine with `ffmpeg -f avfoundation -i ":1" -t 3 -f null -` (3 seconds of the built-in microphone, discarded): 0 processes running input before, 1 during; `afplay` of a system sound raised running *output* only. Works for Zoom, Meet in a browser and Teams alike |
+| A microphone device running: `kAudioDevicePropertyDeviceIsRunningSomewhere` on every input device | One flag per audio device | Also flips with the recording above, but is device-wide: a headset that only plays music would read as in use. Kept only as the fallback before macOS 14.2 |
 | The unified log: `log show --last 20s --predicate 'subsystem == "com.apple.controlcenter" AND eventMessage CONTAINS[c] "mic"'` | The user's system log | Readable without admin, and names the process (`Recent activity attributions changed to ["mic:ffmpeg"]`), but costs 2.2 s a query and reads far more than a flag. Not used |
 | Zoom's windows: a standard window titled `Zoom Meeting` (see `1-initial-brainstorm/zoom-ax.md`) | Another app's window titles | Zoom only, and reads another app's text. Dropped |
 | A Zoom helper process (`CptHost`, `aomhost`) | Process names | Not verifiable without a real meeting (Zoom was not running). Not used |
 
-`ottospace_mac::meeting::call()` returns `InCall`, `NotInCall` or `Unknown` (no input device, or
-CoreAudio did not answer); `Unknown` gives no alert. It is asked every 2 seconds from a minute
+`ottospace_mac::meeting::call()` returns `InCall`, `NotInCall` or `Unknown` (no way to tell, or a
+read failed and none said `InCall`); `Unknown` gives no alert. It is asked every 2 seconds from a minute
 before a meeting until it ends, never otherwise, and not in a test run (`calendar_call` stands in).
 
 Limits: a microphone in use for something else (dictation, a voice memo, a recording app) counts as
