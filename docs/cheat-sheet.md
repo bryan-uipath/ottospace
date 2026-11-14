@@ -149,8 +149,8 @@ ottospace ctl '{"cmd":"task_list"}'
 | I want to | Do |
 |---|---|
 | Scroll back | Wheel or trackpad · ⇧PageUp ⇧PageDown · ⇧Home ⇧End |
-| Select | Drag · double-click a word · triple-click a line |
-| Copy / paste | ⌘C / ⌘V |
+| Select | Drag · double-click a word · triple-click a line · ⇧-click extends · Esc clears |
+| Copy / paste | ⌘C / ⌘V: the pane pulses and says "Copied 3 lines". Text with a line break asks first: ↵ pastes |
 | Select with the keyboard | ⌘⇧C, then `hjkl` move, `v` select, `y` copy, Esc leave |
 
 Scrolling is the program's own inside full-screen programs (vim, less).

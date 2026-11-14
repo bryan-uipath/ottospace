@@ -1,6 +1,7 @@
 //! The quit question: ⌘Q asks before it ends a program running in a terminal.
 
-use gpui::{Context, Keystroke, Window, div, prelude::*, rgb};
+use gpui::{Context, Keystroke, Window, div, prelude::*, px, relative, rgb};
+use ottospace_core::clip::PasteAsk;
 use ottospace_core::keys::Mods;
 use ottospace_core::model::{Confirm, Running};
 use ottospace_core::{Action, Origin, theme};
@@ -28,11 +29,14 @@ impl Workspace {
     /// What `key` from `origin` answers the question with, as the core says (`Confirm::answer`).
     /// `None`: the question is not up, or the key is a socket client's and not an answer.
     pub fn confirm_answer(&self, key: &Keystroke, origin: Origin) -> Option<Action> {
-        self.model.confirm.as_ref()?;
+        let confirm = self.model.confirm.as_ref()?;
         let m = key.modifiers;
         // Fn counts as a modifier the core has no name for: with it no key is a yes.
         let mods = Mods { shift: m.shift || m.function, ..crate::mods(m) };
-        Confirm::answer(&key.key, mods, origin)
+        match confirm.paste {
+            Some(_) => PasteAsk::answer(&key.key, mods, origin == Origin::User),
+            None => Confirm::answer(&key.key, mods, origin),
+        }
     }
 
     /// Before any binding or key handler runs. While the question is up it takes every key: it
@@ -47,11 +51,45 @@ impl Workspace {
         if let Some(answer) = self.confirm_answer(key, self.input).filter(|_| !held) {
             self.dispatch(answer, self.input, window, cx);
         }
+        // Answered: the text a paste waited with goes.
+        if self.model.confirm.is_none() {
+            self.pasting = None;
+        }
         true
+    }
+
+    /// "Paste 4 lines?" over its pane: the first lines of the text, and what ↵ does.
+    pub fn render_paste_ask(&self, ask: &PasteAsk) -> impl IntoElement + use<> {
+        let text = self.pasting.as_ref().map_or("", |(_, text)| text.as_str());
+        let lines = text.lines().take(3).map(|line| div().truncate().child(line.to_string()));
+        let more = (ask.amount.lines > 3).then(|| div().child(format!("and {} more", ask.amount.lines - 3)));
+        let panel = dialog::panel(theme::BORDER_STRONG)
+            .w(px(320.))
+            .max_w(relative(0.9))
+            .flex()
+            .flex_col()
+            .child(div().px_3().pt_3().text_sm().text_color(rgb(theme::TEXT)).child(ask.title()))
+            .child(
+                div()
+                    .p_3()
+                    .flex()
+                    .flex_col()
+                    .text_xs()
+                    .font_family(crate::terminal::font_family())
+                    .text_color(rgb(theme::MUTED))
+                    .children(lines)
+                    .children(more),
+            )
+            .child(dialog::hint("↵ paste · esc cancel"));
+        div().absolute().size_full().flex().items_center().justify_center().child(panel)
     }
 
     /// The question, centred over the workspace. A click outside it cancels.
     pub fn render_confirm(&self, confirm: &Confirm, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        // "Paste 4 lines?" is drawn in its pane (`render_paste_ask`); a click anywhere cancels it.
+        if confirm.paste.is_some() {
+            return dialog::backdrop("confirm-backdrop", 0., Action::QuitCancel, cx).flex();
+        }
         // "Stop its agent and dismiss?": the task, and what ↵ does.
         if let Some(task) = confirm.dismiss.and_then(|id| self.model.tasks.get(id)) {
             let panel = dialog::floating(320.)

@@ -668,11 +668,38 @@ export interface Running {
   background: boolean;
 }
 
+/** How much text a copy or paste moved. `newline`: it holds a line break, even a last one. */
+export interface Amount {
+  lines: number;
+  chars: number;
+  newline: boolean;
+}
+
+/** A paste with a line break, waiting for the user's answer. */
+export interface PasteAsk {
+  pane: PaneId;
+  amount: Amount;
+}
+
+/** What the title strip of `pane` and the status bar say for 2 seconds after a copy or paste. */
+export interface Clip {
+  /** Null: a copy from no pane (a text field, a chat's Copy). */
+  pane: PaneId | null;
+  verb: "copied" | "cut" | "pasted";
+  amount: Amount;
+  /** "Copied 3 lines". */
+  text: string;
+  /** When, in milliseconds since 1970. */
+  at: number;
+}
+
 /** The quit question: the terminals that run something. */
 export interface Confirm {
   running: Running[];
   /** Not the quit question: "Stop its agent and dismiss?" for this task. Only the user answers it. */
   dismiss: TaskId | null;
+  /** Not the quit question: "Paste 4 lines?" over that terminal pane. Only the user answers it. */
+  paste: PasteAsk | null;
 }
 
 /** What a mark waits for while it has the keyboard (`mode` is `mark`). */
@@ -783,6 +810,8 @@ export interface Model {
   inspector: InspectorState | null;
   /** The quit question while it is up. */
   confirm: Confirm | null;
+  /** "Copied 3 lines", while it shows. */
+  clip: Clip | null;
   keys: boolean;
   /** The terminal pane in visual mode. */
   visual: PaneId | null;
@@ -818,6 +847,8 @@ export interface Terminal {
   /** Lines of history kept above the screen. */
   history: number;
   selection: string | null;
+  /** The selection's first and last cell as `[line, column]`, line 0 the top of the screen and negative in history. */
+  selection_range: [[number, number], [number, number]] | null;
   /** `[line, column]` in visual mode. */
   visual_cursor: [number, number] | null;
 }
@@ -967,7 +998,7 @@ export interface Snapshot {
   crop: Record<string, number>;
   /** By pane id. */
   terminals: Record<string, Terminal>;
-  /** The text of the last copy. */
+  /** A test run's stand-in clipboard: the last text copied. Null outside a test run. */
   copied: string | null;
   /** The picker's rows as drawn, or null: its items narrowed by the filter, then, once something is typed, the installed apps that are not running. */
   picker_rows: PickItem[] | null;

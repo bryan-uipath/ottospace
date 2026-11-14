@@ -110,11 +110,11 @@ impl Workspace {
     /// paths. False: there are none, or the line is not the new-task box's.
     pub fn paste_files(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
         let composing = self.model.field().is_some_and(|(of, _)| of == "compose");
-        // A test run's clipboard is the app's own text: the system's is never read.
-        if !composing || !self.system_clipboard {
+        if !composing {
             return false;
         }
-        let files = ottospace_mac::pasteboard::files();
+        // A test run's stand-in holds no files: the system's is never read.
+        let files = self.clipboard.files();
         if files.is_empty() {
             return false;
         }

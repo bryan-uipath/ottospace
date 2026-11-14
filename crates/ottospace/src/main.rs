@@ -20,13 +20,14 @@ use conversation::NativeInput;
 use core_foundation::base::TCFType;
 use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 use gpui::{
-    AnyElement, AnyView, App, Application, AssetSource, BorderStyle, Bounds, BoxShadow, ClickEvent, ClipboardItem,
-    ContentMask, Context, Div, ElementId, FocusHandle, FontWeight, KeyBinding, KeyDownEvent, Keystroke, Modifiers,
-    MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, ScrollDelta, ScrollHandle, ScrollWheelEvent, SharedString,
-    Size, Stateful, Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions, actions, black, canvas, div,
-    img, point, prelude::*, px, quad, relative, rgb, size, surface, svg, transparent_black,
+    AnyElement, AnyView, App, Application, AssetSource, BorderStyle, Bounds, BoxShadow, ClickEvent, ContentMask,
+    Context, Div, ElementId, FocusHandle, FontWeight, KeyBinding, KeyDownEvent, Keystroke, Modifiers, MouseButton,
+    MouseDownEvent, MouseMoveEvent, Pixels, ScrollDelta, ScrollHandle, ScrollWheelEvent, SharedString, Size, Stateful,
+    Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions, actions, black, canvas, div, img, point,
+    prelude::*, px, quad, relative, rgb, size, surface, svg, transparent_black,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+use ottospace_core::clip::{self, Verb};
 use ottospace_core::compose;
 use ottospace_core::edit::{self, Edit};
 use ottospace_core::hosted::{self as hosting, Click};
@@ -41,7 +42,9 @@ use ottospace_core::scrollbar::{Extent, key_step};
 use ottospace_core::settings::Installed;
 use ottospace_core::sneak::{SneakKey, sneak_key};
 use ottospace_core::tasks::{Assign, Group, Heading, MAX_TITLE, State, Task, TaskId, TaskRow};
-use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, scroll_key, select_kind, visual_key};
+use ottospace_core::terminal::{
+    CellPoint, VisualKey, cell_at, clears_selection, edge_scroll, press, scroll_key, visual_key,
+};
 use ottospace_core::{
     Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Origin, Pane, PaneId, PickItem, Picker, Rect, Section, Zone,
     theme,
@@ -56,6 +59,7 @@ mod app_wheel;
 mod apps;
 mod ax_debug;
 mod calendar;
+mod clipboard;
 mod collect;
 mod commands;
 mod config;
@@ -674,8 +678,14 @@ struct Workspace {
     injected: bool,
     /// Where headers, their × and tabs were last drawn.
     marks: Marks,
-    /// The last text copied. E2E runs use it as the clipboard, so tests never touch the user's.
-    copied: Option<String>,
+    /// Where every copy goes and every paste comes from: a stand-in in an E2E run.
+    clipboard: clipboard::Clipboard,
+    /// A paste that asks first ("Paste 4 lines?"): its pane and the text read at ⌘V.
+    pasting: Option<(PaneId, String)>,
+    /// Reduce motion, as read at the last copy or paste: the pulse holds still.
+    clip_reduced: bool,
+    /// Where the pointer is while a selection drag is held: past an edge, the terminal scrolls.
+    drag_at: Option<gpui::Point<Pixels>>,
     /// The open text field as last drawn: the new-task line, and a note's and the picker's own.
     field: field::Shared,
     /// What an ⌥-click would reference in the new-task box: outlined while ⌥ is held over it.
@@ -701,7 +711,6 @@ struct Workspace {
     visual_after: Vec<PaneId>,
     /// A global key that could not be registered, for the status bar.
     key_notice: Option<String>,
-    system_clipboard: bool,
     /// Each pane's body bounds in window coordinates, recorded during prepaint.
     cells: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
     /// Each pane's bounds inside its border, for e2e to check the live window's gap.
@@ -973,6 +982,14 @@ impl Workspace {
                             }
                         }
                         this.sync_terminals(window, cx);
+                        if tick % 3 == 0 {
+                            this.drag_scroll(cx);
+                        }
+                        // A pulse after a copy or paste is drawn frame by frame, and once more as it ends.
+                        let pulse = this.model.clip.as_ref().filter(|clip| clip.pane.is_some());
+                        if pulse.is_some_and(|clip| now_ms().saturating_sub(clip.at) < clip::PULSE_MS + 100) {
+                            cx.notify();
+                        }
                         this.sync_agents(window, cx);
                         // The header's time goes on while an agent runs.
                         let runs = this.model.talk.as_ref().is_some_and(|t| t.open && this.model.agent_runs(&t.task));
@@ -1058,7 +1075,10 @@ impl Workspace {
             abandoned: None,
             injected: false,
             marks: Marks::default(),
-            copied: None,
+            clipboard: clipboard::Clipboard::new(std::env::var_os("OTTOSPACE_E2E").is_some()),
+            pasting: None,
+            clip_reduced: false,
+            drag_at: None,
             field: field::Shared::default(),
             pointing: None,
             hover_at: gpui::Point::default(),
@@ -1075,7 +1095,6 @@ impl Workspace {
             pending: Vec::new(),
             visual_after: Vec::new(),
             key_notice: None,
-            system_clipboard: std::env::var_os("OTTOSPACE_E2E").is_none(),
             cells: HashMap::new(),
             frames: HashMap::new(),
             renders: 0,
@@ -1213,7 +1232,9 @@ impl Workspace {
         let unmarks = matches!(action, Action::MarkRemove { .. } | Action::MarkToggle { .. } | Action::ListDismiss);
         // And the offer to take a pin, an unpin or a hidden suggestion back.
         let pins = matches!(action, Action::AppPin { .. } | Action::AppHide { .. } | Action::ListPin);
-        if files || row || unmarks || pins || captures {
+        // And a paste: its pane pulses from now.
+        let pastes = matches!(action, Action::Paste { .. } | Action::QuitConfirm);
+        if files || row || unmarks || pins || captures || pastes {
             self.model.update(Action::Tick { now: now_ms() }.sent_by(Origin::System));
         }
         let name = trace::name(&action);
@@ -1387,6 +1408,13 @@ impl Workspace {
                 // Carried out with its pane's `Opened`, before the shell starts.
                 Effect::History { .. } | Effect::EditSettings { .. } => {}
                 Effect::ApplySettings { settings } => config::set_live(settings.as_ref().clone()),
+                // The text read at ⌘V, into the pane it was read for.
+                Effect::Paste { pane } => {
+                    let text = self.pasting.take().filter(|(at, _)| at == pane).map(|(_, text)| text);
+                    if let (Some(terminal), Some(text)) = (self.terminals.get(pane), text) {
+                        terminal.paste(&text);
+                    }
+                }
                 Effect::ForgetLayout => self.forget_layout(),
                 Effect::Snapshot { draft, material, pane } => self.ask_snapshot(draft, *material, *pane),
                 Effect::CaptureDropped { draft, material } => self.drop_capture(draft, *material),
@@ -2316,8 +2344,19 @@ impl Workspace {
                 return Some(why);
             }
         }
-        if self.model.confirm.is_some() {
-            return self.confirm_answer(key, Origin::Socket).is_none().then_some(CONFIRM_UP);
+        if let Some(confirm) = &self.model.confirm {
+            let why = if confirm.paste.is_some() { clip::USERS_ALONE } else { CONFIRM_UP };
+            return self.confirm_answer(key, Origin::Socket).is_none().then_some(why);
+        }
+        // ⌘V into a terminal: the user's clipboard, theirs alone to paste (`Action::Paste`).
+        let cmd = key.modifiers == Modifiers::command();
+        if let Some(pane) =
+            self.model.keyboard_terminal().filter(|_| cmd && key.key == "v" && self.model.field().is_none())
+        {
+            let paste = Action::Paste { pane, amount: clip::Amount::default() };
+            if let Some(why) = self.model.refusal(&paste, Origin::Socket) {
+                return Some(why);
+            }
         }
         // The palette types, moves and runs for the user alone.
         self.model.palette.is_some().then_some(ottospace_core::commands::USERS_ALONE)
@@ -2559,6 +2598,9 @@ impl Workspace {
                     "display_offset": display_offset, "history": history,
                     // What ⌘C would copy.
                     "selection": t.selected(),
+                    // Its first and last cell as [line, column], line 0 the top of the screen and
+                    // negative in history.
+                    "selection_range": t.selection_range(),
                     "visual_cursor": t.visual_cursor(),
                 });
                 (*id, terminal)
@@ -2612,8 +2654,8 @@ impl Workspace {
             // Each hosted pane's title-bar crop in points (0: none).
             "crop": crop,
             "terminals": terminals,
-            // The last text ⌘C copied.
-            "copied": self.copied,
+            // A test run's stand-in clipboard: the last text copied. Null outside a test run.
+            "copied": self.clipboard.test_text(),
             // The picker's rows as drawn, or null: `state.picker.items` narrowed by its filter,
             // then, once something is typed, the installed apps that are not running (`closed`).
             "picker_rows": self.model.picker.as_ref().map(Picker::matches),
@@ -3221,6 +3263,12 @@ impl Workspace {
         let key = &event.keystroke;
         let m = key.modifiers;
         let mods = crate::mods(m);
+        if clears_selection(&key.key, mods, terminal.selected().is_some()) {
+            terminal.clear_selection();
+            cx.notify();
+            cx.stop_propagation();
+            return;
+        }
         if let Some(scroll) = scroll_key(&key.key, mods, terminal.alt_screen()) {
             terminal.scroll(scroll);
             cx.notify();
@@ -3242,7 +3290,8 @@ impl Workspace {
         }
     }
 
-    /// A press on a terminal starts a selection there: a drag, or a word or line by click count.
+    /// A press on a terminal starts a selection there: a drag, or a word or line by click count;
+    /// with ⇧ it moves the far end of the one there (`press`).
     /// It also focuses the pane (`click_pane`), so the first click on an unfocused pane selects too.
     fn terminal_mouse_down(&mut self, id: PaneId, event: &MouseDownEvent, cx: &mut Context<Self>) {
         // While a picture is annotated a click on another pane captures it: it selects nothing.
@@ -3251,8 +3300,8 @@ impl Workspace {
         }
         let Some(at) = self.cell_under(id, event.position) else { return };
         if let Some(terminal) = self.terminals.get(&id) {
-            terminal.select_start(at, select_kind(event.click_count));
-            self.dragging = Some(id);
+            terminal.select_start(at, press(event.click_count, event.modifiers.shift));
+            (self.dragging, self.drag_at) = (Some(id), None);
             cx.notify();
         }
     }
@@ -3264,8 +3313,24 @@ impl Workspace {
             self.dragging = None;
             return;
         }
+        self.drag_at = Some(event.position);
         if let (Some(at), Some(terminal)) = (self.cell_under(id, event.position), self.terminals.get(&id)) {
             terminal.select_to(at);
+            cx.notify();
+        }
+    }
+
+    /// While a selection drag is held past the grid's top or bottom, the terminal scrolls a
+    /// little each step (`edge_scroll`), and the selection follows into the history.
+    fn drag_scroll(&mut self, cx: &mut Context<Self>) {
+        let (Some(id), Some(at)) = (self.dragging, self.drag_at) else { return };
+        let (Some(bounds), Some(terminal)) = (self.cells.get(&id).map(|c| c.get()), self.terminals.get(&id)) else {
+            return;
+        };
+        let rows = terminal.grid_size().1 as f32 * f32::from(self.cell.height);
+        let lines = edge_scroll(f32::from(at.y - bounds.origin.y), rows, self.cell.height.into());
+        if let (true, Some(cell)) = (lines != 0, self.cell_under(id, at)) {
+            terminal.select_scrolling(lines, cell);
             cx.notify();
         }
     }
@@ -3421,7 +3486,7 @@ impl Workspace {
             VisualKey::SelectLines => terminal.visual_select(true),
             VisualKey::Copy => {
                 if let Some(text) = terminal.selected() {
-                    self.copy_text(text, cx);
+                    self.copy_text(text, Some(id), Verb::Copied, cx);
                 }
                 self.dispatch(Action::LeaveVisual, self.input, window, cx);
             }
@@ -3436,39 +3501,46 @@ impl Workspace {
         if self.field_copy(false, window, cx) {
             return;
         }
-        let pane = self.model.visual.or_else(|| self.model.keyboard_terminal());
-        let terminal = pane.and_then(|id| self.terminals.get(&id));
-        let Some(text) = terminal.and_then(Terminal::selected) else { return };
-        self.copy_text(text, cx);
+        let Some((id, text)) = self.copyable() else { return };
+        self.copy_text(text, Some(id), Verb::Copied, cx);
     }
 
-    fn copy_text(&mut self, text: String, cx: &mut Context<Self>) {
-        if self.system_clipboard {
-            cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-        }
-        self.copied = Some(text);
+    /// The terminal ⌘C copies from and what it would copy: Copy in the Edit menu is on with it.
+    fn copyable(&self) -> Option<(PaneId, String)> {
+        let id = self.model.visual.or_else(|| self.model.keyboard_terminal())?;
+        Some((id, self.terminals.get(&id)?.selected()?))
+    }
+
+    /// Every copy of ottospace's: to the clipboard, then the notice that says so (`clip::Clip`).
+    /// `pane`: where the text came from, which pulses. None: a text field or a chat's Copy.
+    pub(crate) fn copy_text(&mut self, text: String, pane: Option<PaneId>, verb: Verb, cx: &mut Context<Self>) {
+        let amount = clip::Amount::of(&text);
+        self.clipboard.copy(text, cx);
+        self.clip_reduced = ottospace_mac::meeting::reduce_motion();
+        // The notice has no effects, so needs no window: a chat's Copy button has none to give.
+        self.model.update(Action::Tick { now: now_ms() }.sent_by(Origin::System));
+        self.model.update(Action::Copied { pane, verb, amount }.sent_by(self.input));
+        cx.notify();
     }
 
     /// ⌘V: pastes the clipboard's text into the open text field, else the focused terminal.
+    /// There the core decides: the user's alone, and text with a line break asks first.
     fn paste(&mut self, window: &Window, cx: &mut Context<Self>) {
         if self.field_paste(window, cx) {
             return;
         }
-        let text = self.clipboard_text(cx);
-        if self.talk_paste(text) {
+        let text = self.clipboard.text(cx);
+        if self.talk_paste(text.clone()) {
             return;
         }
-        let Some(terminal) = self.model.keyboard_terminal().and_then(|id| self.terminals.get(&id)) else { return };
-        if let Some(text) = self.clipboard_text(cx) {
-            terminal.paste(&text);
-        }
-    }
-
-    /// The clipboard's text. An E2E run's clipboard is `copied`, never the user's.
-    fn clipboard_text(&self, cx: &App) -> Option<String> {
-        match self.system_clipboard {
-            true => cx.read_from_clipboard().and_then(|item| item.text()),
-            false => self.copied.clone(),
+        let (Some(pane), Some(text)) = (self.model.keyboard_terminal(), text) else { return };
+        let amount = clip::Amount::of(&text);
+        self.pasting = Some((pane, text));
+        self.clip_reduced = ottospace_mac::meeting::reduce_motion();
+        self.dispatch(Action::Paste { pane, amount }, self.input, window, cx);
+        // Refused, or pasted at once: nothing waits.
+        if self.model.confirm.as_ref().is_none_or(|confirm| confirm.paste.is_none()) {
+            self.pasting = None;
         }
     }
 
@@ -4404,6 +4476,11 @@ impl Workspace {
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| this.fit_pane(id, window, cx)))
         });
+        // After a copy from it or a paste into it: "Copied 3 lines" in the header, and one pulse.
+        let now = now_ms();
+        let clip = self.model.clip.as_ref().filter(|clip| clip.pane == Some(id) && clip.shows(now));
+        let glow = clip.map_or(0., |clip| clip.glow(now, self.clip_reduced));
+        let clip = clip.map(|clip| div().flex_none().text_color(rgb(theme::PRIMARY)).child(clip.text.clone()));
         // The pane being annotated has its tools in its header.
         let drawn_on = self.model.annotated().filter(|m| m.pane == id && self.shots.contains_key(&m.n));
         let strip = drawn_on.map(|material| self.annotate_strip(material, cx));
@@ -4462,6 +4539,7 @@ impl Workspace {
                     .min_w_0()
                     .gap_2()
                     .items_center()
+                    .children(clip)
                     .children(hint)
                     .children(word)
                     .children(strip)
@@ -4639,6 +4717,20 @@ impl Workspace {
             )
             .child(header)
             .child(body)
+            // The pulse: the border and a tint in the focus colour, over the pane, taking no clicks.
+            .when(glow > 0., |d| {
+                let color = gpui::Hsla::from(rgb(theme::PRIMARY));
+                let ring = div().absolute().inset_0().border_2().border_color(color.opacity(glow));
+                d.child(ring.bg(color.opacity(glow * 0.1)))
+            })
+            .children(
+                self.model
+                    .confirm
+                    .as_ref()
+                    .and_then(|c| c.paste)
+                    .filter(|ask| ask.pane == id)
+                    .map(|ask| self.render_paste_ask(&ask)),
+            )
             .on_drop(cx.listener(move |this, dragged: &DraggedPane, window, cx| {
                 let zone = this.drop_zone(dragged.0, window.mouse_position()).filter(|(target, _)| *target == id);
                 if let Some((target, zone)) = zone {
@@ -4881,6 +4973,7 @@ impl Workspace {
             }
             Mode::Sneak => ("SNEAK", "type a label · esc leaves"),
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.dismiss.is_some()) => ("DISMISS?", ""),
+            Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.paste.is_some()) => ("PASTE?", ""),
             Mode::Confirm => ("QUIT?", ""),
             Mode::Annotate => ("ANNOTATE", "drag to circle · click for a note · ↵ title · esc leaves"),
             Mode::Talk => ("TALK", "keys go to the task's agent"),
@@ -4935,6 +5028,14 @@ impl Workspace {
                 div().text_color(rgb(theme::SNEAK)).child(label)
             }))
             // Shown here, not in the Apps list, so it is visible whichever section is open.
+            // "Copied 3 lines", from anywhere: the status bar says each copy and paste.
+            .children(
+                self.model
+                    .clip
+                    .as_ref()
+                    .filter(|clip| clip.shows(now_ms()))
+                    .map(|clip| div().flex_none().text_color(rgb(theme::PRIMARY)).child(clip.text.clone())),
+            )
             .children(self.problem().map(|e| div().min_w_0().truncate().text_color(rgb(theme::ERROR)).child(e)))
             // Which build this is, last and dim: it matters when something looks wrong.
             .child(
@@ -5263,7 +5364,10 @@ impl Render for Workspace {
                     this.dispatch(Action::MarkCancel, this.input, window, cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &CopySelection, window, cx| this.copy(window, cx)))
+            // Copy, in the menu too, only with something selected: in a field, else in the terminal.
+            .when(self.field_selected() || self.copyable().is_some(), |d| {
+                d.on_action(cx.listener(|this, _: &CopySelection, window, cx| this.copy(window, cx)))
+            })
             .on_action(cx.listener(|this, _: &PasteText, window, cx| this.paste(window, cx)))
             .on_action(cx.listener(|this, _: &Cut, window, cx| this.field_menu(edit::Key::Cut, window, cx)))
             .on_action(cx.listener(|this, _: &SelectAll, window, cx| {

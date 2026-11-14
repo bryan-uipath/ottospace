@@ -118,6 +118,9 @@ pub struct Settings {
     /// machine: never in the state, a log or the feed's request.
     #[serde(default)]
     pub calendar_email: Option<String>,
+    /// When ⌘V into a terminal asks first: `multiline` (default: text with a line break) or `never`.
+    #[serde(default)]
+    pub paste_confirm: Option<crate::clip::PasteConfirm>,
 }
 
 /// Which meetings alert when they start (`calendar_notify_for`).
@@ -439,6 +442,7 @@ fn restart_keys(started: &Settings, now: &Settings) -> Vec<&'static str> {
         calendar_notify: _,
         calendar_notify_for: _,
         calendar_email,
+        paste_confirm: _,
     } = now;
     let changed = [
         ("terminal", *terminal != started.terminal),
