@@ -51,7 +51,7 @@ running, and the rest of the design is not built: see the
 | Workbooks (⌘⇧S): save tabs under a name (their splits, each terminal's directory, each app) and open them again from the Workbook section. Several tabs each: add a tab to one, or save all the tabs on the bar as one. Kept in `~/.ottospace/workbooks`. An app comes back as its window, not on the page or document it showed | Works today |
 | Tabs and layout come back after quitting: every tab (with its task and workbook), its splits and sizes, focus, the tab on show, the section and the drawer; terminals start again in their folders with their last lines and an offered command; running apps' windows go back in their panes. See [Restoring the layout](#restoring-the-layout) | Works today |
 | `settings.json`: terminal font, repository directories, tasks folder, apps to offer, window rules | Works today |
-| [Meeting timeline](#meeting-timeline): a calendar feed (`calendar_ics`) as a hairline across the top of the window, now at its left edge; the next meeting named beside the tab bar's buttons; a soft pulse as one comes near; a banner, a notification and a sound when one has started and you are in no call | Works today |
+| [Meeting timeline](#meeting-timeline): a calendar feed (`calendar_ics`) as a thin band of the workday above the status bar, a tick for now; the next meeting named beside the tab bar's buttons; a soft pulse as one comes near; a banner, a notification and a sound when one has started and you are in no call | Works today |
 
 ### Roadmap: designed, not built
 
@@ -635,16 +635,19 @@ Set `calendar_ics` to your calendar's feed (an `https://` link, such as a calend
 address in iCal format", or a file's path) and ottospace shows your day's meetings, never in
 the way.
 
-- **The hairline**: a 6-point band along the very top of the window, above the window's buttons,
-  so it costs no room. Its left edge is now; it shows the next `calendar_window_hours` (8). Each
-  meeting is a block as long as it lasts; blocks slide left as time passes and go when they end.
-  A meeting that runs starts at the left edge and shrinks. Faint ticks mark whole hours; the hour
-  shows on hover. Meetings that overlap share two half-height lanes. All-day events are one small
-  dot at the left end. Hover a block for its title, time and place.
+- **The band**: 8 points high, directly above the status bar, the window's width; panes give up
+  that height. It is the workday (`calendar_workday`, 09:00 to 17:00), fixed through the day: a
+  small mark at its start and one at its end, each meeting a flat block at its clock place (past
+  ones faint), and a bright tick for now that moves along it (pinned to an end before or after
+  hours). A meeting outside the workday widens the band to hold it, never past midnight (one over
+  midnight is cut there). Meetings that overlap share two half-height lanes; all-day events are
+  one small dot at the left end. Blocks are at least 3 points wide. Hover only, no click: a block
+  shows its title, time, length, place and whether it has a Zoom, Meet or Teams link; a mark its
+  time; now the time and the next meeting.
 - **The chip**: beside the new-tab and split buttons, the next meeting today: `Design review ·
   in 12m`, `· now` while it runs. Hidden when nothing is left today. Its tooltip says when the
   feed was last read (`calendar: not updated since 09:40` when the last read failed).
-- **The pulse**: from 10 minutes before a meeting its block and the chip glow softly, slowly;
+- **The pulse**: from 10 minutes before a meeting its block (its opacity) and the chip glow softly, slowly;
   from 2 minutes, faster; while it runs, steadily. With Reduce motion (System Settings,
   Accessibility, Display) the colour steps up instead, with no movement. Nothing else in
   ottospace pulses.
@@ -677,7 +680,7 @@ the way.
   occurrences are followed; see [meeting-timeline.md](ai/meeting-timeline.md) for what is not.
 - **Declined meetings**: set `calendar_email` to your address as the feed lists you among a
   meeting's attendees, and a meeting (or one occurrence) you declined is left out everywhere: the
-  hairline, the chip, the section and the alerts. A feed published with limited detail (free/busy
+  band, the chip, the section and the alerts. A feed published with limited detail (free/busy
   only, or without attendees) does not say who declined; then nothing is left out. The address
   stays in `settings.json`: it is not sent with the feed's request, shown, logged or in the state.
 - **The Calendar section** (its rail cell, second, is there only while `calendar_ics` is set):
@@ -847,7 +850,7 @@ A change is read when the file is saved: what is wrong in it is said in the stat
 | `apps_hidden` | Apps of the Dock not to suggest in Apps, written as `apps` is. Hide in the Apps section writes this list | none |
 | `wheel_to_apps` | The wheel or trackpad over an app pane you are not in brings its window up for the scroll (a peek). `false`: the wheel there does nothing | `true` |
 | `calendar_ics` | The [meeting timeline](#meeting-timeline)'s calendar feed: an `https://` link (to a host on the internet, not an address or `localhost`) or a file's path (`/…` or `~/…`). Never shown: a private feed's link holds a secret | none: no timeline |
-| `calendar_window_hours` | How many hours the hairline shows from now, 1 to 24 | `8` |
+| `calendar_workday` | The workday the timeline's band spans: `"HH:MM-HH:MM"`, local 24-hour time, the start at least an hour before the end (`"06:00-22:00"`; `24:00` ends the day). `calendar_window_hours`, from before, is retired: the status bar asks to remove it, and the rest applies | `"09:00-17:00"` |
 | `calendar_refresh_minutes` | How often the feed is read again, at least 1 | `5` |
 | `calendar_notify` | A meeting that starts while you are in no call, or in another call, shows the banner, a notification and a sound | `true` |
 | `calendar_notify_for` | Which meetings alert: `all`, or only those with a Zoom, Meet or Teams `links` | `all` |
