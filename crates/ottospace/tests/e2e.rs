@@ -6280,7 +6280,8 @@ fn edit_call(path: &Path) -> String {
     json!({"type": "tool_use", "id": "toolu_edit", "name": "Edit", "input": input}).to_string()
 }
 
-/// The conversation's last `Edit` call has its card, in the state by counts only: no line, no path.
+/// The conversation's last `Edit` call has its card, in the state by counts only: no line, and
+/// of its path only the label's last two parts.
 fn assert_edit_card(chat: &Value) {
     let entries = chat["transcript"]["entries"].as_array().unwrap();
     let call = entries.iter().rev().find(|e| e["tool"] == "Edit").expect("the edit's call");
@@ -6288,7 +6289,7 @@ fn assert_edit_card(chat: &Value) {
     assert_eq!(diff["changes"], json!(["edit"]), "{call}");
     assert_eq!((&diff["added"], &diff["removed"], &diff["more"]), (&json!(0), &json!(1), &json!(0)), "{call}");
     let said = chat.to_string();
-    assert!(!said.contains("redirect") && !said.contains("src/auth.rs"), "{said}");
+    assert!(!said.contains("redirect") && !said.contains("app/src/auth.rs"), "{said}");
 }
 
 #[test]
