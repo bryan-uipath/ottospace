@@ -17,6 +17,7 @@ import {
   taskNewReply,
   taskPopReply,
   taskReply,
+  recordReply,
   traceReply,
   waitReply,
 } from "./parse.ts";
@@ -45,6 +46,7 @@ import type {
   MarkRenameArgs,
   MarkReply,
   MarksReply,
+  RecordReply,
   TraceReply,
   KeyArgs,
   MouseArgs,
@@ -469,6 +471,17 @@ export class Client {
    */
   calendarCall(args: { in_call: boolean | null }): Promise<Snapshot> {
     return this.snapshot({ cmd: "calendar_call", ...args });
+  }
+  /**
+   * For tests (`OTTOSPACE_E2E`): records ottospace's own window into the folder `dir`, a raw
+   * BGRA file a frame and `frames.jsonl` (`scripts/shot --record`). Rejects outside a test run.
+   */
+  async recordStart(args: { dir: string }): Promise<void> {
+    await this.send({ cmd: "record_start", ...args });
+  }
+  /** For tests: stops the recording. */
+  async recordStop(): Promise<RecordReply> {
+    return recordReply(await this.send({ cmd: "record_stop" }));
   }
   /**
    * The user's meetings of `day` and the `days` after it, busy and free time: what the app holds

@@ -95,6 +95,9 @@ Rules:
   - `sneak_app_tree`: a fixture tree as if read from the focused pane's window while sneak mode
     is on (a test run hosts no window), so its elements get labels. The state's `app_presses`
     (null outside a test run) lists each press a label asked for.
+  - `record_start` (`"dir"`) and `record_stop`: ScreenCaptureKit films ottospace's own window
+    into `dir`, a raw BGRA file a change and `frames.jsonl` (`record.rs`), for
+    `scripts/shot --record`. Outside a test run no client films the window.
   - `"repeat":true` on `key`: each key as one still held down. A key that types is a real repeat
     to `keyDown:`: `enter`, `tab`, `space`, or a character the layout types with no modifier on
     key codes 0 to 50 (`a`, `7`, `/`; not `A`). A `cmd-` shortcut, by the flag alone, is pressed as
@@ -135,11 +138,31 @@ Rules:
   `main-latest` prerelease and moves its tag. Not a required check.
 - `.github/workflows/scripts.yml`, on pull requests that change `scripts/**` or `install.sh`:
   `scripts/test-osi.sh`.
+- `.github/workflows/shots.yml`, on pull requests that change `crates/ottospace/src/**`,
+  `crates/ottospace-core/src/**`, `scripts/shot`, `scripts/shots/**` or `scripts/test-shot.sh`:
+  `scripts/test-shot.sh`, then `scripts/shot --compare` of every scenario against the merge base;
+  the pictures are the artifact `shots`. Read-only token, no comment on the pull request. Not a
+  required check. (`test-shot.sh` needs a screen that draws, so it runs here, not in scripts.yml.)
 - `.github/workflows/release.yml`, on a `v*` tag: `scripts/package.sh`, GitHub Release.
 - `.github/workflows/pages.yml`, on pushes to `main` that touch `site/**`: deploys `site/` to GitHub
   Pages. Never on pull requests. Only its deploy job has `pages: write` and `id-token: write`.
 - Workflows use `pull_request`, never `pull_request_target`, and name their `permissions:`. Pin
   actions by commit.
+
+## Pull requests
+
+- **Every pull request shows evidence.** A change to anything on screen has a before and an after
+  picture (or a short recording when the change is motion); a tool, CLI, parser or CI change has
+  the command's output, before and after where there is a before. No evidence, no merge.
+- Pictures come from a private test instance (`OTTOSPACE_E2E`, its own `OTTOSPACE_HOME` and
+  `OTTOSPACE_SOCKET` under `$TMPDIR`, made-up content), by window id only (`screencapture -l <id>`),
+  never a screen region, never the user's own windows. Look at each one before it is uploaded.
+  They go in the pull request's body through a secret gist, never into the repository.
+- If a picture cannot be taken (the screen is locked: a locked screen draws nothing), the pull
+  request says so and waits; it is not merged unseen.
+- Visual evidence: `scripts/shot --compare <base> <scenario>…` (or the `shots.yml` artifact); add
+  a scenario under `scripts/shots/` for a view none covers. See `docs/development.md`.
+- A tool, CLI, parser or CI change pastes the command's output instead.
 
 ## Install scripts
 

@@ -56,6 +56,7 @@ import type {
   MarkInput,
   MarkReply,
   MarksReply,
+  RecordReply,
   TraceReply,
   Workbook,
   WorkbookPane,
@@ -1503,6 +1504,10 @@ function staleMark(value: unknown, at: string): true {
 
 export function traceReply(value: unknown): TraceReply {
   return { ok: true, trace: str(fields(value, "reply").trace, "trace") };
+}
+
+export function recordReply(value: unknown): RecordReply {
+  return { ok: true, frames: num(fields(value, "reply").frames, "frames") };
 }
 
 function scrollbar(value: unknown, at: string): Scrollbar {

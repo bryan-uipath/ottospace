@@ -1189,6 +1189,12 @@ export interface TraceReply {
   trace: string;
 }
 
+/** `record_stop`'s reply: how many frames the recording wrote. */
+export interface RecordReply {
+  ok: true;
+  frames: number;
+}
+
 /** A scroll area's bar, in window points. `opacity` 0: faded out, and it takes no press. */
 export interface Scrollbar {
   track: Rect;
