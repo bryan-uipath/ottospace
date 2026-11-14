@@ -314,6 +314,7 @@ impl Gen<'_> {
             dismissed: self.rng.one_in(4),
             project: self.rng.coin().then(|| self.name(REPOS)),
             repo: self.rng.coin().then(|| self.name(DIRS)),
+            folder: self.rng.one_in(4).then(|| self.name(DIRS)),
             agent: self.rng.coin().then(|| self.name(AGENTS)),
             paths: self.names(DIRS, 2),
             resolved: self.names(DIRS, 2),
@@ -755,6 +756,7 @@ const MAKERS: &[Make] = &[
     |_| Action::ComposeEscape,
     |g| Action::ComposeMove { delta: g.delta() },
     |g| Action::ComposeAccept { index: g.index(4) },
+    |_| Action::ComposeFolderClear,
     |g| {
         // Paths of every kind: a space, a narrow no-break space, a backslash, a line break,
         // one too long, one that is no path.
@@ -1389,7 +1391,21 @@ fn check(m: &Model) -> Result<(), String> {
         unique(&aliases) && unique(&targets),
         "the line points at one thing twice, or two by one name: {aliases:?}"
     );
-    let kept = !m.compose_refs.is_empty() || !m.compose_attached.is_empty() || m.compose_note.is_some();
+    let kept = !m.compose_refs.is_empty() || m.compose_folder.is_some() || m.compose_note.is_some();
+    ensure!(m.compose.is_some() || m.path_shown.is_none(), "the box is closed and a path's rows are kept");
+    // A path's rows still being read are not to be taken; fresh ones are of the folder typed.
+    if let Some(menu) = m.dropdown().filter(|menu| menu.mark == '/') {
+        ensure!(!menu.stale || menu.selected.is_none(), "a row still being read is highlighted: {menu:?}");
+        let folder = compose::path_folder(&menu.typed);
+        let inside = menu.rows.iter().all(|row| row.name.starts_with(&folder) && row.name.len() > folder.len());
+        ensure!(menu.stale || inside, "a path's row is not in the folder typed: {menu:?}");
+    }
+    if let Some(folder) = m.compose_folder() {
+        let named = m
+            .compose_line()
+            .is_some_and(|line| compose::path_words(line).concat().iter().any(|p| folder.starts_with(p.as_str())));
+        ensure!(named, "the box's folder {folder:?} is no word of its line");
+    }
     ensure!(m.compose.is_some() || !kept, "the box is closed and something of its line is kept");
     let offered: Vec<String> = m.ref_candidates().into_iter().map(|(r, _)| r.name).collect();
     ensure!(unique(&offered), "two things are offered by one name: {offered:?}");

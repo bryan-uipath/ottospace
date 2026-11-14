@@ -82,6 +82,8 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     compose_picks: { wheres: ["app"], whos: ["claude", "codex"] },
     welcome: false,
     compose_menu: null,
+    compose_menu_bounds: null,
+    compose_folder: null,
     compose_pointing: null,
     compose_note: null,
     tasks_bar: { empty: true, undo: null, sections: [] },

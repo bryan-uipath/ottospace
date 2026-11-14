@@ -170,6 +170,8 @@ export interface Task {
   project: string | null;
   /** A repository path. */
   repo: string | null;
+  /** The folder the user took from the new-task box's dropdown: its agent runs there, not in `repo`. Absent: none. */
+  folder?: string;
   /** Who works it: `claude`, `codex`, or a saved agent's name. */
   agent: string | null;
   /** Paths the task is about, as typed. */
@@ -354,7 +356,7 @@ export interface ComposeMenu {
   rows: MenuRow[];
   /** The highlighted row: ↵ and Tab take it. Null: ↵ adds the task. */
   selected: number | null;
-  /** What it says with no row: `no match` or `new project`. */
+  /** What it says with no row: `no match` or `new project`; under a folder's rows, `… 12 more`. */
   note: string | null;
 }
 
@@ -979,13 +981,17 @@ export interface Snapshot {
   compose_read: boolean;
   /** Where the new-task box is: the drawer's new-task state, the draft's title, or closed. */
   compose_host: "drawer" | "bar" | null;
-  /** What ↵ in the box would do: start `agent` (unless a saved agent: `starts` false) in the repository `dir` (null: the home folder), on `branch`. Null while the box is closed. */
+  /** What ↵ in the box would do: start `agent` (unless a saved agent: `starts` false) in the repository `dir`, or the folder taken from the dropdown as typed (null: the home folder), on `branch`. Null while the box is closed. */
   compose_plan: { agent: string; starts: boolean; dir: string | null; branch: string | null } | null;
   /** The drawer's one-click picks: repository names and agent names. */
   compose_picks: { wheres: string[]; whos: string[] };
   /** Nothing is open yet (no pane, task or conversation): the drawer shows the new task by itself. */
   welcome: boolean;
   compose_menu: ComposeMenu | null;
+  /** Where `compose_menu` was drawn, or null without one. */
+  compose_menu_bounds: Rect | null;
+  /** The folder taken from a path's dropdown that the task's agent will run in, as the line has it (`~/notes/`), or null. */
+  compose_folder: string | null;
   /** The tab or pane an ⌥-click would reference in the new-task box, while ⌥ is held over it. */
   compose_pointing: Rect | null;
   /** What the new-task box says it could not do ("no room in the line for that name"), or null. */

@@ -33,7 +33,7 @@ running, and the rest of the design is not built: see the
 | A task's agent in the right drawer: a click or ↵ on a task starts its agent (`claude` or `codex`, by its `@agent`, else `default_agent`) beside the workspace, which stays as it is. See [Flow of a task](#flow-of-a-task) | Works today |
 | Native conversation for Claude Code: the drawer drives `claude -p` (stream-json) and draws the reply itself: markdown (headings, emphasis, lists, quotes, tables), code blocks with Copy, links that open only on your click (web pages in the browser; files of the task's repository revealed in Finder), local images of the repository as thumbnails, tool calls as compact rows, a file edit's change as a diff card under its call, a working row while a turn runs, Copy and Copy as Markdown on each message, and a composer (↵ send, ⇧↵ new line). Permission requests are cards: Allow this one request as shown, or Deny (with a message if you like); a request too long to show is opened in full before Allow is offered. `Chat \| Terminal` in the header switches to the CLI's own TUI and back on the same session. A session at work in another terminal is watched read-only (what it calls and edits, not what it says; "Watching · updates per message" in the header), with Take over once it is idle. Codex stays in a terminal. No text selection by dragging yet: copy by message or block | Works today |
 | Right rail: a badge per open conversation of a live task (needs you first, then running, then the last opened; at most 8), and `+` for a new task. A dismissed task leaves it; a done one stays only while shown or its agent runs | Works today |
-| New task (⌘N), in the drawer: one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`, picks for where and who, and a line that says what ↵ will do. `/path` and `$skill` are stored and shown; nothing acts on them yet | Works today |
+| New task (⌘N), in the drawer: one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`, picks for where and who, and a line that says what ↵ will do. A `/path` stays in the title the agent reads, and a folder taken from its dropdown is where the agent runs; `$skill` is stored and shown, nothing acts on it yet | Works today |
 | Home screen: a tab with no panes says what goes there (Open an app ⌘E, Terminal ⌘D), the tasks that need you, and each listed task as a node on a lattice (left to right by project; within a project the older task is farther). A click on a node or a row opens its conversation. With nothing open at all, the drawer shows a new task by itself | Works today |
 | Task groups on the one tab bar: a tab may be a task's, and each task's tabs sit side by side behind its badge (its two letters, bordered in its own colour, its state as a dot), underlined in its colour; the tabs of no task last. Starting a task takes the tab on show if that is no task's; ⌘T joins the task on show; drag a tab onto a group to move it there. The same badge on its panes, its row, the rail and the drawer. Selecting a task's tab shows its conversation in the open drawer | Works today |
 | Tabs, each with its own split tree | Works today |
@@ -173,6 +173,16 @@ and WHO (the default agent, then each runner and its models), which set the line
   folder takes no space: the dropdown stays open on what is inside it. A space typed at
   the end of a name that is one of the rows takes that row, spelled as it is kept; inside a
   word a space is a space.
+- **A path's rows.** Only a word that starts with `/`, `~/`, `./` or `../` (or a bare `~`)
+  opens them: `and/or`, `11/14` and a link do not. Directories come first, then files; a name
+  that starts with the last part typed before one that holds it, whatever the case. A hidden
+  name shows once that part starts with `.`. At most eight, and "… n more" under them. While
+  the next folder is read the rows shown stay; none can be taken until it is in. A name that
+  hides or turns its text around (a bidi mark) is not offered. `./` and `../` need a `>repo`.
+- **A folder you take** (Tab, ↵ or a click on a folder's row) is where the task's agent will
+  run, in place of its `>repo`: the box shows it as "runs in ~/notes/ ×", and the line above
+  says so. × takes it off and leaves the path in the line. Changed in the line, it is gone. A
+  path typed out and never taken is only a word of the task.
 - **Tags that are understood** are drawn in their colour on a faint chip, in the line itself;
   a word that names nothing stays plain.
 - **Files.** Files and folders dragged from Finder onto the box, picked with ⌘O, or copied in
@@ -358,7 +368,7 @@ read out of the line; the rest is the title.
 | `#project` | The project the task serves | Projects other tasks name |
 | `>repo` | The repository the task works in | The Repos list (repositories and worktrees) |
 | `@agent` | Who works it: a runner (`@claude`, `@codex`: its default model), a runner and a model (`@claude-opus-5-5`, `@codex-gpt-6-astra`), or a saved agent | `claude`, its models, `codex`, its models, then each `~/.ottospace/agents/<name>.md` if that folder exists |
-| `/path` | A path the task is about: a word that starts with `/` or `~/` | The files and directories under what is typed |
+| `/path` | A path the task is about: a word that starts with `/`, `~/` (or is `~`), `./` or `../`. It stays in the title. A folder taken from the dropdown is where the agent runs | The directories, then the files, of the folder typed |
 | `$skill` | A skill to load for the task | Skill folders (those with a `SKILL.md`) in `~/.claude/skills`, `$CLAUDE_CONFIG_DIR/skills`, `~/.codex/skills` (or `$CODEX_HOME/skills` if that is set), and the `.claude/skills` of the task's `>repo` |
 | `^reference` | Something open that the task points at. A space in the name has a backslash before it: `^Tab\ 1` | What is open now: each tab (its title), each pane (a terminal by its directory's name, an app pane by the app's), each [mark](#marks), and the installed apps that are not running. Two of one name: the later one is `name-2` |
 | `p1` to `p9` | The priority. 1 is most urgent; 3 when none is given | |
@@ -385,12 +395,12 @@ review the export PR >canvas-app @codex $code-review /src/export
   `ask @ana`, `costs $5` and `use > 3 workers` are safe. A name starts with a letter, so `#123`,
   `>3` and `$5` are never tags. `#project` always counts: a new name is a new project. A name
   longer than 200 characters is no tag either: it stays in the title.
-- **A `/path`** is under the home folder (`~/notes.md`), or, when the line names a `>repo`,
-  inside that repository: `/src/export` with `>canvas-app` is `src/export` in it. If nothing is
-  there (or no repository is named), it is absolute: `/Users/me/notes.md`. So with a `>repo` the
-  repository is looked in first, then the root of the disk; Tab lists the repository's entries
-  before the root's. It counts if a file or directory is there. The task keeps the word as typed
-  (`paths`) and, beside it, the absolute path that was found (`resolved`).
+- **A `/path`** is under the home folder (`~/notes.md`), from the root of the disk
+  (`/Users/me/notes.md`), or, when the line names a `>repo`, inside that repository:
+  `./src/export` with `>canvas-app` is `src/export` in it, `../other` beside it. It counts if a
+  file or directory is there. The task keeps the word as typed (`paths`) and, beside it, the
+  absolute path that was found (`resolved`). The word also stays in the title, so the agent
+  reads it.
 - **Punctuation and spaces.** A comma or full stop after a tag is not part of it: `#canvas,`
   and `p1,` work. For a path the word as typed is tried first, so a file named `v1.` is found,
   then the word without the punctuation. A space in a path or a reference is written with a
@@ -398,8 +408,6 @@ review the export PR >canvas-app @codex $code-review /src/export
   no-break space, as in a macOS screenshot's name) and a backslash itself (`a\\b`); taking a
   row, a drop or ⌥-click writes them for you. The task keeps the name without them. A name
   with a line break or a tab in it cannot be in the line: it is left out, and the box says so.
-- **A file dropped, picked or pasted** is that very file: `/tmp/report.txt` put in whole is
-  not looked for inside the line's `>repo`, as a path you type is.
 - **How many.** One `#project`, one `>repo`, one `@agent`, one priority: of two, the last one
   counts. Every `/path` and `$skill` is kept, each once (at most 20 of each). `@agent` and
   `$skill` are kept as their file or folder spells them, whatever the case typed.
@@ -413,14 +421,17 @@ review the export PR >canvas-app @codex $code-review /src/export
   runner, or `claude-…` or `codex-…`, is not offered: the name means the runner or its model.
   Name saved agents otherwise.
 - **What they do today.** `#project` and `>repo` are used: the home screen groups by project, and
-  a task's agent runs in its repository. `@agent` says which agent starts in the drawer
-  ([Flow of a task](#flow-of-a-task)). `/path` and `$skill` are stored on the task and shown
-  on its row; nothing loads a skill yet. What must be checked before anything does:
+  a task's agent runs in its repository, or in the folder taken from a path's dropdown.
+  `@agent` says which agent starts in the drawer ([Flow of a task](#flow-of-a-task)). A
+  `/path` is in the title the agent reads, and stored on the task; `$skill` is stored and
+  shown on its row; nothing loads a skill yet. What must be checked before anything does:
   [routines.md](ai/routines.md#6-trust-and-safety).
 - **Reading is off the window's thread.** Names and paths are looked up on another thread, so a
   slow disk does not stop typing. A tag's chip shows a moment after the word is typed; ↵ files
   the line with the tags that have shown.
 - `OTTOSPACE_SKILLS` (directories, `:` between them) replaces the runners' skill folders.
+- `OTTOSPACE_PATH_HOME` is the folder `~` stands for in a `/path`. A test run (`OTTOSPACE_E2E`)
+  that names none has no `~`, and looks at no path outside the temp folder.
 - `@name` named a repository before. It does not now. Titles of tasks already filed are not read
   again.
 

@@ -1198,8 +1198,8 @@ fn the_new_task_box_files_a_line() {
     let finished = [
         ("a @co", "a @codex "),
         ("a $code", "a $code-review "),
-        ("a >flow-app /src/ex", "a >flow-app /src/export/"),
-        ("a >flow-app /My", r"a >flow-app /My\ Notes/"),
+        ("a >flow-app ./src/ex", "a >flow-app ./src/export/"),
+        ("a >flow-app ./My", r"a >flow-app ./My\ Notes/"),
     ];
     for (typed, completed) in finished {
         compose(typed);
@@ -1212,17 +1212,20 @@ fn the_new_task_box_files_a_line() {
     assert_eq!(key("tab")["state"]["compose"], "costs $5");
     key("escape");
     // Every tag through the box. The skill is spelled as its folder is, once; the path is kept
-    // as typed, with where it was found: inside the repository.
-    let line = r"review the export PR #canvas >flow-app p2, @codex $Code-Review $code-review /src/export, /My\ Notes";
+    // as typed, with where it was found: inside the repository; and it stays in the title.
+    let line = r"review the export PR #canvas >flow-app p2, @codex $Code-Review $code-review ./src/export, ./My\ Notes";
     compose(line);
     let reply = key("enter");
     let task = &reply["state"]["tasks"]["list"][3];
-    assert_eq!((task["title"].as_str(), task["project"].as_str()), (Some("review the export PR"), Some("canvas")));
+    assert_eq!(
+        (task["title"].as_str(), task["project"].as_str()),
+        (Some(r"review the export PR ./src/export, ./My\ Notes"), Some("canvas"))
+    );
     assert_eq!(
         (task["repo"].as_str(), task["agent"].as_str(), task["priority"].as_u64()),
         (repo.to_str(), Some("codex"), Some(2))
     );
-    assert_eq!((&task["skills"], &task["paths"]), (&json!(["code-review"]), &json!(["/src/export", "/My Notes"])));
+    assert_eq!((&task["skills"], &task["paths"]), (&json!(["code-review"]), &json!(["./src/export", "./My Notes"])));
     assert_eq!(task["resolved"], json!([repo.join("src/export"), repo.join("My Notes")]));
     // A socket call while the box is open reads its own line's tags: the user's line keeps its own.
     compose("mine $code-review");
@@ -2097,28 +2100,90 @@ fn the_new_task_dropdown_finishes_the_tag_at_the_cursor() {
 
     // A path: its folder's entries are read on another thread. Taking a folder keeps the
     // dropdown open on what is inside it.
-    otto.call(json!({"cmd": "compose", "text": "see >flow-app /sr"}));
+    otto.call(json!({"cmd": "compose", "text": "see >flow-app ./sr"}));
     let rows = |want: &[&str]| {
         otto.wait_for("the entries of the path", |o| {
             let reply = o.call(json!({"cmd": "state"}));
             (menu(&reply).0 == want).then_some(reply)
         })
     };
-    assert_eq!(rows(&["/src/"])["compose_menu"]["rows"][0]["kind"], "folder");
-    assert_eq!(field(&key("tab")).0, "see >flow-app /src/");
-    assert_eq!(menu(&rows(&["/src/export/", "/src/extra.rs"])).1, None, "nothing of a name is typed yet");
+    assert_eq!(rows(&["./src/"])["compose_menu"]["rows"][0]["kind"], "folder");
+    assert_eq!(field(&key("tab")).0, "see >flow-app ./src/");
+    assert_eq!(menu(&rows(&["./src/export/", "./src/extra.rs"])).1, None, "nothing of a name is typed yet");
     key("e x p");
-    rows(&["/src/export/"]);
-    assert_eq!(field(&key("enter")).0, "see >flow-app /src/export/");
-    assert_eq!(rows(&["/src/export/a.md"])["compose_menu"]["rows"][0]["kind"], "file");
-    assert_eq!(field(&key("down enter")).0, "see >flow-app /src/export/a.md ");
+    rows(&["./src/export/"]);
+    assert_eq!(field(&key("enter")).0, "see >flow-app ./src/export/");
+    assert_eq!(rows(&["./src/export/a.md"])["compose_menu"]["rows"][0]["kind"], "file");
+    assert_eq!(field(&key("down enter")).0, "see >flow-app ./src/export/a.md ");
     otto.wait_for("the line's tags", |o| {
         o.call(json!({"cmd": "state"}))["compose_read"].as_bool().filter(|read| *read)
     });
     let reply = key("enter");
     let task = &reply["state"]["tasks"]["list"][4];
-    assert_eq!((task["title"].as_str(), &task["paths"]), (Some("see"), &json!(["/src/export/a.md"])));
+    assert_eq!(
+        (task["title"].as_str(), &task["paths"]),
+        (Some("see ./src/export/a.md"), &json!(["./src/export/a.md"]))
+    );
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_path_typed_a_letter_at_a_time_keeps_its_dropdown_still() {
+    // A made-up home folder: `~` stands for it, never the user's.
+    let home = support::temp(&format!("ottospace-e2e-paths-{}", std::process::id()));
+    for dir in ["notes/2026", "notes/archive", "Documents", "node", ".secret"] {
+        std::fs::create_dir_all(home.join(dir)).unwrap();
+    }
+    std::fs::write(home.join("notes.md"), "").unwrap();
+    let otto = Otto::launch_with("paths", &[("OTTOSPACE_PATH_HOME", home.to_str().unwrap())]);
+    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+    otto.call(json!({"cmd": "split"}));
+    // Prose with a `/` in it opens nothing; nor does `./` with no repository named.
+    for prose in ["and/or", "11/14", "./"] {
+        otto.call(json!({"cmd": "compose", "text": format!("plan {prose}")}));
+        assert_eq!(otto.call(json!({"cmd": "state"}))["compose_menu"], Value::Null, "{prose}");
+        while key("escape")["mode"] == "compose" {}
+    }
+    otto.call(json!({"cmd": "compose", "text": "plan my week "}));
+    key("~");
+    let first = otto.wait_for("the home folder's entries", |o| {
+        let reply = o.call(json!({"cmd": "state"}));
+        (!menu(&reply).0.is_empty()).then_some(reply)
+    });
+    // Directories first, a hidden one left out.
+    assert_eq!(menu(&first).0, ["~/Documents/", "~/node/", "~/notes/", "~/notes.md"]);
+    let at = rect(&first["compose_menu_bounds"]);
+    let line = rect(&first["field"]["bounds"]);
+    // The edge that meets the line: the top below it, the bottom above it.
+    let edge = |r: [f64; 4]| if r[1] < line[1] { r[1] + r[3] } else { r[1] };
+    // Each key's reply waits for the frame that draws it: the list is there on every one, in place.
+    for c in "/notes/2".chars() {
+        let reply = key(&c.to_string());
+        let (rows, menu_at) = (menu(&reply).0, rect(&reply["compose_menu_bounds"]));
+        assert!(!rows.is_empty(), "after {c:?} the list is empty: {}", reply["compose_menu"]);
+        assert_eq!((menu_at[0], menu_at[2], edge(menu_at)), (at[0], at[2], edge(at)), "after {c:?} it moved");
+    }
+    otto.wait_for("the folder's entries", |o| {
+        let reply = o.call(json!({"cmd": "state"}));
+        (menu(&reply).0 == ["~/notes/2026/"]).then_some(())
+    });
+    // The user's Tab takes the folder: `/` after it, and the agent will run there.
+    let reply = otto.call(json!({"cmd": "key", "keys": "tab", "as": "user"}));
+    assert_eq!(
+        (field(&reply).0.as_str(), &reply["compose_folder"]),
+        ("plan my week ~/notes/2026/", &json!("~/notes/2026/"))
+    );
+    assert_eq!(reply["compose_plan"]["dir"], "~/notes/2026/");
+    // Esc closes the list and leaves the text as typed.
+    let reply = key("escape");
+    assert_eq!((field(&reply).0.as_str(), &reply["compose_menu"]), ("plan my week ~/notes/2026/", &Value::Null));
+    otto.wait_for("the line's tags", |o| o.call(json!({"cmd": "state"}))["compose_read"].as_bool().filter(|r| *r));
+    // ⇧↵ files it for later: no agent starts. The path stays in the title; the folder is the task's.
+    let reply = key("shift-enter");
+    let task = &reply["state"]["tasks"]["list"][0];
+    let folder = home.join("notes/2026").to_string_lossy().into_owned();
+    assert_eq!((&task["title"], &task["folder"]), (&json!("plan my week ~/notes/2026/"), &json!(folder)));
 }
 
 #[test]
@@ -2161,7 +2226,11 @@ fn files_dropped_on_the_new_task_box_and_what_is_pointed_at_go_into_the_line() {
     let task = &reply["state"]["tasks"]["list"][0];
     assert_eq!(
         (task["title"].as_str(), &task["paths"], &task["resolved"]),
-        (Some("read"), &json!([file, folder]), &json!([file, folder]))
+        (
+            Some(format!("read {} {folder}", file.replace(' ', "\\ ")).as_str()),
+            &json!([file, folder]),
+            &json!([file, folder])
+        )
     );
     // A name with a space that is not a plain space stays one word, and one path. A dropped
     // path is that very file: with `>flow-app` in the line it is not looked for inside the

@@ -40,8 +40,13 @@ pub struct Dropdown {
     pub rows: Vec<Row>,
     /// The highlighted row: ↵ and Tab take it. `None`: ↵ adds the task.
     pub selected: Option<usize>,
-    /// What the dropdown says with no row: `no match`, `new project`, `reading…`.
-    pub note: Option<&'static str>,
+    /// What the dropdown says under its rows: `no match`, `new project` with none; `… 12 more`
+    /// past the last of a folder's.
+    pub note: Option<String>,
+    /// The rows are those of the path as it was: what finishes it now is still being read. They
+    /// stay on show, so the list does not blink, and none can be taken.
+    #[serde(skip)]
+    pub stale: bool,
 }
 
 /// How well `name` matches `typed`, without regard to case, and where. 0: it starts with it.
