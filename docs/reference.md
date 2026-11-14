@@ -553,7 +553,9 @@ written a second after a change and at quit, readable by you alone.
 - **What comes back**: every tab in bar order, each with its task (a task's tabs together, tabs of
   no task last) and the workbook it came from; its splits and their sizes; which pane had focus;
   the tab on show; the section that was open; the drawer (the conversation it showed, open or
-  closed, its width). A task's tabs live here, keyed by the task's number, not in the task's file.
+  closed, its width). A task's tabs live here, keyed by the task's number, not in the task's file;
+  its badge colour is in the task's file. A tab of a task that is gone or dismissed comes back as
+  a tab of no task.
 - **Terminals** start a new shell in the folder they were in (one that is gone: your home folder,
   and the status bar says so). As a [workbook](#workbooks)'s do, they show their last lines in
   grey above the prompt, and a program that ran in front is typed on the prompt, not run: ↵ runs

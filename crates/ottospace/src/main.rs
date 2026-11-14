@@ -807,6 +807,8 @@ struct Launch {
     axis: Axis,
     new_tab: bool,
     since: Instant,
+    /// Who asked: the user's new tab joins the task on show once the window is in.
+    origin: Origin,
     /// The window a mark asked for; else the app's main window, as a click in the list asks.
     wanted: Option<marks::Wanted>,
     /// How many windows the started app had at the last look, and since when: a mark's window
@@ -2777,7 +2779,8 @@ impl Workspace {
                 Err(err) => return Err(format!("{} could not be opened: {err}", app.name)),
             }
         }
-        self.launching.push(Launch { app, axis, new_tab, since: Instant::now(), wanted, windows: None });
+        let origin = self.input;
+        self.launching.push(Launch { app, axis, new_tab, since: Instant::now(), origin, wanted, windows: None });
         Ok(())
     }
 
@@ -2807,7 +2810,9 @@ impl Workspace {
             // Listed, but its main window may not be ready yet: try again until the time is up.
             let hosted = app.is_some_and(|app| match &launch.wanted {
                 Some(wanted) => settled && self.host_window_of(app.pid, wanted, window, cx).is_ok(),
-                None => self.open_app(&app.name, launch.axis, launch.new_tab, window, cx).is_ok(),
+                None => self.with_origin(launch.origin, |this| {
+                    this.open_app(&app.name, launch.axis, launch.new_tab, window, cx).is_ok()
+                }),
             });
             if hosted {
                 continue;

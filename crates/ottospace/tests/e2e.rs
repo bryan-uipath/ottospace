@@ -5806,14 +5806,14 @@ fn tabs_and_layout_come_back_after_quitting_and_no_agent_starts() {
     otto.call(json!({"cmd": "split"}));
     otto.call(json!({"cmd": "split", "axis": "down"}));
     let second = tree_shape(&otto.call(json!({"cmd": "state"}))["state"]["layout"]);
-    // A task whose agent the user started once: it has a session. Its own tab is on show.
+    // A task whose agent the user started once: it has a session, and took the tab on show.
     otto.call(json!({"cmd": "task_new", "line": "fix login >app"}));
     otto.call(json!({"cmd": "section", "section": "tasks"}));
     otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
     otto.wait_for("the agent to start", |_| agent_argv(&bin, "claude"));
-    otto.call(json!({"cmd": "task_open", "id": 1}));
     let before = otto.call(json!({"cmd": "state"}));
-    assert_eq!((&before["state"]["current_task"], &before["state"]["talk"]["task"]), (&json!(1), &json!(1)));
+    let on_show = |s: &Value| s["state"]["tabs"][s["state"]["active"].as_u64().unwrap_or(0) as usize]["task"].clone();
+    assert_eq!((on_show(&before), &before["state"]["talk"]["task"]), (json!(1), &json!(1)));
     otto.call(json!({"cmd": "quit"}));
     exits(&mut otto);
 
@@ -5828,26 +5828,27 @@ fn tabs_and_layout_come_back_after_quitting_and_no_agent_starts() {
     let otto = Otto::launch_with("restore-2", &env);
     let after = otto.wait_for("the tabs back", |o| {
         let state = o.call(json!({"cmd": "state"}));
-        (state["terminals"].as_object()?.len() == 5).then_some(state)
+        (state["terminals"].as_object()?.len() == 4).then_some(state)
     });
     // Each task's tabs together, then no task's, in their order; the task's tab on show.
     let task_tab = tab_titles(&before).into_iter().find(|(_, task)| *task == json!(1)).unwrap();
     let none = |tabs: Vec<(String, Value)>| tabs.into_iter().filter(|(_, task)| task.is_null()).collect::<Vec<_>>();
     assert_eq!(tab_titles(&after)[0], task_tab);
     assert_eq!(none(tab_titles(&after)), none(tab_titles(&before)));
-    assert_eq!((&after["state"]["current_task"], &after["state"]["sidebar"]), (&json!(1), &json!("tasks")));
+    assert_eq!((on_show(&after), &after["state"]["sidebar"]), (json!(1), &json!("tasks")));
+    assert_eq!(after["groups"], before["groups"]);
     // The drawer shows the task's conversation to go on with; no agent was started.
     let talk = &after["state"]["talk"];
     assert_eq!((&talk["task"], &talk["open"], &talk["keys"]), (&json!(1), &json!(true), &json!(false)), "{talk}");
     assert_eq!((&after["state"]["agents"], &after["drawer"]["agents"]), (&json!([]), &json!({})));
     // The splits, ratios within a point, and each terminal in its folder.
-    let tab = otto.call(json!({"cmd": "task_leave"}));
+    let tab = otto.call(json!({"cmd": "select_tab", "index": 1}));
     assert_eq!(tree_shape(&tab["state"]["layout"]), first);
-    assert_eq!(pane_dirs(&after)[1..3], [json!(one), json!(two)]);
-    otto.call(json!({"cmd": "type", "pane": 2, "text": "pwd\r"}));
-    otto.call(json!({"cmd": "wait", "pane": 2, "pattern": format!("^{one}$"), "timeout_ms": 30000}));
-    // By its place among all the tabs: the task's comes first.
-    assert_eq!(tree_shape(&otto.call(json!({"cmd": "select_tab", "index": 2}))["state"]["layout"]), second);
+    assert_eq!(pane_dirs(&after)[2..4], [json!(one), json!(two)]);
+    otto.call(json!({"cmd": "type", "pane": 3, "text": "pwd\r"}));
+    otto.call(json!({"cmd": "wait", "pane": 3, "pattern": format!("^{one}$"), "timeout_ms": 30000}));
+    // The task's tab, first on the bar, is the second tab made.
+    assert_eq!(tree_shape(&otto.call(json!({"cmd": "select_tab", "index": 0}))["state"]["layout"]), second);
     assert!(agent_argv(&bin, "claude").is_none(), "an agent was started at start");
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);

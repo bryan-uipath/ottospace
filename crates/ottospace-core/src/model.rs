@@ -2133,7 +2133,9 @@ impl Model {
             | Action::TaskStop { .. }
             | Action::TalkGo => Some(agents::USERS_ALONE),
             // "Stop its agent and dismiss?" is the user's to answer yes to.
-            Action::QuitConfirm if self.confirm.as_ref().is_some_and(|confirm| confirm.dismiss.is_some()) => {
+            Action::QuitConfirm | Action::QuitCancel
+                if self.confirm.as_ref().is_some_and(|confirm| confirm.dismiss.is_some()) =>
+            {
                 Some(agents::USERS_ALONE)
             }
             // Dismissing a task whose agent runs would stop the agent: the user is asked.
@@ -2283,11 +2285,13 @@ impl Model {
             .map(|tab| tab.id)
             .filter(|_| !matches!(sent.action, Action::RestoreLayout { .. }));
         let undo = matches!(sent.action, Action::TaskUndo | Action::ListUndo);
+        // Where the keyboard was before the step: a tab change moves it out of the drawer.
+        let drawer_keys = self.talk.as_ref().is_some_and(|talk| talk.open && talk.keys) || self.composing();
         let effects = self.step(sent);
         self.tasks.finished(&states, self.now);
         // Only the user's own undo links a dismissed task's tabs again.
         self.settle_tasks(undo && origin == Origin::User);
-        self.follow_tab(shown, origin);
+        self.follow_tab(shown, origin, drawer_keys);
         // However the list was left (Esc, a click on a pane), ⌘⌃← comes back to its row.
         if self.list.is_none() && listed.is_some() {
             self.list_kept = zones::KeptRow(listed);
@@ -4723,21 +4727,22 @@ impl Model {
     /// The tab on show changed from `shown`: an open drawer shows the conversation of its task,
     /// if it has one, with no agent started and the keyboard where it was. While the keyboard
     /// is in the drawer only the user's own change of tab does this.
-    fn follow_tab(&mut self, shown: Option<u32>, origin: Origin) {
+    fn follow_tab(&mut self, shown: Option<u32>, origin: Origin, drawer_keys: bool) {
         let Some(shown) = shown else { return };
         let Some(tab) = self.tabs.get(self.active).filter(|tab| tab.id != shown) else { return };
         let Some(id) = tab.task else { return };
         let open = self.talk.as_ref().is_some_and(|talk| talk.open) || self.compose_host() == Some(Host::Drawer);
-        let keys = self.talk.as_ref().is_some_and(|talk| talk.open && talk.keys) || self.composing();
         let subject = Subject::Task(id);
-        if !open || (keys && origin != Origin::User) || self.talk.as_ref().is_some_and(|t| t.open && t.task == subject)
+        if !open
+            || (drawer_keys && origin != Origin::User)
+            || self.talk.as_ref().is_some_and(|t| t.open && t.task == subject)
         {
             return;
         }
         if self.compose_host() == Some(Host::Drawer) {
             self.put_compose_aside();
         }
-        let keys = keys && self.talk_live(&subject);
+        let keys = drawer_keys && self.talk_live(&subject);
         self.talk = Some(Talk { task: subject.clone(), open: true, keys });
         self.opened.retain(|seen| *seen != subject);
         self.opened.push(subject);
@@ -7064,8 +7069,16 @@ mod tests {
         m.update(Action::SelectTab { index: 1 });
         m.update(Action::TaskTalk { id: a }); // starts it: the keyboard goes in
         assert_eq!(m.mode(), Mode::Talk);
+        m.update(Action::SelectTab { index: 0 }.sent_by(Origin::Socket));
+        assert_eq!((shown(&m), m.tab_task()), (Some(a), Some(a)));
+        m.update(Action::TaskTalk { id: a });
+        assert_eq!(m.mode(), Mode::Talk);
         m.update(Action::SelectTab { index: 1 }.sent_by(Origin::Socket));
-        assert_eq!((shown(&m), m.tab_task()), (Some(a), Some(b)));
+        assert_eq!((shown(&m), m.tab_task()), (Some(a), Some(b)), "a client's tab change, the keyboard in the drawer");
+        // A client cannot answer "Stop its agent and dismiss?", yes or no.
+        m.update(Action::RowDismiss { id: a });
+        assert_eq!(m.refusal(&Action::QuitCancel, Origin::Socket), Some(agents::USERS_ALONE));
+        m.update(Action::QuitCancel);
         // A task with no tab: claim the tab on show if it is no task's, else a new tab.
         let c = add_task(&mut m, "c", State::Captured);
         m.update(Action::TaskTalk { id: c });

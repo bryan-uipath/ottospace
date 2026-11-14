@@ -15,7 +15,7 @@ use crate::workbook::{self, History};
 pub const VERSION: u32 = 1;
 /// The largest file read, as a workbook's.
 pub const MAX_FILE_BYTES: usize = workbook::MAX_FILE_BYTES;
-/// The most tabs kept, every scope's together.
+/// The most tabs kept.
 pub const MAX_TABS: usize = 8 * workbook::MAX_TABS;
 /// The most marks one tab names.
 const MAX_LINKS: usize = 64;

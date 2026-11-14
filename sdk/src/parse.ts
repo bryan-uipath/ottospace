@@ -902,7 +902,8 @@ function running(value: unknown, at: string): Running {
 }
 
 function confirm(value: unknown, at: string): Confirm {
-  return { running: list(running)(fields(value, at).running, `${at}.running`) };
+  const o = fields(value, at);
+  return { running: list(running)(o.running, `${at}.running`), dismiss: orNull(num)(o.dismiss, `${at}.dismiss`) };
 }
 
 function markInput(value: unknown, at: string): MarkInput {
