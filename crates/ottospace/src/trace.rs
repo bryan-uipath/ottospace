@@ -118,6 +118,7 @@ mod tests {
 
     #[test]
     fn a_name_never_carries_its_payload() {
+        // The payloads are never read: they are there to be left out of the name.
         #[derive(Debug)]
         #[allow(dead_code)]
         enum Sample {
