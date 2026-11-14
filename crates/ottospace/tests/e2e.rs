@@ -1918,7 +1918,7 @@ fn mouse_selects_and_copy_paste_use_it() {
     let reply = down(7.5, 2);
     assert_eq!(reply["state"]["focused"], 1);
     assert_eq!(reply["terminals"]["1"]["selection"], "beta");
-    assert_eq!(down(7.5, 3)["terminals"]["1"]["selection"], "alpha beta gamma\n", "a triple-click selects the line");
+    assert_eq!(down(7.5, 3)["terminals"]["1"]["selection"], "alpha beta gamma", "a triple-click selects the line");
 
     // A drag selects from the press to the cell under the pointer; a click alone clears it.
     down(0.25, 1);
@@ -1926,9 +1926,10 @@ fn mouse_selects_and_copy_paste_use_it() {
     assert_eq!(reply["terminals"]["1"]["selection"], "alpha beta");
     assert_eq!(down(3.5, 1)["terminals"]["1"]["selection"], Value::Null);
 
-    // ⌘C with nothing selected copies nothing.
+    // ⌘C with nothing selected copies nothing, and says nothing.
     let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
-    assert_eq!(key("cmd-c")["copied"], Value::Null);
+    let reply = key("cmd-c");
+    assert_eq!((reply["copied"].clone(), reply["state"]["clip"].clone()), (Value::Null, Value::Null));
 
     // The selection follows its text as new output scrolls the screen.
     down(7.5, 2);
@@ -1936,12 +1937,133 @@ fn mouse_selects_and_copy_paste_use_it() {
     let t = otto.wait_for("more output", |o| Some(term1(o)).filter(|t| shows(t, "two")));
     assert_eq!(t["selection"], "beta", "{t}");
 
-    // ⌘C copies it; ⌘V pastes it at the prompt (e2e runs use a private clipboard).
-    assert_eq!(key("cmd-c")["copied"], "beta");
+    // ⌘C copies it (e2e runs use a stand-in clipboard), and pane 1 and the status bar say so.
+    let reply = key("cmd-c");
+    assert_eq!(reply["copied"], "beta");
+    let clip = &reply["state"]["clip"];
+    assert_eq!((clip["pane"].as_u64(), clip["text"].as_str()), (Some(1), Some("Copied 4 characters")), "{clip}");
+    assert_eq!(reply["terminals"]["1"]["selection"], "beta", "copying keeps the selection");
+
+    // A client's ⌘V is refused: it would put the user's clipboard where `capture` reads it.
     otto.call(json!({"cmd": "type", "pane": 1, "text": "echo pasted-"}));
-    key("cmd-v");
+    let refused = otto.raw(&json!({"cmd": "key", "keys": "cmd-v"}).to_string());
+    assert!(refused["error"].as_str().is_some_and(|e| e.contains("only the user pastes")), "{refused}");
+    // The user's pastes, and pane 1 says so.
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-v", "as": "user"}));
+    assert_eq!(reply["state"]["clip"]["text"], "Pasted 4 characters");
     otto.call(json!({"cmd": "type", "pane": 1, "text": "\r"}));
     otto.wait_for("the pasted command's output", |o| Some(term1(o)).filter(|t| shows(t, "pasted-beta")));
+
+    // Esc clears a selection and goes no further; a second Esc is the shell's.
+    down(7.5, 2);
+    assert_eq!(key("escape")["terminals"]["1"]["selection"], Value::Null);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_multi_line_paste_asks_first_and_only_the_users_enter_pastes() {
+    let otto = Otto::launch("paste-ask");
+    otto.call(json!({"cmd": "split"}));
+    otto.bounds(&[1]);
+    otto.call(json!({"cmd": "type", "text": "printf 'echo m-one\\necho m-two\\n'\r"}));
+    let t = otto.wait_for("the lines", |o| Some(term1(o)).filter(|t| shows(t, "echo m-two")));
+    let lines = t["lines"].as_array().expect("lines");
+    let row = lines.iter().position(|l| l.as_str() == Some("echo m-one")).expect("row") as f32 + 0.5;
+
+    // Two whole lines, copied: the stand-in clipboard holds them, with no newline at the end.
+    otto.call(json!({"cmd": "mouse_down", "x": 1.5, "y": row, "clicks": 3}));
+    otto.call(json!({"cmd": "mouse_drag", "x": 1.5, "y": row + 1.0}));
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-c"}));
+    assert_eq!(reply["copied"], "echo m-one\necho m-two");
+    assert_eq!(reply["state"]["clip"]["text"], "Copied 2 lines");
+
+    // The user's ⌘V asks over pane 1; a client neither answers nor cancels it.
+    let user = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys, "as": "user"}));
+    let reply = user("cmd-v");
+    let ask = &reply["state"]["confirm"]["paste"];
+    assert_eq!(
+        (reply["mode"].as_str(), ask["pane"].as_u64(), ask["amount"]["lines"].as_u64()),
+        (Some("confirm"), Some(1), Some(2))
+    );
+    for keys in ["enter", "escape"] {
+        let refused = otto.raw(&json!({"cmd": "key", "keys": keys}).to_string());
+        assert!(refused["error"].as_str().is_some_and(|e| e.contains("only the user pastes")), "{refused}");
+    }
+    // Esc cancels: nothing is pasted.
+    let reply = user("escape");
+    assert_eq!(reply["state"]["confirm"], Value::Null);
+    assert_ne!(reply["state"]["clip"]["text"], "Pasted 2 lines");
+    // Asked again, ↵ pastes: the first line runs, the second waits at the prompt for its own ↵.
+    user("cmd-v");
+    let reply = user("enter");
+    assert_eq!(
+        (reply["mode"].as_str(), reply["state"]["clip"]["text"].as_str()),
+        (Some("normal"), Some("Pasted 2 lines"))
+    );
+    otto.wait_for("the first line's output", |o| Some(term1(o)).filter(|t| shows(t, "m-one")));
+    otto.call(json!({"cmd": "type", "text": "\r"}));
+    otto.wait_for("the second line's output", |o| Some(term1(o)).filter(|t| shows(t, "m-two")));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_drag_past_the_top_selects_into_the_history_and_shift_extends() {
+    let otto = Otto::launch("select-history");
+    otto.call(json!({"cmd": "split"}));
+    otto.bounds(&[1]);
+    otto.call(json!({"cmd": "type", "text": "i=1; while [ $i -le 200 ]; do echo row-$i; i=$((i+1)); done\r"}));
+    otto.wait_for("the rows", |o| Some(term1(o)).filter(|t| shows(t, "row-200")));
+    let state = otto.drawn();
+    let (b, cell) = (rect(&state["bounds"]["1"]), state["cell"].as_array().expect("cell").clone());
+    let (w, h) = (cell[0].as_f64().unwrap_or(8.), cell[1].as_f64().unwrap_or(16.));
+    // `col` in cells, a fraction picking the side of one.
+    let point = |col: f64, row: f64| [b[0] + col * w, b[1] + (row + 0.5) * h];
+    let mouse = |action: &str, p: [f64; 2], modifiers: &[&str]| {
+        otto.call(json!({"cmd": "mouse", "action": action, "x": p[0], "y": p[1], "modifiers": modifiers, "as": "user"}))
+    };
+
+    // Held above the top edge, the drag scrolls back, and the selection follows into the history.
+    mouse("down", point(3.5, 2.), &[]);
+    mouse("move", [b[0] + 2. * w, b[1] - 3. * h], &[]);
+    let t = otto.wait_for("the drag to scroll back", |o| {
+        Some(term1(o)).filter(|t| t["display_offset"].as_u64().unwrap_or(0) >= 5)
+    });
+    let range = &t["selection_range"];
+    assert!(range[0][0].as_i64().is_some_and(|line| line < 0), "the selection reaches into the history: {t}");
+    let reply = mouse("up", [b[0] + 2. * w, b[1] - 3. * h], &[]);
+    let selected = reply["terminals"]["1"]["selection"].as_str().unwrap_or_default().to_string();
+    assert!(selected.lines().count() > 3, "{selected:?}");
+    // It stays after the release, and through new output.
+    otto.call(json!({"cmd": "type", "text": "echo more\r"}));
+    otto.wait_for("the output", |o| Some(term1(o)).filter(|t| t["display_offset"] == 0 || shows(t, "more")));
+    assert_eq!(term1(&otto)["selection"].as_str(), Some(selected.as_str()));
+
+    // A click, then a ⇧-click on a later line: from the one to the other.
+    otto.call(json!({"cmd": "scroll", "lines": -1000}));
+    let lines = term1(&otto)["lines"].as_array().expect("lines").clone();
+    let row = |text: &str| lines.iter().position(|l| l.as_str() == Some(text)).expect(text) as f64;
+    let (first, last) = (row("row-197"), row("row-199"));
+    mouse("down", point(0.1, first), &[]);
+    mouse("up", point(0.1, first), &[]);
+    mouse("down", point(6.9, last), &["shift"]);
+    let reply = mouse("up", point(6.9, last), &["shift"]);
+    assert_eq!(reply["terminals"]["1"]["selection"], "row-197\nrow-198\nrow-199");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_drag_selects_while_the_program_asks_for_the_mouse() {
+    // ottospace sends programs no mouse reports: a drag in vim or tmux selects, as in a shell.
+    let otto = Otto::launch("select-mouse-mode");
+    otto.call(json!({"cmd": "split"}));
+    otto.bounds(&[1]);
+    otto.call(json!({"cmd": "type", "text": "printf '\\033[?1000h\\033[?1006h'; echo mouse-on\r"}));
+    let t = otto.wait_for("the output", |o| Some(term1(o)).filter(|t| shows(t, "mouse-on")));
+    let lines = t["lines"].as_array().expect("lines");
+    let row = lines.iter().position(|l| l.as_str() == Some("mouse-on")).expect("row") as f32 + 0.5;
+    otto.call(json!({"cmd": "mouse_down", "x": 0.25, "y": row}));
+    let reply = otto.call(json!({"cmd": "mouse_drag", "x": 4.75, "y": row}));
+    assert_eq!(reply["terminals"]["1"]["selection"], "mouse");
 }
 
 #[test]

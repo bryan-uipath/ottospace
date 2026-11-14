@@ -136,6 +136,8 @@ pub enum Request {
     ///   layout types with no modifier on key codes 0 to 50 (`a`, `7`, `/`; not `A`). A `cmd-`
     ///   shortcut (any key, by the flag alone) is pressed as without `repeat`, while the app
     ///   reads the key as held. `escape`, `backspace`, arrows: "no key to hold down".
+    /// - The clipboard `cmd-c` and `cmd-v` use is a stand-in in a test run (`clipboard.rs`), never
+    ///   the user's: the state's `copied` is its text, and null outside a test run.
     Key {
         keys: String,
         #[serde(default, rename = "as")]

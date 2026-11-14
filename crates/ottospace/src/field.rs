@@ -13,6 +13,7 @@ use gpui::{
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, ShapedLine, SharedString, Style, TextRun,
     UTF16Selection, UnderlineStyle, Window, div, fill, point, prelude::*, px, relative, rgb, size,
 };
+use ottospace_core::clip::Verb;
 use ottospace_core::edit::{self, Edit, Key};
 use ottospace_core::{Action, theme};
 
@@ -88,12 +89,18 @@ impl Workspace {
         let Some((_, field)) = self.model.field() else { return false };
         let text = field.selected().to_string();
         if !text.is_empty() {
-            self.copy_text(text, cx);
+            let verb = if cut { Verb::Cut } else { Verb::Copied };
+            self.copy_text(text, None, verb, cx);
             if cut {
                 self.edit(Edit::Cut, window, cx);
             }
         }
         true
+    }
+
+    /// The field that has the keyboard has text selected: ⌘C has something to copy.
+    pub fn field_selected(&self) -> bool {
+        self.model.field().is_some_and(|(_, field)| !field.selected().is_empty())
     }
 
     /// ⌘V in a field. False: no field has the keyboard.
@@ -105,7 +112,7 @@ impl Workspace {
         if self.paste_files(window, cx) {
             return true;
         }
-        if let Some(text) = self.clipboard_text(cx) {
+        if let Some(text) = self.clipboard.text(cx) {
             self.edit(Edit::Paste(text), window, cx);
         }
         true

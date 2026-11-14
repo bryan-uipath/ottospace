@@ -1,4 +1,4 @@
-//! Terminal pane rules: scrolling back, mouse and keyboard selection, paste. The shell applies
+//! Terminal pane rules: scrolling back, mouse and keyboard selection (paste is `clip`). The shell applies
 //! them to its `alacritty_terminal` grid.
 
 use crate::keys::Mods;
@@ -103,14 +103,44 @@ pub fn select_kind(clicks: usize) -> SelectKind {
     }
 }
 
-/// Bytes for pasting `text`. With bracketed paste the program sees it as one paste; ESC is
-/// removed so the text cannot end the bracket early. Without it, newlines become ↵ (CR).
-pub fn paste(text: &str, bracketed: bool) -> Vec<u8> {
-    if bracketed {
-        let body: String = text.chars().filter(|c| *c != '\x1b').collect();
-        return format!("\x1b[200~{body}\x1b[201~").into_bytes();
+/// What a left press on a terminal does to its selection.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Press {
+    /// Starts one, replacing any other: a plain click selects nothing until it drags.
+    Start(SelectKind),
+    /// ⇧: moves the far end of the one there to the press. With none, starts one.
+    Extend,
+}
+
+pub fn press(clicks: usize, shift: bool) -> Press {
+    if shift { Press::Extend } else { Press::Start(select_kind(clicks)) }
+}
+
+/// Lines to scroll while a selection is dragged past the top (positive: back into history) or
+/// the bottom of a grid `height` points tall, `y` from its top: one line a step at the edge,
+/// more the farther out, at most 10. Inside the grid, none.
+pub fn edge_scroll(y: f32, height: f32, line: f32) -> i32 {
+    if line <= 0. || !y.is_finite() {
+        return 0;
     }
-    text.replace("\r\n", "\r").replace('\n', "\r").into_bytes()
+    let past = if y < 0. { -y } else { y - height };
+    let lines = (1. + past / (2. * line)).min(10.) as i32;
+    match (y < 0., y > height) {
+        (true, _) => lines,
+        (_, true) => -lines,
+        _ => 0,
+    }
+}
+
+/// Esc with nothing held clears a terminal's selection, and the program does not get it.
+pub fn clears_selection(key: &str, mods: Mods, selected: bool) -> bool {
+    selected && key == "escape" && mods == Mods::default()
+}
+
+/// A selection stays while its text is what was selected: output that scrolls it keeps it,
+/// output written over it (`kept` is no longer its text) clears it.
+pub fn selection_holds(kept: &str, now: Option<&str>) -> bool {
+    now == Some(kept)
 }
 
 /// A cursor move in visual mode.
@@ -389,10 +419,38 @@ mod tests {
     }
 
     #[test]
-    fn paste_brackets_when_asked_and_otherwise_sends_returns() {
-        assert_eq!(paste("a\nb", true), b"\x1b[200~a\nb\x1b[201~".to_vec());
-        assert_eq!(paste("x\x1b[201~rm", true), b"\x1b[200~x[201~rm\x1b[201~".to_vec(), "no early end");
-        assert_eq!(paste("a\nb\r\nc", false), b"a\rb\rc".to_vec());
+    fn shift_extends_a_selection_and_clicks_pick_its_kind() {
+        assert_eq!(press(1, false), Press::Start(SelectKind::Simple));
+        assert_eq!(press(2, false), Press::Start(SelectKind::Word));
+        assert_eq!(press(3, false), Press::Start(SelectKind::Line));
+        assert_eq!((press(1, true), press(2, true)), (Press::Extend, Press::Extend));
+    }
+
+    #[test]
+    fn a_drag_past_an_edge_scrolls_faster_the_farther_out() {
+        let (height, line) = (180., 18.);
+        assert_eq!(edge_scroll(90., height, line), 0);
+        assert_eq!((edge_scroll(0., height, line), edge_scroll(height, height, line)), (0, 0));
+        assert_eq!(edge_scroll(-1., height, line), 1, "above: back into history");
+        assert_eq!(edge_scroll(height + 1., height, line), -1, "below: toward the bottom");
+        assert_eq!(edge_scroll(-72., height, line), 3);
+        assert_eq!(edge_scroll(-9_999., height, line), 10);
+        assert_eq!((edge_scroll(f32::NAN, height, line), edge_scroll(-5., height, 0.)), (0, 0));
+    }
+
+    #[test]
+    fn plain_esc_clears_a_selection() {
+        assert!(clears_selection("escape", Mods::default(), true));
+        assert!(!clears_selection("escape", Mods::default(), false), "with none, the program gets it");
+        assert!(!clears_selection("escape", SHIFT, true));
+        assert!(!clears_selection("a", Mods::default(), true));
+    }
+
+    #[test]
+    fn a_selection_holds_while_its_text_does() {
+        assert!(selection_holds("beta", Some("beta")));
+        assert!(!selection_holds("beta", Some("bet")), "written over");
+        assert!(!selection_holds("beta", None), "scrolled out of the history, or cleared");
     }
 
     #[test]

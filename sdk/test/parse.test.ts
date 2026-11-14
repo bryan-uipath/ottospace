@@ -36,6 +36,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       palette: null,
       inspector: null,
       confirm: null,
+      clip: null,
       keys: false,
       visual: null,
       ax_overlay: overlay !== null,
