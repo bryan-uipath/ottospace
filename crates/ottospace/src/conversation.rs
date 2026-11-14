@@ -1210,7 +1210,7 @@ impl Workspace {
             .children((!hint.is_empty()).then(|| div().text_xs().text_color(rgb(theme::MUTED)).child(hint)))
     }
 
-    /// The header's Chat | Terminal switch and the permission mode, for a Claude Code
+    /// The header's Chat | Terminal switch, for a Claude Code
     /// conversation. Greyed while it cannot switch (a turn runs, a card waits).
     pub(crate) fn view_switch(&self, subject: &Subject, cx: &mut Context<Self>) -> Option<Div> {
         if !self.model.drawable(subject) {
@@ -1227,16 +1227,12 @@ impl Workspace {
                     drop(this.dispatch(Action::TalkView { shows: view }, this.input, window, cx))
                 }))
         };
-        let mode = self.model.chat(subject).and_then(|chat| chat.transcript.mode.clone());
-        Some(
-            div()
-                .flex()
-                .items_center()
-                .gap_0p5()
-                .children(mode.map(|mode| muted(format!("mode: {mode}")).pr_1()))
-                .child(button("view-chat", "Chat", View::Native))
-                .child(button("view-terminal", "Terminal", View::Terminal)),
-        )
+        // The permission mode is on the title's hover, and at the foot when it acts unasked.
+        Some(div().flex().items_center().gap_0p5().child(button("view-chat", "Chat", View::Native)).child(button(
+            "view-terminal",
+            "Terminal",
+            View::Terminal,
+        )))
     }
 
     /// What the state reply says of native conversations: structure, counts and labels, never

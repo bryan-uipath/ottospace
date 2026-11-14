@@ -50,6 +50,14 @@ export type TaskId = number;
 /** Whose a conversation is: a task's id, or a session no task owns, by its runner and id. */
 export type Subject = TaskId | { runner: string; id: string };
 
+/** What the drawer says of its agent apart from the title (`drawer.line`). */
+export interface AgentLine {
+  foot: string | null;
+  bypass: boolean;
+  folder: string | null;
+  facts: [string, string][];
+}
+
 export type Axis = "right" | "down";
 export type Dir = "left" | "right" | "up" | "down";
 export type Section = "apps" | "workbook" | "tasks" | "repos" | "marks" | "calendar";
@@ -1113,6 +1121,13 @@ export interface Snapshot {
     native: { chats: Record<string, NativeChat>; opened: ("web" | "file")[] };
     /** What the header's go word (⌘↵) does: `tabs` (go to its tabs), `claim` (the tab on show becomes its), `new` (a new tab of it). */
     goes_to: "tabs" | "claim" | "new" | null;
+    /**
+     * Of the conversation the drawer is on: `foot`, the line at its foot (the model in short, and
+     * a mode that lets the agent act unasked: `haiku-5.5 · auto`), `bypass` (that mode asks for
+     * nothing), `folder` (in the header only when not its task's own) and `facts`, the title's
+     * hover as [name, value] pairs. `model` and `mode` are untrusted labels.
+     */
+    line: AgentLine | null;
     note: string | null;
     /** The right rail's conversations, in order: badge, state, at work, shown, and the tooltip's text. */
     rail: { task: Subject; mono: string; group: Group | null; working: boolean; shown: boolean; tip: string }[];

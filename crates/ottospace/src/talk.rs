@@ -455,7 +455,42 @@ impl Workspace {
         ))
     }
 
-    /// The conversation's header: state, title, model and time, then what can be done.
+    /// What the drawer says of `subject`'s agent (`talk::agent_line`): the model the CLI
+    /// reported, else the one it was started with; its mode; how long it has run; where.
+    pub(crate) fn agent_line(&self, subject: &Subject) -> talk::AgentLine {
+        let native = self.drawer.native.get(subject).map(|native| (native.model.clone(), native.since));
+        let agent = self.drawer.agents.get(subject).map(|agent| (agent.model.clone(), agent.since)).or(native);
+        let transcript = self.model.chat(subject).map(|chat| &chat.transcript);
+        let model = transcript.and_then(|t| t.model.clone()).or_else(|| agent.as_ref().map(|(model, _)| model.clone()));
+        let mode = transcript.and_then(|t| t.mode.clone());
+        let secs = agent.filter(|_| self.model.agent_runs(subject)).map(|(_, since)| since.elapsed().as_secs());
+        // Its process's folder, else the task's (`Task::dir`), else the home folder.
+        let ran = self.drawer.native.get(subject).and_then(|native| native.cwd.clone());
+        let ran = ran.or_else(|| self.drawer.agents.get(subject).and_then(|agent| agent.cwd.clone()));
+        let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
+        let task = subject.task().and_then(|id| self.model.tasks.get(id));
+        let dir = task.and_then(|task| task.dir().cloned()).or_else(|| self.repo_of(subject));
+        let short = |dir: String| {
+            let rest = home.as_deref().and_then(|home| dir.strip_prefix(home));
+            let short = rest.filter(|rest| rest.is_empty() || rest.starts_with('/')).map(|rest| format!("~{rest}"));
+            short.unwrap_or(dir)
+        };
+        let folder = ran.or(dir).or_else(|| home.clone()).map(short);
+        // Its task's own: its repository, else home.
+        let default = self.repo_of(subject).or_else(|| home.clone()).map(short);
+        talk::agent_line(model.as_deref(), mode.as_deref(), secs, folder.as_deref(), default.as_deref())
+    }
+
+    /// The drawer's foot: the agent's model, and a mode that lets it act unasked. Muted; a
+    /// mode that asks for nothing in the warning colour. Stays once the agent ended.
+    fn agent_foot(&self, subject: &Subject) -> Option<Div> {
+        let line = self.agent_line(subject);
+        let color = if line.bypass { theme::SNEAK } else { theme::MUTED };
+        let foot = div().id("talk-foot").flex_none().px_3().pb_1().truncate().text_xs().text_color(rgb(color));
+        line.foot.map(|text| div().child(foot.child(text)))
+    }
+
+    /// The conversation's header: state, title, Chat | Terminal, then what can be done.
     fn talk_header(&self, subject: &Subject, cx: &mut Context<Self>) -> Option<Div> {
         let shown = match subject {
             Subject::Task(id) => Some(self.model.tasks.get(*id)?),
@@ -471,26 +506,11 @@ impl Workspace {
             }
             (None, Subject::Task(_)) => return None,
         };
-        // The model and since when: of the agent's terminal, or of its native process.
-        let native = self.drawer.native.get(subject).map(|native| (native.model.clone(), native.since));
-        let agent = self.drawer.agents.get(subject).map(|agent| (agent.model.clone(), agent.since)).or(native);
         let runs = self.model.agent_runs(subject);
         let muted = |text: String| div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(text);
-        // Where the agent runs (or would): what it can see. Its process's folder, else the task's
-        // (`Task::dir`), else the home folder.
-        let ran = self.drawer.native.get(subject).and_then(|native| native.cwd.clone());
-        let ran = ran.or_else(|| self.drawer.agents.get(subject).and_then(|agent| agent.cwd.clone()));
-        let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
-        let dir = shown.and_then(|task| task.dir().cloned()).or_else(|| self.repo_of(subject));
-        let folder = ran.or(dir).or_else(|| home.clone()).map(|dir| {
-            let rest = home.as_deref().and_then(|home| dir.strip_prefix(home));
-            let short = rest.filter(|rest| rest.is_empty() || rest.starts_with('/')).map(|rest| format!("~{rest}"));
-            short.unwrap_or(dir)
-        });
-        let elapsed = agent.as_ref().filter(|_| runs).map(|(_, since)| {
-            let secs = since.elapsed().as_secs();
-            if secs < 3600 { format!("{}:{:02}", secs / 60, secs % 60) } else { format!("{}h", secs / 3600) }
-        });
+        let line = self.agent_line(subject);
+        let facts: gpui::SharedString =
+            line.facts.iter().map(|(name, value)| format!("{name}: {value}")).collect::<Vec<_>>().join("\n").into();
         // ⌘↵: to the task's tabs; with none, claim the tab on show or make it a new one.
         let go = self.model.talk_go().map(|go| {
             let tip = match go {
@@ -551,10 +571,21 @@ impl Workspace {
                     Some(badge) => badge,
                     None => home::dot(color),
                 })
-                .child(div().flex_1().min_w(px(72.)).truncate().text_sm().child(title))
-                // The model gives way before the title does.
-                .children(agent.map(|(model, _)| muted(model).flex_shrink().min_w_0().truncate()))
-                .children(folder.map(|folder| {
+                // Model, mode, time and folder are on its hover; the model is at the drawer's foot too.
+                .child(
+                    div()
+                        .id("talk-title")
+                        .flex_1()
+                        .min_w(px(72.))
+                        .truncate()
+                        .text_sm()
+                        .child(title)
+                        .when(!facts.is_empty(), |d| {
+                            d.tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(facts.clone()))))
+                        }),
+                )
+                // Where it runs, only when that is not its task's own folder: what it can see.
+                .children(line.folder.map(|folder| {
                     let tip: gpui::SharedString = format!("The agent runs in {folder}").into();
                     muted(folder)
                         .id("talk-folder")
@@ -563,7 +594,6 @@ impl Workspace {
                         .truncate()
                         .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone()))))
                 }))
-                .children(elapsed.map(muted))
                 .children(self.watch_chip(subject))
                 .children(self.view_switch(subject, cx))
                 .children(go)
@@ -678,7 +708,8 @@ impl Workspace {
                     .talk_note()
                     .map(|note| div().px_3().py_1().text_xs().text_color(rgb(theme::ERROR)).child(note)),
             )
-            .child(body);
+            .child(body)
+            .children(self.agent_foot(&talk.task));
         Some(drawer.into_any_element())
     }
 
@@ -872,6 +903,8 @@ impl Workspace {
             "agents": agents,
             "native": self.chats_snapshot(),
             "goes_to": self.model.talk_go(),
+            // The shown conversation's foot, header folder and title hover (`talk::agent_line`).
+            "line": self.model.talk.as_ref().map(|talk| self.agent_line(&talk.task)),
             // The right rail's conversations, in order: task, badge, state, at work, shown, tooltip.
             "rail": self.model.rail(),
             "note": self.model.talk_note(),

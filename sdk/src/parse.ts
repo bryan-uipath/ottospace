@@ -3,6 +3,7 @@
 // Keys the types do not name are dropped, so a test can compare the result with the raw reply.
 
 import type {
+  AgentLine,
   AppEntry,
   Feature,
   CalendarReply,
@@ -666,6 +667,21 @@ function goWord(value: unknown, at: string): "tabs" | "claim" | "new" {
   throw new Error(`${at}: not a go word: ${JSON.stringify(value)}`);
 }
 
+function agentLine(value: unknown, at: string): AgentLine {
+  const o = fields(value, at);
+  const pair = (v: unknown, p: string): [string, string] => {
+    const [name, text] = list(str)(v, p);
+    if (name === undefined || text === undefined) throw new Error(`${p}: not a [name, value] pair`);
+    return [name, text];
+  };
+  return {
+    foot: orNull(str)(o.foot, `${at}.foot`),
+    bypass: bool(o.bypass, `${at}.bypass`),
+    folder: orNull(str)(o.folder, `${at}.folder`),
+    facts: list(pair)(o.facts, `${at}.facts`),
+  };
+}
+
 function tabGroup(value: unknown, at: string): Snapshot["groups"][number] {
   const o = fields(value, at);
   return { task: orNull(num)(o.task, `${at}.task`), tabs: list(num)(o.tabs, `${at}.tabs`) };
@@ -755,6 +771,7 @@ function drawerDrawn(value: unknown, at: string): Snapshot["drawer"] {
     agents: map(agent)(o.agents, `${at}.agents`),
     native: native(o.native, `${at}.native`),
     goes_to: orNull(goWord)(o.goes_to, `${at}.goes_to`),
+    line: orNull(agentLine)(o.line, `${at}.line`),
     note: orNull(str)(o.note, `${at}.note`),
     rail: list(railCell)(o.rail, `${at}.rail`),
   };
