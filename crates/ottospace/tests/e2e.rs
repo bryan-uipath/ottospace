@@ -7245,7 +7245,7 @@ fn a_click_on_a_tab_switches_with_the_drawer_open() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// The check the native view must pass before it is the default again: the real `claude`, on
+/// The check the native view passed to be the default again (2026-11-14): the real `claude`, on
 /// the cheapest model, in a private instance and a scratch repository. One short model session
 /// on the user's own account: never in CI, never by default; run only with the user's approval:
 ///
