@@ -2613,6 +2613,12 @@ impl Model {
         // From the new task in the drawer, focus moves on, as the box waits pane actions.
         let across = matches!(action, Action::FocusDir { dir: Dir::Left | Dir::Right });
         let drawer = across && self.in_right_zone();
+        // The user's own pick of a tab is not behind the new task in the drawer: the line is
+        // put aside, kept for the box's next opening, and the tab shows.
+        let picks_tab = matches!(action, Action::SelectTab { .. });
+        if user && picks_tab && self.compose_host() == Some(Host::Drawer) && self.capture.is_none() {
+            self.put_compose_aside();
+        }
         if self.waits(&action).is_some() && !(user && drawer) {
             return effects;
         }
@@ -7470,6 +7476,23 @@ mod tests {
         m.update(Action::OpenCompose { text: "later".into() });
         m.update(Action::ComposeSubmit { open: false });
         assert_eq!(m.tab_task(), None);
+    }
+
+    /// The bug of 0.1.0: with the new task open in the drawer, a click on a tab did nothing (the
+    /// box held the keyboard). The user's pick goes there and the line is kept; a client's waits.
+    #[test]
+    fn the_users_tab_click_puts_the_new_task_aside() {
+        let mut m = Model::default();
+        term(&mut m);
+        m.update(Action::NewTab);
+        m.update(Action::OpenCompose { text: "half".into() });
+        assert_eq!(m.compose_host(), Some(Host::Drawer));
+        m.update(Action::SelectTab { index: 0 }.sent_by(Origin::Socket));
+        assert_eq!((m.active, m.compose_line().cloned()), (1, Some("half".into())));
+        m.update(Action::SelectTab { index: 0 });
+        assert_eq!((m.active, m.compose_line()), (0, None));
+        m.update(Action::OpenCompose { text: String::new() });
+        assert_eq!(m.compose_line().cloned(), Some("half".into()), "kept");
     }
 
     #[test]

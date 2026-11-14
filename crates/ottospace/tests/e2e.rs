@@ -6583,6 +6583,49 @@ fn a_message_after_the_agent_ended_starts_it_again_and_is_sent() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// The user's real click on a tab switches to it: with a task's conversation open in the
+/// drawer, with the new-task box open there (it goes aside, kept), and when the press moves a
+/// few points before it is let go (a drag onto itself).
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_click_on_a_tab_switches_with_the_drawer_open() {
+    let (root, _, env) = native_setup("tab-clicks", &[("turn1.jsonl", recorded("real-2.1.325-turn.jsonl"))], &[]);
+    let otto = launch_env("tab-clicks", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "plan the week >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.start_task(1);
+    otto.call(json!({"cmd": "new_tab"}));
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    let state = otto.call(json!({"cmd": "state"}));
+    let tasks: Vec<Value> = state["state"]["tabs"].as_array().unwrap().iter().map(|t| t["task"].clone()).collect();
+    assert_eq!((tasks, &state["state"]["active"]), (vec![json!(1), json!(null)], &json!(1)), "{}", state["state"]);
+    let tab = |place: usize| rect(&otto.drawn()["tabs"][place]);
+    let active = |reply: &Value| reply["state"]["active"].clone();
+
+    // The task's conversation open: the task's tab, then the other, and back.
+    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["talk"]["open"], true);
+    assert_eq!(active(&otto.user_click(at(tab(0), 0.5, 0.5))), 0);
+    assert_eq!(active(&otto.user_click(at(tab(1), 0.5, 0.5))), 1);
+    assert_eq!(active(&otto.user_click(at(tab(0), 0.5, 0.5))), 0);
+
+    // The new-task box open in the drawer, half written: a click on a tab goes there and the
+    // line is kept for the box's next opening.
+    otto.user_key("cmd-n");
+    otto.user_key("h a l f");
+    assert!(otto.call(json!({"cmd": "state"}))["state"]["compose"].is_string());
+    let clicked = otto.user_click(at(tab(1), 0.5, 0.5));
+    assert_eq!((active(&clicked), &clicked["state"]["compose"]), (json!(1), &Value::Null), "{}", clicked["state"]);
+    assert_eq!(otto.user_key("cmd-n")["state"]["compose"], "half");
+    otto.user_key("escape");
+
+    // A press that moves 3 points before it is let go: still that tab.
+    let from = at(tab(0), 0.5, 0.5);
+    assert_eq!(active(&otto.user_drag(from, [from[0] + 3.0, from[1]])), 0);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A session another process holds is watched from its file: the header says so, and each
 /// record that lands shows, an edit with its card. The state has the card's counts only.
 #[test]

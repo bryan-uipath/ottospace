@@ -4673,6 +4673,10 @@ impl Workspace {
                                 .drag_over::<DraggedPane>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
                                 .drag_over::<DraggedTab>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
                                 .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                                    // Dropped on itself: a click that moved a few points (GPUI drags past 2).
+                                    if dragged.0 == id {
+                                        return this.select_tab(id, window, cx);
+                                    }
                                     let at = TabAt::Before(id);
                                     this.dispatch(
                                         Action::TabPlace { tab: Some(dragged.0), at },

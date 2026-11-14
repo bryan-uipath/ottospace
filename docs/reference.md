@@ -231,7 +231,7 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    shows the one of them shown last; a task with none offers Claim this tab (the tab on show is
    no task's) or New tab (a shell in its repository); Brief (when it has captures); Stop ends the agent;
    × (⌘⇧L) closes the drawer to the right rail and the agent goes on. ⌘L moves the keyboard in
-   and out. Drag its left edge to make it wider or narrower. Opening a conversation while a new
+   and out. Drag its left edge to make it wider or narrower. Opening a conversation, or a click on a tab, while a new
    task is half written puts the line aside: the box gets it back when it opens again.
 5. **The right rail.** The task's badge per open conversation: its border in the task's own
    colour, its state as the corner dot; hover for its card. A click shows it, and the tab stays;
