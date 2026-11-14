@@ -41,6 +41,28 @@ pub struct Talk {
     pub keys: bool,
 }
 
+/// What the drawer header's go word does (`Model::talk_go`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Go {
+    /// "Go to its tabs": the task's tab shown last.
+    Tabs,
+    /// "Claim this tab": the tab on show, of no task, becomes the task's.
+    Claim,
+    /// "New tab": a tab of the task, with a terminal in its repository.
+    New,
+}
+
+impl Go {
+    pub fn label(self) -> &'static str {
+        match self {
+            Go::Tabs => "Go to its tabs",
+            Go::Claim => "Claim this tab",
+            Go::New => "New tab",
+        }
+    }
+}
+
 /// The most conversations the right rail shows. Past it the oldest idle ones drop off; they
 /// stay in the Tasks list.
 pub const RAIL: usize = 8;

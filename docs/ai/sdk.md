@@ -525,7 +525,7 @@ Stages 4 and 5 do not depend on each other; either can go first.
 3. **`otto` as a global** (your examples) or an import (`scripting.md`)? The global needs no
    module resolution. An import from the bare name `ottospace` is not safe until the package is
    published by us: the name on npm is not ours (not checked who has it, if anyone).
-4. **Field names:** the socket is snake_case (`current_task`, `timeout_ms`) and the client in
+4. **Field names:** the socket is snake_case (`tab_panes`, `timeout_ms`) and the client in
    `sdk/` keeps it, so a request object is what is sent. Should the script API be camelCase
    instead (`w.size.width` already is)?
 5. **Reading apps that are not in a pane:** any app, or only apps the settings name?

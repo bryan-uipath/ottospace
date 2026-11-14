@@ -170,13 +170,9 @@ impl Layout {
     }
 }
 
-/// The tabs in the order the bar keeps them: each task's together, where its first tab was, and
-/// no task's last; `selected` follows its tab. Stands for the core's own rule of the tab bar.
+/// The tabs in the order the bar keeps them (`model::bar_order`); `selected` follows its tab.
 pub fn grouped(layout: &mut Layout) {
-    let first = |task: TaskId| layout.tabs.iter().position(|saved| saved.tab.task == Some(task));
-    let key = |saved: &SavedTab| saved.tab.task.and_then(first).unwrap_or(usize::MAX);
-    let mut order: Vec<usize> = (0..layout.tabs.len()).collect();
-    order.sort_by_key(|at| key(&layout.tabs[*at]));
+    let order = crate::model::bar_order(&layout.tabs.iter().map(|saved| saved.tab.task).collect::<Vec<_>>());
     layout.selected = layout.selected.and_then(|was| order.iter().position(|at| *at == was));
     let mut tabs: Vec<Option<SavedTab>> = std::mem::take(&mut layout.tabs).into_iter().map(Some).collect();
     layout.tabs = order.into_iter().filter_map(|at| tabs[at].take()).collect();
@@ -263,11 +259,11 @@ impl Model {
     /// True while the model is as it starts: one empty tab of no task. Only that is restored into.
     fn fresh(&self) -> bool {
         let empty = |tab: &crate::model::Tab| tab.task.is_none() && tab.layout.is_none();
-        self.panes.is_empty() && self.layout.is_none() && self.current_task.is_none() && self.tabs.iter().all(empty)
+        self.panes.is_empty() && self.layout.is_none() && self.tabs.iter().all(empty)
     }
 
     /// Builds the tabs of `layout` in bar order, each as a workbook's (`rebuild_tab`), and puts
-    /// back the scope and tab on show, each scope's last tab, the section, the drawer and what
+    /// back the tab on show, the section, the drawer and what
     /// marks and workbooks stood for. A tab whose task is gone is a tab of no task. Terminals in
     /// a directory of `gone` start in `home`; each shows its history, its command typed and not
     /// run. App panes ask for their windows; `launch`: an app that is not running may be started.
@@ -283,9 +279,11 @@ impl Model {
         if !self.fresh() || layout.unsound().is_some() {
             return;
         }
-        let exists = |model: &Model, task: Option<TaskId>| task.filter(|id| model.tasks.get(*id).is_some());
+        let exists = |model: &Model, task: Option<TaskId>| {
+            task.filter(|id| model.tasks.get(*id).is_some_and(|task| !task.dismissed))
+        };
         let mut layout = layout;
-        // A tab whose task is gone is a tab of no task; then each task's tabs go together.
+        // A tab whose task is gone or dismissed is a tab of no task; then each task's tabs go together.
         for saved in &mut layout.tabs {
             saved.tab.task = exists(self, saved.tab.task);
         }
@@ -338,13 +336,11 @@ impl Model {
         self.restore_links(&layout, &built);
     }
 
-    /// The tab that was on show, else the first: its task's tabs come with it.
+    /// The tab that was on show, else the first.
     fn restore_selected(&mut self, selected: Option<usize>, built: &[(u32, Vec<PaneId>)], effects: &mut Vec<Effect>) {
         let id = selected.and_then(|at| built.get(at)).or(built.first()).map(|(tab, _)| *tab);
-        match id.and_then(|id| self.tabs.iter().position(|tab| tab.id == id)) {
-            Some(at) if at == self.active => self.current_task = self.tabs[at].task,
-            Some(at) => self.select_tab(at, effects),
-            None => {}
+        if let Some(at) = id.and_then(|id| self.tabs.iter().position(|tab| tab.id == id)) {
+            self.select_tab(at, effects);
         }
     }
 
@@ -441,10 +437,9 @@ mod tests {
         let title = "alice: the plan".to_string();
         let slack = Kind::App { window: 9, title, bundle: Some("com.slack".into()), name: "Slack".into() };
         m.update(Action::Open { kind: slack, axis: Right, beside: None });
-        m.update(Action::TaskOpen { id: Some(1) });
+        m.update(Action::NewTabOf { task: Some(1) });
         split(&mut m, Right, Kind::Terminal);
-        m.update(Action::TaskLeave);
-        m.update(Action::SelectTab { index: 0 });
+        m.update(Action::SelectTab { index: 1 });
         m.update(Action::ToggleSection { section: Section::Tasks });
         m.talk = Some(Talk { task: Subject::Task(1), open: true, keys: true });
         m
@@ -491,14 +486,14 @@ mod tests {
         let m = workspace();
         let cwds = vec![(1, "/code/app".to_string()), (2, "/code/web".to_string())];
         let file = parse(&write(&m.layout_file(&cwds, &[], 500))).unwrap();
-        assert_eq!((file.tabs.len(), file.selected, file.section), (3, Some(0), Some(Section::Tasks)));
+        assert_eq!((file.tabs.len(), file.selected, file.section), (3, Some(1), Some(Section::Tasks)));
         assert_eq!(file.drawer.task, Some(1));
         let (r, effects) = restored(&m, file, &[], false);
         // The task's tab first: each task's tabs go together, no task's last.
         let bar = |m: &Model| m.tabs.iter().map(|tab: &Tab| (tab.title.clone(), tab.task)).collect::<Vec<_>>();
         let tab = |title: &str, task| (title.to_string(), task);
         assert_eq!(bar(&r), [tab("fix zoom", Some(1)), tab("Tab 1", None), tab("Tab 2", None)]);
-        assert_eq!((r.current_task, r.active, r.sidebar), (None, 1, Some(Section::Tasks)));
+        assert_eq!((r.tab_task(), r.active, r.sidebar), (None, 1, Some(Section::Tasks)));
         let mut was = m.layout_file(&cwds, &[], 0);
         grouped(&mut was);
         assert_eq!(write(&r.layout_file(&[], &[], 0)), write(&was));
@@ -588,7 +583,7 @@ mod tests {
     fn a_task_with_no_tab_gets_none_and_the_tab_on_show_comes_back() {
         let mut m = workspace();
         task(&mut m, "later");
-        m.update(Action::SelectTab { index: 1 });
+        m.update(Action::SelectTab { index: 2 });
         let file = m.layout_file(&[], &[], 0);
         let (r, _) = restored(&m, file, &[], false);
         assert_eq!((r.tabs.len(), r.tabs.iter().any(|tab| tab.task == Some(2))), (3, false));

@@ -37,8 +37,8 @@ person can see:
 | Its agent runs | The conversation opens with the keyboard |
 | `@agent` is a saved agent | The conversation opens and says a saved agent cannot be started yet |
 
-The center does not change. When it shows another task's tabs, the header offers
-`Go to <workspace>` (⌘↵).
+The tab on show does not change. The header offers `Go to its tabs` (⌘↵); a task with no tab
+is offered `Claim this tab` (the tab on show is no task's) or `New tab`. See "Tasks and tabs".
 
 ↵ in the composer files the task and starts it. ⇧↵ files it for later. × on the drawer, or
 ⌘⇧L, closes it to the rail; the agent goes on. ⌘L moves the keyboard into the conversation and
@@ -81,11 +81,54 @@ The capture draft is the same drawer in its collecting state.
   brief's text, which holds what was captured from the screen, never goes into argv. A task
   filed from captures alone has a title made of fixed words.
 - **Who may.** Only the user (`Origin::User`): `Model::refusal` refuses `TaskTalk` and
-  `TaskStop` from the socket, and a client's ↵ or `open` files the task and shows its tabs, as
-  before, with no agent. The property test fails on a `StartAgent` any other origin caused.
+  `TaskStop` from the socket, and a client's ↵ or `open` files the task with no agent and no tab. The property test fails on a `StartAgent` any other origin caused.
 - **Following.** Claude takes the session's id, so the task is linked to its session from the
   start and follows it by the rule Adopt uses: Running while it works, Needs you when quiet.
   When the agent's terminal ends while the task runs, the task needs you.
+
+## Tasks and tabs (2026-11-13)
+
+The user: "one thing that was very jarring - is creating a new task switched window to a
+terminal", then "there should be an affinity between the window panes (and/or tabs) and a
+task", and, of the mock-up, "i like the affinity mockup, lets try that out". And: "after i
+dismissed some tasks - they still show up in the right rail".
+
+What changed, replacing per-task tab sets ("scopes", `current_task`, `TaskLeave`, the task chip
+on the bar, `Go to <workspace>`/`Leave`):
+
+- **One bar.** Every tab is on it. `Tab.task` stays; `Model::groups` keeps a task's tabs side
+  by side, groups in the order their first tab was made or claimed, the tabs of no task last
+  (`regroup`, after every step). ⌘1…9 and cycling count every tab.
+- **Nothing jumps.** No action but a move to a tab (select, cycle, close, a new tab,
+  `TaskGo`, `TalkGo`, the user's drag or click into a pane, a mark, a workbook, a list row)
+  changes the tab on show; starting, resuming, adopting or clicking a conversation makes,
+  closes or shows no tab. Both are property `check`s (`selects_tab`).
+- **How a tab gets its task.** The user's start of a new task (↵ in the composer, a click on a
+  task that never ran) takes the tab on show if it has panes and is no task's. ⌘T (and the
+  picker's new tab) joins the task on show; `NewTabOf { task: None }` (New Tab outside the
+  Task) does not; `TabPlace` moves a tab before another (taking its task) or to a group's end
+  (the drag, Remove Tab from Task, Claim tab on a row, Claim this tab in the header). Only the
+  user links or unlinks (`TABS_USERS`): `task_add`'s `tab` links nothing now.
+- **Identity.** A task's colour (`Task::colour`, `tasks::colour_for`: one no live task has, the
+  one used longest ago first; kept in its file) and its letters (`Model::badges`: monograms of
+  every live task, oldest first, so the same letters everywhere). `talk::badge` in the shell is
+  the one look: on its group on the bar, its panes' headers, its row, its rail cell (the ring is
+  the identity colour now; the state is the corner dot) and the drawer header. Its tabs are
+  underlined in its colour, brighter while the drawer shows it; a done task's group is dimmed.
+- **Drawer and tabs.** Selecting a tab of a task shows that task's conversation in an open
+  drawer (`follow_tab`): no agent starts, the keyboard stays where it was; while the keyboard is
+  in the drawer, only the user's own change of tab does it. A closed drawer stays closed. ⌘⇧N
+  shows the next task's conversation; a client's `task_pop`/`task_open` go to tabs it has.
+- **Dismissed and done.** The rail lists a task's conversation while the task is not dismissed,
+  and once done only while it is shown or its agent runs. A dismissed task's conversation leaves
+  the rail; if shown, the drawer shows nothing (no other conversation takes its place); its tabs
+  are no task's (`unlinked`), and taking the dismissal back links those still open and of no
+  task again. Dismissing a task whose agent runs asks first (`Confirm::dismiss`, "Stop its agent
+  and dismiss?"): yes stops it as Stop does, then dismisses; only the user answers, and a
+  client's dismissal of it is refused. The agent's end does not bring the task back. A task gone
+  from a file read again is handled the same way (`settle_tasks`).
+
+Not built yet: "Move Tab to Task…" (a filtered list of tasks in the palette).
 
 ## What is built
 

@@ -257,6 +257,7 @@ impl Gen<'_> {
             started_at: self.rng.coin().then(|| self.time()),
             finished_at: self.rng.one_in(4).then(|| self.time()),
             work: (0..self.rng.below(3)).map(|_| self.work()).collect(),
+            colour: self.rng.coin().then(|| self.rng.pick(&[0, 3, 7, 8, 255])),
             extra: if self.rng.one_in(4) {
                 [("tabs".to_string(), serde_json::json!([1]))].into()
             } else {
@@ -670,9 +671,13 @@ const MAKERS: &[Make] = &[
     |g| Action::RowSnooze { id: g.task(), until: g.time() },
     |g| Action::RowHold { id: g.task() },
     |g| Action::RowDismiss { id: g.task() },
-    |g| Action::TaskOpen { id: g.rng.coin().then(|| g.task()) },
-    |_| Action::TaskLeave,
-    |g| Action::SelectVisibleTab { index: g.index(g.m.visible_tabs().len()) },
+    |g| Action::TaskGo { id: g.rng.coin().then(|| g.task()) },
+    |g| Action::NewTabOf { task: g.rng.coin().then(|| g.task()) },
+    |g| {
+        let at = if g.rng.coin() { TabAt::End(g.rng.coin().then(|| g.task())) } else { TabAt::Before(g.tab_id()) };
+        Action::TabPlace { tab: g.rng.coin().then(|| g.tab_id()), at }
+    },
+    |g| Action::SelectVisibleTab { index: g.index(g.m.tabs.len()) },
     |g| Action::Tick { now: g.time() },
     |g| Action::OpenCompose { text: g.line() },
     |_| Action::ComposeComplete,
@@ -988,6 +993,7 @@ const MAKERS: &[Make] = &[
     |g| Action::SessionMissing { task: g.task(), id: g.session_id() },
     |g| Action::TaskStop { id: g.subject() },
     |_| Action::TalkToggle,
+    |_| Action::TalkGo,
     |g| Action::TalkKeys { on: g.rng.coin() },
     |g| Action::TalkResize { width: g.rng.pick(&[0., 400., 9e9, f32::NAN]) },
     |_| Action::TalkWide,
@@ -1028,6 +1034,38 @@ macro_rules! ensure {
     };
 }
 
+/// The moves that may change the tab on show: selecting, cycling or closing a tab, a new tab,
+/// going to a task's tabs (`TaskGo`, `TalkGo`), the user's drag of a pane or a click into one,
+/// and what goes to a mark, a workbook, a picked app or a capture's pane.
+fn selects_tab(action: &Action, origin: Origin) -> bool {
+    let _ = origin;
+    matches!(
+        action,
+        Action::SelectTab { .. }
+            | Action::SelectVisibleTab { .. }
+            | Action::CycleTab { .. }
+            | Action::CloseTab { .. }
+            | Action::NewTab
+            | Action::NewEmptyTab
+            | Action::NewTabOf { .. }
+            | Action::TaskGo { .. }
+            | Action::TalkGo
+            | Action::DropPane { .. }
+            | Action::MovePane { .. }
+            | Action::Focus { .. }
+            | Action::Enter { .. }
+            | Action::Open { .. }
+            | Action::PickerChoose { .. }
+            | Action::MarkGo { .. }
+            | Action::WorkbookOpen { .. }
+            | Action::ListChoose { .. }
+            | Action::MarkType { .. }
+            | Action::MarkSubmit
+            | Action::CaptureBack
+            | Action::RestoreLayout { .. }
+    )
+}
+
 fn unique<T: PartialEq>(list: &[T]) -> bool {
     list.iter().enumerate().all(|(i, item)| !list[..i].contains(item))
 }
@@ -1050,13 +1088,16 @@ fn check(m: &Model) -> Result<(), String> {
     ensure!(unique(&tab_ids), "two tabs share an id: {tab_ids:?}");
     let on_show = &m.tabs[m.active];
     ensure!(on_show.layout.is_none() && on_show.focused.is_none(), "the tab on show keeps a second tree or focus");
-    ensure!(
-        on_show.task == m.current_task,
-        "the tab on show is of {:?}, the bar of {:?}",
-        on_show.task,
-        m.current_task
-    );
-    ensure!(m.visible_tabs().contains(&m.active), "the tab on show is not on the bar");
+    // Each task's tabs side by side, groups in order of their first tab, no task's last; each
+    // tab of a task there is, not dismissed.
+    let groups = m.groups();
+    let tasks_of: Vec<Option<TaskId>> = groups.iter().map(|group| group.task).collect();
+    ensure!(unique(&tasks_of), "a task's tabs are apart: {tasks_of:?}");
+    ensure!(groups.iter().rev().skip(1).all(|group| group.task.is_some()), "tabs of no task before a task's");
+    for tab in &m.tabs {
+        let live = tab.task.is_none_or(|id| m.tasks.get(id).is_some_and(|task| !task.dismissed));
+        ensure!(live, "tab {} is of task {:?}, gone or dismissed", tab.id, tab.task);
+    }
     let mut held: Vec<PaneId> = Vec::new();
     for (i, tab) in m.tabs.iter().enumerate() {
         let (tree, focused) = if i == m.active { (&m.layout, m.focused) } else { (&tab.layout, tab.focused) };
@@ -1098,6 +1139,7 @@ fn check(m: &Model) -> Result<(), String> {
     // The drawer is on a task there is; the keyboard is in it only while it is open, its agent
     // runs, and no app, list or visual mode has the keyboard.
     let gone = |subject: &Subject| subject.task().is_some_and(|id| m.tasks.get(id).is_none());
+    let dismissed = |subject: &Subject| subject.task().is_some_and(|id| m.tasks.get(id).is_some_and(|t| t.dismissed));
     if let Some(talk) = &m.talk {
         ensure!(!gone(&talk.task), "the drawer is on task {:?}, which is gone", talk.task);
         let free = m.live.is_none() && m.list.is_none() && m.visual.is_none() && m.annotated().is_none();
@@ -1273,7 +1315,10 @@ fn check(m: &Model) -> Result<(), String> {
         let _ = sneak.visible().count();
     }
     if let Some(confirm) = &m.confirm {
-        let loses = !confirm.running.is_empty() || m.quit_discards() > 0 || !m.agents.is_empty();
+        let loses = match confirm.dismiss {
+            Some(id) => m.agent_runs(&Subject::Task(id)),
+            None => !confirm.running.is_empty() || m.quit_discards() > 0 || !m.agents.is_empty(),
+        };
         ensure!(loses, "the quit question names no terminal, no draft holds a capture, and no agent runs");
         ensure!(
             confirm.running.iter().all(|r| m.pane(r.pane).is_some()),
@@ -1378,11 +1423,19 @@ fn check(m: &Model) -> Result<(), String> {
     badges.sort_unstable();
     badges.dedup();
     ensure!(rail.len() <= talk::RAIL && badges.len() == rail.len(), "the rail: {rail:?}");
-    ensure!(!rail.iter().any(|cell| gone(&cell.task)), "a rail cell for a task that is gone");
+    ensure!(
+        !rail.iter().any(|cell| gone(&cell.task) || dismissed(&cell.task)),
+        "a rail cell for a task that is gone or dismissed"
+    );
+    let listed = |subject: &Subject| match subject {
+        Subject::Task(_) => true,
+        Subject::Session { runner, id } => m.session(runner, id).is_some() || m.agent_runs(subject),
+    };
+    ensure!(rail.iter().all(|cell| listed(&cell.task)), "a rail cell for a session not listed: {rail:?}");
     let open = m.talk.as_ref().filter(|talk| talk.open).map(|talk| &talk.task);
     ensure!(rail.iter().all(|cell| cell.shown == (open == Some(&cell.task))), "the rail shows another cell: {rail:?}");
     let shown =
-        |id: TaskId| m.current_task == Some(id) || m.talk.as_ref().is_some_and(|talk| talk.task.task() == Some(id));
+        |id: TaskId| m.tab_task() == Some(id) || m.talk.as_ref().is_some_and(|talk| talk.task.task() == Some(id));
     let briefed = |id: TaskId| shown(id) && m.tasks.get(id).is_some_and(|task| !task.materials.is_empty());
     ensure!(m.brief.is_none_or(briefed), "the brief of task {:?} shows: not on show, or it has none", m.brief);
     for task in &m.tasks.list {
@@ -1400,7 +1453,6 @@ fn check(m: &Model) -> Result<(), String> {
     let task_ids: Vec<TaskId> = m.tasks.list.iter().map(|t| t.id).collect();
     ensure!(unique(&task_ids) && !task_ids.contains(&0), "task ids {task_ids:?}");
     ensure!(m.tasks.list.iter().all(|t| (1..=9).contains(&t.priority)), "a task's priority is out of range");
-    ensure!(m.current_task.is_none_or(|id| m.tasks.get(id).is_some()), "the current task {:?} is gone", m.current_task);
     ensure!(unique(&m.collapsed), "a heading is collapsed twice");
     match m.undo_offer.map(|offer| offer.moved) {
         Some(Moved::MarkRemoved) => {
@@ -1632,7 +1684,7 @@ fn check_layout(m: &Model) -> Result<(), String> {
     layout_file::grouped(&mut was);
     let (was, now) = (layout_file::write(&was), layout_file::write(&fresh.layout_file(&[], &[], 0)));
     ensure!(was == now, "restored, the layout is another:\n{was}\nthen\n{now}");
-    ensure!(fresh.current_task == m.current_task.filter(|t| m.tasks.get(*t).is_some()), "another scope is on show");
+    ensure!(fresh.tab_task() == m.tab_task(), "the tab on show is of another task");
     Ok(())
 }
 
@@ -1790,6 +1842,15 @@ impl Run {
         let line_before = m.compose_line().cloned();
         let composing = m.composing();
         let palette_typing = m.field().is_some_and(|(of, _)| of == "palette");
+        let tab_before = m.tabs[m.active].id;
+        let tabs_before: Vec<u32> = m.tabs.iter().map(|tab| tab.id).collect();
+        let talks = matches!(
+            action,
+            Action::TaskTalk { .. }
+                | Action::SessionOpen { .. }
+                | Action::SessionAdopt { .. }
+                | Action::TalkPick { .. }
+        );
 
         let effects = m.update(sent);
         check(m)?;
@@ -1807,6 +1868,18 @@ impl Run {
             ensure!(*before == now, "a draft's title or drawings changed, and not by the user: {before:?}");
         }
         ensure!(m.capture.is_none() || !m.compose_theirs, "a draft's title holds what a client wrote");
+        // Only a move to a tab changes the tab on show, or its closing.
+        let tab_now = m.tabs[m.active].id;
+        ensure!(
+            tab_now == tab_before || !m.tabs.iter().any(|tab| tab.id == tab_before) || selects_tab(&action, origin),
+            "{origin:?}'s {action:?} changed the tab on show from {tab_before} to {tab_now}"
+        );
+        // Starting, going on with, adopting or clicking a conversation makes, closes or shows no tab.
+        let tabs_now: Vec<u32> = m.tabs.iter().map(|tab| tab.id).collect();
+        let mut sorted = (tabs_before.clone(), tabs_now.clone());
+        sorted.0.sort_unstable();
+        sorted.1.sort_unstable();
+        ensure!(!talks || (sorted.0 == sorted.1 && tab_now == tab_before), "{action:?} changed the tabs");
         let held = m.capture.as_ref().map_or(0, |draft| draft.materials.len());
         ensure!(unasked == 0 || held == unasked, "a draft's {unasked} captures went with no question");
         // Only the user starts a capture: a client's or a timer's is refused, whatever the mode.
@@ -2337,7 +2410,7 @@ const BASES: &[(&str, Setup)] = &[
                 assign: Assign::default(),
             },
             |_| Action::TaskFromLine { line: "fix zoom #canvas >app p1".into(), known: Known::default(), open: false },
-            |_| Action::TaskOpen { id: Some(3) },
+            |_| Action::NewTabOf { task: Some(3) },
             |_| Action::Split { axis: Axis::Down, kind: Kind::Terminal },
             |_| Action::TaskSnooze { id: 1, until: 2_000_000 },
             |_| Action::RowHold { id: 2 },
@@ -2363,7 +2436,7 @@ const BASES: &[(&str, Setup)] = &[
                 }
             },
             |_| Action::ToggleSection { section: Section::Tasks },
-            |_| Action::TaskLeave,
+            |_| Action::SelectTab { index: 1 },
         ],
     ),
     // App panes: one measured, one in a background tab.
@@ -2554,6 +2627,7 @@ fn code(sent: &Envelope) -> String {
     ];
     const ENUM_OF: &[(&str, &str)] = &[
         ("axis", "Axis"),
+        ("at", "TabAt"),
         ("dir", "Dir"),
         ("zone", "Zone"),
         ("kind", "Kind"),
@@ -3247,7 +3321,7 @@ fn a_drag_on_a_picture_ends_with_annotate_mode() {
         split(Axis::Down, Kind::Terminal),
         capture(None).into(),
         by(Origin::Socket, press),
-        by(Origin::System, Action::TaskLeave),
+        by(Origin::System, Action::CloseTab { index: None }),
     ])
     .unwrap();
 }
@@ -3353,7 +3427,7 @@ fn a_workbook_whose_file_names_a_task_opens_as_a_tab_of_no_task() {
     let effects = m.update(Action::WorkbookOpen { workbook: 1, tab: None, home: None });
     // A terminal and nothing typed into it: no effect carries a command.
     assert_eq!(effects, vec![Effect::Opened(1)]);
-    assert_eq!((m.tabs[m.active].task, m.current_task, m.tabs[m.active].title.as_str()), (None, None, "dri"));
+    assert_eq!((m.tabs[m.active].task, m.tabs[m.active].title.as_str()), (None, "dri"));
 }
 
 /// A system `CloseTab` took the capture's pane off show, which ends annotate mode and keeps the

@@ -816,14 +816,10 @@ mod tests {
         assert!(Action::AppsFilter { on: true }.takes_keyboard() && !Action::AppsFilter { on: false }.takes_keyboard());
         m.update(Action::AppsFilter { on: true });
         // A client adds a task "and starts it" while the user types in the filter: the task is
-        // added, and the tabs on show stay.
+        // added, and the filter keeps the keyboard.
         let line = Action::TaskFromLine { line: "theirs".into(), known: Default::default(), open: true };
-        m.update(line.clone().sent_by(Origin::Socket));
-        assert_eq!((m.tasks.list.len(), m.current_task, m.field().map(|(of, _)| of)), (1, None, Some("apps")));
-        // With the keyboard given back, the same starts the task.
-        m.update(Action::AppsFilter { on: false });
         m.update(line.sent_by(Origin::Socket));
-        assert_eq!((m.tasks.list.len(), m.current_task), (2, Some(2)));
+        assert_eq!((m.tasks.list.len(), m.tab_task(), m.field().map(|(of, _)| of)), (1, None, Some("apps")));
     }
 
     #[test]

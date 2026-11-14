@@ -322,10 +322,10 @@ impl Workspace {
             }
             ("repo", _) => Some(Action::OpenRepo { path: name.into(), axis: Axis::Right }),
             // The one verb, as a click: the user's starts the conversation, a client's shows the tabs.
-            ("task" | "home-row" | "home-node", _) if self.input == ottospace_core::Origin::User => {
+            ("task" | "home-row" | "home-node" | "group", _) if self.input == ottospace_core::Origin::User => {
                 number.map(|id| Action::TaskTalk { id })
             }
-            ("task" | "home-row" | "home-node", _) => number.map(|id| Action::TaskOpen { id: Some(id) }),
+            ("task" | "home-row" | "home-node" | "group", _) => number.map(|id| Action::TaskGo { id: Some(id) }),
             ("tasks-view", _) => {
                 if let Ok(view) = serde_json::from_value(serde_json::json!(name)) {
                     self.click_tasks_view(view, window, cx);
@@ -344,7 +344,7 @@ impl Workspace {
                 }
                 None
             }
-            ("task-snooze" | "task-hold" | "task-dismiss", _) => {
+            ("task-snooze" | "task-hold" | "task-dismiss" | "task-claim", _) => {
                 if let Some(id) = number {
                     self.click_row_button(kind, id, window, cx);
                 }
@@ -409,7 +409,6 @@ impl Workspace {
                 self.save_workbook(window, cx);
                 None
             }
-            ("top", "task_leave") => Some(Action::TaskLeave),
             ("top", _) => {
                 if let Some((.., axis, new_tab)) = SPLITS.iter().find(|(top, ..)| *top == name) {
                     self.top_button(*axis, *new_tab, window, cx);

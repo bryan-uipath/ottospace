@@ -375,9 +375,6 @@ export class Client {
   taskOpen(args: { id: TaskId }): Promise<Snapshot> {
     return this.snapshot({ cmd: "task_open", ...args });
   }
-  taskLeave(): Promise<Snapshot> {
-    return this.snapshot({ cmd: "task_leave" });
-  }
   /** One terminal pane's text. */
   async capture(args: CaptureArgs = {}): Promise<CaptureReply> {
     return captureReply(await this.send({ cmd: "capture", ...args }));

@@ -77,9 +77,8 @@ export class Otto {
     /** The inbox, in the order the Tasks section lists it. */
     list: async (): Promise<InboxRow[]> => (await this.client.taskList()).inbox,
     setState: (id: TaskId, state: TaskState): Promise<Snapshot> => this.client.taskSetState({ id, state }),
-    /** Puts the task's tabs on the user's tab bar. */
+    /** Goes to the task's tabs: the one it showed last. A task with no tab: nothing changes. */
     open: (id: TaskId): Promise<Snapshot> => this.client.taskOpen({ id }),
-    leave: (): Promise<Snapshot> => this.client.taskLeave(),
   };
 
   state(): Promise<Snapshot> {

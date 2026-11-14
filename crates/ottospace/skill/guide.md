@@ -56,7 +56,7 @@ ottospace ctl '{"cmd":"state"}'
 | `state.list` | Null, or the index of the selected row of the open section: the secondary bar has the keyboard (`mode` is `list`, or `pick` while the picker is open over it) |
 | `state.panes` | Every pane of every tab: `id`, `kind`, `cwd` for a terminal opened by `open_repo`, and `fit` for an app pane whose window kept another size than the pane's: `wants` (`[width, height]` in points, the size the window kept) `hint` (what the pane header says, e.g. `needs 120 pt more width` or `fixed size 232×320`) and, only when a `fit` request would move nothing, `stuck`: `no_split` (the pane spans the tab on that axis) or `at_limit` (the splits are at their 10%). No `fit`: the window has the pane's size, or is less than 24 pt smaller (an app that snaps its size), or the layout changed and the pane has not been measured since (within a second). `kind` is an object: `{"type":"terminal"}`, `{"type":"empty"}` or `{"type":"app","window":N,"title":"...","bundle":"com.apple.Safari","name":"Safari"}` (`bundle` is left out for an app that has none) |
 | `state.tabs`, `state.active` | Every tab (`id`, `title`, and `task`: the id of the task it belongs to, or null) and the index of the one showing. Requests take the index, not the `id` |
-| `state.current_task` | The task whose tabs are on the user's tab bar, or null for the tabs of no task. Tabs of other tasks keep running, off the bar |
+| `groups`, `badges` | The tab bar in groups, in order: each task's tabs side by side (`task`, `tabs` as indexes into `state.tabs`), the tabs of no task (`task` null) last. Every tab is on the bar. `badges`: each live task's two letters by id, as its badge shows them on the bar, its panes, its row and the rail; a task's identity colour is `colour` on the task (an index into a palette of 8) |
 | `tab_panes` | Pane ids of each tab, in tab order |
 | `state.focused` | The pane that splits and keys act on |
 | `state.layout` | The active tab's split tree, or null: `{"leaf":3}` or `{"split":{"axis":"right","ratio":0.5,"a":..,"b":..}}`. `ratio` is the share of the split that `a` (the left or top side) takes |
@@ -82,7 +82,7 @@ ottospace ctl '{"cmd":"state"}'
 | `state.compose` | Null, or the text in the new-task box while it is open |
 | `compose_host` | Null, `drawer` (the box is in the right drawer, beside the workspace) or `bar` (it is the title of the draft being collected: `state.capture`) |
 | `compose_plan`, `compose_picks`, `welcome` | What the user's ↵ would do (`agent`, `starts`, `dir`, `branch`), the drawer's repository and agent picks, and whether nothing is open yet |
-| `state.talk`, `state.agents`, `drawer` | The conversation the right drawer shows (`task`, `open`, `keys`), the conversations whose agent runs there, and what is drawn: `agents` by task (`model`, `ended`, `lines`), `rail` (its conversations in order, each with `tip`), `goes_to`, `note`. A conversation is a task's id, or `{"runner","id"}` for a session the user opened that is no task's (in `drawer.agents` keyed `<runner>:<id>`). Only the user starts, stops or types to an agent |
+| `state.talk`, `state.agents`, `drawer` | The conversation the right drawer shows (`task`, `open`, `keys`), the conversations whose agent runs there, and what is drawn: `agents` by task (`model`, `ended`, `lines`), `rail` (its conversations in order, each with `tip`: a task's while it is not dismissed, and once done only while shown or its agent runs), `goes_to` (what the header's ⌘↵ does: `tabs`, `claim` the tab on show, a `new` tab, or null), `note`. A conversation is a task's id, or `{"runner","id"}` for a session the user opened that is no task's (in `drawer.agents` keyed `<runner>:<id>`). Only the user starts, stops or types to an agent |
 | `compose_menu` | Null, or the dropdown for the tag at the cursor: `mark`, `typed`, `rows` (each `name`, `kind`, `detail`, `matched`), `selected` (the highlighted row, or null) and `note` (`no match`, `new project`, or null). While `selected` is not null, ↵ takes that row instead of adding the task, unless the word is that name already |
 | `compose_pointing` | Null, or the rect of the tab or pane the user's ⌥-click would reference |
 | `compose_note` | Null, or what the box says it could not do: a name the line has no room for, files left out |
@@ -159,16 +159,14 @@ ottospace ctl '{"cmd":"drop_pane","source":3,"target":1,"zone":"center"}'
 - `swap` trades the focused pane with its neighbour on that side (the pane `focus_dir` would go
   to). The pane keeps focus.
 - `move_pane` moves a pane (default: the focused one) to another tab, beside that tab's focused
-  pane, and shows that tab with the pane focused. `tab` is the place on the tab bar, from 0: among
-  the tabs of `state.current_task` only, so with no task open it equals the index in
+  pane, and shows that tab with the pane focused. `tab` is the place on the tab bar, from 0: the index in
   `state.tabs`. A tab left with no panes stays, empty. `$OTTOSPACE_TAB` in a moved terminal
   still names the tab its shell started in.
 - `drop_pane` does what dragging pane `source` by its header onto pane `target` does. `zone` is
   `left`, `right`, `top` or `bottom`: `target` is split in two and `source` takes that side. Or
   `center`: the two trade places. `source` takes focus and its tab comes forward. It fails if
-  either pane does not exist or they are the same pane. Unlike `move_pane`, it is not limited to
-  the tabs on the bar: the panes may be in different tabs, also tabs of another task, and then
-  that task's tabs come on show (`state.current_task` changes). A pane dropped where it already
+  either pane does not exist or they are the same pane. The panes may be in different tabs, also
+  tabs of different tasks: a pane takes the task of the tab it lands in. A pane dropped where it already
   is keeps its split's `ratio`. The user's own drag parks a live app; `drop_pane` leaves a live
   `source` live.
 
@@ -252,7 +250,6 @@ ottospace ctl '{"cmd":"task_set_state","id":1,"state":"needs_you"}'
 ottospace ctl '{"cmd":"task_list"}'
 ottospace ctl '{"cmd":"task_pop"}'
 ottospace ctl '{"cmd":"task_open","id":1}'
-ottospace ctl '{"cmd":"task_leave"}'
 ottospace ctl '{"cmd":"task_snooze","id":1,"seconds":3600}'
 ottospace ctl '{"cmd":"task_hold","id":1}'
 ottospace ctl '{"cmd":"task_dismiss","id":1}'
@@ -265,12 +262,13 @@ ottospace ctl '{"cmd":"session_click","runner":"claude","id":"11111111-1111-4111
 ottospace ctl '{"cmd":"sessions_range","range":"week"}'
 ```
 
-A task has a `title`, a `priority` (1 is most urgent, default 3) and a `state`. A task has its
-own tabs: `state.tabs[].task` says which task a tab belongs to. `"tab"` on `task_add` gives the
-task an open tab (a tab `id`): do that for the tab you work in, so the user finds your work
-under the task. `$OTTOSPACE_TAB` is the tab your shell started in; the pane may have been moved
-since, so read the tab that holds `$OTTOSPACE_PANE` now (below). It must be a tab of no task; a tab that
-is gone or that another task has is refused. To file a follow-up from inside a task, leave `tab` out.
+A task has a `title`, a `priority` (1 is most urgent, default 3) and a `state`. A tab may be
+a task's: `state.tabs[].task` says which, and `groups` keeps each task's tabs side by side.
+Only the user links a tab to a task (starting a task takes the tab on show if it is no task's;
+a drag, a palette command or `Claim tab` on a row): a client's task has no tab, and `"tab"` on
+`task_add` links none (a tab that is gone, or another task's, is still refused).
+`$OTTOSPACE_TAB` is the tab your shell started in; the pane may have been moved since, so read
+the tab that holds `$OTTOSPACE_PANE` now (below).
 States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stale`, `parked`,
 `done`, `cleaned`. The inbox lists tasks in groups, in this order: `needs_you` (states
 `needs_you`, `stale`), `running` (`running`, `review`), `captured` (`captured`, `triaged`),
@@ -294,9 +292,8 @@ States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stal
   repository. The task keeps them as `repo` (a path), `agent`, `paths`, `skills`. `agent` is the
   agent the user's click starts in the drawer; nothing acts on `paths` or `skills` yet. It
   replies like `task_add`. A line with no title, or longer than 500 characters, is refused.
-  `"open":true` also shows the new task's tabs (it starts no agent: only the user does): it
-  changes what the user sees, so send it only when asked. The reply then has `opened`: false if the task was added but not shown, because the
-  user was in the new-task box, the picker, the key reference or visual mode.
+  `"open":true` starts no agent (only the user does), and a client's new task has no tab to
+  show: the reply's `opened` is false.
 - `task_add` takes `agent` and `skills` only if `task_new` would know the names (`claude`,
   `codex`, a runner's model as `codex-gpt-6-astra`, a saved agent; an installed skill): any other is refused, and the error names it.
   They are kept as their file or folder spells them. `paths` are kept as given, without
@@ -325,14 +322,15 @@ States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stal
   when you start again, so the next `needs_you` is news.
 - `task_list` replies `{"ok":true,"inbox":[..]}`: each row is a task plus its `group`. The same
   rows are `inbox` in the state, with the count `needs_you`.
-- `task_open` puts a task's tabs on the user's tab bar; `task_leave` shows the tabs of no task
-  again. Both change what the user sees: send them only when asked. The first time a task is
-  opened it gets a tab named after it, with a terminal in its `repo` if it has one. `select_tab`
-  on a tab of another task also brings that task's tabs to the bar.
+- `task_open` goes to a task's tabs: it selects the one of them shown last. It changes what the
+  user sees: send it only when asked. A task with no tab: nothing changes, and no tab is made.
 - `task_pop` is `task_open` for the first task under `needs_you`. It replies
   `{"ok":true,"task":{..},"opened":true}`. `"task":null`: nothing needs the user.
-  `"opened":false`: the view did not change (the picker, the new-task box or the key reference
-  is open, or the user is in visual mode).
+  `"opened":false`: the tab on show did not change (the task has no tab, or the picker, the
+  new-task box or the key reference is open, or the user is in visual mode).
+- `task_dismiss` of a task whose agent runs is refused: dismissing it would stop the agent,
+  and only the user does that (the user is asked first). A dismissed task leaves the rail and
+  the drawer, and its tabs are no task's; `task_undo` links them again.
 - `task_snooze`, `task_hold` and `task_dismiss` are the user's moves; send them only when asked.
   A snoozed or dismissed task leaves the inbox. A snoozed task returns when its time is up;
   a dismissed task does not. Either returns when it moves under `needs_you`. `task_hold` sets
@@ -526,8 +524,8 @@ ottospace ctl "{\"cmd\":\"task_brief\",\"id\":$OTTOSPACE_TASK}"
 ```
 
 `task_brief` replies `{"ok":true,"task":7,"dir":"..","path":"../brief.md","brief":{..}}`, not the
-state. Without `id` it is the task of the tab `tab` (`$OTTOSPACE_TAB`), else the task whose tabs
-are on show, else the task in the drawer. It fails with "has no materials" for a task nothing was captured for. `brief` holds:
+state. Without `id` it is the task of the tab `tab` (`$OTTOSPACE_TAB`), else the task of the tab
+on show, else the task in the drawer. It fails with "has no materials" for a task nothing was captured for. `brief` holds:
 
 - `ask`: the user's own words: `title`, `priority`, `project`, `repo`, `agent`, `paths`, `skills`.
   `title_generated` true: nobody typed the title (the task was filed from captures alone); it
@@ -594,7 +592,7 @@ those after a spelled label. Ids: `rail:apps`
 (`workbook`, `tasks`, `repos`, `marks`), `bar:add` (Tasks: the new-task box; Repos: the folder picker, for the user alone), `bar:save_tab` (Workbook's +: save the tab on show), `bar:close`, `repo-remove:<path>` (under the pointer; the user's alone), `app:<name>`, `repo:<path>`,
 `task:<id>`, `mark:<id>` (go to it), `mark-key:<id>`, `mark-rename:<id>`, `mark-remove:<id>`,
 `mark-undo`, `tab:<tab id>`, `tab-close:<tab id>`, `top:new_tab`, `top:split_right`,
-`top:split_down`, `top:task_leave`, `header:<pane>` (focus), `close:<pane>`, `fit:<pane>` (only
+`top:split_down`, `group:<task>` (a tab group's badge: goes to its tabs), `header:<pane>` (focus), `close:<pane>`, `fit:<pane>` (only
 while the header shows `fit`), `pane:<pane>` (focus;
 an app pane gets the keyboard, as `enter`), `home:new_task`, `home-row:<task>`, `home-node:<task>`.
 A `close:`, `tab-close:` or `mark-remove:` label always has two letters.

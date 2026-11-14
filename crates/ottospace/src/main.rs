@@ -32,8 +32,8 @@ use ottospace_core::hosted::{self as hosting, Click};
 use ottospace_core::keys::{self, FilterKey, Mods};
 use ottospace_core::list::{ListKey, list_key};
 use ottospace_core::marks::{Field, MarkInput, MarkOf, MarkRef, letter};
-use ottospace_core::model::CONFIRM_UP;
 use ottospace_core::model::zones::RailFocus;
+use ottospace_core::model::{CONFIRM_UP, TabAt};
 use ottospace_core::repos::{Checkout, Repo};
 use ottospace_core::rules::{self, Facts};
 use ottospace_core::scrollbar::{Extent, key_step};
@@ -533,6 +533,9 @@ impl Render for Tooltip {
 /// A pane on its way to another place: the value a drag of its header carries.
 struct DraggedPane(PaneId);
 
+/// A tab on its way to another place on the bar, or into another task's group.
+struct DraggedTab(u32);
+
 /// What follows the pointer during a pane drag: the pane's label. `offset`: where in the header
 /// the drag began, as GPUI draws the view that far up and left of the pointer.
 struct DragChip {
@@ -617,6 +620,8 @@ actions!(ottospace, [StartFresh]);
 actions!(ottospace, [CapturePane]);
 // The right drawer: the keyboard in or out, closed to the rail or open, the task's workspace.
 actions!(ottospace, [TalkFocus, TalkToggle, TalkGo, StopAgent]);
+// A tab of no task, and the tab on show taken out of its task.
+actions!(ottospace, [NewTabOutside, RemoveTabFromTask]);
 // App menu.
 actions!(ottospace, [Quit, Hide]);
 
@@ -1392,14 +1397,14 @@ impl Workspace {
             let (_, filing, reply) = self.filing.remove(at);
             let known = compose::Known { names: names.unwrap_or_default(), paths, entries: Vec::new() };
             let before = self.model.tasks.list.len();
-            // `task_new` with `open`: whether the task's tabs are now on show. They are not if
-            // the user was in the new-task box, the picker, the key reference or visual mode.
+            // `task_new` with `open`: whether the task's tabs are now on show. A client's new task
+            // has none: only the user links a tab to a task.
             let mut opened = None;
             let refused = match filing {
                 Filing::Line { open } => {
                     self.dispatch(Action::TaskFromLine { line, known, open }, Origin::Socket, window, cx);
                     opened = open.then(|| {
-                        self.model.tasks.list.get(before).is_some_and(|t| self.model.current_task == Some(t.id))
+                        self.model.tasks.list.get(before).is_some_and(|t| self.model.tab_task() == Some(t.id))
                     });
                     "the line has no title".to_string()
                 }
@@ -1677,7 +1682,7 @@ impl Workspace {
                     failure = Some(format!("no pane {pane}"));
                     None
                 }
-                Request::MovePane { tab, .. } if tab >= self.model.visible_tabs().len() => {
+                Request::MovePane { tab, .. } if tab >= self.model.tabs.len() => {
                     failure = Some(format!("no tab at place {tab} on the tab bar"));
                     None
                 }
@@ -1874,9 +1879,9 @@ impl Workspace {
                     self.dispatch(Action::Tick { now: now_ms() }, Origin::Socket, window, cx);
                     let next = self.model.tasks.next().map(|task| task.id);
                     let task = serde_json::json!(self.model.tasks.next());
-                    self.dispatch(Action::TaskOpen { id: None }, Origin::Socket, window, cx);
-                    // False: the picker or the key reference is in the way, so the view stayed.
-                    let opened = next.is_some() && self.model.current_task == next;
+                    self.dispatch(Action::TaskGo { id: None }, Origin::Socket, window, cx);
+                    // False: it has no tab, or the picker or the key reference is in the way.
+                    let opened = next.is_some() && self.model.tab_task() == next;
                     let _ = reply.send(serde_json::json!({ "ok": true, "task": task, "opened": opened }).to_string());
                     continue;
                 }
@@ -1884,12 +1889,7 @@ impl Workspace {
                     failure = Some(format!("no task {id}"));
                     None
                 }
-                Request::TaskOpen { id } => {
-                    // Its repository as it is now, for the terminal a first opening starts.
-                    self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
-                    Some(Action::TaskOpen { id: Some(id) })
-                }
-                Request::TaskLeave => Some(Action::TaskLeave),
+                Request::TaskOpen { id } => Some(Action::TaskGo { id: Some(id) }),
                 Request::Repos => Some(Action::SetRepos { repos: repos::scan() }),
                 Request::OpenRepo { path, .. } if !self.model.repo_listed(&path) => {
                     failure = Some("no listed repository at that path".into());
@@ -2442,9 +2442,8 @@ impl Workspace {
         let marked = |key: fn(PaneId) -> Mark| -> BTreeMap<PaneId, [f32; 4]> {
             drawn.iter().filter_map(|id| Some((*id, rect(*marks.get(&key(*id))?)))).collect()
         };
-        let tabs: Vec<[f32; 4]> = (0..self.model.visible_tabs().len())
-            .filter_map(|place| marks.get(&Mark::Tab(place)).copied().map(rect))
-            .collect();
+        let tabs: Vec<[f32; 4]> =
+            (0..self.model.tabs.len()).filter_map(|place| marks.get(&Mark::Tab(place)).copied().map(rect)).collect();
         let previews = self.hosted.iter().map(|(id, h)| (*id, h.preview.clone())).collect();
         let shown = drawn_rects(&previews);
         let terminals: BTreeMap<PaneId, serde_json::Value> = self
@@ -2611,6 +2610,9 @@ impl Workspace {
             // (`model`, `ended`, its terminal's `lines`), the workspace ⌘↵ goes to, and why no
             // agent runs for the task on show (`note`).
             "drawer": self.talk_snapshot(),
+            // The tab bar's groups (`task`, `tabs` as places), and each live task's badge letters.
+            "groups": self.model.groups(),
+            "badges": self.model.badges(&[]).into_iter().filter_map(|(subject, mono)| Some((subject.task()?.to_string(), serde_json::Value::from(mono)))).collect::<serde_json::Map<String, serde_json::Value>>(),
             // Frames drawn (`number`), actions dispatched (`seq`) and how many of them the last
             // frame drew (`drawn`); `waited_ms`: how long a test run's reply waited for that frame.
             // `window`: the window's number, for `screencapture -l`.
@@ -3859,6 +3861,7 @@ impl Workspace {
             "task-snooze" => Action::RowSnooze { id, until: now_ms().saturating_add(SNOOZE_MS) },
             "task-hold" => Action::RowHold { id },
             "task-dismiss" => Action::RowDismiss { id },
+            "task-claim" => Action::TabPlace { tab: None, at: TabAt::End(Some(id)) },
             _ => return,
         };
         self.dispatch(action, self.input, window, cx);
@@ -4114,6 +4117,11 @@ impl Workspace {
             .children(
                 (!matches!(row.group, Group::Done | Group::OnHold)).then(|| button("task-hold", "Hold", "Hold (H)")),
             )
+            // The tab on show, of no task, can become this task's.
+            .children(
+                (self.model.tab_task().is_none() && row.group != Group::Done)
+                    .then(|| button("task-claim", "Claim tab", "Make the tab on show this task's")),
+            )
             .child(button("task-dismiss", "Dismiss", "Dismiss (X)"));
         // The task on show: a bar at the row's edge, and its title in bold.
         let bar = div().absolute().left(px(-1.)).top(px(5.)).bottom(px(5.)).w(px(3.)).rounded_full();
@@ -4123,7 +4131,7 @@ impl Workspace {
             .relative()
             .items_start()
             .children(row.current.then(|| bar.bg(rgb(theme::PRIMARY))))
-            .child(div().h(px(20.)).flex().items_center().child(home::dot(theme::task(row.group))))
+            .child(div().h(px(20.)).flex().items_center().children(self.task_badge(id, 18.)))
             .child(
                 div()
                     .flex_1()
@@ -4323,20 +4331,35 @@ impl Workspace {
             .child(self.controls.mark(format!("header:{id}")))
             // `fit` and × never shrink, so they stay in the header however narrow the pane.
             .child(
-                div().flex().min_w_0().gap_2().children(hint).children(word).children(strip).child(
-                    div()
-                        .id(("close", id))
-                        .child(mark(&self.marks, Mark::Close(id)))
-                        .flex_none()
-                        .px_1()
-                        .cursor_pointer()
-                        .hover(|s| s.text_color(rgb(theme::ERROR)))
-                        .child("×")
-                        .child(self.controls.mark(format!("close:{id}")))
-                        // The press must not reach the header: an unsteady click would start a drag.
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .on_click(cx.listener(move |this, _, window, cx| this.close_pane(id, window, cx))),
-                ),
+                // The task of its tab: the same badge as on the bar.
+                div()
+                    .flex()
+                    .min_w_0()
+                    .gap_2()
+                    .items_center()
+                    .children(hint)
+                    .children(word)
+                    .children(strip)
+                    .children(
+                        self.model
+                            .tab_of(id)
+                            .and_then(|tab| self.model.tabs.iter().find(|t| t.id == tab)?.task)
+                            .and_then(|task| self.task_badge(task, 16.)),
+                    )
+                    .child(
+                        div()
+                            .id(("close", id))
+                            .child(mark(&self.marks, Mark::Close(id)))
+                            .flex_none()
+                            .px_1()
+                            .cursor_pointer()
+                            .hover(|s| s.text_color(rgb(theme::ERROR)))
+                            .child("×")
+                            .child(self.controls.mark(format!("close:{id}")))
+                            // The press must not reach the header: an unsteady click would start a drag.
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_click(cx.listener(move |this, _, window, cx| this.close_pane(id, window, cx))),
+                    ),
             );
         // Once its picture is taken. Until then the pane draws as ever, beside the bar.
         let taken = |material: &&ottospace_core::capture::Material| self.shots.contains_key(&material.n);
@@ -4559,69 +4582,49 @@ impl Workspace {
                     }
                 }),
             )
-            // The task whose tabs these are, unless the drawer's header names it. × goes back to
-            // the tabs of no task; the task goes on.
-            .children(
-                self.model.current_task.filter(|id| !self.talk_names(*id)).and_then(|id| self.model.tasks.get(id)).map(
-                    |task| {
-                        div()
-                            .id("task-chip")
-                            .h_full()
-                            .pl_3()
-                            .pr_1()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .border_r_1()
-                            .border_color(rgb(theme::BORDER))
-                            .text_xs()
-                            .text_color(rgb(theme::MUTED))
-                            .child(
-                                svg().path("icons/tasks.svg").size(px(12.)).flex_none().text_color(rgb(theme::MUTED)),
-                            )
-                            .child(div().max_w(px(220.)).truncate().child(task.title.clone()))
-                            // It names a task, it is no tab: a click shows the task in the Tasks section.
-                            .cursor_pointer()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                if this.model.sidebar != Some(Section::Tasks) {
-                                    this.dispatch(
-                                        Action::ToggleSection { section: Section::Tasks },
-                                        this.input,
-                                        window,
-                                        cx,
-                                    );
-                                }
-                            }))
-                            .child(
-                                div()
-                                    .id("task-leave")
-                                    .px_1()
-                                    .rounded_sm()
-                                    .cursor_pointer()
-                                    .text_color(rgb(theme::MUTED))
-                                    .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
-                                    .child("×")
-                                    .child(self.controls.mark("top:task_leave"))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.dispatch(Action::TaskLeave, this.input, window, cx);
-                                    })),
-                            )
-                    },
-                ),
-            )
-            // Only the current task's tabs (or those of no task) are on the bar.
-            .children(
-                self.model
-                    .visible_tabs()
-                    .into_iter()
-                    .filter_map(|index| Some((index, self.model.tabs.get(index)?)))
-                    .enumerate()
-                    .map(|(place, (index, tab))| {
-                        let (active, id) = (index == self.model.active, tab.id);
+            // Each task's tabs side by side behind its badge, the tabs of no task last.
+            .children(self.model.groups().into_iter().flat_map(|group| {
+                let task = group.task.and_then(|id| self.model.tasks.get(id));
+                let shown = task.is_some_and(|task| self.talk_names(task.id));
+                let underline = task.map(|task| (theme::identity(task.colour), shown));
+                let done = task.is_some_and(|task| matches!(task.state, State::Done | State::Cleaned));
+                // Its badge: a click shows its conversation; a tab dropped on it joins the group.
+                let head = group.task.and_then(|id| Some((id, self.task_badge(id, 18.)?))).map(|(id, badge)| {
+                    div()
+                        .id(("group", id))
+                        .h_full()
+                        .pl_2()
+                        .flex()
+                        .items_center()
+                        .cursor_pointer()
+                        .child(badge)
+                        .child(self.controls.mark(format!("group:{id}")))
+                        .drag_over::<DraggedTab>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
+                        .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                            let at = TabAt::End(Some(id));
+                            this.dispatch(Action::TabPlace { tab: Some(dragged.0), at }, this.input, window, cx);
+                        }))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.dispatch(Action::TaskTalk { id }, this.input, window, cx);
+                        }))
+                        .into_any_element()
+                });
+                let tabs = group.tabs.into_iter().filter_map(|index| Some((index, self.model.tabs.get(index)?))).map(
+                    |(place, tab)| {
+                        let (active, id) = (place == self.model.active, tab.id);
+                        let title = SharedString::from(tab.title.clone());
                         div()
                             .id(("tab", tab.id))
-                            // A pane dropped on a tab moves there.
+                            // A pane dropped on a tab moves there; a tab dropped on one goes before it, in its group.
                             .drag_over::<DraggedPane>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
+                            .drag_over::<DraggedTab>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
+                            .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                                let at = TabAt::Before(id);
+                                this.dispatch(Action::TabPlace { tab: Some(dragged.0), at }, this.input, window, cx);
+                            }))
+                            .on_drag(DraggedTab(id), move |_, offset, _, cx| {
+                                cx.new(|_| DragChip { label: title.clone(), offset })
+                            })
                             .on_drop(cx.listener(move |this, dragged: &DraggedPane, window, cx| {
                                 this.dispatch(
                                     Action::MovePane { pane: Some(dragged.0), tab: place },
@@ -4640,6 +4643,10 @@ impl Workspace {
                             .border_color(rgb(theme::BORDER))
                             .cursor_pointer()
                             .when(active, |d| d.bg(rgb(theme::RAISED)).text_color(rgb(theme::TEXT)))
+                            // A task's tab is underlined in its colour, brighter while the drawer shows it.
+                            .when_some(underline, |d, (colour, shown)| {
+                                d.border_b_2().border_color(rgb(colour)).when(!shown, |d| d.opacity(0.85))
+                            })
                             .hover(|s| s.text_color(rgb(theme::TEXT)))
                             .child(mark(&self.marks, Mark::Tab(place)))
                             .children(
@@ -4671,8 +4678,13 @@ impl Workspace {
                                     })),
                             )
                             .on_click(cx.listener(move |this, _, window, cx| this.select_tab(id, window, cx)))
-                    }),
-            )
+                            .when(done, |d| d.opacity(0.5))
+                            .into_any_element()
+                    },
+                );
+                let tabs: Vec<_> = tabs.collect();
+                head.into_iter().chain(tabs).collect::<Vec<_>>()
+            }))
             // New tab and split buttons: a new empty tab, or the picker for that split.
             .child(div().ml_auto().mr_2().flex().gap_1().children(SPLITS.iter().enumerate().map(
                 |(i, (name, icon, tip, axis, new_tab))| {
@@ -4718,6 +4730,7 @@ impl Workspace {
                 ("SNEAK", "type a label · esc leaves · the accessibility overlay is hidden (⌘⌃A shows it)")
             }
             Mode::Sneak => ("SNEAK", "type a label · esc leaves"),
+            Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.dismiss.is_some()) => ("DISMISS?", ""),
             Mode::Confirm => ("QUIT?", ""),
             Mode::Annotate => ("ANNOTATE", "drag to circle · click for a note · ↵ title · esc leaves"),
             Mode::Talk => ("TALK", "keys go to the task's agent"),
@@ -4800,8 +4813,7 @@ fn open_task(id: TaskId, cx: &mut Context<Workspace>) -> Box<dyn Fn(&ClickEvent,
     Box::new(cx.listener(move |this, _, window, cx| {
         // The user's click is the one verb: its conversation. A client's shows its tabs, as
         // its `task_open` does: only the user starts an agent.
-        let action =
-            if this.input == Origin::User { Action::TaskTalk { id } } else { Action::TaskOpen { id: Some(id) } };
+        let action = if this.input == Origin::User { Action::TaskTalk { id } } else { Action::TaskGo { id: Some(id) } };
         this.dispatch(action, this.input, window, cx);
         cx.notify();
     }))
@@ -5142,7 +5154,7 @@ impl Render for Workspace {
                 if this.model.compose_keys() {
                     this.dispatch(Action::ComposeSubmit { open: true }, this.input, window, cx);
                 } else {
-                    this.talk_go(window, cx);
+                    this.dispatch(Action::TalkGo, this.input, window, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &CapturePane, window, cx| {
@@ -5162,7 +5174,7 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &NextTask, window, cx| {
                 this.dispatch(Action::Tick { now: now_ms() }, this.input, window, cx);
-                this.dispatch(Action::TaskOpen { id: None }, this.input, window, cx);
+                this.dispatch(Action::TaskGo { id: None }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
                 this.dispatch(Action::Split { axis: Axis::Right, kind: Kind::Terminal }, this.input, window, cx);
@@ -5190,6 +5202,12 @@ impl Render for Workspace {
                 }
             }))
             .on_action(cx.listener(|this, _: &NewTab, window, cx| this.top_button(Axis::Right, true, window, cx)))
+            .on_action(cx.listener(|this, _: &NewTabOutside, window, cx| {
+                this.dispatch(Action::NewTabOf { task: None }, this.input, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &RemoveTabFromTask, window, cx| {
+                this.dispatch(Action::TabPlace { tab: None, at: TabAt::End(None) }, this.input, window, cx);
+            }))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| {
                 this.dispatch(Action::CycleTab { delta: 1 }, this.input, window, cx);
             }))

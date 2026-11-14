@@ -158,6 +158,8 @@ export interface Task {
   finished_at?: number;
   /** What its agent's sessions did, the newest last. Absent: nothing yet. */
   work?: Work[];
+  /** Its identity colour: an index into the app's palette of 8, kept on the task. Absent: none yet. */
+  colour?: number;
 }
 
 /** Something drawn on a capture. Positions are 0..1 of the picture, from its top left. */
@@ -624,6 +626,8 @@ export interface Running {
 /** The quit question: the terminals that run something. */
 export interface Confirm {
   running: Running[];
+  /** Not the quit question: "Stop its agent and dismiss?" for this task. Only the user answers it. */
+  dismiss: TaskId | null;
 }
 
 /** What a mark waits for while it has the keyboard (`mode` is `mark`). */
@@ -713,8 +717,6 @@ export interface Model {
   focused: PaneId | null;
   /** The app pane that has the keyboard. */
   live: PaneId | null;
-  /** The task whose tabs are on the tab bar, or null for the tabs of no task. */
-  current_task: TaskId | null;
   sidebar: Section | null;
   /** The text in the new-task box while it is open. */
   compose: string | null;
@@ -985,12 +987,17 @@ export interface Snapshot {
     brief: { task: TaskId; dir: string | null } | null;
   };
   /** The right drawer: where its conversation is drawn, each agent by task id (a session's: `<runner>:<id>`), the workspace ⌘↵ goes to, and why no agent runs for the conversation on show. */
+  /** The tab bar's groups in order: each task's tabs (places in `state.tabs`), the tabs of no task (`task` null) last. */
+  groups: { task: TaskId | null; tabs: number[] }[];
+  /** Each live task's badge letters, by task id: the same on the bar, its panes, its row and the rail. */
+  badges: Record<string, string>;
   drawer: {
     body: Rect | null;
     /** Its width in points as last drawn. */
     width: number;
     agents: Record<string, { model: string; ended: boolean; cols: number; rows: number; lines: string[] }>;
-    goes_to: string | null;
+    /** What the header's go word (⌘↵) does: `tabs` (go to its tabs), `claim` (the tab on show becomes its), `new` (a new tab of it). */
+    goes_to: "tabs" | "claim" | "new" | null;
     note: string | null;
     /** The right rail's conversations, in order: badge, state, at work, shown, and the tooltip's text. */
     rail: { task: Subject; mono: string; group: Group | null; working: boolean; shown: boolean; tip: string }[];

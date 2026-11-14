@@ -93,7 +93,6 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.composeDrop({ paths: ["/tmp/a.txt"] }),
   (c) => c.taskPop(),
   (c) => c.taskOpen({ id: 1 }),
-  (c) => c.taskLeave(),
   (c) => c.capture({ pane: 1, history: true }),
   (c) => c.wait({ pane: 1, pattern: "^done$", timeout_ms: 1000 }),
   (c) => c.captureStart({ pane: 1 }),

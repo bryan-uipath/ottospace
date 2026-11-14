@@ -30,7 +30,7 @@ test("state: the typed snapshot is the whole reply", async () => {
     assert.equal(start.mode, "normal");
     assert.deepEqual(start.state.panes, []);
     assert.deepEqual(start.state.tabs, [{ id: 1, title: "Tab 1", task: null }]);
-    assert.equal(start.state.current_task, null);
+    assert.deepEqual(start.groups, [{ task: null, tabs: [0] }]);
     assert.equal(start.notice, null);
     // No pane: the home screen, with nothing on it yet.
     assert.deepEqual(start.home?.nodes, []);
@@ -164,7 +164,7 @@ test("disconnect ends a pending wait, and later calls reject", async () => {
   });
 });
 
-test("tasks: add, list, open, leave", async () => {
+test("tasks: add, list, open", async () => {
   await withOttospace(async (client) => {
     const otto = new Otto(client);
     const later = await otto.tasks.add("Write the note");
@@ -187,6 +187,7 @@ test("tasks: add, list, open, leave", async () => {
       refs: [],
       title_generated: false,
       materials: [],
+      colour: 0,
     });
     const urgent = await otto.tasks.add("Review the client", { priority: 1, state: "needs_you" });
     const filed = (await client.taskNew({ line: "fix the flicker #canvas p2" })).task;
@@ -196,13 +197,11 @@ test("tasks: add, list, open, leave", async () => {
     assert.deepEqual(inbox.map((row) => [row.id, row.group]), [[2, "needs_you"], [3, "captured"], [1, "captured"]]);
     assert.equal((await client.state()).needs_you, 1);
 
+    // A client's task has no tab (only the user links one): going to its tabs changes nothing.
     const opened = await otto.tasks.open(urgent.id);
-    assert.equal(opened.state.current_task, urgent.id);
-    assert.deepEqual(opened.state.tabs[opened.state.active], { id: 2, title: "Review the client", task: urgent.id });
-
-    const left = await otto.tasks.leave();
-    assert.equal(left.state.current_task, null);
-    assert.equal(left.state.tabs[left.state.active]?.task, null);
+    assert.deepEqual(opened.state.tabs, [{ id: 1, title: "Tab 1", task: null }]);
+    assert.equal(typeof opened.state.tasks.list[1]?.colour, "number");
+    assert.equal(opened.badges[String(urgent.id)], "RT");
   });
 });
 

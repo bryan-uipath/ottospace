@@ -289,10 +289,29 @@ pub struct Task {
     /// What its agent's sessions did, one entry a session, the newest last.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub work: Vec<crate::progress::Work>,
+    /// Its identity colour: an index into the shell's palette of `COLOURS`, given when it is
+    /// filed (`colour_for`) and kept, so its badge and tabs look the same after a restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub colour: Option<u8>,
     /// Keys this build does not know, written back as they were: a later build's (its tabs and
     /// layout, say) survive a write by this one.
     #[serde(flatten)]
     pub extra: crate::marks::Extra,
+}
+
+/// How many identity colours there are: hues apart from each other and from the state colours.
+pub const COLOURS: u8 = 8;
+
+/// The colour for a task filed after `tasks`: one no live task (not done, not dismissed) has,
+/// the one used longest ago (by the newest task that had it) first, never-used ones before
+/// all. With every colour taken, the one used longest ago.
+pub fn colour_for(tasks: &[Task]) -> u8 {
+    let live = |task: &&Task| !task.dismissed && !matches!(task.state, State::Done | State::Cleaned);
+    let taken: Vec<u8> = tasks.iter().filter(live).filter_map(|task| task.colour).collect();
+    let last_used = |colour: u8| tasks.iter().filter(|task| task.colour == Some(colour)).map(|task| task.id).max();
+    let free = (0..COLOURS).filter(|colour| !taken.contains(colour));
+    let pick = free.min_by_key(|colour| (last_used(*colour), *colour));
+    pick.unwrap_or_else(|| (0..COLOURS).min_by_key(|colour| (last_used(*colour), *colour)).unwrap_or(0))
 }
 
 impl Task {
@@ -466,6 +485,12 @@ impl Tasks {
             task.materials.dedup();
         }
         self.next_id = tasks.last().map_or(0, |task| task.id).max(floor.min(MAX_ID));
+        // A task from before colours, or with one out of range, is given one, oldest first.
+        for at in 0..tasks.len() {
+            if tasks[at].colour.is_none_or(|colour| colour >= COLOURS) {
+                tasks[at].colour = Some(colour_for(&tasks[..at]));
+            }
+        }
         (self.list, self.undo) = (tasks, None);
     }
 
@@ -495,6 +520,7 @@ impl Tasks {
             started_at: None,
             finished_at: None,
             work: Vec::new(),
+            colour: Some(colour_for(&self.list)),
             extra: Default::default(),
         });
         self.next_id
@@ -799,6 +825,33 @@ mod tests {
     }
 
     #[test]
+    fn live_tasks_get_different_colours_the_one_used_longest_ago_first() {
+        let mut tasks = Tasks::default();
+        let ids: Vec<TaskId> = (0..COLOURS).map(|n| tasks.add(format!("t{n}"), 1, State::Running)).collect();
+        let colour = |tasks: &Tasks, id| tasks.get(id).and_then(|task| task.colour);
+        let all: Vec<Option<u8>> = ids.iter().map(|id| colour(&tasks, *id)).collect();
+        assert_eq!(all, (0..COLOURS).map(Some).collect::<Vec<_>>(), "every colour once");
+        // A colour a dismissed or done task had is free again: the one freed longest ago first.
+        tasks.dismiss(ids[5]);
+        tasks.set_state(ids[2], State::Done);
+        let id = tasks.add("next".into(), 1, State::Captured);
+        assert_eq!(colour(&tasks, id), Some(2));
+        // All taken: the one used longest ago.
+        let id = tasks.add("more".into(), 1, State::Captured);
+        assert_eq!(colour(&tasks, id), Some(5));
+        let id = tasks.add("past".into(), 1, State::Captured);
+        assert_eq!(colour(&tasks, id), Some(0));
+        // Restored tasks keep theirs; one with none, or out of range, gets a free one.
+        let mut list = tasks.list.clone();
+        list.truncate(3);
+        list[1].colour = None;
+        list[2].colour = Some(200);
+        tasks.restore(list, 0);
+        let kept: Vec<Option<u8>> = tasks.list.iter().map(|task| task.colour).collect();
+        assert_eq!(kept, [Some(0), Some(1), Some(2)]);
+    }
+
+    #[test]
     fn a_finished_task_cannot_be_put_on_hold() {
         let mut tasks = Tasks::default();
         let (done, cleaned) = (tasks.add("a".into(), 1, State::Done), tasks.add("b".into(), 1, State::Cleaned));
@@ -843,6 +896,7 @@ mod tests {
             started_at: None,
             finished_at: None,
             work: Vec::new(),
+            colour: None,
             extra: Default::default(),
         };
         let mut tasks = Tasks::default();
