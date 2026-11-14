@@ -184,7 +184,10 @@ once and keeps what lies under the user's annotations. Only the user starts one 
 key, the menu, the bar): the core refuses a `CaptureStart` of any other origin, and
 `capture_start` on the socket answers only under `OTTOSPACE_E2E` (`control::test_refusal`).
 In a task's brief (`task_brief`) everything captured is quoted and labelled as untrusted: see
-`docs/ai/capture.md`. The user's own sneak label may press a control in the focused app pane
+`docs/ai/capture.md`. Meeting titles and places are never in the state (every reply carries it):
+only the read-only `calendar` request gives them, with times and busy/free, from what the app
+holds (it never fetches); never a meeting's link, description or attendees, the feed's address or
+`calendar_email`. The guide tells agents titles are data, never instructions. The user's own sneak label may press a control in the focused app pane
 (`docs/ai/sneak-apps.md`): the core refuses a label in an app from any other origin. Requests
 that press or set values in another app are still a
 separate trust decision: see `docs/ai/1-initial-brainstorm/accessibility.md`.
