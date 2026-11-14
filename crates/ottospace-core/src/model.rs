@@ -1006,6 +1006,21 @@ pub enum Action {
     RestoreWorkbooks {
         workbooks: Vec<Workbook>,
     },
+    /// Build the tabs `layout.json` kept, at start, into the fresh model: the shell's alone.
+    /// `gone`: its directories not found now, whose terminals start in `home`. `launch`: an app
+    /// a pane names that is not running may be started (`restore_apps`).
+    RestoreLayout {
+        layout: Box<crate::layout_file::Layout>,
+        gone: Vec<String>,
+        home: Option<String>,
+        launch: bool,
+    },
+    /// File ▸ Start Fresh: the next start begins empty. The layout is not kept this run.
+    StartFresh,
+    /// "Open <App>" on a restored app pane that waits for its window.
+    UnfilledOpen {
+        pane: PaneId,
+    },
     /// Save the tab on show as a workbook, or update its tab of the one it came from. `uid`: a
     /// new one's file name, made up by the shell. `cwds`: each terminal's directory now.
     /// `histories`: each terminal's last lines and the command in front, as the shell read them.
@@ -1391,6 +1406,9 @@ impl Action {
             | Action::BriefShow { .. }
             | Action::BriefClose
             | Action::RestoreWorkbooks { .. }
+            | Action::RestoreLayout { .. }
+            | Action::StartFresh
+            | Action::UnfilledOpen { .. }
             | Action::WorkbookAddTab { .. }
             | Action::WorkbookOpen { .. }
             | Action::WorkbookRemove { .. }
@@ -1571,6 +1589,8 @@ pub enum Effect {
     /// Host a window of this app: the one titled `title`, else as `marks::pick_window` says; an
     /// app that is not running is started. `into`: the empty pane it fills (`Action::Fill`),
     /// else a new pane (`Action::Open` along `axis`). `mark`: the pane mark to bind to that pane.
+    /// `launch`: false leaves an app that is not running as it is, and the pane waits (a
+    /// restored layout's, unless `restore_apps`).
     HostWindow {
         mark: Option<MarkId>,
         bundle: Option<String>,
@@ -1578,7 +1598,10 @@ pub enum Effect {
         title: String,
         into: Option<PaneId>,
         axis: Axis,
+        launch: bool,
     },
+    /// Start Fresh: remove `layout.json`, and write none this run.
+    ForgetLayout,
     /// Show a workbook's saved history in terminal `pane`, just opened (`Opened`), above its
     /// prompt, and type its command there without running it.
     History {
@@ -1666,7 +1689,7 @@ pub struct Model {
     pub current_task: Option<TaskId>,
     /// The tab each task (or no task) showed last, to come back to it.
     #[serde(skip)]
-    last_tab: Vec<(Option<TaskId>, u32)>,
+    pub(crate) last_tab: Vec<(Option<TaskId>, u32)>,
     /// Rail section shown in the secondary bar. `None`: the bar is closed.
     pub sidebar: Option<Section>,
     /// The text in the new-task box, while it is open.
@@ -1794,7 +1817,7 @@ pub struct Model {
     pub agents: Vec<Subject>,
     /// The conversations the user opened in this run, the last opened last.
     #[serde(skip)]
-    opened: Vec<Subject>,
+    pub(crate) opened: Vec<Subject>,
     /// Agents started whose session's id is not known yet: their runner names it.
     #[serde(skip)]
     seeking: Vec<agents::Seek>,
@@ -1825,6 +1848,12 @@ pub struct Model {
     pub(crate) next_id: PaneId,
     #[serde(skip)]
     next_tab: u32,
+    /// The layout file as it was last told to the shell, but for what the shell reads.
+    #[serde(skip)]
+    pub(crate) layout_seen: Option<crate::layout_file::Layout>,
+    /// False after Start Fresh: no change is told to the shell.
+    #[serde(skip)]
+    pub(crate) layout_kept: bool,
 }
 
 impl Default for Model {
@@ -1902,6 +1931,8 @@ impl Default for Model {
             current_task: None,
             last_tab: Vec::new(),
             next_tab: 0,
+            layout_seen: None,
+            layout_kept: true,
         };
         model.push_tab();
         model
@@ -2000,6 +2031,11 @@ impl Model {
             // So do a directory added to the Repos list and one taken off it.
             Action::RepoAdd { .. } | Action::RepoRemove { .. } => Some(apps::USERS_ALONE),
             Action::ListDismiss | Action::ListUndo if self.sidebar == Some(Section::Apps) => Some(apps::USERS_ALONE),
+            // The layout file is read by the shell at start, and its app panes start the user's apps.
+            Action::RestoreLayout { .. } if origin == Origin::Socket => Some(crate::layout_file::USERS_ALONE),
+            Action::StartFresh | Action::UnfilledOpen { .. } if origin != Origin::User => {
+                Some(crate::layout_file::USERS_ALONE)
+            }
             // A workbook is the user's file, and opening one starts their apps.
             Action::WorkbookSave { .. }
             | Action::WorkbookAddTab { .. }
@@ -3362,6 +3398,14 @@ impl Model {
                 }
             }
             Action::RestoreWorkbooks { workbooks } => self.restore_workbooks(workbooks),
+            Action::RestoreLayout { layout, gone, home, launch } => {
+                self.layout_restore(*layout, &gone, home, launch, effects)
+            }
+            Action::StartFresh => {
+                self.layout_kept = false;
+                effects.push(Effect::ForgetLayout);
+            }
+            Action::UnfilledOpen { pane } => self.unfilled_open(pane, effects),
             Action::WorkbookSave { uid, cwds, histories } => self.workbook_save(uid, (&cwds, &histories), effects),
             Action::WorkbookAddTab { workbook, cwds, histories } => {
                 self.workbook_add_tab(workbook, (&cwds, &histories))
@@ -5699,6 +5743,9 @@ mod tests {
         Action::BriefShow { .. },
         Action::BriefClose,
         Action::RestoreWorkbooks { .. },
+        Action::RestoreLayout { .. },
+        Action::StartFresh,
+        Action::UnfilledOpen { .. },
         Action::WorkbookSave { .. },
         Action::WorkbookAddTab { .. },
         Action::WorkbookSaveAll { .. },
@@ -5891,6 +5938,14 @@ mod tests {
             Action::BriefShow { id: 1 },
             Action::BriefClose,
             Action::RestoreWorkbooks { workbooks: Vec::new() },
+            Action::RestoreLayout {
+                layout: Box::new(Model::default().layout_file(&[], &[], 0)),
+                gone: Vec::new(),
+                home: None,
+                launch: false,
+            },
+            Action::StartFresh,
+            Action::UnfilledOpen { pane: 1 },
             Action::WorkbookSave { uid: text(), cwds: Vec::new(), histories: Vec::new() },
             Action::WorkbookAddTab { workbook: 1, cwds: Vec::new(), histories: Vec::new() },
             Action::WorkbookSaveAll { uid: text(), cwds: Vec::new(), histories: Vec::new() },
@@ -6056,6 +6111,8 @@ mod tests {
                         Some(inspect::USERS_ALONE)
                     }
                     Action::AppWheel { .. } => Some(crate::app_wheel::USERS_ALONE),
+                    Action::RestoreLayout { .. } if origin == Origin::Socket => Some(crate::layout_file::USERS_ALONE),
+                    Action::StartFresh | Action::UnfilledOpen { .. } => Some(crate::layout_file::USERS_ALONE),
                     _ => action.takes_keyboard().then_some("sneak mode is on"),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");
@@ -9738,6 +9795,8 @@ mod tests {
                         Some(inspect::USERS_ALONE)
                     }
                     Action::AppWheel { .. } => Some(crate::app_wheel::USERS_ALONE),
+                    Action::RestoreLayout { .. } if origin == Origin::Socket => Some(crate::layout_file::USERS_ALONE),
+                    Action::StartFresh | Action::UnfilledOpen { .. } => Some(crate::layout_file::USERS_ALONE),
                     _ => action.takes_keyboard().then_some(CONFIRM_UP),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");

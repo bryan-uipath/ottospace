@@ -1174,6 +1174,44 @@ fn a_workbook_hosts_its_apps_window_again_beside_its_terminal() {
 
 #[test]
 #[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn a_restored_layout_hosts_its_running_apps_window_again_beside_its_terminal() {
+    let home = support::temp(&format!("otto-apps-layout-{}", std::process::id()));
+    std::fs::create_dir_all(&home).expect("make the folder");
+    let home_str = home.to_str().expect("a plain path");
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-layout", "CANARY_SOCKET", &[]);
+    wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
+    let env = [("OTTOSPACE_HOME", home_str), ("OTTOSPACE_SHELL", "/bin/sh")];
+    let kinds = |state: &Value| -> Vec<String> {
+        let panes = state["state"]["panes"].as_array().cloned().unwrap_or_default();
+        panes.iter().filter_map(|pane| pane["kind"]["type"].as_str().map(str::to_string)).collect()
+    };
+
+    // The app's window beside a terminal; the quit gives the window back and keeps the layout.
+    let mut otto = otto_for(&canary, "otto-layout-1", &env);
+    otto.call(json!({"cmd": "open_app", "name": CANARY}));
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "quit"}));
+    let quit = Instant::now();
+    while otto.child.try_wait().expect("wait").is_none() {
+        assert!(quit.elapsed() < Duration::from_secs(10), "quit did not exit the app");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let text = std::fs::read_to_string(home.join("layout.json")).expect("layout.json written at quit");
+    // The app by name, and no window title.
+    assert!(text.contains(CANARY) && !text.contains("Canary 1"), "{text}");
+    drop(otto);
+
+    // The next start hosts the running app's window in its pane again: started by nobody.
+    let otto = otto_for(&canary, "otto-layout-2", &env);
+    let state = || otto.call(json!({"cmd": "state"}));
+    let built = wait_for("the window in its pane", || {
+        Some(state()).filter(|s| kinds(s) == ["app", "terminal"] && s["hosted"].as_object().map(|h| h.len()) == Some(1))
+    });
+    assert_eq!(built["state"]["panes"][0]["kind"]["title"], "Canary 1", "{}", built["state"]["panes"]);
+}
+
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
 fn the_inspector_reads_a_hosted_canary_window_and_counts_its_roles() {
     let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary", "CANARY_SOCKET", &[]);
     wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));

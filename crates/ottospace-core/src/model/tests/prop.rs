@@ -8,6 +8,7 @@ use super::*;
 use crate::ax::{Frame, Source};
 use crate::compose::{Known, Names, PathFound};
 use crate::fuzz::{self, Rng};
+use crate::layout_file;
 use crate::marks::{Mark, PaneRecord, RecordKind, TabRecord};
 use crate::progress;
 use crate::repos::{MAX_DIRS, RepoDir, RepoDirs, Worktree};
@@ -912,6 +913,24 @@ const MAKERS: &[Make] = &[
         let read = |book: &Workbook| workbook::parse(&workbook::write(book), &book.uid).ok();
         Action::RestoreWorkbooks { workbooks: kept.iter().filter_map(read).collect() }
     },
+    |g| {
+        // As the shell does: the model's own layout file, read back, at times a newer build's or a tampered one's.
+        let histories = g.histories();
+        let mut layout = g.m.layout_file(&g.read(DIRS), &histories, g.rng.pick(&[0, 3, 500]));
+        layout.version = g.rng.pick(&[layout_file::VERSION, layout_file::VERSION, 0, 2]);
+        if let Some(saved) = layout.tabs.first_mut().filter(|_| g.rng.one_in(4)) {
+            saved.tab.panes.iter_mut().for_each(|pane| pane.cwd = Some(g.name(DIRS)));
+            saved.marks = vec![layout_file::MarkLink { id: g.name(UIDS), pane: g.rng.coin().then(|| g.stray()) }];
+        }
+        layout.selected = g.rng.coin().then(|| g.rng.pick(&[0, 1, 2, 99]));
+        layout.drawer.task = g.rng.coin().then(|| g.task());
+        let layout = layout_file::parse(&layout_file::write(&layout)).unwrap_or(layout);
+        let gone = g.names(DIRS, 2);
+        let home = g.rng.coin().then(|| g.name(DIRS));
+        Action::RestoreLayout { layout: Box::new(layout), gone, home, launch: g.rng.coin() }
+    },
+    |_| Action::StartFresh,
+    |g| Action::UnfilledOpen { pane: g.pane() },
     |g| Action::WorkbookSave { uid: g.rng.pick(BOOK_UIDS).to_string(), cwds: g.read(DIRS), histories: g.histories() },
     |g| Action::WorkbookAddTab { workbook: g.workbook(), cwds: g.read(DIRS), histories: g.histories() },
     |g| Action::WorkbookSaveAll {
@@ -1567,6 +1586,55 @@ fn check_file(m: &Model) -> Result<(), String> {
     Ok(())
 }
 
+/// The layout file: no terminal text with no lines to keep, never an app's title, and it reads
+/// back as written. Restored into a fresh model with the same tasks, marks and workbooks, it is
+/// the model's layout again: tabs, order, trees, ratios, focus, the scope and tab on show.
+fn check_layout(m: &Model) -> Result<(), String> {
+    let marked = |pane: &Pane| {
+        let lines = vec![format!("{SAVED} line")];
+        (pane.id, History { lines, command: Some(format!("echo {SAVED}")), saved: 1 })
+    };
+    let marked: Vec<(PaneId, History)> = m.panes.iter().map(marked).collect();
+    let bare = layout_file::write(&m.layout_file(&[], &marked, 0));
+    ensure!(!bare.contains(SAVED), "terminal text is kept with no lines to keep: {bare}");
+    let file = m.layout_file(&[], &marked, 500);
+    let records = || file.tabs.iter().flat_map(|saved| saved.tab.panes.iter());
+    let titled = |pane: &PaneRecord| match &pane.kind {
+        RecordKind::App { title, extra, .. } => !title.is_empty() || !extra.is_empty(),
+        _ => false,
+    };
+    ensure!(!records().any(titled), "an app's title is kept in the layout file");
+    let read = layout_file::parse(&layout_file::write(&file))
+        .map_err(|why| format!("layout.json does not read back: {why:?}"))?;
+    ensure!(layout_file::write(&read) == layout_file::write(&file), "layout.json read back changed");
+    // Every tab is kept, or the comparison below says nothing.
+    if file.tabs.len() != m.tabs.len() {
+        return Ok(());
+    }
+    let mut fresh = Model::default();
+    let floor = m.tasks.list.iter().map(|task| task.id).max().unwrap_or(0);
+    for action in [
+        Action::RestoreTasks { tasks: m.tasks.list.clone(), floor },
+        Action::RestoreWorkbooks { workbooks: m.workbooks.list.clone() },
+        Action::RestoreMarks { marks: m.marks.list.clone(), extra: m.marks.extra.clone() },
+        Action::RestoreLayout { layout: Box::new(read), gone: Vec::new(), home: None, launch: false },
+    ] {
+        fresh.update(action.sent_by(Origin::System));
+    }
+    // A task a file would not keep (an id past `tasks::MAX_ID`) is not one the comparison can use.
+    let ids = |m: &Model| m.tasks.list.iter().map(|task| task.id).collect::<Vec<_>>();
+    if ids(&fresh) != ids(m) {
+        return Ok(());
+    }
+    // As text: a ratio is kept to three places. Each task's tabs together, no task's last.
+    let mut was = m.layout_file(&[], &[], 0);
+    layout_file::grouped(&mut was);
+    let (was, now) = (layout_file::write(&was), layout_file::write(&fresh.layout_file(&[], &[], 0)));
+    ensure!(was == now, "restored, the layout is another:\n{was}\nthen\n{now}");
+    ensure!(fresh.current_task == m.current_task.filter(|t| m.tasks.get(*t).is_some()), "another scope is on show");
+    Ok(())
+}
+
 /// What the shell draws and sends: none of it may panic, the state is JSON, and what is kept
 /// or read from disk reads back as written.
 fn check_state(m: &Model) -> Result<(), String> {
@@ -1926,8 +1994,10 @@ impl Run {
                 Effect::History { pane, history } => {
                     let opened = effects.contains(&Effect::Opened(*pane));
                     let terminal = m.pane(*pane).is_some_and(|p| p.kind == Kind::Terminal);
+                    // Or the layout file's, read by the shell at start.
+                    let restored = origin == Origin::System && matches!(action, Action::RestoreLayout { .. });
                     ensure!(
-                        opened && terminal && user,
+                        opened && terminal && (user || restored),
                         "a history for pane {pane}, not a terminal just opened by the user"
                     );
                     // Plain, and nothing credential-shaped left in it.
@@ -2066,6 +2136,11 @@ impl Run {
                 }
                 Effect::Run { command } => {
                     ensure!(user && matches!(action, Action::PaletteChoose { .. }), "{command:?} run by {action:?}")
+                }
+                // Only the user starts fresh; after that the layout is never told to the shell.
+                Effect::ForgetLayout => {
+                    ensure!(user && matches!(action, Action::StartFresh), "{origin:?} forgot the layout: {action:?}");
+                    ensure!(!m.layout_kept, "the layout is forgotten and still kept");
                 }
                 Effect::Quit => {
                     ensure!(
@@ -2388,6 +2463,7 @@ fn sequence(seed: u64, actions: usize, sparse: bool) -> Result<(), String> {
         }
         (0..actions).try_for_each(|_| run.step(random(&mut rng, &run.m)))?;
         check_state(&run.m)?;
+        check_layout(&run.m)?;
         check_file(&run.m)
     });
     let Err(why) = outcome.unwrap_or_else(Err) else { return Ok(()) };
@@ -2499,6 +2575,14 @@ fn code(sent: &Envelope) -> String {
         let work = serde_json::to_string(work).unwrap_or_default();
         return format!("session_work({work:?}).sent_by(Origin::{:?})", sent.origin);
     }
+    if let Action::RestoreLayout { layout, gone, home, launch } = &sent.action {
+        let (layout, gone, home) = (
+            serde_json::to_string(layout).unwrap_or_default(),
+            serde_json::to_string(gone).unwrap_or_default(),
+            serde_json::to_string(home).unwrap_or_default(),
+        );
+        return format!("restore_layout({layout:?}, {gone:?}, {home:?}, {launch}).sent_by(Origin::{:?})", sent.origin);
+    }
     if let Action::RestoreWorkbooks { workbooks } = &sent.action {
         let workbooks = serde_json::to_string(workbooks).unwrap_or_default();
         return format!("restore_workbooks({workbooks:?}).sent_by(Origin::{:?})", sent.origin);
@@ -2574,6 +2658,14 @@ fn restore_tasks(tasks: &str, floor: TaskId) -> Action {
 
 fn session_work(work: &str) -> Action {
     Action::SessionWork { work: serde_json::from_str(work).expect("a regression's work is JSON") }
+}
+
+/// `RestoreLayout` from the JSON of its file, as `code` writes it.
+fn restore_layout(layout: &str, gone: &str, home: &str, launch: bool) -> Action {
+    let read = "a regression's layout is JSON";
+    let layout = Box::new(serde_json::from_str(layout).expect(read));
+    let (gone, home) = (serde_json::from_str(gone).expect(read), serde_json::from_str(home).expect(read));
+    Action::RestoreLayout { layout, gone, home, launch }
 }
 
 /// `RestoreWorkbooks` from the JSON of its workbooks, as `code` writes it.

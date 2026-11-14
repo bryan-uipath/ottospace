@@ -18,6 +18,7 @@ pub mod hosted;
 pub mod inspect;
 pub mod keys;
 pub mod layout;
+pub mod layout_file;
 pub mod list;
 pub mod marks;
 pub mod model;
@@ -40,4 +41,9 @@ pub mod titlebar;
 pub mod workbook;
 
 pub use layout::{Axis, Dir, Node, Rect, Zone};
+
+/// A file's text as JSON: indented, with a newline at the end. Empty if it does not serialise.
+pub fn pretty_json(value: &impl serde::Serialize) -> String {
+    serde_json::to_string_pretty(value).unwrap_or_default() + "\n"
+}
 pub use model::{Action, Effect, Envelope, Kind, Mode, Model, Origin, Pane, PaneId, PickItem, Picker, Section, Tab};

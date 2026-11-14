@@ -46,8 +46,11 @@ permission story is the same Accessibility grant we already need.
 ## 5. Session restore
 
 Designed in [session-restore.md](session-restore.md): layout first, then terminal content and
-app windows, then per-app state. Today startup only gives leftover windows their original frames
-back.
+app windows, then per-app state. Layer 1, the layout file (`layout.json`), is built: tabs,
+splits, focus, the tab on show, the section and the drawer come back, terminals with their
+last lines and offered command, running apps' windows in their panes. Left: OSC 7 and a
+scrollback file of its own per pane, matching a window by id and title, apps started by
+default, per-app state (layers 2 to 4).
 
 ## 6. Routines and agents
 

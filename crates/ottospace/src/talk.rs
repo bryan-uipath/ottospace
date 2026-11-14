@@ -444,7 +444,13 @@ impl Workspace {
             // The note, if there is one, is the line under the header (`render_talk`): once.
             // Nothing either while its session is read for a resume.
             let none = self.model.talk_note().is_none() && !self.model.talk_live(subject);
-            let why = none.then(|| muted("no agent runs for this conversation".into()));
+            // A task with a session (a conversation shown again at start, say) is gone on with by the user only.
+            let session = subject.task().and_then(|id| self.model.tasks.get(id)).is_some_and(|t| t.session.is_some());
+            let why = match session {
+                true => "Not running. A click on its task goes on with its session.",
+                false => "no agent runs for this conversation",
+            };
+            let why = none.then(|| muted(why.into()));
             return div().relative().flex_1().child(record).children(why).into_any_element();
         };
         let (screen, cell) = (agent.terminal.screen(), self.cell);

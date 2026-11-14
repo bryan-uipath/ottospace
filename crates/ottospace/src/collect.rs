@@ -195,10 +195,6 @@ pub(crate) fn read_plain(file: &std::path::Path, most: u64) -> Option<Vec<u8>> {
     (read.ok()? as u64 <= most).then_some(bytes)
 }
 
-fn pretty(what: &impl serde::Serialize) -> String {
-    serde_json::to_string_pretty(what).unwrap_or_default() + "\n"
-}
-
 /// Removes the folders of drafts no run will come back to: those of a process that is gone (or
 /// of this one's number, which a run before it had). Never a draft of another ottospace that
 /// runs now. A crash is the only way one is left.
@@ -559,8 +555,13 @@ impl Workspace {
                 pictures.extend(png.map(|(_, drawn)| (kept.n, drawn)));
             }
             let text = capture::markdown_in(&brief, at.as_deref());
-            let mut files = vec![("brief.md".to_string(), text.clone()), ("brief.json".to_string(), pretty(&brief))];
-            files.extend(brief.materials.iter().map(|kept| (format!("{}.json", kept.n), pretty(kept))));
+            let mut files = vec![
+                ("brief.md".to_string(), text.clone()),
+                ("brief.json".to_string(), ottospace_core::pretty_json(&brief)),
+            ];
+            files.extend(
+                brief.materials.iter().map(|kept| (format!("{}.json", kept.n), ottospace_core::pretty_json(kept))),
+            );
             let write = |dir: &PathBuf| {
                 files.iter().try_for_each(|(name, text)| config::write_private(dir, name, text.as_bytes()))
             };

@@ -340,7 +340,7 @@ fn depth(tree: &Node) -> usize {
 }
 
 /// Text from the file that is short enough and one line: it is drawn, and looked up on disk.
-fn plain(text: &str, most: usize) -> bool {
+pub(crate) fn plain(text: &str, most: usize) -> bool {
     text.chars().count() <= most && !text.chars().any(char::is_control)
 }
 
@@ -362,7 +362,7 @@ impl PaneRecord {
     }
 
     /// What is wrong with a record read from disk, if anything.
-    fn unsound(&self) -> Option<&'static str> {
+    pub(crate) fn unsound(&self) -> Option<&'static str> {
         match &self.cwd {
             Some(cwd) if !cwd.starts_with('/') => return Some("its directory is not an absolute path"),
             Some(cwd) if !plain(cwd, 1024) => return Some("its directory is too long or not one line"),
@@ -386,7 +386,7 @@ impl PaneRecord {
 
 impl TabRecord {
     /// The recorded panes the layout shows, in reading order.
-    pub(crate) fn shown(&self) -> Vec<&PaneRecord> {
+    pub fn shown(&self) -> Vec<&PaneRecord> {
         let leaves = self.layout.as_ref().map(Node::leaves).unwrap_or_default();
         leaves.iter().filter_map(|id| self.panes.iter().find(|pane| pane.id == *id)).collect()
     }
@@ -416,13 +416,18 @@ impl TabRecord {
 }
 
 /// A recorded tree with new pane ids (`ids`: old → new), and ratios a hand-written file got wrong
-/// brought back in range.
-fn renumber(tree: &Node, ids: &[(u32, PaneId)]) -> Option<Node> {
+/// brought back in range: `MIN_SHARE`, or less in a tree of more than ten panes, as `Node::remove`.
+pub(crate) fn renumber(tree: &Node, ids: &[(u32, PaneId)]) -> Option<Node> {
+    renumbered(tree, ids, MIN_SHARE.min(1.0 / tree.leaves().len() as f32))
+}
+
+fn renumbered(tree: &Node, ids: &[(u32, PaneId)], least: f32) -> Option<Node> {
     Some(match tree {
         Node::Leaf(old) => Node::Leaf(ids.iter().find(|(from, _)| from == old)?.1),
         Node::Split { axis, ratio, a, b } => {
-            let ratio = if ratio.is_finite() { ratio.clamp(MIN_SHARE, 1.0 - MIN_SHARE) } else { 0.5 };
-            Node::Split { axis: *axis, ratio, a: Box::new(renumber(a, ids)?), b: Box::new(renumber(b, ids)?) }
+            let ratio = if ratio.is_finite() { ratio.clamp(least, 1.0 - least) } else { 0.5 };
+            let (a, b) = (renumbered(a, ids, least)?, renumbered(b, ids, least)?);
+            Node::Split { axis: *axis, ratio, a: Box::new(a), b: Box::new(b) }
         }
     })
 }
@@ -511,7 +516,7 @@ pub fn parse(text: &str) -> Result<Loaded, String> {
 /// The text of `marks.json`.
 pub fn write(marks: &[Mark], extra: &Extra) -> String {
     let file = File { version: VERSION, marks: marks.to_vec(), extra: extra.clone() };
-    serde_json::to_string_pretty(&file).unwrap_or_default() + "\n"
+    crate::pretty_json(&file)
 }
 
 /// The marks of two running ottospaces as one list. `base`: the file as this one last read or
@@ -690,7 +695,7 @@ impl Marks {
         marks.filter(|mark| mark.live == Some(live)).for_each(|mark| mark.live = None);
     }
 
-    fn bind(&mut self, id: MarkId, live: u32) {
+    pub(crate) fn bind(&mut self, id: MarkId, live: u32) {
         if let Some(mark) = self.get_mut(id) {
             mark.live = Some(live);
         }
@@ -974,7 +979,15 @@ impl Model {
             }
             Target::Pane(PaneRecord { kind: RecordKind::App { bundle, name, title, .. }, .. }) => {
                 let (bundle, name, title) = (bundle.clone(), name.clone(), title.clone());
-                effects.push(Effect::HostWindow { mark: Some(id), bundle, name, title, into: None, axis });
+                effects.push(Effect::HostWindow {
+                    mark: Some(id),
+                    bundle,
+                    name,
+                    title,
+                    into: None,
+                    axis,
+                    launch: true,
+                });
             }
             Target::Pane(_) => {}
             Target::Tab(record) => {
@@ -1050,6 +1063,7 @@ impl Model {
                         title,
                         into: Some(pane),
                         axis: Axis::Right,
+                        launch: true,
                     });
                 }
                 (RecordKind::Empty, None) => {}
@@ -1406,7 +1420,7 @@ mod tests {
         let bundle = Some("com.tinyspeck.slackmacgap".to_string());
         let host = |mark| {
             let (bundle, name, title) = (bundle.clone(), "Slack".to_string(), "random".to_string());
-            Effect::HostWindow { mark, bundle, name, title, into: None, axis: Right }
+            Effect::HostWindow { mark, bundle, name, title, into: None, axis: Right, launch: true }
         };
         assert_eq!(effects, [host(Some(m.marks.list[0].id))], "the shell is asked for the window titled random");
         assert_eq!(m.panes.len(), 1, "no pane until the window is in hand");
@@ -1518,6 +1532,7 @@ mod tests {
             title: "general".into(),
             into: Some(new_app),
             axis: Right,
+            launch: true,
         };
         assert_eq!(effects, [Effect::Opened(new_left), Effect::Opened(new_below), host]);
         let renamed = before
@@ -1982,6 +1997,7 @@ mod tests {
             title: "general".into(),
             into: Some(b),
             axis: Right,
+            launch: true,
         };
         assert_eq!((effects, m.active), (vec![Effect::Opened(c), host], 1));
         assert_eq!(m.pane(c).map(|p| (&p.kind, p.cwd.as_deref())), Some((&Kind::Terminal, Some("/gone/notes"))));
