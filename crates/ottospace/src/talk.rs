@@ -13,7 +13,7 @@ use gpui::{
 use ottospace_core::agents::{self, Command, Start};
 use ottospace_core::keys;
 use ottospace_core::runner::RunnerId;
-use ottospace_core::talk::{self, Subject};
+use ottospace_core::talk::Subject;
 use ottospace_core::tasks::{Group, TaskId};
 use ottospace_core::terminal::scroll_key;
 use ottospace_core::{Action, Axis, Kind, Mode, Origin, theme};
@@ -318,7 +318,6 @@ impl Workspace {
                 self.new_task(window, cx);
                 return true;
             }
-            ("talk", "talk-go", _) => Action::TalkGo,
             ("talk", "talk-start", _) => Action::TalkStart,
             ("talk", "talk-brief", Some(id)) if self.model.brief == Some(id) => Action::BriefClose,
             ("talk", "talk-brief", Some(id)) => Action::BriefShow { id },
@@ -491,17 +490,6 @@ impl Workspace {
             let secs = since.elapsed().as_secs();
             if secs < 3600 { format!("{}:{:02}", secs / 60, secs % 60) } else { format!("{}h", secs / 3600) }
         });
-        // ⌘↵: to the task's tabs; with none, claim the tab on show or make it a new one.
-        let go = self.model.talk_go().map(|go| {
-            let tip = match go {
-                talk::Go::Tabs => "Show the tab of this task shown last",
-                talk::Go::Claim => "Make the tab on show this task's",
-                talk::Go::New => "A new tab of this task, with a terminal in its repository",
-            };
-            self.talk_button("talk-go", &format!("{} ⌘↵", go.label()), tip).on_click(
-                cx.listener(|this, _, window, cx| drop(this.dispatch(Action::TalkGo, this.input, window, cx))),
-            )
-        });
         let brief = shown.filter(|task| !task.materials.is_empty()).map(|task| {
             let (task, on) = (task.id, self.model.brief == Some(task.id));
             self.talk_button("talk-brief", if on { "Agent" } else { "Brief" }, "The task's brief, or its agent")
@@ -566,7 +554,6 @@ impl Workspace {
                 .children(elapsed.map(muted))
                 .children(self.watch_chip(subject))
                 .children(self.view_switch(subject, cx))
-                .children(go)
                 .children(brief)
                 .children(adopt)
                 .children(stop)
@@ -871,7 +858,6 @@ impl Workspace {
             "width": self.drawer.width,
             "agents": agents,
             "native": self.chats_snapshot(),
-            "goes_to": self.model.talk_go(),
             // The right rail's conversations, in order: task, badge, state, at work, shown, tooltip.
             "rail": self.model.rail(),
             "note": self.model.talk_note(),

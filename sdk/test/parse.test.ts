@@ -16,7 +16,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     focus: "nothing",
     state: {
       panes: [],
-      tabs: [{ id: 1, title: "Tab 1", task: null }],
+      tabs: [{ id: 1, title: "Tab 1", space: { kind: "workspace" } }],
       active: 0,
       layout: null,
       focused: null,
@@ -113,7 +113,10 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     workbook_offer: null,
     scrollbars: {},
     capture: { key: null, bar: null, picture: null, encoded: [], pending: 0, dir: null, brief: null },
-    groups: [{ task: 1, tabs: [0] }, { task: null, tabs: [1] }],
+    spaces: [
+      { of: { kind: "workspace" }, hidden: false, selected: true, tabs: [0] },
+      { of: { kind: "task", id: 1 }, hidden: true, selected: false, tabs: [1] },
+    ],
     badges: { "1": "FL" },
     calendar: {
       on: true, events_today: 3, all_day_today: 1, events_tomorrow: 2, next_start: 1794560400000, stage: "approaching",
@@ -167,7 +170,6 @@ function replyWith(overlay: unknown): Record<string, unknown> {
         },
         opened: ["web"],
       },
-      goes_to: null,
       note: null,
       rail: [
         { task: 1, mono: "FL", group: "running", working: true, shown: true, tip: "fix login\nRunning\napp · @claude · now" },

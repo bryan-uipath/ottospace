@@ -116,7 +116,7 @@ pub struct Running {
 /// Why a socket client's request is refused under the quit question.
 pub const CONFIRM_UP: &str = "the quit question is up";
 /// Why a client may not link a tab to a task, or unlink it.
-pub const TABS_USERS: &str = "only the user says which task a tab is of";
+pub const TABS_USERS: &str = "only the user says which space a tab is of";
 /// Why a client's Open Settings is refused.
 pub const SETTINGS_USERS: &str = "only the user opens the settings";
 
@@ -470,21 +470,34 @@ pub enum Action {
         new_tab: bool,
         items: Vec<PickItem>,
     },
-    /// A new, empty tab. It becomes the active tab. The user's joins the group of the task whose
-    /// tab is on show.
+    /// A new, empty tab. It becomes the active tab. The user's is of the selected space; a
+    /// client's of Workspace.
     NewTab,
     /// ⌘T: a new tab holding one empty pane, shown. No picker: ⌘E picks what goes in it.
     NewEmptyTab,
-    /// A new tab in `task`'s group, with a terminal in its repository; `None`: a tab of no task.
-    /// A task's is the user's alone.
-    NewTabOf {
-        task: Option<TaskId>,
-    },
-    /// Move a tab (default: the one on show) on the bar: into a group, or before a tab, whose
-    /// task it takes. The user's alone when its task changes.
+    /// Move a tab (default: the one on show) into a space, or before a tab, whose space it
+    /// takes. The user's alone.
     TabPlace {
         tab: Option<u32>,
         at: TabAt,
+    },
+    /// Select the space at `index` on the top row: the tab it showed last.
+    SpaceSelect {
+        index: usize,
+    },
+    /// The next (positive) or previous space on the top row. It wraps.
+    SpaceCycle {
+        delta: i32,
+    },
+    /// Take a space (default: the selected one; `index` on the top row) off the row. Nothing in
+    /// it ends. Workspace stays.
+    SpaceHide {
+        index: Option<usize>,
+    },
+    /// Open a space and select it: made with one empty tab if it has none, shown where it was if
+    /// hidden. A task's that is gone or dismissed, or a workbook that is not kept: nothing.
+    SpaceOpen {
+        space: Owner,
     },
     SelectTab {
         index: usize,
@@ -664,13 +677,12 @@ pub enum Action {
     RowDismiss {
         id: TaskId,
     },
-    /// Go to a task's tabs: the one of them shown last (default task: the first that needs the
-    /// user). A task with no tab: nothing. The user's ⌘⇧N (no task named) shows that task's
-    /// conversation instead, and the tab stays.
+    /// Open a task's space (default task: the first that needs the user). The user's ⌘⇧N (no
+    /// task named) opens the drawer on its chat too.
     TaskGo {
         id: Option<TaskId>,
     },
-    /// Select a tab by its place on the tab bar.
+    /// Select a tab by its place among the tabs of the spaces on the top row.
     SelectVisibleTab {
         index: usize,
     },
@@ -1255,8 +1267,6 @@ pub enum Action {
     },
     /// Close the drawer to the right rail, or open it again on the same conversation.
     TalkToggle,
-    /// The drawer header's go word (⌘↵): see `Model::talk_go`. Only the user's.
-    TalkGo,
     /// The keyboard goes into the conversation, or back to the workspace.
     TalkKeys {
         on: bool,
@@ -1267,8 +1277,8 @@ pub enum Action {
     },
     /// Widen the drawer to half the window, or back.
     TalkWide,
-    /// A click on a conversation's cell of the right rail (or ⌘⌃1…9): that conversation in the
-    /// drawer, as `TaskTalk`; the one the drawer shows closes to the rail. Only the user's.
+    /// A click on a conversation's cell of the right rail (or ⌘⌃1…9): its space, and the drawer on
+    /// it, as `TaskTalk`; on the one the drawer shows, the drawer closes. Only the user's.
     TalkPick {
         id: Subject,
     },
@@ -1381,7 +1391,10 @@ impl Action {
                 | Action::EditSettings
                 | Action::SelectTab { .. }
                 | Action::SelectVisibleTab { .. }
-                | Action::NewTabOf { .. }
+                | Action::SpaceSelect { .. }
+                | Action::SpaceCycle { .. }
+                | Action::SpaceHide { .. }
+                | Action::SpaceOpen { .. }
                 | Action::TabPlace { .. }
                 | Action::CycleTab { .. }
                 | Action::CloseTab { .. }
@@ -1402,7 +1415,6 @@ impl Action {
                 | Action::TalkPick { .. }
                 | Action::TalkStart
                 | Action::TalkToggle
-                | Action::TalkGo
                 | Action::TalkKeys { .. }
         )
     }
@@ -1504,7 +1516,10 @@ impl Action {
             | Action::TaskDismiss { .. }
             | Action::TaskUndo
             | Action::TaskGo { .. }
-            | Action::NewTabOf { .. }
+            | Action::SpaceSelect { .. }
+            | Action::SpaceCycle { .. }
+            | Action::SpaceHide { .. }
+            | Action::SpaceOpen { .. }
             | Action::TabPlace { .. }
             | Action::SelectVisibleTab { .. }
             | Action::Tick { .. }
@@ -1615,7 +1630,6 @@ impl Action {
             | Action::TalkToggle
             | Action::TalkKeys { on: false }
             | Action::TalkResize { .. }
-            | Action::TalkGo
             | Action::TalkWide
             | Action::SetCalendar { .. }
             | Action::CalendarRead { .. }
@@ -1696,7 +1710,10 @@ impl Action {
             | Action::OpenPicker { .. }
             | Action::NewTab
             | Action::NewEmptyTab
-            | Action::NewTabOf { .. }
+            | Action::SpaceSelect { .. }
+            | Action::SpaceCycle { .. }
+            | Action::SpaceHide { .. }
+            | Action::SpaceOpen { .. }
             | Action::TabPlace { .. }
             | Action::SelectTab { .. }
             | Action::CycleTab { .. }
@@ -1842,7 +1859,6 @@ impl Action {
             | Action::SessionMissing { .. }
             | Action::TaskStop { .. }
             | Action::TalkToggle
-            | Action::TalkGo
             | Action::TalkKeys { .. }
             | Action::TalkResize { .. }
             | Action::TalkWide
@@ -2137,8 +2153,8 @@ pub enum Effect {
 pub struct Tab {
     pub id: u32,
     pub title: String,
-    /// The task this tab belongs to. `None`: a tab of no task.
-    pub task: Option<TaskId>,
+    /// The space it is of.
+    pub space: Owner,
     /// The tab's tree and focus while it is not the active tab. The active tab's live copies
     /// are `Model::layout` and `Model::focused`.
     #[serde(skip)]
@@ -2147,32 +2163,26 @@ pub struct Tab {
     pub(crate) focused: Option<PaneId>,
 }
 
-/// Where `TabPlace` puts a tab: at the end of a task's group (`None`: the group of no task),
-/// or just before another tab, in that tab's group.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Where `TabPlace` puts a tab: at the end of a space's tabs, or just before another tab, in
+/// that tab's space.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TabAt {
-    End(Option<TaskId>),
+    End(Owner),
     Before(u32),
 }
 
-/// The tab bar's rule, for tabs of these tasks in this order: the order they go in (indexes),
-/// each task's together where its first tab is, the tabs of no task last. Stable.
-pub fn bar_order(tasks: &[Option<TaskId>]) -> Vec<usize> {
-    let first = |task: Option<TaskId>| tasks.iter().position(|t| *t == task).unwrap_or(0);
-    let mut order: Vec<usize> = (0..tasks.len()).collect();
-    order.sort_by_key(|at| (tasks[*at].is_none(), first(tasks[*at])));
-    order
-}
-
-/// One task's tabs (or no task's), side by side on the bar: `tabs` index into `Model::tabs`.
+/// One space's tabs, side by side on the bar: `tabs` index into `Model::tabs`.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Group {
-    pub task: Option<TaskId>,
+    pub space: Owner,
     pub tabs: Vec<usize>,
 }
 
 pub mod zones;
+
+pub mod spaces;
+pub use spaces::{Owner, Space};
 
 pub mod chat;
 
@@ -2194,9 +2204,12 @@ pub struct Model {
     /// itself. Not an entry: the mode stays as it was.
     #[serde(skip)]
     pub peek: Option<crate::app_wheel::Peek>,
-    /// The tab each task showed last, to go back to it (`TaskGo`).
+    /// The top row, hidden spaces too, in order. In the state it is `spaces` (`space_rows`).
     #[serde(skip)]
-    pub(crate) last_tab: Vec<(TaskId, u32)>,
+    pub(crate) spaces: Vec<Space>,
+    /// The drawer was open when last on a conversation: a space with one opens it so.
+    #[serde(skip)]
+    pub(crate) drawer_open: bool,
     /// The tabs a dismissed task had, linked again if the dismissal is taken back.
     #[serde(skip)]
     unlinked: Vec<(TaskId, Vec<u32>)>,
@@ -2485,7 +2498,8 @@ impl Default for Model {
             switching: Vec::new(),
             by_user: false,
             next_id: 0,
-            last_tab: Vec::new(),
+            spaces: vec![Space { of: Owner::Workspace, hidden: false, last: None }],
+            drawer_open: false,
             unlinked: Vec::new(),
             next_tab: 0,
             layout_seen: None,
@@ -2502,7 +2516,7 @@ impl Default for Model {
 }
 
 /// A task's title as a tab's: at most 24 characters.
-fn short_title(title: &str) -> String {
+pub(crate) fn short_title(title: &str) -> String {
     match title.char_indices().nth(24) {
         Some((cut, _)) => format!("{}…", title[..cut].trim_end()),
         None => title.to_string(),
@@ -2609,7 +2623,8 @@ impl Model {
             Action::EditSettings => Some(SETTINGS_USERS),
             Action::SettingsRead { .. } if origin == Origin::Socket => Some("only ottospace reads settings.json"),
             // A workbook is the user's file, and opening one starts their apps.
-            Action::WorkbookSave { .. }
+            Action::SpaceOpen { space: Owner::Workbook { .. } }
+            | Action::WorkbookSave { .. }
             | Action::WorkbookAddTab { .. }
             | Action::WorkbookSaveAll { .. }
             | Action::WorkbookOpen { .. }
@@ -2638,8 +2653,7 @@ impl Model {
             | Action::SessionOpen { .. }
             | Action::TalkPick { .. }
             | Action::TalkStart
-            | Action::TaskStop { .. }
-            | Action::TalkGo => Some(agents::USERS_ALONE),
+            | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
             // A paste is of the user's clipboard: only their ⌘V and their answer to "Paste 4 lines?".
             Action::Paste { .. } => Some(clip::USERS_ALONE),
             Action::QuitConfirm | Action::QuitCancel
@@ -2660,8 +2674,10 @@ impl Model {
             Action::ListDismiss if self.selected_task().is_some_and(|id| self.agent_runs(&Subject::Task(id))) => {
                 Some(agents::USERS_ALONE)
             }
-            // Which task a tab is of is the user's to say.
-            Action::TabPlace { .. } | Action::NewTabOf { task: Some(_) } => Some(TABS_USERS),
+            // Which space a tab is of is the user's to say.
+            Action::TabPlace { .. } => Some(TABS_USERS),
+            // A client changes no space under the user's keys in the chat.
+            action if self.space_refusal(action, origin).is_some() => self.space_refusal(action, origin),
             // What reaches a native agent, or stops its turn, is the user's: a message is as
             // strong as typing into it, an answer grants a tool call.
             Action::TalkSend
@@ -2826,12 +2842,6 @@ impl Model {
         let (origin, line) = (sent.origin, self.compose_line().cloned());
         let states: Vec<(TaskId, State)> = self.tasks.list.iter().map(|task| (task.id, task.state)).collect();
         let listed = self.sidebar.zip(self.list);
-        // A restored layout puts back its own conversation: the drawer does not follow its tab.
-        let shown = self
-            .tabs
-            .get(self.active)
-            .map(|tab| tab.id)
-            .filter(|_| !matches!(sent.action, Action::RestoreLayout { .. }));
         let undo = matches!(sent.action, Action::TaskUndo | Action::ListUndo);
         // Where the keyboard was before the step: a tab change moves it out of the drawer.
         let drawer_keys = self.talk.as_ref().is_some_and(|talk| talk.open && talk.keys) || self.composing();
@@ -2845,7 +2855,9 @@ impl Model {
         self.tasks.finished(&states, self.now);
         // Only the user's own undo links a dismissed task's tabs again.
         self.settle_tasks(undo && origin == Origin::User);
-        self.follow_tab(shown, origin, drawer_keys);
+        self.settle_spaces();
+        self.follow_space(origin, drawer_keys);
+        self.settle_brief();
         // However the list was left (Esc, a click on a pane), ⌘⌃← comes back to its row.
         if self.list.is_none() && listed.is_some() {
             self.list_kept = zones::KeptRow(listed);
@@ -2987,7 +2999,14 @@ impl Model {
         let drawer = across && self.in_right_zone();
         // The user's own pick of a tab is not behind the new task in the drawer: the line is
         // put aside, kept for the box's next opening, and the tab shows.
-        let picks_tab = matches!(action, Action::SelectTab { .. });
+        let picks_tab = matches!(
+            action,
+            Action::SelectTab { .. }
+                | Action::SpaceSelect { .. }
+                | Action::SpaceCycle { .. }
+                | Action::SpaceHide { .. }
+                | Action::SpaceOpen { .. }
+        );
         if user && picks_tab && self.compose_host() == Some(Host::Drawer) && self.capture.is_none() {
             self.put_compose_aside();
         }
@@ -3018,7 +3037,10 @@ impl Model {
                 | Action::EditSettings
                 | Action::SelectTab { .. }
                 | Action::SelectVisibleTab { .. }
-                | Action::NewTabOf { .. }
+                | Action::SpaceSelect { .. }
+                | Action::SpaceCycle { .. }
+                | Action::SpaceHide { .. }
+                | Action::SpaceOpen { .. }
                 | Action::CycleTab { .. }
                 | Action::CloseSidebar
                 | Action::TaskGo { .. }
@@ -3211,8 +3233,8 @@ impl Model {
             }
             Action::TaskGo { id } => {
                 let task = id.map_or_else(|| self.tasks.next(), |id| self.tasks.get(id)).map(|task| task.id);
-                if let Some(index) = task.and_then(|id| self.tab_of_task(id)) {
-                    self.select_tab(index, effects);
+                if let Some(id) = task {
+                    self.open_space(Owner::Task { id }, effects);
                 }
                 // What was captured for it comes up with it.
                 if let Some(id) = task.filter(|id| self.tab_task() == Some(*id)) {
@@ -3220,13 +3242,27 @@ impl Model {
                     self.brief = Some(id).filter(|_| briefed);
                 }
             }
-            Action::SelectVisibleTab { index } => self.select_tab(index, effects),
+            Action::SelectVisibleTab { index } => {
+                let shown: Vec<usize> = (0..self.tabs.len()).filter(|at| !self.tab_hidden(*at)).collect();
+                if let Some(at) = shown.get(index) {
+                    self.select_tab(*at, effects);
+                }
+            }
             Action::OpenRepo { path, axis } => {
-                // Only a listed path: the list is what the user sees and can choose from.
+                // Only a listed path: the list is what the user sees and can choose from. Its
+                // terminal is in a tab of Workspace of its own: the one on show if it is empty or
+                // its focused pane is, else a new one.
                 if let Some(name) = self.repo_name(&path) {
-                    let empty_tab = self.layout.is_none();
+                    let empty = self.focused.and_then(|id| self.pane(id)).is_some_and(|p| p.kind == Kind::Empty);
+                    if *self.space() != Owner::Workspace || (self.layout.is_some() && !empty) {
+                        self.leave(effects);
+                        self.leave_visual(effects);
+                        self.park_active();
+                        self.push_tab_of(Owner::Workspace);
+                    }
+                    let named = self.layout.is_none() || self.tabs[self.active].title.starts_with("Tab ");
                     self.open_terminal_at(axis, Some(path), effects);
-                    if let Some(tab) = self.tabs.get_mut(self.active).filter(|_| empty_tab) {
+                    if let Some(tab) = self.tabs.get_mut(self.active).filter(|_| named) {
                         tab.title = name;
                     }
                 }
@@ -3257,37 +3293,30 @@ impl Model {
                 }
             }
             Action::NewTab => {
-                // The user's joins the task whose tab is on show; a client links no tab.
-                let task = self.tab_task().filter(|_| self.by_user);
+                // The user's joins the selected space; a client's, Workspace.
+                let of = if self.by_user { self.space().clone() } else { Owner::Workspace };
                 self.leave(effects);
                 self.park_active();
-                self.push_tab_of(task);
+                self.push_tab_of(of);
             }
             Action::NewEmptyTab => {
                 self.act(Action::NewTab, effects);
                 self.open(Kind::Empty, Axis::Right, None, effects);
             }
-            Action::NewTabOf { task } => {
-                let task = task.and_then(|id| self.tasks.get(id)).map(|task| (task.id, task.repo.clone()));
-                self.leave(effects);
-                self.park_active();
-                self.push_tab_of(task.as_ref().map(|(id, _)| *id));
-                // A task's tab: named for where it works, with a terminal there.
-                if let Some((id, repo)) = task {
-                    let place = repo.as_deref().and_then(|path| self.repo_name(path));
-                    let title = self.tasks.get(id).map(|task| short_title(&task.title)).unwrap_or_default();
-                    if let Some(tab) = self.tabs.get_mut(self.active) {
-                        tab.title = place.unwrap_or(title);
-                    }
-                    if let Some(path) = repo.filter(|path| self.repo_listed(path)) {
-                        self.open_terminal_at(Axis::Right, Some(path), effects);
-                    }
-                }
-            }
             Action::TabPlace { tab, at } => self.place_tab(tab, at),
             Action::SelectTab { index } => self.select_tab(index, effects),
+            Action::SpaceSelect { index } => self.select_space(index, effects),
+            Action::SpaceCycle { delta } => self.cycle_space(delta, effects),
+            Action::SpaceHide { index } => self.hide_space(index, effects),
+            Action::SpaceOpen { space: Owner::Workbook { id } } => {
+                self.workbook_open(id, None, self.home.clone(), effects)
+            }
+            Action::SpaceOpen { space: of } => self.open_space(of, effects),
+            // Within the selected space.
             Action::CycleTab { delta } => {
-                let to = (self.active as i64 + delta as i64).rem_euclid(self.tabs.len() as i64) as usize;
+                let tabs = self.space_tabs(self.space());
+                let at = tabs.iter().position(|at| *at == self.active).unwrap_or(0) as i64;
+                let to = tabs[(at + delta as i64).rem_euclid(tabs.len() as i64) as usize];
                 self.select_tab(to, effects);
             }
             Action::CloseTab { index } => {
@@ -3298,8 +3327,9 @@ impl Model {
                 self.leave(effects);
                 self.park_active();
                 let was_on_show = index == self.active;
+                // A space left with no tab gives way as a hidden one does.
+                let after = self.space_after(&self.tabs[index].space).map(|at| at - usize::from(at > index));
                 let tab = self.tabs.remove(index);
-                self.last_tab.retain(|(_, id)| *id != tab.id);
                 // A closed tab's id is used again: no dismissal taken back may link the new one.
                 self.unlinked.iter_mut().for_each(|(_, ids)| ids.retain(|id| *id != tab.id));
                 self.marks.forget_tab(tab.id);
@@ -3313,16 +3343,20 @@ impl Model {
                     self.unpark_active();
                     return;
                 }
-                // Its right neighbour takes its place, else the left one. The last tab closed gets
-                // an empty one, so there is always a tab on show.
-                match index.min(self.tabs.len().saturating_sub(1)) {
-                    _ if self.tabs.is_empty() => {
-                        self.next_tab = 0;
-                        self.push_tab();
-                    }
-                    next => {
+                // Its right neighbour in its space takes its place, else the left one. Workspace
+                // left with none gets an empty tab.
+                let left = self.space_tabs(&tab.space);
+                let next = left.iter().copied().find(|at| *at >= index).or(left.last().copied());
+                match next.or(after.filter(|_| tab.space != Owner::Workspace)) {
+                    Some(next) => {
                         self.active = next;
                         self.unpark_active();
+                    }
+                    None => {
+                        if self.tabs.is_empty() {
+                            self.next_tab = 0;
+                        }
+                        self.push_tab_of(Owner::Workspace);
                     }
                 }
             }
@@ -3810,11 +3844,11 @@ impl Model {
                 match choice {
                     // Same rule as an app: fill the focused pane if it is empty, else split it.
                     Some(PickItem::Terminal) => {
-                        // As `NewTab`: the user's joins the task of the tab on show.
+                        // As `NewTab`: the user's joins the selected space.
                         if picker.new_tab {
-                            let task = self.tab_task().filter(|_| self.by_user);
+                            let of = if self.by_user { self.space().clone() } else { Owner::Workspace };
                             self.park_active();
-                            self.push_tab_of(task);
+                            self.push_tab_of(of);
                         }
                         self.open(Kind::Terminal, picker.axis, None, effects);
                     }
@@ -3834,11 +3868,16 @@ impl Model {
             Action::PaletteOpen | Action::PaletteTasks | Action::PaletteFeatures => {
                 self.palette_over_talk = self.talk.as_ref().is_some_and(|talk| talk.keys);
                 self.leave(effects);
-                // Live tasks in their order, then no task.
+                // Workspace, the live tasks in their order, then the workbooks.
                 let tasks = matches!(action, Action::PaletteTasks).then(|| {
+                    let workspace = TaskChoice { to: Owner::Workspace, title: "Workspace".into() };
                     let live = self.tasks.list.iter().filter(|task| !task.dismissed);
-                    let live = live.map(|task| TaskChoice { task: Some(task.id), title: task.title.clone() });
-                    live.chain([TaskChoice { task: None, title: "No task".into() }]).collect()
+                    let live =
+                        live.map(|task| TaskChoice { to: Owner::Task { id: task.id }, title: task.title.clone() });
+                    let books = self.workbooks.list.iter();
+                    let books =
+                        books.map(|book| TaskChoice { to: Owner::Workbook { id: book.id }, title: book.name.clone() });
+                    std::iter::once(workspace).chain(live).chain(books).collect()
                 });
                 let features = matches!(action, Action::PaletteFeatures).then(|| {
                     let choice = |feature| FeatureChoice { feature, on: self.features.on(feature) };
@@ -3859,18 +3898,18 @@ impl Model {
             Action::PaletteChoose { index } => {
                 let Some(mut palette) = self.palette.take() else { return };
                 let at = index.unwrap_or(palette.selected);
-                // Listing tasks: the tab on show moves to the end of the chosen one's group.
+                // Listing spaces: the tab on show moves to the end of the chosen one's tabs.
                 if let Some(tasks) = &palette.tasks {
-                    match palette.task_matches().get(at).map(|choice| choice.task) {
+                    match palette.task_matches().get(at).map(|choice| choice.to.clone()) {
                         // Dismissed since the list was read: its row goes, and the palette stays.
-                        Some(Some(id)) if self.tasks.live(id).is_none() => {
-                            let left = tasks.iter().filter(|choice| choice.task != Some(id)).cloned().collect();
+                        Some(to) if !self.owner_valid(&to) => {
+                            let left = tasks.iter().filter(|choice| choice.to != to).cloned().collect();
                             (palette.tasks, palette.selected) = (Some(left), 0);
                             self.palette = Some(palette);
                         }
-                        Some(task) => {
+                        Some(to) => {
                             self.palette_closed(effects);
-                            self.place_tab(None, TabAt::End(task));
+                            self.place_tab(None, TabAt::End(to));
                         }
                         None => self.palette = Some(palette),
                     }
@@ -4450,15 +4489,6 @@ impl Model {
                 }
             }
             Action::TalkKeys { on } => self.talk_keys(on, effects),
-            Action::TalkGo => {
-                let task = self.talk.as_ref().and_then(|talk| talk.task.task());
-                match (self.talk_go(), task) {
-                    (Some(talk::Go::Tabs), Some(id)) => self.act(Action::TaskGo { id: Some(id) }, effects),
-                    (Some(talk::Go::Claim), Some(id)) => self.place_tab(None, TabAt::End(Some(id))),
-                    (Some(talk::Go::New), Some(id)) => self.act(Action::NewTabOf { task: Some(id) }, effects),
-                    _ => {}
-                }
-            }
             Action::TalkResize { width } => self.talk_width = talk::width(width),
             Action::TalkWide => self.talk_wide = !self.talk_wide,
             Action::SetCalendar { on, notify, links_only } => {
@@ -4813,21 +4843,9 @@ impl Model {
         subjects.zip(talk::monograms(&titles)).collect()
     }
 
-    /// What the drawer header's go word (⌘↵, `TalkGo`) does for the task shown: go to its tabs;
-    /// with none, claim the tab on show if it is no task's, else make it a new tab. `None`: no
-    /// task is shown, or its tab is on show.
-    pub fn talk_go(&self) -> Option<talk::Go> {
-        let task = self.talk.as_ref().filter(|talk| talk.open)?.task.task()?;
-        match self.tab_of_task(task) {
-            Some(index) => (index != self.active).then_some(talk::Go::Tabs),
-            None if self.tab_task().is_none() => Some(talk::Go::Claim),
-            None => Some(talk::Go::New),
-        }
-    }
-
-    /// Opens the drawer on a conversation, with the keyboard if its agent runs. `start`: and
-    /// starts its agent (or goes on with its session) if it does not run; selecting a
-    /// conversation never does. A session's opens while it is listed or its agent runs.
+    /// Opens a conversation's space and the drawer on it, with the keyboard if its agent runs.
+    /// `start`: and starts its agent (or goes on with its session) if it does not run; selecting
+    /// a conversation never does. A session's opens while it is listed or its agent runs.
     fn talk_to(&mut self, subject: Subject, start: bool, effects: &mut Vec<Effect>) {
         let brief = match &subject {
             Subject::Task(id) => match self.tasks.get(*id) {
@@ -4856,6 +4874,7 @@ impl Model {
         if self.compose_host() == Some(Host::Drawer) {
             self.put_compose_aside();
         }
+        self.open_space(Owner::of(&subject), effects);
         let keys = self.talk_live(&subject) || start.is_some();
         self.talk = Some(Talk { task: subject.clone(), open: true, keys });
         self.opened.retain(|seen| *seen != subject);
@@ -4872,14 +4891,6 @@ impl Model {
                 agents::Start::Resume { .. } => None,
             };
             let brief = brief.filter(|_| runner.is_some());
-            // The user's new task takes the tab on show, if that has panes and is no task's.
-            if let Some(id) = subject.task().filter(|_| runner.is_some() && self.by_user)
-                && self.tab_task().is_none()
-                && self.layout.is_some()
-                && self.tab_of_task(id).is_none()
-            {
-                self.place_tab(None, TabAt::End(Some(id)));
-            }
             self.starting.push((subject.clone(), runner));
             effects.push(Effect::StartAgent { task: subject, start, cwd, brief });
         }
@@ -4898,6 +4909,9 @@ impl Model {
         self.opened.iter_mut().for_each(rename);
         self.starting.iter_mut().for_each(|(subject, _)| rename(subject));
         self.talk.iter_mut().for_each(|talk| rename(&mut talk.task));
+        let (was, now) = (Owner::of(&from), Owner::of(&to));
+        let owners = self.tabs.iter_mut().map(|tab| &mut tab.space).chain(self.spaces.iter_mut().map(|s| &mut s.of));
+        owners.filter(|of| **of == was).for_each(|of| *of = now.clone());
         self.chat_moves(&from, &to);
         if runs {
             effects.push(Effect::AgentMoved { from, to });
@@ -5552,30 +5566,29 @@ impl Model {
         }
     }
 
-    /// After every step: a tab of a task that is gone or dismissed is a tab of no task (the
-    /// user's undo of the dismissal links again those of its tabs still open and of no task; a
-    /// task back by other means, such as a state report, gets none); a dismissed task's
-    /// conversation leaves the rail and the drawer; the groups stay side by side; the tab on
-    /// show is its task's last.
+    /// After every step: a tab of a task that is gone or dismissed is Workspace's (the user's
+    /// undo of the dismissal takes back those of its tabs still open there; a task back by other
+    /// means, such as a state report, gets none); a dismissed task's conversation leaves the
+    /// rail and the drawer.
     fn settle_tasks(&mut self, undone: bool) {
         let tasks = &self.tasks;
         let gone = |id: &TaskId| tasks.live(*id).is_none();
         for tab in &mut self.tabs {
-            if let Some(id) = tab.task.filter(gone) {
+            if let Some(id) = tab.space.task().filter(gone) {
                 if tasks.get(id).is_some() {
                     match self.unlinked.iter_mut().find(|(task, _)| *task == id) {
                         Some((_, tabs)) => tabs.push(tab.id),
                         None => self.unlinked.push((id, vec![tab.id])),
                     }
                 }
-                tab.task = None;
+                tab.space = Owner::Workspace;
             }
         }
         self.unlinked.retain(|(id, _)| tasks.get(*id).is_some());
         let back: Vec<(TaskId, Vec<u32>)> = self.unlinked.extract_if(.., |(id, _)| !gone(id)).collect();
         for (id, ids) in back.into_iter().filter(|_| undone) {
-            for tab in self.tabs.iter_mut().filter(|tab| ids.contains(&tab.id) && tab.task.is_none()) {
-                tab.task = Some(id);
+            for tab in self.tabs.iter_mut().filter(|tab| ids.contains(&tab.id) && tab.space == Owner::Workspace) {
+                tab.space = Owner::Task { id };
             }
         }
         let live = |subject: &Subject| subject.task().is_none_or(|id| !gone(&id));
@@ -5584,32 +5597,6 @@ impl Model {
             self.talk = None;
             self.brief = None;
         }
-        self.regroup();
-        self.remember_tab();
-    }
-
-    /// The tab on show changed from `shown`: an open drawer shows the conversation of its task,
-    /// if it has one, with no agent started and the keyboard where it was. While the keyboard
-    /// is in the drawer only the user's own change of tab does this.
-    fn follow_tab(&mut self, shown: Option<u32>, origin: Origin, drawer_keys: bool) {
-        let Some(shown) = shown else { return };
-        let Some(tab) = self.tabs.get(self.active).filter(|tab| tab.id != shown) else { return };
-        let Some(id) = tab.task else { return };
-        let open = self.talk.as_ref().is_some_and(|talk| talk.open) || self.compose_host() == Some(Host::Drawer);
-        let subject = Subject::Task(id);
-        if !open
-            || (drawer_keys && origin != Origin::User)
-            || self.talk.as_ref().is_some_and(|t| t.open && t.task == subject)
-        {
-            return;
-        }
-        if self.compose_host() == Some(Host::Drawer) {
-            self.put_compose_aside();
-        }
-        let keys = drawer_keys && self.talk_live(&subject);
-        self.talk = Some(Talk { task: subject.clone(), open: true, keys });
-        self.opened.retain(|seen| *seen != subject);
-        self.opened.push(subject);
     }
 
     /// Adds a task, filed at the time of the last `Tick`, if there was one.
@@ -5623,12 +5610,30 @@ impl Model {
 
     /// "Add and start": shows a task just filed, and the list gives up the keyboard.
     fn start(&mut self, id: TaskId, open: bool, effects: &mut Vec<Effect>) {
-        // Only the user's own ↵ starts an agent, in the drawer: the workspace stays. A client's
-        // "open" starts nothing, and a new task has no tab to go to.
+        // Only the user's own ↵ starts an agent, in the drawer. A client's "open" starts nothing,
+        // and a new task has no tab to go to.
         if open && self.by_user {
+            self.bind_tab(id);
             self.talk_to(Subject::Task(id), true, effects);
         } else if open {
             self.list = None;
+        }
+    }
+
+    /// A task started from a Workspace tab opened for its folder takes that tab: it leaves
+    /// Workspace, in sight, as the task's first. Any other tab stays where it is.
+    fn bind_tab(&mut self, id: TaskId) {
+        let Some(dir) = self.tasks.get(id).and_then(|task| task.dir()).cloned() else { return };
+        let shown = self.layout.as_ref().map(Node::leaves).unwrap_or_default();
+        let there = |pane: &Pane| {
+            shown.contains(&pane.id) && pane.kind == Kind::Terminal && pane.cwd.as_deref() == Some(dir.as_str())
+        };
+        let settings = self.settings_pane.is_some_and(|pane| shown.contains(&pane));
+        if *self.space() == Owner::Workspace && !settings && self.panes.iter().any(there) {
+            let of = Owner::Task { id };
+            self.add_space(&of);
+            self.tabs[self.active].space = of;
+            self.regroup();
         }
     }
 
@@ -5643,10 +5648,10 @@ impl Model {
         places
     }
 
-    /// How many tabs and panes a task has open.
+    /// How many tabs and panes a task's space has.
     fn task_open(&self, id: TaskId) -> (usize, usize) {
         let panes = self.tab_panes();
-        let mine = || self.tabs.iter().zip(&panes).filter(|(tab, _)| tab.task == Some(id));
+        let mine = || self.tabs.iter().zip(&panes).filter(|(tab, _)| tab.space == Owner::Task { id });
         (mine().count(), mine().map(|(_, panes)| panes.len()).sum())
     }
 
@@ -5813,7 +5818,7 @@ impl Model {
     }
 
     /// A listed session, by runner and id: one that is no task's and not hidden.
-    fn session(&self, runner: &str, id: &str) -> Option<&Found> {
+    pub(crate) fn session(&self, runner: &str, id: &str) -> Option<&Found> {
         self.unadopted().find(|s| s.runner == runner && s.id == id)
     }
 
@@ -6044,100 +6049,93 @@ impl Model {
     }
 
     pub(crate) fn push_tab(&mut self) {
-        self.push_tab_of(None);
+        self.push_tab_of(Owner::Workspace);
     }
 
-    /// A new tab on show, at the end of `task`'s group: a new group goes before the tabs of no task.
-    pub(crate) fn push_tab_of(&mut self, task: Option<TaskId>) {
-        self.next_tab += 1;
-        // The lowest number no tab has: closing "Tab 5" and opening one gives "Tab 5" again.
+    /// The lowest "Tab n" no tab has: closing "Tab 5" and opening one gives "Tab 5" again.
+    pub(crate) fn free_title(&self) -> String {
         let taken = |n: &u32| self.tabs.iter().any(|t| t.title == format!("Tab {n}"));
-        let title = format!("Tab {}", (1..).find(|n| !taken(n)).unwrap_or(self.next_tab));
-        let at = self.group_end(task);
-        self.tabs.insert(at, Tab { id: self.next_tab, title, task, layout: None, focused: None });
+        format!("Tab {}", (1..).find(|n| !taken(n)).unwrap_or(self.next_tab))
+    }
+
+    /// A new tab on show, at the end of space `of`'s tabs: the space comes onto the row if it
+    /// was not there, or was hidden.
+    pub(crate) fn push_tab_of(&mut self, of: Owner) {
+        self.next_tab += 1;
+        let title = self.free_title();
+        self.add_space(&of);
+        let at = self.space_end(&of);
+        self.tabs.insert(at, Tab { id: self.next_tab, title, space: of, layout: None, focused: None });
         self.active = at;
     }
 
-    /// Where a tab joining `task`'s group goes: after its last tab; a new group goes before the
-    /// tabs of no task.
-    fn group_end(&self, task: Option<TaskId>) -> usize {
-        let end = self.tabs.iter().rposition(|t| t.task == task).map(|at| at + 1);
-        let before_none = || self.tabs.iter().position(|t| t.task.is_none() && task.is_some());
-        end.or_else(before_none).unwrap_or(self.tabs.len())
+    /// Where a tab joining space `of` goes: after its last tab, else before the tabs of the
+    /// spaces after it on the row.
+    fn space_end(&self, of: &Owner) -> usize {
+        let rank = |space: &Owner| self.spaces.iter().position(|s| s.of == *space).unwrap_or(usize::MAX);
+        let end = self.tabs.iter().rposition(|t| t.space == *of).map(|at| at + 1);
+        let later = || self.tabs.iter().position(|t| rank(&t.space) > rank(of));
+        end.or_else(later).unwrap_or(self.tabs.len())
     }
 
-    /// The task of the tab on show, if it has one.
+    /// The task of the selected space, if it is a task's.
     pub fn tab_task(&self) -> Option<TaskId> {
-        self.tabs.get(self.active).and_then(|tab| tab.task)
+        self.space().task()
     }
 
-    /// The tab bar's groups in order: each task's tabs side by side, the tabs of no task last.
+    /// The tab at `at` is of a space off the row.
+    pub(crate) fn tab_hidden(&self, at: usize) -> bool {
+        let of = self.tabs.get(at).map(|tab| &tab.space);
+        self.spaces.iter().any(|space| Some(&space.of) == of && space.hidden)
+    }
+
+    /// The tab bar's groups in order, one a space on the row: its tabs side by side.
     pub fn groups(&self) -> Vec<Group> {
-        let mut groups: Vec<Group> = Vec::new();
-        for (at, tab) in self.tabs.iter().enumerate() {
-            match groups.last_mut() {
-                Some(group) if group.task == tab.task => group.tabs.push(at),
-                _ => groups.push(Group { task: tab.task, tabs: vec![at] }),
-            }
-        }
-        groups
+        let group = |space: &&Space| Group { space: space.of.clone(), tabs: self.space_tabs(&space.of) };
+        self.shown_spaces().iter().map(group).filter(|group| !group.tabs.is_empty()).collect()
     }
 
-    /// The task's tab shown last, else its first. `None`: it has no tab.
-    fn tab_of_task(&self, task: TaskId) -> Option<usize> {
-        let last = self.last_tab.iter().find(|(id, _)| *id == task).map(|(_, tab)| *tab);
-        let last = last.and_then(|id| self.tabs.iter().position(|tab| tab.id == id && tab.task == Some(task)));
-        last.or_else(|| self.tabs.iter().position(|tab| tab.task == Some(task)))
-    }
-
-    /// Notes the tab on show as its task's last, to go back to it.
-    pub(crate) fn remember_tab(&mut self) {
-        if let Some((task, id)) = self.tabs.get(self.active).and_then(|tab| Some((tab.task?, tab.id)))
-            && self.last_tab.first() != Some(&(task, id))
-        {
-            self.last_tab.retain(|(t, _)| *t != task);
-            self.last_tab.insert(0, (task, id));
-        }
-    }
-
-    /// Moves a tab into a group, or before a tab, taking that group's task. The tab on show stays on show.
+    /// Moves a tab into a space, or before a tab, taking that one's space. The tab on show stays
+    /// on show, its space selected.
     fn place_tab(&mut self, tab: Option<u32>, at: TabAt) {
         let Some(from) = tab.map_or(Some(self.active), |id| self.tabs.iter().position(|t| t.id == id)) else {
             return;
         };
-        let task = match at {
-            // A task that is gone or dismissed takes no tab.
-            TabAt::End(Some(id)) => match self.tasks.live(id) {
-                Some(_) => Some(id),
-                None => return,
-            },
-            TabAt::End(None) => None,
-            TabAt::Before(id) => match self.tabs.iter().find(|t| t.id == id) {
-                Some(target) if target.id != self.tabs[from].id => target.task,
+        let of = match &at {
+            // A task that is gone or dismissed takes no tab, nor a workbook not kept, nor a session
+            // that has no space.
+            TabAt::End(Owner::Session { .. }) if !self.spaces.iter().any(|s| TabAt::End(s.of.clone()) == at) => return,
+            TabAt::End(of) if self.owner_valid(of) => of.clone(),
+            TabAt::End(_) => return,
+            TabAt::Before(id) => match self.tabs.iter().find(|t| t.id == *id) {
+                Some(target) if target.id != self.tabs[from].id => target.space.clone(),
                 _ => return,
             },
         };
         let shown = self.tabs[self.active].id;
         let mut moved = self.tabs.remove(from);
-        moved.task = task;
+        moved.space = of.clone();
+        self.add_space(&of);
         let to = match at {
             TabAt::Before(id) => self.tabs.iter().position(|t| t.id == id),
             TabAt::End(_) => None,
         };
-        let to = to.unwrap_or_else(|| self.group_end(task));
+        let to = to.unwrap_or_else(|| self.space_end(&of));
         self.tabs.insert(to, moved);
         self.active = self.tabs.iter().position(|t| t.id == shown).unwrap_or(0);
         self.regroup();
     }
 
-    /// Keeps each task's tabs side by side, groups in the order of their first tab, the tabs of
-    /// no task last. The tab on show stays on show.
-    fn regroup(&mut self) {
-        let order = bar_order(&self.tabs.iter().map(|tab| tab.task).collect::<Vec<_>>());
-        if order.is_sorted() {
+    /// Keeps each space's tabs side by side, in row order. The tab on show stays on show.
+    pub(crate) fn regroup(&mut self) {
+        let rank = |space: &Owner| self.spaces.iter().position(|s| s.of == *space).unwrap_or(usize::MAX);
+        let ranks: Vec<usize> = self.tabs.iter().map(|tab| rank(&tab.space)).collect();
+        if ranks.is_sorted() {
             return;
         }
         let shown = self.tabs[self.active].id;
+        let mut order: Vec<usize> = (0..self.tabs.len()).collect();
+        order.sort_by_key(|at| ranks[*at]);
         let mut tabs: Vec<Option<Tab>> = std::mem::take(&mut self.tabs).into_iter().map(Some).collect();
         self.tabs = order.into_iter().filter_map(|at| tabs[at].take()).collect();
         self.active = self.tabs.iter().position(|t| t.id == shown).unwrap_or(0);
@@ -6227,7 +6225,7 @@ impl Model {
     }
 
     /// Open Settings: the pane opened for it, if its terminal is still there, else a new tab of
-    /// no task, "Settings", whose terminal runs the editor.
+    /// Workspace, "Settings", whose terminal runs the editor.
     fn edit_settings(&mut self, effects: &mut Vec<Effect>) {
         let open = self.settings_pane.filter(|id| self.pane(*id).is_some_and(|p| p.kind == Kind::Terminal));
         if let Some(id) = open {
@@ -6235,7 +6233,7 @@ impl Model {
         }
         self.leave(effects);
         self.park_active();
-        self.push_tab_of(None);
+        self.push_tab_of(Owner::Workspace);
         let id = self.open(Kind::Terminal, Axis::Right, None, effects);
         if let Some(tab) = self.tabs.get_mut(self.active) {
             tab.title = "Settings".into();
@@ -6358,9 +6356,9 @@ impl Model {
         if index >= self.tabs.len() || index == self.active {
             return;
         }
-        // A live app window would stay on screen over the other tab.
+        // A live app window would stay on screen over the other tab, and visual mode on a terminal off it.
         self.leave(effects);
-        self.remember_tab();
+        self.leave_visual(effects);
         self.park_active();
         self.active = index;
         self.unpark_active();
@@ -6851,8 +6849,11 @@ mod tests {
         Action::RowHold { .. },
         Action::RowDismiss { .. },
         Action::TaskGo { .. },
-        Action::NewTabOf { .. },
         Action::TabPlace { .. },
+        Action::SpaceSelect { .. },
+        Action::SpaceCycle { .. },
+        Action::SpaceHide { .. },
+        Action::SpaceOpen { .. },
         Action::SelectVisibleTab { .. },
         Action::Tick { .. },
         Action::OpenCompose { .. },
@@ -6970,7 +6971,6 @@ mod tests {
         Action::SessionRead { .. },
         Action::TaskStop { .. },
         Action::TalkToggle,
-        Action::TalkGo,
         Action::TalkKeys { .. },
         Action::TalkResize { .. },
         Action::TalkWide,
@@ -7073,8 +7073,11 @@ mod tests {
             Action::TaskDismiss { id: 1 },
             Action::TaskUndo,
             Action::TaskGo { id: None },
-            Action::NewTabOf { task: None },
-            Action::TabPlace { tab: None, at: TabAt::End(None) },
+            Action::TabPlace { tab: None, at: TabAt::End(Owner::Workspace) },
+            Action::SpaceSelect { index: 0 },
+            Action::SpaceCycle { delta: 1 },
+            Action::SpaceHide { index: None },
+            Action::SpaceOpen { space: Owner::Task { id: 1 } },
             Action::SelectVisibleTab { index: 0 },
             Action::Tick { now: 0 },
             Action::OpenCompose { text: text() },
@@ -7198,7 +7201,6 @@ mod tests {
             Action::SessionRead { runner: "claude".into(), id: String::new(), found: None },
             Action::TaskStop { id: Subject::Task(1) },
             Action::TalkToggle,
-            Action::TalkGo,
             Action::TalkKeys { on: true },
             Action::TalkResize { width: 400. },
             Action::TalkWide,
@@ -7261,6 +7263,7 @@ mod tests {
                 | Action::WorkbookEdit { .. }
                 | Action::WorkbookRemove { .. }
                 | Action::WorkbookUndo
+                | Action::SpaceOpen { space: Owner::Workbook { .. } }
         )
     }
 
@@ -7335,6 +7338,7 @@ mod tests {
             assign: Assign::default(),
         });
         let id = m.tasks.list[0].id;
+        m.update(Action::SpaceOpen { space: Owner::Task { id } });
         (m.talk, m.agents) =
             (Some(talk::Talk { task: Subject::Task(id), open: true, keys: true }), vec![Subject::Task(id)]);
         assert_eq!(m.mode(), Mode::Talk);
@@ -7370,9 +7374,8 @@ mod tests {
                     | Action::SessionOpen { .. }
                     | Action::TalkPick { .. }
                     | Action::TalkStart
-                    | Action::TaskStop { .. }
-                    | Action::TalkGo => Some(agents::USERS_ALONE),
-                    Action::TabPlace { .. } | Action::NewTabOf { task: Some(_) } => Some(TABS_USERS),
+                    | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
+                    Action::TabPlace { .. } => Some(TABS_USERS),
                     Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
                     _ if talks(action) => Some(chat::USERS_ALONE),
                     Action::AgentEvents { .. } if origin == Origin::Socket => Some(chat::RUNNERS_ALONE),
@@ -7892,9 +7895,10 @@ mod tests {
             assert_eq!(m.update(Action::EditSettings.sent_by(origin)), []);
         }
         assert_eq!(m.tabs.len(), 1);
-        // The user's: a tab of no task, its terminal running the editor.
+        // The user's: a tab of Workspace, its terminal running the editor.
         assert_eq!(m.update(Action::EditSettings), [Effect::Opened(2), Effect::EditSettings { pane: 2 }]);
-        assert_eq!((m.tabs.len(), m.active, m.tabs[1].title.as_str(), m.tabs[1].task), (2, 1, "Settings", None));
+        let settings = (m.tabs.len(), m.active, m.tabs[1].title.as_str(), &m.tabs[1].space);
+        assert_eq!(settings, (2, 1, "Settings", &Owner::Workspace));
         // Again, from another tab: that tab and its pane come forward, nothing opens.
         m.update(Action::SelectTab { index: 0 });
         assert_eq!(m.update(Action::EditSettings), []);
@@ -7954,8 +7958,13 @@ mod tests {
         m.tabs.iter().map(|tab| tab.title.as_str()).collect()
     }
 
-    fn groups(m: &Model) -> Vec<(Option<TaskId>, Vec<usize>)> {
-        m.groups().into_iter().map(|group| (group.task, group.tabs)).collect()
+    /// The top row as owners, hidden ones marked, with their tabs' places.
+    fn row(m: &Model) -> Vec<(Owner, bool, Vec<usize>)> {
+        m.space_rows().into_iter().map(|row| (row.of, row.hidden, row.tabs)).collect()
+    }
+
+    fn task_space(id: TaskId) -> Owner {
+        Owner::Task { id }
     }
 
     fn add_task(m: &mut Model, title: &str, state: State) -> TaskId {
@@ -7965,69 +7974,70 @@ mod tests {
     }
 
     #[test]
-    fn a_tasks_tabs_are_a_group_on_the_one_bar() {
+    fn a_tasks_space_holds_its_tabs_and_a_new_tab_joins_the_selected_space() {
         let mut m = Model::default();
         m.update(Action::SetRepos { repos: listed() });
-        term(&mut m); // pane 1, in a tab of no task
+        term(&mut m); // pane 1, in Workspace
         for line in ["fix the zoom flicker on the canvas when zooming #canvas >app-2", "ask Ana about the retry plan"] {
             m.update(Action::TaskFromLine { line: line.into(), known: Default::default(), open: false });
         }
-        assert_eq!((m.tab_task(), tab_titles(&m), groups(&m)), (None, vec!["Tab 1"], vec![(None, vec![0])]));
-        // A task's new tab: named for its repository, with a terminal there, before the tabs of no task.
-        assert_eq!(m.update(Action::NewTabOf { task: Some(1) }), [Effect::Opened(2)]);
-        assert_eq!((m.tab_task(), tab_titles(&m)), (Some(1), vec!["app-2", "Tab 1"]));
-        assert_eq!((m.focused, m.pane(2).and_then(|p| p.cwd.as_deref())), (Some(2), Some("/code/app-2")));
-        // The user's new tab joins the task of the tab on show; "outside the task" joins none.
+        let at_start = (m.space(), tab_titles(&m), row(&m));
+        assert_eq!(at_start, (&Owner::Workspace, vec!["Tab 1"], vec![(Owner::Workspace, false, vec![0])]));
+        // Opened, a task's space is made at the row's end: one empty tab, named for its repository.
+        assert_eq!(m.update(Action::SpaceOpen { space: task_space(1) }), []);
+        assert_eq!((m.space(), tab_titles(&m), m.layout.is_none()), (&task_space(1), vec!["Tab 1", "app-2"], true));
+        // The user's new tab joins the selected space, a client's Workspace.
         m.update(Action::NewTab);
-        m.update(Action::NewTabOf { task: None });
-        assert_eq!(tab_titles(&m), ["app-2", "Tab 2", "Tab 1", "Tab 3"]);
-        assert_eq!(groups(&m), [(Some(1), vec![0, 1]), (None, vec![2, 3])]);
-        // ⌘1… and cycling count every tab on the bar.
-        m.update(Action::SelectVisibleTab { index: 0 });
-        assert_eq!(m.focused, Some(2));
-        m.update(Action::CycleTab { delta: 1 });
-        m.update(Action::CycleTab { delta: 1 });
-        assert_eq!((m.active, m.focused, m.tab_task()), (2, Some(1), None));
-        // Going to a task's tabs: the one it showed last. A task with no tab: nothing.
-        m.update(Action::TaskGo { id: Some(1) });
-        assert_eq!(m.active, 1);
-        m.update(Action::TaskGo { id: Some(2) });
-        assert_eq!(m.active, 1);
-        // A client's new tab is of no task, whatever is on show.
+        assert_eq!(row(&m), [(Owner::Workspace, false, vec![0]), (task_space(1), false, vec![1, 2])]);
         m.update(Action::NewTab.sent_by(Origin::Socket));
-        assert_eq!((m.active, m.tab_task()), (4, None));
+        assert_eq!((m.active, m.space()), (1, &Owner::Workspace));
+        assert_eq!(row(&m), [(Owner::Workspace, false, vec![0, 1]), (task_space(1), false, vec![2, 3])]);
+        // Cycling stays in the space; a space shows the tab it showed last.
+        m.update(Action::CycleTab { delta: 1 });
+        m.update(Action::CycleTab { delta: 1 });
+        assert_eq!(m.active, 1);
+        m.update(Action::SpaceSelect { index: 1 });
+        m.update(Action::CycleTab { delta: -1 });
+        assert_eq!(m.active, 2);
+        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::SpaceSelect { index: 1 });
+        assert_eq!(m.active, 2);
+        // Going to a task opens its space; a task there is not opens none.
+        m.update(Action::TaskGo { id: Some(2) });
+        assert_eq!((m.space(), m.tabs.len()), (&task_space(2), 5));
+        m.update(Action::TaskGo { id: Some(9) });
+        assert_eq!(m.space(), &task_space(2));
     }
 
     #[test]
-    fn a_tab_moves_between_groups_by_the_user_alone() {
+    fn a_tab_moves_between_spaces_by_the_user_alone() {
         let mut m = Model::default();
         let (a, b) = (add_task(&mut m, "a", State::Running), add_task(&mut m, "b", State::Running));
-        m.update(Action::NewTabOf { task: Some(a) }); // tab 2
-        m.update(Action::NewTabOf { task: Some(b) }); // tab 3
-        m.update(Action::NewTabOf { task: None }); // tab 4
+        m.update(Action::SpaceOpen { space: task_space(a) }); // tab 2
+        m.update(Action::SpaceOpen { space: task_space(b) }); // tab 3
+        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::NewTab); // tab 4, Workspace's
         let ids = |m: &Model| m.tabs.iter().map(|tab| tab.id).collect::<Vec<_>>();
-        assert_eq!(ids(&m), [2, 3, 1, 4]);
-        // Onto another group's tab: it takes that task, before it. The tab on show stays.
+        assert_eq!(ids(&m), [1, 4, 2, 3]);
+        // Onto another space's tab: it takes that space, before it. The tab on show stays on show,
+        // its new space selected.
         m.update(Action::TabPlace { tab: Some(4), at: TabAt::Before(2) });
-        assert_eq!((ids(&m), m.tabs[m.active].id), (vec![4, 2, 3, 1], 4));
-        assert_eq!(groups(&m), [(Some(a), vec![0, 1]), (Some(b), vec![2]), (None, vec![3])]);
-        // Onto a group's badge: the end of that group. Onto no task's: unlinked, at the end.
-        m.update(Action::TabPlace { tab: Some(2), at: TabAt::End(Some(b)) });
-        assert_eq!(ids(&m), [4, 3, 2, 1]);
-        m.update(Action::TabPlace { tab: Some(4), at: TabAt::End(None) });
-        assert_eq!((ids(&m), m.tab_task()), (vec![3, 2, 1, 4], None));
-        // The last tab of `a` gone, its group is gone: `b` is first.
-        assert_eq!(groups(&m), [(Some(b), vec![0, 1]), (None, vec![2, 3])]);
-        // A client links nothing, and a dismissed task takes no tab.
-        let theirs = Action::TabPlace { tab: Some(1), at: TabAt::End(Some(a)) };
+        assert_eq!((ids(&m), m.tabs[m.active].id, m.space()), (vec![1, 4, 2, 3], 4, &task_space(a)));
+        // Onto a space: the end of its tabs. A space left with none goes.
+        m.update(Action::TabPlace { tab: Some(2), at: TabAt::End(task_space(b)) });
+        m.update(Action::TabPlace { tab: Some(4), at: TabAt::End(Owner::Workspace) });
+        assert_eq!((ids(&m), m.space()), (vec![1, 4, 3, 2], &Owner::Workspace));
+        assert_eq!(row(&m), [(Owner::Workspace, false, vec![0, 1]), (task_space(b), false, vec![2, 3])]);
+        // A client moves nothing, and a dismissed task takes no tab.
+        let theirs = Action::TabPlace { tab: Some(1), at: TabAt::End(task_space(a)) };
         assert_eq!(m.refusal(&theirs, Origin::Socket), Some(TABS_USERS));
         m.update(Action::TaskDismiss { id: a }.sent_by(Origin::Socket));
         m.update(theirs.sent_by(Origin::User));
-        assert_eq!(m.tabs.iter().find(|tab| tab.id == 1).and_then(|tab| tab.task), None);
+        assert_eq!(m.tabs.iter().find(|tab| tab.id == 1).map(|tab| &tab.space), Some(&Owner::Workspace));
     }
 
     #[test]
-    fn move_tab_to_task_lists_the_live_tasks_and_no_task_and_moves_the_tab_on_show() {
+    fn move_tab_to_lists_workspace_the_live_tasks_and_the_workbooks_and_moves_the_tab_on_show() {
         let mut m = Model::default();
         let (a, b, gone) = (
             add_task(&mut m, "fix login", State::Running),
@@ -8035,26 +8045,28 @@ mod tests {
             add_task(&mut m, "old", State::Running),
         );
         m.update(Action::TaskDismiss { id: gone });
-        m.update(Action::NewTabOf { task: Some(a) }); // tab 2, on show
+        m.update(Action::SpaceOpen { space: task_space(a) }); // tab 2, on show
         let titles = |m: &Model| -> Vec<String> {
             let palette = m.palette.as_ref().map(|p| p.task_matches().into_iter().map(|c| c.title.clone()).collect());
             palette.unwrap_or_default()
         };
-        // A client opens nothing; the user's lists the live tasks in order, then no task.
+        // A client opens nothing; the user's lists Workspace, then the live tasks in order.
         assert!(m.update(Action::PaletteTasks.sent_by(Origin::Socket)).is_empty());
         assert!(m.palette.is_none());
         m.update(Action::PaletteTasks);
-        assert_eq!((m.mode(), titles(&m)), (Mode::Palette, vec!["fix login".into(), "docs".into(), "No task".into()]));
+        let listed = (m.mode(), titles(&m));
+        assert_eq!(listed, (Mode::Palette, vec!["Workspace".into(), "fix login".into(), "docs".into()]));
         assert!(m.palette.as_ref().is_some_and(|p| p.matches().is_empty()));
         // Typing narrows it; a client chooses nothing.
         m.update(Action::FieldEdit { edit: Edit::Insert("doc".into()) });
         assert_eq!(titles(&m), ["docs"]);
         assert!(m.update(Action::PaletteChoose { index: None }.sent_by(Origin::Socket)).is_empty());
         assert_eq!(m.tab_task(), Some(a));
-        // The user's ↵: the tab on show moves to the end of that task's group, still on show.
+        // The user's ↵: the tab on show moves to that task's space, still on show. `a`'s is gone.
         m.update(Action::PaletteChoose { index: None });
         assert_eq!((m.palette.is_none(), m.tabs[m.active].id, m.tab_task()), (true, 2, Some(b)));
-        // No task: unlinked, at the end. Nothing matched: it stays open.
+        assert_eq!(m.spaces().len(), 2);
+        // Nothing matched: it stays open.
         m.update(Action::PaletteTasks);
         m.update(Action::FieldEdit { edit: Edit::Insert("zzz".into()) });
         m.update(Action::PaletteChoose { index: None });
@@ -8063,26 +8075,27 @@ mod tests {
         m.update(Action::ClosePalette);
         m.update(Action::PaletteTasks);
         m.update(Action::TaskDismiss { id: a }.sent_by(Origin::Socket));
-        m.update(Action::PaletteChoose { index: Some(0) });
-        assert_eq!((titles(&m), m.tab_task()), (vec!["docs".into(), "No task".into()], Some(b)));
         m.update(Action::PaletteChoose { index: Some(1) });
-        assert_eq!((m.tab_task(), m.active), (None, m.tabs.len() - 1));
+        assert_eq!((titles(&m), m.tab_task()), (vec!["Workspace".into(), "docs".into()], Some(b)));
+        m.update(Action::PaletteChoose { index: Some(0) });
+        assert_eq!((m.space(), m.tabs.len()), (&Owner::Workspace, 2));
     }
 
     #[test]
-    fn pop_next_shows_the_conversation_of_the_task_that_needs_the_user_and_the_tab_stays() {
+    fn next_task_opens_the_space_of_the_task_that_needs_the_user_and_the_drawer_on_it() {
         let mut m = Model::default();
         term(&mut m);
         add_task(&mut m, "runs", State::Running);
         let waits = add_task(&mut m, "waits", State::NeedsYou);
         // Not the more urgent one that is only running.
         m.update(Action::TaskGo { id: None });
-        assert_eq!((m.talk.as_ref().and_then(|t| t.task.task()), m.active, m.tabs.len()), (Some(waits), 0, 1));
-        // A client's goes to its tab, when it has one.
-        m.update(Action::NewTabOf { task: Some(waits) });
-        m.update(Action::SelectTab { index: 1 });
+        let drawer = |m: &Model| m.talk.as_ref().filter(|t| t.open).and_then(|t| t.task.task());
+        assert_eq!((drawer(&m), m.tab_task(), m.tabs.len()), (Some(waits), Some(waits), 2));
+        // A client's opens its space, the drawer as it was.
+        m.update(Action::TalkToggle);
+        m.update(Action::SpaceSelect { index: 0 });
         m.update(Action::TaskGo { id: None }.sent_by(Origin::Socket));
-        assert_eq!(m.tab_task(), Some(waits));
+        assert_eq!((drawer(&m), m.tab_task(), m.tabs.len()), (None, Some(waits), 2));
     }
 
     #[test]
@@ -8098,52 +8111,80 @@ mod tests {
             assign: Assign::default(),
         };
         m.update(add.sent_by(Origin::Socket));
-        assert_eq!((m.tabs[0].task, m.tasks.list.len()), (None, 1));
+        assert_eq!((&m.tabs[0].space, m.tasks.list.len(), m.spaces().len()), (&Owner::Workspace, 1, 1));
     }
 
     #[test]
-    fn closing_a_tasks_last_tab_leaves_the_task_with_none() {
+    fn closing_a_spaces_last_tab_closes_the_space_and_workspace_keeps_one() {
         let mut m = Model::default();
         term(&mut m);
-        let a = add_task(&mut m, "a", State::Running);
-        m.update(Action::NewTabOf { task: Some(a) });
+        let (a, b) = (add_task(&mut m, "a", State::Running), add_task(&mut m, "b", State::Running));
+        m.update(Action::SpaceOpen { space: task_space(a) });
         m.update(Action::NewTab);
-        term(&mut m); // pane 2, in the task's second tab
-        assert_eq!(groups(&m), [(Some(a), vec![0, 1]), (None, vec![2])]);
-        // Its right neighbour takes its place.
+        m.update(Action::SpaceOpen { space: task_space(b) });
+        m.update(Action::SpaceSelect { index: 1 });
+        // Within its space, its right neighbour takes its place, else the left one.
         m.update(Action::CloseTab { index: None });
-        assert_eq!((m.tab_task(), tab_titles(&m), m.panes.len()), (None, vec!["a", "Tab 1"], 1));
-        m.update(Action::CloseTab { index: Some(0) });
-        assert_eq!((groups(&m), m.tasks.get(a).is_some()), (vec![(None, vec![0])], true));
+        assert_eq!((m.tab_task(), tab_titles(&m)), (Some(a), vec!["Tab 1", "a", "b"]));
+        // The last tab of a space: the space goes, its right neighbour on the row is selected.
+        m.update(Action::CloseTab { index: None });
+        assert_eq!((m.tab_task(), m.spaces().len(), m.tasks.get(a).is_some()), (Some(b), 2, true));
+        // The row's last space: its left one. Workspace's last tab: an empty one in its place.
+        m.update(Action::CloseTab { index: None });
+        assert_eq!((m.space(), m.spaces().len()), (&Owner::Workspace, 1));
+        m.update(Action::CloseTab { index: None });
+        assert_eq!((m.tabs.len(), m.panes.len(), m.space()), (1, 0, &Owner::Workspace));
     }
 
     #[test]
-    fn starting_a_task_claims_the_tab_on_show_if_it_is_no_tasks_and_nothing_else_moves() {
+    fn starting_a_new_task_opens_its_space_and_nothing_the_user_had_moves() {
         let mut m = Model::default();
         m.update(Action::SetRepos { repos: listed() });
         term(&mut m);
         term(&mut m);
-        let view = |m: &Model| (m.active, m.tabs.len(), m.layout.clone(), m.focused, m.panes.clone());
-        let before = view(&m);
+        let before = (m.tabs[0].id, m.layout.clone(), m.focused, m.panes.clone());
         m.update(Action::OpenCompose { text: "fix zoom >app".into() });
         let effects = m.update(Action::ComposeEnter);
         assert!(matches!(effects[..], [Effect::StartAgent { .. }]), "{effects:?}");
-        assert_eq!((view(&m), m.tab_task(), m.mode()), (before.clone(), Some(1), Mode::Talk));
-        // A tab of another task already: the next task starts with no tab.
-        m.update(Action::OpenCompose { text: "second".into() });
-        m.update(Action::ComposeEnter);
-        assert_eq!((view(&m), m.tab_task(), m.groups().len()), (before, Some(1), 1));
-        // An empty tab (nothing open): the task takes none, and the home screen stays.
-        m.update(Action::NewTabOf { task: None });
-        m.update(Action::OpenCompose { text: "third".into() });
-        m.update(Action::ComposeEnter);
-        assert_eq!((m.tab_task(), m.home(&[]).is_some()), (None, true));
-        // Filed for later, or a client's ↵: no tab.
-        m.update(Action::SelectTab { index: 1 });
-        m.update(Action::TabPlace { tab: None, at: TabAt::End(None) });
+        assert_eq!((m.tab_task(), m.mode(), m.tabs.len()), (Some(1), Mode::Talk, 2));
+        // Workspace's tab is as it was.
+        m.update(Action::SpaceSelect { index: 0 });
+        assert_eq!((m.tabs[0].id, m.layout.clone(), m.focused, m.panes.clone()), before);
+        // Filed for later, or a client's ↵: no space.
         m.update(Action::OpenCompose { text: "later".into() });
         m.update(Action::ComposeSubmit { open: false });
-        assert_eq!(m.tab_task(), None);
+        assert_eq!((m.tab_task(), m.spaces().len()), (None, 2));
+    }
+
+    #[test]
+    fn a_task_started_from_a_tab_opened_for_its_folder_takes_that_tab_and_no_other() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        m.update(Action::OpenRepo { path: "/code/app".into(), axis: Right });
+        let opened = m.tabs[m.active].id;
+        // Started there for that folder: the tab leaves Workspace as the task's first; Workspace
+        // gets an empty one back.
+        m.update(Action::OpenCompose { text: "fix zoom >app".into() });
+        m.update(Action::ComposeEnter);
+        assert_eq!((m.tab_task(), m.tabs[m.active].id, m.tabs.len()), (Some(1), opened, 2));
+        assert_eq!(row(&m), [(Owner::Workspace, false, vec![0]), (task_space(1), false, vec![1])]);
+        // A tab of another folder: nothing moves, the task gets an empty tab.
+        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::OpenRepo { path: "/code/app-2".into(), axis: Right });
+        m.update(Action::OpenCompose { text: "other >app".into() });
+        m.update(Action::ComposeEnter);
+        assert_eq!((m.tab_task(), m.layout.is_none(), m.space_tabs(&Owner::Workspace).len()), (Some(2), true, 1));
+        // Started from a task's space: nothing moves either.
+        m.update(Action::SpaceSelect { index: 1 });
+        m.update(Action::OpenCompose { text: "third >app".into() });
+        m.update(Action::ComposeEnter);
+        assert_eq!((m.tab_task(), m.space_tabs(&task_space(1)).len(), m.tabs.len()), (Some(3), 1, 4));
+        // Filed for later: no tab moves.
+        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::OpenRepo { path: "/code/app".into(), axis: Right });
+        m.update(Action::OpenCompose { text: "later >app".into() });
+        m.update(Action::ComposeSubmit { open: false });
+        assert_eq!(m.space(), &Owner::Workspace);
     }
 
     /// The bug of 0.1.0: with the new task open in the drawer, a click on a tab did nothing (the
@@ -8161,84 +8202,110 @@ mod tests {
         assert_eq!((m.active, m.compose_line()), (0, None));
         m.update(Action::OpenCompose { text: String::new() });
         assert_eq!(m.compose_line().cloned(), Some("half".into()), "kept");
+        // So for a space.
+        let a = add_task(&mut m, "a", State::Captured);
+        m.update(Action::CloseCompose);
+        m.update(Action::SpaceOpen { space: task_space(a) });
+        m.update(Action::OpenCompose { text: "more".into() });
+        m.update(Action::SpaceSelect { index: 0 });
+        assert_eq!((m.space(), m.compose_line()), (&Owner::Workspace, None));
     }
 
     #[test]
-    fn the_drawer_follows_the_tab_on_show_and_never_the_other_way() {
+    fn the_drawer_is_only_ever_on_the_selected_spaces_agent() {
         let mut m = Model::default();
         term(&mut m);
         let (a, b) = (add_task(&mut m, "a", State::Captured), add_task(&mut m, "b", State::Captured));
-        m.update(Action::NewTabOf { task: Some(a) });
-        m.update(Action::NewTabOf { task: Some(b) });
-        // A click on a task: its conversation, the tab stays.
-        started(&mut m, Action::TaskTalk { id: a });
+        m.update(Action::SpaceOpen { space: task_space(b) });
+        // A click on a task: its space, and its chat; nothing starts.
+        assert!(!m.update(Action::TaskTalk { id: a }).iter().any(|e| matches!(e, Effect::StartAgent { .. })));
         let shown = |m: &Model| m.talk.as_ref().filter(|t| t.open).and_then(|t| t.task.task());
-        assert_eq!((shown(&m), m.tab_task()), (Some(a), Some(b)));
-        // The header offers its tabs; ⌘↵ goes there.
-        assert_eq!(m.talk_go(), Some(talk::Go::Tabs));
-        m.update(Action::TalkGo);
-        assert_eq!((m.tab_task(), m.talk_go()), (Some(a), None));
-        // A tab of another task, the drawer open: it shows that task's, starting nothing.
-        assert_eq!(m.update(Action::SelectTab { index: 1 }), []);
+        assert_eq!((shown(&m), m.tab_task()), (Some(a), Some(a)));
+        // Another space, the drawer open: it shows that one's, starting nothing.
+        assert_eq!(m.update(Action::SpaceSelect { index: 1 }), []);
         assert_eq!((shown(&m), m.agent_runs(&Subject::Task(b))), (Some(b), false));
-        // A tab of no task: the drawer stays.
-        m.update(Action::SelectTab { index: 2 });
-        assert_eq!(shown(&m), Some(b));
+        // Workspace: no chat. Back: the drawer opens as it was.
+        m.update(Action::SpaceSelect { index: 0 });
+        assert!(m.talk.is_none());
+        m.update(Action::SpaceSelect { index: 2 });
+        assert_eq!(shown(&m), Some(a));
         // Closed: it stays closed.
         m.update(Action::TalkToggle);
-        m.update(Action::SelectTab { index: 0 });
+        m.update(Action::SpaceSelect { index: 1 });
         assert_eq!((shown(&m), m.talk.as_ref().map(|t| t.task.clone())), (None, Some(Subject::Task(b))));
-        // The keyboard in the drawer: a client's change of tab does not change the conversation.
-        m.update(Action::TalkToggle);
-        m.update(Action::SelectTab { index: 1 });
+        // The keyboard in the drawer: a client's change of space waits; a tab change in the space does not.
         started(&mut m, Action::TaskTalk { id: a }); // starts it: the keyboard goes in
         assert_eq!(m.mode(), Mode::Talk);
-        m.update(Action::SelectTab { index: 0 }.sent_by(Origin::Socket));
-        assert_eq!((shown(&m), m.tab_task()), (Some(a), Some(a)));
-        started(&mut m, Action::TaskTalk { id: a });
-        assert_eq!(m.mode(), Mode::Talk);
-        m.update(Action::SelectTab { index: 1 }.sent_by(Origin::Socket));
-        assert_eq!((shown(&m), m.tab_task()), (Some(a), Some(b)), "a client's tab change, the keyboard in the drawer");
-        // A client cannot answer "Stop its agent and dismiss?", yes or no.
-        m.update(Action::RowDismiss { id: a });
-        assert_eq!(m.refusal(&Action::QuitCancel, Origin::Socket), Some(agents::USERS_ALONE));
-        m.update(Action::QuitCancel);
-        // A task with no tab: claim the tab on show if it is no task's, else a new tab.
-        let c = add_task(&mut m, "c", State::Captured);
-        started(&mut m, Action::TaskTalk { id: c });
-        assert_eq!(m.talk_go(), Some(talk::Go::New));
-        m.update(Action::SelectTab { index: 2 });
-        assert_eq!(m.talk_go(), Some(talk::Go::Claim));
-        m.update(Action::TalkGo);
-        assert_eq!((m.tab_task(), m.talk_go()), (Some(c), None));
-        assert_eq!(m.refusal(&Action::TalkGo, Origin::Socket), Some(agents::USERS_ALONE));
+        let theirs = Action::SpaceSelect { index: 1 };
+        assert_eq!(m.refusal(&theirs, Origin::Socket), Some(spaces::CHAT_TYPING));
+        assert_eq!(m.refusal(&Action::SelectTab { index: 0 }, Origin::Socket), Some(spaces::CHAT_TYPING));
+        assert_eq!(m.refusal(&Action::SelectTab { index: m.active }, Origin::Socket), None);
+        m.update(theirs.clone().sent_by(Origin::Socket));
+        assert_eq!((shown(&m), m.mode()), (Some(a), Mode::Talk));
+        // The user's: the keyboard goes where the user went.
+        m.update(theirs);
+        assert_eq!((shown(&m), m.mode()), (Some(b), Mode::Normal));
     }
 
     #[test]
-    fn a_dismissed_task_leaves_the_rail_the_drawer_and_its_tabs_and_undo_brings_them_back() {
+    fn hiding_a_space_ends_nothing_and_its_row_opens_it_where_it_was() {
         let mut m = Model::default();
         term(&mut m);
         let (a, b) = (add_task(&mut m, "a", State::Captured), add_task(&mut m, "b", State::Captured));
-        m.update(Action::TabPlace { tab: None, at: TabAt::End(Some(a)) });
+        started(&mut m, Action::TaskTalk { id: a });
+        m.update(Action::NewTab);
+        term(&mut m);
+        m.update(Action::SpaceOpen { space: task_space(b) });
+        m.update(Action::SpaceSelect { index: 1 });
+        let panes = m.panes.clone();
+        // Hidden: off the row, its right neighbour selected; its tabs, panes and agent stay.
+        assert_eq!(m.update(Action::SpaceHide { index: None }), []);
+        assert_eq!((m.tab_task(), m.shown_spaces().len(), m.tabs.len()), (Some(b), 2, 4));
+        assert_eq!((m.panes.clone(), m.agent_runs(&Subject::Task(a))), (panes, true));
+        assert_eq!(row(&m)[1], (task_space(a), true, vec![1, 2]));
+        // Selecting counts the row's spaces alone; cycling skips the hidden one.
+        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::SpaceCycle { delta: 1 });
+        assert_eq!(m.tab_task(), Some(b));
+        // Workspace stays.
+        m.update(Action::SpaceHide { index: Some(0) });
+        assert!(!m.spaces()[0].hidden);
+        // Its row opens it again where it was, on the tab it showed last; its chat is there.
+        m.update(Action::TaskTalk { id: a });
+        assert_eq!((m.space(), row(&m)[1].1, m.active, m.tabs.len()), (&task_space(a), false, 2, 4));
+        assert_eq!(m.talk.as_ref().map(|t| (&t.task, t.open)), Some((&Subject::Task(a), true)));
+        // A tab of a hidden space selected by its place shows it again too.
+        m.update(Action::SpaceHide { index: None });
+        m.update(Action::SelectTab { index: 1 });
+        assert_eq!((m.space(), row(&m)[1].1), (&task_space(a), false));
+    }
+
+    #[test]
+    fn a_dismissed_task_leaves_the_rail_the_drawer_and_the_row_and_undo_brings_its_tabs_back() {
+        let mut m = Model::default();
+        term(&mut m);
+        let (a, b) = (add_task(&mut m, "a", State::Captured), add_task(&mut m, "b", State::Captured));
+        m.update(Action::TabPlace { tab: None, at: TabAt::End(task_space(a)) });
         started(&mut m, Action::TaskTalk { id: b });
         m.update(Action::AgentExited { task: Subject::Task(b) }.sent_by(Origin::System));
         started(&mut m, Action::TaskTalk { id: a });
         m.update(Action::AgentExited { task: Subject::Task(a) }.sent_by(Origin::System));
         let rail = |m: &Model| m.rail().iter().map(|cell| cell.task.clone()).collect::<Vec<_>>();
         assert_eq!(rail(&m), [Subject::Task(a), Subject::Task(b)]);
-        // Dismissed: off the rail, the drawer shows nothing (not `b`), its tab is no task's.
+        // Dismissed: off the rail and the row, the drawer shows nothing, its tab is Workspace's.
         m.update(Action::RowDismiss { id: a });
-        assert_eq!((rail(&m), m.talk.is_none(), m.tab_task()), (vec![Subject::Task(b)], true, None));
-        // Taken back: the task and its tab link; its conversation waits to be opened again.
+        assert_eq!((rail(&m), m.talk.is_none(), m.space()), (vec![Subject::Task(b)], true, &Owner::Workspace));
+        assert_eq!(m.spaces().len(), 2);
+        // Taken back: its tab is its space's again.
         m.update(Action::TaskUndo);
-        assert_eq!((rail(&m), m.tab_task()), (vec![Subject::Task(b)], Some(a)));
+        assert_eq!((m.tab_task(), m.spaces().len()), (Some(a), 3));
         // Done: off the rail unless shown or its agent runs.
         started(&mut m, Action::TaskTalk { id: b });
         m.update(Action::AgentExited { task: Subject::Task(b) }.sent_by(Origin::System));
         m.update(Action::TaskSetState { id: b, state: State::Done });
-        assert_eq!(rail(&m), [Subject::Task(b)], "shown");
+        assert!(rail(&m).contains(&Subject::Task(b)), "shown");
         m.update(Action::TalkToggle);
-        assert_eq!(rail(&m), Vec::<Subject>::new());
+        assert!(!rail(&m).contains(&Subject::Task(b)));
     }
 
     #[test]
@@ -8246,29 +8313,19 @@ mod tests {
         let mut m = Model::default();
         term(&mut m);
         let a = add_task(&mut m, "a", State::Captured);
-        m.update(Action::TabPlace { tab: None, at: TabAt::End(Some(a)) });
+        m.update(Action::TabPlace { tab: None, at: TabAt::End(task_space(a)) });
         m.update(Action::TaskDismiss { id: a });
-        // Back by a state report: its tab stays the user's, of no task.
+        // Back by a state report: its tab stays the user's, in Workspace.
         m.update(Action::TaskSetState { id: a, state: State::NeedsYou }.sent_by(Origin::Socket));
         assert_eq!((m.tasks.live(a).is_some(), m.tab_task()), (true, None));
-        // Dismissed, its only tab closed, a new tab with the same id: undo links nothing.
-        m.update(Action::TabPlace { tab: None, at: TabAt::End(Some(a)) });
+        // Dismissed, every tab closed, a new tab with the same id: undo links nothing.
+        m.update(Action::TabPlace { tab: None, at: TabAt::End(task_space(a)) });
         m.update(Action::TaskDismiss { id: a });
+        m.update(Action::CloseTab { index: None });
         m.update(Action::CloseTab { index: None });
         assert_eq!(m.tabs[0].id, 1, "the id is used again");
         m.update(Action::TaskUndo);
         assert_eq!((m.tasks.live(a).is_some(), m.tab_task()), (true, None));
-    }
-
-    #[test]
-    fn starting_a_task_that_has_a_tab_takes_no_other() {
-        let mut m = Model::default();
-        term(&mut m);
-        let a = add_task(&mut m, "a", State::Captured);
-        m.update(Action::NewTabOf { task: Some(a) });
-        m.update(Action::SelectTab { index: 1 });
-        started(&mut m, Action::TaskTalk { id: a });
-        assert_eq!((m.active, m.tab_task(), groups(&m).len()), (1, None, 2));
     }
 
     #[test]
@@ -8352,9 +8409,10 @@ mod tests {
         assert_eq!((m.list_rows(), m.list), (vec![heading(Heading::NeedsYou), task(1)], Some(1)));
         m.update(Action::TaskUndo);
         assert_eq!(m.tasks.get(3).map(|t| (t.state, t.snoozed_until)), Some((State::Parked, None)));
-        // ↵ on a task shows its conversation, starting nothing; the workspace stays.
+        // ↵ on a task shows its space and its chat, starting nothing.
         assert_eq!(m.update(Action::ListChoose { axis: Right }), []);
-        assert_eq!((m.active, m.mode(), m.talk.as_ref().and_then(|talk| talk.task.task())), (0, Mode::Normal, Some(1)));
+        let shown = (m.tab_task(), m.mode(), m.talk.as_ref().and_then(|talk| talk.task.task()));
+        assert_eq!(shown, (Some(1), Mode::Normal, Some(1)));
     }
 
     #[test]
@@ -8395,7 +8453,7 @@ mod tests {
         m.update(Action::TalkStart);
         assert_eq!(
             (m.mode(), m.tab_task(), m.talk.as_ref().and_then(|talk| talk.task.task())),
-            (Mode::Talk, None, Some(2))
+            (Mode::Talk, Some(2), Some(2))
         );
     }
 
@@ -9405,9 +9463,9 @@ mod tests {
             open: false,
         });
         // Under its state's heading, open or not; within one, most urgent first, then oldest.
-        m.update(Action::NewTabOf { task: Some(4) });
+        m.update(Action::SpaceOpen { space: Owner::Task { id: 4 } });
         m.update(Action::NewTab);
-        m.update(Action::NewTabOf { task: Some(1) });
+        m.update(Action::SpaceOpen { space: Owner::Task { id: 1 } });
         m.update(Action::TaskSetState { id: 3, state: State::Parked });
         assert_eq!(
             sections(&m),
@@ -9421,7 +9479,7 @@ mod tests {
             (needs.detail.as_str(), needs.tabs, needs.current, needs.group),
             ("1 tab, 0 panes · 3h", 1, true, tasks::Group::NeedsYou)
         );
-        assert_eq!((later.detail.as_str(), later.current), ("#canvas · >app-2 · 2 tabs, 1 pane · 3h", false));
+        assert_eq!((later.detail.as_str(), later.current), ("#canvas · >app-2 · 2 tabs, 0 panes · 3h", false));
         // List mode walks the headings and rows in the order drawn.
         m.update(Action::ToggleSection { section: Section::Tasks });
         let (heading, task) = (ListRow::Heading, ListRow::Task);
@@ -9869,9 +9927,9 @@ mod tests {
         };
         let idle = of_session("claude", IDLE);
         // Gone on with in the folder it started in, below the repository: `claude --resume`
-        // finds a session by its directory. No task, no pane, no tab: the workspace stays.
+        // finds a session by its directory. No task, no pane: its space, one empty tab.
         assert_eq!(open(&mut m, "claude", IDLE), [resumed(idle.clone(), "claude", IDLE, "/code/app/crates/core")]);
-        assert_eq!((m.tasks.list.len(), m.panes.len(), m.tabs.len(), m.mode()), (0, 0, 1, Mode::Talk));
+        assert_eq!((m.tasks.list.len(), m.panes.len(), m.tabs.len(), m.mode()), (0, 0, 2, Mode::Talk));
         assert_eq!(m.talk, Some(Talk { task: idle.clone(), open: true, keys: true }));
         // Once: a second open, before the shell says it started and after, starts nothing.
         assert_eq!(open(&mut m, "claude", IDLE), []);
@@ -10032,7 +10090,8 @@ mod tests {
             (m.agents.clone(), m.talk.clone()),
             (vec![Subject::Task(1)], Some(Talk { task: Subject::Task(1), open: true, keys: true }))
         );
-        assert_eq!((m.panes.len(), m.tabs.len(), m.tab_task()), (0, 1, None), "no shell tab");
+        // The session's space is the task's now: its one empty tab, no shell.
+        assert_eq!((m.panes.len(), m.tabs.len(), m.tab_task()), (0, 2, Some(1)), "no shell tab");
         assert_eq!(m.rail().iter().map(|cell| cell.task.clone()).collect::<Vec<_>>(), [Subject::Task(1)]);
         // Not open: the task's conversation, gone on with where the session started.
         m.update(Action::SetSessions {
@@ -10161,8 +10220,8 @@ mod tests {
             ("app", Some("/code/app"), ">app · @claude".into())
         );
         assert!(!serde_json::to_string(&task).unwrap().contains("crates"), "no path from the session is kept");
-        assert_eq!(m.update(Action::NewTabOf { task: Some(task.id) }).len(), 1, "a terminal opens");
-        assert_eq!(m.pane(1).and_then(|pane| pane.cwd.as_deref()), Some("/code/app"));
+        m.update(Action::SpaceOpen { space: Owner::Task { id: task.id } });
+        assert_eq!(m.tabs[m.active].title, "app", "its space's tab is named for its repository");
         m.update(Action::TaskSetState { id: task.id, state: State::Cleaned });
         // An idle one is saved for later. One that is not listed is not adopted.
         m.update(Action::SessionAdopt { runner: "codex".into(), id: "s2".into() });
@@ -10264,8 +10323,7 @@ mod tests {
         m.update(Action::ToggleGroup { heading: Heading::Sessions }); // folded at first
         m.update(Action::SetRepos { repos: listed() });
         term(&mut m); // pane 1, opened nowhere in particular
-        m.update(Action::OpenRepo { path: "/code/app".into(), axis: Right }); // pane 2, in /code/app
-        m.update(Action::Focus { pane: 1 });
+        m.update(Action::OpenRepo { path: "/code/app".into(), axis: Right }); // pane 2, in /code/app, its own tab
         let click = |m: &mut Model, id: &str| m.update(Action::SessionClick { runner: "claude".into(), id: id.into() });
         m.update(Action::SetSessions {
             found: vec![
@@ -10288,6 +10346,9 @@ mod tests {
         let there = Subject::Session { runner: "claude".into(), id: "there".into() };
         assert_eq!((m.list, m.panes.len(), m.tasks.list.len()), (None, 2, 0));
         assert_eq!(m.talk.as_ref().map(|talk| &talk.task), Some(&there));
+        // Its space is selected; Workspace's panes are on show again once it is.
+        assert_eq!(m.space(), &Owner::Session { runner: "claude".into(), id: "there".into() });
+        m.update(Action::SpaceSelect { index: 0 });
         // A click on one row, then on another: the selection is on the one clicked last.
         m.update(Action::SetSessions {
             found: vec![
@@ -10319,6 +10380,7 @@ mod tests {
         m.update(Action::SetSessions { found: found(), day: 0 });
         m.update(Action::SessionHide { runner: "codex".into(), id: "hidden".into() });
         m.update(Action::SessionAdopt { runner: "codex".into(), id: "adopted".into() });
+        m.update(Action::SpaceSelect { index: 0 });
         let panes = |m: &Model| m.sessions_bar().rows.iter().map(|row| (row.id.clone(), row.pane)).collect::<Vec<_>>();
         assert_eq!(panes(&m), [("here".to_string(), Some(2)), ("past".to_string(), None)], "an idle one is in no pane");
         // The picker, the new-task box, the key reference and visual mode keep the focus where it
@@ -10345,7 +10407,9 @@ mod tests {
             m.update(release);
         }
         m.update(Action::SetSessions { found: vec![session("claude", "here", "/code/app", true, 9)], day: 0 });
+        // A second terminal there, beside the first: which is it is not known.
         m.update(Action::OpenRepo { path: "/code/app".into(), axis: Right });
+        m.update(Action::MovePane { pane: None, tab: 1 });
         assert_eq!(m.sessions_bar().rows[0].pane, None);
     }
 
@@ -10456,7 +10520,7 @@ mod tests {
         m.update(Action::OpenCompose { text: "mine".into() });
         m.update(Action::ComposeSubmit { open: true });
         let talk = m.talk.as_ref().and_then(|talk| talk.task.task());
-        assert_eq!((m.tab_task(), talk, m.compose.as_ref().map(Field::text)), (None, Some(2), None));
+        assert_eq!((m.tab_task(), talk, m.compose.as_ref().map(Field::text)), (Some(2), Some(2), None));
     }
 
     #[test]
@@ -10489,7 +10553,8 @@ mod tests {
         let codex = launch(RunnerId::Codex, Some("gpt-6-astra"), "fix zoom");
         assert_eq!(started(&mut m, Action::TaskTalk { id: 1 }), [asked(1, codex, Some("/code/app"))]);
         assert_eq!(m.talk.clone(), Some(Talk { task: Subject::Task(1), open: true, keys: true }));
-        assert_eq!((m.mode(), m.tab_task(), m.tabs.len()), (Mode::Talk, Some(1), 1));
+        // Its space opens, with one empty tab.
+        assert_eq!((m.mode(), m.tab_task(), m.tabs.len()), (Mode::Talk, Some(1), 2));
         // Started: the task runs. Codex names its own session, so there is none to follow.
         system(&mut m, Action::AgentStarted { task: Subject::Task(1), session: Some(UUID.into()), at: 0 });
         let task = m.tasks.get(1).unwrap();
@@ -10504,8 +10569,8 @@ mod tests {
         assert_eq!((m.mode(), m.talk.as_ref().map(|talk| talk.open)), (Mode::Normal, Some(true)));
         m.update(Action::TalkKeys { on: true });
         assert_eq!(m.mode(), Mode::Talk);
-        m.update(Action::Focus { pane: 1 });
-        assert_eq!(m.mode(), Mode::Normal, "a click on a pane takes the keyboard");
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        assert_eq!(m.mode(), Mode::Normal, "a pane opened in its space takes the keyboard");
         m.update(Action::TalkToggle);
         assert_eq!(m.talk.clone(), Some(Talk { task: Subject::Task(1), open: false, keys: false }));
         m.update(Action::TalkToggle);
@@ -10566,12 +10631,13 @@ mod tests {
         assert_eq!(m.update(Action::ListChoose { axis: Right }), [], "↵ shows it, starting nothing");
         let effects = m.update(Action::TalkStart);
         assert!(matches!(effects[..], [Effect::StartAgent { task: Subject::Task(1), .. }]), "{effects:?}");
-        assert_eq!((m.talk.as_ref().and_then(|talk| talk.task.task()), m.list, m.tabs.len()), (Some(1), None, 1));
+        // Each task shown has its space: Workspace's tab, and one for each of the four.
+        assert_eq!((m.talk.as_ref().and_then(|talk| talk.task.task()), m.list, m.tabs.len()), (Some(1), None, 5));
         m.update(Action::TalkResize { width: 9e9 });
         m.update(Action::TalkWide);
         assert_eq!((m.talk_width, m.talk_wide), (talk::MAX_WIDTH, true));
-        // Started, it took the tab on show: the header offers no go.
-        assert_eq!((m.tab_task(), m.talk_go()), (Some(1), None));
+        // Shown, its space is selected.
+        assert_eq!(m.tab_task(), Some(1));
     }
 
     #[test]
@@ -10757,13 +10823,14 @@ mod tests {
         let mut m = Model::default();
         m.update(Action::SetRepos { repos: listed() });
         m.update(Action::OpenCompose { text: "fix zoom >app".into() });
-        // Its agent, in the drawer, with the keyboard, in its repository. No tab opens.
+        // Its agent, in the drawer, with the keyboard, in its repository. Its space opens, one
+        // empty tab; nothing the user had changes.
         let launch = agents::Launch { runner: RunnerId::Claude, model: None, title: "fix zoom".into() };
         let start = agents::Start::New(launch);
         let agent = Effect::StartAgent { task: Subject::Task(1), start, cwd: Some("/code/app".into()), brief: None };
         assert_eq!(m.update(Action::ComposeSubmit { open: true }), [agent]);
-        assert_eq!((m.compose.as_ref().map(Field::text), m.tab_task(), m.mode()), (None, None, Mode::Talk));
-        assert_eq!((m.tabs.len(), m.layout.is_none()), (1, true));
+        assert_eq!((m.compose.as_ref().map(Field::text), m.tab_task(), m.mode()), (None, Some(1), Mode::Talk));
+        assert_eq!((m.tabs.len(), m.layout.is_none(), m.tabs[0].layout.is_none()), (2, true, true));
         // No title: nothing is filed, nothing opens, the box stays.
         m.update(Action::OpenCompose { text: "p1".into() });
         assert_eq!(m.update(Action::ComposeSubmit { open: true }), []);
@@ -10772,7 +10839,7 @@ mod tests {
         // A client's "open": no agent, no tab, no terminal.
         let theirs = Action::TaskFromLine { line: "ask Ana >app".into(), known: Default::default(), open: true };
         assert_eq!(m.update(theirs.sent_by(Origin::Socket)), []);
-        assert_eq!((m.tab_task(), m.tasks.list.len(), m.panes.len()), (None, 2, 0));
+        assert_eq!((m.tab_task(), m.tasks.list.len(), m.panes.len(), m.tabs.len()), (Some(1), 2, 0, 2));
     }
 
     #[test]
@@ -10837,10 +10904,15 @@ mod tests {
         let pane = m.pane(1).unwrap();
         assert_eq!((&pane.kind, pane.cwd.as_deref()), (&Kind::Terminal, Some("/code/app-2")));
         assert_eq!(m.tabs[0].title, "app-2");
-        // A second repo splits the tab, which keeps its name.
+        // A second repo: a tab of Workspace of its own, named for it.
         assert_eq!(m.update(Action::OpenRepo { path: "/code/app".into(), axis: Down }), [Effect::Opened(2)]);
-        assert_eq!((m.pane(2).unwrap().cwd.as_deref(), m.tabs[0].title.as_str()), (Some("/code/app"), "app-2"));
-        assert_eq!(m.layout.as_ref().unwrap().neighbor(1, Dir::Down), Some(2));
+        assert_eq!((m.pane(2).unwrap().cwd.as_deref(), tab_titles(&m)), (Some("/code/app"), vec!["app-2", "app"]));
+        assert_eq!((m.active, m.tab_panes()), (1, vec![vec![1], vec![2]]));
+        // From a task's space too: Workspace is selected, with the new tab.
+        let a = add_task(&mut m, "a", State::Captured);
+        m.update(Action::SpaceOpen { space: task_space(a) });
+        m.update(Action::OpenRepo { path: "/code/app".into(), axis: Right });
+        assert_eq!((m.space(), m.active, m.tabs.len()), (&Owner::Workspace, 2, 4));
     }
 
     #[test]
@@ -10852,7 +10924,7 @@ mod tests {
         // An empty pane takes the repo, as it takes anything opened.
         m.update(Action::Split { axis: Right, kind: Kind::Empty });
         assert_eq!(m.update(Action::OpenRepo { path: "/code/app".into(), axis: Right }), [Effect::Opened(1)]);
-        assert_eq!((m.panes.len(), m.tabs[0].title.as_str()), (1, "Tab 1"));
+        assert_eq!((m.panes.len(), m.tabs[0].title.as_str()), (1, "app"));
     }
 
     fn term(m: &mut Model) {
@@ -11262,14 +11334,14 @@ mod tests {
             assign: Assign::default(),
         });
         let task = m.tasks.list[0].id;
-        m.update(Action::NewTabOf { task: Some(task) });
+        m.update(Action::SpaceOpen { space: Owner::Task { id: task } });
         term(&mut m);
         m.update(Action::NewTab);
         term(&mut m);
-        // Place 0 on the bar is the task's first tab: the task's tabs come first.
+        // Place 0 on the bar is Workspace's first tab: Workspace comes first.
         m.update(Action::MovePane { pane: None, tab: 0 });
-        assert_eq!(m.tab_panes(), [vec![2, 3], vec![], vec![1]]);
-        assert_eq!((m.active, m.tab_task()), (0, Some(task)));
+        assert_eq!(m.tab_panes(), [vec![1, 3], vec![2], vec![]]);
+        assert_eq!((m.active, m.tab_task()), (0, None));
     }
 
     #[test]
@@ -11666,9 +11738,8 @@ mod tests {
                     | Action::SessionOpen { .. }
                     | Action::TalkPick { .. }
                     | Action::TalkStart
-                    | Action::TaskStop { .. }
-                    | Action::TalkGo => Some(agents::USERS_ALONE),
-                    Action::TabPlace { .. } | Action::NewTabOf { task: Some(_) } => Some(TABS_USERS),
+                    | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
+                    Action::TabPlace { .. } => Some(TABS_USERS),
                     Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
                     _ if talks(action) => Some(chat::USERS_ALONE),
                     Action::AgentEvents { .. } if origin == Origin::Socket => Some(chat::RUNNERS_ALONE),

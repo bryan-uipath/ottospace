@@ -29,8 +29,8 @@ test("state: the typed snapshot is the whole reply", async () => {
     const start = await client.state();
     assert.equal(start.mode, "normal");
     assert.deepEqual(start.state.panes, []);
-    assert.deepEqual(start.state.tabs, [{ id: 1, title: "Tab 1", task: null }]);
-    assert.deepEqual(start.groups, [{ task: null, tabs: [0] }]);
+    assert.deepEqual(start.state.tabs, [{ id: 1, title: "Tab 1", space: { kind: "workspace" } }]);
+    assert.deepEqual(start.spaces, [{ of: { kind: "workspace" }, hidden: false, selected: true, tabs: [0] }]);
     assert.equal(start.notice, null);
     // No pane: the home screen, with nothing on it yet.
     assert.deepEqual(start.home?.nodes, []);
@@ -197,9 +197,18 @@ test("tasks: add, list, open", async () => {
     assert.deepEqual(inbox.map((row) => [row.id, row.group]), [[2, "needs_you"], [3, "captured"], [1, "captured"]]);
     assert.equal((await client.state()).needs_you, 1);
 
-    // A client's task has no tab (only the user links one): going to its tabs changes nothing.
+    // Opening a task opens its space: one empty tab, after Workspace's, selected.
     const opened = await otto.tasks.open(urgent.id);
-    assert.deepEqual(opened.state.tabs, [{ id: 1, title: "Tab 1", task: null }]);
+    const space = { kind: "task", id: urgent.id } as const;
+    assert.deepEqual(opened.state.tabs, [
+      { id: 1, title: "Tab 1", space: { kind: "workspace" } },
+      { id: 2, title: "Review the client", space },
+    ]);
+    assert.deepEqual(opened.spaces.map((row) => [row.of, row.selected]), [[{ kind: "workspace" }, false], [space, true]]);
+    // Hidden, it leaves the row and its tab stays.
+    const hidden = await client.hideSpace();
+    assert.deepEqual(hidden.spaces.map((row) => [row.hidden, row.selected]), [[false, true], [true, false]]);
+    assert.equal(hidden.state.tabs.length, 2);
     assert.equal(typeof opened.state.tasks.list[1]?.colour, "number");
     assert.equal(opened.badges[String(urgent.id)], "RT");
   });

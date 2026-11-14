@@ -14,6 +14,7 @@ use std::{fs, thread};
 
 use ottospace_core::ax::{Frame, Node};
 use ottospace_core::features::{Feature, Features};
+use ottospace_core::model::Owner;
 use ottospace_core::tasks::{Heading, State, TaskId};
 use ottospace_core::{Axis, Dir, PaneId, Section, Zone};
 use serde::Deserialize;
@@ -99,13 +100,30 @@ pub enum Request {
         #[serde(default)]
         new_tab: bool,
     },
+    /// A new tab of Workspace, selected.
     NewTab,
+    /// Selects a tab by its index in `state.tabs`, and with it its space (a hidden one comes back).
     SelectTab {
         index: usize,
     },
-    /// Next (positive) or previous tab on the bar: the tabs of the task on show.
+    /// Next (positive) or previous tab of the selected space.
     CycleTab {
         delta: i32,
+    },
+    /// Selects the space at `index` on the top row (Workspace is 0), on the tab it showed last.
+    SelectSpace {
+        index: usize,
+    },
+    /// Takes a space off the top row (default: the selected one; `index` on the row). Nothing in
+    /// it ends. Not Workspace.
+    HideSpace {
+        #[serde(default)]
+        index: Option<usize>,
+    },
+    /// Opens a space and selects it: `{"kind":"workspace"}` or `{"kind":"task","id":3}`. One a task
+    /// has not yet is made with one empty tab; a hidden one comes back where it was.
+    OpenSpace {
+        space: Owner,
     },
     /// Closes a tab (default: the active one) and its panes.
     CloseTab {
@@ -312,12 +330,12 @@ pub enum Request {
     ComposeDrop {
         paths: Vec<String>,
     },
-    /// Goes to the tabs of the first task that needs the user. The reply is
+    /// Opens the space of the first task that needs the user. The reply is
     /// `{"ok":true,"task":{..},"opened":true}`; `"task":null` if nothing needs the user, and
-    /// `"opened":false` if the tab on show did not change (the task has no tab, or the picker
+    /// `"opened":false` if the tab on show did not change (its space was on show, or the picker
     /// or key reference is open).
     TaskPop,
-    /// Goes to a task's tabs: selects the one it showed last. A task with no tab: nothing.
+    /// Opens a task's space, on the tab it showed last: made with one empty tab if it has none.
     TaskOpen {
         id: TaskId,
     },
