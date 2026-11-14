@@ -44,8 +44,9 @@ pub struct Settings {
     /// Suggest the Dock's apps that are not running. Default: true.
     #[serde(default)]
     pub suggest_dock_apps: Option<bool>,
-    /// The wheel or trackpad over an app pane you are not in scrolls the app, which stays where it
-    /// is (`app_wheel`). Default: true. False: the wheel there does nothing.
+    /// The wheel or trackpad over an app pane you are not in brings its window up for the scroll,
+    /// until the pointer leaves or the wheel is quiet (`app_wheel`). Default: true. False: the
+    /// wheel there does nothing.
     #[serde(default)]
     pub wheel_to_apps: Option<bool>,
     /// List the agent sessions (Claude Code, Codex) of the listed repositories in the Tasks

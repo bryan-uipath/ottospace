@@ -840,12 +840,19 @@ pub enum Action {
         pane: PaneId,
         read: Option<crate::sneak_apps::AppRead>,
     },
-    /// The user's wheel or trackpad over a parked app pane, by `dx`, `dy` points (positive `dy`
-    /// scrolls back, as AppKit counts): forwarded to the app's window. See `app_wheel`.
+    /// The user's wheel or trackpad over a parked app pane, at `now` (ms): its window comes up
+    /// over the pane for the scroll (a peek). See `app_wheel`.
     AppWheel {
         pane: PaneId,
-        dx: f64,
-        dy: f64,
+        now: u64,
+    },
+    /// While a peek is on, the shell's look at it: the pointer is `over` its pane, a click or a
+    /// key was `pressed` since it began (the app has both), the last scroll was at `scrolled` (ms).
+    PeekCheck {
+        now: u64,
+        over: bool,
+        pressed: bool,
+        scrolled: Option<u64>,
     },
     /// ⌘Q. `running`: the terminals with a program in front of their shell, as the shell crate
     /// sees them now. None: quit. Some: ask first. Asked again while the question is up: quit.
@@ -1429,6 +1436,7 @@ impl Action {
             | Action::LeaveSneak
             | Action::SneakApp { .. }
             | Action::AppWheel { .. }
+            | Action::PeekCheck { .. }
             | Action::QuitConfirm
             | Action::QuitCancel
             | Action::Quit
@@ -1646,13 +1654,9 @@ pub enum Effect {
         at: crate::ax::Frame,
         focus: bool,
     },
-    /// Scroll the parked app window of `pane` by `dx`, `dy` points (capped), without raising it.
-    /// Only ever the user's own scroll.
-    AppWheel {
-        pane: PaneId,
-        dx: f64,
-        dy: f64,
-    },
+    /// A peek starts: `pane`'s real window goes over the pane, above ottospace (its app is
+    /// activated), and the scroll that started it is handed on. Only ever the user's own wheel.
+    Peek(PaneId),
     /// End the app.
     Quit,
     /// The user chose a command in the palette: run it as its menu item does.
@@ -1792,6 +1796,10 @@ pub struct Model {
     pub focused: Option<PaneId>,
     /// App pane that has the keyboard.
     pub live: Option<PaneId>,
+    /// The parked app pane whose window is up for the user's scroll, until it parks again by
+    /// itself. Not an entry: the mode stays as it was.
+    #[serde(skip)]
+    pub peek: Option<crate::app_wheel::Peek>,
     /// The tab each task showed last, to go back to it (`TaskGo`).
     #[serde(skip)]
     pub(crate) last_tab: Vec<(TaskId, u32)>,
@@ -1979,6 +1987,7 @@ impl Default for Model {
             layout: None,
             focused: None,
             live: None,
+            peek: None,
             sidebar: None,
             compose: None,
             list: None,
@@ -2345,7 +2354,13 @@ impl Model {
         let undo = matches!(sent.action, Action::TaskUndo | Action::ListUndo);
         // Where the keyboard was before the step: a tab change moves it out of the drawer.
         let drawer_keys = self.talk.as_ref().is_some_and(|talk| talk.open && talk.keys) || self.composing();
-        let effects = self.step(sent);
+        let mut effects = self.step(sent);
+        // A peek ends when what it was over changes: the tab, the tree, the mode.
+        if let Some(peek) = &self.peek
+            && !(self.peekable(peek.pane) && peek.over(self.active, self.layout.as_ref()))
+        {
+            self.end_peek(&mut effects);
+        }
         self.tasks.finished(&states, self.now);
         // Only the user's own undo links a dismissed task's tabs again.
         self.settle_tasks(undo && origin == Origin::User);
@@ -2870,6 +2885,8 @@ impl Model {
             Action::Enter { pane } => {
                 let is_app = self.pane(pane).is_some_and(|p| matches!(p.kind, Kind::App { .. }));
                 if is_app && self.live != Some(pane) {
+                    // A peek of this pane becomes the entry: its window is already up.
+                    self.peek = self.peek.take().filter(|peek| peek.pane != pane);
                     // A live window over a tab that does not show its pane would cover other panes.
                     self.show_tab_of(pane, effects);
                     self.leave(effects);
@@ -3459,14 +3476,29 @@ impl Model {
                     Some(Typed::Narrowed) | None => {}
                 }
             }
-            Action::AppWheel { pane, dx, dy } => {
-                // A parked app pane on show: a live window takes its own scrolls.
-                let app = self.pane(pane).is_some_and(|p| matches!(p.kind, Kind::App { .. }));
-                let shown = self.layout.as_ref().is_some_and(|l| l.leaves().contains(&pane));
-                let (dx, dy) = (crate::app_wheel::cap(dx), crate::app_wheel::cap(dy));
-                // A scroll of no distance still goes: a trackpad gesture's end has none.
-                if app && shown && self.live != Some(pane) {
-                    effects.push(Effect::AppWheel { pane, dx, dy });
+            Action::AppWheel { pane, now } => {
+                if let Some(peek) = self.peek.as_mut().filter(|peek| peek.pane == pane) {
+                    // Came before the window was up: the peek goes on.
+                    peek.last = now;
+                } else if self.peekable(pane) {
+                    self.end_peek(effects);
+                    self.peek = Some(crate::app_wheel::Peek::new(pane, now, self.active, self.layout.clone()));
+                    effects.push(Effect::Peek(pane));
+                }
+            }
+            Action::PeekCheck { now, over, pressed, scrolled } => {
+                let Some(peek) = &mut self.peek else { return };
+                let pane = peek.pane;
+                if pressed {
+                    // A click or a key in the app: a normal entry.
+                    self.act(Action::Enter { pane }, effects);
+                    return;
+                }
+                if over && let Some(at) = scrolled {
+                    peek.last = peek.last.max(at);
+                }
+                if !over || now >= peek.last + crate::app_wheel::QUIET_MS {
+                    self.end_peek(effects);
                 }
             }
             Action::SneakApp { pane, read } => {
@@ -5653,6 +5685,22 @@ impl Model {
         self.focused = Some(id);
     }
 
+    /// The peeked window goes back off screen, as on leaving.
+    fn end_peek(&mut self, effects: &mut Vec<Effect>) {
+        if let Some(peek) = self.peek.take() {
+            effects.push(Effect::Parked(peek.pane));
+        }
+    }
+
+    /// A peek may start over `pane`: a parked app pane on show, with nothing over the panes that
+    /// holds the user's attention (sneak mode, the palette, a box, the quit question).
+    fn peekable(&self, pane: PaneId) -> bool {
+        let app = self.pane(pane).is_some_and(|p| matches!(p.kind, Kind::App { .. }));
+        let shown = self.layout.as_ref().is_some_and(|l| l.leaves().contains(&pane));
+        let mode = matches!(self.mode(), Mode::Normal | Mode::List | Mode::Talk);
+        app && shown && self.live.is_none() && mode && !self.keys && !self.ax_overlay
+    }
+
     pub(crate) fn leave_visual(&mut self, effects: &mut Vec<Effect>) {
         if let Some(pane) = self.visual.take() {
             effects.push(Effect::Visual { pane, on: false });
@@ -5663,6 +5711,7 @@ impl Model {
         if let Some(id) = self.live.take() {
             effects.push(Effect::Parked(id));
         }
+        self.end_peek(effects);
         // Whatever takes the keyboard from an app takes it from the conversation too.
         if let Some(talk) = &mut self.talk {
             talk.keys = false;
@@ -6043,6 +6092,7 @@ mod tests {
         Action::LeaveSneak,
         Action::SneakApp { .. },
         Action::AppWheel { .. },
+        Action::PeekCheck { .. },
         Action::QuitAsked { .. },
         Action::QuitConfirm,
         Action::QuitCancel,
@@ -6246,7 +6296,8 @@ mod tests {
             Action::SneakBackspace,
             Action::LeaveSneak,
             Action::SneakApp { pane: 1, read: None },
-            Action::AppWheel { pane: 1, dx: 0., dy: 1. },
+            Action::AppWheel { pane: 1, now: 0 },
+            Action::PeekCheck { now: 0, over: true, pressed: true, scrolled: None },
             Action::QuitAsked { running: Vec::new() },
             Action::QuitConfirm,
             Action::QuitCancel,

@@ -187,8 +187,6 @@ struct Hosted {
     preview: Rc<Cell<Bounds<Pixels>>>,
     /// Last pane content rect the live window was placed over, to re-place only on change.
     placed: CGRect,
-    /// Where the window's top left landed when parked, global: a scroll is posted there.
-    parked_at: CGPoint,
 }
 
 impl Hosted {
@@ -244,7 +242,6 @@ impl Hosted {
             refused: None,
             preview: Rc::default(),
             placed: CGRect::default(),
-            parked_at: original.origin,
         })
     }
 
@@ -286,8 +283,7 @@ impl Hosted {
         self.parked_size = size;
         self.crop = crop;
         self.show(scale);
-        let spot = display::parking_spot();
-        self.parked_at = self.window.set_position(spot).unwrap_or(spot);
+        let _ = self.window.set_position(display::parking_spot());
         self.placed = CGRect::default();
     }
 
@@ -298,10 +294,6 @@ impl Hosted {
     fn show(&mut self, scale: f64) -> Option<CGSize> {
         let pane = to_cg(self.bounds.get().size);
         let frame = self.window_frame().filter(|_| pane.width >= 1.0)?;
-        // Parked (not placed over a pane): where it is now, should it have moved.
-        if self.placed == CGRect::default() {
-            self.parked_at = frame.origin;
-        }
         let content = CGSize::new(frame.size.width, frame.size.height - self.crop);
         let shown = CGSize::new(pane.width.min(content.width), pane.height.min(content.height));
         let asked = (shown, self.crop);
@@ -721,7 +713,7 @@ struct Workspace {
     sneak_spent: bool,
     /// Reads of the focused app pane's tree while sneak mode is on.
     sneak_reads: sneak_apps::Reads,
-    /// The wheel over parked app panes, this frame.
+    /// The scroll that started a peek of a parked app pane, and counts.
     wheel: app_wheel::Wheel,
     /// Whose key, click or request is being handled now: the person's, unless the control socket
     /// is being served (also a key or click it injects) or the tick is doing its own work.
@@ -974,7 +966,9 @@ impl Workspace {
                         }
                         this.sync_sneak(window, cx);
                         this.read_sneak_app(window, cx);
-                        this.flush_wheel(window, cx);
+                        if tick % 4 == 0 {
+                            this.check_peek(window, cx);
+                        }
                         this.tick_timeline(window, cx);
                     });
                     this.take_snapshots(window, cx);
@@ -1333,7 +1327,7 @@ impl Workspace {
                 Effect::Activate { id } => self.activate(id, window, cx),
                 Effect::Run { command } => self.run_command(*command, window, cx),
                 Effect::PressApp { pane, path, role, at, .. } => self.press_app(*pane, path, role, *at, window, cx),
-                Effect::AppWheel { pane, dx, dy } => self.post_wheel(*pane, *dx, *dy),
+                Effect::Peek(pane) => self.peek(*pane, window, cx),
                 Effect::HostWindow { mark, bundle, name, title, into, axis, launch } => {
                     let (bundle, name, title) = (bundle.clone(), name.clone(), title.clone());
                     let (mark, into, axis, launch) = (*mark, *into, *axis, *launch);
@@ -2599,9 +2593,12 @@ impl Workspace {
             "counts": std::env::var_os("OTTOSPACE_E2E").map(|_| serde_json::json!({
                 "live": self.went_live,
                 "frame_reads": self.hosted.values().map(|h| h.frame_reads).sum::<u64>(),
-                // Scrolls over an app pane's picture kept, and posted to the app.
-                "wheel_kept": self.wheel.kept,
-                "wheel_posted": self.wheel.posted,
+                // Scrolls over an app pane's picture, peeks they started, the one on now (its pane; 0:
+                // none), and first scrolls handed on.
+                "wheels": self.wheel.over,
+                "peeks": self.wheel.peeks,
+                "peek": self.model.peek.as_ref().map_or(0, |peek| peek.pane),
+                "peek_scrolls": self.wheel.handed,
             })),
             // Test runs only: each press in an app a sneak label asked for, `[pane, path]`; else null.
             "app_presses": std::env::var_os("OTTOSPACE_E2E").map(|_| &self.sneak_reads.presses),
@@ -2875,8 +2872,9 @@ impl Workspace {
             }
         }
         let Some(pane) = self.wanted else { return };
-        if self.model.live == Some(pane) {
-            self.wanted = None; // already the one on screen
+        // Already the one on screen; or a peek, which activated the app itself.
+        if self.model.live == Some(pane) || self.model.peek.as_ref().is_some_and(|peek| peek.pane == pane) {
+            self.wanted = None;
             return;
         }
         // The core would drop the move behind a box or in visual mode. Wait: do not come
@@ -2959,7 +2957,8 @@ impl Workspace {
         // Only panes of the active tab are drawn; a background pane's bounds are stale.
         let drawn = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
         let scale = window.scale_factor() as f64;
-        let live = self.model.live;
+        // A peeked window is kept over its pane as the live one is.
+        let live = self.model.live.or(self.model.peek.as_ref().map(|peek| peek.pane));
         let limit = top_limit(window, cx);
         for (id, hosted) in &mut self.hosted {
             let rect = on_screen(hosted.bounds.get(), window, cx);
@@ -4412,8 +4411,12 @@ impl Workspace {
                         .left_0()
                         .w(px(hosted.shown.width as f32))
                         .h(px(hosted.shown.height as f32))
-                        // The wheel scrolls the app, which stays parked.
-                        .on_scroll_wheel(cx.listener(move |this, e: &ScrollWheelEvent, _, _| this.app_wheel(id, e)))
+                        // The wheel brings the app's window up for the scroll (a peek).
+                        .on_scroll_wheel(
+                            cx.listener(move |this, e: &ScrollWheelEvent, window, cx| {
+                                this.app_wheel(id, e, window, cx)
+                            }),
+                        )
                         .child(surface(buffer).size_full())
                         // Record where the preview is drawn (e2e reads it), and mask the window's
                         // corners there: the ring is the whole window's, clipped to the preview,
@@ -4748,7 +4751,11 @@ impl Workspace {
             Some(key) => format!("keys go to the app · {key} or a click on ottospace returns"),
             None => "keys go to the app · click ottospace to return".to_string(),
         };
+        let peek = self.model.peek.as_ref().and_then(|peek| self.hosted.get(&peek.pane));
+        let peek_hint = peek.map(|hosted| format!("{} · a click or a key enters it", hosted.app));
         let (mode, hint) = match self.model.mode() {
+            // The app is up for a scroll: it has the keyboard until the peek ends.
+            _ if peek_hint.is_some() => ("PEEK", peek_hint.as_deref().unwrap_or_default()),
             // One hint, not the key list: ⌘/ shows the keys of every mode. A mode you can be in
             // by accident also says how to leave. The picker and the new-task box show theirs.
             Mode::Normal => ("NORMAL", "⌘/ keys"),
