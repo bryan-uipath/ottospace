@@ -416,7 +416,7 @@ impl Workspace {
     /// A key while a native conversation has the keyboard. Only the user's: a client's key
     /// reaches nothing here, as in the terminal.
     pub(crate) fn chat_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
-        let Some(chat) = self.model.shown_chat() else { return };
+        let Some(chat) = self.model.shown_draft_chat() else { return };
         let card = chat.transcript.cards.front().map(|card| card.ticket).filter(|_| !chat.deny);
         let (key, mods) = (&event.keystroke.key, crate::mods(event.keystroke.modifiers));
         match chat::key(key, mods, card) {
@@ -1194,10 +1194,15 @@ impl Workspace {
             _ if chat.transcript.turn.is_some() => {
                 ("Write the next message", "↵ sends once the turn ends · esc esc stops")
             }
-            _ if !chat.transcript.live => ("The agent ended", "Resume session above goes on with it"),
+            _ if chat.queued.is_some() => ("Starting the agent…", "your message goes once it runs"),
+            _ if !chat.transcript.live && self.model.shown_draft_chat().is_some() => {
+                ("Write to go on with it", "↵ resumes the session and sends · ⇧↵ new line")
+            }
+            _ if !chat.transcript.live => ("The agent ended", "it cannot be gone on with from here"),
             _ => ("Message the agent", "↵ send · ⇧↵ new line · esc leave"),
         };
-        let field = (!card || chat.deny).then(|| self.render_field_of("talk", placeholder, cx));
+        let open = chat.transcript.live || self.model.shown_draft_chat().is_some();
+        let field = (open && (!card || chat.deny)).then(|| self.render_field_of("talk", placeholder, cx));
         div()
             .flex_none()
             .px_3()

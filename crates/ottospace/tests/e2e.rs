@@ -6549,6 +6549,40 @@ fn an_agent_that_ends_before_replying_says_why() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// The recorded 2.1.325 turn is read whole ("ok", once); once its agent is stopped, the
+/// composer still takes the user's words, and ↵ starts it again and sends them.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_message_after_the_agent_ended_starts_it_again_and_is_sent() {
+    let (root, record, env) = native_setup("say-hello", &[("turn1.jsonl", recorded("real-2.1.325-turn.jsonl"))], &[]);
+    let otto = launch_env("say-hello", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "plan the week >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    let stdin = || std::fs::read_to_string(record.join("stdin")).unwrap_or_default();
+    let starts = || std::fs::read_to_string(record.join("starts")).unwrap_or_default().lines().count();
+    otto.start_task(1);
+    let replied = otto.wait_for("the reply", |o| {
+        let chat = chat(o);
+        (chat["transcript"]["turn"].is_null() && chat["replies"].as_array()?.len() == 1).then_some(chat)
+    });
+    let kinds: Vec<&str> =
+        replied["transcript"]["entries"].as_array().unwrap().iter().filter_map(|e| e["kind"].as_str()).collect();
+    assert_eq!((kinds, &replied["transcript"]["not_understood"]), (vec!["user", "assistant"], &json!(0)), "{replied}");
+    otto.user_click(at(otto.control("talk:talk-stop"), 0.5, 0.5));
+    otto.wait_for("the end", |o| (chat(o)["transcript"]["live"] == false).then_some(()));
+    // A client's words reach nothing; the user's ↵ starts it again and sends them.
+    otto.call(json!({"cmd": "key", "keys": "x enter"}));
+    assert_eq!(starts(), 1);
+    otto.user_click(at(otto.control("talk"), 0.5, 0.5));
+    otto.user_key("s a y space h e l l o enter");
+    otto.wait_for("the message", |_| (starts() == 2 && stdin().contains(r#""text":"say hello""#)).then_some(()));
+    assert_eq!(chat(&otto)["draft_chars"], 0);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A session another process holds is watched from its file: the header says so, and each
 /// record that lands shows, an edit with its card. The state has the card's counts only.
 #[test]

@@ -3888,7 +3888,7 @@ impl Model {
                 if let Some(place) = self.starting.iter().position(|(id, _)| *id == subject) {
                     let (_, runner) = self.starting.remove(place);
                     self.agents.push(subject.clone());
-                    self.chat_started(&subject, runner.is_none());
+                    self.chat_started(&subject, runner.is_none(), effects);
                     // A session's conversation is gone on with: nothing of a task to change.
                     let Some(task) = subject.task() else { return };
                     self.tasks.started(task, Some(at).filter(|at| *at > 0));
@@ -4457,7 +4457,7 @@ impl Model {
     /// The keyboard goes into the open conversation, if its agent runs, or leaves it.
     fn talk_keys(&mut self, on: bool, effects: &mut Vec<Effect>) {
         let Some(talk) = &self.talk else { return };
-        let on = on && self.talk_live(&talk.task) && self.annotated().is_none();
+        let on = on && self.talk_writable(&talk.task) && self.annotated().is_none();
         if on {
             self.leave(effects);
             self.list = None;
@@ -4482,7 +4482,7 @@ impl Model {
         // A picture being drawn on keeps the keyboard, as an app, the list and visual mode do.
         let drawing = self.annotated().is_some();
         let elsewhere = self.live.is_some() || self.list.is_some() || self.visual.is_some() || drawing;
-        let runs = self.talk.as_ref().is_some_and(|talk| self.talk_live(&talk.task));
+        let runs = self.talk.as_ref().is_some_and(|talk| self.talk_writable(&talk.task));
         if let Some(talk) = &mut self.talk {
             talk.keys = talk.keys && talk.open && runs && !elsewhere;
         }
@@ -9702,9 +9702,11 @@ mod tests {
         assert_eq!(started(&mut m, Action::TaskTalk { id: 2 }), [read]);
         let none = Action::SessionRead { runner: "claude".into(), id: UUID.into(), found: None };
         assert_eq!(system(&mut m, none), [asked(2, resume, None)]);
-        // An agent the shell could not start is not running: the keyboard is not left in nothing.
+        // An agent the shell could not start is not running: the keyboard stays in its native
+        // composer, whose ↵ goes on with it (never in nothing).
         system(&mut m, Action::AgentExited { task: Subject::Task(2) });
-        assert_eq!((m.agent_runs(&Subject::Task(2)), m.mode(), m.talk_note().is_some()), (false, Mode::Normal, false));
+        assert_eq!((m.agent_runs(&Subject::Task(2)), m.mode(), m.talk_note().is_some()), (false, Mode::Talk, false));
+        assert_eq!(m.field().map(|(of, _)| of), Some("talk"));
 
         // A saved agent names no runner: the drawer says so and starts nothing.
         assert_eq!(started(&mut m, Action::TaskTalk { id: 3 }), []);

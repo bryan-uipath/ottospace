@@ -290,7 +290,7 @@ impl Workspace {
             self.error = Some(agents::USERS_ALONE.into());
             return cx.stop_propagation();
         }
-        if self.model.shown_chat().is_some() {
+        if self.model.shown_draft_chat().is_some() {
             return self.chat_key(event, window, cx);
         }
         let Some(agent) = self.model.talk.as_ref().and_then(|talk| self.drawer.agents.get(&talk.task)) else { return };
