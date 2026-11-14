@@ -8,14 +8,49 @@ use gpui::{
 };
 use ottospace_core::model::{Card, ProjectGroup, TasksView};
 use ottospace_core::progress::count;
-use ottospace_core::sessions::Range;
-use ottospace_core::tasks::Segments;
+use ottospace_core::sessions::Row;
+use ottospace_core::tasks::{Group, Segments};
 use ottospace_core::{Action, theme};
 
 use crate::{Tooltip, Workspace, home};
 
 /// The segments' colours, in the bar's order: needs you, running, later, done.
 const SEGMENTS: [u32; 4] = [theme::SNEAK, theme::PRIMARY, 0x71717a, theme::PICK];
+
+/// An age as a card says it: `3h ago`, but `now`.
+fn ago(age: String) -> String {
+    if age == "now" { age } else { format!("{age} ago") }
+}
+
+/// A hover card's frame: its title, then a dot and its state. The task's and the session's.
+fn frame(title: String, color: u32, state: String) -> Div {
+    div()
+        .w(px(330.))
+        .p_3()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .rounded_md()
+        .bg(rgb(theme::RAISED))
+        .border_1()
+        .border_color(rgb(theme::BORDER_STRONG))
+        .text_color(rgb(theme::TEXT))
+        .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(title))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .child(home::dot(color))
+                .child(div().text_xs().truncate().child(state)),
+        )
+}
+
+/// A named fact of a hover card: `Started  3h ago`.
+fn fact(name: &'static str, value: String) -> Div {
+    let name = div().w(px(72.)).text_color(rgb(theme::MUTED)).child(name);
+    div().flex().gap_2().text_xs().child(name).child(div().min_w_0().truncate().child(value))
+}
 
 /// A task's hover card: shown as a tooltip, after the tooltip's own delay.
 pub struct CardView(pub Card);
@@ -25,7 +60,9 @@ impl Render for CardView {
         let card = &self.0;
         let muted = || div().text_xs().text_color(rgb(theme::MUTED));
         let color = card.group.map_or(theme::MUTED, theme::task);
-        let state = [Some(card.state.to_string()), card.live.clone()].into_iter().flatten().collect::<Vec<_>>();
+        let priority = Some(format!("P{}", card.priority));
+        let state = [priority, Some(card.state.to_string()), card.live.clone(), card.model.clone()];
+        let state = state.into_iter().flatten().collect::<Vec<_>>();
         let chip = |tag: &String| {
             div()
                 .px_1p5()
@@ -34,9 +71,6 @@ impl Render for CardView {
                 .text_xs()
                 .text_color(rgb(theme::TEXT))
                 .child(tag.clone())
-        };
-        let fact = |name: &'static str, value: String| {
-            div().flex().gap_2().child(muted().w(px(72.)).child(name)).child(div().text_xs().child(value))
         };
         let cell = |text: String| div().w(px(52.)).text_right().child(text);
         let tokens = card.tokens.iter().map(|row| {
@@ -47,7 +81,6 @@ impl Render for CardView {
                 .child(div().flex_1().min_w_0().truncate().child(name))
                 .child(cell(count(row.input)))
                 .child(cell(count(row.output)))
-                .child(cell(count(row.cached)))
         });
         let context = card.context.zip(card.window).filter(|(_, window)| *window > 0).map(|(used, window)| {
             let share = (used as f32 / window as f32).clamp(0., 1.);
@@ -65,30 +98,12 @@ impl Render for CardView {
                         .child(div().h_full().w(relative(share)).rounded_full().bg(rgb(theme::PRIMARY))),
                 )
         });
-        div()
-            .w(px(330.))
-            .p_3()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .rounded_md()
-            .bg(rgb(theme::RAISED))
-            .border_1()
-            .border_color(rgb(theme::BORDER_STRONG))
-            .text_color(rgb(theme::TEXT))
-            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(card.title.clone()))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1p5()
-                    .child(home::dot(color))
-                    .child(div().text_xs().truncate().child(state.join(" · "))),
-            )
+        frame(card.title.clone(), color, state.join(" · "))
             .when(!card.tags.is_empty(), |d| {
                 d.child(div().flex().flex_wrap().gap_1().children(card.tags.iter().map(chip)))
             })
-            .child(fact("Started", card.started.clone().map_or("not yet".into(), |age| format!("{age} ago"))))
+            .children(card.filed.clone().map(|age| fact("Filed", ago(age))))
+            .child(fact("Started", card.started.clone().map_or("not yet".into(), ago)))
             .child(fact("Agent time", card.agent_time.clone()))
             .child(fact("Workspace", card.workspace.clone()))
             .when(!card.tokens.is_empty(), |d| {
@@ -96,8 +111,7 @@ impl Render for CardView {
                     .flex()
                     .child(div().flex_1().child("TOKENS"))
                     .child(cell("in".into()))
-                    .child(cell("out".into()))
-                    .child(cell("cached".into()));
+                    .child(cell("out".into()));
                 d.child(div().flex().flex_col().gap_0p5().child(head).children(tokens))
             })
             .children(context)
@@ -108,6 +122,23 @@ impl Render for CardView {
 pub fn card_tip(workspace: &Workspace, id: u32) -> Option<impl Fn(&mut Window, &mut gpui::App) -> AnyView + 'static> {
     let card = workspace.model.card(id, crate::now_ms())?;
     Some(move |_: &mut Window, cx: &mut gpui::App| AnyView::from(cx.new(|_| CardView(card.clone()))))
+}
+
+/// An Elsewhere row's hover card: what its one line leaves out. Its title is quoted text.
+pub struct SessionCard(pub Row);
+
+impl Render for SessionCard {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let row = &self.0;
+        let state = if row.active { row.doing.clone().unwrap_or_else(|| "active".into()) } else { "idle".into() };
+        let color = if row.active { theme::task(Group::Running) } else { theme::BORDER_STRONG };
+        frame(row.title().to_string(), color, state)
+            .child(fact("Repository", row.name.clone()))
+            .child(fact("Runner", row.runner.clone()))
+            .children(row.model.clone().map(|model| fact("Model", model)))
+            .children(row.age.clone().map(|age| fact("Last active", ago(age))))
+            .children(row.pane.map(|pane| fact("Runs in", format!("pane {pane}"))))
+    }
 }
 
 /// The bar of a project's states: one segment a state, as wide as its share of the tasks.
@@ -162,24 +193,6 @@ impl Workspace {
         ];
         let views = [TasksView::State, TasksView::Project];
         self.switch(&options, move |this, at, window, cx| this.click_tasks_view(views[at], window, cx), cx)
-    }
-
-    /// The Other sessions heading's switch: Today | 7 days | 30 days | All. A click picks one.
-    pub(crate) fn sessions_range_switch(&self, cx: &mut Context<Self>) -> Div {
-        let range = self.model.sessions_range;
-        let name = |of: Range| match of {
-            Range::Today => "sessions-range:today",
-            Range::Week => "sessions-range:week",
-            Range::Month => "sessions-range:month",
-            Range::All => "sessions-range:all",
-        };
-        let options = Range::EVERY.map(|of| (name(of), of.label(), of == range));
-        self.switch(&options, |this, at, window, cx| this.click_sessions_range(Range::EVERY[at], window, cx), cx)
-    }
-
-    pub(crate) fn click_sessions_range(&mut self, range: Range, window: &Window, cx: &mut Context<Self>) {
-        self.dispatch(Action::SessionsRange { range }, self.input, window, cx);
-        cx.notify();
     }
 
     pub(crate) fn click_tasks_view(&mut self, view: TasksView, window: &Window, cx: &mut Context<Self>) {
