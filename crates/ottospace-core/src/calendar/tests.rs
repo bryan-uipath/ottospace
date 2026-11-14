@@ -273,10 +273,24 @@ fn blocks_go_under_the_calls_and_never_widen_the_band() {
 }
 
 #[test]
-fn a_call_card_names_the_calls_merged_into_it() {
-    let (one, two, three) = (event(1, NINE, 30), event(2, NINE, 30), event(3, NINE, 30));
-    assert_eq!(card(&one, &[], 0), describe(&one, 0));
-    assert_eq!(card(&one, &[&two, &three], 0), format!("{}\n+2 more: Meeting 2, Meeting 3", describe(&one, 0)));
+fn a_cards_facts_name_the_place_without_links_the_link_the_status_and_the_calls_merged() {
+    let one = Event {
+        location: "Room 4 https://example.zoom.us/j/1?pwd=x".into(),
+        show: Show::Tentative,
+        ..event(1, NINE, 30)
+    };
+    let (two, three) = (event(2, NINE, 30), event(3, NINE, 30));
+    let f = facts(&one, &[&two, &three], 0);
+    assert_eq!(
+        (f.title.as_str(), f.when.as_str(), f.place.as_deref()),
+        ("Meeting 1", "09:00–09:30 · 30m", Some("Room 4"))
+    );
+    assert_eq!(
+        (f.link, f.status, f.more),
+        (Some("Zoom"), Some("tentative"), vec!["Meeting 2".to_string(), "Meeting 3".into()])
+    );
+    let all_day = Event { all_day: true, link: None, ..event(4, NINE, 0) };
+    assert_eq!((facts(&all_day, &[], 0).when.as_str(), facts(&all_day, &[], 0).link), ("all day", None));
 }
 
 #[test]

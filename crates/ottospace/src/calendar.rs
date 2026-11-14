@@ -19,7 +19,7 @@ use ottospace_core::settings::expand_home;
 use ottospace_core::{Action, Effect, Origin, theme};
 use ottospace_mac::meeting;
 
-use crate::{Mark, Tooltip, Workspace, config, list_row, mark, now_ms, words};
+use crate::{Mark, Tooltip, Workspace, config, home, list_button, mark, now_ms, progress, words};
 
 /// The band's height above the status bar, its 1-point top line included; hover takes all of it.
 const BAND: f32 = 12.;
@@ -328,9 +328,11 @@ impl Workspace {
             move |_: &mut Window, cx: &mut gpui::App| AnyView::from(cx.new(|_| Tooltip(tip.clone().into())))
         };
         // A hover area `HOVER_PAD` wider than what it holds on each side, as tall as the band.
-        let hover = |id: gpui::ElementId, tip: String| {
-            div().id(id).absolute().top_0().bottom_0().left(px(-HOVER_PAD)).right(px(-HOVER_PAD)).tooltip(card(tip))
-        };
+        let area =
+            |id: gpui::ElementId| div().id(id).absolute().top_0().bottom_0().left(px(-HOVER_PAD)).right(px(-HOVER_PAD));
+        let hover = |id: gpui::ElementId, tip: String| area(id).tooltip(card(tip));
+        // A meeting's: the card the Calendar section's rows show.
+        let hover_card = |id: gpui::ElementId, tip: progress::MeetingTip| area(id).tooltip(tip);
         let at = |from: f32, to: f32| div().absolute().top_0().bottom_0().left(relative(from)).w(relative(to - from));
         // Inset, so a mark or block at either end is drawn whole.
         let mut out = div().absolute().top_0().bottom_0().left(px(INSET)).right(px(INSET));
@@ -374,7 +376,8 @@ impl Workspace {
             let paint = calendar.paint(e, now, reduced);
             let fill = div().absolute().left_0().right_0().top(px(LANES_TOP)).bottom(px(LANES_BOTTOM)).rounded_sm();
             let fill = fill.bg(rgb(paint.color)).opacity(paint.alpha * BLOCK_STRENGTH);
-            let hovered = hover(("meeting-block", block.id as usize).into(), calendar::describe(e, offset));
+            let card = progress::meeting_tip(calendar::facts(e, &[], offset), paint.color);
+            let hovered = hover_card(("meeting-block", block.id as usize).into(), card);
             out = out.child(
                 at(block.from, block.to)
                     .min_w(px(MIN_BLOCK))
@@ -409,9 +412,9 @@ impl Workspace {
             let last = f32::from(bar.lane) + 1. >= lanes;
             let from = if first { 0. } else { top - LANE_GAP / 2. };
             let to = if last { INNER } else { top + height + LANE_GAP / 2. };
-            let hovered = hover(("meeting-bar", bar.id as usize).into(), calendar::card(e, &more, offset))
-                .top(px(from))
-                .bottom(px(INNER - to));
+            let card = progress::meeting_tip(calendar::facts(e, &more, offset), paint.color);
+            let hovered =
+                hover_card(("meeting-bar", bar.id as usize).into(), card).top(px(from)).bottom(px(INNER - to));
             out = out.child(at(bar.from, bar.to).min_w(px(MIN_BLOCK)).child(block).child(hovered));
         }
         // Now, last: over the blocks.
@@ -628,13 +631,19 @@ impl Workspace {
             _ => calendar::day_name(noon, ottospace_mac::time::utc_offset((noon / 1_000) as i64)),
         };
         let read = format!("calendar {}", calendar.read_status(offset));
+        // As tall as the header's + and ×, with room inside each: none sits against the next.
         let step = |name: &'static str, text: &'static str, tip: &'static str, step: calendar::DayStep| {
             let control = format!("calendar-day:{name}");
             div()
                 .id(gpui::ElementId::Name(control.clone().into()))
                 .relative()
+                .h(px(28.))
+                .min_w(px(20.))
                 .px_1()
-                .rounded_sm()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_md()
                 .cursor_pointer()
                 .text_color(rgb(theme::MUTED))
                 .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
@@ -645,25 +654,24 @@ impl Workspace {
                     this.dispatch(Action::CalendarDay { step }, this.input, window, cx);
                 }))
         };
-        let date = div().id("calendar-date").min_w(px(74.)).flex().justify_center().text_color(rgb(theme::TEXT));
+        let date = div().id("calendar-date").min_w(px(64.)).flex().justify_center().text_color(rgb(theme::TEXT));
         let date = date.child(label).tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(read.clone().into()))));
         div()
-            .ml_2()
-            .mr_1()
+            .ml_1()
             .flex()
             .items_center()
-            .gap_0p5()
             .child(step("back", "‹", "The day before (←)", calendar::DayStep::Back))
             .child(date)
             .child(step("forward", "›", "The day after (→)", calendar::DayStep::Forward))
             .children(
                 (calendar.day != 0)
-                    .then(|| step("today", "Today", "Back to today (t)", calendar::DayStep::Today).ml_1()),
+                    .then(|| step("today", "Today", "Back to today (t)", calendar::DayStep::Today).px_2()),
             )
     }
 
-    /// One meeting on one line: a dot and a faint tint in its colour (the band's), its start, its
-    /// title and one quiet fact. Past ones faded, the one that runs stronger with now's colour.
+    /// One meeting on one line, as a Tasks row (`list_button`): a dot and a faint tint in its
+    /// colour (the band's), its start, its title and one quiet fact; the band's card on hover.
+    /// Past ones faded, the one that runs stronger, with now's colour at its edge.
     fn meeting_row(
         &self,
         event: &Event,
@@ -677,7 +685,8 @@ impl Workspace {
         let paint = calendar.paint(event, now, true);
         // Each time in the offset it has: another day may be across a clock change.
         let clock = |ms: u64| calendar::clock(ms, ottospace_mac::time::utc_offset((ms / 1_000) as i64));
-        let card = calendar::describe(event, ottospace_mac::time::utc_offset((event.start / 1_000) as i64));
+        let card = calendar::facts(event, &[], ottospace_mac::time::utc_offset((event.start / 1_000) as i64));
+        let card = progress::meeting_tip(card, paint.color);
         let group: &'static str = "meeting-row";
         let join = event.link.as_ref().map(|_| {
             words::words(group, selected).top(px(2.)).child(self.word(
@@ -690,30 +699,23 @@ impl Workspace {
         let running = stage == Stage::Running;
         let tint = div().absolute().inset_0().rounded_md().bg(rgb(paint.color));
         let tint = tint.opacity(if running { 0.22 } else { 0.1 * paint.alpha.max(0.4) });
-        let dot = div().absolute().left(px(10.)).top(px(6.)).size(px(6.)).rounded_full().bg(rgb(paint.color));
         let fact = calendar.row_fact(event, now);
-        list_row(("meeting", index), selected)
+        let muted = || div().flex_none().text_xs().text_color(rgb(theme::MUTED));
+        // Now's colour, as the band's tick: a bar at the edge of the meeting that runs, where a
+        // Tasks row marks the task on show.
+        let bar = div().absolute().left(px(-1.)).top(px(5.)).bottom(px(5.)).w(px(3.)).rounded_full();
+        list_button(("meeting", index), selected)
             .group(group)
-            .text_color(rgb(theme::TEXT))
+            .relative()
             .when(stage == Stage::Past, |d| d.opacity(0.5))
             .child(tint)
-            .child(dot.opacity(paint.alpha.max(0.5)))
-            // Now's colour, as the band's tick: a bar at the left edge of the meeting that runs.
-            .children(
-                running
-                    .then(|| div().absolute().left_0().top_1().bottom_1().w(px(2.)).rounded_sm().bg(rgb(theme::TEXT))),
-            )
-            .child(
-                div()
-                    .relative()
-                    .flex()
-                    .gap_2()
-                    .child(div().flex_none().w(px(38.)).text_color(rgb(theme::MUTED)).child(clock(event.start)))
-                    .child(div().flex_1().min_w_0().truncate().child(event.title.clone()))
-                    .children(fact.map(|fact| div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(fact))),
-            )
+            .children(running.then(|| bar.bg(rgb(theme::TEXT))))
+            .child(div().h(px(20.)).flex().items_center().child(home::dot(paint.color).opacity(paint.alpha.max(0.5))))
+            .child(muted().relative().w(px(34.)).child(clock(event.start)))
+            .child(div().relative().flex_1().min_w_0().truncate().child(event.title.clone()))
+            .children(fact.map(|fact| muted().relative().child(fact)))
             .children(join)
-            .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(card.clone().into()))))
+            .tooltip(card)
             .into_any_element()
     }
 

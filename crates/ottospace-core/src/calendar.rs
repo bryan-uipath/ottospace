@@ -373,13 +373,43 @@ fn layout(events: &[Event], day: (u64, u64), band: Band, now: u64) -> Layout {
     out
 }
 
-/// A call's hover card, with the calls merged into it: `+2 more: Sync, 1:1`.
-pub fn card(event: &Event, more: &[&Event], offset: i64) -> String {
-    let titles: Vec<&str> = more.iter().map(|e| e.title.as_str()).collect();
-    if titles.is_empty() {
-        return describe(event, offset);
+/// What a meeting's hover card says, the band's and the Calendar section's alike.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Facts {
+    pub title: String,
+    /// `09:00–09:30 · 30m`, or `all day`.
+    pub when: String,
+    /// Without its links: a Zoom link often is the place, and holds a passcode.
+    pub place: Option<String>,
+    /// `Zoom`, `Meet` or `Teams`.
+    pub link: Option<&'static str>,
+    /// `tentative`, `free` or `out of office`; none when busy.
+    pub status: Option<&'static str>,
+    /// The titles of the calls merged into it on the band.
+    pub more: Vec<String>,
+}
+
+pub fn facts(event: &Event, more: &[&Event], offset: i64) -> Facts {
+    let when = if event.all_day {
+        "all day".to_string()
+    } else {
+        let length = span(event.end.saturating_sub(event.start));
+        format!("{}–{} · {length}", clock(event.start, offset), clock(event.end, offset))
+    };
+    let status = match event.show {
+        Show::Busy => None,
+        Show::Tentative => Some("tentative"),
+        Show::Free => Some("free"),
+        Show::Away => Some("out of office"),
+    };
+    Facts {
+        title: event.title.clone(),
+        when,
+        place: Some(reply::text(&event.location)).filter(|l| !l.is_empty()),
+        link: meeting_service(event),
+        status,
+        more: more.iter().map(|e| e.title.clone()).collect(),
     }
-    format!("{}\n+{} more: {}", describe(event, offset), titles.len(), titles.join(", "))
 }
 
 /// `12m`, `1h 5m`, `3h`: a time to come, rounded up to the minute.
@@ -407,27 +437,15 @@ pub fn day_name(ms: u64, offset: i64) -> String {
     format!("{weekday} {date} {}", months[(month - 1).clamp(0, 11) as usize])
 }
 
-/// What a block's hover card says: `Design review`, `09:00–09:30 · 30m · Room 4`, `Zoom link ·
-/// tentative`.
+/// A meeting's facts as text, for a tooltip that lists several (all-day events, blocks outside
+/// the band): `Design review`, `09:00–09:30 · 30m · Room 4`, `Zoom link · tentative`.
 pub fn describe(event: &Event, offset: i64) -> String {
-    let when = if event.all_day {
-        "all day".to_string()
-    } else {
-        let length = span(event.end.saturating_sub(event.start));
-        format!("{}–{} · {length}", clock(event.start, offset), clock(event.end, offset))
-    };
-    // The place without its links: a Zoom link often is the place, and holds a passcode.
-    let place = Some(reply::text(&event.location)).filter(|l| !l.is_empty()).map(|l| format!(" · {l}"));
-    let status = match event.show {
-        Show::Busy => None,
-        Show::Tentative => Some("tentative"),
-        Show::Free => Some("free"),
-        Show::Away => Some("out of office"),
-    };
-    let link = meeting_service(event).map(|name| format!("{name} link"));
-    let facts: Vec<String> = link.into_iter().chain(status.map(String::from)).collect();
-    let facts = if facts.is_empty() { String::new() } else { format!("\n{}", facts.join(" · ")) };
-    format!("{}\n{when}{}{facts}", event.title, place.unwrap_or_default())
+    let f = facts(event, &[], offset);
+    let place = f.place.map(|l| format!(" · {l}")).unwrap_or_default();
+    let more: Vec<String> =
+        f.link.map(|name| format!("{name} link")).into_iter().chain(f.status.map(String::from)).collect();
+    let more = if more.is_empty() { String::new() } else { format!("\n{}", more.join(" · ")) };
+    format!("{}\n{}{place}{more}", f.title, f.when)
 }
 
 /// The text of the events read, as shown: cleaned and capped. The last of `MAX_EVENTS` go.
