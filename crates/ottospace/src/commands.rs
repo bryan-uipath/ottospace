@@ -5,7 +5,7 @@ use gpui::{
     Context, InteractiveElement, IntoElement, KeyDownEvent, Keymap, Keystroke, ParentElement, Styled, Window, actions,
     div, px, rgb,
 };
-use ottospace_core::commands::{Command, Palette, TaskChoice};
+use ottospace_core::commands::{Command, FeatureChoice, Palette, TaskChoice};
 use ottospace_core::keys::FilterKey;
 use ottospace_core::{Action, theme};
 
@@ -64,6 +64,7 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::AddTabToWorkbook => Box::new(AddTabToWorkbook),
         Command::SaveAllWorkbook => Box::new(SaveAllWorkbook),
         Command::StartFresh => Box::new(StartFresh),
+        Command::Features => Box::new(features::ShowFeatures),
         Command::MarkPane => Box::new(MarkPane),
         Command::MarkTab => Box::new(MarkTab),
         Command::MarkJump => Box::new(MarkJump),
@@ -120,6 +121,9 @@ impl Workspace {
             .on_action(cx.listener(|this, _: &OpenSettings, _, cx| {
                 this.error = open_in_user_folder(Some("settings.json")).err();
                 cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &features::ShowFeatures, window, cx| {
+                this.dispatch(Action::PaletteFeatures, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &AxInspector, window, cx| this.toggle_inspector(window, cx)))
             .on_action(
@@ -212,15 +216,20 @@ impl Workspace {
         });
         let rows = rows.collect();
         let tasks = palette.tasks.is_some();
-        let (title, hint) = if tasks { ("Move to", "type a task") } else { ("Run", "type a command") };
+        let (title, hint) = match (tasks, palette.features.is_some()) {
+            (true, _) => ("Move to", "type a task"),
+            (_, true) => ("Turn", "type a feature"),
+            _ => ("Run", "type a command"),
+        };
         let header = div()
             .h(px(40.))
             .child(div().text_xs().text_color(rgb(theme::COMMAND)).child(title))
             .child(self.render_field(hint, cx));
         let panel = dialog::floating(560.).max_w_full().max_h(px(440.));
-        let texts = match tasks {
-            true => ("No task matches", "↑↓ move · ↵ move the tab · esc close"),
-            false => ("No command matches", "↑↓ move · ↵ run · esc close"),
+        let texts = match (tasks, palette.features.is_some()) {
+            (true, _) => ("No task matches", "↑↓ move · ↵ move the tab · esc close"),
+            (_, true) => ("No feature matches", "↑↓ move · ↵ turn on or off · esc close"),
+            _ => ("No command matches", "↑↓ move · ↵ run · esc close"),
         };
         let panel = self.list_panel(panel, header, "palette", rows, texts);
         dialog::backdrop("palette-backdrop", 0.35, Action::ClosePalette, cx)
@@ -239,6 +248,15 @@ fn palette_items(palette: &Palette, keymap: &Keymap) -> Vec<(Command, &'static s
     if palette.tasks.is_some() {
         let task = |choice: &TaskChoice| (Command::MoveTabToTask, "Move to", choice.title.clone(), None);
         return palette.task_matches().into_iter().map(task).collect();
+    }
+    // Listing flags: each a row of Features…, its name, stage and description, and on or off.
+    if palette.features.is_some() {
+        let flag = |choice: &FeatureChoice| {
+            let (feature, state) = (choice.feature, if choice.on { "on" } else { "off" });
+            let name = format!("{} · {} — {}", feature.name(), feature.stage().label(), feature.description());
+            (Command::Features, "Features", name, Some(state.to_string()))
+        };
+        return palette.feature_matches().into_iter().map(flag).collect();
     }
     let command = |c: Command| (c, c.group().label(), c.name().to_string(), key_of(keymap, c));
     palette.matches().into_iter().map(command).collect()
@@ -276,7 +294,7 @@ mod tests {
             }
         }
         let mut out = Vec::new();
-        for menu in menus::app_menus() {
+        for menu in menus::app_menus(&ottospace_core::features::Features::all()) {
             walk(&menu.items, &mut out);
         }
         out

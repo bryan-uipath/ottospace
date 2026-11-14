@@ -8,6 +8,7 @@ use super::*;
 use crate::ax::{Frame, Source};
 use crate::calendar::Event;
 use crate::compose::{Known, Names, PathFound};
+use crate::features::{self, Feature, Features};
 use crate::fuzz::{self, Rng};
 use crate::layout_file;
 use crate::marks::{Mark, PaneRecord, RecordKind, TabRecord};
@@ -682,6 +683,7 @@ const MAKERS: &[Make] = &[
     |_| Action::ClosePicker,
     |_| Action::PaletteOpen,
     |_| Action::PaletteTasks,
+    |_| Action::PaletteFeatures,
     |g| Action::PaletteMove { delta: g.delta() },
     |g| Action::PaletteChoose { index: g.rng.coin().then(|| g.index(50)) },
     |_| Action::ClosePalette,
@@ -1096,6 +1098,11 @@ const MAKERS: &[Make] = &[
     |g| Action::CalendarDismiss { id: g.meeting_id() },
     |g| Action::CalendarJoin { id: g.meeting_id() },
     |_| Action::CalendarTomorrow,
+    // Random flags: what a feature turned off shows goes, and its actions do nothing (`Run::step`).
+    |g| {
+        let on: Vec<&str> = features::ALL.into_iter().filter(|_| g.rng.coin()).map(Feature::name).collect();
+        set_features(&on)
+    },
 ];
 
 /// The way out of each box and mode. Picked one time in 8: with every action as likely as any
@@ -1180,6 +1187,20 @@ fn drawn(material: &crate::capture::Material) -> Vec<crate::capture::Shape> {
 }
 
 fn check(m: &Model) -> Result<(), String> {
+    // A feature that is off is absent: no section, rail cell, wait, filter or command of it.
+    let shown = |section| m.sidebar == Some(section) || m.rail_focus == Some(zones::RailFocus::Left(section));
+    if !m.features.on(Feature::Marks) {
+        ensure!(!shown(Section::Marks), "the Marks section with marks off");
+        let waits = !matches!(m.mark_input, None | Some(MarkInput::Workbook { .. }));
+        ensure!(!waits, "a mark waits with marks off: {:?}", m.mark_input);
+        let listed = m.palette.iter().flat_map(Palette::matches).any(|c| c.feature() == Some(Feature::Marks));
+        ensure!(!listed, "the palette lists a mark command with marks off");
+    }
+    if !m.features.on(Feature::AppsSection) {
+        ensure!(!shown(Section::Apps), "the Apps section with it off");
+        ensure!(!m.app_lists.filtering, "the Apps filter has the keyboard with the section off");
+    }
+    ensure!(m.sections().iter().all(|s| s.feature().is_none_or(|f| m.features.on(f))), "a rail cell of a feature off");
     // The Calendar is open, or has the rail's keyboard, only while a feed is set.
     let calendar_shown =
         m.sidebar == Some(Section::Calendar) || m.rail_focus == Some(zones::RailFocus::Left(Section::Calendar));
@@ -2010,8 +2031,34 @@ impl Run {
         );
 
         let peek_before = m.peek.as_ref().map(|peek| peek.pane);
+        // An action of a feature that is off changes nothing at all, whoever sent it.
+        let gated = m.disabled(&action).map(|_| format!("{m:?}"));
+        let off_before = |feature| !m.features.on(feature);
+        let (marks_off, apps_off) = (off_before(Feature::Marks), off_before(Feature::AppsSection));
+        let stored = serde_json::to_string(&m.marks.list).unwrap_or_default();
+        let listed_flags: Vec<(Feature, bool)> =
+            m.palette.iter().flat_map(|p| p.feature_matches()).map(|c| (c.feature, c.on)).collect();
         let effects = m.update(sent);
         check(m)?;
+        if let Some(before) = &gated {
+            ensure!(
+                effects.is_empty() && format!("{m:?}") == *before,
+                "{action:?} of a feature that is off did something"
+            );
+        }
+        // Of a feature that stays off nothing changes and nothing is asked for: marks are kept as
+        // stored (a restore reads them), and no pin is written.
+        if marks_off && !m.features.on(Feature::Marks) {
+            let restores = matches!(action, Action::RestoreMarks { .. });
+            let kept = serde_json::to_string(&m.marks.list).unwrap_or_default() == stored;
+            ensure!(restores || kept, "{action:?} changed the marks while they are off");
+            let for_mark = effects.iter().any(|e| matches!(e, Effect::HostWindow { mark: Some(_), .. }));
+            ensure!(!for_mark, "{action:?} hosted a window for a mark while marks are off");
+        }
+        if apps_off && !m.features.on(Feature::AppsSection) {
+            let pins = effects.iter().any(|e| matches!(e, Effect::SaveApps { .. }));
+            ensure!(!pins, "{action:?} wrote a pin with the Apps section off");
+        }
         // A peek that ends is parked again, made an entry, or its pane closed: never stranded.
         if let Some(pane) = peek_before.filter(|pane| m.peek.as_ref().map(|p| p.pane) != Some(*pane)) {
             let closed = |e: &Effect| matches!(e, Effect::Closed(p) if p.id == pane);
@@ -2054,6 +2101,7 @@ impl Run {
             action,
             Action::PaletteOpen
                 | Action::PaletteTasks
+                | Action::PaletteFeatures
                 | Action::PaletteMove { .. }
                 | Action::PaletteChoose { .. }
                 | Action::ClosePalette
@@ -2144,7 +2192,9 @@ impl Run {
         }
         if sneak.is_some() && !sneak_own {
             let now = m.sneak.as_ref().map(|sneak| sneak.typed.clone());
-            ensure!(if user { now.is_none() } else { now == sneak }, "sneak mode: {sneak:?} before, {now:?} after");
+            // An action of a feature that is off is no move at all: it ends nothing.
+            let moved = user && gated.is_none();
+            ensure!(if moved { now.is_none() } else { now == sneak }, "sneak mode: {sneak:?} before, {now:?} after");
         }
         if let Some(asked) = asked.filter(|_| !user && !matches!(action, Action::QuitCancel)) {
             let left = asked.iter().any(|pane| m.pane(*pane).is_some());
@@ -2160,7 +2210,10 @@ impl Run {
             let gone = gone
                 || matches!(&mark_input, Some(MarkInput::Workbook { workbook, tab, .. })
                     if m.workbooks.get(*workbook).is_none_or(|book| tab.is_some_and(|at| at >= book.tabs.len() || book.tabs.len() < 2)));
-            let kept = if user { m.mark_input.is_none() } else { m.mark_input == mark_input || gone };
+            // Marks turned off take a mark's wait with them; an action of a feature off ends none.
+            let gone = gone || (!m.features.on(Feature::Marks) && matches!(action, Action::SetFeatures { .. }));
+            let kept =
+                if user && gated.is_none() { m.mark_input.is_none() } else { m.mark_input == mark_input || gone };
             ensure!(kept, "a mark's wait: {mark_input:?} before, {:?} after", m.mark_input);
         }
 
@@ -2440,6 +2493,11 @@ impl Run {
                     ensure!(matches!(action, Action::Tick { .. }) && *started <= m.now, "an alert by {action:?}")
                 }
                 Effect::OpenLink { .. } => {}
+                // The settings file is the user's: only their choice in Features… writes a flag.
+                Effect::SaveFeature { feature, on } => {
+                    let listed = listed_flags.iter().any(|(f, was)| f == feature && was != on);
+                    ensure!(user && listed, "{origin:?}'s {action:?} wrote the flag {feature:?} {on}")
+                }
                 Effect::Quit => {
                     ensure!(
                         matches!(action, Action::QuitAsked { .. } | Action::QuitConfirm | Action::Quit),
@@ -2904,6 +2962,10 @@ fn code(sent: &Envelope) -> String {
             sent.origin
         );
     }
+    if let Action::SetFeatures { features } = &sent.action {
+        let on: Vec<&str> = features::ALL.into_iter().filter(|f| features.on(*f)).map(Feature::name).collect();
+        return format!("set_features(&{on:?}).sent_by(Origin::{:?})", sent.origin);
+    }
     if let Action::RestoreWorkbooks { workbooks } = &sent.action {
         let workbooks = serde_json::to_string(workbooks).unwrap_or_default();
         return format!("restore_workbooks({workbooks:?}).sent_by(Origin::{:?})", sent.origin);
@@ -3014,6 +3076,11 @@ fn event_code(event: &Said) -> String {
         Said::MessageElsewhere => "Said::MessageElsewhere".into(),
         Said::WatchFromStart => "Said::WatchFromStart".into(),
     }
+}
+
+/// `SetFeatures` with these flags on, as `code` writes it.
+fn set_features(on: &[&str]) -> Action {
+    Action::SetFeatures { features: Features::parse_list(&on.join(",")).expect("a regression names flags") }
 }
 
 /// `RestoreMarks` from the JSON of its marks and of the file's own keys, as `code` writes it.
@@ -3822,4 +3889,21 @@ fn a_peek_at_the_clocks_end_does_not_overflow() {
         Action::PeekCheck { now: u64::MAX, over: true, pressed: false, scrolled: None }.into(),
     ])
     .unwrap();
+}
+
+/// Seed 1209: marks turned off under the open palette took rows from under its highlight.
+#[test]
+fn the_palettes_highlight_stays_on_a_row_when_a_feature_goes() {
+    replay(&[
+        Action::PaletteOpen.into(),
+        Action::PaletteMove { delta: -1 }.into(),
+        by(Origin::System, set_features(&[])),
+    ])
+    .unwrap();
+}
+
+/// Seed 603: marks turned off while the jump prefix waited for a letter.
+#[test]
+fn marks_turned_off_take_the_jumps_wait_with_them() {
+    replay(&[Action::MarkPrefix.into(), by(Origin::System, set_features(&[]))]).unwrap();
 }

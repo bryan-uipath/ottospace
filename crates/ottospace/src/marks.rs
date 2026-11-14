@@ -211,11 +211,16 @@ impl Workspace {
     /// The name of the mark the Marks section offers to put back, while it offers.
     pub(crate) fn mark_offered(&self) -> Option<&str> {
         let offered = self.model.undo_offer.is_some_and(|offer| offer.moved == Moved::MarkRemoved);
+        let offered = offered && self.on(ottospace_core::features::Feature::Marks);
         self.model.marks.removed().filter(|_| offered).map(|mark| mark.name.as_str())
     }
 
     /// The marks as the state lists them: each row, and where it and its buttons were drawn.
     pub(crate) fn marks_json(&self) -> Vec<serde_json::Value> {
+        // With marks off the state lists none: they are kept, not shown.
+        if !self.on(ottospace_core::features::Feature::Marks) {
+            return Vec::new();
+        }
         let drawn = |id: String| self.controls.bounds(&id).map(rect);
         let row = |row: MarkRow| {
             let id = row.id;

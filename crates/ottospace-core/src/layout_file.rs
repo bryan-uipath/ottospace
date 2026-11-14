@@ -329,7 +329,8 @@ impl Model {
         // Building each tab noted it as its task's last: none is, so each task shows its first.
         self.last_tab.clear();
         // A Calendar left open by a run that had a feed: none without one.
-        self.sidebar = layout.section.filter(|s| *s != Section::Calendar || self.calendar.on);
+        // Not a section that is not on the rail: Calendar with no feed, one behind a flag that is off.
+        self.sidebar = layout.section.filter(|s| self.sections().contains(s));
         self.talk_width = talk::width(layout.drawer.width);
         self.talk_wide = layout.drawer.wide;
         let views = layout.drawer.views.iter().filter_map(|(task, view)| Some((exists(self, Some(*task))?, *view)));

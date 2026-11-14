@@ -253,6 +253,11 @@ pub fn save_value(key: &str, value: &serde_json::Value) -> Result<(), String> {
     save_settings(|text| ottospace_core::settings::with_value(text, key, value))
 }
 
+/// Sets `features.<name>` in `settings.json`, as `save_value` sets a key.
+pub fn save_feature(name: &str, on: bool) -> Result<(), String> {
+    save_settings(|text| ottospace_core::settings::with_feature(text, name, on))
+}
+
 /// `settings.json` made over by `edit`, from the file as it is now.
 fn save_settings(edit: impl FnOnce(&str) -> Result<String, String>) -> Result<(), String> {
     let Some(home) = get().home.as_ref() else { return Ok(()) };
