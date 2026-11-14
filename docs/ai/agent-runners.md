@@ -378,7 +378,7 @@ each held by code named here:
   input by the core from borrowed JSON: Claude `Edit` (old/new: the lines both share at start
   and end as two lines of context around the ones that differ; `replace_all` shown),
   `MultiEdit` (one file, a break between edits), `Write` (all added), `NotebookEdit`
-  (`new_source` added; `delete` named); Codex's `fileChange` item (`changes[].kind.type` `add`:
+  (`new_source` added; a cell's `delete`: no card); Codex's `fileChange` item (`changes[].kind.type` `add`:
   its `diff` is the content, `delete`, `update` with `move_path`: a unified diff) and
   `apply_patch` in a rollout (`*** Add/Update/Delete File:`, `*** Move to:`). At most 40 lines a
   card, 240 bytes a line, 8 files; the rest counted, never copied. Each line goes through

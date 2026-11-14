@@ -576,7 +576,8 @@ impl Workspace {
     /// message at a time, not streamed. None on one ottospace runs.
     pub(crate) fn watch_chip(&self, subject: &Subject) -> Option<gpui::Stateful<Div>> {
         let t = &self.model.chat(subject)?.transcript;
-        if !t.watched || t.live {
+        // Taken over in a terminal, its transcript stays as watched: the agent is ours now.
+        if !t.watched || t.live || self.model.agent_runs(subject) {
             return None;
         }
         let colour = subject.task().and_then(|id| self.model.tasks.get(id)).map(|task| task.colour);

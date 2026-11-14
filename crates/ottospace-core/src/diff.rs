@@ -74,9 +74,11 @@ impl File {
     }
 
     /// What a click on the path may do: reveal it, if `links::target` allows it. Only an
-    /// absolute path: a relative one is the session's folder's, not surely the repository's.
+    /// absolute path, and none `links::target` would read as another (`a#b`, `a%20`, `a:12`):
+    /// a relative one is the session's folder's, not surely the repository's.
     pub fn target(&self, repo: Option<&str>) -> Option<Target> {
-        let path = Some(self.path.text()).filter(|path| path.starts_with('/'))?;
+        let literal = |path: &&str| path.starts_with('/') && !path.contains(['#', '?', '%', ':']);
+        let path = Some(self.path.text()).filter(literal)?;
         links::target(path, repo).filter(|target| matches!(target, Target::File(_)))
     }
 }
@@ -143,15 +145,21 @@ pub fn claude(tool: &str, input: &Value) -> Option<Diff> {
         }
         "MultiEdit" => {
             let mut file = cards.file(text("file_path")?, Change::Edit)?;
-            for (n, edit) in input["edits"].as_array()?.iter().enumerate() {
+            let mut read = 0;
+            for edit in input["edits"].as_array()? {
                 let (Some(old), Some(new)) = (edit["old_string"].as_str(), edit["new_string"].as_str()) else {
                     continue;
                 };
-                if n > 0 {
+                // A break between edits read, not before the first.
+                if read > 0 {
                     cards.line(&mut file, Sign::Hunk, "");
                 }
+                read += 1;
                 file.all |= edit["replace_all"] == true;
                 cards.edit(&mut file, old, new);
+            }
+            if read == 0 {
+                return None;
             }
             cards.push(file);
         }
@@ -160,10 +168,8 @@ pub fn claude(tool: &str, input: &Value) -> Option<Diff> {
             cards.all(&mut file, Sign::Added, text("content")?);
             cards.push(file);
         }
-        "NotebookEdit" if text("edit_mode") == Some("delete") => {
-            let file = cards.file(text("notebook_path")?, Change::Delete)?;
-            cards.push(file);
-        }
+        // A cell deleted: the notebook stays, and there is no new source to show.
+        "NotebookEdit" if text("edit_mode") == Some("delete") => return None,
         "NotebookEdit" => {
             let mut file = cards.file(text("notebook_path")?, Change::Edit)?;
             cards.all(&mut file, Sign::Added, text("new_source")?);
@@ -276,9 +282,11 @@ impl Cards {
             return;
         }
         self.room -= 1;
+        // Cut before cleaning (bounded work) and after (a tab is four spaces, a mark `\u{…}`).
         let kept = cut(text, MAX_LINE);
-        let mut shown = clean(kept);
-        if kept.len() < text.len() {
+        let cleaned = clean(kept);
+        let mut shown = cut(&cleaned, MAX_LINE).to_string();
+        if kept.len() < text.len() || shown.len() < cleaned.len() {
             shown.push('…');
         }
         file.lines.push(Line { sign, text: Text::new(&shown) });
@@ -312,6 +320,10 @@ impl Cards {
         let head = old.lines().zip(new.lines()).take_while(|(a, b)| a == b).count();
         let tail = old.lines().rev().zip(new.lines().rev()).take_while(|(a, b)| a == b).count();
         let tail = tail.min(olds.min(news) - head);
+        // Only line endings differ (`a` → `a\n`, CRLF → LF): the lines are the same; say so.
+        if old != new && head == olds && head == news {
+            self.line(file, Sign::Hunk, "only line endings change");
+        }
         let before = head.min(CONTEXT);
         self.run(file, Sign::Context, old.lines().skip(head - before), before);
         self.run(file, Sign::Removed, old.lines().skip(head), olds - head - tail);
@@ -389,6 +401,10 @@ mod tests {
         assert_eq!(relative.target(Some("/w/app")), None);
         let out = one(claude("Write", &json!({"file_path": "/w/app/../../etc/passwd", "content": ""})));
         assert_eq!(out.target(Some("/w/app")), None);
+        for other in ["/w/app/report#old", "/w/app/a%2e.rs", "/w/app/main.rs:12", "/w/app/a?b"] {
+            let file = one(claude("Write", &json!({"file_path": other, "content": ""})));
+            assert_eq!(file.target(Some("/w/app")), None, "{other} would reveal another file");
+        }
         let all = json!({"file_path": "a.rs", "old_string": "x", "new_string": "y", "replace_all": true});
         let file = one(claude("Edit", &all));
         assert!(file.all && lines(&file) == ["-x", "+y"]);
@@ -397,6 +413,10 @@ mod tests {
         assert_eq!(lines(&file), ["+x", "+y"]);
         let same = one(claude("Edit", &json!({"file_path": "a", "old_string": "x\nx", "new_string": "x\nx"})));
         assert_eq!((lines(&same).len(), same.added, same.removed), (2, 0, 0));
+        for (old, new) in [("hello", "hello\n"), ("a\r\nb", "a\nb")] {
+            let ends = one(claude("Edit", &json!({"file_path": "a", "old_string": old, "new_string": new})));
+            assert_eq!(lines(&ends)[0], "@only line endings change", "{old:?}");
+        }
     }
 
     #[test]
@@ -404,6 +424,7 @@ mod tests {
         let write = one(claude("Write", &json!({"file_path": "/w/app/new.md", "content": "# Title\n\nbody\n"})));
         assert_eq!((lines(&write), write.change), (vec!["+# Title".into(), "+".into(), "+body".into()], Change::Write));
         let multi = json!({"file_path": "/w/app/a.rs", "edits": [
+            {"new_string": "unread"},
             {"old_string": "one", "new_string": "1"},
             {"old_string": "two", "new_string": "2", "replace_all": true},
             {"old_string": 3},
@@ -411,10 +432,12 @@ mod tests {
         let multi = one(claude("MultiEdit", &multi));
         assert_eq!(lines(&multi), ["-one", "+1", "@", "-two", "+2"]);
         assert!(multi.all);
+        let unread = json!({"file_path": "/w/a.rs", "edits": [{"old_string": 3}]});
+        assert_eq!(claude("MultiEdit", &unread), None, "no edit read: no card");
         let cell = json!({"notebook_path": "/w/n.ipynb", "new_source": "print(1)", "edit_mode": "replace"});
         assert_eq!(lines(&one(claude("NotebookEdit", &cell))), ["+print(1)"]);
-        let gone = one(claude("NotebookEdit", &json!({"notebook_path": "/w/n.ipynb", "edit_mode": "delete"})));
-        assert_eq!((gone.change, gone.lines.len()), (Change::Delete, 0));
+        let cell = json!({"notebook_path": "/w/n.ipynb", "cell_id": "c1", "edit_mode": "delete"});
+        assert_eq!(claude("NotebookEdit", &cell), None, "a cell deleted, not the notebook");
         // Not an edit: no card.
         assert_eq!(claude("Bash", &json!({"command": "ls"})), None);
         assert_eq!(claude("Read", &json!({"file_path": "/w/a"})), None);
@@ -471,6 +494,10 @@ mod tests {
         // A long line is cut at a character, and says so.
         let long = "é".repeat(MAX_LINE);
         let file = one(claude("Write", &json!({"file_path": "/w/a", "content": long})));
+        let text = file.lines[0].text.text();
+        assert!(text.ends_with('…') && text.len() <= MAX_LINE + '…'.len_utf8(), "{}", text.len());
+        // Cleaning grows it (a tab is four spaces): cut again.
+        let file = one(claude("Write", &json!({"file_path": "/w/a", "content": "\t".repeat(MAX_LINE)})));
         let text = file.lines[0].text.text();
         assert!(text.ends_with('…') && text.len() <= MAX_LINE + '…'.len_utf8(), "{}", text.len());
         // A 50 MB string: kept to the cap, its lines counted.
