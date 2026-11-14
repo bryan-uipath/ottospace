@@ -6915,7 +6915,13 @@ fn a_click_on_a_tab_switches_with_the_drawer_open() {
     let state = otto.call(json!({"cmd": "state"}));
     let tasks: Vec<Value> = state["state"]["tabs"].as_array().unwrap().iter().map(|t| t["task"].clone()).collect();
     assert_eq!((tasks, &state["state"]["active"]), (vec![json!(1), json!(null)], &json!(1)), "{}", state["state"]);
-    let tab = |place: usize| rect(&otto.drawn()["tabs"][place]);
+    // The Tasks section closed: a small window's strip shows both tabs whole, none clipped
+    // under the drawer. Each is clicked near its left edge, where its title is.
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let tab = |place: usize| {
+        let r = rect(&otto.drawn()["tabs"][place]);
+        [r[0], r[1], r[2] * 0.4, r[3]]
+    };
     let active = |reply: &Value| reply["state"]["active"].clone();
 
     // The task's conversation open: the task's tab, then the other, and back.
