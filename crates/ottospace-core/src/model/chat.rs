@@ -9,7 +9,7 @@ use crate::edit::Field;
 use crate::runner::{RunnerId, Status};
 use crate::talk::Subject;
 use crate::tasks::State;
-use crate::transcript::{Transcript, View};
+use crate::transcript::{Event, Transcript, View};
 
 /// Why a client's send, answer, interrupt or switch is refused.
 pub const USERS_ALONE: &str = "only the user sends to, answers or interrupts a conversation's agent";
@@ -195,18 +195,30 @@ impl Model {
     pub(super) fn chat_act(&mut self, action: Action, effects: &mut Vec<Effect>) {
         let shown = self.talk.as_ref().filter(|talk| talk.open).map(|talk| talk.task.clone());
         match action {
+            // The shell's runner alone reports events: a key or click of the user's is none.
+            Action::AgentEvents { .. } if self.by_user => {}
             Action::AgentEvents { task: subject, events, at } => {
                 let Some(chat) = self.chat_mut(&subject).filter(|chat| chat.transcript.live) else { return };
-                let before = (chat.transcript.turn.is_some(), chat.transcript.cards.is_empty());
+                // A turn's start or end, or a request's, may cancel out within one batch: the task's
+                // state is set again after any of them, not only when the end state differs.
+                let turns = events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::TurnStarted
+                            | Event::TurnFinished { .. }
+                            | Event::Permission { .. }
+                            | Event::PermissionClosed { .. }
+                            | Event::Exited { .. }
+                    )
+                });
                 let front = chat.transcript.cards.front().map(|card| card.ticket);
                 for event in events {
                     chat.transcript.fold(event, at);
                 }
-                let after = (chat.transcript.turn.is_some(), chat.transcript.cards.is_empty());
-                chat.armed &= after.0;
+                chat.armed &= chat.transcript.turn.is_some();
                 // A Deny's message is for the card it was written under: another one in front ends it.
                 chat.deny &= chat.transcript.cards.front().map(|card| card.ticket) == front;
-                if before != after {
+                if turns {
                     self.chat_state(&subject);
                 }
             }
@@ -384,6 +396,22 @@ mod tests {
         events(&mut m, &one, vec![Event::TurnStarted, Event::TurnFinished { outcome: Outcome::Completed }]);
         assert_eq!(m.tasks.get(one.task().unwrap_or_default()).map(|t| t.state), Some(State::NeedsYou));
         assert_eq!(m.update(Action::TalkSend), [Effect::AgentSend { task: one, text: "more".into() }]);
+    }
+
+    /// Only the shell's runner reports what an agent said: a user's or a client's report is nothing.
+    #[test]
+    fn events_come_from_the_runner_alone() {
+        let mut m = two_live();
+        let one = first(&m);
+        for origin in [Origin::User, Origin::Socket] {
+            m.update(Action::AgentEvents { task: one.clone(), events: vec![card(9, false)], at: 1 }.sent_by(origin));
+            assert!(m.chat(&one).is_some_and(|chat| chat.transcript.cards.is_empty()), "{origin:?}");
+        }
+        // A turn that starts and ends in one report leaves the task waiting for the user.
+        let turn = vec![Event::TurnStarted, Event::TurnFinished { outcome: Outcome::Completed }];
+        m.tasks.set_state(one.task().unwrap_or_default(), State::Running);
+        events(&mut m, &one, turn);
+        assert_eq!(m.tasks.get(one.task().unwrap_or_default()).map(|t| t.state), Some(State::NeedsYou));
     }
 
     #[test]

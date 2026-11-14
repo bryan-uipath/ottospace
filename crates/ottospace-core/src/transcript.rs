@@ -17,6 +17,8 @@ pub const MAX_TEXT: usize = 256 << 10;
 /// The most entries kept, and the most bytes of text: past either the oldest go from memory.
 pub const MAX_ITEMS: usize = 400;
 pub const MAX_BYTES: usize = 4 << 20;
+/// The most requests waiting at once. The shell denies one past it before the core sees it.
+pub const MAX_CARDS: usize = 32;
 
 impl Text {
     /// At most `MAX_TEXT` bytes of `text`, cut at a character.
@@ -402,7 +404,7 @@ impl Transcript {
                 }
             }
             Event::Permission { ticket, tool, label, detail, len, cut, claim } => {
-                if !self.cards.iter().any(|card| card.ticket == ticket) {
+                if !self.cards.iter().any(|card| card.ticket == ticket) && self.cards.len() < MAX_CARDS {
                     self.settle();
                     self.cards.push_back(Card { ticket, tool, label, detail, len, cut, claim, expanded: false });
                 }

@@ -119,6 +119,8 @@ struct Builder<'a> {
     pictures: Vec<String>,
     blocks: usize,
     cut: usize,
+    /// Characters on the drawn line so far (`budget`).
+    line: usize,
 }
 
 /// `text`, a reply's markdown, as blocks. `repo`: the task's repository, whose files may be links.
@@ -133,6 +135,7 @@ pub fn parse(text: &str, repo: Option<&str>) -> Vec<Block> {
         pictures: Vec::new(),
         blocks: 0,
         cut: 0,
+        line: 0,
     };
     for event in Parser::new_ext(text, options) {
         b.event(event);
@@ -183,6 +186,9 @@ impl Builder<'_> {
     }
 
     fn start(&mut self, tag: Tag) {
+        if matches!(tag, Tag::Paragraph | Tag::Heading { .. } | Tag::Item | Tag::TableCell) {
+            self.line = 0;
+        }
         match tag {
             Tag::Paragraph => self.frames.push(Frame::Para(Vec::new())),
             Tag::Heading { .. } => self.frames.push(Frame::Heading(Vec::new())),
@@ -260,7 +266,7 @@ impl Builder<'_> {
                 // Never loaded from where it says: a link to it, under its alt text.
                 let shown = if alt.trim().is_empty() { "image".to_string() } else { alt };
                 let link = target.map(|target| Link { target, raw: clean(&raw) });
-                let span = Span { text: format!("[image: {}]", cap(&shown, MAX_LINE)), style: self.style, link };
+                let span = Span { text: self.budget(&format!("[image: {shown}]")), style: self.style, link };
                 self.push_span(span);
             }
             _ => {}
@@ -269,13 +275,14 @@ impl Builder<'_> {
 
     /// Ends the innermost frame and gives what it built to the one around it.
     fn close(&mut self) {
+        self.line = 0;
         let Some(frame) = self.frames.pop() else { return };
         match frame {
             Frame::Root(blocks) => self.frames.push(Frame::Root(blocks)),
             Frame::Quote(blocks) => self.block(Block::Quote(blocks)),
             Frame::List { start, items } => self.block(Block::List { start, items }),
             Frame::Item(mut blocks, spans) => {
-                if !spans.is_empty() {
+                if !spans.is_empty() && self.room() {
                     blocks.push(Block::Para(spans));
                 }
                 match self.frames.last_mut() {
@@ -309,15 +316,13 @@ impl Builder<'_> {
     /// Adds a block to the innermost container, then any pictures it named. Past `MAX_BLOCKS`,
     /// counted and left out.
     fn block(&mut self, block: Block) {
-        if self.blocks >= MAX_BLOCKS {
-            self.cut += 1;
-            return;
-        }
-        self.blocks += 1;
         let pictures = std::mem::take(&mut self.pictures).into_iter().map(|path| Block::Image { path });
-        let mut add = vec![block];
-        add.extend(pictures);
+        let add: Vec<Block> = std::iter::once(block).chain(pictures).collect();
         for block in add {
+            // A tight list item's text, made a paragraph here, counts with the block after it.
+            if !self.room() {
+                continue;
+            }
             match self.frames.iter_mut().rev().find(|frame| !matches!(frame, Frame::Flat)) {
                 Some(Frame::Root(blocks) | Frame::Quote(blocks)) => blocks.push(block),
                 Some(Frame::Item(blocks, spans)) => {
@@ -331,6 +336,41 @@ impl Builder<'_> {
                 Some(_) | None => {}
             }
         }
+    }
+
+    /// True if one more block may be drawn; else it is counted as cut.
+    fn room(&mut self) -> bool {
+        let room = self.blocks < MAX_BLOCKS;
+        if room {
+            self.blocks += 1
+        } else {
+            self.cut += 1
+        }
+        room
+    }
+
+    /// `text` within the drawn line's budget: at most `MAX_LINE` characters a line, whatever
+    /// the spans it is made of; past it, `…` once.
+    fn budget(&mut self, text: &str) -> String {
+        let mut out = String::with_capacity(text.len().min(MAX_LINE + 4));
+        for c in text.chars() {
+            match c {
+                '\n' => {
+                    self.line = 0;
+                    out.push(c);
+                }
+                _ if self.line < MAX_LINE => {
+                    self.line += 1;
+                    out.push(c);
+                }
+                _ if self.line == MAX_LINE => {
+                    self.line += 1;
+                    out.push('…');
+                }
+                _ => {}
+            }
+        }
+        out
     }
 
     fn text(&mut self, text: &str) {
@@ -347,7 +387,7 @@ impl Builder<'_> {
     }
 
     fn span(&mut self, text: String, style: Style) {
-        let text = text.split('\n').map(|line| cap(line, MAX_LINE)).collect::<Vec<_>>().join("\n");
+        let text = self.budget(&text);
         if let Some(open) = self.links.last_mut() {
             open.text.push_str(&text);
         }
@@ -514,6 +554,26 @@ mod tests {
         let many = "x\n\n".repeat(MAX_BLOCKS + 10);
         let blocks = parse(&many, None);
         assert_eq!((blocks.len(), blocks.last()), (MAX_BLOCKS + 1, Some(&Block::Cut { blocks: 10 })));
+        // A line of many spans, a tight list, and pictures: the caps hold for each.
+        let spans = "a **b** ".repeat(MAX_LINE);
+        let Block::Para(drawn) = &parse(&spans, None)[0] else { panic!() };
+        let longest = texts(drawn).split('\n').map(|line| line.chars().count()).max().unwrap_or(0);
+        assert!(longest <= MAX_LINE + 1, "{longest}");
+        let count = |blocks: &[Block]| -> usize {
+            fn all(blocks: &[Block]) -> usize {
+                blocks
+                    .iter()
+                    .map(|b| match b {
+                        Block::Quote(inner) => 1 + all(inner),
+                        Block::List { items, .. } => 1 + items.iter().map(|item| all(item)).sum::<usize>(),
+                        _ => 1,
+                    })
+                    .sum()
+            }
+            all(blocks)
+        };
+        assert!(count(&parse(&"- x\n".repeat(MAX_BLOCKS * 10), None)) <= MAX_BLOCKS * 2 + 2);
+        assert!(count(&parse(&"![x](a.png)\n\n".repeat(MAX_BLOCKS * 2), REPO)) <= MAX_BLOCKS * 2 + 2);
         let deep = format!("{}x", "> ".repeat(500));
         assert!(!parse(&deep, None).is_empty());
     }
