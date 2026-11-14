@@ -209,7 +209,7 @@ setting takes its default.
 
 The Calendar section (second on the rail, only while `calendar_ics` is set) lists today's meetings and a folded "Tomorrow"; ↵ or `Join` opens a meeting's link. Its rail cell has an amber dot near a meeting, a filled badge while the banner is up.
 
-`calendar_ics`: your calendar's feed (an `https://` link or a file) for the [meeting timeline](reference.md#meeting-timeline): a hairline of the next `calendar_window_hours` (8) across the top, the next meeting beside the tab bar's buttons, a pulse from 10 minutes before, and at the start, if you are in no call (or still in an earlier one), a banner with Join and Dismiss and a notification. `calendar_notify: false` turns alerts off; `calendar_notify_for: "links"` alerts only meetings with a meeting link; `calendar_email` (your address in the feed) leaves out meetings you declined.
+`calendar_ics`: your calendar's feed (an `https://` link or a file) for the [meeting timeline](reference.md#meeting-timeline): a band of the workday (`calendar_workday`, `"09:00-17:00"`) above the status bar, hover a block for its details, the next meeting beside the tab bar's buttons, a pulse from 10 minutes before, and at the start, if you are in no call (or still in an earlier one), a banner with Join and Dismiss and a notification. `calendar_notify: false` turns alerts off; `calendar_notify_for: "links"` alerts only meetings with a meeting link; `calendar_email` (your address in the feed) leaves out meetings you declined.
 
 `windows` rules name windows ottospace leaves alone, by `app`, `title` and `subrole`: [reference](reference.md#settings).
 

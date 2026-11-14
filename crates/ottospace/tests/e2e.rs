@@ -1557,6 +1557,71 @@ fn open_settings_edits_the_file_and_the_status_bar_says_what_is_wrong_until_it_i
     });
 }
 
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_settings_tab_comes_back_after_a_restart_running_the_editor_again() {
+    let home = support::temp(&format!("ottospace-e2e-home-settings-tab-{}", std::process::id()));
+    std::fs::create_dir_all(&home).unwrap();
+    let bin = support::temp(&format!("ottospace-e2e-editor-tab-{}", std::process::id()));
+    std::fs::create_dir_all(&bin).unwrap();
+    // The stand-in editor: says what it was given, then waits until it is killed.
+    let editor = bin.join("edit");
+    let script = format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > {}/args\nwhile :; do sleep 0.1; done\n", bin.display());
+    std::fs::write(&editor, script).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let editor = editor.to_str().unwrap();
+    let env = |visual: &'static str| -> Vec<(&str, String)> {
+        let visual = if visual.is_empty() { editor.to_string() } else { visual.to_string() };
+        vec![
+            ("OTTOSPACE_HOME", home.to_str().unwrap().to_string()),
+            ("VISUAL", visual),
+            ("EDITOR", "/usr/bin/false".into()),
+        ]
+    };
+    let launch = |name: &str, visual: &'static str| {
+        let env = env(visual);
+        let env: Vec<(&str, &str)> = env.iter().map(|(key, value)| (*key, value.as_str())).collect();
+        Otto::launch_with(name, &env)
+    };
+    let titles = |reply: &Value| -> Vec<String> {
+        let tabs = reply["state"]["tabs"].as_array().unwrap();
+        tabs.iter().map(|tab| tab["title"].as_str().unwrap().to_string()).collect()
+    };
+    let args = bin.join("args");
+    let editing = |o: &Otto| std::fs::read_to_string(&args).ok().map(|_| o.call(json!({"cmd": "state"})));
+
+    let mut otto = launch("settings-tab-1", "");
+    otto.user_key("cmd-,");
+    otto.wait_for("the editor", editing);
+    otto.call(json!({"cmd": "quit"}));
+    exits(&mut otto);
+    // Kept as a mark on its pane: no command, no screen.
+    let text = std::fs::read_to_string(home.join("layout.json")).unwrap();
+    assert!(text.contains("\"settings\": 1") && !text.contains("history") && !text.contains(editor), "{text}");
+
+    // Started again: one Settings tab, the editor on the file again.
+    std::fs::remove_file(&args).unwrap();
+    let mut otto = launch("settings-tab-2", "");
+    let state = otto.wait_for("the editor again", editing);
+    assert_eq!(std::fs::read_to_string(&args).unwrap(), format!("{}\n", home.join("settings.json").display()));
+    assert_eq!(titles(&state), ["Tab 1", "Settings"]);
+    // ⌘, from the first tab: that tab comes forward, no second one.
+    otto.call(json!({"cmd": "select_tab", "index": 0}));
+    let reply = otto.user_key("cmd-,");
+    assert_eq!((titles(&reply), &reply["state"]["active"]), (vec!["Tab 1".to_string(), "Settings".into()], &json!(1)));
+    otto.call(json!({"cmd": "quit"}));
+    exits(&mut otto);
+
+    // An editor that is gone: its pane closes as an exited shell's does, and nothing runs again.
+    let otto = launch("settings-tab-3", "/no/such/editor");
+    let closed = |o: &Otto| Some(o.call(json!({"cmd": "state"}))).filter(|state| pane_ids(state).is_empty());
+    let state = otto.wait_for("the editor's pane to close", closed);
+    assert_eq!(titles(&state), ["Tab 1", "Settings"]);
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(pane_ids(&otto.call(json!({"cmd": "state"}))).is_empty());
+}
+
 /// Terminal 1's entry in the state dump.
 fn term1(o: &Otto) -> Value {
     o.call(json!({"cmd": "state"}))["terminals"]["1"].clone()
@@ -6482,8 +6547,62 @@ fn no_feed_no_timeline() {
     let otto = Otto::launch("calendar-off");
     let calendar = otto.call(json!({"cmd": "state"}))["calendar"].clone();
     assert_eq!((&calendar["on"], &calendar["bars"], &calendar["chip"]), (&json!(false), &json!(0), &json!(false)));
+    assert_eq!(calendar["band"], Value::Null, "no band");
     // `calendar_call` answers only in a test run; an agent cannot learn it from the guide.
     assert!(!include_str!("../skill/guide.md").contains("calendar_call"));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_timeline_band_spans_the_workday_directly_above_the_status_bar() {
+    let home = calendar_folder(
+        "calendar-band",
+        &feed(&[
+            ("a", "Alpha", -7_200, -5_400, ""),
+            ("b", "Beta", 3_600, 5_400, ""),
+            ("c", "Gamma", 7_200, 10_800, ""),
+        ]),
+        None,
+    );
+    // The whole day, so every fixture meeting is inside it whenever the test runs.
+    let settings = json!({ "calendar_ics": home.join("today.ics"), "calendar_workday": "00:00-24:00", "repos": [] });
+    std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
+    let otto = Otto::launch_with("calendar-band", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    calendar_read(&otto);
+    let band = otto.wait_for("the band drawn", |o| {
+        let b = o.call(json!({"cmd": "state"}))["calendar"]["band"].clone();
+        (b["rect"].is_array() && b["status_bar"].is_array() && b["now"].is_array()).then_some(b)
+    });
+    let r = |v: &Value| -> Vec<f64> { v.as_array().expect("a rect").iter().filter_map(Value::as_f64).collect() };
+    let (rect, status) = (r(&band["rect"]), r(&band["status_bar"]));
+    // Directly above the status bar (its mark is inside its 1-point top border), as wide as the
+    // window less its insets; nothing at the top.
+    assert!((rect[1] + rect[3] + 1. - status[1]).abs() < 0.5, "{band}");
+    assert!((rect[2] - (status[2] - 12.)).abs() < 0.5 && rect[1] > 100., "{band}");
+    let (from, to) = (band["span"][0].as_f64().unwrap(), band["span"][1].as_f64().unwrap());
+    let x = |t: f64| rect[0] + (t.clamp(from, to) - from) / (to - from) * rect[2];
+    // The workday's marks at both ends.
+    let marks: Vec<Vec<f64>> = band["marks"].as_array().unwrap().iter().map(r).collect();
+    assert!((marks[0][0] - rect[0]).abs() < 1. && (marks[1][0] - (rect[0] + rect[2])).abs() < 1., "{band}");
+    // Each meeting of today at its clock place, within a point.
+    let blocks = band["blocks"].as_array().unwrap();
+    let today = otto.call(json!({"cmd": "state"}))["calendar"]["events_today"].as_u64().unwrap();
+    assert_eq!(blocks.len() as u64, today, "{band}");
+    assert!(today >= 1, "{band}");
+    for block in blocks {
+        let at = r(&block["rect"]);
+        let (start, end) = (block["start"].as_f64().unwrap(), block["end"].as_f64().unwrap());
+        assert!((at[0] - x(start)).abs() < 1., "{block} in {band}");
+        assert!((at[2] - (x(end) - x(start)).max(3.)).abs() < 1., "{block} in {band}");
+    }
+    // Now's tick, where the clock says (it moves a point a minute at most).
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as f64;
+    let tick = r(&band["now"]);
+    assert!((tick[0] + tick[2] / 2. - x(now)).abs() < 2., "{band}");
+    // No title on the socket.
+    assert!(!otto.call(json!({"cmd": "state"})).to_string().contains("Gamma"));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// Whether sneak mode labels a control of this id: it is drawn.
