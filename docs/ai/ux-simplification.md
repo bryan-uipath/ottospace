@@ -21,6 +21,10 @@ What they showed that the code alone did not:
 - ⌘/ shows `off` as the key of two rows (return key, capture key) when they are not set: a row
   whose key is "off" teaches nothing.
 - The home screen shows Needs-you while the Tasks section beside it shows the same task.
+- After Allow, the call's line shows a red ✗ beside "You allowed Bash · git status." (seen once,
+  with the fake agent: check whether the real result was an error or the mark is wrong).
+- The Apps section with nothing listed is blank: header and ×, no empty state.
+- Sneak labels sit on the first letters of what they label (`S ab 1`, `Q ERM`).
 
 
 Counts: about 420 user-visible strings reviewed (shell literals, core labels that reach the
