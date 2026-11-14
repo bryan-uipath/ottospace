@@ -1,0 +1,76 @@
+name: Shots
+
+# Before and after pictures of a pull request that changes what is drawn: `scripts/shot
+# --compare` runs the scenario library (scripts/shots/) on the merge base and on the pull
+# request, on a hosted runner whose image grants bash Screen Recording, so nobody's screen is
+# needed. The pictures are a workflow artifact; nothing is posted to the pull request.
+# Not a required check.
+on:
+  pull_request:
+    paths:
+      - 'crates/ottospace/src/**'
+      - 'crates/ottospace-core/src/**'
+      - 'scripts/shot'
+      - 'scripts/shots/**'
+      - 'scripts/test-shot.sh'
+      - '.github/workflows/shots.yml'
+
+# pull_request, never pull_request_target: a fork's run gets a read-only token and no secrets.
+permissions: {}
+
+concurrency:
+  group: shots-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  shots:
+    runs-on: macos-26
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The merge base is in the history.
+          fetch-depth: 0
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Build the pull request
+        run: |
+          cargo build -p ottospace --bin ottospace
+          cp target/debug/ottospace "$RUNNER_TEMP/ottospace-after"
+      - name: The tool's own test
+        run: scripts/test-shot.sh "$RUNNER_TEMP/ottospace-after"
+      # HEAD is the merge commit: its parents are the base branch and the pull request.
+      - name: Before and after
+        run: |
+          base="$(git merge-base HEAD^1 HEAD^2)"
+          echo "merge base: $base"
+          scripts/shot --compare "$base" $(scripts/shot --list) --bin-after "$RUNNER_TEMP/ottospace-after" \
+            --out "$RUNNER_TEMP/shots" > "$RUNNER_TEMP/snippet.md"
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Shots"
+            echo
+            echo "Side by side, before and after (artifact \`shots\`):"
+            echo
+            find "$RUNNER_TEMP/shots/compare" -name '*.png' -exec basename {} \; 2>/dev/null | sort | sed 's/^/- /'
+            echo
+            echo "Fetch them: \`gh run download $GITHUB_RUN_ID -n shots\`, then upload with the pr-image-upload skill."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: shots
+          path: ${{ runner.temp }}/shots
+          if-no-files-found: warn
+          retention-days: 14

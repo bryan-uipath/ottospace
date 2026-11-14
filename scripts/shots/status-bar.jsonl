@@ -1,0 +1,10 @@
+# The status bar: a setting it cannot read (an error), what needs you, and a copy's notice.
+{"cmd":"split"}
+{"cmd":"task_add","title":"Approve the retry plan","state":"needs_you"}
+{"cmd":"wait","pattern":"^\\$"}
+{"cmd":"type","text":"clear && echo status\r"}
+{"cmd":"wait","pattern":"^status$"}
+{"cmd":"mouse_down","x":1.5,"y":0.5,"clicks":2}
+{"cmd":"key","keys":"cmd-c"}
+{"sleep_ms":800}
+{"shot":"notices"}
