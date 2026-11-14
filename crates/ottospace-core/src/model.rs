@@ -20,7 +20,7 @@ use crate::list::ListRow;
 use crate::marks::{self, Extra, MarkId, MarkInput, MarkOf, MarkRef, Marks, Need};
 use crate::progress;
 use crate::repos::{self, Repo};
-use crate::sessions::{self, Found};
+use crate::sessions::{self, ENDED_GRACE_MS, ENDED_MS, Found};
 use crate::settings::{Installed, closed_apps};
 use crate::sneak::{Sneak, Typed};
 use crate::talk::{self, Subject, Talk};
@@ -1086,6 +1086,13 @@ pub enum Action {
     AgentExited {
         task: Subject,
     },
+    /// A session read for a resume the user asked for (`Effect::ReadSession`): where it started,
+    /// whether it is at work or a process holds it. `None`: no listed checkout has it.
+    SessionRead {
+        runner: String,
+        id: String,
+        found: Option<Found>,
+    },
     /// The session id an agent was started with has no file now its agent is gone: it never
     /// wrote one (`claude` not found, stopped at once). The task stops following it, so the
     /// next click starts a new session, not one that cannot be gone on with.
@@ -1395,6 +1402,7 @@ impl Action {
             | Action::AgentSessions { .. }
             | Action::SessionMissing { .. }
             | Action::AgentExited { .. }
+            | Action::SessionRead { .. }
             | Action::TaskStop { .. }
             | Action::TalkToggle
             | Action::TalkKeys { on: false }
@@ -1609,6 +1617,11 @@ pub enum Effect {
     StopAgent {
         task: Subject,
     },
+    /// Read this one session now, off the main thread, and answer `SessionRead`.
+    ReadSession {
+        runner: String,
+        id: String,
+    },
     /// The agent started for `from` (a session, since adopted) is `to`'s now: keep its terminal
     /// under that name.
     AgentMoved {
@@ -1788,6 +1801,19 @@ pub struct Model {
     /// Those asked for and not yet started, each with the runner of a new session.
     #[serde(skip)]
     starting: Vec<(Subject, Option<&'static str>)>,
+    /// Conversations the user asked to go on with whose session is not listed (the Tasks section
+    /// is closed): waiting on `SessionRead`, which says where it started and if it is in use.
+    #[serde(skip)]
+    awaiting: Vec<Subject>,
+    /// What `SessionRead` said of a session (`None`: no listed checkout has it), by runner and id.
+    #[serde(skip)]
+    read_sessions: Vec<(String, String, Option<Found>)>,
+    /// Sessions whose agent in the drawer ended, and when (`now` then): its last writes were ours.
+    #[serde(skip)]
+    ended: Vec<(String, String, u64)>,
+    /// The title of each session conversation opened this run, as it was when opened.
+    #[serde(skip)]
+    talk_titles: Vec<(String, String, String)>,
     #[serde(skip)]
     models: agents::Models,
     #[serde(skip)]
@@ -1865,6 +1891,10 @@ impl Default for Model {
             opened: Vec::new(),
             seeking: Vec::new(),
             starting: Vec::new(),
+            awaiting: Vec::new(),
+            read_sessions: Vec::new(),
+            ended: Vec::new(),
+            talk_titles: Vec::new(),
             models: agents::Models::default(),
             default_agent: None,
             by_user: false,
@@ -3466,6 +3496,11 @@ impl Model {
                         let cwd = self.tasks.get(task).and_then(|task| task.repo.clone());
                         self.seeking.push(agents::Seek { task, runner, cwd, since: at });
                     }
+                    // Its session gone on with: the task runs, as for a new one, and follows it.
+                    if runner.is_none() && self.tasks.get(task).is_some_and(|task| task.session.is_some()) {
+                        self.tasks.set_state(task, State::Running);
+                        self.tasks.followed(task, State::Running);
+                    }
                     // A new session: the task runs, and follows the session if its id is known.
                     if let Some(runner) = runner {
                         self.tasks.set_state(task, State::Running);
@@ -3478,8 +3513,17 @@ impl Model {
                 }
             }
             Action::AgentSessions { found, home, now } => {
-                let linked: Vec<(String, String)> = self.followed_sessions();
-                let links = agents::find_sessions(&self.seeking, &found, home.as_deref(), &linked);
+                // Every task's session, followed or not, and those of the conversations no task owns.
+                let links = self.tasks.list.iter().filter_map(|task| task.session.as_ref());
+                let mut taken: Vec<(String, String)> =
+                    links.map(|link| (link.runner.clone(), link.id.clone())).collect();
+                let open =
+                    self.opened.iter().chain(&self.agents).chain(self.starting.iter().map(|(subject, _)| subject));
+                taken.extend(open.filter_map(|subject| match subject {
+                    Subject::Session { runner, id } => Some((runner.clone(), id.clone())),
+                    Subject::Task(_) => None,
+                }));
+                let links = agents::find_sessions(&self.seeking, &found, home.as_deref(), &taken);
                 for (task, id) in links {
                     let runner = self.seeking.iter().find(|seek| seek.task == task).map(|seek| seek.runner);
                     if let Some(runner) = runner {
@@ -3498,8 +3542,15 @@ impl Model {
             }
             Action::AgentExited { task: subject } => {
                 let ran = self.agents.contains(&subject);
+                // What its session's file shows of the last moments is ours, not another terminal's.
+                if let Some((runner, id)) = self.session_of(&subject).filter(|_| ran) {
+                    let now = self.now;
+                    self.ended.retain(|(r, i, at)| (r, i) != (&runner, &id) && now.saturating_sub(*at) <= ENDED_MS);
+                    self.ended.push((runner, id, now));
+                }
                 self.agents.retain(|id| *id != subject);
                 self.starting.retain(|(id, _)| *id != subject);
+                self.awaiting.retain(|id| *id != subject);
                 let Some(task) = subject.task() else { return };
                 // No longer looked for: a later agent's session must not be taken for its.
                 self.seeking.retain(|seek| seek.task != task);
@@ -3511,6 +3562,25 @@ impl Model {
                 if ran && self.tasks.get(task).is_some_and(|task| task.state == State::Running) {
                     self.tasks.set_state(task, State::NeedsYou);
                     self.tasks.followed(task, State::NeedsYou);
+                }
+            }
+            Action::SessionRead { runner, id, found } => {
+                let found = found.and_then(|found| sessions::kept(vec![found]).pop());
+                let found = found.filter(|found| (&found.runner, &found.id) == (&runner, &id));
+                self.read_sessions.retain(|(r, i, _)| (r, i) != (&runner, &id));
+                self.read_sessions.truncate(talk::RAIL);
+                self.read_sessions.insert(0, (runner.clone(), id.clone(), found));
+                // The resumes the user asked for go on, now that it is known where and if.
+                let key = Some((runner, id));
+                let answered: Vec<Subject> =
+                    self.awaiting.iter().filter(|subject| self.session_of(subject) == key).cloned().collect();
+                self.awaiting.retain(|subject| !answered.contains(subject));
+                for subject in answered {
+                    let start = Some(&subject).filter(|s| !self.agent_runs(s)).and_then(|s| self.agent_start(s));
+                    if let Some((start @ agents::Start::Resume { .. }, cwd)) = start {
+                        self.starting.push((subject.clone(), None));
+                        effects.push(Effect::StartAgent { task: subject, start, cwd, brief: None });
+                    }
                 }
             }
             Action::TaskStop { id } => {
@@ -3543,6 +3613,11 @@ impl Model {
         self.agents.contains(subject) || self.starting.iter().any(|(id, _)| id == subject)
     }
 
+    /// True if its agent runs, or is to once its session is read: the conversation keeps the keyboard.
+    pub(crate) fn talk_live(&self, subject: &Subject) -> bool {
+        self.agent_runs(subject) || self.awaiting.contains(subject)
+    }
+
     /// Where a session is gone on with: the directory it started in (`claude --resume` looks
     /// for a session by it), if that is in a listed repository or worktree. `None`: outside.
     fn resume_dir(&self, found: &Found) -> Option<String> {
@@ -3559,11 +3634,10 @@ impl Model {
             let known = sessions::RUNNERS.contains(&runner) && agents::is_uuid(id);
             known.then(|| agents::Start::Resume { runner: runner.into(), session: id.into() })
         };
-        let found = |runner: &str, id: &str| self.found.iter().find(|s| s.runner == runner && s.id == id);
         match subject {
             // Idle, and no process holds it: else a second program on it would clash.
             Subject::Session { runner, id } => {
-                let session = self.session(runner, id).filter(|s| !s.active && !s.held)?;
+                let session = self.session(runner, id).filter(|s| !self.in_use(s))?;
                 Some((resume(runner, id)?, Some(self.resume_dir(session)?)))
             }
             Subject::Task(id) => {
@@ -3572,11 +3646,10 @@ impl Model {
                     // At work elsewhere (a terminal of the user's): a second program on it would clash.
                     Some(link) if link.state == Some(State::Running) => None,
                     Some(link) => {
-                        let read = found(&link.runner, &link.id);
                         // Where it started, if it was read (outside the listed checkouts: not at
                         // all); else the task's repository.
-                        let cwd = match read {
-                            Some(s) if s.held => return None,
+                        let cwd = match self.facts(&link.runner, &link.id).flatten() {
+                            Some(s) if s.held && !self.ours(s) => return None,
                             Some(s) => Some(self.resume_dir(s)?),
                             None => task.repo.clone(),
                         };
@@ -3598,16 +3671,21 @@ impl Model {
         if self.agent_runs(subject) || self.agent_start(subject).is_some() {
             return None;
         }
-        let found = |runner: &str, id: &str| self.found.iter().find(|s| s.runner == runner && s.id == id);
+        // Being read: nothing to say yet.
+        if self.awaiting.contains(subject) {
+            return None;
+        }
+        let found = |runner: &str, id: &str| self.facts(runner, id).flatten();
         let live = match subject {
-            Subject::Session { runner, id } => found(runner, id).is_some_and(|s| s.active || s.held),
+            Subject::Session { runner, id } => found(runner, id).is_some_and(|s| self.in_use(s)),
             Subject::Task(id) => {
                 let task = self.tasks.get(*id)?;
                 if let (Some(agent), None) = (&task.agent, &task.session) {
                     return Some(format!("@{agent} is a saved agent: starting one is not built yet"));
                 }
                 task.session.as_ref().is_some_and(|link| {
-                    link.state == Some(State::Running) || found(&link.runner, &link.id).is_some_and(|s| s.held)
+                    let held = found(&link.runner, &link.id).is_some_and(|s| s.held && !self.ours(s));
+                    link.state == Some(State::Running) || held
                 })
             }
         };
@@ -3623,10 +3701,55 @@ impl Model {
         self.session(runner, id).is_some()
     }
 
-    /// A session conversation's name: the session's title, else its repository's, else its runner.
+    /// A session conversation's name: the session's title, else its repository's; not listed now
+    /// (the Tasks section closed), the name it had when opened; else its runner.
     pub fn session_title(&self, runner: &str, id: &str) -> String {
         let found = self.found.iter().find(|s| s.runner == runner && s.id == id);
-        found.map_or_else(|| runner.to_string(), |s| s.title.clone().unwrap_or_else(|| self.session_name(s)))
+        let kept = || self.talk_titles.iter().find(|(r, i, _)| (r.as_str(), i.as_str()) == (runner, id));
+        match found {
+            Some(s) => s.title.clone().unwrap_or_else(|| self.session_name(s)),
+            None => kept().map_or_else(|| runner.to_string(), |(_, _, title)| title.clone()),
+        }
+    }
+
+    /// What is known of a session: as listed, else as `SessionRead` said (`Some(None)`: read,
+    /// and no listed checkout has it). `None`: not known.
+    fn facts(&self, runner: &str, id: &str) -> Option<Option<&Found>> {
+        if let Some(found) = self.found.iter().find(|s| s.runner == runner && s.id == id) {
+            return Some(Some(found));
+        }
+        self.read_sessions.iter().find(|(r, i, _)| (r.as_str(), i.as_str()) == (runner, id)).map(|(.., f)| f.as_ref())
+    }
+
+    /// True if what the session's file shows of its use is ours: its agent in the drawer ended
+    /// lately, and it has not been written to since.
+    fn ours(&self, session: &Found) -> bool {
+        self.ours_at(&session.runner, &session.id, session.last_activity)
+    }
+
+    /// `ours`, of a session by runner and id whose file last changed at `last`.
+    fn ours_at(&self, runner: &str, id: &str, last: Option<u64>) -> bool {
+        self.ended.iter().any(|(r, i, at)| {
+            let since = last.is_none_or(|last| last <= at + ENDED_GRACE_MS);
+            (r.as_str(), i.as_str()) == (runner, id) && since && self.now.saturating_sub(*at) <= ENDED_MS
+        })
+    }
+
+    /// True if something other than our own ended agent has the session: at work, or held by a
+    /// live process.
+    pub(crate) fn in_use(&self, session: &Found) -> bool {
+        (session.active || session.held) && !self.ours(session)
+    }
+
+    /// The session a conversation is of: a session's own, or its task's.
+    pub(crate) fn session_of(&self, subject: &Subject) -> Option<(String, String)> {
+        match subject {
+            Subject::Session { runner, id } => Some((runner.clone(), id.clone())),
+            Subject::Task(id) => {
+                let link = self.tasks.get(*id)?.session.as_ref()?;
+                Some((link.runner.clone(), link.id.clone()))
+            }
+        }
     }
 
     /// The right rail's conversations, in order: those that need the user, then those whose agent
@@ -3749,7 +3872,18 @@ impl Model {
             Subject::Session { runner, id } if self.session(runner, id).is_some() || self.agent_runs(&subject) => None,
             Subject::Session { .. } => return,
         };
-        let start = Some(&subject).filter(|subject| !self.agent_runs(subject)).and_then(|s| self.agent_start(s));
+        // A task's session not listed now (the Tasks section is closed): where it started, and
+        // whether something has it, are read first (`ReadSession`), and the resume waits on that.
+        let unlisted = |(runner, id): &(String, String)| !self.found.iter().any(|s| (&s.runner, &s.id) == (runner, id));
+        let task = subject.task().and_then(|id| self.tasks.get(id));
+        let resumes = task.and_then(|task| task.session.as_ref()).is_some_and(|l| l.state != Some(State::Running));
+        let read = self.session_of(&subject).filter(|_| resumes && !self.talk_live(&subject));
+        if let Some((runner, id)) = read.filter(unlisted) {
+            self.read_sessions.retain(|(r, i, _)| (r, i) != (&runner, &id));
+            self.awaiting.push(subject.clone());
+            effects.push(Effect::ReadSession { runner, id });
+        }
+        let start = Some(&subject).filter(|s| !self.talk_live(s)).and_then(|s| self.agent_start(s));
         self.leave(effects);
         self.list = None;
         // The drawer shows one thing: the new task being written gives way, kept for the box's
@@ -3757,10 +3891,16 @@ impl Model {
         if self.compose_host() == Some(Host::Drawer) {
             self.put_compose_aside();
         }
-        let keys = self.agent_runs(&subject) || start.is_some();
+        let keys = self.talk_live(&subject) || start.is_some();
         self.talk = Some(Talk { task: subject.clone(), open: true, keys });
         self.opened.retain(|seen| *seen != subject);
         self.opened.push(subject.clone());
+        // Its name, kept for while it is not listed.
+        if let Subject::Session { runner, id } = &subject {
+            let title = self.session_title(runner, id);
+            self.talk_titles.retain(|(r, i, _)| (r, i) != (runner, id));
+            self.talk_titles.push((runner.clone(), id.clone(), title));
+        }
         if let Some((start, cwd)) = start {
             let runner = match &start {
                 agents::Start::New(launch) => Some(launch.runner),
@@ -3808,7 +3948,7 @@ impl Model {
     /// The keyboard goes into the open conversation, if its agent runs, or leaves it.
     fn talk_keys(&mut self, on: bool, effects: &mut Vec<Effect>) {
         let Some(talk) = &self.talk else { return };
-        let on = on && self.agent_runs(&talk.task) && self.annotated().is_none();
+        let on = on && self.talk_live(&talk.task) && self.annotated().is_none();
         if on {
             self.leave(effects);
             self.list = None;
@@ -3827,11 +3967,12 @@ impl Model {
         self.opened.retain(|id| !gone(id));
         self.seeking.retain(|seek| tasks.get(seek.task).is_some_and(|task| task.session.is_none()));
         self.starting.retain(|(id, _)| !gone(id));
+        self.awaiting.retain(|id| !gone(id));
         self.talk = self.talk.take().filter(|talk| !gone(&talk.task));
         // A picture being drawn on keeps the keyboard, as an app, the list and visual mode do.
         let drawing = self.annotated().is_some();
         let elsewhere = self.live.is_some() || self.list.is_some() || self.visual.is_some() || drawing;
-        let runs = self.talk.as_ref().is_some_and(|talk| self.agent_runs(&talk.task));
+        let runs = self.talk.as_ref().is_some_and(|talk| self.talk_live(&talk.task));
         if let Some(talk) = &mut self.talk {
             talk.keys = talk.keys && talk.open && runs && !elsewhere;
         }
@@ -4472,7 +4613,9 @@ impl Model {
         let follows = |task: &Task| {
             let link = task.session.as_ref()?;
             let (.., active, last) = seen.iter().find(|(runner, id, ..)| (runner, id) == (&link.runner, &link.id))?;
-            let next = sessions::follow(*active, *last, link.state, task.state, self.now, self.session_quiet_ms)?;
+            // Our own agent's last writes, just stopped, are no work of the session's.
+            let active = *active && !self.ours_at(&link.runner, &link.id, *last);
+            let next = sessions::follow(active, *last, link.state, task.state, self.now, self.session_quiet_ms)?;
             Some((task.id, next))
         };
         let moves: Vec<(TaskId, State)> = self.tasks.list.iter().filter_map(follows).collect();
@@ -5549,6 +5692,7 @@ mod tests {
         Action::AgentSessions { .. },
         Action::SessionMissing { .. },
         Action::AgentExited { .. },
+        Action::SessionRead { .. },
         Action::TaskStop { .. },
         Action::TalkToggle,
         Action::TalkKeys { .. },
@@ -5741,6 +5885,7 @@ mod tests {
             Action::AgentSessions { found: Vec::new(), home: None, now: 0 },
             Action::SessionMissing { task: 1, id: String::new() },
             Action::AgentExited { task: Subject::Task(1) },
+            Action::SessionRead { runner: "claude".into(), id: String::new(), found: None },
             Action::TaskStop { id: Subject::Task(1) },
             Action::TalkToggle,
             Action::TalkKeys { on: true },
@@ -7901,6 +8046,90 @@ mod tests {
         assert_eq!(m.talk, before);
     }
 
+    /// Our own agent just stopped: what its session's file shows (written lately, a process
+    /// recorded for it) is ours, and reopening goes on with it at once.
+    #[test]
+    fn a_session_whose_agent_we_stopped_is_not_live_elsewhere() {
+        let mut m = conversations();
+        let idle = of_session("claude", IDLE);
+        let system = |m: &mut Model, action: Action| m.update(action.sent_by(Origin::System));
+        let open = Action::SessionOpen { runner: "claude".into(), id: IDLE.into() };
+        let listed = |m: &mut Model, last: u64, held: bool| {
+            let found = m.found.iter().map(|s| match s.id == IDLE {
+                true => Found { active: true, held, last_activity: Some(last), ..s.clone() },
+                false => s.clone(),
+            });
+            let found = found.collect();
+            system(m, Action::SetSessions { found });
+        };
+        let now = 9_000_000;
+        m.update(open.clone());
+        system(&mut m, Action::AgentStarted { task: idle.clone(), session: None, at: now });
+        // It wrote while it ran, and Claude Code recorded its process.
+        listed(&mut m, now + 4_000, true);
+        system(&mut m, Action::Tick { now: now + 5_000 });
+        m.update(Action::TaskStop { id: idle.clone() });
+        system(&mut m, Action::AgentExited { task: idle.clone() });
+        // Read again within the 30 s after which a session reads idle: still "at work".
+        listed(&mut m, now + 5_500, false);
+        assert_eq!(m.talk_note(), None);
+        let resumes = [resumed(idle.clone(), "claude", IDLE, "/code/app/crates/core")];
+        assert_eq!(m.update(open.clone()), resumes);
+        system(&mut m, Action::AgentExited { task: idle.clone() });
+        // Written to since it ended, by another terminal: live there.
+        listed(&mut m, now + 30_000, true);
+        assert_eq!(m.update(open.clone()), []);
+        assert!(m.talk_note().is_some_and(|note| note.contains("live in another terminal")));
+
+        // A task's the same: its agent stopped, the stale record of its process is ours.
+        let mut m = conversations();
+        m.update(Action::SessionAdopt { runner: "claude".into(), id: IDLE.into() });
+        system(&mut m, Action::AgentStarted { task: Subject::Task(1), session: None, at: now });
+        listed(&mut m, now, true);
+        m.update(Action::TaskStop { id: Subject::Task(1) });
+        system(&mut m, Action::AgentExited { task: Subject::Task(1) });
+        // A read in flight when it stopped says the session is at work: the task is not moved by it.
+        listed(&mut m, now, true);
+        assert_eq!(m.tasks.get(1).map(|task| task.state), Some(State::NeedsYou));
+        assert_eq!(m.talk_note(), None);
+        assert_eq!(
+            m.update(Action::TaskTalk { id: 1 }),
+            [resumed(Subject::Task(1), "claude", IDLE, "/code/app/crates/core")]
+        );
+    }
+
+    /// An adopted session gone on with in the drawer: its task runs at once, as on a new start.
+    #[test]
+    fn a_task_gone_on_with_runs_at_once() {
+        let mut m = conversations();
+        m.update(Action::SessionAdopt { runner: "claude".into(), id: IDLE.into() }.sent_by(Origin::Socket));
+        assert_eq!(m.tasks.get(1).map(|task| task.state), Some(State::Captured));
+        assert_eq!(m.update(Action::TaskTalk { id: 1 }).len(), 1);
+        m.update(Action::AgentStarted { task: Subject::Task(1), session: None, at: 1 }.sent_by(Origin::System));
+        let task = m.tasks.get(1).expect("the task");
+        assert_eq!(
+            (task.state, task.session.as_ref().and_then(|link| link.state)),
+            (State::Running, Some(State::Running))
+        );
+        // Its agent gone: the user's to look at.
+        m.update(Action::AgentExited { task: Subject::Task(1) }.sent_by(Origin::System));
+        assert_eq!(m.tasks.get(1).map(|task| task.state), Some(State::NeedsYou));
+    }
+
+    /// The Tasks section closed: a session's conversation keeps the name and badge it had.
+    #[test]
+    fn a_session_conversation_keeps_its_name_when_it_is_not_listed() {
+        let mut m = conversations();
+        m.update(Action::SessionOpen { runner: "claude".into(), id: IDLE.into() });
+        m.update(
+            Action::AgentStarted { task: of_session("claude", IDLE), session: None, at: 1 }.sent_by(Origin::System),
+        );
+        m.update(Action::SetSessions { found: Vec::new() }.sent_by(Origin::System));
+        assert_eq!(m.session_title("claude", IDLE), "Fix the login");
+        assert_eq!(m.rail()[0].mono, "FT");
+        assert!(m.rail()[0].tip.starts_with("Fix the login\n"), "{}", m.rail()[0].tip);
+    }
+
     #[test]
     fn only_the_user_opens_a_sessions_conversation() {
         for origin in [Origin::Socket, Origin::System] {
@@ -7959,10 +8188,37 @@ mod tests {
             m.update(Action::TaskTalk { id: 7 }),
             [resumed(Subject::Task(7), "claude", IDLE, "/code/app/crates/core")]
         );
-        // Not read since (the Sessions group was never open): in the task's repository.
+        // Not listed (the Tasks section closed): that one session is read first, and the resume
+        // waits on it with the keyboard in the drawer. Read: where it started.
+        let closed = || {
+            let mut m = Model::default();
+            m.update(Action::SetRepos { repos: listed() });
+            m.update(Action::RestoreTasks { tasks: vec![serde_json::from_str(&kept).expect("kept")], floor: 7 });
+            let read = Effect::ReadSession { runner: "claude".into(), id: IDLE.into() };
+            assert_eq!(m.update(Action::TaskTalk { id: 7 }), [read]);
+            assert_eq!((m.mode(), m.agent_runs(&Subject::Task(7)), m.talk_note()), (Mode::Talk, false, None));
+            m
+        };
+        let read = |found: Option<Found>| Action::SessionRead { runner: "claude".into(), id: IDLE.into(), found };
+        let below = Found { repo: "/code/app".into(), ..session("claude", IDLE, "/code/app/crates/core", false, 1) };
+        let mut m = closed();
+        let resumes = [resumed(Subject::Task(7), "claude", IDLE, "/code/app/crates/core")];
+        assert_eq!(m.update(read(Some(below.clone())).sent_by(Origin::System)), resumes);
+        assert_eq!((m.mode(), m.agent_runs(&Subject::Task(7))), (Mode::Talk, true));
+        // Held by a live process: not gone on with, and the drawer says why.
+        let mut m = closed();
+        assert_eq!(m.update(read(Some(Found { held: true, ..below.clone() })).sent_by(Origin::System)), []);
+        assert!(m.talk_note().is_some_and(|note| note.contains("live in another terminal")));
+        assert_eq!(m.mode(), Mode::Normal);
+        // No listed checkout has it: in the task's repository. Asked once: a second read starts nothing.
+        let mut m = closed();
+        let home = [resumed(Subject::Task(7), "claude", IDLE, "/code/app")];
+        assert_eq!(m.update(read(None).sent_by(Origin::System)), home);
+        assert_eq!(m.update(read(None).sent_by(Origin::System)), []);
+        // A read nobody waits on starts nothing.
         let mut m = Model::default();
-        m.update(Action::RestoreTasks { tasks: vec![serde_json::from_str(&kept).expect("a task as kept")], floor: 7 });
-        assert_eq!(m.update(Action::TaskTalk { id: 7 }), [resumed(Subject::Task(7), "claude", IDLE, "/code/app")]);
+        m.update(Action::RestoreTasks { tasks: vec![serde_json::from_str(&kept).expect("kept")], floor: 7 });
+        assert_eq!(m.update(read(Some(below)).sent_by(Origin::System)), []);
         // A live process holds it: not gone on with.
         let mut m = conversations();
         let found = m.found.iter().map(|s| Found { held: s.id == IDLE, ..s.clone() }).collect();
@@ -8380,7 +8636,10 @@ mod tests {
         // Its terminal gone, a click goes on with that session: nothing of the task is sent again.
         system(&mut m, Action::AgentExited { task: Subject::Task(2) });
         let resume = agents::Start::Resume { runner: "claude".into(), session: UUID.into() };
-        assert_eq!(m.update(Action::TaskTalk { id: 2 }), [asked(2, resume, None)]);
+        let read = Effect::ReadSession { runner: "claude".into(), id: UUID.into() };
+        assert_eq!(m.update(Action::TaskTalk { id: 2 }), [read]);
+        let none = Action::SessionRead { runner: "claude".into(), id: UUID.into(), found: None };
+        assert_eq!(system(&mut m, none), [asked(2, resume, None)]);
         // An agent the shell could not start is not running: the keyboard is not left in nothing.
         system(&mut m, Action::AgentExited { task: Subject::Task(2) });
         assert_eq!((m.agent_runs(&Subject::Task(2)), m.mode(), m.talk_note().is_some()), (false, Mode::Normal, false));

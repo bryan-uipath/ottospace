@@ -4672,14 +4672,21 @@ fn fake_agents(dir: &Path, sessions: &Path) {
 const CODEX_SESSION: &str = r#"id=$(uuidgen | tr A-Z a-z); at=$(date -u +%Y-%m-%dT%H:%M:%S.000Z); day="$SESSIONS/codex/sessions/2026/01/01"
 mkdir -p "$day"
 printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s","timestamp":"%s"}}\n' "$id" "$(pwd -P)" "$at" > "$day/rollout-2026-01-01T00-00-00-$id.jsonl"
-printf '%s' "$id" > "$SESSIONS/codex/last-id"
+printf '%s' "$id" > "$SESSIONS/codex/last-id.$$" && mv "$SESSIONS/codex/last-id.$$" "$SESSIONS/codex/last-id"
 "#;
 
 /// What the stand-in `claude` writes when it is given a new session's id: that session's file.
+/// Going on with one, as Claude Code does: its file is written to, and its process recorded
+/// (`sessions/<pid>.json`; `exec cat` keeps the pid).
 const CLAUDE_SESSION: &str = r#"if [ "$1" = "--session-id" ]; then
   folder="$SESSIONS/claude/projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"
   mkdir -p "$folder"
   printf '{"type":"user","sessionId":"%s"}\n' "$2" > "$folder/$2.jsonl"
+fi
+if [ "$1" = "--resume" ]; then
+  for file in "$SESSIONS"/claude/projects/*/"$2".jsonl; do [ -f "$file" ] && touch "$file"; done
+  mkdir -p "$SESSIONS/claude/sessions"
+  printf '{"pid":%s,"sessionId":"%s","status":"busy"}' "$$" "$2" > "$SESSIONS/claude/sessions/$$.json"
 fi
 "#;
 
@@ -5069,6 +5076,32 @@ fn a_click_on_a_session_goes_on_with_it_in_the_drawer() {
     assert_eq!(adopted["state"]["tabs"], before["state"]["tabs"], "no shell tab");
     std::thread::sleep(Duration::from_millis(300));
     assert!(agent_argv(&bin, "claude").is_none(), "the same program, not a second one");
+
+    // Stopped: what its file shows of the last moments (written to, its process recorded, as
+    // read before it stopped) is our own agent's. A click on the task goes on with it at once,
+    // in the folder it started in, below the repository; the task runs.
+    let reads = |o: &Otto| o.call(json!({"cmd": "state"}))["sessions_bar"]["reads"].as_u64().unwrap_or(0);
+    let read = reads(&otto);
+    otto.wait_for("a read that sees the agent's process", |o| (reads(o) > read + 1).then_some(()));
+    let stopped = otto.user_click(at(otto.control("talk:talk-stop"), 0.5, 0.5));
+    assert_eq!(stopped["state"]["agents"], json!([]), "{stopped}");
+    let again = otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
+    assert_eq!((&again["drawer"]["note"], &again["state"]["agents"]), (&Value::Null, &json!([1])), "{again}");
+    let argv = otto.wait_for("claude --resume", |_| agent_argv(&bin, "claude"));
+    assert_eq!(argv, [below.to_str().unwrap(), "--resume", idle]);
+    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["tasks"]["list"][0]["state"], "running");
+
+    // The Tasks section closed, so nothing is listed: the task's session is read for the
+    // resume, which goes on in the folder it started in, not the repository.
+    std::fs::remove_file(bin.join("claude.argv")).unwrap();
+    otto.user_click(at(otto.control("talk:talk-stop"), 0.5, 0.5));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.wait_for("nothing listed", |o| (o.call(json!({"cmd": "state"}))["sessions_bar"]["count"] == 0).then_some(()));
+    otto.user_key("cmd-shift-l");
+    let reading = otto.user_click(at(otto.control("rail-talk:1"), 0.5, 0.5));
+    assert_eq!((&reading["mode"], &reading["state"]["talk"]["task"]), (&json!("talk"), &json!(1)), "{reading}");
+    let argv = otto.wait_for("claude --resume, read first", |_| agent_argv(&bin, "claude"));
+    assert_eq!(argv, [below.to_str().unwrap(), "--resume", idle]);
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&home);

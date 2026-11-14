@@ -36,6 +36,13 @@ pub const MAX_TITLE: usize = 80;
 /// session's row reads idle: a build that prints nothing for a minute is not a question.
 pub const QUIET_MS: u64 = 180_000;
 
+/// How long after an agent of ours on a session ended its recent use is taken for ours: past the
+/// 30 s after which a session reads idle, and the next listing.
+pub const ENDED_MS: u64 = 60_000;
+
+/// Our agent's last writes may land this long after the core was told it ended.
+pub const ENDED_GRACE_MS: u64 = 2_000;
+
 /// An adopted session's file, as the shell last saw it while the Tasks section was closed: no
 /// more than when it last changed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

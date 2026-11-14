@@ -1201,8 +1201,10 @@ impl Workspace {
         for effect in effects {
             match effect {
                 Effect::StartAgent { task, start, cwd, brief } => {
+                    // Before the program starts: a session it writes cannot say it began earlier.
+                    let at = now_ms();
                     match self.start_agent(task, start, cwd.as_deref(), brief.as_deref()) {
-                        Ok(session) => agents.push(Action::AgentStarted { task: task.clone(), session, at: now_ms() }),
+                        Ok(session) => agents.push(Action::AgentStarted { task: task.clone(), session, at }),
                         Err(why) => {
                             self.error = Some(format!("agent: {why}"));
                             agents.push(Action::AgentExited { task: task.clone() });
@@ -1211,6 +1213,7 @@ impl Workspace {
                 }
                 Effect::StopAgent { task } => agents.extend(self.stop_agent(task)),
                 Effect::AgentMoved { from, to } => self.move_agent(from, to),
+                Effect::ReadSession { runner, id } => agents.extend(self.read_session(runner, id)),
                 Effect::Opened(id) => {
                     if self.model.pane(*id).is_some_and(|p| p.kind == Kind::Terminal) {
                         // The shell learns where it runs, so a program in it can name its own pane.

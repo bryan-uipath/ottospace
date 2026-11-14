@@ -124,17 +124,25 @@ agent's terminal".
 
 ## Open questions
 
-- **Codex's session** (built): `codex` takes no id at start (0.166 `--help`: no option names
-  one), so after starting it the shell reads the rollouts in the task's folder
-  (`ottospace-sessions`) and the core links the task to the first that started after the agent
-  and no task follows (`agents::find_sessions`). Two agents in one folder take two sessions.
-  Looked for a minute.
+- **Codex's session** (built): `codex` takes no id at start, and nothing we could set at start
+  comes back in the rollout. 0.166 `--help`: no option names a session; `-c` keys are config,
+  not written to `session_meta`; `originator` is an internal override also sent to OpenAI as a
+  header; the prompt would put the id into the model's context; and the process that has the
+  rollout open may be the shared app-server daemon, not ours. So after starting it the shell
+  reads the rollouts in the task's folder (`ottospace-sessions`), and the core
+  (`agents::find_sessions`) links the task only to the one session that may be its: Codex's,
+  that folder, `session_meta.timestamp` at or after the start (taken before the program
+  starts; a time written to the second, in that second) and before the next agent there
+  started, within a minute, a UUID, and that no task or open conversation has; and no other
+  agent's it may be. Else it waits; after a minute the task follows none. Two agents in one
+  folder started one after the other take one session each; two started before either wrote
+  take none.
 - **Where a session is gone on with** (built): `claude --resume <id>` looks in the directory it
   runs in first (since 2.1.223 then in every project), and the agent works there, so a session
   is resumed in the folder it started in (`Found.cwd`), when
   that is inside a listed repository or worktree (`sessions::below`, then again in the shell
-  with links resolved). Not read (the Tasks section was never open this run): the task's
-  repository.
+  with links resolved). Not listed (the Tasks section is closed): that one session is read
+  first (`ReadSession`), and the resume waits on it; read and not found: the task's repository.
 - **A session in use elsewhere** (built): one at work (its file changed in the last 30 s), or
   held (Claude Code records a live process for it: `sessions/<pid>.json` and a pid that
   exists), is not gone on with: the drawer opens on it and says it is live in another
