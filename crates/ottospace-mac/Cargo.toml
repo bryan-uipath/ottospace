@@ -17,5 +17,5 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["std", 
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSEnumerator", "NSError", "NSGeometry", "NSPropertyList", "NSString", "NSURL"] }
 # App icons are drawn to a CGImage, then encoded as PNG. CGEvent: a test run's wheel and held-key
-# events, made and never posted, and the scroll that started a peek; CGEventSource: the last scroll's time.
+# events, made and never posted, and the pointer's place; CGEventSource: when the last scroll, click or key came.
 objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGImage", "CGEvent", "CGEventSource", "CGEventTypes", "CGRemoteOperation", "libc"] }

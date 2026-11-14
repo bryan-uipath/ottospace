@@ -1655,7 +1655,7 @@ pub enum Effect {
         focus: bool,
     },
     /// A peek starts: `pane`'s real window goes over the pane, above ottospace (its app is
-    /// activated), and the scroll that started it is handed on. Only ever the user's own wheel.
+    /// activated); macOS gives it the scrolls that follow. Only ever the user's own wheel.
     Peek(PaneId),
     /// End the app.
     Quit,

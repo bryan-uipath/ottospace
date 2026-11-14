@@ -41,7 +41,7 @@ running, and the rest of the design is not built: see the
 | Repos: each repository's name over its checkouts (the branch, then `Default` or a linked worktree's directory); open a terminal in one. + in the header adds a directory to `repos` in the settings; Remove on a name takes it off | Works today |
 | List mode (⌘⌃E): drive the bar with the keyboard | Works today |
 | Sneak mode (⌘; or ⌘⌃G): a letter label on each of ottospace's own controls, and on the buttons and text fields of the focused app pane; typing it clicks the control, presses the app's button, or focuses its text field | Works today |
-| The wheel over an app pane you are not in, passed to the app, which stays in the back | Experimental: posted to the app, but a parked GPUI window (the test canary) did not receive it; other apps not verified |
+| The wheel over an app pane you are not in brings its window up for the scroll (a peek): `PEEK` in the status bar, parked again when the pointer leaves or the wheel is quiet | Partly verified: on CI the window comes up, the app is in front and the scrolls after the first reach it. The first scroll is lost. The window parking again by itself is unit-tested, not yet seen on CI |
 | [Command palette](#command-palette) (⌘P): every command of the menu bar by name, with its key; a Developer group | Works today |
 | [Accessibility inspector](#accessibility-inspector): a hosted app's accessibility tree in the right drawer's place, read-only | Works today |
 | Marks (⌘B, ⌘⇧B, ⌘' and a letter): named ways back to a pane or a tab, kept in `~/.ottospace/marks.json` | Works today |
@@ -681,10 +681,15 @@ it is still among all apps. Each of these writes `~/.ottospace/settings.json` (`
 A running app has no Pin button yet. Original window frames are saved to disk and restored on
 every way out: see [Getting a window back](#getting-a-window-back).
 
-Experimental: the wheel or trackpad over an app pane you are not in is passed to the app where
-it is: the window stays parked and in the back, and the pointer does not move (`wheel_to_apps`).
-Only your own scroll is passed on; a click, a key or a drag still enters the pane first. A
-parked GPUI window (the test canary) did not receive it; other apps are not verified yet.
+The wheel or trackpad over an app pane you are not in brings its real window up over the pane
+for the scroll (a peek, `wheel_to_apps`). The window is placed as on entering, and the app is
+activated, because macOS shows an inactive app's window under ottospace's. The status bar says
+`PEEK <App>`, and keys go to the app. The scroll that started the peek reached ottospace and is
+lost; the ones after it go to the window. The window parks again, and ottospace takes the
+keyboard back, when the pointer leaves the pane or 1.5 s pass with no scroll. A click or a key in
+the app makes it a normal entry (`APP`), and the return key leaves as ever. Only your own wheel
+peeks: a socket client's scroll brings nothing up. No peek starts under sneak mode, the palette,
+a box, the quit question, the accessibility overlay or a drag.
 
 Click an app pane to give it the keyboard (`APP` mode). If you bring a hosted app forward from
 outside (its Dock icon, ⌘Tab) and the window it shows is one ottospace holds, ottospace comes
@@ -769,7 +774,7 @@ optional:
 | `windows` | Rules for windows ottospace must leave alone. Each rule selects windows by `app` (the app's name or bundle id), `title` and `subrole`; every field given must match, `*` stands for any text, and case does not matter. `"do": "ignore"`: the window never becomes a pane, when its app is hosted or when it opens later. `"do": "manage"` undoes a built-in rule. Your rules come first. Name an app by its bundle id to be sure. A window is judged once, when it is first seen, on the title it has then; rules are read at start | Built in: only standard windows are ever put in a pane, and Zoom's sharing controls, annotation layer and pop-ups are ignored |
 | `apps` | The pinned apps: listed first under "Not running" in Apps, and in the picker before anything is typed; choosing one starts it in the background and puts its window in a pane. Each is the name of the app as Finder shows it (`Visual Studio Code` for `Visual Studio Code.app`), looked for in `/Applications`, `~/Applications` and `/System/Applications` (and their `Utilities`), or the path of its bundle (`~/Tools/Lumen.app`). One that is not found is left out of the list and kept in the file. Pin and Unpin in the Apps section write this list: the name if it means that same bundle when read back (the first of that name in those folders, in that order), else its path. A name that is found only once ottospace runs (the app was installed since) is listed from the next scan. (Once you type in the picker it offers every installed app in those folders, these first) | none |
 | `apps_hidden` | Apps of the Dock not to suggest in Apps, written as `apps` is. Hide in the Apps section writes this list | none |
-| `wheel_to_apps` | Experimental: the wheel or trackpad over an app pane you are not in is passed to the app, which stays in the back. `false`: the wheel there does nothing | `true` |
+| `wheel_to_apps` | The wheel or trackpad over an app pane you are not in brings its window up for the scroll (a peek). `false`: the wheel there does nothing | `true` |
 | `calendar_ics` | The [meeting timeline](#meeting-timeline)'s calendar feed: an `https://` link (to a host on the internet, not an address or `localhost`) or a file's path (`/…` or `~/…`). Never shown: a private feed's link holds a secret | none: no timeline |
 | `calendar_window_hours` | How many hours the hairline shows from now, 1 to 24 | `8` |
 | `calendar_refresh_minutes` | How often the feed is read again, at least 1 | `5` |
@@ -835,8 +840,8 @@ The guide itself: [`crates/ottospace/skill/guide.md`](../crates/ottospace/skill/
 macOS cannot reparent another process's window, so ottospace fakes embedding with the Accessibility
 (AX) API and ScreenCaptureKit (SCK). An inactive app window is parked off-screen with one pixel on
 a display, and its pane shows an SCK stream of it. Clicking the pane moves the real window over it
-and replays the click, so input is native. The wheel over a parked pane is posted to the app's
-process alone (`CGEventPostToPid`) at the matching point of the parked window. A pane shows one title bar: the stream leaves out the
+and replays the click, so input is native. The wheel over a parked pane places the window the
+same way for as long as the scroll lasts (a peek). A pane shows one title bar: the stream leaves out the
 app's own, and the live window's covers the pane header. Measurements and risks: [docs/ai/hosting-windows.md](ai/hosting-windows.md).
 
 ### Getting a window back

@@ -2593,12 +2593,11 @@ impl Workspace {
             "counts": std::env::var_os("OTTOSPACE_E2E").map(|_| serde_json::json!({
                 "live": self.went_live,
                 "frame_reads": self.hosted.values().map(|h| h.frame_reads).sum::<u64>(),
-                // Scrolls over an app pane's picture, peeks they started, the one on now (its pane; 0:
-                // none), and first scrolls handed on.
+                // Scrolls over an app pane's picture, peeks they started, and the one on now (its pane; 0:
+                // none).
                 "wheels": self.wheel.over,
                 "peeks": self.wheel.peeks,
                 "peek": self.model.peek.as_ref().map_or(0, |peek| peek.pane),
-                "peek_scrolls": self.wheel.handed,
             })),
             // Test runs only: each press in an app a sneak label asked for, `[pane, path]`; else null.
             "app_presses": std::env::var_os("OTTOSPACE_E2E").map(|_| &self.sneak_reads.presses),
