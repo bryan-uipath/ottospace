@@ -510,8 +510,6 @@ mod tests {
 
     fn two_live() -> Model {
         let mut m = Model::default();
-        assert_eq!(m.conversation_view, View::Terminal, "terminal until a real-CLI check passes");
-        m.update(Action::SetAgents { claude: vec![], codex: vec![], default: None, shows: View::Native });
         for title in ["fix login", "write docs"] {
             add(&mut m, title);
         }
@@ -547,6 +545,25 @@ mod tests {
     fn card(ticket: u64, cut: bool) -> Event {
         let (tool, label, detail) = ("Bash".into(), "git".into(), Text::new("command: git"));
         Event::Permission { ticket, tool, label, detail, len: 12, cut, claim: Text::default() }
+    }
+
+    #[test]
+    fn with_no_setting_a_verified_runner_shows_natively_and_codex_in_a_terminal() {
+        let read = |m: &mut Model, text: &str| {
+            m.update(Action::SettingsRead { text: text.into(), written: false }.sent_by(Origin::System));
+        };
+        let mut m = Model::default();
+        add(&mut m, "fix login");
+        let one = first(&m);
+        assert_eq!(m.talk_view(&one), View::Native, "no settings read yet");
+        read(&mut m, "{}");
+        assert_eq!(m.talk_view(&one), View::Native, "no key: Claude Code natively");
+        read(&mut m, r#"{"default_agent": "codex"}"#);
+        assert_eq!(m.talk_view(&one), View::Terminal, "Codex's structured mode is not verified");
+        read(&mut m, r#"{"conversation_view": "terminal"}"#);
+        assert_eq!(m.talk_view(&one), View::Terminal, "named: respected");
+        read(&mut m, "{}");
+        assert_eq!(m.talk_view(&one), View::Native, "the key removed: native again");
     }
 
     #[test]
