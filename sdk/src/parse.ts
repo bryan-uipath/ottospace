@@ -4,6 +4,7 @@
 
 import type {
   AppEntry,
+  NativeChat,
   MeetingStage,
   AxNode,
   AxOverlay,
@@ -656,6 +657,68 @@ function tabGroup(value: unknown, at: string): Snapshot["groups"][number] {
   return { task: orNull(num)(o.task, `${at}.task`), tabs: list(num)(o.tabs, `${at}.tabs`) };
 }
 
+function nativeChat(value: unknown, at: string): NativeChat {
+  const o = fields(value, at);
+  const t = fields(o.transcript, `${at}.transcript`);
+  const entry = (value: unknown, at: string) => {
+    const e = fields(value, at);
+    return { ...e, kind: str(e.kind, `${at}.kind`) };
+  };
+  const card = (value: unknown, at: string) => {
+    const c = fields(value, at);
+    return {
+      tool: str(c.tool, `${at}.tool`),
+      label: str(c.label, `${at}.label`),
+      cut: bool(c.cut, `${at}.cut`),
+      expanded: bool(c.expanded, `${at}.expanded`),
+      len: num(c.len, `${at}.len`),
+    };
+  };
+  const reply = (value: unknown, at: string) => {
+    const r = fields(value, at);
+    const links = fields(r.links, `${at}.links`);
+    return {
+      blocks: map(num)(r.blocks, `${at}.blocks`),
+      links: { web: num(links.web, `${at}.links.web`), file: num(links.file, `${at}.links.file`) },
+    };
+  };
+  const view = (value: unknown, at: string): "native" | "terminal" => {
+    if (value === "native" || value === "terminal") return value;
+    throw wrong(at, "native or terminal", value);
+  };
+  return {
+    view: view(o.view, `${at}.view`),
+    native: bool(o.native, `${at}.native`),
+    transcript: {
+      entries: list(entry)(t.entries, `${at}.transcript.entries`),
+      dropped: num(t.dropped, `${at}.transcript.dropped`),
+      cards: list(card)(t.cards, `${at}.transcript.cards`),
+      turn: orNull(str)(t.turn, `${at}.transcript.turn`),
+      model: orNull(str)(t.model, `${at}.transcript.model`),
+      mode: orNull(str)(t.mode, `${at}.transcript.mode`),
+      session: orNull(str)(t.session, `${at}.transcript.session`),
+      context: orNull(num)(t.context, `${at}.transcript.context`),
+      window: orNull(num)(t.window, `${at}.transcript.window`),
+      live: bool(t.live, `${at}.transcript.live`),
+      watched: bool(t.watched, `${at}.transcript.watched`),
+    },
+    replies: list(reply)(o.replies, `${at}.replies`),
+    draft_chars: num(o.draft_chars, `${at}.draft_chars`),
+    deny: bool(o.deny, `${at}.deny`),
+    armed: bool(o.armed, `${at}.armed`),
+    away: bool(o.away, `${at}.away`),
+  };
+}
+
+function native(value: unknown, at: string): Snapshot["drawer"]["native"] {
+  const o = fields(value, at);
+  const kind = (value: unknown, at: string): "web" | "file" => {
+    if (value === "web" || value === "file") return value;
+    throw wrong(at, "web or file", value);
+  };
+  return { chats: map(nativeChat)(o.chats, `${at}.chats`), opened: list(kind)(o.opened, `${at}.opened`) };
+}
+
 function drawerDrawn(value: unknown, at: string): Snapshot["drawer"] {
   const o = fields(value, at);
   const agent = (value: unknown, at: string) => {
@@ -672,6 +735,7 @@ function drawerDrawn(value: unknown, at: string): Snapshot["drawer"] {
     body: orNull(rect)(o.body, `${at}.body`),
     width: num(o.width, `${at}.width`),
     agents: map(agent)(o.agents, `${at}.agents`),
+    native: native(o.native, `${at}.native`),
     goes_to: orNull(goWord)(o.goes_to, `${at}.goes_to`),
     note: orNull(str)(o.note, `${at}.note`),
     rail: list(railCell)(o.rail, `${at}.rail`),

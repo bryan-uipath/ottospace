@@ -3,8 +3,6 @@
 //! is a link only if `links::target` accepts it. An image is never fetched: a link, and a local
 //! file in the repository that the shell may read itself. Text is cleaned of terminal escapes
 //! and hidden marks, and capped. Pure.
-// The drawer's native view draws these: the next change in the stack.
-#![allow(dead_code)]
 
 use ottospace_core::ax::truncate as cap;
 use ottospace_core::links::{self, Target};

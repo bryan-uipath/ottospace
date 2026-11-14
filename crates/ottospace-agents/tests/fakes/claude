@@ -1,6 +1,8 @@
 #!/bin/sh
 # Fake `claude -p` for tests: records argv and stdin under $FAKE_DIR, and answers each line
 # on stdin by replaying a fixture from $FAKE_FIXTURES. Starts no model session.
+# An answer replays `turn<N>-allowed.jsonl` or `turn<N>-denied.jsonl` of the turn it answers,
+# if the fixtures have one; an allow falls back to `turn1-allowed.jsonl`.
 printf '%s\n' "$@" >"$FAKE_DIR/argv"
 replay() { grep -v '"_fixture"' "$FAKE_FIXTURES/$1"; }
 turn=0
@@ -8,7 +10,9 @@ while IFS= read -r line; do
   printf '%s\n' "$line" >>"$FAKE_DIR/stdin"
   case "$line" in
     *'"type":"user"'*) turn=$((turn + 1)); replay "turn$turn.jsonl" ;;
-    *'"behavior":"allow"'*) replay turn1-allowed.jsonl ;;
+    *'"behavior":"allow"'*)
+      if [ -f "$FAKE_FIXTURES/turn$turn-allowed.jsonl" ]; then replay "turn$turn-allowed.jsonl"; else replay turn1-allowed.jsonl; fi ;;
+    *'"behavior":"deny"'*) [ -f "$FAKE_FIXTURES/turn$turn-denied.jsonl" ] && replay "turn$turn-denied.jsonl" ;;
     *'"subtype":"interrupt"'*) replay turn2-interrupted.jsonl ;;
   esac
 done

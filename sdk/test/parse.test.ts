@@ -119,6 +119,39 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       body: [880, 40, 470, 820],
       width: 470,
       agents: { "1": { model: "claude", ended: false, cols: 60, rows: 45, lines: ["fake claude ready"] } },
+      // A native conversation: its shape, never its text.
+      native: {
+        chats: {
+          "2": {
+            view: "native",
+            native: true,
+            transcript: {
+              entries: [
+                { kind: "user", bytes: 15 },
+                { kind: "assistant", bytes: 120, streaming: false },
+                { kind: "tool", tool: "Bash", label: "git", state: "running", sub: false },
+                { kind: "notice", notice: "interrupted" },
+              ],
+              dropped: 0,
+              cards: [{ tool: "Bash", label: "git", cut: false, expanded: false, len: 22 }],
+              turn: "git",
+              model: "claude-opus-5-5",
+              mode: "default",
+              session: "8f14e45f-ceea-467f-a8d3-0242ac130003",
+              context: 2300,
+              window: 1000000,
+              live: true,
+              watched: false,
+            },
+            replies: [{ blocks: { para: 2, code: 1 }, links: { web: 1, file: 0 } }],
+            draft_chars: 0,
+            deny: false,
+            armed: false,
+            away: false,
+          },
+        },
+        opened: ["web"],
+      },
       goes_to: null,
       note: null,
       rail: [

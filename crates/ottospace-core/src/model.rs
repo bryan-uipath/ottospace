@@ -8800,6 +8800,46 @@ mod tests {
         Effect::StartAgent { task: subject, start, cwd: Some(cwd.into()), brief: None }
     }
 
+    /// A session another terminal holds is watched, read-only: what it did, no card, no turn;
+    /// once idle it may be taken over, by the user's click.
+    #[test]
+    fn a_session_held_elsewhere_is_watched_and_taken_over_once_idle() {
+        use crate::transcript::{Event, Text};
+        let mut m = conversations();
+        let held = of_session("claude", HELD);
+        assert_eq!(m.update(Action::SessionOpen { runner: "claude".into(), id: HELD.into() }), []);
+        assert_eq!(m.watch_target().map(|(subject, ..)| subject), Some(held.clone()));
+        assert!(!m.take_over_ready(&held));
+        let tool = Event::ToolStart {
+            id: "a".into(),
+            sub: false,
+            tool: "Bash".into(),
+            label: "git".into(),
+            detail: Text::default(),
+        };
+        let card = Event::Permission {
+            ticket: 1,
+            tool: "Bash".into(),
+            label: "rm".into(),
+            detail: Text::default(),
+            len: 0,
+            cut: false,
+            claim: Text::default(),
+        };
+        let events = Action::AgentEvents { task: held.clone(), events: vec![Event::TurnStarted, tool, card], at: 1 };
+        assert!(m.update(events.clone().sent_by(Origin::Socket)).is_empty() && m.chat(&held).is_none());
+        m.update(events.sent_by(Origin::System));
+        let t = &m.chat(&held).expect("a watched transcript").transcript;
+        assert!(t.watched && !t.live && t.turn.is_none() && t.cards.is_empty(), "{t:?}");
+        assert_eq!(t.items().len(), 1);
+        // Idle and no longer held: no more watching, and Take over (the user's open) goes on with it.
+        let free = Found { repo: "/code/app".into(), ..session("claude", HELD, "/code/app", false, 2_000) };
+        m.update(Action::SetSessions { found: vec![free], day: 0 });
+        assert!(m.watch_target().is_none() && m.take_over_ready(&held));
+        let took = m.update(Action::SessionOpen { runner: "claude".into(), id: HELD.into() });
+        assert!(matches!(&took[..], [Effect::StartAgent { start: agents::Start::Resume { .. }, .. }]), "{took:?}");
+    }
+
     #[test]
     fn opening_a_session_goes_on_with_it_in_the_drawer_where_it_started() {
         let mut m = conversations();

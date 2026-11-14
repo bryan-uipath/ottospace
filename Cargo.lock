@@ -3788,6 +3788,7 @@ dependencies = [
  "gpui",
  "libc",
  "objc2-core-foundation",
+ "ottospace-agents",
  "ottospace-core",
  "ottospace-mac",
  "ottospace-sessions",

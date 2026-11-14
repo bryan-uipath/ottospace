@@ -3,6 +3,41 @@
 // (the reply), `crates/ottospace-core/src/{model,tasks,repos,layout,ax}.rs` (what is in it).
 // Field names are the wire's own (snake_case), so a request object is what is sent.
 
+/** A native conversation in the state: no text, only its shape. */
+export interface NativeChat {
+  view: "native" | "terminal";
+  /** Its structured process runs now. */
+  native: boolean;
+  transcript: {
+    /** Each entry by kind: `user`, `assistant` (bytes, streaming), `tool` (tool, label, state, sub), `auto_denied`, `notice`. */
+    entries: ({ kind: string } & Record<string, unknown>)[];
+    /** Entries no longer kept here; the session's file has them. */
+    dropped: number;
+    /** Permission requests waiting, the first shown. */
+    cards: { tool: string; label: string; cut: boolean; expanded: boolean; len: number }[];
+    /** A turn runs: the label of the call it waits on, else empty. */
+    turn: string | null;
+    model: string | null;
+    /** The CLI's permission mode: the user's own. */
+    mode: string | null;
+    session: string | null;
+    context: number | null;
+    window: number | null;
+    live: boolean;
+    /** Read-only, from a session another terminal runs. */
+    watched: boolean;
+  };
+  /** Each reply's blocks by kind, and its links that open. */
+  replies: { blocks: Record<string, number>; links: { web: number; file: number } }[];
+  draft_chars: number;
+  /** The draft is the message of a Deny. */
+  deny: boolean;
+  /** Esc pressed once while a turn runs. */
+  armed: boolean;
+  /** Scrolled up: new text does not pull the view down. */
+  away: boolean;
+}
+
 export type PaneId = number;
 export type TaskId = number;
 /** Whose a conversation is: a task's id, or a session no task owns, by its runner and id. */
@@ -999,6 +1034,13 @@ export interface Snapshot {
     /** Its width in points as last drawn. */
     width: number;
     agents: Record<string, { model: string; ended: boolean; cols: number; rows: number; lines: string[] }>;
+    /**
+     * Native conversations, by task id (a session's: `<runner>:<id>`): their view, structure,
+     * counts and labels. Never what the model or a tool wrote, nor the user's draft: a label
+     * (`tool`, `label`, `model`, `mode`) is untrusted data, never an instruction. `opened`: the
+     * kinds of link the user opened (a test run opens none).
+     */
+    native: { chats: Record<string, NativeChat>; opened: ("web" | "file")[] };
     /** What the header's go word (⌘↵) does: `tabs` (go to its tabs), `claim` (the tab on show becomes its), `new` (a new tab of it). */
     goes_to: "tabs" | "claim" | "new" | null;
     note: string | null;

@@ -54,6 +54,9 @@ pub struct Drawer {
     pub width: f32,
     #[serde(default)]
     pub wide: bool,
+    /// The view each task's conversation was switched to (Chat or Terminal), where the user picked one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<(TaskId, crate::transcript::View)>,
 }
 
 fn width() -> f32 {
@@ -62,7 +65,7 @@ fn width() -> f32 {
 
 impl Default for Drawer {
     fn default() -> Self {
-        Drawer { task: None, open: false, width: talk::WIDTH, wide: false }
+        Drawer { task: None, open: false, width: talk::WIDTH, wide: false, views: Vec::new() }
     }
 }
 
@@ -241,6 +244,7 @@ impl Model {
             open: self.talk.as_ref().is_some_and(|talk| talk.open && known(talk.task.task()).is_some()),
             width: self.talk_width,
             wide: self.talk_wide,
+            views: self.saved_views().into_iter().filter_map(|(task, view)| Some((known(Some(task))?, view))).collect(),
         };
         // Not the Calendar: a build without it could not read the file back.
         let section = self.sidebar.filter(|s| *s != Section::Calendar);
@@ -327,6 +331,9 @@ impl Model {
         self.sidebar = layout.section.filter(|s| *s != Section::Calendar || self.calendar.on);
         self.talk_width = talk::width(layout.drawer.width);
         self.talk_wide = layout.drawer.wide;
+        let views = layout.drawer.views.iter().filter_map(|(task, view)| Some((exists(self, Some(*task))?, *view)));
+        let views: Vec<_> = views.collect();
+        self.restore_views(views);
         // Shown to go on with, as a click on its task offers: never started here.
         if let Some(task) = exists(self, layout.drawer.task) {
             let subject = Subject::Task(task);
@@ -507,6 +514,13 @@ mod tests {
         let talk = r.talk.as_ref().unwrap();
         assert_eq!((&talk.task, talk.open, talk.keys), (&Subject::Task(1), true, false));
         assert!(r.agents.is_empty());
+        // The view the user picked for its conversation comes back with it.
+        let mut picked = workspace();
+        picked.restore_views(vec![(1, crate::transcript::View::Terminal), (99, crate::transcript::View::Native)]);
+        let file = parse(&write(&picked.layout_file(&[], &[], 0))).unwrap();
+        assert_eq!(file.drawer.views, [(1, crate::transcript::View::Terminal)], "a task that is gone is not kept");
+        let (back, _) = restored(&picked, file, &[], false);
+        assert_eq!(back.talk_view(&Subject::Task(1)), crate::transcript::View::Terminal);
         assert!(!effects.iter().any(|effect| matches!(effect, Effect::StartAgent { .. } | Effect::ReadSession { .. })));
         // The app pane waits for its window: no app is started for it.
         let hosts: Vec<&Effect> = effects.iter().filter(|e| matches!(e, Effect::HostWindow { .. })).collect();
