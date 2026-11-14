@@ -1470,8 +1470,10 @@ fn the_key_reference_lists_what_is_not_known_and_folds_what_is() {
     assert!(!rows(&used, "app").as_array().unwrap().contains(&json!("show_keys")), "{used}");
     // ↵ opens Known; a click on its header folds it again.
     otto.user_key("enter");
+    assert_eq!(reference(&otto)["known_open"], json!(true));
+    // In a small window the list scrolls: End brings the header into view.
+    otto.user_key("end");
     let open = reference(&otto);
-    assert_eq!(open["known_open"], json!(true), "{open}");
     let header: Vec<f64> = serde_json::from_value(open["known_header"].clone()).unwrap();
     otto.user_click(at([header[0], header[1], header[2], header[3]], 0.2, 0.5));
     assert_eq!(reference(&otto)["known_open"], json!(false));
