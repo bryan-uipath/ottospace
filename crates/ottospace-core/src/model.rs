@@ -1890,7 +1890,7 @@ impl Default for Model {
             terminals: Vec::new(),
             home: None,
             // Done is at the bottom, folded: what is finished is counted, not listed.
-            collapsed: vec![Heading::Done],
+            collapsed: vec![Heading::Done, Heading::Sessions],
             tasks_view: TasksView::State,
             folded_projects: Vec::new(),
             open_done: Vec::new(),
@@ -7940,7 +7940,11 @@ mod tests {
         m.update(Action::ToggleGroup { heading: Heading::NeedsYou });
         assert_eq!(
             (m.list_rows(), m.list, m.collapsed.as_slice()),
-            (vec![needs.clone(), running.clone(), task(3)], Some(2), &[Heading::Done, Heading::NeedsYou][..])
+            (
+                vec![needs.clone(), running.clone(), task(3)],
+                Some(2),
+                &[Heading::Done, Heading::Sessions, Heading::NeedsYou][..]
+            )
         );
         // All folded is no dead end: a heading is a row, and ↵ on it unfolds it. The selection stays on it.
         m.update(Action::ToggleGroup { heading: Heading::Running });
@@ -7951,9 +7955,27 @@ mod tests {
             (vec![needs.clone(), running.clone(), task(3)], Some(1), Mode::List)
         );
         m.update(Action::ListChoose { axis: Right });
-        assert_eq!(m.collapsed.as_slice(), &[Heading::Done, Heading::NeedsYou, Heading::Running]);
+        assert_eq!(m.collapsed.as_slice(), &[Heading::Done, Heading::Sessions, Heading::NeedsYou, Heading::Running]);
         m.update(Action::ToggleGroup { heading: Heading::NeedsYou });
-        assert_eq!((sections(&m)[0].2.len(), m.collapsed.len()), (2, 2));
+        assert_eq!((sections(&m)[0].2.len(), m.collapsed.len()), (2, 3));
+    }
+
+    #[test]
+    fn other_sessions_start_folded_and_list_mode_skips_their_rows() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        m.update(Action::Tick { now: 5_000 });
+        m.update(Action::SetSessions { found: vec![session("claude", "busy", "/code/app", true, 5_000)] });
+        m.update(Action::ToggleSection { section: Section::Tasks });
+        // At work, and still folded: the heading counts it, list mode has the heading alone.
+        let bar = m.sessions_bar();
+        assert_eq!((bar.count, bar.collapsed, bar.rows.len()), (1, true, 0));
+        assert_eq!(m.list_rows(), [ListRow::Heading(Heading::Sessions)]);
+        assert_eq!(Heading::Sessions.title(), "Other sessions");
+        // ↵ on the heading unfolds it, as any other.
+        m.update(Action::FocusList);
+        m.update(Action::ListChoose { axis: Right });
+        assert_eq!(m.list_rows()[1], ListRow::Session("claude".into(), "busy".into()));
     }
 
     fn session(runner: &str, id: &str, cwd: &str, active: bool, at: u64) -> Found {
@@ -7972,6 +7994,7 @@ mod tests {
     #[test]
     fn sessions_that_are_no_tasks_are_listed_active_first_and_old_ones_wait() {
         let mut m = Model::default();
+        m.update(Action::ToggleGroup { heading: Heading::Sessions }); // folded at first
         m.update(Action::SetRepos { repos: listed() });
         let now = 10 * sessions::OLD_MS;
         m.update(Action::Tick { now });
@@ -8047,6 +8070,7 @@ mod tests {
     #[test]
     fn a_sessions_title_and_model_are_in_its_row_and_in_no_task() {
         let mut m = Model::default();
+        m.update(Action::ToggleGroup { heading: Heading::Sessions }); // folded at first
         m.update(Action::SetRepos { repos: listed() });
         m.update(Action::Tick { now: 5_000 });
         let mut titled = session("claude", "s1", "/code/app", false, 4_000);
@@ -8362,6 +8386,7 @@ mod tests {
     #[test]
     fn adopting_a_session_makes_it_a_task() {
         let mut m = Model::default();
+        m.update(Action::ToggleGroup { heading: Heading::Sessions }); // folded at first
         m.update(Action::SetRepos { repos: listed() });
         m.update(Action::Tick { now: 5_000 });
         m.update(Action::SetSessions {
@@ -8484,6 +8509,7 @@ mod tests {
     #[test]
     fn the_cap_on_sessions_listed_counts_those_that_can_be_listed() {
         let mut m = Model::default();
+        m.update(Action::ToggleGroup { heading: Heading::Sessions }); // folded at first
         let found: Vec<Found> = (0..sessions::MAX_FOUND + 5)
             .map(|n| session("claude", &format!("s{n:04}"), "/code/app", true, 9))
             .collect();
@@ -8500,6 +8526,7 @@ mod tests {
     #[test]
     fn a_click_on_a_session_focuses_its_pane_only_when_there_is_no_doubt() {
         let mut m = Model::default();
+        m.update(Action::ToggleGroup { heading: Heading::Sessions }); // folded at first
         m.update(Action::SetRepos { repos: listed() });
         term(&mut m); // pane 1, opened nowhere in particular
         m.update(Action::OpenRepo { path: "/code/app".into(), axis: Right }); // pane 2, in /code/app

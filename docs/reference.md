@@ -232,7 +232,7 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    the task's folder after the agent did and before the next agent there, that nothing else
    has. When two could be its (another Codex started there at the same moment), neither is
    taken: the task runs, following none. When the agent ends while the task runs, the task needs you.
-7. **A session that is no task's.** A click or ↵ on its row under Sessions opens its
+7. **A session that is no task's.** A click or ↵ on its row under Other sessions opens its
    conversation the same way, with no task: it gets a badge on the rail (from its title, else
    its repository) and Adopt in the drawer's header. Adopt, there or on the row, makes the task,
    and the conversation is the task's: the same agent if it runs, else gone on with. Adopt opens
@@ -414,8 +414,10 @@ Design: [capture.md](ai/capture.md).
 ## Sessions
 
 An agent is a saved definition. A session is one running conversation of Claude Code or Codex.
-The Tasks section lists, under **Sessions**, the sessions of your listed repositories (worktrees
-included) that no task has adopted: for example a Claude Code you started by hand in a terminal.
+The Tasks section lists, under **Other sessions**, the sessions of your listed repositories
+(worktrees included) that no task has adopted: for example a Claude Code you started by hand in a
+terminal. The group is folded at first: its heading shows the count, and a click, ↵ or space
+unfolds it. A session at work does not unfold it.
 
 - **What a row shows.** The runner (`claude` or `codex`), the repository or worktree, a dot that
   is lit while the session is active (its file changed in the last 30 seconds), what it does now
@@ -675,7 +677,7 @@ optional:
 | `terminal.font_size` | In points, 6 to 72 | `13` |
 | `repos` | Directories that are repositories or hold them, for the Repos section. `OTTOSPACE_REPOS` (`:` between directories) wins over it. The section's + adds the folder you pick (a repository, or one that holds some), by its full path; if the file named none, `~/code` and `~/notes` are written with it. Remove, on a repository's name under the pointer, takes off a directory listed as itself; one that comes from a folder holding several is yours to edit. At most 64 through + | `~/code`, `~/notes` |
 | `tasks` | Where tasks are kept, one JSON file each. A relative path is inside `~/.ottospace` | `tasks` |
-| `sessions` | List agent sessions that are no task's under Sessions in the Tasks section. `false`: no session file is ever read | `true` |
+| `sessions` | List agent sessions that are no task's under Other sessions in the Tasks section. `false`: no session file is ever read | `true` |
 | `session_dirs` | Where the runners keep their sessions: `claude` is a list of Claude Code config directories (one for each account), `codex` is Codex's home. A runner left out keeps its default. An app started from the Dock does not see `CLAUDE_CONFIG_DIR` or `CODEX_HOME`: name other directories here | `~/.claude`, `~/.codex` |
 | `session_quiet_minutes` | A task adopted from a session moves to Needs you once the session has been quiet this many minutes. `0`: a quiet session never moves its task | `3` |
 | `agent_models` | The models the `@agent` dropdown offers after each runner, in place of the built-in list: ids as the runner's CLI takes them. `claude` and `codex` are each a list; a runner left out keeps its own, an empty list offers the runner alone. An id that does not start with the runner's name gets it in the tag: `gpt-6-astra` is `@codex-gpt-6-astra`, `opus` is `@claude-opus`. An entry that is not a name (letters and digits, with `.`, `-` or `_` between them one at a time; at most 64) is left out and named in the status bar | `claude-fable-5-2`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`; `gpt-6-astra` |

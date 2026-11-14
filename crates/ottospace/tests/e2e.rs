@@ -1555,7 +1555,13 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
     assert_eq!((&bar["enabled"], &bar["reads"], &bar["count"]), (&json!(true), &json!(0), &json!(0)));
     assert_eq!(bar["slow_reads"], 0, "no task follows a session: nothing to look at");
     // Open: read at once. The active session first, the one older than a day behind "1 older".
+    // The group starts folded: its heading alone, until unfolded.
     otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let folded = otto.wait_for("the sessions to be read", |o| {
+        Some(o.call(json!({"cmd": "state"}))).filter(|reply| reply["sessions_bar"]["count"] == 3)
+    });
+    assert_eq!((&folded["sessions_bar"]["collapsed"], rows(&folded).len()), (&json!(true), 0));
+    otto.call(json!({"cmd": "task_group", "heading": "sessions"}));
     let reply = otto.wait_for("the sessions to be read", |o| {
         Some(o.call(json!({"cmd": "state"}))).filter(|reply| reply["sessions_bar"]["count"] == 3)
     });
@@ -5034,6 +5040,7 @@ fn a_click_on_a_session_goes_on_with_it_in_the_drawer() {
     let otto = Otto::launch_with("session-open", &env);
     otto.call(json!({"cmd": "split", "kind": "empty"}));
     otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.call(json!({"cmd": "task_group", "heading": "sessions"}));
     otto.wait_for("the sessions to be read", |o| {
         (o.call(json!({"cmd": "state"}))["sessions_bar"]["count"] == 3).then_some(())
     });
