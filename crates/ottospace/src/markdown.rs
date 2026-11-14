@@ -244,7 +244,9 @@ impl Builder<'_> {
                 let text = open.text.trim();
                 let looks = text.to_ascii_lowercase().starts_with("http") || text.contains("://");
                 if open.link.is_some() && looks && text != open.raw {
-                    self.span(format!(" ({})", cap(&clean(&open.raw), MAX_LINE)), self.style);
+                    // Outside the line's budget: however long the text, where it goes always shows.
+                    let real = format!(" ({})", cap(&clean(&open.raw), MAX_LINE));
+                    self.push_span(Span { text: real, style: self.style, link: None });
                 }
             }
             TagEnd::Image => {
@@ -535,6 +537,9 @@ mod tests {
         assert!(!blocks.iter().any(|b| matches!(b, Block::Image { path } if path.contains("evil"))));
         // A link whose text is another address shows the real one.
         assert!(all.contains("https://good.com (https://evil.com)"), "{all}");
+        // A text long enough to use up the line's budget still leaves the real address shown.
+        let long = format!("[https://good.com/{}](https://evil.com/x)", "a".repeat(MAX_LINE * 2));
+        assert!(plain(&parse(&long, REPO)).ends_with(" (https://evil.com/x)"), "the real target is shown");
         let image = plain(&parse("[![https://good.com](x.png)](https://evil.com)", REPO));
         assert!(image.contains("(https://evil.com)"), "an image's alt text is the link's text: {image}");
         // Every escape a terminal reads, and every hidden mark.
