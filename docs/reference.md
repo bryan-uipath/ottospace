@@ -609,6 +609,10 @@ written a second after a change and at quit, readable by you alone.
   cleaning apply: escape sequences taken out, credential-shaped text hidden, capped. The program
   itself did not survive. The grey lines are kept once: a start in which you typed nothing there
   keeps them as they were; one in which you did adds what it printed below a second divider.
+- **The Settings tab** (Open Settings) is kept as a mark on its pane, never as a command and with
+  none of its screen. It comes back running your editor on `settings.json` again, built as ⌘,
+  builds it from `$VISUAL` or `$EDITOR` now; ⌘, brings it forward. An editor that is gone exits
+  at once and its pane closes.
 - **App panes** keep the app (bundle id and name), never a window title. A running app's window
   goes back in its pane; an app that is not running is not started: its pane says so and offers
   `Open <App>`. `restore_apps: true` starts it instead. Opening a workbook starts its apps: you
@@ -617,7 +621,8 @@ written a second after a change and at quit, readable by you alone.
   with its session, as always. No agent starts by itself.
 - A tab whose task no longer exists comes back as a tab of no task, so nothing is lost.
 - A file that cannot be read is set aside as `layout.json.bad`, and ottospace starts empty and
-  says so. A file a newer build wrote is left as it is and not written over.
+  says so. A file a newer build wrote is left as it is and not written over. A pane of a kind
+  this build does not know comes back empty.
 - **File ▸ Start Fresh** (or the palette): the next start is empty. The file (and a
   `layout.json.bad`) is removed and not written again this run. `restore_layout: false` turns it all off: the file is neither read nor
   written (one that is there is left alone).
@@ -797,7 +802,8 @@ Open Settings (⌘,, the palette, or ottospace ▸ Open Settings) opens the file
 Settings, whose terminal runs `$VISUAL`, else `$EDITOR`, else `vi`, as your login shell sets them
 (an editor that must wait, as `code -w`, needs its flag). A file that is not there is made `{}`
 first. Again while that tab is open brings it forward; quitting the editor closes its pane. Only
-you open it: a socket client's ⌘, does nothing.
+you open it: a socket client's ⌘, does nothing. Open at quit, it comes back at the next start,
+the editor running again ([Restoring the layout](#restoring-the-layout)).
 
 A change is read when the file is saved: what is wrong in it is said in the status bar (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify` and `calendar_notify_for` apply at once; any other key changed says "restart to apply" with its name (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
 
