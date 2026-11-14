@@ -356,7 +356,9 @@ fn assistant(record: &Value, cursor: &mut Cursor, emit: &mut impl FnMut(What)) {
             continue;
         };
         let (station, summary) = describe(tool, &block["input"]);
-        emit(What::ToolStart { id: id.clone(), tool: station::tool_label(tool), station, summary: summary.clone() });
+        let diff = cursor.edits.then(|| ottospace_core::diff::claude(tool, &block["input"])).flatten();
+        let label = station::tool_label(tool);
+        emit(What::ToolStart { id: id.clone(), tool: label, station, summary: summary.clone(), diff });
         if matches!(tool, "Agent" | "Task") && track(&mut cursor.agents, id.clone()) {
             emit(What::SubAgentStart { id, label: summary });
         }
@@ -519,6 +521,29 @@ mod tests {
         });
         let m = Some(1_000_000);
         assert_eq!(windows.collect::<Vec<_>>(), [None, m, m, m], "and a huge count does not overflow");
+    }
+
+    /// A file's contents leave the crate only for a cursor that asks: an edit's change, as a
+    /// `Diff` whose `Debug` prints lengths.
+    #[test]
+    fn an_edit_carries_its_change_only_for_a_cursor_that_asks() {
+        let input =
+            serde_json::json!({ "file_path": "/w/a.rs", "old_string": "secret old", "new_string": "secret new" });
+        let block = serde_json::json!({ "type": "tool_use", "id": "t", "name": "Edit", "input": input });
+        let record = serde_json::json!({ "type": "assistant", "message": { "content": [block] } });
+        let diff = |mut cursor: Cursor| {
+            let mut events = Vec::new();
+            record_events(&record, false, &mut cursor, &mut events);
+            let debug = format!("{events:?}");
+            assert!(!debug.contains("secret"), "{debug}");
+            events.into_iter().find_map(|e| match e.what {
+                What::ToolStart { diff, .. } => Some(diff),
+                _ => None,
+            })
+        };
+        assert_eq!(diff(Cursor::default()), Some(None));
+        let shown = diff(Cursor::with_edits()).flatten().expect("a change");
+        assert_eq!((shown.files[0].added, shown.files[0].removed), (1, 1));
     }
 
     #[test]

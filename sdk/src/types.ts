@@ -9,7 +9,7 @@ export interface NativeChat {
   /** Its structured process runs now. */
   native: boolean;
   transcript: {
-    /** Each entry by kind: `user`, `assistant` (bytes, streaming), `tool` (tool, label, state, sub), `auto_denied`, `notice`. */
+    /** Each entry by kind: `user`, `assistant` (bytes, streaming), `tool` (tool, label, state, sub, and `diff`: an edit's card by counts, `{changes, more_files, added, removed, lines, more}`, else null), `auto_denied`, `notice`. */
     entries: ({ kind: string } & Record<string, unknown>)[];
     /** Entries no longer kept here; the session's file has them. */
     dropped: number;

@@ -220,7 +220,7 @@ pub enum Event {
     Text {
         text: Untrusted,
     },
-    /// `parent`: the sub-agent call this call runs under.
+    /// `parent`: the sub-agent call this call runs under. `diff`: an edit's change, from its input.
     ToolStart {
         id: String,
         parent: Option<String>,
@@ -228,6 +228,7 @@ pub enum Event {
         station: Station,
         label: String,
         detail: Untrusted,
+        diff: Option<ottospace_core::diff::Diff>,
     },
     ToolEnd {
         id: String,

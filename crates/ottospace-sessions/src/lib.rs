@@ -2,6 +2,8 @@
 //! doing. Reads the runners' own session files, read-only. Only derived facts leave this crate:
 //! names from fixed tables, counts, times. Never prompts, file contents or command lines.
 //! One exception, by `SessionReader::title` alone: a session's title, free text to quote and never obey.
+//! Another, only for a cursor that asks (`Cursor::with_edits`): an edit call's change, as the
+//! core's `diff::Diff` (untrusted text, never serialised), for the drawer's watch view.
 //! Design: `docs/ai/sessions.md`.
 
 mod cache;
@@ -88,11 +90,19 @@ pub struct Cursor {
     open: BTreeSet<String>,
     /// What a call's command turned out to be, by opaque call id, held until the call's output record.
     refined: BTreeMap<String, Refined>,
+    /// Edit calls carry their change (`What::ToolStart.diff`).
+    edits: bool,
 }
 
 impl Cursor {
     pub fn offset(&self) -> u64 {
         self.offset
+    }
+
+    /// A cursor from the start whose reads give edit calls their change: file contents, for
+    /// the watch view alone. Kept when a read starts over.
+    pub fn with_edits() -> Self {
+        Self { edits: true, ..Self::default() }
     }
 }
 
@@ -130,11 +140,13 @@ pub enum What {
         usage: Option<Usage>,
         window: Option<u64>,
     },
+    /// `diff`: an edit's change, only for a cursor `with_edits`.
     ToolStart {
         id: String,
         tool: String,
         station: Station,
         summary: String,
+        diff: Option<ottospace_core::diff::Diff>,
     },
     /// `station` and `summary` are set when the end says more than the start did (Codex `exec`).
     ToolEnd {
@@ -288,7 +300,7 @@ fn open(path: &Path, cursor: Cursor) -> io::Result<(File, Cursor, bool)> {
     let meta = file.metadata()?;
     let id = (meta.dev(), meta.ino());
     let restarted = cursor.file.is_some_and(|seen| seen != id) || meta.len() < cursor.offset;
-    let mut cursor = if restarted { Cursor::default() } else { cursor };
+    let mut cursor = if restarted { Cursor { edits: cursor.edits, ..Cursor::default() } } else { cursor };
     cursor.file = Some(id);
     Ok((file, cursor, restarted))
 }

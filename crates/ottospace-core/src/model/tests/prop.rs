@@ -116,7 +116,11 @@ impl Gen<'_> {
             0 | 1 => Said::TurnStarted,
             2 => Said::TextDelta { text },
             3 => Said::Text { text },
-            4 => Said::ToolStart { id, sub: self.rng.coin(), tool, label, detail: text },
+            4 => {
+                let input = serde_json::json!({"file_path": "/w/a", "old_string": "x", "new_string": text.text()});
+                let diff = self.rng.coin().then(|| crate::diff::claude("Edit", &input)).flatten();
+                Said::ToolStart { id, sub: self.rng.coin(), tool, label, detail: text, diff }
+            }
             5 => Said::ToolEnd { id, failed: self.rng.coin() },
             6 | 7 => {
                 let (ticket, cut) = (self.rng.below(3) as u64, self.rng.coin());
@@ -2953,9 +2957,16 @@ fn event_code(event: &Said) -> String {
         Said::TurnStarted => "Said::TurnStarted".into(),
         Said::TextDelta { text: t } => format!("Said::TextDelta {{ text: {} }}", text(t)),
         Said::Text { text: t } => format!("Said::Text {{ text: {} }}", text(t)),
-        Said::ToolStart { id, sub, tool, label, detail } => format!(
-            "Said::ToolStart {{ id: {id:?}.into(), sub: {sub}, tool: {tool:?}.into(), label: {label:?}.into(), detail: {} }}",
-            text(detail)
+        Said::ToolStart { id, sub, tool, label, detail, diff } => format!(
+            "Said::ToolStart {{ id: {id:?}.into(), sub: {sub}, tool: {tool:?}.into(), label: {label:?}.into(), detail: {}, \
+             diff: {} }}",
+            text(detail),
+            match diff {
+                Some(_) =>
+                    "crate::diff::claude(\"Edit\", &serde_json::json!({\"file_path\": \"/w/a\", \
+                            \"old_string\": \"x\", \"new_string\": \"y\"}))",
+                None => "None",
+            }
         ),
         Said::ToolEnd { id, failed } => format!("Said::ToolEnd {{ id: {id:?}.into(), failed: {failed} }}"),
         Said::Permission { ticket, tool, label, detail, len, cut, claim } => format!(

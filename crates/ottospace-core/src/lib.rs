@@ -11,6 +11,7 @@ pub mod capture_model;
 pub mod commands;
 pub mod complete;
 pub mod compose;
+pub mod diff;
 pub mod edit;
 #[cfg(test)]
 mod fuzz;

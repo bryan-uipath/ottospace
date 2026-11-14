@@ -287,8 +287,9 @@ impl Codex {
             self.remember(item["id"].as_str().unwrap_or(""), Some(&label), &item["changes"]);
         }
         let Some(id) = opaque(&item["id"]) else { return };
+        let diff = (item["type"] == "fileChange").then(|| ottospace_core::diff::codex_changes(&item["changes"]));
         // A sub-agent thread's calls count too. Codex names no parent call, so none is given.
-        emit.push(Event::ToolStart { id, parent: None, tool, station, label, detail });
+        emit.push(Event::ToolStart { id, parent: None, tool, station, label, detail, diff: diff.flatten() });
     }
 
     /// Keeps a file-change item's changes until its approval. A patch update (`label` `None`)

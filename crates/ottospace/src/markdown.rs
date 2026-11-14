@@ -6,6 +6,7 @@
 
 use ottospace_core::ax::truncate as cap;
 use ottospace_core::links::{self, Target};
+use ottospace_core::transcript::clean;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 
 /// The most blocks one reply is drawn as; the rest is counted.
@@ -404,27 +405,6 @@ impl Builder<'_> {
             Some(_) | None => self.block(Block::Para(vec![span])),
         }
     }
-}
-
-/// Text as drawn: terminal escape sequences and other control characters out (a tab is four
-/// spaces), marks that hide or reorder text written out (`\u{202e}`).
-pub fn clean(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '\u{1b}' => ottospace_core::workbook::skip_escape(&mut chars),
-            '\n' => out.push('\n'),
-            '\t' => out.push_str("    "),
-            c if c.is_control() => {}
-            // Hidden or reordering marks (`capture::shows`) and line separators, written out.
-            c if !ottospace_core::capture::shows(c) || matches!(c, '\u{2028}' | '\u{2029}') => {
-                out.extend(c.escape_unicode())
-            }
-            c => out.push(c),
-        }
-    }
-    out
 }
 
 /// The blocks as plain text, for Copy.

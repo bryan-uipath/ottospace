@@ -526,6 +526,7 @@ impl Workspace {
                 // The model gives way before the title does.
                 .children(agent.map(|(model, _)| muted(model).flex_shrink().min_w_0().truncate()))
                 .children(elapsed.map(muted))
+                .children(self.watch_chip(subject))
                 .children(self.view_switch(subject, cx))
                 .children(go)
                 .children(brief)
