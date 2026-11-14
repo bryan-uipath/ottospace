@@ -420,6 +420,27 @@ mod tests {
         assert_eq!(m.key_use, read);
     }
 
+    /// A key of a feature that is off is not counted.
+    #[test]
+    fn a_key_of_a_feature_that_is_off_is_not_counted() {
+        use crate::features::{Feature, Features};
+        use crate::model::{Action, Model, Origin};
+        let mut m = Model::default();
+        let on = |m: &mut Model, on: bool| {
+            let features = Features::default().with(Feature::Marks, on);
+            m.update(Action::SetFeatures { features }.sent_by(Origin::System));
+        };
+        on(&mut m, false);
+        for binding in [Binding::MarkPane, Binding::MarkJump, Binding::MarkNumber] {
+            assert!(!m.binding_on(binding), "{binding:?}");
+            m.update(Action::KeyUsed { binding, at: T0 });
+        }
+        assert!(m.key_use.is_empty() && m.binding_on(Binding::Copy));
+        on(&mut m, true);
+        m.update(Action::KeyUsed { binding: Binding::MarkNumber, at: T0 });
+        assert_eq!(m.key_use.score(Binding::MarkNumber, T0), 1.0);
+    }
+
     /// Ids are the command's own where a binding is one command's: one source for names.
     #[test]
     fn a_command_counts_for_one_binding_and_ids_follow_the_commands() {

@@ -4,6 +4,7 @@
 
 import type {
   AppEntry,
+  Feature,
   CalendarReply,
   Meeting,
   TimeSpan,
@@ -68,6 +69,7 @@ import type {
   Picker,
   Palette,
   PaletteRow,
+  PaletteFeature,
   PaletteTask,
   Inspector,
   InspectorRow,
@@ -714,12 +716,16 @@ function nativeChat(value: unknown, at: string): NativeChat {
       window: orNull(num)(t.window, `${at}.transcript.window`),
       live: bool(t.live, `${at}.transcript.live`),
       watched: bool(t.watched, `${at}.transcript.watched`),
+      not_understood: num(t.not_understood, `${at}.transcript.not_understood`),
     },
     replies: list(reply)(o.replies, `${at}.replies`),
     draft_chars: num(o.draft_chars, `${at}.draft_chars`),
     deny: bool(o.deny, `${at}.deny`),
     armed: bool(o.armed, `${at}.armed`),
     away: bool(o.away, `${at}.away`),
+    details: bool(o.details, `${at}.details`),
+    details_open: bool(o.details_open, `${at}.details_open`),
+    unread_open: bool(o.unread_open, `${at}.unread_open`),
   };
 }
 
@@ -911,7 +917,18 @@ function palette(value: unknown, at: string): Palette {
     query: str(o.query, `${at}.query`),
     selected: num(o.selected, `${at}.selected`),
     tasks: orNull(list(paletteTask))(o.tasks, `${at}.tasks`),
+    features: orNull(list(paletteFeature))(o.features, `${at}.features`),
   };
+}
+
+function paletteFeature(value: unknown, at: string): PaletteFeature {
+  const o = fields(value, at);
+  return { feature: feature(o.feature, `${at}.feature`), on: bool(o.on, `${at}.on`) };
+}
+
+function feature(value: unknown, at: string): Feature {
+  if (value === "marks" || value === "apps_section") return value;
+  throw wrong(at, "a feature", value);
 }
 
 function paletteTask(value: unknown, at: string): PaletteTask {
@@ -1153,6 +1170,7 @@ function model(value: unknown, at: string): Model {
     talk_width: num(o.talk_width, `${at}.talk_width`),
     talk_wide: bool(o.talk_wide, `${at}.talk_wide`),
     agents: list(subject)(o.agents, `${at}.agents`),
+    features: list(feature)(o.features, `${at}.features`),
   };
 }
 
@@ -1328,6 +1346,7 @@ export function snapshot(value: unknown): Snapshot {
     frames: map(rect)(o.frames, "frames"),
     headers: map(rect)(o.headers, "headers"),
     closes: map(rect)(o.closes, "closes"),
+    titles: map(str)(o.titles, "titles"),
     tabs: list(rect)(o.tabs, "tabs"),
     strip: orNull(rect)(o.strip, "strip"),
     bar_header: orNull(rect)(o.bar_header, "bar_header"),

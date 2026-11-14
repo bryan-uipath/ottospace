@@ -282,11 +282,8 @@ impl Workspace {
             Some((list, false)) => (None, Some(list)),
             None => (None, None),
         };
-        let keys = match menu.as_ref().map(|menu| (menu.rows.is_empty(), menu.selected.is_some())) {
-            Some((false, true)) => "↑↓ move · ↵ or tab take · esc close the list · ⌘↵ start",
-            Some((false, false)) => "↑↓ move · tab take · ↵ start · esc close the list",
-            _ => KEYS_HINT,
-        };
+        // The one key a text box does not have; none while the dropdown lists rows.
+        let keys = menu.as_ref().is_none_or(|menu| menu.rows.is_empty()).then_some(KEYS_HINT);
         let muted = |text: &'static str| div().text_xs().text_color(rgb(theme::MUTED)).child(text);
         // What the box could not do: a name with no room, files left out.
         let note =
@@ -394,7 +391,7 @@ impl Workspace {
             .children(under)
             .children(note)
             .when(!above, |d| d.child(muted(TAG_HINT)))
-            .child(muted(keys))
+            .children(keys.map(muted))
     }
 
     /// The drawer in its new-task state, `width` points wide: a heading, one-click picks for

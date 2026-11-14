@@ -15,6 +15,11 @@ mod support;
 /// How long a wait may take. Generous: a loaded machine can take over 10s to start a shell.
 const TIMEOUT: Duration = Duration::from_secs(40);
 
+/// The flags a test that needs a feature behind one names: off by default, as for the user.
+const MARKS: (&str, &str) = ("OTTOSPACE_FEATURES", "marks");
+const APPS_SECTION: (&str, &str) = ("OTTOSPACE_FEATURES", "apps_section");
+const BOTH: (&str, &str) = ("OTTOSPACE_FEATURES", "marks,apps_section");
+
 /// A running ottospace on a private socket. Killed on drop, so a failed assert leaves no window.
 struct Otto {
     child: Child,
@@ -64,6 +69,8 @@ impl Otto {
             .envs((!env.iter().any(|(name, _)| *name == "OTTOSPACE_HOME")).then_some(("OTTOSPACE_REPOS", "")))
             // Never read the user's settings or tasks: `OTTOSPACE_E2E` without a folder keeps nothing.
             .env_remove("OTTOSPACE_HOME")
+            // Every feature as by default, unless the test names its flags.
+            .env_remove("OTTOSPACE_FEATURES")
             .envs(env.iter().copied())
             .spawn()
             .expect("launch ottospace");
@@ -673,6 +680,27 @@ fn terminal_runs_a_typed_command() {
     otto.call(json!({"cmd": "type", "pane": 1, "text": "exit\r"}));
     otto.wait_for("the pane to close", |o| (pane_ids(&o.call(json!({"cmd": "state"}))) == [2]).then_some(()));
     assert_eq!(otto.raw(r#"{"cmd":"type","text":"x"}"#)["ok"], false, "no terminal is left");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_pane_header_names_the_directory_and_the_program_not_the_kind() {
+    let root = support::temp(&format!("ottospace-e2e-header-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("app-api")).unwrap();
+    let otto = Otto::launch("header");
+    otto.call(json!({"cmd": "split"}));
+    let title = |o: &Otto, pane: &str| o.call(json!({"cmd": "state"}))["titles"][pane].as_str().map(String::from);
+    let has = |pane: &'static str, want: &'static str| move |o: &Otto| title(o, pane).filter(|t| t == want);
+    otto.call(json!({"cmd": "type", "pane": 1, "text": format!("cd '{}/app-api'\r", root.display())}));
+    otto.wait_for("the directory's name", has("1", "app-api"));
+    // A program in front of the shell follows it; at the prompt again, the directory alone.
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "sleep 30\r"}));
+    otto.wait_for("the program", has("1", "app-api · sleep 30"));
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "\u{3}"}));
+    otto.wait_for("the program gone", has("1", "app-api"));
+    // An empty pane's header has no text.
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.wait_for("an empty header", has("2", ""));
 }
 
 #[test]
@@ -1470,7 +1498,7 @@ fn settings_choose_the_font_the_repos_and_the_tasks_folder() {
     // Defaults: Menlo 13, rows 18 points high.
     let plain = Otto::launch("settings-none");
     let state = plain.call(json!({"cmd": "state"}));
-    // The build, as the status bar shows it: "0.1.0 · local" here.
+    // The build, short: "0.1.0 · local" here.
     let version = state["version"].as_str().unwrap_or_default();
     assert!(version.starts_with(concat!(env!("CARGO_PKG_VERSION"), " · ")), "{version}");
     assert_eq!(
@@ -2148,7 +2176,7 @@ fn visual_mode_selects_with_the_keyboard() {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn secondary_bar_opens_and_closes_beside_the_panes() {
-    let otto = Otto::launch("bar");
+    let otto = Otto::launch_with("bar", &[APPS_SECTION]);
     let reply = otto.call(json!({"cmd": "split", "kind": "empty"}));
     assert_eq!(reply["state"]["sidebar"], Value::Null, "bar starts closed when hosting is off");
     let closed = otto.bounds(&[1])[0];
@@ -2714,6 +2742,7 @@ fn the_apps_section_lists_pinned_then_dock_then_all_apps_and_a_pin_is_written_to
         ("OTTOSPACE_REPOS", ""),
         ("OTTOSPACE_APPS_DIRS", root.to_str().unwrap()),
         ("OTTOSPACE_DOCK_APPS", dock.as_str()),
+        APPS_SECTION,
     ];
     let otto = Otto::launch_with("apps-bar", &env);
     // A pin writes the settings file: the user's keys and labels, never a client's.
@@ -2873,6 +2902,7 @@ fn a_settings_file_that_cannot_be_read_is_not_written_and_dock_suggestions_can_b
             ("OTTOSPACE_REPOS", String::new()),
             ("OTTOSPACE_APPS_DIRS", root.to_str().unwrap().to_string()),
             ("OTTOSPACE_DOCK_APPS", dock.clone()),
+            (APPS_SECTION.0, APPS_SECTION.1.to_string()),
         ]
     };
     let listed = |otto: &Otto, count: u64| {
@@ -3283,7 +3313,7 @@ fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
     let _ = std::fs::remove_dir_all(&root);
     fake_repo(&root.join("app"));
     let repo = root.canonicalize().unwrap().join("app").to_string_lossy().into_owned();
-    let otto = Otto::launch_with("sneak", &[("OTTOSPACE_REPOS", &root.to_string_lossy())]);
+    let otto = Otto::launch_with("sneak", &[("OTTOSPACE_REPOS", &root.to_string_lossy()), APPS_SECTION]);
     otto.call(json!({"cmd": "task_add", "title": "review the fix", "state": "needs_you"}));
 
     // The home screen with the Repos bar open: every control drawn has a label, and one each.
@@ -3407,7 +3437,7 @@ fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_two_letter_sneak_label_narrows_then_activates() {
-    let otto = Otto::launch("sneak-two");
+    let otto = Otto::launch_with("sneak-two", &[BOTH]);
     // Three panes, two tabs and the bar: more controls than the alphabet has letters.
     otto.call(json!({"cmd": "split", "kind": "empty"}));
     otto.call(json!({"cmd": "split", "axis": "right", "kind": "empty"}));
@@ -3670,6 +3700,66 @@ fn mark_names(reply: &Value) -> Vec<String> {
     marks.iter().filter_map(|mark| mark["name"].as_str().map(str::to_string)).collect()
 }
 
+/// Off by default, a feature is absent: no rail cell, its keys do nothing, its requests answer
+/// "feature off", and what it keeps on disk stays. Turned on in Features…, it is back at once.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_feature_that_is_off_is_absent_and_features_turns_it_on_live() {
+    let home = user_folder("flags", r#"{"repos": [], "restore_layout": false}"#);
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    {
+        let otto = Otto::launch_with("flags-1", &[env[0], MARKS]);
+        otto.call(json!({"cmd": "split"}));
+        otto.call(json!({"cmd": "mark_add", "pane": 1, "name": "notes", "key": "n"}));
+    }
+    let kept = std::fs::read_to_string(home.join("marks.json")).unwrap();
+    let otto = Otto::launch_with("flags-2", &env);
+    otto.call(json!({"cmd": "split"}));
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!(
+        (&state["state"]["features"], &state["marks"], &state["apps_bar"]["not_running"]),
+        (&json!([]), &json!([]), &json!([]))
+    );
+    // Its requests answer why; a section of no flag still opens.
+    for (request, why) in [
+        (json!({"cmd": "marks"}), "feature off: marks"),
+        (json!({"cmd": "mark_add", "pane": 1}), "feature off: marks"),
+        (json!({"cmd": "mark_go", "key": "n"}), "feature off: marks"),
+        (json!({"cmd": "section", "section": "marks"}), "feature off: marks"),
+        (json!({"cmd": "section", "section": "apps"}), "feature off: apps_section"),
+    ] {
+        assert_eq!(otto.raw(&request.to_string())["error"], why, "{request}");
+    }
+    assert_eq!(otto.call(json!({"cmd": "section", "section": "repos"}))["state"]["sidebar"], "repos");
+    // No rail cell: Tasks, Workbook, Repos.
+    let (_, labels) = sneak(&otto);
+    let rails: Vec<&String> = labels.keys().filter(|id| id.starts_with("rail:") && *id != "rail:new-task").collect();
+    assert_eq!(rails, ["rail:repos", "rail:tasks", "rail:workbook"], "{labels:?}");
+    otto.call(json!({"cmd": "key", "keys": "escape"}));
+    // The keys do nothing: no mark, no wait for a letter.
+    for keys in ["cmd-b", "cmd-shift-b", "cmd-'", "cmd-alt-1"] {
+        let reply = otto.user_key(keys);
+        assert_eq!(
+            (&reply["mode"], &reply["marks"], &reply["state"]["mark_input"]),
+            (&json!("normal"), &json!([]), &Value::Null),
+            "{keys}"
+        );
+    }
+    assert_eq!(std::fs::read_to_string(home.join("marks.json")).unwrap(), kept, "marks.json is untouched");
+
+    // Features… in the palette turns marks on: the settings say so, and the mark is back.
+    otto.user_key("cmd-p f e a t u r e s enter");
+    let listed = otto.user_key("m a r k s");
+    assert_eq!(listed["state"]["palette"]["features"][0], json!({"feature": "marks", "on": false}), "{listed}");
+    let on = otto.user_key("enter");
+    assert_eq!((&on["state"]["features"], mark_names(&on)), (&json!(["marks"]), vec!["notes".to_string()]));
+    let settings: Value = serde_json::from_str(&std::fs::read_to_string(home.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(settings["features"], json!({"marks": true}));
+    assert_eq!(otto.call(json!({"cmd": "section", "section": "marks"}))["state"]["sidebar"], "marks");
+    // A client's palette is refused, so no client turns a flag.
+    assert!(otto.raw(r#"{"cmd":"key","keys":"cmd-p"}"#)["state"]["palette"].is_null());
+}
+
 /// The mark called `name`, as the state has it.
 fn mark_named(reply: &Value, name: &str) -> Value {
     let marks = reply["marks"].as_array().cloned().unwrap_or_default();
@@ -3696,7 +3786,7 @@ fn marks_are_a_way_back_to_a_pane_and_a_tab_and_are_kept_between_runs() {
     let home = user_folder("marks", r#"{"repos": [], "restore_layout": false}"#);
     std::fs::create_dir_all(home.join("notes")).unwrap();
     let notes = home.join("notes").canonicalize().unwrap();
-    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap()), MARKS];
     {
         let otto = Otto::launch_with("marks-1", &env);
         let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
@@ -3880,7 +3970,7 @@ fn marks_are_a_way_back_to_a_pane_and_a_tab_and_are_kept_between_runs() {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_marks_wait_for_a_letter_is_the_users_and_a_mark_taken_off_by_mistake_comes_back() {
-    let otto = Otto::launch("marks-quiet");
+    let otto = Otto::launch_with("marks-quiet", &[MARKS]);
     let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
     // No marks yet.
     let empty = otto.call(json!({"cmd": "section", "section": "marks"}));
@@ -3939,7 +4029,7 @@ fn a_hand_written_marks_file_is_checked_and_commands_in_it_are_never_typed() {
     let home = user_folder("marks-file", r#"{"repos": [], "nope": 1, "restore_layout": false}"#);
     std::fs::create_dir_all(home.join("work")).unwrap();
     let work = home.join("work").canonicalize().unwrap();
-    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap()), MARKS];
     let shell = |cwd: &str, rest: &str| json!({"id": 1, "kind": {"type": "terminal"}, "cwd": cwd, "command": rest});
     let chat = json!({"id": 2, "kind": {"type": "app", "bundle": "com.example.acmechat", "name": "Acme Chat", "title": "general", "pid": 811}});
     let layout = json!({"split": {"axis": "right", "ratio": 0.6, "a": {"leaf": 1}, "b": {"leaf": 2}}});
@@ -4009,7 +4099,7 @@ fn a_hand_written_marks_file_is_checked_and_commands_in_it_are_never_typed() {
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn two_ottospaces_on_one_folder_keep_each_others_marks() {
     let home = user_folder("marks-two", r#"{"repos": []}"#);
-    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap()), MARKS];
     let (a, b) = (Otto::launch_with("marks-two-a", &env), Otto::launch_with("marks-two-b", &env));
     let on_disk = || -> Vec<String> {
         let marks = kept_marks(&home)["marks"].as_array().cloned().unwrap_or_default();
@@ -4265,13 +4355,19 @@ impl Otto {
     }
 
     /// A press and a release at `p`, the user's own.
-    /// The tab on show becomes `task`'s, as the user's click on a task that never started makes
+    /// The tab on show becomes `task`'s, as the user's start of a task that never started makes
     /// it (only the user links a tab to a task). With no stand-in agents its start fails at once.
     fn claim(&self, task: u64) -> Value {
         if self.call(json!({"cmd": "state"}))["state"]["sidebar"] != "tasks" {
             self.call(json!({"cmd": "section", "section": "tasks"}));
         }
-        self.user_click(at(self.control(&format!("task:{task}")), 0.3, 0.3))
+        self.user_click(at(self.control(&format!("task:{task}")), 0.3, 0.3));
+        self.user_start()
+    }
+
+    /// The user's click on the drawer's Start agent (Resume session): a selection starts nothing.
+    fn user_start(&self) -> Value {
+        self.user_click(at(self.control("talk:talk-start"), 0.5, 0.5))
     }
 
     fn user_click(&self, p: [f64; 2]) -> Value {
@@ -4286,6 +4382,13 @@ impl Otto {
         for i in 0..60 {
             self.call(json!({"cmd": "task_add", "title": format!("task {i}")}));
         }
+    }
+
+    /// The user starts a listed task's agent: a click on its row (the Tasks section is open),
+    /// then on Start agent.
+    fn start_task(&self, task: u64) -> Value {
+        self.user_click(at(self.control(&format!("task:{task}")), 0.3, 0.3));
+        self.user_start()
     }
 
     /// `keys` pressed as the user's own, not a client's.
@@ -4558,7 +4661,7 @@ fn under_the_quit_question_the_users_shortcut_only_cancels_and_a_second_cmd_q_qu
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_key_still_held_after_a_marks_wait_reaches_nothing() {
-    let otto = Otto::launch("marks-held");
+    let otto = Otto::launch_with("marks-held", &[MARKS]);
     let wait = |pattern: &str| otto.call(json!({"cmd": "wait", "pane": 1, "pattern": pattern, "timeout_ms": 40000}));
     let text = || otto.call(json!({"cmd": "capture", "pane": 1}))["text"].as_str().unwrap().to_string();
     // 1 | 2    two shells; pane 1 is marked `n`.
@@ -4663,7 +4766,7 @@ fn a_held_key_is_sent_only_for_keys_that_exist() {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_users_click_in_a_marks_name_keeps_the_rename_and_one_outside_ends_it() {
-    let otto = Otto::launch("marks-field");
+    let otto = Otto::launch_with("marks-field", &[MARKS]);
     otto.call(json!({"cmd": "split", "kind": "empty"}));
     otto.call(json!({"cmd": "split"}));
     otto.call(json!({"cmd": "mark_add", "pane": 2, "name": "notes"}));
@@ -5311,7 +5414,7 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn a_click_on_a_task_starts_its_agent_in_the_drawer_and_the_workspace_stays() {
+fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_workspace_stays() {
     let root = support::temp(&format!("ottospace-e2e-talk-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let (bin, repos, sessions) = (root.join("bin"), root.join("repos"), root.join("sessions"));
@@ -5334,9 +5437,11 @@ fn a_click_on_a_task_starts_its_agent_in_the_drawer_and_the_workspace_stays() {
     otto.call(json!({"cmd": "section", "section": "tasks"}));
     let before = otto.call(json!({"cmd": "state"}));
 
-    // The user's click on the row: the agent starts in the drawer at once, with the keyboard.
+    // The user's click on the row shows it; Start agent starts it in the drawer, with the keyboard.
     let row = otto.control("task:1");
-    let reply = otto.user_click(at(row, 0.3, 0.3));
+    let shown = otto.user_click(at(row, 0.3, 0.3));
+    assert_eq!((&shown["state"]["agents"], &shown["state"]["talk"]["task"]), (&json!([]), &json!(1)), "{shown}");
+    let reply = otto.user_start();
     assert_eq!((&reply["mode"], &reply["state"]["talk"]["task"]), (&json!("talk"), &json!(1)), "{reply}");
     let lines = otto.wait_for("the agent to say it is ready", |o| {
         let state = o.call(json!({"cmd": "state"}));
@@ -5389,7 +5494,7 @@ fn a_click_on_a_task_starts_its_agent_in_the_drawer_and_the_workspace_stays() {
     assert_eq!(stopped["state"]["tasks"]["list"][0]["state"], "needs_you");
 
     // A task tagged with a Codex model starts Codex with that model, in the home folder.
-    otto.user_click(at(otto.control("task:2"), 0.3, 0.3));
+    otto.start_task(2);
     let argv = otto.wait_for("codex's argv", |_| agent_argv(&bin, "codex"));
     assert_eq!(argv[1..], ["--model", "gpt-6-astra", "--", "Task: try codex"]);
     assert_eq!(Some(&argv[0]), std::env::var("HOME").ok().as_ref(), "no repository: the home folder");
@@ -5405,9 +5510,10 @@ fn a_click_on_a_task_starts_its_agent_in_the_drawer_and_the_workspace_stays() {
     otto.call(json!({"cmd": "new_tab"}));
     let theirs = otto.click(at(otto.control("task:1"), 0.3, 0.3), 1);
     assert_eq!((&theirs["state"]["active"], &theirs["state"]["agents"]), (&json!(0), &json!([2])), "{theirs}");
-    // The user's click on it: its conversation, gone on with in its session; the tab stays.
+    // The user's click on it: its conversation; Resume session goes on with it; the tab stays.
     otto.call(json!({"cmd": "select_tab", "index": 1}));
-    let reply = otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
+    otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
+    let reply = otto.user_start();
     assert_eq!(reply["state"]["active"], 1);
     let argv = otto.wait_for("claude --resume", |_| agent_argv(&bin, "claude").filter(|argv| argv[1] == "--resume"));
     assert_eq!(argv[1..], ["--resume", session.as_str()]);
@@ -5518,7 +5624,7 @@ fn a_new_task_takes_the_tab_on_show_and_the_drawer_follows_the_tab() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn a_click_on_a_session_goes_on_with_it_in_the_drawer() {
+fn a_click_shows_a_session_and_resume_goes_on_with_it_in_the_drawer() {
     let root = support::temp(&format!("ottospace-e2e-session-open-{}", std::process::id()));
     let (bin, repos, sessions) = (root.join("bin"), root.join("repos"), root.join("sessions"));
     fake_agents(&bin, &sessions);
@@ -5568,9 +5674,10 @@ fn a_click_on_a_session_goes_on_with_it_in_the_drawer() {
     assert_eq!((&theirs["state"]["talk"], &theirs["mode"]), (&Value::Null, &json!("list")), "{theirs}");
     otto.user_key("escape");
 
-    // The user's click: the conversation in the drawer, gone on with by `claude --resume <id>`
-    // in the folder the session started in. No task, and the workspace is as it was.
-    let reply = otto.user_click(row(idle));
+    // The user's click shows it; Resume session goes on with it by `claude --resume <id>` in
+    // the folder the session started in. No task, and the workspace is as it was.
+    otto.user_click(row(idle));
+    let reply = otto.user_start();
     let talk = json!({"runner": "claude", "id": idle});
     assert_eq!((&reply["mode"], &reply["state"]["talk"]["task"]), (&json!("talk"), &talk), "{reply}");
     let argv = otto.wait_for("claude --resume", |_| agent_argv(&bin, "claude"));
@@ -5626,14 +5733,15 @@ fn a_click_on_a_session_goes_on_with_it_in_the_drawer() {
     assert!(agent_argv(&bin, "claude").is_none(), "the same program, not a second one");
 
     // Stopped: what its file shows of the last moments (written to, its process recorded, as
-    // read before it stopped) is our own agent's. A click on the task goes on with it at once,
-    // in the folder it started in, below the repository; the task runs.
+    // read before it stopped) is our own agent's. Resume session goes on with it at once, in the
+    // folder it started in, below the repository; the task runs.
     let reads = |o: &Otto| o.call(json!({"cmd": "state"}))["sessions_bar"]["reads"].as_u64().unwrap_or(0);
     let read = reads(&otto);
     otto.wait_for("a read that sees the agent's process", |o| (reads(o) > read + 1).then_some(()));
     let stopped = otto.user_click(at(otto.control("talk:talk-stop"), 0.5, 0.5));
     assert_eq!(stopped["state"]["agents"], json!([]), "{stopped}");
-    let again = otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
+    otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
+    let again = otto.user_start();
     assert_eq!((&again["drawer"]["note"], &again["state"]["agents"]), (&Value::Null, &json!([1])), "{again}");
     let argv = otto.wait_for("claude --resume", |_| agent_argv(&bin, "claude"));
     assert_eq!(argv, [below.to_str().unwrap(), "--resume", idle]);
@@ -5646,7 +5754,8 @@ fn a_click_on_a_session_goes_on_with_it_in_the_drawer() {
     otto.call(json!({"cmd": "section", "section": "tasks"}));
     otto.wait_for("nothing listed", |o| (o.call(json!({"cmd": "state"}))["sessions_bar"]["count"] == 0).then_some(()));
     otto.user_key("cmd-shift-l");
-    let reading = otto.user_click(at(otto.control("rail-talk:1"), 0.5, 0.5));
+    otto.user_click(at(otto.control("rail-talk:1"), 0.5, 0.5));
+    let reading = otto.user_start();
     assert_eq!((&reading["mode"], &reading["state"]["talk"]["task"]), (&json!("talk"), &json!(1)), "{reading}");
     let argv = otto.wait_for("claude --resume, read first", |_| agent_argv(&bin, "claude"));
     assert_eq!(argv, [below.to_str().unwrap(), "--resume", idle]);
@@ -5660,7 +5769,7 @@ fn a_click_on_a_session_goes_on_with_it_in_the_drawer() {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn nothing_is_drawn_over_the_window_buttons_with_a_section_or_the_drawer_open_or_not() {
-    let otto = Otto::launch("lights");
+    let otto = Otto::launch_with("lights", &[BOTH]);
     otto.call(json!({"cmd": "split", "kind": "empty"}));
     let state = otto.call(json!({"cmd": "section", "section": "tasks"}));
     // Both rects end inside a 1 pt bottom border: the strip is 28 tall, the header 40 like a cell.
@@ -5978,7 +6087,7 @@ fn focus_moves_across_the_zones_to_the_rails_and_back() {
     // The user's goes on: the left rail (no section open), its cells by ↓, a section's list by →.
     let rail = otto.user_key(FOCUS_LEFT);
     assert_eq!((focus(&rail), &rail["mode"]), (json!({"rail": "tasks"}), &json!("list")));
-    assert_eq!(focus(&otto.user_key("down")), json!({"rail": "apps"}));
+    // With the flags off the rail is Tasks, Workbook, Repos: no Apps cell between.
     assert_eq!(focus(&otto.user_key("down")), json!({"rail": "workbook"}));
     let list = otto.user_key("right");
     assert_eq!((list["focus"].get("list").is_some(), &list["state"]["sidebar"]), (true, &json!("workbook")), "{list}");
@@ -6011,6 +6120,8 @@ fn the_command_palette_runs_a_command_by_name_for_the_user_alone() {
     assert!(rows.len() > 30, "{rows:?}");
     let first = json!({"command": "split_right", "name": "Terminal Right", "group": "Panes", "key": "⌘D"});
     assert_eq!(rows[0], first);
+    // The version left the status bar for About.
+    assert!(rows.iter().any(|row| row["name"] == "About ottospace" && row["group"] == "App"), "{rows:?}");
     // Typing narrows the rows, best first. A client's key is refused, and its split waits.
     let reply = otto.user_key("t e r m space b e l");
     let typed = (&reply["state"]["palette"]["query"], &reply["palette_rows"][0]["name"]);
@@ -6256,7 +6367,7 @@ fn tabs_and_layout_come_back_after_quitting_and_no_agent_starts() {
     // A task whose agent the user started once: it has a session, and took the tab on show.
     otto.call(json!({"cmd": "task_new", "line": "fix login >app"}));
     otto.call(json!({"cmd": "section", "section": "tasks"}));
-    otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
+    otto.start_task(1);
     otto.wait_for("the agent to start", |_| agent_argv(&bin, "claude"));
     let before = otto.call(json!({"cmd": "state"}));
     let on_show = |s: &Value| s["state"]["tabs"][s["state"]["active"].as_u64().unwrap_or(0) as usize]["task"].clone();
@@ -6853,7 +6964,7 @@ fn a_native_conversation_streams_asks_and_switches_to_the_terminal_and_back() {
     // The agents crate's stand-in, as `claude`: it records argv and stdin, and replays the fixtures.
     let fake = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ottospace-agents/tests/fakes/claude");
     std::fs::copy(&fake, bin.join("claude")).unwrap();
-    let home = user_folder("native", &json!({ "repos": [repos] }).to_string());
+    let home = user_folder("native", &json!({ "repos": [repos], "conversation_view": "native" }).to_string());
     let env = [
         ("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()),
         ("OTTOSPACE_HOME", home.to_str().unwrap()),
@@ -6868,8 +6979,8 @@ fn a_native_conversation_streams_asks_and_switches_to_the_terminal_and_back() {
     let stdin = || std::fs::read_to_string(record.join("stdin")).unwrap_or_default();
     let argv = || std::fs::read_to_string(record.join("argv")).unwrap_or_default();
 
-    // The user's click starts it natively: the prompt on stdin, the reply drawn, a card at the end.
-    otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
+    // The user starts it natively: the prompt on stdin, the reply drawn, a card at the end.
+    otto.start_task(1);
     let first = otto.wait_for("a permission card", |o| {
         let chat = chat(o);
         (chat["transcript"]["cards"].as_array()?.len() == 1).then_some(chat)
@@ -6966,6 +7077,282 @@ fn a_native_conversation_streams_asks_and_switches_to_the_terminal_and_back() {
     otto.wait_for("claude -p --resume", |_| native().then_some(()));
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
+}
+
+/// The stand-in `claude` in a folder of its own, replaying `fixtures` (name, lines), with a
+/// repository `app` listed and the native view set. Returns the root (to remove when the test
+/// ends), the record folder, and the environment to launch with, `extra` added.
+fn native_setup(
+    name: &str,
+    fixtures: &[(&str, String)],
+    extra: &[(&str, &str)],
+) -> (PathBuf, PathBuf, Vec<(String, String)>) {
+    let root = support::temp(&format!("ottospace-e2e-{name}-{}", std::process::id()));
+    let (bin, repos, record, dir) = (root.join("bin"), root.join("repos"), root.join("record"), root.join("fixtures"));
+    fake_repo(&repos.join("app"));
+    for folder in [&bin, &record, &dir] {
+        std::fs::create_dir_all(folder).unwrap();
+    }
+    for (file, body) in fixtures {
+        std::fs::write(dir.join(file), format!("{body}\n")).unwrap();
+    }
+    let fake = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ottospace-agents/tests/fakes/claude");
+    std::fs::copy(&fake, bin.join("claude")).unwrap();
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    // Its own session folder: a session the fake never writes is known to be missing.
+    let sessions = root.join("sessions/claude");
+    std::fs::create_dir_all(&sessions).unwrap();
+    let settings = json!({ "repos": [repos], "conversation_view": "native", "session_dirs": {"claude": [sessions]} });
+    std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
+    let path = |p: &Path| p.to_str().unwrap().to_string();
+    let mut env = vec![
+        ("OTTOSPACE_AGENTS_DIR".to_string(), path(&bin)),
+        ("OTTOSPACE_HOME".to_string(), path(&home)),
+        ("FAKE_DIR".to_string(), path(&record)),
+        ("FAKE_FIXTURES".to_string(), path(&dir)),
+    ];
+    env.extend(extra.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+    (root, record, env)
+}
+
+fn launch_env(name: &str, env: &[(String, String)]) -> Otto {
+    let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    Otto::launch_with(name, &env)
+}
+
+/// A fixture of the agents crate's, by file name.
+fn recorded(name: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ottospace-agents/tests/fixtures/claude").join(name);
+    std::fs::read_to_string(path).unwrap().trim_end().to_string()
+}
+
+/// An agent that ends before it replies says so on the user's screen: its exit code, that no
+/// reply came, a line not understood counted; Show details (the user's click only) opens its
+/// stderr, and the state says only that there is some, never what.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn an_agent_that_ends_before_replying_says_why() {
+    let start = format!("{}\n{{\"type\":\"made_up_kind\",\"made\":\"up\"}}", recorded("real-2.1.325-no-reply.jsonl"));
+    let stderr = ("FAKE_STDERR", "Error: made-up failure; key sk-ant-api03-madeupmadeupmadeup");
+    let (root, record, env) = native_setup("silent-end", &[("start.jsonl", start)], &[("FAKE_EXIT", "0"), stderr]);
+    let otto = launch_env("silent-end", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "plan the week >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    otto.start_task(1);
+    let ended = otto.wait_for("the end", |o| {
+        let chat = chat(o);
+        (chat["transcript"]["live"] == false && chat["details"] == true).then_some(chat)
+    });
+    let last = ended["transcript"]["entries"].as_array().unwrap().last().cloned().unwrap();
+    let notice =
+        json!({"kind": "notice", "notice": "ended", "code": 0, "signal": null, "replied": false, "details": true});
+    assert_eq!(last, notice, "{ended}");
+    assert_eq!(ended["transcript"]["not_understood"], 1, "hook lines are quiet, the made-up kind is not");
+    let state = otto.call(json!({"cmd": "state"})).to_string();
+    assert!(!state.contains("made-up failure") && !state.contains("sk-ant"), "stderr stays out of the state");
+    // A client's click opens nothing; the user's does.
+    otto.click(at(otto.control("talk:chat-details"), 0.5, 0.5), 1);
+    assert_eq!(chat(&otto)["details_open"], false);
+    otto.user_click(at(otto.control("talk:chat-details"), 0.5, 0.5));
+    assert_eq!(chat(&otto)["details_open"], true);
+    let state = otto.call(json!({"cmd": "state"})).to_string();
+    assert!(!state.contains("made-up failure") && !state.contains("sk-ant"), "{state}");
+
+    // Clicks on its row and its rail cell only show it: nothing starts, nothing is added.
+    let starts = || std::fs::read_to_string(record.join("starts")).unwrap_or_default().lines().count();
+    let entries = |o: &Otto| chat(o)["transcript"]["entries"].as_array().map(Vec::len);
+    let before = entries(&otto);
+    for _ in 0..3 {
+        otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
+        otto.user_click(at(otto.control("rail-talk:1"), 0.5, 0.5));
+        otto.user_click(at(otto.control("rail-talk:1"), 0.5, 0.5));
+    }
+    assert_eq!((starts(), entries(&otto)), (1, before), "a selection starts nothing");
+    // Resume session: its session was never written, so it starts afresh, its prompt once.
+    otto.user_start();
+    otto.wait_for("a second start", |_| (starts() == 2).then_some(()));
+    let again = otto.wait_for("its end", |o| (chat(o)["transcript"]["live"] == false).then_some(chat(o)));
+    let users = again["transcript"]["entries"].as_array().unwrap().iter().filter(|e| e["kind"] == "user").count();
+    assert_eq!(users, 2, "{again}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The recorded 2.1.325 turn is read whole ("ok", once); once its agent is stopped, the
+/// composer still takes the user's words, and ↵ starts it again and sends them.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_message_after_the_agent_ended_starts_it_again_and_is_sent() {
+    let (root, record, env) = native_setup("say-hello", &[("turn1.jsonl", recorded("real-2.1.325-turn.jsonl"))], &[]);
+    let otto = launch_env("say-hello", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "plan the week >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    let stdin = || std::fs::read_to_string(record.join("stdin")).unwrap_or_default();
+    let starts = || std::fs::read_to_string(record.join("starts")).unwrap_or_default().lines().count();
+    otto.start_task(1);
+    let replied = otto.wait_for("the reply", |o| {
+        let chat = chat(o);
+        (chat["transcript"]["turn"].is_null() && chat["replies"].as_array()?.len() == 1).then_some(chat)
+    });
+    let kinds: Vec<&str> =
+        replied["transcript"]["entries"].as_array().unwrap().iter().filter_map(|e| e["kind"].as_str()).collect();
+    assert_eq!((kinds, &replied["transcript"]["not_understood"]), (vec!["user", "assistant"], &json!(0)), "{replied}");
+    otto.user_click(at(otto.control("talk:talk-stop"), 0.5, 0.5));
+    otto.wait_for("the end", |o| (chat(o)["transcript"]["live"] == false).then_some(()));
+    // A client's words reach nothing; the user's ↵ starts it again and sends them.
+    otto.call(json!({"cmd": "key", "keys": "x enter"}));
+    assert_eq!(starts(), 1);
+    otto.user_click(at(otto.control("talk"), 0.5, 0.5));
+    otto.user_key("s a y space h e l l o enter");
+    otto.wait_for("the message", |_| (starts() == 2 && stdin().contains(r#""text":"say hello""#)).then_some(()));
+    assert_eq!(chat(&otto)["draft_chars"], 0);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The user's real click on a tab switches to it: with a task's conversation open in the
+/// drawer, with the new-task box open there (it goes aside, kept), and when the press moves a
+/// few points before it is let go (a drag onto itself).
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_click_on_a_tab_switches_with_the_drawer_open() {
+    let (root, _, env) = native_setup("tab-clicks", &[("turn1.jsonl", recorded("real-2.1.325-turn.jsonl"))], &[]);
+    let otto = launch_env("tab-clicks", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "plan the week >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.start_task(1);
+    otto.call(json!({"cmd": "new_tab"}));
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    let state = otto.call(json!({"cmd": "state"}));
+    let tasks: Vec<Value> = state["state"]["tabs"].as_array().unwrap().iter().map(|t| t["task"].clone()).collect();
+    assert_eq!((tasks, &state["state"]["active"]), (vec![json!(1), json!(null)], &json!(1)), "{}", state["state"]);
+    // The Tasks section closed: a small window's strip shows both tabs whole, none clipped
+    // under the drawer. Each is clicked near its left edge, where its title is.
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let tab = |place: usize| {
+        let r = rect(&otto.drawn()["tabs"][place]);
+        [r[0], r[1], r[2] * 0.4, r[3]]
+    };
+    let active = |reply: &Value| reply["state"]["active"].clone();
+
+    // The task's conversation open: the task's tab, then the other, and back.
+    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["talk"]["open"], true);
+    assert_eq!(active(&otto.user_click(at(tab(0), 0.5, 0.5))), 0);
+    assert_eq!(active(&otto.user_click(at(tab(1), 0.5, 0.5))), 1);
+    assert_eq!(active(&otto.user_click(at(tab(0), 0.5, 0.5))), 0);
+
+    // The new-task box open in the drawer, half written: a click on a tab goes there and the
+    // line is kept for the box's next opening.
+    otto.user_key("cmd-n");
+    otto.user_key("h a l f");
+    assert!(otto.call(json!({"cmd": "state"}))["state"]["compose"].is_string());
+    let clicked = otto.user_click(at(tab(1), 0.5, 0.5));
+    assert_eq!((active(&clicked), &clicked["state"]["compose"]), (json!(1), &Value::Null), "{}", clicked["state"]);
+    assert_eq!(otto.user_key("cmd-n")["state"]["compose"], "half");
+    otto.user_key("escape");
+
+    // A press that moves 3 points before it is let go: still that tab.
+    let from = at(tab(0), 0.5, 0.5);
+    assert_eq!(active(&otto.user_drag(from, [from[0] + 3.0, from[1]])), 0);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The check the native view must pass before it is the default again: the real `claude`, on
+/// the cheapest model, in a private instance and a scratch repository. One short model session
+/// on the user's own account: never in CI, never by default; run only with the user's approval:
+///
+/// `OTTOSPACE_REAL_CLI=1 cargo test -p ottospace --test e2e -- --ignored --nocapture real_cli_native_smoke`
+///
+/// A task started natively → a reply → a second message → Chat → Terminal → Chat → its session
+/// file exists → another task shown and back: no bubble added, nothing started again.
+#[test]
+#[ignore = "starts the real Claude Code: OTTOSPACE_REAL_CLI=1, with the user's approval"]
+fn real_cli_native_smoke() {
+    if std::env::var("OTTOSPACE_REAL_CLI").as_deref() != Ok("1") {
+        return;
+    }
+    let root = support::temp(&format!("ottospace-e2e-real-{}", std::process::id()));
+    let (bin, repos, record) = (root.join("bin"), root.join("repos"), root.join("record"));
+    fake_repo(&repos.join("app"));
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::create_dir_all(&record).unwrap();
+    // The real program as the user's login shell finds it, behind a stand-in that counts its starts.
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    let found = Command::new(&shell).args(["-lic", "command -v claude"]).output().unwrap();
+    let claude = String::from_utf8_lossy(&found.stdout).lines().last().unwrap_or_default().trim().to_string();
+    assert!(Path::new(&claude).is_file(), "no claude on the login shell's PATH: {claude:?}");
+    let starts = record.join("starts");
+    let wrapper = format!("#!/bin/sh\necho start >>'{}'\nexec '{claude}' \"$@\"\n", starts.display());
+    std::fs::write(bin.join("claude"), wrapper).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(bin.join("claude"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let config = std::env::var("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(std::env::var("HOME").unwrap()).join(".claude"));
+    let settings = json!({"repos": [repos], "conversation_view": "native", "default_agent": "claude-haiku-5-5",
+        "session_dirs": {"claude": [config]}});
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
+    let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let app = Otto::launch_with("real-cli", &env);
+    let otto = &app;
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    let count = || std::fs::read_to_string(&starts).unwrap_or_default().lines().count();
+    // A model turn takes longer than `TIMEOUT`.
+    let slow = |what: &str, check: &dyn Fn() -> Option<Value>| {
+        let start = Instant::now();
+        loop {
+            if let Some(value) = check() {
+                return value;
+            }
+            assert!(start.elapsed() < Duration::from_secs(180), "{what}: {}", chat(otto));
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    };
+    let replies = |n: usize| {
+        move || {
+            let chat = chat(otto);
+            (chat["transcript"]["turn"].is_null() && chat["replies"].as_array()?.len() >= n).then_some(chat)
+        }
+    };
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "Reply with the single word ok >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.start_task(1);
+    let first = slow("the first reply", &replies(1));
+    println!("first: {}", first["transcript"]["entries"]);
+    otto.user_key("R e p l y space w i t h space o k enter");
+    let second = slow("the second reply", &replies(2));
+    println!("second: {}", second["transcript"]["entries"]);
+    // Chat → Terminal → Chat: one process at a time, the same session.
+    otto.user_click(at(otto.control("talk:view-terminal"), 0.5, 0.5));
+    slow("the terminal", &|| {
+        otto.call(json!({"cmd": "state"}))["drawer"]["agents"]["1"].is_object().then_some(json!(null))
+    });
+    otto.user_click(at(otto.control("talk:view-chat"), 0.5, 0.5));
+    slow("chat again", &|| (chat(otto)["native"] == true).then_some(json!(null)));
+    // Its session file, where Claude Code keeps it.
+    let state = otto.call(json!({"cmd": "state"}));
+    let id = state["state"]["tasks"]["list"][0]["session"]["id"].as_str().expect("a session").to_string();
+    let cwd = repos.join("app").canonicalize().unwrap();
+    let file = config.join("projects").join(ottospace_sessions::claude::slug(&cwd)).join(format!("{id}.jsonl"));
+    assert!(file.is_file(), "no session file at {}", file.display());
+    // Another task shown and back: nothing added, nothing started.
+    let (entries, started) = (chat(otto)["transcript"]["entries"].as_array().map(Vec::len), count());
+    otto.call(json!({"cmd": "task_new", "line": "other"}));
+    otto.user_click(at(otto.control("task:2"), 0.3, 0.3));
+    otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
+    assert_eq!((chat(otto)["transcript"]["entries"].as_array().map(Vec::len), count()), (entries, started));
+    drop(app);
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 /// A session another process holds is watched from its file: the header says so, and each
