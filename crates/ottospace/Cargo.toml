@@ -7,6 +7,9 @@ license.workspace = true
 # The package also builds `ottospace-canary`, a test app (src/bin).
 default-run = "ottospace"
 
+[lints]
+workspace = true
+
 [dependencies]
 ottospace-sessions = { path = "../ottospace-sessions" }
 # Drives agent CLIs in their structured modes: the drawer's native conversation.

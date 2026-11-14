@@ -38,9 +38,14 @@ jobs:
       # ottospace-mac is not rustfmt-clean yet, so check only the crates that are.
       - name: Format
         run: cargo fmt -p ottospace -p ottospace-core -p ottospace-sessions -p ottospace-agents --check
-      # Fails on errors only: main still has clippy warnings.
+      # Fails on errors and unused code (`-D unused`); other clippy warnings do not fail.
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --locked
+        run: cargo clippy --workspace --all-targets --locked -- -D unused
+      # A library's `pub` in a private module fails: as `pub(crate)` the dead-code check sees it.
+      - name: Unreachable pub in the libraries
+        run: >-
+          cargo clippy -p ottospace-core -p ottospace-sessions -p ottospace-agents -p ottospace-mac
+          --all-targets --locked -- -D unused -D unreachable_pub
       - name: Unit tests
         run: cargo test --workspace --locked
       # The SDK without the app: its types, and that it has a method for every request.
