@@ -386,10 +386,8 @@ impl Workspace {
 /// its corner. The one look of a task on the tab bar, its panes, its row, the rail and the drawer.
 pub(crate) fn badge(mono: &str, colour: u32, state: Option<u32>, size: f32) -> Div {
     let dot = (size * 0.36).max(7.);
-    div()
-        .relative()
-        .flex_none()
-        .size(px(size))
+    let square = div()
+        .size_full()
         .flex()
         .items_center()
         .justify_center()
@@ -399,19 +397,21 @@ pub(crate) fn badge(mono: &str, colour: u32, state: Option<u32>, size: f32) -> D
         .bg(rgb(theme::SELECTED))
         .text_size(px((size * 0.4).max(9.)))
         .text_color(rgb(theme::TEXT))
-        .child(mono.to_string())
-        .children(state.map(|state| {
-            let at = px(-dot / 2.);
-            div()
-                .absolute()
-                .top(at)
-                .right(at)
-                .size(px(dot))
-                .rounded_full()
-                .bg(rgb(state))
-                .border_1()
-                .border_color(rgb(theme::BACKGROUND))
-        }))
+        .child(mono.to_string());
+    // The dot is the square's sibling: a border is painted over its own children.
+    div().relative().flex_none().size(px(size)).child(square).children(state.map(|state| {
+        // Where it was inside the square: insets start inside a border, 2 points of it.
+        let at = px(2. - dot / 2.);
+        div()
+            .absolute()
+            .top(at)
+            .right(at)
+            .size(px(dot))
+            .rounded_full()
+            .bg(rgb(state))
+            .border_1()
+            .border_color(rgb(theme::BACKGROUND))
+    }))
 }
 
 impl Workspace {
