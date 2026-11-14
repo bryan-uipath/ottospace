@@ -5748,6 +5748,51 @@ fn the_inspector_shows_a_trees_counts_and_roles_never_its_text() {
     assert!(otto.call(json!({"cmd": "close", "pane": 1}))["inspector"].is_null());
 }
 
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_tab_strip_ends_where_the_panes_end_and_its_buttons_stay_in_view() {
+    let otto = Otto::launch("strip");
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    for _ in 0..24 {
+        otto.call(json!({"cmd": "new_tab"}));
+    }
+    otto.call(json!({"cmd": "select_tab", "index": 0}));
+    // Each button lies within the pane area; each tab's drawn part, left of the buttons.
+    let fits = |what: &str| {
+        let end = otto.bounds(&[1])[0];
+        let end = end[0] + end[2];
+        let reply = otto.call(json!({"cmd": "sneak"}));
+        otto.call(json!({"cmd": "key", "keys": "escape"}));
+        let frames: Vec<(String, [f64; 4])> = reply["sneak"]["targets"]
+            .as_array()
+            .expect("targets")
+            .iter()
+            .map(|t| {
+                let f = |key: &str| t["frame"][key].as_f64().unwrap();
+                (t["source"]["id"].as_str().unwrap_or_default().to_string(), [f("x"), f("y"), f("w"), f("h")])
+            })
+            .collect();
+        let mut first = f64::MAX;
+        for id in ["top:new_tab", "top:split_right", "top:split_down"] {
+            let b = frames.iter().find(|(i, _)| i == id).unwrap_or_else(|| panic!("{what}: no {id}")).1;
+            assert!(b[0] + b[2] <= end + 0.5, "{what}: {id} {b:?} runs past the panes' end {end}");
+            first = first.min(b[0]);
+        }
+        let tabs: Vec<_> = frames.iter().filter(|(i, _)| i.starts_with("tab:")).collect();
+        assert!(!tabs.is_empty(), "{what}: no tab drawn");
+        for (id, b) in tabs {
+            assert!(b[0] + b[2] <= first + 0.5, "{what}: {id} {b:?} runs under the buttons at {first}");
+        }
+    };
+    fits("the right rail alone");
+    // The inspector, in the drawer's place and as wide.
+    let root = json!({"role": "AXWindow", "frame": {"x": 0, "y": 0, "w": 400, "h": 300}});
+    let truncated = json!({"depth": false, "nodes": false, "timeout": false});
+    let tree = json!({"root": root, "count": 1, "truncated": truncated});
+    assert!(otto.call(json!({"cmd": "inspector_fixture", "app": "Fixture", "tree": tree}))["inspector"].is_object());
+    fits("the inspector");
+}
+
 /// The tabs as the bar has them: each one's title and task.
 fn tab_titles(reply: &Value) -> Vec<(String, Value)> {
     let tabs = reply["state"]["tabs"].as_array().cloned().unwrap_or_default();
