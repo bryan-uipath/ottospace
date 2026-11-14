@@ -60,54 +60,135 @@ fn the_glow_eases_and_holds_still_with_reduced_motion() {
     assert!(glow(Stage::Imminent, 0, true) > glow(Stage::Approaching, 0, true));
 }
 
-#[test]
-fn a_block_enters_from_the_right_crosses_and_leaves_at_the_left() {
-    let window = 8 * H;
-    let e = [event(1, NINE, 60)];
-    // Beyond the window: nothing.
-    assert!(bars(&e, NINE - 8 * H - 1, window).is_empty());
-    // Entering: its start at the right edge, cut there.
-    let entering = &bars(&e, NINE - 8 * H + 30 * M, window)[0];
-    assert!((entering.from - (450. / 480.)).abs() < 1e-6 && entering.to == 1.);
-    // Crossing: its width is its length.
-    let crossing = &bars(&e, NINE - 4 * H, window)[0];
-    assert!((crossing.from - 0.5).abs() < 1e-6 && (crossing.to - 0.5 - 1. / 8.).abs() < 1e-6);
-    assert_eq!(crossing.stage, Stage::Far);
-    // Running: from the left edge, as wide as the time left.
-    let running = &bars(&e, NINE + 15 * M, window)[0];
-    assert_eq!((running.from, running.stage), (0., Stage::Running));
-    assert!((running.to - 45. / 480.).abs() < 1e-6);
-    // Ended: gone.
-    assert!(bars(&e, NINE + 60 * M, window).is_empty());
+/// Today's midnight and the next, UTC.
+const DAY: (u64, u64) = (NINE - 9 * H, NINE + 15 * H);
+const UTC: &dyn Fn(u64) -> i64 = &|_| 0;
+
+fn workday(text: &str) -> Workday {
+    Workday::parse(text).unwrap()
 }
 
 #[test]
-fn an_event_longer_than_the_window_fills_it() {
-    let b = &bars(&[event(1, NINE, 12 * 60)], NINE + H, 8 * H)[0];
-    assert_eq!((b.from, b.to, b.lane), (0., 1., Lane::Full));
+fn the_workday_setting() {
+    let table = [
+        ("09:00-17:00", Some((540, 1_020))),
+        ("06:00-22:00", Some((360, 1_320))),
+        (" 08:30 - 18:15 ", Some((510, 1_095))),
+        ("00:00-24:00", Some((0, 1_440))),
+        ("09:00-09:59", None),
+        ("09:00-10:00", Some((540, 600))),
+        ("17:00-09:00", None),
+        ("9:00-17:00", None),
+        ("09:60-17:00", None),
+        ("24:30-25:00", None),
+        ("09:00", None),
+        ("", None),
+        ("+9:00-17:00", None),
+    ];
+    for (text, want) in table {
+        assert_eq!(Workday::parse(text).map(|w| (w.start, w.end)), want, "{text:?}");
+    }
+    assert_eq!(Workday::default(), workday("09:00-17:00"));
+}
+
+#[test]
+fn a_band_spans_the_workday_and_meetings_sit_at_their_clock_places() {
+    // 06:00 to 22:00: 16 hours. A meeting 09:00–09:30 starts 3/16 in.
+    let w = workday("06:00-22:00");
+    let e = [event(1, NINE, 30), event(2, NINE + 5 * H, 60)];
+    let band = band(&e, DAY, w, UTC);
+    assert_eq!((band.from, band.to), (NINE - 3 * H, NINE + 13 * H));
+    assert_eq!(band.workday, (band.from, band.to));
+    let bars = bars(&e, DAY, &band, NINE - 4 * H);
+    assert!((bars[0].from - 3. / 16.).abs() < 1e-6 && (bars[0].to - 3.5 / 16.).abs() < 1e-6);
+    assert!((bars[1].from - 8. / 16.).abs() < 1e-6 && (bars[1].to - 9. / 16.).abs() < 1e-6);
+    // The band does not move with the clock; past meetings stay, as past.
+    let later = super::bars(&e, DAY, &band, NINE + 7 * H);
+    assert_eq!((later[0].from, later[0].stage, later[1].stage), (bars[0].from, Stage::Past, Stage::Past));
+}
+
+#[test]
+fn now_moves_along_the_band_and_pins_to_its_ends_out_of_hours() {
+    let band = band(&[], DAY, Workday::default(), UTC);
+    let table = [(NINE - 2 * H, 0.), (NINE, 0.), (NINE + 2 * H, 0.25), (NINE + 8 * H, 1.), (NINE + 12 * H, 1.)];
+    for (now, at) in table {
+        assert!((band.at(now) - at).abs() < 1e-6, "{now}: {}", band.at(now));
+    }
+}
+
+#[test]
+fn a_meeting_out_of_hours_widens_the_band_never_past_the_day() {
+    let w = Workday::default();
+    let table: [(&str, Vec<Event>, (u64, u64)); 5] = [
+        ("inside", vec![event(1, NINE + H, 30)], (NINE, NINE + 8 * H)),
+        ("spans the start", vec![event(1, NINE - 30 * M, 60)], (NINE - 30 * M, NINE + 8 * H)),
+        ("after hours", vec![event(1, NINE + 10 * H, 60)], (NINE, NINE + 11 * H)),
+        // 23:00 to 01:00: cut at midnight.
+        ("overnight", vec![event(1, NINE + 14 * H, 120)], (NINE, DAY.1)),
+        // Yesterday's 23:00 to 01:00 today: from midnight.
+        ("from yesterday", vec![event(1, DAY.0 - H, 120)], (DAY.0, NINE + 8 * H)),
+    ];
+    for (name, events, want) in table {
+        let band = band(&events, DAY, w, UTC);
+        assert_eq!((band.from, band.to), want, "{name}");
+        assert_eq!(band.workday, (NINE, NINE + 8 * H), "{name}: the marks stay at the workday");
+        let bar = &bars(&events, DAY, &band, NINE)[0];
+        assert!(bar.from >= 0. && bar.to <= 1. && bar.to > bar.from, "{name}: {bar:?}");
+    }
+    // Tomorrow's and all-day events neither widen nor show.
+    let other = [event(1, DAY.1 + H, 60), Event { all_day: true, ..event(2, DAY.0, 24 * 60) }];
+    let band = band(&other, DAY, w, UTC);
+    assert_eq!((band.from, band.to), (NINE, NINE + 8 * H));
+    assert!(bars(&other, DAY, &band, NINE).is_empty());
+}
+
+#[test]
+fn a_zero_length_event_is_a_point() {
+    let e = [event(1, NINE + 2 * H, 0)];
+    let band = band(&e, DAY, Workday::default(), UTC);
+    let bar = &bars(&e, DAY, &band, NINE)[0];
+    assert_eq!((bar.from, bar.to, bar.lane), (0.25, 0.25, Lane::Full));
+}
+
+#[test]
+fn the_workday_keeps_its_clock_on_a_day_the_clocks_change() {
+    // Clocks go forward an hour at 02:00 local: from UTC-5 to UTC-4. Midnight is 05:00 UTC.
+    let midnight = NINE - 4 * H;
+    let change = midnight + 2 * H;
+    let offset: &dyn Fn(u64) -> i64 = &|t| if t < change { -5 * 3_600 } else { -4 * 3_600 };
+    let day = (midnight, midnight + 23 * H);
+    let band = band(&[], day, Workday::default(), offset);
+    // 09:00 local is 13:00 UTC, 8 hours before 17:00 local: not 14:00 and 22:00.
+    assert_eq!(band.workday, (midnight + 8 * H, midnight + 16 * H));
+    assert_eq!(clock(band.from, -4 * 3_600), "09:00");
+    // Clocks go forward at midnight itself (Santiago): the day starts at 01:00, at the change
+    // (04:00 UTC).
+    let change = NINE - 5 * H;
+    let offset: &dyn Fn(u64) -> i64 = &|t| if t < change { -4 * 3_600 } else { -3 * 3_600 };
+    let band = super::band(&[], (change, change + 23 * H), Workday::default(), offset);
+    assert_eq!(
+        (clock(band.workday.0, -3 * 3_600), clock(band.workday.1, -3 * 3_600)),
+        ("09:00".into(), "17:00".into())
+    );
 }
 
 #[test]
 fn overlapping_events_share_two_half_lanes() {
     let events =
         [event(1, NINE, 60), event(2, NINE + 30 * M, 60), event(3, NINE + 3 * H, 30), event(4, NINE + 45 * M, 10)];
-    let lanes: Vec<(u64, Lane)> = bars(&events, NINE - H, 8 * H).iter().map(|b| (b.id, b.lane)).collect();
+    let band = band(&events, DAY, Workday::default(), UTC);
+    let lanes: Vec<(u64, Lane)> = bars(&events, DAY, &band, NINE - H).iter().map(|b| (b.id, b.lane)).collect();
     assert_eq!(lanes, [(1, Lane::Top), (2, Lane::Bottom), (4, Lane::Top), (3, Lane::Full)]);
-    // All-day events are no blocks.
-    let all_day = Event { all_day: true, ..event(5, NINE, 24 * 60) };
-    assert!(bars(&[all_day], NINE, 8 * H).is_empty());
 }
 
 #[test]
-fn hour_ticks_slide_with_the_clock() {
-    // 09:15 UTC, a zone 1 hour ahead: 10:15 local. The first tick is 11:00, 45 minutes in.
-    let ticks = ticks(NINE + 15 * M, 8 * H, 3_600);
-    assert_eq!(ticks.len(), 8);
-    assert_eq!(ticks[0].1, 11);
-    assert!((ticks[0].0 - 45. / 480.).abs() < 1e-6);
-    assert_eq!(ticks[7].1, 18);
-    // A tick at the right edge itself counts; past midnight hours start again at 0.
-    assert_eq!(super::ticks(NINE + 14 * H, 3 * H, 0).iter().map(|t| t.1).collect::<Vec<_>>(), [0, 1, 2]);
+fn the_now_card_names_the_time_and_the_next_meeting() {
+    let c = calendar(vec![event(1, NINE, 30), event(2, NINE + 2 * H, 60)]);
+    assert_eq!(c.now_card(NINE - 55 * M, 0), "08:05\nNext: Meeting 1 at 09:00 (in 55m)");
+    assert_eq!(c.now_card(NINE + 10 * M, 0), "09:10\nNow: Meeting 1");
+    assert_eq!(c.now_card(NINE + 4 * H, 0), "13:00\nNo more meetings today");
+    let (band, bars) = c.band(Workday::default(), NINE, UTC);
+    assert_eq!((band.from, bars.len()), (NINE, 2));
 }
 
 #[test]
@@ -490,7 +571,9 @@ fn clock_times_and_the_banner_line() {
     assert_eq!(clock(NINE + 5 * M, -5 * 3_600), "04:05");
     assert_eq!(clock(NINE, 16 * 3_600), "01:00");
     let e = Event { location: "Room 4".into(), ..event(1, NINE, 30) };
-    assert_eq!(describe(&e, 0), "Meeting 1\n09:00–09:30 · Room 4");
+    assert_eq!(describe(&e, 0), "Meeting 1\n09:00–09:30 · 30m · Room 4\nZoom link");
+    let plain = Event { link: None, ..event(2, NINE, 90) };
+    assert_eq!(describe(&plain, 0), "Meeting 2\n09:00–10:30 · 1h 30m");
     let mut c = calendar(vec![e]);
     c.in_call = Some(false);
     c.tick(NINE + 30_000);

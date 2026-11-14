@@ -116,6 +116,11 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     calendar: {
       on: true, events_today: 3, all_day_today: 1, events_tomorrow: 2, next_start: 1794560400000, stage: "approaching",
       updated: 1794556800000, stale: false, in_call: false, soon: true, bars: 3, chip: true,
+      band: {
+        rect: [6, 868, 1388, 8], span: [1794556800000, 1794585600000], workday: [1794556800000, 1794585600000],
+        marks: [[6, 869.5, 1, 5], [1394, 869.5, 1, 5]], now: [659.5, 868, 1.5, 8],
+        blocks: [{ start: 1794560400000, end: 1794562200000, rect: [179.5, 869.5, 86.75, 5] }], status_bar: [0, 877, 1400, 23],
+      },
       banner: { join: [0, 28, 40, 20], dismiss: [44, 28, 60, 20] }, alerts: 1, joins: null,
       rows: 4, rail: "near", tomorrow_open: false,
     },

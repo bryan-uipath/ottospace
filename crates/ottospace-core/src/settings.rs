@@ -102,9 +102,13 @@ pub struct Settings {
     /// a secret: it is never shown) or a file's path. None: no timeline.
     #[serde(default)]
     pub calendar_ics: Option<String>,
-    /// How many hours the hairline shows from now. Default: 8; 1 to 24.
+    /// The workday the timeline's band spans: `"09:00-17:00"` (the default), local 24-hour time.
     #[serde(default)]
-    pub calendar_window_hours: Option<u32>,
+    pub calendar_workday: Option<String>,
+    /// Retired: the band shows the workday. Still read, so a file that has it is not refused;
+    /// the status bar says to remove it.
+    #[serde(default)]
+    pub calendar_window_hours: Option<serde::de::IgnoredAny>,
     /// How often the feed is read again. Default: 5; at least 1.
     #[serde(default)]
     pub calendar_refresh_minutes: Option<u32>,
@@ -256,8 +260,8 @@ impl Settings {
                 return Err(why.into());
             }
         }
-        if settings.calendar_window_hours.is_some_and(|h| !(1..=24).contains(&h)) {
-            return Err("calendar_window_hours must be 1 to 24".into());
+        if settings.calendar_workday.as_deref().is_some_and(|w| crate::calendar::Workday::parse(w).is_none()) {
+            return Err(crate::calendar::WORKDAY_FORM.into());
         }
         if settings.calendar_refresh_minutes == Some(0) {
             return Err("calendar_refresh_minutes must be at least 1".into());
@@ -317,6 +321,11 @@ impl Settings {
         }
     }
 
+    /// `calendar_workday`, else 09:00 to 17:00.
+    pub fn workday(&self) -> crate::calendar::Workday {
+        self.calendar_workday.as_deref().and_then(crate::calendar::Workday::parse).unwrap_or_default()
+    }
+
     /// How long an adopted session is quiet before its task needs the user, in milliseconds:
     /// `session_quiet_minutes`, else 3 minutes. 0: never.
     pub fn quiet_ms(&self) -> u64 {
@@ -335,7 +344,12 @@ pub struct Watch {
     problems: Vec<String>,
     /// Keys changed since the start that apply at the next one.
     restart: Vec<&'static str>,
+    /// A retired key the file still has: said, never refused.
+    retired: Option<&'static str>,
 }
+
+/// What the status bar says of a retired key.
+const RETIRED: &str = "settings.json: calendar_window_hours is retired (the band shows calendar_workday): remove it";
 
 /// The longest problem the status bar shows, in characters.
 const MAX_PROBLEM: usize = 240;
@@ -359,6 +373,7 @@ impl Watch {
             started.apps_hidden.clone_from(&settings.apps_hidden);
         }
         self.restart = restart_keys(started, &settings);
+        self.retired = settings.calendar_window_hours.is_some().then_some(RETIRED);
         Some(settings)
     }
 
@@ -373,8 +388,10 @@ impl Watch {
         match self.problems.first() {
             Some(first) if more > 0 => Some(format!("{first} (+{more} more)")),
             Some(first) => Some(first.clone()),
-            None if self.restart.is_empty() => None,
-            None => Some(format!("settings.json: restart to apply {}", self.restart.join(", "))),
+            None if !self.restart.is_empty() => {
+                Some(format!("settings.json: restart to apply {}", self.restart.join(", ")))
+            }
+            None => self.retired.map(String::from),
         }
     }
 }
@@ -434,7 +451,9 @@ fn restart_keys(started: &Settings, now: &Settings) -> Vec<&'static str> {
         tasks_view: _,
         sessions_range: _,
         calendar_ics,
-        calendar_window_hours,
+        calendar_workday,
+        // Retired: read nowhere.
+        calendar_window_hours: _,
         calendar_refresh_minutes,
         calendar_notify: _,
         calendar_notify_for: _,
@@ -454,7 +473,7 @@ fn restart_keys(started: &Settings, now: &Settings) -> Vec<&'static str> {
         ("restore_layout", *restore_layout != started.restore_layout),
         ("restore_apps", *restore_apps != started.restore_apps),
         ("calendar_ics", *calendar_ics != started.calendar_ics),
-        ("calendar_window_hours", *calendar_window_hours != started.calendar_window_hours),
+        ("calendar_workday", *calendar_workday != started.calendar_workday),
         ("calendar_refresh_minutes", *calendar_refresh_minutes != started.calendar_refresh_minutes),
         ("calendar_email", *calendar_email != started.calendar_email),
     ];
@@ -834,9 +853,11 @@ mod tests {
     fn a_calendar_feed_is_a_link_or_a_path_and_a_wrong_one_is_never_named() {
         let read = |text: &str| Settings::read(text);
         let ok = read(
-            r#"{"calendar_ics": "https://calendar.example.com/private-s3cret/basic.ics", "calendar_window_hours": 6}"#,
+            r#"{"calendar_ics": "https://calendar.example.com/private-s3cret/basic.ics", "calendar_workday": "06:00-22:00"}"#,
         );
-        assert_eq!((ok.0.calendar_ics.is_some(), ok.0.calendar_window_hours, ok.1.len()), (true, Some(6), 0));
+        assert_eq!((ok.0.calendar_ics.is_some(), ok.1.len()), (true, 0));
+        assert_eq!(ok.0.workday(), crate::calendar::Workday { start: 360, end: 1_320 });
+        assert_eq!(Settings::default().workday(), crate::calendar::Workday { start: 540, end: 1_020 });
         assert_eq!(read(r#"{"calendar_ics": "~/cal/today.ics"}"#).1, Vec::<String>::new());
         for bad in [
             "http://calendar.example.com/s3cret.ics",
@@ -851,8 +872,14 @@ mod tests {
                 "{wrong:?}"
             );
         }
-        assert_eq!(read(r#"{"calendar_window_hours": 0}"#).1.len(), 1);
-        assert_eq!(read(r#"{"calendar_window_hours": 25}"#).1.len(), 1);
+        for bad in ["17:00-09:00", "09:00-09:30", "9-5", "09:00"] {
+            let wrong = read(&format!(r#"{{"calendar_workday": "{bad}"}}"#)).1;
+            assert!(wrong.len() == 1 && wrong[0].contains("\"HH:MM-HH:MM\""), "{bad}: {wrong:?}");
+        }
+        // Retired: read, so the rest of the file applies; the status bar says to remove it.
+        let mut watch = Watch::default();
+        assert!(watch.read(r#"{"calendar_window_hours": 8, "tasks_view": "project"}"#, false).is_some());
+        assert_eq!((watch.errors(), watch.line().as_deref()), (0, Some(RETIRED)));
         assert_eq!(read(r#"{"calendar_refresh_minutes": 0}"#).1.len(), 1);
         assert_eq!(read(r#"{"calendar_notify": false}"#).0.calendar_notify, Some(false));
         assert_eq!(read(r#"{"calendar_notify_for": "links"}"#).0.calendar_notify_for, Some(NotifyFor::Links));
@@ -1035,8 +1062,8 @@ mod tests {
         assert_eq!(watch.errors(), 1);
         // Several: the first (by key, or in the file's order with serde_json's `preserve_order`),
         // and how many more.
-        assert_eq!(watch.read(r#"{"calendar_window_hours": 30, "colour": 1, "default_agent": "x"}"#, false), None);
-        let first = "settings.json: calendar_window_hours: calendar_window_hours must be 1 to 24 (+2 more)";
+        assert_eq!(watch.read(r#"{"calendar_refresh_minutes": 0, "colour": 1, "default_agent": "x"}"#, false), None);
+        let first = "settings.json: calendar_refresh_minutes: calendar_refresh_minutes must be at least 1 (+2 more)";
         assert_eq!(watch.line().as_deref(), Some(first));
         assert_eq!(watch.errors(), 3);
         // Right again: applied, and nothing to say. Started with `tasks_view` as now.
@@ -1061,9 +1088,10 @@ mod tests {
         assert_eq!(watch.line().as_deref(), Some("settings.json: restart to apply apps"));
         assert!(watch.read(pinned, true).is_some());
         assert_eq!(watch.line(), None);
-        let later = r#"{"terminal": {"font_size": 16}, "tasks": "~/t", "apps": ["Slack"], "calendar_window_hours": 2}"#;
+        let later =
+            r#"{"terminal": {"font_size": 16}, "tasks": "~/t", "apps": ["Slack"], "calendar_workday": "08:00-16:00"}"#;
         assert!(watch.read(later, false).is_some());
-        let restart = "settings.json: restart to apply terminal, tasks, calendar_window_hours";
+        let restart = "settings.json: restart to apply terminal, tasks, calendar_workday";
         assert_eq!(watch.line().as_deref(), Some(restart));
         // A problem goes first; put back as at start, there is nothing to restart for.
         assert_eq!(watch.read("{", false), None);
