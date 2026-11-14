@@ -1356,6 +1356,8 @@ export function snapshot(value: unknown): Snapshot {
     compose_read: bool(o.compose_read, "compose_read"),
     compose_host: orNull(composeHost)(o.compose_host, "compose_host"),
     compose_plan: orNull(composePlan)(o.compose_plan, "compose_plan"),
+    compose_plan_line: orNull(str)(o.compose_plan_line, "compose_plan_line"),
+    compose_hint: orNull(str)(o.compose_hint, "compose_hint"),
     compose_picks: composePicks(o.compose_picks, "compose_picks"),
     welcome: bool(o.welcome, "welcome"),
     compose_menu: orNull(composeMenu)(o.compose_menu, "compose_menu"),

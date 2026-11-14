@@ -13,7 +13,7 @@ use ottospace_core::complete::{self, Dropdown, Row};
 use ottospace_core::model::{Pointed, TerminalInfo};
 use ottospace_core::{Action, Origin, theme};
 
-use crate::{KEYS_HINT, TAG_HINT, Workspace, dialog};
+use crate::{KEYS_HINT, Workspace, dialog};
 
 /// The dropdown's width, and a row's height: the shell knows its room from them.
 const MENU_WIDTH: f32 = 340.;
@@ -393,12 +393,13 @@ impl Workspace {
             .child(line)
             .children(under)
             .children(note)
-            .when(!above, |d| d.child(muted(TAG_HINT)))
+            // Its row stays while typing: the line above it does not move.
+            .when(!above, |d| d.child(div().h(px(16.)).children(self.model.compose_hint().map(muted))))
             .child(muted(keys))
     }
 
-    /// The drawer in its new-task state, `width` points wide: a heading, one-click picks for
-    /// where and who, what ↵ will do, and the box at the bottom. With the box closed (nothing
+    /// The drawer in its new-task state, `width` points wide: one-click picks for where and who,
+    /// what ↵ will do when not the default, and the box at the bottom. With the box closed (nothing
     /// open yet, `Model::welcome`) a click on its line opens it.
     pub fn render_new_task(&self, width: f32, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
         let open = self.model.compose.is_some();
@@ -406,7 +407,6 @@ impl Workspace {
         let draft = self.model.compose_line().map(|line| self.model.draft(line));
         let repo = draft.as_ref().and_then(|draft| draft.repo.clone());
         let agent = draft.as_ref().and_then(|draft| draft.agent.clone());
-        let heading = |text: &'static str| div().pt_2().text_xs().text_color(rgb(theme::MUTED)).child(text);
         let pick = |mark: char, name: Option<String>, label: String, on: bool| {
             let id = format!("pick:{mark}{}", name.as_deref().unwrap_or(""));
             div()
@@ -441,18 +441,8 @@ impl Workspace {
             let on = agent.as_ref().is_some_and(|agent| agent.eq_ignore_ascii_case(name));
             pick('@', Some(name.clone()), format!("@{name}"), on)
         });
-        let plan = self.model.compose_plan().map(|plan| {
-            let place = match (&plan.dir, &plan.branch) {
-                (Some(dir), Some(branch)) => format!("in {dir} on {branch}"),
-                (Some(dir), None) => format!("in {dir}"),
-                (None, _) => "in your home folder".into(),
-            };
-            let text = match plan.starts {
-                true => format!("↵ will start {} {place}", plan.agent),
-                false => format!("@{} is a saved agent: ↵ files the task and starts nothing yet", plan.agent),
-            };
-            div().text_xs().text_color(rgb(theme::COMPOSE)).child(text)
-        });
+        let plan =
+            self.model.compose_plan_line().map(|text| div().text_xs().text_color(rgb(theme::COMPOSE)).child(text));
         let idle = (!open).then(|| {
             dialog::panel(theme::BORDER_STRONG)
                 .id("drawer-new-task")
@@ -485,16 +475,7 @@ impl Workspace {
             .flex_col()
             .gap_2()
             .p_3()
-            .child(div().text_lg().child("What needs doing?"))
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(rgb(theme::MUTED))
-                    .child("Say it in a line: an agent starts on it here, beside your workspace."),
-            )
-            .child(heading("WHERE"))
             .child(div().flex().flex_wrap().gap_1().children(wheres).child(none))
-            .child(heading("WHO"))
             .child(div().flex().flex_wrap().gap_1().children(whos))
             .child(div().flex_1())
             .children(plan)

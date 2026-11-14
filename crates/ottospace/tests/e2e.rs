@@ -2443,6 +2443,7 @@ fn a_path_typed_a_letter_at_a_time_keeps_its_dropdown_still() {
         ("plan my week ~/notes/2026/", &json!("~/notes/2026/"))
     );
     assert_eq!(reply["compose_plan"]["dir"], "~/notes/2026/");
+    assert_eq!(reply["compose_plan_line"], "↵ will start claude in ~/notes/2026/");
     // Esc closes the list and leaves the text as typed.
     let reply = key("escape");
     assert_eq!((field(&reply).0.as_str(), &reply["compose_menu"]), ("plan my week ~/notes/2026/", &Value::Null));
@@ -2578,6 +2579,11 @@ fn with_nothing_open_the_drawer_offers_a_new_task() {
     });
     let plan = json!({"agent": "codex", "starts": true, "dir": null, "branch": null});
     assert_eq!(reply["compose_plan"], plan);
+    // Not the default agent: the drawer says what ↵ does. Something typed: no tag hint.
+    assert_eq!(
+        (&reply["compose_plan_line"], &reply["compose_hint"]),
+        (&json!("↵ will start codex in your home folder"), &Value::Null)
+    );
     // Typing goes into it; ⇧↵ files the task for later and the box closes. A task is open now:
     // the drawer goes.
     key("cmd-a t i d y space # x");
@@ -2587,8 +2593,16 @@ fn with_nothing_open_the_drawer_offers_a_new_task() {
         (&reply["compose_host"], &reply["welcome"], &reply["mode"]),
         (&Value::Null, &json!(false), &json!("normal"))
     );
-    // ⌘N opens it again; Esc leaves.
-    assert_eq!(key("cmd-n")["compose_host"], "drawer");
+    // ⌘N opens it again, empty: the tag hint, and no plan line for the default.
+    let reply = key("cmd-n");
+    assert_eq!(reply["compose_host"], "drawer");
+    assert!(
+        reply["compose_hint"].as_str().is_some_and(|hint| hint.starts_with("#project")),
+        "{}",
+        reply["compose_hint"]
+    );
+    assert_eq!(reply["compose_plan_line"], Value::Null);
+    // Esc leaves.
     // Its left edge drags: 100 pt to the right narrows it by 100. (Wider is capped at half a
     // window, which may be no wider than it is.)
     let state = otto.drawn();

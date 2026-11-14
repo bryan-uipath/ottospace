@@ -653,9 +653,7 @@ enum Filing {
     Task { title: String, priority: u8, state: State, tab: Option<u32>, assign: Assign },
 }
 
-/// What a line in the new-task box may hold, and what its keys do: in the box and where the
-/// Tasks section says how to add a task.
-const TAG_HINT: &str = "#project · >repo · @agent · /path · $skill · ^open · p1–p9";
+/// What the new-task box's keys do: in the box and where the Tasks section says how to add a task.
 const KEYS_HINT: &str = "↵ start · ⇧↵ file for later · esc leaves";
 
 /// A heading's name in a control's id and on the socket: `needs_you`, `open`, ...
@@ -2687,6 +2685,9 @@ impl Workspace {
             // What ↵ in the box would do (`agent`, `starts`, `dir`, `branch`), or null; and the
             // drawer's picks: repository names (`wheres`) and agent names (`whos`).
             "compose_plan": self.model.compose_plan(),
+            // The plan's line over the box, null when it is the default; the tag hint, null once typed.
+            "compose_plan_line": self.model.compose_plan_line(),
+            "compose_hint": self.model.compose_hint(),
             "compose_picks": self.model.compose_picks(),
             // Nothing is open yet: the drawer shows the new task by itself.
             "welcome": self.model.welcome(),

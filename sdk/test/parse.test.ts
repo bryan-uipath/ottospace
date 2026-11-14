@@ -81,6 +81,8 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     compose_read: false,
     compose_host: null,
     compose_plan: null,
+    compose_plan_line: null,
+    compose_hint: null,
     compose_picks: { wheres: ["app"], whos: ["claude", "codex"] },
     welcome: false,
     compose_menu: null,
