@@ -200,6 +200,8 @@ const CODEX: RunnerSpec = RunnerSpec {
     attach: Attach {
         // Probe 2026-11-13: the rollout grows per item; a call's start is on disk before it ends.
         watch: Support::Yes,
+        // Once the holder is gone. A daemon-held thread stays refused to a private `app-server` for
+        // minutes after its clients leave; the TUI's `codex resume` goes through the daemon.
         take_over_when_idle: Support::Yes,
         // Probe 2026-11-13: a second client of the shared daemon (`codex app-server proxy`) resumed a
         // running thread and got its live events. A private `codex app-server` refuses it.

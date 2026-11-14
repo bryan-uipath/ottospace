@@ -180,7 +180,11 @@ What is verified, and how:
   (below); Codex's app server is experimental by its own `--help`, and its command approval and
   interrupt were seen in the probe, and a file-change approval in the attach probes (below);
   `grantRoot` and `networkApprovalContext` were not.
-- Held: Claude Code's `sessions/<pid>.json` (`sessions.md`); Codex records no process.
+- Held: Claude Code's `sessions/<pid>.json` (`sessions.md`); Codex records no process, though a
+  held `thread-writer-locks/<id>.lock` refuses a `flock` (Probes, 1; not read yet).
+- Take over when idle: both continue the same id once the holder is gone (Probes, 5). A Codex
+  thread the daemon holds is refused to a private `codex app-server` for minutes after its
+  clients leave; through the daemon (the TUI's `codex resume`) it is not.
 - Watch: both files grow a record at a time while the session runs, and a tool call's start
   is on disk before its result (Probes, 3 and 4). Neither file has text deltas.
 - Attach live: Claude: an interactive or `-p` session is live only in the terminal running it;
@@ -413,7 +417,7 @@ uses the daemon unless `--no-daemon`. The daemon's socket
 
 So: a session on the daemon can be watched and joined live by another daemon client; a session
 in a private `codex app-server` (what `ottospace-agents` starts) cannot be joined by anyone, and a
-resume elsewhere is refused, not forked. Live/held: `thread/resume` is refused; on disk, the lock
+resume in another server is refused, not forked (through the same daemon it joins). Live/held: `thread/resume` is refused; on disk, the lock
 file's `flock`; on the daemon, `thread/loaded/list` and `thread/status/changed`.
 
 **2. Codex file-change approval** (private server, `thread/start {sandbox: read-only,
@@ -478,7 +482,7 @@ What watch mode can rely on:
 | Text deltas | no (stream only) | no (stream only) |
 | Live holder | `sessions/<pid>.json`, `claude agents --json --cwd` | lock file `flock`; daemon `thread/loaded/list`, `thread/status/changed` |
 | Join live | only `--bg` sessions, by `claude attach` in a terminal | daemon sessions, by a daemon client; never a private `app-server`'s |
-| Resume while held | not refused (branches the file) but for `--bg` (refused) | refused (`active writer`) |
+| Resume while held | not refused (branches the file) but for `--bg` (refused) | refused by another server (`active writer`); joined through the same daemon |
 
 Left on disk: the probe's session files (Claude: `projects/<scratch>/…jsonl`; Codex: two rollouts
 under `sessions/2026/11/13/`), the scratch folder's trust entry in Claude's `.claude.json`, and
