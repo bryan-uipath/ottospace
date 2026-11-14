@@ -6794,6 +6794,33 @@ fn the_timeline_band_spans_the_workday_directly_above_the_status_bar() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// A test run films its own window for `scripts/shot --record`: a raw frame of the window's size
+/// per change, each listed with its time. One recording at a time.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_test_run_records_its_own_window() {
+    let otto = Otto::launch("record");
+    let dir = support::temp(&format!("ottospace-e2e-record-{}", std::process::id()));
+    assert_eq!(otto.raw(r#"{"cmd":"record_stop"}"#)["error"], "not recording");
+    otto.call(json!({"cmd": "record_start", "dir": dir}));
+    let again = otto.raw(&json!({"cmd": "record_start", "dir": dir}).to_string());
+    assert_eq!(again["error"], "already recording");
+    otto.call(json!({"cmd": "split"}));
+    let index = dir.join("frames.jsonl");
+    let lines = |_: &Otto| std::fs::read_to_string(&index).ok().filter(|text| !text.is_empty());
+    otto.wait_for("a recorded frame", lines);
+    let frames = otto.call(json!({"cmd": "record_stop"}))["frames"].as_u64().expect("frames");
+    assert!(frames >= 1);
+    let text = std::fs::read_to_string(&index).unwrap();
+    let first: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+    // One pixel a point: the window's size, four bytes a pixel.
+    let window = otto.call(json!({"cmd": "state"}))["window"].clone();
+    let (w, h) = (first["w"].as_u64().unwrap(), first["h"].as_u64().unwrap());
+    assert_eq!((w as f64, h as f64), (window[2].as_f64().unwrap(), window[3].as_f64().unwrap()), "{first}");
+    let bytes = std::fs::metadata(dir.join(format!("{}.bgra", first["n"]))).unwrap().len();
+    assert_eq!(bytes, w * h * 4);
+}
+
 /// Whether sneak mode labels a control of this id: it is drawn.
 fn labelled(otto: &Otto, id: &str) -> bool {
     let (_, labels) = sneak(otto);

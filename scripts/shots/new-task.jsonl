@@ -1,0 +1,14 @@
+# The new-task box: empty, being typed in, and with a folder the agent will run in.
+{"env":{"OTTOSPACE_PATH_HOME":"{ROOT}/user"}}
+{"cmd":"split","kind":"empty"}
+{"cmd":"compose"}
+{"shot":"empty"}
+{"cmd":"key","keys":"f i x space t h e space e x p o r t space # c a n v","as":"user"}
+{"shot":"typing"}
+{"cmd":"key","keys":"escape escape","as":"user"}
+{"cmd":"compose","text":"summarise this week "}
+{"cmd":"key","keys":"~ / n o t e s / 2","as":"user"}
+{"until":"compose_menu.rows.0"}
+{"cmd":"key","keys":"tab","as":"user"}
+{"until":"compose_folder","is":"~/notes/2026/"}
+{"shot":"folder"}

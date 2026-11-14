@@ -1,0 +1,9 @@
+# A busy day: the band above the status bar, the Calendar section, a meeting's hover card.
+# Four meetings at fixed times today ({TODAY+34200} is 09:30), one around now, one tomorrow.
+{"cmd":"split","kind":"empty"}
+{"until":"calendar.band.blocks.3"}
+{"cmd":"section","section":"calendar"}
+{"shot":"day"}
+{"hover":{"rect":"calendar.band.blocks.2.rect"}}
+{"sleep_ms":1200}
+{"shot":"hover"}
