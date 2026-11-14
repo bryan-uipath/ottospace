@@ -115,6 +115,8 @@ pub struct Running {
 pub const CONFIRM_UP: &str = "the quit question is up";
 /// Why a client may not link a tab to a task, or unlink it.
 pub const TABS_USERS: &str = "only the user says which task a tab is of";
+/// Why a client's Open Settings is refused.
+pub const SETTINGS_USERS: &str = "only the user opens the settings";
 
 /// The quit question: these terminals would lose a running program.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -1069,6 +1071,16 @@ pub enum Action {
     },
     /// File ▸ Start Fresh: the next start begins empty. The layout is not kept this run.
     StartFresh,
+    /// Open Settings: a tab titled "Settings" whose terminal runs the user's editor on
+    /// `settings.json`, or the one opened so that is still there. Only the user's.
+    EditSettings,
+    /// `settings.json` as the shell read it: at start, then each time it changed. The shell's
+    /// alone: what is right applies, what is wrong is said in the status bar.
+    /// `written`: just after the app wrote it itself.
+    SettingsRead {
+        text: String,
+        written: bool,
+    },
     /// "Open <App>" on a restored app pane that waits for its window.
     UnfilledOpen {
         pane: PaneId,
@@ -1323,6 +1335,7 @@ impl Action {
                 | Action::CloseSidebar
                 | Action::NewTab
                 | Action::NewEmptyTab
+                | Action::EditSettings
                 | Action::SelectTab { .. }
                 | Action::SelectVisibleTab { .. }
                 | Action::NewTabOf { .. }
@@ -1535,6 +1548,8 @@ impl Action {
             | Action::RestoreWorkbooks { .. }
             | Action::RestoreLayout { .. }
             | Action::StartFresh
+            | Action::EditSettings
+            | Action::SettingsRead { .. }
             | Action::UnfilledOpen { .. }
             | Action::WorkbookAddTab { .. }
             | Action::WorkbookOpen { .. }
@@ -1686,6 +1701,16 @@ pub enum Effect {
     /// settings file, as it is then.
     SaveRepos {
         changes: Vec<crate::settings::ListChange>,
+    },
+    /// Pane `pane` was just opened (`Opened`) for the user's editor on `settings.json`: its
+    /// terminal runs that, not a shell. Carried out with the pane's `Opened`.
+    EditSettings {
+        pane: PaneId,
+    },
+    /// `settings.json` is right again: what the shell reads as it goes (`windows`, `capture`,
+    /// `wheel_to_apps`, `workbook_scrollback_lines`) reads these from now on.
+    ApplySettings {
+        settings: Box<crate::settings::Settings>,
     },
     /// Say this in the status bar: why a move of the user's did nothing.
     Notice {
@@ -2077,6 +2102,12 @@ pub struct Model {
     /// The meeting timeline. Not in the state: its text is other people's (`calendar_snapshot`).
     #[serde(skip)]
     pub calendar: Calendar,
+    /// The pane Open Settings opened, while it may still be there.
+    #[serde(skip)]
+    settings_pane: Option<PaneId>,
+    /// What the status bar says of `settings.json` (`settings_line`).
+    #[serde(skip)]
+    settings_file: crate::settings::Watch,
 }
 
 impl Default for Model {
@@ -2165,6 +2196,8 @@ impl Default for Model {
             layout_seen: None,
             layout_kept: true,
             calendar: Calendar::default(),
+            settings_pane: None,
+            settings_file: crate::settings::Watch::default(),
         };
         model.push_tab();
         model
@@ -2275,6 +2308,9 @@ impl Model {
             Action::StartFresh | Action::UnfilledOpen { .. } if origin != Origin::User => {
                 Some(crate::layout_file::USERS_ALONE)
             }
+            // The editor writes the user's settings: no client opens it. Only the shell reads the file.
+            Action::EditSettings => Some(SETTINGS_USERS),
+            Action::SettingsRead { .. } if origin == Origin::Socket => Some("only ottospace reads settings.json"),
             // A workbook is the user's file, and opening one starts their apps.
             Action::WorkbookSave { .. }
             | Action::WorkbookAddTab { .. }
@@ -2656,6 +2692,7 @@ impl Model {
                 | Action::Enter { .. }
                 | Action::NewTab
                 | Action::NewEmptyTab
+                | Action::EditSettings
                 | Action::SelectTab { .. }
                 | Action::SelectVisibleTab { .. }
                 | Action::NewTabOf { .. }
@@ -3767,6 +3804,8 @@ impl Model {
                 self.layout_kept = false;
                 effects.push(Effect::ForgetLayout);
             }
+            Action::EditSettings => self.edit_settings(effects),
+            Action::SettingsRead { text, written } => self.settings_read(&text, written, effects),
             Action::UnfilledOpen { pane } => self.unfilled_open(pane, effects),
             Action::WorkbookSave { uid, cwds, histories } => self.workbook_save(uid, (&cwds, &histories), effects),
             Action::WorkbookAddTab { workbook, cwds, histories } => {
@@ -5753,6 +5792,51 @@ impl Model {
         Some(format!("pane {id} cannot be fitted: {}", stuck.why()))
     }
 
+    /// Open Settings: the pane opened for it, if its terminal is still there, else a new tab of
+    /// no task, "Settings", whose terminal runs the editor.
+    fn edit_settings(&mut self, effects: &mut Vec<Effect>) {
+        let open = self.settings_pane.filter(|id| self.pane(*id).is_some_and(|p| p.kind == Kind::Terminal));
+        if let Some(id) = open {
+            return self.focus(id, effects);
+        }
+        self.leave(effects);
+        self.park_active();
+        self.push_tab_of(None);
+        let id = self.open(Kind::Terminal, Axis::Right, None, effects);
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            tab.title = "Settings".into();
+        }
+        self.settings_pane = Some(id);
+        effects.push(Effect::EditSettings { pane: id });
+    }
+
+    /// `settings.json` read again: right, what applies as the app runs is told again; wrong,
+    /// the last good settings stay. The status bar says which (`settings_line`).
+    fn settings_read(&mut self, text: &str, written: bool, effects: &mut Vec<Effect>) {
+        let Some(settings) = self.settings_file.read(text, written) else { return };
+        self.act(Action::TasksView { view: settings.tasks_view.unwrap_or_default() }, effects);
+        self.act(Action::SessionsRange { range: settings.sessions_range.unwrap_or_default() }, effects);
+        self.act(Action::SessionQuiet { ms: settings.quiet_ms() }, effects);
+        // The models are read only at start (`agent_models`).
+        let (claude, codex) = (self.models.claude.clone(), self.models.codex.clone());
+        let (default, shows) = (settings.default_agent.clone(), settings.conversation_view.unwrap_or_default());
+        self.act(Action::SetAgents { claude, codex, default, shows }, effects);
+        let (notify, links_only) = (settings.calendar_notify.unwrap_or(true), settings.calendar_notify_for);
+        let links_only = links_only == Some(crate::settings::NotifyFor::Links);
+        self.act(Action::SetCalendar { on: self.calendar.on, notify, links_only }, effects);
+        effects.push(Effect::ApplySettings { settings: Box::new(settings) });
+    }
+
+    /// What the status bar says of `settings.json`: its first problem, or the keys that need a restart.
+    pub fn settings_line(&self) -> Option<String> {
+        self.settings_file.line()
+    }
+
+    /// How many problems the last read of `settings.json` found.
+    pub fn settings_errors(&self) -> usize {
+        self.settings_file.errors()
+    }
+
     /// Brings forward the tab that holds `id`, if it is a background tab.
     fn show_tab_of(&mut self, id: PaneId, effects: &mut Vec<Effect>) {
         let holds = |tab: &Tab| tab.layout.as_ref().is_some_and(|l| l.leaves().contains(&id));
@@ -6420,6 +6504,8 @@ mod tests {
         Action::RestoreWorkbooks { .. },
         Action::RestoreLayout { .. },
         Action::StartFresh,
+        Action::EditSettings,
+        Action::SettingsRead { .. },
         Action::UnfilledOpen { .. },
         Action::WorkbookSave { .. },
         Action::WorkbookAddTab { .. },
@@ -6640,6 +6726,8 @@ mod tests {
                 launch: false,
             },
             Action::StartFresh,
+            Action::EditSettings,
+            Action::SettingsRead { text: "{}".into(), written: false },
             Action::UnfilledOpen { pane: 1 },
             Action::WorkbookSave { uid: text(), cwds: Vec::new(), histories: Vec::new() },
             Action::WorkbookAddTab { workbook: 1, cwds: Vec::new(), histories: Vec::new() },
@@ -6842,6 +6930,10 @@ mod tests {
                     Action::AppWheel { .. } => Some(crate::app_wheel::USERS_ALONE),
                     Action::RestoreLayout { .. } if origin == Origin::Socket => Some(crate::layout_file::USERS_ALONE),
                     Action::StartFresh | Action::UnfilledOpen { .. } => Some(crate::layout_file::USERS_ALONE),
+                    Action::EditSettings => Some(SETTINGS_USERS),
+                    Action::SettingsRead { .. } if origin == Origin::Socket => {
+                        Some("only ottospace reads settings.json")
+                    }
                     _ => action.takes_keyboard().then_some("sneak mode is on"),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");
@@ -7333,6 +7425,59 @@ mod tests {
             (Some(Kind::Empty), Mode::Normal, true)
         );
         assert_eq!(effects, [Effect::Opened(2)]);
+    }
+
+    #[test]
+    fn open_settings_opens_one_settings_tab_for_the_user_alone() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        // A client's, or nobody's: nothing opens.
+        for origin in [Origin::Socket, Origin::System] {
+            assert_eq!(m.refusal(&Action::EditSettings, origin), Some(SETTINGS_USERS));
+            assert_eq!(m.update(Action::EditSettings.sent_by(origin)), []);
+        }
+        assert_eq!(m.tabs.len(), 1);
+        // The user's: a tab of no task, its terminal running the editor.
+        assert_eq!(m.update(Action::EditSettings), [Effect::Opened(2), Effect::EditSettings { pane: 2 }]);
+        assert_eq!((m.tabs.len(), m.active, m.tabs[1].title.as_str(), m.tabs[1].task), (2, 1, "Settings", None));
+        // Again, from another tab: that tab and its pane come forward, nothing opens.
+        m.update(Action::SelectTab { index: 0 });
+        assert_eq!(m.update(Action::EditSettings), []);
+        assert_eq!((m.tabs.len(), m.active, m.focused), (2, 1, Some(2)));
+        // Its editor quit and the pane closed: the next opens another.
+        m.update(Action::Close { pane: Some(2) }.sent_by(Origin::System));
+        let effects = m.update(Action::EditSettings);
+        assert_eq!(effects, [Effect::Opened(3), Effect::EditSettings { pane: 3 }]);
+        assert_eq!(m.tabs.last().map(|tab| tab.title.as_str()), Some("Settings"));
+    }
+
+    #[test]
+    fn a_settings_file_read_again_applies_when_right_and_keeps_the_last_good_when_wrong() {
+        let mut m = Model::default();
+        // At start: as the shell applied it.
+        m.update(
+            Action::SettingsRead { text: r#"{"default_agent": "claude"}"#.into(), written: false }
+                .sent_by(Origin::System),
+        );
+        assert_eq!((m.settings_line(), m.settings_errors()), (None, 0));
+        // Wrong: nothing applies, and the status bar says where.
+        let wrong = r#"{"tasks_view": "project",}"#;
+        assert_eq!(m.update(Action::SettingsRead { text: wrong.into(), written: false }.sent_by(Origin::System)), []);
+        assert_eq!((m.tasks_view, m.settings_errors()), (TasksView::State, 1));
+        assert_eq!(m.settings_line().as_deref(), Some("settings.json:1:26 trailing comma"));
+        // A client never reads it for the app.
+        let right = r#"{"tasks_view": "project", "default_agent": "codex", "session_quiet_minutes": 1}"#;
+        let read = Action::SettingsRead { text: right.into(), written: false };
+        assert_eq!(m.refusal(&read, Origin::Socket), Some("only ottospace reads settings.json"));
+        assert_eq!(m.update(read.clone().sent_by(Origin::Socket)), []);
+        // Right again: what applies as the app runs applies now, and the status bar clears.
+        let effects = m.update(read.sent_by(Origin::System));
+        assert!(matches!(&effects[..], [Effect::ApplySettings { settings }] if settings.tasks_view.is_some()));
+        assert_eq!(
+            (m.tasks_view, m.default_agent.as_deref(), m.session_quiet_ms),
+            (TasksView::Project, Some("codex"), 60_000)
+        );
+        assert_eq!((m.settings_line(), m.settings_errors()), (None, 0));
     }
 
     #[test]
@@ -10974,6 +11119,10 @@ mod tests {
                     Action::AppWheel { .. } => Some(crate::app_wheel::USERS_ALONE),
                     Action::RestoreLayout { .. } if origin == Origin::Socket => Some(crate::layout_file::USERS_ALONE),
                     Action::StartFresh | Action::UnfilledOpen { .. } => Some(crate::layout_file::USERS_ALONE),
+                    Action::EditSettings => Some(SETTINGS_USERS),
+                    Action::SettingsRead { .. } if origin == Origin::Socket => {
+                        Some("only ottospace reads settings.json")
+                    }
                     _ => action.takes_keyboard().then_some(CONFIRM_UP),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");

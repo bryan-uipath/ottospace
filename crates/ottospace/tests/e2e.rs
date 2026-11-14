@@ -1476,6 +1476,87 @@ fn settings_choose_the_font_the_repos_and_the_tasks_folder() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn open_settings_edits_the_file_and_the_status_bar_says_what_is_wrong_until_it_is_right() {
+    let home = support::temp(&format!("ottospace-e2e-home-edit-{}", std::process::id()));
+    std::fs::create_dir_all(&home).unwrap();
+    // A stand-in for the user's editor: it says what it was given and waits to be told to quit.
+    let bin = support::temp(&format!("ottospace-e2e-editor-{}", std::process::id()));
+    std::fs::create_dir_all(&bin).unwrap();
+    let editor = bin.join("edit");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > {0}/args\nwhile [ ! -e {0}/quit ]; do sleep 0.1; done\n",
+        bin.display()
+    );
+    std::fs::write(&editor, script).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o700)).unwrap();
+    // `$VISUAL` with an argument, as `code -w`: the shell splits it. `$EDITOR` is not used then.
+    let visual = format!("{} -w", editor.display());
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap()), ("VISUAL", &visual), ("EDITOR", "/usr/bin/false")];
+    let otto = Otto::launch_with("settings-edit", &env);
+    let file = home.join("settings.json");
+    let titles = |reply: &Value| -> Vec<String> {
+        let tabs = reply["state"]["tabs"].as_array().unwrap();
+        tabs.iter().map(|tab| tab["title"].as_str().unwrap().to_string()).collect()
+    };
+    let start = otto.call(json!({"cmd": "state"}));
+    assert_eq!((&start["notice"], &start["settings_errors"]), (&Value::Null, &json!(0)));
+    // A client's ⌘, opens nothing.
+    assert_eq!(titles(&otto.call(json!({"cmd": "key", "keys": "cmd-,"}))), ["Tab 1"]);
+
+    // The user's, from the palette: a Settings tab, the editor on the file, made `{}` first.
+    otto.user_key("cmd-p o p e n space s e t t i n g s");
+    assert_eq!(otto.call(json!({"cmd": "state"}))["palette_rows"][0]["name"], "Open Settings");
+    otto.user_key("enter");
+    let args = otto.wait_for("the editor", |_| std::fs::read_to_string(bin.join("args")).ok());
+    assert_eq!(args, format!("-w\n{}\n", file.display()));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "{}\n");
+    let reply = otto.call(json!({"cmd": "state"}));
+    assert_eq!((titles(&reply), &reply["state"]["active"]), (vec!["Tab 1".to_string(), "Settings".into()], &json!(1)));
+
+    // Saved wrong: the status bar says where, in its own words, and nothing applies.
+    std::fs::write(&file, "{\n  \"tasks_view\": \"project\",\n}\n").unwrap();
+    let said = |o: &Otto| {
+        let reply = o.call(json!({"cmd": "state"}));
+        (reply["settings_errors"] == 1).then_some(reply)
+    };
+    let reply = otto.wait_for("the problem said", said);
+    assert_eq!(reply["notice"], "settings.json:3:1 trailing comma");
+    assert_eq!(reply["state"]["tasks_view"], "state");
+    // Removed: as at a start with no file, the defaults, and nothing to say.
+    std::fs::remove_file(&file).unwrap();
+    let gone = |o: &Otto| Some(o.call(json!({"cmd": "state"}))).filter(|reply| reply["settings_errors"] == 0);
+    assert_eq!(otto.wait_for("the defaults", gone)["notice"], Value::Null);
+    // Right: it applies, and the status bar clears.
+    std::fs::write(&file, "{\n  \"tasks_view\": \"project\"\n}\n").unwrap();
+    let applied = |o: &Otto| {
+        let reply = o.call(json!({"cmd": "state"}));
+        (reply["state"]["tasks_view"] == "project").then_some(reply)
+    };
+    let reply = otto.wait_for("the setting applied", applied);
+    assert_eq!((&reply["notice"], &reply["settings_errors"]), (&Value::Null, &json!(0)));
+    // A key read only at start: said to need a restart.
+    std::fs::write(&file, r#"{"tasks_view": "project", "terminal": {"font_size": 15}}"#).unwrap();
+    let restart = |o: &Otto| {
+        let notice = o.call(json!({"cmd": "state"}))["notice"].as_str().map(String::from);
+        notice.filter(|notice| notice.contains("restart"))
+    };
+    assert_eq!(otto.wait_for("a restart asked for", restart), "settings.json: restart to apply terminal");
+
+    // Again, from the first tab: the Settings tab comes forward, no second one.
+    otto.call(json!({"cmd": "select_tab", "index": 0}));
+    let reply = otto.user_key("cmd-,");
+    assert_eq!((titles(&reply).len(), &reply["state"]["active"]), (2, &json!(1)));
+    // The editor quits: its pane closes, as a shell's does.
+    let panes = pane_ids(&reply).len();
+    std::fs::write(bin.join("quit"), "").unwrap();
+    otto.wait_for("the editor's pane to close", |o| {
+        (pane_ids(&o.call(json!({"cmd": "state"}))).len() < panes).then_some(())
+    });
+}
+
 /// Terminal 1's entry in the state dump.
 fn term1(o: &Otto) -> Value {
     o.call(json!({"cmd": "state"}))["terminals"]["1"].clone()
