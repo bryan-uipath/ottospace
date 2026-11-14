@@ -4242,38 +4242,6 @@ fn a_pane_dropped_on_a_terminals_scrollbar_lands() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn the_keys_overlay_scrolls_inside_the_window() {
-    let otto = Otto::launch("scrollbar-keys");
-    let reply = otto.call(json!({"cmd": "keys"}));
-    let window = rect(&reply["window"]);
-    let (track, thumb, _) = otto.wait_for("the bar", |o| scrollbar(&o.drawn(), "keys"));
-    assert!(track[1] > 0.0 && track[1] + track[3] < window[3], "the panel is inside the window: {track:?} {window:?}");
-    // Dragging the bar scrolls the list and does not close it, as a press beside the panel does.
-    otto.mouse("move", at(thumb, 0.5, 0.5));
-    let reply = otto.drag(at(thumb, 0.5, 0.5), [thumb[0], track[1] + track[3]]);
-    let (_, bottom, _) = scrollbar(&reply, "keys").unwrap();
-    assert!((bottom[1] + bottom[3] - (track[1] + track[3])).abs() < 0.5, "{track:?} {bottom:?}");
-    assert_eq!(reply["state"]["keys"], true);
-
-    // The keyboard scrolls it: Home and End, a line, a page. Esc still closes.
-    let key = |keys: &str| {
-        let reply = otto.call(json!({"cmd": "key", "keys": keys}));
-        // The bar as drawn after the key, while the list is still open.
-        if reply["state"]["keys"] == true { otto.drawn() } else { reply }
-    };
-    let top = |reply: &Value| scrollbar(reply, "keys").unwrap().1[1];
-    assert_eq!(top(&key("home")), track[1]);
-    let line = top(&key("j"));
-    assert!(line > track[1] && top(&key("down")) > line && top(&key("k k")) == track[1], "{line}");
-    assert_eq!(top(&key("end")), bottom[1]);
-    assert!(top(&key("pageup")) < bottom[1] && top(&key("space")) == bottom[1]);
-    assert_eq!(key("escape")["state"]["keys"], false);
-    // Closed, its bar is gone.
-    assert_eq!(otto.drawn()["scrollbars"], json!({}));
-}
-
-#[test]
-#[ignore = "opens a window; run with `cargo e2e`"]
 fn the_pickers_list_has_a_scrollbar() {
     // Made-up apps in a folder of the test's own: never the user's, and none is ever started.
     let root = support::temp(&format!("ottospace-e2e-scrollbar-apps-{}", std::process::id()));
@@ -4426,10 +4394,12 @@ fn the_wheel_over_a_scrollbar_scrolls_what_is_under_it() {
 fn the_key_reference_fits_the_window_and_the_wheel_closes_nothing() {
     let otto = Otto::launch("wheel-keys");
     let reply = otto.call(json!({"cmd": "keys"}));
-    // What is not known yet fits a window of this size whole: no bar. A smaller one scrolls it.
+    // What is not known yet fits a window of this size whole: no bar. (A smaller window scrolls
+    // it with the shared scroll area, as the other lists.)
     assert!(scrollbar(&reply, "keys").is_none(), "{}", reply["scrollbars"]);
     let reply = otto.wheel([700.0, 450.0], -60.0, true);
     assert_eq!(reply["state"]["keys"], json!(true));
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "escape"}))["state"]["keys"], json!(false));
 }
 
 #[test]

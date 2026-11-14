@@ -5337,8 +5337,10 @@ impl Render for Workspace {
         }
         self.controls.begin();
         self.bars.begin();
-        // The Repos list is noted again only while it is drawn.
-        self.marks.borrow_mut().retain(|mark, _| !matches!(mark, Mark::Repo(_) | Mark::Checkout(_) | Mark::BarHeader));
+        // The Repos list and ⌘/'s Known are noted again only while they are drawn.
+        let drawn_anew =
+            |mark: &Mark| matches!(mark, Mark::Repo(_) | Mark::Checkout(_) | Mark::BarHeader | Mark::KeysKnown);
+        self.marks.borrow_mut().retain(|mark, _| !drawn_anew(mark));
         // The pane drag is over, however it ended (a drop, Esc, a release outside the window):
         // no drop zone may stay drawn.
         if !cx.has_active_drag() {

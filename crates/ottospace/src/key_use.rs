@@ -167,7 +167,7 @@ impl Workspace {
 
     /// The ids of the bindings the user knows now, for a test run's state.
     pub(crate) fn keys_known(&self) -> Vec<String> {
-        let now = now_ms();
+        let now = self.model.now();
         let known = ottospace_core::key_use::ALL.iter().filter(|b| self.model.key_use.known(**b, now));
         known.map(|binding| binding.id()).collect()
     }

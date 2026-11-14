@@ -3694,7 +3694,11 @@ impl Model {
                 }
             }
             Action::CloseKeys => self.keys = false,
-            Action::KeysKnown => self.keys_known_open = self.keys && !self.keys_known_open,
+            // Only while there is something known to show.
+            Action::KeysKnown => {
+                let known = self.key_use.uses().any(|(binding, _)| self.key_use.known(binding, self.now));
+                self.keys_known_open = self.keys && known && !self.keys_known_open;
+            }
             // Taken by `update` before any step.
             Action::KeyUsed { .. } | Action::ResetKeyUse | Action::RestoreKeyUse { .. } => {}
             Action::ToggleVisual => {

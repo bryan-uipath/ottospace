@@ -304,8 +304,7 @@ impl Group {
 }
 
 /// One line of the key reference.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case", tag = "type")]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Line {
     /// A binding, and how full its bar is: its score toward `KNOWN_AT`, 0 never used (no bar).
     Key { binding: Binding, fill: f32 },
@@ -315,7 +314,7 @@ pub enum Line {
 
 /// The key reference, as the core lays it out: each group with the keys not yet known first,
 /// least used first; then every known key, folded under `Known · n` unless `known_open`.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Reference {
     pub groups: Vec<(Group, Vec<Line>)>,
     /// Key lines, in `ALL`'s order.
@@ -689,6 +688,22 @@ mod tests {
         seen.sort();
         all.sort();
         assert_eq!(seen, all);
+    }
+
+    /// `Known` opens only over something known, and only while the reference shows.
+    #[test]
+    fn known_opens_only_with_something_known() {
+        use crate::model::{Action, Model};
+        let mut m = Model::default();
+        m.update(Action::ToggleKeys);
+        m.update(Action::KeysKnown);
+        assert!(!m.keys_known_open, "nothing known");
+        let read = KeyUse::parse(r#"{"version":1,"keys":{"copy":{"score":5,"at":0,"known":true}}}"#).unwrap();
+        m.update(Action::RestoreKeyUse { uses: read }.sent_by(crate::model::Origin::System));
+        m.update(Action::KeysKnown);
+        assert!(m.keys_known_open);
+        m.update(Action::KeysKnown);
+        assert!(!m.keys_known_open);
     }
 
     /// Ids are the command's own where a binding is one command's: one source for names.
