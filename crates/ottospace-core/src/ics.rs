@@ -3,9 +3,11 @@
 //!
 //! Read: VEVENT with DTSTART, DTEND or DURATION (UTC, floating, `TZID=`, `VALUE=DATE`), SUMMARY,
 //! LOCATION, DESCRIPTION, URL, UID, STATUS, RRULE (DAILY, WEEKLY, MONTHLY, YEARLY with INTERVAL,
-//! UNTIL, COUNT, BYDAY, BYMONTHDAY, BYMONTH, WKST), EXDATE, RECURRENCE-ID; VTIMEZONE with
-//! STANDARD and DAYLIGHT. A rule with another part (BYSETPOS, BYWEEKNO, BYYEARDAY, BYHOUR...)
-//! gives its first occurrence only. RDATE, VTODO, VJOURNAL and attendees are not read.
+//! UNTIL, COUNT, BYDAY, BYMONTHDAY, BYMONTH, BYSETPOS, WKST), EXDATE, RDATE, RECURRENCE-ID;
+//! VTIMEZONE with STANDARD and DAYLIGHT. An RDATE period (`VALUE=PERIOD`) counts by its start,
+//! with the event's own length; an RDATE of a whole day for a timed event, or the other way, is
+//! left out. A rule with another part (BYWEEKNO, BYYEARDAY, BYHOUR...) gives its first occurrence
+//! only. VTODO, VJOURNAL and attendees are not read.
 
 /// The most of a feed that is read: the rest is left out.
 pub const MAX_BYTES: usize = 5 * 1024 * 1024;
@@ -13,8 +15,9 @@ pub const MAX_BYTES: usize = 5 * 1024 * 1024;
 const MAX_COMPONENTS: usize = 20_000;
 /// Characters kept of a property's value.
 const MAX_VALUE: usize = 4_000;
-/// Dates of one EXDATE list, and of all of an event's.
+/// Dates of one EXDATE list, and of all of an event's; the same for RDATE.
 const MAX_EXDATES: usize = 1_000;
+const MAX_RDATES: usize = 1_000;
 /// Occurrences one expansion returns.
 pub const MAX_OCCURRENCES: usize = 500;
 /// The longest event: a longer one is cut to this.
@@ -59,6 +62,8 @@ struct Rule {
     by_day: Vec<(i64, i64)>,
     by_month_day: Vec<i64>,
     by_month: Vec<i64>,
+    /// Positions kept among a period's selected days: 1 the first, -1 the last.
+    by_set_pos: Vec<i64>,
     week_start: i64,
     /// A part this reader does not follow: only the first occurrence is given.
     unsupported: bool,
@@ -77,6 +82,7 @@ pub struct Event {
     cancelled: bool,
     rule: Option<Rule>,
     exdates: Vec<When>,
+    rdates: Vec<When>,
     recurrence_id: Option<When>,
 }
 
@@ -225,7 +231,8 @@ pub fn parse(text: &str) -> Feed {
 pub fn named_zones(feed: &Feed) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     let defined = |name: &str| feed.zones.iter().any(|z| z.id == name);
-    let times = feed.events.iter().flat_map(|e| [&e.start, &e.end, &e.recurrence_id].into_iter().flatten());
+    let times =
+        feed.events.iter().flat_map(|e| [&e.start, &e.end, &e.recurrence_id].into_iter().flatten().chain(&e.rdates));
     for when in times {
         if let When::Local { zone: Some(name), .. } = when
             && !defined(name)
@@ -252,7 +259,7 @@ pub fn expand_counted(feed: &Feed, from: i64, to: i64, zones: &Zones) -> (Vec<Oc
     let named: Vec<&str> = feed
         .events
         .iter()
-        .flat_map(|e| [&e.start, &e.end, &e.recurrence_id].into_iter().flatten().chain(&e.exdates))
+        .flat_map(|e| [&e.start, &e.end, &e.recurrence_id].into_iter().flatten().chain(&e.exdates).chain(&e.rdates))
         .filter_map(|when| match when {
             When::Local { zone: Some(name), .. } => Some(name.as_str()),
             _ => None,
@@ -314,11 +321,13 @@ pub fn expand_counted(feed: &Feed, from: i64, to: i64, zones: &Zones) -> (Vec<Oc
             }
         };
         let rule = event.rule.as_ref().filter(|r| !r.unsupported && event.recurrence_id.is_none());
-        let Some(rule) = rule else {
+        // An override is one occurrence: its RDATEs mean nothing.
+        let rdates = if event.recurrence_id.is_none() { event.rdates.as_slice() } else { &[] };
+        if rule.is_none() && rdates.is_empty() {
             let end = if all_day { day_end(start, duration, &zones.local) } else { first_utc + duration };
             push(first_utc, end);
             continue;
-        };
+        }
         // The rule counts days in the zone of its start: UTC for a `Z` time.
         let (zone_table, local_first) = match start {
             When::Utc(at) => (Table::fixed(0), *at),
@@ -327,24 +336,26 @@ pub fn expand_counted(feed: &Feed, from: i64, to: i64, zones: &Zones) -> (Vec<Oc
         };
         let first_day = local_first.div_euclid(DAY);
         let time_of_day = local_first.rem_euclid(DAY);
-        let last_day = match rule.count {
-            Some(count) => {
+        let mut set = SetDays::default();
+        let last_day = match rule.map(|r| (r, r.count)) {
+            None => first_day, // no rule: DTSTART, and the RDATEs below
+            Some((rule, Some(count))) => {
                 let mut seen = 0;
                 let mut day = first_day;
                 let stop = (to.div_euclid(DAY) + 2).min(first_day + MAX_SCAN);
                 while day <= stop && seen < count && budget > 0 {
-                    seen += i64::from(occurs(rule, first_day, day));
+                    seen += i64::from(occurs(rule, first_day, day, &mut set));
                     day += 1;
-                    budget -= 1;
+                    budget -= 1 + std::mem::take(&mut set.work);
                 }
                 if seen < count && day <= stop {
                     continue; // out of budget: left out rather than wrong
                 }
                 day - 1
             }
-            None => i64::MAX,
+            Some((_, None)) => i64::MAX,
         };
-        let until = rule.until.as_ref().map(|until| match until {
+        let until = rule.and_then(|r| r.until.as_ref()).map(|until| match until {
             When::Date(day) => zone_table.to_utc((day + 1).saturating_mul(DAY)) - 1,
             When::Local { at, zone: None } => zone_table.to_utc(*at),
             other => utc(other),
@@ -353,7 +364,7 @@ pub fn expand_counted(feed: &Feed, from: i64, to: i64, zones: &Zones) -> (Vec<Oc
         let span_days = duration / DAY + 1;
         let low = (from.saturating_sub(DAY)).div_euclid(DAY) - span_days;
         let high = to.saturating_add(DAY).div_euclid(DAY);
-        budget -= event.exdates.len() as i64 + (high - low).max(0);
+        budget -= (event.exdates.len() + rdates.len()) as i64 + (high - low).max(0);
         if budget <= 0 {
             continue;
         }
@@ -368,15 +379,30 @@ pub fn expand_counted(feed: &Feed, from: i64, to: i64, zones: &Zones) -> (Vec<Oc
         ex_times.sort_unstable();
         let excluded =
             |begin: i64, day: i64| ex_days.binary_search(&day).is_ok() || ex_times.binary_search(&begin).is_ok();
+        // (start, local day) of the rule's occurrences and the RDATEs, each start once.
+        let mut starts: Vec<(i64, i64)> = Vec::new();
         for day in low.max(first_day)..=high.min(last_day) {
-            if !occurs(rule, first_day, day) {
+            if !rule.map_or(day == first_day, |rule| occurs(rule, first_day, day, &mut set)) {
                 continue;
             }
             let begin = zone_table.to_utc(day * DAY + time_of_day);
-            if until.is_some_and(|until| begin > until)
-                || excluded(begin, day)
-                || overrides.binary_search(&(event.uid.as_str(), begin)).is_ok()
-            {
+            if !until.is_some_and(|until| begin > until) {
+                starts.push((begin, day));
+            }
+        }
+        budget -= set.work;
+        for rdate in rdates.iter().filter(|r| matches!(r, When::Date(_)) == all_day) {
+            let begin = utc(rdate);
+            let day = match rdate {
+                When::Date(day) => *day,
+                _ => (begin + zone_table.at(begin)).div_euclid(DAY),
+            };
+            starts.push((begin, day));
+        }
+        starts.sort_unstable();
+        starts.dedup_by_key(|(begin, _)| *begin);
+        for (begin, day) in starts {
+            if excluded(begin, day) || overrides.binary_search(&(event.uid.as_str(), begin)).is_ok() {
                 continue;
             }
             let end = if all_day { day_end(&When::Date(day), duration, &zones.local) } else { begin + duration };
@@ -413,6 +439,7 @@ impl Zone {
                 None => changes.push((start - from, from, to)),
                 Some(rule) => {
                     let (first_day, time) = (start.div_euclid(DAY), start.rem_euclid(DAY));
+                    let mut set = SetDays::default();
                     for year in years.clone() {
                         let months =
                             if rule.by_month.is_empty() { vec![civil(first_day).1] } else { rule.by_month.clone() };
@@ -426,9 +453,10 @@ impl Zone {
                                     When::Local { at, .. } => at - from,
                                     When::Date(day) => day * DAY,
                                 });
-                                if occurs(rule, first_day, day) && until.is_none_or(|u| local - from <= u) {
+                                if occurs(rule, first_day, day, &mut set) && until.is_none_or(|u| local - from <= u) {
                                     changes.push((local - from, from, to));
                                 }
+                                *budget -= std::mem::take(&mut set.work);
                             }
                         }
                     }
@@ -444,12 +472,54 @@ impl Zone {
     }
 }
 
+/// The days a BYSETPOS rule selects in its last period looked at, so each period is worked out
+/// once. `work` counts the days looked at, for the caller's budget.
+#[derive(Default)]
+struct SetDays {
+    from: Option<i64>,
+    days: Vec<i64>,
+    work: i64,
+}
+
 /// Whether a rule that started on `first` has an occurrence on `day` (days since 1970). COUNT
 /// and UNTIL are the caller's.
-fn occurs(rule: &Rule, first: i64, day: i64) -> bool {
-    if day < first {
+fn occurs(rule: &Rule, first: i64, day: i64, set: &mut SetDays) -> bool {
+    if day < first || !selected(rule, first, day) {
         return false;
     }
+    if rule.by_set_pos.is_empty() {
+        return true;
+    }
+    // The period's days before `first` count too: positions are of the whole period.
+    let (lo, hi) = period(rule, day);
+    if set.from != Some(lo) {
+        set.from = Some(lo);
+        set.days = (lo..=hi).filter(|d| selected(rule, first, *d)).collect();
+        set.work += hi - lo + 1;
+    }
+    let Ok(at) = set.days.binary_search(&day) else { return false };
+    let (at, len) = (at as i64, set.days.len() as i64);
+    rule.by_set_pos.iter().any(|&p| p == at + 1 || p == at - len)
+}
+
+/// The first and last day of the period of `day` that BYSETPOS counts in: the FREQ's.
+fn period(rule: &Rule, day: i64) -> (i64, i64) {
+    let (y, m, _) = civil(day);
+    match rule.freq {
+        Freq::Daily => (day, day),
+        Freq::Weekly => (week_of(rule, day), week_of(rule, day) + 6),
+        Freq::Monthly => (days_from_civil(y, m, 1), days_from_civil(y, m, month_len(y, m))),
+        Freq::Yearly => (days_from_civil(y, 1, 1), days_from_civil(y, 12, 31)),
+    }
+}
+
+/// The first day of the week of `day`, by WKST.
+fn week_of(rule: &Rule, day: i64) -> i64 {
+    day - (weekday(day) + 7 - rule.week_start) % 7
+}
+
+/// As `occurs`, before BYSETPOS and without the start: whether the other parts name `day`.
+fn selected(rule: &Rule, first: i64, day: i64) -> bool {
     let ((fy, fm, fd), (y, m, d)) = (civil(first), civil(day));
     let wd = weekday(day);
     if !rule.by_month.is_empty() && !rule.by_month.contains(&m) {
@@ -463,8 +533,7 @@ fn occurs(rule: &Rule, first: i64, day: i64) -> bool {
                 && (rule.by_month_day.is_empty() || month_day(&rule.by_month_day, y, m, d))
         }
         Freq::Weekly => {
-            let week = |day: i64| day - (weekday(day) + 7 - rule.week_start) % 7;
-            let weeks = (week(day) - week(first)) / 7;
+            let weeks = (week_of(rule, day) - week_of(rule, first)) / 7;
             weeks % rule.interval == 0 && if rule.by_day.is_empty() { wd == weekday(first) } else { on_weekday() }
         }
         Freq::Monthly => ((y - fy) * 12 + m - fm) % rule.interval == 0 && in_month(rule, y, m, d, wd, fd),
@@ -553,16 +622,22 @@ fn event_property(event: &mut Event, name: &str, params: &[(String, String)], va
         "DURATION" => event.duration = duration(value),
         "RRULE" => event.rule = rule(value),
         "RECURRENCE-ID" => event.recurrence_id = when(value, zone(), date),
-        "EXDATE" => {
-            for one in value.split(',').take(MAX_EXDATES) {
-                if event.exdates.len() < MAX_EXDATES
-                    && let Some(at) = when(one, zone(), date)
-                {
-                    event.exdates.push(at);
-                }
-            }
-        }
+        "EXDATE" => dates(&mut event.exdates, MAX_EXDATES, value, zone, date),
+        "RDATE" => dates(&mut event.rdates, MAX_RDATES, value, zone, date),
         _ => {}
+    }
+}
+
+/// A comma list of times added to `list`, which holds at most `max`. A period
+/// (`20261113T090000Z/PT1H`) by its start.
+fn dates(list: &mut Vec<When>, max: usize, value: &str, zone: impl Fn() -> Option<String>, date: bool) {
+    for one in value.split(',').take(max) {
+        let one = one.split_once('/').map_or(one, |(start, _)| start);
+        if list.len() < max
+            && let Some(at) = when(one, zone(), date)
+        {
+            list.push(at);
+        }
     }
 }
 
@@ -667,6 +742,7 @@ fn rule(value: &str) -> Option<Rule> {
         by_day: Vec::new(),
         by_month_day: Vec::new(),
         by_month: Vec::new(),
+        by_set_pos: Vec::new(),
         week_start: 0,
         unsupported: false,
     };
@@ -700,6 +776,11 @@ fn rule(value: &str) -> Option<Rule> {
                 rule.by_month =
                     list().map(|n| n.parse::<i64>().ok().filter(|n| (1..=12).contains(n))).collect::<Option<_>>()?
             }
+            "BYSETPOS" => {
+                rule.by_set_pos = list()
+                    .map(|n| n.parse::<i64>().ok().filter(|n| (-366..=366).contains(n) && *n != 0))
+                    .collect::<Option<_>>()?
+            }
             "WKST" => rule.week_start = day_of(value).filter(|(n, _)| *n == 0)?.1,
             _ => rule.unsupported = true,
         }
@@ -712,6 +793,8 @@ fn rule(value: &str) -> Option<Rule> {
     rule.by_month_day.dedup();
     rule.by_month.sort_unstable();
     rule.by_month.dedup();
+    rule.by_set_pos.sort_unstable();
+    rule.by_set_pos.dedup();
     // An ordinal BYDAY of a year with no month counts weeks of the year: not followed.
     let ordinal = rule.by_day.iter().any(|(n, _)| *n != 0);
     if (rule.freq == Freq::Yearly && ordinal && rule.by_month.is_empty())
