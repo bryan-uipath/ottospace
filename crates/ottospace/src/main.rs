@@ -583,6 +583,13 @@ enum Mark {
     /// The left column's title strip, and the open section's header.
     Strip,
     BarHeader,
+    /// The meeting timeline's band, its workday marks (0 start, 1 end), now's tick, its n-th block.
+    Band,
+    BandEdge(usize),
+    BandNow,
+    BandBlock(usize),
+    /// The status bar.
+    Status,
 }
 
 type Marks = Rc<RefCell<HashMap<Mark, Bounds<Pixels>>>>;
@@ -744,6 +751,10 @@ struct Workspace {
     /// A problem found at start (settings, font, tasks folder). It stays: unlike `error`, no
     /// later success makes it untrue.
     notice: Option<String>,
+    /// `settings.json` as last looked at, and as last read into the core: a change is read
+    /// once it has held for one look, so a file an editor is still writing is not.
+    settings_looked: Option<config::Stamp>,
+    settings_read: Option<config::Stamp>,
     /// False: the tasks folder could not be read, so nothing is written to it.
     keeping: bool,
     /// The last task that could not be written, until a write of it succeeds.
@@ -978,6 +989,9 @@ impl Workspace {
                         if tick % 60 == 0 {
                             this.seek_sessions(window, cx);
                         }
+                        if tick % 15 == 7 {
+                            this.watch_settings(window, cx);
+                        }
                         this.sync_sneak(window, cx);
                         this.read_sneak_app(window, cx);
                         if tick % 4 == 0 {
@@ -1034,6 +1048,11 @@ impl Workspace {
         // The first problem found at start, for the status bar: settings, the font, then tasks.
         let unread = (unread > 0).then(|| format!("tasks: {unread} file(s) in the tasks folder could not be read"));
         let notice = config::get().error.clone().or(terminal::choose_font(window)).or(kept.error).or(unread);
+        // What `settings.json` says at start: what is wrong in it stays in the status bar until mended.
+        let settings_read = config::settings_stamp();
+        if let Some(text) = config::get().home.as_ref().map(|_| config::settings_text().unwrap_or_default()) {
+            model.update(Action::SettingsRead { text, written: false }.sent_by(Origin::System));
+        }
         let mut this = Self {
             model,
             hosted: HashMap::new(),
@@ -1104,6 +1123,8 @@ impl Workspace {
             wanted: None,
             error: None,
             notice,
+            settings_looked: settings_read,
+            settings_read,
             keeping,
             unsaved: None,
             stored: Vec::new(),
@@ -1285,7 +1306,14 @@ impl Workspace {
                             _ => None,
                         });
                         let spawned = Instant::now();
-                        match Terminal::spawn(&vars, cwd, history) {
+                        // Open Settings: the editor on the file, not a shell.
+                        let started = if effects.contains(&Effect::EditSettings { pane: *id }) {
+                            let file = config::settings_file().map_err(std::io::Error::other);
+                            file.and_then(|file| Terminal::edit(&file.to_string_lossy(), &vars))
+                        } else {
+                            Terminal::spawn(&vars, cwd, history)
+                        };
+                        match started {
                             Ok(terminal) => drop(self.terminals.insert(*id, terminal)),
                             Err(err) => self.error = Some(format!("terminal: {err}")),
                         }
@@ -1364,7 +1392,8 @@ impl Workspace {
                     }
                 }
                 // Carried out with its pane's `Opened`, before the shell starts.
-                Effect::History { .. } => {}
+                Effect::History { .. } | Effect::EditSettings { .. } => {}
+                Effect::ApplySettings { settings } => config::set_live(settings.as_ref().clone()),
                 Effect::ForgetLayout => self.forget_layout(),
                 Effect::Snapshot { draft, material, pane } => self.ask_snapshot(draft, *material, *pane),
                 Effect::CaptureDropped { draft, material } => self.drop_capture(draft, *material),
@@ -1392,6 +1421,19 @@ impl Workspace {
         if asked {
             self.error = (!unhosted.is_empty()).then(|| unhosted.join("; "));
         }
+        // The app wrote `settings.json`: the status bar speaks of the file as written.
+        let wrote = effects.iter().any(|effect| {
+            matches!(
+                effect,
+                Effect::SaveApps { .. }
+                    | Effect::SaveRepos { .. }
+                    | Effect::SaveTasksView { .. }
+                    | Effect::SaveSessionsRange { .. }
+            )
+        });
+        if wrote {
+            self.read_settings_now(true, window, cx);
+        }
         for news in agents {
             self.dispatch(news, Origin::System, window, cx);
         }
@@ -1404,8 +1446,7 @@ impl Workspace {
         let names = self.tags_repo.as_ref() != Some(&repo);
         self.tags_repo = Some(repo.clone());
         if let Some(reader) = &self.tags {
-            let whole = self.model.compose_attached().to_vec();
-            reader.ask(tags::Job { call: 0, line, typing, whole, repo, names });
+            reader.ask(tags::Job { call: 0, line, typing, repo, names });
         }
     }
 
@@ -1484,7 +1525,7 @@ impl Workspace {
         };
         self.calls += 1;
         let repo = self.model.draft_repo(&line);
-        reader.ask(tags::Job { call: self.calls, line, typing: None, whole: Vec::new(), repo, names: true });
+        reader.ask(tags::Job { call: self.calls, line, typing: None, repo, names: true });
         self.filing.push((self.calls, filing, reply));
     }
 
@@ -1522,16 +1563,55 @@ impl Workspace {
     /// What the status bar says is wrong, most pressing first: the last request that failed, a
     /// task that is not saved, then a problem found at start.
     fn problem(&self) -> Option<String> {
-        // What is wrong with `marks.json` has its own place beside a notice from the start.
-        let start = match (&self.notice, &self.kept_marks.notice) {
-            (Some(notice), Some(marks)) => Some(format!("{notice} · {marks}")),
-            (notice, marks) => notice.clone().or(marks.clone()),
-        };
+        // What is wrong with `settings.json` and `marks.json` has its own place beside a notice from the start.
+        let start = [self.model.settings_line(), self.notice.clone(), self.kept_marks.notice.clone()];
+        let start: Vec<String> = start.into_iter().flatten().collect();
+        let start = (!start.is_empty()).then(|| start.join(" · "));
         let start = start.or(self.key_notice.clone()).or(self.kept_workbooks.notice.clone());
         let start = start.or(self.kept_layout.notice.clone());
         let unsaved = self.unsaved.clone().or(self.kept_marks.unsaved.clone()).or(self.kept_workbooks.unsaved.clone());
         let unsaved = unsaved.or(self.kept_layout.unsaved.clone());
         self.error.clone().or(unsaved).or(start)
+    }
+
+    /// Reads `settings.json` again once a change to it has held for one look: a file an editor
+    /// is still writing, or has briefly renamed away, is not read.
+    fn watch_settings(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let now = config::settings_stamp();
+        let held = now == self.settings_looked;
+        self.settings_looked = now;
+        if held {
+            self.read_settings_now(false, window, cx);
+        }
+    }
+
+    /// Reads `settings.json` into the core if it changed since the last read. Gone: as at a
+    /// start with no file, the defaults. `written`: the app has just written it.
+    fn read_settings_now(&mut self, written: bool, window: &Window, cx: &mut Context<Self>) {
+        let now = config::settings_stamp();
+        if now == self.settings_read || config::get().home.is_none() {
+            return;
+        }
+        let text = match now {
+            Some(_) => match config::settings_text() {
+                Some(text) => text,
+                None => return,
+            },
+            None => String::new(),
+        };
+        (self.settings_looked, self.settings_read) = (now, now);
+        drop(self.dispatch(Action::SettingsRead { text, written }, Origin::System, window, cx));
+        cx.notify();
+    }
+
+    /// Open Settings: the user's editor on `settings.json` in a tab of its own, made `{}` first
+    /// if there is none.
+    pub(crate) fn edit_settings(&mut self, window: &Window, cx: &mut Context<Self>) {
+        match config::settings_file() {
+            Ok(_) => drop(self.dispatch(Action::EditSettings, self.input, window, cx)),
+            Err(why) => self.error = Some(why),
+        }
+        cx.notify();
     }
 
     /// The global return key: take the keyboard back from a live app, and bring ottospace to the
@@ -2129,16 +2209,15 @@ impl Workspace {
         let open = self.model.sidebar == Some(Section::Tasks);
         if !self.sessions_quiet_told {
             self.sessions_quiet_told = true;
-            let ms = config::session_quiet_ms();
-            self.dispatch(Action::SessionQuiet { ms }, Origin::System, window, cx);
-            // Told with it, once: the models and the default agent a task starts with.
-            let settings = &config::get().settings;
-            let models = ottospace_core::agents::Models::with(settings.agent_models.as_ref());
+            let live = config::live();
+            self.dispatch(Action::SessionQuiet { ms: live.quiet_ms() }, Origin::System, window, cx);
+            // Told with it, once: the models (read only at start) and the default agent a task starts with.
+            let models = ottospace_core::agents::Models::with(config::get().settings.agent_models.as_ref());
             let agents = Action::SetAgents {
                 claude: models.claude,
                 codex: models.codex,
-                default: settings.default_agent.clone(),
-                shows: settings.conversation_view.unwrap_or(ottospace_core::settings::DEFAULT_VIEW),
+                default: live.default_agent.clone(),
+                shows: live.conversation_view.unwrap_or(ottospace_core::settings::DEFAULT_VIEW),
             };
             self.dispatch(agents, Origin::System, window, cx);
         }
@@ -2533,6 +2612,8 @@ impl Workspace {
             "cell": [f32::from(self.cell.width), f32::from(self.cell.height)],
             // The problem the status bar shows, or null. Not `error`: that key means the request failed.
             "notice": self.problem(),
+            // How many problems the last read of `settings.json` found.
+            "settings_errors": self.model.settings_errors(),
             // Each hosted window's real frame, in the same global coordinates as `parking`.
             "hosted": hosted,
             // Each hosted pane's title-bar crop in points (0: none).
@@ -2566,6 +2647,11 @@ impl Workspace {
             // The dropdown that finishes the tag at the cursor, or null: its `mark`, what is
             // `typed`, the `rows` (name, kind, detail, matched letters) and the one `selected`.
             "compose_menu": self.model.dropdown(),
+            // Where that dropdown was drawn, or null without one.
+            "compose_menu_bounds": self.model.dropdown().map(|_| rect(self.field.borrow().menu)),
+            // The folder taken from a path's dropdown that the task's agent will run in, as the
+            // line has it (`~/notes/`), or null.
+            "compose_folder": self.model.compose_folder(),
             // What the box says it could not do ("no room in the line for that name"), or null.
             "compose_note": self.model.compose_note(),
             // The tab or pane an ⌥-click would reference, outlined while ⌥ is held over it
@@ -4837,6 +4923,7 @@ impl Workspace {
             .border_color(rgb(theme::BORDER))
             .text_xs()
             .text_color(rgb(theme::MUTED))
+            .child(mark(&self.marks, Mark::Status))
             .child(div().px_2().rounded_sm().bg(rgb(color)).text_color(rgb(theme::BACKGROUND)).child(mode))
             // Long text gives way, so the build tag on the right stays in view.
             .child(div().min_w_0().truncate().child(focused))
@@ -5027,7 +5114,7 @@ fn window_managed(window: &ax::Window) -> bool {
     let (title, subrole) = (window.title().unwrap_or_default(), window.subrole().unwrap_or_default());
     let facts =
         Facts { app: name.as_deref().unwrap_or_default(), bundle: bundle.as_deref(), title: &title, subrole: &subrole };
-    rules::manages(&config::get().settings.windows, &facts)
+    rules::manages(&config::live().windows, &facts)
 }
 
 /// Apps that can be hosted right now. In a test run limited to one app, only that app.
@@ -5396,10 +5483,10 @@ impl Render for Workspace {
                     .child(zone_shadow(right_width, false))
                     // Highest, the title strip: its shadow falls on all three zones.
                     .child(title_shadow())
-                    // Over the strip's top edge, above the window's buttons: the meeting timeline.
-                    .children(self.render_hairline())
                     .children(self.render_meeting_banner(cx)),
             )
+            // The meeting timeline, directly above the status bar.
+            .children(self.render_timeline())
             .child(self.render_status(cx))
             // Only over a parked, drawn pane: a live window sits above ottospace and would cover it.
             .children(
@@ -5566,6 +5653,7 @@ fn main() {
             KeyBinding::new("cmd-shift-e", PickPaneDown, None),
             KeyBinding::new("cmd-/", ShowKeys, None),
             KeyBinding::new("cmd-p", commands::CommandPalette, None),
+            KeyBinding::new("cmd-,", commands::EditSettings, None),
             KeyBinding::new("cmd-w", ClosePane, None),
             KeyBinding::new("cmd-ctrl-left", FocusLeft, None),
             KeyBinding::new("cmd-ctrl-right", FocusRight, None),

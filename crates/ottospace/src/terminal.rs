@@ -150,6 +150,10 @@ pub struct Terminal {
     typed: std::cell::RefCell<Option<Typed>>,
     /// That command until the user types here: saving again keeps it, though nothing runs it yet.
     offered: std::cell::RefCell<Option<String>>,
+    /// The history it opened with and its time zone's offset: saved again once, not read off the view.
+    opened: Option<(History, i64)>,
+    /// The user typed here: only then is what this run printed saved.
+    touched: std::cell::Cell<bool>,
 }
 
 /// A command waiting for the shell's prompt, and when the terminal's output last came.
@@ -179,13 +183,35 @@ impl Terminal {
     /// the program and each argument are positional parameters, never read by the shell.
     /// With `$OTTOSPACE_SHELL` (tests), that shell runs it without reading a profile.
     pub fn run(program: &str, args: &[String], vars: &[(&str, String)], cwd: Option<&str>) -> io::Result<Self> {
+        let mut argv = vec![program.to_string()];
+        argv.extend(args.iter().cloned());
+        Self::script("exec \"$@\"", "ottospace-agent", argv, vars, cwd)
+    }
+
+    /// Runs the user's editor on `file`, as `run` runs a program: `$VISUAL`, else `$EDITOR`,
+    /// else `vi`, as the login shell sets them. The shell splits the variable itself, so
+    /// `code -w` works (zsh is told to split as POSIX shells do, and none expands a glob).
+    pub fn edit(file: &str, vars: &[(&str, String)]) -> io::Result<Self> {
+        const EDIT: &str = "if [ -n \"$ZSH_VERSION\" ]; then setopt shwordsplit noglob; else set -f; fi; \
+                            exec ${VISUAL:-${EDITOR:-vi}} \"$1\"";
+        Self::script(EDIT, "ottospace-settings", vec![file.to_string()], vars, None)
+    }
+
+    /// `$SHELL -lic <script> <name> <args…>`: the script is fixed text, the arguments its
+    /// positional parameters. With `$OTTOSPACE_SHELL` (tests), that shell with no profile.
+    fn script(
+        script: &str,
+        name: &str,
+        args: Vec<String>,
+        vars: &[(&str, String)],
+        cwd: Option<&str>,
+    ) -> io::Result<Self> {
         let (shell, flags) = match std::env::var("OTTOSPACE_SHELL") {
             Ok(test) => (test, "-c"),
             Err(_) => (login_shell(), "-lic"),
         };
-        let mut argv = vec![flags.to_string(), "exec \"$@\"".to_string(), "ottospace-agent".to_string()];
-        argv.push(program.to_string());
-        argv.extend(args.iter().cloned());
+        let mut argv = vec![flags.to_string(), script.to_string(), name.to_string()];
+        argv.extend(args);
         Self::start(Some(tty::Shell::new(shell, argv)), vars, cwd, None)
     }
 
@@ -210,9 +236,10 @@ impl Terminal {
         let (child, master) = (pty.child().id(), pty.file().try_clone().ok());
         let term = Arc::new(FairMutex::new(Term::new(Config::default(), &grid, listener.clone())));
         // Before the shell can print: the history comes first, its prompt below it.
-        if let Some(history) = history {
+        let opened = history.map(|history| (history.clone(), utc_offset(history.saved as i64 / 1000)));
+        if let Some((history, offset)) = &opened {
             Processor::<alacritty_terminal::vte::ansi::StdSyncHandler>::new()
-                .advance(&mut *term.lock(), &workbook::history_view(history, utc_offset(history.saved as i64 / 1000)));
+                .advance(&mut *term.lock(), &workbook::history_view(history, *offset));
         }
         let offered = history.and_then(|history| history.kept(0).command);
         let typed = offered.clone().map(|text| Typed { text, heard: None });
@@ -221,7 +248,28 @@ impl Terminal {
         let _ = shared.input.set(input.clone());
         event_loop.spawn();
         let (typed, offered) = (typed.into(), offered.into());
-        Ok(Self { term, shared, input, grid, wheel: Wheel::default(), child, pty: master, typed, offered })
+        let touched = Default::default();
+        Ok(Self {
+            term,
+            shared,
+            input,
+            grid,
+            wheel: Wheel::default(),
+            child,
+            pty: master,
+            typed,
+            offered,
+            opened,
+            touched,
+        })
+    }
+
+    /// The history to save: what it opened with, once, and this run's text if the user typed here
+    /// (`workbook::next_history`). The command aside.
+    pub fn history(&self, now: u64, most: usize) -> History {
+        let text = if most == 0 { String::new() } else { self.text(true) };
+        let (opened, offset) = self.opened.as_ref().map_or((None, 0), |(history, offset)| (Some(history), *offset));
+        workbook::next_history(opened, offset, &text, self.touched.get(), now, most)
     }
 
     /// Types a workbook's command on the prompt, without ↵, once the shell has printed, gone
@@ -287,6 +335,7 @@ impl Terminal {
     pub fn write(&self, bytes: Vec<u8>) {
         self.typed.take();
         self.offered.take();
+        self.touched.set(true);
         self.scroll(Scroll::Bottom);
         let _ = self.input.send(Msg::Input(bytes.into()));
     }

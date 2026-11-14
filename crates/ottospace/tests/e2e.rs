@@ -1198,8 +1198,8 @@ fn the_new_task_box_files_a_line() {
     let finished = [
         ("a @co", "a @codex "),
         ("a $code", "a $code-review "),
-        ("a >flow-app /src/ex", "a >flow-app /src/export/"),
-        ("a >flow-app /My", r"a >flow-app /My\ Notes/"),
+        ("a >flow-app ./src/ex", "a >flow-app ./src/export/"),
+        ("a >flow-app ./My", r"a >flow-app ./My\ Notes/"),
     ];
     for (typed, completed) in finished {
         compose(typed);
@@ -1212,17 +1212,20 @@ fn the_new_task_box_files_a_line() {
     assert_eq!(key("tab")["state"]["compose"], "costs $5");
     key("escape");
     // Every tag through the box. The skill is spelled as its folder is, once; the path is kept
-    // as typed, with where it was found: inside the repository.
-    let line = r"review the export PR #canvas >flow-app p2, @codex $Code-Review $code-review /src/export, /My\ Notes";
+    // as typed, with where it was found: inside the repository; and it stays in the title.
+    let line = r"review the export PR #canvas >flow-app p2, @codex $Code-Review $code-review ./src/export, ./My\ Notes";
     compose(line);
     let reply = key("enter");
     let task = &reply["state"]["tasks"]["list"][3];
-    assert_eq!((task["title"].as_str(), task["project"].as_str()), (Some("review the export PR"), Some("canvas")));
+    assert_eq!(
+        (task["title"].as_str(), task["project"].as_str()),
+        (Some(r"review the export PR ./src/export, ./My\ Notes"), Some("canvas"))
+    );
     assert_eq!(
         (task["repo"].as_str(), task["agent"].as_str(), task["priority"].as_u64()),
         (repo.to_str(), Some("codex"), Some(2))
     );
-    assert_eq!((&task["skills"], &task["paths"]), (&json!(["code-review"]), &json!(["/src/export", "/My Notes"])));
+    assert_eq!((&task["skills"], &task["paths"]), (&json!(["code-review"]), &json!(["./src/export", "./My Notes"])));
     assert_eq!(task["resolved"], json!([repo.join("src/export"), repo.join("My Notes")]));
     // A socket call while the box is open reads its own line's tags: the user's line keeps its own.
     compose("mine $code-review");
@@ -1471,6 +1474,152 @@ fn settings_choose_the_font_the_repos_and_the_tasks_folder() {
     assert_eq!(state["font"], json!({"name": "Menlo", "size": 15.0}));
     assert!(state["notice"].as_str().is_some_and(|e| e.contains("not installed")), "{}", state["notice"]);
     let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn open_settings_edits_the_file_and_the_status_bar_says_what_is_wrong_until_it_is_right() {
+    let home = support::temp(&format!("ottospace-e2e-home-edit-{}", std::process::id()));
+    std::fs::create_dir_all(&home).unwrap();
+    // A stand-in for the user's editor: it says what it was given and waits to be told to quit.
+    let bin = support::temp(&format!("ottospace-e2e-editor-{}", std::process::id()));
+    std::fs::create_dir_all(&bin).unwrap();
+    let editor = bin.join("edit");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > {0}/args\nwhile [ ! -e {0}/quit ]; do sleep 0.1; done\n",
+        bin.display()
+    );
+    std::fs::write(&editor, script).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o700)).unwrap();
+    // `$VISUAL` with an argument, as `code -w`: the shell splits it. `$EDITOR` is not used then.
+    let visual = format!("{} -w", editor.display());
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap()), ("VISUAL", &visual), ("EDITOR", "/usr/bin/false")];
+    let otto = Otto::launch_with("settings-edit", &env);
+    let file = home.join("settings.json");
+    let titles = |reply: &Value| -> Vec<String> {
+        let tabs = reply["state"]["tabs"].as_array().unwrap();
+        tabs.iter().map(|tab| tab["title"].as_str().unwrap().to_string()).collect()
+    };
+    let start = otto.call(json!({"cmd": "state"}));
+    assert_eq!((&start["notice"], &start["settings_errors"]), (&Value::Null, &json!(0)));
+    // A client's ⌘, opens nothing.
+    assert_eq!(titles(&otto.call(json!({"cmd": "key", "keys": "cmd-,"}))), ["Tab 1"]);
+
+    // The user's, from the palette: a Settings tab, the editor on the file, made `{}` first.
+    otto.user_key("cmd-p o p e n space s e t t i n g s");
+    assert_eq!(otto.call(json!({"cmd": "state"}))["palette_rows"][0]["name"], "Open Settings");
+    otto.user_key("enter");
+    let args = otto.wait_for("the editor", |_| std::fs::read_to_string(bin.join("args")).ok());
+    assert_eq!(args, format!("-w\n{}\n", file.display()));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "{}\n");
+    let reply = otto.call(json!({"cmd": "state"}));
+    assert_eq!((titles(&reply), &reply["state"]["active"]), (vec!["Tab 1".to_string(), "Settings".into()], &json!(1)));
+
+    // Saved wrong: the status bar says where, in its own words, and nothing applies.
+    std::fs::write(&file, "{\n  \"tasks_view\": \"project\",\n}\n").unwrap();
+    let said = |o: &Otto| {
+        let reply = o.call(json!({"cmd": "state"}));
+        (reply["settings_errors"] == 1).then_some(reply)
+    };
+    let reply = otto.wait_for("the problem said", said);
+    assert_eq!(reply["notice"], "settings.json:3:1 trailing comma");
+    assert_eq!(reply["state"]["tasks_view"], "state");
+    // Removed: as at a start with no file, the defaults, and nothing to say.
+    std::fs::remove_file(&file).unwrap();
+    let gone = |o: &Otto| Some(o.call(json!({"cmd": "state"}))).filter(|reply| reply["settings_errors"] == 0);
+    assert_eq!(otto.wait_for("the defaults", gone)["notice"], Value::Null);
+    // Right: it applies, and the status bar clears.
+    std::fs::write(&file, "{\n  \"tasks_view\": \"project\"\n}\n").unwrap();
+    let applied = |o: &Otto| {
+        let reply = o.call(json!({"cmd": "state"}));
+        (reply["state"]["tasks_view"] == "project").then_some(reply)
+    };
+    let reply = otto.wait_for("the setting applied", applied);
+    assert_eq!((&reply["notice"], &reply["settings_errors"]), (&Value::Null, &json!(0)));
+    // A key read only at start: said to need a restart.
+    std::fs::write(&file, r#"{"tasks_view": "project", "terminal": {"font_size": 15}}"#).unwrap();
+    let restart = |o: &Otto| {
+        let notice = o.call(json!({"cmd": "state"}))["notice"].as_str().map(String::from);
+        notice.filter(|notice| notice.contains("restart"))
+    };
+    assert_eq!(otto.wait_for("a restart asked for", restart), "settings.json: restart to apply terminal");
+
+    // Again, from the first tab: the Settings tab comes forward, no second one.
+    otto.call(json!({"cmd": "select_tab", "index": 0}));
+    let reply = otto.user_key("cmd-,");
+    assert_eq!((titles(&reply).len(), &reply["state"]["active"]), (2, &json!(1)));
+    // The editor quits: its pane closes, as a shell's does.
+    let panes = pane_ids(&reply).len();
+    std::fs::write(bin.join("quit"), "").unwrap();
+    otto.wait_for("the editor's pane to close", |o| {
+        (pane_ids(&o.call(json!({"cmd": "state"}))).len() < panes).then_some(())
+    });
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_settings_tab_comes_back_after_a_restart_running_the_editor_again() {
+    let home = support::temp(&format!("ottospace-e2e-home-settings-tab-{}", std::process::id()));
+    std::fs::create_dir_all(&home).unwrap();
+    let bin = support::temp(&format!("ottospace-e2e-editor-tab-{}", std::process::id()));
+    std::fs::create_dir_all(&bin).unwrap();
+    // The stand-in editor: says what it was given, then waits until it is killed.
+    let editor = bin.join("edit");
+    let script = format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > {}/args\nwhile :; do sleep 0.1; done\n", bin.display());
+    std::fs::write(&editor, script).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let editor = editor.to_str().unwrap();
+    let env = |visual: &'static str| -> Vec<(&str, String)> {
+        let visual = if visual.is_empty() { editor.to_string() } else { visual.to_string() };
+        vec![
+            ("OTTOSPACE_HOME", home.to_str().unwrap().to_string()),
+            ("VISUAL", visual),
+            ("EDITOR", "/usr/bin/false".into()),
+        ]
+    };
+    let launch = |name: &str, visual: &'static str| {
+        let env = env(visual);
+        let env: Vec<(&str, &str)> = env.iter().map(|(key, value)| (*key, value.as_str())).collect();
+        Otto::launch_with(name, &env)
+    };
+    let titles = |reply: &Value| -> Vec<String> {
+        let tabs = reply["state"]["tabs"].as_array().unwrap();
+        tabs.iter().map(|tab| tab["title"].as_str().unwrap().to_string()).collect()
+    };
+    let args = bin.join("args");
+    let editing = |o: &Otto| std::fs::read_to_string(&args).ok().map(|_| o.call(json!({"cmd": "state"})));
+
+    let mut otto = launch("settings-tab-1", "");
+    otto.user_key("cmd-,");
+    otto.wait_for("the editor", editing);
+    otto.call(json!({"cmd": "quit"}));
+    exits(&mut otto);
+    // Kept as a mark on its pane: no command, no screen.
+    let text = std::fs::read_to_string(home.join("layout.json")).unwrap();
+    assert!(text.contains("\"settings\": 1") && !text.contains("history") && !text.contains(editor), "{text}");
+
+    // Started again: one Settings tab, the editor on the file again.
+    std::fs::remove_file(&args).unwrap();
+    let mut otto = launch("settings-tab-2", "");
+    let state = otto.wait_for("the editor again", editing);
+    assert_eq!(std::fs::read_to_string(&args).unwrap(), format!("{}\n", home.join("settings.json").display()));
+    assert_eq!(titles(&state), ["Tab 1", "Settings"]);
+    // ⌘, from the first tab: that tab comes forward, no second one.
+    otto.call(json!({"cmd": "select_tab", "index": 0}));
+    let reply = otto.user_key("cmd-,");
+    assert_eq!((titles(&reply), &reply["state"]["active"]), (vec!["Tab 1".to_string(), "Settings".into()], &json!(1)));
+    otto.call(json!({"cmd": "quit"}));
+    exits(&mut otto);
+
+    // An editor that is gone: its pane closes as an exited shell's does, and nothing runs again.
+    let otto = launch("settings-tab-3", "/no/such/editor");
+    let closed = |o: &Otto| Some(o.call(json!({"cmd": "state"}))).filter(|state| pane_ids(state).is_empty());
+    let state = otto.wait_for("the editor's pane to close", closed);
+    assert_eq!(titles(&state), ["Tab 1", "Settings"]);
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(pane_ids(&otto.call(json!({"cmd": "state"}))).is_empty());
 }
 
 /// Terminal 1's entry in the state dump.
@@ -2097,28 +2246,90 @@ fn the_new_task_dropdown_finishes_the_tag_at_the_cursor() {
 
     // A path: its folder's entries are read on another thread. Taking a folder keeps the
     // dropdown open on what is inside it.
-    otto.call(json!({"cmd": "compose", "text": "see >flow-app /sr"}));
+    otto.call(json!({"cmd": "compose", "text": "see >flow-app ./sr"}));
     let rows = |want: &[&str]| {
         otto.wait_for("the entries of the path", |o| {
             let reply = o.call(json!({"cmd": "state"}));
             (menu(&reply).0 == want).then_some(reply)
         })
     };
-    assert_eq!(rows(&["/src/"])["compose_menu"]["rows"][0]["kind"], "folder");
-    assert_eq!(field(&key("tab")).0, "see >flow-app /src/");
-    assert_eq!(menu(&rows(&["/src/export/", "/src/extra.rs"])).1, None, "nothing of a name is typed yet");
+    assert_eq!(rows(&["./src/"])["compose_menu"]["rows"][0]["kind"], "folder");
+    assert_eq!(field(&key("tab")).0, "see >flow-app ./src/");
+    assert_eq!(menu(&rows(&["./src/export/", "./src/extra.rs"])).1, None, "nothing of a name is typed yet");
     key("e x p");
-    rows(&["/src/export/"]);
-    assert_eq!(field(&key("enter")).0, "see >flow-app /src/export/");
-    assert_eq!(rows(&["/src/export/a.md"])["compose_menu"]["rows"][0]["kind"], "file");
-    assert_eq!(field(&key("down enter")).0, "see >flow-app /src/export/a.md ");
+    rows(&["./src/export/"]);
+    assert_eq!(field(&key("enter")).0, "see >flow-app ./src/export/");
+    assert_eq!(rows(&["./src/export/a.md"])["compose_menu"]["rows"][0]["kind"], "file");
+    assert_eq!(field(&key("down enter")).0, "see >flow-app ./src/export/a.md ");
     otto.wait_for("the line's tags", |o| {
         o.call(json!({"cmd": "state"}))["compose_read"].as_bool().filter(|read| *read)
     });
     let reply = key("enter");
     let task = &reply["state"]["tasks"]["list"][4];
-    assert_eq!((task["title"].as_str(), &task["paths"]), (Some("see"), &json!(["/src/export/a.md"])));
+    assert_eq!(
+        (task["title"].as_str(), &task["paths"]),
+        (Some("see ./src/export/a.md"), &json!(["./src/export/a.md"]))
+    );
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_path_typed_a_letter_at_a_time_keeps_its_dropdown_still() {
+    // A made-up home folder: `~` stands for it, never the user's.
+    let home = support::temp(&format!("ottospace-e2e-paths-{}", std::process::id()));
+    for dir in ["notes/2026", "notes/archive", "Documents", "node", ".secret"] {
+        std::fs::create_dir_all(home.join(dir)).unwrap();
+    }
+    std::fs::write(home.join("notes.md"), "").unwrap();
+    let otto = Otto::launch_with("paths", &[("OTTOSPACE_PATH_HOME", home.to_str().unwrap())]);
+    let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
+    otto.call(json!({"cmd": "split"}));
+    // Prose with a `/` in it opens nothing; nor does `./` with no repository named.
+    for prose in ["and/or", "11/14", "./"] {
+        otto.call(json!({"cmd": "compose", "text": format!("plan {prose}")}));
+        assert_eq!(otto.call(json!({"cmd": "state"}))["compose_menu"], Value::Null, "{prose}");
+        while key("escape")["mode"] == "compose" {}
+    }
+    otto.call(json!({"cmd": "compose", "text": "plan my week "}));
+    key("~");
+    let first = otto.wait_for("the home folder's entries", |o| {
+        let reply = o.call(json!({"cmd": "state"}));
+        (!menu(&reply).0.is_empty()).then_some(reply)
+    });
+    // Directories first, a hidden one left out.
+    assert_eq!(menu(&first).0, ["~/Documents/", "~/node/", "~/notes/", "~/notes.md"]);
+    let at = rect(&first["compose_menu_bounds"]);
+    let line = rect(&first["field"]["bounds"]);
+    // The edge that meets the line: the top below it, the bottom above it.
+    let edge = |r: [f64; 4]| if r[1] < line[1] { r[1] + r[3] } else { r[1] };
+    // Each key's reply waits for the frame that draws it: the list is there on every one, in place.
+    for c in "/notes/2".chars() {
+        let reply = key(&c.to_string());
+        let (rows, menu_at) = (menu(&reply).0, rect(&reply["compose_menu_bounds"]));
+        assert!(!rows.is_empty(), "after {c:?} the list is empty: {}", reply["compose_menu"]);
+        assert_eq!((menu_at[0], menu_at[2], edge(menu_at)), (at[0], at[2], edge(at)), "after {c:?} it moved");
+    }
+    otto.wait_for("the folder's entries", |o| {
+        let reply = o.call(json!({"cmd": "state"}));
+        (menu(&reply).0 == ["~/notes/2026/"]).then_some(())
+    });
+    // The user's Tab takes the folder: `/` after it, and the agent will run there.
+    let reply = otto.call(json!({"cmd": "key", "keys": "tab", "as": "user"}));
+    assert_eq!(
+        (field(&reply).0.as_str(), &reply["compose_folder"]),
+        ("plan my week ~/notes/2026/", &json!("~/notes/2026/"))
+    );
+    assert_eq!(reply["compose_plan"]["dir"], "~/notes/2026/");
+    // Esc closes the list and leaves the text as typed.
+    let reply = key("escape");
+    assert_eq!((field(&reply).0.as_str(), &reply["compose_menu"]), ("plan my week ~/notes/2026/", &Value::Null));
+    otto.wait_for("the line's tags", |o| o.call(json!({"cmd": "state"}))["compose_read"].as_bool().filter(|r| *r));
+    // ⇧↵ files it for later: no agent starts. The path stays in the title; the folder is the task's.
+    let reply = key("shift-enter");
+    let task = &reply["state"]["tasks"]["list"][0];
+    let folder = home.join("notes/2026").to_string_lossy().into_owned();
+    assert_eq!((&task["title"], &task["folder"]), (&json!("plan my week ~/notes/2026/"), &json!(folder)));
 }
 
 #[test]
@@ -2161,7 +2372,11 @@ fn files_dropped_on_the_new_task_box_and_what_is_pointed_at_go_into_the_line() {
     let task = &reply["state"]["tasks"]["list"][0];
     assert_eq!(
         (task["title"].as_str(), &task["paths"], &task["resolved"]),
-        (Some("read"), &json!([file, folder]), &json!([file, folder]))
+        (
+            Some(format!("read {} {folder}", file.replace(' ', "\\ ")).as_str()),
+            &json!([file, folder]),
+            &json!([file, folder])
+        )
     );
     // A name with a space that is not a plain space stays one word, and one path. A dropped
     // path is that very file: with `>flow-app` in the line it is not looked for inside the
@@ -5946,6 +6161,52 @@ fn tabs_and_layout_come_back_after_quitting_and_no_agent_starts() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn a_restored_terminal_keeps_its_history_once_and_adds_a_block_only_after_typing() {
+    let home = user_folder("restore-once", r#"{"repos": []}"#);
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    // The restored pane's text once its divider shows: how often `line` is in it, and how many dividers.
+    let restored = |run: &str, lines: &[&str]| {
+        let otto = Otto::launch_with(run, &env);
+        let text = otto.wait_for("the history back", |o| {
+            let pane = pane_ids(&o.call(json!({"cmd": "state"}))).first().copied()?;
+            let text = o.call(json!({"cmd": "capture", "pane": pane, "history": true}))["text"].as_str()?.to_string();
+            text.contains("── saved ").then_some(text)
+        });
+        let count = |what: &dyn Fn(&str) -> bool| text.lines().filter(|line| what(line)).count();
+        let counts: Vec<usize> = lines.iter().map(|want| count(&|line| line == *want)).collect();
+        (otto, counts, count(&|line| line.starts_with("── saved ")), text)
+    };
+    let quit = |mut otto: Otto| {
+        otto.call(json!({"cmd": "quit"}));
+        exits(&mut otto);
+    };
+    let run = |otto: &Otto, word: &str| {
+        let pane = pane_ids(&otto.call(json!({"cmd": "state"})))[0];
+        otto.call(json!({"cmd": "type", "pane": pane, "text": format!("printf 'run-%s\\n' {word}\r")}));
+        otto.call(json!({"cmd": "wait", "pane": pane, "pattern": format!("^run-{word}$"), "timeout_ms": 30000}));
+    };
+    let otto = Otto::launch_with("restore-once-1", &env);
+    otto.call(json!({"cmd": "split"}));
+    run(&otto, "one");
+    quit(otto);
+    // Started twice, nothing typed: one copy, one divider, each time.
+    for start in ["restore-once-2", "restore-once-3"] {
+        let (otto, counts, dividers, text) = restored(start, &["run-one"]);
+        assert_eq!((counts, dividers), (vec![1], 1), "{text}");
+        quit(otto);
+    }
+    // A command run: one more block, and one more divider.
+    let (otto, ..) = restored("restore-once-4", &[]);
+    run(&otto, "two");
+    quit(otto);
+    let (otto, counts, dividers, text) = restored("restore-once-5", &["run-one", "run-two"]);
+    assert_eq!((counts, dividers), (vec![1, 1], 2), "{text}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn a_layout_file_that_does_not_read_is_set_aside_and_restore_layout_false_starts_empty() {
     let pid = std::process::id();
     let dir = support::temp(&format!("ottospace-e2e-restored-dir-{pid}"));
@@ -6183,8 +6444,62 @@ fn no_feed_no_timeline() {
     let otto = Otto::launch("calendar-off");
     let calendar = otto.call(json!({"cmd": "state"}))["calendar"].clone();
     assert_eq!((&calendar["on"], &calendar["bars"], &calendar["chip"]), (&json!(false), &json!(0), &json!(false)));
+    assert_eq!(calendar["band"], Value::Null, "no band");
     // `calendar_call` answers only in a test run; an agent cannot learn it from the guide.
     assert!(!include_str!("../skill/guide.md").contains("calendar_call"));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_timeline_band_spans_the_workday_directly_above_the_status_bar() {
+    let home = calendar_folder(
+        "calendar-band",
+        &feed(&[
+            ("a", "Alpha", -7_200, -5_400, ""),
+            ("b", "Beta", 3_600, 5_400, ""),
+            ("c", "Gamma", 7_200, 10_800, ""),
+        ]),
+        None,
+    );
+    // The whole day, so every fixture meeting is inside it whenever the test runs.
+    let settings = json!({ "calendar_ics": home.join("today.ics"), "calendar_workday": "00:00-24:00", "repos": [] });
+    std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
+    let otto = Otto::launch_with("calendar-band", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    calendar_read(&otto);
+    let band = otto.wait_for("the band drawn", |o| {
+        let b = o.call(json!({"cmd": "state"}))["calendar"]["band"].clone();
+        (b["rect"].is_array() && b["status_bar"].is_array() && b["now"].is_array()).then_some(b)
+    });
+    let r = |v: &Value| -> Vec<f64> { v.as_array().expect("a rect").iter().filter_map(Value::as_f64).collect() };
+    let (rect, status) = (r(&band["rect"]), r(&band["status_bar"]));
+    // Directly above the status bar (its mark is inside its 1-point top border), as wide as the
+    // window less its insets; nothing at the top.
+    assert!((rect[1] + rect[3] + 1. - status[1]).abs() < 0.5, "{band}");
+    assert!((rect[2] - (status[2] - 12.)).abs() < 0.5 && rect[1] > 100., "{band}");
+    let (from, to) = (band["span"][0].as_f64().unwrap(), band["span"][1].as_f64().unwrap());
+    let x = |t: f64| rect[0] + (t.clamp(from, to) - from) / (to - from) * rect[2];
+    // The workday's marks at both ends.
+    let marks: Vec<Vec<f64>> = band["marks"].as_array().unwrap().iter().map(r).collect();
+    assert!((marks[0][0] - rect[0]).abs() < 1. && (marks[1][0] - (rect[0] + rect[2])).abs() < 1., "{band}");
+    // Each meeting of today at its clock place, within a point.
+    let blocks = band["blocks"].as_array().unwrap();
+    let today = otto.call(json!({"cmd": "state"}))["calendar"]["events_today"].as_u64().unwrap();
+    assert_eq!(blocks.len() as u64, today, "{band}");
+    assert!(today >= 1, "{band}");
+    for block in blocks {
+        let at = r(&block["rect"]);
+        let (start, end) = (block["start"].as_f64().unwrap(), block["end"].as_f64().unwrap());
+        assert!((at[0] - x(start)).abs() < 1., "{block} in {band}");
+        assert!((at[2] - (x(end) - x(start)).max(3.)).abs() < 1., "{block} in {band}");
+    }
+    // Now's tick, where the clock says (it moves a point a minute at most).
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as f64;
+    let tick = r(&band["now"]);
+    assert!((tick[0] + tick[2] / 2. - x(now)).abs() < 2., "{band}");
+    // No title on the socket.
+    assert!(!otto.call(json!({"cmd": "state"})).to_string().contains("Gamma"));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// Whether sneak mode labels a control of this id: it is drawn.

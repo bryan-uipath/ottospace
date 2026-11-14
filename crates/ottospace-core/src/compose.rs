@@ -1,5 +1,6 @@
 //! The new-task box: one line of text becomes a task. Tags: `#project`, `>repo`, `@agent`,
-//! `/path`, `$skill`, `^reference`, `p1`..`p9`; the rest is the title. See "Tags" in `docs/reference.md`.
+//! `/path`, `$skill`, `^reference`, `p1`..`p9`; the rest, and every path, is the title. See "Tags"
+//! in `docs/reference.md`.
 
 use crate::tasks::MAX_TAG;
 
@@ -13,7 +14,8 @@ pub struct Draft {
     pub repo: Option<String>,
     /// From `@claude`: who works the task. From `read`: as spelled where it was read.
     pub agent: Option<String>,
-    /// From `/src/export` or `~/notes`: paths the task is about, as typed, each once.
+    /// From `/src/export`, `~/notes` or `./src`: paths the task is about, as typed, each once.
+    /// Each stays in the title too: the agent reads it there.
     pub paths: Vec<String>,
     /// Where each of `paths` was found, in the same order. Set by `read`; empty from `parse`.
     pub resolved: Vec<String>,
@@ -142,11 +144,22 @@ fn name(word: &str, mark: char) -> Option<&str> {
     name.chars().next().filter(|c| c.is_alphabetic()).map(|_| name)
 }
 
-/// What a word may be as a path, most likely first: the word itself if it starts with `/` or
-/// `~/`, then the word without the punctuation that ends a clause (`/src/export,`). A last part
-/// that is `.` or `..` is never cut. `word` is without its backslashes.
+/// True if a word starts as a path does: `/`, `~/`, `./` or `../`. A `/` inside a word
+/// (`and/or`, `11/14`, `https://`) starts none.
+pub fn path_shaped(word: &str) -> bool {
+    ["/", "~/", "./", "../"].iter().any(|start| word.starts_with(start))
+}
+
+/// True if the path starts in the task's repository: `./src`, `../app`.
+pub fn relative(path: &str) -> bool {
+    path.starts_with("./") || path.starts_with("../")
+}
+
+/// What a word may be as a path, most likely first: the word itself if it is `path_shaped` (and
+/// not `/` alone), then the word without the punctuation that ends a clause (`/src/export,`). A
+/// last part that is `.` or `..` is never cut. `word` is without its backslashes.
 pub fn path_candidates(word: &str) -> Vec<&str> {
-    let shaped = |path: &str| path.starts_with("~/") || (path.starts_with('/') && path.len() > 1);
+    let shaped = |path: &str| path_shaped(path) && path != "/";
     if !shaped(word) {
         return Vec::new();
     }
@@ -158,8 +171,8 @@ pub fn path_candidates(word: &str) -> Vec<&str> {
 /// The words of a line that may be paths, for the shell to look up: for each, what it may be,
 /// most likely first. The first that exists is the path.
 pub fn path_words(line: &str) -> Vec<Vec<String>> {
-    // A path starts with `/` or `~/` as typed: `\~/x` is a word that starts with a backslash.
-    let shaped = |word: &&&str| word.starts_with('/') || word.starts_with("~/");
+    // A path is shaped as typed: `\~/x` is a word that starts with a backslash.
+    let shaped = |word: &&&str| path_shaped(word);
     let candidates = |word: &&str| path_candidates(&unescape(word)).into_iter().map(str::to_string).collect();
     words(line).iter().filter(shaped).map(candidates).filter(|list: &Vec<String>| !list.is_empty()).collect()
 }
@@ -183,7 +196,7 @@ fn tag(word: &str, known: &impl Fn(char, &str) -> bool) -> Option<(char, String)
     let digit = bare.strip_prefix(['p', 'P']).filter(|_| bare.len() == 2);
     let priority = digit.filter(|n| n.parse::<u8>().is_ok_and(|n| (1..=9).contains(&n)));
     let plain = unescape(word);
-    let shaped = word.starts_with('/') || word.starts_with("~/");
+    let shaped = path_shaped(word);
     let path = || {
         path_candidates(&plain).into_iter().find(|path| shaped && known('/', path)).map(|path| ('/', path.to_string()))
     };
@@ -194,7 +207,8 @@ fn tag(word: &str, known: &impl Fn(char, &str) -> bool) -> Option<(char, String)
 }
 
 /// Reads a line. `known(mark, name)`: see `tag`. Of two `#project`, `>repo`, `@agent` or
-/// priorities the last one counts; every `/path`, `$skill` and `^reference` is kept.
+/// priorities the last one counts; every `/path`, `$skill` and `^reference` is kept. A path also
+/// stays in the title: what the agent reads keeps every word of it.
 pub fn parse(line: &str, known: impl Fn(char, &str) -> bool) -> Draft {
     let mut draft = Draft::default();
     let mut title: Vec<&str> = Vec::new();
@@ -209,7 +223,10 @@ pub fn parse(line: &str, known: impl Fn(char, &str) -> bool) -> Draft {
             Some(('>', repo)) => draft.repo = Some(repo),
             Some(('@', agent)) => draft.agent = Some(agent),
             Some(('$', skill)) => once(&mut draft.skills, skill),
-            Some(('/', path)) => once(&mut draft.paths, path),
+            Some(('/', path)) => {
+                once(&mut draft.paths, path);
+                title.push(word);
+            }
             Some(('^', name)) => once(&mut draft.refs, name),
             Some((_, digit)) => draft.priority = digit.parse().ok(),
             None => title.push(word),
@@ -289,11 +306,12 @@ pub fn unknown<'a>(names: &Names, agent: Option<&'a str>, skills: &'a [String]) 
 
 /// The tag being typed at the end of the line, as (mark, what is typed of the name).
 /// `fix >ap` → `('>', "ap")`. A path is all of its word, without its backslashes:
-/// `see ~/My\ No` → `('/', "~/My No")`. `None` after a space, when the last word is ordinary,
-/// or when a name does not start with a letter: `costs $5` is no skill.
+/// `see ~/My\ No` → `('/', "~/My No")`; a bare `~` is one, the home folder's. `None` after a
+/// space, when the last word is ordinary, or when a name does not start with a letter:
+/// `costs $5` is no skill.
 pub fn completing(line: &str) -> Option<(char, String)> {
     let word = typing(line)?;
-    if word.starts_with('/') || word.starts_with("~/") {
+    if path_shaped(word) || word == "~" {
         return Some(('/', unescape(word)));
     }
     // A reference is any name: a tab may be called `2`, and a space in it has a backslash.
@@ -311,16 +329,48 @@ fn typing(line: &str) -> Option<&str> {
     line.ends_with(word).then_some(word)
 }
 
-/// The entries that may finish a path: at most `MAX_ROWS`, and only those the line can hold.
-/// One with a tab or a line break in a name cannot be written.
-pub fn path_suggestions(entries: &[String]) -> Vec<String> {
-    let mut offered: Vec<String> = Vec::new();
-    for entry in entries.iter().filter(|entry| writable(entry)) {
-        if offered.len() < crate::complete::MAX_ROWS && !offered.contains(entry) {
-            offered.push(entry.clone());
+/// The folder a path being typed lists: up to its last `/`. `~/no` → `~/`; `~` → `~/`.
+pub fn path_folder(typed: &str) -> String {
+    match typed {
+        "~" => "~/".into(),
+        _ => typed[..typed.rfind('/').map_or(0, |at| at + 1)].to_string(),
+    }
+}
+
+/// The entries of a folder (`listed`: each the folder, a name, and `/` after a directory's)
+/// that finish `typed`, best first, at most `MAX_ROWS`, each with the characters of it that
+/// match; and how many more match. Directories, then files; within each, a name that starts
+/// with the last part typed, then one that holds it, whatever the case; then by name. A hidden
+/// name only once that part starts with `.`. A name the line cannot hold, or one that hides or
+/// turns text around (`capture::shows`), is never offered.
+pub fn path_rows(typed: &str, listed: &[String]) -> (Vec<(String, Vec<usize>)>, usize) {
+    let folder = path_folder(typed);
+    let part = if typed == "~" { Vec::new() } else { lower(&typed[folder.len()..]) };
+    let skip = folder.chars().count();
+    let mut found: Vec<(bool, bool, Vec<char>, &String, usize)> = Vec::new();
+    for entry in listed {
+        let Some(name) = entry.strip_prefix(folder.as_str()) else { continue };
+        let name = name.strip_suffix('/').unwrap_or(name);
+        let shows = writable(entry) && entry.chars().all(crate::capture::shows);
+        let hidden = name.starts_with('.') && part.first() != Some(&'.');
+        if name.is_empty() || name.contains('/') || !shows || hidden {
+            continue;
+        }
+        let low = lower(name);
+        if let Some(at) = (0..low.len()).find(|at| low[*at..].starts_with(&part)) {
+            found.push((!entry.ends_with('/'), at > 0, low, entry, at));
         }
     }
-    offered
+    found.sort_by(|a, b| (a.0, a.1, &a.2, a.3).cmp(&(b.0, b.1, &b.2, b.3)));
+    found.dedup_by(|a, b| a.3 == b.3);
+    let more = found.len().saturating_sub(crate::complete::MAX_ROWS);
+    let rows = found.into_iter().take(crate::complete::MAX_ROWS);
+    (rows.map(|(.., entry, at)| (entry.clone(), (skip + at..skip + at + part.len()).collect())).collect(), more)
+}
+
+/// A text's characters, each lowered to one: an index stays that of the text.
+fn lower(text: &str) -> Vec<char> {
+    text.chars().map(|c| c.to_lowercase().next().unwrap_or(c)).collect()
 }
 
 /// The line with the word being typed replaced by `name`, and a space to go on typing. No space
@@ -413,14 +463,20 @@ mod tests {
     #[test]
     fn a_task_has_one_agent_and_any_number_of_paths_and_skills() {
         let draft = parse("review the export PR >app @claude @codex $code-review /src/export $deploy ~/notes.", known);
-        assert_eq!((draft.title.as_str(), draft.agent.as_deref()), ("review the export PR", Some("codex")));
+        assert_eq!(
+            (draft.title.as_str(), draft.agent.as_deref()),
+            ("review the export PR /src/export ~/notes.", Some("codex"))
+        );
         assert_eq!(
             (draft.skills, draft.paths),
             (vec!["code-review".to_string(), "deploy".into()], vec!["/src/export".to_string(), "~/notes".into()])
         );
         // Named twice, kept once.
         let draft = parse("$deploy /src/export, then $deploy /src/export", known);
-        assert_eq!((draft.title.as_str(), draft.skills.len(), draft.paths.len()), ("then", 1, 1));
+        assert_eq!(
+            (draft.title.as_str(), draft.skills.len(), draft.paths.len()),
+            ("/src/export, then /src/export", 1, 1)
+        );
     }
 
     #[test]
@@ -455,7 +511,7 @@ mod tests {
         let draft = parse("read /notes/v1. and /notes/v2.", |_, name| ["/notes/v1.", "/notes/v2"].contains(&name));
         assert_eq!(
             (draft.title.as_str(), draft.paths),
-            ("read and", vec!["/notes/v1.".to_string(), "/notes/v2".into()])
+            ("read /notes/v1. and /notes/v2.", vec!["/notes/v1.".to_string(), "/notes/v2".into()])
         );
     }
 
@@ -466,7 +522,10 @@ mod tests {
         assert_eq!(path_words(r"see ~/My\ Notes, then"), [vec!["~/My Notes,", "~/My Notes"]]);
         // The path is kept without the backslash; a word that is no tag stays as typed.
         let draft = parse(r"file ~/My\ Notes under Big\ Ideas", |_, name| name == "~/My Notes");
-        assert_eq!((draft.title.as_str(), draft.paths), (r"file under Big\ Ideas", vec!["~/My Notes".to_string()]));
+        assert_eq!(
+            (draft.title.as_str(), draft.paths),
+            (r"file ~/My\ Notes under Big\ Ideas", vec!["~/My Notes".to_string()])
+        );
         // Tab writes the backslash, and the next word typed is the path going on.
         assert_eq!(completing(r"see ~/Library/App"), Some(('/', "~/Library/App".into())));
         let line = complete("see ~/Library/App", "~/Library/Application Support/");
@@ -499,7 +558,7 @@ mod tests {
         );
         assert_eq!((draft.paths, draft.resolved), (names(&["/src/export"]), names(&["/code/app/src/export"])));
         // A path too long to keep is no tag: it stays in the title with the names nobody knows.
-        assert_eq!(draft.title, format!("ship {long} >web @ana $nope"));
+        assert_eq!(draft.title, format!("ship /src/export {long} >web @ana $nope"));
         // Names given outright: the first that is not known.
         let skills = names(&["Deploy", "nope"]);
         assert_eq!(unknown(&known.names, Some("CLAUDE"), &skills), Some("nope"));
@@ -548,16 +607,80 @@ mod tests {
         assert_eq!(completion_at("fix it", 6, "app"), (6..6, String::new()));
     }
 
-    /// A draft as a line that reads as it: the tags, then the title. Tabs between them: a space
-    /// after a word that ends in a backslash would join it to the next.
+    #[test]
+    fn only_a_word_that_starts_as_a_path_opens_a_path() {
+        let path = |typed: &str| Some(('/', typed.to_string()));
+        // Home, the root, and the task's repository.
+        for typed in ["~", "~/", "~/no", "/", "/us", "./", "./src/ex", "../", "../app/"] {
+            assert_eq!(completing(&format!("plan {typed}")), path(typed), "{typed}");
+        }
+        // A `/` in the middle of prose is none: `and/or`, a date, a URL, a fraction, `a/b`.
+        for prose in ["and/or", "11/14", "https://x.io/a", "1/2", "a/b", "~notes", ".x", "..", ".", "~~/"] {
+            assert_eq!(completing(&format!("plan {prose}")), None, "{prose}");
+            assert!(path_candidates(prose).is_empty(), "{prose}");
+        }
+        assert_eq!(path_words("see ./src, ../app/x and/or 11/14 ~"), [vec!["./src,", "./src"], vec!["../app/x"]]);
+        // A path the shell found stays in the title as typed: the agent reads it there.
+        let draft = parse("help me plan my next week ~/notes folder", |mark, name| mark == '/' && name == "~/notes");
+        assert_eq!(
+            (draft.title.as_str(), draft.paths),
+            ("help me plan my next week ~/notes folder", vec!["~/notes".into()])
+        );
+        // A bare `~` finishes to a folder in the home folder.
+        assert_eq!(complete("plan ~", "~/notes/"), "plan ~/notes/");
+        assert_eq!(
+            (path_folder("~"), path_folder("~/no"), path_folder("./src/ex"), path_folder("/")),
+            ("~/".to_string(), "~/".to_string(), "./src/".to_string(), "/".to_string())
+        );
+    }
+
+    #[test]
+    fn a_folder_lists_directories_then_files_the_best_match_first() {
+        let listed: Vec<String> = [
+            "~/notes.md",
+            "~/Notes/",
+            "~/old notes/",
+            "~/node/",
+            "~/.notes/",
+            "~/Documents/",
+            "~/annotate.txt",
+            "~/x/y",
+        ]
+        .map(|entry| entry.to_string())
+        .to_vec();
+        let names = |typed: &str| path_rows(typed, &listed).0.into_iter().map(|(name, _)| name).collect::<Vec<_>>();
+        // Directories first; a name that starts with what is typed, then one that holds it; any case.
+        assert_eq!(names("~/no"), ["~/node/", "~/Notes/", "~/old notes/", "~/notes.md", "~/annotate.txt"]);
+        assert_eq!(names("~/NOTES"), ["~/Notes/", "~/old notes/", "~/notes.md"]);
+        // A hidden one once a `.` is typed; nothing typed lists every one that shows, and `~` its folder.
+        assert_eq!(names("~/.n"), ["~/.notes/"]);
+        assert_eq!(
+            names("~/"),
+            ["~/Documents/", "~/node/", "~/Notes/", "~/old notes/", "~/annotate.txt", "~/notes.md"]
+        );
+        assert_eq!(names("~"), names("~/"));
+        assert_eq!(names("~/zzz"), Vec::<String>::new());
+        // The letters that match, counted in the whole row.
+        let (rows, _) = path_rows("~/ot", &listed);
+        assert_eq!(rows.iter().find(|(name, _)| name == "~/Notes/").map(|(_, at)| at.clone()), Some(vec![3, 4]));
+        // At most `MAX_ROWS`, and how many more.
+        let many: Vec<String> = (0..30).map(|n| format!("/big/f{n:02}/")).collect();
+        let (rows, more) = path_rows("/big/f", &many);
+        assert_eq!(
+            (rows.len(), more, rows[0].0.as_str()),
+            (crate::complete::MAX_ROWS, 30 - crate::complete::MAX_ROWS, "/big/f00/")
+        );
+    }
+
+    /// A draft as a line that reads as it: the tags, then the title, which holds the paths.
+    /// Tabs between them: a space after a word that ends in a backslash would join it to the next.
     fn rebuild(draft: &Draft) -> String {
         let tag = |mark: char, name: &Option<String>| name.as_ref().map(|name| format!("{mark}{name}"));
         let skills = draft.skills.iter().map(|skill| format!("${skill}"));
-        let paths = draft.paths.iter().map(|path| escape(path));
         let priority = draft.priority.map(|n| format!("p{n}"));
         let title = Some(draft.title.clone()).filter(|title| !title.is_empty());
         let one = [tag('#', &draft.project), tag('>', &draft.repo), tag('@', &draft.agent)].into_iter().flatten();
-        one.chain(skills).chain(paths).chain(priority).chain(title).collect::<Vec<_>>().join("\t")
+        one.chain(skills).chain(priority).chain(title).collect::<Vec<_>>().join("\t")
     }
 
     /// What must hold of any line, with names of any kind known. `Err`: what does not.
@@ -574,9 +697,11 @@ mod tests {
         // A path is its word without the backslashes: a word may be typed with more of them
         // than `escape` would write (`/a\@b`), and names the same path.
         for path in &draft.paths {
-            let from =
-                |word: &&str| (word.starts_with('/') || word.starts_with("~/")) && unescape(word).starts_with(path);
+            let from = |word: &&str| path_shaped(word) && unescape(word).starts_with(path);
             check(typed.iter().any(from), format!("the path {path:?} is no word of the line"))?;
+            // And it stays in the title: nothing typed goes missing from what the agent reads.
+            let titled = |word: &str| path_shaped(word) && unescape(word).starts_with(path);
+            check(words(&draft.title).into_iter().any(titled), format!("the path {path:?} left the title"))?;
         }
         let priority = |word: &&str| draft.priority.is_some_and(|n| word.to_lowercase().starts_with(&format!("p{n}")));
         check(draft.priority.is_none() || typed.iter().any(priority), "the priority is no word of the line".into())?;
@@ -601,10 +726,11 @@ mod tests {
         // Every name offered for the word being typed finishes it as that tag, wherever the cursor is.
         for cursor in (0..=line.len()).filter(|at| line.is_char_boundary(*at)) {
             let Some((mark, start)) = completing(&line[..cursor]) else { continue };
-            // A path the shell lists is path-shaped.
-            let shaped: Vec<String> = names.iter().filter(|name| !path_candidates(name).is_empty()).cloned().collect();
-            let offered = match mark {
-                '/' => path_suggestions(&shaped),
+            // A path the shell lists is its folder and a name.
+            let folder = path_folder(&start);
+            let listed: Vec<String> = names.iter().map(|name| format!("{folder}{name}")).collect();
+            let offered: Vec<String> = match mark {
+                '/' => path_rows(&start, &listed).0.into_iter().map(|(name, _)| name).collect(),
                 _ => {
                     let fits =
                         |name: &&String| taggable(mark, name) && crate::complete::matching(&start, name).is_some();
@@ -646,8 +772,14 @@ mod tests {
     /// that one is not offered.
     #[test]
     fn a_path_with_a_backslash_is_written_and_one_with_a_tab_is_not_offered() {
-        let entries = ["~/a\\ b", "/src/a\tb", "/src/a\nb", "/src/My Dir/"].map(str::to_string);
-        assert_eq!(path_suggestions(&entries), ["~/a\\ b", "/src/My Dir/"]);
+        let offered = |typed: &str, entries: &[&str]| {
+            let entries: Vec<String> = entries.iter().map(|entry| entry.to_string()).collect();
+            path_rows(typed, &entries).0.into_iter().map(|(name, _)| name).collect::<Vec<_>>()
+        };
+        assert_eq!(offered("~/", &["~/a\\ b", "~/a\tb"]), ["~/a\\ b"]);
+        assert_eq!(offered("/src/", &["/src/a\tb", "/src/a\nb", "/src/My Dir/"]), ["/src/My Dir/"]);
+        // Nor is one that hides or turns its text around: it would draw as another name.
+        assert_eq!(offered("~/", &["~/evil\u{202e}gpj.exe", "~/a\u{200b}b", "~/ok"]), ["~/ok"]);
         assert_eq!(draft_all(&complete("see /", "/src/My Dir/")).paths, ["/src/My Dir/"]);
         assert_eq!(draft_all(&complete("see ~/", "~/a\\ b")).paths, ["~/a\\ b"]);
     }

@@ -401,6 +401,7 @@ function task(value: unknown, at: string): Task {
     dismissed: bool(o.dismissed, `${at}.dismissed`),
     project: orNull(str)(o.project, `${at}.project`),
     repo: orNull(str)(o.repo, `${at}.repo`),
+    ...(o.folder === undefined ? {} : { folder: str(o.folder, `${at}.folder`) }),
     agent: orNull(str)(o.agent, `${at}.agent`),
     paths: list(str)(o.paths, `${at}.paths`),
     resolved: list(str)(o.resolved, `${at}.resolved`),
@@ -1305,6 +1306,7 @@ export function snapshot(value: unknown): Snapshot {
     font: { name: str(fields(o.font, "font").name, "font.name"), size: num(fields(o.font, "font").size, "font.size") },
     cell: pair(o.cell, "cell"),
     notice: orNull(str)(o.notice, "notice"),
+    settings_errors: num(o.settings_errors, "settings_errors"),
     hosted: map(rect)(o.hosted, "hosted"),
     crop: map(num)(o.crop, "crop"),
     terminals: map(terminal)(o.terminals, "terminals"),
@@ -1321,6 +1323,8 @@ export function snapshot(value: unknown): Snapshot {
     compose_picks: composePicks(o.compose_picks, "compose_picks"),
     welcome: bool(o.welcome, "welcome"),
     compose_menu: orNull(composeMenu)(o.compose_menu, "compose_menu"),
+    compose_menu_bounds: orNull(rect)(o.compose_menu_bounds, "compose_menu_bounds"),
+    compose_folder: orNull(str)(o.compose_folder, "compose_folder"),
     compose_pointing: orNull(rect)(o.compose_pointing, "compose_pointing"),
     compose_note: orNull(str)(o.compose_note, "compose_note"),
     tasks_bar: tasksBar(o.tasks_bar, "tasks_bar"),
@@ -1363,6 +1367,23 @@ function railMark(value: unknown, at: string): Snapshot["calendar"]["rail"] {
   throw wrong(at, "none, near or alert", value);
 }
 
+function band(value: unknown, at: string): NonNullable<Snapshot["calendar"]["band"]> {
+  const o = fields(value, at);
+  const block = (v: unknown, at: string) => {
+    const b = fields(v, at);
+    return { start: num(b.start, `${at}.start`), end: num(b.end, `${at}.end`), rect: orNull(rect)(b.rect, `${at}.rect`) };
+  };
+  return {
+    rect: orNull(rect)(o.rect, `${at}.rect`),
+    span: pair(o.span, `${at}.span`),
+    workday: pair(o.workday, `${at}.workday`),
+    marks: list(orNull(rect))(o.marks, `${at}.marks`),
+    now: orNull(rect)(o.now, `${at}.now`),
+    blocks: list(block)(o.blocks, `${at}.blocks`),
+    status_bar: orNull(rect)(o.status_bar, `${at}.status_bar`),
+  };
+}
+
 function calendar(value: unknown, at: string): Snapshot["calendar"] {
   const o = fields(value, at);
   const banner = (v: unknown, at: string) => {
@@ -1381,6 +1402,7 @@ function calendar(value: unknown, at: string): Snapshot["calendar"] {
     in_call: orNull(bool)(o.in_call, `${at}.in_call`),
     soon: bool(o.soon, `${at}.soon`),
     bars: num(o.bars, `${at}.bars`),
+    band: orNull(band)(o.band, `${at}.band`),
     chip: bool(o.chip, `${at}.chip`),
     banner: orNull(banner)(o.banner, `${at}.banner`),
     alerts: num(o.alerts, `${at}.alerts`),

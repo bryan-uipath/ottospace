@@ -33,6 +33,7 @@ ottospace            # opens on the Repos list
 | Quit | ⌘Q, or the window's close button. While a terminal runs something (a program, or a background job) it asks first: ↵, Q or ⌘Q again quits; Esc, any other key or shortcut cancels and does nothing else. Shells at a prompt do not count. Dock ▸ Quit and logout do not ask |
 | Start empty next time | File ▸ Start Fresh. Otherwise the tabs, splits, the tab on show and the drawer come back after quitting (`restore_layout`) |
 | Find an action by name | ⌘P: type part of its name, ↵ runs it. Or the menu bar |
+| Edit the settings | ⌘, (Open Settings): `settings.json` in your editor, in a tab of its own |
 | See what an app exposes to accessibility | Focus its pane, ⌘P, "inspector": its tree in a panel on the right, counted by role. Click a row to outline it |
 | Switch tab | ⌘1 … ⌘9 · ⌘⇧] ⌘⇧[ · ⌃Tab |
 | Close the tab and its panes | ⌘⇧W |
@@ -120,6 +121,7 @@ what can be opened, and its other panes are empty and say why. Marks are kept in
 | Give an agent a task's brief | In a terminal of the task: `ottospace ctl "{\"cmd\":\"task_brief\",\"id\":$OTTOSPACE_TASK}"` |
 | Tag the task | In that line: `#project` · `>repo` · `@agent` · `/path` · `$skill` · `^reference` · `p1` … `p9`. A dropdown finishes the tag at the cursor: ↑↓ move, ↵ or Tab takes a row, Esc closes it. [All tags](reference.md#tags) |
 | Add files to the task | Drag them from Finder onto the box, ⌘O, or copy in Finder and ⌘V: each becomes a `/path` |
+| Run the agent in a folder | Type `~/`, `/` or (with a `>repo`) `./`, and take a folder from the dropdown: "runs in ~/notes/ ×" shows it. The path stays in the title |
 | Point the task at a tab, a pane, a mark or an app | `^name` in the line, or ⌥-click the tab or pane while the box is open |
 | A task's tabs | Side by side behind its badge on the one bar. Starting a task takes the tab on show (if it is no task's); ⌘T joins the task on show; drag a tab onto another group; palette: New Tab outside the Task, Remove Tab from Task, Move Tab to Task…; Claim tab on a row |
 | The next task that needs me | ⌘⇧N: its conversation; the tab stays |
@@ -173,7 +175,9 @@ ottospace ctl '{"cmd":"state"}' | jq --argjson pane "$OTTOSPACE_PANE" '.state.ta
 
 ## Settings
 
-`~/.ottospace/settings.json`, read at start:
+`~/.ottospace/settings.json`, read at start. ⌘, (Open Settings) edits it in `$VISUAL`/`$EDITOR`; on
+save the status bar says what is wrong (`settings.json:3:1 trailing comma`) or which keys need a
+restart, and the rest applies at once:
 
 ```json
 {
@@ -205,7 +209,7 @@ setting takes its default.
 
 The Calendar section (second on the rail, only while `calendar_ics` is set) lists today's meetings and a folded "Tomorrow"; ↵ or `Join` opens a meeting's link. Its rail cell has an amber dot near a meeting, a filled badge while the banner is up.
 
-`calendar_ics`: your calendar's feed (an `https://` link or a file) for the [meeting timeline](reference.md#meeting-timeline): a hairline of the next `calendar_window_hours` (8) across the top, the next meeting beside the tab bar's buttons, a pulse from 10 minutes before, and at the start, if you are in no call (or still in an earlier one), a banner with Join and Dismiss and a notification. `calendar_notify: false` turns alerts off; `calendar_notify_for: "links"` alerts only meetings with a meeting link; `calendar_email` (your address in the feed) leaves out meetings you declined.
+`calendar_ics`: your calendar's feed (an `https://` link or a file) for the [meeting timeline](reference.md#meeting-timeline): a band of the workday (`calendar_workday`, `"09:00-17:00"`) above the status bar, hover a block for its details, the next meeting beside the tab bar's buttons, a pulse from 10 minutes before, and at the start, if you are in no call (or still in an earlier one), a banner with Join and Dismiss and a notification. `calendar_notify: false` turns alerts off; `calendar_notify_for: "links"` alerts only meetings with a meeting link; `calendar_email` (your address in the feed) leaves out meetings you declined.
 
 `windows` rules name windows ottospace leaves alone, by `app`, `title` and `subrole`: [reference](reference.md#settings).
 

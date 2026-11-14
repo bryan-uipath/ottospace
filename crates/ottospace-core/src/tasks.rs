@@ -247,6 +247,10 @@ pub struct Task {
     /// The path of the repository the work is in, from a `>name`.
     #[serde(default)]
     pub repo: Option<String>,
+    /// The folder the user took from the new-task box's dropdown, as an absolute path: its
+    /// agent runs there, not in `repo`. See `dir`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
     /// Who works it, from an `@name`. Stored and shown; nothing acts on it yet.
     #[serde(default)]
     pub agent: Option<String>,
@@ -322,6 +326,12 @@ impl Task {
         let kept = |r: &Ref| Ref { title: None, cwd: None, program: None, bundle: None, ..r.clone() };
         Task { refs: self.refs.iter().map(kept).collect(), ..self.clone() }
     }
+
+    /// Where its agent runs: the folder taken in the box, else its repository. `None`: the
+    /// home folder.
+    pub fn dir(&self) -> Option<&String> {
+        self.folder.as_ref().or(self.repo.as_ref())
+    }
 }
 
 /// What a reference points at.
@@ -374,6 +384,11 @@ pub struct Assign {
 
 /// The longest resolved path kept.
 pub const MAX_RESOLVED: usize = 1024;
+
+/// A folder an agent may run in: an absolute path, with no control character, not too long.
+fn folder_fits(path: &str) -> bool {
+    path.starts_with('/') && path.chars().count() <= MAX_RESOLVED && !path.chars().any(char::is_control)
+}
 
 /// The longest agent, path or skill name kept, and the most paths or skills on one task.
 pub const MAX_TAG: usize = 200;
@@ -488,6 +503,7 @@ impl Tasks {
             let kept = |file: &String| dir.is_some() && material_file(id, file).map(|(dir, _)| dir) == dir.as_deref();
             task.materials.retain(kept);
             task.materials.dedup();
+            task.folder = task.folder.take().filter(|path| folder_fits(path));
         }
         self.next_id = tasks.last().map_or(0, |task| task.id).max(floor.min(MAX_ID));
         // A task from before colours, or with one out of range, is given one, oldest first.
@@ -513,6 +529,7 @@ impl Tasks {
             dismissed,
             project,
             repo,
+            folder: None,
             agent,
             paths,
             resolved,
@@ -549,6 +566,13 @@ impl Tasks {
     pub fn tag(&mut self, id: TaskId, project: Option<String>, repo: Option<String>) {
         if let Some(task) = self.list.iter_mut().find(|t| t.id == id) {
             (task.project, task.repo) = (project, repo);
+        }
+    }
+
+    /// Sets the folder a task's agent runs in: an absolute path, kept only if it is one.
+    pub fn set_folder(&mut self, id: TaskId, folder: Option<String>) {
+        if let Some(task) = self.list.iter_mut().find(|t| t.id == id) {
+            task.folder = folder.filter(|path| folder_fits(path));
         }
     }
 
@@ -889,6 +913,7 @@ mod tests {
             dismissed: false,
             project: None,
             repo: None,
+            folder: None,
             agent: None,
             paths: Vec::new(),
             resolved: Vec::new(),
@@ -984,5 +1009,19 @@ mod tests {
         let mut tasks = Tasks::default();
         let (low, high) = (tasks.add("a".into(), 0, State::Captured), tasks.add("b".into(), 200, State::Captured));
         assert_eq!((tasks.get(low).map(|t| t.priority), tasks.get(high).map(|t| t.priority)), (Some(1), Some(9)));
+    }
+
+    #[test]
+    fn a_folder_is_kept_only_as_an_absolute_path() {
+        let mut tasks = Tasks::default();
+        let id = tasks.add("a".into(), 3, State::Captured);
+        for (given, kept) in [("/Users/me/notes", true), ("notes", false), ("/a\nb", false), ("~/notes", false)] {
+            tasks.set_folder(id, Some(given.into()));
+            assert_eq!(tasks.get(id).and_then(|t| t.folder.as_deref()), kept.then_some(given), "{given:?}");
+        }
+        // Nor from a file: the tasks folder may be shared.
+        let task = Task { folder: Some("../../etc".into()), ..tasks.get(id).cloned().unwrap() };
+        tasks.restore(vec![task], 0);
+        assert_eq!(tasks.get(id).map(|t| (t.folder.clone(), t.dir().cloned())), Some((None, None)));
     }
 }

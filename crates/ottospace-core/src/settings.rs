@@ -106,9 +106,13 @@ pub struct Settings {
     /// a secret: it is never shown) or a file's path. None: no timeline.
     #[serde(default)]
     pub calendar_ics: Option<String>,
-    /// How many hours the hairline shows from now. Default: 8; 1 to 24.
+    /// The workday the timeline's band spans: `"09:00-17:00"` (the default), local 24-hour time.
     #[serde(default)]
-    pub calendar_window_hours: Option<u32>,
+    pub calendar_workday: Option<String>,
+    /// Retired: the band shows the workday. Still read, so a file that has it is not refused;
+    /// the status bar says to remove it.
+    #[serde(default)]
+    pub calendar_window_hours: Option<serde::de::IgnoredAny>,
     /// How often the feed is read again. Default: 5; at least 1.
     #[serde(default)]
     pub calendar_refresh_minutes: Option<u32>,
@@ -260,8 +264,8 @@ impl Settings {
                 return Err(why.into());
             }
         }
-        if settings.calendar_window_hours.is_some_and(|h| !(1..=24).contains(&h)) {
-            return Err("calendar_window_hours must be 1 to 24".into());
+        if settings.calendar_workday.as_deref().is_some_and(|w| crate::calendar::Workday::parse(w).is_none()) {
+            return Err(crate::calendar::WORKDAY_FORM.into());
         }
         if settings.calendar_refresh_minutes == Some(0) {
             return Err("calendar_refresh_minutes must be at least 1".into());
@@ -320,6 +324,164 @@ impl Settings {
             Err(err) => (Self::default(), vec![err]),
         }
     }
+
+    /// `calendar_workday`, else 09:00 to 17:00.
+    pub fn workday(&self) -> crate::calendar::Workday {
+        self.calendar_workday.as_deref().and_then(crate::calendar::Workday::parse).unwrap_or_default()
+    }
+
+    /// How long an adopted session is quiet before its task needs the user, in milliseconds:
+    /// `session_quiet_minutes`, else 3 minutes. 0: never.
+    pub fn quiet_ms(&self) -> u64 {
+        let minutes = self.session_quiet_minutes.map(u64::from);
+        minutes.map_or(crate::sessions::QUIET_MS, |minutes| minutes.saturating_mul(60_000))
+    }
+}
+
+/// `settings.json` while the app runs: what the status bar says of it. Each read of the file
+/// goes through `read`; the first is the one the app started with.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Watch {
+    /// As read at start: what changes to the keys read only then are told against.
+    started: Option<Settings>,
+    /// What was wrong with the last read, each a line for the status bar.
+    problems: Vec<String>,
+    /// Keys changed since the start that apply at the next one.
+    restart: Vec<&'static str>,
+    /// A retired key the file still has: said, never refused.
+    retired: Option<&'static str>,
+}
+
+/// What the status bar says of a retired key.
+const RETIRED: &str = "settings.json: calendar_window_hours is retired (the band shows calendar_workday): remove it";
+
+/// The longest problem the status bar shows, in characters.
+const MAX_PROBLEM: usize = 240;
+
+impl Watch {
+    /// Takes the file's text as it is now. `Some`: the settings to apply, the file has no
+    /// problem. `None`: something is wrong, and the last good settings stay.
+    /// `written`: the app has just written the file itself, so its lists there (`repos`, `apps`,
+    /// `apps_hidden`) are the ones it holds.
+    pub fn read(&mut self, text: &str, written: bool) -> Option<Settings> {
+        let (settings, problems) = problems(text);
+        // At start what is right applies, as `Settings::read` says: that is what was applied.
+        let started = self.started.get_or_insert_with(|| settings.clone());
+        self.problems = problems;
+        if !self.problems.is_empty() {
+            return None;
+        }
+        if written {
+            started.repos.clone_from(&settings.repos);
+            started.apps.clone_from(&settings.apps);
+            started.apps_hidden.clone_from(&settings.apps_hidden);
+        }
+        self.restart = restart_keys(started, &settings);
+        self.retired = settings.calendar_window_hours.is_some().then_some(RETIRED);
+        Some(settings)
+    }
+
+    pub fn errors(&self) -> usize {
+        self.problems.len()
+    }
+
+    /// The status bar's line: the first problem and how many more, else the keys that need a
+    /// restart. `None`: nothing to say.
+    pub fn line(&self) -> Option<String> {
+        let more = self.problems.len().saturating_sub(1);
+        match self.problems.first() {
+            Some(first) if more > 0 => Some(format!("{first} (+{more} more)")),
+            Some(first) => Some(first.clone()),
+            None if !self.restart.is_empty() => {
+                Some(format!("settings.json: restart to apply {}", self.restart.join(", ")))
+            }
+            None => self.retired.map(String::from),
+        }
+    }
+}
+
+/// The file's settings as `Settings::read` takes them, and its problems as the status bar says
+/// them: `settings.json:12:5 expected value`, `settings.json: tasks: …`. Our own messages and
+/// positions, with no control character and cut short.
+fn problems(text: &str) -> (Settings, Vec<String>) {
+    let bare = text.trim_start_matches('\u{feff}');
+    let syntax = serde_json::from_str::<serde_json::Value>(bare).err().filter(|_| !bare.trim().is_empty());
+    let (settings, wrong) = Settings::read(text);
+    let said = match syntax {
+        Some(err) => {
+            let message = err.to_string();
+            let message = message.rsplit_once(" at line ").map_or(message.as_str(), |(message, _)| message);
+            vec![format!("settings.json:{}:{} {message}", err.line(), err.column())]
+        }
+        None => wrong.into_iter().map(|line| format!("settings.json: {line}")).collect(),
+    };
+    let clean = |line: String| -> String {
+        let mut line: String = line.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+        if let Some((cut, _)) = line.char_indices().nth(MAX_PROBLEM) {
+            line.truncate(cut);
+            line.push('…');
+        }
+        line
+    };
+    (settings, said.into_iter().map(clean).collect())
+}
+
+/// The keys of `now` that differ from `started` and are read only at start. Every field is
+/// named: a new one does not compile until it is put on a side.
+fn restart_keys(started: &Settings, now: &Settings) -> Vec<&'static str> {
+    let Settings {
+        terminal,
+        // Kept by the app (the Repos and Apps sections write them): `started` follows its own writes.
+        repos,
+        tasks,
+        // Read each time they are used.
+        windows: _,
+        apps,
+        apps_hidden,
+        suggest_dock_apps,
+        wheel_to_apps: _,
+        sessions,
+        session_dirs,
+        // Told to the core again on each good read.
+        session_quiet_minutes: _,
+        agent_models,
+        default_agent: _,
+        conversation_view: _,
+        capture_key,
+        capture: _,
+        workbook_scrollback_lines: _,
+        restore_layout,
+        restore_apps,
+        tasks_view: _,
+        sessions_range: _,
+        calendar_ics,
+        calendar_workday,
+        // Retired: read nowhere.
+        calendar_window_hours: _,
+        calendar_refresh_minutes,
+        calendar_notify: _,
+        calendar_notify_for: _,
+        calendar_email,
+    } = now;
+    let changed = [
+        ("terminal", *terminal != started.terminal),
+        ("repos", *repos != started.repos),
+        ("apps", *apps != started.apps),
+        ("apps_hidden", *apps_hidden != started.apps_hidden),
+        ("tasks", *tasks != started.tasks),
+        ("suggest_dock_apps", *suggest_dock_apps != started.suggest_dock_apps),
+        ("sessions", *sessions != started.sessions),
+        ("session_dirs", *session_dirs != started.session_dirs),
+        ("agent_models", *agent_models != started.agent_models),
+        ("capture_key", *capture_key != started.capture_key),
+        ("restore_layout", *restore_layout != started.restore_layout),
+        ("restore_apps", *restore_apps != started.restore_apps),
+        ("calendar_ics", *calendar_ics != started.calendar_ics),
+        ("calendar_workday", *calendar_workday != started.calendar_workday),
+        ("calendar_refresh_minutes", *calendar_refresh_minutes != started.calendar_refresh_minutes),
+        ("calendar_email", *calendar_email != started.calendar_email),
+    ];
+    changed.into_iter().filter(|(_, changed)| *changed).map(|(key, _)| key).collect()
 }
 
 /// An app the settings name, found on disk.
@@ -695,9 +857,11 @@ mod tests {
     fn a_calendar_feed_is_a_link_or_a_path_and_a_wrong_one_is_never_named() {
         let read = |text: &str| Settings::read(text);
         let ok = read(
-            r#"{"calendar_ics": "https://calendar.example.com/private-s3cret/basic.ics", "calendar_window_hours": 6}"#,
+            r#"{"calendar_ics": "https://calendar.example.com/private-s3cret/basic.ics", "calendar_workday": "06:00-22:00"}"#,
         );
-        assert_eq!((ok.0.calendar_ics.is_some(), ok.0.calendar_window_hours, ok.1.len()), (true, Some(6), 0));
+        assert_eq!((ok.0.calendar_ics.is_some(), ok.1.len()), (true, 0));
+        assert_eq!(ok.0.workday(), crate::calendar::Workday { start: 360, end: 1_320 });
+        assert_eq!(Settings::default().workday(), crate::calendar::Workday { start: 540, end: 1_020 });
         assert_eq!(read(r#"{"calendar_ics": "~/cal/today.ics"}"#).1, Vec::<String>::new());
         for bad in [
             "http://calendar.example.com/s3cret.ics",
@@ -712,8 +876,14 @@ mod tests {
                 "{wrong:?}"
             );
         }
-        assert_eq!(read(r#"{"calendar_window_hours": 0}"#).1.len(), 1);
-        assert_eq!(read(r#"{"calendar_window_hours": 25}"#).1.len(), 1);
+        for bad in ["17:00-09:00", "09:00-09:30", "9-5", "09:00"] {
+            let wrong = read(&format!(r#"{{"calendar_workday": "{bad}"}}"#)).1;
+            assert!(wrong.len() == 1 && wrong[0].contains("\"HH:MM-HH:MM\""), "{bad}: {wrong:?}");
+        }
+        // Retired: read, so the rest of the file applies; the status bar says to remove it.
+        let mut watch = Watch::default();
+        assert!(watch.read(r#"{"calendar_window_hours": 8, "tasks_view": "project"}"#, false).is_some());
+        assert_eq!((watch.errors(), watch.line().as_deref()), (0, Some(RETIRED)));
         assert_eq!(read(r#"{"calendar_refresh_minutes": 0}"#).1.len(), 1);
         assert_eq!(read(r#"{"calendar_notify": false}"#).0.calendar_notify, Some(false));
         assert_eq!(read(r#"{"calendar_notify_for": "links"}"#).0.calendar_notify_for, Some(NotifyFor::Links));
@@ -878,5 +1048,69 @@ mod tests {
         assert_eq!(expand_home("~", "/Users/me/"), "/Users/me/");
         assert_eq!(expand_home("/opt/repos", "/Users/me"), "/opt/repos");
         assert_eq!(expand_home("~other/code", "/Users/me"), "~other/code");
+    }
+
+    #[test]
+    fn a_watched_file_says_its_first_problem_with_its_place_until_it_is_right() {
+        let mut watch = Watch::default();
+        // Started with a wrong key: what is right applied, and the status bar says it.
+        assert_eq!(watch.read(r#"{"tasks_view": "project", "calendar_refresh_minutes": 0}"#, false), None);
+        assert_eq!(
+            watch.line().as_deref(),
+            Some("settings.json: calendar_refresh_minutes: calendar_refresh_minutes must be at least 1")
+        );
+        assert_eq!(watch.errors(), 1);
+        // Broken mid-edit: the line and column, our own words, no text of the file.
+        assert_eq!(watch.read("{\n  \"tasks\": \"x\",\n    \n}", false), None);
+        assert_eq!(watch.line().as_deref(), Some("settings.json:4:1 trailing comma"));
+        assert_eq!(watch.errors(), 1);
+        // Several: the first (by key, or in the file's order with serde_json's `preserve_order`),
+        // and how many more.
+        assert_eq!(watch.read(r#"{"calendar_refresh_minutes": 0, "colour": 1, "default_agent": "x"}"#, false), None);
+        let first = "settings.json: calendar_refresh_minutes: calendar_refresh_minutes must be at least 1 (+2 more)";
+        assert_eq!(watch.line().as_deref(), Some(first));
+        assert_eq!(watch.errors(), 3);
+        // Right again: applied, and nothing to say. Started with `tasks_view` as now.
+        let good = watch.read(r#"{"tasks_view": "project", "default_agent": "codex"}"#, false).unwrap();
+        assert_eq!((good.default_agent.as_deref(), watch.line(), watch.errors()), (Some("codex"), None, 0));
+        // An empty file is the defaults: no problem.
+        assert!(watch.read("", false).is_some());
+    }
+
+    #[test]
+    fn a_key_read_only_at_start_says_restart_and_a_live_one_does_not() {
+        let mut watch = Watch::default();
+        assert!(watch.read(r#"{"terminal": {"font_size": 14}, "default_agent": "claude"}"#, false).is_some());
+        assert_eq!(watch.line(), None);
+        // Live keys: nothing to say.
+        let live = r#"{"terminal": {"font_size": 14}, "default_agent": "codex", "wheel_to_apps": false}"#;
+        assert!(watch.read(live, false).is_some());
+        assert_eq!(watch.line(), None);
+        // A list the app keeps: by hand, at the next start; as the app wrote it, nothing to say.
+        let pinned = r#"{"terminal": {"font_size": 14}, "apps": ["Slack"]}"#;
+        assert!(watch.read(pinned, false).is_some());
+        assert_eq!(watch.line().as_deref(), Some("settings.json: restart to apply apps"));
+        assert!(watch.read(pinned, true).is_some());
+        assert_eq!(watch.line(), None);
+        let later =
+            r#"{"terminal": {"font_size": 16}, "tasks": "~/t", "apps": ["Slack"], "calendar_workday": "08:00-16:00"}"#;
+        assert!(watch.read(later, false).is_some());
+        let restart = "settings.json: restart to apply terminal, tasks, calendar_workday";
+        assert_eq!(watch.line().as_deref(), Some(restart));
+        // A problem goes first; put back as at start, there is nothing to restart for.
+        assert_eq!(watch.read("{", false), None);
+        assert!(watch.line().unwrap().starts_with("settings.json:1:1 EOF"), "{:?}", watch.line());
+        assert!(watch.read(r#"{"terminal": {"font_size": 14}, "apps": ["Slack"]}"#, false).is_some());
+        assert_eq!(watch.line(), None);
+    }
+
+    #[test]
+    fn a_problem_has_no_control_character_and_is_cut_short() {
+        let mut watch = Watch::default();
+        let key = format!("a\u{1b}[31m{}", "b".repeat(400));
+        watch.read(&serde_json::json!({ key: 1 }).to_string(), false);
+        let line = watch.line().unwrap();
+        assert!(!line.chars().any(char::is_control) && line.ends_with('…'), "{line}");
+        assert_eq!(line.chars().count(), MAX_PROBLEM + 1);
     }
 }

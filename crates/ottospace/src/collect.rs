@@ -260,7 +260,7 @@ fn ignored(hosted: &Hosted) -> (Option<String>, bool) {
             title: title.as_deref().unwrap_or(&hosted.title),
             subrole: &subrole,
         };
-        let managed = rules::manages(&config::get().settings.windows, &facts);
+        let managed = rules::manages(&config::live().windows, &facts);
         (title, !managed)
     })
 }
@@ -305,7 +305,7 @@ impl Workspace {
             draft: format!("draft-{}-{}", std::process::id(), now_ms()),
             word: new_word().ok_or("capture: the system's random source could not be read")?,
             facts,
-            images: config::get().settings.capture.keep_images && config::materials_dir().is_some(),
+            images: config::live().capture.keep_images && config::materials_dir().is_some(),
         };
         if let Some(why) = self.model.refusal(&action, origin) {
             return Err(why.into());
@@ -368,7 +368,7 @@ impl Workspace {
             return;
         }
         let scale = f64::from(window.scale_factor());
-        let settings = config::get().settings.capture;
+        let settings = config::live().capture;
         let taken =
             |picture: bool, stale: bool| Action::CaptureTaken { draft: draft.to_string(), material: n, picture, stale };
         let content = |content| Action::CaptureContent { draft: draft.to_string(), material: n, content };

@@ -33,7 +33,7 @@ running, and the rest of the design is not built: see the
 | A task's agent in the right drawer: ↵ in the new-task box, or Start agent in the drawer, starts its agent (`claude` or `codex`, by its `@agent`, else `default_agent`) beside the workspace, which stays as it is. A click on a task only shows its conversation; Resume session goes on with one that ended. See [Flow of a task](#flow-of-a-task) | Works today |
 | Native conversation for Claude Code: the drawer drives `claude -p` (stream-json) and draws the reply itself: markdown (headings, emphasis, lists, quotes, tables), code blocks with Copy, links that open only on your click (web pages in the browser; files of the task's repository revealed in Finder), local images of the repository as thumbnails, tool calls as compact rows, a file edit's change as a diff card under its call, a working row while a turn runs, Copy and Copy as Markdown on each message, and a composer (↵ send, ⇧↵ new line). Permission requests are cards: Allow this one request as shown, or Deny (with a message if you like); a request too long to show is opened in full before Allow is offered. `Chat \| Terminal` in the header switches to the CLI's own TUI and back on the same session. A session at work in another terminal is watched read-only (what it calls and edits, not what it says; "Watching · updates per message" in the header), with Take over once it is idle. Codex stays in a terminal. No text selection by dragging yet: copy by message or block | Works today |
 | Right rail: a badge per open conversation of a live task (needs you first, then running, then the last opened; at most 8), and `+` for a new task. A dismissed task leaves it; a done one stays only while shown or its agent runs | Works today |
-| New task (⌘N), in the drawer: one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`, picks for where and who, and a line that says what ↵ will do. `/path` and `$skill` are stored and shown; a new agent is told the `/path`s (`Task: <title> (paths: ~/notes)`); nothing loads a skill yet | Works today |
+| New task (⌘N), in the drawer: one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`, picks for where and who, and a line that says what ↵ will do. A `/path` stays in the title the agent reads, and a folder taken from its dropdown is where the agent runs; `$skill` is stored and shown, nothing acts on it yet | Works today |
 | Home screen: a tab with no panes says what goes there (Open an app ⌘E, Terminal ⌘D), the tasks that need you, and each listed task as a node on a lattice (left to right by project; within a project the older task is farther). A click on a node or a row opens its conversation. With nothing open at all, the drawer shows a new task by itself | Works today |
 | Task groups on the one tab bar: a tab may be a task's, and each task's tabs sit side by side behind its badge (its two letters, bordered in its own colour, its state as a dot), underlined in its colour; the tabs of no task last. Starting a task takes the tab on show if that is no task's; ⌘T joins the task on show; drag a tab onto a group to move it there. The same badge on its panes, its row, the rail and the drawer. Selecting a task's tab shows its conversation in the open drawer | Works today |
 | Tabs, each with its own split tree | Works today |
@@ -50,7 +50,7 @@ running, and the rest of the design is not built: see the
 | Workbooks (⌘⇧S): save tabs under a name (their splits, each terminal's directory, each app) and open them again from the Workbook section. Several tabs each: add a tab to one, or save all the tabs on the bar as one. Kept in `~/.ottospace/workbooks`. An app comes back as its window, not on the page or document it showed | Works today |
 | Tabs and layout come back after quitting: every tab (with its task and workbook), its splits and sizes, focus, the tab on show, the section and the drawer; terminals start again in their folders with their last lines and an offered command; running apps' windows go back in their panes. See [Restoring the layout](#restoring-the-layout) | Works today |
 | `settings.json`: terminal font, repository directories, tasks folder, apps to offer, window rules | Works today |
-| [Meeting timeline](#meeting-timeline): a calendar feed (`calendar_ics`) as a hairline across the top of the window, now at its left edge; the next meeting named beside the tab bar's buttons; a soft pulse as one comes near; a banner, a notification and a sound when one has started and you are in no call | Works today |
+| [Meeting timeline](#meeting-timeline): a calendar feed (`calendar_ics`) as a thin band of the workday above the status bar, a tick for now; the next meeting named beside the tab bar's buttons; a soft pulse as one comes near; a banner, a notification and a sound when one has started and you are in no call | Works today |
 
 ### Roadmap: designed, not built
 
@@ -102,6 +102,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⌃A | Debug: outline the focused app pane's accessibility targets (parked panes only) |
 | ⌘/ | Show every key. In a small window the list scrolls: J / K or the arrows, space or Page Down / Page Up, Home / End |
 | ⌘P | [Command palette](#command-palette): run any command of the menu bar by name. Type to filter, ↑/↓ or ⌃N/⌃P move, ↵ runs, Esc or ⌘P closes |
+| ⌘, | Open Settings: `settings.json` in your editor, in a tab of its own (see [Settings](#settings)) |
 | F18 | From any app: take the keyboard back and bring ottospace forward |
 | ⌘T | New tab, with an empty pane: ⌘E picks what goes in it |
 | ⌘1 … ⌘9 | Select a tab on the bar |
@@ -173,6 +174,16 @@ and WHO (the default agent, then each runner and its models), which set the line
   folder takes no space: the dropdown stays open on what is inside it. A space typed at
   the end of a name that is one of the rows takes that row, spelled as it is kept; inside a
   word a space is a space.
+- **A path's rows.** Only a word that starts with `/`, `~/`, `./` or `../` (or a bare `~`)
+  opens them: `and/or`, `11/14` and a link do not. Directories come first, then files; a name
+  that starts with the last part typed before one that holds it, whatever the case. A hidden
+  name shows once that part starts with `.`. At most eight, and "… n more" under them. While
+  the next folder is read the rows shown stay; none can be taken until it is in. A name that
+  hides or turns its text around (a bidi mark) is not offered. `./` and `../` need a `>repo`.
+- **A folder you take** (Tab, ↵ or a click on a folder's row) is where the task's agent will
+  run, in place of its `>repo`: the box shows it as "runs in ~/notes/ ×", and the line above
+  says so. × takes it off and leaves the path in the line. Changed in the line, it is gone. A
+  path typed out and never taken is only a word of the task.
 - **Tags that are understood** are drawn in their colour on a faint chip, in the line itself;
   a word that names nothing stays plain.
 - **Files.** Files and folders dragged from Finder onto the box, picked with ⌘O, or copied in
@@ -299,6 +310,9 @@ a word's first letter and letters side by side rank first, then a group's name (
 Developer group). ↑/↓ or ⌃N/⌃P move, a click or ↵ runs the command as its menu item does, Esc, ⌘P
 or a click outside closes it. A command that nothing matches keeps the box open.
 
+Open Settings (App, also ottospace ▸ Open Settings, ⌘,) opens `settings.json` in your editor in a
+tab titled Settings; see [Settings](#settings).
+
 Move Tab to Task… (Tabs, also File ▸ Move Tab to Task…) turns the box into a list of the tasks
 not dismissed, in their order, then No task. Type to filter by title; ↵ or a click moves the
 tab on show to the end of that task's group, or out of any task.
@@ -361,7 +375,7 @@ read out of the line; the rest is the title.
 | `#project` | The project the task serves | Projects other tasks name |
 | `>repo` | The repository the task works in | The Repos list (repositories and worktrees) |
 | `@agent` | Who works it: a runner (`@claude`, `@codex`: its default model), a runner and a model (`@claude-opus-5-5`, `@codex-gpt-6-astra`), or a saved agent | `claude`, its models, `codex`, its models, then each `~/.ottospace/agents/<name>.md` if that folder exists |
-| `/path` | A path the task is about: a word that starts with `/` or `~/` | The files and directories under what is typed |
+| `/path` | A path the task is about: a word that starts with `/`, `~/` (or is `~`), `./` or `../`. It stays in the title. A folder taken from the dropdown is where the agent runs | The directories, then the files, of the folder typed |
 | `$skill` | A skill to load for the task | Skill folders (those with a `SKILL.md`) in `~/.claude/skills`, `$CLAUDE_CONFIG_DIR/skills`, `~/.codex/skills` (or `$CODEX_HOME/skills` if that is set), and the `.claude/skills` of the task's `>repo` |
 | `^reference` | Something open that the task points at. A space in the name has a backslash before it: `^Tab\ 1` | What is open now: each tab (its title), each pane (a terminal by its directory's name, an app pane by the app's), each [mark](#marks), and the installed apps that are not running. Two of one name: the later one is `name-2` |
 | `p1` to `p9` | The priority. 1 is most urgent; 3 when none is given | |
@@ -388,12 +402,12 @@ review the export PR >canvas-app @codex $code-review /src/export
   `ask @ana`, `costs $5` and `use > 3 workers` are safe. A name starts with a letter, so `#123`,
   `>3` and `$5` are never tags. `#project` always counts: a new name is a new project. A name
   longer than 200 characters is no tag either: it stays in the title.
-- **A `/path`** is under the home folder (`~/notes.md`), or, when the line names a `>repo`,
-  inside that repository: `/src/export` with `>canvas-app` is `src/export` in it. If nothing is
-  there (or no repository is named), it is absolute: `/Users/me/notes.md`. So with a `>repo` the
-  repository is looked in first, then the root of the disk; Tab lists the repository's entries
-  before the root's. It counts if a file or directory is there. The task keeps the word as typed
-  (`paths`) and, beside it, the absolute path that was found (`resolved`).
+- **A `/path`** is under the home folder (`~/notes.md`), from the root of the disk
+  (`/Users/me/notes.md`), or, when the line names a `>repo`, inside that repository:
+  `./src/export` with `>canvas-app` is `src/export` in it, `../other` beside it. It counts if a
+  file or directory is there. The task keeps the word as typed (`paths`) and, beside it, the
+  absolute path that was found (`resolved`). The word also stays in the title, so the agent
+  reads it.
 - **Punctuation and spaces.** A comma or full stop after a tag is not part of it: `#canvas,`
   and `p1,` work. For a path the word as typed is tried first, so a file named `v1.` is found,
   then the word without the punctuation. A space in a path or a reference is written with a
@@ -401,8 +415,6 @@ review the export PR >canvas-app @codex $code-review /src/export
   no-break space, as in a macOS screenshot's name) and a backslash itself (`a\\b`); taking a
   row, a drop or ⌥-click writes them for you. The task keeps the name without them. A name
   with a line break or a tab in it cannot be in the line: it is left out, and the box says so.
-- **A file dropped, picked or pasted** is that very file: `/tmp/report.txt` put in whole is
-  not looked for inside the line's `>repo`, as a path you type is.
 - **How many.** One `#project`, one `>repo`, one `@agent`, one priority: of two, the last one
   counts. Every `/path` and `$skill` is kept, each once (at most 20 of each). `@agent` and
   `$skill` are kept as their file or folder spells them, whatever the case typed.
@@ -416,16 +428,17 @@ review the export PR >canvas-app @codex $code-review /src/export
   runner, or `claude-…` or `codex-…`, is not offered: the name means the runner or its model.
   Name saved agents otherwise.
 - **What they do today.** `#project` and `>repo` are used: the home screen groups by project, and
-  a task's agent runs in its repository. `@agent` says which agent starts in the drawer
-  ([Flow of a task](#flow-of-a-task)). `/path` and `$skill` are stored on the task and shown
-  on its row; a new agent is asked its title with the `/path`s after it, as typed
-  (`plan ~/notes` → `Task: plan (paths: ~/notes)`). A `/path` is not where the agent runs: that
-  is `>repo` (none: the home folder), named in the drawer's header. Nothing loads a skill yet. What must be checked before anything does:
+  a task's agent runs in its repository, or in the folder taken from a path's dropdown.
+  `@agent` says which agent starts in the drawer ([Flow of a task](#flow-of-a-task)). A
+  `/path` is in the title the agent reads, and stored on the task; `$skill` is stored and
+  shown on its row; nothing loads a skill yet. What must be checked before anything does:
   [routines.md](ai/routines.md#6-trust-and-safety).
 - **Reading is off the window's thread.** Names and paths are looked up on another thread, so a
   slow disk does not stop typing. A tag's chip shows a moment after the word is typed; ↵ files
   the line with the tags that have shown.
 - `OTTOSPACE_SKILLS` (directories, `:` between them) replaces the runners' skill folders.
+- `OTTOSPACE_PATH_HOME` is the folder `~` stands for in a `/path`. A test run (`OTTOSPACE_E2E`)
+  that names none has no `~`, and looks at no path outside the temp folder.
 - `@name` named a repository before. It does not now. Titles of tasks already filed are not read
   again.
 
@@ -535,7 +548,7 @@ tab of dashboards, a tab of docs. It is not a task: no agent works it and it is 
 - **Save**: ⌘⇧S, File ▸ Save Tab as Workbook, or + in the Workbook section's header. It records
   the tab's splits and their sizes, and each app pane's app (bundle id and name); for each
   terminal, its directory as it is then, its last 500 lines (`workbook_scrollback_lines`; `0`
-  keeps none) and the command line of the program in front of its shell, if one runs. No window
+  keeps none; only once you typed in it: a shell left at its prompt keeps none) and the command line of the program in front of its shell, if one runs. No window
   title, URL or document. A tab with nothing in it is not saved.
 - **Add a tab**: `Add tab` on a workbook's row, `a` on it in list mode, or File ▸ Add Tab to
   Workbook… (it opens the section in list mode: pick the row, `a`). **All tabs**: File ▸ Save All
@@ -597,7 +610,12 @@ written a second after a change and at quit, readable by you alone.
   grey above the prompt, and a program that ran in front is typed on the prompt, not run: ↵ runs
   it. The same setting (`workbook_scrollback_lines`; `0` keeps no terminal text) and the same
   cleaning apply: escape sequences taken out, credential-shaped text hidden, capped. The program
-  itself did not survive.
+  itself did not survive. The grey lines are kept once: a start in which you typed nothing there
+  keeps them as they were; one in which you did adds what it printed below a second divider.
+- **The Settings tab** (Open Settings) is kept as a mark on its pane, never as a command and with
+  none of its screen. It comes back running your editor on `settings.json` again, built as ⌘,
+  builds it from `$VISUAL` or `$EDITOR` now; ⌘, brings it forward. An editor that is gone exits
+  at once and its pane closes.
 - **App panes** keep the app (bundle id and name), never a window title. A running app's window
   goes back in its pane; an app that is not running is not started: its pane says so and offers
   `Open <App>`. `restore_apps: true` starts it instead. Opening a workbook starts its apps: you
@@ -606,7 +624,8 @@ written a second after a change and at quit, readable by you alone.
   goes on with its session. No agent starts by itself.
 - A tab whose task no longer exists comes back as a tab of no task, so nothing is lost.
 - A file that cannot be read is set aside as `layout.json.bad`, and ottospace starts empty and
-  says so. A file a newer build wrote is left as it is and not written over.
+  says so. A file a newer build wrote is left as it is and not written over. A pane of a kind
+  this build does not know comes back empty.
 - **File ▸ Start Fresh** (or the palette): the next start is empty. The file (and a
   `layout.json.bad`) is removed and not written again this run. `restore_layout: false` turns it all off: the file is neither read nor
   written (one that is there is left alone).
@@ -618,16 +637,19 @@ Set `calendar_ics` to your calendar's feed (an `https://` link, such as a calend
 address in iCal format", or a file's path) and ottospace shows your day's meetings, never in
 the way.
 
-- **The hairline**: a 6-point band along the very top of the window, above the window's buttons,
-  so it costs no room. Its left edge is now; it shows the next `calendar_window_hours` (8). Each
-  meeting is a block as long as it lasts; blocks slide left as time passes and go when they end.
-  A meeting that runs starts at the left edge and shrinks. Faint ticks mark whole hours; the hour
-  shows on hover. Meetings that overlap share two half-height lanes. All-day events are one small
-  dot at the left end. Hover a block for its title, time and place.
+- **The band**: 8 points high, directly above the status bar, the window's width; panes give up
+  that height. It is the workday (`calendar_workday`, 09:00 to 17:00), fixed through the day: a
+  small mark at its start and one at its end, each meeting a flat block at its clock place (past
+  ones faint), and a bright tick for now that moves along it (pinned to an end before or after
+  hours). A meeting outside the workday widens the band to hold it, never past midnight (one over
+  midnight is cut there). Meetings that overlap share two half-height lanes; all-day events are
+  one small dot at the left end. Blocks are at least 3 points wide. Hover only, no click: a block
+  shows its title, time, length, place and whether it has a Zoom, Meet or Teams link; a mark its
+  time; now the time and the next meeting.
 - **The chip**: beside the new-tab and split buttons, the next meeting today: `Design review ·
   in 12m`, `· now` while it runs. Hidden when nothing is left today. Its tooltip says when the
   feed was last read (`calendar: not updated since 09:40` when the last read failed).
-- **The pulse**: from 10 minutes before a meeting its block and the chip glow softly, slowly;
+- **The pulse**: from 10 minutes before a meeting its block (its opacity) and the chip glow softly, slowly;
   from 2 minutes, faster; while it runs, steadily. With Reduce motion (System Settings,
   Accessibility, Display) the colour steps up instead, with no movement. Nothing else in
   ottospace pulses.
@@ -660,7 +682,7 @@ the way.
   occurrences are followed; see [meeting-timeline.md](ai/meeting-timeline.md) for what is not.
 - **Declined meetings**: set `calendar_email` to your address as the feed lists you among a
   meeting's attendees, and a meeting (or one occurrence) you declined is left out everywhere: the
-  hairline, the chip, the section and the alerts. A feed published with limited detail (free/busy
+  band, the chip, the section and the alerts. A feed published with limited detail (free/busy
   only, or without attendees) does not say who declined; then nothing is left out. The address
   stays in `settings.json`: it is not sent with the feed's request, shown, logged or in the state.
 - **The Calendar section** (its rail cell, second, is there only while `calendar_ics` is set):
@@ -769,8 +791,17 @@ you already have. To undo it: `hidutil property --set '{"UserKeyMapping":[]}'`.
 ## Settings
 
 ottospace keeps its files in `~/.ottospace` (another folder: set `OTTOSPACE_HOME`). It reads
-`settings.json` there at start, so a change applies the next time you start it. Every key is
-optional:
+`settings.json` there at start. Every key is optional.
+
+Open Settings (⌘,, the palette, or ottospace ▸ Open Settings) opens the file in a tab titled
+Settings, whose terminal runs `$VISUAL`, else `$EDITOR`, else `vi`, as your login shell sets them
+(an editor that must wait, as `code -w`, needs its flag). A file that is not there is made `{}`
+first. Again while that tab is open brings it forward; quitting the editor closes its pane. Only
+you open it: a socket client's ⌘, does nothing. Open at quit, it comes back at the next start,
+the editor running again ([Restoring the layout](#restoring-the-layout)).
+
+A change is read when the file is saved: what is wrong in it is said in the status bar (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify` and `calendar_notify_for` apply at once; any other key changed says "restart to apply" with its name (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
+
 
 ```json
 {
@@ -816,12 +847,12 @@ optional:
 | `capture_key` | The key that captures the pane in use, from any app: modifiers (`ctrl`, `alt`, `cmd`, `shift`) and a key, with `-` between them. `"off"`: no key. `OTTOSPACE_CAPTURE_KEY` wins over it. Not `ctrl-alt-space`: macOS uses it to change the input source | `ctrl-alt-cmd-space` |
 | `capture.keep_images` | Keep a capture's pictures on disk. `false`: no picture is ever written | `true` |
 | `capture.ax` | Read an app pane's accessibility tree with its picture. `false`: it is never read for a capture | `true` |
-| `windows` | Rules for windows ottospace must leave alone. Each rule selects windows by `app` (the app's name or bundle id), `title` and `subrole`; every field given must match, `*` stands for any text, and case does not matter. `"do": "ignore"`: the window never becomes a pane, when its app is hosted or when it opens later. `"do": "manage"` undoes a built-in rule. Your rules come first. Name an app by its bundle id to be sure. A window is judged once, when it is first seen, on the title it has then; rules are read at start | Built in: only standard windows are ever put in a pane, and Zoom's sharing controls, annotation layer and pop-ups are ignored |
+| `windows` | Rules for windows ottospace must leave alone. Each rule selects windows by `app` (the app's name or bundle id), `title` and `subrole`; every field given must match, `*` stands for any text, and case does not matter. `"do": "ignore"`: the window never becomes a pane, when its app is hosted or when it opens later. `"do": "manage"` undoes a built-in rule. Your rules come first. Name an app by its bundle id to be sure. A window is judged once, when it is first seen, on the title it has then; a changed rule applies to windows seen after it | Built in: only standard windows are ever put in a pane, and Zoom's sharing controls, annotation layer and pop-ups are ignored |
 | `apps` | The pinned apps: listed first under "Not running" in Apps, and in the picker before anything is typed; choosing one starts it in the background and puts its window in a pane. Each is the name of the app as Finder shows it (`Visual Studio Code` for `Visual Studio Code.app`), looked for in `/Applications`, `~/Applications` and `/System/Applications` (and their `Utilities`), or the path of its bundle (`~/Tools/Lumen.app`). One that is not found is left out of the list and kept in the file. Pin and Unpin in the Apps section write this list: the name if it means that same bundle when read back (the first of that name in those folders, in that order), else its path. A name that is found only once ottospace runs (the app was installed since) is listed from the next scan. (Once you type in the picker it offers every installed app in those folders, these first) | none |
 | `apps_hidden` | Apps of the Dock not to suggest in Apps, written as `apps` is. Hide in the Apps section writes this list | none |
 | `wheel_to_apps` | The wheel or trackpad over an app pane you are not in brings its window up for the scroll (a peek). `false`: the wheel there does nothing | `true` |
 | `calendar_ics` | The [meeting timeline](#meeting-timeline)'s calendar feed: an `https://` link (to a host on the internet, not an address or `localhost`) or a file's path (`/…` or `~/…`). Never shown: a private feed's link holds a secret | none: no timeline |
-| `calendar_window_hours` | How many hours the hairline shows from now, 1 to 24 | `8` |
+| `calendar_workday` | The workday the timeline's band spans: `"HH:MM-HH:MM"`, local 24-hour time, the start at least an hour before the end (`"06:00-22:00"`; `24:00` ends the day). `calendar_window_hours`, from before, is retired: the status bar asks to remove it, and the rest applies | `"09:00-17:00"` |
 | `calendar_refresh_minutes` | How often the feed is read again, at least 1 | `5` |
 | `calendar_notify` | A meeting that starts while you are in no call, or in another call, shows the banner, a notification and a sound | `true` |
 | `calendar_notify_for` | Which meetings alert: `all`, or only those with a Zoom, Meet or Teams `links` | `all` |

@@ -315,6 +315,7 @@ impl Gen<'_> {
             dismissed: self.rng.one_in(4),
             project: self.rng.coin().then(|| self.name(REPOS)),
             repo: self.rng.coin().then(|| self.name(DIRS)),
+            folder: self.rng.one_in(4).then(|| self.name(DIRS)),
             agent: self.rng.coin().then(|| self.name(AGENTS)),
             paths: self.names(DIRS, 2),
             resolved: self.names(DIRS, 2),
@@ -725,6 +726,7 @@ const MAKERS: &[Make] = &[
         // For the path at the cursor, or (an answer that is late) for another.
         let typing =
             g.m.compose_typing().filter(|_| g.rng.coin()).or_else(|| g.rng.one_in(4).then(|| "/src/".to_string()));
+        let typing = typing.map(|folder| (folder.clone(), format!("/r/{folder}")));
         Action::SetKnown {
             line,
             typing,
@@ -756,6 +758,7 @@ const MAKERS: &[Make] = &[
     |_| Action::ComposeEscape,
     |g| Action::ComposeMove { delta: g.delta() },
     |g| Action::ComposeAccept { index: g.index(4) },
+    |_| Action::ComposeFolderClear,
     |g| {
         // Paths of every kind: a space, a narrow no-break space, a backslash, a line break,
         // one too long, one that is no path.
@@ -999,6 +1002,10 @@ const MAKERS: &[Make] = &[
             saved.tab.panes.iter_mut().for_each(|pane| pane.cwd = Some(g.name(DIRS)));
             saved.marks = vec![layout_file::MarkLink { id: g.name(UIDS), pane: g.rng.coin().then(|| g.stray()) }];
         }
+        // A Settings mark on a tab, on what may be no pane of it or no terminal.
+        if let Some(saved) = layout.tabs.last_mut().filter(|_| g.rng.one_in(3)) {
+            saved.settings = Some(g.rng.pick(&[1, 2, 99]));
+        }
         layout.selected = g.rng.coin().then(|| g.rng.pick(&[0, 1, 2, 99]));
         layout.drawer.task = g.rng.coin().then(|| g.task());
         let layout = layout_file::parse(&layout_file::write(&layout)).unwrap_or(layout);
@@ -1007,6 +1014,14 @@ const MAKERS: &[Make] = &[
         Action::RestoreLayout { layout: Box::new(layout), gone, home, launch: g.rng.coin() }
     },
     |_| Action::StartFresh,
+    |_| Action::EditSettings,
+    |g| Action::SettingsRead {
+        text: g
+            .rng
+            .pick(&["", "{}", "{", r#"{"tasks_view": "project", "default_agent": "codex"}"#, r#"{"x": 1}"#])
+            .into(),
+        written: g.rng.coin(),
+    },
     |g| Action::UnfilledOpen { pane: g.pane() },
     |g| Action::WorkbookSave { uid: g.rng.pick(BOOK_UIDS).to_string(), cwds: g.read(DIRS), histories: g.histories() },
     |g| Action::WorkbookAddTab { workbook: g.workbook(), cwds: g.read(DIRS), histories: g.histories() },
@@ -1146,6 +1161,7 @@ fn selects_tab(action: &Action, origin: Origin) -> bool {
             | Action::NewTab
             | Action::NewEmptyTab
             | Action::NewTabOf { .. }
+            | Action::EditSettings
             | Action::TaskGo { .. }
             | Action::TalkGo
             | Action::DropPane { .. }
@@ -1391,7 +1407,21 @@ fn check(m: &Model) -> Result<(), String> {
         unique(&aliases) && unique(&targets),
         "the line points at one thing twice, or two by one name: {aliases:?}"
     );
-    let kept = !m.compose_refs.is_empty() || !m.compose_attached.is_empty() || m.compose_note.is_some();
+    let kept = !m.compose_refs.is_empty() || m.compose_folder.is_some() || m.compose_note.is_some();
+    ensure!(m.compose.is_some() || m.path_shown.is_none(), "the box is closed and a path's rows are kept");
+    // A path's rows still being read are not to be taken; fresh ones are of the folder typed.
+    if let Some(menu) = m.dropdown().filter(|menu| menu.mark == '/') {
+        ensure!(!menu.stale || menu.selected.is_none(), "a row still being read is highlighted: {menu:?}");
+        let folder = compose::path_folder(&menu.typed);
+        let inside = menu.rows.iter().all(|row| row.name.starts_with(&folder) && row.name.len() > folder.len());
+        ensure!(menu.stale || inside, "a path's row is not in the folder typed: {menu:?}");
+    }
+    if let Some(folder) = m.compose_folder() {
+        let named = m
+            .compose_line()
+            .is_some_and(|line| compose::path_words(line).concat().iter().any(|p| folder.starts_with(p.as_str())));
+        ensure!(named, "the box's folder {folder:?} is no word of its line");
+    }
     ensure!(m.compose.is_some() || !kept, "the box is closed and something of its line is kept");
     let offered: Vec<String> = m.ref_candidates().into_iter().map(|(r, _)| r.name).collect();
     ensure!(unique(&offered), "two things are offered by one name: {offered:?}");
@@ -2261,6 +2291,23 @@ impl Run {
                     self.shell.live = self.shell.live.filter(|live| *live != pane.id);
                     self.shell.visual = self.shell.visual.filter(|visual| *visual != pane.id);
                 }
+                // The editor runs on settings.json only in a terminal just opened by the user's Open Settings.
+                Effect::EditSettings { pane } => {
+                    let opened = effects.contains(&Effect::Opened(*pane));
+                    let terminal = m.pane(*pane).is_some_and(|p| p.kind == Kind::Terminal);
+                    // Or the layout file's Settings tab, read by the shell at start.
+                    let restored = origin == Origin::System && matches!(action, Action::RestoreLayout { .. });
+                    let users = user && matches!(action, Action::EditSettings);
+                    ensure!(
+                        opened && terminal && (users || restored) && m.settings_pane == Some(*pane),
+                        "{origin:?} ran the editor in pane {pane}: {action:?}"
+                    );
+                }
+                // Only the shell's read of the file applies settings, and only one with no problem.
+                Effect::ApplySettings { .. } => {
+                    let read = matches!(action, Action::SettingsRead { .. }) && origin != Origin::Socket;
+                    ensure!(read && m.settings_errors() == 0, "{origin:?} applied settings: {action:?}");
+                }
                 // A history goes to a terminal that has just started, of the user's opening, and is clean.
                 Effect::History { pane, history } => {
                     let opened = effects.contains(&Effect::Opened(*pane));
@@ -2349,16 +2396,11 @@ impl Run {
                         agents::Start::Resume { runner, session } => agents::resume(*runner, session),
                     };
                     ensure!(command.is_some(), "an agent that cannot be started is asked for: {start:?}");
-                    // Its prompt is the task's title and the paths its line named alone: nothing
-                    // captured from a pane or an app (a title nobody typed is fixed words), and
-                    // never the brief's text.
+                    // Its prompt is the task's title alone: nothing captured from a pane or an app
+                    // (a title nobody typed is fixed words), and never the brief's text.
                     if let agents::Start::New(launch) = start {
-                        let asked = m.tasks.get(task).map(|task| agents::asked(&task.title, &task.paths));
-                        ensure!(
-                            asked.as_deref() == Some(launch.title.as_str()),
-                            "task {task} starts with {:?}",
-                            launch.title
-                        );
+                        let title = m.tasks.get(task).map(|task| task.title.as_str());
+                        ensure!(title == Some(launch.title.as_str()), "task {task} starts with {:?}", launch.title);
                     }
                 }
                 Effect::ReadSession { runner, id } => {

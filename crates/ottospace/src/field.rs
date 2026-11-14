@@ -37,8 +37,9 @@ pub struct Drawn {
     ticking: bool,
     /// The window's height when it was drawn: what hangs under the field knows its room.
     viewport: Pixels,
-    /// Where the new-task box's content was last drawn.
+    /// Where the new-task box's content was last drawn, and its dropdown.
     panel: Bounds<Pixels>,
+    pub menu: Bounds<Pixels>,
     /// A field of several lines (the conversation's composer): each line drawn, where it starts
     /// in the text and its top; and the pointer's last height, to pick the line it is over.
     rows: Vec<(usize, ShapedLine, Pixels)>,

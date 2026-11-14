@@ -390,10 +390,8 @@ impl Workspace {
 /// its corner. The one look of a task on the tab bar, its panes, its row, the rail and the drawer.
 pub(crate) fn badge(mono: &str, colour: u32, state: Option<u32>, size: f32) -> Div {
     let dot = (size * 0.36).max(7.);
-    div()
-        .relative()
-        .flex_none()
-        .size(px(size))
+    let square = div()
+        .size_full()
         .flex()
         .items_center()
         .justify_center()
@@ -403,19 +401,21 @@ pub(crate) fn badge(mono: &str, colour: u32, state: Option<u32>, size: f32) -> D
         .bg(rgb(theme::SELECTED))
         .text_size(px((size * 0.4).max(9.)))
         .text_color(rgb(theme::TEXT))
-        .child(mono.to_string())
-        .children(state.map(|state| {
-            let at = px(-dot / 2.);
-            div()
-                .absolute()
-                .top(at)
-                .right(at)
-                .size(px(dot))
-                .rounded_full()
-                .bg(rgb(state))
-                .border_1()
-                .border_color(rgb(theme::BACKGROUND))
-        }))
+        .child(mono.to_string());
+    // The dot is the square's sibling: a border is painted over its own children.
+    div().relative().flex_none().size(px(size)).child(square).children(state.map(|state| {
+        // Where it was inside the square: insets start inside a border, 2 points of it.
+        let at = px(2. - dot / 2.);
+        div()
+            .absolute()
+            .top(at)
+            .right(at)
+            .size(px(dot))
+            .rounded_full()
+            .bg(rgb(state))
+            .border_1()
+            .border_color(rgb(theme::BACKGROUND))
+    }))
 }
 
 impl Workspace {
@@ -477,11 +477,12 @@ impl Workspace {
         let runs = self.model.agent_runs(subject);
         let muted = |text: String| div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(text);
         // Where the agent runs (or would): what it can see. Its process's folder, else the task's
-        // repository, else the home folder.
+        // (`Task::dir`), else the home folder.
         let ran = self.drawer.native.get(subject).and_then(|native| native.cwd.clone());
         let ran = ran.or_else(|| self.drawer.agents.get(subject).and_then(|agent| agent.cwd.clone()));
         let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
-        let folder = ran.or_else(|| self.repo_of(subject)).or_else(|| home.clone()).map(|dir| {
+        let dir = shown.and_then(|task| task.dir().cloned()).or_else(|| self.repo_of(subject));
+        let folder = ran.or(dir).or_else(|| home.clone()).map(|dir| {
             let rest = home.as_deref().and_then(|home| dir.strip_prefix(home));
             let short = rest.filter(|rest| rest.is_empty() || rest.starts_with('/')).map(|rest| format!("~{rest}"));
             short.unwrap_or(dir)

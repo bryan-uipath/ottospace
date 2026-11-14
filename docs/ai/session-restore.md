@@ -37,7 +37,11 @@ The file is `layout.json`, not `session.json`, and a pane is kept as a workbook 
 - **What**: one ordered list of tabs, each a workbook's `TabRecord` (title, `task`, split tree
   with ratios, focused pane, panes: terminal with `cwd` and the workbook's `history`, app by
   bundle id and name and never a title, empty), plus the workbook's tab it stands for and the
-  marks that stood for it or its panes (by the mark's `id`). Then `selected` (the tab on show,
+  marks that stood for it or its panes (by the mark's `id`), and `settings`: the record id of the
+  pane Open Settings opened (kept without history; restored, the core sends `EditSettings` for
+  that terminal and the shell runs its own fixed editor command; one at most, only on a terminal).
+  A pane `kind` this build does not know reads as `empty` here (`marks.json` and workbooks still
+  leave such a file alone). Then `selected` (the tab on show,
   by place), `section`, and `drawer` (`task`, `open`, `width`, `wide`). A session's
   conversation that is no task's is not kept. No scope on show: per-task tab sets are going away;
   restored on today's model, the tab on show brings its task's tabs with it.
@@ -51,6 +55,10 @@ The file is `layout.json`, not `session.json`, and a pane is kept as a workbook 
 - **Terminal text**: the workbook's rules exactly (`workbook_scrollback_lines`; `0` keeps no
   text and no command; cleaned, credential shapes hidden, 64 KB a terminal, 1 MB in all). The
   command is typed on the prompt, never run, and the divider names it. Never in the state.
+  The restored lines are saved again as they were, never read back off the view; what the run
+  printed below their divider is added, after a `── saved <date> ──` line, only if the user (or
+  a client's `type`) typed into the pane (`workbook::next_history`). A restart with no typing
+  saves the same history.
 - **Restore** (`Workspace::new`, after tasks, workbooks and marks are read; the guardian's
   leftovers were given back before the app started): each tab is built as a workbook's tab
   (`rebuild_tab`), in order, each task's tabs together and tabs of no task last

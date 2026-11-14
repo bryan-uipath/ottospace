@@ -177,6 +177,8 @@ export interface Task {
   project: string | null;
   /** A repository path. */
   repo: string | null;
+  /** The folder the user took from the new-task box's dropdown: its agent runs there, not in `repo`. Absent: none. */
+  folder?: string;
   /** Who works it: `claude`, `codex`, or a saved agent's name. */
   agent: string | null;
   /** Paths the task is about, as typed. */
@@ -361,7 +363,7 @@ export interface ComposeMenu {
   rows: MenuRow[];
   /** The highlighted row: ↵ and Tab take it. Null: ↵ adds the task. */
   selected: number | null;
-  /** What it says with no row: `no match` or `new project`. */
+  /** What it says with no row: `no match` or `new project`; under a folder's rows, `… 12 more`. */
   note: string | null;
 }
 
@@ -964,6 +966,8 @@ export interface Snapshot {
   cell: [number, number];
   /** The problem the status bar shows. Not an error of this request. */
   notice: string | null;
+  /** How many problems the last read of `settings.json` found: the first is in `notice`. */
+  settings_errors: number;
   /** Each hosted window's real frame, by pane id. */
   hosted: Record<string, Rect>;
   /** Each hosted pane's title-bar crop in points, by pane id. */
@@ -986,13 +990,17 @@ export interface Snapshot {
   compose_read: boolean;
   /** Where the new-task box is: the drawer's new-task state, the draft's title, or closed. */
   compose_host: "drawer" | "bar" | null;
-  /** What ↵ in the box would do: start `agent` (unless a saved agent: `starts` false) in the repository `dir` (null: the home folder), on `branch`. Null while the box is closed. */
+  /** What ↵ in the box would do: start `agent` (unless a saved agent: `starts` false) in the repository `dir`, or the folder taken from the dropdown as typed (null: the home folder), on `branch`. Null while the box is closed. */
   compose_plan: { agent: string; starts: boolean; dir: string | null; branch: string | null } | null;
   /** The drawer's one-click picks: repository names and agent names. */
   compose_picks: { wheres: string[]; whos: string[] };
   /** Nothing is open yet (no pane, task or conversation): the drawer shows the new task by itself. */
   welcome: boolean;
   compose_menu: ComposeMenu | null;
+  /** Where `compose_menu` was drawn, or null without one. */
+  compose_menu_bounds: Rect | null;
+  /** The folder taken from a path's dropdown that the task's agent will run in, as the line has it (`~/notes/`), or null. */
+  compose_folder: string | null;
   /** The tab or pane an ⌥-click would reference in the new-task box, while ⌥ is held over it. */
   compose_pointing: Rect | null;
   /** What the new-task box says it could not do ("no room in the line for that name"), or null. */
@@ -1081,6 +1089,20 @@ export interface Snapshot {
     in_call: boolean | null;
     soon: boolean;
     bars: number;
+    /**
+     * The band above the status bar, in window points (null without a feed): its rect, the times
+     * (ms) at its ends and the workday's, the workday's two marks, now's tick, each block's times
+     * and rect, and the status bar's rect.
+     */
+    band: {
+      rect: Rect | null;
+      span: [number, number];
+      workday: [number, number];
+      marks: (Rect | null)[];
+      now: Rect | null;
+      blocks: { start: number; end: number; rect: Rect | null }[];
+      status_bar: Rect | null;
+    } | null;
     chip: boolean;
     banner: { join: Rect | null; dismiss: Rect | null } | null;
     alerts: number;
