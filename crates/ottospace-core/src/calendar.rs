@@ -567,10 +567,15 @@ impl Calendar {
                 || self.today().any(|e| !e.all_day && e.start <= now.saturating_add(WATCH_BEFORE) && now < e.end))
     }
 
-    /// A call is on that the user was in before `event` came near: not this meeting.
+    /// A call is on that the user was in before `event` came near: not this meeting. Either first
+    /// seen `JOINED_EARLY` before it, or before its watch while another meeting ran (one overrunning).
     pub fn in_other_call(&self, event: &Event) -> bool {
-        self.in_call == Some(true)
-            && self.call_since.is_some_and(|since| since.saturating_add(JOINED_EARLY) <= event.start)
+        let Some(since) = self.call_since.filter(|_| self.in_call == Some(true)) else { return false };
+        let other = |e: &Event| {
+            e.id != event.id && !e.all_day && e.start.saturating_sub(WATCH_BEFORE) <= since && since < e.end
+        };
+        since.saturating_add(JOINED_EARLY) <= event.start
+            || (since.saturating_add(WATCH_BEFORE) <= event.start && self.today().any(other))
     }
 
     /// The alerts due now: (event, whether it is the second).
@@ -617,7 +622,9 @@ impl Calendar {
     pub fn banner(&self, now: u64) -> Option<&Event> {
         let shown = |e: &&Event| {
             let alerted = self.alerts.iter().any(|a| a.id == e.id && !a.done);
-            alerted && stage(e, now) == Stage::Running && (self.in_call != Some(true) || self.in_other_call(e))
+            // In another call, only in the first minutes: a switch between two looks reads as one call.
+            let other = self.in_other_call(e) && now < e.start.saturating_add(ALERT_WINDOW);
+            alerted && stage(e, now) == Stage::Running && (self.in_call != Some(true) || other)
         };
         self.events.iter().rfind(shown)
     }

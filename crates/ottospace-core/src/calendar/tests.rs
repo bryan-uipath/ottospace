@@ -224,6 +224,13 @@ fn a_meeting_that_starts_in_another_call_alerts_once_and_twice_at_most() {
         assert!(early.tick(NINE.max(since)).is_empty(), "{since}");
         assert!(early.tick(NINE + REPEAT + M).is_empty(), "{since}");
     }
+    // A short meeting before, running over: its call, first seen 5 minutes before, is another.
+    let mut short = calendar(vec![event(1, NINE - 5 * M, 5), event(2, NINE, 30)]);
+    short.call_seen(Some(true), NINE - 4 * M);
+    assert_eq!(short.tick(NINE).len(), 1);
+    // In that call, the banner stays only for the alert window: a switch unseen reads as one call.
+    assert!(short.banner(NINE + ALERT_WINDOW - 1).is_some());
+    assert!(short.banner(NINE + ALERT_WINDOW).is_none());
     let mut before = calendar(vec![event(3, NINE, 30)]);
     before.call_seen(Some(true), NINE - JOINED_EARLY);
     assert_eq!(before.tick(NINE).len(), 1);

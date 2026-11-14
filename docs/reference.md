@@ -618,8 +618,8 @@ the way.
   Accessibility, Display) the colour steps up instead, with no movement. Nothing else in
   ottospace pulses.
 - **The status bar** says `Design review in 4m` in amber from 5 minutes before.
-- **At the start**, if you are in no call, or in one that was on from more than 10 minutes before
-  (the meeting before, running over): a banner under the title strip (the title, how long
+- **At the start**, if you are in no call, or still in an earlier one (on from 10 minutes before,
+  or the meeting before, running over): a banner under the title strip (the title, how long
   ago it started, **Join** if the meeting has an `https:` link, **Dismiss**), which stays until
   you dismiss it, join, a call starts or the meeting ends; and a system notification with the
   alert sound, so you see it when ottospace is behind other windows. Once more 2 minutes later
@@ -630,7 +630,7 @@ the way.
 - **In a call** means a microphone is in use by any app (Zoom, Meet in a browser, Teams), as
   macOS's audio system says. ottospace reads no window, title or log for it and asks for no
   permission. A microphone in use for something else (dictation, a recording) also counts as a
-  call, and then no alert comes, unless it was on from more than 10 minutes before the start. Until
+  call, and then no alert comes, unless it is an earlier call (above). Until
   it has looked (it looks every 2 seconds from a minute before a meeting, and while a call it saw
   goes on) no alert comes either. Leaving one call and joining the next within 2 seconds reads as
   one call: Dismiss the alert.

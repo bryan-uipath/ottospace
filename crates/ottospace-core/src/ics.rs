@@ -303,6 +303,13 @@ pub fn expand_counted(feed: &Feed, from: i64, to: i64, zones: &Zones) -> (Vec<Oc
     let mut overrides: Vec<(&str, i64)> =
         feed.events.iter().filter_map(|e| Some((e.uid.as_str(), utc(e.recurrence_id.as_ref()?)))).collect();
     overrides.sort_unstable();
+    // Series the user declined: an override with no line of the user's is declined with them.
+    let declined: Vec<&str> = feed
+        .events
+        .iter()
+        .filter(|e| e.recurrence_id.is_none() && e.declined == Some(true))
+        .map(|e| e.uid.as_str())
+        .collect();
     let mut out = Vec::new();
     'events: for event in &feed.events {
         // RDATEs give up to a thousand occurrences an event, each with its text: keep few.
@@ -311,7 +318,9 @@ pub fn expand_counted(feed: &Feed, from: i64, to: i64, zones: &Zones) -> (Vec<Oc
         }
         let Some(start) = event.start.as_ref() else { continue };
         // An override declined or cancelled hides its occurrence only; a series, all but overrides.
-        if event.cancelled || event.declined == Some(true) {
+        let inherited =
+            event.declined.is_none() && event.recurrence_id.is_some() && declined.contains(&event.uid.as_str());
+        if event.cancelled || event.declined == Some(true) || inherited {
             continue;
         }
         let all_day = matches!(start, When::Date(_));

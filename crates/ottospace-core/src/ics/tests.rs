@@ -268,6 +268,10 @@ fn a_declined_occurrence_or_series_hides_only_what_was_declined() {
     let one_accepted = feed(&format!("{}{}", series("DECLINED"), moved("ACCEPTED")));
     assert_eq!(mine(&one_accepted), ["Standup (moved)"]);
     assert_eq!((mine_on(&one_accepted, 12), mine_on(&one_accepted, 14)), (0, 0));
+    // An override with no line of the user's answers as the series does.
+    let silent = moved("X").replace("ATTENDEE;PARTSTAT=X:mailto:me@example.com\r\n", "");
+    assert_eq!(mine_on(&feed(&format!("{}{silent}", series("DECLINED"))), 13), 0);
+    assert_eq!(mine_on(&feed(&format!("{}{silent}", series("ACCEPTED"))), 13), 1);
 }
 
 #[test]

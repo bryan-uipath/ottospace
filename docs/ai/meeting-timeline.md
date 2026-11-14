@@ -85,16 +85,18 @@ whose predecessor ran over alerted nothing, unless that call ended in its first 
 
 - `CallSeen { in_call, at }`: the core keeps when the call on was first seen (`call_since`),
   forgotten when one is seen off or not known. A call first seen at least `JOINED_EARLY` (10
-  minutes) before a start is another call: the meeting alerts, and its banner shows in that call.
-  One seen later, or after the start, is taken for this meeting, joined early: no alert.
+  minutes) before a start, or before its last minute while another meeting ran (a short one
+  overrunning), is another call: the meeting alerts, and its banner shows in that call for its
+  first 10 minutes. One seen later, or after the start, is taken for this meeting: no alert.
 - A call that is on is watched (every 2 seconds) until it is seen off, not only near a meeting,
   so `call_since` is of this call: a call that ended unseen and a new one would otherwise read
   as the old one.
 - Once per occurrence, at most twice (start and 2 minutes on), as before: a feed read keeps the
   alerts of an id, and the same call read again changes nothing. A new call ends the alert.
 - Limits: leaving one call and joining the next between two looks (2 seconds) reads as one call,
-  so the joined meeting alerts (one Dismiss). Joining 10 minutes or more early while another
-  meeting's slot still runs reads as another call too.
+  so the joined meeting alerts (one Dismiss; the banner goes after 10 minutes). Joining early
+  while another meeting's slot still runs reads as another call too. A call with no meeting
+  before it is first looked at a minute before the start, so it is taken for this meeting.
 
 ## Declined meetings
 
@@ -110,7 +112,7 @@ trace or failure folder, and the curl config holds only the link.
   parameter, and a colon in a quoted CN does not start the value.
 - An event declined is skipped as a cancelled one is: an override declined hides that occurrence
   only (it still replaces the series' one); a series declined hides all but overrides with the
-  user's own other answer (or none).
+  user's own other answer. An override with no line of the user's answers as its series does.
 - Not verified against real feeds (none was read): Google's secret iCal address is known to list
   attendees with `PARTSTAT`. Outlook by default removes a meeting the user declines from their
   calendar, so its published feed should not hold one; a feed published with limited detail
