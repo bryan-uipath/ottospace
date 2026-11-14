@@ -723,6 +723,8 @@ struct Workspace {
     /// Whose key, click or request is being handled now: the person's, unless the control socket
     /// is being served (also a key or click it injects) or the tick is doing its own work.
     input: Origin,
+    /// `Model::badges` as of this frame.
+    badges: std::cell::RefCell<Vec<(ottospace_core::talk::Subject, String)>>,
     apps: Vec<capture::App>,
     /// Apps started from the list, and where each one's window goes once it has one.
     launching: Vec<Launch>,
@@ -1057,6 +1059,7 @@ impl Workspace {
             sneak_reads: sneak_apps::Reads::default(),
             wheel: app_wheel::Wheel::default(),
             input: Origin::User,
+            badges: Default::default(),
             apps: Vec::new(),
             launching: Vec::new(),
             installed: apps::Scan::default(),
@@ -5030,6 +5033,8 @@ fn on_screen(body: Bounds<Pixels>, window: &Window, cx: &App) -> CGRect {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
+        // Every task's letters, worked out once a frame for each badge drawn (`task_badge`).
+        *self.badges.borrow_mut() = self.model.badges(&[]);
         // This frame draws every action so far: the replies held for it can go (`settle`).
         self.drawn_seq = self.seq;
         self.frame_start.set(Some(Instant::now()));

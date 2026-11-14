@@ -2282,9 +2282,11 @@ impl Model {
             .get(self.active)
             .map(|tab| tab.id)
             .filter(|_| !matches!(sent.action, Action::RestoreLayout { .. }));
+        let undo = matches!(sent.action, Action::TaskUndo | Action::ListUndo);
         let effects = self.step(sent);
         self.tasks.finished(&states, self.now);
-        self.settle_tasks();
+        // Only the user's own undo links a dismissed task's tabs again.
+        self.settle_tasks(undo && origin == Origin::User);
         self.follow_tab(shown, origin);
         // However the list was left (Esc, a click on a pane), ⌘⌃← comes back to its row.
         if self.list.is_none() && listed.is_some() {
@@ -2718,6 +2720,8 @@ impl Model {
                 let was_on_show = index == self.active;
                 let tab = self.tabs.remove(index);
                 self.last_tab.retain(|(_, id)| *id != tab.id);
+                // A closed tab's id is used again: no dismissal taken back may link the new one.
+                self.unlinked.iter_mut().for_each(|(_, ids)| ids.retain(|id| *id != tab.id));
                 self.marks.forget_tab(tab.id);
                 self.workbooks.forget_tab(tab.id);
                 for id in tab.layout.as_ref().map(Node::leaves).unwrap_or_default() {
@@ -4104,6 +4108,7 @@ impl Model {
             if let Some(id) = subject.task().filter(|_| runner.is_some() && self.by_user)
                 && self.tab_task().is_none()
                 && self.layout.is_some()
+                && self.tab_of_task(id).is_none()
             {
                 self.place_tab(None, TabAt::End(Some(id)));
             }
@@ -4667,7 +4672,7 @@ impl Model {
     /// Dismisses a task. One whose agent runs is asked about first (`Confirm::dismiss`): a
     /// client's dismissal of it is refused. `moved`: the move the notice offers back.
     fn dismiss(&mut self, id: TaskId, moved: Option<Moved>, effects: &mut Vec<Effect>) {
-        if self.agent_runs(&Subject::Task(id)) && self.tasks.get(id).is_some_and(|task| !task.dismissed) {
+        if self.agent_runs(&Subject::Task(id)) && self.tasks.live(id).is_some() {
             // The question is ottospace's own UI: a live window would cover it.
             self.leave(effects);
             self.confirm = Some(Confirm { running: Vec::new(), dismiss: Some(id) });
@@ -4679,13 +4684,14 @@ impl Model {
         }
     }
 
-    /// After every step: a tab of a task that is gone or dismissed is a tab of no task (a
-    /// dismissal taken back links again those of its tabs still open and of no task); a
-    /// dismissed task's conversation leaves the rail and the drawer; the groups stay side by
-    /// side; the tab on show is its task's last.
-    fn settle_tasks(&mut self) {
+    /// After every step: a tab of a task that is gone or dismissed is a tab of no task (the
+    /// user's undo of the dismissal links again those of its tabs still open and of no task; a
+    /// task back by other means, such as a state report, gets none); a dismissed task's
+    /// conversation leaves the rail and the drawer; the groups stay side by side; the tab on
+    /// show is its task's last.
+    fn settle_tasks(&mut self, undone: bool) {
         let tasks = &self.tasks;
-        let gone = |id: &TaskId| tasks.get(*id).is_none_or(|task| task.dismissed);
+        let gone = |id: &TaskId| tasks.live(*id).is_none();
         for tab in &mut self.tabs {
             if let Some(id) = tab.task.filter(gone) {
                 if tasks.get(id).is_some() {
@@ -4699,7 +4705,7 @@ impl Model {
         }
         self.unlinked.retain(|(id, _)| tasks.get(*id).is_some());
         let back: Vec<(TaskId, Vec<u32>)> = self.unlinked.extract_if(.., |(id, _)| !gone(id)).collect();
-        for (id, ids) in back {
+        for (id, ids) in back.into_iter().filter(|_| undone) {
             for tab in self.tabs.iter_mut().filter(|tab| ids.contains(&tab.id) && tab.task.is_none()) {
                 tab.task = Some(id);
             }
@@ -5175,11 +5181,17 @@ impl Model {
         // The lowest number no tab has: closing "Tab 5" and opening one gives "Tab 5" again.
         let taken = |n: &u32| self.tabs.iter().any(|t| t.title == format!("Tab {n}"));
         let title = format!("Tab {}", (1..).find(|n| !taken(n)).unwrap_or(self.next_tab));
-        let end = self.tabs.iter().rposition(|t| t.task == task).map(|at| at + 1);
-        let before_none = || self.tabs.iter().position(|t| t.task.is_none() && task.is_some());
-        let at = end.or_else(before_none).unwrap_or(self.tabs.len());
+        let at = self.group_end(task);
         self.tabs.insert(at, Tab { id: self.next_tab, title, task, layout: None, focused: None });
         self.active = at;
+    }
+
+    /// Where a tab joining `task`'s group goes: after its last tab; a new group goes before the
+    /// tabs of no task.
+    fn group_end(&self, task: Option<TaskId>) -> usize {
+        let end = self.tabs.iter().rposition(|t| t.task == task).map(|at| at + 1);
+        let before_none = || self.tabs.iter().position(|t| t.task.is_none() && task.is_some());
+        end.or_else(before_none).unwrap_or(self.tabs.len())
     }
 
     /// The task of the tab on show, if it has one.
@@ -5223,7 +5235,7 @@ impl Model {
         };
         let task = match at {
             // A task that is gone or dismissed takes no tab.
-            TabAt::End(Some(id)) => match self.tasks.get(id).filter(|task| !task.dismissed) {
+            TabAt::End(Some(id)) => match self.tasks.live(id) {
                 Some(_) => Some(id),
                 None => return,
             },
@@ -5238,10 +5250,10 @@ impl Model {
         moved.task = task;
         let to = match at {
             TabAt::Before(id) => self.tabs.iter().position(|t| t.id == id),
-            TabAt::End(_) => self.tabs.iter().rposition(|t| t.task == task).map(|at| at + 1),
+            TabAt::End(_) => None,
         };
-        let none = self.tabs.iter().position(|t| t.task.is_none() && task.is_some());
-        self.tabs.insert(to.or(none).unwrap_or(self.tabs.len()), moved);
+        let to = to.unwrap_or_else(|| self.group_end(task));
+        self.tabs.insert(to, moved);
         self.active = self.tabs.iter().position(|t| t.id == shown).unwrap_or(0);
         self.regroup();
     }
@@ -7090,6 +7102,36 @@ mod tests {
         assert_eq!(rail(&m), [Subject::Task(b)], "shown");
         m.update(Action::TalkToggle);
         assert_eq!(rail(&m), Vec::<Subject>::new());
+    }
+
+    #[test]
+    fn only_the_users_undo_links_a_dismissed_tasks_tabs_and_never_a_tab_made_since() {
+        let mut m = Model::default();
+        term(&mut m);
+        let a = add_task(&mut m, "a", State::Captured);
+        m.update(Action::TabPlace { tab: None, at: TabAt::End(Some(a)) });
+        m.update(Action::TaskDismiss { id: a });
+        // Back by a state report: its tab stays the user's, of no task.
+        m.update(Action::TaskSetState { id: a, state: State::NeedsYou }.sent_by(Origin::Socket));
+        assert_eq!((m.tasks.live(a).is_some(), m.tab_task()), (true, None));
+        // Dismissed, its only tab closed, a new tab with the same id: undo links nothing.
+        m.update(Action::TabPlace { tab: None, at: TabAt::End(Some(a)) });
+        m.update(Action::TaskDismiss { id: a });
+        m.update(Action::CloseTab { index: None });
+        assert_eq!(m.tabs[0].id, 1, "the id is used again");
+        m.update(Action::TaskUndo);
+        assert_eq!((m.tasks.live(a).is_some(), m.tab_task()), (true, None));
+    }
+
+    #[test]
+    fn starting_a_task_that_has_a_tab_takes_no_other() {
+        let mut m = Model::default();
+        term(&mut m);
+        let a = add_task(&mut m, "a", State::Captured);
+        m.update(Action::NewTabOf { task: Some(a) });
+        m.update(Action::SelectTab { index: 1 });
+        m.update(Action::TaskTalk { id: a });
+        assert_eq!((m.active, m.tab_task(), groups(&m).len()), (1, None, 2));
     }
 
     #[test]

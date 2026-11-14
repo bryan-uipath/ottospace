@@ -1016,7 +1016,7 @@ impl Model {
         self.remember_tab();
         self.park_active();
         // A task that is gone: a tab of no task.
-        let task = record.task.filter(|task| self.tasks.get(*task).is_some_and(|task| !task.dismissed));
+        let task = record.task.filter(|task| self.tasks.live(*task).is_some());
         self.push_tab_of(task);
         let mut ids = Vec::new();
         for pane in record.shown() {

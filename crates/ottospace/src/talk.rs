@@ -312,8 +312,8 @@ impl Workspace {
     /// A task's badge as drawn everywhere: its letters (`Model::badges`), its identity colour,
     /// its state's dot. `None`: no such task, or it is dismissed.
     pub(crate) fn task_badge(&self, id: TaskId, size: f32) -> Option<Div> {
-        let task = self.model.tasks.get(id).filter(|task| !task.dismissed)?;
-        let badges = self.model.badges(&[]);
+        let task = self.model.tasks.live(id)?;
+        let badges = self.badges.borrow();
         let mono = badges.iter().find(|(of, _)| *of == Subject::Task(id)).map(|(_, mono)| mono.clone())?;
         Some(badge(&mono, theme::identity(task.colour), task.group().map(theme::task), size))
     }
@@ -593,6 +593,7 @@ impl Workspace {
         let cells = self.model.rail().into_iter().enumerate().map(|(at, cell)| {
             let (name, tip) = (key(&cell.task), gpui::SharedString::from(cell.tip.clone()));
             // Its identity colour (a session's grey) and its state's dot, as on the bar and the rows.
+            // Not `task_badge`: a session's cell has no task, and its dot is lit while it works.
             let task_colour = cell.task.task().and_then(|id| self.model.tasks.get(id)).and_then(|task| task.colour);
             let ring = theme::identity(task_colour);
             let state = cell.group.map(theme::task).or(cell.working.then(|| theme::task(Group::Running)));

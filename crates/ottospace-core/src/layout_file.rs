@@ -279,9 +279,7 @@ impl Model {
         if !self.fresh() || layout.unsound().is_some() {
             return;
         }
-        let exists = |model: &Model, task: Option<TaskId>| {
-            task.filter(|id| model.tasks.get(*id).is_some_and(|task| !task.dismissed))
-        };
+        let exists = |model: &Model, task: Option<TaskId>| task.filter(|id| model.tasks.live(*id).is_some());
         let mut layout = layout;
         // A tab whose task is gone or dismissed is a tab of no task; then each task's tabs go together.
         for saved in &mut layout.tabs {

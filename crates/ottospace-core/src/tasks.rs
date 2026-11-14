@@ -452,6 +452,11 @@ impl Tasks {
         self.list.iter().find(|t| t.id == id)
     }
 
+    /// A task there is and that is not dismissed: one a tab, a badge or the rail may stand for.
+    pub fn live(&self, id: TaskId) -> Option<&Task> {
+        self.get(id).filter(|task| !task.dismissed)
+    }
+
     /// The inbox: listed tasks by group, then most urgent first, then oldest first.
     pub fn inbox(&self) -> Vec<(Group, &Task)> {
         let mut rows: Vec<(Group, &Task)> = self.list.iter().filter_map(|t| Some((t.group()?, t))).collect();
