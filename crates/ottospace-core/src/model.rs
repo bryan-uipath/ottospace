@@ -3532,8 +3532,15 @@ impl Model {
                     }
                     self.seeking.retain(|seek| seek.task != task);
                 }
-                // Not found in a while: the task runs, with no session to follow.
-                self.seeking.retain(|seek| now.saturating_sub(seek.since) <= agents::SEEK_MS);
+                // Not found in a while: the task runs, with no session to follow. Not while a later
+                // agent there is looked for: a session it may have been is not that one's either.
+                let old = |seek: &agents::Seek| now.saturating_sub(seek.since) > agents::SEEK_MS;
+                let later = |seek: &agents::Seek| {
+                    let there = |other: &&agents::Seek| (other.runner, &other.cwd) == (seek.runner, &seek.cwd);
+                    self.seeking.iter().filter(there).any(|other| other.since > seek.since && !old(other))
+                };
+                let gone: Vec<TaskId> = self.seeking.iter().filter(|s| old(s) && !later(s)).map(|s| s.task).collect();
+                self.seeking.retain(|seek| !gone.contains(&seek.task));
             }
             Action::SessionMissing { task, id } => {
                 if self.tasks.get(task).and_then(|task| task.session.as_ref()).is_some_and(|link| link.id == id) {
@@ -3575,7 +3582,9 @@ impl Model {
                 let answered: Vec<Subject> =
                     self.awaiting.iter().filter(|subject| self.session_of(subject) == key).cloned().collect();
                 self.awaiting.retain(|subject| !answered.contains(subject));
-                for subject in answered {
+                // What this read found counts, whatever an older listing since said.
+                let busy = self.read_sessions[0].2.as_ref().is_some_and(|found| self.in_use(found));
+                for subject in answered.into_iter().filter(|_| !busy) {
                     let start = Some(&subject).filter(|s| !self.agent_runs(s)).and_then(|s| self.agent_start(s));
                     if let Some((start @ agents::Start::Resume { .. }, cwd)) = start {
                         self.starting.push((subject.clone(), None));
@@ -3584,6 +3593,8 @@ impl Model {
                 }
             }
             Action::TaskStop { id } => {
+                // A resume waiting on its read is asked for no more.
+                self.awaiting.retain(|subject| *subject != id);
                 if self.agent_runs(&id) {
                     effects.push(Effect::StopAgent { task: id });
                 }
@@ -3614,7 +3625,7 @@ impl Model {
     }
 
     /// True if its agent runs, or is to once its session is read: the conversation keeps the keyboard.
-    pub(crate) fn talk_live(&self, subject: &Subject) -> bool {
+    pub fn talk_live(&self, subject: &Subject) -> bool {
         self.agent_runs(subject) || self.awaiting.contains(subject)
     }
 
@@ -3649,7 +3660,7 @@ impl Model {
                         // Where it started, if it was read (outside the listed checkouts: not at
                         // all); else the task's repository.
                         let cwd = match self.facts(&link.runner, &link.id).flatten() {
-                            Some(s) if self.held_elsewhere(s) => return None,
+                            Some(s) if self.in_use(s) => return None,
                             Some(s) => Some(self.resume_dir(s)?),
                             None => task.repo.clone(),
                         };
@@ -3684,7 +3695,7 @@ impl Model {
                     return Some(format!("@{agent} is a saved agent: starting one is not built yet"));
                 }
                 task.session.as_ref().is_some_and(|link| {
-                    let held = found(&link.runner, &link.id).is_some_and(|s| self.held_elsewhere(s));
+                    let held = found(&link.runner, &link.id).is_some_and(|s| self.in_use(s));
                     link.state == Some(State::Running) || held
                 })
             }
@@ -8240,6 +8251,15 @@ mod tests {
         let home = [resumed(Subject::Task(7), "claude", IDLE, "/code/app")];
         assert_eq!(m.update(read(None).sent_by(Origin::System)), home);
         assert_eq!(m.update(read(None).sent_by(Origin::System)), []);
+        // At work in another terminal as it is read: not gone on with.
+        let mut m = closed();
+        let busy = Found { active: true, last_activity: Some(9_000_000), ..below.clone() };
+        assert_eq!(m.update(read(Some(busy)).sent_by(Origin::System)), []);
+        assert!(m.talk_note().is_some_and(|note| note.contains("live in another terminal")));
+        // Stopped while it is read: the resume is asked for no more.
+        let mut m = closed();
+        assert_eq!(m.update(Action::TaskStop { id: Subject::Task(7) }), []);
+        assert_eq!(m.update(read(None).sent_by(Origin::System)), []);
         // A read nobody waits on starts nothing.
         let mut m = Model::default();
         m.update(Action::RestoreTasks { tasks: vec![serde_json::from_str(&kept).expect("kept")], floor: 7 });
@@ -8786,6 +8806,33 @@ mod tests {
         system(&mut m, Action::AgentExited { task: Subject::Task(5) });
         system(&mut m, Action::AgentSessions { found: vec![started(9, 81_000)], home: None, now: 82_000 });
         assert!(m.seeking().is_empty() && link(&m, 5).is_none());
+    }
+
+    /// The first agent's session came after the second started: which is whose cannot be told.
+    /// Once the first is no longer looked for, the second still does not take it.
+    #[test]
+    fn an_expired_codex_agent_keeps_a_later_one_from_a_session_that_may_be_its() {
+        let system = |m: &mut Model, action: Action| m.update(action.sent_by(Origin::System));
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        let names = compose::Names { agents: vec!["codex".into()], skills: Vec::new() };
+        let known = compose::Known { names, ..Default::default() };
+        for (task, at) in [(1, 0), (2, 10_000)] {
+            m.update(Action::TaskFromLine { line: format!("t{task} >app @codex"), known: known.clone(), open: false });
+            m.update(Action::TaskTalk { id: task });
+            system(&mut m, Action::AgentStarted { task: Subject::Task(task), session: None, at });
+        }
+        let id = "8f14e45f-ceea-467f-a8d3-0242ac130011";
+        let found =
+            vec![agents::Started { runner: "codex".into(), id: id.into(), cwd: "/code/app".into(), started: 11_000 }];
+        let link = |m: &Model, task| m.tasks.get(task).and_then(|task| task.session.as_ref()).map(|l| l.id.clone());
+        for now in [12_000, agents::SEEK_MS + 2_000, agents::SEEK_MS + 9_000] {
+            system(&mut m, Action::AgentSessions { found: found.clone(), home: None, now });
+            assert_eq!((link(&m, 1), link(&m, 2), m.seeking().len()), (None, None, 2), "at {now}");
+        }
+        // The later one's minute is up too: both go, neither linked.
+        system(&mut m, Action::AgentSessions { found, home: None, now: agents::SEEK_MS + 10_001 });
+        assert_eq!((link(&m, 2), m.seeking().len()), (None, 0));
     }
 
     #[test]

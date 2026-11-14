@@ -308,10 +308,7 @@ fn read(
     let mut found = Vec::new();
     for (index, (runner, session)) in sessions.iter().enumerate() {
         let Some(runner_name) = runner_name(&session.kind) else { continue };
-        // The longest listed checkout the session started in or below: a worktree inside its
-        // repository's folder is the worktree's.
-        let inside = checkouts.iter().filter(|dir| session.cwd.starts_with(dir));
-        let Some(repo) = inside.max_by_key(|dir| dir.as_os_str().len()) else { continue };
+        let Some(repo) = repo_of(&checkouts, session) else { continue };
         let (mut station, mut label) = (None, None);
         if active(session) && index < FOLLOWED {
             let follow = follows.entry(session.path.clone()).or_default();
@@ -328,6 +325,12 @@ fn read(
         found.push(Found { station, label, title, model, ..as_found(runner_name, session, repo, now) });
     }
     found
+}
+
+/// The longest listed checkout the session started in or below: a worktree inside its
+/// repository's folder is the worktree's.
+fn repo_of<'a>(checkouts: &'a [PathBuf], session: &SessionRef) -> Option<&'a PathBuf> {
+    checkouts.iter().filter(|dir| session.cwd.starts_with(dir)).max_by_key(|dir| dir.as_os_str().len())
 }
 
 /// What a listing says of a session in `repo`: where and when, at work, held. Nothing it runs.
@@ -354,13 +357,14 @@ fn as_found(runner: &str, session: &SessionRef, repo: &std::path::Path, now: u64
 /// makes; no transcript is followed. Called off the window's thread. `None`: no checkout has it.
 pub fn read_one(runner: &str, id: &str, now: u64) -> Option<Found> {
     let dirs = config::session_dirs()?;
-    let claude = Claude::new(dirs.claude);
-    let codex = dirs.codex.map(Codex::new);
-    let mut runners: Vec<&dyn Runner> = vec![&claude];
+    // Only that runner's folders.
+    let claude = (runner == "claude").then(|| Claude::new(dirs.claude));
+    let codex = dirs.codex.filter(|_| runner == "codex").map(Codex::new);
+    let mut runners: Vec<&dyn Runner> = claude.iter().map(|claude| claude as &dyn Runner).collect();
     runners.extend(codex.as_ref().map(|codex| codex as &dyn Runner));
     let (checkouts, sessions) = list(&runners, &repos::scan());
     let (reader, session) = sessions.iter().find(|(_, s)| runner_name(&s.kind) == Some(runner) && s.id == id)?;
-    let repo = checkouts.iter().filter(|dir| session.cwd.starts_with(dir)).max_by_key(|dir| dir.as_os_str().len())?;
+    let repo = repo_of(&checkouts, session)?;
     Some(Found { title: reader.title(session), ..as_found(runner, session, repo, now) })
 }
 

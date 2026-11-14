@@ -50,7 +50,7 @@ pub struct Drawer {
     /// A read of new Codex sessions under way, for agents whose session is not known yet.
     reading: Option<std::sync::mpsc::Receiver<Vec<agents::Started>>>,
     /// Reads of one session each under way, for resumes that wait on them (`SessionRead`).
-    session_reads: Vec<std::sync::mpsc::Receiver<Action>>,
+    session_reads: Vec<(String, String, std::sync::mpsc::Receiver<Action>)>,
 }
 
 /// A new session's id: a random (version 4) UUID. `None`: no random bytes could be read.
@@ -161,7 +161,7 @@ impl Workspace {
             return Some(Action::SessionRead { runner, id, found: None });
         }
         let (send, read) = std::sync::mpsc::channel();
-        self.drawer.session_reads.push(read);
+        self.drawer.session_reads.push((runner.clone(), id.clone(), read));
         std::thread::spawn(move || {
             let found = crate::sessions::read_one(&runner, &id, crate::now_ms());
             let _ = send.send(Action::SessionRead { runner, id, found });
@@ -212,15 +212,18 @@ impl Workspace {
                 self.dispatch(action, Origin::System, window, cx);
             }
         }
-        // Sessions read for a resume: a thread that ended without an answer is dropped.
+        // Sessions read for a resume. A thread gone with no answer: nothing is known.
         let mut read = Vec::new();
-        self.drawer.session_reads.retain(|answer| match answer.try_recv() {
+        self.drawer.session_reads.retain(|(runner, id, answer)| match answer.try_recv() {
             Ok(action) => {
                 read.push(action);
                 false
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => true,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => false,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                read.push(Action::SessionRead { runner: runner.clone(), id: id.clone(), found: None });
+                false
+            }
         });
         for action in read {
             self.dispatch(action, Origin::System, window, cx);
@@ -439,7 +442,9 @@ impl Workspace {
         let muted = |text: String| div().p_3().text_sm().text_color(rgb(theme::MUTED)).child(text);
         let Some(agent) = self.drawer.agents.get(subject) else {
             // The note, if there is one, is the line under the header (`render_talk`): once.
-            let why = self.model.talk_note().is_none().then(|| muted("no agent runs for this conversation".into()));
+            // Nothing either while its session is read for a resume.
+            let none = self.model.talk_note().is_none() && !self.model.talk_live(subject);
+            let why = none.then(|| muted("no agent runs for this conversation".into()));
             return div().relative().flex_1().child(record).children(why).into_any_element();
         };
         let (screen, cell) = (agent.terminal.screen(), self.cell);
