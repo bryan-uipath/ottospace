@@ -325,6 +325,15 @@ refused while it is open), and pane requests wait behind it as they do behind th
 key of ottospace's, so it does nothing while a hosted app has the keyboard (`APP` mode). Not ⌘K:
 in a terminal it clears the screen, and is kept for that.
 
+Reset Key Counts (View, also Help ▸ Reset Key Counts) forgets which keys you use. ottospace
+counts each key you press that runs a binding (⌘D, ⌘⌃ arrows, ⌘1–9 …), never the palette, a menu
+item or a socket client's key, and a press within a second of the last (a held key) is the same
+use. Each key has a score that halves in a week without use. A key is known from a
+score of 4.5 (five uses within a day or two), and again unknown once it decays below 2 (about eight
+idle days). The counts are kept in `~/.ottospace/keys.json`, readable by you alone: per key's id
+its score, when it was last used and whether it is known; no key text and nothing typed. Never on
+the socket. A test run keeps none unless it names `OTTOSPACE_HOME`.
+
 The Tasks group also holds the drawer's commands: Type in the Conversation (⌘L), Open or Close the
 Conversation (⌘⇧L), Go to Its Tabs (⌘↵) and Stop the Agent (the drawer's Stop), each for
 the conversation the drawer shows. ⌘P while you type in the conversation opens the palette over

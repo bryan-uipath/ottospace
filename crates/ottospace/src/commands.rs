@@ -28,7 +28,8 @@ actions!(
         AxInspector,
         InspectorFilter,
         InspectorRefresh,
-        BringBack
+        BringBack,
+        ResetKeyCounts
     ]
 );
 
@@ -82,6 +83,7 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::VisualMode => Box::new(VisualMode),
         Command::Zoom => Box::new(Zoom),
         Command::ShowKeys => Box::new(ShowKeys),
+        Command::ResetKeyCounts => Box::new(ResetKeyCounts),
         Command::AxOverlay => Box::new(AxOverlay),
         Command::AxInspector => Box::new(AxInspector),
         Command::InspectorFilter => Box::new(InspectorFilter),
@@ -133,6 +135,7 @@ impl Workspace {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &EditSettings, window, cx| this.edit_settings(window, cx)))
+            .on_action(cx.listener(|this, _: &ResetKeyCounts, window, cx| this.reset_key_use(window, cx)))
             .on_action(cx.listener(|this, _: &AxInspector, window, cx| this.toggle_inspector(window, cx)))
             .on_action(
                 cx.listener(|this, _: &InspectorFilter, window, cx| this.inspector_command("filter", window, cx)),

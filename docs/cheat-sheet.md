@@ -106,6 +106,9 @@ its splits. A mark whose directory is gone or whose app is not installed says so
 what can be opened, and its other panes are empty and say why. Marks are kept in
 `~/.ottospace/marks.json`.
 
+Which keys you use is counted in `~/.ottospace/keys.json` (your own presses only). Help ▸ Reset
+Key Counts forgets it.
+
 ## Tasks
 
 | I want to | Do |

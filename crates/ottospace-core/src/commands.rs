@@ -113,6 +113,7 @@ commands! {
     VisualMode: "Select with the Keyboard", View;
     Zoom: "Fill the Screen", View;
     ShowKeys: "Keys", View;
+    ResetKeyCounts: "Reset Key Counts", View;
     AxOverlay: "Accessibility Overlay", Developer;
     AxInspector: "Accessibility Inspector", Developer;
     InspectorFilter: "Filter the Accessibility Inspector", Developer;

@@ -1375,6 +1375,40 @@ fn user_folder(name: &str, settings: &str) -> PathBuf {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn the_users_own_keys_are_counted_and_kept_in_keys_json() {
+    let home = user_folder("keys", r#"{"repos": [], "restore_layout": false}"#);
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let mut otto = Otto::launch_with("keys-1", &env);
+    let known = |o: &Otto| o.call(json!({"cmd": "state"}))["keys_known"].clone();
+    // A client's keys count for nothing, however many.
+    for _ in 0..6 {
+        otto.call(json!({"cmd": "key", "keys": "cmd-/"}));
+    }
+    assert_eq!(known(&otto), json!([]));
+    // The user's: five presses of ⌘/ and it is known; ⌘T once is not. A press within a second
+    // of the last is the same use (a held key repeats), so each waits that long.
+    for _ in 0..5 {
+        otto.user_key("cmd-/");
+        std::thread::sleep(Duration::from_millis(1100));
+    }
+    otto.user_key("cmd-t");
+    assert_eq!(known(&otto), json!(["show_keys"]));
+    otto.call(json!({"cmd": "quit"}));
+    exits(&mut otto);
+
+    // The user's alone, and only ids, scores and times: no key text or typed text.
+    use std::os::unix::fs::PermissionsExt;
+    let file = home.join("keys.json");
+    let mode = std::fs::metadata(&file).expect("keys.json written at quit").permissions().mode() & 0o777;
+    let text: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    let ids: Vec<&str> = text["keys"].as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!((mode, ids), (0o600, vec!["new_tab", "show_keys"]), "{text}");
+    let otto = Otto::launch_with("keys-2", &env);
+    assert_eq!(known(&otto), json!(["show_keys"]), "read back");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn tasks_are_kept_between_runs() {
     // Each run after the first starts with nothing open: no layout is restored.
     let home = user_folder("tasks", r#"{"repos": [], "restore_layout": false}"#); // no repositories: not the user's own

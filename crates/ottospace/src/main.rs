@@ -31,6 +31,7 @@ use ottospace_core::clip::{self, Verb};
 use ottospace_core::compose;
 use ottospace_core::edit::{self, Edit};
 use ottospace_core::hosted::{self as hosting, Click};
+use ottospace_core::key_use::Binding;
 use ottospace_core::keys::{self, FilterKey, Mods};
 use ottospace_core::list::{ListKey, list_key};
 use ottospace_core::marks::{Field, MarkInput, MarkOf, MarkRef, letter};
@@ -71,6 +72,7 @@ mod field;
 mod give_back;
 mod home;
 mod inspector;
+mod key_use;
 mod layout_file;
 mod markdown;
 mod marks;
@@ -645,6 +647,88 @@ actions!(ottospace, [NewTabOutside, RemoveTabFromTask, MoveTabToTask]);
 // App menu.
 actions!(ottospace, [Quit, Hide]);
 
+/// Every key binding: the menus show these keys.
+fn keymap() -> Vec<KeyBinding> {
+    vec![
+        KeyBinding::new("cmd-d", SplitRight, None),
+        KeyBinding::new("cmd-shift-d", SplitDown, None),
+        KeyBinding::new("cmd-e", PickPane, None),
+        KeyBinding::new("cmd-shift-e", PickPaneDown, None),
+        KeyBinding::new("cmd-/", ShowKeys, None),
+        KeyBinding::new("cmd-p", commands::CommandPalette, None),
+        KeyBinding::new("cmd-,", commands::EditSettings, None),
+        KeyBinding::new("cmd-w", ClosePane, None),
+        KeyBinding::new("cmd-ctrl-left", FocusLeft, None),
+        KeyBinding::new("cmd-ctrl-right", FocusRight, None),
+        KeyBinding::new("cmd-ctrl-up", FocusUp, None),
+        KeyBinding::new("cmd-ctrl-down", FocusDown, None),
+        // The same moves on the home row, and a cycle through every pane.
+        KeyBinding::new("cmd-ctrl-h", FocusLeft, None),
+        KeyBinding::new("cmd-ctrl-l", FocusRight, None),
+        KeyBinding::new("cmd-ctrl-k", FocusUp, None),
+        KeyBinding::new("cmd-ctrl-j", FocusDown, None),
+        KeyBinding::new("cmd-]", FocusNext, None),
+        KeyBinding::new("cmd-[", FocusPrev, None),
+        // Resize the focused pane's split, and even all splits out.
+        KeyBinding::new("cmd-alt-left", ResizeLeft, None),
+        KeyBinding::new("cmd-alt-right", ResizeRight, None),
+        KeyBinding::new("cmd-alt-up", ResizeUp, None),
+        KeyBinding::new("cmd-alt-down", ResizeDown, None),
+        KeyBinding::new("cmd-alt-h", ResizeLeft, None),
+        KeyBinding::new("cmd-alt-l", ResizeRight, None),
+        KeyBinding::new("cmd-alt-k", ResizeUp, None),
+        KeyBinding::new("cmd-alt-j", ResizeDown, None),
+        KeyBinding::new("cmd-ctrl-=", Equalize, None),
+        KeyBinding::new("cmd-ctrl-0", FitPane, None),
+        // Swap the focused pane with its neighbour. ⌘⇧⌥1..9 move it to a tab (`key_down`).
+        KeyBinding::new("cmd-shift-alt-left", SwapLeft, None),
+        KeyBinding::new("cmd-shift-alt-right", SwapRight, None),
+        KeyBinding::new("cmd-shift-alt-up", SwapUp, None),
+        KeyBinding::new("cmd-shift-alt-down", SwapDown, None),
+        KeyBinding::new("cmd-shift-alt-h", SwapLeft, None),
+        KeyBinding::new("cmd-shift-alt-l", SwapRight, None),
+        KeyBinding::new("cmd-shift-alt-k", SwapUp, None),
+        KeyBinding::new("cmd-shift-alt-j", SwapDown, None),
+        // Fill the screen without leaving the Space (see `zoom_instead_of_fullscreen`).
+        KeyBinding::new("cmd-ctrl-f", Zoom, None),
+        // Debug: outline the focused app pane's accessibility tree.
+        KeyBinding::new("cmd-ctrl-a", AxOverlay, None),
+        // Tabs. ⌘1..⌘9 select one (handled in `key_down`).
+        KeyBinding::new("cmd-t", NewTab, None),
+        KeyBinding::new("cmd-}", NextTab, None),
+        KeyBinding::new("cmd-{", PrevTab, None),
+        KeyBinding::new("ctrl-tab", NextTab, None),
+        KeyBinding::new("ctrl-shift-tab", PrevTab, None),
+        KeyBinding::new("cmd-shift-w", CloseTab, None),
+        KeyBinding::new("cmd-shift-s", SaveWorkbook, None),
+        // Terminal selection. ⌘C never sends ^C: that is ⌃C.
+        KeyBinding::new("cmd-c", CopySelection, None),
+        KeyBinding::new("cmd-v", PasteText, None),
+        // A text field takes these keys itself; bound so the Edit menu shows them.
+        KeyBinding::new("cmd-x", Cut, None),
+        KeyBinding::new("cmd-a", SelectAll, None),
+        KeyBinding::new("cmd-z", Undo, None),
+        KeyBinding::new("cmd-shift-z", Redo, None),
+        KeyBinding::new("cmd-shift-c", VisualMode, None),
+        KeyBinding::new("cmd-ctrl-e", ListMode, None),
+        // The first is the one the menu shows.
+        KeyBinding::new(sneak::KEYS[0], SneakMode, None),
+        KeyBinding::new(sneak::KEYS[1], SneakMode, None),
+        KeyBinding::new("cmd-n", NewTask, None),
+        KeyBinding::new("cmd-shift-n", NextTask, None),
+        KeyBinding::new("cmd-l", TalkFocus, None),
+        KeyBinding::new("cmd-shift-l", TalkToggle, None),
+        KeyBinding::new("cmd-enter", TalkGo, None),
+        // Marks: ⌘' waits for a mark's letter. ⌘⌥1..9 go to the first nine (`key_down`).
+        KeyBinding::new("cmd-b", MarkPane, None),
+        KeyBinding::new("cmd-shift-b", MarkTab, None),
+        KeyBinding::new("cmd-'", MarkJump, None),
+        KeyBinding::new("cmd-h", Hide, None),
+        // Asks first while a terminal runs (`ask_quit`): ⌘Q sits next to ⌘W.
+        KeyBinding::new("cmd-q", Quit, None),
+    ]
+}
+
 /// What a socket call files once its tags are read.
 enum Filing {
     /// `task_new`: the line the reader was asked about. `open`: also show the task's tabs.
@@ -775,6 +859,8 @@ struct Workspace {
     /// The workbooks' files as last read and written.
     kept_workbooks: workbook::Kept,
     kept_layout: layout_file::Kept,
+    /// `keys.json` as last read and written.
+    kept_keys: key_use::Kept,
     /// Scroll position of the bar's list, so list mode can bring the selected row into view.
     list_scroll: ScrollHandle,
     /// Every scroll area's bar.
@@ -896,6 +982,13 @@ impl Workspace {
                     this.dispatch(Action::Leave, this.input, window, cx);
                 }
             }),
+            // A key's binding ran: counted, if the key was the user's. A menu or the palette runs
+            // the same action with no keystroke, so it counts for nothing.
+            cx.observe_keystrokes(|this, event, _, _| {
+                if let Some(binding) = event.action.as_deref().and_then(key_use::binding_of) {
+                    this.key_used(binding);
+                }
+            }),
             // Before the key's binding runs, so every ⌘ shortcut leaves sneak mode and then acts,
             // also one whose handler changes no state (⌘C, ⌘V). The quit question takes the key
             // whole: no binding and no key handler sees it.
@@ -916,6 +1009,7 @@ impl Workspace {
                 // Every quit ends here: ⌘Q, the menu, the close button, `ctl quit`, a signal.
                 // The layout first, while its panes and terminals are all there.
                 this.store_layout(true);
+                this.store_key_use(true);
                 this.hosted.drain().for_each(|(_, hosted)| {
                     hosted.give_back();
                 });
@@ -941,13 +1035,16 @@ impl Workspace {
                     this.serve_control(window, cx);
                     this.take_tags(window, cx);
                     this.store_layout(false);
+                    this.store_key_use(false);
                     if tick % 15 == 0 {
                         this.poll_sessions(window, cx);
                     }
                     if hotkey::take_press() {
+                        this.key_used(Binding::ReturnKey);
                         this.return_to_ottospace(window, cx);
                     }
                     if hotkey::take_capture() {
+                        this.key_used(Binding::CaptureKey);
                         // From any app: ottospace comes forward with the picture to draw on.
                         this.error = this.capture_pane(None, Origin::User, window, cx).err();
                         cx.activate(true);
@@ -1150,6 +1247,7 @@ impl Workspace {
             kept_marks: marks::Kept::default(),
             kept_workbooks: workbook::Kept::default(),
             kept_layout: layout_file::Kept::default(),
+            kept_keys: key_use::Kept::default(),
             hosting,
             host_only,
             control,
@@ -1162,6 +1260,7 @@ impl Workspace {
         this.refresh_apps();
         this.offer_installed(cx);
         this.stored = this.kept_tasks(); // what was read needs no writing back
+        this.restore_key_use();
         this.restore_workbooks();
         this.restore_marks(cx);
         // After the tasks, workbooks and marks it names; the windows a run left were given back already.
@@ -2755,6 +2854,9 @@ impl Workspace {
             })),
             // Test runs only: each press in an app a sneak label asked for, `[pane, path]`; else null.
             "app_presses": std::env::var_os("OTTOSPACE_E2E").map(|_| &self.sneak_reads.presses),
+            // The bindings the user knows (`key_use`), by id. Null outside a test run: what the
+            // user's keys are used for is never on the socket.
+            "keys_known": std::env::var_os("OTTOSPACE_E2E").map(|_| self.keys_known()),
             // The marks in the user's order: name, key, kind, whether its pane or tab is open
             // now, and whether it can be opened. `row` and `buttons`: where the Marks section
             // drew it, or null.
@@ -3206,6 +3308,7 @@ impl Workspace {
         let us_layout = matches!(cx.keyboard_layout().id(), "com.apple.keylayout.US" | "com.apple.keylayout.ABC");
         let place = keys::move_to_tab_key(&key.key, m.shift, us_layout);
         if let Some(tab) = place.filter(|_| m.platform && m.alt && !m.control) {
+            self.key_used(Binding::MoveToTab);
             self.dispatch(Action::MovePane { pane: None, tab }, self.input, window, cx);
             cx.stop_propagation();
             return;
@@ -3213,12 +3316,14 @@ impl Workspace {
         // ⌘⌥1..9 go to one of the first nine marks.
         let digit = key.key.parse::<usize>().ok().filter(|d| (1..=9).contains(d));
         if let Some(digit) = digit.filter(|_| m.platform && m.alt && !m.shift && !m.control) {
+            self.key_used(Binding::MarkNumber);
             let _ = self.go_to_mark(MarkRef::Place(digit - 1), Axis::Right, window, cx);
             cx.stop_propagation();
             return;
         }
         // ⌘⌃1..⌘⌃9 show one of the right rail's conversations.
         if let Some(digit) = digit.filter(|_| m.platform && m.control && !m.alt && !m.shift) {
+            self.key_used(Binding::RailNumber);
             self.rail_key(digit - 1, window, cx);
             cx.stop_propagation();
             return;
@@ -3227,6 +3332,7 @@ impl Workspace {
         if key.modifiers.platform
             && let Some(digit) = key.key.parse::<usize>().ok().filter(|d| (1..=9).contains(d))
         {
+            self.key_used(Binding::TabNumber);
             self.dispatch(Action::SelectVisibleTab { index: digit - 1 }, self.input, window, cx);
             cx.stop_propagation();
             return;
@@ -5758,84 +5864,7 @@ fn main() {
     Application::new().with_assets(Assets).run(move |cx: &mut App| {
         // Run as a bare binary (`ottospace`, `cargo run`) there is no bundle to supply the icon.
         ottospace_mac::window::set_dock_icon(include_bytes!("../assets/ottospace.icns"));
-        cx.bind_keys([
-            KeyBinding::new("cmd-d", SplitRight, None),
-            KeyBinding::new("cmd-shift-d", SplitDown, None),
-            KeyBinding::new("cmd-e", PickPane, None),
-            KeyBinding::new("cmd-shift-e", PickPaneDown, None),
-            KeyBinding::new("cmd-/", ShowKeys, None),
-            KeyBinding::new("cmd-p", commands::CommandPalette, None),
-            KeyBinding::new("cmd-,", commands::EditSettings, None),
-            KeyBinding::new("cmd-w", ClosePane, None),
-            KeyBinding::new("cmd-ctrl-left", FocusLeft, None),
-            KeyBinding::new("cmd-ctrl-right", FocusRight, None),
-            KeyBinding::new("cmd-ctrl-up", FocusUp, None),
-            KeyBinding::new("cmd-ctrl-down", FocusDown, None),
-            // The same moves on the home row, and a cycle through every pane.
-            KeyBinding::new("cmd-ctrl-h", FocusLeft, None),
-            KeyBinding::new("cmd-ctrl-l", FocusRight, None),
-            KeyBinding::new("cmd-ctrl-k", FocusUp, None),
-            KeyBinding::new("cmd-ctrl-j", FocusDown, None),
-            KeyBinding::new("cmd-]", FocusNext, None),
-            KeyBinding::new("cmd-[", FocusPrev, None),
-            // Resize the focused pane's split, and even all splits out.
-            KeyBinding::new("cmd-alt-left", ResizeLeft, None),
-            KeyBinding::new("cmd-alt-right", ResizeRight, None),
-            KeyBinding::new("cmd-alt-up", ResizeUp, None),
-            KeyBinding::new("cmd-alt-down", ResizeDown, None),
-            KeyBinding::new("cmd-alt-h", ResizeLeft, None),
-            KeyBinding::new("cmd-alt-l", ResizeRight, None),
-            KeyBinding::new("cmd-alt-k", ResizeUp, None),
-            KeyBinding::new("cmd-alt-j", ResizeDown, None),
-            KeyBinding::new("cmd-ctrl-=", Equalize, None),
-            KeyBinding::new("cmd-ctrl-0", FitPane, None),
-            // Swap the focused pane with its neighbour. ⌘⇧⌥1..9 move it to a tab (`key_down`).
-            KeyBinding::new("cmd-shift-alt-left", SwapLeft, None),
-            KeyBinding::new("cmd-shift-alt-right", SwapRight, None),
-            KeyBinding::new("cmd-shift-alt-up", SwapUp, None),
-            KeyBinding::new("cmd-shift-alt-down", SwapDown, None),
-            KeyBinding::new("cmd-shift-alt-h", SwapLeft, None),
-            KeyBinding::new("cmd-shift-alt-l", SwapRight, None),
-            KeyBinding::new("cmd-shift-alt-k", SwapUp, None),
-            KeyBinding::new("cmd-shift-alt-j", SwapDown, None),
-            // Fill the screen without leaving the Space (see `zoom_instead_of_fullscreen`).
-            KeyBinding::new("cmd-ctrl-f", Zoom, None),
-            // Debug: outline the focused app pane's accessibility tree.
-            KeyBinding::new("cmd-ctrl-a", AxOverlay, None),
-            // Tabs. ⌘1..⌘9 select one (handled in `key_down`).
-            KeyBinding::new("cmd-t", NewTab, None),
-            KeyBinding::new("cmd-}", NextTab, None),
-            KeyBinding::new("cmd-{", PrevTab, None),
-            KeyBinding::new("ctrl-tab", NextTab, None),
-            KeyBinding::new("ctrl-shift-tab", PrevTab, None),
-            KeyBinding::new("cmd-shift-w", CloseTab, None),
-            KeyBinding::new("cmd-shift-s", SaveWorkbook, None),
-            // Terminal selection. ⌘C never sends ^C: that is ⌃C.
-            KeyBinding::new("cmd-c", CopySelection, None),
-            KeyBinding::new("cmd-v", PasteText, None),
-            // A text field takes these keys itself; bound so the Edit menu shows them.
-            KeyBinding::new("cmd-x", Cut, None),
-            KeyBinding::new("cmd-a", SelectAll, None),
-            KeyBinding::new("cmd-z", Undo, None),
-            KeyBinding::new("cmd-shift-z", Redo, None),
-            KeyBinding::new("cmd-shift-c", VisualMode, None),
-            KeyBinding::new("cmd-ctrl-e", ListMode, None),
-            // The first is the one the menu shows.
-            KeyBinding::new(sneak::KEYS[0], SneakMode, None),
-            KeyBinding::new(sneak::KEYS[1], SneakMode, None),
-            KeyBinding::new("cmd-n", NewTask, None),
-            KeyBinding::new("cmd-shift-n", NextTask, None),
-            KeyBinding::new("cmd-l", TalkFocus, None),
-            KeyBinding::new("cmd-shift-l", TalkToggle, None),
-            KeyBinding::new("cmd-enter", TalkGo, None),
-            // Marks: ⌘' waits for a mark's letter. ⌘⌥1..9 go to the first nine (`key_down`).
-            KeyBinding::new("cmd-b", MarkPane, None),
-            KeyBinding::new("cmd-shift-b", MarkTab, None),
-            KeyBinding::new("cmd-'", MarkJump, None),
-            KeyBinding::new("cmd-h", Hide, None),
-            // Asks first while a terminal runs (`ask_quit`): ⌘Q sits next to ⌘W.
-            KeyBinding::new("cmd-q", Quit, None),
-        ]);
+        cx.bind_keys(keymap());
         // The menu bar lists the same actions; the app-level ones are handled here.
         cx.on_action(|_: &Hide, cx| cx.hide());
         cx.set_menus(menus::app_menus());

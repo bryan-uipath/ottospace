@@ -124,6 +124,9 @@ pub fn app_menus() -> Vec<Menu> {
                 item("Bring All Windows Back", commands::BringBack),
             ],
         },
-        Menu { name: "Help".into(), items: vec![item("Keys", ShowKeys)] },
+        Menu {
+            name: "Help".into(),
+            items: vec![item("Keys", ShowKeys), item("Reset Key Counts", commands::ResetKeyCounts)],
+        },
     ]
 }

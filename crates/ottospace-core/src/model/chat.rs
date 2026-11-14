@@ -331,7 +331,10 @@ impl Model {
                 });
                 let front = chat.transcript.cards.front().map(|card| card.ticket);
                 for event in events {
-                    chat.transcript.fold(event, at);
+                    // An agent that exited in this batch asks nothing: no card waits on it.
+                    if chat.transcript.live || !matches!(event, Event::Permission { .. }) {
+                        chat.transcript.fold(event, at);
+                    }
                 }
                 chat.armed &= chat.transcript.turn.is_some();
                 // A Deny's message is for the card it was written under: another one in front ends it.

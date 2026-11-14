@@ -341,6 +341,20 @@ pub fn save_marks(text: &str) -> io::Result<()> {
     write_whole(home, "marks.json", text)
 }
 
+/// `keys.json`: how much each key is used. `None`: no file, nothing is kept, or not a small
+/// plain file of text.
+pub fn read_keys() -> Option<String> {
+    let file = get().home.as_ref()?.join("keys.json");
+    let most = ottospace_core::key_use::MAX_FILE_BYTES as u64;
+    String::from_utf8(crate::collect::read_plain(&file, most)?).ok()
+}
+
+/// Writes `keys.json`, as `save_task` writes a task. Nothing in a test run that named no folder.
+pub fn save_keys(text: &str) -> io::Result<()> {
+    let Some(home) = get().home.as_ref() else { return Ok(()) };
+    write_whole(home, "keys.json", text)
+}
+
 /// The most workbook files read, and the largest one read: a folder is input, not trusted text.
 const MAX_WORKBOOKS: usize = 512;
 const MAX_WORKBOOK_BYTES: u64 = ottospace_core::workbook::MAX_FILE_BYTES as u64;

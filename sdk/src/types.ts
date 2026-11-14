@@ -1048,6 +1048,8 @@ export interface Snapshot {
   counts: Record<string, number> | null;
   /** Test runs only: each press in an app a sneak label asked for, `[pane, path]`. Else null. */
   app_presses: [PaneId, number[]][] | null;
+  /** Test runs only: the ids of the key bindings the user knows. Else null. */
+  keys_known: string[] | null;
   /** The marks, in the user's order. */
   marks: Mark[];
   /** The name of the mark just taken off, while the Marks section offers to put it back. */

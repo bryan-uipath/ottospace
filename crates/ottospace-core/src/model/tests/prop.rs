@@ -598,6 +598,18 @@ impl Gen<'_> {
         crate::sneak_apps::AppRead { window, crop, content: Frame { x: 50., y: 30., w: 300., h: 200. }, root }
     }
 
+    /// When a key is pressed: about now, a day or weeks on, or a clock set back.
+    fn key_time(&mut self) -> u64 {
+        const DAY: u64 = 24 * 60 * 60 * 1000;
+        let now = self.m.now();
+        match self.rng.below(4) {
+            0 => now.saturating_sub(DAY),
+            1 => now.saturating_add(self.rng.below(60) as u64 * 60_000),
+            2 => now.saturating_add(DAY),
+            _ => now.saturating_add(self.rng.below(40) as u64 * DAY),
+        }
+    }
+
     fn letters(&mut self) -> String {
         // After a first letter, often the rest of a label it starts.
         let typed = self.m.sneak.as_ref().map_or(String::new(), |s| s.typed.clone());
@@ -707,6 +719,15 @@ const MAKERS: &[Make] = &[
     |g| Action::InspectorFilter { on: g.rng.coin() },
     |_| Action::ToggleKeys,
     |_| Action::CloseKeys,
+    |g| Action::KeyUsed { binding: g.rng.pick(crate::key_use::ALL), at: g.key_time() },
+    |_| Action::ResetKeyUse,
+    |g| {
+        let mut uses = KeyUse::default();
+        for _ in 0..g.rng.below(12) {
+            uses.press(g.rng.pick(crate::key_use::ALL), g.key_time());
+        }
+        Action::RestoreKeyUse { uses }
+    },
     |_| Action::ToggleVisual,
     |_| Action::LeaveVisual,
     |_| Action::ToggleAxOverlay,
@@ -1205,6 +1226,10 @@ fn drawn(material: &crate::capture::Material) -> Vec<crate::capture::Shape> {
 }
 
 fn check(m: &Model) -> Result<(), String> {
+    // A key's score is between none and the ceiling, however its clock went.
+    let scored =
+        |used: &crate::key_use::Use| used.score.is_finite() && (0.0..=crate::key_use::MOST).contains(&used.score);
+    ensure!(m.key_use.uses().all(|(_, used)| scored(&used)), "key counts out of range: {:?}", m.key_use);
     // The Calendar is open, or has the rail's keyboard, only while a feed is set.
     let calendar_shown =
         m.sidebar == Some(Section::Calendar) || m.rail_focus == Some(zones::RailFocus::Left(Section::Calendar));
@@ -2041,8 +2066,16 @@ impl Run {
         );
 
         let peek_before = m.peek.as_ref().map(|peek| peek.pane);
+        let key_use = m.key_use.clone();
         let effects = m.update(sent);
         check(m)?;
+        // The counts are the user's keys: only their count and reset change them, and the shell's
+        // read of keys.json. A count changes nothing else: no effect.
+        let counts = matches!(action, Action::KeyUsed { .. } | Action::ResetKeyUse) && origin == Origin::User;
+        let read = matches!(action, Action::RestoreKeyUse { .. }) && origin != Origin::Socket;
+        ensure!(counts || read || m.key_use == key_use, "{origin:?} changed the key counts: {action:?}");
+        let keyed = matches!(action, Action::KeyUsed { .. } | Action::ResetKeyUse | Action::RestoreKeyUse { .. });
+        ensure!(!keyed || effects.is_empty(), "a key count made {effects:?}");
         // A peek that ends is parked again, made an entry, or its pane closed: never stranded.
         if let Some(pane) = peek_before.filter(|pane| m.peek.as_ref().map(|p| p.pane) != Some(*pane)) {
             let closed = |e: &Effect| matches!(e, Effect::Closed(p) if p.id == pane);
@@ -2131,6 +2164,8 @@ impl Run {
             let before = drafts.iter().find(|(subject, _)| *subject == chat.subject).map(|(_, text)| text.as_str());
             ensure!(before.unwrap_or("") == chat.draft.text(), "{origin:?} changed the draft of {:?}", chat.subject);
         }
+        // A count of a key is no input: it ends no mode or wait.
+        let counted = matches!(action, Action::KeyUsed { .. } | Action::ResetKeyUse | Action::RestoreKeyUse { .. });
         let sneak_own = matches!(
             action,
             Action::Sneak { .. }
@@ -2141,10 +2176,11 @@ impl Run {
                 | Action::LeaveSneak
                 | Action::SneakApp { .. }
                 | Action::AppWheel { .. }
-        );
-        let mark_own = matches!(
-            action,
-            Action::MarkPrefix
+        ) || counted;
+        let mark_own = counted
+            || matches!(
+                action,
+                Action::MarkPrefix
                 | Action::MarkEdit { .. }
                 | Action::ListMarkEdit { .. }
                 | Action::MarkType { .. }
@@ -2156,7 +2192,7 @@ impl Run {
                 | Action::WorkbookSave { .. }
                 | Action::WorkbookSaveAll { .. }
                 | Action::WorkbookEdit { .. }
-        );
+            );
         // A name being typed is a text field: an edit of it is the wait's own, whoever sends it.
         let typing = mark_input.as_ref().is_some_and(|input| input.text().is_some());
         let mark_own = mark_own || (typing && matches!(action, Action::FieldEdit { .. }));
@@ -2922,6 +2958,7 @@ fn code(sent: &Envelope) -> String {
         ("task", "Subject"),
         ("id", "Subject"),
         ("shows", "View"),
+        ("binding", "Binding"),
     ];
     // A mark is long, and half of it is JSON already: it is given as its file's text.
     if let Action::RestoreMarks { marks, extra } = &sent.action {
@@ -2933,6 +2970,10 @@ fn code(sent: &Envelope) -> String {
     if let Action::RestoreTasks { tasks, floor } = &sent.action {
         let tasks = serde_json::to_string(tasks).unwrap_or_default();
         return format!("restore_tasks({tasks:?}, {floor}).sent_by(Origin::{:?})", sent.origin);
+    }
+    // Key counts as keys.json has them.
+    if let Action::RestoreKeyUse { uses } = &sent.action {
+        return format!("restore_key_use({:?}).sent_by(Origin::{:?})", uses.write(), sent.origin);
     }
     if let Action::SessionWork { work } = &sent.action {
         let work = serde_json::to_string(work).unwrap_or_default();
@@ -3087,6 +3128,10 @@ fn restore_tasks(tasks: &str, floor: TaskId) -> Action {
     Action::RestoreTasks { tasks: serde_json::from_str(tasks).expect("a regression's tasks are JSON"), floor }
 }
 
+fn restore_key_use(text: &str) -> Action {
+    Action::RestoreKeyUse { uses: KeyUse::parse(text).expect("a regression's key counts are keys.json") }
+}
+
 fn session_work(work: &str) -> Action {
     Action::SessionWork { work: serde_json::from_str(work).expect("a regression's work is JSON") }
 }
@@ -3215,6 +3260,54 @@ fn by(origin: Origin, action: Action) -> Envelope {
 
 fn split(axis: Axis, kind: Kind) -> Envelope {
     Action::Split { axis, kind }.into()
+}
+
+/// A permission in the same batch as its agent's exit put a card up with no agent to answer it.
+#[test]
+fn a_permission_after_its_agent_exited_puts_up_no_card() {
+    let permission = Said::Permission {
+        ticket: 0,
+        tool: "Bash".into(),
+        label: "deploy".into(),
+        detail: Text::new("xxxxxx"),
+        len: 9,
+        cut: true,
+        claim: Text::new(""),
+    };
+    replay(&[
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.into(),
+        Action::CaptureStart {
+            pane: None,
+            draft: "d1".into(),
+            word: "k3f9a2c41b7d".into(),
+            facts: vec![],
+            images: true,
+        }
+        .into(),
+        Action::ComposeEnter.into(),
+        by(Origin::Socket, Action::AgentStarted { task: Subject::Task(1), session: None, at: 49 }),
+        by(
+            Origin::System,
+            Action::AgentEvents {
+                task: Subject::Task(1),
+                events: vec![Said::Exited { code: None }, Said::MessageElsewhere, permission],
+                at: 5000,
+            },
+        ),
+    ])
+    .unwrap();
+}
+
+/// Key counts read back from keys.json are the user's again; a client's count adds nothing.
+#[test]
+fn key_counts_read_back_and_a_clients_count_adds_nothing() {
+    let read = r#"{"version":1,"keys":{"copy":{"score":4,"at":1000,"known":false}}}"#;
+    replay(&[
+        by(Origin::System, restore_key_use(read)),
+        by(Origin::Socket, Action::KeyUsed { binding: Binding::Copy, at: 1000 }),
+        Action::KeyUsed { binding: Binding::Copy, at: 1000 }.into(),
+    ])
+    .unwrap();
 }
 
 /// ← from the right rail's cell of the conversation on show gave the keyboard to the drawer
