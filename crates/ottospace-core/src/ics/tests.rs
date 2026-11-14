@@ -205,6 +205,9 @@ fn an_unsupported_rule_gives_its_first_occurrence_only() {
     assert!(on(&text, 2026, 12, 31, &utc()).is_empty());
     let hourly = feed(&event("SUMMARY:Hourly\r\nDTSTART:20261112T090000Z\r\nRRULE:FREQ=HOURLY\r\n"));
     assert!(on(&hourly, 2026, 11, 13, &utc()).is_empty());
+    // The last Monday of the year, not of January: needs the whole year's days, not read.
+    let yearly = feed(&event("SUMMARY:Y\r\nDTSTART:20260126T090000Z\r\nRRULE:FREQ=YEARLY;BYDAY=MO;BYSETPOS=-1\r\n"));
+    assert_eq!(dates_in(&yearly, (2026, 1, 1), (2028, 1, 1)), [(2026, 1, 26)]);
 }
 
 #[test]
@@ -334,6 +337,35 @@ fn hostile_zones_and_rules_cost_no_more_than_the_budget() {
     assert!(one_work >= MAX_SCAN, "the years scanned are charged: {one_work}");
     let (_, work) = expand_counted(&parse(&feed(&yearly.repeat(3_000))), from, from + 2 * DAY, &utc());
     assert!(work <= SCAN_BUDGET + MAX_SCAN + 1_500, "{work}");
+
+    // A span of millennia: the years' positions are charged as they are worked out.
+    let old =
+        event("SUMMARY:o\r\nDTSTART:00010101T090000Z\r\nRRULE:FREQ=YEARLY;BYMONTH=1,6;BYMONTHDAY=1;BYSETPOS=1\r\n");
+    let (_, work) = expand_counted(&parse(&feed(&old)), at(1, 1, 1, 0, 0), at(5000, 1, 1, 0, 0), &utc());
+    assert!(work <= SCAN_BUDGET + 400, "{work}");
+}
+
+#[test]
+fn many_rdates_keep_the_earliest_occurrences() {
+    // 300 events of 1,000 RDATEs a minute apart, the last event's earliest.
+    let rdates = |base: i64| {
+        (0..1_000).map(|n| format!("20261113T{:02}{:02}00Z", (base + n) / 60 % 24, (base + n) % 60)).collect::<Vec<_>>()
+    };
+    let events: String = (0..300)
+        .map(|n| {
+            let (summary, base) = if n == 299 { ("First", 0) } else { ("Later", 120) };
+            let list = rdates(base);
+            event(&format!(
+                "UID:{n}\r\nSUMMARY:{summary}\r\nDTSTART:20261113T230000Z\r\nRDATE:{}\r\nRDATE:{}\r\n",
+                list[..500].join(","),
+                list[500..].join(",")
+            ))
+        })
+        .collect();
+    let got = expand(&parse(&feed(&events)), at(2026, 11, 13, 0, 0), at(2026, 11, 14, 0, 0), &utc());
+    assert_eq!(got.len(), MAX_OCCURRENCES);
+    assert!(got[..120].iter().all(|o| o.summary == "First"), "{:?}", got[0].summary);
+    assert!(got.windows(2).all(|w| w[0].start <= w[1].start));
 }
 
 /// Year, month, day.

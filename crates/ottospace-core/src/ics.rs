@@ -86,6 +86,13 @@ pub struct Event {
     recurrence_id: Option<When>,
 }
 
+impl Event {
+    /// Every time the event names: a zone any of them uses must be known.
+    fn times(&self) -> impl Iterator<Item = &When> {
+        [&self.start, &self.end, &self.recurrence_id].into_iter().flatten().chain(&self.exdates).chain(&self.rdates)
+    }
+}
+
 /// One STANDARD or DAYLIGHT part of a VTIMEZONE.
 #[derive(Clone, Debug, Default, PartialEq)]
 struct ZonePart {
@@ -231,9 +238,7 @@ pub fn parse(text: &str) -> Feed {
 pub fn named_zones(feed: &Feed) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     let defined = |name: &str| feed.zones.iter().any(|z| z.id == name);
-    let times =
-        feed.events.iter().flat_map(|e| [&e.start, &e.end, &e.recurrence_id].into_iter().flatten().chain(&e.rdates));
-    for when in times {
+    for when in feed.events.iter().flat_map(Event::times) {
         if let When::Local { zone: Some(name), .. } = when
             && !defined(name)
             && !names.contains(name)
@@ -259,7 +264,7 @@ pub fn expand_counted(feed: &Feed, from: i64, to: i64, zones: &Zones) -> (Vec<Oc
     let named: Vec<&str> = feed
         .events
         .iter()
-        .flat_map(|e| [&e.start, &e.end, &e.recurrence_id].into_iter().flatten().chain(&e.exdates).chain(&e.rdates))
+        .flat_map(Event::times)
         .filter_map(|when| match when {
             When::Local { zone: Some(name), .. } => Some(name.as_str()),
             _ => None,
@@ -288,7 +293,11 @@ pub fn expand_counted(feed: &Feed, from: i64, to: i64, zones: &Zones) -> (Vec<Oc
         feed.events.iter().filter_map(|e| Some((e.uid.as_str(), utc(e.recurrence_id.as_ref()?)))).collect();
     overrides.sort_unstable();
     let mut out = Vec::new();
-    for event in &feed.events {
+    'events: for event in &feed.events {
+        // RDATEs give up to a thousand occurrences an event, each with its text: keep few.
+        if out.len() >= 2 * MAX_OCCURRENCES {
+            earliest(&mut out);
+        }
         let Some(start) = event.start.as_ref() else { continue };
         if event.cancelled {
             continue;
@@ -382,15 +391,16 @@ pub fn expand_counted(feed: &Feed, from: i64, to: i64, zones: &Zones) -> (Vec<Oc
         // (start, local day) of the rule's occurrences and the RDATEs, each start once.
         let mut starts: Vec<(i64, i64)> = Vec::new();
         for day in low.max(first_day)..=high.min(last_day) {
-            if !rule.map_or(day == first_day, |rule| occurs(rule, first_day, day, &mut set)) {
-                continue;
+            let on = rule.map_or(day == first_day, |rule| occurs(rule, first_day, day, &mut set));
+            budget -= std::mem::take(&mut set.work);
+            if budget <= 0 {
+                continue 'events; // out of budget: left out rather than wrong
             }
             let begin = zone_table.to_utc(day * DAY + time_of_day);
-            if !until.is_some_and(|until| begin > until) {
+            if on && !until.is_some_and(|until| begin > until) {
                 starts.push((begin, day));
             }
         }
-        budget -= set.work;
         for rdate in rdates.iter().filter(|r| matches!(r, When::Date(_)) == all_day) {
             let begin = utc(rdate);
             let day = match rdate {
@@ -409,9 +419,14 @@ pub fn expand_counted(feed: &Feed, from: i64, to: i64, zones: &Zones) -> (Vec<Oc
             push(begin, end);
         }
     }
+    earliest(&mut out);
+    (out, SCAN_BUDGET - budget)
+}
+
+/// The first `MAX_OCCURRENCES`, by start.
+fn earliest(out: &mut Vec<Occurrence>) {
     out.sort_by(|a, b| (a.start, a.end, &a.summary).cmp(&(b.start, b.end, &b.summary)));
     out.truncate(MAX_OCCURRENCES);
-    (out, SCAN_BUDGET - budget)
 }
 
 /// The end of a whole-day event that starts at `start` and lasts `duration`: a local midnight.
@@ -797,7 +812,9 @@ fn rule(value: &str) -> Option<Rule> {
     rule.by_set_pos.dedup();
     // An ordinal BYDAY of a year with no month counts weeks of the year: not followed.
     let ordinal = rule.by_day.iter().any(|(n, _)| *n != 0);
-    if (rule.freq == Freq::Yearly && ordinal && rule.by_month.is_empty())
+    // So do positions among a year's days: without BYMONTH this reads only DTSTART's month.
+    let year_set = !rule.by_set_pos.is_empty() && !(rule.by_day.is_empty() && rule.by_month_day.is_empty());
+    if (rule.freq == Freq::Yearly && (ordinal || year_set) && rule.by_month.is_empty())
         || (ordinal && matches!(rule.freq, Freq::Daily | Freq::Weekly))
     {
         rule.unsupported = true;
