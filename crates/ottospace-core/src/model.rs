@@ -1847,6 +1847,7 @@ impl Action {
             | Action::TalkResize { .. }
             | Action::TalkWide
             | Action::TalkPick { .. }
+            | Action::TalkStart
             | Action::SetCalendar { .. }
             | Action::CalendarRead { .. }
             | Action::CallSeen { .. }
