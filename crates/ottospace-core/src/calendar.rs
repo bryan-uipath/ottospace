@@ -296,33 +296,70 @@ pub fn feed_host(url: &str) -> Option<(&str, u16)> {
     Some((host(url)?, port))
 }
 
-/// An address a feed may come from: not this machine, a private or link-local network, carrier
-/// NAT, multicast, a documentation or unspecified one (IPv4, IPv6, and IPv4 inside IPv6).
+/// IPv4 networks a feed may not come from, as (network, prefix length): this network, private,
+/// carrier NAT, loopback, link-local, IETF protocol, documentation, benchmarking, multicast,
+/// reserved and broadcast.
+pub const V4_REFUSED: [(u32, u32); 14] = [
+    (0x0000_0000, 8),
+    (0x0a00_0000, 8),
+    (0x6440_0000, 10),
+    (0x7f00_0000, 8),
+    (0xa9fe_0000, 16),
+    (0xac10_0000, 12),
+    (0xc000_0000, 24),
+    (0xc000_0200, 24),
+    (0xc0a8_0000, 16),
+    (0xc612_0000, 15),
+    (0xc633_6400, 24),
+    (0xcb00_7100, 24),
+    (0xe000_0000, 4),
+    (0xf000_0000, 4),
+];
+
+/// IPv6 networks refused outright: unspecified, loopback, local-use NAT64, Teredo (its IPv4 is
+/// obscured), documentation, unique local, link-local, site-local and multicast.
+pub const V6_REFUSED: [(u128, u32); 9] = [
+    (0, 128),
+    (1, 128),
+    (0x0064_ff9b_0001 << 80, 48),
+    (0x2001_0000 << 96, 32),
+    (0x2001_0db8 << 96, 32),
+    (0xfc00 << 112, 7),
+    (0xfe80 << 112, 10),
+    (0xfec0 << 112, 10),
+    (0xff00 << 112, 8),
+];
+
+/// An address a feed may come from: none of `V4_REFUSED` or `V6_REFUSED`, and an IPv4 inside IPv6
+/// (mapped, compatible, NAT64 `64:ff9b::/96`, 6to4 `2002::/16`) is judged as that IPv4.
 pub fn public_address(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
-            let [a, b, ..] = v4.octets();
-            let special = v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_unspecified()
-                || v4.is_multicast()
-                || v4.is_broadcast()
-                || v4.is_documentation()
-                || a == 0
-                || (a == 100 && (64..128).contains(&b))
-                || (a == 198 && (b == 18 || b == 19));
-            !special
+            let ip = u32::from(v4);
+            !V4_REFUSED.iter().any(|&(net, len)| ip >> (32 - len) == net >> (32 - len))
         }
         IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped().or_else(|| v6.to_ipv4().filter(|_| v6.segments()[..6] == [0; 6])) {
-                return public_address(IpAddr::V4(v4));
+            let ip = u128::from(v6);
+            let within = |net: u128, len: u32| len == 0 || ip >> (128 - len) == net >> (128 - len);
+            if V6_REFUSED.iter().any(|&(net, len)| within(net, len)) {
+                return false;
             }
-            let first = v6.segments()[0];
-            let local = (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80;
-            !(v6.is_loopback() || v6.is_unspecified() || v6.is_multicast() || local)
+            let embedded = if within(0xffff << 32, 96) || within(0, 96) || within(0x0064_ff9b << 96, 96) {
+                Some(ip as u32)
+            } else if within(0x2002 << 112, 16) {
+                Some((ip >> 80) as u32)
+            } else {
+                None
+            };
+            embedded.is_none_or(|v4| public_address(IpAddr::V4(v4.into())))
         }
     }
+}
+
+/// The address to pin a fetch to: the first the host resolved to, if every one is public. One
+/// that is not refuses the fetch, rather than picking the public one among them.
+pub fn pin_address(found: &[IpAddr]) -> Option<IpAddr> {
+    (found.iter().all(|ip| public_address(*ip))).then(|| found.first().copied()).flatten()
 }
 
 /// The config `curl --config -` reads on its standard input: the link is not in its arguments,

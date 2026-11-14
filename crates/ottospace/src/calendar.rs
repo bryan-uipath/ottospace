@@ -122,7 +122,7 @@ fn fetch(source: &Source) -> Result<String, Option<&'static str>> {
 
 /// `curl -q --config -`, the link and every limit in the config on its standard input
 /// (`calendar::curl_config`). `-q` first: no `.curlrc` of the user's applies. The host is looked
-/// up here, refused unless public, and curl is pinned to that address (`resolve`). A proxy in
+/// up here, refused unless every address it has is public, and curl is pinned to the first (`resolve`). A proxy in
 /// the user's environment (`https_proxy`) still applies; the proxy then looks the host up.
 /// A test run may name another program in `OTTOSPACE_CURL`, which stands for curl, reads the same
 /// config and is given no pinned address (a test looks nothing up).
@@ -134,7 +134,7 @@ fn curl(link: &str) -> Result<String, Option<&'static str>> {
             use std::net::ToSocketAddrs;
             let (host, port) = calendar::feed_host(link).ok_or(None)?;
             let found: Vec<_> = (host, port).to_socket_addrs().map_err(|_| None)?.map(|a| a.ip()).collect();
-            Some(found.into_iter().find(|ip| calendar::public_address(*ip)).ok_or(Some(PRIVATE))?)
+            Some(calendar::pin_address(&found).ok_or(Some(PRIVATE))?)
         }
     };
     let config = calendar::curl_config(link, pin).ok_or(None)?;

@@ -314,6 +314,52 @@ fn curls_config_holds_the_link_and_the_limits_and_follows_no_redirect() {
     assert_eq!(curl_config("https://calendar.example.com/a\"\nupload-file = /etc/passwd", None), None);
 }
 
+/// Every refused range: its first and last address are refused, the neighbours outside are not.
+#[test]
+fn every_refused_range_and_its_neighbours() {
+    for (net, len) in V4_REFUSED {
+        let (first, last) = (net, net | (u32::MAX >> len));
+        for ip in [first, last] {
+            assert!(!public_address(IpAddr::V4(ip.into())), "{} in {net:#x}/{len}", std::net::Ipv4Addr::from(ip));
+        }
+        for ip in [first.checked_sub(1), last.checked_add(1)].into_iter().flatten() {
+            let inside_another = V4_REFUSED.iter().any(|&(n, l)| ip >> (32 - l) == n >> (32 - l));
+            assert_eq!(public_address(IpAddr::V4(ip.into())), !inside_another, "{}", std::net::Ipv4Addr::from(ip));
+        }
+    }
+    for (net, len) in V6_REFUSED {
+        let last = if len == 128 { net } else { net | (u128::MAX >> len) };
+        for ip in [net, last] {
+            assert!(!public_address(IpAddr::V6(ip.into())), "{}", std::net::Ipv6Addr::from(ip));
+        }
+    }
+    // Neighbours of IPv6 ranges with nothing embedded.
+    for ip in ["2001:db9::1", "2001:db7:ffff::1", "fbff::1", "fe00::1"] {
+        assert!(public_address(ip.parse().unwrap()), "{ip}");
+    }
+    // An IPv4 inside IPv6 is judged as that IPv4: mapped, compatible, NAT64, 6to4.
+    let wrapped = [
+        "::ffff:10.0.0.1",
+        "::10.0.0.1",
+        "64:ff9b::a9fe:a9fe",
+        "64:ff9b::7f00:1",
+        "2002:c0a8:0101::1",
+        "2002:7f00:1::",
+    ];
+    for ip in wrapped {
+        assert!(!public_address(ip.parse().unwrap()), "{ip}");
+    }
+    for ip in ["::ffff:93.184.215.14", "64:ff9b::5db8:d70e", "2002:5db8:d70e::1", "2606:4700::1111"] {
+        assert!(public_address(ip.parse().unwrap()), "{ip}");
+    }
+    // Every address a host resolved to must pass: one that does not refuses the fetch.
+    let ip = |s: &str| -> IpAddr { s.parse().unwrap() };
+    assert_eq!(pin_address(&[ip("93.184.215.14"), ip("8.8.8.8")]), Some(ip("93.184.215.14")));
+    assert_eq!(pin_address(&[ip("93.184.215.14"), ip("10.0.0.1")]), None);
+    assert_eq!(pin_address(&[ip("127.0.0.1"), ip("93.184.215.14")]), None);
+    assert_eq!(pin_address(&[]), None);
+}
+
 #[test]
 fn only_a_public_address_is_fetched_from_and_a_redirect_is_no_read() {
     let private = [
