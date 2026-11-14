@@ -81,6 +81,68 @@ Design: [docs/ai/e2e-reliability.md](ai/e2e-reliability.md).
 - `ottospace ctl '{"cmd":"trace"}'` reads the trace of any running app. `OTTOSPACE_TRACE=1` also
   writes it to `~/.ottospace/trace.jsonl` on a panic or on `kill -USR1`.
 
+## Screenshots and recordings
+
+Every pull request shows evidence (AGENTS.md, "Pull requests"). `scripts/shot` takes the pictures:
+
+```sh
+scripts/shot tasks chat                 # .shots/<scenario>/<shot>.png
+scripts/shot terminal-copy --record     # also .shots/terminal-copy.gif and .mp4 (needs ffmpeg)
+scripts/shot --compare origin/main calendar   # .shots/before, after, compare; prints a snippet
+scripts/shot --list
+```
+
+It builds this tree (or takes `--bin`), starts a private instance (`OTTOSPACE_E2E`, its home and
+socket in a fresh temp folder, the agents crate's stand-ins as `claude`/`codex`, no apps, no
+repositories of yours), runs the scenario, takes its window by window id with `screencapture
+-l` (never a screen region), and removes the folder. `.shots/` is ignored by git: upload the
+pictures with the `pr-image-upload` skill, never commit them.
+
+- **The window's whole picture.** A test window sits at a free corner with a sliver on screen.
+  `screencapture -l` still takes all of it: the window server keeps the window's own picture.
+  The sliver is what keeps GPUI drawing (a window nothing of which shows is not drawn). A
+  locked screen draws nothing: the script stops and says so, and refuses a picture of one
+  colour or with most of it see-through.
+- **When.** A state reply waits for the frame that draws its request; each shot waits for that,
+  then 150 ms for the window server.
+- **Recordings.** `--record` films the window with ScreenCaptureKit through the test-only
+  `record_start`/`record_stop` requests (AGENTS.md, "Tests"): a frame per change, timed by the
+  app, resampled to a steady 30 fps MP4 and a 15 fps GIF. A debug build draws motion at about
+  20 frames a second. While it records, `screencapture -l` sees only the sliver, so a shot then
+  comes from the recording's last frame, at one pixel a point.
+- **Compare.** `--compare <ref>` builds the ref in a temporary worktree with its own target
+  folder (a clone of this one's), runs the same scenarios with the same fixtures on both, and
+  writes one labelled side-by-side per shot. A scenario that fails on the base (its view did not
+  exist) gives an "after only" picture. `--bin-before`/`--bin-after` skip the builds.
+- **CI.** `.github/workflows/shots.yml` runs `--compare` against the merge base on a hosted runner
+  for a pull request that changes the app's sources or the scenarios, and keeps the pictures as
+  the artifact `shots`. It writes nothing to the pull request: fetch them with
+  `gh run download <run id> -n shots`, then upload them with the `pr-image-upload` skill.
+- **Its test.** `scripts/test-shot.sh [binary]`: one scenario, a compare of a build with itself,
+  and nothing left in `$TMPDIR`. It needs a screen that draws; `shots.yml` runs it.
+
+### Adding a scenario
+
+`scripts/shots/<name>.jsonl`: control-socket requests, one a line, and the script's own steps.
+A folder `scripts/shots/<name>/` is copied into the instance's folder first (`home/settings.json`,
+`repos/`, `fixtures/` for the stand-in `claude`); `_git` there becomes `.git`. `{ROOT}` (that
+folder), `{REPO}` (the checkout) and `{NOW+3600}` (an ICS time from now) are filled in.
+
+| Step | Does |
+|---|---|
+| `{"cmd":..}` | a request; it must answer `ok` |
+| `{"shot":"name"}` | waits for the frame, takes `name.png` |
+| `{"click":"task:1"}`, `{"hover":"task:1"}` | the user's pointer on a named control (`"at":[0.3,0.5]`), or on a rect of the state: `{"hover":{"rect":"calendar.band.blocks.2.rect"}}` |
+| `{"until":"drawer.native.chats.1.transcript.cards","len":1}` | waits on the state (`"is"`, `"len"`, or there at all) |
+| `{"settle":500}`, `{"sleep_ms":700}` | waits |
+| `{"record":"start"}`, `{"record":"stop"}` | what `--record` covers (default: all of it) |
+| `{"env":{..}}` | first line only: more environment for the instance |
+| `{"controls":true}`, `{"print":"repos_bar"}` | prints the named controls, or a part of the state, while writing one |
+
+Name controls and read the state; never pixel positions, which move with every layout change.
+Requests a client is refused (keys and clicks that are the user's) take `"as":"user"`, which
+answers in a test run only. Made-up content only.
+
 ## Crates
 
 | Path | Role |
@@ -111,6 +173,8 @@ Design: [docs/ai/e2e-reliability.md](ai/e2e-reliability.md).
   prerelease. `osi install pr <n>` adds the label.
 - `.github/workflows/scripts.yml`, on pull requests that change `scripts/` or `install.sh`: tests
   the installer.
+- `.github/workflows/shots.yml`, on pull requests that change the app's or core's sources or the
+  scenarios: before and after pictures, an artifact (see "Screenshots and recordings").
 - `.github/workflows/release.yml`, on a `v*` tag: the GitHub Release.
 - `.github/workflows/pages.yml`, on pushes to `main` that change `site/`: deploys `site/` to
   GitHub Pages. Pages must be on for the repository, with GitHub Actions as its source.

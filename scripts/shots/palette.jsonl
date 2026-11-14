@@ -1,0 +1,6 @@
+# The command palette: open, then narrowed by typing.
+{"cmd":"split","kind":"empty"}
+{"cmd":"key","keys":"cmd-p","as":"user"}
+{"shot":"open"}
+{"cmd":"key","keys":"t e r m space b e l","as":"user"}
+{"shot":"typed"}

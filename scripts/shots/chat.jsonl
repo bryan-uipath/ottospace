@@ -1,0 +1,15 @@
+# Native chat: a reply, a tool row, an edit's diff card and a permission card; then an agent
+# that ended before it replied. The stand-in `claude` replays chat/fixtures.
+{"env":{"OTTOSPACE_AGENTS_DIR":"{ROOT}/bin"}}
+{"cmd":"split","kind":"empty"}
+{"cmd":"task_new","line":"fix the login loop >app"}
+{"cmd":"task_new","line":"plan the week >app"}
+{"cmd":"section","section":"tasks"}
+{"click":"task:1","at":[0.3,0.3]}
+{"click":"talk:talk-start"}
+{"until":"drawer.native.chats.1.transcript.cards","len":1}
+{"shot":"permission"}
+{"click":"task:2","at":[0.3,0.3]}
+{"click":"talk:talk-start"}
+{"until":"drawer.native.chats.2.transcript.live","is":false}
+{"shot":"ended"}

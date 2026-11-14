@@ -1,0 +1,9 @@
+# A busy day: the band above the status bar, the Calendar section, a meeting's hover card.
+# The feed's times are from now ({NOW+3600}), so the day is busy whenever it runs.
+{"cmd":"split","kind":"empty"}
+{"until":"calendar.band.blocks.3"}
+{"cmd":"section","section":"calendar"}
+{"shot":"day"}
+{"hover":{"rect":"calendar.band.blocks.2.rect"}}
+{"sleep_ms":1200}
+{"shot":"hover"}

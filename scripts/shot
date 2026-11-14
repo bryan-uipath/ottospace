@@ -1,0 +1,561 @@
+#!/usr/bin/env python3
+"""Pictures of ottospace for a pull request: runs a scenario on a private test instance and
+takes its window, by window id only.
+
+  scripts/shot <scenario>... [--out DIR] [--bin PATH] [--record]
+  scripts/shot --compare <base-ref> <scenario>... [--bin-before PATH --bin-after PATH] [--out DIR]
+  scripts/shot --list
+
+A scenario is scripts/shots/<name>.jsonl: control-socket requests, one a line, and the steps
+below; a folder scripts/shots/<name>/ beside it is copied into the instance's own folder first.
+`{ROOT}` (that folder), `{REPO}` (this checkout) and `{NOW+3600}` (an ICS time, seconds from
+now) are replaced in both. Lines starting with `#` are comments.
+
+  {"shot":"name"}             settle, then take the window: <out>/<scenario>/<name>.png
+  {"settle":true}             wait for the frame that draws the last request (`settle`:500: and 500 ms)
+  {"click":"task:1"}          the user's click on a named control (ids: {"controls":true}); "at":[x,y]
+  {"hover":"task:1"}          the pointer over a named control, or {"hover":{"rect":"calendar.band.blocks.0.rect"}}
+  {"until":"drawer.native.chats.1.transcript.cards","len":1}   wait on the state ("is", "exists")
+  {"sleep_ms":700}            wait (motion while recording)
+  {"record":"start"}          with --record: what the recording covers (default: all of it)
+  {"controls":true}           print the named controls on screen (for writing scenarios)
+  {"print":"repos_bar"}       print a part of the state (for writing scenarios)
+
+The instance: OTTOSPACE_E2E, its home and socket in a fresh temp folder (removed at the end),
+the agents crate's stand-ins as `claude`/`codex`, no apps, no repositories, no user settings.
+"""
+
+import argparse
+import json
+import os
+import plistlib
+import re
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SCENARIOS = os.path.join(REPO, "scripts", "shots")
+IMAGE_JS = os.path.join(SCENARIOS, "image.js")
+FAKES = os.path.join(REPO, "crates", "ottospace-agents", "tests", "fakes")
+TIMEOUT = 60
+FPS = 30
+
+
+class Failed(Exception):
+    pass
+
+
+def say(*parts):
+    print(*parts, file=sys.stderr, flush=True)
+
+
+def screen_locked():
+    """The console is locked: a locked screen draws nothing."""
+    try:
+        out = subprocess.run(["/usr/sbin/ioreg", "-n", "Root", "-d1", "-a"], capture_output=True, check=True).stdout
+        root = plistlib.loads(out)
+        root = root[0] if isinstance(root, list) else root
+        return bool(root.get("IOConsoleLocked"))
+    except Exception:
+        return False
+
+
+def ics_time(offset):
+    return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(time.time() + offset))
+
+
+def fill(text, root):
+    text = text.replace("{ROOT}", root).replace("{REPO}", REPO)
+    return re.sub(r"\{NOW([+-]\d+)\}", lambda m: ics_time(int(m.group(1))), text)
+
+
+def scenario_names():
+    return sorted(f[:-6] for f in os.listdir(SCENARIOS) if f.endswith(".jsonl"))
+
+
+def read_steps(name, root):
+    path = os.path.join(SCENARIOS, name + ".jsonl")
+    if not os.path.isfile(path):
+        raise Failed(f"no scenario {name}: {', '.join(scenario_names())}")
+    steps = []
+    with open(path) as f:
+        for number, line in enumerate(f, 1):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            try:
+                steps.append(json.loads(fill(line, root)))
+            except json.JSONDecodeError as err:
+                raise Failed(f"{path}:{number}: {err}")
+    return steps
+
+
+def copy_fixtures(name, root):
+    """scripts/shots/<name>/ into the instance's folder; `_git` becomes `.git` (git keeps none)."""
+    src = os.path.join(SCENARIOS, name)
+    if not os.path.isdir(src):
+        return
+    for dirpath, _, files in os.walk(src):
+        rel = os.path.relpath(dirpath, src)
+        to = os.path.normpath(os.path.join(root, *[".git" if p == "_git" else p for p in rel.split(os.sep)]))
+        os.makedirs(to, exist_ok=True)
+        for file in files:
+            with open(os.path.join(dirpath, file), "rb") as f:
+                data = f.read()
+            try:
+                data = fill(data.decode(), root).encode()
+            except UnicodeDecodeError:
+                pass
+            out = os.path.join(to, ".git" if file == "_git" else file)
+            with open(out, "wb") as f:
+                f.write(data)
+            shutil.copymode(os.path.join(dirpath, file), out)
+
+
+def image(*args):
+    out = subprocess.run(["/usr/bin/osascript", "-l", "JavaScript", IMAGE_JS, *args], capture_output=True, text=True)
+    if out.returncode != 0:
+        raise Failed(f"image.js {args[0]}: {out.stderr.strip()}")
+    return out.stdout.strip()
+
+
+def path_get(value, path):
+    for key in path.split("."):
+        if isinstance(value, list) and key.isdigit() and int(key) < len(value):
+            value = value[int(key)]
+        elif isinstance(value, dict) and key in value:
+            value = value[key]
+        else:
+            return None
+    return value
+
+
+class Instance:
+    """One private ottospace: started here, and only this pid is ever killed."""
+
+    def __init__(self, binary, scenario, env):
+        self.root = os.path.realpath(tempfile.mkdtemp(prefix="ottospace-shot-"))
+        self.socket = os.path.join(self.root, "s.sock")
+        self.proc, self.log = None, None
+        # The recording's folder while one runs.
+        self.recording = None
+        try:
+            self.start(binary, scenario, env)
+        except BaseException:
+            # A start that fails leaves no app running and no folder behind.
+            self.close()
+            raise
+
+    def start(self, binary, scenario, env):
+        for folder in ["home", "user", "agent-record", "fixtures"]:
+            os.makedirs(os.path.join(self.root, folder), exist_ok=True)
+        copy_fixtures(scenario, self.root)
+        self.steps = read_steps(scenario, self.root)
+        # A first line `{"env":{..}}`: what the scenario adds to the instance's environment.
+        extra = self.steps.pop(0)["env"] if self.steps and "env" in self.steps[0] else {}
+        clean = {k: v for k, v in os.environ.items() if not k.startswith(("OTTOSPACE_", "FAKE_", "CLAUDE", "CODEX"))}
+        clean.update(
+            {
+                "OTTOSPACE_E2E": "1",
+                "OTTOSPACE_HOME": os.path.join(self.root, "home"),
+                "OTTOSPACE_SOCKET": self.socket,
+                "OTTOSPACE_SHELL": "/bin/sh",
+                "OTTOSPACE_APPS_DIRS": "",
+                "OTTOSPACE_DOCK_APPS": "",
+                "OTTOSPACE_AGENTS_DIR": FAKES,
+                "FAKE_DIR": os.path.join(self.root, "agent-record"),
+                "FAKE_FIXTURES": os.path.join(self.root, "fixtures"),
+                # The terminals' home: never the user's own folder in a picture.
+                "HOME": os.path.join(self.root, "user"),
+                "PS1": "$ ",
+            }
+        )
+        clean.update({k: fill(str(v), self.root) for k, v in {**env, **extra}.items()})
+        self.log = open(os.path.join(self.root, "app.log"), "w")
+        self.proc = subprocess.Popen([binary], env=clean, cwd=os.path.join(self.root, "user"),
+                                     stdout=self.log, stderr=subprocess.STDOUT)
+        self.wait("the control socket", lambda: os.path.exists(self.socket) and self.state())
+        drawn = self.wait("the first frame", lambda: (path_get(self.state(), "frame.number") or 0) > 0, fail=False)
+        if not drawn:
+            raise Failed(
+                "the window drew no frame in 60 s. Is the screen locked or asleep? A locked screen draws "
+                "nothing; unlock it and run again"
+            )
+
+    def wait(self, what, check, timeout=TIMEOUT, fail=True):
+        start = time.time()
+        while time.time() - start < timeout:
+            if self.proc.poll() is not None:
+                raise Failed(f"ottospace exited ({self.proc.returncode}) waiting for {what}; log: {self.tail()}")
+            try:
+                if check():
+                    return True
+            except (OSError, ValueError):
+                pass
+            time.sleep(0.05)
+        if fail:
+            raise Failed(f"timed out after {timeout} s waiting for {what}")
+        return False
+
+    def tail(self):
+        try:
+            with open(os.path.join(self.root, "app.log")) as f:
+                return f.read()[-800:]
+        except OSError:
+            return ""
+
+    def call(self, request):
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(TIMEOUT)
+            s.connect(self.socket)
+            s.sendall((json.dumps(request) + "\n").encode())
+            data = b""
+            while not data.endswith(b"\n"):
+                chunk = s.recv(1 << 20)
+                if not chunk:
+                    break
+                data += chunk
+        return json.loads(data)
+
+    def ok(self, request):
+        reply = self.call(request)
+        if reply.get("ok") is not True:
+            raise Failed(f"{json.dumps(request)} failed: {reply.get('error') or reply.get('notice')}")
+        return reply
+
+    def state(self):
+        return self.call({"cmd": "state"})
+
+    def controls(self):
+        reply = self.ok({"cmd": "sneak"})
+        self.ok({"cmd": "key", "keys": "escape", "as": "user"})
+        found = {}
+        for t in path_get(reply, "sneak.targets") or []:
+            ident, f = path_get(t, "source.id"), t.get("frame") or {}
+            if ident:
+                found[ident] = [f["x"], f["y"], f["w"], f["h"]]
+        return found
+
+    def control(self, ident, at):
+        if isinstance(ident, dict):
+            # {"rect":"calendar.band.blocks.0.rect"}: a rect the state gives, [x, y, w, h].
+            r = path_get(self.state(), ident["rect"])
+            if not (isinstance(r, list) and len(r) == 4):
+                raise Failed(f"no rect at {ident['rect']}: {r}")
+            return r[0] + r[2] * at[0], r[1] + r[3] * at[1]
+        found = self.controls()
+        if ident not in found:
+            raise Failed(f"no control {ident} on screen: {sorted(found)}")
+        x, y, w, h = found[ident]
+        return x + w * at[0], y + h * at[1]
+
+    def settle(self, extra_ms=0):
+        """The reply to `state` waits for the frame that draws it; the window server then has it."""
+        self.wait("the frame to draw every request",
+                  lambda: (lambda f: f and f.get("drawn") == f.get("seq"))(self.state().get("frame")), timeout=5,
+                  fail=False)
+        time.sleep(0.15 + extra_ms / 1000)
+
+    def window_id(self):
+        window = path_get(self.state(), "frame.window")
+        if not isinstance(window, int) or window <= 0:
+            raise Failed("could not resolve this instance's window id; no picture taken (never the frontmost window)")
+        return window
+
+    def shot(self, path):
+        self.settle()
+        if screen_locked():
+            raise Failed("the screen is locked: nothing draws. Unlock it and run again")
+        window = self.window_id()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if self.recording:
+            # While the window is streamed, the window server gives screencapture only the part
+            # on screen: the picture is the recording's last frame, one pixel a point.
+            frame_png(self.recording, path)
+        else:
+            subprocess.run(["/usr/sbin/screencapture", "-x", "-o", "-l", str(window), path], check=False)
+        if not os.path.isfile(path):
+            raise Failed("screencapture wrote nothing: does this terminal have Screen Recording permission?")
+        stats = json.loads(image("stats", path))
+        # Only the sliver on screen came out: the rest is see-through.
+        if stats["clear"] > 64 * 40 // 20:
+            os.remove(path)
+            raise Failed(f"{path}: most of the window is missing from the picture (only what is on screen drew)")
+        size = path_get(self.state(), "window") or [0, 0, 0, 0]
+        scale = stats["w"] / size[2] if size[2] else 0
+        if stats["colors"] <= 1:
+            os.remove(path)
+            raise Failed(f"{path} came out one colour: the window is not drawn (screen locked or asleep?)")
+        if scale not in (1, 2) or abs(stats["h"] - size[3] * scale) > 1:
+            raise Failed(f"{path} is {stats['w']}x{stats['h']}, not the window's {size[2]}x{size[3]} points")
+        return stats
+
+    def close(self):
+        if self.proc and self.proc.poll() is None:
+            self.proc.send_signal(signal.SIGTERM)
+            try:
+                self.proc.wait(5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+                self.proc.wait()
+        if self.log:
+            self.log.close()
+        shutil.rmtree(self.root, ignore_errors=True)
+
+
+def frame_png(frames_dir, path):
+    """The last frame recorded in `frames_dir`, as a PNG."""
+    with open(os.path.join(frames_dir, "frames.jsonl")) as f:
+        rows = [json.loads(line) for line in f]
+    if not rows:
+        raise Failed("the recording has no frame yet")
+    last = rows[-1]
+    raw = os.path.join(frames_dir, f"{last['n']}.bgra")
+    size = f"{last['w']}x{last['h']}"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgra", "-s", size, "-i", raw,
+                    "-frames:v", "1", path], check=True)
+
+
+def encode(frames_dir, stop_ms, out_base):
+    """The recorded frames as a steady 30 fps MP4 and a small GIF. Returns a line about it."""
+    index = os.path.join(frames_dir, "frames.jsonl")
+    rows = [json.loads(line) for line in open(index)] if os.path.isfile(index) else []
+    if not rows:
+        raise Failed("the recording has no frames (Screen Recording permission? a locked screen?)")
+    w, h, start = rows[0]["w"], rows[0]["h"], rows[0]["ms"]
+    end = max(stop_ms, rows[-1]["ms"])
+    # The busiest second: the frame rate motion is drawn at (frames come only when it changes).
+    times = [r["ms"] for r in rows]
+    peak = max(sum(1 for t in times if s <= t < s + 1000) for s in times)
+    mp4, gif = out_base + ".mp4", out_base + ".gif"
+    encoder = ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20"]
+    probe = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True).stdout
+    if " libx264 " not in probe:
+        encoder = ["-c:v", "h264_videotoolbox", "-b:v", "6M", "-pix_fmt", "yuv420p"]
+    ff = subprocess.Popen(
+        ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgra", "-s", f"{w}x{h}", "-r", str(FPS),
+         "-i", "-", *encoder, mp4],
+        stdin=subprocess.PIPE,
+    )
+    # Each tick shows the last frame drawn by then: the timing is the app's own.
+    current, data = 0, None
+    for tick in range(int((end - start) * FPS / 1000) + 1):
+        at = start + tick * 1000 / FPS
+        while current + 1 < len(rows) and rows[current + 1]["ms"] <= at:
+            current, data = current + 1, None
+        if data is None:
+            with open(os.path.join(frames_dir, f"{rows[current]['n']}.bgra"), "rb") as f:
+                data = f.read()
+        ff.stdin.write(data)
+    ff.stdin.close()
+    if ff.wait() != 0:
+        raise Failed("ffmpeg could not encode the MP4")
+    graph = ("fps=15,scale=960:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=96:stats_mode=diff[p];"
+             "[b][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle")
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", mp4, "-vf", graph, gif], check=True)
+    secs = (end - start) / 1000
+    return f"{len(rows)} frames over {secs:.1f} s, up to {peak} fps while it moves; {mp4}, {gif} ({os.path.getsize(gif) // 1024} KB)"
+
+
+def run_scenario(binary, scenario, out, record=False):
+    """Runs one scenario; returns the pictures it took, in order."""
+    inst = Instance(binary, scenario, {})
+    folder = os.path.join(out, scenario)
+    shutil.rmtree(folder, ignore_errors=True)
+    os.makedirs(folder)
+    shots, recording = [], None
+    frames_dir = os.path.join(inst.root, "recording")
+    marked = any(s.get("record") == "start" for s in inst.steps)
+
+    def start_recording():
+        inst.ok({"cmd": "record_start", "dir": frames_dir})
+        inst.recording = frames_dir
+        index = os.path.join(frames_dir, "frames.jsonl")
+        inst.wait("the recording's first frame", lambda: os.path.getsize(index) > 0, timeout=10)
+        return True
+
+    def stop_recording():
+        inst.ok({"cmd": "record_stop"})
+        inst.recording = None
+        return time.time()
+
+    try:
+        if record and not marked:
+            recording = start_recording()
+        for step in inst.steps:
+            if "cmd" in step:
+                inst.ok(step)
+            elif "shot" in step:
+                path = os.path.join(folder, step["shot"] + ".png")
+                stats = inst.shot(path)
+                shots.append(step["shot"])
+                say(f"  {scenario}/{step['shot']}.png  {stats['w']}x{stats['h']}, {stats['colors']} colours")
+            elif "settle" in step:
+                inst.settle(step["settle"] if isinstance(step["settle"], (int, float)) and step["settle"] is not True else 0)
+            elif "click" in step:
+                x, y = inst.control(step["click"], step.get("at", [0.5, 0.5]))
+                for action in ["down", "up"]:
+                    inst.ok({"cmd": "mouse", "action": action, "x": x, "y": y, "clicks": step.get("clicks", 1), "as": "user"})
+            elif "hover" in step:
+                x, y = inst.control(step["hover"], step.get("at", [0.5, 0.5]))
+                inst.ok({"cmd": "mouse", "action": "move", "x": x, "y": y, "as": "user"})
+            elif "until" in step:
+                def met(step=step):
+                    value = path_get(inst.state(), step["until"])
+                    if "is" in step:
+                        return value == step["is"]
+                    if "len" in step:
+                        return isinstance(value, (list, dict, str)) and len(value) == step["len"]
+                    return value is not None
+                inst.wait(f"{step['until']} ({json.dumps(step)})", met, timeout=step.get("timeout_ms", 20000) / 1000)
+            elif "sleep_ms" in step:
+                time.sleep(step["sleep_ms"] / 1000)
+            elif "record" in step:
+                if record and step["record"] == "start" and not recording:
+                    recording = start_recording()
+                elif record and step["record"] == "stop" and recording is True:
+                    recording = stop_recording()
+            elif "print" in step:
+                print(f"  {step['print']}: {json.dumps(path_get(inst.state(), step['print']))}")
+            elif "controls" in step:
+                for ident, frame in sorted(inst.controls().items()):
+                    print(f"  {ident}  {frame}")
+            else:
+                raise Failed(f"{scenario}: a step it does not know: {json.dumps(step)}")
+        if record:
+            if recording is True:
+                recording = stop_recording()
+            time.sleep(0.3)
+            say("  recording: " + encode(frames_dir, int(recording * 1000), os.path.join(out, scenario)))
+    finally:
+        inst.close()
+    return shots
+
+
+def target_dir():
+    out = subprocess.run(["cargo", "metadata", "--format-version", "1", "--no-deps"], cwd=REPO,
+                         capture_output=True, text=True, check=True)
+    return json.loads(out.stdout)["target_directory"]
+
+
+def build(tree, dest, target=None):
+    """`cargo build` of the app in `tree`; the binary is copied to `dest`, so later builds keep it."""
+    say(f"building {tree} ...")
+    env = dict(os.environ, **({"CARGO_TARGET_DIR": target} if target else {}))
+    out = subprocess.run(
+        ["cargo", "build", "-p", "ottospace", "--bin", "ottospace", "--message-format=json-render-diagnostics"],
+        cwd=tree, stdout=subprocess.PIPE, text=True, env=env,
+    )
+    if out.returncode != 0:
+        raise Failed(f"cargo build failed in {tree}")
+    exe = None
+    for line in out.stdout.splitlines():
+        msg = json.loads(line)
+        if msg.get("reason") == "compiler-artifact" and msg.get("executable") and msg["target"]["name"] == "ottospace":
+            exe = msg["executable"]
+    if not exe:
+        raise Failed("cargo built no ottospace binary")
+    shutil.copy2(exe, dest)
+    return dest
+
+
+def compare(args, scratch):
+    if args.bin_before and args.bin_after:
+        before, after = args.bin_before, args.bin_after
+    else:
+        sha = subprocess.run(["git", "-C", REPO, "rev-parse", "--verify", args.compare + "^{commit}"],
+                             capture_output=True, text=True)
+        if sha.returncode != 0:
+            raise Failed(f"no commit {args.compare}")
+        tree = os.path.join(scratch, "base")
+        subprocess.run(["git", "-C", REPO, "worktree", "add", "--detach", "-q", tree, sha.stdout.strip()], check=True)
+        # A target folder of its own: the workspace's crates hash alike in both trees, and one
+        # folder would leave the other tree's build of them looking fresh. A clone costs no space.
+        target = os.path.join(scratch, "target")
+        if os.path.isdir(target_dir()):
+            subprocess.run(["cp", "-Rc", target_dir(), target], check=False)
+        try:
+            before = build(tree, os.path.join(scratch, "ottospace-before"), target)
+        finally:
+            subprocess.run(["git", "-C", REPO, "worktree", "remove", "--force", tree], check=False)
+        after = args.bin_after or build(REPO, os.path.join(scratch, "ottospace-after"))
+    for side in ["before", "after", "compare"]:
+        shutil.rmtree(os.path.join(args.out, side), ignore_errors=True)
+    rows = []
+    for scenario in args.scenarios:
+        say(f"{scenario}: before")
+        try:
+            old = run_scenario(before, scenario, os.path.join(args.out, "before"))
+        except Failed as err:
+            # The view may not exist on the base: the after pictures stand alone.
+            say(f"  could not run on the base ({err}): after only")
+            old = []
+        say(f"{scenario}: after")
+        new = run_scenario(after, scenario, os.path.join(args.out, "after"))
+        for shot in new:
+            pair = os.path.join(args.out, "compare", f"{scenario}-{shot}.png")
+            os.makedirs(os.path.dirname(pair), exist_ok=True)
+            b = os.path.join(args.out, "before", scenario, shot + ".png")
+            if shot in old:
+                image("pair", b, os.path.join(args.out, "after", scenario, shot + ".png"), pair, "before", "after")
+                rows.append((f"{scenario}/{shot}", pair, False))
+            else:
+                image("pair", "-", os.path.join(args.out, "after", scenario, shot + ".png"), pair, "", "after only")
+                rows.append((f"{scenario}/{shot}", pair, True))
+    print("\n### Evidence\n")
+    for name, pair, only in rows:
+        print(f"**{name}**{' (after only)' if only else ''}\n")
+        print(f"![{name}](<url of {os.path.relpath(pair, args.out)}>)\n")
+    say(f"\nwrote {args.out}/before, after and compare. Upload with the pr-image-upload skill; never commit them.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("scenarios", nargs="*")
+    parser.add_argument("--out", default=os.path.join(REPO, ".shots"))
+    parser.add_argument("--bin", help="the ottospace binary (default: cargo build this tree)")
+    parser.add_argument("--record", action="store_true", help="also a GIF and an MP4 of each scenario (ffmpeg)")
+    parser.add_argument("--compare", metavar="BASE", help="before (BASE) and after (this tree), side by side")
+    parser.add_argument("--bin-before")
+    parser.add_argument("--bin-after")
+    parser.add_argument("--list", action="store_true", help="the scenarios")
+    args = parser.parse_args()
+    if args.list:
+        print("\n".join(scenario_names()))
+        return 0
+    if not args.scenarios:
+        parser.error("name a scenario (--list lists them)")
+    if args.record and not shutil.which("ffmpeg"):
+        say("--record needs ffmpeg (brew install ffmpeg); pictures need nothing else")
+        return 2
+    if args.record and args.compare:
+        parser.error("--record and --compare: one at a time")
+    if screen_locked():
+        say("the screen is locked: nothing draws. Unlock it and run again")
+        return 3
+    args.out = os.path.abspath(args.out)
+    scratch = tempfile.mkdtemp(prefix="ottospace-shot-build-")
+    try:
+        if args.compare:
+            compare(args, scratch)
+            return 0
+        binary = args.bin or build(REPO, os.path.join(scratch, "ottospace"))
+        for scenario in args.scenarios:
+            say(scenario)
+            run_scenario(binary, scenario, args.out, args.record)
+        say(f"wrote {args.out}")
+        return 0
+    except Failed as err:
+        say(f"shot: {err}")
+        return 1
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
