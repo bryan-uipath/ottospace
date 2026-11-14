@@ -997,15 +997,7 @@ fn the_tasks_section_lists_what_needs_you_then_what_runs_then_what_waits() {
 
     // Where a control is drawn: sneak mode's targets give each one's frame. Then a real click
     // there, through the window's own handlers.
-    let press = |id: &str| -> Value {
-        let reply = otto.call(json!({"cmd": "sneak"}));
-        key("escape");
-        let targets = reply["sneak"]["targets"].as_array().expect("targets");
-        let drawn: Vec<&str> = targets.iter().filter_map(|t| t["source"]["id"].as_str()).collect();
-        let target = targets.iter().find(|t| t["source"]["id"] == id).unwrap_or_else(|| panic!("no {id} in {drawn:?}"));
-        let f = |key: &str| target["frame"][key].as_f64().unwrap();
-        otto.click([f("x") + f("w") / 2.0, f("y") + f("h") / 2.0], 1)
-    };
+    let press = |id: &str| -> Value { otto.click(at(otto.control(id), 0.5, 0.5), 1) };
     let drawn = |id: &str| -> bool {
         let reply = otto.call(json!({"cmd": "sneak"}));
         key("escape");
@@ -4700,13 +4692,19 @@ fn workbook_files(home: &Path) -> Vec<PathBuf> {
 impl Otto {
     /// The frame `[x, y, w, h]` of the control `id` as drawn, read from sneak mode's labels.
     fn control(&self, id: &str) -> [f64; 4] {
+        let controls = self.controls();
+        let found = controls.iter().find(|(i, _)| i == id).map(|(_, frame)| *frame);
+        let drawn: Vec<&str> = controls.iter().map(|(i, _)| i.as_str()).collect();
+        found.unwrap_or_else(|| panic!("no {id} in {drawn:?}"))
+    }
+
+    /// Every labelled control's id and drawn frame `[x, y, w, h]`, from one pass of sneak mode.
+    fn controls(&self) -> Vec<(String, [f64; 4])> {
         let reply = self.call(json!({"cmd": "sneak"}));
         self.call(json!({"cmd": "key", "keys": "escape"}));
         let targets = reply["sneak"]["targets"].as_array().expect("targets");
-        let drawn: Vec<&str> = targets.iter().filter_map(|t| t["source"]["id"].as_str()).collect();
-        let target = targets.iter().find(|t| t["source"]["id"] == id).unwrap_or_else(|| panic!("no {id} in {drawn:?}"));
-        let f = |key: &str| target["frame"][key].as_f64().unwrap();
-        [f("x"), f("y"), f("w"), f("h")]
+        let frame = |t: &Value| ["x", "y", "w", "h"].map(|key| t["frame"][key].as_f64().unwrap());
+        targets.iter().filter_map(|t| Some((t["source"]["id"].as_str()?.to_string(), frame(t)))).collect()
     }
 }
 
@@ -5118,6 +5116,9 @@ fn a_new_task_takes_the_tab_on_show_and_the_drawer_follows_the_tab() {
     assert_eq!(gone["state"]["active"], 0, "{}", gone["drawer"]);
 
     // The user's drag of a tab onto another group: it takes that task. A client's is refused.
+    // The section and the drawer closed: a small window's strip shows every tab, none clipped.
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.user_key("cmd-shift-l");
     let tab = |place: usize| {
         otto.drawn()["tabs"][place]
             .as_array()
@@ -5743,14 +5744,7 @@ fn the_inspector_shows_a_trees_counts_and_roles_never_its_text() {
     }
 
     // A click on a row selects it, and its frame is outlined on the pane.
-    let press = |id: &str| {
-        let reply = otto.call(json!({"cmd": "sneak"}));
-        otto.call(json!({"cmd": "key", "keys": "escape"}));
-        let targets = reply["sneak"]["targets"].as_array().expect("targets");
-        let target = targets.iter().find(|t| t["source"]["id"] == id).unwrap_or_else(|| panic!("no {id}"));
-        let f = |key: &str| target["frame"][key].as_f64().unwrap();
-        otto.user_click([f("x") + f("w") / 2.0, f("y") + f("h") / 2.0])
-    };
+    let press = |id: &str| otto.user_click(at(otto.control(id), 0.5, 0.5));
     let pane = otto.bounds(&[1])[0];
     let reply = press("inspector-row:2");
     assert_eq!(reply["inspector"]["selected"], 2);
@@ -5775,6 +5769,54 @@ fn the_inspector_shows_a_trees_counts_and_roles_never_its_text() {
     otto.user_key("escape");
     otto.call(json!({"cmd": "inspector_fixture", "app": "Fixture", "tree": tree}));
     assert!(otto.call(json!({"cmd": "close", "pane": 1}))["inspector"].is_null());
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_tab_strip_ends_where_the_panes_end_and_its_buttons_stay_in_view() {
+    // A meeting soon, its title long: its chip shares the strip with the buttons.
+    let title = "Quarterly planning with every team that has an opinion about the roadmap";
+    let home = calendar_folder("strip", &feed(&[("a", title, 240, 3_600, "")]), None);
+    let otto = Otto::launch_with("strip", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    assert_eq!(calendar_read(&otto)["chip"], true);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    for _ in 0..24 {
+        otto.call(json!({"cmd": "new_tab"}));
+    }
+    otto.call(json!({"cmd": "select_tab", "index": 0}));
+    // Each button lies within the pane area; each tab's drawn part, left of the buttons.
+    let fits = |what: &str| {
+        let end = otto.bounds(&[1])[0];
+        let end = end[0] + end[2];
+        let frames = otto.controls();
+        let mut first = f64::MAX;
+        for id in ["top:new_tab", "top:split_right", "top:split_down"] {
+            let b = frames.iter().find(|(i, _)| i == id).unwrap_or_else(|| panic!("{what}: no {id}")).1;
+            assert!(b[0] + b[2] <= end + 0.5, "{what}: {id} {b:?} runs past the panes' end {end}");
+            first = first.min(b[0]);
+        }
+        let tabs: Vec<_> = frames.iter().filter(|(i, _)| i.starts_with("tab:")).collect();
+        assert!(!tabs.is_empty(), "{what}: no tab drawn");
+        for (id, b) in tabs {
+            assert!(b[0] + b[2] <= first + 0.5, "{what}: {id} {b:?} runs under the buttons at {first}");
+        }
+    };
+    fits("the right rail alone");
+    // The drawer dragged to its widest, half the window, then closed: it keeps that width.
+    otto.user_key("cmd-n");
+    let pane = otto.bounds(&[1])[0];
+    otto.user_drag([pane[0] + pane[2], 400.], [100., 400.]);
+    otto.user_key("escape");
+    // The inspector, in the drawer's place and as wide.
+    let root = json!({"role": "AXWindow", "frame": {"x": 0, "y": 0, "w": 400, "h": 300}});
+    let truncated = json!({"depth": false, "nodes": false, "timeout": false});
+    let tree = json!({"root": root, "count": 1, "truncated": truncated});
+    assert!(otto.call(json!({"cmd": "inspector_fixture", "app": "Fixture", "tree": tree}))["inspector"].is_object());
+    fits("the inspector");
+    // A section open too: the strip is narrower than the chip and the buttons.
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    fits("the inspector and a section");
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// The tabs as the bar has them: each one's title and task.

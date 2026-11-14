@@ -344,6 +344,7 @@ impl Workspace {
             .flex()
             .items_center()
             .rounded_md()
+            .min_w_0()
             .max_w(px(260.))
             .text_xs()
             .text_color(rgb(if lit { theme::SNEAK } else { theme::MUTED }))
@@ -351,7 +352,8 @@ impl Workspace {
             .child(div().absolute().inset_0().rounded_md().bg(rgb(theme::SNEAK)).opacity(0.25 * glow))
             .child(div().relative().truncate().child(text))
             .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone().into()))));
-        Some(div().flex().items_center().child(chip))
+        // It shrinks, text truncated, when the title strip is short of room.
+        Some(div().min_w_0().flex().items_center().child(chip))
     }
 
     /// The status bar's `Design review in 4m`, from five minutes before.

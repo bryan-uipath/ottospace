@@ -393,6 +393,8 @@ static RETURN_KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 /// it keeps clear on the left for the traffic lights.
 const TOP_BAR: f32 = 28.;
 const TRAFFIC_LIGHTS: f32 = 80.;
+/// The narrowest a tab shrinks to when the strip is full: a few letters of its title and its ×.
+const MIN_TAB: f32 = 80.;
 /// The left rail's width, and the section list's beside it.
 const RAIL: f32 = 56.;
 const SECTION: f32 = 260.;
@@ -4623,114 +4625,131 @@ impl Workspace {
                     }
                 }),
             )
-            // Each task's tabs side by side behind its badge, the tabs of no task last.
-            .children(self.model.groups().into_iter().flat_map(|group| {
-                let task = group.task.and_then(|id| self.model.tasks.get(id));
-                let shown = task.is_some_and(|task| self.talk_names(task.id));
-                let underline = task.map(|task| (theme::identity(task.colour), shown));
-                let done = task.is_some_and(|task| matches!(task.state, State::Done | State::Cleaned));
-                // Its badge: a click shows its conversation; a tab dropped on it joins the group.
-                let head = group.task.and_then(|id| Some((id, self.task_badge(id, 18.)?))).map(|(id, badge)| {
-                    div()
-                        .id(("group", id))
-                        .h_full()
-                        .pl_2()
-                        .flex()
-                        .items_center()
-                        .cursor_pointer()
-                        .child(badge)
-                        .child(self.controls.mark(format!("group:{id}")))
-                        .drag_over::<DraggedTab>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
-                        .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
-                            let at = TabAt::End(Some(id));
-                            this.dispatch(Action::TabPlace { tab: Some(dragged.0), at }, this.input, window, cx);
-                        }))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.dispatch(Action::TaskTalk { id }, this.input, window, cx);
-                        }))
-                        .into_any_element()
-                });
-                let tabs = group.tabs.into_iter().filter_map(|index| Some((index, self.model.tabs.get(index)?))).map(
-                    |(place, tab)| {
-                        let (active, id) = (place == self.model.active, tab.id);
-                        let title = SharedString::from(tab.title.clone());
+            // Each task's tabs side by side behind its badge, the tabs of no task last. They shrink
+            // to `MIN_TAB`, then clip: the buttons on the right always show.
+            .child(div().flex_auto().min_w_0().h_full().flex().overflow_hidden().children(
+                self.model.groups().into_iter().flat_map(|group| {
+                    let task = group.task.and_then(|id| self.model.tasks.get(id));
+                    let shown = task.is_some_and(|task| self.talk_names(task.id));
+                    let underline = task.map(|task| (theme::identity(task.colour), shown));
+                    let done = task.is_some_and(|task| matches!(task.state, State::Done | State::Cleaned));
+                    // Its badge: a click shows its conversation; a tab dropped on it joins the group.
+                    let head = group.task.and_then(|id| Some((id, self.task_badge(id, 18.)?))).map(|(id, badge)| {
                         div()
-                            .id(("tab", tab.id))
-                            // A pane dropped on a tab moves there; a tab dropped on one goes before it, in its group.
-                            .drag_over::<DraggedPane>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
-                            .drag_over::<DraggedTab>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
-                            .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
-                                let at = TabAt::Before(id);
-                                this.dispatch(Action::TabPlace { tab: Some(dragged.0), at }, this.input, window, cx);
-                            }))
-                            .on_drag(DraggedTab(id), move |_, offset, _, cx| {
-                                cx.new(|_| DragChip { label: title.clone(), offset })
-                            })
-                            .on_drop(cx.listener(move |this, dragged: &DraggedPane, window, cx| {
-                                this.dispatch(
-                                    Action::MovePane { pane: Some(dragged.0), tab: place },
-                                    this.input,
-                                    window,
-                                    cx,
-                                );
-                            }))
+                            .id(("group", id))
                             .h_full()
-                            .pl_3()
-                            .pr_1()
+                            .flex_none()
+                            .pl_2()
                             .flex()
                             .items_center()
-                            .gap_2()
-                            .border_r_1()
-                            .border_color(rgb(theme::BORDER))
                             .cursor_pointer()
-                            .when(active, |d| d.bg(rgb(theme::RAISED)).text_color(rgb(theme::TEXT)))
-                            // A task's tab is underlined in its colour, brighter while the drawer shows it.
-                            .relative()
-                            .when_some(underline, |d, (colour, shown)| {
-                                let line = div().absolute().left_0().right_0().bottom_0().h(px(2.)).bg(rgb(colour));
-                                d.child(line.when(!shown, |d| d.opacity(0.6)))
-                            })
-                            .hover(|s| s.text_color(rgb(theme::TEXT)))
-                            .child(mark(&self.marks, Mark::Tab(place)))
-                            .children(
-                                self.model
-                                    .mark_of(MarkOf::Tab(Some(id)))
-                                    .map(|_| div().text_color(rgb(theme::MARK)).child("◆")),
-                            )
-                            // A tab of a workbook: its icon, and the workbook's name on hover.
-                            .when_some(self.workbook_of(id), |d, book| {
-                                let icon = svg().path("icons/workbook.svg").size(px(12.)).flex_none();
-                                d.child(icon.text_color(rgb(theme::MUTED))).tooltip(move |_, cx| {
-                                    AnyView::from(cx.new(|_| Tooltip(format!("Workbook: {book}").into())))
-                                })
-                            })
-                            .child(tab.title.clone())
-                            .child(self.controls.mark(format!("tab:{}", tab.id)))
-                            .child(
-                                div()
-                                    .id(("tab-close", tab.id))
-                                    .px_1()
-                                    .rounded_sm()
-                                    .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::ERROR)))
-                                    .child("×")
-                                    .child(self.controls.mark(format!("tab-close:{}", tab.id)))
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        // Do not also select the tab that is going away.
-                                        cx.stop_propagation();
-                                        this.close_tab(id, window, cx);
-                                    })),
-                            )
-                            .on_click(cx.listener(move |this, _, window, cx| this.select_tab(id, window, cx)))
-                            .when(done, |d| d.opacity(0.5))
+                            .child(badge)
+                            .child(self.controls.mark(format!("group:{id}")))
+                            .drag_over::<DraggedTab>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
+                            .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                                let at = TabAt::End(Some(id));
+                                this.dispatch(Action::TabPlace { tab: Some(dragged.0), at }, this.input, window, cx);
+                            }))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.dispatch(Action::TaskTalk { id }, this.input, window, cx);
+                            }))
                             .into_any_element()
-                    },
-                );
-                let tabs: Vec<_> = tabs.collect();
-                head.into_iter().chain(tabs).collect::<Vec<_>>()
-            }))
+                    });
+                    let tabs = group
+                        .tabs
+                        .into_iter()
+                        .filter_map(|index| Some((index, self.model.tabs.get(index)?)))
+                        .map(|(place, tab)| {
+                            let (active, id) = (place == self.model.active, tab.id);
+                            let title = SharedString::from(tab.title.clone());
+                            div()
+                                .id(("tab", tab.id))
+                                // A pane dropped on a tab moves there; a tab dropped on one goes before it, in its group.
+                                .drag_over::<DraggedPane>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
+                                .drag_over::<DraggedTab>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
+                                .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                                    let at = TabAt::Before(id);
+                                    this.dispatch(
+                                        Action::TabPlace { tab: Some(dragged.0), at },
+                                        this.input,
+                                        window,
+                                        cx,
+                                    );
+                                }))
+                                .on_drag(DraggedTab(id), move |_, offset, _, cx| {
+                                    cx.new(|_| DragChip { label: title.clone(), offset })
+                                })
+                                .on_drop(cx.listener(move |this, dragged: &DraggedPane, window, cx| {
+                                    this.dispatch(
+                                        Action::MovePane { pane: Some(dragged.0), tab: place },
+                                        this.input,
+                                        window,
+                                        cx,
+                                    );
+                                }))
+                                .h_full()
+                                .min_w(px(MIN_TAB))
+                                // At its narrowest it clips, never paints over the next tab.
+                                .overflow_hidden()
+                                .pl_3()
+                                .pr_1()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .border_r_1()
+                                .border_color(rgb(theme::BORDER))
+                                .cursor_pointer()
+                                .when(active, |d| d.bg(rgb(theme::RAISED)).text_color(rgb(theme::TEXT)))
+                                // A task's tab is underlined in its colour, brighter while the drawer shows it.
+                                .relative()
+                                .when_some(underline, |d, (colour, shown)| {
+                                    let line = div().absolute().left_0().right_0().bottom_0().h(px(2.)).bg(rgb(colour));
+                                    d.child(line.when(!shown, |d| d.opacity(0.6)))
+                                })
+                                .hover(|s| s.text_color(rgb(theme::TEXT)))
+                                .child(mark(&self.marks, Mark::Tab(place)))
+                                .children(
+                                    self.model
+                                        .mark_of(MarkOf::Tab(Some(id)))
+                                        .map(|_| div().text_color(rgb(theme::MARK)).child("◆")),
+                                )
+                                // A tab of a workbook: its icon, and the workbook's name on hover.
+                                .when_some(self.workbook_of(id), |d, book| {
+                                    let icon = svg().path("icons/workbook.svg").size(px(12.)).flex_none();
+                                    d.child(icon.text_color(rgb(theme::MUTED))).tooltip(move |_, cx| {
+                                        AnyView::from(cx.new(|_| Tooltip(format!("Workbook: {book}").into())))
+                                    })
+                                })
+                                .child(div().flex_1().min_w_0().truncate().child(tab.title.clone()))
+                                .child(self.controls.mark(format!("tab:{}", tab.id)))
+                                .child(
+                                    div()
+                                        .id(("tab-close", tab.id))
+                                        .flex_none()
+                                        .px_1()
+                                        .rounded_sm()
+                                        .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::ERROR)))
+                                        .child("×")
+                                        .child(self.controls.mark(format!("tab-close:{}", tab.id)))
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            // Do not also select the tab that is going away.
+                                            cx.stop_propagation();
+                                            this.close_tab(id, window, cx);
+                                        })),
+                                )
+                                .on_click(cx.listener(move |this, _, window, cx| this.select_tab(id, window, cx)))
+                                .when(done, |d| d.opacity(0.5))
+                                .into_any_element()
+                        });
+                    let tabs: Vec<_> = tabs.collect();
+                    head.into_iter().chain(tabs).collect::<Vec<_>>()
+                }),
+            ))
+            // Short of room, the meeting chip gives way with the tabs, never the buttons.
+            .children(self.render_meeting_chip().map(|chip| chip.mr_1()))
             // New tab and split buttons: a new empty tab, or the picker for that split.
-            .child(div().ml_auto().mr_2().flex().gap_1().children(self.render_meeting_chip()).children(
-                SPLITS.iter().enumerate().map(|(i, (name, icon, tip, axis, new_tab))| {
+            .child(div().flex_none().ml_auto().mr_2().flex().gap_1().children(SPLITS.iter().enumerate().map(
+                |(i, (name, icon, tip, axis, new_tab))| {
                     let (tip, axis, new_tab) = (*tip, *axis, *new_tab);
                     div()
                         .id(("split", i))
@@ -4746,8 +4765,8 @@ impl Workspace {
                         .child(self.controls.mark(format!("top:{name}")))
                         .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
                         .on_click(cx.listener(move |this, _, window, cx| this.top_button(axis, new_tab, window, cx)))
-                }),
-            ))
+                },
+            )))
     }
 
     /// Bottom bar: who has the keyboard, and the focused pane.
