@@ -18,7 +18,7 @@ use std::time::Duration;
 use ottospace_agents::claude::{self, Claude};
 use ottospace_agents::codex::{self, Codex};
 use ottospace_agents::driver::Driver;
-use ottospace_agents::{Answer, Event, Input, Outcome, Output, Protocol, Refused, Runner, Start};
+use ottospace_agents::{Answer, Event, Input, Outcome, Output, Process, Refused, Start, Wire};
 use serde_json::Value;
 
 const ASK: &str =
@@ -126,7 +126,7 @@ fn shape(line: &str) -> String {
 /// The protocol, with the shape of each line printed when what it gave needs looking at.
 struct Tap<P>(P);
 
-impl<P: Protocol> Protocol for Tap<P> {
+impl<P: Wire> Wire for Tap<P> {
     fn opening(&mut self) -> Vec<String> {
         self.0.opening()
     }

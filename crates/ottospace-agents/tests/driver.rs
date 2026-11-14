@@ -9,7 +9,7 @@ use std::time::Duration;
 use ottospace_agents::claude::{self, Claude};
 use ottospace_agents::codex::{self, Codex};
 use ottospace_agents::driver::Driver;
-use ottospace_agents::{Answer, Argv, Event, Input, Outcome, Protocol, Runner, Start};
+use ottospace_agents::{Answer, Argv, Event, Input, Outcome, Process, Start, Wire};
 
 const CLAUDE_SESSION: &str = "8f14e45f-ceea-467f-a8d3-0242ac130003";
 const CODEX_THREAD: &str = "019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b";
@@ -50,7 +50,7 @@ impl AsRef<Path> for Scratch {
 }
 
 /// The fake in place of `argv.program`, with the table's arguments.
-fn spawn(argv: &Argv, dir: &Path, protocol: impl Protocol) -> Driver {
+fn spawn(argv: &Argv, dir: &Path, protocol: impl Wire) -> Driver {
     let mut command = Command::new(here().join("fakes").join(argv.program));
     command.args(&argv.args).current_dir(dir);
     command.env("FAKE_DIR", dir).env("FAKE_FIXTURES", here().join("fixtures").join(argv.program));

@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::PathBuf;
 
-use crate::{Cursor, Event, Runner, SessionRef, Usage, What};
+use crate::{Cursor, Event, SessionRef, Usage, What};
 
 /// A model's name when a request did not say it.
 pub const UNKNOWN: &str = "unknown";
@@ -69,7 +69,12 @@ pub struct Reader {
 
 impl Reader {
     /// Reads on, at most `budget` bytes a file: the session's own, then each sub-agent's.
-    pub fn advance(&mut self, runner: &dyn Runner, session: &SessionRef, budget: u64) -> io::Result<Read> {
+    pub fn advance(
+        &mut self,
+        runner: &dyn crate::SessionReader,
+        session: &SessionRef,
+        budget: u64,
+    ) -> io::Result<Read> {
         let mut read = Read { caught_up: true, ..Read::default() };
         // On an error the cursor stays: the next read must not count from the start again.
         let batch = runner.read(session, self.main.clone(), budget)?;

@@ -7,5 +7,6 @@ license.workspace = true
 
 # Reads agent runners' local session files. No network, no async runtime, no writes.
 [dependencies]
+ottospace-core = { path = "../ottospace-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

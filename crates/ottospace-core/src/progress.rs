@@ -5,7 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::sessions::{self, RUNNERS};
+use crate::runner::RunnerId;
+use crate::sessions;
 
 /// A gap between two moments of activity longer than this is the agent waiting (for the user,
 /// most often): not time at work.
@@ -91,7 +92,7 @@ impl Work {
     /// is not a name; one row a model, at most `MAX_MODELS`, the main loop's first.
     pub fn kept(self) -> Option<Work> {
         let plain = !self.session.is_empty() && self.session.len() <= 128;
-        if !RUNNERS.contains(&self.runner.as_str()) || !plain || self.session.chars().any(char::is_control) {
+        if RunnerId::named(&self.runner).is_none() || !plain || self.session.chars().any(char::is_control) {
             return None;
         }
         Some(Work { tokens: merged(self.tokens.iter()), ..self })

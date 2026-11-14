@@ -5,14 +5,15 @@
 //! `system/compact_boundary`. Permission prompts and interrupts go by `control_request` and
 //! `control_response` lines, whose shape the docs do not print: UNVERIFIED, see the design note.
 
+use ottospace_core::runner::RunnerId;
 use ottospace_sessions::claude::describe;
 use ottospace_sessions::station;
 use serde_json::{Value, json};
 
 use crate::payload::Payload;
 use crate::{
-    Answer, Argv, Event, Input, MAX_DETAIL, MAX_TEXT, Outcome, Output, Protocol, Refused, Start, Ticket, TicketKind,
-    Untrusted, kind_of, model_of, opaque, session_of,
+    Answer, Argv, Event, Input, MAX_DETAIL, MAX_TEXT, Outcome, Output, Refused, Start, Ticket, TicketKind, Untrusted,
+    Wire, kind_of, model_of, opaque, session_of,
 };
 
 /// Flags every session gets. Streams in and out, partial text, and permission prompts to us.
@@ -44,7 +45,7 @@ pub fn argv(model: Option<&str>, start: &Start) -> Option<Argv> {
     }
     let model = model.into_iter().flat_map(|id| ["--model".to_string(), id.to_string()]);
     let args = FLAGS.iter().map(|flag| flag.to_string()).chain(model).chain([flag.to_string(), id.clone()]);
-    Some(Argv { program: "claude", args: args.collect() })
+    Some(Argv { program: RunnerId::Claude.spec().terminal.program, args: args.collect() })
 }
 
 /// Error codes of `system/api_retry` and an assistant message's `error`, from the headless docs.
@@ -297,7 +298,7 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
-impl Protocol for Claude {
+impl Wire for Claude {
     fn opening(&mut self) -> Vec<String> {
         Vec::new()
     }

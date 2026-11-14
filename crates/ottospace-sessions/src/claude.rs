@@ -6,11 +6,12 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+use ottospace_core::runner::RunnerId;
 use serde_json::Value;
 
 use crate::cache::Cache;
 use crate::station::{self, Station};
-use crate::{Batch, Cursor, Event, Kind, Runner, SessionRef, Usage, What, jsonl, opaque, recorded_cwd, track};
+use crate::{Batch, Cursor, Event, SessionReader, SessionRef, Usage, What, jsonl, opaque, recorded_cwd, track};
 
 /// The values of an API-error record's `error` field. Seen in transcripts: the first five.
 /// The rest are the API's other error types. Anything else is shown as `api_error`.
@@ -107,9 +108,9 @@ fn dash(c: char) -> char {
     if c.is_ascii_alphanumeric() { c } else { '-' }
 }
 
-impl Runner for Claude {
-    fn kind(&self) -> Kind {
-        Kind::Claude
+impl SessionReader for Claude {
+    fn runner(&self) -> RunnerId {
+        RunnerId::Claude
     }
 
     fn sessions(&self, dirs: &[PathBuf]) -> io::Result<Vec<SessionRef>> {
@@ -140,10 +141,21 @@ impl Runner for Claude {
                         continue;
                     }
                     let (pid, busy) = live.get(id).map_or((None, None), |(pid, busy)| (Some(*pid), *busy));
-                    let (kind, id, last_activity) = (Kind::Claude, id.to_string(), Some(modified));
+                    let (runner, id, last_activity) = (RunnerId::Claude, id.to_string(), Some(modified));
                     let (cwd, started) = (head.cwd, head.started);
                     let (model, parent) = (None, None);
-                    sessions.push(SessionRef { kind, id, cwd, path, started, last_activity, model, pid, busy, parent });
+                    sessions.push(SessionRef {
+                        runner,
+                        id,
+                        cwd,
+                        path,
+                        started,
+                        last_activity,
+                        model,
+                        pid,
+                        busy,
+                        parent,
+                    });
                 }
             }
         }
@@ -162,6 +174,12 @@ impl Runner for Claude {
         self.tail(session).title
     }
 
+    /// `<config dir>/projects/<slug of cwd, links resolved>/<id>.jsonl`, in the first config dir that has it.
+    fn path_of(&self, cwd: &Path, id: &str) -> Option<PathBuf> {
+        let (folder, file) = (slug(&cwd.canonicalize().ok()?), format!("{id}.jsonl"));
+        self.config_dirs.iter().map(|dir| dir.join("projects").join(&folder).join(&file)).find(|path| path.is_file())
+    }
+
     /// `<session>/subagents/agent-*.jsonl`: each sub-agent's own transcript.
     fn subagents(&self, session: &SessionRef) -> Vec<SessionRef> {
         let Ok(files) = fs::read_dir(session.path.with_extension("").join("subagents")) else { return Vec::new() };
@@ -171,7 +189,7 @@ impl Runner for Claude {
             let modified = path.metadata().and_then(|m| m.modified()).ok();
             let last_activity = modified.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
             subs.push(SessionRef {
-                kind: Kind::Claude,
+                runner: RunnerId::Claude,
                 id: id.to_string(),
                 cwd: session.cwd.clone(),
                 path,

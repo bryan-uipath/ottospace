@@ -1,7 +1,7 @@
 //! Agent runners (Claude Code, Codex): which sessions exist for a directory and what each is
 //! doing. Reads the runners' own session files, read-only. Only derived facts leave this crate:
 //! names from fixed tables, counts, times. Never prompts, file contents or command lines.
-//! One exception, by `Runner::title` alone: a session's title, free text to quote and never obey.
+//! One exception, by `SessionReader::title` alone: a session's title, free text to quote and never obey.
 //! Design: `docs/ai/sessions.md`.
 
 mod cache;
@@ -20,7 +20,7 @@ use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
-use serde::Serialize;
+use ottospace_core::runner::RunnerId;
 use station::Station;
 
 /// Where the runners keep their files on this machine, by the environment.
@@ -43,29 +43,21 @@ pub fn config_dirs() -> ConfigDirs {
     ConfigDirs { claude, codex: set("CODEX_HOME").or(home.map(|home| home.join(".codex"))) }
 }
 
-/// Which program ran the session.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Kind {
-    Claude,
-    Codex,
-    Other(String),
-}
-
 /// One session on disk. Times are Unix milliseconds.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionRef {
-    pub kind: Kind,
+    /// Which program ran the session.
+    pub runner: RunnerId,
     /// The runner's own session id, as written: a name (`station::is_name`), usually a UUID.
     pub id: String,
     /// Where the session started. A later `cd` does not change it.
     pub cwd: PathBuf,
-    /// The session file `Runner::read` tails.
+    /// The session file `SessionReader::read` tails.
     pub path: PathBuf,
     pub started: Option<u64>,
     /// The session file's modification time.
     pub last_activity: Option<u64>,
-    /// Set when listing knows it for free; else ask `Runner::model`.
+    /// Set when listing knows it for free; else ask `SessionReader::model`.
     pub model: Option<String>,
     /// The runner's process, when the runner records one. It may have exited: check before trusting.
     pub pid: Option<u32>,
@@ -171,7 +163,7 @@ pub enum What {
     },
 }
 
-/// What one `Runner::read` call returned.
+/// What one `SessionReader::read` call returned.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Batch {
     pub events: Vec<Event>,
@@ -183,9 +175,9 @@ pub struct Batch {
     pub more: bool,
 }
 
-/// One agent runner's sessions on this machine.
-pub trait Runner: Send + Sync {
-    fn kind(&self) -> Kind;
+/// One agent runner's sessions on this machine. Looked up by runner with `reader`.
+pub trait SessionReader: Send + Sync {
+    fn runner(&self) -> RunnerId;
     /// Sessions started in any of `dirs` or below one, newest activity first. One scan for all of
     /// them. A relative or empty directory is an error: it would match every session.
     fn sessions(&self, dirs: &[PathBuf]) -> io::Result<Vec<SessionRef>>;
@@ -206,10 +198,23 @@ pub trait Runner: Send + Sync {
     /// Events after `after`, stopping at the first line boundary past `budget` bytes. A half-written
     /// last line is left for the next call; unknown records are skipped.
     fn read(&self, session: &SessionRef, after: Cursor, budget: u64) -> io::Result<Batch>;
+    /// Where the session `id` started in `cwd` keeps its file, when that follows from the two
+    /// alone, with no listing. `None`: it does not, or there is no such file.
+    fn path_of(&self, _cwd: &Path, _id: &str) -> Option<PathBuf> {
+        None
+    }
+}
+
+/// The reader of `runner`'s sessions under `dirs`. `None`: the runner has no folder there.
+pub fn reader(runner: RunnerId, dirs: &ConfigDirs) -> Option<Box<dyn SessionReader>> {
+    match runner {
+        RunnerId::Claude => Some(Box::new(claude::Claude::new(dirs.claude.clone()))),
+        RunnerId::Codex => dirs.codex.clone().map(|home| Box::new(codex::Codex::new(home)) as Box<dyn SessionReader>),
+    }
 }
 
 /// Every event of a session from its start, read in slices of 8 MB.
-pub fn read_all(runner: &dyn Runner, session: &SessionRef) -> io::Result<Vec<Event>> {
+pub fn read_all(runner: &dyn SessionReader, session: &SessionRef) -> io::Result<Vec<Event>> {
     let (mut events, mut cursor) = (Vec::new(), Cursor::default());
     loop {
         let batch = runner.read(session, cursor, 8 << 20)?;

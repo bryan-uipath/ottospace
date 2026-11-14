@@ -8,12 +8,14 @@ macOS agent multiplexer: terminals and real app windows tiled in one workspace. 
 |---|---|---|
 | `ottospace-core` | State and rules. `Model::update(Envelope { action, origin }) -> Vec<Effect>` | std, serde, unicode-segmentation. No I/O, UI, clock, threads |
 | `ottospace-mac` | macOS calls: AX, ScreenCaptureKit, displays, input | system APIs |
-| `ottospace-sessions` | Reads Claude Code and Codex session files: sessions of a directory, events, snapshot | std, serde, read-only files. No network, clock, writes |
-| `ottospace-agents` | Speaks to agent CLIs in their structured modes: starts, sends, reads events | std, serde_json, the two crates above; spawns child processes. No network of its own, clock decisions, or reading other apps |
+| `ottospace-sessions` | Reads Claude Code and Codex session files: sessions of a directory, events, snapshot. A `SessionReader` per `RunnerId` | std, serde, read-only files, `ottospace-core` (pure: for `runner::RunnerId`). No network, clock, writes |
+| `ottospace-agents` | Speaks to agent CLIs in their structured modes: starts, sends, reads events. A `Wire` per `RunnerId` | std, serde_json, the two crates above; spawns child processes. No network of its own, clock decisions, or reading other apps |
 | `ottospace` | Shell: GPUI views, control socket. Turns input into `Action`s, carries out `Effect`s | everything |
 
 Rules:
 
+- **A runner is its spec.** What differs between Claude Code and Codex is a field of its
+  `RunnerSpec` (`ottospace-core::runner`), asked by capability; never a `match` on its name.
 - **Decisions go in the core.** If code chooses what happens next (which pane gets focus, where a
   split goes, what closes), it belongs in `ottospace-core` with a unit test.
 - **The shell only translates.** Input → `Action`; `Effect` → system call or draw. All state

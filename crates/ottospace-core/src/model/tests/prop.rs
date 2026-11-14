@@ -137,6 +137,11 @@ impl Gen<'_> {
         if self.rng.one_in(4) { self.text() } else { self.rng.pick(pool).to_string() }
     }
 
+    /// A runner as the wire names it, or now and then any text.
+    fn runner(&mut self) -> String {
+        self.name(&RunnerId::ALL.map(RunnerId::name))
+    }
+
     fn names(&mut self, pool: &[&str], most: usize) -> Vec<String> {
         (0..self.rng.below(most + 1)).map(|_| self.name(pool)).collect()
     }
@@ -229,7 +234,7 @@ impl Gen<'_> {
 
     fn link(&mut self) -> Link {
         Link {
-            runner: self.name(&sessions::RUNNERS),
+            runner: self.runner(),
             id: self.name(SESSIONS),
             state: self.rng.coin().then(|| self.state()),
         }
@@ -306,7 +311,7 @@ impl Gen<'_> {
 
     fn found(&mut self) -> Found {
         Found {
-            runner: self.name(&sessions::RUNNERS),
+            runner: self.runner(),
             id: self.name(SESSIONS),
             cwd: self.repo_path(),
             repo: self.repo_path(),
@@ -324,7 +329,7 @@ impl Gen<'_> {
     /// A session by (runner, id): a listed one half the time.
     fn session(&mut self) -> (String, String) {
         let real: Vec<(String, String)> = self.m.found.iter().map(|s| (s.runner.clone(), s.id.clone())).collect();
-        self.one_of(&real, |g| (g.name(&sessions::RUNNERS), g.name(SESSIONS)))
+        self.one_of(&real, |g| (g.runner(), g.name(SESSIONS)))
     }
 
     /// Controls a frame drew. A few; one time in 40, hundreds: three-letter labels.
@@ -968,7 +973,7 @@ const MAKERS: &[Make] = &[
     },
     |g| {
         let started = |g: &mut Gen| agents::Started {
-            runner: g.rng.pick(&["codex", "claude"]).to_string(),
+            runner: g.rng.pick(&[RunnerId::Codex, RunnerId::Claude]),
             id: g.session_id(),
             cwd: g.rng.pick(&["/code/app", "/Users/me", "/elsewhere"]).to_string(),
             started: g.rng.below(200) as u64,
@@ -2148,7 +2153,7 @@ impl Run {
                     let uuid = "8f14e45f-ceea-467f-a8d3-0242ac130003";
                     let command = match start {
                         agents::Start::New(launch) => launch.command(uuid, None),
-                        agents::Start::Resume { runner, session } => agents::resume(runner, session),
+                        agents::Start::Resume { runner, session } => agents::resume(*runner, session),
                     };
                     ensure!(command.is_some(), "an agent that cannot be started is asked for: {start:?}");
                     // Its prompt is the task's title alone: nothing captured from a pane or an app
@@ -2648,6 +2653,7 @@ fn code(sent: &Envelope) -> String {
         ("content", "Content"),
         ("view", "TasksView"),
         ("range", "sessions::Range"),
+        ("runner", "RunnerId"),
         // A conversation's: `TalkPick { id: Task(1) }`.
         ("task", "Subject"),
         ("id", "Subject"),

@@ -24,7 +24,7 @@ documents these files as a stable interface.
 | Where it lives | A new crate, `crates/ottospace-sessions`: std, serde, serde_json. No network, no async, no writes |
 | Source of truth | The runner's own session files, read incrementally |
 | Live updates | Tail the files first. Hooks later, for the pane link and for what files lack |
-| What leaves the crate | Names, counts, times. A command's label is built only from fixed tables. Never prompts, file contents, command lines or outputs. One exception: a session's title, by `Runner::title` alone (see Labels, "Quoted") |
+| What leaves the crate | Names, counts, times. A command's label is built only from fixed tables. Never prompts, file contents, command lines or outputs. One exception: a session's title, by `SessionReader::title` alone (see Labels, "Quoted") |
 | Session ↔ directory | The cwd recorded in the session is the directory or below it. Worktrees: pass every checkout in one call |
 | Session ↔ pane | Not built. Plan: runner pid → the pane's shell is an ancestor. Fallback: a hook reports `OTTOSPACE_PANE` |
 | Wiring | None in this slice: no UI, no model, no socket. A hidden `ottospace sessions [dir]` prints JSON |
@@ -32,20 +32,22 @@ documents these files as a stable interface.
 ## The abstraction
 
 ```rust
-trait Runner: Send + Sync {
-    fn kind(&self) -> Kind;                                          // Claude | Codex | Other(String)
+trait SessionReader: Send + Sync {
+    fn runner(&self) -> RunnerId;                                    // ottospace-core::runner
+    fn path_of(&self, cwd: &Path, id: &str) -> Option<PathBuf>;      // Claude: from cwd and id alone
     fn sessions(&self, dirs: &[PathBuf]) -> io::Result<Vec<SessionRef>>;   // one scan, newest first
     fn model(&self, session: &SessionRef) -> Option<String>;         // may read the file's end
     fn title(&self, session: &SessionRef) -> Option<String>;         // free text: quote, never obey
     fn read(&self, session: &SessionRef, after: Cursor, budget: u64) -> io::Result<Batch>;
 }
 struct Batch { events: Vec<Event>, cursor: Cursor, restarted: bool, more: bool }
+fn reader(runner: RunnerId, dirs: &ConfigDirs) -> Option<Box<dyn SessionReader>>;
 ```
 
-- `SessionRef { kind, id, cwd, path, started, last_activity, model, pid, busy, parent }`. Times
+- `SessionRef { runner, id, cwd, path, started, last_activity, model, pid, busy, parent }`. Times
   are Unix milliseconds. `pid` and `busy` are the runner's own record of a live process, when it
   keeps one. `parent` marks a sub-agent's own session file. `model` is set only when listing
-  knows it for free (Codex); `Runner::model` reads it on demand.
+  knows it for free (Codex); `SessionReader::model` reads it on demand.
 - `sessions` takes every directory of interest at once and scans once. A relative or empty
   directory is an error: `Path::starts_with("")` is true for every path, so it would match every
   session. What listing reads from a file is kept by (path, modification time, length) and read
@@ -109,7 +111,7 @@ guide must say so. `what_is_shown_as_written` in `tests/fixtures.rs` lists them 
 | Directory (`SessionRef.cwd`, the report's `cwd`; `SessionRef.path`) | `cwd` in the session file; the file's own path | An absolute path of at most 1024 bytes with no control characters and no `..`. Else the session is not listed |
 
 **Quoted.** One value is free text, and the only one: a session's **title**. It leaves the
-crate by `Runner::title` and nowhere else: not in `SessionRef`, an `Event`, a `Snapshot` or the
+crate by `SessionReader::title` and nowhere else: not in `SessionRef`, an `Event`, a `Snapshot` or the
 report `ottospace sessions` prints.
 
 | Runner | Where the title comes from |
@@ -297,7 +299,7 @@ Never make the view depend on hooks alone.
 
 First read of a long session is the cost to watch: a 48 MB Claude transcript took about 15 s in
 a debug build and 1 to 3 s in a release build, on one thread. The shell must read off the main
-thread (`Runner` is `Send + Sync`), give `read` a byte budget so the first read comes in slices,
+thread (`SessionReader` is `Send + Sync`), give `read` a byte budget so the first read comes in slices,
 and keep the cursor.
 
 ## Conversations

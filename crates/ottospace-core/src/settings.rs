@@ -205,7 +205,7 @@ impl Settings {
         // Only a runner, or a runner and a model, in small letters: a saved agent starts nothing
         // yet. Whatever `agent_models` lists: each key is read by itself (`read`).
         if let Some(name) = settings.default_agent.as_deref() {
-            let built_in = crate::sessions::RUNNERS.contains(&name) || crate::agents::typed(name).is_some();
+            let built_in = crate::runner::RunnerId::named(name).is_some() || crate::agents::typed(name).is_some();
             if !built_in {
                 return Err(format!("{name:?} is not `claude`, `codex` or one with a model, as `codex-gpt-6-astra`"));
             }
