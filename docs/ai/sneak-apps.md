@@ -35,7 +35,8 @@ and what it allows.
   anything but the user's own `SneakType`, and that no other origin types toward an app's label.
   A text field's label makes the pane live only once the field took focus.
 - **Labels.** One namespace with ottospace's own: the app's take letters the own labels leave free,
-  so those never change when the tree arrives (a property check). With an app pane in focus the own
+  so those never change when the tree arrives (a property check). Every app label has two letters
+  at least (see "Two letters in an app" below). With an app pane in focus the own
   labels leave at least one label free; if none is, the app gets no labels.
 - **Labels drawn after a letter.** The app's tree arrives while the user may already have typed a
   first letter. Rule: what is typed counts as taken, so no app label drawn then goes on with it;
@@ -51,6 +52,32 @@ and what it allows.
 - **Privacy.** The tree is stripped of every text (title, description, value) on the read thread,
   before it reaches the model. The state has each label's frame, path and role, and counts
   (`sneak.app`), no text. Nothing is logged.
+
+## Two letters in an app
+
+2026-11-13. A review: "An app's destructive controls can get one-letter labels": one mistyped key
+could press Delete or Send in another app. The user: "multi letter sneak labels are OK".
+
+- **Rule.** Every label on an app's element has `sneak_apps::MIN_LETTERS` (2) letters or more,
+  always; ottospace's own keep theirs (home row single letters first, a × always two). The first
+  letter only narrows: the app labels it starts stay, the rest dim; ⌫ takes it back. Property
+  checks: no app label is shorter, no label (own or app) starts another, and no single keystroke
+  with nothing typed before it presses in an app.
+- **The space.** `more_labels` walks the labels free of the own ones and of what was typed, and
+  goes one level further down from any one-letter label. The letters no own label starts come
+  first: 19 two-letter labels under each (`ta ts td ...`). E.g. 3 own labels leave 16 letters,
+  304 labels, past the cap of 150. Then the two-letter labels under a letter own labels share (a
+  × at `ra` leaves `rd`, `rf`, ...), kept for last so a client can still type `r` toward the ×
+  while apps fit elsewhere. Then three letters, the shortest in reading order first. With an app
+  pane in focus own labels leave at least one label free. One letter, `p` (18 own): 19
+  two-letter labels, three letters for the rest (150: 11 of two, 139 of three). At worst one
+  two-letter label, `pp` (36 own, no ×): three and four letters (150: 11 of three, 139 of four). The cap and
+  its order are unchanged: the 150 nearest the pane's top left get labels.
+- **Stable.** Labels are handed out on the first read and kept by element after (as above), so
+  the split never moves while the mode is on. The epoch rule holds: a typed letter counts as
+  taken, so no label drawn after it goes on with it.
+- **Considered, rejected for now.** Leaving "destructive-looking" controls unlabelled: the tree
+  has no reliable signal (titles are stripped, and a role does not say Delete from Save).
 
 ## What is not allowed
 
@@ -108,5 +135,3 @@ pane, after the sneak label.
   `AXEnhancedUserInterface`) for Electron and Chromium apps, with its cost (Chromium animates
   AX-driven moves once it is on).
 - `AXPress` reports success in some web views and does nothing. No fallback click is made.
-- A one-letter label in an app can press, e.g., "Delete". ottospace's own × always gets two
-  letters; an app's destructive controls cannot be told apart from its tree.

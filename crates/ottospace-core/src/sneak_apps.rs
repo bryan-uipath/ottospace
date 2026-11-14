@@ -19,6 +19,8 @@ pub const CAP: usize = 150;
 pub const MIN_SIDE: f64 = 4.0;
 /// How far, in points, an element may have moved in its window since it was read and still be pressed.
 pub const TOLERANCE: f64 = 2.0;
+/// The fewest letters of a label in an app: one stray key never presses another app's control.
+pub const MIN_LETTERS: usize = 2;
 
 /// Why a client's letter does not choose an app's label.
 pub const USERS_ALONE: &str =
@@ -113,7 +115,9 @@ pub fn targets(pane: PaneId, read: &AppRead) -> (Vec<Target>, usize) {
 }
 
 /// `n` labels that are not a label of `taken`, nor start one, nor start with one, and none of
-/// which starts another: shortest first. e.g. `a s` taken, 2 more: `d f`.
+/// which starts another, each at least `MIN_LETTERS` long: shortest first. e.g. `a s` taken, 2
+/// more: `da ds`. They start with the letters `taken` leaves free (19 two-letter labels each),
+/// then go under a taken label's first letter (`ra` taken: `rd`, `rf`, ...).
 fn more_labels(taken: &[&str], n: usize) -> Vec<String> {
     let letters: Vec<char> = ax::ALPHABET.chars().collect();
     let extend = |prefix: &str| letters.iter().map(|c| format!("{prefix}{c}")).collect::<Vec<_>>();
@@ -124,10 +128,15 @@ fn more_labels(taken: &[&str], n: usize) -> Vec<String> {
             match () {
                 _ if taken.contains(&label.as_str()) => {}
                 _ if taken.iter().any(|t| t.starts_with(&label)) => under.push_back(label),
+                _ if label.chars().count() < MIN_LETTERS => under.push_back(label),
                 _ => free.push_back(label),
             }
         }
     }
+    // Letters no taken label starts first, e.g. `ta` before `rd` beside a × `ra`: a client may
+    // still type `r`, and one letter of the user's reaches either ottospace's or the app's.
+    let shared = |label: &String| taken.iter().any(|t| t.starts_with(&label[..1]));
+    free.make_contiguous().sort_by_key(|label| (label.len(), shared(label)));
     // Split the shortest until there are enough.
     while !free.is_empty() && free.len() < n {
         let Some(shortest) = free.pop_front() else { break };
@@ -381,7 +390,9 @@ mod tests {
         let moved = sneak.targets.iter().find(|t| t.label == first).unwrap().target.clone();
         assert_eq!(moved.frame.y, 11.);
         assert!(sneak.reaches_app(&first) && !sneak.reaches_app(&second));
-        assert_eq!(sneak.type_letter(first.chars().next().unwrap()), sneak::Typed::App(moved));
+        let mut letters = first.chars();
+        assert_eq!(sneak.type_letter(letters.next().unwrap()), sneak::Typed::Narrowed);
+        assert_eq!(sneak.type_letter(letters.next().unwrap()), sneak::Typed::App(moved));
         sneak.drop_app();
         assert_eq!((sneak.targets.len(), sneak.app), (1, None));
     }
@@ -496,7 +507,9 @@ mod tests {
 
     #[test]
     fn more_labels_are_free_of_the_taken_and_of_each_other() {
-        assert_eq!(more_labels(&["a", "s"], 2), ["d", "f"]);
+        assert_eq!(more_labels(&["a", "s"], 2), ["da", "ds"]);
+        assert_eq!(more_labels(&["a", "sa"], 2), ["da", "ds"], "never one letter, a free letter first");
+        assert_eq!(more_labels(&["a", "sa"], 19 * 17 + 1).last().map(String::as_str), Some("ss"));
         assert_eq!(more_labels(&[], 0), Vec::<String>::new());
         let taken: Vec<String> = ax::ALPHABET.chars().map(String::from).collect();
         let taken: Vec<&str> = taken.iter().map(String::as_str).collect();
@@ -507,6 +520,36 @@ mod tests {
         for (i, x) in all.iter().enumerate() {
             assert!(all.iter().enumerate().all(|(j, y)| i == j || !y.starts_with(x)), "{x} starts another");
         }
+    }
+
+    #[test]
+    fn an_app_label_has_two_letters_its_first_only_narrows_and_backspace_takes_it_back() {
+        // 3 own labels (`a s d`) leave 16 letters: 16 x 19 = 304 two-letter labels, past the cap.
+        let mut sneak = Sneak::leaving_room(vec![own("c0", 0.), own("c1", 30.), own("c2", 60.)], true).unwrap();
+        let grid: Vec<Node> =
+            (0..200).map(|i| button(100. + (i % 10) as f64 * 35., 50. + (i / 10) as f64 * 14.)).collect();
+        let (found, n) = targets(1, &read(grid));
+        sneak.read_app(1, found, n);
+        let app: Vec<String> = sneak.targets[3..].iter().map(|t| t.label.clone()).collect();
+        assert_eq!(app.len(), CAP);
+        assert!(app.iter().all(|l| l.len() == 2 && !"asd".contains(&l[..1])), "{app:?}");
+        assert_prefix_free(&sneak);
+        let first = app[0].chars().next().unwrap();
+        assert_eq!(sneak.type_letter(first), sneak::Typed::Narrowed);
+        assert_eq!(sneak.visible().count(), 19, "the app labels it starts stay; the rest dim");
+        sneak.backspace();
+        assert_eq!((sneak.typed.as_str(), sneak.visible().count()), ("", 3 + CAP));
+        // 18 own labels leave one letter, `p`: 19 two-letter labels, then three letters, the
+        // shortest in reading order first.
+        let own: Vec<Target> = (0..18).map(|i| self::own(&format!("c{i}"), i as f64 * 30.)).collect();
+        let mut sneak = Sneak::leaving_room(own, true).unwrap();
+        let (found, n) = targets(1, &read((0..40).map(|i| button(100. + i as f64 * 9., 60.)).collect()));
+        sneak.read_app(1, found, n);
+        let lens: Vec<usize> = sneak.targets[18..].iter().map(|t| t.label.len()).collect();
+        assert_eq!(lens.len(), 40);
+        assert!(lens.iter().all(|&l| l >= 2) && lens.is_sorted(), "{lens:?}");
+        assert!(sneak.targets[18..].iter().all(|t| t.label.starts_with('p')));
+        assert_prefix_free(&sneak);
     }
 
     #[test]

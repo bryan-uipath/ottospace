@@ -1447,8 +1447,12 @@ fn a_sneak_label_presses_a_control_in_the_hosted_app_and_a_disabled_one_has_none
 
     // Typing it presses the checkbox through accessibility: the canary reports it, the pane
     // stays parked and ottospace keeps the keyboard.
-    let letters: Vec<String> = label.chars().map(String::from).collect();
-    let reply = user_key(&letters.join(" "));
+    // Two letters: the first only narrows, and presses nothing yet.
+    assert!(label.len() >= 2, "{label}");
+    let first = user_key(&label[..1]);
+    assert_eq!((&first["mode"], &first["sneak"]["typed"]), (&json!("sneak"), &json!(&label[..1])), "{first}");
+    assert_eq!((&first["app_presses"], &canary.call(json!({"cmd": "state"}))["pressed"]), (&json!([]), &json!(false)));
+    let reply = user_key(&label[1..].chars().map(String::from).collect::<Vec<_>>().join(" "));
     assert_eq!((&reply["mode"], &reply["state"]["live"]), (&json!("normal"), &Value::Null), "{reply}");
     wait_or(
         "the canary to report the press",

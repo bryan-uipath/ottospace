@@ -1240,6 +1240,9 @@ fn check(m: &Model) -> Result<(), String> {
             apps.iter().all(|t| matches!(t.target.source, Source::App { pane: p, .. } if Some(p) == pane)),
             "a label is on an app's node of a pane not read: {pane:?}"
         );
+        // One stray key never presses in another app: its labels have two letters at least.
+        let short = apps.iter().find(|t| t.label.chars().count() < sneak_apps::MIN_LETTERS);
+        ensure!(short.is_none(), "a one-letter label in an app: {short:?}");
         let counted = sneak.app.is_none_or(|a| a.controls == apps.len() && a.controls <= a.found.min(sneak_apps::CAP));
         ensure!(counted, "the app's count is off: {:?}", sneak.app);
         // Each app label names one element.
@@ -2031,6 +2034,10 @@ impl Run {
                     // Only the user's own letter presses in another app, and only what was labelled.
                     ensure!(user, "{origin:?} pressed in an app: {path:?}");
                     ensure!(matches!(action, Action::SneakType { .. }), "{action:?} pressed in an app");
+                    // A single keystroke, with nothing typed before it, never presses there.
+                    let one = matches!(&action, Action::SneakType { text } if text.chars().count() == 1);
+                    let fresh = typed_before.as_deref().is_none_or(str::is_empty);
+                    ensure!(!(one && fresh), "a single keystroke pressed in an app: {path:?}");
                     let source = Source::App { pane: *pane, path: path.clone(), role: role.clone(), at: *at };
                     ensure!(labelled.contains(&format!("{source:?}")), "an element with no label is pressed: {path:?}");
                     let key = format!("{pane} {path:?} {role}");
@@ -2721,6 +2728,28 @@ fn an_app_label_drawn_after_the_first_letter_is_not_pressed_by_the_second() {
         split(Axis::Right, Kind::Empty),
         Action::Sneak { targets }.into(),
         Action::SneakType { text: "o".into() }.into(),
+        by(Origin::System, Action::SneakApp { pane: 1, read: Some(read) }),
+        Action::SneakType { text: "s".into() }.into(),
+    ])
+    .unwrap();
+}
+
+/// An app's control had a one-letter label (`s`): one stray key pressed it. (Found by review.)
+#[test]
+fn one_key_never_presses_in_an_app() {
+    let own = Target { frame: Frame { x: 0., y: 0., w: 20., h: 20. }, source: Source::Own { id: "c0".into() } };
+    let button = crate::ax::Node {
+        role: "AXButton".into(),
+        actions: vec!["AXPress".into()],
+        frame: Some(Frame { x: 10., y: 60., w: 30., h: 20. }),
+        ..Default::default()
+    };
+    let root = crate::ax::Node { role: "AXWindow".into(), children: vec![button], ..Default::default() };
+    let window = Frame { x: 0., y: 0., w: 400., h: 300. };
+    let read = sneak_apps::AppRead { window, crop: 0., content: window, root };
+    replay(&[
+        split(Axis::Right, Kind::Empty),
+        Action::Sneak { targets: vec![own] }.into(),
         by(Origin::System, Action::SneakApp { pane: 1, read: Some(read) }),
         Action::SneakType { text: "s".into() }.into(),
     ])
