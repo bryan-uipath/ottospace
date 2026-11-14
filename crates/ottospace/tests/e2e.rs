@@ -5115,6 +5115,9 @@ fn a_new_task_takes_the_tab_on_show_and_the_drawer_follows_the_tab() {
     assert_eq!(gone["state"]["active"], 0, "{}", gone["drawer"]);
 
     // The user's drag of a tab onto another group: it takes that task. A client's is refused.
+    // The section and the drawer closed: a small window's strip shows every tab, none clipped.
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.user_key("cmd-shift-l");
     let tab = |place: usize| {
         otto.drawn()["tabs"][place]
             .as_array()
