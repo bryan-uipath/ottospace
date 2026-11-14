@@ -5,7 +5,7 @@
 //! `system/compact_boundary`. Permission prompts and interrupts go by `control_request` and
 //! `control_response` lines, whose shape the docs do not print: UNVERIFIED, see the design note.
 
-use ottospace_core::runner::RunnerId;
+use ottospace_core::runner::{RunnerId, SessionId};
 use ottospace_sessions::claude::describe;
 use ottospace_sessions::station;
 use serde_json::{Value, json};
@@ -36,16 +36,21 @@ pub fn argv(model: Option<&str>, start: &Start) -> Option<Argv> {
     if model.is_some_and(|id| !ottospace_core::agents::is_name(id)) {
         return None;
     }
+    let cli = &RunnerId::Claude.spec().terminal;
+    let chosen = match cli.session {
+        SessionId::Chosen { flag } => flag,
+        SessionId::Found { .. } => return None,
+    };
     let (flag, id) = match start {
-        Start::New { id } => ("--session-id", id),
-        Start::Resume { id } => ("--resume", id),
+        Start::New { id } => (chosen, id),
+        Start::Resume { id } => (cli.resume, id),
     };
     if !crate::is_uuid(id) {
         return None;
     }
-    let model = model.into_iter().flat_map(|id| ["--model".to_string(), id.to_string()]);
+    let model = model.into_iter().flat_map(|id| [cli.model_flag.to_string(), id.to_string()]);
     let args = FLAGS.iter().map(|flag| flag.to_string()).chain(model).chain([flag.to_string(), id.clone()]);
-    Some(Argv { program: RunnerId::Claude.spec().terminal.program, args: args.collect() })
+    Some(Argv { program: cli.program, args: args.collect() })
 }
 
 /// Error codes of `system/api_retry` and an assistant message's `error`, from the headless docs.

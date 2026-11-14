@@ -63,11 +63,6 @@ impl Codex {
     pub fn new(home: PathBuf) -> Self {
         Self { home, max_files: 1000, heads: Cache::default(), names: Cache::default(), models: Cache::default() }
     }
-
-    /// `$CODEX_HOME` if set and not empty, or `~/.codex`.
-    pub fn from_env() -> Self {
-        Self::new(crate::config_dirs().codex.unwrap_or_default())
-    }
 }
 
 impl SessionReader for Codex {

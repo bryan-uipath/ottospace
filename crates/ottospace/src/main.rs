@@ -5380,8 +5380,7 @@ fn ctl(args: &[String]) -> ! {
 /// `ottospace sessions [dir]`: the agent sessions of the directory's repository, worktrees included,
 /// as JSON. Names, counts and times only; see `docs/ai/sessions.md`.
 fn sessions(dir: Option<&String>) -> ! {
-    use ottospace_core::runner::RunnerId;
-    use ottospace_sessions::{config_dirs, git::checkouts, reader, report::report};
+    use ottospace_sessions::{config_dirs, git::checkouts, readers, report::report};
     const USAGE: &str = "usage: ottospace sessions [dir]\n\
         Prints the Claude Code and Codex sessions of the repository at <dir> (an absolute path;\n\
         default: the current directory) as JSON: names, counts and times only.";
@@ -5391,7 +5390,7 @@ fn sessions(dir: Option<&String>) -> ! {
     }
     // No directory, an empty or relative one, or one that is not there: an error, never "all sessions".
     let dir = dir.map(PathBuf::from).map_or_else(std::env::current_dir, Ok);
-    let readers: Vec<_> = RunnerId::ALL.into_iter().filter_map(|id| reader(id, &config_dirs())).collect();
+    let readers = readers(&config_dirs());
     let readers: Vec<_> = readers.iter().map(|reader| reader.as_ref()).collect();
     let report = dir.and_then(|dir| checkouts(&dir)).and_then(|dirs| report(&readers, &dirs, now_ms(), 5));
     match report {

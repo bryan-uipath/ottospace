@@ -233,11 +233,7 @@ impl Gen<'_> {
     }
 
     fn link(&mut self) -> Link {
-        Link {
-            runner: self.runner(),
-            id: self.name(SESSIONS),
-            state: self.rng.coin().then(|| self.state()),
-        }
+        Link { runner: self.runner(), id: self.name(SESSIONS), state: self.rng.coin().then(|| self.state()) }
     }
 
     fn kept_task(&mut self) -> Task {

@@ -213,6 +213,11 @@ pub fn reader(runner: RunnerId, dirs: &ConfigDirs) -> Option<Box<dyn SessionRead
     }
 }
 
+/// The reader of every runner that has a folder under `dirs`, in `RunnerId::ALL` order.
+pub fn readers(dirs: &ConfigDirs) -> Vec<Box<dyn SessionReader>> {
+    RunnerId::ALL.into_iter().filter_map(|id| reader(id, dirs)).collect()
+}
+
 /// Every event of a session from its start, read in slices of 8 MB.
 pub fn read_all(runner: &dyn SessionReader, session: &SessionRef) -> io::Result<Vec<Event>> {
     let (mut events, mut cursor) = (Vec::new(), Cursor::default());

@@ -23,7 +23,7 @@ use ottospace_core::sessions::{Found, Seen};
 use ottospace_sessions::report::IDLE_AFTER_MS;
 use ottospace_sessions::snapshot::Snapshot;
 use ottospace_sessions::tally;
-use ottospace_sessions::{Cursor, SessionReader, SessionRef, reader};
+use ottospace_sessions::{Cursor, SessionReader, SessionRef, reader, readers};
 
 use crate::{config, repos};
 
@@ -107,8 +107,7 @@ impl Poller {
         let (reads, slow_reads) = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)));
         let (count, slow_count) = (reads.clone(), slow_reads.clone());
         let spawned = std::thread::Builder::new().name("sessions".into()).spawn(move || {
-            let readers: Vec<Box<dyn SessionReader>> =
-                RunnerId::ALL.into_iter().filter_map(|id| reader(id, &dirs)).collect();
+            let readers = readers(&dirs);
             let runners: Vec<&dyn SessionReader> = readers.iter().map(|reader| reader.as_ref()).collect();
             let mut follows: HashMap<PathBuf, Follow> = HashMap::new();
             // Where each session's file is, as the listing found it: an adopted session is
@@ -335,8 +334,9 @@ fn as_found(session: &SessionRef, repo: &std::path::Path, now: u64) -> Found {
         label: None,
         title: None,
         model: None,
-        // A pid used again by another program reads as alive: then it is not gone on with.
-        held: session.pid.is_some_and(crate::running::alive),
+        // Only a runner that records its process can say so (`disk.held`). A pid used again by
+        // another program reads as alive: then it is not gone on with.
+        held: session.runner.spec().disk.held && session.pid.is_some_and(crate::running::alive),
     }
 }
 
@@ -367,7 +367,8 @@ fn works(
     let mut out = Vec::new();
     for (runner_name, id, repo) in keys {
         let key = (runner_name.clone(), id.clone());
-        let Some(runner) = runners.iter().find(|r| Some(r.runner()) == RunnerId::named(runner_name)) else { continue };
+        let Some(named) = RunnerId::named(runner_name) else { continue };
+        let Some(runner) = runners.iter().find(|r| r.runner() == named) else { continue };
         // Where a listing found it; else where the runner keeps the sessions of the task's folder (Claude).
         let cwd = repo.clone().or_else(|| std::env::var("HOME").ok()).map(PathBuf::from).unwrap_or_default();
         let path = files.get(&key).cloned().or_else(|| runner.path_of(&cwd, id));

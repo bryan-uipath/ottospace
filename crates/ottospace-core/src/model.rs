@@ -3918,9 +3918,7 @@ impl Model {
         let stale = self.ended.iter().any(|(runner, id, at)| {
             (runner, id) == (&session.runner, &session.id) && self.now.saturating_sub(*at) <= ENDED_HELD_MS
         });
-        // Only a runner that records its process can say a session is held.
-        let recorded = RunnerId::named(&session.runner).is_some_and(|runner| runner.spec().disk.held);
-        recorded && session.held && !(listed && stale)
+        session.held && !(listed && stale)
     }
 
     /// The agent a task with no `@agent` starts: the settings', else the default runner.

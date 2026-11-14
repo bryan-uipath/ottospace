@@ -33,6 +33,8 @@ const ERRORS: &[&str] = &[
 
 pub struct Claude {
     config_dirs: Vec<PathBuf>,
+    /// Every dir as given, relative ones too: where a known session's file is looked for (`path_of`).
+    named: Vec<PathBuf>,
     heads: Cache<Head>,
     tails: Cache<Tail>,
 }
@@ -55,13 +57,9 @@ impl Claude {
     /// One runner over several config dirs, e.g. `~/.claude` and `~/.claude-personal`.
     /// A relative one is ignored.
     pub fn new(config_dirs: Vec<PathBuf>) -> Self {
+        let named = config_dirs.clone();
         let config_dirs = config_dirs.into_iter().filter(|d| d.is_absolute()).collect();
-        Self { config_dirs, heads: Cache::default(), tails: Cache::default() }
-    }
-
-    /// `$CLAUDE_CONFIG_DIR` if set, and `~/.claude`.
-    pub fn from_env() -> Self {
-        Self::new(crate::config_dirs().claude)
+        Self { config_dirs, named, heads: Cache::default(), tails: Cache::default() }
     }
 }
 
@@ -177,7 +175,7 @@ impl SessionReader for Claude {
     /// `<config dir>/projects/<slug of cwd, links resolved>/<id>.jsonl`, in the first config dir that has it.
     fn path_of(&self, cwd: &Path, id: &str) -> Option<PathBuf> {
         let (folder, file) = (slug(&cwd.canonicalize().ok()?), format!("{id}.jsonl"));
-        self.config_dirs.iter().map(|dir| dir.join("projects").join(&folder).join(&file)).find(|path| path.is_file())
+        self.named.iter().map(|dir| dir.join("projects").join(&folder).join(&file)).find(|path| path.is_file())
     }
 
     /// `<session>/subagents/agent-*.jsonl`: each sub-agent's own transcript.
