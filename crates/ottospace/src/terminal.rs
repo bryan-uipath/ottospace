@@ -425,6 +425,11 @@ impl Terminal {
         self.selection_changed();
     }
 
+    /// Something is selected, without building its text: for each frame and key.
+    pub fn has_selection(&self) -> bool {
+        self.term.lock().selection.as_ref().is_some_and(|selection| !selection.is_empty())
+    }
+
     /// What ⌘C copies (`clip::copy_text`), if anything is selected.
     pub fn selected(&self) -> Option<String> {
         selected_text(&self.term.lock())

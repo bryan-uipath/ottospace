@@ -1235,7 +1235,7 @@ impl Workspace {
         // And a paste: its pane pulses from now.
         let pastes = matches!(action, Action::Paste { .. } | Action::QuitConfirm);
         if files || row || unmarks || pins || captures || pastes {
-            self.model.update(Action::Tick { now: now_ms() }.sent_by(Origin::System));
+            self.tick_now();
         }
         let name = trace::name(&action);
         let effects = self.model.update(action.sent_by(origin));
@@ -3263,7 +3263,7 @@ impl Workspace {
         let key = &event.keystroke;
         let m = key.modifiers;
         let mods = crate::mods(m);
-        if clears_selection(&key.key, mods, terminal.selected().is_some()) {
+        if clears_selection(&key.key, mods, terminal.has_selection()) {
             terminal.clear_selection();
             cx.notify();
             cx.stop_propagation();
@@ -3501,14 +3501,22 @@ impl Workspace {
         if self.field_copy(false, window, cx) {
             return;
         }
-        let Some((id, text)) = self.copyable() else { return };
+        let Some(id) = self.copy_pane() else { return };
+        let Some(text) = self.terminals.get(&id).and_then(Terminal::selected) else { return };
         self.copy_text(text, Some(id), Verb::Copied, cx);
     }
 
-    /// The terminal ⌘C copies from and what it would copy: Copy in the Edit menu is on with it.
-    fn copyable(&self) -> Option<(PaneId, String)> {
+    /// The terminal ⌘C copies from, while it has a selection: Copy in the Edit menu is on with it.
+    fn copy_pane(&self) -> Option<PaneId> {
         let id = self.model.visual.or_else(|| self.model.keyboard_terminal())?;
-        Some((id, self.terminals.get(&id)?.selected()?))
+        self.terminals.get(&id)?.has_selection().then_some(id)
+    }
+
+    /// Tells the core the time now, and gives a meeting alert that time brought (`Effect::MeetingAlert`).
+    fn tick_now(&mut self) {
+        for effect in self.model.update(Action::Tick { now: now_ms() }.sent_by(Origin::System)) {
+            self.meeting_effect(&effect);
+        }
     }
 
     /// Every copy of ottospace's: to the clipboard, then the notice that says so (`clip::Clip`).
@@ -3518,7 +3526,7 @@ impl Workspace {
         self.clipboard.copy(text, cx);
         self.clip_reduced = ottospace_mac::meeting::reduce_motion();
         // The notice has no effects, so needs no window: a chat's Copy button has none to give.
-        self.model.update(Action::Tick { now: now_ms() }.sent_by(Origin::System));
+        self.tick_now();
         self.model.update(Action::Copied { pane, verb, amount }.sent_by(self.input));
         cx.notify();
     }
@@ -5365,7 +5373,7 @@ impl Render for Workspace {
                 }
             }))
             // Copy, in the menu too, only with something selected: in a field, else in the terminal.
-            .when(self.field_selected() || self.copyable().is_some(), |d| {
+            .when(self.field_selected() || self.copy_pane().is_some(), |d| {
                 d.on_action(cx.listener(|this, _: &CopySelection, window, cx| this.copy(window, cx)))
             })
             .on_action(cx.listener(|this, _: &PasteText, window, cx| this.paste(window, cx)))
