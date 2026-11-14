@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::edit::Field;
+use crate::features::Feature;
 use crate::tasks::TaskId;
 
 /// Why a client's request to the palette is refused.
@@ -60,6 +61,14 @@ macro_rules! commands {
             pub fn group(self) -> Group {
                 match self { $(Command::$variant => Group::$group),* }
             }
+
+            /// The flag it is behind: off, it is not listed, nor is its menu item.
+            pub fn feature(self) -> Option<Feature> {
+                match self.group() {
+                    Group::Marks => Some(Feature::Marks),
+                    _ => None,
+                }
+            }
         }
     };
 }
@@ -105,6 +114,7 @@ commands! {
     AddTabToWorkbook: "Add Tab to Workbook…", Workbook;
     SaveAllWorkbook: "Save All Tabs as Workbook", Workbook;
     StartFresh: "Start Fresh", App;
+    Features: "Features…", App;
     MarkPane: "Mark Pane", Marks;
     MarkTab: "Mark Tab", Marks;
     MarkJump: "Go to Mark…", Marks;
@@ -135,6 +145,18 @@ pub struct Palette {
     pub selected: usize,
     /// Move Tab to Task…: the tasks to move the tab on show to, not commands.
     pub tasks: Option<Vec<TaskChoice>>,
+    /// Features…: the flags, each with whether it is on, not commands.
+    pub features: Option<Vec<FeatureChoice>>,
+    /// The commands of features that are off: not listed.
+    #[serde(skip)]
+    pub hidden: Vec<Command>,
+}
+
+/// A flag Features… lists, and whether it is on: choosing it turns it the other way.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct FeatureChoice {
+    pub feature: Feature,
+    pub on: bool,
 }
 
 /// A task the tab may move to. `task` `None`: no task.
@@ -147,7 +169,17 @@ pub struct TaskChoice {
 impl Palette {
     /// The commands the query matches; none while it lists tasks.
     pub fn matches(&self) -> Vec<Command> {
-        if self.tasks.is_some() { Vec::new() } else { rank(self.query.text()) }
+        if self.tasks.is_some() || self.features.is_some() {
+            return Vec::new();
+        }
+        rank(self.query.text()).into_iter().filter(|command| !self.hidden.contains(command)).collect()
+    }
+
+    /// The flags the query matches, by name or description, in their order.
+    pub fn feature_matches(&self) -> Vec<&FeatureChoice> {
+        let query = letters(self.query.text());
+        let named = |c: &&FeatureChoice| score(&query, &format!("{} {}", c.feature.name(), c.feature.description()));
+        self.features.iter().flatten().filter(|choice| named(choice).is_some()).collect()
     }
 
     /// The tasks the query matches, best first, ties in their order; none while it lists commands.
@@ -161,7 +193,11 @@ impl Palette {
 
     /// How many rows it shows.
     pub fn count(&self) -> usize {
-        if self.tasks.is_some() { self.task_matches().len() } else { self.matches().len() }
+        match (&self.tasks, &self.features) {
+            (Some(_), _) => self.task_matches().len(),
+            (_, Some(_)) => self.feature_matches().len(),
+            _ => self.matches().len(),
+        }
     }
 }
 
