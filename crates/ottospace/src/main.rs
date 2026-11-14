@@ -3867,7 +3867,7 @@ impl Workspace {
                         .when(active, |d| {
                             // Amber on Tasks while a task needs the user, as its dot is.
                             let tasks = section == Section::Tasks && needs_you;
-                            raised_cell(d, if tasks { theme::SNEAK } else { theme::PRIMARY }, false, i == 0)
+                            raised_cell(d, if tasks { theme::SNEAK } else { theme::PRIMARY }, false)
                         })
                         .when(self.model.rail_focus == Some(RailFocus::Left(section)), |d| focus_ring(d.relative()))
                         .child(svg().path(*icon).size(px(20.)).text_color(rgb(if active {
@@ -5195,21 +5195,19 @@ fn title_shadow() -> Div {
     }])
 }
 
-/// A rail's open cell, raised: the panel's background, a soft shadow above and below it, a
-/// lighter line along its top, and an accent bar at the window's edge (`right`: the right rail's).
-/// The `first` cell has neither line nor shadow above: the title strip's border is the one line there.
-pub(crate) fn raised_cell(cell: Stateful<Div>, accent: u32, right: bool, first: bool) -> Stateful<Div> {
-    let shadow = |y: f32| BoxShadow {
+/// A rail's open cell, raised: the panel's background, a soft shadow below it, and an accent bar
+/// at the window's edge (`right`: the right rail's). No line or shadow above: every cell reads
+/// as the first one does, under one border.
+pub(crate) fn raised_cell(cell: Stateful<Div>, accent: u32, right: bool) -> Stateful<Div> {
+    let shadow = BoxShadow {
         color: black().opacity(0.85),
-        offset: point(px(0.), px(y)),
+        offset: point(px(0.), px(7.)),
         blur_radius: px(9.),
         spread_radius: px(-6.),
     };
     let bar = div().absolute().top_0().w(px(2.)).h_full().bg(rgb(accent));
     let bar = if right { bar.right_0() } else { bar.left_0() };
-    let shadows = if first { vec![shadow(7.)] } else { vec![shadow(-7.), shadow(7.)] };
-    let line = (!first).then(|| div().absolute().top_0().left_0().w_full().h(px(1.)).bg(rgb(0x303036)));
-    cell.relative().bg(rgb(theme::RAISED)).shadow(shadows).children(line).child(bar)
+    cell.relative().bg(rgb(theme::RAISED)).shadow(vec![shadow]).child(bar)
 }
 
 /// A rail cell with the keyboard (`zones`): a ring in list mode's colour, apart from "open".
