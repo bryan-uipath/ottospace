@@ -14,10 +14,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::capture;
 use crate::model::PaneId;
+use crate::runner::RunnerId;
 use crate::tasks::State;
-
-/// The runners whose sessions are listed.
-pub const RUNNERS: [&str; 2] = ["claude", "codex"];
 
 /// A day, for the ranges of the Other sessions group.
 pub const DAY_MS: u64 = 86_400_000;
@@ -253,7 +251,7 @@ pub fn kept(found: Vec<Found>) -> Vec<Found> {
     let name = |text: &str| text.chars().all(|c| c.is_ascii_lowercase() || c == '_') && plain(text, 16);
     let mut list: Vec<Found> = Vec::new();
     for mut session in found {
-        let known = RUNNERS.contains(&session.runner.as_str()) && plain(&session.id, 128);
+        let known = RunnerId::named(&session.runner).is_some() && plain(&session.id, 128);
         let placed = [&session.cwd, &session.repo].iter().all(|dir| dir.starts_with('/') && plain(dir, 1024));
         if !known || !placed || list.iter().any(|s| (&s.runner, &s.id) == (&session.runner, &session.id)) {
             continue;

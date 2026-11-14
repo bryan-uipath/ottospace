@@ -6,19 +6,19 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 
 use crate::snapshot::Snapshot;
-use crate::{Runner, SessionRef, read_all};
+use crate::{SessionReader, SessionRef, read_all};
 
 /// A session counts as active this long after its file last changed.
 pub const IDLE_AFTER_MS: u64 = 30_000;
 
 /// Every runner's sessions under `dirs`, newest first. The newest `snapshots` are read in full
 /// for what they are doing; the rest are only listed. `now_ms` is the caller's clock.
-pub fn report(runners: &[&dyn Runner], dirs: &[PathBuf], now_ms: u64, snapshots: usize) -> io::Result<Value> {
-    let mut sessions: Vec<(&dyn Runner, SessionRef)> = Vec::new();
+pub fn report(runners: &[&dyn SessionReader], dirs: &[PathBuf], now_ms: u64, snapshots: usize) -> io::Result<Value> {
+    let mut sessions: Vec<(&dyn SessionReader, SessionRef)> = Vec::new();
     for runner in runners {
         for session in runner.sessions(dirs)? {
             // One file is one session, however many directories or runners led to it.
-            if !sessions.iter().any(|(_, s)| (&s.kind, &s.path) == (&session.kind, &session.path)) {
+            if !sessions.iter().any(|(_, s)| (s.runner, &s.path) == (session.runner, &session.path)) {
                 sessions.push((*runner, session));
             }
         }
@@ -37,7 +37,7 @@ pub fn report(runners: &[&dyn Runner], dirs: &[PathBuf], now_ms: u64, snapshots:
         let age = session.last_activity.map(|at| now_ms.saturating_sub(at));
         let model = snapshot.as_ref().and_then(|s| s.model.clone()).or(session.model.clone());
         let mut entry = json!({
-            "kind": session.kind,
+            "kind": session.runner.name(),
             "id": session.id,
             "cwd": session.cwd,
             "started": session.started,

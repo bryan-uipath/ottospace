@@ -17,6 +17,7 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 
+use ottospace_core::runner::RunnerId;
 use ottospace_sessions::station::Station;
 use serde_json::Value;
 
@@ -304,7 +305,7 @@ pub struct Output {
 }
 
 /// One runner's wire protocol. Pure: lines in, lines and events out.
-pub trait Protocol: Send + 'static {
+pub trait Wire: Send + 'static {
     /// Lines to write as soon as the process runs.
     fn opening(&mut self) -> Vec<String>;
     /// One line of the process's stdout, without its newline.
@@ -317,7 +318,7 @@ pub trait Protocol: Send + 'static {
 }
 
 /// A running agent CLI: what the shell talks to. `driver::Driver` is the one implementation.
-pub trait Runner {
+pub trait Process {
     fn send(&self, input: Input) -> io::Result<()>;
     /// Events, in order, ending with `Exited`.
     fn events(&self) -> &Receiver<Event>;
@@ -343,6 +344,31 @@ pub enum Start {
 pub struct Argv {
     pub program: &'static str,
     pub args: Vec<String>,
+}
+
+/// A runner's structured mode: what to run, and the wire to speak to it. `None`: the model is
+/// not a name, the id not a UUID, or `cwd` not a plain absolute path (Codex).
+pub fn structured(runner: RunnerId, cwd: &Path, model: Option<&str>, start: &Start) -> Option<(Argv, Box<dyn Wire>)> {
+    match runner {
+        RunnerId::Claude => Some((claude::argv(model, start)?, Box::new(claude::Claude::new()))),
+        RunnerId::Codex => Some((codex::argv(), Box::new(codex::Codex::new(cwd, model, start)?))),
+    }
+}
+
+/// A wire found by `structured` is driven as any other.
+impl<W: Wire + ?Sized> Wire for Box<W> {
+    fn opening(&mut self) -> Vec<String> {
+        (**self).opening()
+    }
+    fn read(&mut self, line: &str) -> Output {
+        (**self).read(line)
+    }
+    fn write(&mut self, input: Input) -> Result<Vec<String>, Refused> {
+        (**self).write(input)
+    }
+    fn awaits_answer(&self, head: &str) -> bool {
+        (**self).awaits_answer(head)
+    }
 }
 
 /// True if `id` is written as a UUID. Mirrors `agents::is_uuid` on the `task-start` branch (PR
@@ -424,6 +450,18 @@ fn session_of(value: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ottospace_core::runner::Status;
+
+    #[test]
+    fn every_runner_with_a_structured_mode_has_a_wire_and_its_program() {
+        let start = Start::New { id: "8f14e45f-ceea-467f-a8d3-0242ac130003".into() };
+        for id in RunnerId::ALL {
+            let found = structured(id, Path::new("/code/app"), Some("m-1"), &start);
+            assert_eq!(found.is_some(), id.spec().structured.status != Status::None, "{id:?}");
+            let program = found.map(|(argv, _)| argv.program);
+            assert!(program.is_none_or(|program| program == id.spec().terminal.program), "{id:?}");
+        }
+    }
 
     #[test]
     fn untrusted_text_is_cut_at_a_character_and_never_debug_printed() {

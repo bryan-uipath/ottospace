@@ -11,7 +11,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::lines::{Line, Lines, MAX_LINE};
-use crate::{Event, Input, Protocol, Runner, Untrusted};
+use crate::{Event, Input, Process, Untrusted, Wire};
 
 /// How much of stderr is kept for `Exited`.
 const STDERR_TAIL: usize = 4096;
@@ -54,14 +54,14 @@ pub struct Driver {
     reaped: Arc<Mutex<bool>>,
     /// `None` once stopped.
     writes: Option<Writes>,
-    protocol: Arc<Mutex<dyn Protocol>>,
+    protocol: Arc<Mutex<dyn Wire>>,
     events: Receiver<Event>,
 }
 
 impl Driver {
     /// Starts `command` (its program, argv and directory already set) with piped stdio, in a
     /// process group of its own, and writes the protocol's opening lines.
-    pub fn spawn(mut command: Command, protocol: impl Protocol) -> io::Result<Self> {
+    pub fn spawn(mut command: Command, protocol: impl Wire) -> io::Result<Self> {
         command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
         let mut child = command.spawn()?;
         let group = i32::try_from(child.id()).map_err(|_| io::Error::other("pid out of range"))?;
@@ -70,7 +70,7 @@ impl Driver {
         if let Some(stdin) = child.stdin.take() {
             thread::spawn(move || write(stdin, queue));
         }
-        let protocol: Arc<Mutex<dyn Protocol>> = Arc::new(Mutex::new(protocol));
+        let protocol: Arc<Mutex<dyn Wire>> = Arc::new(Mutex::new(protocol));
         let reaped = Arc::new(Mutex::new(false));
         let (exit_tx, exit) = mpsc::channel();
         let waiting = reaped.clone();
@@ -137,7 +137,7 @@ fn read_some(from: &mut impl Read, buffer: &mut [u8]) -> Option<usize> {
 /// Reads stdout to its end, then takes the exit code from `wait` and sends `Exited`.
 fn read(
     stdout: Option<impl Read>,
-    protocol: &Mutex<dyn Protocol>,
+    protocol: &Mutex<dyn Wire>,
     writes: &Writes,
     tx: &Sender<Event>,
     (tail, tailing): (&Mutex<Vec<u8>>, Option<thread::JoinHandle<()>>),
@@ -186,7 +186,7 @@ fn read(
     let _ = tx.send(Event::Exited { code, stderr });
 }
 
-impl Runner for Driver {
+impl Process for Driver {
     fn send(&self, input: Input) -> io::Result<()> {
         let closed = || io::Error::new(io::ErrorKind::BrokenPipe, "stdin is closed");
         let writes = self.writes.as_ref().ok_or_else(closed)?;

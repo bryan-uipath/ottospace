@@ -8,6 +8,7 @@ use std::{fs, io};
 use ottospace_core::repos::{RepoDir, RepoDirs};
 use ottospace_core::settings::{DEFAULT_REPOS, ListChange, Settings, expand_home, with_changes};
 use ottospace_core::tasks::Task;
+use ottospace_sessions::ConfigDirs;
 
 pub struct Config {
     pub settings: Settings,
@@ -84,17 +85,11 @@ pub fn set_repo_roots(dirs: &RepoDirs) {
     }
 }
 
-/// Where the runners' sessions are read from.
-pub struct SessionDirs {
-    pub claude: Vec<PathBuf>,
-    pub codex: Option<PathBuf>,
-}
-
 /// Where sessions are read from: `session_dirs` in the settings, else `~/.claude` and `~/.codex`
 /// (an app started from the Dock has no `CLAUDE_CONFIG_DIR` to go by). `None`: nothing is read,
 /// because `"sessions": false` says so, or because this is a test run whose settings name no
 /// directory: a test never reads the user's own sessions.
-pub fn session_dirs() -> Option<SessionDirs> {
+pub fn session_dirs() -> Option<ConfigDirs> {
     let settings = &get().settings;
     let test_run = std::env::var_os("OTTOSPACE_E2E").is_some();
     if settings.sessions == Some(false) || (test_run && settings.session_dirs.is_none()) {
@@ -106,7 +101,7 @@ pub fn session_dirs() -> Option<SessionDirs> {
     let default = |dir: &str| (!test_run).then(|| dir.to_string());
     let claude = named.claude.unwrap_or_else(|| default("~/.claude").into_iter().collect());
     let codex = named.codex.or_else(|| default("~/.codex"));
-    Some(SessionDirs { claude: claude.iter().map(path).collect(), codex: codex.as_ref().map(path) })
+    Some(ConfigDirs { claude: claude.iter().map(path).collect(), codex: codex.as_ref().map(path) })
 }
 
 /// How long an adopted session is quiet before its task needs the user, in milliseconds:

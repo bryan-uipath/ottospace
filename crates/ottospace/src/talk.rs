@@ -12,6 +12,7 @@ use gpui::{
 };
 use ottospace_core::agents::{self, Command, Start};
 use ottospace_core::keys;
+use ottospace_core::runner::RunnerId;
 use ottospace_core::talk::{self, Subject};
 use ottospace_core::tasks::{Group, TaskId};
 use ottospace_core::terminal::scroll_key;
@@ -29,8 +30,9 @@ pub struct Agent {
     since: Instant,
     /// What the header names: the model, else the runner.
     pub model: String,
-    /// The id it was started with (Claude's), and where it runs: to see if its session was written.
-    session: Option<String>,
+    /// The runner and id it was started with, if the id was chosen here, and where it runs: to
+    /// see if its session was written.
+    session: Option<(RunnerId, String)>,
     cwd: Option<String>,
     /// The core was told it ended.
     told: bool,
@@ -47,7 +49,7 @@ pub struct Drawer {
     pub body: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
     /// Its width at the last render: the draft's collecting state takes the same.
     pub width: f32,
-    /// A read of new Codex sessions under way, for agents whose session is not known yet.
+    /// A read of new sessions under way, for agents whose runner names its own (Codex).
     reading: Option<std::sync::mpsc::Receiver<Vec<agents::Started>>>,
     /// Reads of one session each under way, for resumes that wait on them (`SessionRead`).
     session_reads: Vec<(String, String, std::sync::mpsc::Receiver<Action>)>,
@@ -110,8 +112,8 @@ impl Workspace {
             Start::New(launch) => {
                 let session = new_uuid().ok_or("no random bytes for a session id")?;
                 let command = launch.command(&session, brief).ok_or("no command for this agent")?;
-                let model = launch.model.clone().unwrap_or_else(|| launch.runner.to_string());
-                (command, agents::names_session(launch.runner).then_some(session), model)
+                let model = launch.model.clone().unwrap_or_else(|| launch.runner.name().to_string());
+                (command, launch.runner.spec().chooses_session().then_some((launch.runner, session)), model)
             }
             Start::Resume { runner, session } => {
                 // Where the session started: the core checked its words, this checks where it leads.
@@ -119,7 +121,11 @@ impl Workspace {
                 if let Some(dir) = cwd.filter(|dir| Some(*dir) != own) {
                     self.in_checkout(dir)?;
                 }
-                (agents::resume(runner, session).ok_or("no command for this session")?, None, runner.clone())
+                (
+                    agents::resume(*runner, session).ok_or("no command for this session")?,
+                    None,
+                    runner.name().to_string(),
+                )
             }
         };
         let Command { program: name, args } = command;
@@ -130,6 +136,7 @@ impl Workspace {
         let cwd = cwd.or(home.as_deref());
         let terminal = Terminal::run(&program(name)?, &args, &vars, cwd).map_err(|err| format!("{name}: {err}"))?;
         let (given, cwd) = (session.clone(), cwd.map(str::to_string));
+        let session = session.map(|(_, id)| id);
         let agent = Agent { terminal, since: Instant::now(), model, told: false, session: given, cwd };
         self.drawer.agents.insert(subject.clone(), agent);
         Ok(session)
@@ -176,19 +183,17 @@ impl Workspace {
         }
     }
 
-    /// The session id a task's gone agent was started with, if no Claude folder holds its file
-    /// (`projects/<folder>/<id>.jsonl`): it was never written. `None` too when sessions are not
-    /// read (`"sessions": false`): nothing is known.
+    /// The session id a task's gone agent was started with, if its runner's folders hold no file
+    /// for it (Claude: `projects/<folder>/<id>.jsonl`): it was never written. `None` too when
+    /// sessions are not read (`"sessions": false`): nothing is known.
     fn session_missing(&self, subject: &Subject) -> Option<Action> {
         let task = subject.task()?;
         let agent = self.drawer.agents.get(subject)?;
-        let (id, cwd) = (agent.session.clone()?, agent.cwd.as_ref()?);
+        let ((runner, id), cwd) = (agent.session.clone()?, agent.cwd.as_ref()?);
         let dirs = crate::config::session_dirs()?;
-        let real = std::fs::canonicalize(cwd).ok()?;
-        let folder = ottospace_sessions::claude::slug(&real);
-        let file = format!("{id}.jsonl");
-        let written = dirs.claude.iter().any(|dir| dir.join("projects").join(&folder).join(&file).is_file());
-        (!written).then_some(Action::SessionMissing { task, id })
+        std::fs::canonicalize(cwd).ok()?;
+        let written = ottospace_sessions::reader(runner, &dirs).and_then(|reader| reader.path_of(cwd.as_ref(), &id));
+        written.is_none().then_some(Action::SessionMissing { task, id })
     }
 
     /// Fits the conversation's terminal to the drawer, redraws on its output, and tells the
@@ -667,7 +672,7 @@ impl Workspace {
     }
 
     /// About once a second while an agent's session is not known (`Model::seeking`): reads, on a
-    /// thread of its own, the sessions Codex wrote in those folders, and tells the core
+    /// thread of its own, the sessions their runners wrote in those folders, and tells the core
     /// (`AgentSessions`), which links each agent to its own.
     pub(crate) fn seek_sessions(&mut self, window: &Window, cx: &mut Context<Self>) {
         if let Some(found) = self.drawer.reading.as_ref().and_then(|read| read.try_recv().ok()) {
@@ -679,29 +684,43 @@ impl Workspace {
         let seeking = self.model.seeking();
         // Read only where sessions are read: not with `"sessions": false`, nor in a test run
         // whose settings name no folder.
-        let Some(codex_home) = crate::config::session_dirs().and_then(|dirs| dirs.codex) else { return };
-        if seeking.is_empty() || self.drawer.reading.is_some() {
+        let Some(session_dirs) = crate::config::session_dirs() else { return };
+        // Each runner sought, with its reader: one whose folder is not read finds nothing.
+        let mut readers: Vec<(RunnerId, Box<dyn ottospace_sessions::SessionReader>)> = Vec::new();
+        for (runner, _) in &seeking {
+            if !readers.iter().any(|(seen, _)| seen == runner)
+                && let Some(reader) = ottospace_sessions::reader(*runner, &session_dirs)
+            {
+                readers.push((*runner, reader));
+            }
+        }
+        if readers.is_empty() || self.drawer.reading.is_some() {
             return;
         }
         let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
-        let dirs: Vec<String> = seeking.into_iter().filter_map(|(_, cwd)| cwd.or_else(|| home.clone())).collect();
+        let dirs: Vec<(RunnerId, String)> =
+            seeking.into_iter().filter_map(|(runner, cwd)| Some((runner, cwd.or_else(|| home.clone())?))).collect();
         let (send, read) = std::sync::mpsc::channel();
         self.drawer.reading = Some(read);
         std::thread::spawn(move || {
-            use ottospace_sessions::Runner;
-            let codex = ottospace_sessions::codex::Codex::new(codex_home);
-            // A folder as the core names it: Codex writes where it ran with links resolved.
-            let named = |cwd: &std::path::Path| {
-                dirs.iter().find(|dir| std::fs::canonicalize(dir).is_ok_and(|real| real == cwd)).cloned()
-            };
-            let roots: Vec<std::path::PathBuf> =
-                dirs.iter().filter_map(|dir| std::fs::canonicalize(dir).ok()).collect();
-            let sessions = codex.sessions(&roots).unwrap_or_default();
-            let found = sessions.into_iter().filter_map(|session| {
-                let (cwd, started) = (named(&session.cwd)?, session.started?);
-                Some(agents::Started { runner: "codex".into(), id: session.id, cwd, started })
-            });
-            let _ = send.send(found.collect());
+            let mut found = Vec::new();
+            for (runner, reader) in readers {
+                let dirs: Vec<&String> = dirs.iter().filter(|(of, _)| *of == runner).map(|(_, dir)| dir).collect();
+                // A folder as the core names it: the runner writes where it ran with links resolved.
+                let named = |cwd: &std::path::Path| {
+                    dirs.iter()
+                        .find(|dir| std::fs::canonicalize(dir).is_ok_and(|real| real == cwd))
+                        .map(|dir| dir.to_string())
+                };
+                let roots: Vec<std::path::PathBuf> =
+                    dirs.iter().filter_map(|dir| std::fs::canonicalize(dir).ok()).collect();
+                let sessions = reader.sessions(&roots).unwrap_or_default();
+                found.extend(sessions.into_iter().filter_map(|session| {
+                    let (cwd, started) = (named(&session.cwd)?, session.started?);
+                    Some(agents::Started { runner, id: session.id, cwd, started })
+                }));
+            }
+            let _ = send.send(found);
         });
     }
 

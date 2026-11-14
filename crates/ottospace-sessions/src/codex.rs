@@ -7,12 +7,13 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use ottospace_core::runner::RunnerId;
 use serde_json::Value;
 
 use crate::cache::Cache;
 use crate::station::{self, Station};
 use crate::{
-    Batch, Cursor, Event, Kind, MAX_OPEN, Refined, Runner, SessionRef, Usage, What, jsonl, opaque, recorded_cwd, track,
+    Batch, Cursor, Event, MAX_OPEN, Refined, SessionReader, SessionRef, Usage, What, jsonl, opaque, recorded_cwd, track,
 };
 
 /// The values of an error event's `codex_error_info`: Codex's error kinds, in the snake case it
@@ -62,16 +63,11 @@ impl Codex {
     pub fn new(home: PathBuf) -> Self {
         Self { home, max_files: 1000, heads: Cache::default(), names: Cache::default(), models: Cache::default() }
     }
-
-    /// `$CODEX_HOME` if set and not empty, or `~/.codex`.
-    pub fn from_env() -> Self {
-        Self::new(crate::config_dirs().codex.unwrap_or_default())
-    }
 }
 
-impl Runner for Codex {
-    fn kind(&self) -> Kind {
-        Kind::Codex
+impl SessionReader for Codex {
+    fn runner(&self) -> RunnerId {
+        RunnerId::Codex
     }
 
     fn sessions(&self, dirs: &[PathBuf]) -> io::Result<Vec<SessionRef>> {
@@ -84,10 +80,10 @@ impl Runner for Codex {
         for path in &rollouts {
             let Some((head, modified)) = self.heads.get(path, || head(path)) else { continue };
             if dirs.iter().any(|dir| head.cwd.starts_with(dir)) {
-                let (kind, path, last_activity) = (Kind::Codex, path.clone(), Some(modified));
+                let (runner, path, last_activity) = (RunnerId::Codex, path.clone(), Some(modified));
                 let Head { id, cwd, started, model, parent } = head;
                 let (pid, busy) = (None, None);
-                sessions.push(SessionRef { kind, id, cwd, path, started, last_activity, model, pid, busy, parent });
+                sessions.push(SessionRef { runner, id, cwd, path, started, last_activity, model, pid, busy, parent });
             }
         }
         let rollouts = rollouts.into_iter().collect::<HashSet<_>>();
@@ -123,8 +119,8 @@ impl Runner for Codex {
             let Some((head, modified)) = self.heads.get(&path, || head(&path)) else { continue };
             if head.parent.as_deref() == Some(session.id.as_str()) {
                 let Head { id, cwd, started, model, parent } = head;
-                let (kind, last_activity, pid, busy) = (Kind::Codex, Some(modified), None, None);
-                subs.push(SessionRef { kind, id, cwd, path, started, last_activity, model, pid, busy, parent });
+                let (runner, last_activity, pid, busy) = (RunnerId::Codex, Some(modified), None, None);
+                subs.push(SessionRef { runner, id, cwd, path, started, last_activity, model, pid, busy, parent });
             }
         }
         subs.sort_by(|a, b| a.path.cmp(&b.path));

@@ -1,11 +1,8 @@
 //! What an `@agent` tag names: a runner (`claude`), a runner and a model (`claude-opus-5-5`,
 //! `codex-gpt-6-astra`), or a saved agent. `read` is the one reading of a tag.
 
-use crate::sessions::RUNNERS;
+use crate::runner::{RunnerId, SessionId};
 use crate::settings::AgentModels;
-
-/// The runner whose model ids start with its own name: `claude-opus-5-5` is tag and id both.
-const WHOLE: &str = "claude";
 
 /// The longest model id, or what follows `claude-` in one typed outright.
 pub const MAX_MODEL: usize = 64;
@@ -19,11 +16,8 @@ pub struct Models {
 
 impl Default for Models {
     fn default() -> Self {
-        let list = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect();
-        Self {
-            claude: list(&["claude-fable-5-2", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]),
-            codex: list(&["gpt-6-astra"]),
-        }
+        let list = |runner: RunnerId| runner.spec().models.iter().map(|id| id.to_string()).collect();
+        Self { claude: list(RunnerId::Claude), codex: list(RunnerId::Codex) }
     }
 }
 
@@ -40,8 +34,11 @@ impl Models {
         Self { claude: named(&settings.claude, default.claude), codex: named(&settings.codex, default.codex) }
     }
 
-    fn of(&self, runner: &str) -> &[String] {
-        if runner == WHOLE { &self.claude } else { &self.codex }
+    fn of(&self, runner: RunnerId) -> &[String] {
+        match runner {
+            RunnerId::Claude => &self.claude,
+            RunnerId::Codex => &self.codex,
+        }
     }
 }
 
@@ -55,24 +52,25 @@ pub fn is_name(id: &str) -> bool {
 
 /// The tag's name for a runner's model: `gpt-6-astra` → `codex-gpt-6-astra`. An id that
 /// starts with the runner's name is the tag: `claude-opus-5-5`.
-pub fn tag(runner: &str, id: &str) -> String {
+pub fn tag(runner: RunnerId, id: &str) -> String {
+    let runner = runner.name();
     if id.strip_prefix(runner).is_some_and(|rest| rest.starts_with('-')) { id.into() } else { format!("{runner}-{id}") }
 }
 
 /// What a tag names. A saved agent has neither: its runner is in its file.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Agent {
-    pub runner: Option<&'static str>,
+    pub runner: Option<RunnerId>,
     /// As the runner's CLI takes it. `None`: the runner's own default.
     pub model: Option<String>,
 }
 
 /// A runner and a model typed outright, listed or not: `codex-gpt-7` → (`codex`, `gpt-7`).
 /// The runner's name in small letters, then `-`, then a name (`is_name`).
-pub fn typed(name: &str) -> Option<(&'static str, &str)> {
-    RUNNERS.iter().find_map(|runner| {
-        let rest = name.strip_prefix(runner)?.strip_prefix('-')?;
-        is_name(rest).then_some((*runner, if *runner == WHOLE { name } else { rest }))
+pub fn typed(name: &str) -> Option<(RunnerId, &str)> {
+    RunnerId::ALL.into_iter().find_map(|runner| {
+        let rest = name.strip_prefix(runner.name())?.strip_prefix('-')?;
+        is_name(rest).then_some((runner, if runner.spec().ids_named { name } else { rest }))
     })
 }
 
@@ -80,8 +78,8 @@ pub fn typed(name: &str) -> Option<(&'static str, &str)> {
 /// `claude-opus-5-5` → `claude` and that id; `codex-gpt-6-astra` → `codex` and `gpt-6-astra`;
 /// `ana` → a saved agent. A listed model gives its id as listed; one not listed, as typed.
 pub fn read(name: &str, models: &Models) -> Agent {
-    for runner in RUNNERS {
-        if name.eq_ignore_ascii_case(runner) {
+    for runner in RunnerId::ALL {
+        if name.eq_ignore_ascii_case(runner.name()) {
             return Agent { runner: Some(runner), model: None };
         }
         if let Some(id) = models.of(runner).iter().find(|id| tag(runner, id).eq_ignore_ascii_case(name)) {
@@ -92,12 +90,11 @@ pub fn read(name: &str, models: &Models) -> Agent {
 }
 
 /// What a name is, for the dropdown's row: `runner`, `claude model`, `saved agent`.
-pub fn kind(name: &str) -> &'static str {
-    match (RUNNERS.iter().any(|runner| name.eq_ignore_ascii_case(runner)), typed(name)) {
-        (true, _) => "runner",
-        (_, Some((WHOLE, _))) => "claude model",
-        (_, Some(_)) => "codex model",
-        _ => "saved agent",
+pub fn kind(name: &str) -> String {
+    match (RunnerId::ALL.iter().any(|runner| name.eq_ignore_ascii_case(runner.name())), typed(name)) {
+        (true, _) => "runner".into(),
+        (_, Some((runner, _))) => format!("{} model", runner.name()),
+        _ => "saved agent".into(),
     }
 }
 
@@ -106,8 +103,8 @@ pub fn kind(name: &str) -> &'static str {
 /// that is what the name means.
 pub fn names(models: &Models, saved: Vec<String>) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
-    let built_in = RUNNERS.iter().flat_map(|runner| {
-        std::iter::once(runner.to_string()).chain(models.of(runner).iter().map(|id| tag(runner, id)))
+    let built_in = RunnerId::ALL.into_iter().flat_map(|runner| {
+        std::iter::once(runner.name().to_string()).chain(models.of(runner).iter().map(move |id| tag(runner, id)))
     });
     for name in built_in.chain(saved.into_iter().filter(|name| typed(name).is_none())) {
         if !names.iter().any(|seen| seen.eq_ignore_ascii_case(&name)) {
@@ -116,24 +113,6 @@ pub fn names(models: &Models, saved: Vec<String>) -> Vec<String> {
     }
     names
 }
-
-/// How a runner's CLI is started. Read from `claude --help` and `codex --help`; nothing here
-/// comes from the settings or a task.
-struct Cli {
-    runner: &'static str,
-    program: &'static str,
-    /// Before the model's id.
-    model: &'static str,
-    /// Before the id the new session is to have. `None`: the CLI names its sessions itself.
-    session: Option<&'static str>,
-    /// Before the id of a session to go on with.
-    resume: &'static str,
-}
-
-const CLIS: [Cli; 2] = [
-    Cli { runner: "claude", program: "claude", model: "--model", session: Some("--session-id"), resume: "--resume" },
-    Cli { runner: "codex", program: "codex", model: "--model", session: None, resume: "resume" },
-];
 
 /// A program and its arguments, each one element of argv. Never text for a shell to read.
 #[derive(Clone, Debug, PartialEq)]
@@ -146,7 +125,7 @@ pub struct Command {
 /// task's title, which is what it is asked first.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Launch {
-    pub runner: &'static str,
+    pub runner: RunnerId,
     pub model: Option<String>,
     pub title: String,
 }
@@ -157,7 +136,7 @@ pub enum Start {
     /// A new session, asked the task.
     New(Launch),
     /// The session the task already has, gone on with.
-    Resume { runner: String, session: String },
+    Resume { runner: RunnerId, session: String },
 }
 
 /// Why a client's request to start, stop or talk to an agent is refused.
@@ -172,12 +151,6 @@ pub fn launch(tag: Option<&str>, default: &str, models: &Models, title: String) 
     runner.map(|runner| Launch { runner, model, title })
 }
 
-/// True if the runner's CLI takes the id of the session it starts: only then is the task's
-/// session known from the start.
-pub fn names_session(runner: &str) -> bool {
-    CLIS.iter().any(|cli| cli.runner == runner && cli.session.is_some())
-}
-
 /// True if `id` is written as a UUID: `8f14e45f-ceea-467f-a8d3-0242ac130003`.
 pub fn is_uuid(id: &str) -> bool {
     let dash = |at: usize| matches!(at, 8 | 13 | 18 | 23);
@@ -187,32 +160,36 @@ pub fn is_uuid(id: &str) -> bool {
 impl Launch {
     /// What to run: `claude --model <id> --session-id <uuid> -- <prompt>`. The prompt (see
     /// `prompt`) is one element, after `--`: whatever it holds, it is never read as an option.
-    /// `session`: a new UUID. `brief`: the path of the task's brief, which the shell made.
-    /// `None`: `session` is not a UUID, or the model is not a name.
+    /// `session`: a new UUID, passed if the runner takes one. `brief`: the path of the task's
+    /// brief, which the shell made. `None`: `session` is not a UUID, or the model is not a name.
     pub fn command(&self, session: &str, brief: Option<&str>) -> Option<Command> {
-        let cli = CLIS.iter().find(|cli| cli.runner == self.runner)?;
+        let cli = &self.runner.spec().terminal;
         if !is_uuid(session) || self.model.as_deref().is_some_and(|id| !is_name(id)) {
             return None;
         }
-        let model = self.model.iter().flat_map(|id| [cli.model.to_string(), id.clone()]);
-        let session = cli.session.iter().flat_map(|flag| [flag.to_string(), session.to_string()]);
+        let model = self.model.iter().flat_map(|id| [cli.model_flag.to_string(), id.clone()]);
+        let flag = match cli.session {
+            SessionId::Chosen { flag } => Some(flag),
+            SessionId::Found { .. } => None,
+        };
+        let session = flag.into_iter().flat_map(|flag| [flag.to_string(), session.to_string()]);
         let args = model.chain(session).chain(["--".to_string(), prompt(&self.title, brief)]).collect();
         Some(Command { program: cli.program, args })
     }
 }
 
 /// What goes on with a runner's session: `claude --resume <id>`, `codex resume <id>`.
-/// `None`: no such runner, or the id is not a UUID.
-pub fn resume(runner: &str, session: &str) -> Option<Command> {
-    let cli = CLIS.iter().find(|cli| cli.runner == runner).filter(|_| is_uuid(session))?;
-    Some(Command { program: cli.program, args: vec![cli.resume.to_string(), session.to_string()] })
+/// `None`: the id is not a UUID.
+pub fn resume(runner: RunnerId, session: &str) -> Option<Command> {
+    let cli = &runner.spec().terminal;
+    is_uuid(session).then(|| Command { program: cli.program, args: vec![cli.resume.to_string(), session.to_string()] })
 }
 
-/// An agent started whose runner names its own session (Codex): its id is looked for.
+/// An agent started whose runner names its own session (`SessionId::Found`): its id is looked for.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Seek {
     pub task: crate::tasks::TaskId,
-    pub runner: &'static str,
+    pub runner: RunnerId,
     /// Where it runs: the task's repository; `None`, the home folder.
     pub cwd: Option<String>,
     /// When it was started, in ms since 1970: taken before the program was, so its session
@@ -224,7 +201,7 @@ pub struct Seek {
 /// when (ms since 1970).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Started {
-    pub runner: String,
+    pub runner: RunnerId,
     pub id: String,
     pub cwd: String,
     pub started: u64,
@@ -255,7 +232,7 @@ pub fn find_sessions(
     let may = |seek: &Seek, session: &Started| {
         let here = session.runner == seek.runner && dir(seek).is_some_and(|dir| session.cwd == *dir);
         let soon = after(session.started, seek.since) && session.started <= seek.since + SEEK_MS;
-        let had = taken.iter().any(|(runner, id)| (runner, id) == (&session.runner, &session.id));
+        let had = taken.iter().any(|(runner, id)| (runner.as_str(), id) == (session.runner.name(), &session.id));
         here && soon && is_uuid(&session.id) && !had
     };
     let (mut seeks, mut links): (Vec<&Seek>, Vec<(crate::tasks::TaskId, String)>) = (seeking.iter().collect(), vec![]);
@@ -308,8 +285,8 @@ mod tests {
         names.iter().map(|name| name.to_string()).collect()
     }
 
-    fn agent(runner: &'static str, model: Option<&str>) -> Agent {
-        Agent { runner: Some(runner), model: model.map(str::to_string) }
+    fn agent(runner: &str, model: Option<&str>) -> Agent {
+        Agent { runner: RunnerId::named(runner), model: model.map(str::to_string) }
     }
 
     #[test]
@@ -409,28 +386,38 @@ mod tests {
         // Codex names its sessions itself.
         assert_eq!(args(Some("codex-gpt-6-astra")).as_deref(), Some("codex --model gpt-6-astra -- Task: fix it"));
         assert_eq!(args(Some("codex")).as_deref(), Some("codex -- Task: fix it"));
-        assert!(names_session("claude") && !names_session("codex") && !names_session("ana"));
+        assert!(RunnerId::Claude.spec().chooses_session() && !RunnerId::Codex.spec().chooses_session());
         // A saved agent names no runner: nothing to start.
         assert_eq!(args(Some("ana")), None);
         assert_eq!(launch(None, "ana", &models, String::new()), None);
         // A session id that is no UUID, or a model that is no name, starts nothing.
-        let ask = Launch { runner: "claude", model: None, title: "x".into() };
+        let ask = Launch { runner: RunnerId::Claude, model: None, title: "x".into() };
         for id in ["", "--resume", "8f14e45f-ceea-467f-a8d3-0242ac13000", "8f14e45f-ceea-467f-a8d3-0242ac13000g"] {
-            assert_eq!((ask.command(id, None), resume("claude", id)), (None, None), "{id}");
+            assert_eq!((ask.command(id, None), resume(RunnerId::Claude, id)), (None, None), "{id}");
         }
         assert_eq!(Launch { model: Some("--yolo".into()), ..ask }.command(uuid, None), None);
         // Going on with a session: its id and nothing of the task.
-        let args = |runner: &str| resume(runner, uuid).map(|command| (command.program, command.args.join(" ")));
-        assert_eq!(args("claude"), Some(("claude", format!("--resume {uuid}"))));
-        assert_eq!((args("codex"), args("ana")), (Some(("codex", format!("resume {uuid}"))), None));
+        let args = |runner: Option<RunnerId>| {
+            runner.and_then(|r| resume(r, uuid)).map(|command| (command.program, command.args.join(" ")))
+        };
+        assert_eq!(args(RunnerId::named("claude")), Some(("claude", format!("--resume {uuid}"))));
+        assert_eq!(
+            (args(RunnerId::named("codex")), args(RunnerId::named("ana"))),
+            (Some(("codex", format!("resume {uuid}"))), None)
+        );
     }
 
     #[test]
     fn each_codex_agent_is_linked_to_the_first_new_session_in_its_folder() {
         let id = |n: u8| format!("8f14e45f-ceea-467f-a8d3-0242ac1300{n:02}");
-        let seek = |task, cwd: Option<&str>, since| Seek { task, runner: "codex", cwd: cwd.map(str::to_string), since };
+        let seek = |task, cwd: Option<&str>, since| Seek {
+            task,
+            runner: RunnerId::Codex,
+            cwd: cwd.map(str::to_string),
+            since,
+        };
         let session = |runner: &str, n, cwd: &str, started| Started {
-            runner: runner.into(),
+            runner: RunnerId::named(runner).unwrap(),
             id: id(n),
             cwd: cwd.into(),
             started,
@@ -463,8 +450,8 @@ mod tests {
     #[test]
     fn a_codex_agent_is_never_linked_to_a_session_it_may_not_have_started() {
         let id = |n: u8| format!("8f14e45f-ceea-467f-a8d3-0242ac1300{n:02}");
-        let at = |n, started| Started { runner: "codex".into(), id: id(n), cwd: "/code/app".into(), started };
-        let seek = |task, since| Seek { task, runner: "codex", cwd: Some("/code/app".into()), since };
+        let at = |n, started| Started { runner: RunnerId::Codex, id: id(n), cwd: "/code/app".into(), started };
+        let seek = |task, since| Seek { task, runner: RunnerId::Codex, cwd: Some("/code/app".into()), since };
         let links = |seeking: &[Seek], found: &[Started]| find_sessions(seeking, found, None, &[]);
         // Two sessions after it: another terminal started Codex there too. It waits.
         assert_eq!(links(&[seek(1, 10_000)], &[at(1, 10_200), at(2, 10_300)]), []);
@@ -511,7 +498,7 @@ mod tests {
             assert_eq!(asked.lines().count() <= 1, brief.is_none(), "{asked:?}");
             let Some(launch) = launch(Some(&tag), "claude", &Models::default(), title.clone()) else { continue };
             let Command { program, args } = launch.command(uuid, brief).unwrap();
-            assert!(program == launch.runner && RUNNERS.contains(&program));
+            assert_eq!(program, launch.runner.name());
             let (flags, last) = args.split_at(args.len() - 2);
             assert_eq!(last, ["--".to_string(), asked]);
             // Before `--`: a flag of the table, then a name or the id; never a word of the title.

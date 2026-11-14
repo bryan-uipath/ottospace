@@ -18,13 +18,12 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 
 use ottospace_core::progress::{Clock, Tokens, Work};
 use ottospace_core::repos::Repo;
+use ottospace_core::runner::RunnerId;
 use ottospace_core::sessions::{Found, Seen};
-use ottospace_sessions::claude::Claude;
-use ottospace_sessions::codex::Codex;
 use ottospace_sessions::report::IDLE_AFTER_MS;
 use ottospace_sessions::snapshot::Snapshot;
 use ottospace_sessions::tally;
-use ottospace_sessions::{Cursor, Kind, Runner, SessionRef};
+use ottospace_sessions::{Cursor, SessionReader, SessionRef, reader, readers};
 
 use crate::{config, repos};
 
@@ -108,11 +107,8 @@ impl Poller {
         let (reads, slow_reads) = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)));
         let (count, slow_count) = (reads.clone(), slow_reads.clone());
         let spawned = std::thread::Builder::new().name("sessions".into()).spawn(move || {
-            let claude_dirs = dirs.claude.clone();
-            let claude = Claude::new(dirs.claude);
-            let codex = dirs.codex.map(Codex::new);
-            let mut runners: Vec<&dyn Runner> = vec![&claude];
-            runners.extend(codex.as_ref().map(|codex| codex as &dyn Runner));
+            let readers = readers(&dirs);
+            let runners: Vec<&dyn SessionReader> = readers.iter().map(|reader| reader.as_ref()).collect();
             let mut follows: HashMap<PathBuf, Follow> = HashMap::new();
             // Where each session's file is, as the listing found it: an adopted session is
             // looked at by this path, with no listing. Kept in memory only.
@@ -157,7 +153,7 @@ impl Poller {
                 if send.send(read).is_err() {
                     break;
                 }
-                let worked = works(&runners, &work, &files, &claude_dirs, &mut tallies, day);
+                let worked = works(&runners, &work, &files, &mut tallies, day);
                 if !worked.is_empty() && send.send(Read::Work(worked)).is_err() {
                     break;
                 }
@@ -249,25 +245,19 @@ fn seen(keys: &[Key], files: &HashMap<Key, PathBuf>, last: &mut HashMap<Key, u64
     keys.iter().filter_map(|key| changed(key)).collect()
 }
 
-/// A runner's name as tasks and rows keep it.
-fn runner_name(kind: &Kind) -> Option<&'static str> {
-    match kind {
-        Kind::Claude => Some("claude"),
-        Kind::Codex => Some("codex"),
-        Kind::Other(_) => None,
-    }
-}
-
 /// The listed repositories and worktrees, and every session started in or below one, the most
 /// recently active first. The runners list their folders and read each session file's first
 /// records (cached) to learn where it started.
-fn list<'a>(runners: &[&'a dyn Runner], listed: &[Repo]) -> (Vec<PathBuf>, Vec<(&'a dyn Runner, SessionRef)>) {
+fn list<'a>(
+    runners: &[&'a dyn SessionReader],
+    listed: &[Repo],
+) -> (Vec<PathBuf>, Vec<(&'a dyn SessionReader, SessionRef)>) {
     let checkouts: Vec<PathBuf> = listed
         .iter()
         .flat_map(|repo| std::iter::once(&repo.path).chain(repo.worktrees.iter().map(|w| &w.path)))
         .map(PathBuf::from)
         .collect();
-    let mut sessions: Vec<(&dyn Runner, SessionRef)> = Vec::new();
+    let mut sessions: Vec<(&dyn SessionReader, SessionRef)> = Vec::new();
     for runner in runners.iter().filter(|_| !checkouts.is_empty()) {
         // A runner whose folder cannot be read has no sessions to show.
         for session in runner.sessions(&checkouts).unwrap_or_default() {
@@ -282,18 +272,16 @@ fn list<'a>(runners: &[&'a dyn Runner], listed: &[Repo]) -> (Vec<PathBuf>, Vec<(
 }
 
 /// Where each listed session's file is, and no more: no transcript is followed.
-fn locate(runners: &[&dyn Runner], listed: &[Repo], files: &mut HashMap<Key, PathBuf>) {
+fn locate(runners: &[&dyn SessionReader], listed: &[Repo], files: &mut HashMap<Key, PathBuf>) {
     for (_, session) in list(runners, listed).1 {
-        if let Some(runner) = runner_name(&session.kind) {
-            files.insert((runner.to_string(), session.id), session.path);
-        }
+        files.insert((session.runner.name().to_string(), session.id), session.path);
     }
 }
 
 /// One round: the sessions of every listed repository and worktree, and, for the few most
 /// recently active, what they are doing now. `files`: where each one's file is, for `seen`.
 fn read(
-    runners: &[&dyn Runner],
+    runners: &[&dyn SessionReader],
     listed: &[Repo],
     now: u64,
     follows: &mut HashMap<PathBuf, Follow>,
@@ -307,7 +295,6 @@ fn read(
     follows.retain(|path, _| sessions.iter().any(|(_, session)| session.path == *path));
     let mut found = Vec::new();
     for (index, (runner, session)) in sessions.iter().enumerate() {
-        let Some(runner_name) = runner_name(&session.kind) else { continue };
         let Some(repo) = repo_of(&checkouts, session) else { continue };
         let (mut station, mut label) = (None, None);
         if active(session) && index < FOLLOWED {
@@ -319,10 +306,10 @@ fn read(
                 label = follow.snapshot.running.last().map(|call| call.summary.clone());
             }
         }
-        files.insert((runner_name.to_string(), session.id.clone()), session.path.clone());
+        files.insert((session.runner.name().to_string(), session.id.clone()), session.path.clone());
         // From the end of the file, read again only when the file changed: not a transcript followed.
         let (title, model) = if index < TITLED { (runner.title(session), runner.model(session)) } else { (None, None) };
-        found.push(Found { station, label, title, model, ..as_found(runner_name, session, repo, now) });
+        found.push(Found { station, label, title, model, ..as_found(session, repo, now) });
     }
     found
 }
@@ -334,9 +321,9 @@ fn repo_of<'a>(checkouts: &'a [PathBuf], session: &SessionRef) -> Option<&'a Pat
 }
 
 /// What a listing says of a session in `repo`: where and when, at work, held. Nothing it runs.
-fn as_found(runner: &str, session: &SessionRef, repo: &std::path::Path, now: u64) -> Found {
+fn as_found(session: &SessionRef, repo: &std::path::Path, now: u64) -> Found {
     Found {
-        runner: runner.to_string(),
+        runner: session.runner.name().to_string(),
         id: session.id.clone(),
         cwd: session.cwd.to_string_lossy().into_owned(),
         repo: repo.to_string_lossy().into_owned(),
@@ -347,8 +334,9 @@ fn as_found(runner: &str, session: &SessionRef, repo: &std::path::Path, now: u64
         label: None,
         title: None,
         model: None,
-        // A pid used again by another program reads as alive: then it is not gone on with.
-        held: session.pid.is_some_and(crate::running::alive),
+        // Only a runner that records its process can say so (`disk.held`). A pid used again by
+        // another program reads as alive: then it is not gone on with.
+        held: session.runner.spec().disk.held && session.pid.is_some_and(crate::running::alive),
     }
 }
 
@@ -358,24 +346,20 @@ fn as_found(runner: &str, session: &SessionRef, repo: &std::path::Path, now: u64
 pub fn read_one(runner: &str, id: &str, now: u64) -> Option<Found> {
     let dirs = config::session_dirs()?;
     // Only that runner's folders.
-    let claude = (runner == "claude").then(|| Claude::new(dirs.claude));
-    let codex = dirs.codex.filter(|_| runner == "codex").map(Codex::new);
-    let mut runners: Vec<&dyn Runner> = claude.iter().map(|claude| claude as &dyn Runner).collect();
-    runners.extend(codex.as_ref().map(|codex| codex as &dyn Runner));
-    let (checkouts, sessions) = list(&runners, &repos::scan());
-    let (reader, session) = sessions.iter().find(|(_, s)| runner_name(&s.kind) == Some(runner) && s.id == id)?;
+    let only = reader(RunnerId::named(runner)?, &dirs)?;
+    let (checkouts, sessions) = list(&[only.as_ref()], &repos::scan());
+    let (reader, session) = sessions.iter().find(|(_, s)| s.id == id)?;
     let repo = repo_of(&checkouts, session)?;
-    Some(Found { title: reader.title(session), ..as_found(runner, session, repo, now) })
+    Some(Found { title: reader.title(session), ..as_found(session, repo, now) })
 }
 
 /// What each task's session did, read on from where the last round stopped: tokens by model
 /// and time at work (`progress::Clock`, from `day`). Only those read to their end are given:
 /// half a transcript's tokens would replace the whole count the task keeps.
 fn works(
-    runners: &[&dyn Runner],
+    runners: &[&dyn SessionReader],
     keys: &[WorkKey],
     files: &HashMap<Key, PathBuf>,
-    claude_dirs: &[PathBuf],
     tallies: &mut HashMap<Key, (tally::Reader, Clock, Vec<u64>)>,
     day: u64,
 ) -> Vec<Work> {
@@ -383,23 +367,14 @@ fn works(
     let mut out = Vec::new();
     for (runner_name, id, repo) in keys {
         let key = (runner_name.clone(), id.clone());
-        let kind = match runner_name.as_str() {
-            "claude" => Kind::Claude,
-            "codex" => Kind::Codex,
-            _ => continue,
-        };
-        let Some(runner) = runners.iter().find(|r| r.kind() == kind) else { continue };
-        // Where a listing found it; else, for Claude, where it keeps the sessions of the task's folder.
+        let Some(named) = RunnerId::named(runner_name) else { continue };
+        let Some(runner) = runners.iter().find(|r| r.runner() == named) else { continue };
+        // Where a listing found it; else where the runner keeps the sessions of the task's folder (Claude).
         let cwd = repo.clone().or_else(|| std::env::var("HOME").ok()).map(PathBuf::from).unwrap_or_default();
-        let path = files.get(&key).cloned().or_else(|| {
-            let folder = ottospace_sessions::claude::slug(&cwd.canonicalize().ok()?);
-            let file = format!("{id}.jsonl");
-            let found = claude_dirs.iter().map(|dir| dir.join("projects").join(&folder).join(&file));
-            found.into_iter().find(|path| kind == Kind::Claude && path.is_file())
-        });
+        let path = files.get(&key).cloned().or_else(|| runner.path_of(&cwd, id));
         let Some(path) = path else { continue };
         let session = SessionRef {
-            kind,
+            runner: runner.runner(),
             id: id.clone(),
             cwd,
             path,
@@ -444,7 +419,7 @@ fn works(
 }
 
 /// Reads on from where the last round stopped, at most `BUDGET` bytes.
-fn advance(runner: &dyn Runner, session: &SessionRef, follow: &mut Follow) {
+fn advance(runner: &dyn SessionReader, session: &SessionRef, follow: &mut Follow) {
     match runner.read(session, std::mem::take(&mut follow.cursor), BUDGET) {
         Ok(batch) => {
             if batch.restarted {

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use ottospace_agents::claude::Claude;
 use ottospace_agents::codex::Codex;
 use ottospace_agents::lines::{Line, Lines};
-use ottospace_agents::{Event, Protocol, Start};
+use ottospace_agents::{Event, Start, Wire};
 use serde_json::{Value, json};
 
 const SENTINEL: &str = "x SENTINEL $(y) ../../z";
@@ -56,14 +56,14 @@ fn codex() -> Codex {
 }
 
 /// Makes a fresh protocol of one runner.
-type Make = Box<dyn Fn() -> Box<dyn Protocol>>;
+type Make = Box<dyn Fn() -> Box<dyn Wire>>;
 
 fn protocols() -> Vec<(&'static str, Make)> {
     vec![("claude", Box::new(|| Box::new(Claude::new()))), ("codex", Box::new(|| Box::new(codex())))]
 }
 
 /// Labels never carry the sentinel; whatever the line, the parser returns.
-fn check(protocol: &mut dyn Protocol, line: &str) {
+fn check(protocol: &mut dyn Wire, line: &str) {
     let out = protocol.read(line);
     let shown = format!("{:?}", out.events);
     assert!(!shown.contains("SENTINEL"), "{line}\n{shown}");

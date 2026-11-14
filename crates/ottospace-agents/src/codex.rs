@@ -7,19 +7,20 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use ottospace_core::runner::RunnerId;
 use ottospace_sessions::station::{self, Station};
 use serde_json::{Value, json};
 
 use crate::payload::Payload;
 use crate::{
-    Answer, Argv, Event, Input, MAX_DETAIL, MAX_TEXT, Outcome, Output, Protocol, Refused, Start, Ticket, TicketKind,
-    Untrusted, kind_of, model_of, opaque, session_of,
+    Answer, Argv, Event, Input, MAX_DETAIL, MAX_TEXT, Outcome, Output, Refused, Start, Ticket, TicketKind, Untrusted,
+    Wire, kind_of, model_of, opaque, session_of,
 };
 
 /// `codex app-server`: stdio is its default transport. The model and the session go in the
 /// protocol, not in argv.
 pub fn argv() -> Argv {
-    Argv { program: "codex", args: vec!["app-server".to_string()] }
+    Argv { program: RunnerId::Codex.spec().terminal.program, args: vec!["app-server".to_string()] }
 }
 
 /// `CodexErrorInfo`'s plain values, from the schema.
@@ -490,7 +491,7 @@ const SERVER_REQUESTS: &[&str] = &[
     "execCommandApproval",
 ];
 
-impl Protocol for Codex {
+impl Wire for Codex {
     fn awaits_answer(&self, head: &str) -> bool {
         SERVER_REQUESTS.iter().any(|method| head.contains(&format!("\"{method}\"")))
     }

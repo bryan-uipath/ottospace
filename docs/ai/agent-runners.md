@@ -133,16 +133,94 @@ after a restart, and sub-agents' own calls. The live stream is the source for th
 ottospace runs the process. One rule: a live session's view folds stream events; on reopen it
 folds the file, then follows the stream.
 
+## One description per runner (`ottospace-core::runner`)
+
+The runners are a closed enum, `RunnerId { Claude, Codex }`, and each has one `RunnerSpec`: a
+`const` struct of plain data. Code asks the spec, never the name: no `match "claude"` outside
+the spec. On the wire (task files, the socket, the settings) a runner stays its name, a string,
+read with `RunnerId::named` where a decision needs it.
+
+- **Identity.** `name` (the `@` tag and the wire name), `display`, the default `models`, and
+  `ids_named` (Claude's model ids start with its name, so `claude-opus-5-5` is tag and id both).
+- **Terminal.** `program`, `model_flag`, `resume` (a flag or a subcommand), and `session`:
+  `Chosen { flag }` (we pick the id: `--session-id`) or `Found { how: NewInFolder }` (the CLI
+  names it; `agents::find_sessions` finds it). `chooses_session()` asks which.
+- **Structured.** `status` (`Verified | Experimental | None`), `answers` (`AllowOnce`, `Deny`;
+  never a session grant), `interrupt`.
+- **Disk.** `held` (the files name the live process) and `cwd` (the files record where it started).
+- **Attach.** `watch`, `take_over_when_idle` (`Yes | Unverified | No`) and `attach_live`
+  (`No | ViaOwnTerminal | ViaDaemon { verified }`), stated even where the answer is no.
+
+The id type lives in the core (pure). `ottospace-sessions` and `ottospace-agents` depend on the
+core for it and are looked up by it: `ottospace_sessions::reader(id, &dirs)` gives a
+`SessionReader`; `ottospace_agents::structured(id, ..)` gives the argv and a `Wire`.
+
+The table, written by a test from the specs (`runner::tests`): every capability of every runner.
+
+|  | Claude Code | Codex |
+| --- | --- | --- |
+| name | `claude` | `codex` |
+| model ids carry the name | true | false |
+| session id at start | chosen (`--session-id`) | found: new in its folder |
+| resume | `claude --resume <id>` | `codex resume <id>` |
+| structured mode | Verified | Experimental |
+| permission answers | [AllowOnce, Deny] | [AllowOnce, Deny] |
+| interrupt | true | true |
+| held (live holder on disk) | true | false |
+| cwd on disk | true | true |
+| watch | Yes | Unverified |
+| take over when idle | Yes | Yes |
+| attach live | ViaOwnTerminal | ViaDaemon { verified: false } |
+
+What is verified, and how:
+
+- Session ids, resume and model flags: `claude --help` (2.1.323) and `codex --help` (0.166.0),
+  and the stage 1 terminal mode, which uses them (`task-conversation.md`).
+- Structured mode: Claude's permission envelope, allow and interrupt seen in the real probe
+  (below); Codex's app server is experimental by its own `--help`, and its command approval and
+  interrupt were seen in the probe; a file-change approval, `grantRoot` and
+  `networkApprovalContext` were not.
+- Held: Claude Code's `sessions/<pid>.json` (`sessions.md`); Codex records no process.
+- Watch: Claude's transcript is read as it grows (`ottospace-sessions`). For Codex, whether a
+  call's start is on disk before the call ends was never measured: `Unverified`.
+- Attach live: Claude: a session is live only in the terminal running it; its docs say
+  `--resume` of a running *background* session attaches (since 2.1.285): not tried. Codex:
+  `codex agents` ("Browse all agent sessions on the shared local app-server daemon") and
+  `codex queue` ("Queue a message for an existing session") in 0.166 `--help`: not tried, so
+  `verified: false`.
+
+Where the UI asks the spec today: a new session's id (`chooses_session`: the task is linked at
+once, or its session is sought), the sessions sought and read (`reader`), the held check
+(`disk.held`), and a resume (`take_over_when_idle`). Seams not wired, on purpose:
+
+- `attach.watch`: a read-only live view of a session started elsewhere (stage 2's native view).
+- `attach.attach_live`: joining a running session (Claude's background attach, Codex's daemon).
+- `structured.status`: the drawer's Chat | Terminal default (`Verified` → Chat).
+- `structured.answers` and `interrupt`: the permission card's buttons and Stop.
+- `display`: the drawer header and rows still show `name`, as before.
+
+### Adding a third runner
+
+1. A variant in `RunnerId`, in `ALL`, and its `RunnerSpec` const in `runner.rs`; every field
+   stated, from its `--help`, with `Unverified` where nothing was seen.
+2. The per-runner fields of the settings: `settings::AgentModels`, `settings::SessionDirs`,
+   `ottospace_sessions::ConfigDirs`, `agents::Models` (and `Models::of`), `Action::SetAgents`,
+   and `config::session_dirs` for its default folder.
+3. A `SessionReader` in `ottospace-sessions` and its arm in `reader`; fixtures for it.
+4. If it has a structured mode: a `Wire` in `ottospace-agents` and its arm in `structured`.
+5. The table above (the test prints the rows to paste), `sdk/src/types.ts` `SessionRunner`
+   and `sdk/src/parse.ts`, and the guide's list of runners.
+
 ## The common model (`crates/ottospace-agents`)
 
 ```rust
-pub trait Protocol: Send + 'static {      // pure: lines in, lines and events out
+pub trait Wire: Send + 'static {          // pure: lines in, lines and events out
     fn opening(&mut self) -> Vec<String>;
     fn read(&mut self, line: &str) -> Output;          // events + replies to write at once
     fn write(&mut self, input: Input) -> Result<Vec<String>, Refused>;
     fn awaits_answer(&self, head: &str) -> bool;       // may an unreadable line be a request?
 }
-pub trait Runner {                          // driver::Driver implements it
+pub trait Process {                         // driver::Driver implements it
     fn send(&self, input: Input) -> io::Result<()>;
     fn events(&self) -> &Receiver<Event>;               // ends with Exited
     fn stop(&mut self);                                  // close stdin
@@ -160,6 +238,8 @@ enum Event {
     TurnFinished { outcome }, Error { kind, retrying }, Unknown { kind },
     Exited { code, stderr: Untrusted },
 }
+// By runner id: `claude -p …` or `codex app-server`, and its wire.
+fn structured(runner: RunnerId, cwd: &Path, model: Option<&str>, start: &Start) -> Option<(Argv, Box<dyn Wire>)>;
 ```
 
 - `claude::argv(model, start)` and `codex::argv()` are fixed tables. A model id passes the core's

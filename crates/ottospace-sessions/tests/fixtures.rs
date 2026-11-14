@@ -5,6 +5,7 @@ use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
+use ottospace_core::runner::RunnerId;
 use ottospace_sessions::claude::Claude;
 use ottospace_sessions::codex::Codex;
 use ottospace_sessions::git::checkouts;
@@ -12,7 +13,7 @@ use ottospace_sessions::report::report;
 use ottospace_sessions::snapshot::Snapshot;
 use ottospace_sessions::station::Station;
 use ottospace_sessions::tally::{Reader, Tally};
-use ottospace_sessions::{Cursor, Kind, Runner, SessionRef, Usage, What, read_all};
+use ottospace_sessions::{Cursor, SessionReader, SessionRef, Usage, What, read_all};
 
 const CLAUDE_MAIN: &str = "11111111-1111-4111-8111-111111111111";
 const CLAUDE_WORKTREE: &str = "22222222-2222-4222-8222-222222222222";
@@ -68,7 +69,7 @@ impl AsRef<Path> for Scratch {
     }
 }
 
-fn list(runner: &dyn Runner, dir: &str) -> Vec<SessionRef> {
+fn list(runner: &dyn SessionReader, dir: &str) -> Vec<SessionRef> {
     runner.sessions(&[PathBuf::from(dir)]).unwrap()
 }
 
@@ -78,11 +79,11 @@ fn ids(sessions: &[SessionRef]) -> Vec<&str> {
     ids
 }
 
-fn find(runner: &dyn Runner, dir: &str, id: &str) -> SessionRef {
+fn find(runner: &dyn SessionReader, dir: &str, id: &str) -> SessionRef {
     list(runner, dir).into_iter().find(|s| s.id == id).unwrap()
 }
 
-fn snapshot(runner: &dyn Runner, dir: &str, id: &str) -> Snapshot {
+fn snapshot(runner: &dyn SessionReader, dir: &str, id: &str) -> Snapshot {
     Snapshot::fold(&read_all(runner, &find(runner, dir, id)).unwrap())
 }
 
@@ -98,7 +99,7 @@ fn claude_lists_sessions_started_in_a_directory_or_below() {
     assert_eq!(ids(&list(&claude, "/work/app/")), [CLAUDE_MAIN, CLAUDE_WORKTREE], "a trailing slash changes nothing");
 
     let main = find(&claude, "/work/app", CLAUDE_MAIN);
-    assert_eq!(main.kind, Kind::Claude);
+    assert_eq!(main.runner, RunnerId::Claude);
     assert_eq!(main.cwd, Path::new("/work/app"));
     assert_eq!(main.started, Some(1_794_474_000_000));
     assert!(main.last_activity.is_some());
@@ -126,7 +127,7 @@ fn claude_lists_sessions_started_in_a_directory_or_below() {
 #[test]
 fn an_empty_or_relative_directory_is_an_error_not_every_session() {
     let (claude, codex) = (claude(), codex());
-    let runners: [&dyn Runner; 2] = [&claude, &codex];
+    let runners: [&dyn SessionReader; 2] = [&claude, &codex];
     for bad in ["", ".", "work/app", "../app"] {
         for runner in runners {
             let err = runner.sessions(&[PathBuf::from("/work/app"), PathBuf::from(bad)]).unwrap_err();
@@ -327,7 +328,7 @@ fn codex_lists_sessions_started_in_a_directory_or_below() {
     assert!(list(&codex, "/work/ap").is_empty());
 
     let new = find(&codex, "/work/app", CODEX_NEW);
-    assert_eq!(new.kind, Kind::Codex);
+    assert_eq!(new.runner, RunnerId::Codex);
     assert_eq!(new.cwd, Path::new("/work/app/crates"));
     assert_eq!(new.started, Some(1_794_475_800_000));
     assert_eq!(new.model.as_deref(), Some("gpt-6-astra"));
@@ -433,9 +434,9 @@ fn report_snapshots_only_the_newest_sessions() {
 /// Lists sessions, then deletes their files before they are read.
 struct Vanishing(Codex);
 
-impl Runner for Vanishing {
-    fn kind(&self) -> Kind {
-        Kind::Codex
+impl SessionReader for Vanishing {
+    fn runner(&self) -> RunnerId {
+        RunnerId::Codex
     }
     fn sessions(&self, dirs: &[PathBuf]) -> std::io::Result<Vec<SessionRef>> {
         let sessions = self.0.sessions(dirs)?;
@@ -475,7 +476,7 @@ const SHOWN: &str = "zzshow";
 fn adversarial() -> (String, Snapshot, Snapshot) {
     let root = fixtures().join("adversarial");
     let (claude, codex) = (Claude::new(vec![root.join("claude")]), Codex::new(root.join("codex")));
-    let runners: [&dyn Runner; 2] = [&claude, &codex];
+    let runners: [&dyn SessionReader; 2] = [&claude, &codex];
     let dirs = [PathBuf::from("/work/ZZSHOWcwd")];
 
     let mut out = serde_json::to_string(&report(&runners, &dirs, 0, 10).unwrap()).unwrap();
@@ -608,7 +609,7 @@ fn nothing_private_comes_out() {
 #[test]
 fn a_title_is_the_last_written_and_a_name_given_by_hand_comes_first() {
     let (claude, codex) = (claude(), codex());
-    let title = |runner: &dyn Runner, dir: &str, id: &str| runner.title(&find(runner, dir, id));
+    let title = |runner: &dyn SessionReader, dir: &str, id: &str| runner.title(&find(runner, dir, id));
     assert_eq!(title(&claude, "/work/app", CLAUDE_MAIN).as_deref(), Some("Greet the user"));
     assert_eq!(title(&claude, "/work/app", CLAUDE_WORKTREE).as_deref(), Some("Renamed by hand"));
     assert_eq!(title(&claude, "/work/app-other", "33333333-3333-4333-8333-333333333333"), None);
@@ -674,7 +675,7 @@ fn a_title_leaves_by_title_alone() {
     let root = fixtures().join("adversarial");
     let (claude, codex) = (Claude::new(vec![root.join("claude")]), Codex::new(root.join("codex")));
     let dirs = [PathBuf::from("/work/ZZSHOWcwd")];
-    let titles: Vec<Option<String>> = [&claude as &dyn Runner, &codex]
+    let titles: Vec<Option<String>> = [&claude as &dyn SessionReader, &codex]
         .iter()
         .map(|runner| runner.title(&runner.sessions(&dirs).unwrap()[0]))
         .collect();
@@ -856,7 +857,7 @@ fn a_tally_goes_on_from_its_cursor_and_starts_again_with_a_new_file() {
     };
     fs::write(&path, step("m1", "01", 10) + "\n").unwrap();
     let session = SessionRef {
-        kind: Kind::Claude,
+        runner: RunnerId::Claude,
         id: "s".into(),
         cwd: "/w".into(),
         path: path.clone(),
@@ -887,4 +888,31 @@ fn a_tally_goes_on_from_its_cursor_and_starts_again_with_a_new_file() {
     assert!(read.restarted);
     assert_eq!(tokens(&reader.tally)[0].2, 5);
     let _ = fs::remove_dir_all(dir);
+}
+
+/// Each runner's reader is found by its id, and lists what its spec says the files record: a
+/// live holder only for a runner whose spec says it records one.
+#[test]
+fn each_runners_reader_is_found_by_its_id_and_keeps_to_its_spec() {
+    let dirs = ottospace_sessions::ConfigDirs {
+        claude: vec![fixtures().join("claude")],
+        codex: Some(fixtures().join("codex")),
+    };
+    for id in RunnerId::ALL {
+        let reader = ottospace_sessions::reader(id, &dirs).unwrap();
+        assert_eq!(reader.runner(), id);
+        let sessions = reader.sessions(&[PathBuf::from("/work/app")]).unwrap();
+        assert!(!sessions.is_empty() && sessions.iter().all(|s| s.runner == id), "{id:?}");
+        if !id.spec().disk.held {
+            assert!(sessions.iter().all(|s| s.pid.is_none()), "{id:?} records no process");
+        }
+    }
+    // No folder for Codex: no reader.
+    let none = ottospace_sessions::ConfigDirs { claude: Vec::new(), codex: None };
+    assert!(ottospace_sessions::reader(RunnerId::Codex, &none).is_none());
+    // Claude's file follows from where it started and its id; Codex's does not.
+    let claude = ottospace_sessions::reader(RunnerId::Claude, &dirs).unwrap();
+    let codex = ottospace_sessions::reader(RunnerId::Codex, &dirs).unwrap();
+    assert_eq!(codex.path_of(&fixtures(), CODEX_NEW), None);
+    assert_eq!(claude.path_of(Path::new("/no/such/dir"), CLAUDE_MAIN), None);
 }

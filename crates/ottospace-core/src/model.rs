@@ -21,6 +21,7 @@ use crate::list::ListRow;
 use crate::marks::{self, Extra, MarkId, MarkInput, MarkOf, MarkRef, Marks, Need};
 use crate::progress;
 use crate::repos::{self, Repo};
+use crate::runner::{RunnerId, Support};
 use crate::sessions::{self, ENDED_GRACE_MS, ENDED_HELD_MS, ENDED_MS, Found};
 use crate::settings::{Installed, closed_apps};
 use crate::sneak::{Sneak, Typed};
@@ -1934,7 +1935,7 @@ pub struct Model {
     seeking: Vec<agents::Seek>,
     /// Those asked for and not yet started, each with the runner of a new session.
     #[serde(skip)]
-    starting: Vec<(Subject, Option<&'static str>)>,
+    starting: Vec<(Subject, Option<RunnerId>)>,
     /// Conversations the user asked to go on with whose session is not listed (the Tasks section
     /// is closed): waiting on `SessionRead`, which says where it started and if it is in use.
     #[serde(skip)]
@@ -3704,7 +3705,7 @@ impl Model {
                     let Some(task) = subject.task() else { return };
                     self.tasks.started(task, Some(at).filter(|at| *at > 0));
                     // A runner that names its own session: look for it (`AgentSessions`).
-                    if let Some(runner) = runner.filter(|runner| !agents::names_session(runner)) {
+                    if let Some(runner) = runner.filter(|runner| !runner.spec().chooses_session()) {
                         let cwd = self.tasks.get(task).and_then(|task| task.repo.clone());
                         self.seeking.push(agents::Seek { task, runner, cwd, since: at });
                     }
@@ -3716,9 +3717,9 @@ impl Model {
                     // A new session: the task runs, and follows the session if its id is known.
                     if let Some(runner) = runner {
                         self.tasks.set_state(task, State::Running);
-                        let id = session.filter(|id| agents::names_session(runner) && agents::is_uuid(id));
+                        let id = session.filter(|id| runner.spec().chooses_session() && agents::is_uuid(id));
                         if let Some(id) = id {
-                            let link = sessions::Link { runner: runner.into(), id, state: Some(State::Running) };
+                            let link = sessions::Link { runner: runner.name().into(), id, state: Some(State::Running) };
                             self.tasks.link(task, link);
                         }
                     }
@@ -3739,7 +3740,7 @@ impl Model {
                 for (task, id) in links {
                     let runner = self.seeking.iter().find(|seek| seek.task == task).map(|seek| seek.runner);
                     if let Some(runner) = runner {
-                        let link = sessions::Link { runner: runner.into(), id, state: Some(State::Running) };
+                        let link = sessions::Link { runner: runner.name().into(), id, state: Some(State::Running) };
                         self.tasks.link(task, link);
                     }
                     self.seeking.retain(|seek| seek.task != task);
@@ -3851,7 +3852,7 @@ impl Model {
 
     /// The folders and runners whose new sessions the shell should read (`AgentSessions`): an
     /// agent was started there and its session is not known yet. `None` folder: the home folder.
-    pub fn seeking(&self) -> Vec<(&'static str, Option<String>)> {
+    pub fn seeking(&self) -> Vec<(RunnerId, Option<String>)> {
         self.seeking.iter().map(|seek| (seek.runner, seek.cwd.clone())).collect()
     }
 
@@ -3878,8 +3879,9 @@ impl Model {
     /// go on with: nothing is started.
     fn agent_start(&self, subject: &Subject) -> Option<(agents::Start, Option<String>)> {
         let resume = |runner: &str, id: &str| {
-            let known = sessions::RUNNERS.contains(&runner) && agents::is_uuid(id);
-            known.then(|| agents::Start::Resume { runner: runner.into(), session: id.into() })
+            let runner = RunnerId::named(runner).filter(|_| agents::is_uuid(id))?;
+            let takes = runner.spec().attach.take_over_when_idle == Support::Yes;
+            takes.then(|| agents::Start::Resume { runner, session: id.into() })
         };
         match subject {
             // Idle, and no process holds it: else a second program on it would clash.
@@ -3903,7 +3905,7 @@ impl Model {
                         resume(&link.runner, &link.id).map(|r| (r, cwd))
                     }
                     None => {
-                        let default = self.default_agent.as_deref().unwrap_or(sessions::RUNNERS[0]);
+                        let default = self.default_agent();
                         let launch = agents::launch(task.agent.as_deref(), default, &self.models, task.title.clone());
                         launch.map(|launch| (agents::Start::New(launch), task.repo.clone()))
                     }
@@ -3996,6 +3998,11 @@ impl Model {
             (runner, id) == (&session.runner, &session.id) && self.now.saturating_sub(*at) <= ENDED_HELD_MS
         });
         session.held && !(listed && stale)
+    }
+
+    /// The agent a task with no `@agent` starts: the settings', else the default runner.
+    fn default_agent(&self) -> &str {
+        self.default_agent.as_deref().unwrap_or(RunnerId::DEFAULT.name())
     }
 
     /// The session a conversation is of: a session's own, or its task's.
@@ -4096,7 +4103,7 @@ impl Model {
             || "home folder".to_string(),
             |path| self.repo_name(path).unwrap_or_else(|| path.rsplit('/').next().unwrap_or(path).to_string()),
         );
-        let default = self.default_agent.as_deref().unwrap_or(sessions::RUNNERS[0]);
+        let default = self.default_agent();
         let agent = task.agent.as_deref().unwrap_or(default);
         let age = task.created.map(|created| format!(" · {}", tasks::age(created, self.now))).unwrap_or_default();
         format!("{}\n{line}\n{place} · @{agent}{age}", task.title)
@@ -4452,7 +4459,7 @@ impl Model {
     pub fn compose_picks(&self) -> Picks {
         let names = self.repos.iter().map(|repo| repo.name.clone()).filter(|name| compose::taggable('>', name));
         let wheres = names.take(PICKS).collect();
-        let default = self.default_agent.clone().unwrap_or_else(|| sessions::RUNNERS[0].to_string());
+        let default = self.default_agent().to_string();
         let mut whos = vec![default];
         for name in agents::names(&self.models, Vec::new()) {
             if !whos.iter().any(|seen| seen.eq_ignore_ascii_case(&name)) {
@@ -4494,7 +4501,7 @@ impl Model {
     /// repository (none: the home folder), on its branch. `None`: the box is closed.
     pub fn compose_plan(&self) -> Option<Plan> {
         let draft = self.draft(self.compose_line()?);
-        let default = self.default_agent.as_deref().unwrap_or(sessions::RUNNERS[0]);
+        let default = self.default_agent();
         let agent = draft.agent.clone().unwrap_or_else(|| default.to_string());
         let starts = agents::launch(Some(&agent), default, &self.models, String::new()).is_some();
         let path = draft.repo.as_deref().and_then(|name| self.repo_named(name));
@@ -4542,7 +4549,7 @@ impl Model {
             '>' => self.repo_names().map(|(name, path)| of("repo", name, short(self.home.as_deref(), path))).collect(),
             '@' => {
                 let agents = self.known.names.agents.iter();
-                agents.map(|name| of("agent", name, crate::agents::kind(name).to_string())).collect()
+                agents.map(|name| of("agent", name, crate::agents::kind(name))).collect()
             }
             '$' => self.known.names.skills.iter().map(|name| of("skill", name, String::new())).collect(),
             '/' => {
@@ -8632,7 +8639,7 @@ mod tests {
 
     /// `claude --resume <id>` (or Codex's) for `subject`, in `cwd`.
     fn resumed(subject: Subject, runner: &str, id: &str, cwd: &str) -> Effect {
-        let start = agents::Start::Resume { runner: runner.into(), session: id.into() };
+        let start = agents::Start::Resume { runner: RunnerId::named(runner).unwrap(), session: id.into() };
         Effect::StartAgent { task: subject, start, cwd: Some(cwd.into()), brief: None }
     }
 
@@ -9261,7 +9268,7 @@ mod tests {
             cwd: cwd.map(str::to_string),
             brief: None,
         };
-        let codex = launch("codex", Some("gpt-6-astra"), "fix zoom");
+        let codex = launch(RunnerId::Codex, Some("gpt-6-astra"), "fix zoom");
         assert_eq!(m.update(Action::TaskTalk { id: 1 }), [asked(1, codex, Some("/code/app"))]);
         assert_eq!(m.talk.clone(), Some(Talk { task: Subject::Task(1), open: true, keys: true }));
         assert_eq!((m.mode(), m.tab_task(), m.tabs.len()), (Mode::Talk, Some(1), 1));
@@ -9294,14 +9301,14 @@ mod tests {
 
         // No `@agent`: the default agent, in the home folder. Claude takes the session's id:
         // the task follows that session from the start.
-        assert_eq!(m.update(Action::TaskTalk { id: 2 }), [asked(2, launch("claude", None, "plain"), None)]);
+        assert_eq!(m.update(Action::TaskTalk { id: 2 }), [asked(2, launch(RunnerId::Claude, None, "plain"), None)]);
         system(&mut m, Action::AgentStarted { task: Subject::Task(2), session: Some(UUID.into()), at: 0 });
         let link = sessions::Link { runner: "claude".into(), id: UUID.into(), state: Some(State::Running) };
         assert_eq!(m.tasks.get(2).unwrap().session, Some(link));
         assert_eq!(m.followed_sessions(), [("claude".to_string(), UUID.to_string())]);
         // Its terminal gone, a click goes on with that session: nothing of the task is sent again.
         system(&mut m, Action::AgentExited { task: Subject::Task(2) });
-        let resume = agents::Start::Resume { runner: "claude".into(), session: UUID.into() };
+        let resume = agents::Start::Resume { runner: RunnerId::Claude, session: UUID.into() };
         let read = Effect::ReadSession { runner: "claude".into(), id: UUID.into() };
         assert_eq!(m.update(Action::TaskTalk { id: 2 }), [read]);
         let none = Action::SessionRead { runner: "claude".into(), id: UUID.into(), found: None };
@@ -9320,7 +9327,7 @@ mod tests {
         // The settings name the default agent.
         system(&mut m, Action::SetAgents { claude: Vec::new(), codex: Vec::new(), default: Some("codex".into()) });
         m.update(Action::TaskFromLine { line: "other".into(), known: Default::default(), open: false });
-        assert_eq!(m.update(Action::TaskTalk { id: 4 }), [asked(4, launch("codex", None, "other"), None)]);
+        assert_eq!(m.update(Action::TaskTalk { id: 4 }), [asked(4, launch(RunnerId::Codex, None, "other"), None)]);
         // ↵ on a task's row is that click; the drawer's width stays within bounds.
         m.update(Action::ToggleSection { section: Section::Tasks });
         m.update(Action::FocusList);
@@ -9396,11 +9403,11 @@ mod tests {
             system(&mut m, Action::AgentStarted { task: Subject::Task(task), session: None, at });
         }
         // Codex names its own sessions: they are looked for in the repository. Claude's is not.
-        let app = ("codex", Some("/code/app".to_string()));
+        let app = (RunnerId::Codex, Some("/code/app".to_string()));
         assert_eq!(m.seeking(), [app.clone(), app]);
         let id = |n: u8| format!("8f14e45f-ceea-467f-a8d3-0242ac1300{n:02}");
         let started =
-            |n, at| agents::Started { runner: "codex".into(), id: id(n), cwd: "/code/app".into(), started: at };
+            |n, at| agents::Started { runner: RunnerId::Codex, id: id(n), cwd: "/code/app".into(), started: at };
         let found = vec![started(7, 2_500), started(8, 1_200)];
         system(&mut m, Action::AgentSessions { found: found.clone(), home: None, now: 3_000 });
         let link = |m: &Model, task| m.tasks.get(task).and_then(|task| task.session.as_ref()).map(|l| l.id.clone());
@@ -9441,7 +9448,7 @@ mod tests {
         }
         let id = "8f14e45f-ceea-467f-a8d3-0242ac130011";
         let found =
-            vec![agents::Started { runner: "codex".into(), id: id.into(), cwd: "/code/app".into(), started: 11_000 }];
+            vec![agents::Started { runner: RunnerId::Codex, id: id.into(), cwd: "/code/app".into(), started: 11_000 }];
         let link = |m: &Model, task| m.tasks.get(task).and_then(|task| task.session.as_ref()).map(|l| l.id.clone());
         for now in [12_000, agents::SEEK_MS + 2_000, agents::SEEK_MS + 9_000] {
             system(&mut m, Action::AgentSessions { found: found.clone(), home: None, now });
@@ -9521,7 +9528,7 @@ mod tests {
         m.update(Action::SetRepos { repos: listed() });
         m.update(Action::OpenCompose { text: "fix zoom >app".into() });
         // Its agent, in the drawer, with the keyboard, in its repository. No tab opens.
-        let launch = agents::Launch { runner: "claude", model: None, title: "fix zoom".into() };
+        let launch = agents::Launch { runner: RunnerId::Claude, model: None, title: "fix zoom".into() };
         let start = agents::Start::New(launch);
         let agent = Effect::StartAgent { task: Subject::Task(1), start, cwd: Some("/code/app".into()), brief: None };
         assert_eq!(m.update(Action::ComposeSubmit { open: true }), [agent]);
