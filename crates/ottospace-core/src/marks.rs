@@ -34,6 +34,7 @@ pub type Extra = BTreeMap<String, serde_json::Value>;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RecordKind {
+    Empty,
     Terminal,
     /// An app's window: the app by bundle id (else by name), the window by its title.
     App {
@@ -46,10 +47,6 @@ pub enum RecordKind {
         #[serde(flatten)]
         extra: Extra,
     },
-    /// Also a kind this build does not know (a newer build's): an empty pane, not an unread file.
-    /// Last: serde's `other` must be.
-    #[serde(other)]
-    Empty,
 }
 
 impl RecordKind {

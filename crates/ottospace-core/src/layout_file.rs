@@ -122,7 +122,9 @@ pub fn parse(text: &str) -> Result<Layout, Unread> {
         newer if newer > VERSION => return Err(Unread::Newer(newer)),
         old => return Err(Unread::Bad(format!("version {old} is not one this build reads"))),
     }
-    let mut layout: Layout = serde_json::from_str(text).map_err(|err| Unread::Bad(err.to_string()))?;
+    let mut value: serde_json::Value = serde_json::from_str(text).map_err(|err| Unread::Bad(err.to_string()))?;
+    empty_unknown_kinds(&mut value);
+    let mut layout: Layout = serde_json::from_value(value).map_err(|err| Unread::Bad(err.to_string()))?;
     let mut records: Vec<TabRecord> = layout.tabs.iter().map(|saved| saved.tab.clone()).collect();
     workbook::fit_history(&mut records);
     for (saved, record) in layout.tabs.iter_mut().zip(records) {
@@ -131,6 +133,20 @@ pub fn parse(text: &str) -> Result<Layout, Unread> {
     match layout.unsound() {
         Some(wrong) => Err(Unread::Bad(wrong.into())),
         None => Ok(layout),
+    }
+}
+
+/// A pane of a kind this build does not know (a newer build's) is an empty pane, not an unread
+/// file. Here only: `marks.json` and workbooks leave such a file alone, so nothing of it is lost.
+fn empty_unknown_kinds(value: &mut serde_json::Value) {
+    let tabs = value.get_mut("tabs").and_then(serde_json::Value::as_array_mut);
+    let panes = tabs.into_iter().flatten().filter_map(|tab| tab.get_mut("panes")?.as_array_mut()).flatten();
+    for pane in panes {
+        let Some(kind) = pane.get_mut("kind") else { continue };
+        let known = kind.get("type").and_then(serde_json::Value::as_str);
+        if !matches!(known, Some("empty" | "terminal" | "app")) {
+            *kind = serde_json::json!({ "type": "empty" });
+        }
     }
 }
 
@@ -759,5 +775,8 @@ mod tests {
         assert_eq!(file.tabs[0].tab.panes[0].kind, RecordKind::Empty);
         let (r, _) = restored(&Model::default(), file, &[], false);
         assert_eq!(r.panes.iter().map(|pane| pane.kind.clone()).collect::<Vec<_>>(), [Kind::Empty]);
+        // `marks.json` with one is not read, so it is left alone: nothing of it is lost.
+        let marks = r#"{"version": 1, "marks": [{"name": "x", "target": {"pane": {"kind": {"type": "hologram"}}}}]}"#;
+        assert!(crate::marks::parse(marks).is_err());
     }
 }
