@@ -80,6 +80,7 @@ mod marks;
 mod menus;
 mod new_task;
 mod progress;
+mod record;
 mod repos;
 mod running;
 #[cfg(test)]
@@ -723,6 +724,8 @@ struct Workspace {
     visual_after: Vec<PaneId>,
     /// A global key that could not be registered, for the status bar.
     key_notice: Option<String>,
+    /// A test run's recording of its own window (`record_start`).
+    recording: Option<record::Recording>,
     /// Each pane's body bounds in window coordinates, recorded during prepaint.
     cells: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
     /// Each pane's bounds inside its border, for e2e to check the live window's gap.
@@ -1112,6 +1115,7 @@ impl Workspace {
             pending: Vec::new(),
             visual_after: Vec::new(),
             key_notice: None,
+            recording: None,
             cells: HashMap::new(),
             frames: HashMap::new(),
             renders: 0,
@@ -2125,6 +2129,32 @@ impl Workspace {
                     continue;
                 }
                 Request::CalendarCall { in_call } => Some(Action::CallSeen { in_call, at: now_ms() }),
+                Request::RecordStart { dir } => {
+                    let size = to_cg(window.bounds().size);
+                    let id = ns_view(window).map(|view| unsafe { ottospace_mac::window::number(view) });
+                    let started = match (&self.recording, id) {
+                        (Some(_), _) => Err("already recording".to_string()),
+                        (None, Some(id)) if id > 0 => record::start(id as u32, size, dir.into()),
+                        (None, _) => Err("the window has no number".to_string()),
+                    };
+                    let answer = match started {
+                        Ok(recording) => {
+                            self.recording = Some(recording);
+                            serde_json::json!({ "ok": true }).to_string()
+                        }
+                        Err(why) => control::error(&why),
+                    };
+                    let _ = reply.send(answer);
+                    continue;
+                }
+                Request::RecordStop => {
+                    let answer = match self.recording.take() {
+                        Some(recording) => serde_json::json!({ "ok": true, "frames": recording.stop() }).to_string(),
+                        None => control::error("not recording"),
+                    };
+                    let _ = reply.send(answer);
+                    continue;
+                }
                 Request::Trace => {
                     let _ = reply.send(serde_json::json!({ "ok": true, "trace": trace::jsonl() }).to_string());
                     continue;
@@ -6087,8 +6117,15 @@ mod tests {
     /// them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        const TESTS_ONLY: [&str; 5] =
-            ["capture_start", "repo_add", "inspector_fixture", "sneak_app_tree", "calendar_call"];
+        const TESTS_ONLY: [&str; 7] = [
+            "capture_start",
+            "repo_add",
+            "inspector_fixture",
+            "sneak_app_tree",
+            "calendar_call",
+            "record_start",
+            "record_stop",
+        ];
         assert!(TESTS_ONLY.iter().all(|name| !SKILL_GUIDE.contains(name)));
         for name in request_names().into_iter().filter(|name| !TESTS_ONLY.contains(&name.as_str())) {
             assert!(SKILL_GUIDE.contains(&format!(r#""cmd":"{name}""#)), "the guide has no example of `{name}`");

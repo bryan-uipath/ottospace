@@ -1,0 +1,6 @@
+# The Repos section: repositories, a linked worktree on its branch, and a terminal opened in one.
+{"cmd":"section","section":"repos"}
+{"until":"repos_bar.2"}
+{"shot":"list"}
+{"cmd":"open_repo","path":"{ROOT}/repos/canvas-app-2"}
+{"shot":"opened"}

@@ -113,6 +113,8 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
       tree: { role: "AXWindow", children: [{ role: "AXButton", actions: ["AXPress"], frame: { x: 10, y: 40, w: 60, h: 24 } }] },
     }),
   (c) => c.calendarCall({ in_call: false }),
+  (c) => c.recordStart({ dir: "/tmp/rec" }),
+  (c) => c.recordStop(),
   (c) => c.calendar({ day: "tomorrow", days: 2 }),
   (c) => c.calendar({ day: "yesterday" }),
   (c) => c.marks(),
