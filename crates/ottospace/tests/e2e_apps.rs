@@ -143,6 +143,24 @@ fn click_at(x: f64, y: f64, double: bool) {
     let kind = if double { "dc" } else { "c" };
     let status = Command::new("cliclick").arg(format!("{kind}:{x:.0},{y:.0}")).status().expect("run cliclick");
     assert!(status.success(), "cliclick failed");
+    released(x, y);
+}
+
+/// Waits for the system to read the left button as up, releasing again at `x, y` until it does.
+/// About one `cliclick` release in six is not taken on a hosted runner; the button then reads as
+/// down for the tests after, and a wheel over a parked pane (a drag, to ottospace) starts no peek.
+fn released(x: f64, y: f64) {
+    let up = (0..20).any(|_| {
+        std::thread::sleep(Duration::from_millis(150));
+        if !ottospace_mac::input::left_button_down() {
+            return true;
+        }
+        eprintln!("the system still reads the left button as down: releasing again");
+        let again = Command::new("cliclick").arg(format!("du:{x:.0},{y:.0}")).status().expect("run cliclick");
+        assert!(again.success(), "cliclick failed");
+        false
+    });
+    assert!(up, "the system still reads the left button as down after 20 releases");
 }
 
 fn rect(value: &Value) -> Option<[f64; 4]> {
@@ -566,21 +584,8 @@ fn a_hosted_pane_is_dragged_by_its_header() {
         let moves = [step("dd", from), step("dm", via), step("dm", half), step("dm", to), step("du", to)];
         let status = Command::new("cliclick").args(["-w", "120"]).args(&moves).status().expect("run cliclick");
         assert!(status.success(), "cliclick failed");
-        // The release `cliclick` posts is not always taken: about one time in six on a hosted
-        // runner the system goes on reading the button as down (session and HID state both, for
-        // 40 s), and the drag rightly goes on. A finger cannot do that. Release until the
-        // system agrees that the button is up.
-        let released = (0..20).any(|_| {
-            std::thread::sleep(Duration::from_millis(150));
-            if !ottospace_mac::input::left_button_down() {
-                return true;
-            }
-            eprintln!("the system still reads the left button as down: releasing again");
-            let again = Command::new("cliclick").arg(step("du", to)).status().expect("run cliclick");
-            assert!(again.success(), "cliclick failed");
-            false
-        });
-        assert!(released, "the system still reads the left button as down after 20 releases");
+        // A release not taken would make the drag rightly go on: a finger cannot do that.
+        released(to[0], to[1]);
         // A press on ottospace brings its window forward, and the pointer is its own until the
         // release: the pane is dropped where the other window was (the centre of 1: a swap), and
         // that window gets nothing.
@@ -1571,6 +1576,8 @@ fn the_users_wheel_brings_a_parked_app_window_up_and_the_next_scroll_reaches_it(
 
     // The user's wheel: the window comes up over the pane, under the pointer.
     bring_forward(otto.child.id(), "ottospace");
+    // A wheel with the button down is part of a drag: no peek.
+    assert!(!ottospace_mac::input::left_button_down(), "the system reads the left button as down");
     hid(x, y, None);
     std::thread::sleep(Duration::from_millis(300));
     hid(x, y, Some(-3));
@@ -1649,6 +1656,8 @@ fn a_killed_ottospace_has_its_guardian_give_a_peeked_window_back() {
     host_and_park(&otto);
     let [x, y] = on_picture(&otto);
     bring_forward(otto.child.id(), "ottospace");
+    // A wheel with the button down is part of a drag: no peek.
+    assert!(!ottospace_mac::input::left_button_down(), "the system reads the left button as down");
     hid(x, y, None);
     std::thread::sleep(Duration::from_millis(300));
     hid(x, y, Some(-3));

@@ -2612,6 +2612,7 @@ impl Workspace {
                 // none).
                 "wheels": self.wheel.over,
                 "peeks": self.wheel.peeks,
+                "wheel_skipped": self.wheel.skipped,
                 "peek": self.model.peek.as_ref().map_or(0, |peek| peek.pane),
             })),
             // Test runs only: each press in an app a sneak label asked for, `[pane, path]`; else null.
