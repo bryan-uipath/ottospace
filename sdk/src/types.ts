@@ -1028,7 +1028,7 @@ export interface Snapshot {
   compose_host: "drawer" | "bar" | null;
   /** What ↵ in the box would do: start `agent` (unless a saved agent: `starts` false) in the repository `dir`, or the folder taken from the dropdown as typed (null: the home folder), on `branch`. Null while the box is closed. */
   compose_plan: { agent: string; starts: boolean; dir: string | null; branch: string | null } | null;
-  /** The plan's line drawn over the box: null when ↵ does the default (default agent, home folder) or the box is closed. */
+  /** The line the drawer draws over the box: null when ↵ does the default (default agent, home folder) or the box is closed. */
   compose_plan_line: string | null;
   /** The tag hint under the box's line: only while the line is empty. */
   compose_hint: string | null;

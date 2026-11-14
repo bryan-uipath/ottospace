@@ -498,7 +498,7 @@ pub struct Notice {
 
 /// The banner's line of a meeting that started: `Design review · started 3m ago`,
 /// `Design review · just started` in its first minute.
-pub fn started_line(title: &str, start: u64, now: u64) -> String {
+pub(crate) fn started_line(title: &str, start: u64, now: u64) -> String {
     match now.saturating_sub(start) / MINUTE {
         0 => format!("{title} · just started"),
         ago => format!("{title} · started {ago}m ago"),

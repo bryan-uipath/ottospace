@@ -394,7 +394,7 @@ impl Workspace {
             .children(under)
             .children(note)
             // Its row stays while typing: the line above it does not move.
-            .when(!above, |d| d.child(div().h(px(16.)).children(self.model.compose_hint().map(muted))))
+            .when(!above, |d| d.child(div().min_h(px(16.)).children(self.model.compose_hint().map(muted))))
             .child(muted(keys))
     }
 
