@@ -684,6 +684,27 @@ fn terminal_runs_a_typed_command() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn a_pane_header_names_the_directory_and_the_program_not_the_kind() {
+    let root = support::temp(&format!("ottospace-e2e-header-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("app-api")).unwrap();
+    let otto = Otto::launch("header");
+    otto.call(json!({"cmd": "split"}));
+    let title = |o: &Otto, pane: &str| o.call(json!({"cmd": "state"}))["titles"][pane].as_str().map(String::from);
+    let has = |pane: &'static str, want: &'static str| move |o: &Otto| title(o, pane).filter(|t| t == want);
+    otto.call(json!({"cmd": "type", "pane": 1, "text": format!("cd '{}/app-api'\r", root.display())}));
+    otto.wait_for("the directory's name", has("1", "app-api"));
+    // A program in front of the shell follows it; at the prompt again, the directory alone.
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "sleep 30\r"}));
+    otto.wait_for("the program", has("1", "app-api · sleep 30"));
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "\u{3}"}));
+    otto.wait_for("the program gone", has("1", "app-api"));
+    // An empty pane's header has no text.
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.wait_for("an empty header", has("2", ""));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn capture_and_wait_read_one_pane() {
     let otto = Otto::launch("capture");
     otto.call(json!({"cmd": "split"}));
@@ -1438,7 +1459,7 @@ fn settings_choose_the_font_the_repos_and_the_tasks_folder() {
     // Defaults: Menlo 13, rows 18 points high.
     let plain = Otto::launch("settings-none");
     let state = plain.call(json!({"cmd": "state"}));
-    // The build, as the status bar shows it: "0.1.0 · local" here.
+    // The build, short: "0.1.0 · local" here.
     let version = state["version"].as_str().unwrap_or_default();
     assert!(version.starts_with(concat!(env!("CARGO_PKG_VERSION"), " · ")), "{version}");
     assert_eq!(
@@ -6060,6 +6081,8 @@ fn the_command_palette_runs_a_command_by_name_for_the_user_alone() {
     assert!(rows.len() > 30, "{rows:?}");
     let first = json!({"command": "split_right", "name": "Terminal Right", "group": "Panes", "key": "⌘D"});
     assert_eq!(rows[0], first);
+    // The version left the status bar for About.
+    assert!(rows.iter().any(|row| row["name"] == "About ottospace" && row["group"] == "App"), "{rows:?}");
     // Typing narrows the rows, best first. A client's key is refused, and its split waits.
     let reply = otto.user_key("t e r m space b e l");
     let typed = (&reply["state"]["palette"]["query"], &reply["palette_rows"][0]["name"]);

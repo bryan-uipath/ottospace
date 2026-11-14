@@ -133,6 +133,7 @@ commands! {
     OpenSettings: "Open the Settings File", Developer;
     OpenFolder: "Open the ottospace Folder", Developer;
     BringBack: "Bring All Windows Back", Developer;
+    About: "About ottospace", App;
     Hide: "Hide ottospace", App;
     Quit: "Quit ottospace", App;
 }

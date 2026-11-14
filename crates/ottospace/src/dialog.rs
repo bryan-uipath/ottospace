@@ -76,14 +76,14 @@ pub fn filter_row(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
 
 impl Workspace {
     /// A filtered list in `panel`: `header` (title and filter), `empty` when there are no rows,
-    /// the rows scrolling under `name`, then `keys`.
+    /// the rows scrolling under `name`. No keys line: ↑↓, ↵ and esc are every list's.
     pub fn list_panel(
         &self,
         panel: Div,
         header: Div,
         name: &'static str,
         rows: Vec<AnyElement>,
-        (empty, keys): (&'static str, &'static str),
+        empty: &'static str,
     ) -> Div {
         let none = rows.is_empty();
         let list =
@@ -94,7 +94,6 @@ impl Workspace {
             .when(none, |d| d.child(div().p_3().text_xs().text_color(rgb(theme::MUTED)).child(empty)))
             // Long lists scroll inside the panel.
             .child(self.bars.area(name, list))
-            .child(hint(keys))
     }
 
     /// A key while a filtered list is open: `action` is what a list key does (`keys::filter_key`),

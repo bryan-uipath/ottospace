@@ -54,6 +54,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     frames: {},
     headers: {},
     closes: {},
+    titles: {},
     tabs: [],
     strip: [0, 0, 316, 28],
     bar_header: null,

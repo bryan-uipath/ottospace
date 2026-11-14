@@ -20,7 +20,7 @@ running, and the rest of the design is not built: see the
 | Capability | State |
 |---|---|
 | Split panes mixing terminals and real app windows | Works today |
-| Key bindings and a status bar showing `NORMAL` / `APP` mode | Works today |
+| Key bindings and a status bar showing the mode (`APP`, `PICK`…; none when normal) | Works today |
 | Control socket and `ottospace ctl` for agents and tests | Works today |
 | Terminal scrollback, mouse selection, copy and paste | Works today |
 | Scrollbars on every list that scrolls, the key reference and a terminal's scrollback: drag the thumb, click the track to page (in a terminal a click beside the thumb is the terminal's). They follow the system's "Show scroll bars" setting | Works today |
@@ -318,6 +318,9 @@ that is off is not listed.
 
 Open Settings (App, also ottospace ▸ Open Settings, ⌘,) opens `settings.json` in your editor in a
 tab titled Settings; see [Settings](#settings).
+
+About ottospace (App, also ottospace ▸ About ottospace) shows the version and build in the Mac's
+About panel. The hover of the status bar's empty middle shows them too.
 
 Move Tab to Task… (Tabs, also File ▸ Move Tab to Task…) turns the box into a list of the tasks
 not dismissed, in their order, then No task. Type to filter by title; ↵ or a click moves the
@@ -720,6 +723,9 @@ screen (vim, less, htop) the wheel does nothing, and ⇧PageUp and friends go to
 A click on a terminal focuses it and clears its selection; a drag there selects, even in an
 unfocused pane. ottospace sends programs no mouse reports: in vim, tmux or htop a drag selects as
 it does at a prompt. Paste is bracketed when the program asks for it.
+Its header names its directory, and the program in front of the shell while one runs:
+`app-api · cargo test`. An app pane's header shows the app's icon and the window's title; an
+empty pane's, nothing.
 
 ## App panes
 
