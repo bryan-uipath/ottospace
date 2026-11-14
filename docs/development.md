@@ -97,8 +97,10 @@ Design: [docs/ai/e2e-reliability.md](ai/e2e-reliability.md).
 ## CI
 
 - `.github/workflows/ci.yml`, on pull requests and pushes to `main`: `cargo fmt --check` on the
-  formatted crates, `cargo clippy`, `cargo test --workspace`, and the SDK's type check and the
-  tests that need no app. `cargo e2e` runs in a separate job that may fail without blocking, under
+  formatted crates, `cargo clippy -- -D unused` (unused code fails; locally it only warns), the
+  libraries with `-D unreachable_pub`, `cargo machete` (an unused dependency fails),
+  `cargo test --workspace`, and the SDK's type check and the tests that need no app. A library's
+  `pub` item that no crate uses is not caught. `cargo e2e` runs in a separate job that may fail without blocking, under
   cargo-nextest: a failed test is tried twice more, and one that then passes is listed as flaky in
   the job's summary, with the slowest tests and waits. Failure folders are an artifact. The same
   job then runs the SDK's tests against a private instance.

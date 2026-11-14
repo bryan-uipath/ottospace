@@ -102,11 +102,16 @@ Rules:
 
 - `.github/workflows/ci.yml`, on pull requests and pushes to `main`, macOS arm64:
   `cargo fmt -p ottospace -p ottospace-core -p ottospace-sessions -p ottospace-agents --check`, `cargo
-  clippy` (errors fail, warnings do not), `cargo test --workspace`, and the SDK's type check and request-fixture
-  tests (`sdk/`, Node). `cargo e2e` runs in a separate job that may fail without blocking, under
+  clippy -- -D unused` (errors and unused code fail, other warnings do not; locally unused code only
+  warns), the libraries again with `-D unreachable_pub` (a `pub` the crate root cannot reach: make
+  it `pub(crate)`), `cargo machete --with-metadata` (an unused dependency fails),
+  `cargo test --workspace`, and the SDK's type check and request-fixture tests (`sdk/`, Node). `cargo e2e` runs in a separate job that may fail without blocking, under
   cargo-nextest (`.config/nextest.toml`): up to three tries, a test that passes on a retry is
   listed as flaky in the job summary. The same job then runs the SDK's tests against a private
   instance.
+- Unused code is deleted, or its `cfg`/visibility fixed. A library's `pub` item that no crate uses
+  is not caught: make `pub(crate)` what only its own crate uses. `#[allow(dead_code)]` only with a one-line
+  reason; a machete false positive goes in `[package.metadata.cargo-machete] ignored`, with one.
 - `.github/workflows/reliability.yml`, nightly and by hand: `cargo e2e` and `cargo e2e-apps` five
   times each, tallied; the nightly run keeps the issue "Flaky tests" (`issues: write` on that job
   only). Never on pull requests.

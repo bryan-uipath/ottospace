@@ -5,6 +5,9 @@ edition.workspace = true
 publish.workspace = true
 license.workspace = true
 
+[lints]
+workspace = true
+
 # Reads agent runners' local session files. No network, no async runtime, no writes.
 [dependencies]
 ottospace-core = { path = "../ottospace-core" }

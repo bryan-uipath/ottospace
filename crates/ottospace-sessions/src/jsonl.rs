@@ -7,10 +7,10 @@ use std::path::Path;
 use serde_json::Value;
 
 /// A longer line is skipped without being held in memory.
-pub const MAX_LINE: u64 = 64 << 20;
+pub(crate) const MAX_LINE: u64 = 64 << 20;
 
 /// Opens a regular file. A FIFO or device named like a session file is an error, not a read that never returns.
-pub fn open(path: &Path) -> io::Result<File> {
+pub(crate) fn open(path: &Path) -> io::Result<File> {
     let regular = |meta: fs::Metadata| meta.is_file().then_some(()).ok_or(io::ErrorKind::InvalidInput);
     regular(fs::metadata(path)?)?;
     let file = File::open(path)?;
@@ -26,7 +26,7 @@ pub fn open(path: &Path) -> io::Result<File> {
 ///
 /// `skipping` says the bytes at `offset` are the rest of an oversized line; it is set when such
 /// a line has no end yet, so the next call goes on from there and does not scan the line again.
-pub fn lines(
+pub(crate) fn lines(
     file: File,
     offset: u64,
     budget: u64,
@@ -102,7 +102,7 @@ fn skip_line(reader: &mut impl BufRead) -> io::Result<(u64, bool)> {
 }
 
 /// The first complete lines of a file, parsed: at most `max_lines` lines and `max_bytes` bytes.
-pub fn head(path: &Path, max_lines: usize, max_bytes: u64) -> io::Result<Vec<Value>> {
+pub(crate) fn head(path: &Path, max_lines: usize, max_bytes: u64) -> io::Result<Vec<Value>> {
     let mut reader = BufReader::new(open(path)?.take(max_bytes));
     let mut records = Vec::new();
     let mut line = String::new();
@@ -118,7 +118,7 @@ pub fn head(path: &Path, max_lines: usize, max_bytes: u64) -> io::Result<Vec<Val
 }
 
 /// The complete lines in the last `max_bytes` of a file, oldest first.
-pub fn tail(path: &Path, max_bytes: u64) -> io::Result<Vec<String>> {
+pub(crate) fn tail(path: &Path, max_bytes: u64) -> io::Result<Vec<String>> {
     let mut file = open(path)?;
     let len = file.metadata()?.len();
     let start = len.saturating_sub(max_bytes);
@@ -136,13 +136,13 @@ pub fn tail(path: &Path, max_bytes: u64) -> io::Result<Vec<String>> {
 }
 
 /// A small regular file's text, e.g. a pid file. Not a pipe or device, and not a huge file.
-pub fn small(path: &Path) -> Option<String> {
+pub(crate) fn small(path: &Path) -> Option<String> {
     let meta = fs::metadata(path).ok()?;
     (meta.is_file() && meta.len() < 65_536).then(|| fs::read_to_string(path).ok()).flatten()
 }
 
 /// An RFC 3339 UTC time in Unix milliseconds, e.g. `2026-11-12T10:44:00.123Z` → 1794480240123.
-pub fn parse_time(text: &str) -> Option<u64> {
+pub(crate) fn parse_time(text: &str) -> Option<u64> {
     let text = text.strip_suffix('Z')?;
     let (date, time) = text.split_once('T')?;
     let mut date = date.split('-').map(|p| p.parse::<u64>().ok());
@@ -165,7 +165,7 @@ pub fn parse_time(text: &str) -> Option<u64> {
 }
 
 /// A record's `timestamp` field in Unix milliseconds, or 0.
-pub fn time_of(record: &Value) -> u64 {
+pub(crate) fn time_of(record: &Value) -> u64 {
     record["timestamp"].as_str().and_then(parse_time).unwrap_or(0)
 }
 

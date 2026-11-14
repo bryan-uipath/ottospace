@@ -5,6 +5,9 @@ edition.workspace = true
 publish.workspace = true
 license.workspace = true
 
+[lints]
+workspace = true
+
 # Speaks to agent CLIs in their structured modes. Spawns them; no network, no async runtime.
 [dependencies]
 # Tool labels and stations, by the same rules as the session files.

@@ -8,6 +8,11 @@ edition = "2024"
 publish = false
 license = "MIT"
 
+# Unused code warns here and fails CI, which runs clippy with `-D unused`: a half-written
+# function does not stop `cargo test`. Each crate opts in with `[lints] workspace = true`.
+[workspace.lints.rust]
+unused = { level = "warn", priority = -1 }
+
 # Smaller build folders: several worktrees build at once. Line numbers in backtraces stay for
 # our crates; dependencies carry no debug info.
 [profile.dev]

@@ -120,8 +120,8 @@ pub struct Disk {
     pub cwd: bool,
 }
 
-/// What can be done with a session started elsewhere. Stated even where the answer is no or
-/// not known, so the UI asks instead of assuming. Only `take_over_when_idle` is built.
+/// What can be done with a session started elsewhere. Stated even where the answer is no, so the
+/// UI asks instead of assuming. Only `take_over_when_idle` is built.
 #[derive(Debug, PartialEq)]
 pub struct Attach {
     /// Its transcript can be followed read-only, live, from the session file.
@@ -134,8 +134,6 @@ pub struct Attach {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Support {
     Yes,
-    /// Thought to work, never seen to.
-    Unverified,
     No,
 }
 
@@ -146,9 +144,7 @@ pub enum AttachLive {
     /// Only in the terminal that runs it: a pane of ours if we started it.
     ViaOwnTerminal,
     /// Through the runner's shared daemon.
-    ViaDaemon {
-        verified: bool,
-    },
+    ViaDaemon,
 }
 
 impl RunnerSpec {
@@ -205,7 +201,7 @@ const CODEX: RunnerSpec = RunnerSpec {
         take_over_when_idle: Support::Yes,
         // Probe 2026-11-13: a second client of the shared daemon (`codex app-server proxy`) resumed a
         // running thread and got its live events. A private `codex app-server` refuses it.
-        attach_live: AttachLive::ViaDaemon { verified: true },
+        attach_live: AttachLive::ViaDaemon,
     },
 };
 

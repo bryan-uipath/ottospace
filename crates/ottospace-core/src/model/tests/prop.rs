@@ -3090,6 +3090,12 @@ fn every_action_can_be_written_as_code() {
         "Action::OpenPicker { axis: Axis::Down, new_tab: true, items: vec![PickItem::App { name: \"a\\\"b\".into() }, \
          PickItem::Terminal] }.sent_by(Origin::User)"
     );
+    // The helpers its output calls for actions read from files build them again.
+    let work = serde_json::to_string(&progress::Work::default()).expect("work is JSON");
+    let tasks = Action::RestoreTasks { tasks: vec![], floor: 3 };
+    assert_eq!(restore_tasks("[]", 3), tasks);
+    assert_eq!(code(&tasks.sent_by(Origin::System)), "restore_tasks(\"[]\", 3).sent_by(Origin::System)");
+    assert_eq!(session_work(&work), Action::SessionWork { work: progress::Work::default() });
 }
 
 #[test]

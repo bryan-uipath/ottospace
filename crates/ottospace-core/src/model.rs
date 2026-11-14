@@ -6133,6 +6133,7 @@ mod tests {
                 listed.iter().position(|is| *is).unwrap_or(COUNT)
             }
 
+            // Never called: it exists to fail the build on an unnamed variant.
             #[allow(dead_code)]
             fn named(action: &Action) {
                 match action {

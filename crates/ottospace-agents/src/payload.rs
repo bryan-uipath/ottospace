@@ -58,7 +58,7 @@ fn escape(c: char) -> Vec<char> {
 #[cfg(test)]
 pub(crate) mod testing {
     /// A generator of strings made of line breaks, controls, bidi marks, labels and the like.
-    pub fn hostile(seed: u64) -> impl FnMut() -> String {
+    pub(crate) fn hostile(seed: u64) -> impl FnMut() -> String {
         const PIECES: &[&str] = &[
             "\n",
             "\r",
@@ -92,7 +92,7 @@ pub(crate) mod testing {
     }
 
     /// Splits as any reader might, at every Unicode line break, and checks the labels in order.
-    pub fn assert_lines(text: &str, labels: &[&str]) {
+    pub(crate) fn assert_lines(text: &str, labels: &[&str]) {
         let lines: Vec<&str> = text.split(['\n', '\r', '\u{85}', '\u{2028}', '\u{2029}']).collect();
         assert_eq!(lines.len(), labels.len(), "{text:?}");
         for (line, label) in lines.iter().zip(labels) {
