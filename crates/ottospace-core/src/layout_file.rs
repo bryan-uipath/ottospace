@@ -291,7 +291,12 @@ impl Model {
         }
         grouped(&mut layout);
         if !layout.tabs.is_empty() {
-            (self.tabs, self.last_tab, self.active) = (Vec::new(), Vec::new(), 0);
+            // The empty tabs go: nothing may stand for them (a workbook saved from one), as on close.
+            for tab in std::mem::take(&mut self.tabs) {
+                self.marks.forget_tab(tab.id);
+                self.workbooks.forget_tab(tab.id);
+            }
+            (self.last_tab, self.active) = (Vec::new(), 0);
         }
         let mut built: Vec<(u32, Vec<PaneId>)> = Vec::new();
         for saved in &layout.tabs {
