@@ -370,11 +370,6 @@ impl Workspace {
         true
     }
 
-    /// True if the open drawer is on this task: its header names it.
-    pub(crate) fn talk_names(&self, task: TaskId) -> bool {
-        self.model.talk.as_ref().is_some_and(|talk| talk.open && talk.task == Subject::Task(task))
-    }
-
     /// A task's badge as drawn everywhere: its letters (`Model::badges`), its identity colour,
     /// its state's dot. `None`: no such task, or it is dismissed.
     pub(crate) fn task_badge(&self, id: TaskId, size: f32) -> Option<Div> {

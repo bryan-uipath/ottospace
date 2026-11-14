@@ -1,0 +1,44 @@
+# The top row: a task of one tab (no second row), one of three, Workspace, a workbook's space,
+# a task hidden then opened again from its row with the drawer open, and many spaces clipping.
+{"cmd":"split"}
+{"cmd":"task_new","line":"Fix the login loop #auth p1"}
+{"cmd":"task_new","line":"Plan the week #notes"}
+{"cmd":"task_set_state","id":1,"state":"needs_you"}
+{"cmd":"open_space","space":{"kind":"task","id":1}}
+{"shot":"one-tab-task"}
+{"cmd":"open_space","space":{"kind":"task","id":2}}
+{"click":"top:new_tab"}
+{"click":"top:new_tab"}
+{"cmd":"split"}
+{"shot":"multi-tab-task"}
+{"click":"space:0"}
+{"shot":"workspace"}
+{"cmd":"key","keys":"cmd-shift-s","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"cmd":"new_tab"}
+{"cmd":"close_tab","index":0}
+{"click":"workbook-open:1"}
+{"cmd":"section","section":"workbook"}
+{"shot":"workbook"}
+{"click":"space:1"}
+{"click":"space-hide:1"}
+{"shot":"hidden"}
+{"cmd":"section","section":"tasks"}
+{"click":"task:1","at":[0.3,0.3]}
+{"shot":"reopened-drawer-open"}
+{"cmd":"task_new","line":"Review the export PR #api"}
+{"cmd":"task_new","line":"Answer Ana about the retry bug #support"}
+{"cmd":"task_new","line":"Minimap spike #canvas"}
+{"cmd":"task_new","line":"Ship the release notes #docs"}
+{"cmd":"task_new","line":"Socket guide for agents #docs"}
+{"cmd":"task_new","line":"Zoom flicker on the canvas #canvas"}
+{"cmd":"task_new","line":"Upgrade the build image #infra"}
+{"cmd":"open_space","space":{"kind":"task","id":3}}
+{"cmd":"open_space","space":{"kind":"task","id":4}}
+{"cmd":"open_space","space":{"kind":"task","id":5}}
+{"cmd":"open_space","space":{"kind":"task","id":6}}
+{"cmd":"open_space","space":{"kind":"task","id":7}}
+{"cmd":"open_space","space":{"kind":"task","id":8}}
+{"cmd":"open_space","space":{"kind":"task","id":9}}
+{"click":"task:1","at":[0.3,0.3]}
+{"shot":"many"}

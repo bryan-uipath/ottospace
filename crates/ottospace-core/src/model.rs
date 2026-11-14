@@ -685,7 +685,7 @@ pub enum Action {
     TaskGo {
         id: Option<TaskId>,
     },
-    /// Select a tab by its place among the tabs of the spaces on the top row.
+    /// Select a tab by its place among the selected space's tabs (⌘1…⌘9).
     SelectVisibleTab {
         index: usize,
     },
@@ -2175,13 +2175,6 @@ pub enum TabAt {
     Before(u32),
 }
 
-/// One space's tabs, side by side on the bar: `tabs` index into `Model::tabs`.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct Group {
-    pub space: Owner,
-    pub tabs: Vec<usize>,
-}
-
 pub mod zones;
 
 pub mod spaces;
@@ -3277,8 +3270,7 @@ impl Model {
                 }
             }
             Action::SelectVisibleTab { index } => {
-                let shown: Vec<usize> = (0..self.tabs.len()).filter(|at| !self.tab_hidden(*at)).collect();
-                if let Some(at) = shown.get(index) {
+                if let Some(at) = self.space_tabs(self.space()).get(index) {
                     self.select_tab(*at, effects);
                 }
             }
@@ -6141,18 +6133,6 @@ impl Model {
         self.space().task()
     }
 
-    /// The tab at `at` is of a space off the row.
-    pub(crate) fn tab_hidden(&self, at: usize) -> bool {
-        let of = self.tabs.get(at).map(|tab| &tab.space);
-        self.spaces.iter().any(|space| Some(&space.of) == of && space.hidden)
-    }
-
-    /// The tab bar's groups in order, one a space on the row: its tabs side by side.
-    pub fn groups(&self) -> Vec<Group> {
-        let group = |space: &&Space| Group { space: space.of.clone(), tabs: self.space_tabs(&space.of) };
-        self.shown_spaces().iter().map(group).filter(|group| !group.tabs.is_empty()).collect()
-    }
-
     /// Moves a tab into a space, or before a tab, taking that one's space. The tab on show stays
     /// on show, its space selected.
     fn place_tab(&mut self, tab: Option<u32>, at: TabAt) {
@@ -6340,7 +6320,9 @@ impl Model {
     /// The home screen, while it is on show: the tab on show has no panes.
     /// `keep_out`: where the shell draws text over the lattice (see `home::home`).
     pub fn home(&self, keep_out: &[Rect]) -> Option<Home<'_>> {
-        self.layout.is_none().then(|| home::home(&self.tasks, keep_out))
+        // A task's empty tab is its own, not the home screen: the shell says what goes in it.
+        let workspace = *self.space() == Owner::Workspace;
+        (self.layout.is_none() && workspace).then(|| home::home(&self.tasks, keep_out))
     }
 
     /// Pane ids of each tab, in tab order. The state dump uses it to show which tab holds a pane.

@@ -35,7 +35,7 @@ running, and the rest of the design is not built: see the
 | Right rail: a badge per open conversation of a live task (needs you first, then running, then the last opened; at most 8), and `+` for a new task. A dismissed task leaves it; a done one stays only while shown or its agent runs | Works today |
 | New task (⌘N), in the drawer: one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`, picks for where and who, and a line that says what ↵ will do when it is not the default. A `/path` stays in the title the agent reads, and a folder taken from its dropdown is where the agent runs; `$skill` is stored and shown, nothing acts on it yet | Works today |
 | Home screen: a tab with no panes says what goes there (Open an app ⌘E, Terminal ⌘D), the tasks that need you, and each listed task as a node on a lattice (left to right by project; within a project the older task is farther). A click on a node or a row opens its conversation. With nothing open at all, the drawer shows a new task by itself | Works today |
-| Task groups on the one tab bar: a tab may be a task's, and each task's tabs sit side by side behind its badge (its two letters, bordered in its own colour, its state as a dot), underlined in its colour; the tabs of no task last. Starting a task takes the tab on show if that is no task's; ⌘T joins the task on show; drag a tab onto a group to move it there. The same badge on its panes, its row, the rail and the drawer. Selecting a task's tab shows its conversation in the open drawer | Works today |
+| Two rows of tabs: the top row holds Workspace, then each open task (its badge and title) and workbook; under it, the selected one's tabs, when it has more than one. One selection: the drawer shows the selected task's chat. × hides a task (nothing stops); its row opens it again. Short of room, the tasks not selected are their badges alone. Drag a tab onto a task to move it there | Works today |
 | Tabs, each with its own split tree | Works today |
 | Pane picker: choose a terminal, a running app, or (once you type) any installed app for a new pane or tab | Works today |
 | Icon rail with a secondary bar | Works today |
@@ -106,8 +106,11 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘, | Open Settings: `settings.json` in your editor, in a tab of its own (see [Settings](#settings)) |
 | F18 | From any app: take the keyboard back and bring ottospace forward |
 | ⌘T | New tab, with an empty pane: ⌘E picks what goes in it |
-| ⌘1 … ⌘9 | Select a tab on the bar |
-| ⌘⇧] / ⌘⇧[ or ⌃Tab / ⌃⇧Tab | Next / previous tab |
+| ⌘1 … ⌘9 | Select a tab of the selected task (the second row) |
+| ⌘⇧] / ⌘⇧[ or ⌃Tab / ⌃⇧Tab | Next / previous tab of the selected task |
+| ⌘⌃1 … ⌘⌃9 | Select a space of the top row: Workspace, then each open task and workbook. Not ⌥1…⌥9: ⌥ is Meta in a terminal |
+| ⌘⌃] / ⌘⌃[ | Next / previous space of the top row |
+| ⌘⌃W | Hide the selected task or workbook (Hide Task): it leaves the top row and nothing in it stops; its row in Tasks or Workbook opens it again |
 | ⌘⇧W | Close the tab and its panes |
 | ⌘⇧S | Save the tab on show as a [workbook](#workbooks). On a tab that came from one, or was saved into one: update its tab there |
 | ⌘Q | Quit. While a terminal runs something (a program in front of its shell, or a background or stopped job) it asks first, and lists them: ↵, Q or ⌘Q again quits; Esc, any other key or any other shortcut cancels and does nothing else |
@@ -120,7 +123,6 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘N | New task, in the drawer. Type what needs doing, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `^reference`, `p1` to `p9`; a dropdown finishes the one at the cursor. ↵ adds the task and starts its agent; ⇧↵ adds it for later; Esc closes. [Its keys](#keys) |
 | ⌘L | The keyboard into the drawer's conversation, or back to the workspace |
 | ⌘⇧L | Close the drawer to the right rail, or open it again. The agent goes on |
-| ⌘⌃1 … ⌘⌃9 | Show the nth conversation of the right rail (its task's space); on the one shown, close the drawer. Not ⌥1…⌥9: ⌥ is Meta in a terminal |
 | ⌘⇧N | Next task: the space and chat of the first task that needs you |
 | ⌃⌥⌘Space | Capture, from any app: the pane in use (a hosted app you are in, else the focused pane) is frozen as a picture to draw on, and a draft opens in the drawer on the right, with the new-task line as its title. A live app is parked first; "↩ back to …" in the bar returns to it. On the picture: drag circles, ⇧-drag draws a box, ⌥-drag a freehand line, a click places a note to type (↵ keeps it). ⌘Z and ⇧⌘Z go over the steps; a click on a shape's line selects it and ⌫ removes it. ↵ goes to the title, Esc leaves the picture; a click on another pane captures that one too. In the title ↵ adds the task and starts its agent, ⇧↵ adds it for later; × or Esc cancels, after a question if anything was captured. The workspace stays in use beside the drawer, and ⌘N goes to the draft's title. See [Capture](#capture) |
 | ⌘B / ⌘⇧B | With the `marks` [flag](#features) on (so for the next two rows): mark the focused pane / the tab on show; on one that is marked, take the mark off (the Marks section offers it back for six seconds, and ⌘B again within them puts the same mark back). The mark is named for the app, the terminal's directory or the tab's title. It records what to open, not a window or a process: a terminal's directory as it is then, an app's bundle id, name and window title, a tab's title, task and split tree. A marked pane or tab shows ◆ and its letter |

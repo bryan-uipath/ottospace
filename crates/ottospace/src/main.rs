@@ -403,6 +403,8 @@ const TOP_BAR: f32 = 40.;
 const SPACE_TABS: f32 = 30.;
 /// How narrow a space of the top row gets before the row clips, and how wide.
 const MIN_SPACE: f32 = 72.;
+/// What a space wants with its title: past the row's room for that many, the others are badges.
+const TITLED_SPACE: f32 = 150.;
 const MAX_SPACE: f32 = 220.;
 const TRAFFIC_LIGHTS: f32 = 80.;
 /// The narrowest a tab shrinks to when the strip is full: a few letters of its title and its ×.
@@ -455,9 +457,12 @@ const KEYS_DRAG: &[(&str, &str)] = &[
 ];
 const KEYS_TABS: &[(&str, &str)] = &[
     ("⌘T", "New tab, with an empty pane: ⌘E picks what goes in it"),
-    ("⌘1 … ⌘9", "Go to a tab"),
+    ("⌘1 … ⌘9", "Go to a tab of the task on show"),
     ("⌘⇧] / ⌘⇧[", "Next / previous tab"),
     ("⌃Tab / ⌃⇧Tab", "Next / previous tab"),
+    ("⌘⌃1 … ⌘⌃9", "Go to a task (Workspace is the first) on the top row"),
+    ("⌘⌃] / ⌘⌃[", "Next / previous task on the top row"),
+    ("⌘⌃W", "Hide the task on show: nothing in it stops; its row opens it again"),
     ("⌘⇧W", "Close the tab and its panes"),
     ("⌘⇧S", "Save the tab as a workbook; again updates it"),
     ("File menu", "Add the tab to a workbook · save all tabs as one"),
@@ -4909,9 +4914,11 @@ impl Workspace {
 
     /// Top bar, drawn where the system title bar was: tabs on the left, new-tab and split
     /// buttons on the right.
-    fn render_top(&self, left: f32, cx: &mut Context<Self>) -> impl IntoElement {
+    /// `room`: the points the top row has for its spaces.
+    fn render_top(&self, left: f32, room: f32, cx: &mut Context<Self>) -> impl IntoElement {
         // The spaces of the top row, then under them the selected space's tabs, when it has more than one.
-        div().flex_none().flex().flex_col().child(self.render_spaces(left, cx)).children(self.render_space_tabs(cx))
+        let spaces = self.render_spaces(left, room, cx);
+        div().flex_none().flex().flex_col().child(spaces).children(self.render_space_tabs(cx))
     }
 
     /// The colour a space is drawn in: its task's, else the accent.
@@ -4933,19 +4940,32 @@ impl Workspace {
     /// The top row, in the window bar beside the traffic lights: a tab a space, the selected one
     /// raised with a line in its colour along its top; a quiet × hides one. They shrink, then
     /// clip: the + and the buttons on the right always show.
-    fn render_spaces(&self, left: f32, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_spaces(&self, left: f32, room: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let selected = self.model.space().clone();
-        let spaces = self.model.shown_spaces().into_iter().enumerate().map(|(place, space)| {
+        let shown = self.model.shown_spaces();
+        // Short of room, a space not selected is its badge alone, its title on hover.
+        let compact = shown.len() as f32 * TITLED_SPACE > room;
+        let spaces = shown.into_iter().enumerate().map(|(place, space)| {
             let of = space.of.clone();
             let on = of == selected;
+            let small = compact && !on && of != Owner::Workspace;
+            let tip: SharedString = self.space_title(&of).into();
             let colour = self.space_colour(&of);
             let count = self.model.space_tabs(&of).len();
             // A task's badge, a workbook's glyph; Workspace and a session's chat a dot.
             let lead = match &of {
                 Owner::Task { id } => self.task_badge(*id, 18.).map(IntoElement::into_any_element),
                 Owner::Workbook { .. } => Some(
-                    svg().path("icons/workbook.svg").size(px(14.)).flex_none().text_color(rgb(theme::MUTED)).into_any_element(),
+                    svg()
+                        .path("icons/workbook.svg")
+                        .size(px(14.))
+                        .flex_none()
+                        .text_color(rgb(theme::MUTED))
+                        .into_any_element(),
                 ),
+                Owner::Session { .. } if small => {
+                    Some(div().child(ottospace_core::talk::monogram(&self.space_title(&of))).into_any_element())
+                }
                 Owner::Workspace | Owner::Session { .. } => None,
             };
             let hide = (of != Owner::Workspace).then(|| {
@@ -4972,9 +4992,11 @@ impl Workspace {
                 .group("space")
                 .relative()
                 .h_full()
-                .min_w(px(MIN_SPACE))
-                .max_w(px(MAX_SPACE))
-                .flex_shrink()
+                // Workspace and the selected space keep their names; the others give way first.
+                .when(!small, |d| d.min_w(px(MIN_SPACE)).max_w(px(MAX_SPACE)).flex_shrink())
+                .when(of == Owner::Workspace, |d| d.flex_none())
+                .when(on && compact, |d| d.min_w(px(TITLED_SPACE)))
+                .when(small, |d| d.flex_none().tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))))
                 .overflow_hidden()
                 .pl_3()
                 .pr_1()
@@ -4992,9 +5014,12 @@ impl Workspace {
                 .hover(|s| s.text_color(rgb(theme::TEXT)))
                 .child(mark(&self.marks, Mark::Space(place)))
                 .children(lead)
-                .child(div().flex_1().min_w_0().truncate().child(self.space_title(&of)))
-                .children((count > 1).then(|| div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(count.to_string())))
-                .children(hide)
+                .children((!small).then(|| div().flex_1().min_w_0().truncate().child(self.space_title(&of))))
+                .children(
+                    (count > 1 && !small)
+                        .then(|| div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(count.to_string())),
+                )
+                .children(hide.filter(|_| !small))
                 .child(self.controls.mark(format!("space:{place}")))
                 // A tab dropped on a space moves there.
                 .drag_over::<DraggedTab>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
@@ -5081,76 +5106,79 @@ impl Workspace {
             return None;
         }
         let colour = self.space_colour(&of);
-        let tabs = places.into_iter().filter_map(|place| Some((place, self.model.tabs.get(place)?))).map(|(place, tab)| {
-            let (active, id) = (place == self.model.active, tab.id);
-            let title = SharedString::from(tab.title.clone());
-            div()
-                .id(("tab", tab.id))
-                // A pane dropped on a tab moves there; a tab dropped on one goes before it.
-                .drag_over::<DraggedPane>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
-                .drag_over::<DraggedTab>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
-                .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
-                    // Dropped on itself: a click that moved a few points (GPUI drags past 2).
-                    if dragged.0 == id {
-                        return this.select_tab(id, window, cx);
-                    }
-                    let at = TabAt::Before(id);
-                    this.dispatch(Action::TabPlace { tab: Some(dragged.0), at }, this.input, window, cx);
-                }))
-                .on_drag(DraggedTab(id), move |_, offset, _, cx| cx.new(|_| DragChip { label: title.clone(), offset }))
-                .on_drop(cx.listener(move |this, dragged: &DraggedPane, window, cx| {
-                    this.dispatch(Action::MovePane { pane: Some(dragged.0), tab: place }, this.input, window, cx);
-                }))
-                .relative()
-                .h_full()
-                .min_w(px(MIN_TAB))
-                .max_w(px(MAX_SPACE))
-                // At its narrowest it clips, never paints over the next tab.
-                .overflow_hidden()
-                .pl_3()
-                .pr_1()
-                .flex()
-                .items_center()
-                .gap_2()
-                .cursor_pointer()
-                .when(active, |d| {
-                    let line = div().absolute().left_0().right_0().bottom_0().h(px(2.)).bg(rgb(colour));
-                    d.text_color(rgb(theme::TEXT)).child(line)
-                })
-                .hover(|s| s.text_color(rgb(theme::TEXT)))
-                .child(mark(&self.marks, Mark::Tab(place)))
-                .children(
-                    self.model
-                        .mark_of(MarkOf::Tab(Some(id)))
-                        .filter(|_| self.on(Feature::Marks))
-                        .map(|_| div().text_color(rgb(theme::MARK)).child("◆")),
-                )
-                // A tab of a workbook: its icon, and the workbook's name on hover.
-                .when_some(self.workbook_of(id), |d, book| {
-                    let icon = svg().path("icons/workbook.svg").size(px(12.)).flex_none();
-                    d.child(icon.text_color(rgb(theme::MUTED))).tooltip(move |_, cx| {
-                        AnyView::from(cx.new(|_| Tooltip(format!("Workbook: {book}").into())))
+        let tabs =
+            places.into_iter().filter_map(|place| Some((place, self.model.tabs.get(place)?))).map(|(place, tab)| {
+                let (active, id) = (place == self.model.active, tab.id);
+                let title = SharedString::from(tab.title.clone());
+                div()
+                    .id(("tab", tab.id))
+                    // A pane dropped on a tab moves there; a tab dropped on one goes before it.
+                    .drag_over::<DraggedPane>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
+                    .drag_over::<DraggedTab>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
+                    .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                        // Dropped on itself: a click that moved a few points (GPUI drags past 2).
+                        if dragged.0 == id {
+                            return this.select_tab(id, window, cx);
+                        }
+                        let at = TabAt::Before(id);
+                        this.dispatch(Action::TabPlace { tab: Some(dragged.0), at }, this.input, window, cx);
+                    }))
+                    .on_drag(DraggedTab(id), move |_, offset, _, cx| {
+                        cx.new(|_| DragChip { label: title.clone(), offset })
                     })
-                })
-                .child(div().flex_1().min_w_0().truncate().child(tab.title.clone()))
-                .child(self.controls.mark(format!("tab:{}", tab.id)))
-                .child(
-                    div()
-                        .id(("tab-close", tab.id))
-                        .flex_none()
-                        .px_1()
-                        .rounded_sm()
-                        .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::ERROR)))
-                        .child("×")
-                        .child(self.controls.mark(format!("tab-close:{}", tab.id)))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            // Do not also select the tab that is going away.
-                            cx.stop_propagation();
-                            this.close_tab(id, window, cx);
-                        })),
-                )
-                .on_click(cx.listener(move |this, _, window, cx| this.select_tab(id, window, cx)))
-        });
+                    .on_drop(cx.listener(move |this, dragged: &DraggedPane, window, cx| {
+                        this.dispatch(Action::MovePane { pane: Some(dragged.0), tab: place }, this.input, window, cx);
+                    }))
+                    .relative()
+                    .h_full()
+                    .min_w(px(MIN_TAB))
+                    .max_w(px(MAX_SPACE))
+                    // At its narrowest it clips, never paints over the next tab.
+                    .overflow_hidden()
+                    .pl_3()
+                    .pr_1()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .cursor_pointer()
+                    .when(active, |d| {
+                        let line = div().absolute().left_0().right_0().bottom_0().h(px(2.)).bg(rgb(colour));
+                        d.text_color(rgb(theme::TEXT)).child(line)
+                    })
+                    .hover(|s| s.text_color(rgb(theme::TEXT)))
+                    .child(mark(&self.marks, Mark::Tab(place)))
+                    .children(
+                        self.model
+                            .mark_of(MarkOf::Tab(Some(id)))
+                            .filter(|_| self.on(Feature::Marks))
+                            .map(|_| div().text_color(rgb(theme::MARK)).child("◆")),
+                    )
+                    // A tab of a workbook: its icon, and the workbook's name on hover.
+                    .when_some(self.workbook_of(id), |d, book| {
+                        let icon = svg().path("icons/workbook.svg").size(px(12.)).flex_none();
+                        d.child(icon.text_color(rgb(theme::MUTED))).tooltip(move |_, cx| {
+                            AnyView::from(cx.new(|_| Tooltip(format!("Workbook: {book}").into())))
+                        })
+                    })
+                    .child(div().flex_1().min_w_0().truncate().child(tab.title.clone()))
+                    .child(self.controls.mark(format!("tab:{}", tab.id)))
+                    .child(
+                        div()
+                            .id(("tab-close", tab.id))
+                            .flex_none()
+                            .px_1()
+                            .rounded_sm()
+                            .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::ERROR)))
+                            .child("×")
+                            .child(self.controls.mark(format!("tab-close:{}", tab.id)))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                // Do not also select the tab that is going away.
+                                cx.stop_propagation();
+                                this.close_tab(id, window, cx);
+                            })),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| this.select_tab(id, window, cx)))
+            });
         Some(
             div()
                 .h(px(SPACE_TABS))
@@ -5534,7 +5562,14 @@ impl Render for Workspace {
         // Only while the tab on show has no panes. Its lines are built once and kept: a frame
         // that moves nothing (a terminal printing in another tab) only paints them again.
         let keep_out = self.home.borrow().keep_out();
-        let home = self.model.home(&keep_out).map(|home| self.render_home(home, cx));
+        let home = self.model.home(&keep_out).map(|home| self.render_home(home, cx).into_any_element());
+        // An empty tab of a task, a session or a workbook: what goes in it.
+        let empty = (self.model.layout.is_none() && home.is_none()).then(|| {
+            let line = "An empty tab: ⌘E picks what goes in it, ⌘D opens a terminal";
+            let hint = div().text_sm().text_color(rgb(theme::MUTED)).child(line);
+            div().size_full().flex().items_center().justify_center().child(hint).into_any_element()
+        });
+        let home = home.or(empty);
         // The left column's width, and the drawer's: as dragged, or half the window when widened.
         let left = RAIL + if self.model.sidebar.is_some() { SECTION } else { 0. };
         let half = f32::from(window.viewport_size().width) / 2.;
@@ -5544,6 +5579,9 @@ impl Render for Workspace {
         let right = self.render_inspector(drawer, cx);
         let right = right.or_else(|| self.render_draft(cx)).or_else(|| self.render_drawer(drawer, cx));
         let right_width = talk::RAIL + if right.is_some() { drawer } else { 0. };
+        // The top row's room for its spaces: the centre, less the lights, the + and the buttons.
+        let centre = f32::from(window.viewport_size().width) - left - right_width;
+        let room = centre - (TRAFFIC_LIGHTS - left).max(0.) - 140.;
         div()
             .size_full()
             .flex()
@@ -5791,21 +5829,28 @@ impl Render for Workspace {
                                     .children(self.model.sidebar.map(|section| self.render_bar(section, cx))),
                             ),
                     )
-                    // Center: the tab strip over the workspace, from the section list to the drawer.
+                    // Center: the top rows over the workspace, from the section list to the drawer.
                     .child(
-                        div().flex_1().min_w_0().h_full().flex().flex_col().child(self.render_top(left, cx)).child(
-                            div()
-                                .flex_1()
-                                // Let the canvas shrink below its content, so a wide image cannot
-                                // push it past the window; it scales down instead.
-                                .min_w_0()
-                                .min_h_0()
-                                .w_full()
-                                .flex()
-                                .overflow_hidden()
-                                .children(home)
-                                .children(tree),
-                        ),
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .flex()
+                            .flex_col()
+                            .child(self.render_top(left, room, cx))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    // Let the canvas shrink below its content, so a wide image cannot
+                                    // push it past the window; it scales down instead.
+                                    .min_w_0()
+                                    .min_h_0()
+                                    .w_full()
+                                    .flex()
+                                    .overflow_hidden()
+                                    .children(home)
+                                    .children(tree),
+                            ),
                     )
                     // Right: the drawer (the draft being collected, a conversation, or a brief),
                     // then its rail.
