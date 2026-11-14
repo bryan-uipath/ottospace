@@ -590,6 +590,19 @@ mod tests {
         assert_eq!((r.tabs[r.active].title.as_str(), r.tabs[r.active].task), ("Tab 2", None));
     }
 
+    /// ⌘T's tab (one empty pane) and the open section come back as they were.
+    #[test]
+    fn an_empty_tab_and_the_open_section_come_back() {
+        let mut m = workspace();
+        m.update(Action::NewEmptyTab);
+        m.update(Action::ToggleSection { section: Section::Apps });
+        let (r, _) = restored(&m, m.layout_file(&[], &[], 0), &[], false);
+        let pane = r.focused.and_then(|id| r.pane(id)).map(|pane| pane.kind.clone());
+        let leaves = r.layout.as_ref().map(Node::leaves).map(|leaves| leaves.len());
+        assert_eq!((r.tabs.len(), r.active, leaves, pane), (m.tabs.len(), m.active, Some(1), Some(Kind::Empty)));
+        assert_eq!(r.sidebar, Some(Section::Apps));
+    }
+
     #[test]
     fn marks_stand_for_their_tabs_and_panes_again() {
         let mut m = workspace();
