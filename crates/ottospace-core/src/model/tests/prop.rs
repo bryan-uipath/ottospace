@@ -1327,14 +1327,14 @@ fn check(m: &Model) -> Result<(), String> {
     }
 
     // The drawer is on a task there is; the keyboard is in it only while it is open, its agent
-    // runs, and no app, list or visual mode has the keyboard.
+    // runs (or its native composer can go on with it), and no app, list or visual mode has it.
     let gone = |subject: &Subject| subject.task().is_some_and(|id| m.tasks.get(id).is_none());
     let dismissed = |subject: &Subject| subject.task().is_some_and(|id| m.tasks.get(id).is_some_and(|t| t.dismissed));
     if let Some(talk) = &m.talk {
         ensure!(!gone(&talk.task), "the drawer is on task {:?}, which is gone", talk.task);
         let free = m.live.is_none() && m.list.is_none() && m.visual.is_none() && m.annotated().is_none();
         ensure!(
-            !talk.keys || (talk.open && m.talk_live(&talk.task) && free),
+            !talk.keys || (talk.open && m.talk_writable(&talk.task) && free),
             "the keyboard is in a conversation that is closed, has no agent, or under another: {talk:?}"
         );
     }
@@ -3987,4 +3987,32 @@ fn the_palettes_highlight_stays_on_a_row_when_a_feature_goes() {
 #[test]
 fn marks_turned_off_take_the_jumps_wait_with_them() {
     replay(&[Action::MarkPrefix.into(), by(Origin::System, set_features(&[]))]).unwrap();
+}
+
+/// Seed 1247 (long run): the drawer's native agent ended while it had the keyboard; its composer
+/// can go on with it (#130), so the keyboard may stay. The check asked for a running agent.
+#[test]
+fn an_ended_agent_lets_the_keyboard_go() {
+    let none = || Assign { agent: None, paths: vec![], resolved: vec![], skills: vec![] };
+    let known = Known { names: Names { agents: vec![], skills: vec![] }, paths: vec![], entries: vec![] };
+    replay(&[
+        Action::TaskAdd { title: "a".into(), priority: 2, state: State::Running, tab: None, assign: none() }.into(),
+        Action::TaskAdd { title: "b".into(), priority: 1, state: State::NeedsYou, tab: None, assign: none() }.into(),
+        Action::TaskFromLine { line: "fix zoom #canvas >app p1".into(), known, open: false }.into(),
+        Action::NewTabOf { task: Some(3) }.into(),
+        Action::Split { axis: Axis::Down, kind: Kind::Terminal }.into(),
+        Action::NewTab.into(),
+        Action::CycleTab { delta: 2 }.into(),
+        Action::TaskTalk { id: 1 }.into(),
+        Action::MovePane { pane: None, tab: 1 }.into(),
+        Action::TalkStart.into(),
+        Action::AgentStarted {
+            task: Subject::Task(3),
+            session: Some("8f14e45f-ceea-467f-a8d3-0242ac130003".into()),
+            at: 32,
+        }
+        .into(),
+        by(Origin::System, Action::AgentExited { task: Subject::Task(3) }),
+    ])
+    .unwrap();
 }
