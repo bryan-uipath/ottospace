@@ -793,7 +793,7 @@ Settings, whose terminal runs `$VISUAL`, else `$EDITOR`, else `vi`, as your logi
 first. Again while that tab is open brings it forward; quitting the editor closes its pane. Only
 you open it: a socket client's ⌘, does nothing.
 
-A change is read when the file is saved: what is wrong in it is said in the status bar (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify` and `calendar_notify_for` apply at once; any other key changed says "restart to apply" with its name (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
+A change is read when the file is saved: what is wrong in it is said in the status bar (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify`, `calendar_notify_for` and `features` apply at once; any other key changed says "restart to apply" with its name (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
 
 
 ```json
