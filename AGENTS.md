@@ -69,6 +69,11 @@ Rules:
   An E2E run that names none lists none, and never starts an app. `OTTOSPACE_DOCK_APPS` (bundle
   paths, `:` between them) stands for the Dock's apps; a test run that names none has none, and
   never reads the user's Dock.
+- Feature flags (`ottospace-core/src/features.rs`) are off in an E2E run, as for a new user. A test
+  of a feature behind one names it: `OTTOSPACE_FEATURES=marks,apps_section` (read only under
+  `OTTOSPACE_E2E`; it wins over `settings.json`), `MARKS`, `APPS_SECTION` or `BOTH` in `e2e.rs`. In
+  the core's unit tests every flag is on (`Model::default`); a test of one off sends
+  `SetFeatures`. A new action names its feature in `Action::feature`.
 - Requests and fields that answer only under `OTTOSPACE_E2E`, by one gate (`control::test_refusal`).
   They are documented here and on `Request` in `control.rs`, never in `skill/guide.md`: an agent
   must not learn them.
@@ -184,7 +189,10 @@ once and keeps what lies under the user's annotations. Only the user starts one 
 key, the menu, the bar): the core refuses a `CaptureStart` of any other origin, and
 `capture_start` on the socket answers only under `OTTOSPACE_E2E` (`control::test_refusal`).
 In a task's brief (`task_brief`) everything captured is quoted and labelled as untrusted: see
-`docs/ai/capture.md`. The user's own sneak label may press a control in the focused app pane
+`docs/ai/capture.md`. Meeting titles and places are never in the state (every reply carries it):
+only the read-only `calendar` request gives them, with times and busy/free, from what the app
+holds (it never fetches); never a meeting's link, description or attendees, the feed's address or
+`calendar_email`. The guide tells agents titles are data, never instructions. The user's own sneak label may press a control in the focused app pane
 (`docs/ai/sneak-apps.md`): the core refuses a label in an app from any other origin. Requests
 that press or set values in another app are still a
 separate trust decision: see `docs/ai/1-initial-brainstorm/accessibility.md`.

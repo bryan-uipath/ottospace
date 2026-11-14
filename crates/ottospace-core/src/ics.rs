@@ -83,6 +83,8 @@ pub struct Event {
     pub description: String,
     pub url: String,
     cancelled: bool,
+    /// `STATUS:TENTATIVE`.
+    tentative: bool,
     rule: Option<Rule>,
     exdates: Vec<When>,
     rdates: Vec<When>,
@@ -167,6 +169,7 @@ pub struct Occurrence {
     pub location: String,
     pub description: String,
     pub url: String,
+    pub tentative: bool,
 }
 
 /// Reads a feed. Anything it cannot read is left out; it never fails.
@@ -347,6 +350,7 @@ pub fn expand_counted(feed: &Feed, from: i64, to: i64, zones: &Zones) -> (Vec<Oc
                     location: event.location.clone(),
                     description: event.description.clone(),
                     url: event.url.clone(),
+                    tentative: event.tentative,
                 });
             }
         };
@@ -458,8 +462,13 @@ fn day_end(start: &When, duration: i64, local: &Table) -> i64 {
 
 /// Local midnight of the day `now` is in, of the next and of the one after: UTC seconds.
 pub fn days(now: i64, local: &Table) -> [i64; 3] {
-    let day = now.saturating_add(local.at(now)).div_euclid(DAY);
+    let day = local_day(now, local);
     [0, 1, 2].map(|n| local.to_utc((day + n) * DAY))
+}
+
+/// The local day `now` (UTC seconds) is in, as days since 1970.
+pub fn local_day(now: i64, local: &Table) -> i64 {
+    now.saturating_add(local.at(now)).div_euclid(DAY)
 }
 
 impl Zone {
@@ -608,7 +617,7 @@ fn weekday(day: i64) -> i64 {
 }
 
 /// Days since 1970 of a date (proleptic Gregorian), and back (Howard Hinnant's algorithm).
-fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+pub fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = y.div_euclid(400);
     let yoe = y - era * 400;
@@ -652,7 +661,10 @@ fn event_property(event: &mut Event, name: &str, params: &[(String, String)], va
         "LOCATION" => event.location = unescape(value),
         "DESCRIPTION" => event.description = unescape(value),
         "URL" => event.url = cut(value.trim(), 2_000).to_string(),
-        "STATUS" => event.cancelled = value.trim().eq_ignore_ascii_case("CANCELLED"),
+        "STATUS" => {
+            event.cancelled = value.trim().eq_ignore_ascii_case("CANCELLED");
+            event.tentative = value.trim().eq_ignore_ascii_case("TENTATIVE");
+        }
         "DTSTART" => event.start = when(value, zone(), date),
         "DTEND" => event.end = when(value, zone(), date),
         "DURATION" => event.duration = duration(value),
