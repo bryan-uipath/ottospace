@@ -1294,6 +1294,7 @@ export function snapshot(value: unknown): Snapshot {
     shown: map(rect)(o.shown, "shown"),
     tab_panes: list(list(num))(o.tab_panes, "tab_panes"),
     window: rect(o.window, "window"),
+    window_active: bool(o.window_active, "window_active"),
     parking: pair(o.parking, "parking"),
     return_key: orNull(str)(o.return_key, "return_key"),
     version: str(o.version, "version"),

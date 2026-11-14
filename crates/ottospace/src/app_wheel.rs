@@ -17,8 +17,9 @@ use crate::{Workspace, config, now_ms, on_screen};
 pub struct Wheel {
     pub over: u64,
     pub peeks: u64,
-    /// Why the last scroll asked for no peek, if it did not: `off`, `button down`, `inactive`.
-    pub skipped: Option<&'static str>,
+    /// Scrolls that asked for no peek: the left button down, ottospace's window not active.
+    pub held: u64,
+    pub inactive: u64,
     /// A click or a key after this went to the app.
     since: Option<Instant>,
 }
@@ -29,17 +30,15 @@ impl Workspace {
         self.wheel.over += 1;
         // Not while a drag is on. Not from behind another app: its end gives ottospace the keyboard.
         let off = config::get().settings.wheel_to_apps == Some(false);
-        let skip = if off {
-            Some("off")
-        } else if input::left_button_down() {
-            Some("button down")
-        } else if !window.is_window_active() {
-            Some("inactive")
-        } else {
-            None
-        };
-        self.wheel.skipped = skip;
-        if skip.is_some() {
+        if off {
+            return;
+        }
+        if input::left_button_down() {
+            self.wheel.held += 1;
+            return;
+        }
+        if !window.is_window_active() {
+            self.wheel.inactive += 1;
             return;
         }
         let action = Action::AppWheel { pane, now: now_ms() };

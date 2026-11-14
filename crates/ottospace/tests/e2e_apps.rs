@@ -1519,6 +1519,31 @@ fn hid(x: f64, y: f64, lines: Option<i32>) {
     }
 }
 
+/// The user's wheel at `x, y` over a parked app pane, once what a peek needs holds: ottospace's
+/// window has the keyboard (the front app's may not yet) and the left button is up (else a drag).
+fn user_wheel(otto: &Proc, x: f64, y: f64) {
+    let state = || otto.call(json!({"cmd": "state"}));
+    let held = || {
+        format!(
+            "window_active {}, button down {}, {}",
+            state()["window_active"],
+            ottospace_mac::input::left_button_down(),
+            in_front()
+        )
+    };
+    wait_or("ottospace's window to be active", held, || {
+        let active = state()["window_active"] == true;
+        if !active {
+            ask_forward(otto.child.id());
+        }
+        active.then_some(())
+    });
+    assert!(!ottospace_mac::input::left_button_down(), "the system reads the left button as down");
+    hid(x, y, None);
+    std::thread::sleep(Duration::from_millis(300));
+    hid(x, y, Some(-3));
+}
+
 /// What a test saw and does not assert yet: on stderr, and in the CI job's summary, which a
 /// passing test's captured output never reaches.
 fn report(line: &str) {
@@ -1575,16 +1600,11 @@ fn the_users_wheel_brings_a_parked_app_window_up_and_the_next_scroll_reaches_it(
     assert!(parked().is_some(), "the window left its parking spot");
 
     // The user's wheel: the window comes up over the pane, under the pointer.
-    bring_forward(otto.child.id(), "ottospace");
-    // A wheel with the button down is part of a drag: no peek.
-    assert!(!ottospace_mac::input::left_button_down(), "the system reads the left button as down");
-    hid(x, y, None);
-    std::thread::sleep(Duration::from_millis(300));
-    hid(x, y, Some(-3));
+    user_wheel(&otto, x, y);
     let wheels = || {
         let trace = otto.call(json!({"cmd": "trace"}))["trace"].as_str().unwrap_or_default().to_string();
         let lines: Vec<&str> = trace.lines().filter(|l| l.contains("wheel")).collect();
-        format!("{} {}", counts(), lines.join(" "))
+        format!("{} {}; {}", counts(), lines.join(" "), in_front())
     };
     wait_or("the peek", wheels, || (counts()["peek"] == 1).then_some(()));
     let up = wait_for("the window over its pane", || rect(&state()["hosted"]["1"]).filter(|f| !close(f[0], spot[0])));
@@ -1631,6 +1651,7 @@ fn the_users_wheel_brings_a_parked_app_window_up_and_the_next_scroll_reaches_it(
     hid(x, y, Some(-3));
     let third = soft(40, &|| counts()["peek"] == 1);
     ottospace_mac::input::click(objc2_core_foundation::CGPoint::new(x, y), 1);
+    released(x, y);
     let entered = third && soft(40, &|| state()["mode"] == "app");
     if entered {
         otto.call(json!({"cmd": "leave"}));
@@ -1655,13 +1676,9 @@ fn a_killed_ottospace_has_its_guardian_give_a_peeked_window_back() {
     let mut otto = otto_for(&canary, "otto-peek-guard", &[("OTTOSPACE_HOME", home_str), ("OTTOSPACE_GUARD", "1")]);
     host_and_park(&otto);
     let [x, y] = on_picture(&otto);
-    bring_forward(otto.child.id(), "ottospace");
-    // A wheel with the button down is part of a drag: no peek.
-    assert!(!ottospace_mac::input::left_button_down(), "the system reads the left button as down");
-    hid(x, y, None);
-    std::thread::sleep(Duration::from_millis(300));
-    hid(x, y, Some(-3));
-    wait_for("the peek", || (otto.call(json!({"cmd": "state"}))["counts"]["peek"] == 1).then_some(()));
+    user_wheel(&otto, x, y);
+    let counts = || otto.call(json!({"cmd": "state"}))["counts"].clone();
+    wait_or("the peek", || format!("{}; {}", counts(), in_front()), || (counts()["peek"] == 1).then_some(()));
 
     // Killed while the window is up over its pane: the guardian puts it back where it was.
     otto.child.kill().expect("kill -9");
