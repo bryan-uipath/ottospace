@@ -8953,6 +8953,7 @@ mod tests {
             tool: "Bash".into(),
             label: "git".into(),
             detail: Text::default(),
+            diff: None,
         };
         let card = Event::Permission {
             ticket: 1,
@@ -8978,6 +8979,7 @@ mod tests {
                 tool: "Bash".into(),
                 label: "git".into(),
                 detail: Text::default(),
+                diff: None,
             },
         ];
         m.update(Action::AgentEvents { task: held.clone(), events: again, at: 2 }.sent_by(Origin::System));

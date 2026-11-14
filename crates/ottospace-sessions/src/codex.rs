@@ -268,7 +268,9 @@ fn record_events(record: &Value, cursor: &mut Cursor, events: &mut Vec<Event>) {
             let tool = payload["name"].as_str().unwrap_or(kind);
             let Some(id) = id_of(&payload["call_id"]).or(id_of(&payload["id"])) else { return };
             let (station, summary) = describe(tool, payload);
-            emit(What::ToolStart { id: id.clone(), tool: station::tool_label(tool), station, summary });
+            let patch = payload["input"].as_str().filter(|_| cursor.edits && tool == "apply_patch");
+            let diff = patch.and_then(ottospace_core::diff::codex_patch);
+            emit(What::ToolStart { id: id.clone(), tool: station::tool_label(tool), station, summary, diff });
             if kind == "web_search_call" {
                 // A web search is written once, when it is over.
                 emit(What::ToolEnd { id, failed: false, station: None, summary: None });
@@ -527,5 +529,22 @@ mod tests {
         };
         (0..2000).for_each(|i| record_events(&end(i), &mut cursor, &mut events));
         assert_eq!(cursor.refined.len(), MAX_OPEN);
+    }
+
+    #[test]
+    fn a_patch_carries_its_change_only_for_a_cursor_that_asks() {
+        let patch = "*** Begin Patch\n*** Update File: /w/a.rs\n@@\n-old\n+new\n*** End Patch\n";
+        let call = json!({"type": "custom_tool_call", "call_id": "p", "name": "apply_patch", "input": patch});
+        let diff = |mut cursor: Cursor| {
+            let mut events = Vec::new();
+            record_events(&record("response_item", call.clone()), &mut cursor, &mut events);
+            events.into_iter().find_map(|e| match e.what {
+                What::ToolStart { diff, .. } => Some(diff),
+                _ => None,
+            })
+        };
+        assert_eq!(diff(Cursor::default()), Some(None));
+        let shown = diff(Cursor::with_edits()).flatten().expect("a change");
+        assert_eq!((shown.files[0].added, shown.files[0].removed), (1, 1));
     }
 }

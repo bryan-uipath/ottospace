@@ -8,6 +8,8 @@ use std::fmt;
 
 use serde::Serialize;
 
+use crate::diff::{Diff, DiffShape};
+
 /// Text a model, a tool or the CLI wrote. Never `Serialize`; `Debug` prints its length only.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct Text(String);
@@ -51,12 +53,31 @@ impl fmt::Debug for Text {
 }
 
 /// `text`'s first `max` bytes, at a character boundary.
-fn cut(text: &str, max: usize) -> &str {
+pub(crate) fn cut(text: &str, max: usize) -> &str {
     let mut end = text.len().min(max);
     while !text.is_char_boundary(end) {
         end -= 1;
     }
     &text[..end]
+}
+
+/// Text as drawn: terminal escape sequences and other control characters out (a tab is four
+/// spaces), marks that hide or reorder text written out (`\u{202e}`).
+pub fn clean(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\u{1b}' => crate::workbook::skip_escape(&mut chars),
+            '\n' => out.push('\n'),
+            '\t' => out.push_str("    "),
+            c if c.is_control() => {}
+            // Hidden or reordering marks (`capture::shows`) and line separators, written out.
+            c if !crate::capture::shows(c) || matches!(c, '\u{2028}' | '\u{2029}') => out.extend(c.escape_unicode()),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// How the drawer shows a conversation: drawn natively, or the agent's own TUI in a terminal.
@@ -96,12 +117,14 @@ pub enum Event {
     Text {
         text: Text,
     },
+    /// `diff`: an edit's change, from the call's input (`diff::claude`, `diff::codex_*`).
     ToolStart {
         id: String,
         sub: bool,
         tool: String,
         label: String,
         detail: Text,
+        diff: Option<Diff>,
     },
     ToolEnd {
         id: String,
@@ -224,6 +247,7 @@ pub enum Entry {
         label: String,
         detail: Text,
         state: Call,
+        diff: Option<Diff>,
     },
     /// A request denied without asking, with what it asked.
     AutoDenied {
@@ -239,7 +263,8 @@ impl Entry {
     fn bytes(&self) -> usize {
         match self {
             Entry::User { text } | Entry::Assistant { text, .. } => text.len(),
-            Entry::Tool { detail, .. } | Entry::AutoDenied { detail, .. } => detail.len() + 64,
+            Entry::Tool { detail, diff, .. } => detail.len() + 64 + diff.as_ref().map_or(0, Diff::bytes),
+            Entry::AutoDenied { detail, .. } => detail.len() + 64,
             Entry::Notice(_) => 32,
         }
     }
@@ -410,12 +435,12 @@ impl Transcript {
                 }
                 _ => self.push(Entry::Assistant { text, streaming: false }),
             },
-            Event::ToolStart { id, sub, tool, label, detail } => {
+            Event::ToolStart { id, sub, tool, label, detail, diff } => {
                 self.settle();
                 if let Some(turn) = &mut self.turn {
                     turn.tool = Some(label.clone());
                 }
-                self.push(Entry::Tool { id, sub, tool, label, detail, state: Call::Running });
+                self.push(Entry::Tool { id, sub, tool, label, detail, state: Call::Running, diff });
             }
             Event::ToolEnd { id, failed } => {
                 let call = self.items.iter_mut().rev().find_map(|item| match &mut item.entry {
@@ -529,7 +554,7 @@ pub struct Summary {
 pub enum Shape {
     User { bytes: usize },
     Assistant { bytes: usize, streaming: bool },
-    Tool { tool: String, label: String, state: Call, sub: bool },
+    Tool { tool: String, label: String, state: Call, sub: bool, diff: Option<DiffShape> },
     AutoDenied { tool: String, label: String, reason: String },
     Notice(Notice),
 }
@@ -539,9 +564,13 @@ impl Shape {
         match entry {
             Entry::User { text } => Shape::User { bytes: text.len() },
             Entry::Assistant { text, streaming } => Shape::Assistant { bytes: text.len(), streaming: *streaming },
-            Entry::Tool { tool, label, state, sub, .. } => {
-                Shape::Tool { tool: tool.clone(), label: label.clone(), state: *state, sub: *sub }
-            }
+            Entry::Tool { tool, label, state, sub, diff, .. } => Shape::Tool {
+                tool: tool.clone(),
+                label: label.clone(),
+                state: *state,
+                sub: *sub,
+                diff: diff.as_ref().map(Diff::shape),
+            },
             Entry::AutoDenied { tool, label, reason, .. } => {
                 Shape::AutoDenied { tool: tool.clone(), label: label.clone(), reason: reason.clone() }
             }
@@ -601,6 +630,7 @@ mod tests {
             tool: "Bash".into(),
             label: "git".into(),
             detail: text("git status"),
+            diff: None,
         };
         t.fold(tool, 15);
         assert_eq!(t.live_label(), Some("git"));
@@ -624,6 +654,7 @@ mod tests {
             tool: "Read".into(),
             label: "a.rs".into(),
             detail: text("/a.rs"),
+            diff: None,
         };
         t.fold(tool, 2);
         t.fold(permission(1, false), 3);
@@ -688,5 +719,38 @@ mod tests {
         transcript.send("secret words", 0);
         let summary = serde_json::to_string(&transcript.summary()).unwrap();
         assert!(!summary.contains("secret"), "{summary}");
+    }
+
+    /// An edit's card stays with its call; the state has its counts, never a line or its path.
+    #[test]
+    fn an_edit_call_keeps_its_card_and_the_summary_only_its_counts() {
+        let input = serde_json::json!({"file_path": "/w/secret.rs", "old_string": "secret a", "new_string": "b\nc"});
+        let diff = crate::diff::claude("Edit", &input);
+        let mut t = Transcript { watched: true, ..Transcript::default() };
+        let start = |diff| Event::ToolStart {
+            id: "e".into(),
+            sub: false,
+            tool: "Edit".into(),
+            label: "secret.rs".into(),
+            detail: Text::default(),
+            diff,
+        };
+        assert!(start(diff.clone()).shows_when_watched());
+        t.fold(start(diff.clone()), 1);
+        t.fold(start(None), 2);
+        let kept: Vec<Option<&Diff>> = t
+            .items()
+            .map(|item| match &item.entry {
+                Entry::Tool { diff, .. } => diff.as_ref(),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(kept, [diff.as_ref(), None]);
+        let summary = serde_json::to_value(t.summary()).unwrap();
+        let shape = &summary["entries"][0]["diff"];
+        assert_eq!(shape["changes"], serde_json::json!(["edit"]));
+        assert_eq!((&shape["added"], &shape["removed"], &shape["lines"]), (&2.into(), &1.into(), &3.into()));
+        assert!(summary["entries"][1]["diff"].is_null(), "{summary}");
+        assert!(!summary.to_string().contains("w/secret"), "{summary}");
     }
 }
