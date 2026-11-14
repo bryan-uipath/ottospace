@@ -4136,14 +4136,12 @@ impl Workspace {
         cx.notify();
     }
 
-    /// A click on a button of a task's row, by the button's name: `task-snooze`,
-    /// `task-hold` or `task-dismiss`. Each offers to be undone.
+    /// A click on a button of a task's row, by the button's name: `task-snooze` or `task-dismiss`
+    /// (Done). Each offers to be undone.
     pub(crate) fn click_row_button(&mut self, button: &str, id: TaskId, window: &Window, cx: &mut Context<Self>) {
         let action = match button {
             "task-snooze" => Action::RowSnooze { id, until: now_ms().saturating_add(SNOOZE_MS) },
-            "task-hold" => Action::RowHold { id },
             "task-dismiss" => Action::RowDismiss { id },
-            "task-claim" => Action::TabPlace { tab: None, at: TabAt::End(Some(id)) },
             _ => return,
         };
         self.dispatch(action, self.input, window, cx);
@@ -4377,9 +4375,9 @@ impl Workspace {
         div().flex_1().min_h_0().flex().flex_col().child(list).children(footer)
     }
 
-    /// A task's row: a dot in its state's colour, priority and title, then a muted line of where
-    /// it is filed and how old it is. Hover (or list mode's selection) shows what list mode's
-    /// keys do, as buttons.
+    /// A task's row: its badge with the state dot, title (`P1` before it when urgent) and one fact
+    /// at the right; while its agent works, a muted line of what it does. The rest is in its hover
+    /// card. Hover (or list mode's selection) shows Snooze and Done.
     fn task_row(&self, task: &Task, row: &TaskRow, selected: bool, cx: &mut Context<Self>) -> AnyElement {
         let id = task.id;
         // Words, as on a session's row: the icons said too little.
@@ -4389,25 +4387,15 @@ impl Workspace {
             };
             self.word(format!("{name}:{id}"), (label, tip), click, cx)
         };
-        // Over the end of the muted line, on the row's own colour: hidden, they take no room from it.
+        // Over the end of the title line, on the row's own colour: hidden, they take no room from it.
+        // No Start or Show: a click on the row opens its conversation. Hold is `h` in list mode.
         let actions = words::words("task-row", selected)
-            .bottom(px(4.))
-            // No Start or Show: a click on the row opens its conversation.
-            .child(button("task-snooze", "Snooze", "Snooze 1 hour (S)"))
-            // A finished task cannot be put on hold, and one on hold is there already: no button
-            // for a move that would change nothing.
-            .children(
-                (!matches!(row.group, Group::Done | Group::OnHold)).then(|| button("task-hold", "Hold", "Hold (H)")),
-            )
-            // The tab on show, of no task, can become this task's.
-            .children(
-                (self.model.tab_task().is_none() && row.group != Group::Done)
-                    .then(|| button("task-claim", "Claim tab", "Make the tab on show this task's")),
-            )
-            .child(button("task-dismiss", "Dismiss", "Dismiss (X)"));
+            .top(px(2.))
+            .child(button("task-snooze", "Snooze", "1 hour · S"))
+            .child(button("task-dismiss", "Done", "X"));
         // The task on show: a bar at the row's edge, and its title in bold.
         let bar = div().absolute().left(px(-1.)).top(px(5.)).bottom(px(5.)).w(px(3.)).rounded_full();
-        let detail = div().flex_1().min_w_0().truncate().text_xs().text_color(rgb(theme::MUTED));
+        let muted = || div().text_xs().text_color(rgb(theme::MUTED));
         list_button(("task", id as usize), selected)
             .group("task-row")
             .relative()
@@ -4422,39 +4410,17 @@ impl Workspace {
                     .flex_col()
                     .child(
                         div()
+                            .h(px(20.))
                             .flex()
                             .items_center()
                             .gap_2()
                             .when(row.current, |d| d.font_weight(FontWeight::SEMIBOLD))
-                            // The tags are on the line below.
                             .children(task_title_cells(task))
-                            // Under Needs you with its tabs open: said here, as it is not under Open.
-                            .children((matches!(row.group, Group::NeedsYou | Group::Done) && row.tabs > 0).then(
-                                || {
-                                    let mark = div().flex_none().px_1().rounded_sm().bg(rgb(theme::SELECTED));
-                                    mark.text_xs()
-                                        .font_weight(FontWeight::NORMAL)
-                                        .text_color(rgb(theme::MUTED))
-                                        .child("open")
-                                },
-                            )),
+                            .children(row.fact.clone().map(|fact| muted().flex_none().child(fact))),
                     )
-                    // What its session does now, while it works, else its tags and age; its model.
-                    .child(
-                        div()
-                            .h(px(20.))
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(detail.child(row.live.clone().unwrap_or_else(|| row.detail.clone())))
-                            .children(
-                                row.model.clone().map(|model| {
-                                    div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(model)
-                                }),
-                            )
-                            .child(actions),
-                    ),
+                    .children(row.live.clone().map(|live| muted().h(px(18.)).truncate().child(live))),
             )
+            .child(actions)
             .child(self.controls.mark(format!("task:{id}")))
             .when_some(progress::card_tip(self, id), |row, tip| row.tooltip(tip))
             .on_click(open_task(id, cx))
@@ -5150,10 +5116,10 @@ fn terminal_title(cwd: Option<&str>, program: Option<&str>, home: Option<&str>) 
 }
 
 /// A task's priority and title, as cells of a row.
-fn task_title_cells(task: &Task) -> [Div; 2] {
-    let urgent = if task.priority == 1 { theme::ERROR } else { theme::MUTED };
-    let priority = div().flex_none().text_xs().text_color(rgb(urgent)).child(format!("P{}", task.priority));
-    [priority, div().flex_1().min_w_0().truncate().child(task.title.clone())]
+fn task_title_cells(task: &Task) -> impl Iterator<Item = Div> {
+    // Only P1 is said: the other priorities are on the card.
+    let priority = (task.priority == 1).then(|| div().flex_none().text_xs().text_color(rgb(theme::ERROR)).child("P1"));
+    priority.into_iter().chain([div().flex_1().min_w_0().truncate().child(task.title.clone())])
 }
 
 /// A task's tags as a cell at the end of its row, no wider than `width`. No tags: no cell.

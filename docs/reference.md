@@ -25,7 +25,7 @@ running, and the rest of the design is not built: see the
 | Terminal scrollback, mouse selection, copy and paste | Works today |
 | Scrollbars on every list that scrolls, the key reference and a terminal's scrollback: drag the thumb, click the track to page (in a terminal a click beside the thumb is the terminal's). They follow the system's "Show scroll bars" setting | Works today |
 | Visual mode: select terminal text with vi keys | Works today |
-| Tasks inbox, by state: Needs you, Running, Later (captured or on hold), Done (last, folded). Headings fold (click, or ↵ or space in list mode). Each row shows its tags, what it has open and its age, or while its session works what it does now; and the session's model. A click opens its conversation; hover it for its card (state, tags, started, agent time, workspace, tokens by model, context) and for snooze, hold and dismiss buttons. After one of those by mouse, a line at the top offers Undo for 6 seconds. Kept in `~/.ottospace/tasks` | Works today |
+| Tasks inbox, by state: Needs you, Running, Later (captured or on hold), Done (last, folded). Headings fold (click, or ↵ or space in list mode). Each row is one line: its badge with the state dot, its title (`P1` before an urgent one) and one fact at the right: how long it has run, waited or been done (none under Needs you: the dot says it); while its session works, a muted line under says what it does now. A click opens its conversation; hover it for its card (priority, state, what it does now and its model, tags and counts of paths, skills, references and captures, filed, started, agent time, workspace, tokens by model, context) and for Snooze and Done (dismiss) buttons; hold is `h` in list mode. After one of those by mouse, a line at the top offers Undo for 6 seconds. Kept in `~/.ottospace/tasks` | Works today |
 | Tasks by project: State \| Project in the section's header, kept in `tasks_view` in the settings. One foldable group a `#project`, by name, with a bar of its tasks' states (hover for the numbers), its open tasks (needs you, running, later), then a folded "Done · n"; the tasks of no project last. Under the list: `Today  n done · n running · agent time` | Works today |
 | A task's progress, kept in its file: when its agent started and when it was done, time at work (activity until a quiet gap of two minutes), and tokens by model (input, output, cached; a sub-agent's apart), summed from its sessions, so they outlive the session files. Tokens only: no prices | Works today |
 | "Pop next" (⌘⇧N): the conversation of the next task that needs you; the tab on show stays | Works today |
@@ -270,12 +270,12 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
 9. **Who may.** Only you start or stop an agent, and only you say which task a tab is of: a
    client's ↵ files the task with no tab, its `task_open` goes to tabs the task has, its
    `session_adopt` makes the task, and none starts anything.
-10. **Progress.** While the task is open its session is read on: what it does now and its model
-   show on its row, and the task keeps in its file when its agent started, when it was done, its
+10. **Progress.** While the task is open its session is read on: what it does now shows on its
+   row and its model on its card, and the task keeps in its file when its agent started, when it was done, its
    time at work (activity until a quiet gap of two minutes) and its tokens by model (input,
    output, cached; a sub-agent's apart), summed over its sessions. They stay when the session
-   files go. Hover the task, or its badge, for its card: state and what it does now, tags,
-   Started, Agent time, Workspace (tabs · panes), the tokens and how full its context is. The
+   files go. Hover the task, or its badge, for its card: priority, state, what it does now and
+   its model, tags and counts, Filed, Started, Agent time, Workspace (tabs · panes), the tokens and how full its context is. The
    Tasks section groups by state (Needs you, Running, Later, Done) or by project (State |
    Project in its header), and says under the list what was done today, what runs, and how
    long agents worked today. A key of a task's file this build does not know is kept as it is.

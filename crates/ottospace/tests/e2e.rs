@@ -1015,13 +1015,15 @@ fn the_tasks_section_lists_what_needs_you_then_what_runs_then_what_waits() {
     // The same from the socket: its task has no tab to show.
     let filed = otto.call(json!({"cmd": "task_new", "line": "write the notes", "open": true}));
     assert_eq!((&filed["task"]["id"], &filed["opened"]), (&json!(5), &json!(false)));
-    // A task that needs you stays under Needs you when its tab is on show; its row says what it has open.
+    // A task that needs you stays under Needs you when its tab is on show; its card says what it has
+    // open. Its row's one fact: none for needs you (the dot says it), how long it waited under Later.
     otto.call(json!({"cmd": "split", "kind": "empty"}));
     let reply = otto.claim(1);
     assert_eq!(bar(&reply)[..3], [section("needs_you", &[1]), section("running", &[2]), section("later", &[3, 4, 5])]);
     let row = &reply["tasks_bar"]["sections"][0]["rows"][0];
-    assert_eq!((&row["tabs"], &row["current"]), (&json!(1), &json!(true)));
-    assert!(row["detail"].as_str().unwrap().starts_with("1 tab, 1 pane"), "{row}");
+    assert_eq!((&row["current"], &row["fact"]), (&json!(true), &Value::Null), "{row}");
+    assert_eq!(reply["tasks_bar"]["sections"][2]["rows"][0]["fact"], "now");
+    assert_eq!(reply["tasks_progress"]["cards"]["1"]["workspace"], "1 tab · 1 pane");
 
     // Where a control is drawn: sneak mode's targets give each one's frame. Then a real click
     // there, through the window's own handlers.
@@ -1049,17 +1051,18 @@ fn the_tasks_section_lists_what_needs_you_then_what_runs_then_what_waits() {
     // A click on that line does what `u` does, and the offer goes.
     let reply = press("task-undo");
     assert_eq!((&reply["tasks_bar"]["undo"], bar(&reply)[1].clone()), (&json!(null), section("running", &[2])));
-    // A click on Hold. Left alone, the offer goes after a few seconds; the move stays.
-    let reply = press("task-hold:2");
-    assert_eq!(reply["tasks_bar"]["undo"], "On hold");
+    // A click on Snooze. Left alone, the offer goes after a few seconds; the move stays.
+    let reply = press("task-snooze:2");
+    assert_eq!(reply["tasks_bar"]["undo"], "Snoozed");
     otto.wait_for("the offer to undo to go", |o| {
         o.call(json!({"cmd": "state"}))["tasks_bar"]["undo"].is_null().then_some(())
     });
-    assert_eq!(bar(&otto.call(json!({"cmd": "state"}))).last(), Some(&section("later", &[3, 2, 4, 5])));
-    // On the row of a task on hold there is no Hold button: it would change nothing.
-    // Rows now: Needs you, 1, Later, 3, 2, 4, 5. The selection went with its task.
-    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["list"], 4);
-    assert!(drawn("task-dismiss:2") && !drawn("task-hold:2"));
+    let reply = otto.call(json!({"cmd": "state"}));
+    assert_eq!(bar(&reply)[1], section("later", &[3, 4, 5]), "Running is gone");
+    // The row's words are Snooze and Done; Hold is `h` alone. Rows: Needs you, 1, Later, 3, ...
+    let up = reply["state"]["list"].as_u64().unwrap() - 1;
+    key(&vec!["k"; up as usize].join(" "));
+    assert!(drawn("task-snooze:1") && drawn("task-dismiss:1") && !drawn("task-hold:1"));
     // The same moves from the socket (an agent's) offer nothing.
     assert_eq!(otto.call(json!({"cmd": "task_dismiss", "id": 3}))["tasks_bar"]["undo"], json!(null));
     // A client's click on a row goes to the task's tabs: only the user's starts an agent.
@@ -1800,7 +1803,8 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
     assert_eq!((&task["title"], &task["state"], &task["agent"]), (&json!("app"), &json!("running"), &json!("claude")));
     assert_eq!((task["repo"].as_str(), task["session"]["id"].as_str()), (repo.to_str(), Some(busy)));
     assert!(task["session"].get("cwd").is_none(), "{task}");
-    assert_eq!(reply["tasks_bar"]["sections"][0]["rows"][0]["detail"], ">app · @claude · now");
+    let card = &reply["tasks_progress"]["cards"]["1"];
+    assert_eq!((&card["tags"], &card["filed"]), (&json!([">app", "@claude"]), &json!("now")));
     assert_eq!(rows(&reply), [row("codex", idle, false)]);
     // One that started below the repository is the repository's task too: `>app`, not `>crates`.
     let reply = otto.call(json!({"cmd": "session_adopt", "runner": "codex", "id": idle}));
@@ -4877,7 +4881,7 @@ fn a_pane_is_captured_annotated_and_becomes_a_task_with_a_brief() {
     let name = file.strip_suffix("/1.json").filter(|name| name.starts_with("1-") && name.len() >= 10).expect(file);
     assert_eq!((&task["title"], task["materials"].as_array().map(Vec::len)), (&json!("fix it"), Some(1)));
     assert_ne!(name, "1-0ldw0rd0ldw0rd");
-    assert!(reply["tasks_bar"]["sections"][0]["rows"][0]["detail"].as_str().is_some_and(|d| d.contains("1 material")));
+    assert!(reply["tasks_progress"]["cards"]["1"]["tags"].as_array().unwrap().contains(&json!("1 capture")));
     let kept = materials.join(name);
     assert!(!dir.exists(), "the draft's folder is the task's now");
     let files = ["1.annotated.png", "1.json", "1.png", "brief.json", "brief.md"];
@@ -5974,7 +5978,10 @@ fn tasks_show_by_state_or_project_with_time_tokens_a_footer_and_a_card() {
     assert_eq!(headings, ["needs_you", "running", "later", "done"]);
     assert_eq!((&sections[3]["count"], &sections[3]["collapsed"]), (&json!(1), &json!(true)));
     let running = &sections[1]["rows"][0];
-    assert_eq!((&running["live"], &running["model"]), (&json!("network · git push"), &json!("fable-5.2")), "{running}");
+    // Its one fact: how long it has run, as its card's Started. Its model is on the card.
+    let card = &reply["tasks_progress"]["cards"]["1"];
+    assert_eq!((&running["live"], &running["fact"]), (&json!("network · git push"), &card["started"]), "{running}");
+    assert_eq!((&card["model"], &card["priority"]), (&json!("fable-5.2"), &json!(3)), "{card}");
 
     // The task keeps what its session did: tokens by model, a sub-agent's apart, and time at work.
     let card = otto.wait_for("the session's work", |o| {

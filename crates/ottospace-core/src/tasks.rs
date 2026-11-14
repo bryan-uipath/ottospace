@@ -85,22 +85,30 @@ impl From<Group> for Heading {
     }
 }
 
-/// A row of the Tasks section, as drawn.
+/// A row of the Tasks section, as drawn: one line; the rest is in its hover card (`Model::card`).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct TaskRow {
-    /// What its session does now (`shell · cargo test`), while it is at work, and its model in short.
+    /// What its session does now (`shell · cargo test`), while it is at work: a muted line under.
     pub live: Option<String>,
-    pub model: Option<String>,
     pub id: TaskId,
     /// The inbox group, whatever heading the row is under: its dot's colour.
     pub group: Group,
-    /// Tabs and panes the task has open.
-    pub tabs: usize,
-    pub panes: usize,
     /// Its tabs are the ones on show.
     pub current: bool,
-    /// The muted second line: `#canvas · >app · 2 tabs, 3 panes · 3h`.
-    pub detail: String,
+    /// The one fact at its right (`fact`).
+    pub fact: Option<String>,
+}
+
+/// The one fact a row shows at its right, by its group: how long it has run (since its agent
+/// first started), waited (since filed) or been done. Needs you: none, its dot says it.
+pub fn fact(task: &Task, group: Group, now: u64) -> Option<String> {
+    let since = match group {
+        Group::NeedsYou => None,
+        Group::Running => task.started_at,
+        Group::Captured | Group::OnHold => task.created,
+        Group::Done => task.finished_at,
+    };
+    since.map(|at| age(at, now))
 }
 
 /// A heading of the Tasks section with its rows. A collapsed one keeps its count and no rows.
@@ -752,6 +760,23 @@ mod tests {
 
     fn titles(tasks: &Tasks) -> Vec<(Group, &str)> {
         tasks.inbox().into_iter().map(|(group, task)| (group, task.title.as_str())).collect()
+    }
+
+    #[test]
+    fn a_row_shows_the_one_fact_of_its_state() {
+        let hour = 3_600_000;
+        let mut tasks = Tasks::default();
+        tasks.add("t".into(), 2, State::Running);
+        let task = &mut tasks.list[0];
+        (task.created, task.started_at, task.finished_at) = (Some(0), Some(hour), Some(3 * hour));
+        let at = |task: &Task, group| fact(task, group, 5 * hour);
+        assert_eq!(at(task, Group::Running).as_deref(), Some("4h"), "run since its agent started");
+        assert_eq!(at(task, Group::Captured).as_deref(), Some("5h"), "waited since filed");
+        assert_eq!(at(task, Group::OnHold).as_deref(), Some("5h"));
+        assert_eq!(at(task, Group::Done).as_deref(), Some("2h"), "done since");
+        assert_eq!(at(task, Group::NeedsYou), None, "the dot says it");
+        task.started_at = None;
+        assert_eq!(at(task, Group::Running), None, "not known: nothing");
     }
 
     #[test]

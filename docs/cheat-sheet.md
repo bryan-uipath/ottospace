@@ -128,14 +128,14 @@ what can be opened, and its other panes are empty and say why. Marks are kept in
 | Add files to the task | Drag them from Finder onto the box, ⌘O, or copy in Finder and ⌘V: each becomes a `/path` |
 | Run the agent in a folder | Type `~/`, `/` or (with a `>repo`) `./`, and take a folder from the dropdown: "runs in ~/notes/ ×" shows it. The path stays in the title |
 | Point the task at a tab, a pane, a mark or an app | `^name` in the line, or ⌥-click the tab or pane while the box is open |
-| A task's tabs | Side by side behind its badge on the one bar. Starting a task takes the tab on show (if it is no task's); ⌘T joins the task on show; drag a tab onto another group; palette: New Tab outside the Task, Remove Tab from Task, Move Tab to Task…; Claim tab on a row |
+| A task's tabs | Side by side behind its badge on the one bar. Starting a task takes the tab on show (if it is no task's); ⌘T joins the task on show; drag a tab onto another group; palette: New Tab outside the Task, Remove Tab from Task, Move Tab to Task… |
 | The next task that needs me | ⌘⇧N: its conversation; the tab stays |
 | See what needs me at a glance | A tab with no panes is the home screen: what goes there (Open an app ⌘E, Terminal ⌘D), up to three tasks under Needs you, and a node for each of the first 12 listed tasks. Left to right is the project; within a project the older task is farther; the colour is the state. No node sits under the text, so a small window shows fewer. Hover a node for its title; click a node or a row to open its conversation |
 | See the inbox | Tasks on the rail: Needs you, Running, Later, Done (folded). Click a heading to fold it, or ⌘⌃E, move to it, ↵ or space |
 | See tasks by project | Project in the Tasks header (State goes back): a group a `#project` with a bar of its states, then "no project". Today's work is under the list |
 | See a task's time and tokens | Hover its row, or its badge on the right rail: started, agent time, workspace, tokens by model |
 | See agent sessions that are no task (a Claude Code or Codex started by hand) | Tasks on the rail, under Other sessions (folded at first: click its heading; Today \| 7 days \| 30 days \| All on it picks how far back): runner, repository, the session's title, active or idle, what it does now, the model. A click shows its conversation in the drawer: Resume session goes on with it, unless it is at work in another terminal (then watched: its calls and edits, a message at a time). Hover a row: Open, Adopt makes it a task (its conversation too), Hide removes it until the next start. [More](reference.md#sessions) |
-| Snooze 1 hour / hold / dismiss / undo | ⌘⌃E on Tasks, then `s` / `h` / `x` / `u`. By mouse: the buttons on a row you hover; "Undo" then shows at the top for 6 seconds |
+| Snooze 1 hour / hold / dismiss / undo | ⌘⌃E on Tasks, then `s` / `h` / `x` / `u`. By mouse: Snooze and Done on a row you hover (hold is `h` only); "Undo" then shows at the top for 6 seconds |
 
 The status bar shows how many tasks need you. Tasks are kept in `~/.ottospace/tasks`, or the `tasks` setting.
 A tag counts only if its name is known (`>repo` in the Repos list, `@claude` or `@codex`, a runner with a model as `@claude-opus-5-5` or `@codex-gpt-6-astra`, a skill that is installed, a path that exists); any other word stays in the title.

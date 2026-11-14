@@ -288,6 +288,8 @@ function card(value: unknown, at: string): Card {
   return {
     id: num(o.id, `${at}.id`),
     title: str(o.title, `${at}.title`),
+    priority: num(o.priority, `${at}.priority`),
+    filed: orNull(str)(o.filed, `${at}.filed`),
     state: str(o.state, `${at}.state`),
     group: orNull(group)(o.group, `${at}.group`),
     live: orNull(str)(o.live, `${at}.live`),
@@ -323,12 +325,9 @@ function taskRow(value: unknown, at: string): TaskRow {
   return {
     id: num(o.id, `${at}.id`),
     group: group(o.group, `${at}.group`),
-    tabs: num(o.tabs, `${at}.tabs`),
-    panes: num(o.panes, `${at}.panes`),
     current: bool(o.current, `${at}.current`),
-    detail: str(o.detail, `${at}.detail`),
+    fact: orNull(str)(o.fact, `${at}.fact`),
     live: orNull(str)(o.live, `${at}.live`),
-    model: orNull(str)(o.model, `${at}.model`),
   };
 }
 

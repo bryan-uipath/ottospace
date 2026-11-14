@@ -25,7 +25,9 @@ impl Render for CardView {
         let card = &self.0;
         let muted = || div().text_xs().text_color(rgb(theme::MUTED));
         let color = card.group.map_or(theme::MUTED, theme::task);
-        let state = [Some(card.state.to_string()), card.live.clone()].into_iter().flatten().collect::<Vec<_>>();
+        let priority = Some(format!("P{}", card.priority));
+        let state = [priority, Some(card.state.to_string()), card.live.clone(), card.model.clone()];
+        let state = state.into_iter().flatten().collect::<Vec<_>>();
         let chip = |tag: &String| {
             div()
                 .px_1p5()
@@ -47,7 +49,6 @@ impl Render for CardView {
                 .child(div().flex_1().min_w_0().truncate().child(name))
                 .child(cell(count(row.input)))
                 .child(cell(count(row.output)))
-                .child(cell(count(row.cached)))
         });
         let context = card.context.zip(card.window).filter(|(_, window)| *window > 0).map(|(used, window)| {
             let share = (used as f32 / window as f32).clamp(0., 1.);
@@ -88,6 +89,7 @@ impl Render for CardView {
             .when(!card.tags.is_empty(), |d| {
                 d.child(div().flex().flex_wrap().gap_1().children(card.tags.iter().map(chip)))
             })
+            .children(card.filed.clone().map(|age| fact("Filed", format!("{age} ago"))))
             .child(fact("Started", card.started.clone().map_or("not yet".into(), |age| format!("{age} ago"))))
             .child(fact("Agent time", card.agent_time.clone()))
             .child(fact("Workspace", card.workspace.clone()))
@@ -96,8 +98,7 @@ impl Render for CardView {
                     .flex()
                     .child(div().flex_1().child("TOKENS"))
                     .child(cell("in".into()))
-                    .child(cell("out".into()))
-                    .child(cell("cached".into()));
+                    .child(cell("out".into()));
                 d.child(div().flex().flex_col().gap_0p5().child(head).children(tokens))
             })
             .children(context)

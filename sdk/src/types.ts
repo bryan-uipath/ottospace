@@ -462,16 +462,12 @@ export interface CheckoutRow {
 export interface TaskRow {
   id: TaskId;
   group: Group;
-  /** Tabs and panes the task has open. */
-  tabs: number;
-  panes: number;
   /** Its tabs are the ones on show. */
   current: boolean;
-  /** The muted line: tags, what is open, age. */
-  detail: string;
-  /** What its session does now (`shell · cargo test`), while it works, and its model in short. */
+  /** The one fact at its right: how long it has run, waited or been done (`3h`). Null for needs you. */
+  fact: string | null;
+  /** What its session does now (`shell · cargo test`), while it works. */
   live: string | null;
-  model: string | null;
 }
 
 /** A project's tasks by state: its bar's segments, in this order. */
@@ -498,11 +494,15 @@ export interface ProjectGroup {
 export interface Card {
   id: TaskId;
   title: string;
+  /** 1 is most urgent. */
+  priority: number;
+  /** How long ago it was filed: `3h`. */
+  filed: string | null;
   state: string;
   group: Group | null;
   live: string | null;
   model: string | null;
-  /** `#project`, `>repo`, `@agent`. */
+  /** `#project`, `>repo`, `@agent`, then counts: `2 paths`, `1 skill`, `1 reference`, `1 capture`. */
   tags: string[];
   /** How long ago its agent first started: `3h`. */
   started: string | null;
