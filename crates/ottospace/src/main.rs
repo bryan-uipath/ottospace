@@ -1592,11 +1592,7 @@ impl Workspace {
 
     /// What the status bar says is wrong, most pressing first: the last request that failed, a
     /// task that is not saved, then a problem found at start.
-    fn problem(&self) -> Option<String> {
-        self.status_line().map(|(text, _)| text)
-    }
-
-    /// `problem`, and how it is drawn: the settings' line by its own level (a restart to ask
+    /// The problem the status bar shows, and how it is drawn: the settings' line by its own level (a restart to ask
     /// for is information), anything else as an error.
     fn status_line(&self) -> Option<(String, Level)> {
         // What is wrong with `settings.json` and `marks.json` has its own place beside a notice from the start.
@@ -2631,6 +2627,7 @@ impl Workspace {
                 (*id, terminal)
             })
             .collect();
+        let status = self.status_line();
         serde_json::json!({
             "ok": true,
             "mode": self.model.mode(),
@@ -2673,9 +2670,9 @@ impl Workspace {
             "font": terminal::font_in_use(),
             "cell": [f32::from(self.cell.width), f32::from(self.cell.height)],
             // The problem the status bar shows, or null. Not `error`: that key means the request failed.
-            "notice": self.problem(),
+            "notice": status.as_ref().map(|(text, _)| text),
             // How the status bar draws it: `info` (muted: a restart to ask for, a retired key) or `error`.
-            "notice_level": self.status_line().map(|(_, level)| level),
+            "notice_level": status.as_ref().map(|(_, level)| level),
             // How many problems the last read of `settings.json` found.
             "settings_errors": self.model.settings_errors(),
             // Each hosted window's real frame, in the same global coordinates as `parking`.

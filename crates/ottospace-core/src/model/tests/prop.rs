@@ -1256,6 +1256,7 @@ fn check(m: &Model) -> Result<(), String> {
     // A stop asked for is of an agent that runs, until its process is gone.
     for subject in &m.ending {
         ensure!(m.agent_runs(subject), "{subject:?} is ending with no agent");
+        ensure!(!m.switching.contains(subject), "{subject:?} is ending and switching: it would start again");
     }
     let chats: Vec<String> = m.chats.iter().map(|chat| format!("{:?}", chat.subject)).collect();
     ensure!(unique(&chats), "two transcripts for one conversation: {chats:?}");

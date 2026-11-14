@@ -435,14 +435,15 @@ impl Transcript {
         if !resumed {
             return;
         }
-        let ended = match self.items.back().map(|item| &item.entry) {
+        let here = self.items.iter().any(|item| !matches!(item.entry, Entry::Notice(_)));
+        // With its turns on show, the end just before gives way; else it stays on the record.
+        let ended = match self.items.back().map(|item| &item.entry).filter(|_| here) {
             Some(&Entry::Notice(Notice::Ended { code, signal, by_user, .. })) => Some(End { code, signal, by_user }),
             _ => None,
         };
         if ended.is_some() {
             self.items.pop_back();
         }
-        let here = self.items.iter().any(|item| !matches!(item.entry, Entry::Notice(_)));
         self.push(Entry::Notice(Notice::Resumed { here, ended }));
     }
 
@@ -770,7 +771,13 @@ mod tests {
         // A resume of a session not shown before: its turns are in its file, and it says so.
         let mut fresh = Transcript::default();
         fresh.started(true);
-        assert_eq!(texts(&fresh), [format!("{:?}", Notice::Resumed { here: false, ended: None })]);
+        let elsewhere = format!("{:?}", Notice::Resumed { here: false, ended: None });
+        assert_eq!(texts(&fresh), [elsewhere.clone()]);
+        // Stopped and resumed again with still no turns on show: the stop stays on the record.
+        fresh.stopping = true;
+        fresh.fold(Event::Exited { code: None, signal: None, details: false }, 4);
+        fresh.started(true);
+        assert_eq!(fresh.items().len(), 3, "{:?}", texts(&fresh));
     }
 
     #[test]

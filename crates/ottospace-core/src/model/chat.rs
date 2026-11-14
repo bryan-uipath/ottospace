@@ -134,6 +134,10 @@ impl Model {
         let talk = self.talk.as_ref().filter(|talk| talk.open)?;
         let chat = self.chat(&talk.task)?;
         let native = self.talk_view(&talk.task) == View::Native;
+        // Stopping: nothing typed would reach it.
+        if self.is_ending(&talk.task) {
+            return None;
+        }
         (chat.transcript.live || (native && !chat.transcript.watched && self.talk_resumes().is_some())).then_some(chat)
     }
 
@@ -198,7 +202,8 @@ impl Model {
     pub fn talk_switchable(&self) -> bool {
         let Some(subject) = self.talk.as_ref().map(|talk| &talk.task) else { return false };
         let busy = self.chat(subject).is_some_and(|chat| chat.transcript.live && chat.transcript.busy());
-        self.drawable(subject) && !busy
+        // Stopping: the stop stands; a switch now would start it again in the other view.
+        self.drawable(subject) && !busy && !self.is_ending(subject)
     }
 
     /// An agent started: drawn natively, its conversation gets a live transcript (kept from
@@ -633,7 +638,13 @@ mod tests {
         assert_eq!(m.update(Action::TaskStop { id: one.clone() }), [Effect::StopAgent { task: one.clone() }]);
         assert!(m.is_ending(&one));
         assert_eq!((m.composer_button(), m.talk_resumes(), m.talk_note()), (None, None, None));
-        m.update(Action::AgentExited { task: one.clone() }.sent_by(Origin::System));
+        // While it stops: no switch of view (it would start it again there), nothing typed or sent.
+        assert!(!m.talk_switchable());
+        assert_eq!(m.update(Action::TalkView { shows: View::Terminal }), []);
+        assert!(m.shown_draft_chat().is_none() && !m.talk_typing());
+        assert_eq!(m.update(Action::TalkSend), []);
+        let exited = m.update(Action::AgentExited { task: one.clone() }.sent_by(Origin::System));
+        assert!(!exited.iter().any(|e| matches!(e, Effect::StartAgent { .. })), "the stop stands: {exited:?}");
         assert!(!m.is_ending(&one));
         let link = m.tasks.get(one.task().unwrap_or_default()).and_then(|task| task.session.clone());
         let resumes = link.is_some();

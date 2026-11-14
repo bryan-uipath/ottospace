@@ -1436,21 +1436,26 @@ fn shape(blocks: &[Block]) -> serde_json::Value {
 /// A notice drawn as a thin rule with a word, not a sentence: the user's stop, and a resume
 /// with the turns above it. The word, and how it ended, for the hover.
 fn divider(notice: &Notice) -> Option<(&'static str, Option<String>)> {
-    let how = |code: Option<i32>, signal: Option<i32>| match (code, signal) {
-        (_, Some(signal)) => format!("signal {signal}"),
-        (Some(code), None) => format!("exit {code}"),
-        (None, None) => "no code".into(),
-    };
     match notice {
-        Notice::Ended { by_user: true, code, signal, .. } => Some(("stopped", Some(how(*code, *signal)))),
+        Notice::Ended { by_user: true, code, signal, .. } => Some(("stopped", how(*code, *signal))),
         Notice::Resumed { here: true, ended: Some(end) } if end.by_user => {
-            Some(("stopped · resumed", Some(how(end.code, end.signal))))
+            Some(("stopped · resumed", how(end.code, end.signal)))
         }
         Notice::Resumed { here: true, ended: Some(end) } => {
-            Some(("ended · resumed", Some(format!("The agent ended ({})", how(end.code, end.signal)))))
+            let how = how(end.code, end.signal).map_or(String::new(), |how| format!(" ({how})"));
+            Some(("ended · resumed", Some(format!("The agent ended{how}"))))
         }
         Notice::Resumed { here: true, ended: None } => Some(("resumed", None)),
         _ => None,
+    }
+}
+
+/// How an agent ended, when its program said: `exit 1`, `signal 9`.
+fn how(code: Option<i32>, signal: Option<i32>) -> Option<String> {
+    match (code, signal) {
+        (_, Some(signal)) => Some(format!("signal {signal}")),
+        (Some(code), None) => Some(format!("exit {code}")),
+        (None, None) => None,
     }
 }
 
@@ -1471,11 +1476,7 @@ fn notice_text(notice: &Notice) -> String {
         Notice::MessageElsewhere => "A message, in the other terminal.".into(),
         Notice::Ended { by_user: true, .. } => "Stopped.".into(),
         Notice::Ended { code, signal, replied, .. } => {
-            let how = match (code, signal) {
-                (_, Some(signal)) => format!(" (signal {signal})"),
-                (Some(code), None) => format!(" (exit {code})"),
-                (None, None) => String::new(),
-            };
+            let how = how(*code, *signal).map_or(String::new(), |how| format!(" ({how})"));
             match replied {
                 true => format!("The agent ended{how}."),
                 false => format!("The agent ended before replying{how}. Terminal view may show why."),
