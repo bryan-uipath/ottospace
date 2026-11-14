@@ -455,3 +455,71 @@ fn spans_round_up_to_the_minute() {
     assert_eq!(span(60 * M), "1h");
     assert_eq!(span(80 * M + 1), "1h 21m");
 }
+
+#[test]
+fn the_agenda_lists_all_day_first_then_by_start_then_a_folded_tomorrow() {
+    use crate::list::ListRow::{Meeting, MeetingsTomorrow};
+    let all_day = Event { all_day: true, ..event(1, NINE - 9 * H, 24 * 60) };
+    let tomorrow = [event(4, NINE + 24 * H, 30), Event { all_day: true, ..event(5, NINE + 15 * H, 24 * 60) }];
+    let mut c = calendar(vec![
+        event(2, NINE, 30),
+        event(3, NINE - 2 * H, 30),
+        all_day,
+        tomorrow[0].clone(),
+        tomorrow[1].clone(),
+    ]);
+    assert_eq!(c.agenda(), [Meeting(1), Meeting(3), Meeting(2), MeetingsTomorrow]);
+    c.tomorrow_open = true;
+    assert_eq!(c.agenda(), [Meeting(1), Meeting(3), Meeting(2), MeetingsTomorrow, Meeting(5), Meeting(4)]);
+    // No tomorrow: no group. Nothing at all: no rows.
+    assert_eq!(calendar(vec![event(2, NINE, 30)]).agenda(), [Meeting(2)]);
+    assert!(calendar(Vec::new()).agenda().is_empty());
+}
+
+#[test]
+fn the_rail_shows_a_dot_near_a_meeting_and_a_badge_while_it_alerts() {
+    let mut c = calendar(vec![event(1, NINE, 30)]);
+    assert_eq!(c.rail(NINE - 5 * M), RailMark::None, "approaching: the pulse is the hairline's");
+    assert_eq!(c.rail(NINE - IMMINENT), RailMark::Near);
+    assert_eq!(c.rail(NINE + M), RailMark::Near);
+    c.in_call = Some(false);
+    c.tick(NINE);
+    assert_eq!(c.rail(NINE + M), RailMark::Alert);
+    c.dismiss(1);
+    assert_eq!(c.rail(NINE + M), RailMark::Near);
+    assert_eq!(c.rail(NINE + 30 * M), RailMark::None);
+    c.on = false;
+    assert_eq!(c.rail(NINE + M), RailMark::None);
+}
+
+#[test]
+fn the_calendar_section_is_there_only_with_a_feed() {
+    use crate::model::{Action, Model, Origin, Section};
+    let mut m = Model::default();
+    assert!(!m.sections().contains(&Section::Calendar));
+    m.update(Action::ToggleSection { section: Section::Calendar });
+    assert_eq!(m.sidebar, None, "no feed: no section to open");
+    m.update(Action::SetCalendar { on: true, notify: true, links_only: false }.sent_by(Origin::System));
+    assert_eq!(m.sections()[..2], [Section::Tasks, Section::Calendar]);
+    m.update(Action::ToggleSection { section: Section::Calendar });
+    assert_eq!(m.sidebar, Some(Section::Calendar));
+    // The feed goes (a later start without it): the section closes.
+    m.update(Action::SetCalendar { on: false, notify: true, links_only: false }.sent_by(Origin::System));
+    assert_eq!(m.sidebar, None);
+}
+
+#[test]
+fn enter_on_a_meeting_joins_it_for_the_user_only() {
+    use crate::model::{Action, Effect, Model, Origin, Section};
+    let mut m = Model::default();
+    m.update(Action::SetCalendar { on: true, notify: true, links_only: false }.sent_by(Origin::System));
+    let days = [NINE - 9 * H, NINE + 15 * H, NINE + 39 * H];
+    m.update(Action::CalendarRead { events: Some(vec![event(7, NINE, 30)]), days, at: NINE }.sent_by(Origin::System));
+    m.update(Action::ToggleSection { section: Section::Calendar });
+    m.update(Action::FocusList);
+    assert_eq!(m.list, Some(0));
+    let client = m.update(Action::ListChoose { axis: crate::Axis::Right }.sent_by(Origin::Socket));
+    assert!(client.is_empty(), "a client's ↵ opens nothing");
+    let user = m.update(Action::ListChoose { axis: crate::Axis::Right });
+    assert_eq!(user, [Effect::OpenLink { url: "https://example.zoom.us/j/123".into() }]);
+}

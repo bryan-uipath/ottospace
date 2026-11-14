@@ -442,6 +442,18 @@ pub struct Calendar {
     alerts: Vec<Alert>,
     /// Alerts given this run (both of an event count), for a test.
     pub given: u32,
+    /// The Calendar section's "Tomorrow" group is unfolded.
+    pub tomorrow_open: bool,
+}
+
+/// What the Calendar's rail cell shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RailMark {
+    None,
+    /// A meeting is imminent or runs: a steady dot.
+    Near,
+    /// A meeting started and the user is in no call (the banner is up): a filled badge.
+    Alert,
 }
 
 impl Calendar {
@@ -487,6 +499,36 @@ impl Calendar {
         let near = timed.iter().find(|(_, s)| matches!(s, Stage::Approaching | Stage::Imminent));
         let running = timed.iter().find(|(_, s)| *s == Stage::Running);
         near.or(running).or(timed.first()).copied()
+    }
+
+    /// The Calendar section's rows: today's all-day events, then today's others by start, then the
+    /// "Tomorrow" group, and tomorrow's events (all-day first) while it is unfolded.
+    pub fn agenda(&self) -> Vec<crate::list::ListRow> {
+        use crate::list::ListRow;
+        let ordered = |events: Vec<&Event>| {
+            let (all_day, timed): (Vec<&Event>, Vec<&Event>) = events.into_iter().partition(|e| e.all_day);
+            all_day.into_iter().chain(timed).map(|e| ListRow::Meeting(e.id)).collect::<Vec<_>>()
+        };
+        let mut rows = ordered(self.today().collect());
+        let tomorrow: Vec<&Event> = self.tomorrow().collect();
+        if !tomorrow.is_empty() {
+            rows.push(ListRow::MeetingsTomorrow);
+            if self.tomorrow_open {
+                rows.extend(ordered(tomorrow));
+            }
+        }
+        rows
+    }
+
+    /// The rail cell's mark: the alert's badge, else a dot while a meeting is imminent or runs.
+    pub fn rail(&self, now: u64) -> RailMark {
+        let near = |e: &&Event| !e.all_day && matches!(stage(e, now), Stage::Imminent | Stage::Running);
+        match (self.on, self.banner(now).is_some(), self.today().any(|e| near(&e))) {
+            (false, ..) => RailMark::None,
+            (true, true, _) => RailMark::Alert,
+            (true, false, true) => RailMark::Near,
+            _ => RailMark::None,
+        }
     }
 
     /// The chip's text: `Design review · in 12m`, `Design review · now`.

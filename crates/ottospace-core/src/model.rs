@@ -346,6 +346,8 @@ pub enum Section {
     Tasks,
     Repos,
     Marks,
+    /// Today's meetings. Only while a calendar feed is set (`Model::sections`).
+    Calendar,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1189,6 +1191,8 @@ pub enum Action {
     CalendarJoin {
         id: u64,
     },
+    /// Fold or unfold the Calendar section's "Tomorrow" group.
+    CalendarTomorrow,
 }
 
 /// What the right drawer shows (see `Model::drawer_view`).
@@ -1489,7 +1493,8 @@ impl Action {
             | Action::CalendarRead { .. }
             | Action::CallSeen { .. }
             | Action::CalendarDismiss { .. }
-            | Action::CalendarJoin { .. } => false,
+            | Action::CalendarJoin { .. }
+            | Action::CalendarTomorrow => false,
         }
     }
 }
@@ -2141,6 +2146,10 @@ impl Model {
             }
             // So do a directory added to the Repos list and one taken off it.
             Action::RepoAdd { .. } | Action::RepoRemove { .. } => Some(apps::USERS_ALONE),
+            // ↵ on a meeting joins it, as its Join does.
+            Action::ListChoose { .. } if self.sidebar == Some(Section::Calendar) && self.rail_focus.is_none() => {
+                Some(calendar::USERS_ALONE)
+            }
             // A meeting's link opens only by the user's own click or key; nor does a client
             // silence an alert meant for the user.
             Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
@@ -2875,6 +2884,8 @@ impl Model {
             }
             Action::Leave => self.leave(effects),
             // The bar is ottospace's own UI, so using it takes the keyboard back.
+            // No rail cell, no section: the Calendar is there only while a feed is set.
+            Action::ToggleSection { section: Section::Calendar } if !self.calendar.on => {}
             Action::ToggleSection { section } => {
                 self.leave(effects);
                 self.sidebar = (self.sidebar != Some(section)).then_some(section);
@@ -3176,10 +3187,10 @@ impl Model {
                 }
             }
             Action::ListSection { delta } => {
-                use zones::SECTIONS as ORDER;
-                let at = ORDER.iter().position(|s| Some(*s) == self.sidebar).unwrap_or(0) as i64;
+                let order = self.sections();
+                let at = order.iter().position(|s| Some(*s) == self.sidebar).unwrap_or(0) as i64;
                 if self.list.is_some() {
-                    self.sidebar = Some(ORDER[(at + i64::from(delta)).rem_euclid(ORDER.len() as i64) as usize]);
+                    self.sidebar = Some(order[(at + i64::from(delta)).rem_euclid(order.len() as i64) as usize]);
                     self.list = Some(self.first_row());
                 }
             }
@@ -3212,6 +3223,9 @@ impl Model {
                 Some(ListRow::Closed(path)) => self.app_launch(&path, axis, effects),
                 Some(ListRow::MoreApps) => self.apps_toggle(apps::Group::More),
                 Some(ListRow::AllApps) => self.apps_toggle(apps::Group::All),
+                // ↵ on a meeting is its Join: the user's alone (`refusal`).
+                Some(ListRow::Meeting(id)) => self.act(Action::CalendarJoin { id }, effects),
+                Some(ListRow::MeetingsTomorrow) => self.act(Action::CalendarTomorrow, effects),
                 None => {}
             },
             Action::ListSnooze { until } => {
@@ -3819,11 +3833,18 @@ impl Model {
             Action::TalkResize { width } => self.talk_width = talk::width(width),
             Action::TalkWide => self.talk_wide = !self.talk_wide,
             Action::SetCalendar { on, notify, links_only } => {
-                (self.calendar.on, self.calendar.notify, self.calendar.links_only) = (on, notify, links_only)
+                (self.calendar.on, self.calendar.notify, self.calendar.links_only) = (on, notify, links_only);
+                if !on {
+                    self.sidebar = self.sidebar.filter(|s| *s != Section::Calendar);
+                    if self.rail_focus == Some(zones::RailFocus::Left(Section::Calendar)) {
+                        self.rail_focus = Some(zones::RailFocus::Left(Section::Tasks));
+                    }
+                }
             }
             Action::CalendarRead { events, days, at } => self.calendar.read(events, days, at),
             Action::CallSeen { in_call } => self.calendar.call_seen(in_call),
             Action::CalendarDismiss { id } => self.calendar.dismiss(id),
+            Action::CalendarTomorrow => self.calendar.tomorrow_open = !self.calendar.tomorrow_open,
             Action::CalendarJoin { id } => effects.extend(self.calendar.join(id).map(|url| Effect::OpenLink { url })),
         }
     }
@@ -4701,6 +4722,11 @@ impl Model {
 
     /// True if a `Tick` now would change what shows: a snoozed task's time has come, or the
     /// offer to undo has run out. The shell asks; it does not look at the times itself.
+    /// The left rail's sections, as drawn: Calendar only while a calendar feed is set.
+    pub fn sections(&self) -> Vec<Section> {
+        zones::SECTIONS.into_iter().filter(|s| *s != Section::Calendar || self.calendar.on).collect()
+    }
+
     pub fn due(&self, now: u64) -> bool {
         self.tasks.due(now)
             || self.undo_offer.is_some_and(|offer| offer.until <= now)
@@ -5146,6 +5172,7 @@ impl Model {
             }
             Some(Section::Tasks) => self.task_list_rows(self.tasks_view, false),
             Some(Section::Marks) => self.marks.list.iter().map(|mark| ListRow::Mark(mark.id)).collect(),
+            Some(Section::Calendar) => self.calendar.agenda(),
             // Each workbook, and the tabs of an unfolded one under it.
             Some(Section::Workbook) => {
                 let mut rows = Vec::new();
@@ -6093,6 +6120,7 @@ mod tests {
         Action::CallSeen { .. },
         Action::CalendarDismiss { .. },
         Action::CalendarJoin { .. },
+        Action::CalendarTomorrow,
         Action::WorkbookFold { .. }
     );
 
@@ -6302,6 +6330,7 @@ mod tests {
             Action::CallSeen { in_call: Some(false) },
             Action::CalendarDismiss { id: 1 },
             Action::CalendarJoin { id: 1 },
+            Action::CalendarTomorrow,
             Action::TasksView { view: TasksView::Project },
             Action::ToggleProject { project: None, done: false },
             Action::SessionWork { work: progress::Work::default() },

@@ -1029,6 +1029,7 @@ const MAKERS: &[Make] = &[
     |g| Action::CallSeen { in_call: g.rng.pick(&[None, Some(true), Some(false)]) },
     |g| Action::CalendarDismiss { id: g.meeting_id() },
     |g| Action::CalendarJoin { id: g.meeting_id() },
+    |_| Action::CalendarTomorrow,
 ];
 
 /// The way out of each box and mode. Picked one time in 8: with every action as likely as any
@@ -1113,6 +1114,10 @@ fn drawn(material: &crate::capture::Material) -> Vec<crate::capture::Shape> {
 }
 
 fn check(m: &Model) -> Result<(), String> {
+    // The Calendar is open, or has the rail's keyboard, only while a feed is set.
+    let calendar_shown =
+        m.sidebar == Some(Section::Calendar) || m.rail_focus == Some(zones::RailFocus::Left(Section::Calendar));
+    ensure!(!calendar_shown || m.calendar.on, "the Calendar section with no feed");
     // The meeting banner is of an event that runs, with no call on.
     if let Some(event) = m.calendar.banner(m.now) {
         ensure!(calendar::stage(event, m.now) == calendar::Stage::Running, "a banner for an event that does not run");
@@ -1703,7 +1708,10 @@ fn check_layout(m: &Model) -> Result<(), String> {
     }
     let mut fresh = Model::default();
     let floor = m.tasks.list.iter().map(|task| task.id).max().unwrap_or(0);
+    let (on, notify, links_only) = (m.calendar.on, m.calendar.notify, m.calendar.links_only);
     for action in [
+        // The settings are read before the layout, as at a start.
+        Action::SetCalendar { on, notify, links_only },
         Action::RestoreTasks { tasks: m.tasks.list.clone(), floor },
         Action::RestoreWorkbooks { workbooks: m.workbooks.list.clone() },
         Action::RestoreMarks { marks: m.marks.list.clone(), extra: m.marks.extra.clone() },
@@ -3548,6 +3556,24 @@ fn a_layout_restored_over_an_emptied_tab_leaves_no_workbook_standing_for_it() {
         Action::WorkbookSaveAll { uid: "00000000000000a2".into(), cwds: vec![], histories: vec![] }.sent_by(Origin::User),
         Action::Close { pane: None }.sent_by(Origin::User),
         restore_layout("{\"version\":1,\"selected\":2,\"section\":\"repos\",\"drawer\":{\"task\":1,\"open\":false,\"width\":480.0,\"wide\":false},\"tabs\":[{\"title\":\"Tab 2\",\"layout\":null,\"panes\":[],\"workbook\":{\"id\":\"00000000000000a2\",\"tab\":0}},{\"title\":\"Tab 1\",\"layout\":null,\"panes\":[]}]}", "[\"/Users/me/My Notes\",\"relative\"]", "null", false).sent_by(Origin::User),
+    ])
+    .unwrap();
+}
+
+/// Seed 1618: a layout restored after the user had opened the drawer's task listed the task twice
+/// on the right rail.
+#[test]
+fn a_restored_drawer_task_is_on_the_rail_once() {
+    replay(&[
+        by(Origin::System, Action::OpenCompose { text: "flicker".into() }),
+        Action::ComposeSubmit { open: true }.into(),
+        restore_layout(
+            r#"{"version":1,"selected":null,"section":null,"drawer":{"task":1,"open":false,"width":480.0,"wide":false},"tabs":[{"title":"Tab 1","layout":null,"panes":[]}]}"#,
+            "[]",
+            "\"/code/app\"",
+            true,
+        )
+        .sent_by(Origin::System),
     ])
     .unwrap();
 }

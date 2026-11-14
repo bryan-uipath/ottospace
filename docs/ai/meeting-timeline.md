@@ -33,6 +33,26 @@ User-facing description: [reference](../reference.md#meeting-timeline).
   dismissed or joined. `calendar_notify_for: "links"` limits it to meetings with a Zoom, Meet or
   Teams link; the default alerts every meeting (an open decision, made a setting).
 
+## The Calendar section
+
+A second pull request. `Section::Calendar`, second on the rail, exists only while a feed is set:
+`Model::sections()` drops it otherwise, and every place that walks the sections asks it (the rail,
+⌘⌃E's section cycling and the rails' focus, a restored layout, `ToggleSection`). A feed removed
+between runs: the restored section is dropped; `SetCalendar { on: false }` closes it and moves the
+rail's keyboard to Tasks.
+
+- Rows (`Calendar::agenda`): today's all-day events, then the rest by start, then "Tomorrow · n"
+  (`ListRow::MeetingsTomorrow`, folded; `CalendarTomorrow` unfolds it), then tomorrow's while
+  unfolded. Today's past meetings stay, dimmed: only the hairline drops them.
+- ↵ on a meeting is `CalendarJoin` through `ListChoose`: refused for a client while the Calendar is
+  open (`calendar::USERS_ALONE`), so a client's key there opens nothing.
+- The rail cell (`Calendar::rail`): a steady dot while a meeting is imminent or runs, a filled
+  badge while the banner is up. No pulse there.
+- The list refreshes with the feed (every `calendar_refresh_minutes`), so the header has no
+  refresh button: the footer says when it was read.
+- Fixed with it: a layout restored after the user had opened the drawer's task listed that task
+  twice on the right rail (found by the property test once its makers changed; `layout_file`).
+
 ## Is the user in a call?
 
 The alert wants "you are not in the meeting that just started". Signals tried, least invasive

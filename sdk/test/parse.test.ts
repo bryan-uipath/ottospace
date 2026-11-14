@@ -113,6 +113,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       on: true, events_today: 3, all_day_today: 1, events_tomorrow: 2, next_start: 1794560400000, stage: "approaching",
       updated: 1794556800000, stale: false, in_call: false, soon: true, bars: 3, chip: true,
       banner: { join: [0, 28, 40, 20], dismiss: [44, 28, 60, 20] }, alerts: 1, joins: null,
+      rows: 4, rail: "near", tomorrow_open: false,
     },
     drawer: {
       body: [880, 40, 470, 820],

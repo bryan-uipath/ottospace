@@ -11,14 +11,15 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use gpui::{AnyElement, AnyView, Context, Div, Window, div, prelude::*, px, relative, rgb};
+use gpui::{AnyElement, AnyView, Context, Div, Window, div, prelude::*, px, relative, rgb, transparent_black};
 use ottospace_core::calendar::{self, Event, Lane, Stage};
 use ottospace_core::ics::{self, Table, Zones};
+use ottospace_core::list::ListRow;
 use ottospace_core::settings::expand_home;
 use ottospace_core::{Action, Effect, Origin, theme};
 use ottospace_mac::meeting;
 
-use crate::{Tooltip, Workspace, config, now_ms};
+use crate::{Tooltip, Workspace, config, now_ms, words};
 
 /// The hairline's height: above the window's buttons, so it costs the title strip nothing.
 pub const HAIRLINE: f32 = 6.;
@@ -437,6 +438,14 @@ impl Workspace {
                 "dismiss": at(format!("meeting-dismiss:{id}")),
             })),
             "alerts": calendar.given,
+            // The Calendar section: how many rows, the rail cell's mark, "Tomorrow" unfolded.
+            "rows": calendar.agenda().len(),
+            "rail": match calendar.rail(now) {
+                calendar::RailMark::None => "none",
+                calendar::RailMark::Near => "near",
+                calendar::RailMark::Alert => "alert",
+            },
+            "tomorrow_open": calendar.tomorrow_open,
             "joins": std::env::var_os("OTTOSPACE_E2E").map(|_| self.timeline.joins),
         })
     }
@@ -452,4 +461,152 @@ fn notify(body: &str) {
         command.args(["-e", line]);
     }
     let _ = command.arg(body).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+}
+
+impl Workspace {
+    /// The Calendar section: today's meetings (all-day first, then by start), the running one
+    /// lit, past ones dimmed, a line where now falls; a folded "Tomorrow · n"; when the feed was
+    /// read. Join on a row with an `https:` link, on hover or selection. Display only: titles and
+    /// places are other people's text.
+    pub(crate) fn render_calendar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let calendar = &self.model.calendar;
+        let now = now_ms();
+        let offset = ottospace_mac::time::utc_offset((now / 1_000) as i64);
+        let rows = calendar.agenda();
+        let today = calendar.today().count();
+        // The first of today's timed meetings still to come: the line for now goes above it.
+        let next = calendar.today().find(|e| !e.all_day && e.start > now).map(|e| e.id);
+        let mut children: Vec<AnyElement> = Vec::new();
+        if today == 0 {
+            children
+                .push(div().px_2().text_xs().text_color(rgb(theme::MUTED)).child("Nothing today").into_any_element());
+        }
+        for (index, row) in rows.iter().enumerate() {
+            let selected = self.model.list == Some(index);
+            match row {
+                ListRow::MeetingsTomorrow => {
+                    let count = calendar.tomorrow().count();
+                    let fold = if calendar.tomorrow_open { "▾" } else { "▸" };
+                    let heading = div()
+                        .id("meetings-tomorrow")
+                        .relative()
+                        .mt_2()
+                        .px_2()
+                        .py_0p5()
+                        .rounded_md()
+                        .flex()
+                        .gap_1()
+                        .text_xs()
+                        .text_color(rgb(theme::MUTED))
+                        .cursor_pointer()
+                        .hover(|s| s.bg(rgb(theme::SELECTED)))
+                        .when(selected, |d| d.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
+                        .child(fold)
+                        .child(format!("Tomorrow · {count}"))
+                        .child(self.controls.mark("meetings-tomorrow"))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.dispatch(Action::CalendarTomorrow, this.input, window, cx);
+                        }));
+                    children.push(heading.into_any_element());
+                }
+                ListRow::Meeting(id) => {
+                    let Some(event) = calendar.events.iter().find(|e| e.id == *id) else { continue };
+                    children.push(self.meeting_row(event, (index, selected), (now, offset), next == Some(*id), cx));
+                }
+                _ => {}
+            }
+        }
+        let footer = match (calendar.updated, calendar.stale) {
+            (Some(at), false) => format!("updated {}", calendar::clock(at, offset)),
+            (Some(at), true) => format!("not updated since {}", calendar::clock(at, offset)),
+            (None, true) => "calendar feed not read".to_string(),
+            (None, false) => "reading the calendar feed…".to_string(),
+        };
+        let list = div().id("calendar").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
+        let list = list.track_scroll(&self.list_scroll).children(children);
+        let footer = div().px_3().py_2().text_xs().text_color(rgb(theme::BORDER_STRONG)).child(footer);
+        div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .child(self.bars.tracked("calendar", list, &self.list_scroll))
+            .child(footer)
+    }
+
+    /// One meeting: its time and title, and its place or its link's host below.
+    fn meeting_row(
+        &self,
+        event: &Event,
+        (index, selected): (usize, bool),
+        (now, offset): (u64, i64),
+        now_above: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let id = event.id;
+        let stage = calendar::stage(event, now);
+        let when = if event.all_day {
+            "all day".to_string()
+        } else {
+            format!("{}–{}", calendar::clock(event.start, offset), calendar::clock(event.end, offset))
+        };
+        let place = Some(event.location.clone())
+            .filter(|l| !l.is_empty())
+            .or_else(|| event.link.as_deref().and_then(calendar::host).map(String::from));
+        let group: &'static str = "meeting-row";
+        let join = event.link.as_ref().map(|_| {
+            words::words(group, selected).top(px(4.)).child(self.word(
+                format!("meeting-join:{id}"),
+                ("Join", "Open the meeting's link"),
+                move |this, window, cx| drop(this.dispatch(Action::CalendarJoin { id }, this.input, window, cx)),
+                cx,
+            ))
+        });
+        let running = stage == Stage::Running;
+        div()
+            .id(("meeting", index))
+            .group(group)
+            .relative()
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .flex()
+            .flex_col()
+            .border_1()
+            .border_color(transparent_black())
+            .text_size(px(13.))
+            .text_color(rgb(theme::TEXT))
+            .when(stage == Stage::Past, |d| d.opacity(0.45))
+            .when(running, |d| d.bg(rgb(theme::SELECTED)).border_color(rgb(theme::SNEAK)))
+            .when(selected, |d| d.bg(rgb(theme::SELECTED)).border_color(rgb(theme::LIST)))
+            .hover(|s| s.bg(rgb(theme::SELECTED)))
+            // Now falls between the meeting before and this one.
+            .when(now_above, |d| {
+                d.child(div().absolute().top(px(-3.)).left_0().right_0().h(px(1.)).bg(rgb(theme::SNEAK)))
+            })
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(div().flex_none().w(px(78.)).text_xs().text_color(rgb(theme::MUTED)).child(when))
+                    .child(div().min_w_0().truncate().child(event.title.clone())),
+            )
+            .children(place.map(|place| {
+                div().pl(px(86.)).min_w_0().truncate().text_xs().text_color(rgb(theme::MUTED)).child(place)
+            }))
+            .children(join)
+            .into_any_element()
+    }
+
+    /// The Calendar rail cell's mark: a steady dot while a meeting is imminent or runs, a filled
+    /// badge while one has started and the user is in no call. Never pulsing.
+    pub(crate) fn calendar_rail_mark(&self) -> Option<Div> {
+        let (size, ring) = match self.model.calendar.rail(now_ms()) {
+            calendar::RailMark::None => return None,
+            calendar::RailMark::Near => (6., false),
+            calendar::RailMark::Alert => (10., true),
+        };
+        let mark = div().absolute().top(px(8.)).right(px(12.)).size(px(size)).rounded_full().bg(rgb(theme::SNEAK));
+        Some(mark.when(ring, |d| d.border_2().border_color(rgb(theme::BACKGROUND))))
+    }
 }

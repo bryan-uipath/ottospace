@@ -172,7 +172,7 @@ function mode(value: unknown, at: string): Mode {
 
 function section(value: unknown, at: string): Section {
   if (value === "apps" || value === "workbook" || value === "tasks" || value === "repos") return value;
-  if (value === "marks") return value;
+  if (value === "marks" || value === "calendar") return value;
   throw wrong(at, "a section", value);
 }
 
@@ -1279,6 +1279,11 @@ function meetingStage(value: unknown, at: string): MeetingStage {
   throw wrong(at, "a meeting stage", value);
 }
 
+function railMark(value: unknown, at: string): Snapshot["calendar"]["rail"] {
+  if (value === "none" || value === "near" || value === "alert") return value;
+  throw wrong(at, "none, near or alert", value);
+}
+
 function calendar(value: unknown, at: string): Snapshot["calendar"] {
   const o = fields(value, at);
   const banner = (v: unknown, at: string) => {
@@ -1301,6 +1306,9 @@ function calendar(value: unknown, at: string): Snapshot["calendar"] {
     banner: orNull(banner)(o.banner, `${at}.banner`),
     alerts: num(o.alerts, `${at}.alerts`),
     joins: orNull(num)(o.joins, `${at}.joins`),
+    rows: num(o.rows, `${at}.rows`),
+    rail: railMark(o.rail, `${at}.rail`),
+    tomorrow_open: bool(o.tomorrow_open, `${at}.tomorrow_open`),
   };
 }
 

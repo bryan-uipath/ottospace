@@ -322,13 +322,16 @@ impl Model {
         self.restore_selected(layout.selected, &built, effects);
         // Building each tab noted it as its task's last: none is, so each task shows its first.
         self.last_tab.clear();
-        self.sidebar = layout.section;
+        // A Calendar left open by a run that had a feed: none without one.
+        self.sidebar = layout.section.filter(|s| *s != Section::Calendar || self.calendar.on);
         self.talk_width = talk::width(layout.drawer.width);
         self.talk_wide = layout.drawer.wide;
         // Shown to go on with, as a click on its task offers: never started here.
         if let Some(task) = exists(self, layout.drawer.task) {
             let subject = Subject::Task(task);
             self.talk = Some(Talk { task: subject.clone(), open: layout.drawer.open, keys: false });
+            // Once: the user may have opened it already this run.
+            self.opened.retain(|opened| *opened != subject);
             self.opened.push(subject);
         }
         self.restore_links(&layout, &built);
