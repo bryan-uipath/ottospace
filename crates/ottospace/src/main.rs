@@ -656,7 +656,7 @@ enum Filing {
 /// What a line in the new-task box may hold, and what its keys do: in the box and where the
 /// Tasks section says how to add a task.
 const TAG_HINT: &str = "#project · >repo · @agent · /path · $skill · ^open · p1–p9";
-const KEYS_HINT: &str = "↵ start · ⇧↵ file for later · esc leaves";
+const KEYS_HINT: &str = "⇧↵ later";
 
 /// A heading's name in a control's id and on the socket: `needs_you`, `open`, ...
 fn heading_name(heading: Heading) -> String {
@@ -3734,9 +3734,7 @@ impl Workspace {
             .text_xs()
             .child(div().text_color(rgb(theme::PICK)).child(title))
             .child(self.render_field("type to filter", cx));
-        // The status bar no longer lists these keys, and ⌘/ closes the picker.
-        let texts = ("No match", "↑↓ move · ↵ open · esc close");
-        let panel = self.list_panel(panel, header, "picker", rows, texts);
+        let panel = self.list_panel(panel, header, "picker", rows, "No match");
         dialog::backdrop("picker-backdrop", 0.25, Action::ClosePicker, cx).child(panel)
     }
 
@@ -4969,37 +4967,35 @@ impl Workspace {
         let color = theme::accent(self.model.mode());
         // Name the return key only if it works: a wrong hint strands the user in the app.
         let app_hint = match RETURN_KEY.get() {
-            Some(key) => format!("keys go to the app · {key} or a click on ottospace returns"),
-            None => "keys go to the app · click ottospace to return".to_string(),
+            Some(key) => format!("{key} returns"),
+            None => "click to return".to_string(),
         };
         let peek = self.model.peek.as_ref().and_then(|peek| self.hosted.get(&peek.pane));
-        let peek_hint = peek.map(|hosted| format!("{} · a click or a key enters it", hosted.app));
+        let peek_hint = peek.map(|hosted| hosted.app.clone());
         let (mode, hint) = match self.model.mode() {
             // The app is up for a scroll: it has the keyboard until the peek ends.
             _ if peek_hint.is_some() => ("PEEK", peek_hint.as_deref().unwrap_or_default()),
-            // One hint, not the key list: ⌘/ shows the keys of every mode. A mode you can be in
-            // by accident also says how to leave. The picker and the new-task box show theirs.
+            // A key, not the key list: ⌘/ shows the keys of every mode. A mode you can be in by
+            // accident names its way out.
             Mode::Normal => ("NORMAL", "⌘/ keys"),
             Mode::Pick => ("PICK", ""),
             Mode::Palette => ("COMMAND", ""),
-            Mode::Inspect => ("INSPECT", "type to filter · ↑↓ select · esc leaves"),
+            Mode::Inspect => ("INSPECT", ""),
             Mode::App => ("APP", app_hint.as_str()),
-            Mode::Visual => ("VISUAL", "esc leaves · ⌘/ keys"),
-            Mode::List => ("LIST", "esc leaves · ⌘/ keys"),
+            Mode::Visual => ("VISUAL", "esc"),
+            Mode::List => ("LIST", "esc"),
             Mode::Compose => ("TASK", ""),
-            Mode::Sneak if self.model.sneak.as_ref().is_some_and(|sneak| sneak.hid_overlay) => {
-                ("SNEAK", "type a label · esc leaves · the accessibility overlay is hidden (⌘⌃A shows it)")
-            }
-            Mode::Sneak => ("SNEAK", "type a label · esc leaves"),
+            Mode::Sneak => ("SNEAK", "esc"),
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.dismiss.is_some()) => ("DISMISS?", ""),
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.paste.is_some()) => ("PASTE?", ""),
             Mode::Confirm => ("QUIT?", ""),
-            Mode::Annotate => ("ANNOTATE", "drag to circle · click for a note · ↵ title · esc leaves"),
-            Mode::Talk => ("TALK", "keys go to the task's agent"),
+            // The strip in the pane's header lists the annotate keys.
+            Mode::Annotate => ("ANNOTATE", ""),
+            Mode::Talk => ("TALK", ""),
             Mode::Mark => match self.model.mark_input {
-                Some(MarkInput::Rename { .. }) => ("MARK", "type its name · ↵ keeps it · esc cancels"),
+                Some(MarkInput::Rename { .. }) => ("MARK", ""),
                 Some(MarkInput::SetKey { .. }) => ("MARK", "a letter for the mark · ⌫ for none · esc cancels"),
-                Some(MarkInput::Workbook { .. }) => ("WORKBOOK", "type its name · ↵ keeps it · esc cancels"),
+                Some(MarkInput::Workbook { .. }) => ("WORKBOOK", ""),
                 _ => ("MARK?", "a mark's letter · esc cancels"),
             },
         };

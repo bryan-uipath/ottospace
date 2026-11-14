@@ -230,11 +230,8 @@ impl Workspace {
             .child(div().text_xs().text_color(rgb(theme::COMMAND)).child(title))
             .child(self.render_field(hint, cx));
         let panel = dialog::floating(560.).max_w_full().max_h(px(440.));
-        let texts = match tasks {
-            true => ("No task matches", "↑↓ move · ↵ move the tab · esc close"),
-            false => ("No command matches", "↑↓ move · ↵ run · esc close"),
-        };
-        let panel = self.list_panel(panel, header, "palette", rows, texts);
+        let empty = if tasks { "No task matches" } else { "No command matches" };
+        let panel = self.list_panel(panel, header, "palette", rows, empty);
         dialog::backdrop("palette-backdrop", 0.35, Action::ClosePalette, cx)
             .pt(px(72.))
             .px_4()
