@@ -17,6 +17,11 @@ use crate::{Tooltip, Workspace, home};
 /// The segments' colours, in the bar's order: needs you, running, later, done.
 const SEGMENTS: [u32; 4] = [theme::SNEAK, theme::PRIMARY, 0x71717a, theme::PICK];
 
+/// An age as a card says it: `3h ago`, but `now`.
+fn ago(age: String) -> String {
+    if age == "now" { age } else { format!("{age} ago") }
+}
+
 /// A task's hover card: shown as a tooltip, after the tooltip's own delay.
 pub struct CardView(pub Card);
 
@@ -89,8 +94,8 @@ impl Render for CardView {
             .when(!card.tags.is_empty(), |d| {
                 d.child(div().flex().flex_wrap().gap_1().children(card.tags.iter().map(chip)))
             })
-            .children(card.filed.clone().map(|age| fact("Filed", format!("{age} ago"))))
-            .child(fact("Started", card.started.clone().map_or("not yet".into(), |age| format!("{age} ago"))))
+            .children(card.filed.clone().map(|age| fact("Filed", ago(age))))
+            .child(fact("Started", card.started.clone().map_or("not yet".into(), ago)))
             .child(fact("Agent time", card.agent_time.clone()))
             .child(fact("Workspace", card.workspace.clone()))
             .when(!card.tokens.is_empty(), |d| {
@@ -139,9 +144,7 @@ impl Render for SessionCard {
             .child(fact("Repository", row.name.clone()))
             .child(fact("Runner", row.runner.clone()))
             .children(row.model.clone().map(|model| fact("Model", model)))
-            .children(
-                row.age.clone().map(|age| fact("Last active", if age == "now" { age } else { format!("{age} ago") })),
-            )
+            .children(row.age.clone().map(|age| fact("Last active", ago(age))))
             .children(row.pane.map(|pane| fact("Runs in", format!("pane {pane}"))))
     }
 }

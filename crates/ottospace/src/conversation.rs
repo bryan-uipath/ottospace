@@ -1197,6 +1197,10 @@ impl Workspace {
         };
         let open = chat.transcript.live || self.model.shown_draft_chat().is_some();
         let field = (open && (!card || chat.deny)).then(|| self.render_field_of("talk", placeholder, cx));
+        // A card waits: nothing to write and nothing to say, so no empty strip.
+        if field.is_none() && hint.is_empty() {
+            return div();
+        }
         div()
             .flex_none()
             .px_3()
