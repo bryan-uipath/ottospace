@@ -179,13 +179,35 @@ impl Terminal {
     /// the program and each argument are positional parameters, never read by the shell.
     /// With `$OTTOSPACE_SHELL` (tests), that shell runs it without reading a profile.
     pub fn run(program: &str, args: &[String], vars: &[(&str, String)], cwd: Option<&str>) -> io::Result<Self> {
+        let mut argv = vec![program.to_string()];
+        argv.extend(args.iter().cloned());
+        Self::script("exec \"$@\"", "ottospace-agent", argv, vars, cwd)
+    }
+
+    /// Runs the user's editor on `file`, as `run` runs a program: `$VISUAL`, else `$EDITOR`,
+    /// else `vi`, as the login shell sets them. The shell splits the variable itself, so
+    /// `code -w` works (zsh is told to split as POSIX shells do, and none expands a glob).
+    pub fn edit(file: &str, vars: &[(&str, String)]) -> io::Result<Self> {
+        const EDIT: &str = "if [ -n \"$ZSH_VERSION\" ]; then setopt shwordsplit noglob; else set -f; fi; \
+                            exec ${VISUAL:-${EDITOR:-vi}} \"$1\"";
+        Self::script(EDIT, "ottospace-settings", vec![file.to_string()], vars, None)
+    }
+
+    /// `$SHELL -lic <script> <name> <args…>`: the script is fixed text, the arguments its
+    /// positional parameters. With `$OTTOSPACE_SHELL` (tests), that shell with no profile.
+    fn script(
+        script: &str,
+        name: &str,
+        args: Vec<String>,
+        vars: &[(&str, String)],
+        cwd: Option<&str>,
+    ) -> io::Result<Self> {
         let (shell, flags) = match std::env::var("OTTOSPACE_SHELL") {
             Ok(test) => (test, "-c"),
             Err(_) => (login_shell(), "-lic"),
         };
-        let mut argv = vec![flags.to_string(), "exec \"$@\"".to_string(), "ottospace-agent".to_string()];
-        argv.push(program.to_string());
-        argv.extend(args.iter().cloned());
+        let mut argv = vec![flags.to_string(), script.to_string(), name.to_string()];
+        argv.extend(args);
         Self::start(Some(tty::Shell::new(shell, argv)), vars, cwd, None)
     }
 

@@ -128,6 +128,8 @@ commands! {
     InspectorFilter: "Filter the Accessibility Inspector", Developer;
     InspectorRefresh: "Read the Inspected App Again", Developer;
     CopyState: "Copy State as JSON", Developer;
+    // Before the Developer one: a tie of "Open Settings" goes to the earlier.
+    EditSettings: "Open Settings", App;
     OpenSettings: "Open the Settings File", Developer;
     OpenFolder: "Open the ottospace Folder", Developer;
     BringBack: "Bring All Windows Back", Developer;

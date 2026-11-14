@@ -29,7 +29,7 @@ impl Workspace {
     pub(crate) fn app_wheel(&mut self, pane: PaneId, window: &Window, cx: &mut Context<Self>) {
         self.wheel.over += 1;
         // Not while a drag is on. Not from behind another app: its end gives ottospace the keyboard.
-        let off = config::get().settings.wheel_to_apps == Some(false);
+        let off = config::live().wheel_to_apps == Some(false);
         if off {
             return;
         }

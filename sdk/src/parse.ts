@@ -1316,6 +1316,7 @@ export function snapshot(value: unknown): Snapshot {
     font: { name: str(fields(o.font, "font").name, "font.name"), size: num(fields(o.font, "font").size, "font.size") },
     cell: pair(o.cell, "cell"),
     notice: orNull(str)(o.notice, "notice"),
+    settings_errors: num(o.settings_errors, "settings_errors"),
     hosted: map(rect)(o.hosted, "hosted"),
     crop: map(num)(o.crop, "crop"),
     terminals: map(terminal)(o.terminals, "terminals"),

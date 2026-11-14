@@ -1,8 +1,8 @@
 //! The user's folder: `~/.ottospace`, or `$OTTOSPACE_HOME`. It holds `settings.json` and the
-//! tasks kept between runs. Read once, at start: a changed setting applies at the next start.
+//! tasks kept between runs. Read at start; a few settings apply again when the file changes (`live`).
 
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::{fs, io};
 
 use ottospace_core::repos::{RepoDir, RepoDirs};
@@ -15,8 +15,8 @@ pub struct Config {
     /// `None`: a test run that named no folder. It reads no settings and keeps nothing on disk,
     /// so a test cannot read or change the user's own.
     pub home: Option<PathBuf>,
-    /// What was wrong with `settings.json`, to show the user. A wrong key takes its default;
-    /// the others apply.
+    /// Why `settings.json` could not be read, to show the user. What is wrong in its text the
+    /// core says, from `SettingsRead`.
     pub error: Option<String>,
 }
 
@@ -35,11 +35,8 @@ fn load() -> Config {
     let home = named.or_else(|| (!test_run).then(|| Path::new(&user_home()).join(".ottospace")));
     let file = home.as_ref().map(|home| home.join("settings.json"));
     let (settings, error) = match file.as_ref().map(fs::read_to_string) {
-        // Every key that is right is kept; what is wrong is named.
-        Some(Ok(text)) => {
-            let (settings, wrong) = Settings::read(&text);
-            (settings, (!wrong.is_empty()).then(|| format!("settings.json: {}", wrong.join("; "))))
-        }
+        // Every key that is right is kept; what is wrong the core says (`settings::Watch`).
+        Some(Ok(text)) => (Settings::read(&text).0, None),
         // No file is the usual case: the defaults.
         Some(Err(err)) if err.kind() != io::ErrorKind::NotFound => {
             (Settings::default(), Some(format!("settings.json: {err}")))
@@ -47,6 +44,56 @@ fn load() -> Config {
         _ => (Settings::default(), None),
     };
     Config { settings, home, error }
+}
+
+/// The settings read as they are used, not only at start: the last good read of the file
+/// (`Effect::ApplySettings`). The rest of `get().settings` stays as it was at start.
+pub fn live() -> Arc<Settings> {
+    live_cell().read().map(|live| live.clone()).unwrap_or_else(|_| Arc::new(get().settings.clone()))
+}
+
+pub fn set_live(settings: Settings) {
+    if let Ok(mut live) = live_cell().write() {
+        *live = Arc::new(settings);
+    }
+}
+
+fn live_cell() -> &'static RwLock<Arc<Settings>> {
+    static LIVE: OnceLock<RwLock<Arc<Settings>>> = OnceLock::new();
+    LIVE.get_or_init(|| RwLock::new(Arc::new(get().settings.clone())))
+}
+
+/// `settings.json`'s modified time and length: a change of either is a change of the file.
+pub type Stamp = (std::time::SystemTime, u64);
+
+/// `settings.json` as it is now, through a link. `None`: there is no folder in this run, no
+/// file, or not a small plain file (a pipe would hang the read).
+pub fn settings_stamp() -> Option<Stamp> {
+    let meta = fs::metadata(get().home.as_ref()?.join("settings.json")).ok()?;
+    (meta.is_file() && meta.len() <= 1_048_576).then(|| meta.modified().ok().map(|at| (at, meta.len()))).flatten()
+}
+
+/// The text of `settings.json` now, if `settings_stamp` finds a file to read.
+pub fn settings_text() -> Option<String> {
+    settings_stamp()?;
+    fs::read_to_string(get().home.as_ref()?.join("settings.json")).ok()
+}
+
+/// Where Open Settings edits: `settings.json` in the user's folder, made `{}` if there is none
+/// yet. `Err`: a test run that named no folder, or the file could not be made.
+pub fn settings_file() -> Result<PathBuf, String> {
+    let Some(home) = get().home.as_ref() else { return Err("no ottospace folder in this run".into()) };
+    let file = home.join("settings.json");
+    // A link, even to nowhere, is the user's: the editor follows it.
+    if fs::symlink_metadata(&file).is_err() {
+        fs::create_dir_all(home).map_err(|err| format!("settings.json: {err}"))?;
+        match fs::OpenOptions::new().write(true).create_new(true).open(&file) {
+            Ok(mut made) => io::Write::write_all(&mut made, b"{}\n").map_err(|err| format!("settings.json: {err}"))?,
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(err) => return Err(format!("settings.json: {err}")),
+        }
+    }
+    Ok(file)
 }
 
 /// Where repositories are looked for: `$OTTOSPACE_REPOS` (directories, `:` between them), else
@@ -104,17 +151,10 @@ pub fn session_dirs() -> Option<ConfigDirs> {
     Some(ConfigDirs { claude: claude.iter().map(path).collect(), codex: codex.as_ref().map(path) })
 }
 
-/// How long an adopted session is quiet before its task needs the user, in milliseconds:
-/// `session_quiet_minutes` in the settings, else 3 minutes. 0: never.
-pub fn session_quiet_ms() -> u64 {
-    let minutes = get().settings.session_quiet_minutes.map(u64::from);
-    minutes.map_or(ottospace_core::sessions::QUIET_MS, |minutes| minutes.saturating_mul(60_000))
-}
-
 /// How many of a terminal's last lines a workbook keeps: `workbook_scrollback_lines` in the
 /// settings, else 500, at most 2000. 0: none.
 pub fn workbook_lines() -> usize {
-    let lines = get().settings.workbook_scrollback_lines.map(|lines| lines as usize);
+    let lines = live().workbook_scrollback_lines.map(|lines| lines as usize);
     lines.unwrap_or(ottospace_core::workbook::HISTORY_LINES).min(ottospace_core::workbook::MAX_HISTORY_LINES)
 }
 

@@ -19,7 +19,17 @@ thread_local! {
 // ⌘P, and the Developer menu's own.
 actions!(
     ottospace,
-    [CommandPalette, CopyState, OpenSettings, OpenFolder, AxInspector, InspectorFilter, InspectorRefresh, BringBack]
+    [
+        CommandPalette,
+        CopyState,
+        OpenSettings,
+        EditSettings,
+        OpenFolder,
+        AxInspector,
+        InspectorFilter,
+        InspectorRefresh,
+        BringBack
+    ]
 );
 
 /// The action a command's menu item dispatches. A new command must name one here.
@@ -81,6 +91,7 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::OpenSettings => Box::new(OpenSettings),
         Command::OpenFolder => Box::new(OpenFolder),
         Command::BringBack => Box::new(BringBack),
+        Command::EditSettings => Box::new(EditSettings),
         Command::Hide => Box::new(Hide),
         Command::Quit => Box::new(Quit),
     }
@@ -125,6 +136,7 @@ impl Workspace {
             .on_action(cx.listener(|this, _: &features::ShowFeatures, window, cx| {
                 this.dispatch(Action::PaletteFeatures, this.input, window, cx);
             }))
+            .on_action(cx.listener(|this, _: &EditSettings, window, cx| this.edit_settings(window, cx)))
             .on_action(cx.listener(|this, _: &AxInspector, window, cx| this.toggle_inspector(window, cx)))
             .on_action(
                 cx.listener(|this, _: &InspectorFilter, window, cx| this.inspector_command("filter", window, cx)),

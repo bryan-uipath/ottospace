@@ -33,6 +33,7 @@ ottospace            # opens on the Repos list
 | Quit | ⌘Q, or the window's close button. While a terminal runs something (a program, or a background job) it asks first: ↵, Q or ⌘Q again quits; Esc, any other key or shortcut cancels and does nothing else. Shells at a prompt do not count. Dock ▸ Quit and logout do not ask |
 | Start empty next time | File ▸ Start Fresh. Otherwise the tabs, splits, the tab on show and the drawer come back after quitting (`restore_layout`) |
 | Find an action by name | ⌘P: type part of its name, ↵ runs it. Or the menu bar |
+| Edit the settings | ⌘, (Open Settings): `settings.json` in your editor, in a tab of its own |
 | See what an app exposes to accessibility | Focus its pane, ⌘P, "inspector": its tree in a panel on the right, counted by role. Click a row to outline it |
 | Switch tab | ⌘1 … ⌘9 · ⌘⇧] ⌘⇧[ · ⌃Tab |
 | Close the tab and its panes | ⌘⇧W |
@@ -178,7 +179,9 @@ ottospace ctl '{"cmd":"state"}' | jq --argjson pane "$OTTOSPACE_PANE" '.state.ta
 
 ## Settings
 
-`~/.ottospace/settings.json`, read at start:
+`~/.ottospace/settings.json`, read at start. ⌘, (Open Settings) edits it in `$VISUAL`/`$EDITOR`; on
+save the status bar says what is wrong (`settings.json:3:1 trailing comma`) or which keys need a
+restart, and the rest applies at once:
 
 ```json
 {

@@ -16,6 +16,8 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
         Menu {
             name: "ottospace".into(),
             items: vec![
+                item("Open Settings", commands::EditSettings),
+                MenuItem::separator(),
                 MenuItem::os_submenu("Services", SystemMenuType::Services),
                 MenuItem::separator(),
                 item("Features…", features::ShowFeatures),
