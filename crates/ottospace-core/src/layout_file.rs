@@ -129,7 +129,7 @@ pub fn parse(text: &str) -> Result<Layout, Unread> {
 
 /// The text of `layout.json`.
 pub fn write(layout: &Layout) -> String {
-    serde_json::to_string_pretty(layout).unwrap_or_default() + "\n"
+    crate::pretty_json(layout)
 }
 
 /// A mark's id for good as the file may name it: short and one line.
@@ -628,6 +628,18 @@ mod tests {
         );
         let (_, launched) = restored(&m, m.layout_file(&[], &[], 0), &[], true);
         assert!(launched.iter().any(|effect| matches!(effect, Effect::HostWindow { launch: true, .. })));
+    }
+
+    #[test]
+    fn a_long_row_evened_out_keeps_its_shares_under_a_tenth() {
+        let mut m = Model::default();
+        for _ in 0..12 {
+            split(&mut m, Right, Kind::Terminal);
+        }
+        m.update(Action::Equalize);
+        let before = write(&m.layout_file(&[], &[], 0));
+        let (r, _) = restored(&m, parse(&before).unwrap(), &[], false);
+        assert_eq!(write(&r.layout_file(&[], &[], 0)), before);
     }
 
     #[test]

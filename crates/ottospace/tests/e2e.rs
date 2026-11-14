@@ -5559,8 +5559,6 @@ fn the_inspector_shows_a_trees_counts_and_roles_never_its_text() {
     assert!(otto.call(json!({"cmd": "close", "pane": 1}))["inspector"].is_null());
 }
 
-/// Two tests run again in a process of their own, with a `$TMPDIR` of their own: apps killed
-/// and one that quits, folders of settings, a file that is no socket. Nothing is left in it.
 /// The tabs as the bar has them: each one's title and task.
 fn tab_titles(reply: &Value) -> Vec<(String, Value)> {
     let tabs = reply["state"]["tabs"].as_array().cloned().unwrap_or_default();
@@ -5723,6 +5721,8 @@ fn a_layout_file_that_does_not_read_is_set_aside_and_restore_layout_false_starts
     assert_eq!(std::fs::read_to_string(home.join("layout.json")).unwrap(), layout);
 }
 
+/// Two tests run again in a process of their own, with a `$TMPDIR` of their own: apps killed
+/// and one that quits, folders of settings, a file that is no socket. Nothing is left in it.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_test_leaves_nothing_in_the_temp_dir() {

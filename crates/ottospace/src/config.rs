@@ -189,12 +189,18 @@ fn write_whole(dir: &Path, name: &str, text: &str) -> io::Result<()> {
 
 /// As `write_whole`, for any bytes: a capture's picture.
 pub fn write_private(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
+    write_mode(dir, name, bytes, None)
+}
+
+/// As `write_private`; `mode`: the file's, else the one there keeps its own.
+fn write_mode(dir: &Path, name: &str, bytes: &[u8], mode: Option<u32>) -> io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
     if !dir.is_dir() {
         fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
     }
-    let mode = fs::metadata(dir.join(name)).map(|meta| meta.permissions().mode() & 0o777).unwrap_or(0o600);
+    let kept = || fs::metadata(dir.join(name)).map(|meta| meta.permissions().mode() & 0o777).unwrap_or(0o600);
+    let mode = mode.unwrap_or_else(kept);
     // The process id keeps two running ottospaces from writing one draft.
     let draft = dir.join(format!(".{name}.{}.tmp", std::process::id()));
     let write = || {
@@ -359,7 +365,12 @@ pub fn save_workbook(uid: &str, text: &str) -> io::Result<()> {
 pub fn remove_workbook(uid: &str) -> io::Result<()> {
     let Some(dir) = workbooks_dir() else { return Ok(()) };
     let name = workbook_file(uid).ok_or_else(|| io::Error::other("not a workbook's id"))?;
-    match fs::remove_file(dir.join(name)) {
+    removed(fs::remove_file(dir.join(name)))
+}
+
+/// A removal or a move of a file that is not there succeeded: it is gone.
+pub fn removed(result: io::Result<()>) -> io::Result<()> {
+    match result {
         Err(err) if err.kind() != io::ErrorKind::NotFound => Err(err),
         _ => Ok(()),
     }
@@ -368,8 +379,12 @@ pub fn remove_workbook(uid: &str) -> io::Result<()> {
 /// `layout.json` in the user's folder: the tabs and layout kept between runs. `None`: nothing
 /// is kept (a test run that named no folder), or `restore_layout` is off.
 fn layout_file() -> Option<PathBuf> {
-    let on = get().settings.restore_layout.unwrap_or(true);
-    Some(get().home.as_ref().filter(|_| on)?.join("layout.json"))
+    get().settings.restore_layout.unwrap_or(true).then(layout_path).flatten()
+}
+
+/// Where `layout.json` is, whether it is kept or not.
+fn layout_path() -> Option<PathBuf> {
+    Some(get().home.as_ref()?.join("layout.json"))
 }
 
 /// True if the layout is kept between runs.
@@ -392,28 +407,26 @@ pub fn read_layout() -> Result<Option<String>, String> {
         Ok(_) => {}
     }
     let most = ottospace_core::layout_file::MAX_FILE_BYTES as u64;
-    let bytes = crate::collect::read_plain(&file, most).ok_or("not a plain file of at most 4 MB")?;
+    let bytes = crate::collect::read_plain(&file, most).ok_or(format!("not a plain file of at most {most} bytes"))?;
     String::from_utf8(bytes).map(Some).map_err(|_| "not text".into())
 }
 
-/// Writes `layout.json`, as `save_task` writes a task: whole, 0600, renamed into place.
+/// Writes `layout.json`, as `save_task` writes a task: whole and renamed into place, but always
+/// 0600: it may hold terminal text.
 pub fn save_layout(text: &str) -> io::Result<()> {
     let Some(file) = layout_file() else { return Ok(()) };
     let dir = file.parent().ok_or_else(|| io::Error::other("no folder"))?;
-    write_whole(dir, "layout.json", text)
+    write_mode(dir, "layout.json", text.as_bytes(), Some(0o600))
 }
 
 /// Puts `layout.json` aside as `layout.json.<end>` (`bad`; an older one is replaced), or with
-/// `None` removes it and the copy set aside: both may hold terminal text.
+/// `None` removes it and the copy set aside, whatever `restore_layout` says: both may hold
+/// terminal text.
 pub fn layout_aside(end: Option<&str>) -> io::Result<()> {
-    let Some(file) = layout_file() else { return Ok(()) };
+    let Some(file) = layout_path() else { return Ok(()) };
     let bad = file.with_extension("json.bad");
-    let gone = |result: io::Result<()>| match result {
-        Err(err) if err.kind() != io::ErrorKind::NotFound => Err(err),
-        _ => Ok(()),
-    };
     match end {
-        Some(end) => gone(fs::rename(&file, file.with_extension(format!("json.{end}")))),
-        None => gone(fs::remove_file(&file)).and(gone(fs::remove_file(bad))),
+        Some(end) => removed(fs::rename(&file, file.with_extension(format!("json.{end}")))),
+        None => removed(fs::remove_file(&file)).and(removed(fs::remove_file(bad))),
     }
 }

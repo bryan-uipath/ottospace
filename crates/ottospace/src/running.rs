@@ -38,10 +38,7 @@ fn claim(dir: &Path, pid: u32, program: &Path, alive: impl Fn(u32) -> bool) -> i
         return Ok(());
     }
     // Removed first, so the new file is 0600 whatever the old one's mode; a symlink there goes, unfollowed.
-    match fs::remove_file(dir.join(NAME)) {
-        Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
-        _ => {}
-    }
+    config::removed(fs::remove_file(dir.join(NAME)))?;
     config::write_private(dir, NAME, text(pid, program).as_bytes())
 }
 

@@ -247,7 +247,7 @@ pub fn parse(text: &str, stem: &str) -> Result<Workbook, String> {
 
 /// The text of a workbook's file.
 pub fn write(book: &Workbook) -> String {
-    serde_json::to_string_pretty(book).unwrap_or_default() + "\n"
+    crate::pretty_json(book)
 }
 
 /// `Ok` if `book`'s file reads back: no larger than `MAX_FILE_BYTES`, with room for its id and a

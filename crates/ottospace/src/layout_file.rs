@@ -52,7 +52,8 @@ impl Workspace {
         let home = Some(config::user_home()).filter(|home| home.starts_with('/'));
         // Checked by the core to be absolute and one line; looked for once, here.
         let gone: Vec<String> = layout.dirs().into_iter().filter(|dir| !Path::new(dir).is_dir()).collect();
-        let restored = !layout.tabs.is_empty();
+        // A file of one empty tab restores nothing: the welcome still shows.
+        let restored = layout.tabs.iter().any(|saved| !saved.tab.shown().is_empty());
         let launch = config::restores_apps();
         let action = Action::RestoreLayout { layout: Box::new(layout), gone: gone.clone(), home, launch };
         self.dispatch(action, Origin::System, window, cx);
