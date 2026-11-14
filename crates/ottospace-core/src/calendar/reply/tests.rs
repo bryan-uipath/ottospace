@@ -285,6 +285,12 @@ fn free_time_only_where_the_calendar_is_known() {
     assert_eq!(a.known_until, Some(rfc3339(last, &utc())));
     let free: Vec<(&str, &str)> = a.free.iter().map(|s| (&s.start[..], &s.end[..])).collect();
     assert_eq!(free, [("2026-11-16T09:00:00+00:00", &rfc3339(last, &utc())[..])], "and none on Tuesday");
+    // Free entries hidden: still cut where the read was, not at the last one shown.
+    let mut hidden = c.clone();
+    hidden.received[0].show = crate::ics::Show::Free;
+    hidden.options(true, Vec::new());
+    assert_eq!(hidden.events.len(), MAX_EVENTS - 1);
+    assert_eq!(answer(&hidden, (from, to), Workday::default(), &utc()).known_until, Some(rfc3339(last, &utc())));
     // Fewer: all known.
     assert_eq!(answer(&calendar(vec![]), (from, to), Workday::default(), &utc()).known_until, None);
 }
