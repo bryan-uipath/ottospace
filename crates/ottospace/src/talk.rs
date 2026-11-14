@@ -316,10 +316,16 @@ impl Workspace {
             },
             ("talk", "talk-close", _) => Action::TalkToggle,
             // The native conversation's buttons: the core says who may.
-            ("talk", "chat-allow", _) => Action::TalkAnswer { allow: true },
-            ("talk", "chat-deny", _) => Action::TalkAnswer { allow: false },
+            ("talk", "chat-allow" | "chat-deny" | "chat-show-all", _) => {
+                let shown = self.model.shown_chat().and_then(|chat| chat.transcript.cards.front());
+                let Some(ticket) = shown.map(|card| card.ticket) else { return true };
+                match name {
+                    "chat-allow" => Action::TalkAnswer { allow: true, ticket },
+                    "chat-deny" => Action::TalkAnswer { allow: false, ticket },
+                    _ => Action::TalkExpand { ticket },
+                }
+            }
             ("talk", "chat-deny-note", _) => Action::TalkDenyNote,
-            ("talk", "chat-show-all", _) => Action::TalkExpand,
             ("talk", "chat-stop", _) => Action::TalkInterrupt,
             ("talk", "view-chat", _) => Action::TalkView { shows: ottospace_core::transcript::View::Native },
             ("talk", "view-terminal", _) => Action::TalkView { shows: ottospace_core::transcript::View::Terminal },

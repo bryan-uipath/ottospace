@@ -24,7 +24,7 @@ use ottospace_core::agents::{self, Start};
 use ottospace_core::links::Target;
 use ottospace_core::model::chat::{self, Key};
 use ottospace_core::talk::Subject;
-use ottospace_core::transcript::{Call, Entry, Event, Item, Notice, Outcome, Text, View};
+use ottospace_core::transcript::{Call, Entry, Event, Item, Notice, Text, View};
 use ottospace_core::{Action, Origin, theme};
 
 use crate::markdown::{self, Block, Span};
@@ -381,7 +381,7 @@ impl Workspace {
     /// reaches nothing here, as in the terminal.
     pub(crate) fn chat_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
         let Some(chat) = self.model.shown_chat() else { return };
-        let card = !chat.transcript.cards.is_empty() && !chat.deny;
+        let card = chat.transcript.cards.front().map(|card| card.ticket).filter(|_| !chat.deny);
         let (key, mods) = (&event.keystroke.key, crate::mods(event.keystroke.modifiers));
         match chat::key(key, mods, card) {
             Key::Pass => return,
@@ -878,9 +878,13 @@ impl Workspace {
             .flex_col()
             .gap_0p5()
             .children(lines);
+        // Each button names the card drawn: one the CLI withdrew meanwhile takes its click along.
+        let ticket = card.ticket;
         let cut = (card.cut && !card.expanded).then(|| {
             let show = self.talk_button("chat-show-all", "Show all (s)", "See all of it before you allow it").on_click(
-                cx.listener(|this, _, window, cx| drop(this.dispatch(Action::TalkExpand, this.input, window, cx))),
+                cx.listener(move |this, _, window, cx| {
+                    drop(this.dispatch(Action::TalkExpand { ticket }, this.input, window, cx))
+                }),
             );
             div()
                 .flex()
@@ -903,14 +907,14 @@ impl Workspace {
             .talk_button("chat-allow", "Allow (a)", "Allow this one request, as shown")
             .when(allowable, |b| b.text_color(rgb(theme::PICK)))
             .when(!allowable, |b| b.opacity(0.4))
-            .on_click(cx.listener(|this, _, window, cx| {
-                drop(this.dispatch(Action::TalkAnswer { allow: true }, this.input, window, cx))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                drop(this.dispatch(Action::TalkAnswer { allow: true, ticket }, this.input, window, cx))
             }));
         let deny = self
             .talk_button("chat-deny", "Deny (d)", "Deny it; the agent goes on without it")
             .text_color(rgb(theme::ERROR))
-            .on_click(cx.listener(|this, _, window, cx| {
-                drop(this.dispatch(Action::TalkAnswer { allow: false }, this.input, window, cx))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                drop(this.dispatch(Action::TalkAnswer { allow: false, ticket }, this.input, window, cx))
             }));
         let note = self.talk_button("chat-deny-note", "Deny with a message (m)", "Tell the agent why").on_click(
             cx.listener(|this, _, window, cx| drop(this.dispatch(Action::TalkDenyNote, this.input, window, cx))),
@@ -1078,13 +1082,7 @@ fn translate(native: &mut Native, said: Said) -> Option<Event> {
         }
         Said::Usage { context, window, cost_micro_usd } => Event::Usage { context, window, cost_micro_usd },
         Said::Compaction => Event::Compaction,
-        Said::TurnFinished { outcome } => Event::TurnFinished {
-            outcome: match outcome {
-                ottospace_agents::Outcome::Completed => Outcome::Completed,
-                ottospace_agents::Outcome::Interrupted => Outcome::Interrupted,
-                ottospace_agents::Outcome::Failed { kind } => Outcome::Failed { kind },
-            },
-        },
+        Said::TurnFinished { outcome } => Event::TurnFinished { outcome },
         Said::Error { kind, retrying } => Event::Error { kind, retrying },
         // Its stderr may hold tokens: it stays in the driver, never in the core or the state.
         Said::Exited { code, .. } => Event::Exited { code },

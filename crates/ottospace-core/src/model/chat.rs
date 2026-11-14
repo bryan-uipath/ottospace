@@ -62,21 +62,22 @@ pub enum Key {
     Pass,
 }
 
-/// The key `key` with `mods`, while a card waits (`card`: and no Deny's message is written) or not.
+/// The key `key` with `mods`, while a card waits (`card`: its ticket, and no Deny's message is
+/// written) or not.
 /// On a card ↵ does nothing, so an Allow is never a reflex: `a` allows, `d` denies, `s` shows
 /// all, `m` writes a message for the Deny. In the composer ↵ sends (or denies with the message),
 /// ⇧↵ starts a new line, Esc leaves, or stops a turn when pressed twice.
-pub fn key(key: &str, mods: crate::keys::Mods, card: bool) -> Key {
+pub fn key(key: &str, mods: crate::keys::Mods, card: Option<u64>) -> Key {
     if mods.cmd {
         return Key::Pass;
     }
     let bare = !mods.ctrl && !mods.alt && !mods.shift;
     match key {
         "escape" => Key::Act(Action::TalkEscape),
-        _ if card => match key {
-            "a" if bare => Key::Act(Action::TalkAnswer { allow: true }),
-            "d" if bare => Key::Act(Action::TalkAnswer { allow: false }),
-            "s" if bare => Key::Act(Action::TalkExpand),
+        _ if let Some(ticket) = card => match key {
+            "a" if bare => Key::Act(Action::TalkAnswer { allow: true, ticket }),
+            "d" if bare => Key::Act(Action::TalkAnswer { allow: false, ticket }),
+            "s" if bare => Key::Act(Action::TalkExpand { ticket }),
             "m" if bare => Key::Act(Action::TalkDenyNote),
             _ => Key::Swallow,
         },
@@ -341,7 +342,10 @@ impl Model {
             }
             // ↵ while the user writes a Deny's message: the Deny, with it.
             Action::TalkSend if self.shown_chat().is_some_and(|chat| chat.deny) => {
-                self.chat_act(Action::TalkAnswer { allow: false }, effects)
+                let front = self.shown_chat().and_then(|chat| chat.transcript.cards.front().map(|card| card.ticket));
+                if let Some(ticket) = front {
+                    self.chat_act(Action::TalkAnswer { allow: false, ticket }, effects)
+                }
             }
             Action::TalkSend => {
                 let now = self.now;
@@ -545,17 +549,18 @@ mod tests {
         use crate::keys::Mods;
         let (none, shift) = (Mods::default(), Mods { shift: true, ..Mods::default() });
         let cmd = Mods { cmd: true, ..Mods::default() };
-        assert_eq!(key("enter", none, true), Key::Swallow, "no reflex Allow");
-        assert_eq!(key("a", none, true), Key::Act(Action::TalkAnswer { allow: true }));
-        assert_eq!(key("A", shift, true), Key::Swallow);
-        assert_eq!(key("d", none, true), Key::Act(Action::TalkAnswer { allow: false }));
-        assert_eq!(key("s", none, true), Key::Act(Action::TalkExpand));
-        assert_eq!(key("m", none, true), Key::Act(Action::TalkDenyNote));
-        assert_eq!(key("x", none, true), Key::Swallow);
-        assert_eq!(key("escape", none, true), Key::Act(Action::TalkEscape));
-        assert_eq!(key("enter", none, false), Key::Act(Action::TalkSend));
-        assert_eq!(key("enter", shift, false), Key::Newline);
-        assert_eq!((key("a", none, false), key("l", cmd, true)), (Key::Field, Key::Pass));
+        let card = Some(4);
+        assert_eq!(key("enter", none, card), Key::Swallow, "no reflex Allow");
+        assert_eq!(key("a", none, card), Key::Act(Action::TalkAnswer { allow: true, ticket: 4 }));
+        assert_eq!(key("A", shift, card), Key::Swallow);
+        assert_eq!(key("d", none, card), Key::Act(Action::TalkAnswer { allow: false, ticket: 4 }));
+        assert_eq!(key("s", none, card), Key::Act(Action::TalkExpand { ticket: 4 }));
+        assert_eq!(key("m", none, card), Key::Act(Action::TalkDenyNote));
+        assert_eq!(key("x", none, card), Key::Swallow);
+        assert_eq!(key("escape", none, card), Key::Act(Action::TalkEscape));
+        assert_eq!(key("enter", none, None), Key::Act(Action::TalkSend));
+        assert_eq!(key("enter", shift, None), Key::Newline);
+        assert_eq!((key("a", none, None), key("l", cmd, card)), (Key::Field, Key::Pass));
     }
 
     #[test]
