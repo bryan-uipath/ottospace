@@ -26,6 +26,8 @@ export interface NativeChat {
     live: boolean;
     /** Read-only, from a session another terminal runs. */
     watched: boolean;
+    /** Lines from the agent no rule reads: a count, never what they said. */
+    not_understood: number;
   };
   /** Each reply's blocks by kind, and its links that open. */
   replies: { blocks: Record<string, number>; links: { web: number; file: number } }[];
@@ -36,6 +38,11 @@ export interface NativeChat {
   armed: boolean;
   /** Scrolled up: new text does not pull the view down. */
   away: boolean;
+  /** The ended agent left stderr to show (never in the state), and whether it is shown. */
+  details: boolean;
+  details_open: boolean;
+  /** The kinds of the lines not understood are shown. */
+  unread_open: boolean;
 }
 
 export type PaneId = number;

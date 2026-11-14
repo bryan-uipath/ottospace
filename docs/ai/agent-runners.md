@@ -334,8 +334,11 @@ each held by code named here:
    plan.
 4. **Argv.** A fixed table plus a name-shaped model and a UUID. The shell runs it through the
    login shell for `PATH` as stage 1 does (`"$SHELL" -lic 'exec "$@"' -- claude …`).
-5. **Data exposure.** stderr may hold tokens: it is `Untrusted`, kept in the driver, never
-   logged, never in the core or the state (not shown in the drawer yet either).
+5. **Data exposure.** stderr may hold tokens: it is `Untrusted`, never logged, never in the
+   core, the state, the trace or a failure folder. Once the agent has ended, its last 4 KB is kept
+   in the shell (`Drawer::details`), cleaned (`transcript::clean`) and its token-shaped parts
+   hidden (`secrets::hide_lines`, through `transcript::details`), and drawn only after the
+   user's click on Show details. The state says only `details: true` and the exit code.
    Copy of a message or block goes to the clipboard, never to the state's `copied` (a test
    run's clipboard is `copied` itself). Images the user attaches are read once and sent; nothing
    is cached on disk by ottospace.
@@ -387,9 +390,18 @@ each held by code named here:
   `links::target`, for an absolute path, on the user's click. The state has counts only
   (`entries[].diff`: changes, added, removed, lines kept, more). Take over, when `take_over_when_idle` and it is
   idle, is the user's open of it (a resume).
+- **Never silent.** An agent that ends says how (exit code or signal), and whether anything
+  came back since it started: "The agent ended before replying (exit 0). Terminal view may show
+  why." Show details opens its stderr (above). A failed turn and an error say "The agent
+  reported: <kind>": a `result` with `is_error` names the assistant message's `error` code (an
+  API key's `authentication_failed`); a `result` subtype or a record no table has still gives
+  its kind, and a record that looks like an error (`is_error`, an `error` field, "error" in its
+  kind) is an error. Every other line no rule reads, but for the known quiet ones
+  (`ottospace_agents::QUIET`: hooks, status, rate limits), is counted: "3 lines from the agent
+  not understood", its kinds on a click; the state has the count alone (`not_understood`).
 - **Not built:** Codex native (its `Wire` exists; the drawer keeps it in a terminal until its
   app server is probed), images attached from the composer (the runner takes them; no picker
-  yet), stderr on request, syntax colouring, drag selection, other rich tool results, the
+  yet), syntax colouring, drag selection, other rich tool results, the
   radial activity view (2c), mailto links, bare paths as links.
 - **Unverified against the real CLI:** that `claude -p --session-id` writes the session file
   as the TUI does (the docs' `--no-session-persistence`, "only works with --print", implies it
@@ -447,7 +459,7 @@ Lines no rule reads (`Unknown`), and what becomes of them:
 
 | Runner | Kind | Decision |
 |---|---|---|
-| Claude | `system.hook_started`, `system.hook_response` (the user's hooks) | stay `Unknown`; later the activity view's Hooks station |
+| Claude | `system.hook_started`, `system.hook_response` (the user's hooks) | stay `Unknown`, quiet (`QUIET`); later the activity view's Hooks station |
 | Claude | `system.status` | stay `Unknown` (turn events say the same) |
 | Claude | `rate_limit_event` | later an event: rate-limit state for the header (stage 2a) |
 | Claude | `system.thinking_tokens` | later an event: a "thinking" indicator (stage 2a) |
@@ -470,6 +482,57 @@ The probes, each one short model session on the user's account (approval needed 
 OTTOSPACE_REAL_CLI=1 cargo test -p ottospace-agents --test real -- --ignored --nocapture claude_real
 OTTOSPACE_PROBE_ISOLATED=1 OTTOSPACE_REAL_CLI=1 cargo test -p ottospace-agents --test real -- --ignored --nocapture claude_real
 OTTOSPACE_REAL_CLI=1 cargo test -p ottospace-agents --test real -- --ignored --nocapture codex_real
+```
+
+## Real-CLI check
+
+0.1.0 shipped the native view as the default, tested only against the fake `claude`, and it
+never got a reply from the real one (the CLI was stopped over the terminal ottospace was
+started from; see the driver's `setsid`). Until this check passes, `conversation_view`
+defaults to `terminal` (`settings::DEFAULT_VIEW`). Before it flips back, run, with the user's
+approval (one short model session on their account, on `claude-haiku-5-5`):
+
+```
+OTTOSPACE_REAL_CLI=1 cargo test -p ottospace --test e2e -- --ignored --nocapture real_cli_native_smoke
+```
+
+It drives a private instance (`OTTOSPACE_HOME` and the socket under temp, a scratch repository)
+and fails unless each step holds. By hand, the same shape, with ottospace started from a
+terminal (the case that failed) and once from Finder, `"conversation_view": "native"`:
+
+1. A new task with a trivial prompt ("Reply with the single word ok"), ↵: the reply shows,
+   the header names the model and the folder the agent runs in.
+2. A second message: its reply shows; no "lines not understood" row.
+3. Chat → Terminal: the TUI opens on the same session; Terminal → Chat: the transcript is
+   back, "Session resumed".
+4. Its session file exists: `<config dir>/projects/<repo slug>/<session id>.jsonl`.
+5. Another task's row, then this one's, its rail cell, its tab: no bubble is added, nothing
+   starts again, nothing flickers.
+6. Stop, then type a message and ↵: it starts again and the message is sent.
+7. A broken start (`PATH` without `claude`, say): the chat says how it ended, and Show details
+   shows the CLI's words.
+
+## Fixtures
+
+`crates/ottospace-agents/tests/fixtures/claude`: what the fake `claude` (`tests/fakes/claude`)
+replays and the parser tests read. Each file starts with a `_fixture` line that says where it
+came from, and the CLI version if recorded.
+
+| File | Source |
+|---|---|
+| `turn1*.jsonl`, `turn2*.jsonl` | hand-written from the SDK reference and the probes above |
+| `real-2.1.325-turn.jsonl` | recorded: one turn of 2.1.325 that answers "ok" (hooks, `system/init`, `system/status`, the stream events with the whole `assistant` before `content_block_stop`, `rate_limit_event`, `result/success`) |
+| `real-2.1.325-no-reply.jsonl` | its hook lines alone: all a run prints when stdin closes before a message; it then exits 0 |
+| `synthetic-auth-failure.jsonl` | SYNTHETIC: an API key's failure as the docs describe it, never recorded |
+| `synthetic-error-result.jsonl` | SYNTHETIC: a retry, failed turns, a subtype and a record type no table has |
+
+A recording is scrubbed before it is written: structure, order and keys as they came; ids,
+paths, text, hook output, counts and account fields made up; protocol names (`type`,
+`subtype`, …) kept. Re-record when the CLI's version changes (one short model session on the
+user's account, with their approval), read the files through, and commit them:
+
+```
+OTTOSPACE_REAL_CLI=1 cargo test -p ottospace-agents --test real -- --ignored --nocapture claude_record
 ```
 
 ## Probes: attach, watch and take-over (2026-11-13)
