@@ -49,6 +49,14 @@ impl Chat {
     }
 }
 
+/// A message that waited on a start back in the composer, unless the user wrote another since.
+fn unqueue(chat: &mut Chat) {
+    if let Some(text) = chat.queued.take().filter(|_| chat.draft.text().is_empty()) {
+        chat.draft = Field::lines(MAX_DRAFT);
+        chat.draft.apply(crate::edit::Edit::Paste(text));
+    }
+}
+
 /// What a key does in a native conversation that has the keyboard.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Key {
@@ -114,7 +122,8 @@ impl Model {
     pub fn shown_draft_chat(&self) -> Option<&Chat> {
         let talk = self.talk.as_ref().filter(|talk| talk.open)?;
         let chat = self.chat(&talk.task)?;
-        (chat.transcript.live || (!chat.transcript.watched && self.talk_resumes().is_some())).then_some(chat)
+        let native = self.talk_view(&talk.task) == View::Native;
+        (chat.transcript.live || (native && !chat.transcript.watched && self.talk_resumes().is_some())).then_some(chat)
     }
 
     fn shown_draft_chat_mut(&mut self) -> Option<&mut Chat> {
@@ -186,6 +195,10 @@ impl Model {
     /// session was gone on with.
     pub(super) fn chat_started(&mut self, subject: &Subject, resumed: bool, effects: &mut Vec<Effect>) {
         if self.talk_view(subject) != View::Native {
+            // In a terminal now: a message that waited is not typed into its TUI; it goes back.
+            if let Some(chat) = self.chat_mut(subject) {
+                unqueue(chat);
+            }
             return;
         }
         if self.chat(subject).is_none() {
@@ -224,11 +237,6 @@ impl Model {
         }
         if let Some(chat) = self.chat_mut(subject) {
             (chat.deny, chat.armed) = (false, false);
-            // A message that waited on a start that failed goes back to the composer.
-            if let Some(text) = chat.queued.take().filter(|_| chat.draft.text().is_empty()) {
-                chat.draft = Field::lines(MAX_DRAFT);
-                chat.draft.apply(crate::edit::Edit::Paste(text));
-            }
         }
         let switching = self.switching.contains(subject);
         self.switching.retain(|of| of != subject);
@@ -311,8 +319,17 @@ impl Model {
         }
     }
 
-    /// The conversations gone with their tasks take their transcripts with them.
+    /// The conversations gone with their tasks take their transcripts with them. A message that
+    /// waited on a start that did not come (it failed, was stopped, or its session was busy when
+    /// read) goes back to its composer.
     pub(super) fn settle_chats(&mut self) {
+        let waiting = self.chats.iter().filter(|c| c.queued.is_some() && !self.talk_live(&c.subject));
+        let waiting: Vec<Subject> = waiting.map(|c| c.subject.clone()).collect();
+        for subject in waiting {
+            if let Some(chat) = self.chat_mut(&subject) {
+                unqueue(chat);
+            }
+        }
         let tasks = &self.tasks;
         let gone = |subject: &Subject| subject.task().is_some_and(|id| tasks.get(id).is_none());
         self.chats.retain(|chat| !gone(&chat.subject));
@@ -803,6 +820,10 @@ mod tests {
         // A start that failed: the words come back.
         m.update(Action::AgentExited { task: one.clone() }.sent_by(Origin::System));
         assert_eq!(m.chat(&one).map(|chat| chat.draft.text()), Some("say hello"));
+        // The same when its read finds it at work elsewhere, or Stop comes first.
+        m.update(Action::TalkSend);
+        m.update(Action::TaskStop { id: one.clone() });
+        assert_eq!(m.chat(&one).map(|chat| (chat.draft.text(), chat.queued.is_some())), Some(("say hello", false)));
         // Once it runs, the message goes.
         m.update(Action::TalkSend);
         let read = Action::SessionRead {

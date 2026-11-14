@@ -482,7 +482,8 @@ impl Workspace {
         let ran = ran.or_else(|| self.drawer.agents.get(subject).and_then(|agent| agent.cwd.clone()));
         let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
         let folder = ran.or_else(|| self.repo_of(subject)).or_else(|| home.clone()).map(|dir| {
-            let short = home.as_deref().and_then(|home| dir.strip_prefix(home)).map(|rest| format!("~{rest}"));
+            let rest = home.as_deref().and_then(|home| dir.strip_prefix(home));
+            let short = rest.filter(|rest| rest.is_empty() || rest.starts_with('/')).map(|rest| format!("~{rest}"));
             short.unwrap_or(dir)
         });
         let elapsed = agent.as_ref().filter(|_| runs).map(|(_, since)| {
