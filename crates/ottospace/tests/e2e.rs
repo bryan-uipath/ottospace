@@ -3186,11 +3186,18 @@ fn sneak_labels_an_apps_elements_and_only_the_users_letter_presses_one() {
     assert!(refused["error"].as_str().is_some_and(|e| e.contains("the user's alone")), "{refused}");
     let state = otto.call(json!({"cmd": "state"}));
     assert_eq!((&state["mode"], &state["app_presses"]), (&json!("sneak"), &json!([])));
-    // The user's letters press that very element. No window is hosted in a test run, so the
+    // Every app label has two letters: the user's first only narrows, and ⌫ takes it back.
+    assert!(labels.iter().all(|(_, l)| l.len() >= 2), "{labels:?}");
+    assert_eq!(state["sneak"]["typed"], "", "{state}");
+    let first = &label[..1];
+    let narrowed = otto.call(json!({"cmd": "key", "keys": first, "as": "user"}));
+    assert_eq!((&narrowed["mode"], &narrowed["sneak"]["typed"]), (&json!("sneak"), &json!(first)), "{narrowed}");
+    assert_eq!(narrowed["app_presses"], json!([]));
+    let back = otto.call(json!({"cmd": "key", "keys": "backspace", "as": "user"}));
+    assert_eq!((&back["mode"], &back["sneak"]["typed"]), (&json!("sneak"), &json!("")), "{back}");
+    // The user's two letters press that very element. No window is hosted in a test run, so the
     // status bar says nothing was pressed.
-    let typed = state["sneak"]["typed"].as_str().unwrap_or("").len();
-    let rest = letters(&label[typed..]);
-    let reply = otto.call(json!({"cmd": "key", "keys": rest, "as": "user"}));
+    let reply = otto.call(json!({"cmd": "key", "keys": letters(&label), "as": "user"}));
     assert_eq!((&reply["mode"], &reply["app_presses"]), (&json!("normal"), &json!([[1, [0]]])), "{reply}");
     assert_eq!(reply["notice"], "the window is gone: nothing was pressed", "{reply}");
     // Outside sneak mode the request is refused: there is nothing to label.
