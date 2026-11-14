@@ -363,6 +363,7 @@ impl AssetSource for Assets {
             "icons/tasks.svg" => Some(include_bytes!("../assets/icons/tasks.svg")),
             "icons/repos.svg" => Some(include_bytes!("../assets/icons/repos.svg")),
             "icons/marks.svg" => Some(include_bytes!("../assets/icons/marks.svg")),
+            "icons/calendar.svg" => Some(include_bytes!("../assets/icons/calendar.svg")),
             "icons/split-right.svg" => Some(include_bytes!("../assets/icons/split-right.svg")),
             "icons/split-down.svg" => Some(include_bytes!("../assets/icons/split-down.svg")),
             "icons/plus.svg" => Some(include_bytes!("../assets/icons/plus.svg")),
@@ -505,8 +506,9 @@ const KEYS_SNEAK: &[(&str, &str)] = &[
 ];
 
 /// Rail sections in order, with their icon and label.
-const SECTIONS: [(Section, &str, &str); 5] = [
+const SECTIONS: [(Section, &str, &str); 6] = [
     (Section::Tasks, "icons/tasks.svg", "Tasks"),
+    (Section::Calendar, "icons/calendar.svg", "Calendar"),
     (Section::Apps, "icons/apps.svg", "Apps"),
     (Section::Workbook, "icons/workbook.svg", "Workbook"),
     (Section::Repos, "icons/repos.svg", "Repos"),
@@ -3278,6 +3280,8 @@ impl Workspace {
             // The offer to put a mark back, if it shows, is above the rows.
             Some(Section::Marks) => return Some(at + usize::from(self.mark_offered().is_some())),
             Some(Section::Workbook) => return Some(at + usize::from(self.model.workbooks.offered().is_some())),
+            // "Nothing today" is above the rows when the day is empty.
+            Some(Section::Calendar) => return Some(at + usize::from(self.model.calendar.today().next().is_none())),
             _ => return Some(at),
         }
         // The offer to undo, if it shows; how to add a task, if none is listed; then the headings
@@ -3616,6 +3620,7 @@ impl Workspace {
         // joined to the list.
         let open = self.model.sidebar;
         let needs_you = self.model.tasks.needs_you() > 0;
+        let sections = self.model.sections();
         div()
             .id("rail")
             .w(px(RAIL))
@@ -3624,37 +3629,41 @@ impl Workspace {
             .overflow_hidden()
             .flex()
             .flex_col()
-            .children(SECTIONS.iter().enumerate().map(|(i, (section, icon, label))| {
-                let (section, label) = (*section, *label);
-                let active = open == Some(section);
-                div()
-                    .id(("rail", i))
-                    .flex_none()
-                    .w(px(RAIL))
-                    .h(px(RAIL_CELL))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .when(!active, |d| d.border_r_1().border_color(rgb(theme::BORDER)))
-                    .hover(|s| s.bg(rgb(theme::SELECTED)))
-                    .when(active, |d| {
-                        // Amber on Tasks while a task needs the user, as its dot is.
-                        let tasks = section == Section::Tasks && needs_you;
-                        raised_cell(d, if tasks { theme::SNEAK } else { theme::PRIMARY }, false, i == 0)
-                    })
-                    .when(self.model.rail_focus == Some(RailFocus::Left(section)), |d| focus_ring(d.relative()))
-                    .child(svg().path(*icon).size(px(20.)).text_color(rgb(if active {
-                        theme::TEXT
-                    } else {
-                        theme::MUTED
-                    })))
-                    .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(label.into()))))
-                    .child(self.controls.mark(format!("rail:{}", label.to_lowercase())))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.dispatch(Action::ToggleSection { section }, this.input, window, cx);
-                    }))
-            }))
+            // Calendar only while a calendar feed is set.
+            .children(SECTIONS.iter().filter(|(s, ..)| sections.contains(s)).enumerate().map(
+                |(i, (section, icon, label))| {
+                    let (section, label) = (*section, *label);
+                    let active = open == Some(section);
+                    div()
+                        .id(("rail", i))
+                        .flex_none()
+                        .w(px(RAIL))
+                        .h(px(RAIL_CELL))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .when(!active, |d| d.border_r_1().border_color(rgb(theme::BORDER)))
+                        .hover(|s| s.bg(rgb(theme::SELECTED)))
+                        .when(active, |d| {
+                            // Amber on Tasks while a task needs the user, as its dot is.
+                            let tasks = section == Section::Tasks && needs_you;
+                            raised_cell(d, if tasks { theme::SNEAK } else { theme::PRIMARY }, false, i == 0)
+                        })
+                        .when(self.model.rail_focus == Some(RailFocus::Left(section)), |d| focus_ring(d.relative()))
+                        .child(svg().path(*icon).size(px(20.)).text_color(rgb(if active {
+                            theme::TEXT
+                        } else {
+                            theme::MUTED
+                        })))
+                        .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(label.into()))))
+                        .children((section == Section::Calendar).then(|| self.calendar_rail_mark()).flatten())
+                        .child(self.controls.mark(format!("rail:{}", label.to_lowercase())))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.dispatch(Action::ToggleSection { section }, this.input, window, cx);
+                        }))
+                },
+            ))
             .child(div().flex_1().border_r_1().border_color(rgb(theme::BORDER)))
     }
 
@@ -3814,6 +3823,7 @@ impl Workspace {
             Section::Repos => self.render_repos(cx).into_any_element(),
             Section::Tasks => self.render_tasks(cx).into_any_element(),
             Section::Marks => self.render_marks(cx).into_any_element(),
+            Section::Calendar => self.render_calendar(cx).into_any_element(),
             Section::Workbook => self.render_workbooks(cx).into_any_element(),
         };
         div()

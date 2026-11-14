@@ -28,6 +28,10 @@ pub enum ListRow {
     /// "and N more" under the suggested apps, and the "All apps" heading. Opening one folds or unfolds it.
     MoreApps,
     AllApps,
+    /// A meeting of the Calendar section, by its id. Opening it joins it.
+    Meeting(u64),
+    /// The folded "Tomorrow · n" group. Opening it folds or unfolds it.
+    MeetingsTomorrow,
 }
 
 /// What a key does in list mode.

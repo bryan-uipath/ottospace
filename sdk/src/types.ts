@@ -10,7 +10,7 @@ export type Subject = TaskId | { runner: string; id: string };
 
 export type Axis = "right" | "down";
 export type Dir = "left" | "right" | "up" | "down";
-export type Section = "apps" | "workbook" | "tasks" | "repos" | "marks";
+export type Section = "apps" | "workbook" | "tasks" | "repos" | "marks" | "calendar";
 /** Pane kinds `split` may create. App panes come from `open_app`. */
 export type SplitKind = "terminal" | "empty";
 /** Who has the keyboard. */
@@ -1026,6 +1026,10 @@ export interface Snapshot {
     banner: { join: Rect | null; dismiss: Rect | null } | null;
     alerts: number;
     joins: number | null;
+    /** The Calendar section's rows, its rail cell's mark, and whether "Tomorrow" is unfolded. */
+    rows: number;
+    rail: "none" | "near" | "alert";
+    tomorrow_open: boolean;
   };
   /**
    * Frames drawn (`number`), actions dispatched (`seq`) and how many of them the last frame drew

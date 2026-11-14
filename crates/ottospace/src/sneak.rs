@@ -419,6 +419,8 @@ impl Workspace {
             ("unfilled-open", _) => number.map(|pane| Action::UnfilledOpen { pane }),
             ("meeting-join", _) => name.parse().ok().map(|id| Action::CalendarJoin { id }),
             ("meeting-dismiss", _) => name.parse().ok().map(|id| Action::CalendarDismiss { id }),
+            ("meetings-tomorrow", _) => Some(Action::CalendarTomorrow),
+            ("meeting-row-join", _) => name.parse().ok().map(|id| Action::CalendarJoin { id }),
             _ => {
                 match (kind, number) {
                     ("tab", Some(tab)) => self.select_tab(tab, window, cx),

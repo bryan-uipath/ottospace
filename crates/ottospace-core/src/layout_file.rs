@@ -242,8 +242,9 @@ impl Model {
             width: self.talk_width,
             wide: self.talk_wide,
         };
-        let mut layout =
-            Layout { version: VERSION, selected, section: self.sidebar, drawer, tabs, extra: Extra::new() };
+        // Not the Calendar: a build without it could not read the file back.
+        let section = self.sidebar.filter(|s| *s != Section::Calendar);
+        let mut layout = Layout { version: VERSION, selected, section, drawer, tabs, extra: Extra::new() };
         // What is written always reads back: the last histories go first, then the last tabs.
         while write(&layout).len() > MAX_FILE_BYTES {
             let held = layout.tabs.iter_mut().flat_map(|saved| saved.tab.panes.iter_mut()).rev();
@@ -322,13 +323,16 @@ impl Model {
         self.restore_selected(layout.selected, &built, effects);
         // Building each tab noted it as its task's last: none is, so each task shows its first.
         self.last_tab.clear();
-        self.sidebar = layout.section;
+        // A Calendar left open by a run that had a feed: none without one.
+        self.sidebar = layout.section.filter(|s| *s != Section::Calendar || self.calendar.on);
         self.talk_width = talk::width(layout.drawer.width);
         self.talk_wide = layout.drawer.wide;
         // Shown to go on with, as a click on its task offers: never started here.
         if let Some(task) = exists(self, layout.drawer.task) {
             let subject = Subject::Task(task);
             self.talk = Some(Talk { task: subject.clone(), open: layout.drawer.open, keys: false });
+            // Once: the user may have opened it already this run.
+            self.opened.retain(|opened| *opened != subject);
             self.opened.push(subject);
         }
         self.restore_links(&layout, &built);

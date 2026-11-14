@@ -6082,3 +6082,52 @@ fn no_feed_no_timeline() {
     // `calendar_call` answers only in a test run; an agent cannot learn it from the guide.
     assert!(!include_str!("../skill/guide.md").contains("calendar_call"));
 }
+
+/// Whether sneak mode labels a control of this id: it is drawn.
+fn labelled(otto: &Otto, id: &str) -> bool {
+    let (_, labels) = sneak(otto);
+    otto.call(json!({"cmd": "key", "keys": "escape", "as": "user"}));
+    labels.contains_key(id)
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_calendar_section_lists_the_day_and_only_the_user_joins_from_it() {
+    let home = calendar_folder(
+        "calendar-section",
+        &feed(&[
+            ("a", "Design review", -30, 1_800, "LOCATION:https://example.zoom.us/j/123\r\n"),
+            ("b", "Planning", 7_200, 9_000, "LOCATION:Room 4\r\n"),
+            ("c", "Retro", 86_400, 90_000, ""),
+        ]),
+        None,
+    );
+    let otto = Otto::launch_with("calendar-section", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    calendar_read(&otto);
+    assert!(labelled(&otto, "rail:calendar"), "a feed: the Calendar's rail cell");
+    let reply = otto.call(json!({"cmd": "section", "section": "calendar"}));
+    assert_eq!(reply["state"]["sidebar"], "calendar");
+    // The rows: today's two (or one, then "Tomorrow" holds both, just before midnight) and the group.
+    let calendar = &reply["calendar"];
+    assert!(calendar["rows"].as_u64() >= Some(2), "{calendar}");
+    assert_eq!((&calendar["rail"], &calendar["tomorrow_open"]), (&json!("near"), &json!(false)));
+    // No title or place reaches a client.
+    let text = reply.to_string();
+    assert!(!text.contains("Design review") && !text.contains("Room 4"), "{text}");
+    // ↵ on the running meeting: a client's opens nothing, the user's opens its link.
+    otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-e", "as": "user"}));
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!((&state["mode"], &state["state"]["list"]), (&json!("list"), &json!(0)));
+    otto.call(json!({"cmd": "key", "keys": "enter"}));
+    assert_eq!(otto.call(json!({"cmd": "state"}))["calendar"]["joins"], 0);
+    otto.call(json!({"cmd": "key", "keys": "enter", "as": "user"}));
+    assert_eq!(otto.call(json!({"cmd": "state"}))["calendar"]["joins"], 1);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+
+    // No feed: no rail cell, and the section does not open.
+    let otto = Otto::launch("calendar-section-off");
+    assert!(!labelled(&otto, "rail:calendar"));
+    assert!(labelled(&otto, "rail:tasks"));
+    assert_eq!(otto.call(json!({"cmd": "section", "section": "calendar"}))["state"]["sidebar"], Value::Null);
+}

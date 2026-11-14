@@ -39,7 +39,7 @@ ottospace            # opens on the Repos list
 | Save the tab as a workbook | ⌘⇧S |
 | Fill the screen | ⌘⌃F (again to restore) |
 
-## The bar on the left (Tasks, Apps, Workbook, Repos, Marks)
+## The bar on the left (Tasks, Calendar, Apps, Workbook, Repos, Marks)
 
 | I want to | Do |
 |---|---|
@@ -200,6 +200,8 @@ setting takes its default.
 `apps`: the pinned apps, by name or bundle path. `apps_hidden`: Dock apps not to suggest. Pin, Unpin and Hide in Apps write these two and leave the rest of the file as it is. `suggest_dock_apps`: `false` lists no Dock apps.
 
 `capture_key`: the key that captures the pane in use (`"off"` for none). `capture`: `keep_images` `false` writes no picture; `ax` `false` reads no accessibility tree for a capture.
+
+The Calendar section (second on the rail, only while `calendar_ics` is set) lists today's meetings and a folded "Tomorrow"; ↵ or `Join` opens a meeting's link. Its rail cell has an amber dot near a meeting, a filled badge while the banner is up.
 
 `calendar_ics`: your calendar's feed (an `https://` link or a file) for the [meeting timeline](reference.md#meeting-timeline): a hairline of the next `calendar_window_hours` (8) across the top, the next meeting beside the tab bar's buttons, a pulse from 10 minutes before, and at the start, if you are in no call, a banner with Join and Dismiss and a notification. `calendar_notify: false` turns alerts off; `calendar_notify_for: "links"` alerts only meetings with a meeting link.
 
