@@ -93,7 +93,7 @@ impl Snapshot {
                     self.context_window = *window;
                 }
             }
-            What::ToolStart { id, tool, station, summary } => {
+            What::ToolStart { id, tool, station, summary, .. } => {
                 *self.counts.entry(*station).or_default() += 1;
                 let (id, tool, summary) = (id.clone(), tool.clone(), summary.clone());
                 self.running.push(Call {
@@ -191,7 +191,7 @@ mod tests {
 
     fn start(time: u64, id: &str, station: Station) -> Event {
         let (id, tool, summary) = (id.to_string(), "Bash".to_string(), "cargo".to_string());
-        at(time, What::ToolStart { id, tool, station, summary })
+        at(time, What::ToolStart { id, tool, station, summary, diff: None })
     }
 
     fn end(time: u64, id: &str, failed: bool) -> Event {

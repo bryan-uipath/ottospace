@@ -250,6 +250,7 @@ fn assistant(record: &Value, main: bool, emit: &mut Vec<Event>) {
                     station,
                     label,
                     detail,
+                    diff: ottospace_core::diff::claude(tool, &block["input"]),
                 });
             }
             _ => {}
@@ -574,5 +575,19 @@ mod tests {
         );
         let Some(Event::ToolStart { station, label, .. }) = out.events.get(1) else { panic!("{out:?}") };
         assert_eq!((*station, label.as_str()), (station::Station::Files, "b/c.rs"));
+    }
+
+    #[test]
+    fn an_edit_call_carries_its_change() {
+        let line = |name: &str, input: Value| {
+            let block = json!({"type": "tool_use", "id": "t", "name": name, "input": input});
+            json!({"type": "assistant", "parent_tool_use_id": null, "message": {"content": [block]}}).to_string()
+        };
+        let edit = line("Edit", json!({"file_path": "/a/b.rs", "old_string": "x", "new_string": "y"}));
+        let out = Claude::new().read(&edit);
+        let Some(Event::ToolStart { diff: Some(diff), .. }) = out.events.get(1) else { panic!("{out:?}") };
+        assert_eq!((diff.files[0].added, diff.files[0].removed), (1, 1));
+        let out = Claude::new().read(&line("Read", json!({"file_path": "/a/b.rs"})));
+        assert!(matches!(out.events.get(1), Some(Event::ToolStart { diff: None, .. })), "{out:?}");
     }
 }

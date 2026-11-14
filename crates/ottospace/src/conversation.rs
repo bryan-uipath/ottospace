@@ -21,10 +21,11 @@ use gpui::{
 use ottospace_agents::driver::Driver;
 use ottospace_agents::{Answer, Event as Said, Input, Process, Ticket};
 use ottospace_core::agents::{self, Start};
+use ottospace_core::diff::{self, Change, Diff, Sign};
 use ottospace_core::links::Target;
 use ottospace_core::model::chat::{self, Key};
 use ottospace_core::talk::Subject;
-use ottospace_core::transcript::{Call, Entry, Event, Item, MAX_CARDS, Notice, Text, View};
+use ottospace_core::transcript::{Call, Entry, Event, Item, MAX_CARDS, Notice, Text, View, clean};
 use ottospace_core::{Action, Origin, theme};
 
 use crate::markdown::{self, Block, Span};
@@ -136,7 +137,7 @@ impl Watch {
             if send.send(vec![Event::WatchFromStart]).is_err() {
                 return;
             }
-            let mut cursor = ottospace_sessions::Cursor::default();
+            let mut cursor = ottospace_sessions::Cursor::with_edits();
             while !stopped.load(std::sync::atomic::Ordering::Relaxed) {
                 let Ok(batch) = reader.read(&session, cursor.clone(), WATCH_BUDGET) else { return };
                 cursor = batch.cursor;
@@ -170,15 +171,15 @@ fn watched(event: &ottospace_sessions::Event) -> Vec<Event> {
             let started = model.clone().map(|model| Event::Started { session: None, model: Some(model), mode: None });
             started.into_iter().chain([usage]).collect()
         }
-        What::ToolStart { id, tool, summary, .. } => {
-            let (tool, label) = (tool.clone(), summary.clone());
-            vec![Event::ToolStart { id: id.clone(), sub: false, tool, label, detail: Text::default() }]
+        What::ToolStart { id, tool, summary, diff, .. } => {
+            let (tool, label, diff) = (tool.clone(), summary.clone(), diff.clone());
+            vec![Event::ToolStart { id: id.clone(), sub: false, tool, label, detail: Text::default(), diff }]
         }
         What::ToolEnd { id, failed, .. } => vec![Event::ToolEnd { id: id.clone(), failed: *failed }],
         What::Error { kind } => vec![Event::Error { kind: kind.clone(), retrying: false }],
         What::SubAgentStart { id, label } => {
             let (tool, label) = ("Agent".to_string(), label.clone());
-            vec![Event::ToolStart { id: id.clone(), sub: true, tool, label, detail: Text::default() }]
+            vec![Event::ToolStart { id: id.clone(), sub: true, tool, label, detail: Text::default(), diff: None }]
         }
         What::SubAgentEnd { id } => vec![Event::ToolEnd { id: id.clone(), failed: false }],
         What::Compaction { .. } => vec![Event::Compaction],
@@ -567,19 +568,45 @@ impl Workspace {
             .border_color(rgb(theme::BORDER))
             .text_xs()
             .text_color(rgb(theme::MUTED))
-            .child(
-                div()
-                    .flex_1()
-                    .child("Watching: it runs in another terminal. Read-only; what it calls, not what it says."),
-            )
+            .child(div().flex_1().child("Another terminal runs it. Read-only: its calls and edits, never its words."))
             .child(take)
+    }
+
+    /// The header's chip on a watched conversation: it follows another process's file, a
+    /// message at a time, not streamed. None on one ottospace runs.
+    pub(crate) fn watch_chip(&self, subject: &Subject) -> Option<gpui::Stateful<Div>> {
+        let t = &self.model.chat(subject)?.transcript;
+        if !t.watched || t.live {
+            return None;
+        }
+        let colour = subject.task().and_then(|id| self.model.tasks.get(id)).map(|task| task.colour);
+        let tip = "Another process holds this session: each reply shows here once that message is complete";
+        Some(
+            div()
+                .id("talk-watching")
+                .relative()
+                .flex_none()
+                .px_1p5()
+                .h(px(18.))
+                .flex()
+                .items_center()
+                .rounded_full()
+                .border_1()
+                .border_color(rgb(theme::identity(colour.flatten())))
+                .bg(rgb(theme::SELECTED))
+                .text_xs()
+                .text_color(rgb(theme::MUTED))
+                .child("Watching · updates per message")
+                .child(self.controls.mark("talk:talk-watching".to_string()))
+                .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into())))),
+        )
     }
 
     fn chat_item(&self, subject: &Subject, key: &str, item: &Item, cx: &mut Context<Self>) -> AnyElement {
         let id = item.id;
         match &item.entry {
             Entry::User { text } => {
-                let shown = markdown::clean(text.text());
+                let shown = clean(text.text());
                 let copy = text.text().to_string();
                 let body = div()
                     .rounded_md()
@@ -606,14 +633,21 @@ impl Workspace {
                     .children(streaming.then(|| div().text_xs().text_color(rgb(theme::MUTED)).child("…")));
                 self.with_copy(key, id, body, plain, text.text().to_string(), cx)
             }
-            Entry::Tool { sub, tool, label, detail, state, .. } => {
+            Entry::Tool { sub, tool, label, detail, state, diff, .. } => {
                 let (glyph, color) = match state {
                     Call::Running => ("●", theme::PRIMARY),
                     Call::Done => ("✓", theme::PICK),
                     Call::Failed => ("✕", theme::ERROR),
                 };
                 let line = format!("{}{tool} · {label}", if *sub { "↳ " } else { "" });
-                self.row(subject, key, id, (glyph, color), line, detail, cx)
+                let row = self.row(subject, key, id, (glyph, color), line, detail, cx);
+                match diff {
+                    Some(diff) => {
+                        div().flex().flex_col().gap_1().child(row).child(self.diff_card(subject, key, id, diff, cx))
+                    }
+                    None => return row,
+                }
+                .into_any_element()
             }
             Entry::AutoDenied { tool, label, reason, detail } => {
                 let line = format!("Denied without asking ({reason}): {tool} · {label}");
@@ -652,11 +686,93 @@ impl Workspace {
                     .text_xs()
                     .text_color(rgb(theme::MUTED))
                     .child(div().text_color(rgb(color)).child(glyph.to_string()))
-                    .child(div().truncate().child(markdown::clean(&line))),
+                    .child(div().truncate().child(clean(&line))),
             )
-            .children(open.then(|| code_text(&markdown::clean(detail.text())).ml_4().mt_0p5()))
+            .children(open.then(|| code_text(&clean(detail.text())).ml_4().mt_0p5()))
             .on_click(cx.listener(move |this, _, _, cx| this.toggle_row(&subject, id, cx)))
             .into_any_element()
+    }
+
+    /// An edit's change under its call: each file's path (a click reveals it, if `File::target`
+    /// allows), then its lines, −/+ coloured. Plain monospaced text, as the core cut and cleaned it.
+    fn diff_card(&self, subject: &Subject, key: &str, id: u64, diff: &Diff, cx: &mut Context<Self>) -> Div {
+        let repo = self.repo_of(subject);
+        let files = diff.files.iter().enumerate().map(|(n, file)| {
+            let target = file.target(repo.as_deref());
+            let path = div()
+                .id(ElementId::Name(format!("chat-diff-path:{key}:{id}:{n}").into()))
+                .min_w_0()
+                .truncate()
+                .text_color(rgb(theme::TEXT))
+                .child(file.shown(repo.as_deref()));
+            let path = match target {
+                Some(target) => {
+                    let subject = subject.clone();
+                    path.cursor_pointer()
+                        .hover(|s| s.text_color(rgb(theme::PRIMARY)))
+                        .on_click(cx.listener(move |this, _, _, cx| this.open_link(&subject, &target, cx)))
+                }
+                None => path,
+            };
+            let what = match file.change {
+                Change::Add => Some("new file"),
+                Change::Delete => Some("deleted"),
+                Change::Write => Some("written whole"),
+                Change::Edit => None,
+            };
+            let to = file.to.as_ref().map(|to| format!("→ {}", diff::shown_path(to.text(), repo.as_deref())));
+            let header = div()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .px_2()
+                .py_0p5()
+                .border_b_1()
+                .border_color(rgb(theme::BORDER))
+                .text_xs()
+                .text_color(rgb(theme::MUTED))
+                .child(path)
+                .children(to.map(|to| div().min_w_0().truncate().child(to)))
+                .children(what.or(file.all.then_some("every occurrence")).map(|what| div().flex_none().child(what)))
+                .child(div().flex_1())
+                .child(div().flex_none().text_color(rgb(theme::PICK)).child(format!("+{}", file.added)))
+                .child(div().flex_none().text_color(rgb(theme::ERROR)).child(format!("−{}", file.removed)));
+            let lines = file.lines.iter().map(|line| {
+                let (sign, color) = match line.sign {
+                    Sign::Added => ("+", theme::PICK),
+                    Sign::Removed => ("−", theme::ERROR),
+                    Sign::Context => (" ", theme::MUTED),
+                    Sign::Hunk => ("", theme::BORDER_STRONG),
+                };
+                code_text(&format!("{sign} {}", line.text.text())).text_color(rgb(color))
+            });
+            let body = div()
+                .id(ElementId::Name(format!("chat-diff:{key}:{id}:{n}").into()))
+                .overflow_x_scroll()
+                .px_2()
+                .py_1()
+                .children(lines);
+            let more = (file.more > 0).then(|| muted(format!("… {} more lines", file.more)).px_2().pb_1());
+            div()
+                .flex()
+                .flex_col()
+                .when(n > 0, |d| d.border_t_1().border_color(rgb(theme::BORDER)))
+                .child(header)
+                .child(body)
+                .children(more)
+        });
+        let more_files =
+            (diff.more_files > 0).then(|| muted(format!("… {} more files", diff.more_files)).px_2().py_0p5());
+        div()
+            .ml_4()
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(theme::BORDER))
+            .bg(rgb(theme::RAISED))
+            .flex()
+            .flex_col()
+            .children(files)
+            .children(more_files)
     }
 
     /// A message with its hover words: Copy (plain text) and Copy as Markdown.
@@ -864,7 +980,7 @@ impl Workspace {
                 .child(crate::home::dot(theme::task(ottospace_core::tasks::Group::Running)))
                 .child(div().flex_1().min_w_0().truncate().child(format!(
                     "Working · {} · {}:{:02}",
-                    markdown::clean(&doing),
+                    clean(&doing),
                     secs / 60,
                     secs % 60
                 )))
@@ -886,7 +1002,7 @@ impl Workspace {
                 .flex()
                 .gap_1p5()
                 .child(div().flex_none().text_color(rgb(theme::MUTED)).child(format!("{label}:")))
-                .child(div().flex_1().min_w_0().child(markdown::clean(value)))
+                .child(div().flex_1().min_w_0().child(clean(value)))
         });
         // A few lines as they are; more scroll in a box of fixed height (a scroll box grows to its cap).
         // Rows as drawn, about: a long line wraps.
@@ -923,7 +1039,7 @@ impl Workspace {
                 .text_xs()
                 .italic()
                 .text_color(rgb(theme::MUTED))
-                .child(format!("The agent says: {}", markdown::clean(card.claim.text())))
+                .child(format!("The agent says: {}", clean(card.claim.text())))
         });
         let allowable = card.allowable();
         let allow = self
@@ -1085,8 +1201,8 @@ fn translate(native: &mut Native, said: Said) -> Option<Event> {
         Said::TurnStarted => Event::TurnStarted,
         Said::TextDelta { text: t } => Event::TextDelta { text: text(&t) },
         Said::Text { text: t } => Event::Text { text: text(&t) },
-        Said::ToolStart { id, parent, tool, label, detail, .. } => {
-            Event::ToolStart { id, sub: parent.is_some(), tool, label, detail: text(&detail) }
+        Said::ToolStart { id, parent, tool, label, detail, diff, .. } => {
+            Event::ToolStart { id, sub: parent.is_some(), tool, label, detail: text(&detail), diff }
         }
         Said::ToolEnd { id, failed } => Event::ToolEnd { id, failed },
         // Past `MAX_CARDS` waiting, denied at once: no request is left waiting unseen.

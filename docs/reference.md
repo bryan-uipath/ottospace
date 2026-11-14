@@ -31,7 +31,7 @@ running, and the rest of the design is not built: see the
 | "Pop next" (⌘⇧N): the conversation of the next task that needs you; the tab on show stays | Works today |
 | Sessions in the Tasks section: the Claude Code and Codex sessions of the listed repositories that are no task's (one you started by hand in a terminal). Each row shows the runner, the repository, the session's title, active or idle, what it does now, when it was last active, and the model. A click opens its conversation in the drawer (`claude --resume`, `codex resume`), unless it is at work in another terminal; Adopt makes a task of one; Hide removes it until the next start | Works today |
 | A task's agent in the right drawer: a click or ↵ on a task starts its agent (`claude` or `codex`, by its `@agent`, else `default_agent`) beside the workspace, which stays as it is. See [Flow of a task](#flow-of-a-task) | Works today |
-| Native conversation for Claude Code: the drawer drives `claude -p` (stream-json) and draws the reply itself: markdown (headings, emphasis, lists, quotes, tables), code blocks with Copy, links that open only on your click (web pages in the browser; files of the task's repository revealed in Finder), local images of the repository as thumbnails, tool calls as compact rows, a working row while a turn runs, Copy and Copy as Markdown on each message, and a composer (↵ send, ⇧↵ new line). Permission requests are cards: Allow this one request as shown, or Deny (with a message if you like); a request too long to show is opened in full before Allow is offered. `Chat \| Terminal` in the header switches to the CLI's own TUI and back on the same session. A session at work in another terminal is watched read-only (what it calls, not what it says), with Take over once it is idle. Codex stays in a terminal. No text selection by dragging yet: copy by message or block | Works today |
+| Native conversation for Claude Code: the drawer drives `claude -p` (stream-json) and draws the reply itself: markdown (headings, emphasis, lists, quotes, tables), code blocks with Copy, links that open only on your click (web pages in the browser; files of the task's repository revealed in Finder), local images of the repository as thumbnails, tool calls as compact rows, a file edit's change as a diff card under its call, a working row while a turn runs, Copy and Copy as Markdown on each message, and a composer (↵ send, ⇧↵ new line). Permission requests are cards: Allow this one request as shown, or Deny (with a message if you like); a request too long to show is opened in full before Allow is offered. `Chat \| Terminal` in the header switches to the CLI's own TUI and back on the same session. A session at work in another terminal is watched read-only (what it calls and edits, not what it says; "Watching · updates per message" in the header), with Take over once it is idle. Codex stays in a terminal. No text selection by dragging yet: copy by message or block | Works today |
 | Right rail: a badge per open conversation of a live task (needs you first, then running, then the last opened; at most 8), and `+` for a new task. A dismissed task leaves it; a done one stays only while shown or its agent runs | Works today |
 | New task (⌘N), in the drawer: one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`, picks for where and who, and a line that says what ↵ will do. `/path` and `$skill` are stored and shown; nothing acts on them yet | Works today |
 | Home screen: a tab with no panes says what goes there (Open an app ⌘E, Terminal ⌘D), the tasks that need you, and each listed task as a node on a lattice (left to right by project; within a project the older task is farther). A click on a node or a row opens its conversation. With nothing open at all, the drawer shows a new task by itself | Works today |
@@ -266,7 +266,10 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    long agents worked today. A key of a task's file this build does not know is kept as it is.
 11. **The native conversation.** The reply is drawn as it streams: markdown, code blocks (a
    Copy on each), tool calls as rows (a click shows what the call does, as plain text), a
-   working row with the call it waits on and the time. Hover a message for Copy and Copy as
+   working row with the call it waits on and the time. A call that edits a file (Claude `Edit`,
+   `MultiEdit`, `Write`, `NotebookEdit`; Codex's patch) has a diff card under it: the path
+   (relative to the repository; a click reveals it in Finder if it is inside), removed and added
+   lines in red and green, plain text, at most 40 lines (`… n more lines` for the rest). Hover a message for Copy and Copy as
    Markdown. Links show their address on hover and open only on your click: `http`/`https`
    in the browser, a file inside the task's repository revealed in Finder; anything else is
    text. Nothing is fetched: an image on the web is a link, a local image in the repository a
@@ -280,8 +283,9 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    decides how often cards come. `Chat | Terminal` in the header ends the process and goes on
    with the session in the other view once it is gone; never two at once. Not while a turn runs
    or a card waits in Chat (Stop first); from the terminal at any time, as Stop. A session at
-   work in another terminal is watched: a read-only list of what it calls; Take over, once it is
-   idle, goes on with it here. Only you send, answer, stop a turn or switch.
+   work in another terminal is watched: a read-only list of what it calls, with its edits' diff
+   cards, a message at a time as its file grows (the header says "Watching · updates per
+   message"; nothing streams); Take over, once it is idle, goes on with it here. Only you send, answer, stop a turn or switch.
 
 ## Command palette
 

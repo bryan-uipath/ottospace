@@ -24,7 +24,7 @@ documents these files as a stable interface.
 | Where it lives | A new crate, `crates/ottospace-sessions`: std, serde, serde_json. No network, no async, no writes |
 | Source of truth | The runner's own session files, read incrementally |
 | Live updates | Tail the files first. Hooks later, for the pane link and for what files lack |
-| What leaves the crate | Names, counts, times. A command's label is built only from fixed tables. Never prompts, file contents, command lines or outputs. One exception: a session's title, by `SessionReader::title` alone (see Labels, "Quoted") |
+| What leaves the crate | Names, counts, times. A command's label is built only from fixed tables. Never prompts, file contents, command lines or outputs. One exception: a session's title, by `SessionReader::title` alone (see Labels, "Quoted"). Another, only for a cursor that asks (`Cursor::with_edits`, the drawer's watch view): an edit call's change (`What::ToolStart.diff`), the core's `diff::Diff`: cut, cleaned, never serialised, `Debug` lengths only |
 | Session ↔ directory | The cwd recorded in the session is the directory or below it. Worktrees: pass every checkout in one call |
 | Session ↔ pane | Not built. Plan: runner pid → the pane's shell is an ancestor. Fallback: a hook reports `OTTOSPACE_PANE` |
 | Wiring | None in this slice: no UI, no model, no socket. A hidden `ottospace sessions [dir]` prints JSON |

@@ -6211,8 +6211,8 @@ fn the_calendar_section_lists_the_day_and_only_the_user_joins_from_it() {
 
 /// Hand-written stream-json for the stand-in `claude -p` (`ottospace-agents/tests/fakes/claude`),
 /// by fixture name. Made-up text: a reply with markdown, a call asked and denied, a long call
-/// asked and allowed once shown in full, and a turn interrupted.
-fn native_fixtures(dir: &Path) {
+/// asked and allowed once shown in full, then an edit of a file in `repo`, and a turn interrupted.
+fn native_fixtures(dir: &Path, repo: &Path) {
     const S: &str = r#""session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003""#;
     let long = "x".repeat(6000);
     let ask = |id: &str, command: &str| {
@@ -6241,6 +6241,8 @@ fn native_fixtures(dir: &Path) {
             r#"{{"type":"stream_event",{S},"parent_tool_use_id":null,"event":{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"{text}"}}}}}}"#
         )
     };
+    let edit = edit_call(&repo.join("src/auth.rs"));
+    let edit = format!(r#"{{"type":"assistant",{S},"parent_tool_use_id":null,"message":{{"content":[{edit}]}}}}"#);
     let done = r#"{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01,"modelUsage":{"claude-opus-5-5":{"contextWindow":1000000}}}"#;
     let reply = "## Plan\n\nThe login loop comes from **two redirects** in `auth.rs`. See [the docs](https://example.com/docs) \
                  and [main](src/main.rs:3); not [this](javascript:alert(1)).\n\n- drop the second redirect\n- keep the \
@@ -6258,7 +6260,7 @@ fn native_fixtures(dir: &Path) {
         ),
         ("turn1-denied.jsonl", [text("Fine, I will not."), done.into()].join("\n")),
         ("turn2.jsonl", [tool("2", &long), ask("2", &long)].join("\n")),
-        ("turn2-allowed.jsonl", [result("2"), text("Done."), done.into()].join("\n")),
+        ("turn2-allowed.jsonl", [result("2"), edit, text("Done."), done.into()].join("\n")),
         ("turn3.jsonl", delta("Working on it")),
         ("turn2-interrupted.jsonl", interrupted.into()),
     ];
@@ -6268,6 +6270,27 @@ fn native_fixtures(dir: &Path) {
     }
 }
 
+/// A made-up `Edit` call's `tool_use` block, of the file at `path`.
+fn edit_call(path: &Path) -> String {
+    let input = json!({
+        "file_path": path,
+        "old_string": "fn login() {\n    redirect();\n    redirect();\n}",
+        "new_string": "fn login() {\n    redirect();\n}",
+    });
+    json!({"type": "tool_use", "id": "toolu_edit", "name": "Edit", "input": input}).to_string()
+}
+
+/// The conversation's last `Edit` call has its card, in the state by counts only: no line, no path.
+fn assert_edit_card(chat: &Value) {
+    let entries = chat["transcript"]["entries"].as_array().unwrap();
+    let call = entries.iter().rev().find(|e| e["tool"] == "Edit").expect("the edit's call");
+    let diff = &call["diff"];
+    assert_eq!(diff["changes"], json!(["edit"]), "{call}");
+    assert_eq!((&diff["added"], &diff["removed"], &diff["more"]), (&json!(0), &json!(1), &json!(0)), "{call}");
+    let said = chat.to_string();
+    assert!(!said.contains("redirect") && !said.contains("src/auth.rs"), "{said}");
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_native_conversation_streams_asks_and_switches_to_the_terminal_and_back() {
@@ -6275,7 +6298,7 @@ fn a_native_conversation_streams_asks_and_switches_to_the_terminal_and_back() {
     let (bin, repos) = (root.join("bin"), root.join("repos"));
     let (record, fixtures) = (root.join("record"), root.join("fixtures"));
     fake_repo(&repos.join("app"));
-    native_fixtures(&fixtures);
+    native_fixtures(&fixtures, &repos.join("app"));
     std::fs::create_dir_all(&bin).unwrap();
     std::fs::create_dir_all(&record).unwrap();
     // The agents crate's stand-in, as `claude`: it records argv and stdin, and replays the fixtures.
@@ -6348,8 +6371,13 @@ fn a_native_conversation_streams_asks_and_switches_to_the_terminal_and_back() {
     otto.user_key("s");
     assert_eq!(chat(&otto)["transcript"]["cards"][0]["expanded"], true);
     otto.user_key("a");
-    otto.wait_for("the allowed turn to end", |o| chat(o)["transcript"]["turn"].is_null().then_some(()));
+    let allowed = otto.wait_for("the allowed turn to end", |o| {
+        let chat = chat(o);
+        chat["transcript"]["turn"].is_null().then_some(chat)
+    });
     assert!(stdin().contains(r#""behavior":"allow""#), "{}", stdin());
+    // The edit after it: a card under its call, in the state by counts only.
+    assert_edit_card(&allowed);
 
     // A turn that runs: Esc once arms, twice interrupts.
     otto.user_key("g o enter");
@@ -6388,5 +6416,62 @@ fn a_native_conversation_streams_asks_and_switches_to_the_terminal_and_back() {
     let native = || argv().lines().any(|a| a == "-p") && argv().contains(&session);
     otto.wait_for("claude -p --resume", |_| native().then_some(()));
     drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// A session another process holds is watched from its file: the header says so, and each
+/// record that lands shows, an edit with its card. The state has the card's counts only.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_watched_session_says_so_and_shows_its_edits_as_they_land() {
+    let root = support::temp(&format!("ottospace-e2e-watch-{}", std::process::id()));
+    let (repos, claude) = (root.join("repos"), root.join("sessions/claude"));
+    fake_repo(&repos.join("app"));
+    let repo = repos.join("app").canonicalize().unwrap();
+    let id = "33333333-3333-4333-8333-333333333333";
+    // Made-up: one prompt, and this test's own pid as the live process that holds it.
+    let file = claude.join("projects").join(ottospace_sessions::claude::slug(&repo)).join(format!("{id}.jsonl"));
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let user = json!({"type": "user", "message": {"role": "user", "content": "made-up prompt"},
+        "timestamp": "2026-11-13T09:00:00.000Z", "cwd": repo, "sessionId": id});
+    std::fs::write(&file, format!("{user}\n")).unwrap();
+    std::fs::create_dir_all(claude.join("sessions")).unwrap();
+    let live = json!({"pid": std::process::id(), "sessionId": id, "status": "busy"});
+    std::fs::write(claude.join("sessions/1.json"), live.to_string()).unwrap();
+    let settings = json!({"repos": [repos], "session_dirs": {"claude": [claude]}});
+    let home = user_folder("watch", &settings.to_string());
+    let otto = Otto::launch_with("watch", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.call(json!({"cmd": "task_group", "heading": "sessions"}));
+    otto.call(json!({"cmd": "sessions_range", "range": "all"}));
+    otto.wait_for("the session to be listed", |o| {
+        (o.call(json!({"cmd": "state"}))["sessions_bar"]["count"] == 1).then_some(())
+    });
+    otto.user_click(at(otto.control(&format!("session:claude:{id}")), 0.3, 0.3));
+    let key = format!("claude:{id}");
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"][&key].clone();
+    let first = otto.wait_for("the watched transcript", |o| {
+        let chat = chat(o);
+        (chat["transcript"]["watched"] == true && chat["transcript"]["entries"].as_array()?.len() == 1).then_some(chat)
+    });
+    assert_eq!(first["transcript"]["live"], false, "{first}");
+    otto.control("talk:talk-watching");
+
+    // A record lands: the edit's call, with its card.
+    let edit = edit_call(&repo.join("src/auth.rs"));
+    let record = format!(
+        r#"{{"type":"assistant","message":{{"id":"msg_1","model":"claude-opus-5-5","content":[{edit}]}},"timestamp":"2026-11-13T09:00:01.000Z","sessionId":"{id}"}}"#
+    );
+    let mut log = std::fs::OpenOptions::new().append(true).open(&file).unwrap();
+    std::io::Write::write_all(&mut log, format!("{record}\n").as_bytes()).unwrap();
+    let seen = otto.wait_for("the edit", |o| {
+        let chat = chat(o);
+        chat["transcript"]["entries"].as_array()?.iter().any(|e| e["tool"] == "Edit").then_some(chat)
+    });
+    assert_edit_card(&seen);
+    assert!(seen["transcript"]["turn"].is_null() && seen["transcript"]["cards"] == json!([]), "{seen}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&home);
 }

@@ -367,12 +367,29 @@ each held by code named here:
   `AgentExited` only once the process is gone; then the core resumes the session in the other
   view. Never two processes on one session.
 - **Watch.** A session at work or held elsewhere, whose spec says `watch: Yes`, is followed from
-  its file (`ottospace-sessions`, read each second): its calls, sub-agents, errors and a notice
-  per message, never its text; no turn, no card. Take over, when `take_over_when_idle` and it is
+  its file (`ottospace-sessions`, read each second): its calls, their edits' diff cards,
+  sub-agents, errors and a notice per message, never its text; no turn, no card. The header
+  says "Watching · updates per message": the file has whole records, never deltas (Probes, 3
+  and 4). Its text stays out by the sessions crate's rule, "names, never content": the file is
+  another process's conversation, and its output feeds rows, the rail and `ottospace sessions`.
+  An edit's change is the one exception, and only for the watch view's cursor
+  (`Cursor::with_edits`).
+- **Diff cards** (`diff.rs`). A call that edits a file carries its change, built from the call's
+  input by the core from borrowed JSON: Claude `Edit` (old/new: the lines both share at start
+  and end as two lines of context around the ones that differ; `replace_all` shown),
+  `MultiEdit` (one file, a break between edits), `Write` (all added), `NotebookEdit`
+  (`new_source` added; `delete` named); Codex's `fileChange` item (`changes[].kind.type` `add`:
+  its `diff` is the content, `delete`, `update` with `move_path`: a unified diff) and
+  `apply_patch` in a rollout (`*** Add/Update/Delete File:`, `*** Move to:`). At most 40 lines a
+  card, 240 bytes a line, 8 files; the rest counted, never copied. Each line goes through
+  `transcript::clean` (the markdown model's rule), drawn as plain monospaced text: no
+  markdown, no links. The path shows relative to the repository; a click reveals it only by
+  `links::target`, for an absolute path, on the user's click. The state has counts only
+  (`entries[].diff`: changes, added, removed, lines kept, more). Take over, when `take_over_when_idle` and it is
   idle, is the user's open of it (a resume).
 - **Not built:** Codex native (its `Wire` exists; the drawer keeps it in a terminal until its
   app server is probed), images attached from the composer (the runner takes them; no picker
-  yet), stderr on request, syntax colouring, drag selection, rich tool results (diffs), the
+  yet), stderr on request, syntax colouring, drag selection, other rich tool results, the
   radial activity view (2c), mailto links, bare paths as links.
 - **Unverified against the real CLI:** that `claude -p --session-id` writes the session file
   as the TUI does (the docs' `--no-session-persistence`, "only works with --print", implies it
