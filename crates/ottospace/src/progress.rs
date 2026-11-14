@@ -22,6 +22,36 @@ fn ago(age: String) -> String {
     if age == "now" { age } else { format!("{age} ago") }
 }
 
+/// A hover card's frame: its title, then a dot and its state. The task's and the session's.
+fn frame(title: String, color: u32, state: String) -> Div {
+    div()
+        .w(px(330.))
+        .p_3()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .rounded_md()
+        .bg(rgb(theme::RAISED))
+        .border_1()
+        .border_color(rgb(theme::BORDER_STRONG))
+        .text_color(rgb(theme::TEXT))
+        .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(title))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .child(home::dot(color))
+                .child(div().text_xs().truncate().child(state)),
+        )
+}
+
+/// A named fact of a hover card: `Started  3h ago`.
+fn fact(name: &'static str, value: String) -> Div {
+    let name = div().w(px(72.)).text_color(rgb(theme::MUTED)).child(name);
+    div().flex().gap_2().text_xs().child(name).child(div().min_w_0().truncate().child(value))
+}
+
 /// A task's hover card: shown as a tooltip, after the tooltip's own delay.
 pub struct CardView(pub Card);
 
@@ -41,9 +71,6 @@ impl Render for CardView {
                 .text_xs()
                 .text_color(rgb(theme::TEXT))
                 .child(tag.clone())
-        };
-        let fact = |name: &'static str, value: String| {
-            div().flex().gap_2().child(muted().w(px(72.)).child(name)).child(div().text_xs().child(value))
         };
         let cell = |text: String| div().w(px(52.)).text_right().child(text);
         let tokens = card.tokens.iter().map(|row| {
@@ -71,26 +98,7 @@ impl Render for CardView {
                         .child(div().h_full().w(relative(share)).rounded_full().bg(rgb(theme::PRIMARY))),
                 )
         });
-        div()
-            .w(px(330.))
-            .p_3()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .rounded_md()
-            .bg(rgb(theme::RAISED))
-            .border_1()
-            .border_color(rgb(theme::BORDER_STRONG))
-            .text_color(rgb(theme::TEXT))
-            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(card.title.clone()))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1p5()
-                    .child(home::dot(color))
-                    .child(div().text_xs().truncate().child(state.join(" · "))),
-            )
+        frame(card.title.clone(), color, state.join(" · "))
             .when(!card.tags.is_empty(), |d| {
                 d.child(div().flex().flex_wrap().gap_1().children(card.tags.iter().map(chip)))
             })
@@ -122,25 +130,9 @@ pub struct SessionCard(pub Row);
 impl Render for SessionCard {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let row = &self.0;
-        let fact = |name: &'static str, value: String| {
-            let name = div().w(px(72.)).text_color(rgb(theme::MUTED)).child(name);
-            div().flex().gap_2().text_xs().child(name).child(div().min_w_0().truncate().child(value))
-        };
         let state = if row.active { row.doing.clone().unwrap_or_else(|| "active".into()) } else { "idle".into() };
         let color = if row.active { theme::task(Group::Running) } else { theme::BORDER_STRONG };
-        div()
-            .w(px(300.))
-            .p_3()
-            .flex()
-            .flex_col()
-            .gap_1p5()
-            .rounded_md()
-            .bg(rgb(theme::RAISED))
-            .border_1()
-            .border_color(rgb(theme::BORDER_STRONG))
-            .text_color(rgb(theme::TEXT))
-            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).truncate().child(row.title().to_string()))
-            .child(div().flex().items_center().gap_1p5().child(home::dot(color)).child(div().text_xs().child(state)))
+        frame(row.title().to_string(), color, state)
             .child(fact("Repository", row.name.clone()))
             .child(fact("Runner", row.runner.clone()))
             .children(row.model.clone().map(|model| fact("Model", model)))
