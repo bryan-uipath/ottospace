@@ -1426,6 +1426,11 @@ function railMark(value: unknown, at: string): Snapshot["calendar"]["rail"] {
   throw wrong(at, "none, near or alert", value);
 }
 
+function blockKind(value: unknown, at: string): "call" | "block" {
+  if (value === "call" || value === "block") return value;
+  throw wrong(at, "call or block", value);
+}
+
 function meetingShow(value: unknown, at: string): MeetingShow {
   if (value === "busy" || value === "tentative" || value === "free" || value === "away") return value;
   throw wrong(at, "busy, tentative, free or away", value);
@@ -1435,13 +1440,11 @@ function band(value: unknown, at: string): NonNullable<Snapshot["calendar"]["ban
   const o = fields(value, at);
   const block = (v: unknown, at: string) => {
     const b = fields(v, at);
-    const kind = b.kind;
-    if (kind !== "call" && kind !== "block") throw wrong(`${at}.kind`, "call or block", kind);
     return {
       start: num(b.start, `${at}.start`),
       end: num(b.end, `${at}.end`),
       rect: orNull(rect)(b.rect, `${at}.rect`),
-      kind,
+      kind: blockKind(b.kind, `${at}.kind`),
       show: meetingShow(b.show, `${at}.show`),
       color: str(b.color, `${at}.color`),
       lane: orNull(num)(b.lane, `${at}.lane`),
