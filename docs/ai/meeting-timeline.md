@@ -13,19 +13,17 @@ User-facing description: [reference](../reference.md#meeting-timeline).
 | Part | Where | What |
 |---|---|---|
 | Reader | `ottospace-core::ics` | A pure iCalendar reader: events, recurrence and time zones, for a span of time |
-| Rules | `ottospace-core::calendar` | Stages, the hairline's blocks, ticks and lanes, the chip and the status line, the alert rule, the link allow-function, the feed-link check and curl's config |
+| Rules | `ottospace-core::calendar` | Stages, the workday, the band's span, blocks and lanes, the hover cards, the chip and the status line, the alert rule, the link allow-function, the feed-link check and curl's config |
 | Model | `Calendar` in `Model` | The events of today and the next 7 days, whether a call is on, the alerts given. Actions `SetCalendar`, `CalendarRead`, `CallSeen`, `CalendarDismiss` and `CalendarJoin` (the last two the user's alone); effects `MeetingAlert` and `OpenLink` |
 | macOS | `ottospace-mac::meeting` | Zone offsets (CoreFoundation), whether a call is on (CoreAudio), Reduce motion, the alert sound, opening a link |
-| Shell | `ottospace::calendar` | The feed thread, the hairline, the chip, the banner, the state's `calendar`, the `calendar` request's reply (`calendar::reply` in the core) |
+| Shell | `ottospace::calendar` | The feed thread, the band, the chip, the banner, the state's `calendar`, the `calendar` request's reply (`calendar::reply` in the core) |
 
 - **Stages** by time to the start: far (more than 10 minutes), approaching (10), imminent (2),
   running, past. The glow is a cosine ease (2.4 s a period approaching, 0.9 s imminent), steady
   while running; with Reduce motion a fixed brightness per stage. Redrawn 10 times a second only
-  while a meeting pulses; otherwise every 20 seconds, which moves a block under a point on a wide
-  window (8 hours across 1440 points is 1 point a minute).
-- **The hairline** is absolute over the top 6 points of the window, inset 10 points from the
-  rounded corners: the window's buttons start 7 points down, so it touches nothing and takes no
-  height. Hour labels on hover: at 6 points a printed number does not read.
+  while a meeting pulses; otherwise every 20 seconds, which moves now's tick about a point on a
+  wide window (8 hours across 1440 points is 3 points a minute).
+- **The band** (below) replaced the first build's hairline across the top of the window.
 - **The chip** sits beside the new-tab and split buttons, the strip's one free place whatever
   the left column's width (beside the traffic lights there is no room with the section closed).
 - **The alert** comes once at the start and once 2 minutes later, only within the meeting's first
@@ -33,6 +31,34 @@ User-facing description: [reference](../reference.md#meeting-timeline).
   first seen at least 10 minutes before the start (`Calendar::in_other_call`), and not for a
   meeting dismissed or joined. `calendar_notify_for: "links"` limits it to meetings with a Zoom, Meet or
   Teams link; the default alerts every meeting (an open decision, made a setting).
+
+## The band
+
+Bryan, 2026-11-14, on the hairline: "the borders look a bit much though. we should try and make
+it a little simpler (just a mark for the beginning and start of the workday, and the
+appointments. hover should show details about it. I'm thinking maybe it should go above the
+statusbar instead of at the top of the window too".
+
+- 8 points high, a flex child between the panes and the status bar, inset 6 points at the
+  sides so a mark at either end is drawn whole. The top of the window is as before the timeline.
+- No line, outline or hour ticks: two muted marks (the workday's start and end), flat blocks in
+  amber (opacity is the stage: faint when past, the pulse while near), a bright tick for now,
+  the all-day dot kept at the left end (the smaller change).
+- The span is the workday (`calendar_workday`, `"HH:MM-HH:MM"`, default `09:00-17:00`), local
+  wall time worked out with the zone's offset at that moment, so 09:00 stays 09:00 on a day the
+  clocks change (`calendar::band`). `calendar_window_hours` is retired: still read (as
+  `IgnoredAny`), so a file with it is not refused; the status bar asks to remove it.
+- Out of hours: the band widens to today's earliest start and latest end, never past midnight,
+  so no meeting is hidden; the workday's marks stay at its times. Chosen over clipping with a
+  marker: simpler, and a meeting wholly outside the workday still shows. A meeting over midnight
+  is cut there; its card says its whole time. Before or after the band, now pins to its end.
+- With a 16-hour workday a 30-minute meeting is about 45 points on a 1440-point window; any block
+  is drawn at least 3 points wide, and each hover area (block, mark, now) is 3 points wider on
+  each side and the band's full height. Hover only: no click handler, nothing occludes, so a
+  pane split's drag and the status bar's tooltips are untouched.
+- Cards: a block's title, `09:00–09:30 · 30m · place`, and `Zoom link` (Meet, Teams) when it has
+  one (`calendar::describe`); a mark `Workday starts 09:00`; now `14:05` and the next meeting or
+  `No more meetings today` (`Calendar::now_card`). Drawn only: the state has bounds and times.
 
 ## The Calendar section
 
@@ -45,7 +71,7 @@ rail's keyboard to Tasks.
 
 - Rows (`Calendar::agenda`): today's all-day events, then the rest by start, then "Tomorrow · n"
   (`ListRow::MeetingsTomorrow`, folded; `CalendarTomorrow` unfolds it), then tomorrow's while
-  unfolded. Today's past meetings stay, dimmed: only the hairline drops them.
+  unfolded. Today's past meetings stay, dimmed, as on the band.
 - ↵ on a meeting is `CalendarJoin` through `ListChoose`: refused for a client while the Calendar is
   open (`calendar::USERS_ALONE`), so a client's key there opens nothing.
 - The rail cell (`Calendar::rail`): a steady dot while a meeting is imminent or runs, a filled
@@ -190,8 +216,9 @@ description is long untrusted text.
   cancelled and declined ones are never held), `busy`, `free`.
 - **Busy and free**: timed meetings cut to the span, merged where they overlap or meet (back to
   back is one span); all-day events and those with no length are no busy time, tentative ones
-  are. `free` is every gap of the span between them, nights included: there is no workday
-  setting on main yet, so no working hours bound it.
+  are. `free` is every gap between them inside each day's `calendar_workday` (09:00 to 17:00 by
+  default), at that day's offsets, so a clock change moves it with the clock. The reply names
+  the `workday`.
 - **Text**: titles and locations go through `capture::plain` again, and any word that looks
   like a link (`://`, `www.`, `host.tld/…`) is taken out: a location is often the Zoom link with
   its passcode. A passcode written as plain words ("Passcode 123") is not recognised.

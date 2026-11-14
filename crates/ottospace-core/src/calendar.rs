@@ -1,5 +1,5 @@
-//! The meeting timeline: today's events from the user's calendar feed, the hairline across the top
-//! of the window, the next-meeting chip, the pulse as one comes near, and the alert when one has
+//! The meeting timeline: today's events from the user's calendar feed, the band of the workday
+//! above the status bar, the next-meeting chip, the pulse as one comes near, and the alert when one has
 //! started and the user is in no call. Pure: the shell passes the time and whether a call is on.
 //!
 //! Titles, places and descriptions are other people's text: kept cleaned and short, drawn, and
@@ -99,7 +99,7 @@ pub fn glow(stage: Stage, now: u64, reduced: bool) -> f32 {
     }
 }
 
-/// Which band of the hairline a block takes: all of it, or a half when events overlap.
+/// Which part of the band a block takes: all of it, or a half when events overlap.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lane {
     Full,
@@ -107,7 +107,7 @@ pub enum Lane {
     Bottom,
 }
 
-/// A block on the hairline: from and to as fractions of its width, 0 at its left edge (now).
+/// A block on the band: from and to as fractions of its width.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Bar {
     pub id: u64,
@@ -117,13 +117,84 @@ pub struct Bar {
     pub stage: Stage,
 }
 
-/// The hairline's blocks: the next `window` milliseconds from `now`, which is its left edge.
-/// What has ended is not drawn; a running event starts at the left edge.
-pub fn bars(events: &[Event], now: u64, window: u64) -> Vec<Bar> {
-    let window = window.max(MINUTE);
-    let at = |t: u64| (t.saturating_sub(now) as f64 / window as f64).min(1.) as f32;
-    let mut shown: Vec<&Event> =
-        events.iter().filter(|e| !e.all_day && e.end > now && e.start < now.saturating_add(window)).collect();
+/// The workday (`calendar_workday`): its start and end, in minutes after local midnight.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Workday {
+    pub start: u32,
+    pub end: u32,
+}
+
+impl Default for Workday {
+    fn default() -> Self {
+        Self { start: 9 * 60, end: 17 * 60 }
+    }
+}
+
+/// What a wrong `calendar_workday` says.
+pub const WORKDAY_FORM: &str = "calendar_workday must be \"HH:MM-HH:MM\" in 24-hour time, the start at least an \
+                                hour before the end, e.g. \"09:00-17:00\"";
+
+impl Workday {
+    /// `09:00-17:00`: both times, the start at least an hour before the end. `24:00` ends the day.
+    pub fn parse(text: &str) -> Option<Workday> {
+        let minutes = |t: &str| -> Option<u32> {
+            let (h, m) = t.trim().split_once(':')?;
+            let two = |s: &str| (s.len() == 2 && s.bytes().all(|b| b.is_ascii_digit())).then(|| s.parse().ok())?;
+            let (h, m): (u32, u32) = (two(h)?, two(m)?);
+            (m < 60 && (h < 24 || (h, m) == (24, 0))).then_some(h * 60 + m)
+        };
+        let (start, end) = text.split_once('-')?;
+        let (start, end) = (minutes(start)?, minutes(end)?);
+        (start + 60 <= end).then_some(Workday { start, end })
+    }
+}
+
+/// The band's span (ms): the workday, widened to hold today's meetings, never past today.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Band {
+    pub from: u64,
+    pub to: u64,
+    /// The workday's start and end, where its marks go.
+    pub workday: (u64, u64),
+}
+
+impl Band {
+    /// Where `t` falls, 0 at the left end, 1 at the right; outside the band, pinned to its end.
+    pub fn at(&self, t: u64) -> f32 {
+        let span = self.to.saturating_sub(self.from).max(1);
+        (t.clamp(self.from, self.to.max(self.from)) - self.from) as f32 / span as f32
+    }
+}
+
+/// The local wall time `minutes` after the midnight `day` (ms), in a zone `offset(t)` seconds east
+/// of UTC at `t`: 09:00 stays 09:00 on a day the clocks change, at midnight too (the offset
+/// just before `day` is the one its wall clock started from).
+fn local(day: u64, minutes: u32, offset: &dyn Fn(u64) -> i64) -> u64 {
+    let naive = day + u64::from(minutes) * MINUTE;
+    let shift = (offset(naive) - offset(day.saturating_sub(1))) * 1_000;
+    naive.saturating_add_signed(-shift)
+}
+
+/// The timed events that overlap the day from midnight `day.0` to `day.1`.
+fn of_day(events: &[Event], (start, end): (u64, u64)) -> impl Iterator<Item = &Event> {
+    events.iter().filter(move |e| !e.all_day && e.start < end && (e.end > start || e.start >= start))
+}
+
+/// The band of the day from midnight `day.0` to `day.1`: the workday, widened to the day's
+/// earliest start and latest end, so no meeting is hidden; a meeting over midnight is cut there.
+pub fn band(events: &[Event], day: (u64, u64), workday: Workday, offset: &dyn Fn(u64) -> i64) -> Band {
+    let hours = (local(day.0, workday.start, offset), local(day.0, workday.end, offset).min(day.1));
+    let mut band = Band { from: hours.0, to: hours.1, workday: hours };
+    for e in of_day(events, day) {
+        band.from = band.from.min(e.start.max(day.0));
+        band.to = band.to.max(e.end.min(day.1));
+    }
+    band
+}
+
+/// The band's blocks: the day's timed events at their clock places, past ones too.
+pub fn bars(events: &[Event], day: (u64, u64), band: &Band, now: u64) -> Vec<Bar> {
+    let mut shown: Vec<&Event> = of_day(events, day).collect();
     shown.sort_by_key(|e| (e.start, e.end));
     let mut out = Vec::new();
     // Events that overlap go in two half lanes; one with none takes both.
@@ -143,7 +214,8 @@ pub fn bars(events: &[Event], now: u64, window: u64) -> Vec<Bar> {
                 bottom_end = bottom_end.max(event.end);
                 Lane::Bottom
             };
-            out.push(Bar { id: event.id, from: at(event.start), to: at(event.end), lane, stage: stage(event, now) });
+            let (from, to) = (band.at(event.start), band.at(event.end));
+            out.push(Bar { id: event.id, from, to, lane, stage: stage(event, now) });
         }
     };
     for event in shown {
@@ -154,20 +226,6 @@ pub fn bars(events: &[Event], now: u64, window: u64) -> Vec<Bar> {
         cluster.push(event);
     }
     flush(&mut cluster);
-    out
-}
-
-/// The whole clock hours in the hairline's window: where each is (a fraction of its width) and
-/// the hour, 0 to 23. `offset`: the local zone's, in seconds east of UTC.
-pub fn ticks(now: u64, window: u64, offset: i64) -> Vec<(f32, u8)> {
-    const HOUR: i64 = 3_600_000;
-    let local = now.min(1 << 50) as i64 + offset.clamp(-86_400, 86_400) * 1_000;
-    let mut hour = local.div_euclid(HOUR) + 1;
-    let mut out = Vec::new();
-    while hour * HOUR - local <= window as i64 && out.len() < 48 {
-        out.push((((hour * HOUR - local) as f64 / window.max(1) as f64) as f32, hour.rem_euclid(24) as u8));
-        hour += 1;
-    }
     out
 }
 
@@ -187,15 +245,17 @@ pub fn clock(ms: u64, offset: i64) -> String {
     format!("{:02}:{:02}", minutes.rem_euclid(1_440) / 60, minutes.rem_euclid(60))
 }
 
-/// `Design review`, `09:00–09:30 · Room 4`: what a block's tooltip says.
+/// What a block's hover card says: `Design review`, `09:00–09:30 · 30m · Room 4`, `Zoom link`.
 pub fn describe(event: &Event, offset: i64) -> String {
     let when = if event.all_day {
         "all day".to_string()
     } else {
-        format!("{}–{}", clock(event.start, offset), clock(event.end, offset))
+        let length = span(event.end.saturating_sub(event.start));
+        format!("{}–{} · {length}", clock(event.start, offset), clock(event.end, offset))
     };
     let place = Some(event.location.as_str()).filter(|l| !l.is_empty()).map(|l| format!(" · {l}")).unwrap_or_default();
-    format!("{}\n{when}{place}", event.title)
+    let link = meeting_service(event).map(|name| format!("\n{name} link")).unwrap_or_default();
+    format!("{}\n{when}{place}{link}", event.title)
 }
 
 /// The text of the events read, as shown: cleaned and capped. The last of `MAX_EVENTS` go.
@@ -234,7 +294,7 @@ fn id(uid: &str, start: i64) -> u64 {
 /// `joinable` allows.
 fn link(texts: &[&str]) -> Option<String> {
     let found: Vec<&str> = texts.iter().flat_map(|text| urls(text)).filter(|url| joinable(url)).collect();
-    let meeting = found.iter().find(|url| host(url).is_some_and(meeting_host));
+    let meeting = found.iter().find(|url| host(url).and_then(meeting_host).is_some());
     meeting.or(found.first()).map(|url| url.to_string())
 }
 
@@ -268,17 +328,26 @@ pub fn host(url: &str) -> Option<&str> {
 
 /// The event's link is a Zoom, Meet or Teams one.
 pub fn has_meeting_link(event: &Event) -> bool {
-    event.link.as_deref().and_then(host).is_some_and(meeting_host)
+    meeting_service(event).is_some()
 }
 
-fn meeting_host(host: &str) -> bool {
+/// `Zoom`, `Meet` or `Teams`: whose meeting the event's link is.
+pub fn meeting_service(event: &Event) -> Option<&'static str> {
+    event.link.as_deref().and_then(host).and_then(meeting_host)
+}
+
+fn meeting_host(host: &str) -> Option<&'static str> {
     let host = host.to_ascii_lowercase();
     let under = |domain: &str| host == domain || host.ends_with(&format!(".{domain}"));
-    under("zoom.us")
-        || under("zoomgov.com")
-        || host == "meet.google.com"
-        || under("teams.microsoft.com")
-        || host == "teams.live.com"
+    if under("zoom.us") || under("zoomgov.com") {
+        Some("Zoom")
+    } else if host == "meet.google.com" {
+        Some("Meet")
+    } else if under("teams.microsoft.com") || host == "teams.live.com" {
+        Some("Teams")
+    } else {
+        None
+    }
 }
 
 /// Why a feed link is refused: not `https:`, a user name in it, or a host that is a number or this
@@ -547,6 +616,23 @@ impl Calendar {
         let (event, stage) = self.next(now)?;
         let when = if stage == Stage::Running { "now".into() } else { format!("in {}", span(event.start - now)) };
         Some((format!("{} · {when}", event.title), stage))
+    }
+
+    /// The now marker's hover card: `14:05`, then `Next: Design review at 15:00 (in 55m)`.
+    pub fn now_card(&self, now: u64, offset: i64) -> String {
+        let next = match self.next(now) {
+            Some((e, Stage::Running)) => format!("Now: {}", e.title),
+            Some((e, _)) => format!("Next: {} at {} (in {})", e.title, clock(e.start, offset), span(e.start - now)),
+            None => "No more meetings today".into(),
+        };
+        format!("{}\n{next}", clock(now, offset))
+    }
+
+    /// Today's band and its blocks. `offset(t)`: the local zone's at `t`, seconds east of UTC.
+    pub fn band(&self, workday: Workday, now: u64, offset: &dyn Fn(u64) -> i64) -> (Band, Vec<Bar>) {
+        let today = (self.days[0], self.days[1]);
+        let band = band(&self.events, today, workday, offset);
+        (band, bars(&self.events, today, &band, now))
     }
 
     /// When the feed was read: `updated 09:40`, `not updated since 09:40`, `not read yet`.

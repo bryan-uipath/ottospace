@@ -3,6 +3,9 @@
 use super::*;
 use crate::calendar::Calendar;
 
+/// A workday of the whole day: free time is every gap.
+const WHOLE: Workday = Workday { start: 0, end: 24 * 60 };
+
 const H: u64 = 3_600_000;
 const M: u64 = 60_000;
 
@@ -43,7 +46,7 @@ fn utc() -> Table {
 /// The busy and free spans of Monday, as `HH:MM` pairs.
 fn day_spans(events: Vec<Event>) -> (Vec<String>, Vec<String>) {
     let c = calendar(events);
-    let a = answer(&c, (midnight(2026, 11, 16), midnight(2026, 11, 17)), &utc());
+    let a = answer(&c, (midnight(2026, 11, 16), midnight(2026, 11, 17)), WHOLE, &utc());
     let short = |list: &[Span]| list.iter().map(|s| format!("{}-{}", &s.start[11..16], &s.end[11..16])).collect();
     (short(&a.busy), short(&a.free))
 }
@@ -87,6 +90,26 @@ fn busy_and_free_time() {
 }
 
 #[test]
+fn free_time_is_of_each_days_workday() {
+    let day = monday();
+    let c = calendar(vec![event(1, day + 8 * H, 90), event(2, day + 12 * H, 60), event(3, day + 40 * H + 30 * M, 90)]);
+    let a = answer(&c, (midnight(2026, 11, 16), midnight(2026, 11, 18)), Workday::default(), &utc());
+    let free: Vec<String> =
+        a.free.iter().map(|s| format!("{} {}-{}", &s.start[8..10], &s.start[11..16], &s.end[11..16])).collect();
+    assert_eq!(free, ["16 09:30-12:00", "16 13:00-17:00", "17 09:00-16:30"]);
+    assert_eq!((a.busy.len(), a.workday.as_str()), (3, "09:00-17:00"), "busy is not cut to the workday");
+    // On a clock change the workday keeps to the clock: 09:00 is after it, at the new offset.
+    let change = midnight(2026, 3, 8) + 10 * 3_600;
+    let la = Table(vec![(i64::MIN, -8 * 3_600), (change, -7 * 3_600)]);
+    let span = span(None, None, change + 3_600, &la).expect("today");
+    let a = answer(&Calendar { on: true, ..Calendar::default() }, span, Workday::default(), &la);
+    assert_eq!(
+        (a.free[0].start.as_str(), a.free[0].end.as_str()),
+        ("2026-03-08T09:00:00-07:00", "2026-03-08T17:00:00-07:00")
+    );
+}
+
+#[test]
 fn a_day_with_a_clock_change() {
     // Los Angeles, 2026-03-08: 02:00 PST (10:00 UTC) becomes 03:00 PDT. A day of 23 hours.
     let change = midnight(2026, 3, 8) + 10 * 3_600;
@@ -100,7 +123,7 @@ fn a_day_with_a_clock_change() {
     let mut c = Calendar { on: true, ..Calendar::default() };
     let (before, after) = (ms(from) + H, ms(from) + 10 * H);
     c.read(Some(vec![event(1, before, 30), event(2, after, 30)]), [0; 3], ms(now));
-    let a = answer(&c, (from, to), &la);
+    let a = answer(&c, (from, to), WHOLE, &la);
     assert_eq!(a.meetings[0].start, "2026-03-08T01:00:00-08:00");
     assert_eq!(a.meetings[1].start, "2026-03-08T11:00:00-07:00");
     assert_eq!(
@@ -154,7 +177,7 @@ fn meetings_are_cleaned_capped_and_carry_no_link() {
     };
     let long = Event { title: "x".repeat(500), ..event(3, day + 11 * H, 30) };
     let c = calendar(vec![zoom, link_only, long]);
-    let a = answer(&c, (midnight(2026, 11, 16), midnight(2026, 11, 17)), &utc());
+    let a = answer(&c, (midnight(2026, 11, 16), midnight(2026, 11, 17)), WHOLE, &utc());
     let m = &a.meetings;
     assert_eq!((m[0].title.as_str(), m[0].location.as_deref()), ("Design review", Some("Room 4")));
     assert_eq!((m[0].has_call_link, m[0].status), (true, Some("tentative")));
@@ -172,7 +195,7 @@ fn meetings_are_cleaned_capped_and_carry_no_link() {
 fn at_most_200_meetings_and_the_rest_counted() {
     let day = monday();
     let c = calendar((0..300).map(|n| event(n, day + n * M, 1)).collect());
-    let a = answer(&c, (midnight(2026, 11, 16), midnight(2026, 11, 17)), &utc());
+    let a = answer(&c, (midnight(2026, 11, 16), midnight(2026, 11, 17)), WHOLE, &utc());
     assert_eq!((a.meetings.len(), a.more), (MAX_MEETINGS, 100));
     assert_eq!(a.busy.len(), 1, "busy counts every meeting: {:?}", a.busy);
 }
@@ -183,7 +206,7 @@ fn only_the_days_asked_for_and_how_fresh() {
     let all_day = Event { all_day: true, ..event(5, day + 24 * H, 24 * 60) };
     let mut c = calendar(vec![event(1, day + 9 * H, 30), all_day, event(6, day + 33 * H, 30)]);
     c.call_seen(Some(true), day);
-    let tuesday = answer(&c, (midnight(2026, 11, 17), midnight(2026, 11, 18)), &utc());
+    let tuesday = answer(&c, (midnight(2026, 11, 17), midnight(2026, 11, 18)), WHOLE, &utc());
     let ids: Vec<&str> = tuesday.meetings.iter().map(|m| m.title.as_str()).collect();
     assert_eq!(ids, ["Meeting 5", "Meeting 6"]);
     assert_eq!((tuesday.meetings[0].all_day, tuesday.meetings[0].end.as_str()), (true, "2026-11-18T00:00:00+00:00"));
@@ -191,14 +214,14 @@ fn only_the_days_asked_for_and_how_fresh() {
     assert_eq!((tuesday.in_call, tuesday.from.as_str()), (Some(true), "2026-11-17T00:00:00+00:00"));
     // A failed read keeps the last events and says so.
     c.read(None, c.days, day + 9 * H);
-    assert!(answer(&c, (midnight(2026, 11, 17), midnight(2026, 11, 18)), &utc()).stale);
+    assert!(answer(&c, (midnight(2026, 11, 17), midnight(2026, 11, 18)), WHOLE, &utc()).stale);
 }
 
 #[test]
 fn no_feed_says_only_that() {
-    let reply = reply(&Calendar::default(), Some("tomorrow"), Some(99), monday(), &utc());
+    let reply = reply(&Calendar::default(), Some("tomorrow"), Some(99), (monday(), WHOLE), &utc());
     assert_eq!(reply, Ok(serde_json::json!({ "configured": false })));
-    let on = super::reply(&calendar(vec![]), None, Some(99), monday(), &utc());
+    let on = super::reply(&calendar(vec![]), None, Some(99), (monday(), WHOLE), &utc());
     assert_eq!(on, Err("days is 1 to 7"));
 }
 
@@ -216,7 +239,7 @@ fn a_declined_meeting_is_not_in_the_reply() {
     let events = super::super::events(&ics::expand(&ics::parse_for(&feed, Some(me)), from, to, &zones));
     let mut c = Calendar { on: true, ..Calendar::default() };
     c.read(Some(events), [0; 3], monday());
-    let json = serde_json::to_string(&answer(&c, (from, to), &utc())).unwrap();
+    let json = serde_json::to_string(&answer(&c, (from, to), WHOLE, &utc())).unwrap();
     assert!(json.contains("\"title\":\"Sync\"") && json.contains("\"status\":\"tentative\""), "{json}");
     for never in ["Skipped", me, "ana@example.com", "Ana"] {
         assert!(!json.contains(never), "{never} in {json}");
@@ -242,6 +265,6 @@ fn a_reply_serializes_as_the_sdk_fixture_says() {
     c.call_seen(Some(false), day);
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("../../../../../sdk/test/calendar.json")).unwrap();
-    let got = serde_json::to_value(answer(&c, (from, to), &la)).unwrap();
+    let got = serde_json::to_value(answer(&c, (from, to), Workday::default(), &la)).unwrap();
     assert_eq!(got, fixture, "{}", serde_json::to_string_pretty(&got).unwrap());
 }

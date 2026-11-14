@@ -1,4 +1,4 @@
-//! The meeting timeline's shell: reads the calendar feed off the main thread, draws the hairline,
+//! The meeting timeline's shell: reads the calendar feed off the main thread, draws the band,
 //! the next-meeting chip and the banner, looks whether a call is on, and alerts. The decisions are the core's
 //! (`ottospace_core::calendar`).
 //!
@@ -12,14 +12,14 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use gpui::{AnyElement, AnyView, Context, Div, Window, div, prelude::*, px, relative, rgb};
-use ottospace_core::calendar::{self, Event, Lane, Stage};
+use ottospace_core::calendar::{self, Event, Lane, Stage, Workday};
 use ottospace_core::ics::{self, Table, Zones};
 use ottospace_core::list::ListRow;
 use ottospace_core::settings::expand_home;
 use ottospace_core::{Action, Effect, Origin, theme};
 use ottospace_mac::meeting;
 
-use crate::{Tooltip, Workspace, config, list_row, now_ms, words};
+use crate::{Mark, Tooltip, Workspace, config, list_row, mark, now_ms, words};
 
 /// Where the line for now goes on a meeting's row.
 #[derive(Clone, Copy)]
@@ -28,10 +28,14 @@ enum Now {
     Below,
 }
 
-/// The hairline's height: above the window's buttons, so it costs the title strip nothing.
-pub const HAIRLINE: f32 = 6.;
-/// The hairline keeps clear of the window's rounded corners by this much.
-const INSET: f32 = 10.;
+/// The band's height above the status bar: blocks are drawn 5 points high in it, and hover
+/// takes all of it.
+const BAND: f32 = 8.;
+/// A block is drawn at least this wide, and hovered over this much more on each side.
+const MIN_BLOCK: f32 = 3.;
+const HOVER_PAD: f32 = 3.;
+/// The band's ends keep this far from the window's sides.
+const INSET: f32 = 6.;
 /// How often the thread wakes to see whether the feed or the day is due.
 const WAKE: Duration = Duration::from_secs(20);
 
@@ -58,10 +62,10 @@ const PRIVATE: &str = "calendar feed: its host is not on the internet";
 #[derive(Default)]
 pub struct Timeline {
     reads: Option<Receiver<Read>>,
-    /// The hairline's span, in milliseconds.
-    window: u64,
+    /// `calendar_workday`: the band's span.
+    workday: Workday,
     reduce_motion: bool,
-    /// When the reduced-motion setting, the hairline and the call were last looked at (ms).
+    /// When the reduced-motion setting, the band and the call were last looked at (ms).
     motion_read: u64,
     slid: u64,
     call_looked: u64,
@@ -73,8 +77,8 @@ impl Timeline {
     /// Starts the reader if the settings name a feed.
     pub fn start() -> Self {
         let settings = &config::get().settings;
-        let window = u64::from(settings.calendar_window_hours.unwrap_or(8)) * 3_600_000;
-        let Some(feed) = settings.calendar_ics.as_deref() else { return Self { window, ..Self::default() } };
+        let workday = settings.workday();
+        let Some(feed) = settings.calendar_ics.as_deref() else { return Self { workday, ..Self::default() } };
         let source = if feed.starts_with("https://") {
             Source::Link(feed.to_string())
         } else {
@@ -111,7 +115,7 @@ impl Timeline {
                 std::thread::sleep(WAKE);
             }
         });
-        Self { reads: Some(rx), window, ..Self::default() }
+        Self { reads: Some(rx), workday, ..Self::default() }
     }
 }
 
@@ -201,7 +205,8 @@ impl Workspace {
     /// no link, description, attendee, feed address or the user's own address.
     pub(crate) fn calendar_reply(&self, day: Option<&str>, days: Option<u32>) -> String {
         let now = now_ms();
-        match calendar::reply::reply(&self.model.calendar, day, days, now, &local_zone((now / 1_000) as i64)) {
+        let (calendar, local) = (&self.model.calendar, local_zone((now / 1_000) as i64));
+        match calendar::reply::reply(calendar, day, days, (now, self.timeline.workday), &local) {
             Ok(serde_json::Value::Object(mut reply)) => {
                 reply.insert("ok".into(), true.into());
                 serde_json::Value::Object(reply).to_string()
@@ -212,7 +217,7 @@ impl Workspace {
     }
 
     /// From the main loop: the feed's reads, the call while a meeting is near, and a redraw while the
-    /// hairline pulses (10 a second) or slides (every 20 seconds).
+    /// band pulses (10 a second), else every 20 seconds, as now moves along it.
     pub(crate) fn tick_timeline(&mut self, window: &Window, cx: &mut Context<Self>) {
         let reads: Vec<Read> = self.timeline.reads.iter().flat_map(|rx| rx.try_iter()).collect();
         for Read { events, days, at, problem } in reads {
@@ -273,82 +278,97 @@ impl Workspace {
         }
     }
 
-    /// The hairline across the top of the window: now at its left edge, the next hours to the
-    /// right. Blocks for events, faint ticks for whole hours, a dot for all-day events.
-    pub(crate) fn render_hairline(&self) -> Option<AnyElement> {
+    /// The band above the status bar: the workday from its left end to its right, a mark at its
+    /// start and end, flat blocks for meetings, a tick for now, a dot for all-day events. Hover
+    /// only: a card for each, no click.
+    pub(crate) fn render_timeline(&self) -> Option<AnyElement> {
+        self.marks.borrow_mut().retain(|m, _| !matches!(m, Mark::BandBlock(_)));
         let calendar = &self.model.calendar;
-        if !calendar.on {
+        // Not before the first read: there is no day yet.
+        if !calendar.on || calendar.days[1] == 0 {
             return None;
         }
         let now = now_ms();
-        let offset = ottospace_mac::time::utc_offset((now / 1_000) as i64);
-        let mut band = div().id("hairline").absolute().top_0().left(px(INSET)).right(px(INSET)).h(px(HAIRLINE));
-        band = band.child(div().absolute().left_0().right_0().top(px(2.5)).h(px(1.)).bg(rgb(theme::BORDER_STRONG)));
-        for (at, hour) in calendar::ticks(now, self.timeline.window, offset) {
-            let tick = div().w(px(1.)).h(px(4.)).mt(px(1.)).bg(rgb(theme::MUTED)).opacity(0.5);
-            band = band.child(
-                div()
-                    .id(("hour", usize::from(hour)))
-                    .absolute()
-                    .left(relative(at))
-                    .ml(px(-4.))
-                    .w(px(8.))
-                    .h_full()
-                    .flex()
-                    .justify_center()
-                    .child(tick)
-                    .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(format!("{hour:02}:00").into())))),
-            );
-        }
-        for bar in calendar::bars(&calendar.events, now, self.timeline.window) {
-            let Some(event) = calendar.events.iter().find(|e| e.id == bar.id) else { continue };
-            let tip = calendar::describe(event, offset);
-            let (top, height) = match bar.lane {
-                Lane::Full => (1., 4.),
-                Lane::Top => (0.5, 2.25),
-                Lane::Bottom => (3.25, 2.25),
-            };
-            let glow = calendar::glow(bar.stage, now, self.timeline.reduce_motion);
-            let (color, opacity) = match bar.stage {
-                Stage::Far => (theme::MUTED, 0.9),
-                _ => (theme::SNEAK, 0.35 + 0.65 * glow),
-            };
-            band = band.child(
-                div()
-                    .id(("meeting-bar", bar.id as usize))
-                    .absolute()
-                    .left(relative(bar.from))
-                    .w(relative(bar.to - bar.from))
-                    .min_w(px(2.))
-                    .top(px(top))
-                    .h(px(height))
-                    .rounded_sm()
-                    .bg(rgb(color))
-                    .opacity(opacity)
-                    .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone().into())))),
-            );
-        }
+        let offset = zone_offset(now);
+        let (band, bars) = calendar.band(self.timeline.workday, now, &zone_offset);
+        let card = |tip: String| {
+            move |_: &mut Window, cx: &mut gpui::App| AnyView::from(cx.new(|_| Tooltip(tip.clone().into())))
+        };
+        // A hover area `HOVER_PAD` wider than what it holds on each side, as tall as the band.
+        let hover = |id: gpui::ElementId, tip: String| {
+            div().id(id).absolute().top_0().bottom_0().left(px(-HOVER_PAD)).right(px(-HOVER_PAD)).tooltip(card(tip))
+        };
+        let at = |from: f32, to: f32| div().absolute().top_0().bottom_0().left(relative(from)).w(relative(to - from));
+        // Inset, so a mark or block at either end is drawn whole.
+        let mut out = div().absolute().top_0().bottom_0().left(px(INSET)).right(px(INSET));
+        out = out.child(mark(&self.marks, Mark::Band));
+        // In the left inset, under everything: it covers no block or mark.
         let all_day: Vec<String> =
             calendar.today().filter(|e| e.all_day).map(|e| calendar::describe(e, offset)).collect();
         if !all_day.is_empty() {
-            let tip = all_day.join("\n");
-            band = band.child(
-                div()
-                    .id("meeting-all-day")
-                    .absolute()
-                    .left(px(2.))
-                    .top(px(1.))
-                    .size(px(4.))
-                    .rounded_full()
-                    .bg(rgb(theme::MUTED))
-                    .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone().into())))),
+            let dot = div().absolute().left(px(1. - INSET)).top(px(2.)).size(px(4.)).rounded_full();
+            let dot = dot.bg(rgb(theme::MUTED)).child(hover("meeting-all-day".into(), all_day.join("\n")));
+            out = out.child(dot);
+        }
+        for (n, (t, what)) in
+            [(band.workday.0, "Workday starts"), (band.workday.1, "Workday ends")].into_iter().enumerate()
+        {
+            let x = band.at(t);
+            let tick = div().absolute().top(px(1.5)).h(px(5.)).w(px(1.)).bg(rgb(theme::MUTED)).opacity(0.6);
+            let tip = format!("{what} {}", calendar::clock(t, zone_offset(t)));
+            out = out.child(
+                at(x, x)
+                    .child(tick.child(mark(&self.marks, Mark::BandEdge(n))))
+                    .child(hover(("workday-mark", n).into(), tip)),
             );
         }
-        Some(band.into_any_element())
+        for (n, bar) in bars.iter().enumerate() {
+            let Some(event) = calendar.events.iter().find(|e| e.id == bar.id) else { continue };
+            let (top, height) = match bar.lane {
+                Lane::Full => (1.5, 5.),
+                Lane::Top => (1.5, 2.25),
+                Lane::Bottom => (4.25, 2.25),
+            };
+            // One calm colour; the pulse is its opacity, past meetings faint.
+            let glow = calendar::glow(bar.stage, now, self.timeline.reduce_motion);
+            let opacity = match bar.stage {
+                Stage::Past => 0.25,
+                Stage::Far => 0.6,
+                _ => 0.6 + 0.4 * glow,
+            };
+            let block = div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .top(px(top))
+                .h(px(height))
+                .rounded_sm()
+                .bg(rgb(theme::SNEAK))
+                .opacity(opacity)
+                .child(mark(&self.marks, Mark::BandBlock(n)));
+            // A half lane is hovered over its half: both of two overlapping meetings can be.
+            let hovered = hover(("meeting-bar", bar.id as usize).into(), calendar::describe(event, offset));
+            let hovered = match bar.lane {
+                Lane::Full => hovered,
+                Lane::Top => hovered.bottom(px(BAND / 2.)),
+                Lane::Bottom => hovered.top(px(BAND / 2.)),
+            };
+            out = out.child(at(bar.from, bar.to).min_w(px(MIN_BLOCK)).child(block).child(hovered));
+        }
+        // Now, last: over the blocks.
+        let x = band.at(now);
+        let tick = div().absolute().top_0().h(px(BAND)).w(px(1.5)).ml(px(-0.75)).bg(rgb(theme::TEXT));
+        out = out.child(
+            at(x, x)
+                .child(tick.child(mark(&self.marks, Mark::BandNow)))
+                .child(hover("timeline-now".into(), calendar.now_card(now, offset))),
+        );
+        let band = div().flex_none().relative().h(px(BAND)).w_full().bg(rgb(theme::BACKGROUND));
+        Some(band.child(out).into_any_element())
     }
 
     /// The chip in the title strip that names the next event today: `Design review · in 12m`.
-    /// It pulses with the hairline. Its tooltip says when the feed was last read.
+    /// It pulses with the band. Its tooltip says when the feed was last read.
     pub(crate) fn render_meeting_chip(&self) -> Option<Div> {
         let calendar = &self.model.calendar;
         let now = now_ms();
@@ -448,6 +468,9 @@ impl Workspace {
         let next = calendar.next(now);
         let banner = calendar.banner(now).map(|e| e.id);
         let at = |control: String| self.controls.bounds(&control).map(crate::rect);
+        let (band, bars) = calendar.band(self.timeline.workday, now, &zone_offset);
+        let marks = self.marks.borrow();
+        let drawn = |m: Mark| marks.get(&m).copied().map(crate::rect);
         serde_json::json!({
             "on": calendar.on,
             "events_today": today.iter().filter(|e| !e.all_day).count(),
@@ -459,7 +482,21 @@ impl Workspace {
             "stale": calendar.stale,
             "in_call": calendar.in_call,
             "soon": calendar.soon(now).is_some(),
-            "bars": calendar::bars(&calendar.events, now, self.timeline.window).len(),
+            "bars": bars.len(),
+            // The band above the status bar, in window points: its rect, the times at its ends and
+            // the workday's (ms), the workday's marks, now's tick, each block's times and rect.
+            "band": (calendar.on && calendar.days[1] > 0).then(|| serde_json::json!({
+                "rect": drawn(Mark::Band),
+                "span": [band.from, band.to],
+                "workday": [band.workday.0, band.workday.1],
+                "marks": [drawn(Mark::BandEdge(0)), drawn(Mark::BandEdge(1))],
+                "now": drawn(Mark::BandNow),
+                "blocks": bars.iter().enumerate().filter_map(|(n, bar)| {
+                    let e = calendar.events.iter().find(|e| e.id == bar.id)?;
+                    Some(serde_json::json!({ "start": e.start, "end": e.end, "rect": drawn(Mark::BandBlock(n)) }))
+                }).collect::<Vec<_>>(),
+                "status_bar": drawn(Mark::Status),
+            })),
             "chip": calendar.chip(now).is_some(),
             "banner": banner.map(|id| serde_json::json!({
                 "join": at(format!("meeting-join:{id}")),
@@ -477,6 +514,11 @@ impl Workspace {
             "joins": std::env::var_os("OTTOSPACE_E2E").map(|_| self.timeline.joins),
         })
     }
+}
+
+/// The local zone's offset at `ms`, seconds east of UTC.
+fn zone_offset(ms: u64) -> i64 {
+    ottospace_mac::time::utc_offset((ms / 1_000) as i64)
 }
 
 /// The system's notification, from `osascript`: a binary started from a terminal has no bundle

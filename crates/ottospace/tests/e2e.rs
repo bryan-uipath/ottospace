@@ -6390,6 +6390,12 @@ fn the_calendar_request_gives_titles_and_busy_time_but_no_link_or_address() {
     assert_eq!(week["meetings"][1]["status"], "tentative");
     // Design review and Planning meet: one busy span.
     assert_eq!(week["busy"].as_array().map(Vec::len), Some(2), "{week}");
+    // Free time is of the workday (09:00 to 17:00 by default), each of the 7 days.
+    let free = week["free"].as_array().unwrap();
+    let clock = |at: &Value| at.as_str().map(|t| t[11..16].to_string()).unwrap();
+    let inside = |f: &Value| clock(&f["start"]).as_str() >= "09:00" && clock(&f["end"]).as_str() <= "17:00";
+    assert!(free.len() >= 7 && free.iter().all(inside), "{free:?}");
+    assert_eq!(week["workday"], "09:00-17:00");
     let text = week.to_string();
     for never in ["s3cret", "zoom.us", "Passcode", "ana@example.com", "Ana", "today.ics", "Skipped"] {
         assert!(!text.contains(never), "{never} in the reply: {text}");
@@ -6416,10 +6422,64 @@ fn no_feed_no_timeline() {
     let otto = Otto::launch("calendar-off");
     let calendar = otto.call(json!({"cmd": "state"}))["calendar"].clone();
     assert_eq!((&calendar["on"], &calendar["bars"], &calendar["chip"]), (&json!(false), &json!(0), &json!(false)));
+    assert_eq!(calendar["band"], Value::Null, "no band");
     let reply = otto.call(json!({"cmd": "calendar", "day": "tomorrow"}));
     assert_eq!(reply, json!({"ok": true, "configured": false}), "nothing but that");
     // `calendar_call` answers only in a test run; an agent cannot learn it from the guide.
     assert!(!include_str!("../skill/guide.md").contains("calendar_call"));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_timeline_band_spans_the_workday_directly_above_the_status_bar() {
+    let home = calendar_folder(
+        "calendar-band",
+        &feed(&[
+            ("a", "Alpha", -7_200, -5_400, ""),
+            ("b", "Beta", 3_600, 5_400, ""),
+            ("c", "Gamma", 7_200, 10_800, ""),
+        ]),
+        None,
+    );
+    // The whole day, so every fixture meeting is inside it whenever the test runs.
+    let settings = json!({ "calendar_ics": home.join("today.ics"), "calendar_workday": "00:00-24:00", "repos": [] });
+    std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
+    let otto = Otto::launch_with("calendar-band", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    calendar_read(&otto);
+    let band = otto.wait_for("the band drawn", |o| {
+        let b = o.call(json!({"cmd": "state"}))["calendar"]["band"].clone();
+        (b["rect"].is_array() && b["status_bar"].is_array() && b["now"].is_array()).then_some(b)
+    });
+    let r = |v: &Value| -> Vec<f64> { v.as_array().expect("a rect").iter().filter_map(Value::as_f64).collect() };
+    let (rect, status) = (r(&band["rect"]), r(&band["status_bar"]));
+    // Directly above the status bar (its mark is inside its 1-point top border), as wide as the
+    // window less its insets; nothing at the top.
+    assert!((rect[1] + rect[3] + 1. - status[1]).abs() < 0.5, "{band}");
+    assert!((rect[2] - (status[2] - 12.)).abs() < 0.5 && rect[1] > 100., "{band}");
+    let (from, to) = (band["span"][0].as_f64().unwrap(), band["span"][1].as_f64().unwrap());
+    let x = |t: f64| rect[0] + (t.clamp(from, to) - from) / (to - from) * rect[2];
+    // The workday's marks at both ends.
+    let marks: Vec<Vec<f64>> = band["marks"].as_array().unwrap().iter().map(r).collect();
+    assert!((marks[0][0] - rect[0]).abs() < 1. && (marks[1][0] - (rect[0] + rect[2])).abs() < 1., "{band}");
+    // Each meeting of today at its clock place, within a point.
+    let blocks = band["blocks"].as_array().unwrap();
+    let today = otto.call(json!({"cmd": "state"}))["calendar"]["events_today"].as_u64().unwrap();
+    assert_eq!(blocks.len() as u64, today, "{band}");
+    assert!(today >= 1, "{band}");
+    for block in blocks {
+        let at = r(&block["rect"]);
+        let (start, end) = (block["start"].as_f64().unwrap(), block["end"].as_f64().unwrap());
+        assert!((at[0] - x(start)).abs() < 1., "{block} in {band}");
+        assert!((at[2] - (x(end) - x(start)).max(3.)).abs() < 1., "{block} in {band}");
+    }
+    // Now's tick, where the clock says (it moves a point a minute at most).
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as f64;
+    let tick = r(&band["now"]);
+    assert!((tick[0] + tick[2] / 2. - x(now)).abs() < 2., "{band}");
+    // No title on the socket.
+    assert!(!otto.call(json!({"cmd": "state"})).to_string().contains("Gamma"));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// Whether sneak mode labels a control of this id: it is drawn.

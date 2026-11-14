@@ -583,6 +583,13 @@ enum Mark {
     /// The left column's title strip, and the open section's header.
     Strip,
     BarHeader,
+    /// The meeting timeline's band, its workday marks (0 start, 1 end), now's tick, its n-th block.
+    Band,
+    BandEdge(usize),
+    BandNow,
+    BandBlock(usize),
+    /// The status bar.
+    Status,
 }
 
 type Marks = Rc<RefCell<HashMap<Mark, Bounds<Pixels>>>>;
@@ -4916,6 +4923,7 @@ impl Workspace {
             .border_color(rgb(theme::BORDER))
             .text_xs()
             .text_color(rgb(theme::MUTED))
+            .child(mark(&self.marks, Mark::Status))
             .child(div().px_2().rounded_sm().bg(rgb(color)).text_color(rgb(theme::BACKGROUND)).child(mode))
             // Long text gives way, so the build tag on the right stays in view.
             .child(div().min_w_0().truncate().child(focused))
@@ -5475,10 +5483,10 @@ impl Render for Workspace {
                     .child(zone_shadow(right_width, false))
                     // Highest, the title strip: its shadow falls on all three zones.
                     .child(title_shadow())
-                    // Over the strip's top edge, above the window's buttons: the meeting timeline.
-                    .children(self.render_hairline())
                     .children(self.render_meeting_banner(cx)),
             )
+            // The meeting timeline, directly above the status bar.
+            .children(self.render_timeline())
             .child(self.render_status(cx))
             // Only over a parked, drawn pane: a live window sits above ottospace and would cover it.
             .children(

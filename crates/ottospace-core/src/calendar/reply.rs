@@ -7,7 +7,7 @@
 
 use serde::Serialize;
 
-use super::{Calendar, Event, MAX_TITLE, has_meeting_link};
+use super::{Calendar, Event, MAX_TITLE, Workday, has_meeting_link};
 use crate::ics::{self, Table};
 
 const DAY: i64 = 86_400;
@@ -31,7 +31,9 @@ pub struct Answer {
     pub to: String,
     pub meetings: Vec<Meeting>,
     pub more: usize,
-    /// Timed meetings merged, cut to the span; `free` is the rest of the span, nights included.
+    /// `calendar_workday`, `09:00-17:00`: what `free` is of.
+    pub workday: String,
+    /// Timed meetings merged, cut to the span; `free` is the rest of each day's workday.
     pub busy: Vec<Span>,
     pub free: Vec<Span>,
 }
@@ -60,14 +62,14 @@ pub fn reply(
     calendar: &Calendar,
     day: Option<&str>,
     days: Option<u32>,
-    now: u64,
+    (now, workday): (u64, Workday),
     local: &Table,
 ) -> Result<serde_json::Value, &'static str> {
     if !calendar.on {
         return Ok(serde_json::json!({ "configured": false }));
     }
     let span = span(day, days, seconds(now), local)?;
-    serde_json::to_value(answer(calendar, span, local)).map_err(|_| "the calendar could not be written")
+    serde_json::to_value(answer(calendar, span, workday, local)).map_err(|_| "the calendar could not be written")
 }
 
 /// Local midnight of today and of `HELD_DAYS` later (UTC seconds): the span the feed's reads hold.
@@ -111,8 +113,9 @@ fn date_day(text: &str) -> Option<i64> {
     (ics::civil(day) == (y, m, d)).then_some(day)
 }
 
-/// The meetings of `from..to` (UTC seconds), busy and free time, and how fresh it is.
-pub fn answer(calendar: &Calendar, (from, to): (i64, i64), local: &Table) -> Answer {
+/// The meetings of `from..to` (UTC seconds, local midnights), busy time, the free time of each
+/// day's workday, and how fresh it is.
+pub fn answer(calendar: &Calendar, (from, to): (i64, i64), workday: Workday, local: &Table) -> Answer {
     let (from_ms, to_ms) = (ms(from), ms(to));
     // As `Calendar::today`: what overlaps the span, and what starts in it with no length.
     let within: Vec<&Event> =
@@ -133,6 +136,16 @@ pub fn answer(calendar: &Calendar, (from, to): (i64, i64), local: &Table) -> Ans
         .collect();
     let busy = busy(&within, from_ms, to_ms);
     let spans = |list: &[(u64, u64)]| list.iter().map(|&(s, e)| Span { start: at(s), end: at(e) }).collect();
+    // Each day's workday, at that day's offsets: a clock change moves it with the clock.
+    let first = today(from, local);
+    let workdays: Vec<(u64, u64)> = (first..first + MAX_DAYS)
+        .take_while(|day| local.to_utc(day * DAY) < to)
+        .map(|day| {
+            let at = |minutes: u32| ms(local.to_utc(day * DAY + i64::from(minutes) * 60));
+            (at(workday.start), at(workday.end))
+        })
+        .collect();
+    let clock = |m: u32| format!("{:02}:{:02}", m / 60, m % 60);
     Answer {
         configured: true,
         updated: calendar.updated.map(at),
@@ -142,7 +155,8 @@ pub fn answer(calendar: &Calendar, (from, to): (i64, i64), local: &Table) -> Ans
         to: at(to_ms),
         meetings,
         more: within.len().saturating_sub(MAX_MEETINGS),
-        free: spans(&free(&busy, from_ms, to_ms)),
+        workday: format!("{}-{}", clock(workday.start), clock(workday.end)),
+        free: spans(&free(&busy, &workdays)),
         busy: spans(&busy),
     }
 }
@@ -167,18 +181,20 @@ fn busy(events: &[&Event], from: u64, to: u64) -> Vec<(u64, u64)> {
     out
 }
 
-/// The gaps of `from..to` between `busy` (merged, by start).
-fn free(busy: &[(u64, u64)], from: u64, to: u64) -> Vec<(u64, u64)> {
+/// The gaps between `busy` (merged, by start) inside each of `windows`.
+fn free(busy: &[(u64, u64)], windows: &[(u64, u64)]) -> Vec<(u64, u64)> {
     let mut out = Vec::new();
-    let mut at = from;
-    for &(start, end) in busy {
-        if start > at {
-            out.push((at, start));
+    for &(from, to) in windows {
+        let mut at = from;
+        for &(start, end) in busy.iter().filter(|(start, end)| *end > from && *start < to) {
+            if start > at {
+                out.push((at, start));
+            }
+            at = at.max(end);
         }
-        at = at.max(end);
-    }
-    if at < to {
-        out.push((at, to));
+        if at < to {
+            out.push((at, to));
+        }
     }
     out
 }

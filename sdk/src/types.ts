@@ -1082,6 +1082,20 @@ export interface Snapshot {
     in_call: boolean | null;
     soon: boolean;
     bars: number;
+    /**
+     * The band above the status bar, in window points (null without a feed): its rect, the times
+     * (ms) at its ends and the workday's, the workday's two marks, now's tick, each block's times
+     * and rect, and the status bar's rect.
+     */
+    band: {
+      rect: Rect | null;
+      span: [number, number];
+      workday: [number, number];
+      marks: (Rect | null)[];
+      now: Rect | null;
+      blocks: { start: number; end: number; rect: Rect | null }[];
+      status_bar: Rect | null;
+    } | null;
     chip: boolean;
     banner: { join: Rect | null; dismiss: Rect | null } | null;
     alerts: number;
@@ -1201,7 +1215,9 @@ export interface CalendarOn {
   /** At most 200, by start; `more` counts the rest. */
   meetings: Meeting[];
   more: number;
-  /** Timed meetings merged; `free` is the rest of the span, nights included. */
+  /** `calendar_workday`, `09:00-17:00`: what `free` is of. */
+  workday: string;
+  /** Timed meetings merged; `free` is the rest of each day's workday. */
   busy: TimeSpan[];
   free: TimeSpan[];
 }
