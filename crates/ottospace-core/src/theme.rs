@@ -52,7 +52,8 @@ pub fn task(group: Group) -> u32 {
 /// Tasks' identity colours (`Task::colour`): their badges and the underline of their tabs. Hues
 /// apart from each other and from the state colours above.
 pub const IDENTITY: [u32; crate::tasks::COLOURS as usize] =
-    [0xf87171, 0xfb923c, 0xa3e635, 0x2dd4bf, 0x60a5fa, 0xa78bfa, 0xf472b6, 0xd6a77a];
+    // Neighbours in the order given are far apart: the first tasks look the most different.
+    [0xf87171, 0x818cf8, 0xfb923c, 0xf472b6, 0xbef264, 0xc084fc, 0xd6a77a, 0x5eead4];
 
 /// A task's identity colour; with none, the muted grey.
 pub fn identity(colour: Option<u8>) -> u32 {

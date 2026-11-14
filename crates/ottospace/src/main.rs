@@ -4652,8 +4652,10 @@ impl Workspace {
                             .cursor_pointer()
                             .when(active, |d| d.bg(rgb(theme::RAISED)).text_color(rgb(theme::TEXT)))
                             // A task's tab is underlined in its colour, brighter while the drawer shows it.
+                            .relative()
                             .when_some(underline, |d, (colour, shown)| {
-                                d.border_b_2().border_color(rgb(colour)).when(!shown, |d| d.opacity(0.85))
+                                let line = div().absolute().left_0().right_0().bottom_0().h(px(2.)).bg(rgb(colour));
+                                d.child(line.when(!shown, |d| d.opacity(0.6)))
                             })
                             .hover(|s| s.text_color(rgb(theme::TEXT)))
                             .child(mark(&self.marks, Mark::Tab(place)))

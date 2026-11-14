@@ -322,7 +322,7 @@ impl Workspace {
 /// A badge: `mono` in a rounded square bordered in an identity colour, and a state's dot at
 /// its corner. The one look of a task on the tab bar, its panes, its row, the rail and the drawer.
 pub(crate) fn badge(mono: &str, colour: u32, state: Option<u32>, size: f32) -> Div {
-    let dot = (size / 4.).max(6.);
+    let dot = (size * 0.36).max(7.);
     div()
         .relative()
         .flex_none()
