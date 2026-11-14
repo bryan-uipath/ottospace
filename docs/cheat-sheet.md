@@ -41,12 +41,12 @@ ottospace            # opens on the Repos list
 | Save the tab as a workbook | ⌘⇧S |
 | Fill the screen | ⌘⌃F (again to restore) |
 
-## The bar on the left (Tasks, Calendar, Apps, Workbook, Repos, Marks)
+## The bar on the left (Tasks, Calendar, Workbook, Repos; Apps and Marks behind flags)
 
 | I want to | Do |
 |---|---|
 | Open a section | Click its icon on the rail |
-| Use it from the keyboard | ⌘⌃E (the open section, or Apps), then `j` `k` move · ↵ open · ⇧↵ open below · Tab next section · Esc leave |
+| Use it from the keyboard | ⌘⌃E (the open section, else Apps, or with it off the first), then `j` `k` move · ↵ open · ⇧↵ open below · Tab next section · Esc leave |
 | Read the lists again | Close and open the section, or ⌘⌃E: Apps and Repos are read when they open |
 | Add something | + in the bar's header: a new task in Tasks, the tab on show in Workbook, a repository in Repos (pick a folder that is one or holds some; it goes into `repos` in the settings) |
 | Stop listing a repository | Point at its name in Repos: Remove. Only for one added as itself |
@@ -54,6 +54,9 @@ ottospace            # opens on the Repos list
 | Click anything without the mouse | ⌘; or ⌘⌃G: every control gets a letter label (a × gets two), and so do the buttons and text fields of the focused app pane, in orange, two letters or more. Type it · ⌫ takes a letter back · Esc or a wrong letter leaves. An orange label presses that button in the app, or puts you in its text field |
 
 ## Apps
+
+The Apps section is behind the `apps_section` flag, off by default: turn it on in ⌘P ▸ Features….
+Without it, ⌘E puts an app in a pane.
 
 | I want to | Do |
 |---|---|
@@ -91,7 +94,8 @@ folder. Kept in `~/.ottospace/workbooks`.
 
 ## Marks
 
-A mark is a named way back to a pane or a whole tab. It is kept between runs.
+A mark is a named way back to a pane or a whole tab. It is kept between runs. Marks are behind
+the `marks` flag, off by default: turn it on in ⌘P ▸ Features….
 
 | I want to | Do |
 |---|---|
@@ -113,8 +117,8 @@ what can be opened, and its other panes are empty and say why. Marks are kept in
 |---|---|
 | Start a task | ⌘N, type a line, ↵: its agent starts in the drawer on the right, beside your workspace. The + on the Tasks bar or the right rail opens the same box; its picks set where and who |
 | Add a task for later | ⌘N, type a line, ⇧↵ |
-| Talk to a task's agent | Click the task (or ↵ on it): its conversation opens in the drawer, started or gone on with. ⌘L moves the keyboard in and out; ⌘⇧L closes the drawer to the right rail; Stop ends the agent; drag its left edge to resize |
-| Chat with Claude Code in the drawer | ↵ send, ⇧↵ new line, Esc leaves; Esc Esc stops a turn. Hover a message: Copy, Copy as Markdown; a code block has its own Copy. An edit shows its diff under its call. A link opens on your click only. A permission card: `a` allow (this one request), `d` deny, `m` deny with a message, `s` show all (needed before `a` on a long one); ↵ does nothing there. `Chat \| Terminal` in the header switches to the CLI's TUI and back (`conversation_view` sets the default) |
+| Talk to a task's agent | Click the task (or ↵ on it): its conversation shows in the drawer. Not running: Start agent, or Resume session once it ended (a click never starts one). ⌘L moves the keyboard in and out; ⌘⇧L closes the drawer to the right rail; Stop ends the agent; drag its left edge to resize |
+| Chat with Claude Code in the drawer | ↵ send, ⇧↵ new line, Esc leaves; Esc Esc stops a turn. Once the agent ended, ↵ goes on with its session and sends; an ended agent says why, and Show details opens what its program printed. Hover a message: Copy, Copy as Markdown; a code block has its own Copy. An edit shows its diff under its call. A link opens on your click only. A permission card: `a` allow (this one request), `d` deny, `m` deny with a message, `s` show all (needed before `a` on a long one); ↵ does nothing there. `Chat \| Terminal` in the header switches between the CLI's TUI and the native view (`conversation_view` sets the default: `terminal` for now) |
 | Switch between running agents | Click a badge on the right rail, or ⌘⌃1 … ⌘⌃9. Hover a badge for what it is doing |
 | See a task's tabs | Go to its tabs (⌘↵) in the drawer's header; with none, Claim this tab or New tab |
 | Point at something for a task ("this message", "this error") | ⌃⌥⌘Space, from any app: the pane in use freezes as a picture and a draft opens on the right. Drag to circle, ⇧-drag a box, ⌥-drag a line, click to type a note. ↵, type what you want, ↵ starts it (⇧↵ for later). Esc leaves the picture; Esc in the title cancels the draft. The task keeps the pictures and the text under what you circled as its brief: [Capture](reference.md#capture) |
@@ -130,7 +134,7 @@ what can be opened, and its other panes are empty and say why. Marks are kept in
 | See the inbox | Tasks on the rail: Needs you, Running, Later, Done (folded). Click a heading to fold it, or ⌘⌃E, move to it, ↵ or space |
 | See tasks by project | Project in the Tasks header (State goes back): a group a `#project` with a bar of its states, then "no project". Today's work is under the list |
 | See a task's time and tokens | Hover its row, or its badge on the right rail: started, agent time, workspace, tokens by model |
-| See agent sessions that are no task (a Claude Code or Codex started by hand) | Tasks on the rail, under Other sessions (folded at first: click its heading; Today \| 7 days \| 30 days \| All on it picks how far back): runner, repository, the session's title, active or idle, what it does now, the model. A click opens its conversation in the drawer, gone on with unless it is at work in another terminal (then watched: its calls and edits, a message at a time). Hover a row: Open, Adopt makes it a task (its conversation too), Hide removes it until the next start. [More](reference.md#sessions) |
+| See agent sessions that are no task (a Claude Code or Codex started by hand) | Tasks on the rail, under Other sessions (folded at first: click its heading; Today \| 7 days \| 30 days \| All on it picks how far back): runner, repository, the session's title, active or idle, what it does now, the model. A click shows its conversation in the drawer: Resume session goes on with it, unless it is at work in another terminal (then watched: its calls and edits, a message at a time). Hover a row: Open, Adopt makes it a task (its conversation too), Hide removes it until the next start. [More](reference.md#sessions) |
 | Snooze 1 hour / hold / dismiss / undo | ⌘⌃E on Tasks, then `s` / `h` / `x` / `u`. By mouse: the buttons on a row you hover; "Undo" then shows at the top for 6 seconds |
 
 The status bar shows how many tasks need you. Tasks are kept in `~/.ottospace/tasks`, or the `tasks` setting.
@@ -194,7 +198,8 @@ restart, and the rest applies at once:
   "apps": ["Microsoft Outlook", "Slack"],
   "apps_hidden": ["Music"],
   "suggest_dock_apps": true,
-  "windows": [{ "app": "us.zoom.xos", "title": "Zoom Meeting", "do": "ignore" }]
+  "windows": [{ "app": "us.zoom.xos", "title": "Zoom Meeting", "do": "ignore" }],
+  "features": { "marks": false, "apps_section": false }
 }
 ```
 
@@ -205,6 +210,8 @@ setting takes its default.
 `sessions`: `false` reads no agent session files. `session_dirs` names where Claude Code and Codex keep them, if not `~/.claude` and `~/.codex`. `session_quiet_minutes`: a task adopted from a session moves to Needs you after the session has been quiet this long (default 3; 0 never). `agent_models`: the models `@` offers after each runner, as its CLI names them, in place of the built-in list.
 
 `apps`: the pinned apps, by name or bundle path. `apps_hidden`: Dock apps not to suggest. Pin, Unpin and Hide in Apps write these two and leave the rest of the file as it is. `suggest_dock_apps`: `false` lists no Dock apps.
+
+`features`: [feature flags](reference.md#features), each `true` or `false`; ⌘P ▸ Features… writes them. A flag is temporary and about readiness; a preference is a normal setting.
 
 `capture_key`: the key that captures the pane in use (`"off"` for none). `capture`: `keep_images` `false` writes no picture; `ax` `false` reads no accessibility tree for a capture.
 

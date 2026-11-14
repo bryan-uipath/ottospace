@@ -30,6 +30,7 @@ use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::clip::{self, Verb};
 use ottospace_core::compose;
 use ottospace_core::edit::{self, Edit};
+use ottospace_core::features::Feature;
 use ottospace_core::hosted::{self as hosting, Click};
 use ottospace_core::keys::{self, FilterKey, Mods};
 use ottospace_core::list::{ListKey, list_key};
@@ -67,6 +68,7 @@ mod confirm;
 mod control;
 mod conversation;
 mod dialog;
+mod features;
 mod field;
 mod give_back;
 mod home;
@@ -467,7 +469,7 @@ const KEYS_TERMINAL: &[(&str, &str)] = &[
     ("⌘C", "Copy the selection"),
     ("⌘V", "Paste"),
     ("⌘⇧C", "Visual mode: select with the keyboard"),
-    ("⌘⌃E", "List mode: keys for the bar (Tasks, Apps, Workbook, Repos, Marks). ↵ or space on a heading folds it"),
+    ("⌘⌃E", "List mode: keys for the bar's sections. ↵ or space on a heading folds it"),
     ("⌘; or ⌘⌃G", "Sneak mode: a letter label on every control"),
     ("⌘N", "New task: type a line, ↵ adds it. ↑↓ ↵ pick from its list; ⌘O adds files"),
     ("⌘⇧N", "Next task: show the tabs of the first that needs you"),
@@ -1059,6 +1061,8 @@ impl Workspace {
         let (on, notify) = (settings.calendar_ics.is_some(), settings.calendar_notify.unwrap_or(true));
         let links_only = settings.calendar_notify_for == Some(ottospace_core::settings::NotifyFor::Links);
         model.update(Action::SetCalendar { on, notify, links_only }.sent_by(Origin::System));
+        // Before what a restore reads: a section behind a flag that is off is not put back.
+        model.update(Action::SetFeatures { features: features::startup() }.sent_by(Origin::System));
         model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
         let kept = config::load_tasks();
         let unread = kept.unread;
@@ -1212,6 +1216,7 @@ impl Workspace {
         // Opening the Apps section too: apps start and quit, and the Dock changes.
         if self.model.sidebar != Some(Section::Apps)
             && matches!(action, Action::ToggleSection { section: Section::Apps })
+            && self.on(Feature::AppsSection)
         {
             self.refresh_apps();
             self.offer_installed(cx);
@@ -1365,7 +1370,7 @@ impl Workspace {
                         hosted.park(window.scale_factor() as f64, crop);
                         // Going live activated the app. If it still has the keyboard, take it
                         // back, or keys keep going to its off-screen window while the status
-                        // bar says NORMAL. If the user moved to a third app, leave them there.
+                        // bar shows no mode. If the user moved to a third app, leave them there.
                         // Not when another pane goes live in this same step: that pane's app is
                         // taking the keyboard, and ottospace must not race it.
                         if !another_goes_live && ax::is_frontmost(hosted.pid) {
@@ -1378,6 +1383,7 @@ impl Workspace {
                 }
                 Effect::LaunchApp { name, path, axis, new_tab } => self.launch_picked(name, path, *axis, *new_tab),
                 Effect::SaveApps { changes } => self.save_apps(changes),
+                Effect::SaveFeature { feature, on } => self.save_feature(*feature, *on, cx),
                 Effect::SaveTasksView { view } => {
                     if let Err(why) = config::save_value("tasks_view", &serde_json::json!(view)) {
                         self.error = Some(format!("{}{why}", Self::NOT_WRITTEN));
@@ -1418,7 +1424,10 @@ impl Workspace {
                 }
                 // Carried out with its pane's `Opened`, before the shell starts.
                 Effect::History { .. } | Effect::EditSettings { .. } => {}
-                Effect::ApplySettings { settings } => config::set_live(settings.as_ref().clone()),
+                Effect::ApplySettings { settings } => {
+                    self.apply_features(settings, cx);
+                    config::set_live(settings.as_ref().clone())
+                }
                 // The text read at ⌘V, into the pane it was read for.
                 Effect::Paste { pane } => {
                     let text = self.pasting.take().filter(|(at, _)| at == pane).map(|(_, text)| text);
@@ -1701,6 +1710,10 @@ impl Workspace {
         }
         for Call { request, reply } in calls {
             if let Some(why) = control::test_refusal(&request, std::env::var_os("OTTOSPACE_E2E").is_some()) {
+                let _ = reply.send(control::error(why));
+                continue;
+            }
+            if let Some(why) = control::feature_refusal(&request, &self.model.features) {
                 let _ = reply.send(control::error(why));
                 continue;
             }
@@ -2253,7 +2266,7 @@ impl Workspace {
                 claude: models.claude,
                 codex: models.codex,
                 default: live.default_agent.clone(),
-                shows: live.conversation_view.unwrap_or_default(),
+                shows: live.conversation_view.unwrap_or(ottospace_core::settings::DEFAULT_VIEW),
             };
             self.dispatch(agents, Origin::System, window, cx);
         }
@@ -2734,7 +2747,8 @@ impl Workspace {
             // The Apps section below the running apps: `not_running` (each with `name`, `path`,
             // `pinned`, `suggested`), `more` behind "and N more", `all` (every other installed
             // app, while `all_open`; `all_count` of them) narrowed by `filter`, and `undo`.
-            "apps_bar": self.model.apps_bar(),
+            // Empty with the section off (`apps_section`).
+            "apps_bar": if self.on(Feature::AppsSection) { self.model.apps_bar() } else { Default::default() },
             // The Apps list: what can be hosted now. `icon`: its icon was read.
             "apps": self.apps.iter().map(|app| serde_json::json!({
                 "name": app.name, "windows": app.windows, "icon": self.icons.contains_key(&app.name),
@@ -3218,7 +3232,8 @@ impl Workspace {
         }
         // ⌘⌥1..9 go to one of the first nine marks.
         let digit = key.key.parse::<usize>().ok().filter(|d| (1..=9).contains(d));
-        if let Some(digit) = digit.filter(|_| m.platform && m.alt && !m.shift && !m.control) {
+        if let Some(digit) = digit.filter(|_| m.platform && m.alt && !m.shift && !m.control && self.on(Feature::Marks))
+        {
             let _ = self.go_to_mark(MarkRef::Place(digit - 1), Axis::Right, window, cx);
             cx.stop_propagation();
             return;
@@ -3629,7 +3644,15 @@ impl Workspace {
                         .child(div().min_w_0().text_color(rgb(theme::MUTED)).child(what))
                 }))
         };
-        let rows = |list: &[(&str, &'static str)]| list.iter().map(|(k, w)| (k.to_string(), *w)).collect::<Vec<_>>();
+        // A row of a feature that is off is not listed: "Mark: …" with marks off, "Apps: …" with the section off.
+        let (marks, apps) = (self.on(Feature::Marks), self.on(Feature::AppsSection));
+        let shown = |what: &str| {
+            (marks || !what.starts_with("Mark:"))
+                && (apps || !what.starts_with("Apps:") && !what.starts_with("App not"))
+        };
+        let rows = |list: &[(&str, &'static str)]| {
+            list.iter().filter(|(_, w)| shown(w)).map(|(k, w)| (k.to_string(), *w)).collect::<Vec<_>>()
+        };
         let columns = div()
             .p_4()
             .flex()
@@ -3650,7 +3673,7 @@ impl Workspace {
                     .flex_col()
                     .gap_4()
                     .child(group("TABS", rows(KEYS_TABS)))
-                    .child(group("MARKS", rows(KEYS_MARKS)))
+                    .children(self.on(Feature::Marks).then(|| group("MARKS", rows(KEYS_MARKS))))
                     .child(group(
                         "WINDOW",
                         vec![
@@ -4549,7 +4572,8 @@ impl Workspace {
             Kind::Empty => "Empty pane".into(),
         };
         // A marked pane says so, with its letter: ⌘B gives no other sign while the Marks list is shut.
-        let marked = self.model.mark_of(MarkOf::Pane(Some(id))).and_then(|mark| self.model.marks.get(mark));
+        let marked = self.model.mark_of(MarkOf::Pane(Some(id))).filter(|_| self.on(Feature::Marks));
+        let marked = marked.and_then(|mark| self.model.marks.get(mark));
         let marked = marked.map(|mark| mark.key.map_or("◆".to_string(), |key| format!("◆ {}", key.to_uppercase())));
         // The header is the pane's handle: a drag of it carries the pane to a drop zone or a tab.
         let workspace = cx.weak_entity();
@@ -4907,6 +4931,10 @@ impl Workspace {
                                 .drag_over::<DraggedPane>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
                                 .drag_over::<DraggedTab>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
                                 .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                                    // Dropped on itself: a click that moved a few points (GPUI drags past 2).
+                                    if dragged.0 == id {
+                                        return this.select_tab(id, window, cx);
+                                    }
                                     let at = TabAt::Before(id);
                                     this.dispatch(
                                         Action::TabPlace { tab: Some(dragged.0), at },
@@ -4950,6 +4978,7 @@ impl Workspace {
                                 .children(
                                     self.model
                                         .mark_of(MarkOf::Tab(Some(id)))
+                                        .filter(|_| self.on(Feature::Marks))
                                         .map(|_| div().text_color(rgb(theme::MARK)).child("◆")),
                                 )
                                 // A tab of a workbook: its icon, and the workbook's name on hover.
@@ -5491,16 +5520,24 @@ impl Render for Workspace {
                 this.error = this.capture_pane(None, this.input, window, cx).err();
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &MarkPane, window, cx| this.toggle_mark(MarkOf::Pane(None), window, cx)))
-            .on_action(cx.listener(|this, _: &MarkTab, window, cx| this.toggle_mark(MarkOf::Tab(None), window, cx)))
+            // With marks off their keys are no keys of ottospace's: they go on as unbound.
+            .on_action(cx.listener(|this, _: &MarkPane, window, cx| match this.on(Feature::Marks) {
+                true => this.toggle_mark(MarkOf::Pane(None), window, cx),
+                false => cx.propagate(),
+            }))
+            .on_action(cx.listener(|this, _: &MarkTab, window, cx| match this.on(Feature::Marks) {
+                true => this.toggle_mark(MarkOf::Tab(None), window, cx),
+                false => cx.propagate(),
+            }))
             .on_action(cx.listener(|this, _: &SaveWorkbook, window, cx| this.save_workbook(window, cx)))
             .on_action(cx.listener(|this, _: &AddTabToWorkbook, window, cx| this.pick_workbook(window, cx)))
             .on_action(cx.listener(|this, _: &SaveAllWorkbook, window, cx| this.save_all_workbook(window, cx)))
             .on_action(cx.listener(|this, _: &StartFresh, window, cx| {
                 drop(this.dispatch(Action::StartFresh, this.input, window, cx))
             }))
-            .on_action(cx.listener(|this, _: &MarkJump, window, cx| {
-                this.dispatch(Action::MarkPrefix, this.input, window, cx);
+            .on_action(cx.listener(|this, _: &MarkJump, window, cx| match this.on(Feature::Marks) {
+                true => drop(this.dispatch(Action::MarkPrefix, this.input, window, cx)),
+                false => cx.propagate(),
             }))
             .on_action(cx.listener(|this, _: &NextTask, window, cx| {
                 this.dispatch(Action::Tick { now: now_ms() }, this.input, window, cx);
@@ -5901,7 +5938,7 @@ fn main() {
             cx.activate(true);
             ottospace_mac::window::show_about(env!("CARGO_PKG_VERSION"), &build_of(commit, date));
         });
-        cx.set_menus(menus::app_menus());
+        cx.set_menus(menus::app_menus(&features::startup()));
         let mut bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
         // A test run stays out of the user's way: a background app that never takes the keyboard,
         // with its window at a free corner of the screens, all but a sliver of it off screen.
