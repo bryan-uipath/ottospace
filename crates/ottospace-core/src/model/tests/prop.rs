@@ -7,6 +7,7 @@
 use super::*;
 use crate::ax::{Frame, Source};
 use crate::calendar::Event;
+use crate::clip::{Amount, Verb};
 use crate::compose::{Known, Names, PathFound};
 use crate::fuzz::{self, Rng};
 use crate::layout_file;
@@ -54,6 +55,11 @@ impl Gen<'_> {
     fn pane(&mut self) -> PaneId {
         let real: Vec<PaneId> = self.m.panes.iter().map(|p| p.id).collect();
         self.one_of(&real, Self::stray)
+    }
+
+    /// How much a clipboard holds: nothing, a word, lines, a command that would run.
+    fn amount(&mut self) -> Amount {
+        Amount::of(self.rng.pick(&["", "ls", "a\nb", "rm -rf build\n", "é\r\n\r\n"]))
     }
 
     fn tab_id(&mut self) -> u32 {
@@ -872,6 +878,11 @@ const MAKERS: &[Make] = &[
     |_| Action::QuitConfirm,
     |_| Action::QuitCancel,
     |_| Action::Quit,
+    |g| {
+        let verb = g.rng.pick(&[Verb::Copied, Verb::Cut, Verb::Pasted]);
+        Action::Copied { pane: g.rng.coin().then(|| g.pane()), verb, amount: g.amount() }
+    },
+    |g| Action::Paste { pane: g.pane(), amount: g.amount() },
     // The Apps section: what the settings, the Dock and the scan say, and the user's pins.
     |g| {
         let entry = |g: &mut Gen| {
@@ -1197,6 +1208,11 @@ fn check(m: &Model) -> Result<(), String> {
     let calendar_shown =
         m.sidebar == Some(Section::Calendar) || m.rail_focus == Some(zones::RailFocus::Left(Section::Calendar));
     ensure!(!calendar_shown || m.calendar.on, "the Calendar section with no feed");
+    // "Paste 4 lines?" is a question of its own, and only of text with a line break.
+    if let Some(confirm) = m.confirm.as_ref().filter(|c| c.paste.is_some()) {
+        let alone = confirm.running.is_empty() && confirm.dismiss.is_none();
+        ensure!(alone && confirm.paste.is_some_and(|ask| ask.amount.newline), "a paste asks with {confirm:?}");
+    }
     // The meeting banner is of an event that runs, with no call on.
     if let Some(event) = m.calendar.banner(m.now) {
         ensure!(calendar::stage(event, m.now) == calendar::Stage::Running, "a banner for an event that does not run");
@@ -1478,6 +1494,7 @@ fn check(m: &Model) -> Result<(), String> {
     if let Some(confirm) = &m.confirm {
         let loses = match confirm.dismiss {
             Some(id) => m.agent_runs(&Subject::Task(id)),
+            None if let Some(ask) = confirm.paste => m.pane(ask.pane).is_some(),
             None => !confirm.running.is_empty() || m.quit_discards() > 0 || !m.agents.is_empty(),
         };
         ensure!(loses, "the quit question names no terminal, no draft holds a capture, and no agent runs");
@@ -2470,6 +2487,13 @@ impl Run {
                     ensure!(matches!(action, Action::Tick { .. }) && *started <= m.now, "an alert by {action:?}")
                 }
                 Effect::OpenLink { .. } => {}
+                // The user's clipboard goes only into a terminal, by their own ⌘V or ↵, and says so.
+                Effect::Paste { pane } => {
+                    let asked = matches!(action, Action::Paste { .. } | Action::QuitConfirm);
+                    let terminal = m.pane(*pane).is_some_and(|p| p.kind == Kind::Terminal);
+                    let said = m.clip.as_ref().is_some_and(|c| c.pane == Some(*pane) && c.verb == Verb::Pasted);
+                    ensure!(user && asked && terminal && said, "{origin:?}'s {action:?} pasted into pane {pane}");
+                }
                 Effect::Quit => {
                     ensure!(
                         matches!(action, Action::QuitAsked { .. } | Action::QuitConfirm | Action::Quit),
@@ -2840,6 +2864,7 @@ fn explore(sequences: u64, actions: usize, sparse: bool) {
 /// (`ENUM_OF`). `UNKNOWN::` marks a variant in a field not listed there.
 fn code(sent: &Envelope) -> String {
     const STRUCTS: &[&str] = &[
+        "Amount",
         "Repo",
         "RepoDir",
         "RepoDirs",
@@ -2868,6 +2893,7 @@ fn code(sent: &Envelope) -> String {
         "Event",
     ];
     const ENUM_OF: &[(&str, &str)] = &[
+        ("verb", "Verb"),
         ("axis", "Axis"),
         ("at", "TabAt"),
         ("dir", "Dir"),

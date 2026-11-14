@@ -22,7 +22,10 @@ import type {
   Shape,
   Subject,
   TaskBriefReply,
+  Amount,
+  Clip,
   Confirm,
+  PasteAsk,
   ComposeMenu,
   Field,
   MenuRow,
@@ -152,6 +155,11 @@ function map<T>(parse: Parse<T>): Parse<Record<string, T>> {
 function pair(value: unknown, at: string): [number, number] {
   if (!Array.isArray(value) || value.length !== 2) throw wrong(at, "two numbers", value);
   return [num(value[0], at), num(value[1], at)];
+}
+
+function range(value: unknown, at: string): [[number, number], [number, number]] {
+  if (!Array.isArray(value) || value.length !== 2) throw wrong(at, "two [line, column] pairs", value);
+  return [pair(value[0], at), pair(value[1], at)];
 }
 
 function rect(value: unknown, at: string): Rect {
@@ -977,9 +985,36 @@ function running(value: unknown, at: string): Running {
   };
 }
 
+function amount(value: unknown, at: string): Amount {
+  const o = fields(value, at);
+  return { lines: num(o.lines, `${at}.lines`), chars: num(o.chars, `${at}.chars`), newline: bool(o.newline, `${at}.newline`) };
+}
+
+function pasteAsk(value: unknown, at: string): PasteAsk {
+  const o = fields(value, at);
+  return { pane: num(o.pane, `${at}.pane`), amount: amount(o.amount, `${at}.amount`) };
+}
+
+function clip(value: unknown, at: string): Clip {
+  const o = fields(value, at);
+  const verb = o.verb;
+  if (verb !== "copied" && verb !== "cut" && verb !== "pasted") throw wrong(`${at}.verb`, "copied, cut or pasted", verb);
+  return {
+    pane: orNull(num)(o.pane, `${at}.pane`),
+    verb,
+    amount: amount(o.amount, `${at}.amount`),
+    text: str(o.text, `${at}.text`),
+    at: num(o.at, `${at}.at`),
+  };
+}
+
 function confirm(value: unknown, at: string): Confirm {
   const o = fields(value, at);
-  return { running: list(running)(o.running, `${at}.running`), dismiss: orNull(num)(o.dismiss, `${at}.dismiss`) };
+  return {
+    running: list(running)(o.running, `${at}.running`),
+    dismiss: orNull(num)(o.dismiss, `${at}.dismiss`),
+    paste: orNull(pasteAsk)(o.paste, `${at}.paste`),
+  };
 }
 
 function markInput(value: unknown, at: string): MarkInput {
@@ -1103,6 +1138,7 @@ function model(value: unknown, at: string): Model {
     palette: orNull(palette)(o.palette, `${at}.palette`),
     inspector: orNull(inspectorState)(o.inspector, `${at}.inspector`),
     confirm: orNull(confirm)(o.confirm, `${at}.confirm`),
+    clip: orNull(clip)(o.clip, `${at}.clip`),
     keys: bool(o.keys, `${at}.keys`),
     visual: orNull(num)(o.visual, `${at}.visual`),
     ax_overlay: bool(o.ax_overlay, `${at}.ax_overlay`),
@@ -1137,6 +1173,7 @@ function terminal(value: unknown, at: string): Terminal {
     display_offset: num(o.display_offset, `${at}.display_offset`),
     history: num(o.history, `${at}.history`),
     selection: orNull(str)(o.selection, `${at}.selection`),
+    selection_range: orNull(range)(o.selection_range, `${at}.selection_range`),
     visual_cursor: orNull(pair)(o.visual_cursor, `${at}.visual_cursor`),
   };
 }

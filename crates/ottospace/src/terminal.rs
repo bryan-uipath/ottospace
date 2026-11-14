@@ -26,10 +26,11 @@ use gpui::{
     point, px, rgb, size,
 };
 use ottospace_core::terminal::{
-    CellPoint, Motion, Proc, Processes, Scroll, SelectKind, Wheel, Work, paste, running, saved_command, wheel_scrolls,
+    CellPoint, Motion, Press, Proc, Processes, Scroll, SelectKind, Wheel, Work, running, saved_command,
+    selection_holds, wheel_scrolls,
 };
 use ottospace_core::workbook::{self, History};
-use ottospace_core::{palette, settings, theme};
+use ottospace_core::{clip, palette, settings, theme};
 use ottospace_mac::process;
 use ottospace_mac::time::utc_offset;
 
@@ -154,6 +155,8 @@ pub struct Terminal {
     opened: Option<(History, i64)>,
     /// The user typed here: only then is what this run printed saved.
     touched: std::cell::Cell<bool>,
+    /// The selection's text as last made: output that changes it clears the selection.
+    kept: std::cell::RefCell<Option<String>>,
 }
 
 /// A command waiting for the shell's prompt, and when the terminal's output last came.
@@ -248,7 +251,7 @@ impl Terminal {
         let _ = shared.input.set(input.clone());
         event_loop.spawn();
         let (typed, offered) = (typed.into(), offered.into());
-        let touched = Default::default();
+        let (touched, kept) = (Default::default(), Default::default());
         Ok(Self {
             term,
             shared,
@@ -261,6 +264,7 @@ impl Terminal {
             offered,
             opened,
             touched,
+            kept,
         })
     }
 
@@ -394,33 +398,67 @@ impl Terminal {
         (term.grid().display_offset(), term.grid().history_size())
     }
 
-    /// Starts a selection at a visible cell, replacing any other. A click that never drags leaves
-    /// an empty selection, which selects nothing.
-    pub fn select_start(&self, at: CellPoint, kind: SelectKind) {
-        let mut term = self.term.lock();
-        let (point, side) = grid_point(&term, at);
-        let ty = match kind {
-            SelectKind::Simple => SelectionType::Simple,
-            SelectKind::Word => SelectionType::Semantic,
-            SelectKind::Line => SelectionType::Lines,
-        };
-        term.selection = Some(Selection::new(ty, point, side));
-        self.shared.dirty.store(true, Relaxed);
+    /// Starts a selection at a visible cell, replacing any other, or with `Press::Extend` moves
+    /// the far end of the one there. A click that never drags leaves an empty selection, which
+    /// selects nothing.
+    pub fn select_start(&self, at: CellPoint, press: Press) {
+        press_at(&mut self.term.lock(), at, press);
+        self.selection_changed();
     }
 
     /// Moves the selection's far end to a visible cell, as a drag does.
     pub fn select_to(&self, at: CellPoint) {
-        let mut term = self.term.lock();
-        let (point, side) = grid_point(&term, at);
-        if let Some(selection) = term.selection.as_mut() {
-            selection.update(point, side);
-            self.shared.dirty.store(true, Relaxed);
-        }
+        extend_to(&mut self.term.lock(), at);
+        self.selection_changed();
     }
 
-    /// The selected text, if anything is selected.
+    /// A drag held past the top or bottom edge: the view scrolls `lines`, and the selection
+    /// follows to the cell at `at`, now on another line of the history.
+    pub fn select_scrolling(&self, lines: i32, at: CellPoint) {
+        self.term.lock().scroll_display(GridScroll::Delta(lines));
+        self.shared.scrolls.fetch_add(1, Relaxed);
+        self.select_to(at);
+    }
+
+    pub fn clear_selection(&self) {
+        self.term.lock().selection = None;
+        self.selection_changed();
+    }
+
+    /// Something is selected, without building its text: for each frame and key.
+    pub fn has_selection(&self) -> bool {
+        self.term.lock().selection.as_ref().is_some_and(|selection| !selection.is_empty())
+    }
+
+    /// What ⌘C copies (`clip::copy_text`), if anything is selected.
     pub fn selected(&self) -> Option<String> {
-        self.term.lock().selection_to_string().filter(|s| !s.is_empty())
+        selected_text(&self.term.lock())
+    }
+
+    /// The selection's first and last cell as (line, column), line 0 the top of the screen and
+    /// negative in history.
+    pub fn selection_range(&self) -> Option<[(i32, usize); 2]> {
+        let term = self.term.lock();
+        let range = term.selection.as_ref()?.to_range(&term)?;
+        Some([(range.start.line.0, range.start.column.0), (range.end.line.0, range.end.column.0)])
+    }
+
+    /// Notes the selection's text: output written over it later clears it (`selection_holds`).
+    fn selection_changed(&self) {
+        *self.kept.borrow_mut() = self.selected();
+        self.shared.dirty.store(true, Relaxed);
+    }
+
+    /// After new output: a selection whose text changed under it goes. One that scrolled with
+    /// its text stays; one scrolled out of the history is already gone.
+    fn check_selection(&self) {
+        let Some(kept) = self.kept.borrow().clone() else { return };
+        let mut term = self.term.lock();
+        if !selection_holds(&kept, selected_text(&term).as_deref()) {
+            term.selection = None;
+            drop(term);
+            self.kept.take();
+        }
     }
 
     /// Turns visual mode (alacritty's vi mode) on, with its cursor at the terminal cursor, or off.
@@ -434,7 +472,8 @@ impl Terminal {
         if !on {
             term.scroll_display(GridScroll::Bottom);
         }
-        self.shared.dirty.store(true, Relaxed);
+        drop(term);
+        self.selection_changed();
     }
 
     /// Moves the visual-mode cursor, scrolling to keep it in view. A selection follows it.
@@ -458,7 +497,8 @@ impl Terminal {
         term.vi_motion(motion);
         let point = term.vi_mode_cursor.point;
         term.scroll_to_point(point);
-        self.shared.dirty.store(true, Relaxed);
+        drop(term);
+        self.selection_changed();
     }
 
     /// Starts a selection at the visual-mode cursor (whole lines with `lines`), or clears it.
@@ -471,7 +511,8 @@ impl Terminal {
             selection.include_all();
             term.selection = Some(selection);
         }
-        self.shared.dirty.store(true, Relaxed);
+        drop(term);
+        self.selection_changed();
     }
 
     /// The visual-mode cursor as (line, column), line 0 the top of the screen and negative in
@@ -485,7 +526,7 @@ impl Terminal {
     /// Pastes `text`, bracketed if the program asked for it.
     pub fn paste(&self, text: &str) {
         let bracketed = self.term.lock().mode().contains(TermMode::BRACKETED_PASTE);
-        self.write(paste(text, bracketed));
+        self.write(clip::paste_bytes(text, bracketed));
     }
 
     /// Resizes the grid to fill `area`, if that changes its size.
@@ -503,6 +544,9 @@ impl Terminal {
     pub fn take_dirty(&self) -> bool {
         let dirty = self.shared.dirty.swap(false, Relaxed);
         self.type_waiting(dirty);
+        if dirty {
+            self.check_selection();
+        }
         dirty
     }
 
@@ -612,9 +656,37 @@ impl Drop for Terminal {
 }
 
 /// A visible cell as a point in the grid, history included, and the side of the cell.
-fn grid_point(term: &Term<Listener>, at: CellPoint) -> (Point, Side) {
+fn grid_point<T>(term: &Term<T>, at: CellPoint) -> (Point, Side) {
     let line = Line(at.row as i32 - term.grid().display_offset() as i32);
     (Point::new(line, Column(at.col)), if at.right { Side::Right } else { Side::Left })
+}
+
+/// A press at a visible cell: a new selection of its kind, or the far end of the one there.
+fn press_at<T>(term: &mut Term<T>, at: CellPoint, press: Press) {
+    let kind = match press {
+        Press::Extend if term.selection.is_some() => return extend_to(term, at),
+        Press::Extend => SelectKind::Simple,
+        Press::Start(kind) => kind,
+    };
+    let (point, side) = grid_point(term, at);
+    let ty = match kind {
+        SelectKind::Simple => SelectionType::Simple,
+        SelectKind::Word => SelectionType::Semantic,
+        SelectKind::Line => SelectionType::Lines,
+    };
+    term.selection = Some(Selection::new(ty, point, side));
+}
+
+fn extend_to<T>(term: &mut Term<T>, at: CellPoint) {
+    let (point, side) = grid_point(term, at);
+    if let Some(selection) = term.selection.as_mut() {
+        selection.update(point, side);
+    }
+}
+
+/// The selection's text as ⌘C copies it. A wrapped line comes back as one.
+fn selected_text<T>(term: &Term<T>) -> Option<String> {
+    term.selection_to_string().map(|raw| clip::copy_text(&raw)).filter(|text| !text.is_empty())
 }
 
 /// The user's `$SHELL` if it reads `exec "$@"` as a POSIX shell does, else zsh: e.g. fish
@@ -695,4 +767,89 @@ pub fn paint(
             window.paint_quad(fill(Bounds { origin, size: cell }, color.opacity(if focused { 0.6 } else { 0.2 })));
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alacritty_terminal::event::VoidListener;
+    use alacritty_terminal::vte::ansi::StdSyncHandler;
+
+    /// A grid `cols` wide and `rows` tall that printed `text`.
+    fn term(cols: usize, rows: usize, text: &str) -> Term<VoidListener> {
+        let mut term = Term::new(Config::default(), &Grid { cols, rows }, VoidListener);
+        print(&mut term, text);
+        term
+    }
+
+    fn print(term: &mut Term<VoidListener>, text: &str) {
+        Processor::<StdSyncHandler>::new().advance(term, text.as_bytes());
+    }
+
+    fn at(row: usize, col: usize) -> CellPoint {
+        CellPoint { row, col, right: false }
+    }
+
+    /// The far half of a cell: a drag to it takes the cell.
+    fn past(row: usize, col: usize) -> CellPoint {
+        CellPoint { row, col, right: true }
+    }
+
+    /// A press at `from` and a drag to `to`: what ⌘C would copy.
+    fn drag(term: &mut Term<VoidListener>, from: CellPoint, to: CellPoint) -> Option<String> {
+        press_at(term, from, Press::Start(SelectKind::Simple));
+        extend_to(term, to);
+        selected_text(term)
+    }
+
+    #[test]
+    fn a_wrapped_line_copies_as_one_and_real_newlines_stay() {
+        // 10 columns: the first line wraps onto the second row.
+        let mut wrapped = term(10, 4, "abcdefghijklmno\r\nnext\r\n");
+        assert_eq!(drag(&mut wrapped, at(0, 0), past(1, 4)).as_deref(), Some("abcdefghijklmno"));
+        assert_eq!(drag(&mut wrapped, at(0, 0), past(2, 9)).as_deref(), Some("abcdefghijklmno\nnext"));
+        // Each line loses its trailing spaces.
+        let mut spaced = term(20, 4, "one   \r\ntwo\r\n");
+        assert_eq!(drag(&mut spaced, at(0, 0), past(1, 19)).as_deref(), Some("one\ntwo"));
+        assert_eq!(drag(&mut spaced, at(0, 3), past(0, 10)), None, "only spaces: nothing to copy");
+    }
+
+    #[test]
+    fn clicks_select_a_word_or_a_line_and_shift_extends() {
+        let mut t = term(30, 3, "alpha beta gamma\r\n");
+        press_at(&mut t, at(0, 7), Press::Start(SelectKind::Word));
+        assert_eq!(selected_text(&t).as_deref(), Some("beta"));
+        press_at(&mut t, at(0, 7), Press::Start(SelectKind::Line));
+        assert_eq!(selected_text(&t).as_deref(), Some("alpha beta gamma"), "no newline at its end");
+        // A click, then ⇧-clicks further on: from the click to each.
+        press_at(&mut t, at(0, 0), Press::Start(SelectKind::Simple));
+        press_at(&mut t, past(0, 4), Press::Extend);
+        assert_eq!(selected_text(&t).as_deref(), Some("alpha"));
+        press_at(&mut t, past(0, 9), Press::Extend);
+        assert_eq!(selected_text(&t).as_deref(), Some("alpha beta"));
+        // ⇧-click with none starts one, which selects nothing yet.
+        t.selection = None;
+        press_at(&mut t, at(0, 3), Press::Extend);
+        assert_eq!((t.selection.is_some(), selected_text(&t)), (true, None));
+    }
+
+    #[test]
+    fn a_selection_reaches_into_the_history_and_follows_its_text() {
+        // 3 rows: l1 and l2 scrolled into the history.
+        let mut t = term(10, 3, "l1\r\nl2\r\nl3\r\nl4\r\nl5");
+        t.scroll_display(GridScroll::Delta(2));
+        press_at(&mut t, at(0, 0), Press::Start(SelectKind::Simple));
+        t.scroll_display(GridScroll::Bottom);
+        extend_to(&mut t, past(2, 1));
+        assert_eq!(selected_text(&t).as_deref(), Some("l1\nl2\nl3\nl4\nl5"));
+        // New output scrolls the screen: the selection goes with its text.
+        press_at(&mut t, at(2, 0), Press::Start(SelectKind::Word));
+        print(&mut t, "\r\nl6\r\nl7");
+        assert_eq!(selected_text(&t).as_deref(), Some("l5"));
+        // Its line erased: it goes.
+        let mut t = term(10, 3, "keep\r\n");
+        press_at(&mut t, at(0, 0), Press::Start(SelectKind::Word));
+        print(&mut t, "\x1b[1;1H\x1b[2K");
+        assert_eq!(selected_text(&t), None);
+    }
 }

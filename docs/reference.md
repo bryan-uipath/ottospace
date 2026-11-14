@@ -113,9 +113,9 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | Wheel / trackpad | Scroll a terminal back through its history |
 | ⇧PageUp / ⇧PageDown | Scroll a terminal a page |
 | ⇧Home / ⇧End | Top / bottom of a terminal's history |
-| Drag / double-click / triple-click | Select text / a word / a line in a terminal |
-| ⌘C | Copy the terminal's selection (nothing selected: does nothing). In a [text field](#keys): its selection |
-| ⌘V | Paste into the terminal, or into the open text field |
+| Drag / double-click / triple-click | Select text / a word / a line in a terminal. ⇧-click moves the selection's end to the click. A drag held past the top or bottom scrolls the history. The selection stays through new output until a click in the pane, Esc, or output written over it |
+| ⌘C | Copy the terminal's selection: a wrapped line as one line, trailing spaces trimmed, no newline at the end. The pane pulses once and its header and the status bar say "Copied 3 lines" for 2 seconds. Nothing selected: ⌘C does nothing (Edit ▸ Copy is off). In a [text field](#keys): its selection. ⌘X in a terminal does nothing |
+| ⌘V | Paste into the terminal, or into the open text field. Into a terminal: line breaks become ↵, other control characters are dropped, bracketed when the program asks for it. Text with a line break asks first in the pane ("Paste 4 lines?", ↵ pastes, Esc cancels; `paste_confirm`). The pane pulses and says "Pasted 4 lines". Only your own ⌘V pastes: a socket client's is refused |
 | ⌘N | New task, in the drawer. Type what needs doing, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `^reference`, `p1` to `p9`; a dropdown finishes the one at the cursor. ↵ adds the task and starts its agent; ⇧↵ adds it for later; Esc closes. [Its keys](#keys) |
 | ⌘L | The keyboard into the drawer's conversation, or back to the workspace |
 | ⌘⇧L | Close the drawer to the right rail, or open it again. The agent goes on |
@@ -701,7 +701,8 @@ A terminal pane runs your shell on a PTY. The pane closes when the shell exits. 
 lines of history. Typing returns to the bottom. In programs that use the mouse or the alternate
 screen (vim, less, htop) the wheel does nothing, and ⇧PageUp and friends go to the program.
 A click on a terminal focuses it and clears its selection; a drag there selects, even in an
-unfocused pane. Paste is bracketed when the program asks for it.
+unfocused pane. ottospace sends programs no mouse reports: in vim, tmux or htop a drag selects as
+it does at a prompt. Paste is bracketed when the program asks for it.
 
 ## App panes
 
@@ -797,7 +798,7 @@ first. Again while that tab is open brings it forward; quitting the editor close
 you open it: a socket client's ⌘, does nothing. Open at quit, it comes back at the next start,
 the editor running again ([Restoring the layout](#restoring-the-layout)).
 
-A change is read when the file is saved: what is wrong in it is said in the status bar (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify` and `calendar_notify_for` apply at once; any other key changed says "restart to apply" with its name (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
+A change is read when the file is saved: what is wrong in it is said in the status bar (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify`, `calendar_notify_for` and `paste_confirm` apply at once; any other key changed says "restart to apply" with its name (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
 
 
 ```json
@@ -819,6 +820,7 @@ A change is read when the file is saved: what is wrong in it is said in the stat
   "apps": ["Microsoft Outlook", "Slack"],
   "apps_hidden": ["Music"],
   "suggest_dock_apps": true,
+  "paste_confirm": "multiline",
   "wheel_to_apps": true,
   "windows": [{ "app": "us.zoom.xos", "title": "Zoom Meeting", "do": "ignore" }]
 }
@@ -855,6 +857,7 @@ A change is read when the file is saved: what is wrong in it is said in the stat
 | `calendar_notify_for` | Which meetings alert: `all`, or only those with a Zoom, Meet or Teams `links` | `all` |
 | `calendar_email` | Your address among a meeting's attendees in the feed: a meeting you declined is left out. Kept on this machine, never shown | none: nothing is left out |
 | `suggest_dock_apps` | List the Dock's apps that are not running under "Not running". `false`: only pinned apps are listed there, and the Dock is not read | `true` |
+| `paste_confirm` | When ⌘V into a terminal asks first: `multiline` (text with a line break, even a last one, bracketed paste or not: a shell may run each line) or `never` | `multiline` |
 
 A mistake in the file (a key that does not exist, a wrong value, a font that is not installed) is
 shown in the status bar. That key takes its default and the others still apply. If the file is

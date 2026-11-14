@@ -126,7 +126,7 @@ impl Workspace {
         root.on_action(cx.listener(|this, _: &CommandPalette, window, cx| this.toggle_palette(window, cx)))
             .on_action(cx.listener(|this, _: &CopyState, window, cx| {
                 let state = this.snapshot(window, cx);
-                this.copy_text(state, cx);
+                this.copy_text(state, None, ottospace_core::clip::Verb::Copied, cx);
             }))
             .on_action(cx.listener(|this, _: &OpenSettings, _, cx| {
                 this.error = open_in_user_folder(Some("settings.json")).err();
