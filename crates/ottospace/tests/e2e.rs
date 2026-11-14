@@ -6356,10 +6356,68 @@ fn a_feed_link_goes_to_curl_on_its_standard_input_not_its_arguments() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn the_calendar_request_gives_titles_and_busy_time_but_no_link_or_address() {
+    let me = "me-s3cret@example.com";
+    let zoom = "LOCATION:Room 4 https://example.zoom.us/j/1?pwd=s3cret\r\nDESCRIPTION:Passcode s3cret\r\n";
+    let declined = format!("ATTENDEE;PARTSTAT=DECLINED;CN=Me:mailto:{me}\r\n");
+    let home = calendar_folder(
+        "calendar-request",
+        &feed(&[
+            ("a", "Design review", 3_600, 5_400, zoom),
+            ("b", "Planning", 5_400, 7_200, "STATUS:TENTATIVE\r\nATTENDEE;CN=Ana:mailto:ana@example.com\r\n"),
+            ("c", "Skipped", 3_600, 5_400, &declined),
+            ("d", "Offsite prep", 3 * 86_400, 3 * 86_400 + 1_800, ""),
+        ]),
+        None,
+    );
+    let feed_path = home.join("today.ics");
+    let settings = json!({ "calendar_ics": feed_path, "calendar_email": me, "repos": [] });
+    std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
+    let otto = Otto::launch_with("calendar-request", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    calendar_read(&otto);
+    let week = otto.call(json!({"cmd": "calendar", "days": 7}));
+    assert_eq!(
+        (&week["ok"], &week["configured"], &week["stale"]),
+        (&json!(true), &json!(true), &json!(false)),
+        "{week}"
+    );
+    assert!(week["updated"].as_str().is_some_and(|u| u.len() == 25), "RFC 3339 with an offset: {week}");
+    assert!(week.get("state").is_none(), "its own payload, not the state");
+    let titles: Vec<&str> = week["meetings"].as_array().unwrap().iter().filter_map(|m| m["title"].as_str()).collect();
+    assert_eq!(titles, ["Design review", "Planning", "Offsite prep"], "the declined one is left out: {week}");
+    let review = &week["meetings"][0];
+    assert_eq!((&review["location"], &review["has_call_link"]), (&json!("Room 4"), &json!(true)), "{review}");
+    assert_eq!(week["meetings"][1]["status"], "tentative");
+    // Design review and Planning meet: one busy span.
+    assert_eq!(week["busy"].as_array().map(Vec::len), Some(2), "{week}");
+    let text = week.to_string();
+    for never in ["s3cret", "zoom.us", "Passcode", "ana@example.com", "Ana", "today.ics", "Skipped"] {
+        assert!(!text.contains(never), "{never} in the reply: {text}");
+    }
+    // At most 7 days, of the days held; a day that is no date is refused.
+    let refused = otto.raw(&json!({"cmd": "calendar", "days": 8}).to_string());
+    assert_eq!((&refused["ok"], &refused["error"]), (&json!(false), &json!("days is 1 to 7")));
+    assert_eq!(otto.raw(r#"{"cmd":"calendar","day":"someday"}"#)["ok"], false);
+    // Tomorrow and 6 days on: the last day held.
+    let later = otto.call(json!({"cmd": "calendar", "day": "tomorrow", "days": 7}));
+    assert_eq!((later["from"] != week["from"], later["configured"].as_bool()), (true, Some(true)), "{later}");
+    // Every other reply carries the state, and the state carries no title.
+    let state = otto.call(json!({"cmd": "state"})).to_string();
+    for never in ["Design review", "Planning", "Offsite prep", "Room 4", "s3cret"] {
+        assert!(!state.contains(never), "{never} in the state");
+    }
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn no_feed_no_timeline() {
     let otto = Otto::launch("calendar-off");
     let calendar = otto.call(json!({"cmd": "state"}))["calendar"].clone();
     assert_eq!((&calendar["on"], &calendar["bars"], &calendar["chip"]), (&json!(false), &json!(0), &json!(false)));
+    let reply = otto.call(json!({"cmd": "calendar", "day": "tomorrow"}));
+    assert_eq!(reply, json!({"ok": true, "configured": false}), "nothing but that");
     // `calendar_call` answers only in a test run; an agent cannot learn it from the guide.
     assert!(!include_str!("../skill/guide.md").contains("calendar_call"));
 }

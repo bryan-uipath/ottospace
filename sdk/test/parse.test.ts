@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { snapshot } from "../src/parse.ts";
+import { calendarReply, snapshot } from "../src/parse.ts";
 
 /** A real `state` reply of an empty app, with `ax_overlay` put in. */
 function replyWith(overlay: unknown): Record<string, unknown> {
@@ -196,4 +196,14 @@ test("the field of each owner parses: the Apps section's filter too", () => {
     assert.equal(snapshot({ ...replyWith(null), field: field(owner) }).field?.of, owner);
   }
   assert.throws(() => snapshot({ ...replyWith(null), field: field("elsewhere") }), /field\.of should be/);
+});
+
+test("a calendar reply parses whole, and with no feed says only that", () => {
+  // `a_reply_serializes_as_the_sdk_fixture_says` (ottospace-core) holds this file to the Rust types.
+  const fixture: Record<string, unknown> = JSON.parse(readFileSync(join(import.meta.dirname, "calendar.json"), "utf8"));
+  const raw = { ok: true, ...fixture };
+  assert.deepEqual(calendarReply(raw), raw);
+  assert.deepEqual(calendarReply({ ok: true, configured: false }), { ok: true, configured: false });
+  const meetings = [{ start: "a", end: "b", all_day: false, title: "t", location: null, has_call_link: false, status: "maybe" }];
+  assert.throws(() => calendarReply({ ...raw, meetings }), /meetings\[0\]\.status should be tentative/);
 });

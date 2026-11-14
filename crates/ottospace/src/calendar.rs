@@ -175,22 +175,42 @@ fn curl(link: &str) -> Result<String, Option<&'static str>> {
     }
 }
 
-/// Today's and tomorrow's events of a feed's text, in the user's zone; and local midnight of
-/// today, tomorrow and the day after (ms).
+/// The events of today and the next 7 days (`reply::HELD_DAYS`) of a feed's text, in the user's
+/// zone; and local midnight of today, tomorrow and the day after (ms).
 fn evaluate(feed: &ics::Feed, now: u64) -> (Vec<Event>, [u64; 3]) {
     let now = (now / 1_000) as i64;
-    let (from, to) = (now - 3 * 86_400, now + 4 * 86_400);
-    let local = Table(meeting::local_table(from, to));
+    let local = local_zone(now);
+    let (from, to) = (now - 3 * 86_400, now + 11 * 86_400);
     let days = ics::days(now, &local);
     let named = ics::named_zones(feed)
         .into_iter()
         .filter_map(|name| Some((name.clone(), Table(meeting::zone_table(&name, from, to)?))))
         .collect();
-    let occurrences = ics::expand(feed, days[0], days[2], &Zones { local, named });
+    let (start, end) = calendar::reply::held(now, &local);
+    let occurrences = ics::expand(feed, start, end, &Zones { local, named });
     (calendar::events(&occurrences), days.map(|day| (day.max(0) as u64) * 1_000))
 }
 
+/// The user's zone's offsets from 3 days before `now` (seconds) to 11 after: the days held and more.
+fn local_zone(now: i64) -> Table {
+    Table(meeting::local_table(now - 3 * 86_400, now + 11 * 86_400))
+}
+
 impl Workspace {
+    /// The `calendar` request: what the model holds, never a fetch. Titles and places, cleaned;
+    /// no link, description, attendee, feed address or the user's own address.
+    pub(crate) fn calendar_reply(&self, day: Option<&str>, days: Option<u32>) -> String {
+        let now = now_ms();
+        match calendar::reply::reply(&self.model.calendar, day, days, now, &local_zone((now / 1_000) as i64)) {
+            Ok(serde_json::Value::Object(mut reply)) => {
+                reply.insert("ok".into(), true.into());
+                serde_json::Value::Object(reply).to_string()
+            }
+            Ok(_) => crate::control::error("the calendar could not be written"),
+            Err(why) => crate::control::error(why),
+        }
+    }
+
     /// From the main loop: the feed's reads, the call while a meeting is near, and a redraw while the
     /// hairline pulses (10 a second) or slides (every 20 seconds).
     pub(crate) fn tick_timeline(&mut self, window: &Window, cx: &mut Context<Self>) {
@@ -419,7 +439,8 @@ impl Workspace {
     }
 
     /// What the state says of the timeline: counts, times and stages, never a title or a place,
-    /// and where the banner's buttons are. Other people's text stays out of reach of agents.
+    /// and where the banner's buttons are. Every reply carries the state: titles are only in the
+    /// `calendar` request's own reply (`calendar_reply`).
     pub(crate) fn calendar_snapshot(&self) -> serde_json::Value {
         let calendar = &self.model.calendar;
         let now = now_ms();

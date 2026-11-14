@@ -191,6 +191,7 @@ impl Gen<'_> {
             title: self.text(),
             location: self.text(),
             link: link.map(String::from),
+            tentative: self.rng.coin(),
         }
     }
 

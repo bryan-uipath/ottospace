@@ -16,6 +16,7 @@ fn event(id: u64, start: u64, minutes: u64) -> Event {
         title: format!("Meeting {id}"),
         location: String::new(),
         link: Some("https://example.zoom.us/j/123".into()),
+        tentative: false,
     }
 }
 
@@ -450,6 +451,7 @@ fn events_are_cleaned_capped_and_linked() {
         location: location.into(),
         description: description.into(),
         url: url.into(),
+        tentative: false,
     };
     let got = events(&[
         occurrence(

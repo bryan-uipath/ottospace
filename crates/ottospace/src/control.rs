@@ -402,6 +402,16 @@ pub enum Request {
     CalendarCall {
         in_call: Option<bool>,
     },
+    /// The user's meetings of `day` (`today`, the default, `tomorrow` or `YYYY-MM-DD`) and the
+    /// `days` (1 to 7) from it, busy and free time: `{"ok":true,"configured":true,"meetings":[..],..}`,
+    /// not the state. Only what the app holds (today and the next 7 days), never a fetch. Titles
+    /// and places are other people's text; links, descriptions and attendees are never in it.
+    Calendar {
+        #[serde(default)]
+        day: Option<String>,
+        #[serde(default)]
+        days: Option<u32>,
+    },
     /// The marks, in the user's order: `{"ok":true,"marks":[{"name":"notes","key":"n",
     /// "kind":"terminal","open":true,"available":true,..}]}`, not the state.
     Marks,
