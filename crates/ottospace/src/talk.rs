@@ -400,7 +400,8 @@ pub(crate) fn badge(mono: &str, colour: u32, state: Option<u32>, size: f32) -> D
         .child(mono.to_string());
     // The dot is the square's sibling: a border is painted over its own children.
     div().relative().flex_none().size(px(size)).child(square).children(state.map(|state| {
-        let at = px(-dot / 2.);
+        // Where it was inside the square: insets start inside a border, 2 points of it.
+        let at = px(2. - dot / 2.);
         div()
             .absolute()
             .top(at)
