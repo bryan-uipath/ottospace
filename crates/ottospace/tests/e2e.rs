@@ -1384,6 +1384,11 @@ fn the_users_own_keys_are_counted_and_kept_in_keys_json() {
     for _ in 0..6 {
         otto.call(json!({"cmd": "key", "keys": "cmd-/"}));
     }
+    // Nor a key the user holds down: its repeats are no presses.
+    for _ in 0..5 {
+        otto.user_holds("cmd-/");
+        std::thread::sleep(Duration::from_millis(1100));
+    }
     assert_eq!(known(&otto), json!([]));
     // The user's: five presses of ⌘/ and it is known; ⌘T once is not. A press within a second
     // of the last is the same use (a held key repeats), so each waits that long.

@@ -59,7 +59,8 @@ impl Workspace {
     /// A key ran `binding`: one use, if the key was the user's. Not through `dispatch`: a count
     /// is no input, and stays out of the trace.
     pub(crate) fn key_used(&mut self, binding: Binding) {
-        if self.input != Origin::User {
+        // A held ⌘ shortcut reaches GPUI as presses: only its first counts.
+        if self.input != Origin::User || ottospace_mac::window::key_repeating() {
             return;
         }
         self.model.update(Action::KeyUsed { binding, at: now_ms() }.sent_by(Origin::User));

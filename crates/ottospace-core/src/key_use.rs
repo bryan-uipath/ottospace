@@ -267,10 +267,12 @@ impl KeyUse {
         if text.len() > MAX_FILE_BYTES {
             return Err(Unread::Bad(format!("larger than {MAX_FILE_BYTES} bytes")));
         }
-        let file: File = serde_json::from_str(text).map_err(|err| Unread::Bad(err.to_string()))?;
-        if file.version > VERSION {
-            return Err(Unread::Newer(file.version));
+        let file: serde_json::Value = serde_json::from_str(text).map_err(|err| Unread::Bad(err.to_string()))?;
+        // The version first: a newer build's file may have another shape, and must not be overwritten.
+        if let Some(version) = file["version"].as_u64().filter(|v| *v > VERSION) {
+            return Err(Unread::Newer(version));
         }
+        let file: File = serde_json::from_value(file).map_err(|err| Unread::Bad(err.to_string()))?;
         let record = |(id, value): (String, serde_json::Value)| {
             let binding: Binding = serde_json::from_value(serde_json::Value::String(id)).ok()?;
             let used: Use = serde_json::from_value(value).ok()?;
@@ -386,6 +388,7 @@ mod tests {
             assert_eq!(got, *read, "{text}");
         }
         assert_eq!(KeyUse::parse(r#"{"version":2,"keys":{}}"#), Err(Unread::Newer(2)));
+        assert_eq!(KeyUse::parse(r#"{"version":2,"keys":[]}"#), Err(Unread::Newer(2)));
         assert!(matches!(KeyUse::parse(&" ".repeat(MAX_FILE_BYTES + 1)), Err(Unread::Bad(_))));
     }
 
