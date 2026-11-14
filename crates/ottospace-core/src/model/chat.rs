@@ -20,7 +20,7 @@ pub const RUNNERS_ALONE: &str = "only ottospace's own runner reports an agent's 
 pub const MAX_DRAFT: usize = 100_000;
 
 /// The most conversations whose transcript is kept: those of the rail, and as many ended.
-const KEPT: usize = crate::talk::RAIL * 2;
+const KEPT: usize = crate::talk::KEPT * 2;
 
 /// One conversation drawn natively.
 #[derive(Clone, Debug, PartialEq)]
@@ -683,13 +683,13 @@ mod tests {
         assert!(!m.talk_typing(), "the card has the keys");
         assert_eq!(m.tasks.get(one.task().unwrap_or_default()).map(|t| t.state), Some(State::NeedsYou));
         // The other conversation, shown mid-stream: its composer is free, and answers are its own.
-        m.update(Action::TalkPick { id: two.clone() });
+        m.update(Action::TaskTalk { id: m.tasks.list[1].id });
         m.update(Action::TalkKeys { on: true });
         assert!(m.talk_typing());
         assert_eq!(m.update(Action::TalkAnswer { allow: false, ticket: 1 }), [], "no card here");
         typed(&mut m, "draft two");
         events(&mut m, &one, vec![Event::TextDelta { text: Text::new("more") }]);
-        m.update(Action::TalkPick { id: one.clone() });
+        m.update(Action::TaskTalk { id: m.tasks.list[0].id });
         m.update(Action::TalkKeys { on: true });
         assert_eq!(m.chat(&two).map(|chat| chat.draft.text()), Some("draft two"), "its draft is kept");
         assert_eq!(m.update(Action::TalkAnswer { allow: true, ticket: 1 }), [], "cut: Show all first");
@@ -775,8 +775,8 @@ mod tests {
         let before = entries(&m);
         for _ in 0..3 {
             assert_eq!(m.update(Action::TaskTalk { id }), []);
-            assert_eq!(m.update(Action::TalkPick { id: second(&m) }), []);
-            assert_eq!(m.update(Action::TalkPick { id: one.clone() }), []);
+            assert_eq!(m.update(Action::TaskTalk { id: m.tasks.list[1].id }), []);
+            assert_eq!(m.update(Action::TaskTalk { id: m.tasks.list[0].id }), []);
         }
         assert_eq!((entries(&m), m.agent_runs(&one), m.talk_resumes()), (before, false, Some(false)));
         // Never written: a new session, its prompt once.

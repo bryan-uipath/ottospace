@@ -57,7 +57,6 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::SwapUp => Box::new(SwapUp),
         Command::SwapDown => Box::new(SwapDown),
         Command::NewTab => Box::new(NewTab),
-        Command::RemoveTabFromTask => Box::new(RemoveTabFromTask),
         Command::MoveTabToTask => Box::new(MoveTabToTask),
         Command::NextTab => Box::new(NextTab),
         Command::NextSpace => Box::new(NextSpace),

@@ -4,7 +4,7 @@
 
 use serde::Serialize;
 
-use crate::tasks::{Group, TaskId};
+use crate::tasks::TaskId;
 
 /// The drawer's width in points when nobody has dragged it, and the least and most it takes.
 pub const WIDTH: f32 = 480.;
@@ -35,17 +35,16 @@ impl Subject {
 pub struct Talk {
     /// Whose it is.
     pub task: Subject,
-    /// False: closed to the right rail. The agent goes on; the rail's button opens it again.
+    /// False: closed. The agent goes on; ⌘⇧L opens it again.
     pub open: bool,
     /// The keyboard is in it: keys go to the agent, as in an app pane they go to the app.
     pub keys: bool,
 }
 
-/// The most conversations the right rail shows. Past it the oldest idle ones drop off; they
-/// stay in the Tasks list.
-pub const RAIL: usize = 8;
+/// How many sessions' reads are kept, the last first.
+pub const KEPT: usize = 8;
 
-/// A conversation's badge on the right rail: the first letters of the title's first two words,
+/// A task's badge: the first letters of the title's first two words,
 /// or the first two letters of a one-word title, in capitals. Whole graphemes: `éte` → `ÉT`.
 pub fn monogram(title: &str) -> String {
     use unicode_segmentation::UnicodeSegmentation;
@@ -58,7 +57,7 @@ pub fn monogram(title: &str) -> String {
     letters.concat().to_uppercase()
 }
 
-/// The monograms of the rail's cells, in order: each `monogram`, unless an earlier cell has it;
+/// The monograms of the tasks, in order: each `monogram`, unless an earlier cell has it;
 /// then the first letter and the first letter (not a space) where this title differs from the
 /// earlier one's, else the first letter and the cell's place.
 pub fn monograms(titles: &[&str]) -> Vec<String> {
@@ -83,23 +82,6 @@ pub fn monograms(titles: &[&str]) -> Vec<String> {
         out.push(mono);
     }
     out
-}
-
-/// A conversation's cell on the right rail.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct Cell {
-    pub task: Subject,
-    /// Its badge: two letters, told apart from the other cells' (`monograms`).
-    pub mono: String,
-    /// The state its ring is coloured by. `None`: a task not listed (snoozed, dismissed), or a
-    /// session's that is idle.
-    pub group: Option<Group>,
-    /// Its agent is at work: the badge's dot blinks.
-    pub working: bool,
-    /// The drawer shows it.
-    pub shown: bool,
-    /// What hovering it says: the title, what it does now, and where, who and how old.
-    pub tip: String,
 }
 
 /// A width asked for (a drag of the drawer's edge), as one it may have.

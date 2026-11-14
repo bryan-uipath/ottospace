@@ -658,7 +658,7 @@ actions!(ottospace, [CapturePane]);
 // The right drawer: the keyboard in or out, closed to the rail or open, the task's workspace.
 actions!(ottospace, [TalkFocus, TalkToggle, TalkGo, StopAgent]);
 // A tab of no task, and the tab on show taken out of its task or moved to another.
-actions!(ottospace, [RemoveTabFromTask, MoveTabToTask]);
+actions!(ottospace, [MoveTabToTask]);
 // App menu.
 actions!(ottospace, [Quit, Hide, About]);
 
@@ -2855,7 +2855,7 @@ impl Workspace {
             // The top row's spaces, hidden ones too: whose (`of`), `hidden`, `selected`, and
             // `tabs` as places; and each live task's badge letters.
             "spaces": self.model.space_rows(),
-            "badges": self.model.badges(&[]).into_iter().filter_map(|(subject, mono)| Some((subject.task()?.to_string(), serde_json::Value::from(mono)))).collect::<serde_json::Map<String, serde_json::Value>>(),
+            "badges": self.model.badges().into_iter().filter_map(|(subject, mono)| Some((subject.task()?.to_string(), serde_json::Value::from(mono)))).collect::<serde_json::Map<String, serde_json::Value>>(),
             // The meeting timeline: counts, times and stages only, never a title or a place.
             "calendar": self.calendar_snapshot(),
             // Frames drawn (`number`), actions dispatched (`seq`) and how many of them the last
@@ -3921,7 +3921,7 @@ impl Workspace {
                         .when(active, |d| {
                             // Amber on Tasks while a task needs the user, as its dot is.
                             let tasks = section == Section::Tasks && needs_you;
-                            raised_cell(d, if tasks { theme::SNEAK } else { theme::PRIMARY }, false)
+                            raised_cell(d, if tasks { theme::SNEAK } else { theme::PRIMARY })
                         })
                         .when(self.model.rail_focus == Some(RailFocus::Left(section)), |d| focus_ring(d.relative()))
                         .child(svg().path(*icon).size(px(20.)).text_color(rgb(if active {
@@ -4476,17 +4476,7 @@ impl Workspace {
                             .gap_2()
                             .when(row.current, |d| d.font_weight(FontWeight::SEMIBOLD))
                             // The tags are on the line below.
-                            .children(task_title_cells(task))
-                            // Under Needs you with its tabs open: said here, as it is not under Open.
-                            .children((matches!(row.group, Group::NeedsYou | Group::Done) && row.tabs > 0).then(
-                                || {
-                                    let mark = div().flex_none().px_1().rounded_sm().bg(rgb(theme::SELECTED));
-                                    mark.text_xs()
-                                        .font_weight(FontWeight::NORMAL)
-                                        .text_color(rgb(theme::MUTED))
-                                        .child("open")
-                                },
-                            )),
+                            .children(task_title_cells(task)),
                     )
                     // What its session does now, while it works, else its tags and age; its model.
                     .child(
@@ -4518,17 +4508,39 @@ impl Workspace {
             let place = if checkout.default { theme::PRIMARY } else { theme::MUTED };
             let icon = svg().path("icons/repos.svg").size(px(12.)).text_color(rgb(theme::MUTED));
             let label = div().truncate().text_xs().line_height(px(15.)).text_color(rgb(place));
+            // The task working there: its badge; a click selects it, and a word opens a terminal anyway.
+            let task = self.model.repo_task(&checkout.path);
+            let terminal = task.map(|_| {
+                let path = checkout.path.clone();
+                let click = move |this: &mut Self, window: &Window, cx: &mut Context<Self>| {
+                    this.dispatch(Action::OpenRepo { path: path.clone(), axis: Axis::Right }, this.input, window, cx);
+                };
+                let tip = ("Terminal", "A terminal here, in Workspace");
+                let selected = self.model.list == Some(index);
+                words::words("repo-row", selected).child(self.word(
+                    format!("repo-terminal:{}", checkout.path),
+                    tip,
+                    click,
+                    cx,
+                ))
+            });
             list_row(("repo", index), self.model.list == Some(index))
+                .group("repo-row")
                 // Beside the lines, not in a flex row with them: text in a flex row's cell is
                 // first measured with no width, and is then never cut.
                 .child(icon.absolute().left(px(8.)).top(px(5.)))
+                .children(
+                    task.and_then(|id| self.task_badge(id, 16.))
+                        .map(|badge| badge.absolute().right(px(8.)).top(px(9.))),
+                )
                 .child(div().truncate().child(checkout.branch))
                 .child(label.child(checkout.label))
+                .children(terminal)
                 .child(mark(&self.marks, Mark::Checkout(index)))
                 .child(self.controls.mark(format!("repo:{}", checkout.path)))
                 .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                     let axis = if e.modifiers().shift { Axis::Down } else { Axis::Right };
-                    this.dispatch(Action::OpenRepo { path: checkout.path.clone(), axis }, this.input, window, cx);
+                    this.dispatch(Action::RepoClick { path: checkout.path.clone(), axis }, this.input, window, cx);
                 }))
         };
         // The repository's name as a heading, then its checkouts: its own directory first.
@@ -4679,12 +4691,6 @@ impl Workspace {
                     .children(hint)
                     .children(word)
                     .children(strip)
-                    .children(
-                        self.model
-                            .tab_of(id)
-                            .and_then(|tab| self.model.tabs.iter().find(|t| t.id == tab)?.space.task())
-                            .and_then(|task| self.task_badge(task, 16.)),
-                    )
                     .child(
                         div()
                             .id(("close", id))
@@ -5352,18 +5358,16 @@ fn title_shadow() -> Div {
     }])
 }
 
-/// A rail's open cell, raised: the panel's background, a soft shadow below it, and an accent bar
-/// at the window's edge (`right`: the right rail's). No line or shadow above: every cell reads
-/// as the first one does, under one border.
-pub(crate) fn raised_cell(cell: Stateful<Div>, accent: u32, right: bool) -> Stateful<Div> {
+/// The rail's open cell, raised: the panel's background, a soft shadow below it, and an accent bar
+/// at the window's edge. No line or shadow above: every cell reads as the first one does, under one border.
+pub(crate) fn raised_cell(cell: Stateful<Div>, accent: u32) -> Stateful<Div> {
     let shadow = BoxShadow {
         color: black().opacity(0.85),
         offset: point(px(0.), px(7.)),
         blur_radius: px(9.),
         spread_radius: px(-6.),
     };
-    let bar = div().absolute().top_0().w(px(2.)).h_full().bg(rgb(accent));
-    let bar = if right { bar.right_0() } else { bar.left_0() };
+    let bar = div().absolute().top_0().left_0().w(px(2.)).h_full().bg(rgb(accent));
     cell.relative().bg(rgb(theme::RAISED)).shadow(vec![shadow]).child(bar)
 }
 
@@ -5538,7 +5542,7 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
         // Every task's letters, worked out once a frame for each badge drawn (`task_badge`).
-        *self.badges.borrow_mut() = self.model.badges(&[]);
+        *self.badges.borrow_mut() = self.model.badges();
         // This frame draws every action so far: the replies held for it can go (`settle`).
         self.drawn_seq = self.seq;
         self.frame_start.set(Some(Instant::now()));
@@ -5578,7 +5582,7 @@ impl Render for Workspace {
         // The inspector takes the drawer's place while it is open; the drawer keeps its state.
         let right = self.render_inspector(drawer, cx);
         let right = right.or_else(|| self.render_draft(cx)).or_else(|| self.render_drawer(drawer, cx));
-        let right_width = talk::RAIL + if right.is_some() { drawer } else { 0. };
+        let right_width = if right.is_some() { drawer } else { 0. };
         // The top row's room for its spaces: the centre, less the lights, the + and the buttons.
         let centre = f32::from(window.viewport_size().width) - left - right_width;
         let room = centre - (TRAFFIC_LIGHTS - left).max(0.) - 140.;
@@ -5733,9 +5737,6 @@ impl Render for Workspace {
                 }
             }))
             .on_action(cx.listener(|this, _: &NewTab, window, cx| this.top_button(Axis::Right, true, window, cx)))
-            .on_action(cx.listener(|this, _: &RemoveTabFromTask, window, cx| {
-                this.dispatch(Action::TabPlace { tab: None, at: TabAt::End(Owner::Workspace) }, this.input, window, cx);
-            }))
             .on_action(cx.listener(|this, _: &MoveTabToTask, window, cx| {
                 this.dispatch(Action::PaletteTasks, this.input, window, cx);
             }))
@@ -5855,7 +5856,6 @@ impl Render for Workspace {
                     // Right: the drawer (the draft being collected, a conversation, or a brief),
                     // then its rail.
                     .children(right)
-                    .child(self.render_right_rail(cx))
                     // The side zones sit above the workspace: each casts a soft shadow onto it.
                     // Drawn last, so it lies over the panes. A live app's window is above it all.
                     .child(zone_shadow(left, true))

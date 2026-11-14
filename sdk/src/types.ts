@@ -92,11 +92,10 @@ export type Focus =
   | { rail: Section }
   | "drawer"
   | "inspector"
-  | { right: number }
   | "nothing";
 
 /** A rail that has the keyboard (in list mode): a left-rail section, or a right-rail place. */
-export type RailFocus = { left: Section } | { right: number };
+export type RailFocus = { left: Section };
 
 /** A heading of the Tasks section, in the order drawn. `open`: tasks with tabs open that do not need the user. */
 export type Heading = "needs_you" | "running" | "later" | "done" | "sessions";
@@ -1134,8 +1133,6 @@ export interface Snapshot {
      */
     native: { chats: Record<string, NativeChat>; opened: ("web" | "file")[] };
     note: string | null;
-    /** The right rail's conversations, in order: badge, state, at work, shown, and the tooltip's text. */
-    rail: { task: Subject; mono: string; group: Group | null; working: boolean; shown: boolean; tip: string }[];
   };
   /**
    * The meeting timeline, if `calendar_ics` is set: counts, times (ms) and stages only. No title or

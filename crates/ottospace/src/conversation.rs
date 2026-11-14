@@ -1244,8 +1244,10 @@ impl Workspace {
     /// What the state reply says of native conversations: structure, counts and labels, never
     /// what the model or a tool wrote.
     pub(crate) fn chats_snapshot(&self) -> serde_json::Value {
-        let subjects = self.model.rail().into_iter().map(|cell| cell.task);
-        let subjects: Vec<Subject> = subjects.chain(self.model.talk.as_ref().map(|t| t.task.clone())).collect();
+        // The conversations of the spaces on the row, hidden ones too, and the drawer's.
+        let subjects = self.model.spaces().iter().filter_map(|space| space.of.subject());
+        let mut subjects: Vec<Subject> = subjects.chain(self.model.talk.as_ref().map(|t| t.task.clone())).collect();
+        subjects.dedup();
         let mut out = serde_json::Map::new();
         for subject in subjects {
             let Some(chat) = self.model.chat(&subject) else { continue };

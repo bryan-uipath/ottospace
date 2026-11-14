@@ -101,8 +101,7 @@ commands! {
     CloseTab: "Close Tab", Tabs;
     NewTask: "New Task", Tasks;
     // After New Task: a query of a name ranks a later tie lower.
-    RemoveTabFromTask: "Remove Tab from Task", Tabs;
-    MoveTabToTask: "Move Tab to Task…", Tabs;
+    MoveTabToTask: "Move Tab to…", Tabs;
     NextTask: "Next Task", Tasks;
     // After Next Task: a query of its name ranks a later tie lower.
     NextSpace: "Next Task Tab", Tabs;

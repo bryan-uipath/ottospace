@@ -233,7 +233,7 @@ impl Model {
             Action::SpaceHide { index } => index.or(selected) == selected && *self.space() != Owner::Workspace,
             Action::SpaceOpen { space: of } => other(Some(of)),
             Action::TaskGo { id } => id.is_none_or(|id| other(Some(&Owner::Task { id }))),
-            Action::OpenRepo { .. } => *self.space() != Owner::Workspace,
+            Action::OpenRepo { .. } | Action::RepoClick { .. } => *self.space() != Owner::Workspace,
             // The selected space's last tab closed: the space goes.
             Action::CloseTab { index } => {
                 let at = index.unwrap_or(self.active);

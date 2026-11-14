@@ -212,14 +212,12 @@ function focus(value: unknown, at: string): Focus {
   const o = fields(value, at);
   if (o.pane !== undefined) return { pane: num(o.pane, `${at}.pane`) };
   if (o.list !== undefined) return { list: num(o.list, `${at}.list`) };
-  if (o.rail !== undefined) return { rail: section(o.rail, `${at}.rail`) };
-  return { right: num(o.right, `${at}.right`) };
+  return { rail: section(o.rail, `${at}.rail`) };
 }
 
 function railFocus(value: unknown, at: string): RailFocus {
   const o = fields(value, at);
-  if (o.left !== undefined) return { left: section(o.left, `${at}.left`) };
-  return { right: num(o.right, `${at}.right`) };
+  return { left: section(o.left, `${at}.left`) };
 }
 
 function heading(value: unknown, at: string): Heading {
@@ -669,18 +667,6 @@ function composePicks(value: unknown, at: string): Snapshot["compose_picks"] {
   return { wheres: list(str)(o.wheres, `${at}.wheres`), whos: list(str)(o.whos, `${at}.whos`) };
 }
 
-function railCell(value: unknown, at: string): Snapshot["drawer"]["rail"][number] {
-  const o = fields(value, at);
-  return {
-    task: subject(o.task, `${at}.task`),
-    mono: str(o.mono, `${at}.mono`),
-    group: orNull(group)(o.group, `${at}.group`),
-    working: bool(o.working, `${at}.working`),
-    shown: bool(o.shown, `${at}.shown`),
-    tip: str(o.tip, `${at}.tip`),
-  };
-}
-
 function spaceRow(value: unknown, at: string): SpaceRow {
   const o = fields(value, at);
   return {
@@ -775,7 +761,6 @@ function drawerDrawn(value: unknown, at: string): Snapshot["drawer"] {
     agents: map(agent)(o.agents, `${at}.agents`),
     native: native(o.native, `${at}.native`),
     note: orNull(str)(o.note, `${at}.note`),
-    rail: list(railCell)(o.rail, `${at}.rail`),
   };
 }
 

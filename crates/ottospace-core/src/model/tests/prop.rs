@@ -731,6 +731,7 @@ const MAKERS: &[Make] = &[
     |g| Action::RepoAdd { dir: g.name(DIRS), found: g.repos() },
     |g| Action::RepoRemove { path: g.name(DIRS) },
     |g| Action::OpenRepo { path: g.repo_path(), axis: g.axis() },
+    |g| Action::RepoClick { path: g.repo_path(), axis: g.axis() },
     |g| {
         let tasks = (0..g.rng.below(4)).map(|_| g.kept_task()).collect();
         Action::RestoreTasks { tasks, floor: g.rng.pick(&[0, 5, tasks::MAX_ID, u32::MAX]) }
@@ -1087,7 +1088,6 @@ const MAKERS: &[Make] = &[
     |_| Action::TalkInterrupt,
     |g| Action::TalkView { shows: g.rng.pick(&[View::Native, View::Terminal]) },
     |g| Action::TaskTalk { id: g.task() },
-    |g| Action::TalkPick { id: g.subject() },
     |_| Action::TalkStart,
     |g| {
         let (runner, id) = g.session();
@@ -1201,13 +1201,13 @@ fn selects_tab(action: &Action, origin: Origin) -> bool {
             | Action::SpaceHide { .. }
             | Action::SpaceOpen { .. }
             | Action::TaskTalk { .. }
-            | Action::TalkPick { .. }
             | Action::SessionOpen { .. }
             | Action::SessionAdopt { .. }
             | Action::ComposeSubmit { .. }
             | Action::ComposeEnter
             | Action::TaskFromLine { .. }
             | Action::OpenRepo { .. }
+            | Action::RepoClick { .. }
             | Action::EditSettings
             | Action::TaskGo { .. }
             | Action::DropPane { .. }
@@ -1358,7 +1358,6 @@ fn check(m: &Model) -> Result<(), String> {
     // The drawer is on a task there is; the keyboard is in it only while it is open, its agent
     // runs, and no app, list or visual mode has the keyboard.
     let gone = |subject: &Subject| subject.task().is_some_and(|id| m.tasks.get(id).is_none());
-    let dismissed = |subject: &Subject| subject.task().is_some_and(|id| m.tasks.get(id).is_some_and(|t| t.dismissed));
     if let Some(talk) = &m.talk {
         ensure!(!gone(&talk.task), "the drawer is on task {:?}, which is gone", talk.task);
         let free = m.live.is_none() && m.list.is_none() && m.visual.is_none() && m.annotated().is_none();
@@ -1653,24 +1652,12 @@ fn check(m: &Model) -> Result<(), String> {
         "the way back leads to pane {:?}, which is gone",
         m.back_to
     );
-    // The right rail: at most its cap, each cell a task there is, told apart by its badge; the
-    // drawer's conversation is the one cell shown.
-    let rail = m.rail();
-    let mut badges: Vec<&str> = rail.iter().map(|cell| cell.mono.as_str()).collect();
+    // Each live task's badge is told apart from the others'.
+    let mut badges: Vec<String> = m.badges().into_iter().map(|(_, mono)| mono).collect();
+    let count = badges.len();
     badges.sort_unstable();
     badges.dedup();
-    ensure!(rail.len() <= talk::RAIL && badges.len() == rail.len(), "the rail: {rail:?}");
-    ensure!(
-        !rail.iter().any(|cell| gone(&cell.task) || dismissed(&cell.task)),
-        "a rail cell for a task that is gone or dismissed"
-    );
-    let listed = |subject: &Subject| match subject {
-        Subject::Task(_) => true,
-        Subject::Session { runner, id } => m.session(runner, id).is_some() || m.agent_runs(subject),
-    };
-    ensure!(rail.iter().all(|cell| listed(&cell.task)), "a rail cell for a session not listed: {rail:?}");
-    let open = m.talk.as_ref().filter(|talk| talk.open).map(|talk| &talk.task);
-    ensure!(rail.iter().all(|cell| cell.shown == (open == Some(&cell.task))), "the rail shows another cell: {rail:?}");
+    ensure!(badges.len() == count, "two tasks share a badge: {badges:?}");
     let shown =
         |id: TaskId| m.tab_task() == Some(id) || m.talk.as_ref().is_some_and(|talk| talk.task.task() == Some(id));
     let briefed = |id: TaskId| shown(id) && m.tasks.get(id).is_some_and(|task| !task.materials.is_empty());
@@ -1789,11 +1776,10 @@ fn check(m: &Model) -> Result<(), String> {
 
 /// The keyboard is on one place there is: a pane on show, a row of the list, a rail's cell.
 fn check_zones(m: &Model) -> Result<(), String> {
-    use crate::model::zones::{RailFocus, Target};
+    use crate::model::zones::Target;
     let leaves = m.layout.as_ref().map(Node::leaves).unwrap_or_default();
     match m.focus_target() {
         Target::Pane(pane) => ensure!(leaves.contains(&pane), "the keyboard is on pane {pane}, not on show"),
-        Target::Right(at) => ensure!(at <= m.rail().len(), "right rail cell {at} of {}", m.rail().len()),
         Target::Nothing => {
             ensure!(leaves.is_empty() || m.mode() != Mode::Normal, "panes on show, and the keyboard on none")
         }
@@ -1801,9 +1787,6 @@ fn check_zones(m: &Model) -> Result<(), String> {
     }
     if m.rail_focus.is_some() {
         ensure!(m.list.is_none() && m.mode() == Mode::List, "a rail and {:?} have the keyboard", m.mode());
-    }
-    if let Some(RailFocus::Right(at)) = m.rail_focus {
-        ensure!(at <= m.rail().len(), "right rail place {at}");
     }
     Ok(())
 }
@@ -2093,20 +2076,14 @@ impl Run {
         let palette_typing = m.field().is_some_and(|(of, _)| of == "palette");
         let tab_before = m.tabs[m.active].id;
         let tabs_before: Vec<u32> = m.tabs.iter().map(|tab| tab.id).collect();
-        let talks = matches!(
-            action,
-            Action::TaskTalk { .. }
-                | Action::SessionOpen { .. }
-                | Action::SessionAdopt { .. }
-                | Action::TalkPick { .. }
-        );
+        let talks =
+            matches!(action, Action::TaskTalk { .. } | Action::SessionOpen { .. } | Action::SessionAdopt { .. });
 
         // Selecting a conversation, a tab, a space or a row, hiding or opening a space, only
         // shows: never an agent, never a transcript.
         let selects = matches!(
             action,
             Action::TaskTalk { .. }
-                | Action::TalkPick { .. }
                 | Action::SessionOpen { .. }
                 | Action::TaskGo { .. }
                 | Action::ListChoose { .. }
