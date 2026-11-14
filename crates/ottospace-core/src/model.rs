@@ -3364,11 +3364,17 @@ impl Model {
                 }
             }
             Action::PaletteChoose { index } => {
-                let Some(palette) = self.palette.take() else { return };
+                let Some(mut palette) = self.palette.take() else { return };
                 let at = index.unwrap_or(palette.selected);
                 // Listing tasks: the tab on show moves to the end of the chosen one's group.
-                if palette.tasks.is_some() {
+                if let Some(tasks) = &palette.tasks {
                     match palette.task_matches().get(at).map(|choice| choice.task) {
+                        // Dismissed since the list was read: its row goes, and the palette stays.
+                        Some(Some(id)) if self.tasks.live(id).is_none() => {
+                            let left = tasks.iter().filter(|choice| choice.task != Some(id)).cloned().collect();
+                            (palette.tasks, palette.selected) = (Some(left), 0);
+                            self.palette = Some(palette);
+                        }
                         Some(task) => {
                             self.palette_closed(effects);
                             self.place_tab(None, TabAt::End(task));
@@ -7190,9 +7196,13 @@ mod tests {
         m.update(Action::FieldEdit { edit: Edit::Insert("zzz".into()) });
         m.update(Action::PaletteChoose { index: None });
         assert!(m.palette.is_some());
+        // A task dismissed while it is listed: choosing it takes its row off, and moves nothing.
         m.update(Action::ClosePalette);
         m.update(Action::PaletteTasks);
-        m.update(Action::PaletteChoose { index: Some(2) });
+        m.update(Action::TaskDismiss { id: a }.sent_by(Origin::Socket));
+        m.update(Action::PaletteChoose { index: Some(0) });
+        assert_eq!((titles(&m), m.tab_task()), (vec!["docs".into(), "No task".into()], Some(b)));
+        m.update(Action::PaletteChoose { index: Some(1) });
         assert_eq!((m.tab_task(), m.active), (None, m.tabs.len() - 1));
     }
 
