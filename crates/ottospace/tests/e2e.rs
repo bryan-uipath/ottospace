@@ -5871,6 +5871,10 @@ fn a_layout_file_that_does_not_read_is_set_aside_and_restore_layout_false_starts
     // Read: the tab, its history above the prompt, its command typed and not run.
     let home = user_folder("restore-hand", r#"{"repos": []}"#);
     std::fs::write(home.join("layout.json"), &layout).unwrap();
+    // A leftover `layout.json.bad`, a link out of the home: Start Fresh removes the link, not its target.
+    let target = Path::new(&dir).join("kept");
+    std::fs::write(&target, "not the home's").unwrap();
+    std::os::unix::fs::symlink(&target, home.join("layout.json.bad")).unwrap();
     let mut otto = Otto::launch_with("restore-hand", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
     let state = otto.call(json!({"cmd": "state"}));
     assert_eq!((tab_titles(&state), pane_dirs(&state)), (vec![("Hand".to_string(), Value::Null)], vec![json!(dir)]));
@@ -5886,6 +5890,8 @@ fn a_layout_file_that_does_not_read_is_set_aside_and_restore_layout_false_starts
     assert_eq!(theirs["state"]["palette"], Value::Null);
     otto.call(json!({"cmd": "key", "keys": "cmd-p s t a r t space f r e s h enter", "as": "user"}));
     assert!(!home.join("layout.json").exists());
+    assert!(std::fs::symlink_metadata(home.join("layout.json.bad")).is_err());
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "not the home's");
     otto.call(json!({"cmd": "quit"}));
     exits(&mut otto);
     assert!(!home.join("layout.json").exists());
