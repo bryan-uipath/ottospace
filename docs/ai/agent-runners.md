@@ -168,9 +168,9 @@ The table, written by a test from the specs (`runner::tests`): every capability 
 | interrupt | true | true |
 | held (live holder on disk) | true | false |
 | cwd on disk | true | true |
-| watch | Yes | Unverified |
+| watch | Yes | Yes |
 | take over when idle | Yes | Yes |
-| attach live | ViaOwnTerminal | ViaDaemon { verified: false } |
+| attach live | ViaOwnTerminal | ViaDaemon { verified: true } |
 
 What is verified, and how:
 
@@ -178,16 +178,15 @@ What is verified, and how:
   and the stage 1 terminal mode, which uses them (`task-conversation.md`).
 - Structured mode: Claude's permission envelope, allow and interrupt seen in the real probe
   (below); Codex's app server is experimental by its own `--help`, and its command approval and
-  interrupt were seen in the probe; a file-change approval, `grantRoot` and
-  `networkApprovalContext` were not.
+  interrupt were seen in the probe, and a file-change approval in the attach probes (below);
+  `grantRoot` and `networkApprovalContext` were not.
 - Held: Claude Code's `sessions/<pid>.json` (`sessions.md`); Codex records no process.
-- Watch: Claude's transcript is read as it grows (`ottospace-sessions`). For Codex, whether a
-  call's start is on disk before the call ends was never measured: `Unverified`.
-- Attach live: Claude: a session is live only in the terminal running it; its docs say
-  `--resume` of a running *background* session attaches (since 2.1.285): not tried. Codex:
-  `codex agents` ("Browse all agent sessions on the shared local app-server daemon") and
-  `codex queue` ("Queue a message for an existing session") in 0.166 `--help`: not tried, so
-  `verified: false`.
+- Watch: both files grow a record at a time while the session runs, and a tool call's start
+  is on disk before its result (Probes, 3 and 4). Neither file has text deltas.
+- Attach live: Claude: an interactive or `-p` session is live only in the terminal running it;
+  `--resume` from elsewhere does not join it, it branches the same file (Probes, 4). Only a
+  `--bg` session is joined, by `claude attach <id>`. Codex: a thread on the shared app-server
+  daemon (where the TUI runs by default) is joined by a second daemon client, live (Probes, 1).
 
 Where the UI asks the spec today: a new session's id (`chooses_session`: the task is linked at
 once, or its session is sought), the sessions sought and read (`reader`), the held check
@@ -377,7 +376,8 @@ Still UNVERIFIED:
 | What | Why it matters |
 |---|---|
 | Whether `updatedInput` is required on allow | We send the original input back, which works either way |
-| A Codex file-change approval, `grantRoot`, `networkApprovalContext` | Not triggered by the probe; declines are built from the schema |
+| Codex `grantRoot`, `networkApprovalContext` | Not triggered by any probe; declines are built from the schema |
+| Which client a daemon thread's approval goes to when two are subscribed | Not triggered: the daemon probe ran no tool |
 | The Claude `control_cancel_request` | Not seen; `PermissionClosed` relies on the SDK's shape |
 
 The probes, each one short model session on the user's account (approval needed each time):
@@ -387,6 +387,102 @@ OTTOSPACE_REAL_CLI=1 cargo test -p ottospace-agents --test real -- --ignored --n
 OTTOSPACE_PROBE_ISOLATED=1 OTTOSPACE_REAL_CLI=1 cargo test -p ottospace-agents --test real -- --ignored --nocapture claude_real
 OTTOSPACE_REAL_CLI=1 cargo test -p ottospace-agents --test real -- --ignored --nocapture codex_real
 ```
+
+## Probes: attach, watch and take-over (2026-11-13)
+
+Run with the user's approval, each in a new `mktemp -d` folder (a `git init` with one file), on
+sessions the probe made: Claude Code 2.1.325 (`--model haiku`), codex-cli 0.166.0 (the user's
+default model, `effort: low`), whose shared daemon was app-server 0.169.0 (already running, the
+user's; not stopped). Python drivers over the CLIs' stdio, a PTY for the TUIs. 14 model turns.
+The Claude TUI runs were started without the `CLAUDE*` variables of the Claude Code session
+running the probe: inherited, they turn session persistence off.
+
+**1. Codex daemon and attach.** `codex agents` is a TUI browser of the daemon's sessions;
+`codex queue --thread <id> --message <text> [--resume]` queues a message (neither run). The TUI
+uses the daemon unless `--no-daemon`. The daemon's socket
+(`~/.codex/app-server-control/app-server-control.sock`) speaks JSON-RPC over WebSocket;
+`codex app-server proxy` pipes stdio to it (send an HTTP upgrade first: `101 Switching Protocols`).
+
+| Run | Seen |
+|---|---|
+| Private `codex app-server` A holds thread T (idle); a second private server B: `thread/resume T` | `-32600 thread T already has an active writer`; B's `thread/loaded/list` lacks T |
+| A killed (`SIGKILL`); B: `thread/resume T` | ok: `~/.codex/thread-writer-locks/T.lock` stays on disk but the lock is released. A file there is not "held"; a held one refuses a non-blocking `flock` (`EAGAIN`) |
+| Daemon clients P1, P2 (`app-server proxy`). P1 `thread/start`, `turn/start`; P2 `thread/resume T` mid-turn | ok, `status: {type: active}`; P2 got the rest of P1's turn live (65 of its 79 deltas, then `turn/completed`) |
+| P2 `turn/start` | ok; P1 got every event of P2's turn. Both clients saw `thread/status/changed` (active / idle) even before P2 resumed |
+| Both `thread/unsubscribe` (`unsubscribed`), clients gone; a private server: `thread/resume T` | 3 s later: `already has an active writer` (the daemon keeps it loaded); about 12 minutes later: ok |
+
+So: a session on the daemon can be watched and joined live by another daemon client; a session
+in a private `codex app-server` (what `ottospace-agents` starts) cannot be joined by anyone, and a
+resume elsewhere is refused, not forked. Live/held: `thread/resume` is refused; on disk, the lock
+file's `flock`; on the daemon, `thread/loaded/list` and `thread/status/changed`.
+
+**2. Codex file-change approval** (private server, `thread/start {sandbox: read-only,
+approvalPolicy: on-request}`, prompt "create a.txt containing 1 with apply_patch"):
+
+```
+item/started   {item: {type: fileChange, id: "exec-<uuid>", changes: [{path: "<cwd>/a.txt",
+                kind: {type: add}, diff: "1\n"}], status: inProgress, startedAtMs, completedAtMs: null},
+                threadId, turnId, startedAtMs}
+item/fileChange/requestApproval  id 0  {threadId, turnId, itemId: "exec-<uuid>", startedAtMs,
+                reason: null, grantRoot: null}
+← {"id":0,"result":{"decision":"accept"}}
+serverRequest/resolved {requestId: 0}; item/completed {status: completed}; turn/diff/updated; a.txt written
+```
+
+No `availableDecisions` and no `item/fileChange/patchUpdated`. The schema's answers: `accept`,
+`acceptForSession`, `decline`, `cancel`; ottospace sends only the first and third. It matches
+`codex.rs`: every field is an id, `reason` or a null `grantRoot`, the change was announced by
+`item/started`, so the request is offered. The real lines are now a unit test
+(`a_real_file_change_approval_is_offered_and_accepted`).
+
+**3. Codex watch.** The rollout (`thread.path`, `~/.codex/sessions/YYYY/MM/DD/rollout-*-<id>.jsonl`)
+is created at the first turn and grows a record or a few at a time, within ~20 ms of the matching
+event: `response_item/custom_tool_call` (the patch) was on disk 170 ms *before* `item/started` and
+the approval, `custom_tool_call_output` after `item/completed`. Agent text is on disk as the whole
+message at `item/completed`; deltas are never written. The first write is large (~175 KB of
+instructions and tool lists).
+
+**4. Claude.** `claude --help` (2.1.325): `--bg` ("Start the session in the background … With
+--resume <session-id>, continues that session in the background under the same ID, or starts a
+copy and says so when the session is already running"), `claude agents [--json] [--cwd <path>]`,
+`claude attach <id>`, `logs`, `stop`, `rm`, `respawn`, `--fork-session`, `--remote-control`,
+`--cloud`, `--teleport`.
+
+| Run | Seen |
+|---|---|
+| A: `claude -p --input-format stream-json … --session-id U`, one turn, idle, alive | `sessions/<A pid>.json` with `sessionId: U`, `kind: interactive`, `status: idle`; `claude agents --json --cwd <dir>` lists it |
+| B: `claude -p --resume U "Reply with the word two."` while A lives | not refused: exit 0, `session_id` U, appends to U's file |
+| A's next turn: "the word you replied before this" | `one`, not `two`: A never saw B. In the file B's turn and A's both hang off A's first reply: a silent branch in one file |
+| A exits; C: `claude -p --resume U` | same id, same file, continues A's branch (B's is left aside) |
+| Interactive TUI A (PTY, `--session-id V`), idle; `-p --resume V` | as above: not refused, same id |
+| A second TUI `claude --resume V` while A lives | opens normally with both turns; `claude agents` lists two `interactive` holders of V |
+| `claude --bg --model haiku "Reply with the word one."` | ignores `--session-id` ("--bg manages the session id"), prints `backgrounded · <short id>`; starts `claude daemon run --origin transient`, which exited by itself once the sessions were stopped |
+| `claude -p --resume <bg id>` while it runs | refused: `That session is running in the background (<id>). Run claude attach <id> to open it, or claude stop <id> first to resume it here. Add --fork-session to branch off a copy instead.` |
+| `claude --bg --resume <bg id>` | `session <id> is already running in the background, so this started a copy as <new id>` |
+| `claude attach <bg id>` (PTY) | the live session's TUI: transcript and composer |
+
+Watch: the file grows a record at a time: the `tool_use` message ~1 s after the stream showed
+it and before its `tool_result`; text as whole messages ~30 ms after the stream's. No deltas.
+
+**5. Take over when idle.** Codex: after the holder exits (cleanly or killed) `thread/resume`
+continues the same id and file. A thread the daemon holds stays refused to a private server for
+a while after its clients leave: take it over through the daemon. Claude: after the holder exits
+`--resume` continues the same id; while one lives, `--resume` (but of a `--bg` session) is *not*
+refused and branches the file, so the `held` check (`sessions/<pid>.json`) must come first.
+
+What watch mode can rely on:
+
+| | Claude Code | Codex |
+|---|---|---|
+| Tail the file live | yes, a record at a time; a call's start before its end | yes, a record at a time; a call's start before its end |
+| Text deltas | no (stream only) | no (stream only) |
+| Live holder | `sessions/<pid>.json`, `claude agents --json --cwd` | lock file `flock`; daemon `thread/loaded/list`, `thread/status/changed` |
+| Join live | only `--bg` sessions, by `claude attach` in a terminal | daemon sessions, by a daemon client; never a private `app-server`'s |
+| Resume while held | not refused (branches the file) but for `--bg` (refused) | refused (`active writer`) |
+
+Left on disk: the probe's session files (Claude: `projects/<scratch>/…jsonl`; Codex: two rollouts
+under `sessions/2026/11/13/`), the scratch folder's trust entry in Claude's `.claude.json`, and
+the three stopped, removed `--bg` sessions' records (`claude rm` keeps the conversation).
 
 ## Open questions
 

@@ -626,6 +626,27 @@ mod tests {
         assert_eq!(sent(&out.replies[0])["id"], 7);
     }
 
+    /// The file-change approval the real codex-cli 0.166.0 sent (probe of 2026-11-13, folder
+    /// renamed): offered, and Allow is `accept`.
+    #[test]
+    fn a_real_file_change_approval_is_offered_and_accepted() {
+        let mut codex = codex();
+        codex.read(&format!(
+            r#"{{"method":"item/started","params":{{"item":{{"type":"fileChange","id":"exec-b25e","changes":[{{"path":"/work/app/a.txt","kind":{{"type":"add"}},"diff":"1\n"}}],"status":"inProgress","startedAtMs":1794630823109,"completedAtMs":null}},"threadId":"{UUID}","turnId":"t","startedAtMs":1794630823109}},"emittedAtMs":1794630823109}}"#
+        ));
+        let out = codex.read(&format!(
+            r#"{{"method":"item/fileChange/requestApproval","id":0,"params":{{"threadId":"{UUID}","turnId":"t","itemId":"exec-b25e","startedAtMs":1794630823112,"reason":null,"grantRoot":null}}}}"#
+        ));
+        let Some(Event::Permission { ticket, detail, .. }) = out.events.first().cloned() else { panic!("{out:?}") };
+        assert!(
+            detail.text().starts_with("add: /work/app/a.txt\n") && detail.text().contains("diff:"),
+            "{}",
+            detail.text()
+        );
+        let answer = codex.write(Input::Answer { ticket, answer: Answer::Allow }).unwrap();
+        assert_eq!(sent(&answer[0]), json!({"id": 0, "result": {"decision": "accept"}}));
+    }
+
     /// A file change shows every change (operation, path escaped, move target), flags those
     /// outside the working directory, and keeps the model's `reason` apart as a claim. Changes
     /// never announced, or a `grantRoot`: declined, and still shown.
