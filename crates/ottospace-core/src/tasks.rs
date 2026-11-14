@@ -69,7 +69,7 @@ impl Heading {
             Heading::Running => Group::Running.title(),
             Heading::Later => "Later",
             Heading::Done => Group::Done.title(),
-            Heading::Sessions => "Sessions",
+            Heading::Sessions => "Other sessions",
         }
     }
 }

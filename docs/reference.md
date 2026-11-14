@@ -232,7 +232,7 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    the task's folder after the agent did and before the next agent there, that nothing else
    has. When two could be its (another Codex started there at the same moment), neither is
    taken: the task runs, following none. When the agent ends while the task runs, the task needs you.
-7. **A session that is no task's.** A click or ↵ on its row under Sessions opens its
+7. **A session that is no task's.** A click or ↵ on its row under Other sessions opens its
    conversation the same way, with no task: it gets a badge on the rail (from its title, else
    its repository) and Adopt in the drawer's header. Adopt, there or on the row, makes the task,
    and the conversation is the task's: the same agent if it runs, else gone on with. Adopt opens
@@ -414,13 +414,21 @@ Design: [capture.md](ai/capture.md).
 ## Sessions
 
 An agent is a saved definition. A session is one running conversation of Claude Code or Codex.
-The Tasks section lists, under **Sessions**, the sessions of your listed repositories (worktrees
-included) that no task has adopted: for example a Claude Code you started by hand in a terminal.
+The Tasks section lists, under **Other sessions**, the sessions of your listed repositories
+(worktrees included) that no task has adopted: for example a Claude Code you started by hand in a
+terminal. The group is folded at first: its heading shows the count, and a click, ↵ or space
+unfolds it. A session at work does not unfold it.
 
 - **What a row shows.** The runner (`claude` or `codex`), the repository or worktree, a dot that
   is lit while the session is active (its file changed in the last 30 seconds), what it does now
   (`shell · cargo test`, `network · git push`, `files · src/main.rs`), and when it was last
-  active. Idle sessions older than a day are behind "N older".
+  active.
+- **Range.** Unfolded, its heading has a switch, Today | 7 days | 30 days | All (kept in the settings as
+  `sessions_range`): Today lists the sessions active since the local day began, the others
+  those active within that many days, All every one listed. A session at work is always
+  listed. The heading counts those in range; hover it for how many there are in all. The
+  range only narrows what was read: at most 200 sessions are listed, the most recent, so All
+  shows those 200.
 - **Title and model.** Between the two lines a row shows the session's title, on one line, when
   the runner keeps one: the name you gave a Claude Code session (`/rename`), else the title
   Claude Code wrote for it; for Codex, the thread's name in its `session_index.jsonl`, which
@@ -675,7 +683,7 @@ optional:
 | `terminal.font_size` | In points, 6 to 72 | `13` |
 | `repos` | Directories that are repositories or hold them, for the Repos section. `OTTOSPACE_REPOS` (`:` between directories) wins over it. The section's + adds the folder you pick (a repository, or one that holds some), by its full path; if the file named none, `~/code` and `~/notes` are written with it. Remove, on a repository's name under the pointer, takes off a directory listed as itself; one that comes from a folder holding several is yours to edit. At most 64 through + | `~/code`, `~/notes` |
 | `tasks` | Where tasks are kept, one JSON file each. A relative path is inside `~/.ottospace` | `tasks` |
-| `sessions` | List agent sessions that are no task's under Sessions in the Tasks section. `false`: no session file is ever read | `true` |
+| `sessions` | List agent sessions that are no task's under Other sessions in the Tasks section. `false`: no session file is ever read | `true` |
 | `session_dirs` | Where the runners keep their sessions: `claude` is a list of Claude Code config directories (one for each account), `codex` is Codex's home. A runner left out keeps its default. An app started from the Dock does not see `CLAUDE_CONFIG_DIR` or `CODEX_HOME`: name other directories here | `~/.claude`, `~/.codex` |
 | `session_quiet_minutes` | A task adopted from a session moves to Needs you once the session has been quiet this many minutes. `0`: a quiet session never moves its task | `3` |
 | `agent_models` | The models the `@agent` dropdown offers after each runner, in place of the built-in list: ids as the runner's CLI takes them. `claude` and `codex` are each a list; a runner left out keeps its own, an empty list offers the runner alone. An id that does not start with the runner's name gets it in the tag: `gpt-6-astra` is `@codex-gpt-6-astra`, `opus` is `@claude-opus`. An entry that is not a name (letters and digits, with `.`, `-` or `_` between them one at a time; at most 64) is left out and named in the status bar | `claude-fable-5-2`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`; `gpt-6-astra` |
@@ -684,6 +692,7 @@ optional:
 | `restore_layout` | [Restore the layout](#restoring-the-layout) at start and keep it in `layout.json`. `false`: every start is empty | `true` |
 | `restore_apps` | At a restore, start an app a pane names that is not running. `false`: its pane waits and offers `Open <App>` | `false` |
 | `tasks_view` | How the Tasks section groups: `state` or `project`. Written when you pick one in the section's header | `state` |
+| `sessions_range` | Which sessions Other sessions lists: `today`, `week` (7 days), `month` (30 days) or `all`. Written when you pick one on its heading | `today` |
 | `capture_key` | The key that captures the pane in use, from any app: modifiers (`ctrl`, `alt`, `cmd`, `shift`) and a key, with `-` between them. `"off"`: no key. `OTTOSPACE_CAPTURE_KEY` wins over it. Not `ctrl-alt-space`: macOS uses it to change the input source | `ctrl-alt-cmd-space` |
 | `capture.keep_images` | Keep a capture's pictures on disk. `false`: no picture is ever written | `true` |
 | `capture.ax` | Read an app pane's accessibility tree with its picture. `false`: it is never read for a capture | `true` |

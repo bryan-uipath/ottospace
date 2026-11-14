@@ -8,6 +8,7 @@ use gpui::{
 };
 use ottospace_core::model::{Card, ProjectGroup, TasksView};
 use ottospace_core::progress::count;
+use ottospace_core::sessions::Range;
 use ottospace_core::tasks::Segments;
 use ottospace_core::{Action, theme};
 
@@ -124,11 +125,14 @@ fn bar(segments: Segments) -> Div {
 }
 
 impl Workspace {
-    /// The Tasks header's switch: State | Project. A click picks one.
-    pub(crate) fn tasks_view_switch(&self, cx: &mut Context<Self>) -> Div {
-        let view = self.model.tasks_view;
-        let option = |name: &'static str, label: &'static str, of: TasksView| {
-            let on = view == of;
+    /// A switch of a few words, one of them on: (sneak id, label, on). A click on one calls
+    /// `click` with its place, and goes no further (a heading under it does not fold).
+    fn switch<F>(&self, options: &[(&'static str, &'static str, bool)], click: F, cx: &mut Context<Self>) -> Div
+    where
+        F: Fn(&mut Self, usize, &Window, &mut Context<Self>) + Clone + 'static,
+    {
+        let option = |at: usize, (name, label, on): (&'static str, &'static str, bool)| {
+            let click = click.clone();
             div()
                 .id(name)
                 .relative()
@@ -140,17 +144,42 @@ impl Workspace {
                 .hover(|s| s.text_color(rgb(theme::TEXT)))
                 .child(label)
                 .child(self.controls.mark(name))
-                .on_click(cx.listener(move |this, _, window, cx| this.click_tasks_view(of, window, cx)))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    click(this, at, window, cx);
+                }))
         };
-        div()
-            .ml_2()
-            .p(px(2.))
-            .flex()
-            .rounded_md()
-            .border_1()
-            .border_color(rgb(theme::BORDER))
-            .child(option("tasks-view:state", "State", TasksView::State))
-            .child(option("tasks-view:project", "Project", TasksView::Project))
+        let container = div().ml_2().p(px(2.)).flex().rounded_md().border_1().border_color(rgb(theme::BORDER));
+        container.children(options.iter().copied().enumerate().map(|(at, o)| option(at, o)))
+    }
+
+    /// The Tasks header's switch: State | Project. A click picks one.
+    pub(crate) fn tasks_view_switch(&self, cx: &mut Context<Self>) -> Div {
+        let view = self.model.tasks_view;
+        let options = [
+            ("tasks-view:state", "State", view == TasksView::State),
+            ("tasks-view:project", "Project", view == TasksView::Project),
+        ];
+        let views = [TasksView::State, TasksView::Project];
+        self.switch(&options, move |this, at, window, cx| this.click_tasks_view(views[at], window, cx), cx)
+    }
+
+    /// The Other sessions heading's switch: Today | 7 days | 30 days | All. A click picks one.
+    pub(crate) fn sessions_range_switch(&self, cx: &mut Context<Self>) -> Div {
+        let range = self.model.sessions_range;
+        let name = |of: Range| match of {
+            Range::Today => "sessions-range:today",
+            Range::Week => "sessions-range:week",
+            Range::Month => "sessions-range:month",
+            Range::All => "sessions-range:all",
+        };
+        let options = Range::EVERY.map(|of| (name(of), of.label(), of == range));
+        self.switch(&options, |this, at, window, cx| this.click_sessions_range(Range::EVERY[at], window, cx), cx)
+    }
+
+    pub(crate) fn click_sessions_range(&mut self, range: Range, window: &Window, cx: &mut Context<Self>) {
+        self.dispatch(Action::SessionsRange { range }, self.input, window, cx);
+        cx.notify();
     }
 
     pub(crate) fn click_tasks_view(&mut self, view: TasksView, window: &Window, cx: &mut Context<Self>) {

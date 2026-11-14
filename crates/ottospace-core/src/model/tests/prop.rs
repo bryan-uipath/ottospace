@@ -730,7 +730,7 @@ const MAKERS: &[Make] = &[
         Action::ToggleProject { project, done: g.rng.coin() }
     },
     |g| Action::SessionWork { work: g.work() },
-    |g| Action::SetSessions { found: (0..g.rng.below(5)).map(|_| g.found()).collect() },
+    |g| Action::SetSessions { found: (0..g.rng.below(5)).map(|_| g.found()).collect(), day: g.time() },
     |g| Action::SessionQuiet { ms: g.rng.pick(&[0, 1, sessions::QUIET_MS, u64::MAX]) },
     |g| {
         let seen = |g: &mut Gen| {
@@ -751,7 +751,7 @@ const MAKERS: &[Make] = &[
         let (runner, id) = g.session();
         Action::SessionClick { runner, id }
     },
-    |_| Action::ToggleOlderSessions,
+    |g| Action::SessionsRange { range: g.rng.pick(&sessions::Range::EVERY) },
     |g| Action::SetApps { names: g.names(APPS, 4) },
     |_| Action::FocusList,
     |_| Action::LeaveList,
@@ -1653,7 +1653,19 @@ fn check_state(m: &Model) -> Result<(), String> {
     ensure!(round_trips(&m.found), "the sessions do not read back as written");
     ensure!(m.panes.iter().all(|pane| round_trips(&pane.kind)), "a pane's kind does not read back as written");
     ensure!(round_trips(&(m.sidebar, m.collapsed.clone())), "the bar does not read back as written");
-    let _ = (m.task_sections(m.now), m.sessions_bar(), m.compose_spans(), m.home(&[]), m.mark_rows());
+    // Other sessions: each row once and in range; under All every listed one, unless folded.
+    let bar = m.sessions_bar();
+    let ids: Vec<(String, String)> = bar.rows.iter().map(|row| (row.runner.clone(), row.id.clone())).collect();
+    ensure!(unique(&ids), "a session is listed twice: {ids:?}");
+    ensure!(bar.count <= bar.total && bar.range == m.sessions_range, "{} of {} in range", bar.count, bar.total);
+    ensure!(bar.rows.len() == if bar.collapsed { 0 } else { bar.count }, "{} rows of {}", bar.rows.len(), bar.count);
+    ensure!(bar.range != sessions::Range::All || bar.count == bar.total, "All lists {} of {}", bar.count, bar.total);
+    let session = |runner: &str, id: &str| m.found.iter().find(|s| (s.runner.as_str(), s.id.as_str()) == (runner, id));
+    for row in &bar.rows {
+        let shown = session(&row.runner, &row.id).is_some_and(|s| s.in_range(bar.range, m.now, m.session_day));
+        ensure!(shown, "{}:{} is listed out of range {:?}", row.runner, row.id, bar.range);
+    }
+    let _ = (m.task_sections(m.now), m.compose_spans(), m.home(&[]), m.mark_rows());
     let _ = (m.keyboard_terminal(), m.due(m.now), m.followed_sessions(), m.compose_read(), m.needs());
     let _ = (m.workbook_rows(), m.workbook_save_refusal(), m.workbook_of_tab(), m.workbooks.offered());
     let _: Vec<Vec<String>> = m.workbooks.list.iter().map(|book| m.workbook_gone(book.id, None)).collect();
@@ -2135,6 +2147,9 @@ impl Run {
                 Effect::SaveTasksView { view } => {
                     ensure!(user && m.tasks_view == *view, "{origin:?} wrote tasks_view {view:?}")
                 }
+                Effect::SaveSessionsRange { range } => {
+                    ensure!(user && m.sessions_range == *range, "{origin:?} wrote sessions_range {range:?}")
+                }
                 Effect::Run { command } => {
                     ensure!(user && matches!(action, Action::PaletteChoose { .. }), "{command:?} run by {action:?}")
                 }
@@ -2344,6 +2359,7 @@ const BASES: &[(&str, Setup)] = &[
                 };
                 Action::SetSessions {
                     found: vec![s.clone(), Found { id: "s2".into(), active: false, last_activity: Some(5), ..s }],
+                    day: 0,
                 }
             },
             |_| Action::ToggleSection { section: Section::Tasks },
@@ -2557,6 +2573,7 @@ fn code(sent: &Envelope) -> String {
         ("tool", "Tool"),
         ("content", "Content"),
         ("view", "TasksView"),
+        ("range", "sessions::Range"),
         // A conversation's: `TalkPick { id: Task(1) }`.
         ("task", "Subject"),
         ("id", "Subject"),

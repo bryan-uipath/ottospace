@@ -356,8 +356,10 @@ impl Workspace {
                 }
                 None
             }
-            ("sessions-older", _) => {
-                self.click_older_sessions(window, cx);
+            ("sessions-range", _) => {
+                if let Ok(range) = serde_json::from_value(serde_json::json!(name)) {
+                    self.click_sessions_range(range, window, cx);
+                }
                 None
             }
             ("task-undo", _) => {

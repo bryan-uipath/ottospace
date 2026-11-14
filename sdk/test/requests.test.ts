@@ -88,7 +88,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.sessionAdopt({ runner: "claude", id: "11111111-1111-4111-8111-111111111111" }),
   (c) => c.sessionHide({ runner: "codex", id: "c0de0001-0000-4000-8000-000000000001" }),
   (c) => c.sessionClick({ runner: "claude", id: "11111111-1111-4111-8111-111111111111" }),
-  (c) => c.sessionsOlder(),
+  (c) => c.sessionsRange({ range: "week" }),
   (c) => c.compose({ text: "a draft" }),
   (c) => c.composeDrop({ paths: ["/tmp/a.txt"] }),
   (c) => c.taskPop(),

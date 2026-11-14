@@ -60,6 +60,9 @@ export type Heading = "needs_you" | "running" | "later" | "done" | "sessions";
 /** How the Tasks section groups its tasks. */
 export type TasksView = "state" | "project";
 
+/** Which sessions Other sessions lists: since the local day began, 7 or 30 days back, or all. */
+export type SessionsRange = "today" | "week" | "month" | "all";
+
 /** Tokens of one model, summed. `input` counts every prompt token, cached or not. */
 export interface Tokens {
   /** In short: `opus-5.5`, `gpt-6-astra`. */
@@ -366,16 +369,16 @@ export interface AppsBar {
   undo: string | null;
 }
 
-/** The Sessions group of the Tasks section. */
+/** The Other sessions group of the Tasks section. */
 export interface SessionsBar {
-  /** Sessions listed, the older ones included. */
+  /** Sessions in `range`, and listed in all. A session at work is always in range. */
   count: number;
+  total: number;
+  range: SessionsRange;
+  /** True at first. */
   collapsed: boolean;
-  /** None while collapsed. The older ones only while `older_open`. */
+  /** Those in `range`. None while collapsed. */
   rows: SessionRow[];
-  /** Idle for more than a day. */
-  older: number;
-  older_open: boolean;
   /** False when the settings turn reading sessions off. */
   enabled: boolean;
   /** How many times the sessions were read since the app started. */

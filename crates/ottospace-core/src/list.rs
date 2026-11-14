@@ -19,8 +19,6 @@ pub enum ListRow {
     ProjectDone(Option<String>),
     /// A session no task has adopted, by runner and id.
     Session(String, String),
-    /// "N older" under Sessions. Opening it shows or hides the older sessions.
-    OlderSessions,
     Mark(MarkId),
     Workbook(WorkbookId),
     /// A tab of an unfolded workbook, by its place in the workbook.

@@ -1082,11 +1082,11 @@ fn list_mode_drives_the_bar_with_the_keyboard() {
     let reply = key("k space");
     assert_eq!(
         (&reply["state"]["collapsed"], reply["state"]["list"].as_u64()),
-        (&json!(["done", "needs_you"]), Some(0))
+        (&json!(["done", "sessions", "needs_you"]), Some(0))
     );
     assert_eq!(reply["tasks_bar"]["sections"][0]["rows"], json!([]));
     let reply = key("enter");
-    assert_eq!((&reply["state"]["collapsed"], reply["mode"].as_str()), (&json!(["done"]), Some("list")));
+    assert_eq!((&reply["state"]["collapsed"], reply["mode"].as_str()), (&json!(["done", "sessions"]), Some("list")));
 
     // Esc gives the keyboard back. While the bar has it, keys do not reach the terminal.
     assert_eq!(key("escape")["mode"], "normal");
@@ -1496,7 +1496,7 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
     fake_repo(&home.join("src/app"));
     let repo = home.canonicalize().unwrap().join("src/app");
     // Three made-up sessions: a Claude Code at work in the repository, a Codex idle for two hours
-    // below it, and a Codex last active three days ago.
+    // below it, and a Codex last active ten days ago.
     let (claude, codex) = (home.join("claude"), home.join("codex"));
     let (busy, idle, old) = (
         "11111111-1111-4111-8111-111111111111",
@@ -1516,7 +1516,7 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
     };
     let (recent, long_ago) = (rollout("11/12", "09-30-00", idle), rollout("03/02", "15-00-00", old));
     session_fixture(&format!("codex/{recent}"), &codex.join(&recent), &repo, hours(2));
-    session_fixture(&format!("codex/{long_ago}"), &codex.join(&long_ago), &repo.join("docs"), hours(72));
+    session_fixture(&format!("codex/{long_ago}"), &codex.join(&long_ago), &repo.join("docs"), hours(240));
     // Codex's names for its threads: one for the idle session, none for the old one.
     session_fixture("codex/session_index.jsonl", &codex.join("session_index.jsonl"), &repo, hours(2));
     let settings = |sessions: bool| {
@@ -1554,26 +1554,44 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
     let bar = otto.call(json!({"cmd": "state"}))["sessions_bar"].clone();
     assert_eq!((&bar["enabled"], &bar["reads"], &bar["count"]), (&json!(true), &json!(0), &json!(0)));
     assert_eq!(bar["slow_reads"], 0, "no task follows a session: nothing to look at");
-    // Open: read at once. The active session first, the one older than a day behind "1 older".
+    // Open: read at once. The group starts folded: its heading alone, until unfolded. Then Today:
+    // the active session first (the idle one too, unless the day began less than 2 hours ago).
     otto.call(json!({"cmd": "section", "section": "tasks"}));
-    let reply = otto.wait_for("the sessions to be read", |o| {
-        Some(o.call(json!({"cmd": "state"}))).filter(|reply| reply["sessions_bar"]["count"] == 3)
+    let folded = otto.wait_for("the sessions to be read", |o| {
+        Some(o.call(json!({"cmd": "state"}))).filter(|reply| reply["sessions_bar"]["total"] == 3)
     });
+    assert_eq!((&folded["sessions_bar"]["collapsed"], rows(&folded).len()), (&json!(true), 0));
+    otto.call(json!({"cmd": "task_group", "heading": "sessions"}));
+    let reply = otto.wait_for("the sessions to be read", |o| {
+        Some(o.call(json!({"cmd": "state"}))).filter(|reply| reply["sessions_bar"]["total"] == 3)
+    });
+    assert_eq!(
+        (rows(&reply)[0].clone(), &reply["sessions_bar"]["range"]),
+        (row("claude", busy, true), &json!("today"))
+    );
+    // 7 days: the two of today and two hours ago. A client's pick lasts the run, unwritten.
+    let reply = otto.call(json!({"cmd": "sessions_range", "range": "week"}));
     assert_eq!(rows(&reply), [row("claude", busy, true), row("codex", idle, false)]);
+    let written = || std::fs::read_to_string(home.join("settings.json")).unwrap();
+    assert!(!written().contains("sessions_range"), "{}", written());
     let bar = &reply["sessions_bar"];
     assert_eq!(
-        (&bar["older"], &bar["rows"][0]["doing"], &bar["rows"][1]["doing"]),
-        (&json!(1), &json!("network · git push"), &Value::Null)
+        (&bar["count"], &bar["total"], &bar["rows"][0]["doing"], &bar["rows"][1]["doing"]),
+        (&json!(2), &json!(3), &json!("network · git push"), &Value::Null)
     );
     assert_eq!((&bar["rows"][0]["age"], &bar["rows"][1]["age"]), (&json!("now"), &json!("2h")));
     // Each row's title, quoted (the last one its file has), and its model in short.
     let named = |row: &Value| (row["quoted_title"].clone(), row["model"].clone());
     assert_eq!(named(&bar["rows"][0]), (json!("Greet the user"), json!("fable-5.2")));
     assert_eq!(named(&bar["rows"][1]), (json!("Tidy the imports"), json!("gpt-6-nova")));
-    let reply = otto.call(json!({"cmd": "sessions_older"}));
+    // All: the one of ten days ago too.
+    let reply = otto.call(json!({"cmd": "sessions_range", "range": "all"}));
     assert_eq!(rows(&reply)[2], row("codex", old, false));
     assert_eq!(named(&reply["sessions_bar"]["rows"][2]), (Value::Null, json!("gpt-5.4")), "no title: none shown");
-    otto.call(json!({"cmd": "sessions_older"}));
+    // The user's click on the heading's switch is written to the settings.
+    let reply = otto.user_click(at(otto.control("sessions-range:week"), 0.5, 0.5));
+    assert_eq!((&reply["sessions_bar"]["range"], &reply["sessions_bar"]["collapsed"]), (&json!("week"), &json!(false)));
+    assert!(written().contains("\"sessions_range\": \"week\""), "{}", written());
     // The words of the made-up conversation are nowhere in what the app says.
     let said = otto.call(json!({"cmd": "state"})).to_string();
     assert!(!said.contains("Add a greeting") && !said.contains("made-up"), "{said}");
@@ -1616,7 +1634,7 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
     let reply = otto.wait_for("the next read", |o| {
         Some(o.call(json!({"cmd": "state"}))).filter(|reply| reply["sessions_bar"]["reads"].as_u64() > Some(reads))
     });
-    assert_eq!((rows(&reply), &reply["sessions_bar"]["count"]), (vec![], &json!(1)));
+    assert_eq!((rows(&reply), &reply["sessions_bar"]["total"]), (vec![], &json!(1)));
     // Hide takes the last one away, shown or not.
     let reply = otto.call(json!({"cmd": "session_hide", "runner": "codex", "id": old}));
     assert_eq!((&reply["sessions_bar"]["count"], &reply["sessions_bar"]["slow_reads"]), (&json!(0), &json!(0)));
@@ -1669,7 +1687,7 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
     fresh.call(json!({"cmd": "section", "section": "tasks"}));
     let listed = |o: &Otto, count: u64| {
         o.wait_for("the sessions bar", |o| {
-            (o.call(json!({"cmd": "state"}))["sessions_bar"]["count"] == count).then_some(())
+            (o.call(json!({"cmd": "state"}))["sessions_bar"]["total"] == count).then_some(())
         })
     };
     listed(&fresh, 1); // the two adopted above are tasks on disk; the old one is left
@@ -5034,6 +5052,9 @@ fn a_click_on_a_session_goes_on_with_it_in_the_drawer() {
     let otto = Otto::launch_with("session-open", &env);
     otto.call(json!({"cmd": "split", "kind": "empty"}));
     otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.call(json!({"cmd": "task_group", "heading": "sessions"}));
+    // All: sessions hours old are not of "today" just after midnight.
+    otto.call(json!({"cmd": "sessions_range", "range": "all"}));
     otto.wait_for("the sessions to be read", |o| {
         (o.call(json!({"cmd": "state"}))["sessions_bar"]["count"] == 3).then_some(())
     });

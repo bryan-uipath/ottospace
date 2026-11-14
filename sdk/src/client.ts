@@ -33,6 +33,7 @@ import type {
   DragArgs,
   DropPaneArgs,
   Heading,
+  SessionsRange,
   SessionRunner,
   InboxReply,
   MarkAddArgs,
@@ -351,9 +352,9 @@ export class Client {
   sessionClick(args: { runner: SessionRunner; id: string }): Promise<Snapshot> {
     return this.snapshot({ cmd: "session_click", ...args });
   }
-  /** Shows or hides the idle sessions older than a day. */
-  sessionsOlder(): Promise<Snapshot> {
-    return this.snapshot({ cmd: "sessions_older" });
+  /** Which sessions Other sessions lists, by when each was last active. For this run alone. */
+  sessionsRange(args: { range: SessionsRange }): Promise<Snapshot> {
+    return this.snapshot({ cmd: "sessions_range", ...args });
   }
   /** Folds or unfolds a heading of the Tasks section. */
   taskGroup(args: { heading: Heading }): Promise<Snapshot> {

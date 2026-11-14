@@ -996,6 +996,8 @@ impl Workspace {
         // The Tasks section as the user last grouped it.
         let view = config::get().settings.tasks_view.unwrap_or_default();
         model.update(Action::TasksView { view }.sent_by(Origin::System));
+        let range = config::get().settings.sessions_range.unwrap_or_default();
+        model.update(Action::SessionsRange { range }.sent_by(Origin::System));
         model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
         let kept = config::load_tasks();
         let unread = kept.unread;
@@ -1288,6 +1290,11 @@ impl Workspace {
                 Effect::SaveApps { changes } => self.save_apps(changes),
                 Effect::SaveTasksView { view } => {
                     if let Err(why) = config::save_value("tasks_view", &serde_json::json!(view)) {
+                        self.error = Some(format!("{}{why}", Self::NOT_WRITTEN));
+                    }
+                }
+                Effect::SaveSessionsRange { range } => {
+                    if let Err(why) = config::save_value("sessions_range", &serde_json::json!(range)) {
                         self.error = Some(format!("{}{why}", Self::NOT_WRITTEN));
                     }
                 }
@@ -1842,7 +1849,7 @@ impl Workspace {
                 Request::SessionAdopt { runner, id } => Some(Action::SessionAdopt { runner, id }),
                 Request::SessionHide { runner, id } => Some(Action::SessionHide { runner, id }),
                 Request::SessionClick { runner, id } => Some(Action::SessionClick { runner, id }),
-                Request::SessionsOlder => Some(Action::ToggleOlderSessions),
+                Request::SessionsRange { range } => Some(Action::SessionsRange { range }),
                 Request::TaskSetState { id, .. }
                 | Request::TaskSnooze { id, .. }
                 | Request::TaskHold { id }
@@ -2135,9 +2142,9 @@ impl Workspace {
         let found = if open && !stopped { found } else { self.sessions_listed.then(Vec::new) };
         if let Some(found) = found {
             self.sessions_listed = open && !stopped;
-            // The time too: ages and "older" are counted from it.
+            // The time too: ages and the range are counted from it.
             self.dispatch(Action::Tick { now }, Origin::System, window, cx);
-            self.dispatch(Action::SetSessions { found }, Origin::System, window, cx);
+            self.dispatch(Action::SetSessions { found, day: day_start(now) }, Origin::System, window, cx);
             cx.notify();
         }
         if stopped && !self.sessions_stopped {
@@ -3909,12 +3916,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// A click on "N older" under Sessions.
-    pub(crate) fn click_older_sessions(&mut self, window: &Window, cx: &mut Context<Self>) {
-        self.dispatch(Action::ToggleOlderSessions, self.input, window, cx);
-        cx.notify();
-    }
-
     /// A heading of the Tasks section, the Sessions one too: a fold mark, its name and how many
     /// it holds. A click folds it. `selected`: list mode is on it, and ↵ or space folds it.
     fn heading_row(
@@ -3924,7 +3925,7 @@ impl Workspace {
         collapsed: bool,
         selected: bool,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> Stateful<Div> {
         let color = match heading {
             Heading::NeedsYou => theme::task(Group::NeedsYou),
             _ => theme::MUTED,
@@ -3947,46 +3948,29 @@ impl Workspace {
             .relative()
             .child(self.controls.mark(format!("task-heading:{}", heading_name(heading))))
             .on_click(cx.listener(move |this, _, window, cx| this.click_heading(heading, window, cx)))
-            .into_any_element()
     }
 
-    /// The Sessions group: agent sessions found for the listed repositories that are no task's.
-    /// Empty when there are none. `listed`: how many rows of the list come before; the heading,
-    /// each session and "N older" are rows, as list mode walks them.
+    /// The Other sessions group: agent sessions found for the listed repositories that are no
+    /// task's, those in its range. Empty when none is listed. `listed`: how many rows of the list
+    /// come before; the heading and each session are rows, as list mode walks them.
     fn render_sessions(&self, mut listed: usize, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let bar = self.model.sessions_bar();
-        if bar.count == 0 {
+        if bar.total == 0 {
             return Vec::new();
         }
-        let small = |selected: bool| {
-            let line = div().px_2().flex().items_center().gap_1p5().text_xs().text_color(rgb(theme::MUTED));
-            line.relative().when(selected, |d| d.pb_0p5().rounded_md().bg(rgb(theme::SELECTED)))
-        };
         let selected = self.model.list == Some(listed);
-        let mut rows = vec![self.heading_row(Heading::Sessions, bar.count, bar.collapsed, selected, cx)];
+        // Unfolded, the heading holds the range switch, on a line below when narrow; its count is
+        // of those in range.
+        let heading = self.heading_row(Heading::Sessions, bar.count, bar.collapsed, selected, cx);
+        let total = SharedString::from(format!("{} in all", bar.total));
+        let heading = heading
+            .flex_wrap()
+            .gap_y_1()
+            .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(total.clone()))))
+            .children((!bar.collapsed).then(|| self.sessions_range_switch(cx)));
+        let mut rows = vec![heading.into_any_element()];
         listed += 1;
-        let (recent, old) = bar.rows.split_at(bar.recent());
-        for row in recent {
-            rows.push(self.session_row(row, self.model.list == Some(listed), cx));
-            listed += 1;
-        }
-        // "N older" sits between the sessions of the last day and the older ones.
-        if bar.older > 0 && !bar.collapsed {
-            rows.push(
-                small(self.model.list == Some(listed))
-                    .id("sessions-older")
-                    .py_0p5()
-                    .cursor_pointer()
-                    .hover(|s| s.text_color(rgb(theme::TEXT)))
-                    .child(div().w(px(8.)).child(if bar.older_open { "▾" } else { "▸" }))
-                    .child(format!("{} older", bar.older))
-                    .child(self.controls.mark("sessions-older"))
-                    .on_click(cx.listener(|this, _, window, cx| this.click_older_sessions(window, cx)))
-                    .into_any_element(),
-            );
-            listed += 1;
-        }
-        for row in old {
+        for row in &bar.rows {
             rows.push(self.session_row(row, self.model.list == Some(listed), cx));
             listed += 1;
         }
@@ -4070,7 +4054,9 @@ impl Workspace {
         }
         for section in self.model.task_sections(now_ms()).into_iter().filter(|_| by_state) {
             let selected = self.model.list == Some(listed);
-            rows.push(self.heading_row(section.heading, section.count, section.collapsed, selected, cx));
+            rows.push(
+                self.heading_row(section.heading, section.count, section.collapsed, selected, cx).into_any_element(),
+            );
             listed += 1;
             for row in &section.rows {
                 if let Some(task) = self.model.tasks.get(row.id) {
@@ -4899,11 +4885,17 @@ fn day_start(now: u64) -> u64 {
     const SINCE_2001: f64 = 978_307_200.;
     let zone = CFTimeZone::system();
     let offset_at = |ms: i64| (zone.seconds_from_gmt(CFDate::new(ms as f64 / 1000. - SINCE_2001)) * 1000.) as i64;
-    let midnight = |offset: i64| {
-        let local = now as i64 + offset;
-        local - local.rem_euclid(86_400_000) - offset
-    };
-    midnight(offset_at(midnight(offset_at(now as i64)))).max(0) as u64
+    midnight_of(now, offset_at)
+}
+
+/// `day_start` with the zone's offset at a time (`offset_at`, in milliseconds). The date is
+/// now's, by now's offset; only the offset is midnight's. e.g. 23:30 on the day clocks went back
+/// is of that day, not the next.
+fn midnight_of(now: u64, offset_at: impl Fn(i64) -> i64) -> u64 {
+    let now_offset = offset_at(now as i64);
+    let local = now as i64 + now_offset;
+    let date = local - local.rem_euclid(86_400_000);
+    (date - offset_at(date - now_offset)).max(0) as u64
 }
 
 fn now_ms() -> u64 {
@@ -5700,6 +5692,21 @@ mod tests {
         for path in icons {
             assert!(Assets.load(path).unwrap().is_some(), "{path} is not in Assets::load");
         }
+    }
+
+    /// Los Angeles: UTC-7 until 2026-11-01 09:00 UTC (2:00 PDT), UTC-8 after; UTC-8 until
+    /// 2026-03-08 10:00 UTC (2:00 PST), UTC-7 after.
+    #[test]
+    fn the_day_starts_at_local_midnight_across_a_clock_change() {
+        const H: i64 = 3_600_000;
+        let (back, forward) = (1_793_523_600_000_i64, 1_772_964_000_000_i64);
+        let la = |ms: i64| if (forward..back).contains(&ms) { -7 * H } else { -8 * H };
+        // 2026-11-01 23:30 PST: the day began at 00:00 PDT (07:00 UTC), not 23:00 PST.
+        assert_eq!(midnight_of((back + 22 * H + 30 * 60_000) as u64, la), (back - 2 * H) as u64);
+        // 2026-03-08 23:00 PDT: the day began at 00:00 PST (08:00 UTC).
+        assert_eq!(midnight_of((forward + 20 * H) as u64, la), (forward - 2 * H) as u64);
+        // A day with no change: 04:00 PST began at 08:00 UTC.
+        assert_eq!(midnight_of((back + 27 * H) as u64, la), (back + 23 * H) as u64);
     }
 
     /// The rail is drawn in the order the core moves through it.
