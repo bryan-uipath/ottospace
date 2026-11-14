@@ -103,6 +103,9 @@ pictures with the `pr-image-upload` skill, never commit them.
   The sliver is what keeps GPUI drawing (a window nothing of which shows is not drawn). A
   locked screen draws nothing: the script stops and says so, and refuses a picture of one
   colour or with most of it see-through.
+- **Size.** The window is 1400x900 points where the screen has room: 2800x1800 pixels on a
+  Retina screen. A hosted runner's screen is 1024x768, so there it is 1024x674. Both sides of a
+  compare run on one machine, so their pictures always match.
 - **When.** A state reply waits for the frame that draws its request; each shot waits for that,
   then 150 ms for the window server.
 - **Recordings.** `--record` films the window with ScreenCaptureKit through the test-only
@@ -126,7 +129,8 @@ pictures with the `pr-image-upload` skill, never commit them.
 `scripts/shots/<name>.jsonl`: control-socket requests, one a line, and the script's own steps.
 A folder `scripts/shots/<name>/` is copied into the instance's folder first (`home/settings.json`,
 `repos/`, `fixtures/` for the stand-in `claude`); `_git` there becomes `.git`. `{ROOT}` (that
-folder), `{REPO}` (the checkout) and `{NOW+3600}` (an ICS time from now) are filled in.
+folder), `{REPO}` (the checkout), `{NOW+3600}` (an ICS time from now) and `{TODAY+34200}`
+(09:30 today, local: what must fall on today whatever the hour) are filled in.
 
 | Step | Does |
 |---|---|

@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
 
+use objc2_core_foundation::CGSize;
 use screencapturekit::prelude::*;
 
 pub struct Recording {
@@ -41,19 +42,19 @@ impl SCStreamOutputTrait for Writer {
             return;
         }
         let line = serde_json::json!({ "n": n, "ms": crate::now_ms(), "w": w, "h": h });
+        // One write a line: a reader never sees half of one.
         if let Ok(mut index) = self.index.lock() {
-            let _ = writeln!(index, "{line}");
+            let _ = index.write_all(format!("{line}\n").as_bytes());
         }
     }
 }
 
 /// Starts recording window `id`, `size` points, at one pixel a point, into the folder `dir`.
-pub fn start(id: u32, size: (f64, f64), dir: PathBuf) -> Result<Recording, String> {
-    let content = SCShareableContent::get().map_err(|e| format!("{e:?}"))?;
-    let window = content.windows().into_iter().find(|w| w.window_id() == id).ok_or("window not shareable")?;
+pub fn start(id: u32, size: CGSize, dir: PathBuf) -> Result<Recording, String> {
+    let window = ottospace_mac::capture::sc_window(id)?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let index = File::create(dir.join("frames.jsonl")).map_err(|e| e.to_string())?;
-    let (w, h) = (size.0.round().max(1.0) as usize, size.1.round().max(1.0) as usize);
+    let (w, h) = (size.width.round().max(1.0) as usize, size.height.round().max(1.0) as usize);
     let filter = SCContentFilter::create().with_window(&window).build().map_err(|e| format!("{e:?}"))?;
     let config = SCStreamConfiguration::new()
         .with_width(w as u32)

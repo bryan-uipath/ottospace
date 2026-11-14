@@ -78,13 +78,14 @@ pub fn name_of(pid: i32) -> Option<String> {
 /// Pairs an AX window with its SCK window (matched by CGWindowID).
 pub fn target(window: ax::Window) -> Result<Target, String> {
     let id = window.id().ok_or("could not resolve CGWindowID")?;
-    let content = SCShareableContent::get().map_err(|e| format!("{e:?}"))?;
-    let sc_window = content
-        .windows()
-        .into_iter()
-        .find(|w| w.window_id() == id)
-        .ok_or("window not shareable")?;
+    let sc_window = sc_window(id)?;
     Ok(Target { window, sc_window, id })
+}
+
+/// The SCK window with this CGWindowID.
+pub fn sc_window(id: u32) -> Result<SCWindow, String> {
+    let content = SCShareableContent::get().map_err(|e| format!("{e:?}"))?;
+    content.windows().into_iter().find(|w| w.window_id() == id).ok_or_else(|| "window not shareable".into())
 }
 
 /// The window's corner radius in points, measured from one alpha screenshot.

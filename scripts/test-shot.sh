@@ -55,9 +55,6 @@ check "it runs" [ "$status" = 0 ]
 check "the picture is written" [ -s "$png" ]
 check "more than one colour" [ "$(field "$png" colors)" -gt 1 ]
 check "nothing see-through: the whole window drew" [ "$(field "$png" clear)" -le 128 ]
-# The window is 1400x900 points: one or two pixels a point.
-size="$(field "$png" w)x$(field "$png" h)"
-check "the window's size ($size)" test "$size" = 1400x900 -o "$size" = 2800x1800
 check "its temp folder is gone" [ "$(leftovers)" = 0 ]
 
 echo "# compare, the same build on both sides"

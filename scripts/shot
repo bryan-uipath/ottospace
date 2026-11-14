@@ -8,8 +8,8 @@ takes its window, by window id only.
 
 A scenario is scripts/shots/<name>.jsonl: control-socket requests, one a line, and the steps
 below; a folder scripts/shots/<name>/ beside it is copied into the instance's own folder first.
-`{ROOT}` (that folder), `{REPO}` (this checkout) and `{NOW+3600}` (an ICS time, seconds from
-now) are replaced in both. Lines starting with `#` are comments.
+`{ROOT}` (that folder), `{REPO}` (this checkout), `{NOW+3600}` (an ICS time, seconds from now)
+and `{TODAY+34200}` (09:30 today, local) are replaced in both. Lines starting with `#` are comments.
 
   {"shot":"name"}             settle, then take the window: <out>/<scenario>/<name>.png
   {"settle":true}             wait for the frame that draws the last request (`settle`:500: and 500 ms)
@@ -65,13 +65,16 @@ def screen_locked():
         return False
 
 
-def ics_time(offset):
-    return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(time.time() + offset))
+def ics_time(at):
+    return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(at))
 
 
 def fill(text, root):
     text = text.replace("{ROOT}", root).replace("{REPO}", REPO)
-    return re.sub(r"\{NOW([+-]\d+)\}", lambda m: ics_time(int(m.group(1))), text)
+    # {TODAY+32400}: 09:00 today, local time; a run at any hour has the same day.
+    midnight = time.mktime(time.localtime()[:3] + (0, 0, 0, 0, 0, -1))
+    text = re.sub(r"\{TODAY\+(\d+)\}", lambda m: ics_time(midnight + int(m.group(1))), text)
+    return re.sub(r"\{NOW([+-]\d+)\}", lambda m: ics_time(time.time() + int(m.group(1))), text)
 
 
 def scenario_names():
@@ -268,6 +271,7 @@ class Instance:
         return window
 
     def shot(self, path):
+        asked = time.time() * 1000
         self.settle()
         if screen_locked():
             raise Failed("the screen is locked: nothing draws. Unlock it and run again")
@@ -276,7 +280,7 @@ class Instance:
         if self.recording:
             # While the window is streamed, the window server gives screencapture only the part
             # on screen: the picture is the recording's last frame, one pixel a point.
-            frame_png(self.recording, path)
+            frame_png(self.recording, path, asked)
         else:
             subprocess.run(["/usr/sbin/screencapture", "-x", "-o", "-l", str(window), path], check=False)
         if not os.path.isfile(path):
@@ -308,10 +312,23 @@ class Instance:
         shutil.rmtree(self.root, ignore_errors=True)
 
 
-def frame_png(frames_dir, path):
-    """The last frame recorded in `frames_dir`, as a PNG."""
-    with open(os.path.join(frames_dir, "frames.jsonl")) as f:
-        rows = [json.loads(line) for line in f]
+def read_frames(frames_dir):
+    """The recording's index: one row a frame. A line still being written is left out."""
+    try:
+        with open(os.path.join(frames_dir, "frames.jsonl")) as f:
+            return [json.loads(line) for line in f if line.endswith("\n")]
+    except OSError:
+        return []
+
+
+def frame_png(frames_dir, path, since_ms):
+    """The last frame recorded in `frames_dir`, as a PNG: one from `since_ms` on if one comes
+    within half a second (frames come only when something changed)."""
+    deadline = time.time() + 0.5
+    rows = read_frames(frames_dir)
+    while (not rows or rows[-1]["ms"] < since_ms) and time.time() < deadline:
+        time.sleep(0.02)
+        rows = read_frames(frames_dir)
     if not rows:
         raise Failed("the recording has no frame yet")
     last = rows[-1]
@@ -323,8 +340,7 @@ def frame_png(frames_dir, path):
 
 def encode(frames_dir, stop_ms, out_base):
     """The recorded frames as a steady 30 fps MP4 and a small GIF. Returns a line about it."""
-    index = os.path.join(frames_dir, "frames.jsonl")
-    rows = [json.loads(line) for line in open(index)] if os.path.isfile(index) else []
+    rows = read_frames(frames_dir)
     if not rows:
         raise Failed("the recording has no frames (Screen Recording permission? a locked screen?)")
     w, h, start = rows[0]["w"], rows[0]["h"], rows[0]["ms"]
@@ -465,9 +481,9 @@ def build(tree, dest, target=None):
 
 
 def compare(args, scratch):
-    if args.bin_before and args.bin_after:
-        before, after = args.bin_before, args.bin_after
-    else:
+    """Before and after of each scenario. Returns the scenarios that failed on this tree."""
+    before = args.bin_before
+    if not before:
         sha = subprocess.run(["git", "-C", REPO, "rev-parse", "--verify", args.compare + "^{commit}"],
                              capture_output=True, text=True)
         if sha.returncode != 0:
@@ -483,10 +499,10 @@ def compare(args, scratch):
             before = build(tree, os.path.join(scratch, "ottospace-before"), target)
         finally:
             subprocess.run(["git", "-C", REPO, "worktree", "remove", "--force", tree], check=False)
-        after = args.bin_after or build(REPO, os.path.join(scratch, "ottospace-after"))
+    after = args.bin_after or build(REPO, os.path.join(scratch, "ottospace-after"))
     for side in ["before", "after", "compare"]:
         shutil.rmtree(os.path.join(args.out, side), ignore_errors=True)
-    rows = []
+    rows, failed = [], []
     for scenario in args.scenarios:
         say(f"{scenario}: before")
         try:
@@ -496,7 +512,13 @@ def compare(args, scratch):
             say(f"  could not run on the base ({err}): after only")
             old = []
         say(f"{scenario}: after")
-        new = run_scenario(after, scenario, os.path.join(args.out, "after"))
+        try:
+            new = run_scenario(after, scenario, os.path.join(args.out, "after"))
+        except Failed as err:
+            # The others still get their pictures; the run fails at the end.
+            say(f"  failed: {err}")
+            failed.append(scenario)
+            continue
         for shot in new:
             pair = os.path.join(args.out, "compare", f"{scenario}-{shot}.png")
             os.makedirs(os.path.dirname(pair), exist_ok=True)
@@ -512,6 +534,7 @@ def compare(args, scratch):
         print(f"**{name}**{' (after only)' if only else ''}\n")
         print(f"![{name}](<url of {os.path.relpath(pair, args.out)}>)\n")
     say(f"\nwrote {args.out}/before, after and compare. Upload with the pr-image-upload skill; never commit them.")
+    return failed
 
 
 def main():
@@ -542,8 +565,10 @@ def main():
     scratch = tempfile.mkdtemp(prefix="ottospace-shot-build-")
     try:
         if args.compare:
-            compare(args, scratch)
-            return 0
+            failed = compare(args, scratch)
+            if failed:
+                say(f"shot: failed on this tree: {', '.join(failed)}")
+            return 1 if failed else 0
         binary = args.bin or build(REPO, os.path.join(scratch, "ottospace"))
         for scenario in args.scenarios:
             say(scenario)

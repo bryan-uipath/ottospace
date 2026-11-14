@@ -1,5 +1,5 @@
 # A busy day: the band above the status bar, the Calendar section, a meeting's hover card.
-# The feed's times are from now ({NOW+3600}), so the day is busy whenever it runs.
+# Four meetings at fixed times today ({TODAY+34200} is 09:30), one around now, one tomorrow.
 {"cmd":"split","kind":"empty"}
 {"until":"calendar.band.blocks.3"}
 {"cmd":"section","section":"calendar"}

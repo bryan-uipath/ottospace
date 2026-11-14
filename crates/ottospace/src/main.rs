@@ -2126,8 +2126,7 @@ impl Workspace {
                 }
                 Request::CalendarCall { in_call } => Some(Action::CallSeen { in_call, at: now_ms() }),
                 Request::RecordStart { dir } => {
-                    let size = window.bounds().size;
-                    let size = (f32::from(size.width) as f64, f32::from(size.height) as f64);
+                    let size = to_cg(window.bounds().size);
                     let id = ns_view(window).map(|view| unsafe { ottospace_mac::window::number(view) });
                     let started = match (&self.recording, id) {
                         (Some(_), _) => Err("already recording".to_string()),
