@@ -38,14 +38,15 @@ running, and the rest of the design is not built: see the
 | Task groups on the one tab bar: a tab may be a task's, and each task's tabs sit side by side behind its badge (its two letters, bordered in its own colour, its state as a dot), underlined in its colour; the tabs of no task last. Starting a task takes the tab on show if that is no task's; ⌘T joins the task on show; drag a tab onto a group to move it there. The same badge on its panes, its row, the rail and the drawer. Selecting a task's tab shows its conversation in the open drawer | Works today |
 | Tabs, each with its own split tree | Works today |
 | Pane picker: choose a terminal, a running app, or (once you type) any installed app for a new pane or tab | Works today |
-| Icon rail with a secondary bar; Apps lists running apps with their icons | Works today |
+| Icon rail with a secondary bar | Works today |
+| The Apps section: the Dock's apps, pins, "Not running" and "All apps" | Works today, behind the `apps_section` [flag](#features), off by default |
 | Repos: each repository's name over its checkouts (the branch, then `Default` or a linked worktree's directory); open a terminal in one. + in the header adds a directory to `repos` in the settings; Remove on a name takes it off | Works today |
 | List mode (⌘⌃E): drive the bar with the keyboard | Works today |
 | Sneak mode (⌘; or ⌘⌃G): a letter label on each of ottospace's own controls, and on the buttons and text fields of the focused app pane; typing it clicks the control, presses the app's button, or focuses its text field | Works today |
 | The wheel over an app pane you are not in brings its window up for the scroll (a peek): `PEEK` in the status bar, parked again when the pointer leaves or the wheel is quiet | Partly verified: on CI the window comes up, the app is in front and the scrolls after the first reach it. The first scroll is lost. The window parking again by itself is unit-tested, not yet seen on CI |
 | [Command palette](#command-palette) (⌘P): every command of the menu bar by name, with its key; a Developer group | Works today |
 | [Accessibility inspector](#accessibility-inspector): a hosted app's accessibility tree in the right drawer's place, read-only | Works today |
-| Marks (⌘B, ⌘⇧B, ⌘' and a letter): named ways back to a pane or a tab, kept in `~/.ottospace/marks.json` | Works today |
+| Marks (⌘B, ⌘⇧B, ⌘' and a letter): named ways back to a pane or a tab, kept in `~/.ottospace/marks.json` | Works today, behind the `marks` [flag](#features), off by default |
 | Capture (⌃⌥⌘Space, from any app): a frozen picture of the pane in use to circle and write on, collected in a draft in the drawer; the task it becomes has a brief with the pictures, the notes and the text under each annotation (`task_brief`), and its agent is told the brief's path. Kept in `~/.ottospace/materials` | Works today |
 | Workbooks (⌘⇧S): save tabs under a name (their splits, each terminal's directory, each app) and open them again from the Workbook section. Several tabs each: add a tab to one, or save all the tabs on the bar as one. Kept in `~/.ottospace/workbooks`. An app comes back as its window, not on the page or document it showed | Works today |
 | Tabs and layout come back after quitting: every tab (with its task and workbook), its splits and sizes, focus, the tab on show, the section and the drawer; terminals start again in their folders with their last lines and an offered command; running apps' windows go back in their panes. See [Restoring the layout](#restoring-the-layout) | Works today |
@@ -123,10 +124,10 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⌃1 … ⌘⌃9 | Show the nth conversation of the right rail; on the one shown, close the drawer. Not ⌥1…⌥9: ⌥ is Meta in a terminal |
 | ⌘⇧N | Next task: the conversation of the first task that needs you. The tab on show stays |
 | ⌃⌥⌘Space | Capture, from any app: the pane in use (a hosted app you are in, else the focused pane) is frozen as a picture to draw on, and a draft opens in the drawer on the right, with the new-task line as its title. A live app is parked first; "↩ back to …" in the bar returns to it. On the picture: drag circles, ⇧-drag draws a box, ⌥-drag a freehand line, a click places a note to type (↵ keeps it). ⌘Z and ⇧⌘Z go over the steps; a click on a shape's line selects it and ⌫ removes it. ↵ goes to the title, Esc leaves the picture; a click on another pane captures that one too. In the title ↵ adds the task and starts its agent, ⇧↵ adds it for later; × or Esc cancels, after a question if anything was captured. The workspace stays in use beside the drawer, and ⌘N goes to the draft's title. See [Capture](#capture) |
-| ⌘B / ⌘⇧B | Mark the focused pane / the tab on show; on one that is marked, take the mark off (the Marks section offers it back for six seconds, and ⌘B again within them puts the same mark back). The mark is named for the app, the terminal's directory or the tab's title. It records what to open, not a window or a process: a terminal's directory as it is then, an app's bundle id, name and window title, a tab's title, task and split tree. A marked pane or tab shows ◆ and its letter |
+| ⌘B / ⌘⇧B | With the `marks` [flag](#features) on (so for the next two rows): mark the focused pane / the tab on show; on one that is marked, take the mark off (the Marks section offers it back for six seconds, and ⌘B again within them puts the same mark back). The mark is named for the app, the terminal's directory or the tab's title. It records what to open, not a window or a process: a terminal's directory as it is then, an app's bundle id, name and window title, a tab's title, task and split tree. A marked pane or tab shows ◆ and its letter |
 | ⌘' then a letter | Go to the mark with that letter. The status bar shows `MARK?` while it waits; Esc, or a letter of no mark, ends the wait and nothing else happens. If the mark's pane or tab is open, its tab comes forward and the pane takes focus (an app pane is focused, not entered). Else it is opened: a terminal in the recorded directory, the app's window in a pane (the one with the recorded title, else its only window, else its main one; an app that is not running is started), or the tab with its splits. A tab opens with what can be opened: a pane whose directory is gone or whose window could not be hosted is empty and says why, and going to the tab again tries it again |
 | ⌘⌥1 … ⌘⌥9 | Go to one of the first nine marks, in the order of the Marks section |
-| ⌘⌃E | List mode: the bar (Tasks, Calendar while a feed is set, Apps, Workbook, Repos, Marks) takes the keyboard, on the open section, or Apps if none is. On a workbook ↵ opens its tabs, space lists them under it, `a` adds the tab on show to it, `r` renames it, `x` deletes it and `u` takes the last delete or update back; on one of its tabs ↵ opens that tab, `r` renames it and `x` takes it out. On a mark `x` removes it, `r` renames it, `m` gives it a letter, ⇧J / ⇧K move it down / up, and `u` puts the last removed mark back. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); in Tasks a heading is a row too, and ↵ or space on it folds or unfolds it; Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; on an app that is not running `p` pins or unpins it, `x` hides a suggestion and `u` takes the last of these back; in Apps `/` types in the filter of "All apps" (↵, ↓ or Esc gives the keys back to the rows); Esc or ⌘⌃E leaves |
+| ⌘⌃E | List mode: the bar (Tasks, Calendar while a feed is set, Apps, Workbook, Repos, Marks; Apps and Marks only while their [flags](#features) are on) takes the keyboard, on the open section, or Apps if none is (with Apps off, the first). On a workbook ↵ opens its tabs, space lists them under it, `a` adds the tab on show to it, `r` renames it, `x` deletes it and `u` takes the last delete or update back; on one of its tabs ↵ opens that tab, `r` renames it and `x` takes it out. On a mark `x` removes it, `r` renames it, `m` gives it a letter, ⇧J / ⇧K move it down / up, and `u` puts the last removed mark back. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); in Tasks a heading is a row too, and ↵ or space on it folds or unfolds it; Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; on an app that is not running `p` pins or unpins it, `x` hides a suggestion and `u` takes the last of these back; in Apps `/` types in the filter of "All apps" (↵, ↓ or Esc gives the keys back to the rows); Esc or ⌘⌃E leaves |
 | ⌘; or ⌘⌃G | Sneak mode: every control ottospace draws (rail icons, bar rows, tabs and their ×, top-bar buttons, pane headers and their ×, each pane, the drawer's buttons and picks, the right rail's badges, the home screen's buttons, rows and nodes) gets a short label, home-row letters first. Type a label and the control does what a click does; a pane's label focuses it, or gives an app pane the keyboard. A × (pane or tab) always has a two-letter label. Two-letter labels narrow on the first letter; ⌫ takes it back. Esc, a click, a letter that goes on with no label, or any ⌘ shortcut leaves; the shortcut then runs (⌘C copies, ⌘V pastes). Other keys do nothing. The labels follow what is drawn: if a control moves its label moves, and if it goes its label goes. What happens by itself (a shell exits, an agent files a task) does not end the mode. Starting it hides the accessibility overlay (⌘⌃A). Not ⌃G alone: a terminal needs that key. On a keyboard layout with no Latin letters, the keys type the letters they have under ⌘. From `APP` mode return first. The focused app pane's elements get labels too, in orange (APP mode's colour), always two letters or more so one stray key presses nothing in another app: those its accessibility tree says can be pressed (`AXPress`) or typed in (text fields), enabled, at least 4 points each way where the pane shows them, the innermost of nested ones, at most 150 (nearest the pane's top left). Their labels start with the letters ottospace's own leave free, 19 two-letter labels to each such letter (e.g. `ta`, `ts`, `td`); the first letter only narrows. Only when those letters run out do they go under a × label's first letter, or take three letters. They appear once the app's tree is read, a moment after ottospace's own, and follow it while the mode is on (read again each second); the status bar says how many, e.g. `12 controls in Calculator`. An orange label presses that element (`AXPress`) and the pane stays parked; a text field's label focuses the field and gives the app the keyboard, so you type there. Before it presses, ottospace finds the element again and checks it is the same (role, enabled, place in its window within 2 points); if not, nothing is pressed and the status bar says the control moved. Sneak sets no value, opens no menu and scrolls nothing in the app, and only your own typed letter presses: a socket client's letter of an orange label is refused. Apps that build their accessibility tree only on request (Electron, Chrome's pages, Spotify) show few elements, and get few labels: ottospace does not switch their fuller mode on. Entering an app pane raises its window, as a click on the pane does |
 | ⌘⇧C | Visual mode on the terminal: `hjkl`/arrows, `w b e 0 ^ $`, `H M L` move; `v` / `V` select; `y` or ↵ copies and leaves; Esc leaves |
 
@@ -306,6 +307,11 @@ key. Type to filter: the letters in order, ignoring case and spaces (`tr` finds 
 a word's first letter and letters side by side rank first, then a group's name (`dev` lists the
 Developer group). ↑/↓ or ⌃N/⌃P move, a click or ↵ runs the command as its menu item does, Esc, ⌘P
 or a click outside closes it. A command that nothing matches keeps the box open.
+
+Features… (App, also ottospace ▸ Features…) turns the box into a list of the [feature
+flags](#features), each with its stage, description and whether it is on; ↵ or a click turns
+the flag the other way, writes it to `settings.json` and applies at once. A command of a feature
+that is off is not listed.
 
 Open Settings (App, also ottospace ▸ Open Settings, ⌘,) opens `settings.json` in your editor in a
 tab titled Settings; see [Settings](#settings).
@@ -797,7 +803,7 @@ first. Again while that tab is open brings it forward; quitting the editor close
 you open it: a socket client's ⌘, does nothing. Open at quit, it comes back at the next start,
 the editor running again ([Restoring the layout](#restoring-the-layout)).
 
-A change is read when the file is saved: what is wrong in it is said in the status bar (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify` and `calendar_notify_for` apply at once; any other key changed says "restart to apply" with its name (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
+A change is read when the file is saved: what is wrong in it is said in the status bar (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify`, `calendar_notify_for` and `features` apply at once; any other key changed says "restart to apply" with its name (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
 
 
 ```json
@@ -820,7 +826,8 @@ A change is read when the file is saved: what is wrong in it is said in the stat
   "apps_hidden": ["Music"],
   "suggest_dock_apps": true,
   "wheel_to_apps": true,
-  "windows": [{ "app": "us.zoom.xos", "title": "Zoom Meeting", "do": "ignore" }]
+  "windows": [{ "app": "us.zoom.xos", "title": "Zoom Meeting", "do": "ignore" }],
+  "features": { "marks": false, "apps_section": false }
 }
 ```
 
@@ -855,10 +862,37 @@ A change is read when the file is saved: what is wrong in it is said in the stat
 | `calendar_notify_for` | Which meetings alert: `all`, or only those with a Zoom, Meet or Teams `links` | `all` |
 | `calendar_email` | Your address among a meeting's attendees in the feed: a meeting you declined is left out. Kept on this machine, never shown | none: nothing is left out |
 | `suggest_dock_apps` | List the Dock's apps that are not running under "Not running". `false`: only pinned apps are listed there, and the Dock is not read | `true` |
+| `features` | [Feature flags](#features), by name: `true` or `false`. A name that is no flag is a mistake, named in the status bar with the flags there are; the others still apply | each flag's default |
 
 A mistake in the file (a key that does not exist, a wrong value, a font that is not installed) is
 shown in the status bar. That key takes its default and the others still apply. If the file is
 not a JSON object, every default applies.
+
+## Features
+
+Parts that are not ready to be on for everyone are behind a flag, in `features` in the settings:
+`{ "features": { "marks": true } }`. Off, a feature is absent, not greyed out: no rail cell, no
+section, its keys do nothing, its commands and menu items are not listed, and its socket requests
+answer `feature off: <name>`. What it keeps on disk stays: turned on again, it is all there.
+Palette ▸ Features… lists each flag with its stage and whether it is on; choosing one turns it the
+other way, writes it to `settings.json` and applies at once.
+
+A flag is temporary and about readiness: it goes when its feature is stable, and a setting of it
+then does nothing (the status bar says so). A preference is a normal setting.
+
+| Feature | Stage | Default | What it is |
+| --- | --- | --- | --- |
+| `marks` | Experimental | off | Marks: name a pane or a tab, and go back to it with a letter |
+| `apps_section` | Experimental | off | The Apps section: the Dock's apps, pins, Not running and All apps |
+
+- `marks` off: no Marks cell or section, ⌘B, ⌘⇧B, ⌘' and ⌘⌥1…9 do nothing, no Mark commands or
+  menu items, no ◆ on a marked pane, and `marks`, `mark_add`, `mark_go`, `mark_remove`,
+  `mark_rename` and `section` `marks` answer `feature off: marks`. `marks.json` is still read and
+  never written; the state's `marks` is `[]`.
+- `apps_section` off: no Apps cell or section, and `section` `apps` answers
+  `feature off: apps_section`. ⌘⌃E drives the rail's first section. Hosting apps in panes, the
+  picker (⌘E, ⌘⇧E) and its installed apps, sneak labels in apps, peeks, restore and rescue all
+  still work. The state's `apps_bar` is empty.
 
 ## Driving it from outside
 

@@ -122,6 +122,9 @@ pub struct Settings {
     /// machine: never in the state, a log or the feed's request.
     #[serde(default)]
     pub calendar_email: Option<String>,
+    /// Feature flags by name, e.g. `{ "marks": true }`: see `features`. One not named keeps its default.
+    #[serde(default)]
+    pub features: std::collections::BTreeMap<String, bool>,
 }
 
 /// Which meetings alert when they start (`calendar_notify_for`).
@@ -274,7 +277,18 @@ impl Settings {
                 return Err("calendar_email must be an e-mail address, as me@example.com".into());
             }
         }
+        // A flag no feature has is a mistake; one retired is ignored (`read` warns of it).
+        let retired = |name: &String| crate::features::RETIRED.contains(&name.as_str());
+        let unknown = settings.features.keys().filter(|name| !retired(name));
+        if let Some(why) = unknown.filter_map(|name| crate::features::wrong(name, &true.into())).next() {
+            return Err(why);
+        }
         Ok(settings)
+    }
+
+    /// The features on, as `features` says.
+    pub fn features(&self) -> crate::features::Features {
+        crate::features::Features::from_settings(&self.features)
     }
 
     /// Reads the file's text, keeping every key that is right. One wrong key must not undo the
@@ -304,6 +318,16 @@ impl Settings {
                 let said = id.as_str().map_or_else(|| id.to_string(), |id| format!("{id:?}"));
                 wrong.extend((!named).then(|| format!("agent_models: {}", not_a_model(&said))));
                 named
+            });
+        }
+        // So does a flag that is wrong: the other flags stay. A retired one is dropped, and only
+        // warned of (`retired_flags`): it is no mistake.
+        if let Some(flags) = keys.get_mut("features").and_then(serde_json::Value::as_object_mut) {
+            flags.retain(|name, on| {
+                let why = crate::features::wrong(name, on);
+                let gone = crate::features::RETIRED.contains(&name.as_str());
+                wrong.extend(why.as_ref().filter(|_| !gone).map(|why| format!("features: {why}")));
+                why.is_none()
             });
         }
         keys.retain(|key, value| {
@@ -346,6 +370,8 @@ pub struct Watch {
     restart: Vec<&'static str>,
     /// A retired key the file still has: said, never refused.
     retired: Option<&'static str>,
+    /// Flags of features that are stable now: a warning, which blocks nothing.
+    flags_retired: Vec<String>,
 }
 
 /// What the status bar says of a retired key.
@@ -361,6 +387,7 @@ impl Watch {
     /// `apps_hidden`) are the ones it holds.
     pub fn read(&mut self, text: &str, written: bool) -> Option<Settings> {
         let (settings, problems) = problems(text);
+        self.flags_retired = retired_flags(text, crate::features::RETIRED);
         // At start what is right applies, as `Settings::read` says: that is what was applied.
         let started = self.started.get_or_insert_with(|| settings.clone());
         self.problems = problems;
@@ -391,9 +418,20 @@ impl Watch {
             None if !self.restart.is_empty() => {
                 Some(format!("settings.json: restart to apply {}", self.restart.join(", ")))
             }
-            None => self.retired.map(String::from),
+            None => self
+                .retired
+                .map(String::from)
+                .or_else(|| self.flags_retired.first().map(|why| format!("settings.json: features: {why}"))),
         }
     }
+}
+
+/// The flags under `features` that are in `retired`, each as its warning.
+fn retired_flags(text: &str, retired: &[&str]) -> Vec<String> {
+    let flags = object(text).ok().and_then(|mut keys| keys.remove("features"));
+    let names: Vec<String> =
+        flags.and_then(|flags| flags.as_object().map(|f| f.keys().cloned().collect())).unwrap_or_default();
+    names.iter().filter_map(|name| crate::features::retired(name, retired)).collect()
 }
 
 /// The file's settings as `Settings::read` takes them, and its problems as the status bar says
@@ -458,6 +496,8 @@ fn restart_keys(started: &Settings, now: &Settings) -> Vec<&'static str> {
         calendar_notify: _,
         calendar_notify_for: _,
         calendar_email,
+        // Told to the core again on each good read, as Features… writes them.
+        features: _,
     } = now;
     let changed = [
         ("terminal", *terminal != started.terminal),
@@ -523,12 +563,7 @@ pub struct ListChange {
 /// `Err`: the file is not a JSON object, or a list to change is not a list of names. It must
 /// then be left alone: nothing in it is dropped for not being understood.
 pub fn with_changes(text: &str, changes: &[ListChange]) -> Result<String, String> {
-    let body = text.trim_start_matches('\u{feff}');
-    let keys = match serde_json::from_str::<serde_json::Value>(if body.trim().is_empty() { "{}" } else { body }) {
-        Ok(serde_json::Value::Object(keys)) => keys,
-        Ok(_) => return Err("the file must be a JSON object: { ... }".into()),
-        Err(err) => return Err(format!("not valid JSON: {err}")),
-    };
+    let keys = object(text)?;
     let mut new = text.to_string();
     for key in ["apps", "apps_hidden", "repos"] {
         let mine: Vec<&ListChange> = changes.iter().filter(|change| change.key == key).collect();
@@ -570,11 +605,7 @@ pub fn with_changes(text: &str, changes: &[ListChange]) -> Result<String, String
 /// they were. e.g. `"tasks_view": "project"`.
 pub fn with_value(text: &str, key: &str, value: &serde_json::Value) -> Result<String, String> {
     let body = text.trim_start_matches('\u{feff}');
-    let mut keys = match serde_json::from_str::<serde_json::Value>(if body.trim().is_empty() { "{}" } else { body }) {
-        Ok(serde_json::Value::Object(keys)) => keys,
-        Ok(_) => return Err("the file must be a JSON object: { ... }".into()),
-        Err(err) => return Err(format!("not valid JSON: {err}")),
-    };
+    let mut keys = object(text)?;
     if keys.get(key) == Some(value) {
         return Ok(text.to_string());
     }
@@ -587,6 +618,28 @@ pub fn with_value(text: &str, key: &str, value: &serde_json::Value) -> Result<St
     let bom = &text[..text.len() - body.len()];
     let fresh = || serde_json::to_string_pretty(&wanted).unwrap_or_default() + "\n";
     Ok(format!("{bom}{}", spliced.unwrap_or_else(fresh)))
+}
+
+/// `text` with `features.<name>` set to `on`: the other flags, and every other key, as they were.
+/// e.g. `{"features": {"marks": true}}` and `apps_section` on → both named.
+pub fn with_feature(text: &str, name: &str, on: bool) -> Result<String, String> {
+    let mut flags = match object(text)?.remove("features") {
+        None => serde_json::Map::new(),
+        Some(serde_json::Value::Object(flags)) => flags,
+        Some(_) => return Err("`features` is not an object: { \"marks\": true }".into()),
+    };
+    flags.insert(name.to_string(), on.into());
+    with_value(text, "features", &serde_json::Value::Object(flags))
+}
+
+/// The settings file's keys: no file or an empty one is `{}`. `Err`: it is not a JSON object.
+fn object(text: &str) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let body = text.trim_start_matches('\u{feff}');
+    match serde_json::from_str::<serde_json::Value>(if body.trim().is_empty() { "{}" } else { body }) {
+        Ok(serde_json::Value::Object(keys)) => Ok(keys),
+        Ok(_) => Err("the file must be a JSON object: { ... }".into()),
+        Err(err) => Err(format!("not valid JSON: {err}")),
+    }
 }
 
 /// As `with_changes`, with both lists given whole.
@@ -603,11 +656,7 @@ fn with_list(text: &str, key: &str, list: &[String]) -> Result<String, String> {
     if body.trim().is_empty() {
         return Ok(if list.is_empty() { text.to_string() } else { format!("{{\n  \"{key}\": {value}\n}}\n") });
     }
-    let mut keys = match serde_json::from_str::<serde_json::Value>(body) {
-        Ok(serde_json::Value::Object(keys)) => keys,
-        Ok(_) => return Err("the file must be a JSON object: { ... }".into()),
-        Err(err) => return Err(format!("not valid JSON: {err}")),
-    };
+    let mut keys = object(body)?;
     if list.is_empty() && !keys.contains_key(key) {
         return Ok(text.to_string());
     }
@@ -1036,6 +1085,39 @@ mod tests {
         assert_eq!((settings.apps_hidden, settings.suggest_dock_apps), (vec!["Music".to_string()], Some(false)));
         assert_eq!(Settings::default().suggest_dock_apps, None);
         assert_eq!(Settings::parse(r#"{"wheel_to_apps": false}"#).unwrap().wheel_to_apps, Some(false));
+    }
+
+    #[test]
+    fn a_feature_flag_is_a_known_name_and_a_bool_and_a_wrong_one_costs_only_itself() {
+        let (settings, wrong) = Settings::read(r#"{"features": {"marks": true, "tabs": true, "apps_section": "yes"}}"#);
+        assert_eq!(
+            settings.features(),
+            crate::features::Features::default().with(crate::features::Feature::Marks, true)
+        );
+        // In either order: the workspace's serde_json may keep the file's.
+        let mut wrong = wrong;
+        wrong.sort();
+        assert_eq!(
+            wrong,
+            [
+                "features: \"apps_section\" must be true or false",
+                "features: \"tabs\" is not a feature: the features are marks, apps_section"
+            ]
+        );
+        assert!(Settings::parse(r#"{"features": {"tabs": true}}"#).unwrap_err().contains("marks, apps_section"));
+        assert!(Settings::parse(r#"{"features": {"marks": 1}}"#).is_err());
+        assert_eq!(Settings::parse("{}").unwrap().features(), crate::features::Features::default());
+        // Features… writes one flag: the others, and the rest of the file, stay.
+        let text = "{\n  \"tasks\": \"t\",\n  \"features\": {\"marks\": true}\n}\n";
+        let set = with_feature(text, "apps_section", true).unwrap();
+        assert!(set.starts_with("{\n  \"tasks\": \"t\",\n  \"features\": {"), "{set}");
+        assert_eq!(Settings::read(&set).0.features(), crate::features::Features::all());
+        assert_eq!(with_feature("", "marks", false).unwrap(), "{\n  \"features\": {\n    \"marks\": false\n  }\n}\n");
+        assert!(with_feature(r#"{"features": true}"#, "marks", true).unwrap_err().contains("not an object"));
+        // A retired flag only warns: the rest of the file still applies.
+        let text = r#"{"features": {"tabs": true, "marks": true}}"#;
+        assert_eq!(retired_flags(text, &["tabs"]).len(), 1);
+        assert!(retired_flags(text, crate::features::RETIRED).is_empty());
     }
 
     #[test]

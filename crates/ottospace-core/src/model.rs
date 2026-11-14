@@ -8,10 +8,11 @@ use crate::ax::Target;
 use crate::calendar::{self, Calendar};
 use crate::capture::{self, Content, Facts, Tool};
 use crate::capture_model::Collection;
-use crate::commands::{self, Command, Palette, TaskChoice};
+use crate::commands::{self, Command, FeatureChoice, Palette, TaskChoice};
 use crate::complete::{self, Candidate, Dropdown, Row};
 use crate::compose::{self, Draft};
 use crate::edit::{Edit, Field, Motion};
+use crate::features::{Feature, Features};
 use crate::home::{self, Home};
 use crate::hosted::{self, Fit, Stuck};
 use crate::inspect::{self, Inspector};
@@ -364,6 +365,17 @@ pub enum Section {
     Calendar,
 }
 
+impl Section {
+    /// The flag the section is behind, if any.
+    pub fn feature(self) -> Option<Feature> {
+        match self {
+            Section::Marks => Some(Feature::Marks),
+            Section::Apps => Some(Feature::AppsSection),
+            Section::Workbook | Section::Tasks | Section::Repos | Section::Calendar => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     /// Split the focused pane; the new half shows `kind`.
@@ -505,6 +517,8 @@ pub enum Action {
     /// Move Tab to Task…: the palette, listing the tasks (and no task) to move the tab on show
     /// to. Only the user's, as is which task a tab is of.
     PaletteTasks,
+    /// Features…: the palette, listing the flags to turn on or off. Only the user's.
+    PaletteFeatures,
     /// Move the palette's highlight down (positive) or up; it wraps.
     PaletteMove {
         delta: i32,
@@ -1267,6 +1281,11 @@ pub enum Action {
     },
     /// Fold or unfold the Calendar section's "Tomorrow" group.
     CalendarTomorrow,
+    /// The features that are on, as the settings say (`features`). What a feature turned off
+    /// shows goes from view; what it keeps (marks, pins) stays as it is.
+    SetFeatures {
+        features: Features,
+    },
 }
 
 /// What the right drawer shows (see `Model::drawer_view`).
@@ -1373,6 +1392,7 @@ impl Action {
             | Action::OpenPicker { .. }
             | Action::PaletteOpen
             | Action::PaletteTasks
+            | Action::PaletteFeatures
             | Action::InspectorFilter { on: true }
             | Action::OpenCompose { .. }
             | Action::ToggleKeys
@@ -1582,7 +1602,232 @@ impl Action {
             | Action::TalkDenyNote
             | Action::TalkEscape
             | Action::TalkInterrupt
-            | Action::TalkView { .. } => false,
+            | Action::TalkView { .. }
+            | Action::SetFeatures { .. } => false,
+        }
+    }
+
+    /// The feature the action is of: while it is off the action does nothing, whoever sent it
+    /// (`Model::update`). `None`: of no flag. Every action is named, with no catch-all: a new
+    /// one must say. What only loads data (marks, pins, the Dock) is of none: it is kept.
+    pub fn feature(&self) -> Option<Feature> {
+        match self {
+            Action::ToggleSection { section: Section::Marks }
+            | Action::MarkAdd { .. }
+            | Action::MarkToggle { .. }
+            | Action::MarkUndo
+            | Action::MarkRemove { .. }
+            | Action::MarkRename { .. }
+            | Action::MarkGo { .. }
+            | Action::MarkBind { .. }
+            | Action::MarkPrefix
+            | Action::MarkEdit { .. } => Some(Feature::Marks),
+            Action::ToggleSection { section: Section::Apps }
+            | Action::AppPin { .. }
+            | Action::AppHide { .. }
+            | Action::AppsUndo
+            | Action::ListPin
+            | Action::AppsToggle { .. }
+            | Action::AppsFilter { .. } => Some(Feature::AppsSection),
+            // Shared with workbooks (a name typed, a row's letter), or data a restore reads.
+            Action::MarkType { .. }
+            | Action::MarkBackspace
+            | Action::MarkSubmit
+            | Action::MarkCancel
+            | Action::ListMarkEdit { .. }
+            | Action::ListReorder { .. }
+            | Action::ListUndo
+            | Action::RestoreMarks { .. }
+            | Action::MarksChecked { .. }
+            | Action::Titles { .. }
+            | Action::Fill { .. }
+            | Action::Unfilled { .. }
+            | Action::SetApps { .. }
+            | Action::SetAppSettings { .. }
+            | Action::SetDock { .. } => None,
+            Action::ToggleSection {
+                section: Section::Workbook | Section::Tasks | Section::Repos | Section::Calendar,
+            }
+            | Action::Split { .. }
+            | Action::Open { .. }
+            | Action::Adopt { .. }
+            | Action::Close { .. }
+            | Action::Focus { .. }
+            | Action::FocusDir { .. }
+            | Action::FocusCycle { .. }
+            | Action::Resize { .. }
+            | Action::SwapDir { .. }
+            | Action::MovePane { .. }
+            | Action::Equalize
+            | Action::DropPane { .. }
+            | Action::PaneWants { .. }
+            | Action::Fit { .. }
+            | Action::Enter { .. }
+            | Action::Leave
+            | Action::CloseSidebar
+            | Action::OpenPicker { .. }
+            | Action::NewTab
+            | Action::NewEmptyTab
+            | Action::NewTabOf { .. }
+            | Action::TabPlace { .. }
+            | Action::SelectTab { .. }
+            | Action::CycleTab { .. }
+            | Action::CloseTab { .. }
+            | Action::SetInstalled { .. }
+            | Action::PickerQuery { .. }
+            | Action::PickerMove { .. }
+            | Action::PickerChoose { .. }
+            | Action::ClosePicker
+            | Action::PaletteOpen
+            | Action::PaletteTasks
+            | Action::PaletteFeatures
+            | Action::PaletteMove { .. }
+            | Action::PaletteChoose { .. }
+            | Action::ClosePalette
+            | Action::InspectorOpen { .. }
+            | Action::InspectorRead { .. }
+            | Action::InspectorFailed { .. }
+            | Action::InspectorClose
+            | Action::InspectorFold { .. }
+            | Action::InspectorSelect { .. }
+            | Action::InspectorMove { .. }
+            | Action::InspectorFilter { .. }
+            | Action::ToggleKeys
+            | Action::CloseKeys
+            | Action::ToggleVisual
+            | Action::LeaveVisual
+            | Action::ToggleAxOverlay
+            | Action::SetRepos { .. }
+            | Action::SetRepoDirs { .. }
+            | Action::RepoAdd { .. }
+            | Action::RepoRemove { .. }
+            | Action::OpenRepo { .. }
+            | Action::RestoreTasks { .. }
+            | Action::TaskAdd { .. }
+            | Action::SetKnown { .. }
+            | Action::SetTerminals { .. }
+            | Action::TaskSetState { .. }
+            | Action::TaskSnooze { .. }
+            | Action::TaskHold { .. }
+            | Action::TaskDismiss { .. }
+            | Action::TaskUndo
+            | Action::RowSnooze { .. }
+            | Action::RowHold { .. }
+            | Action::RowDismiss { .. }
+            | Action::TaskGo { .. }
+            | Action::SelectVisibleTab { .. }
+            | Action::Tick { .. }
+            | Action::OpenCompose { .. }
+            | Action::FieldEdit { .. }
+            | Action::ComposeComplete
+            | Action::ComposeEscape
+            | Action::ComposeMove { .. }
+            | Action::ComposeAccept { .. }
+            | Action::ComposeFolderClear
+            | Action::ComposeAttach { .. }
+            | Action::ComposeRef { .. }
+            | Action::ComposePick { .. }
+            | Action::ComposeSubmit { .. }
+            | Action::CloseCompose
+            | Action::TaskFromLine { .. }
+            | Action::ToggleGroup { .. }
+            | Action::TasksView { .. }
+            | Action::ToggleProject { .. }
+            | Action::SessionWork { .. }
+            | Action::SetSessions { .. }
+            | Action::SessionQuiet { .. }
+            | Action::SessionsSeen { .. }
+            | Action::SessionAdopt { .. }
+            | Action::SessionHide { .. }
+            | Action::SessionClick { .. }
+            | Action::SessionOpen { .. }
+            | Action::SessionsRange { .. }
+            | Action::FocusList
+            | Action::LeaveList
+            | Action::ListMove { .. }
+            | Action::ListSection { .. }
+            | Action::ListChoose { .. }
+            | Action::ListSnooze { .. }
+            | Action::ListHold
+            | Action::ListDismiss
+            | Action::Sneak { .. }
+            | Action::SneakEnter { .. }
+            | Action::SneakDrawn { .. }
+            | Action::SneakType { .. }
+            | Action::SneakBackspace
+            | Action::LeaveSneak
+            | Action::SneakApp { .. }
+            | Action::AppWheel { .. }
+            | Action::PeekCheck { .. }
+            | Action::QuitAsked { .. }
+            | Action::QuitConfirm
+            | Action::QuitCancel
+            | Action::Quit
+            | Action::CaptureStart { .. }
+            | Action::CaptureTaken { .. }
+            | Action::CaptureFacts { .. }
+            | Action::CaptureContent { .. }
+            | Action::AnnotatePress { .. }
+            | Action::AnnotateDrag { .. }
+            | Action::AnnotateRelease { .. }
+            | Action::AnnotateTool { .. }
+            | Action::AnnotateUndo
+            | Action::AnnotateRedo
+            | Action::AnnotateRemove
+            | Action::AnnotateNote { .. }
+            | Action::AnnotateLeave { .. }
+            | Action::CaptureEdit { .. }
+            | Action::CaptureRemove { .. }
+            | Action::CaptureCancel
+            | Action::CaptureDiscard { .. }
+            | Action::CaptureTitle
+            | Action::CaptureBack
+            | Action::BriefShow { .. }
+            | Action::BriefClose
+            | Action::RestoreWorkbooks { .. }
+            | Action::RestoreLayout { .. }
+            | Action::StartFresh
+            | Action::UnfilledOpen { .. }
+            | Action::WorkbookSave { .. }
+            | Action::WorkbookAddTab { .. }
+            | Action::WorkbookSaveAll { .. }
+            | Action::WorkbookOpen { .. }
+            | Action::WorkbookEdit { .. }
+            | Action::WorkbookRemove { .. }
+            | Action::WorkbookFold { .. }
+            | Action::WorkbookUndo
+            | Action::SetAgents { .. }
+            | Action::AgentEvents { .. }
+            | Action::TalkSend
+            | Action::TalkAnswer { .. }
+            | Action::TalkExpand { .. }
+            | Action::TalkDenyNote
+            | Action::TalkEscape
+            | Action::TalkInterrupt
+            | Action::TalkView { .. }
+            | Action::TaskTalk { .. }
+            | Action::ComposeEnter
+            | Action::AgentStarted { .. }
+            | Action::AgentSessions { .. }
+            | Action::AgentExited { .. }
+            | Action::SessionRead { .. }
+            | Action::SessionMissing { .. }
+            | Action::TaskStop { .. }
+            | Action::TalkToggle
+            | Action::TalkGo
+            | Action::TalkKeys { .. }
+            | Action::TalkResize { .. }
+            | Action::TalkWide
+            | Action::TalkPick { .. }
+            | Action::SetCalendar { .. }
+            | Action::CalendarRead { .. }
+            | Action::CallSeen { .. }
+            | Action::CalendarDismiss { .. }
+            | Action::CalendarJoin { .. }
+            | Action::CalendarTomorrow
+            | Action::EditSettings
+            | Action::SettingsRead { .. }
+            | Action::SetFeatures { .. } => None,
         }
     }
 }
@@ -1844,6 +2089,12 @@ pub enum Effect {
     OpenLink {
         url: String,
     },
+    /// The user's Features… choice: write `features.<name>` in the settings file, then send
+    /// `SetFeatures` with what it holds.
+    SaveFeature {
+        feature: Feature,
+        on: bool,
+    },
 }
 
 /// One tab: its own split tree. Only the active tab is drawn.
@@ -2102,6 +2353,8 @@ pub struct Model {
     /// The meeting timeline. Not in the state: its text is other people's (`calendar_snapshot`).
     #[serde(skip)]
     pub calendar: Calendar,
+    /// The features that are on (`SetFeatures`). In the state, their names.
+    pub features: Features,
     /// The pane Open Settings opened (or a restore opened again), while it may still be there.
     #[serde(skip)]
     pub(crate) settings_pane: Option<PaneId>,
@@ -2196,6 +2449,8 @@ impl Default for Model {
             layout_seen: None,
             layout_kept: true,
             calendar: Calendar::default(),
+            // In this crate's tests every feature is on: a test of one that is off turns it off.
+            features: if cfg!(test) { Features::all() } else { Features::default() },
             settings_pane: None,
             settings_file: crate::settings::Watch::default(),
         };
@@ -2389,6 +2644,7 @@ impl Model {
             // in it or chooses. Nor does a client close it from under the user.
             Action::PaletteOpen
             | Action::PaletteTasks
+            | Action::PaletteFeatures
             | Action::PaletteMove { .. }
             | Action::PaletteChoose { .. }
             | Action::ClosePalette => Some(commands::USERS_ALONE),
@@ -2481,6 +2737,7 @@ impl Model {
             action,
             Action::PaletteOpen
                 | Action::PaletteTasks
+                | Action::PaletteFeatures
                 | Action::InspectorFilter { on: true }
                 | Action::InspectorOpen { .. }
         );
@@ -2505,8 +2762,17 @@ impl Model {
         no_box_now.then_some("the key reference or visual mode is in the way")
     }
 
+    /// The feature that is off which `action` is of: it does nothing, whoever sent it.
+    pub fn disabled(&self, action: &Action) -> Option<Feature> {
+        action.feature().filter(|feature| !self.features.on(*feature))
+    }
+
     pub fn update(&mut self, sent: impl Into<Envelope>) -> Vec<Effect> {
         let sent = sent.into();
+        // A feature that is off is absent: its actions change nothing and ask for nothing.
+        if self.disabled(&sent.action).is_some() {
+            return Vec::new();
+        }
         let (origin, line) = (sent.origin, self.compose_line().cloned());
         let states: Vec<(TaskId, State)> = self.tasks.list.iter().map(|task| (task.id, task.state)).collect();
         let listed = self.sidebar.zip(self.list);
@@ -2646,6 +2912,7 @@ impl Model {
                     | Action::OpenPicker { .. }
                     | Action::PaletteOpen
                     | Action::PaletteTasks
+                    | Action::PaletteFeatures
                     | Action::OpenCompose { .. }
                     | Action::ToggleKeys
                     | Action::ToggleVisual
@@ -3362,7 +3629,9 @@ impl Model {
             Action::FocusList if self.list.is_some() => self.list = None,
             Action::FocusList => {
                 self.leave(effects);
-                self.sidebar = self.sidebar.or(Some(Section::Apps));
+                // The Apps section, or with it off the rail's first.
+                let first = if self.features.on(Feature::AppsSection) { Section::Apps } else { self.sections()[0] };
+                self.sidebar = self.sidebar.or(Some(first));
                 self.list = Some(0);
                 self.list = Some(self.first_row());
             }
@@ -3502,7 +3771,7 @@ impl Model {
                 }
             }
             Action::ClosePicker => self.picker = None,
-            Action::PaletteOpen | Action::PaletteTasks => {
+            Action::PaletteOpen | Action::PaletteTasks | Action::PaletteFeatures => {
                 self.palette_over_talk = self.talk.as_ref().is_some_and(|talk| talk.keys);
                 self.leave(effects);
                 // Live tasks in their order, then no task.
@@ -3511,7 +3780,13 @@ impl Model {
                     let live = live.map(|task| TaskChoice { task: Some(task.id), title: task.title.clone() });
                     live.chain([TaskChoice { task: None, title: "No task".into() }]).collect()
                 });
-                self.palette = Some(Palette { query: Field::new("", MAX_FILTER), selected: 0, tasks });
+                let features = matches!(action, Action::PaletteFeatures).then(|| {
+                    let choice = |feature| FeatureChoice { feature, on: self.features.on(feature) };
+                    crate::features::ALL.into_iter().map(choice).collect()
+                });
+                let hidden = self.hidden_commands();
+                let query = Field::new("", MAX_FILTER);
+                self.palette = Some(Palette { query, selected: 0, tasks, features, hidden });
             }
             Action::PaletteMove { delta } => {
                 if let Some(palette) = &mut self.palette {
@@ -3536,6 +3811,17 @@ impl Model {
                         Some(task) => {
                             self.palette_closed(effects);
                             self.place_tab(None, TabAt::End(task));
+                        }
+                        None => self.palette = Some(palette),
+                    }
+                    return;
+                }
+                // Listing flags: the chosen one turns the other way, in the settings.
+                if palette.features.is_some() {
+                    match palette.feature_matches().get(at).map(|choice| (choice.feature, !choice.on)) {
+                        Some((feature, on)) => {
+                            self.palette_closed(effects);
+                            effects.push(Effect::SaveFeature { feature, on });
                         }
                         None => self.palette = Some(palette),
                     }
@@ -4099,7 +4385,42 @@ impl Model {
             Action::CalendarDismiss { id } => self.calendar.dismiss(id),
             Action::CalendarTomorrow => self.calendar.tomorrow_open = !self.calendar.tomorrow_open,
             Action::CalendarJoin { id } => effects.extend(self.calendar.join(id).map(|url| Effect::OpenLink { url })),
+            Action::SetFeatures { features } => self.set_features(features),
         }
+    }
+
+    /// The features on from now. What one turned off shows goes: its section, its rail cell,
+    /// its wait for a letter or a name, its filter, its commands in the palette.
+    fn set_features(&mut self, features: Features) {
+        self.features = features;
+        let sections = self.sections();
+        if self.sidebar.is_some_and(|section| !sections.contains(&section)) {
+            (self.sidebar, self.list) = (None, None);
+        }
+        if let Some(zones::RailFocus::Left(section)) = self.rail_focus
+            && !sections.contains(&section)
+        {
+            self.rail_focus = Some(zones::RailFocus::Left(Section::Tasks));
+        }
+        let marking = !matches!(self.mark_input, None | Some(MarkInput::Workbook { .. }));
+        if marking && !self.features.on(Feature::Marks) {
+            self.mark_input = None;
+        }
+        if !self.features.on(Feature::AppsSection) {
+            self.app_lists.filtering = false;
+        }
+        let (hidden, on) = (self.hidden_commands(), self.features.clone());
+        if let Some(palette) = &mut self.palette {
+            palette.features.iter_mut().flatten().for_each(|choice| choice.on = on.on(choice.feature));
+            palette.hidden = hidden;
+            palette.selected = palette.selected.min(palette.count().saturating_sub(1));
+        }
+    }
+
+    /// The commands of features that are off: the palette does not list them.
+    fn hidden_commands(&self) -> Vec<Command> {
+        let off = |command: &Command| command.feature().is_some_and(|feature| !self.features.on(feature));
+        commands::ALL.iter().copied().filter(off).collect()
     }
 
     /// The folders and runners whose new sessions the shell should read (`AgentSessions`): an
@@ -5063,9 +5384,11 @@ impl Model {
         Some(id)
     }
 
-    /// The left rail's sections, as drawn: Calendar only while a calendar feed is set.
+    /// The left rail's sections, as drawn: Calendar only while a calendar feed is set, and one
+    /// behind a flag only while it is on.
     pub fn sections(&self) -> Vec<Section> {
-        zones::SECTIONS.into_iter().filter(|s| *s != Section::Calendar || self.calendar.on).collect()
+        let flagged = |s: &Section| s.feature().is_none_or(|feature| self.features.on(feature));
+        zones::SECTIONS.into_iter().filter(|s| (*s != Section::Calendar || self.calendar.on) && flagged(s)).collect()
     }
 
     /// True if a `Tick` now would change what shows: a snoozed task's time has come, or the
@@ -6366,6 +6689,7 @@ mod tests {
         Action::ClosePicker,
         Action::PaletteOpen,
         Action::PaletteTasks,
+        Action::PaletteFeatures,
         Action::PaletteMove { .. },
         Action::PaletteChoose { .. },
         Action::ClosePalette,
@@ -6543,7 +6867,8 @@ mod tests {
         Action::TalkEscape,
         Action::TalkInterrupt,
         Action::TalkView { .. },
-        Action::WorkbookFold { .. }
+        Action::WorkbookFold { .. },
+        Action::SetFeatures { .. }
     );
 
     /// One of each action.
@@ -6581,6 +6906,7 @@ mod tests {
             Action::ClosePicker,
             Action::PaletteOpen,
             Action::PaletteTasks,
+            Action::PaletteFeatures,
             Action::PaletteMove { delta: 1 },
             Action::PaletteChoose { index: None },
             Action::ClosePalette,
@@ -6769,6 +7095,7 @@ mod tests {
             Action::TasksView { view: TasksView::Project },
             Action::ToggleProject { project: None, done: false },
             Action::SessionWork { work: progress::Work::default() },
+            Action::SetFeatures { features: Features::default() },
         ];
         let mut places: Vec<usize> = samples.iter().map(index).collect();
         places.sort_unstable();

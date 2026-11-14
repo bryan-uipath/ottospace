@@ -13,6 +13,7 @@ pub mod complete;
 pub mod compose;
 pub mod diff;
 pub mod edit;
+pub mod features;
 #[cfg(test)]
 mod fuzz;
 pub mod home;

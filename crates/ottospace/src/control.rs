@@ -13,6 +13,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::{fs, thread};
 
 use ottospace_core::ax::{Frame, Node};
+use ottospace_core::features::{Feature, Features};
 use ottospace_core::tasks::{Heading, State, TaskId};
 use ottospace_core::{Axis, Dir, PaneId, Section, Zone};
 use serde::Deserialize;
@@ -529,6 +530,21 @@ pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
     }
 }
 
+/// Why a request of a feature that is off is refused: `feature off: <name>`. Off, a feature has
+/// no request of its own; what only reads the state answers with its part empty.
+pub fn feature_refusal(request: &Request, features: &Features) -> Option<&'static str> {
+    let feature = match request {
+        Request::Marks
+        | Request::MarkAdd { .. }
+        | Request::MarkGo { .. }
+        | Request::MarkRemove { .. }
+        | Request::MarkRename { .. } => Feature::Marks,
+        Request::Section { section } => section.feature()?,
+        _ => return None,
+    };
+    (!features.on(feature)).then(|| feature.off())
+}
+
 /// Pane kinds a client may create. App panes come from `open_app`.
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -687,6 +703,17 @@ mod tests {
         ];
         for line in ordinary {
             assert_eq!(test_refusal(&parse(line), false), None);
+        }
+        // A request of a feature that is off answers so; on, it is not refused here.
+        let off = Features::default();
+        for line in [r#"{"cmd":"marks"}"#, r#"{"cmd":"mark_go","key":"a"}"#, r#"{"cmd":"section","section":"marks"}"#] {
+            assert_eq!(feature_refusal(&parse(line), &off), Some("feature off: marks"), "{line}");
+            assert_eq!(feature_refusal(&parse(line), &Features::all()), None, "{line}");
+        }
+        let apps = parse(r#"{"cmd":"section","section":"apps"}"#);
+        assert_eq!(feature_refusal(&apps, &off), Some("feature off: apps_section"));
+        for line in [r#"{"cmd":"section","section":"repos"}"#, r#"{"cmd":"picker"}"#, r#"{"cmd":"state"}"#] {
+            assert_eq!(feature_refusal(&parse(line), &off), None, "{line}");
         }
         // Nor a directory for the Repos list: it is written to the user's settings.
         let add = parse(r#"{"cmd":"repo_add","path":"/tmp/app"}"#);

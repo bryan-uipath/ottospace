@@ -4,6 +4,7 @@
 
 import type {
   AppEntry,
+  Feature,
   NativeChat,
   MeetingStage,
   AxNode,
@@ -62,6 +63,7 @@ import type {
   Picker,
   Palette,
   PaletteRow,
+  PaletteFeature,
   PaletteTask,
   Inspector,
   InspectorRow,
@@ -900,7 +902,18 @@ function palette(value: unknown, at: string): Palette {
     query: str(o.query, `${at}.query`),
     selected: num(o.selected, `${at}.selected`),
     tasks: orNull(list(paletteTask))(o.tasks, `${at}.tasks`),
+    features: orNull(list(paletteFeature))(o.features, `${at}.features`),
   };
+}
+
+function paletteFeature(value: unknown, at: string): PaletteFeature {
+  const o = fields(value, at);
+  return { feature: feature(o.feature, `${at}.feature`), on: bool(o.on, `${at}.on`) };
+}
+
+function feature(value: unknown, at: string): Feature {
+  if (value === "marks" || value === "apps_section") return value;
+  throw wrong(at, "a feature", value);
 }
 
 function paletteTask(value: unknown, at: string): PaletteTask {
@@ -1114,6 +1127,7 @@ function model(value: unknown, at: string): Model {
     talk_width: num(o.talk_width, `${at}.talk_width`),
     talk_wide: bool(o.talk_wide, `${at}.talk_wide`),
     agents: list(subject)(o.agents, `${at}.agents`),
+    features: list(feature)(o.features, `${at}.features`),
   };
 }
 

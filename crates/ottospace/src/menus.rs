@@ -8,7 +8,10 @@ fn item(name: &'static str, action: impl Action) -> MenuItem {
     MenuItem::action(name, action)
 }
 
-pub fn app_menus() -> Vec<Menu> {
+/// The menu bar. A feature that is off has no item: Marks' go with `marks`.
+pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
+    let marks = features.on(ottospace_core::features::Feature::Marks);
+    let mark_tab = [MenuItem::separator(), item("Mark Tab", MarkTab), item("Go to Mark…", MarkJump)];
     vec![
         Menu {
             name: "ottospace".into(),
@@ -16,6 +19,8 @@ pub fn app_menus() -> Vec<Menu> {
                 item("Open Settings", commands::EditSettings),
                 MenuItem::separator(),
                 MenuItem::os_submenu("Services", SystemMenuType::Services),
+                MenuItem::separator(),
+                item("Features…", features::ShowFeatures),
                 MenuItem::separator(),
                 item("Hide ottospace", Hide),
                 MenuItem::separator(),
@@ -55,27 +60,28 @@ pub fn app_menus() -> Vec<Menu> {
         },
         Menu {
             name: "View".into(),
-            items: vec![
+            items: [
                 item("Drive the Bar with the Keyboard", ListMode),
                 item("Label the Controls", SneakMode),
                 item("Fill the Screen", Zoom),
                 item("Command Palette…", commands::CommandPalette),
-                MenuItem::separator(),
-                item("Mark Tab", MarkTab),
-                item("Go to Mark…", MarkJump),
-                MenuItem::separator(),
-                item("Next Tab", NextTab),
-                item("Previous Tab", PrevTab),
-            ],
+            ]
+            .into_iter()
+            .chain(mark_tab.into_iter().filter(|_| marks))
+            .chain([MenuItem::separator(), item("Next Tab", NextTab), item("Previous Tab", PrevTab)])
+            .collect(),
         },
         Menu {
             name: "Pane".into(),
-            items: vec![
+            items: [
                 item("Terminal Right", SplitRight),
                 item("Terminal Below", SplitDown),
                 item("New Pane…", PickPane),
                 item("New Pane Below…", PickPaneDown),
-                item("Mark Pane", MarkPane),
+            ]
+            .into_iter()
+            .chain(marks.then(|| item("Mark Pane", MarkPane)))
+            .chain([
                 MenuItem::separator(),
                 item("Focus Left", FocusLeft),
                 item("Focus Right", FocusRight),
@@ -95,7 +101,8 @@ pub fn app_menus() -> Vec<Menu> {
                 item("Swap Right", SwapRight),
                 item("Swap Up", SwapUp),
                 item("Swap Down", SwapDown),
-            ],
+            ])
+            .collect(),
         },
         Menu {
             name: "Tasks".into(),
