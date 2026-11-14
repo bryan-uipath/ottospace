@@ -1016,8 +1016,8 @@ impl Model {
         self.remember_tab();
         self.park_active();
         // A task that is gone: a tab of no task.
-        self.current_task = record.task.filter(|task| self.tasks.get(*task).is_some());
-        self.push_tab();
+        let task = record.task.filter(|task| self.tasks.live(*task).is_some());
+        self.push_tab_of(task);
         let mut ids = Vec::new();
         for pane in record.shown() {
             self.next_id += 1;
@@ -1575,25 +1575,24 @@ mod tests {
             tab: None,
             assign: Default::default(),
         });
-        m.update(Action::TaskOpen { id: Some(1) });
+        m.update(Action::NewTabOf { task: Some(1) });
         open(&mut m, Kind::Terminal);
         mark(&mut m, MarkOf::Tab(None), &[]);
-        m.update(Action::TaskLeave);
-        assert_eq!(m.current_task, None);
-        // Open in the background: its task's tabs come with it.
+        m.update(Action::SelectTab { index: 1 });
+        assert_eq!(m.tab_task(), None);
+        // Open in the background: going there shows its tab, the task's.
         go(&mut m, "fix zoom");
-        assert_eq!((m.current_task, m.panes.len()), (Some(1), 1));
+        assert_eq!((m.tab_task(), m.panes.len()), (Some(1), 1));
         // Closed: the new tab is the task's again.
         m.update(Action::CloseTab { index: None });
-        m.update(Action::TaskLeave);
         go(&mut m, "fix zoom");
-        assert_eq!((m.current_task, m.tabs[m.active].task), (Some(1), Some(1)));
+        assert_eq!(m.tab_task(), Some(1));
         // The task is gone from this run: a tab of no task.
         let kept = parse(&file(&m)).unwrap();
         let mut m = Model::default();
         restore(&mut m, kept);
         go(&mut m, "fix zoom");
-        assert_eq!((m.current_task, m.tabs[m.active].task, m.panes.len()), (None, None, 1));
+        assert_eq!((m.tab_task(), m.panes.len()), (None, 1));
     }
 
     #[test]

@@ -52,6 +52,18 @@ impl Workspace {
 
     /// The question, centred over the workspace. A click outside it cancels.
     pub fn render_confirm(&self, confirm: &Confirm, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        // "Stop its agent and dismiss?": the task, and what ↵ does.
+        if let Some(task) = confirm.dismiss.and_then(|id| self.model.tasks.get(id)) {
+            let panel = dialog::floating(320.)
+                .child(div().px_3().pt_3().text_sm().text_color(rgb(theme::TEXT)).child(confirm.title()))
+                .child(div().p_3().text_xs().text_color(rgb(theme::MUTED)).child(task.title.clone()))
+                .child(dialog::hint("↵ stop and dismiss · esc cancel"));
+            return dialog::backdrop("confirm-backdrop", 0.5, Action::QuitCancel, cx)
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(panel);
+        }
         // A draft in the right bar goes with the app: its captures are named with the terminals.
         let draft = match self.model.quit_discards() {
             0 => None,

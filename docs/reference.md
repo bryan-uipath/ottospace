@@ -28,13 +28,13 @@ running, and the rest of the design is not built: see the
 | Tasks inbox, by state: Needs you, Running, Later (captured or on hold), Done (last, folded). Headings fold (click, or ↵ or space in list mode). Each row shows its tags, what it has open and its age, or while its session works what it does now; and the session's model. A click opens its conversation; hover it for its card (state, tags, started, agent time, workspace, tokens by model, context) and for snooze, hold and dismiss buttons. After one of those by mouse, a line at the top offers Undo for 6 seconds. Kept in `~/.ottospace/tasks` | Works today |
 | Tasks by project: State \| Project in the section's header, kept in `tasks_view` in the settings. One foldable group a `#project`, by name, with a bar of its tasks' states (hover for the numbers), its open tasks (needs you, running, later), then a folded "Done · n"; the tasks of no project last. Under the list: `Today  n done · n running · agent time` | Works today |
 | A task's progress, kept in its file: when its agent started and when it was done, time at work (activity until a quiet gap of two minutes), and tokens by model (input, output, cached; a sub-agent's apart), summed from its sessions, so they outlive the session files. Tokens only: no prices | Works today |
-| "Pop next" (⌘⇧N): open the next task that needs you | Works today |
+| "Pop next" (⌘⇧N): the conversation of the next task that needs you; the tab on show stays | Works today |
 | Sessions in the Tasks section: the Claude Code and Codex sessions of the listed repositories that are no task's (one you started by hand in a terminal). Each row shows the runner, the repository, the session's title, active or idle, what it does now, when it was last active, and the model. A click opens its conversation in the drawer (`claude --resume`, `codex resume`), unless it is at work in another terminal; Adopt makes a task of one; Hide removes it until the next start | Works today |
 | A task's agent in the right drawer: a click or ↵ on a task starts its agent (`claude` or `codex`, by its `@agent`, else `default_agent`) in a terminal beside the workspace, which stays as it is. See [Flow of a task](#flow-of-a-task) | Works today |
-| Right rail: a badge per open conversation (needs you first, then running, then the last opened; at most 8), and `+` for a new task | Works today |
+| Right rail: a badge per open conversation of a live task (needs you first, then running, then the last opened; at most 8), and `+` for a new task. A dismissed task leaves it; a done one stays only while shown or its agent runs | Works today |
 | New task (⌘N), in the drawer: one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`, picks for where and who, and a line that says what ↵ will do. `/path` and `$skill` are stored and shown; nothing acts on them yet | Works today |
 | Home screen: a tab with no panes says what goes there (Open an app ⌘E, Terminal ⌘D), the tasks that need you, and each listed task as a node on a lattice (left to right by project; within a project the older task is farther). A click on a node or a row opens its conversation. With nothing open at all, the drawer shows a new task by itself | Works today |
-| Tasks own their tabs: opening a task shows only its tabs; the others keep running off the bar | Works today |
+| Task groups on the one tab bar: a tab may be a task's, and each task's tabs sit side by side behind its badge (its two letters, bordered in its own colour, its state as a dot), underlined in its colour; the tabs of no task last. Starting a task takes the tab on show if that is no task's; ⌘T joins the task on show; drag a tab onto a group to move it there. The same badge on its panes, its row, the rail and the drawer. Selecting a task's tab shows its conversation in the open drawer | Works today |
 | Tabs, each with its own split tree | Works today |
 | Pane picker: choose a terminal, a running app, or (once you type) any installed app for a new pane or tab | Works today |
 | Icon rail with a secondary bar; Apps lists running apps with their icons | Works today |
@@ -116,9 +116,9 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘N | New task, in the drawer. Type what needs doing, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `^reference`, `p1` to `p9`; a dropdown finishes the one at the cursor. ↵ adds the task and starts its agent; ⇧↵ adds it for later; Esc closes. [Its keys](#keys) |
 | ⌘L | The keyboard into the drawer's conversation, or back to the workspace |
 | ⌘⇧L | Close the drawer to the right rail, or open it again. The agent goes on |
-| ⌘↵ | With a conversation open: show its task's tabs in the workspace (Go to), or leave them |
+| ⌘↵ | With a task's conversation open: Go to its tabs (the one shown last); with none, Claim this tab (the tab on show, if it is no task's) or a New tab of it |
 | ⌘⌃1 … ⌘⌃9 | Show the nth conversation of the right rail; on the one shown, close the drawer. Not ⌥1…⌥9: ⌥ is Meta in a terminal |
-| ⌘⇧N | Next task: shows the tabs of the first task that needs you |
+| ⌘⇧N | Next task: the conversation of the first task that needs you. The tab on show stays |
 | ⌃⌥⌘Space | Capture, from any app: the pane in use (a hosted app you are in, else the focused pane) is frozen as a picture to draw on, and a draft opens in the drawer on the right, with the new-task line as its title. A live app is parked first; "↩ back to …" in the bar returns to it. On the picture: drag circles, ⇧-drag draws a box, ⌥-drag a freehand line, a click places a note to type (↵ keeps it). ⌘Z and ⇧⌘Z go over the steps; a click on a shape's line selects it and ⌫ removes it. ↵ goes to the title, Esc leaves the picture; a click on another pane captures that one too. In the title ↵ adds the task and starts its agent, ⇧↵ adds it for later; × or Esc cancels, after a question if anything was captured. The workspace stays in use beside the drawer, and ⌘N goes to the draft's title. See [Capture](#capture) |
 | ⌘B / ⌘⇧B | Mark the focused pane / the tab on show; on one that is marked, take the mark off (the Marks section offers it back for six seconds, and ⌘B again within them puts the same mark back). The mark is named for the app, the terminal's directory or the tab's title. It records what to open, not a window or a process: a terminal's directory as it is then, an app's bundle id, name and window title, a tab's title, task and split tree. A marked pane or tab shows ◆ and its letter |
 | ⌘' then a letter | Go to the mark with that letter. The status bar shows `MARK?` while it waits; Esc, or a letter of no mark, ends the wait and nothing else happens. If the mark's pane or tab is open, its tab comes forward and the pane takes focus (an app pane is focused, not entered). Else it is opened: a terminal in the recorded directory, the app's window in a pane (the one with the recorded title, else its only window, else its main one; an app that is not running is started), or the tab with its splits. A tab opens with what can be opened: a pane whose directory is gone or whose window could not be hosted is empty and says why, and going to the tab again tries it again |
@@ -211,7 +211,9 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
 2. **It starts at once.** The agent (`@claude`, `@codex-gpt-6-astra`, …; with no `@agent`, the
    `default_agent` setting, else `claude`) runs in a terminal in the drawer, in the task's
    repository (no `>repo`: the home folder), with the keyboard. It is asked `Task: <title>`; a
-   task with captures is told where its brief is. The workspace stays as it was.
+   task with captures is told where its brief is. The workspace stays as it was: the same tab,
+   panes and focus. That tab, if it is no task's and has panes, becomes the task's and gains its
+   badge; on a tab of another task, or with nothing open, the task starts with no tab.
 3. **One verb.** A click or ↵ on a task is its conversation: started if it never ran, its
    session gone on with if it has one and no agent runs, shown if one runs. A session is gone
    on with in the folder it started in, which may be below the repository; with the Tasks
@@ -219,27 +221,36 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    open by another Claude Code, is not: the drawer says so. An agent you just stopped there is
    not another terminal's: it is gone on with at once. Going on with a session, the task runs.
    A saved agent cannot be started yet: the drawer says so too.
-4. **The drawer.** Its header: the task's state, title, model and time; Go to (⌘↵) shows its
-   tabs in the workspace when it has some; Brief (when it has captures); Stop ends the agent;
+4. **The drawer.** Its header: the task's badge, title, model and time; Go to its tabs (⌘↵)
+   shows the one of them shown last; a task with none offers Claim this tab (the tab on show is
+   no task's) or New tab (a shell in its repository); Brief (when it has captures); Stop ends the agent;
    × (⌘⇧L) closes the drawer to the right rail and the agent goes on. ⌘L moves the keyboard in
    and out. Drag its left edge to make it wider or narrower. Opening a conversation while a new
    task is half written puts the line aside: the box gets it back when it opens again.
-5. **The right rail.** A badge per open conversation, its ring in the task's state colour and a
-   steady dot while its agent works; hover for its card. A click shows it; on the one shown,
-   closes the drawer.
-6. **Following.** The task runs while its agent works. Claude is given the session's id; Codex
+5. **The right rail.** The task's badge per open conversation: its border in the task's own
+   colour, its state as the corner dot; hover for its card. A click shows it, and the tab stays;
+   on the one shown, closes the drawer. A dismissed task leaves the rail and the drawer (the
+   drawer shows nothing, not another conversation); a done one stays only while it is shown or its
+   agent runs. Dismissing a task whose agent runs asks first: Stop its agent and dismiss?
+6. **Tabs and the drawer.** Selecting a tab of a task shows that task's conversation in the
+   open drawer, starting nothing and leaving the keyboard where it was; a closed drawer stays
+   closed, and a tab of no task leaves it as it is. ⌘T makes a tab in the group on show; New Tab
+   outside the Task, one of no task. Drag a tab onto another group's tab or badge to move it
+   there, onto a tab of no task to unlink it; Remove Tab from Task does that from the palette.
+7. **Following.** The task runs while its agent works. Claude is given the session's id; Codex
    names its own, and ottospace finds it where Codex wrote it: the one session that started in
    the task's folder after the agent did and before the next agent there, that nothing else
    has. When two could be its (another Codex started there at the same moment), neither is
    taken: the task runs, following none. When the agent ends while the task runs, the task needs you.
-7. **A session that is no task's.** A click or ↵ on its row under Other sessions opens its
+8. **A session that is no task's.** A click or ↵ on its row under Other sessions opens its
    conversation the same way, with no task: it gets a badge on the rail (from its title, else
    its repository) and Adopt in the drawer's header. Adopt, there or on the row, makes the task,
    and the conversation is the task's: the same agent if it runs, else gone on with. Adopt opens
    no terminal tab.
-8. **Who may.** Only you start or stop an agent: a client's `task_open` or ↵ files the task and
-   shows its tabs, a client's `session_adopt` makes the task, and neither starts anything.
-9. **Progress.** While the task is open its session is read on: what it does now and its model
+9. **Who may.** Only you start or stop an agent, and only you say which task a tab is of: a
+   client's ↵ files the task with no tab, its `task_open` goes to tabs the task has, its
+   `session_adopt` makes the task, and none starts anything.
+10. **Progress.** While the task is open its session is read on: what it does now and its model
    show on its row, and the task keeps in its file when its agent started, when it was done, its
    time at work (activity until a quiet gap of two minutes) and its tokens by model (input,
    output, cached; a sub-agent's apart), summed over its sessions. They stay when the session
@@ -270,7 +281,7 @@ key of ottospace's, so it does nothing while a hosted app has the keyboard (`APP
 in a terminal it clears the screen, and is kept for that.
 
 The Tasks group also holds the drawer's commands: Type in the Conversation (⌘L), Open or Close the
-Conversation (⌘⇧L), Go to the Task's Tabs (⌘↵) and Stop the Agent (the drawer's Stop), each for
+Conversation (⌘⇧L), Go to Its Tabs (⌘↵) and Stop the Agent (the drawer's Stop), each for
 the conversation the drawer shows. ⌘P while you type in the conversation opens the palette over
 it: the agent gets no key while it is open, and when it closes the keyboard goes back to it.
 
@@ -542,7 +553,9 @@ written a second after a change and at quit, readable by you alone.
 - **What comes back**: every tab in bar order, each with its task (a task's tabs together, tabs of
   no task last) and the workbook it came from; its splits and their sizes; which pane had focus;
   the tab on show; the section that was open; the drawer (the conversation it showed, open or
-  closed, its width). A task's tabs live here, keyed by the task's number, not in the task's file.
+  closed, its width). A task's tabs live here, keyed by the task's number, not in the task's file;
+  its badge colour is in the task's file. A tab of a task that is gone or dismissed comes back as
+  a tab of no task.
 - **Terminals** start a new shell in the folder they were in (one that is gone: your home folder,
   and the status bar says so). As a [workbook](#workbooks)'s do, they show their last lines in
   grey above the prompt, and a program that ran in front is typed on the prompt, not run: ↵ runs

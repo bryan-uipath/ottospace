@@ -12,7 +12,7 @@ use gpui::{
 };
 use ottospace_core::agents::{self, Command, Start};
 use ottospace_core::keys;
-use ottospace_core::talk::Subject;
+use ottospace_core::talk::{self, Subject};
 use ottospace_core::tasks::{Group, TaskId};
 use ottospace_core::terminal::scroll_key;
 use ottospace_core::{Action, Axis, Kind, Mode, Origin, theme};
@@ -266,10 +266,7 @@ impl Workspace {
                 self.new_task(window, cx);
                 return true;
             }
-            ("talk", "talk-go", _) => {
-                self.talk_go(window, cx);
-                return true;
-            }
+            ("talk", "talk-go", _) => Action::TalkGo,
             ("talk", "talk-brief", Some(id)) if self.model.brief == Some(id) => Action::BriefClose,
             ("talk", "talk-brief", Some(id)) => Action::BriefShow { id },
             ("talk", "talk-stop", _) => match shown {
@@ -312,19 +309,49 @@ impl Workspace {
         self.model.talk.as_ref().is_some_and(|talk| talk.open && talk.task == Subject::Task(task))
     }
 
-    /// ⌘↵ with a conversation open: shows its task's tabs, or leaves them if they show.
-    pub(crate) fn talk_go(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let Some(task) = self.model.talk.as_ref().filter(|talk| talk.open).and_then(|talk| talk.task.task()) else {
-            return;
-        };
-        let action = match self.model.talk_goes_to() {
-            Some(_) => Action::TaskOpen { id: Some(task) },
-            None if self.model.current_task == Some(task) => Action::TaskLeave,
-            None => return,
-        };
-        self.dispatch(action, self.input, window, cx);
+    /// A task's badge as drawn everywhere: its letters (`Model::badges`), its identity colour,
+    /// its state's dot. `None`: no such task, or it is dismissed.
+    pub(crate) fn task_badge(&self, id: TaskId, size: f32) -> Option<Div> {
+        let task = self.model.tasks.live(id)?;
+        let badges = self.badges.borrow();
+        let mono = badges.iter().find(|(of, _)| *of == Subject::Task(id)).map(|(_, mono)| mono.clone())?;
+        Some(badge(&mono, theme::identity(task.colour), task.group().map(theme::task), size))
     }
+}
 
+/// A badge: `mono` in a rounded square bordered in an identity colour, and a state's dot at
+/// its corner. The one look of a task on the tab bar, its panes, its row, the rail and the drawer.
+pub(crate) fn badge(mono: &str, colour: u32, state: Option<u32>, size: f32) -> Div {
+    let dot = (size * 0.36).max(7.);
+    div()
+        .relative()
+        .flex_none()
+        .size(px(size))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(size / 4.))
+        .border_2()
+        .border_color(rgb(colour))
+        .bg(rgb(theme::SELECTED))
+        .text_size(px((size * 0.4).max(9.)))
+        .text_color(rgb(theme::TEXT))
+        .child(mono.to_string())
+        .children(state.map(|state| {
+            let at = px(-dot / 2.);
+            div()
+                .absolute()
+                .top(at)
+                .right(at)
+                .size(px(dot))
+                .rounded_full()
+                .bg(rgb(state))
+                .border_1()
+                .border_color(rgb(theme::BACKGROUND))
+        }))
+}
+
+impl Workspace {
     /// A small button of the drawer's header or the rail, named for sneak mode and tests.
     fn talk_button(&self, name: &'static str, label: &str, tip: &'static str) -> Stateful<Div> {
         div()
@@ -370,13 +397,17 @@ impl Workspace {
             let secs = agent.since.elapsed().as_secs();
             if secs < 3600 { format!("{}:{:02}", secs / 60, secs % 60) } else { format!("{}h", secs / 3600) }
         });
-        // ⌘↵: the task's tabs into the workspace, or, while they are on show, back out of them.
-        let go = match (self.model.talk_goes_to(), shown.is_some() && self.model.current_task == subject.task()) {
-            (Some(name), _) => Some(self.talk_button("talk-go", &format!("Go to {name} ⌘↵"), "Show its tabs")),
-            (None, true) => Some(self.talk_button("talk-go", "Leave ⌘↵", "Back to the tabs of no task")),
-            (None, false) => None,
-        };
-        let go = go.map(|button| button.on_click(cx.listener(|this, _, window, cx| this.talk_go(window, cx))));
+        // ⌘↵: to the task's tabs; with none, claim the tab on show or make it a new one.
+        let go = self.model.talk_go().map(|go| {
+            let tip = match go {
+                talk::Go::Tabs => "Show the tab of this task shown last",
+                talk::Go::Claim => "Make the tab on show this task's",
+                talk::Go::New => "A new tab of this task, with a terminal in its repository",
+            };
+            self.talk_button("talk-go", &format!("{} ⌘↵", go.label()), tip).on_click(
+                cx.listener(|this, _, window, cx| drop(this.dispatch(Action::TalkGo, this.input, window, cx))),
+            )
+        });
         let brief = shown.filter(|task| !task.materials.is_empty()).map(|task| {
             let (task, on) = (task.id, self.model.brief == Some(task.id));
             self.talk_button("talk-brief", if on { "Agent" } else { "Brief" }, "The task's brief, or its agent")
@@ -422,7 +453,10 @@ impl Workspace {
                 .gap_2()
                 .border_b_1()
                 .border_color(rgb(theme::BORDER))
-                .child(home::dot(color))
+                .child(match shown.and_then(|task| self.task_badge(task.id, 18.)) {
+                    Some(badge) => badge,
+                    None => home::dot(color),
+                })
                 .child(div().flex_1().min_w_0().truncate().text_sm().child(title))
                 .children(agent.map(|agent| muted(agent.model.clone())))
                 .children(elapsed.map(muted))
@@ -558,25 +592,12 @@ impl Workspace {
         };
         let cells = self.model.rail().into_iter().enumerate().map(|(at, cell)| {
             let (name, tip) = (key(&cell.task), gpui::SharedString::from(cell.tip.clone()));
-            let ring = cell.group.map_or(theme::MUTED, theme::task);
-            let badge = div()
-                .relative()
-                .size(px(30.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(7.))
-                .border_2()
-                .border_color(rgb(ring))
-                .bg(rgb(theme::SELECTED))
-                .text_xs()
-                .text_color(rgb(theme::TEXT))
-                .child(cell.mono.clone())
-                // At work: a steady dot at the corner. Nothing on the rail moves.
-                .children(cell.working.then(|| {
-                    let dot = home::dot(theme::PICK).absolute().top(px(-3.)).right(px(-3.));
-                    dot.border_1().border_color(rgb(theme::BACKGROUND))
-                }));
+            // Its identity colour (a session's grey) and its state's dot, as on the bar and the rows.
+            // Not `task_badge`: a session's cell has no task, and its dot is lit while it works.
+            let task_colour = cell.task.task().and_then(|id| self.model.tasks.get(id)).and_then(|task| task.colour);
+            let ring = theme::identity(task_colour);
+            let state = cell.group.map(theme::task).or(cell.working.then(|| theme::task(Group::Running)));
+            let badge = badge(&cell.mono, ring, state, 30.);
             let (task, cell_task) = (cell.task.clone(), cell.task.task());
             div()
                 .id(gpui::ElementId::Name(format!("rail-talk:{name}").into()))
@@ -715,7 +736,7 @@ impl Workspace {
             "body": shown.then(|| crate::rect(self.drawer.body.get())),
             "width": self.drawer.width,
             "agents": agents,
-            "goes_to": self.model.talk_goes_to(),
+            "goes_to": self.model.talk_go(),
             // The right rail's conversations, in order: task, badge, state, at work, shown, tooltip.
             "rail": self.model.rail(),
             "note": self.model.talk_note(),

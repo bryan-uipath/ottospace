@@ -309,17 +309,15 @@ pub enum Request {
     ComposeDrop {
         paths: Vec<String>,
     },
-    /// Shows the tabs of the first task that needs the user. The reply is
+    /// Goes to the tabs of the first task that needs the user. The reply is
     /// `{"ok":true,"task":{..},"opened":true}`; `"task":null` if nothing needs the user, and
-    /// `"opened":false` if the view could not change (the picker or key reference is open).
+    /// `"opened":false` if the tab on show did not change (the task has no tab, or the picker
+    /// or key reference is open).
     TaskPop,
-    /// Shows a task's tabs. A task opened for the first time gets a tab, with a terminal in its
-    /// repository if it names one.
+    /// Goes to a task's tabs: selects the one it showed last. A task with no tab: nothing.
     TaskOpen {
         id: TaskId,
     },
-    /// Shows the tabs of no task again. The task goes on.
-    TaskLeave,
     /// A terminal pane's text (default: the focused one): the bottom screen, and with `history`
     /// everything scrolled off above it. The reply is `{"ok":true,"pane":3,"text":".."}`, not the state.
     Capture {

@@ -54,7 +54,6 @@
 {"cmd":"compose_drop","paths":["/tmp/a.txt"]}
 {"cmd":"task_pop"}
 {"cmd":"task_open","id":1}
-{"cmd":"task_leave"}
 {"cmd":"capture","pane":1,"history":true}
 {"cmd":"wait","pane":1,"pattern":"^done$","timeout_ms":1000}
 {"cmd":"capture_start","pane":1}

@@ -49,6 +49,17 @@ pub fn task(group: Group) -> u32 {
     }
 }
 
+/// Tasks' identity colours (`Task::colour`): their badges and the underline of their tabs. Hues
+/// apart from each other and from the state colours above.
+pub const IDENTITY: [u32; crate::tasks::COLOURS as usize] =
+    // Neighbours in the order given are far apart: the first tasks look the most different.
+    [0xf87171, 0x818cf8, 0xfb923c, 0xf472b6, 0xbef264, 0xc084fc, 0xd6a77a, 0x5eead4];
+
+/// A task's identity colour; with none, the muted grey.
+pub fn identity(colour: Option<u8>) -> u32 {
+    colour.and_then(|at| IDENTITY.get(usize::from(at))).copied().unwrap_or(MUTED)
+}
+
 /// The one colour that changes with the mode. It marks the status pill and the focused pane.
 pub fn accent(mode: Mode) -> u32 {
     match mode {
@@ -73,6 +84,15 @@ pub fn accent(mode: Mode) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn identity_colours_are_apart_from_each_other_and_from_the_state_colours() {
+        let states = [Group::NeedsYou, Group::Running, Group::Captured, Group::OnHold, Group::Done].map(task);
+        for (at, colour) in IDENTITY.iter().enumerate() {
+            assert!(!IDENTITY[..at].contains(colour) && !states.contains(colour), "{colour:06x}");
+        }
+        assert_eq!((identity(Some(1)), identity(Some(200)), identity(None)), (IDENTITY[1], MUTED, MUTED));
+    }
 
     #[test]
     fn each_mode_has_its_own_accent() {

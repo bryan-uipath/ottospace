@@ -24,6 +24,8 @@ pub fn app_menus() -> Vec<Menu> {
             name: "File".into(),
             items: vec![
                 item("New Tab", NewTab),
+                item("New Tab outside the Task", NewTabOutside),
+                item("Remove Tab from Task", RemoveTabFromTask),
                 item("Save Tab as Workbook", SaveWorkbook),
                 item("Add Tab to Workbook…", AddTabToWorkbook),
                 item("Save All Tabs as Workbook", SaveAllWorkbook),
@@ -102,7 +104,7 @@ pub fn app_menus() -> Vec<Menu> {
                 // The conversation in the drawer.
                 item("Type in the Conversation", TalkFocus),
                 item("Open or Close the Conversation", TalkToggle),
-                item("Go to the Task's Tabs", TalkGo),
+                item("Go to Its Tabs", TalkGo),
                 item("Stop the Agent", StopAgent),
             ],
         },

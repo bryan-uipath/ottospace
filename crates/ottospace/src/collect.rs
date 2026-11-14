@@ -624,7 +624,7 @@ impl Workspace {
     pub(crate) fn serve_brief(&mut self, id: Option<TaskId>, tab: Option<u32>) -> String {
         let of_tab = tab.and_then(|tab| self.model.tabs.iter().find(|t| t.id == tab)).and_then(|t| t.task);
         let talking = self.model.talk.as_ref().and_then(|talk| talk.task.task());
-        let Some(id) = id.or(of_tab).or(self.model.current_task).or(talking) else {
+        let Some(id) = id.or(of_tab).or(self.model.tab_task()).or(talking) else {
             return control::error("name a task: {\"cmd\":\"task_brief\",\"id\":7}");
         };
         match self.model.tasks.get(id).map(|task| task.materials.is_empty()) {

@@ -645,7 +645,7 @@ impl Model {
     /// Refused whole rather than saved in part: more than `MAX_TABS`, or one that cannot be kept.
     fn workbook_all_records(&self, read: Read) -> Result<Vec<(u32, TabRecord)>, String> {
         let mut tabs = Vec::new();
-        for at in self.visible_tabs() {
+        for at in 0..self.tabs.len() {
             match self.workbook_record(at, read.0, read.1) {
                 Ok(record) => tabs.push((self.tabs[at].id, record)),
                 Err(why) if why == EMPTY => {}

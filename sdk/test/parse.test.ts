@@ -21,7 +21,6 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       layout: null,
       focused: null,
       live: null,
-      current_task: null,
       sidebar: null,
       compose: null,
       list: null,
@@ -108,6 +107,8 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     workbook_offer: null,
     scrollbars: {},
     capture: { key: null, bar: null, picture: null, encoded: [], pending: 0, dir: null, brief: null },
+    groups: [{ task: 1, tabs: [0] }, { task: null, tabs: [1] }],
+    badges: { "1": "FL" },
     drawer: {
       body: [880, 40, 470, 820],
       width: 470,

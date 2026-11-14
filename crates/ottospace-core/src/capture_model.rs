@@ -121,7 +121,7 @@ impl Model {
 
     /// The tabs on the bar and what the panes of the one on show hold, given what the shell read.
     fn open_now(&self, facts: &[Facts]) -> Open {
-        let tabs = self.visible_tabs().into_iter().filter_map(|i| Some(self.tabs.get(i)?.title.clone())).collect();
+        let tabs = self.tabs.iter().map(|tab| tab.title.clone()).collect();
         let panes = self.shown().into_iter().filter_map(|id| self.source_of(self.pane(id)?, facts)).collect();
         Open { tabs, panes }
     }
@@ -295,7 +295,7 @@ impl Model {
         self.back_to = self.back_to.filter(|pane| self.pane(*pane).is_some());
         let briefed = |id: &TaskId| self.tasks.get(*id).is_some_and(|task| !task.materials.is_empty());
         let shown = |id: &TaskId| {
-            self.current_task == Some(*id) || self.talk.as_ref().is_some_and(|talk| talk.task.task() == Some(*id))
+            self.tab_task() == Some(*id) || self.talk.as_ref().is_some_and(|talk| talk.task.task() == Some(*id))
         };
         self.brief = self.brief.filter(|id| shown(id) && briefed(id));
     }
@@ -680,13 +680,15 @@ mod tests {
         assert_eq!(m.tasks.get(1).map(|task| task.materials.clone()), Some(vec!["1-k3f9a2c41b7d/1.json".to_string()]));
         assert_eq!((m.capture.is_none(), m.compose.is_none(), m.mode()), (true, true, Mode::Normal));
         assert_eq!(m.tasks.get(1).map(|task| task.title_generated), Some(false), "its title was typed");
-        // Opening the task shows its brief; with its tabs off the bar the brief goes too.
-        m.update(Action::TaskOpen { id: Some(1) });
+        // Going to the task's tab shows its brief; with no tab of it on show the brief goes too.
+        m.update(Action::TabPlace { tab: None, at: crate::model::TabAt::End(Some(1)) });
+        m.update(Action::NewTab);
+        m.update(Action::TaskGo { id: Some(1) });
         assert_eq!(m.brief, Some(1));
         m.update(Action::BriefClose);
         m.update(Action::BriefShow { id: 1 });
         assert_eq!(m.brief, Some(1));
-        m.update(Action::TaskLeave);
+        m.update(Action::TabPlace { tab: None, at: crate::model::TabAt::End(None) });
         assert_eq!(m.brief, None);
         m.update(Action::BriefShow { id: 1 });
         assert_eq!(m.brief, None, "its tabs are not on show");

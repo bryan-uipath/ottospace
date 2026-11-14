@@ -411,6 +411,7 @@ function task(value: unknown, at: string): Task {
     ...(o.started_at === undefined ? {} : { started_at: num(o.started_at, `${at}.started_at`) }),
     ...(o.finished_at === undefined ? {} : { finished_at: num(o.finished_at, `${at}.finished_at`) }),
     ...(o.work === undefined ? {} : { work: list(work)(o.work, `${at}.work`) }),
+    ...(o.colour === undefined ? {} : { colour: num(o.colour, `${at}.colour`) }),
   };
 }
 
@@ -644,6 +645,16 @@ function railCell(value: unknown, at: string): Snapshot["drawer"]["rail"][number
   };
 }
 
+function goWord(value: unknown, at: string): "tabs" | "claim" | "new" {
+  if (value === "tabs" || value === "claim" || value === "new") return value;
+  throw new Error(`${at}: not a go word: ${JSON.stringify(value)}`);
+}
+
+function tabGroup(value: unknown, at: string): Snapshot["groups"][number] {
+  const o = fields(value, at);
+  return { task: orNull(num)(o.task, `${at}.task`), tabs: list(num)(o.tabs, `${at}.tabs`) };
+}
+
 function drawerDrawn(value: unknown, at: string): Snapshot["drawer"] {
   const o = fields(value, at);
   const agent = (value: unknown, at: string) => {
@@ -660,7 +671,7 @@ function drawerDrawn(value: unknown, at: string): Snapshot["drawer"] {
     body: orNull(rect)(o.body, `${at}.body`),
     width: num(o.width, `${at}.width`),
     agents: map(agent)(o.agents, `${at}.agents`),
-    goes_to: orNull(str)(o.goes_to, `${at}.goes_to`),
+    goes_to: orNull(goWord)(o.goes_to, `${at}.goes_to`),
     note: orNull(str)(o.note, `${at}.note`),
     rail: list(railCell)(o.rail, `${at}.rail`),
   };
@@ -891,7 +902,8 @@ function running(value: unknown, at: string): Running {
 }
 
 function confirm(value: unknown, at: string): Confirm {
-  return { running: list(running)(fields(value, at).running, `${at}.running`) };
+  const o = fields(value, at);
+  return { running: list(running)(o.running, `${at}.running`), dismiss: orNull(num)(o.dismiss, `${at}.dismiss`) };
 }
 
 function markInput(value: unknown, at: string): MarkInput {
@@ -1000,7 +1012,6 @@ function model(value: unknown, at: string): Model {
     layout: orNull(layout)(o.layout, `${at}.layout`),
     focused: orNull(num)(o.focused, `${at}.focused`),
     live: orNull(num)(o.live, `${at}.live`),
-    current_task: orNull(num)(o.current_task, `${at}.current_task`),
     sidebar: orNull(section)(o.sidebar, `${at}.sidebar`),
     compose: orNull(str)(o.compose, `${at}.compose`),
     list: orNull(num)(o.list, `${at}.list`),
@@ -1251,6 +1262,8 @@ export function snapshot(value: unknown): Snapshot {
     workbook_offer: orNull(workbookOffer)(o.workbook_offer, "workbook_offer"),
     scrollbars: map(scrollbar)(o.scrollbars, "scrollbars"),
     capture: captureDrawn(o.capture, "capture"),
+    groups: list(tabGroup)(o.groups, "groups"),
+    badges: map(str)(o.badges, "badges"),
     drawer: drawerDrawn(o.drawer, "drawer"),
     frame: frameNumbers(o.frame, "frame"),
     ...(o.stale === undefined ? {} : { stale: staleMark(o.stale, "stale") }),
