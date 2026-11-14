@@ -3912,6 +3912,11 @@ impl Otto {
         }
     }
 
+    /// The user starts a listed task's agent: a click on its row (the Tasks section is open).
+    fn start_task(&self, task: u64) -> Value {
+        self.user_click(at(self.control(&format!("task:{task}")), 0.3, 0.3))
+    }
+
     /// `keys` pressed as the user's own, not a client's.
     fn user_key(&self, keys: &str) -> Value {
         self.call(json!({"cmd": "key", "keys": keys, "as": "user"}))
@@ -6426,6 +6431,88 @@ fn a_native_conversation_streams_asks_and_switches_to_the_terminal_and_back() {
     otto.wait_for("claude -p --resume", |_| native().then_some(()));
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
+}
+
+/// The stand-in `claude` in a folder of its own, replaying `fixtures` (name, lines), with a
+/// repository `app` listed and the native view set. Returns the root (to remove when the test
+/// ends), the record folder, and the environment to launch with, `extra` added.
+fn native_setup(
+    name: &str,
+    fixtures: &[(&str, String)],
+    extra: &[(&str, &str)],
+) -> (PathBuf, PathBuf, Vec<(String, String)>) {
+    let root = support::temp(&format!("ottospace-e2e-{name}-{}", std::process::id()));
+    let (bin, repos, record, dir) = (root.join("bin"), root.join("repos"), root.join("record"), root.join("fixtures"));
+    fake_repo(&repos.join("app"));
+    for folder in [&bin, &record, &dir] {
+        std::fs::create_dir_all(folder).unwrap();
+    }
+    for (file, body) in fixtures {
+        std::fs::write(dir.join(file), format!("{body}\n")).unwrap();
+    }
+    let fake = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ottospace-agents/tests/fakes/claude");
+    std::fs::copy(&fake, bin.join("claude")).unwrap();
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let settings = json!({ "repos": [repos], "conversation_view": "native" });
+    std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
+    let path = |p: &Path| p.to_str().unwrap().to_string();
+    let mut env = vec![
+        ("OTTOSPACE_AGENTS_DIR".to_string(), path(&bin)),
+        ("OTTOSPACE_HOME".to_string(), path(&home)),
+        ("FAKE_DIR".to_string(), path(&record)),
+        ("FAKE_FIXTURES".to_string(), path(&dir)),
+    ];
+    env.extend(extra.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+    (root, record, env)
+}
+
+fn launch_env(name: &str, env: &[(String, String)]) -> Otto {
+    let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    Otto::launch_with(name, &env)
+}
+
+/// A fixture of the agents crate's, by file name.
+fn recorded(name: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ottospace-agents/tests/fixtures/claude").join(name);
+    std::fs::read_to_string(path).unwrap().trim_end().to_string()
+}
+
+/// An agent that ends before it replies says so on the user's screen: its exit code, that no
+/// reply came, a line not understood counted; Show details (the user's click only) opens its
+/// stderr, and the state says only that there is some, never what.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn an_agent_that_ends_before_replying_says_why() {
+    let start = format!("{}\n{{\"type\":\"made_up_kind\",\"made\":\"up\"}}", recorded("real-2.1.325-no-reply.jsonl"));
+    let stderr = ("FAKE_STDERR", "Error: made-up failure; key sk-ant-api03-madeupmadeupmadeup");
+    let (root, _, env) = native_setup("silent-end", &[("start.jsonl", start)], &[("FAKE_EXIT", "0"), stderr]);
+    let otto = launch_env("silent-end", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "plan the week >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    otto.start_task(1);
+    let ended = otto.wait_for("the end", |o| {
+        let chat = chat(o);
+        (chat["transcript"]["live"] == false && chat["details"] == true).then_some(chat)
+    });
+    let last = ended["transcript"]["entries"].as_array().unwrap().last().cloned().unwrap();
+    let notice =
+        json!({"kind": "notice", "notice": "ended", "code": 0, "signal": null, "replied": false, "details": true});
+    assert_eq!(last, notice, "{ended}");
+    assert_eq!(ended["transcript"]["not_understood"], 1, "hook lines are quiet, the made-up kind is not");
+    let state = otto.call(json!({"cmd": "state"})).to_string();
+    assert!(!state.contains("made-up failure") && !state.contains("sk-ant"), "stderr stays out of the state");
+    // A client's click opens nothing; the user's does.
+    otto.click(at(otto.control("talk:chat-details"), 0.5, 0.5), 1);
+    assert_eq!(chat(&otto)["details_open"], false);
+    otto.user_click(at(otto.control("talk:chat-details"), 0.5, 0.5));
+    assert_eq!(chat(&otto)["details_open"], true);
+    let state = otto.call(json!({"cmd": "state"})).to_string();
+    assert!(!state.contains("made-up failure") && !state.contains("sk-ant"), "{state}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 /// A session another process holds is watched from its file: the header says so, and each

@@ -279,12 +279,29 @@ pub enum Event {
     Unknown {
         kind: String,
     },
-    /// The process ended. `stderr`: its last few KB.
+    /// The process ended: its exit code, or the signal that ended it. `stderr`: its last few KB.
     Exited {
         code: Option<i32>,
+        signal: Option<i32>,
         stderr: Untrusted,
     },
 }
+
+/// `Unknown` kinds the runners send that are known and read on purpose by nothing: the user's
+/// hooks, status lines, rate limits (`docs/ai/agent-runners.md`, "Lines no rule reads"). Every
+/// other `Unknown` is a line not understood, and the drawer counts it.
+pub const QUIET: &[&str] = &[
+    "system.hook_started",
+    "system.hook_response",
+    "system.status",
+    "system.thinking_tokens",
+    "rate_limit_event",
+    "thread.status.changed",
+    "account.updated",
+    "remoteControl.status.changed",
+    "mcpServer.startupStatus.updated",
+    "account.rateLimits.updated",
+];
 
 /// Why an input was not sent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

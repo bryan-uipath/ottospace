@@ -192,7 +192,7 @@ impl Model {
         if let Some(chat) = self.chat_mut(subject)
             && chat.transcript.live
         {
-            chat.transcript.fold(crate::transcript::Event::Exited { code: None }, 0);
+            chat.transcript.fold(crate::transcript::Event::Exited { code: None, signal: None, details: false }, 0);
         }
         if let Some(chat) = self.chat_mut(subject) {
             (chat.deny, chat.armed) = (false, false);

@@ -3,8 +3,16 @@
 # on stdin by replaying a fixture from $FAKE_FIXTURES. Starts no model session.
 # An answer replays `turn<N>-allowed.jsonl` or `turn<N>-denied.jsonl` of the turn it answers,
 # if the fixtures have one; an allow falls back to `turn1-allowed.jsonl`.
+# `start.jsonl`, if there is one, is replayed first (the real CLI's hook lines). `$FAKE_EXIT`
+# set: after it, the fake exits with that code before reading anything, with `$FAKE_STDERR` on
+# stderr (as the real CLI does when its stdin closes before a message, or it fails to start).
 printf '%s\n' "$@" >"$FAKE_DIR/argv"
 replay() { grep -v '"_fixture"' "$FAKE_FIXTURES/$1"; }
+[ -f "$FAKE_FIXTURES/start.jsonl" ] && replay start.jsonl
+if [ -n "$FAKE_EXIT" ]; then
+  [ -n "$FAKE_STDERR" ] && printf '%s\n' "$FAKE_STDERR" >&2
+  exit "$FAKE_EXIT"
+fi
 turn=0
 while IFS= read -r line; do
   printf '%s\n' "$line" >>"$FAKE_DIR/stdin"

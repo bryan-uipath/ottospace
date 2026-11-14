@@ -135,7 +135,8 @@ impl Gen<'_> {
                 ]),
             },
             10 => Said::Usage { context: Some(10), window: None, cost_micro_usd: None },
-            _ => Said::Exited { code: None },
+            11 if self.rng.coin() => Said::Unknown { kind: self.name(WORDS) },
+            _ => Said::Exited { code: None, signal: None, details: self.rng.coin() },
         }
     }
 
@@ -2993,7 +2994,10 @@ fn event_code(event: &Said) -> String {
             format!("Said::TurnFinished {{ outcome: {outcome} }}")
         }
         Said::Error { kind, retrying } => format!("Said::Error {{ kind: {kind:?}.into(), retrying: {retrying} }}"),
-        Said::Exited { code } => format!("Said::Exited {{ code: {code:?} }}"),
+        Said::Exited { code, signal, details } => {
+            format!("Said::Exited {{ code: {code:?}, signal: {signal:?}, details: {details} }}")
+        }
+        Said::Unknown { kind } => format!("Said::Unknown {{ kind: {kind:?}.into() }}"),
         Said::MessageElsewhere => "Said::MessageElsewhere".into(),
         Said::WatchFromStart => "Said::WatchFromStart".into(),
     }
