@@ -49,6 +49,7 @@ running, and the rest of the design is not built: see the
 | Workbooks (⌘⇧S): save tabs under a name (their splits, each terminal's directory, each app) and open them again from the Workbook section. Several tabs each: add a tab to one, or save all the tabs on the bar as one. Kept in `~/.ottospace/workbooks`. An app comes back as its window, not on the page or document it showed | Works today |
 | Tabs and layout come back after quitting: every tab (with its task and workbook), its splits and sizes, focus, the tab on show, the section and the drawer; terminals start again in their folders with their last lines and an offered command; running apps' windows go back in their panes. See [Restoring the layout](#restoring-the-layout) | Works today |
 | `settings.json`: terminal font, repository directories, tasks folder, apps to offer, window rules | Works today |
+| [Meeting timeline](#meeting-timeline): a calendar feed (`calendar_ics`) as a hairline across the top of the window, now at its left edge; the next meeting named beside the tab bar's buttons; a soft pulse as one comes near; a banner, a notification and a sound when one has started and you are in no call | Works today |
 
 ### Roadmap: designed, not built
 
@@ -123,7 +124,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘B / ⌘⇧B | Mark the focused pane / the tab on show; on one that is marked, take the mark off (the Marks section offers it back for six seconds, and ⌘B again within them puts the same mark back). The mark is named for the app, the terminal's directory or the tab's title. It records what to open, not a window or a process: a terminal's directory as it is then, an app's bundle id, name and window title, a tab's title, task and split tree. A marked pane or tab shows ◆ and its letter |
 | ⌘' then a letter | Go to the mark with that letter. The status bar shows `MARK?` while it waits; Esc, or a letter of no mark, ends the wait and nothing else happens. If the mark's pane or tab is open, its tab comes forward and the pane takes focus (an app pane is focused, not entered). Else it is opened: a terminal in the recorded directory, the app's window in a pane (the one with the recorded title, else its only window, else its main one; an app that is not running is started), or the tab with its splits. A tab opens with what can be opened: a pane whose directory is gone or whose window could not be hosted is empty and says why, and going to the tab again tries it again |
 | ⌘⌥1 … ⌘⌥9 | Go to one of the first nine marks, in the order of the Marks section |
-| ⌘⌃E | List mode: the bar (Tasks, Apps, Workbook, Repos, Marks) takes the keyboard, on the open section, or Apps if none is. On a workbook ↵ opens its tabs, space lists them under it, `a` adds the tab on show to it, `r` renames it, `x` deletes it and `u` takes the last delete or update back; on one of its tabs ↵ opens that tab, `r` renames it and `x` takes it out. On a mark `x` removes it, `r` renames it, `m` gives it a letter, ⇧J / ⇧K move it down / up, and `u` puts the last removed mark back. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); in Tasks a heading is a row too, and ↵ or space on it folds or unfolds it; Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; on an app that is not running `p` pins or unpins it, `x` hides a suggestion and `u` takes the last of these back; in Apps `/` types in the filter of "All apps" (↵, ↓ or Esc gives the keys back to the rows); Esc or ⌘⌃E leaves |
+| ⌘⌃E | List mode: the bar (Tasks, Calendar while a feed is set, Apps, Workbook, Repos, Marks) takes the keyboard, on the open section, or Apps if none is. On a workbook ↵ opens its tabs, space lists them under it, `a` adds the tab on show to it, `r` renames it, `x` deletes it and `u` takes the last delete or update back; on one of its tabs ↵ opens that tab, `r` renames it and `x` takes it out. On a mark `x` removes it, `r` renames it, `m` gives it a letter, ⇧J / ⇧K move it down / up, and `u` puts the last removed mark back. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); in Tasks a heading is a row too, and ↵ or space on it folds or unfolds it; Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; on an app that is not running `p` pins or unpins it, `x` hides a suggestion and `u` takes the last of these back; in Apps `/` types in the filter of "All apps" (↵, ↓ or Esc gives the keys back to the rows); Esc or ⌘⌃E leaves |
 | ⌘; or ⌘⌃G | Sneak mode: every control ottospace draws (rail icons, bar rows, tabs and their ×, top-bar buttons, pane headers and their ×, each pane, the drawer's buttons and picks, the right rail's badges, the home screen's buttons, rows and nodes) gets a short label, home-row letters first. Type a label and the control does what a click does; a pane's label focuses it, or gives an app pane the keyboard. A × (pane or tab) always has a two-letter label. Two-letter labels narrow on the first letter; ⌫ takes it back. Esc, a click, a letter that goes on with no label, or any ⌘ shortcut leaves; the shortcut then runs (⌘C copies, ⌘V pastes). Other keys do nothing. The labels follow what is drawn: if a control moves its label moves, and if it goes its label goes. What happens by itself (a shell exits, an agent files a task) does not end the mode. Starting it hides the accessibility overlay (⌘⌃A). Not ⌃G alone: a terminal needs that key. On a keyboard layout with no Latin letters, the keys type the letters they have under ⌘. From `APP` mode return first. The focused app pane's elements get labels too, in orange (APP mode's colour), always two letters or more so one stray key presses nothing in another app: those its accessibility tree says can be pressed (`AXPress`) or typed in (text fields), enabled, at least 4 points each way where the pane shows them, the innermost of nested ones, at most 150 (nearest the pane's top left). Their labels start with the letters ottospace's own leave free, 19 two-letter labels to each such letter (e.g. `ta`, `ts`, `td`); the first letter only narrows. Only when those letters run out do they go under a × label's first letter, or take three letters. They appear once the app's tree is read, a moment after ottospace's own, and follow it while the mode is on (read again each second); the status bar says how many, e.g. `12 controls in Calculator`. An orange label presses that element (`AXPress`) and the pane stays parked; a text field's label focuses the field and gives the app the keyboard, so you type there. Before it presses, ottospace finds the element again and checks it is the same (role, enabled, place in its window within 2 points); if not, nothing is pressed and the status bar says the control moved. Sneak sets no value, opens no menu and scrolls nothing in the app, and only your own typed letter presses: a socket client's letter of an orange label is refused. Apps that build their accessibility tree only on request (Electron, Chrome's pages, Spotify) show few elements, and get few labels: ottospace does not switch their fuller mode on. Entering an app pane raises its window, as a click on the pane does |
 | ⌘⇧C | Visual mode on the terminal: `hjkl`/arrows, `w b e 0 ^ $`, `H M L` move; `v` / `V` select; `y` or ↵ copies and leaves; Esc leaves |
 
@@ -576,6 +577,62 @@ written a second after a change and at quit, readable by you alone.
   written (one that is there is left alone).
 - Marks that stood for a tab or a pane stand for it again.
 
+## Meeting timeline
+
+Set `calendar_ics` to your calendar's feed (an `https://` link, such as a calendar's "secret
+address in iCal format", or a file's path) and ottospace shows your day's meetings, never in
+the way.
+
+- **The hairline**: a 6-point band along the very top of the window, above the window's buttons,
+  so it costs no room. Its left edge is now; it shows the next `calendar_window_hours` (8). Each
+  meeting is a block as long as it lasts; blocks slide left as time passes and go when they end.
+  A meeting that runs starts at the left edge and shrinks. Faint ticks mark whole hours; the hour
+  shows on hover. Meetings that overlap share two half-height lanes. All-day events are one small
+  dot at the left end. Hover a block for its title, time and place.
+- **The chip**: beside the new-tab and split buttons, the next meeting today: `Design review ·
+  in 12m`, `· now` while it runs. Hidden when nothing is left today. Its tooltip says when the
+  feed was last read (`calendar: not updated since 09:40` when the last read failed).
+- **The pulse**: from 10 minutes before a meeting its block and the chip glow softly, slowly;
+  from 2 minutes, faster; while it runs, steadily. With Reduce motion (System Settings,
+  Accessibility, Display) the colour steps up instead, with no movement. Nothing else in
+  ottospace pulses.
+- **The status bar** says `Design review in 4m` in amber from 5 minutes before.
+- **At the start**, if you are in no call: a banner under the title strip (the title, how long
+  ago it started, **Join** if the meeting has an `https:` link, **Dismiss**), which stays until
+  you dismiss it, join, a call starts or the meeting ends; and a system notification with the
+  alert sound, so you see it when ottospace is behind other windows. Once more 2 minutes later
+  if you are still in no call; never a third time. Only in a meeting's first 10 minutes: one you
+  leave early alerts nothing. `calendar_notify: false` turns alerts off; `calendar_notify_for:
+  "links"` alerts only meetings with a Zoom, Meet or Teams link (the default, `all`, alerts every
+  meeting, as one with no link is still one you would miss).
+- **In a call** means a microphone is in use by any app (Zoom, Meet in a browser, Teams), as
+  macOS's audio system says. ottospace reads no window, title or log for it and asks for no
+  permission. A microphone in use for something else (dictation, a recording) also counts as a
+  call, and then no alert comes. Until it has looked (it looks every 2 seconds from a minute
+  before a meeting) no alert comes either.
+- **Join** opens the meeting's link with the app that handles it (Zoom for a Zoom link), only
+  when you click it or choose it, and only an `https:` link. Never by itself.
+- **The feed** is read at start and every `calendar_refresh_minutes` (5), off the main thread,
+  through `/usr/bin/curl`: `https:` only, no redirects (a feed that has moved is not read: the
+  status bar asks for its final address), only from a host on the internet (looked up once,
+  checked, and curl pinned to that address), at most 5 MB, 30 seconds. A proxy set in your
+  environment (`https_proxy`) applies. It is ottospace's only network access. The link is handed to curl on its standard input, not in
+  its arguments, and is never shown, logged or put in the state. A read that fails keeps the
+  events of the last one. Recurring meetings, time zones, cancelled meetings and moved
+  occurrences are followed; see [meeting-timeline.md](ai/meeting-timeline.md) for what is not.
+- **The Calendar section** (its rail cell, second, is there only while `calendar_ics` is set):
+  today's meetings, all-day ones first, then by start: the time, the title, and the place (or the
+  link's host) below. The meeting that runs is outlined in amber, past ones are dimmed, and a thin
+  amber line marks now. `Join` shows on hover or selection for a meeting with an `https:` link.
+  Below, a folded "Tomorrow · n". "Nothing today" when the day is empty; at the foot, when the feed
+  was last read. The rail cell shows a steady amber dot while a meeting is 2 minutes off or runs,
+  and a filled amber badge while the banner is up. In list mode (⌘⌃E) `j`/`k` move and ↵ joins
+  (or folds "Tomorrow"). The open Calendar is not kept in the restored layout: a build without
+  the section could not read the file.
+- **Privacy**: titles and places are other people's text. They are shown, never sent anywhere,
+  never in the trace or a task's brief, and not in the control socket's state, which has only
+  counts, times and stages (`calendar`). An agent cannot read your calendar.
+
 ## Terminal panes
 
 A terminal pane runs your shell on a PTY. The pane closes when the shell exits. It keeps 10,000
@@ -713,6 +770,11 @@ optional:
 | `apps` | The pinned apps: listed first under "Not running" in Apps, and in the picker before anything is typed; choosing one starts it in the background and puts its window in a pane. Each is the name of the app as Finder shows it (`Visual Studio Code` for `Visual Studio Code.app`), looked for in `/Applications`, `~/Applications` and `/System/Applications` (and their `Utilities`), or the path of its bundle (`~/Tools/Lumen.app`). One that is not found is left out of the list and kept in the file. Pin and Unpin in the Apps section write this list: the name if it means that same bundle when read back (the first of that name in those folders, in that order), else its path. A name that is found only once ottospace runs (the app was installed since) is listed from the next scan. (Once you type in the picker it offers every installed app in those folders, these first) | none |
 | `apps_hidden` | Apps of the Dock not to suggest in Apps, written as `apps` is. Hide in the Apps section writes this list | none |
 | `wheel_to_apps` | Experimental: the wheel or trackpad over an app pane you are not in is passed to the app, which stays in the back. `false`: the wheel there does nothing | `true` |
+| `calendar_ics` | The [meeting timeline](#meeting-timeline)'s calendar feed: an `https://` link (to a host on the internet, not an address or `localhost`) or a file's path (`/…` or `~/…`). Never shown: a private feed's link holds a secret | none: no timeline |
+| `calendar_window_hours` | How many hours the hairline shows from now, 1 to 24 | `8` |
+| `calendar_refresh_minutes` | How often the feed is read again, at least 1 | `5` |
+| `calendar_notify` | A meeting that starts while you are in no call shows the banner, a notification and a sound | `true` |
+| `calendar_notify_for` | Which meetings alert: `all`, or only those with a Zoom, Meet or Teams `links` | `all` |
 | `suggest_dock_apps` | List the Dock's apps that are not running under "Not running". `false`: only pinned apps are listed there, and the Dock is not read | `true` |
 
 A mistake in the file (a key that does not exist, a wrong value, a font that is not installed) is
@@ -831,6 +893,8 @@ first brainstorm:
 [e2e-reliability.md](ai/e2e-reliability.md): replies that wait for the frame that draws them, failure folders, the trace, and repeated runs to find flaky tests.
 
 [agent-runners.md](ai/agent-runners.md): a native (non-terminal) agent conversation: driving Claude Code and Codex in their structured modes, permission prompts, trust rules. Not wired in yet.
+
+[meeting-timeline.md](ai/meeting-timeline.md): the meeting timeline as built, how a call is detected, the network decision, and what the calendar reader does not follow.
 
 [`docs/ai/backlog.md`](ai/backlog.md) is an older backlog. `docs/ideas/` holds the owner's own
 notes.

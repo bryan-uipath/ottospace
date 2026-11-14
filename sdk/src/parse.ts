@@ -4,6 +4,7 @@
 
 import type {
   AppEntry,
+  MeetingStage,
   AxNode,
   AxOverlay,
   AxSource,
@@ -171,7 +172,7 @@ function mode(value: unknown, at: string): Mode {
 
 function section(value: unknown, at: string): Section {
   if (value === "apps" || value === "workbook" || value === "tasks" || value === "repos") return value;
-  if (value === "marks") return value;
+  if (value === "marks" || value === "calendar") return value;
   throw wrong(at, "a section", value);
 }
 
@@ -1265,8 +1266,49 @@ export function snapshot(value: unknown): Snapshot {
     groups: list(tabGroup)(o.groups, "groups"),
     badges: map(str)(o.badges, "badges"),
     drawer: drawerDrawn(o.drawer, "drawer"),
+    calendar: calendar(o.calendar, "calendar"),
     frame: frameNumbers(o.frame, "frame"),
     ...(o.stale === undefined ? {} : { stale: staleMark(o.stale, "stale") }),
+  };
+}
+
+function meetingStage(value: unknown, at: string): MeetingStage {
+  if (value === "far" || value === "approaching" || value === "imminent" || value === "running" || value === "past") {
+    return value;
+  }
+  throw wrong(at, "a meeting stage", value);
+}
+
+function railMark(value: unknown, at: string): Snapshot["calendar"]["rail"] {
+  if (value === "none" || value === "near" || value === "alert") return value;
+  throw wrong(at, "none, near or alert", value);
+}
+
+function calendar(value: unknown, at: string): Snapshot["calendar"] {
+  const o = fields(value, at);
+  const banner = (v: unknown, at: string) => {
+    const b = fields(v, at);
+    return { join: orNull(rect)(b.join, `${at}.join`), dismiss: orNull(rect)(b.dismiss, `${at}.dismiss`) };
+  };
+  return {
+    on: bool(o.on, `${at}.on`),
+    events_today: num(o.events_today, `${at}.events_today`),
+    all_day_today: num(o.all_day_today, `${at}.all_day_today`),
+    events_tomorrow: num(o.events_tomorrow, `${at}.events_tomorrow`),
+    next_start: orNull(num)(o.next_start, `${at}.next_start`),
+    stage: orNull(meetingStage)(o.stage, `${at}.stage`),
+    updated: orNull(num)(o.updated, `${at}.updated`),
+    stale: bool(o.stale, `${at}.stale`),
+    in_call: orNull(bool)(o.in_call, `${at}.in_call`),
+    soon: bool(o.soon, `${at}.soon`),
+    bars: num(o.bars, `${at}.bars`),
+    chip: bool(o.chip, `${at}.chip`),
+    banner: orNull(banner)(o.banner, `${at}.banner`),
+    alerts: num(o.alerts, `${at}.alerts`),
+    joins: orNull(num)(o.joins, `${at}.joins`),
+    rows: num(o.rows, `${at}.rows`),
+    rail: railMark(o.rail, `${at}.rail`),
+    tomorrow_open: bool(o.tomorrow_open, `${at}.tomorrow_open`),
   };
 }
 

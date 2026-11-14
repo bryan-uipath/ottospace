@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::ax::{Frame, Source};
+use crate::calendar::Event;
 use crate::compose::{Known, Names, PathFound};
 use crate::fuzz::{self, Rng};
 use crate::layout_file;
@@ -130,6 +131,28 @@ impl Gen<'_> {
 
     fn text(&mut self) -> String {
         fuzz::hostile(self.rng)
+    }
+
+    /// A meeting near the model's time, with an allowed link, one that is not, or none.
+    fn meeting(&mut self) -> Event {
+        let now = self.m.now;
+        let near = [60_000, 600_000].map(|ms| now.saturating_add(ms));
+        let start = self.rng.pick(&[now, now.saturating_sub(60_000), near[0], near[1], 0, u64::MAX / 2]);
+        let link = self.rng.pick(&[None, Some("https://example.zoom.us/j/1"), Some("http://example.com")]);
+        Event {
+            id: self.rng.pick(&[1, 2, 3]),
+            start,
+            end: start.saturating_add(self.rng.pick(&[0, 60_000, 1_800_000])),
+            all_day: self.rng.one_in(5),
+            title: self.text(),
+            location: self.text(),
+            link: link.map(String::from),
+        }
+    }
+
+    fn meeting_id(&mut self) -> u64 {
+        let real: Vec<u64> = self.m.calendar.events.iter().map(|e| e.id).collect();
+        self.one_of(&real, |g| g.rng.pick(&[0, 9, u64::MAX]))
     }
 
     /// A plain name from `pool`, else hostile text.
@@ -998,6 +1021,16 @@ const MAKERS: &[Make] = &[
     |g| Action::TalkKeys { on: g.rng.coin() },
     |g| Action::TalkResize { width: g.rng.pick(&[0., 400., 9e9, f32::NAN]) },
     |_| Action::TalkWide,
+    |g| Action::SetCalendar { on: g.rng.coin(), notify: g.rng.coin(), links_only: g.rng.coin() },
+    |g| {
+        let events = g.rng.coin().then(|| (0..g.rng.below(4)).map(|_| g.meeting()).collect());
+        let day = g.m.now - g.m.now % 86_400_000;
+        Action::CalendarRead { events, days: [0, 1, 2].map(|n: u64| day.saturating_add(n * 86_400_000)), at: g.time() }
+    },
+    |g| Action::CallSeen { in_call: g.rng.pick(&[None, Some(true), Some(false)]) },
+    |g| Action::CalendarDismiss { id: g.meeting_id() },
+    |g| Action::CalendarJoin { id: g.meeting_id() },
+    |_| Action::CalendarTomorrow,
 ];
 
 /// The way out of each box and mode. Picked one time in 8: with every action as likely as any
@@ -1082,6 +1115,15 @@ fn drawn(material: &crate::capture::Material) -> Vec<crate::capture::Shape> {
 }
 
 fn check(m: &Model) -> Result<(), String> {
+    // The Calendar is open, or has the rail's keyboard, only while a feed is set.
+    let calendar_shown =
+        m.sidebar == Some(Section::Calendar) || m.rail_focus == Some(zones::RailFocus::Left(Section::Calendar));
+    ensure!(!calendar_shown || m.calendar.on, "the Calendar section with no feed");
+    // The meeting banner is of an event that runs, with no call on.
+    if let Some(event) = m.calendar.banner(m.now) {
+        ensure!(calendar::stage(event, m.now) == calendar::Stage::Running, "a banner for an event that does not run");
+        ensure!(m.calendar.in_call != Some(true), "a banner while a call is on");
+    }
     // Tabs, their trees and the panes.
     ensure!(!m.tabs.is_empty(), "no tabs");
     ensure!(m.active < m.tabs.len(), "tab {} is on show, of {}", m.active, m.tabs.len());
@@ -1667,7 +1709,10 @@ fn check_layout(m: &Model) -> Result<(), String> {
     }
     let mut fresh = Model::default();
     let floor = m.tasks.list.iter().map(|task| task.id).max().unwrap_or(0);
+    let (on, notify, links_only) = (m.calendar.on, m.calendar.notify, m.calendar.links_only);
     for action in [
+        // The settings are read before the layout, as at a start.
+        Action::SetCalendar { on, notify, links_only },
         Action::RestoreTasks { tasks: m.tasks.list.clone(), floor },
         Action::RestoreWorkbooks { workbooks: m.workbooks.list.clone() },
         Action::RestoreMarks { marks: m.marks.list.clone(), extra: m.marks.extra.clone() },
@@ -1907,6 +1952,13 @@ impl Run {
             _ => false,
         };
         ensure!(!inspector_own || refused.is_some(), "a client's {action:?} reached the inspector");
+        // A meeting's link opens only on the user's own Join, and only one the allow-function passes.
+        for effect in &effects {
+            if let Effect::OpenLink { url } = effect {
+                let joins = matches!(action, Action::CalendarJoin { .. }) && origin == Origin::User;
+                ensure!(joins && calendar::joinable(url), "{origin:?}'s {action:?} opened {url:?}");
+            }
+        }
         // A resume waits on a read only when the user asked for it.
         let waits_more = m.awaiting.iter().any(|subject| !awaiting.contains(subject));
         ensure!(origin == Origin::User || !waits_more, "{origin:?}'s {action:?} asked for a resume");
@@ -2232,6 +2284,11 @@ impl Run {
                     ensure!(user && matches!(action, Action::StartFresh), "{origin:?} forgot the layout: {action:?}");
                     ensure!(!m.layout_kept, "the layout is forgotten and still kept");
                 }
+                // An alert comes with time passing, of an event that runs.
+                Effect::MeetingAlert { started, .. } => {
+                    ensure!(matches!(action, Action::Tick { .. }) && *started <= m.now, "an alert by {action:?}")
+                }
+                Effect::OpenLink { .. } => {}
                 Effect::Quit => {
                     ensure!(
                         matches!(action, Action::QuitAsked { .. } | Action::QuitConfirm | Action::Quit),
@@ -2625,6 +2682,7 @@ fn code(sent: &Envelope) -> String {
         "Node",
         "Truncated",
         "AppRead",
+        "Event",
     ];
     const ENUM_OF: &[(&str, &str)] = &[
         ("axis", "Axis"),
@@ -3500,6 +3558,24 @@ fn a_layout_restored_over_an_emptied_tab_leaves_no_workbook_standing_for_it() {
         Action::WorkbookSaveAll { uid: "00000000000000a2".into(), cwds: vec![], histories: vec![] }.sent_by(Origin::User),
         Action::Close { pane: None }.sent_by(Origin::User),
         restore_layout("{\"version\":1,\"selected\":2,\"section\":\"repos\",\"drawer\":{\"task\":1,\"open\":false,\"width\":480.0,\"wide\":false},\"tabs\":[{\"title\":\"Tab 2\",\"layout\":null,\"panes\":[],\"workbook\":{\"id\":\"00000000000000a2\",\"tab\":0}},{\"title\":\"Tab 1\",\"layout\":null,\"panes\":[]}]}", "[\"/Users/me/My Notes\",\"relative\"]", "null", false).sent_by(Origin::User),
+    ])
+    .unwrap();
+}
+
+/// Seed 1618: a layout restored after the user had opened the drawer's task listed the task twice
+/// on the right rail.
+#[test]
+fn a_restored_drawer_task_is_on_the_rail_once() {
+    replay(&[
+        by(Origin::System, Action::OpenCompose { text: "flicker".into() }),
+        Action::ComposeSubmit { open: true }.into(),
+        restore_layout(
+            r#"{"version":1,"selected":null,"section":null,"drawer":{"task":1,"open":false,"width":480.0,"wide":false},"tabs":[{"title":"Tab 1","layout":null,"panes":[]}]}"#,
+            "[]",
+            "\"/code/app\"",
+            true,
+        )
+        .sent_by(Origin::System),
     ])
     .unwrap();
 }

@@ -8,8 +8,10 @@ use super::{Action, Effect, Model, Section};
 use crate::layout::{Dir, Node};
 use crate::model::PaneId;
 
-/// The left rail's sections, top to bottom, as the shell draws them.
-pub const SECTIONS: [Section; 5] = [Section::Tasks, Section::Apps, Section::Workbook, Section::Repos, Section::Marks];
+/// The left rail's sections, top to bottom, as the shell draws them. Calendar only while a feed is
+/// set: `Model::sections`.
+pub const SECTIONS: [Section; 6] =
+    [Section::Tasks, Section::Calendar, Section::Apps, Section::Workbook, Section::Repos, Section::Marks];
 
 /// A rail that has the keyboard, in list mode as the section list does.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
@@ -112,7 +114,7 @@ impl Model {
                 if *dir == Dir::Left {
                     match self.sidebar {
                         Some(section) => self.open_section(section, effects),
-                        None => self.rail_focus = Some(RailFocus::Left(SECTIONS[0])),
+                        None => self.rail_focus = Some(RailFocus::Left(self.sections()[0])),
                     }
                 } else if self.inspector.is_some() {
                     // The inspector has the drawer's place: its rows take the keys.
@@ -173,8 +175,9 @@ impl Model {
         let step = |at: usize, len: usize| (at as i64 + i64::from(delta)).rem_euclid(len as i64) as usize;
         self.rail_focus = match self.rail_focus {
             Some(RailFocus::Left(section)) => {
-                let at = SECTIONS.iter().position(|s| *s == section).unwrap_or(0);
-                Some(RailFocus::Left(SECTIONS[step(at, SECTIONS.len())]))
+                let sections = self.sections();
+                let at = sections.iter().position(|s| *s == section).unwrap_or(0);
+                Some(RailFocus::Left(sections[step(at, sections.len())]))
             }
             Some(RailFocus::Right(at)) => Some(RailFocus::Right(step(at, self.rail().len() + 1))),
             None => None,

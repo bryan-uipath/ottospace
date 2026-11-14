@@ -92,6 +92,31 @@ pub struct Settings {
     /// when the user picks one on its heading.
     #[serde(default)]
     pub sessions_range: Option<crate::sessions::Range>,
+    /// The calendar feed of the meeting timeline: an `https://` link (a private feed's link holds
+    /// a secret: it is never shown) or a file's path. None: no timeline.
+    #[serde(default)]
+    pub calendar_ics: Option<String>,
+    /// How many hours the hairline shows from now. Default: 8; 1 to 24.
+    #[serde(default)]
+    pub calendar_window_hours: Option<u32>,
+    /// How often the feed is read again. Default: 5; at least 1.
+    #[serde(default)]
+    pub calendar_refresh_minutes: Option<u32>,
+    /// A meeting that starts with no Zoom meeting open alerts. Default: true.
+    #[serde(default)]
+    pub calendar_notify: Option<bool>,
+    /// Which meetings alert: `all` (default) or only those with a Zoom, Meet or Teams `links`.
+    #[serde(default)]
+    pub calendar_notify_for: Option<NotifyFor>,
+}
+
+/// Which meetings alert when they start (`calendar_notify_for`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NotifyFor {
+    #[default]
+    All,
+    Links,
 }
 
 /// The default capture key. Not ⌃⌥Space: macOS gives that to "Select next source in Input menu".
@@ -212,6 +237,20 @@ impl Settings {
         }
         if let Some(id) = settings.agent_models.as_ref().and_then(AgentModels::wrong) {
             return Err(not_a_model(&format!("{id:?}")));
+        }
+        // Never names the link: it may hold a secret.
+        if let Some(feed) = settings.calendar_ics.as_deref() {
+            let path = feed.starts_with('/') || feed.starts_with("~/");
+            let refused = if path { None } else { crate::calendar::feed_refusal(feed) };
+            if let Some(why) = refused {
+                return Err(why.into());
+            }
+        }
+        if settings.calendar_window_hours.is_some_and(|h| !(1..=24).contains(&h)) {
+            return Err("calendar_window_hours must be 1 to 24".into());
+        }
+        if settings.calendar_refresh_minutes == Some(0) {
+            return Err("calendar_refresh_minutes must be at least 1".into());
         }
         Ok(settings)
     }
@@ -628,6 +667,35 @@ mod tests {
         );
         // Of a key written twice, the last one counts.
         assert_eq!(Settings::read(r#"{"tasks": "a", "tasks": "b"}"#).0.tasks.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn a_calendar_feed_is_a_link_or_a_path_and_a_wrong_one_is_never_named() {
+        let read = |text: &str| Settings::read(text);
+        let ok = read(
+            r#"{"calendar_ics": "https://calendar.example.com/private-s3cret/basic.ics", "calendar_window_hours": 6}"#,
+        );
+        assert_eq!((ok.0.calendar_ics.is_some(), ok.0.calendar_window_hours, ok.1.len()), (true, Some(6), 0));
+        assert_eq!(read(r#"{"calendar_ics": "~/cal/today.ics"}"#).1, Vec::<String>::new());
+        for bad in [
+            "http://calendar.example.com/s3cret.ics",
+            "https://127.0.0.1/s3cret.ics",
+            "s3cret.ics",
+            "file:///s3cret.ics",
+        ] {
+            let (settings, wrong) = read(&format!(r#"{{"calendar_ics": "{bad}"}}"#));
+            assert_eq!(settings.calendar_ics, None);
+            assert!(
+                wrong.len() == 1 && wrong[0].starts_with("calendar_ics: ") && !wrong[0].contains("s3cret"),
+                "{wrong:?}"
+            );
+        }
+        assert_eq!(read(r#"{"calendar_window_hours": 0}"#).1.len(), 1);
+        assert_eq!(read(r#"{"calendar_window_hours": 25}"#).1.len(), 1);
+        assert_eq!(read(r#"{"calendar_refresh_minutes": 0}"#).1.len(), 1);
+        assert_eq!(read(r#"{"calendar_notify": false}"#).0.calendar_notify, Some(false));
+        assert_eq!(read(r#"{"calendar_notify_for": "links"}"#).0.calendar_notify_for, Some(NotifyFor::Links));
+        assert_eq!(read(r#"{"calendar_notify_for": "some"}"#).1.len(), 1);
     }
 
     #[test]
