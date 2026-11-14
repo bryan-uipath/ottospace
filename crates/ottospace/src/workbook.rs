@@ -45,13 +45,9 @@ impl Workspace {
     pub(crate) fn histories(&self) -> Vec<(PaneId, History)> {
         let (most, saved) = (config::workbook_lines(), now_ms());
         let history = |(id, terminal): (&PaneId, &crate::terminal::Terminal)| {
-            let text = if most == 0 { String::new() } else { terminal.text(true) };
-            let lines: Vec<&str> = text.lines().collect();
-            let lines = lines[lines.len().saturating_sub(most)..].iter().map(|line| line.to_string()).collect();
             // 0: no terminal text at all, the command line included.
             let command = (most > 0).then(|| terminal.foreground_command().or_else(|| terminal.offered())).flatten();
-            let history = History { lines, command, saved };
-            (*id, history.kept(most))
+            (*id, History { command, ..terminal.history(saved, most) }.kept(most))
         };
         self.terminals.iter().map(history).collect()
     }

@@ -151,10 +151,45 @@ pub fn history_view(history: &History, offset: i64) -> Vec<u8> {
     for line in &history.lines {
         text.push_str(&format!("\x1b[90m{line}\x1b[0m\r\n"));
     }
-    let typed = history.command.as_ref().map(|command| format!(" · on the prompt, ↵ runs: {command}"));
-    let divider = format!("── saved {}{} ──", local_minute(history.saved, offset), typed.unwrap_or_default());
-    text.push_str(&format!("\x1b[90m{divider}\x1b[0m\r\n"));
+    text.push_str(&format!("\x1b[90m{}\x1b[0m\r\n", divider(&history, offset, true)));
     text.into_bytes()
+}
+
+/// The divider below a history: "── saved 2026-11-13 15:02 ──", naming its command if `command`.
+fn divider(history: &History, offset: i64, command: bool) -> String {
+    let typed =
+        history.command.as_ref().filter(|_| command).map(|command| format!(" · on the prompt, ↵ runs: {command}"));
+    format!("── saved {}{} ──", local_minute(history.saved, offset), typed.unwrap_or_default())
+}
+
+/// What a terminal's history is saved as, its command aside. `opened`: the history it opened
+/// with (`offset` as for `history_view`); `text`: all it shows now, that view included; `typed`:
+/// the user typed into it. The opened lines are carried as they were, once; a block of what this
+/// run printed below their divider is added only if the user typed and it printed something.
+/// e.g. opened ["a"], text "a\n── saved … ──\n$ ls\nb", typed → ["a", "── saved … ──", "$ ls", "b"].
+pub fn next_history(opened: Option<&History>, offset: i64, text: &str, typed: bool, now: u64, most: usize) -> History {
+    let lines: Vec<&str> = if most == 0 { Vec::new() } else { text.lines().collect() };
+    let Some(opened) = opened.filter(|_| most > 0).map(|opened| opened.kept(MAX_HISTORY_LINES)) else {
+        let lines = if typed { lines.iter().map(|line| line.to_string()).collect() } else { Vec::new() };
+        return History { lines, command: None, saved: now }.kept(most);
+    };
+    // The view's divider: below its lines, or below their last ones if the oldest scrolled out
+    // (a `clear` took them all: none is). Not found, all is new.
+    let (shown, count) = (divider(&opened, offset, true), opened.lines.len());
+    let view = |at: usize| {
+        let tail = opened.lines[count - at..].iter().map(|line| line.trim_end());
+        lines.get(at) == Some(&shown.as_str())
+            && (at == count || lines[..at].iter().map(|line| line.trim_end()).eq(tail))
+    };
+    let below = (0..=count).rev().find(|at| view(*at)).map_or(0, |at| at + 1);
+    let new = &lines[below..];
+    if !typed || new.iter().all(|line| line.trim().is_empty()) {
+        return History { command: None, ..opened }.kept(most);
+    }
+    let mut kept = opened.lines.clone();
+    kept.push(divider(&opened, offset, false));
+    kept.extend(new.iter().map(|line| line.to_string()));
+    History { lines: kept, command: None, saved: now }.kept(most)
 }
 
 /// A workbook's histories fitted: to `MAX_BOOK_HISTORY`, then the last ones dropped until its
@@ -1531,6 +1566,65 @@ mod tests {
             assert_eq!(history(&[], Some(wrong)).kept(500).command, None, "{wrong:?}");
         }
         assert_eq!(history(&[], Some(" npm run dev ")).kept(500).command.as_deref(), Some("npm run dev"));
+    }
+
+    #[test]
+    fn a_terminal_saves_what_it_opened_with_once_and_a_block_only_for_a_run_the_user_typed_in() {
+        const AT: u64 = 1_763_042_520_000; // 2025-11-13 14:02 UTC
+        let opened = History { saved: AT, ..history(&["$ make", "built"], None) };
+        let shown = "── saved 2025-11-13 14:02 ──";
+        let view = format!("$ make\nbuilt\n{shown}\nLast login: Sat\n$");
+        let ran = format!("{view} ls\nfile\n$");
+        let new = |lines: &[&str]| History { saved: AT + 60_000, ..history(lines, None) };
+        let block = ["$ make", "built", shown, "Last login: Sat", "$ ls", "file", "$"];
+        // Name, opened with, text now, typed, lines kept: what is saved.
+        type Case<'a> = (&'a str, Option<&'a History>, String, bool, usize, History);
+        let cases: Vec<Case> = vec![
+            ("no typing: unchanged", Some(&opened), view.clone(), false, 500, opened.clone()),
+            (
+                "typed, nothing new below: unchanged",
+                Some(&opened),
+                format!("$ make\nbuilt\n{shown}\n \n"),
+                true,
+                500,
+                opened.clone(),
+            ),
+            ("typed: one block, one divider", Some(&opened), ran.clone(), true, 500, new(&block)),
+            ("over the cap: oldest go", Some(&opened), ran.clone(), true, 3, new(&block[4..])),
+            ("the oldest scrolled out: found above", Some(&opened), ran[7..].to_string(), true, 500, new(&block)),
+            ("0 keeps nothing", Some(&opened), ran.clone(), true, 0, new(&[])),
+            ("fresh, no typing: nothing", None, "Last login: Sat\n$".into(), false, 500, new(&[])),
+            ("fresh, typed: all of it", None, "$ ls\nfile".into(), true, 500, new(&["$ ls", "file"])),
+            // Printed text like a divider is output, not where the view ends.
+            (
+                "a divider printed below is output",
+                Some(&opened),
+                format!("{view} echo\n{shown}\n$"),
+                true,
+                500,
+                new(&["$ make", "built", shown, "Last login: Sat", "$ echo", shown, "$"]),
+            ),
+            // After a `clear` the view is gone: a divider printed near the top is output too.
+            (
+                "cleared, then a divider printed",
+                Some(&opened),
+                format!("$ printf\n{shown}\n$"),
+                true,
+                500,
+                new(&["$ make", "built", shown, "$ printf", shown, "$"]),
+            ),
+            ("empty text", Some(&opened), String::new(), true, 500, opened.clone()),
+        ];
+        for (name, opened, text, typed, most, want) in cases {
+            assert_eq!(next_history(opened, 0, &text, typed, AT + 60_000, most), want, "{name}");
+        }
+        // Restarted three times, typing nothing: the same history each time.
+        let mut kept = next_history(Some(&opened), 0, &ran, true, AT + 60_000, 500);
+        for _ in 0..3 {
+            let text = format!("{}\n{}\nLast login: Sun\n$", kept.lines.join("\n"), divider(&kept, 0, true));
+            assert_eq!(next_history(Some(&kept), 0, &text, false, AT + 120_000, 500), kept);
+            kept = next_history(Some(&kept), 0, &text, false, AT + 120_000, 500);
+        }
     }
 
     #[test]
