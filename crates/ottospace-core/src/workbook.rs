@@ -173,10 +173,15 @@ pub fn next_history(opened: Option<&History>, offset: i64, text: &str, typed: bo
         let lines = if typed { lines.iter().map(|line| line.to_string()).collect() } else { Vec::new() };
         return History { lines, command: None, saved: now }.kept(most);
     };
-    // The view's divider, at its lines' count or above if the oldest scrolled out; not found, all is new.
-    let shown = divider(&opened, offset, true);
-    let reach = (opened.lines.len() + 1).min(lines.len());
-    let below = lines[..reach].iter().rposition(|line| *line == shown).map_or(0, |at| at + 1);
+    // The view's divider: below its lines, or below their last ones if the oldest scrolled out
+    // (a `clear` took them all: none is). Not found, all is new.
+    let (shown, count) = (divider(&opened, offset, true), opened.lines.len());
+    let view = |at: usize| {
+        let tail = opened.lines[count - at..].iter().map(|line| line.trim_end());
+        lines.get(at) == Some(&shown.as_str())
+            && (at == count || lines[..at].iter().map(|line| line.trim_end()).eq(tail))
+    };
+    let below = (0..=count).rev().find(|at| view(*at)).map_or(0, |at| at + 1);
     let new = &lines[below..];
     if !typed || new.iter().all(|line| line.trim().is_empty()) {
         return History { command: None, ..opened }.kept(most);
@@ -1599,6 +1604,16 @@ mod tests {
                 500,
                 new(&["$ make", "built", shown, "Last login: Sat", "$ echo", shown, "$"]),
             ),
+            // After a `clear` the view is gone: a divider printed near the top is output too.
+            (
+                "cleared, then a divider printed",
+                Some(&opened),
+                format!("$ printf\n{shown}\n$"),
+                true,
+                500,
+                new(&["$ make", "built", shown, "$ printf", shown, "$"]),
+            ),
+            ("empty text", Some(&opened), String::new(), true, 500, opened.clone()),
         ];
         for (name, opened, text, typed, most, want) in cases {
             assert_eq!(next_history(opened, 0, &text, typed, AT + 60_000, most), want, "{name}");
