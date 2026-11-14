@@ -4247,22 +4247,16 @@ impl Workspace {
             // `OTTOSPACE_REPOS` names the directories: there is no setting to take it from.
             let path = repo.path.clone();
             let remove = (!self.model.repo_dirs.fixed).then(|| {
-                div()
-                    .id(("repo-remove", n))
-                    .absolute()
-                    .right(px(6.))
+                let click =
+                    move |this: &mut Self, window: &Window, cx: &mut Context<Self>| this.remove_repo(&path, window, cx);
+                let tip = ("Remove", "Stop listing this repository");
+                let word = self.word(format!("repo-remove:{}", repo.path), tip, click, cx);
+                // On the heading's colour, not a row's; the heading's weight would make it bold.
+                words::words("repo-name", false)
                     .bottom(px(1.))
-                    .px_1()
-                    .rounded_sm()
                     .bg(rgb(theme::RAISED))
                     .font_weight(FontWeight::NORMAL)
-                    .cursor_pointer()
-                    .hover(|s| s.text_color(rgb(theme::TEXT)))
-                    .invisible()
-                    .group_hover("repo-name", |s| s.visible())
-                    .child("Remove")
-                    .child(self.controls.mark(format!("repo-remove:{path}")))
-                    .on_click(cx.listener(move |this, _, window, cx| this.remove_repo(&path, window, cx)))
+                    .child(word)
             });
             items.push(name.group("repo-name").relative().children(remove).into_any_element());
             for checkout in repo.checkouts() {
