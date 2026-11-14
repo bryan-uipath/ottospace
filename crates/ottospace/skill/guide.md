@@ -46,6 +46,10 @@ ottospace ctl '{"cmd":"state"}'
   ends its shell; closing a tab closes every pane in it.
 - **Read output with `wait` and `capture`.** After `type`, `wait` for a line that marks the end,
   then `capture` the pane. Both read one pane only, so they do not return other panes' text.
+- **A request can answer `feature off: <name>`.** Some parts are behind a flag the user turns on
+  (`state.features` lists those on): with one off, its requests are refused with that error, and
+  its part of the state is empty. Do not retry; only the user turns a flag on, in the palette's
+  Features….
 
 ## State
 
@@ -69,6 +73,7 @@ ottospace ctl '{"cmd":"state"}'
 | `state.confirm` | Null, or the quit question the user raised (⌘Q, the menu's Quit, the window's close button): `running`, the terminals a quit would end something in, each `pane`, `program` (its name, or null) and `background` (false: the program in front of the shell; true: a background or stopped job of the shell). It is the user's to answer: only the user's own keys and clicks cancel it. From the socket, while it is up: `key` with `enter` or `q` quits and `key` with `escape` cancels; any other `key` (also `cmd-q`), every pointer request (`mouse_down`, `mouse_drag`, `mouse`, `drag`) and every request that would take the keyboard (`enter`, `picker`, `compose`, `keys`, `ax_overlay`) fails with `the quit question is up` and changes nothing. Every other request runs underneath and leaves it up, e.g. `split`, `focus`, `close`, `new_tab`, `type`, `scroll`. A pane that closes leaves `running`; when it empties the question goes away, and ottospace does not quit. `quit` never asks, and quits under the question too |
 | `state.keys` | True while the key reference covers the window |
 | `state.sidebar` | The open rail section, or null |
+| `state.features` | The feature flags that are on: `marks`, `apps_section`. Read-only. With `marks` off, the mark requests and `section` `marks` answer `feature off: marks` and `marks` is `[]`; with `apps_section` off, `section` `apps` answers `feature off: apps_section` and `apps_bar` is empty |
 | `terminals.<id>` | `cols`, `rows`, and `lines`: the visible text of that terminal pane. Also `history` (lines scrolled off the top), `display_offset` (how far the view is scrolled back; 0 is the bottom), `selection` (the selected text, or null) and `visual_cursor` |
 | `copied` | The text of the last copy |
 | `version` | The build, as the status bar shows it: version and the first seven characters of the commit (`0.1.0 · a4a2582`), or `0.1.0 · local` for a build from source |
@@ -369,7 +374,8 @@ States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stal
   without their tabs. Change tasks through these requests, not by editing the files: the running
   app does not read them again.
 
-Marks (named, saved ways back to a pane or a whole tab; the Marks section lists them):
+Marks (named, saved ways back to a pane or a whole tab; the Marks section lists them), while
+the `marks` feature is on (`state.features`); off, each answers `feature off: marks`:
 
 ```sh
 ottospace ctl '{"cmd":"marks"}'

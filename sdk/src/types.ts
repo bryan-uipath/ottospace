@@ -46,6 +46,8 @@ export type Subject = TaskId | { runner: string; id: string };
 export type Axis = "right" | "down";
 export type Dir = "left" | "right" | "up" | "down";
 export type Section = "apps" | "workbook" | "tasks" | "repos" | "marks" | "calendar";
+/** A feature flag (`features` in `settings.json`). Off, its requests answer "feature off: <name>". */
+export type Feature = "marks" | "apps_section";
 /** Pane kinds `split` may create. App panes come from `open_app`. */
 export type SplitKind = "terminal" | "empty";
 /** Who has the keyboard. */
@@ -592,6 +594,14 @@ export interface Palette {
   selected: number;
   /** Move Tab to Task…: the tasks it lists (task null: no task), in order; null while it lists commands. */
   tasks: PaletteTask[] | null;
+  /** Features…: the flags it lists, each with whether it is on; null while it lists commands. */
+  features: PaletteFeature[] | null;
+}
+
+/** A flag Features… lists: choosing it turns it the other way, in the settings. */
+export interface PaletteFeature {
+  feature: Feature;
+  on: boolean;
 }
 
 /** A task Move Tab to Task… may move the tab on show to. */
@@ -806,6 +816,8 @@ export interface Model {
   talk_wide: boolean;
   /** The conversations whose agent runs in the drawer. */
   agents: Subject[];
+  /** The feature flags that are on. Read-only: only the user turns one, in Features…. */
+  features: Feature[];
 }
 
 export interface Terminal {

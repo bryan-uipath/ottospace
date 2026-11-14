@@ -47,6 +47,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       talk_width: 480,
       talk_wide: false,
       agents: [],
+      features: [],
     },
     bounds: {},
     frames: {},

@@ -270,7 +270,8 @@ mod tests {
         fn features_lists_the_flags_and_the_users_choice_writes_one() {
             let mut m = terminal();
             m.update(set(Features::default()));
-            // No client opens it.
+            // Its name finds it first in the palette. No client opens it.
+            assert_eq!(crate::commands::rank("features")[0], Command::Features);
             assert!(m.update(Action::PaletteFeatures.sent_by(Origin::Socket)).is_empty());
             assert!(m.palette.is_none());
             m.update(Action::PaletteFeatures);

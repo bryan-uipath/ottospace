@@ -1172,6 +1172,7 @@ impl Workspace {
         // Opening the Apps section too: apps start and quit, and the Dock changes.
         if self.model.sidebar != Some(Section::Apps)
             && matches!(action, Action::ToggleSection { section: Section::Apps })
+            && self.on(Feature::AppsSection)
         {
             self.refresh_apps();
             self.offer_installed(cx);

@@ -15,6 +15,11 @@ mod support;
 /// How long a wait may take. Generous: a loaded machine can take over 10s to start a shell.
 const TIMEOUT: Duration = Duration::from_secs(40);
 
+/// The flags a test that needs a feature behind one names: off by default, as for the user.
+const MARKS: (&str, &str) = ("OTTOSPACE_FEATURES", "marks");
+const APPS_SECTION: (&str, &str) = ("OTTOSPACE_FEATURES", "apps_section");
+const BOTH: (&str, &str) = ("OTTOSPACE_FEATURES", "marks,apps_section");
+
 /// A running ottospace on a private socket. Killed on drop, so a failed assert leaves no window.
 struct Otto {
     child: Child,
@@ -64,6 +69,8 @@ impl Otto {
             .envs((!env.iter().any(|(name, _)| *name == "OTTOSPACE_HOME")).then_some(("OTTOSPACE_REPOS", "")))
             // Never read the user's settings or tasks: `OTTOSPACE_E2E` without a folder keeps nothing.
             .env_remove("OTTOSPACE_HOME")
+            // Every feature as by default, unless the test names its flags.
+            .env_remove("OTTOSPACE_FEATURES")
             .envs(env.iter().copied())
             .spawn()
             .expect("launch ottospace");
@@ -1841,7 +1848,7 @@ fn visual_mode_selects_with_the_keyboard() {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn secondary_bar_opens_and_closes_beside_the_panes() {
-    let otto = Otto::launch("bar");
+    let otto = Otto::launch_with("bar", &[APPS_SECTION]);
     let reply = otto.call(json!({"cmd": "split", "kind": "empty"}));
     assert_eq!(reply["state"]["sidebar"], Value::Null, "bar starts closed when hosting is off");
     let closed = otto.bounds(&[1])[0];
@@ -2407,6 +2414,7 @@ fn the_apps_section_lists_pinned_then_dock_then_all_apps_and_a_pin_is_written_to
         ("OTTOSPACE_REPOS", ""),
         ("OTTOSPACE_APPS_DIRS", root.to_str().unwrap()),
         ("OTTOSPACE_DOCK_APPS", dock.as_str()),
+        APPS_SECTION,
     ];
     let otto = Otto::launch_with("apps-bar", &env);
     // A pin writes the settings file: the user's keys and labels, never a client's.
@@ -2566,6 +2574,7 @@ fn a_settings_file_that_cannot_be_read_is_not_written_and_dock_suggestions_can_b
             ("OTTOSPACE_REPOS", String::new()),
             ("OTTOSPACE_APPS_DIRS", root.to_str().unwrap().to_string()),
             ("OTTOSPACE_DOCK_APPS", dock.clone()),
+            (APPS_SECTION.0, APPS_SECTION.1.to_string()),
         ]
     };
     let listed = |otto: &Otto, count: u64| {
@@ -2976,7 +2985,7 @@ fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
     let _ = std::fs::remove_dir_all(&root);
     fake_repo(&root.join("app"));
     let repo = root.canonicalize().unwrap().join("app").to_string_lossy().into_owned();
-    let otto = Otto::launch_with("sneak", &[("OTTOSPACE_REPOS", &root.to_string_lossy())]);
+    let otto = Otto::launch_with("sneak", &[("OTTOSPACE_REPOS", &root.to_string_lossy()), APPS_SECTION]);
     otto.call(json!({"cmd": "task_add", "title": "review the fix", "state": "needs_you"}));
 
     // The home screen with the Repos bar open: every control drawn has a label, and one each.
@@ -3100,7 +3109,7 @@ fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_two_letter_sneak_label_narrows_then_activates() {
-    let otto = Otto::launch("sneak-two");
+    let otto = Otto::launch_with("sneak-two", &[BOTH]);
     // Three panes, two tabs and the bar: more controls than the alphabet has letters.
     otto.call(json!({"cmd": "split", "kind": "empty"}));
     otto.call(json!({"cmd": "split", "axis": "right", "kind": "empty"}));
@@ -3363,6 +3372,66 @@ fn mark_names(reply: &Value) -> Vec<String> {
     marks.iter().filter_map(|mark| mark["name"].as_str().map(str::to_string)).collect()
 }
 
+/// Off by default, a feature is absent: no rail cell, its keys do nothing, its requests answer
+/// "feature off", and what it keeps on disk stays. Turned on in Features…, it is back at once.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_feature_that_is_off_is_absent_and_features_turns_it_on_live() {
+    let home = user_folder("flags", r#"{"repos": [], "restore_layout": false}"#);
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    {
+        let otto = Otto::launch_with("flags-1", &[env[0], MARKS]);
+        otto.call(json!({"cmd": "split"}));
+        otto.call(json!({"cmd": "mark_add", "pane": 1, "name": "notes", "key": "n"}));
+    }
+    let kept = std::fs::read_to_string(home.join("marks.json")).unwrap();
+    let otto = Otto::launch_with("flags-2", &env);
+    otto.call(json!({"cmd": "split"}));
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!(
+        (&state["state"]["features"], &state["marks"], &state["apps_bar"]["not_running"]),
+        (&json!([]), &json!([]), &json!([]))
+    );
+    // Its requests answer why; a section of no flag still opens.
+    for (request, why) in [
+        (json!({"cmd": "marks"}), "feature off: marks"),
+        (json!({"cmd": "mark_add", "pane": 1}), "feature off: marks"),
+        (json!({"cmd": "mark_go", "key": "n"}), "feature off: marks"),
+        (json!({"cmd": "section", "section": "marks"}), "feature off: marks"),
+        (json!({"cmd": "section", "section": "apps"}), "feature off: apps_section"),
+    ] {
+        assert_eq!(otto.raw(&request.to_string())["error"], why, "{request}");
+    }
+    assert_eq!(otto.call(json!({"cmd": "section", "section": "repos"}))["state"]["sidebar"], "repos");
+    // No rail cell: Tasks, Workbook, Repos.
+    let (_, labels) = sneak(&otto);
+    let rails: Vec<&String> = labels.keys().filter(|id| id.starts_with("rail:") && *id != "rail:new-task").collect();
+    assert_eq!(rails, ["rail:repos", "rail:tasks", "rail:workbook"], "{labels:?}");
+    otto.call(json!({"cmd": "key", "keys": "escape"}));
+    // The keys do nothing: no mark, no wait for a letter.
+    for keys in ["cmd-b", "cmd-shift-b", "cmd-'", "cmd-alt-1"] {
+        let reply = otto.user_key(keys);
+        assert_eq!(
+            (&reply["mode"], &reply["marks"], &reply["state"]["mark_input"]),
+            (&json!("normal"), &json!([]), &Value::Null),
+            "{keys}"
+        );
+    }
+    assert_eq!(std::fs::read_to_string(home.join("marks.json")).unwrap(), kept, "marks.json is untouched");
+
+    // Features… in the palette turns marks on: the settings say so, and the mark is back.
+    otto.user_key("cmd-p f e a t u r e s enter");
+    let listed = otto.user_key("m a r k s");
+    assert_eq!(listed["state"]["palette"]["features"][0], json!({"feature": "marks", "on": false}), "{listed}");
+    let on = otto.user_key("enter");
+    assert_eq!((&on["state"]["features"], mark_names(&on)), (&json!(["marks"]), vec!["notes".to_string()]));
+    let settings: Value = serde_json::from_str(&std::fs::read_to_string(home.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(settings["features"], json!({"marks": true}));
+    assert_eq!(otto.call(json!({"cmd": "section", "section": "marks"}))["state"]["sidebar"], "marks");
+    // A client's palette is refused, so no client turns a flag.
+    assert!(otto.raw(r#"{"cmd":"key","keys":"cmd-p"}"#)["state"]["palette"].is_null());
+}
+
 /// The mark called `name`, as the state has it.
 fn mark_named(reply: &Value, name: &str) -> Value {
     let marks = reply["marks"].as_array().cloned().unwrap_or_default();
@@ -3389,7 +3458,7 @@ fn marks_are_a_way_back_to_a_pane_and_a_tab_and_are_kept_between_runs() {
     let home = user_folder("marks", r#"{"repos": [], "restore_layout": false}"#);
     std::fs::create_dir_all(home.join("notes")).unwrap();
     let notes = home.join("notes").canonicalize().unwrap();
-    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap()), MARKS];
     {
         let otto = Otto::launch_with("marks-1", &env);
         let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
@@ -3573,7 +3642,7 @@ fn marks_are_a_way_back_to_a_pane_and_a_tab_and_are_kept_between_runs() {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_marks_wait_for_a_letter_is_the_users_and_a_mark_taken_off_by_mistake_comes_back() {
-    let otto = Otto::launch("marks-quiet");
+    let otto = Otto::launch_with("marks-quiet", &[MARKS]);
     let key = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys}));
     // No marks yet.
     let empty = otto.call(json!({"cmd": "section", "section": "marks"}));
@@ -3632,7 +3701,7 @@ fn a_hand_written_marks_file_is_checked_and_commands_in_it_are_never_typed() {
     let home = user_folder("marks-file", r#"{"repos": [], "nope": 1, "restore_layout": false}"#);
     std::fs::create_dir_all(home.join("work")).unwrap();
     let work = home.join("work").canonicalize().unwrap();
-    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap()), MARKS];
     let shell = |cwd: &str, rest: &str| json!({"id": 1, "kind": {"type": "terminal"}, "cwd": cwd, "command": rest});
     let chat = json!({"id": 2, "kind": {"type": "app", "bundle": "com.example.acmechat", "name": "Acme Chat", "title": "general", "pid": 811}});
     let layout = json!({"split": {"axis": "right", "ratio": 0.6, "a": {"leaf": 1}, "b": {"leaf": 2}}});
@@ -3702,7 +3771,7 @@ fn a_hand_written_marks_file_is_checked_and_commands_in_it_are_never_typed() {
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn two_ottospaces_on_one_folder_keep_each_others_marks() {
     let home = user_folder("marks-two", r#"{"repos": []}"#);
-    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap()), MARKS];
     let (a, b) = (Otto::launch_with("marks-two-a", &env), Otto::launch_with("marks-two-b", &env));
     let on_disk = || -> Vec<String> {
         let marks = kept_marks(&home)["marks"].as_array().cloned().unwrap_or_default();
@@ -4251,7 +4320,7 @@ fn under_the_quit_question_the_users_shortcut_only_cancels_and_a_second_cmd_q_qu
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_key_still_held_after_a_marks_wait_reaches_nothing() {
-    let otto = Otto::launch("marks-held");
+    let otto = Otto::launch_with("marks-held", &[MARKS]);
     let wait = |pattern: &str| otto.call(json!({"cmd": "wait", "pane": 1, "pattern": pattern, "timeout_ms": 40000}));
     let text = || otto.call(json!({"cmd": "capture", "pane": 1}))["text"].as_str().unwrap().to_string();
     // 1 | 2    two shells; pane 1 is marked `n`.
@@ -4356,7 +4425,7 @@ fn a_held_key_is_sent_only_for_keys_that_exist() {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_users_click_in_a_marks_name_keeps_the_rename_and_one_outside_ends_it() {
-    let otto = Otto::launch("marks-field");
+    let otto = Otto::launch_with("marks-field", &[MARKS]);
     otto.call(json!({"cmd": "split", "kind": "empty"}));
     otto.call(json!({"cmd": "split"}));
     otto.call(json!({"cmd": "mark_add", "pane": 2, "name": "notes"}));
@@ -5353,7 +5422,7 @@ fn a_click_on_a_session_goes_on_with_it_in_the_drawer() {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn nothing_is_drawn_over_the_window_buttons_with_a_section_or_the_drawer_open_or_not() {
-    let otto = Otto::launch("lights");
+    let otto = Otto::launch_with("lights", &[BOTH]);
     otto.call(json!({"cmd": "split", "kind": "empty"}));
     let state = otto.call(json!({"cmd": "section", "section": "tasks"}));
     // Both rects end inside a 1 pt bottom border: the strip is 28 tall, the header 40 like a cell.
@@ -5671,7 +5740,7 @@ fn focus_moves_across_the_zones_to_the_rails_and_back() {
     // The user's goes on: the left rail (no section open), its cells by ↓, a section's list by →.
     let rail = otto.user_key(FOCUS_LEFT);
     assert_eq!((focus(&rail), &rail["mode"]), (json!({"rail": "tasks"}), &json!("list")));
-    assert_eq!(focus(&otto.user_key("down")), json!({"rail": "apps"}));
+    // With the flags off the rail is Tasks, Workbook, Repos: no Apps cell between.
     assert_eq!(focus(&otto.user_key("down")), json!({"rail": "workbook"}));
     let list = otto.user_key("right");
     assert_eq!((list["focus"].get("list").is_some(), &list["state"]["sidebar"]), (true, &json!("workbook")), "{list}");
