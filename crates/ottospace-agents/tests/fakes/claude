@@ -7,6 +7,7 @@
 # set: after it, the fake exits with that code before reading anything, with `$FAKE_STDERR` on
 # stderr (as the real CLI does when its stdin closes before a message, or it fails to start).
 printf '%s\n' "$@" >"$FAKE_DIR/argv"
+echo start >>"$FAKE_DIR/starts"
 replay() { grep -v '"_fixture"' "$FAKE_FIXTURES/$1"; }
 [ -f "$FAKE_FIXTURES/start.jsonl" ] && replay start.jsonl
 if [ -n "$FAKE_EXIT" ]; then

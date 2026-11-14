@@ -605,8 +605,12 @@ impl Workspace {
         if t.live || t.watched {
             return None;
         }
-        let details = self.drawer.details.get(subject)?;
-        let open = self.drawer.looks.get(subject).is_some_and(|look| look.details);
+        let start = self.start_button(cx);
+        let details = self.drawer.details.get(subject);
+        if start.is_none() && details.is_none() {
+            return None;
+        }
+        let open = details.is_some() && self.drawer.looks.get(subject).is_some_and(|look| look.details);
         let label = if open { "Hide details" } else { "Show details" };
         let who = subject.clone();
         let button = self
@@ -620,7 +624,8 @@ impl Workspace {
                 look.details = !look.details;
                 cx.notify();
             }));
-        let body = open.then(|| {
+        let button = details.is_some().then_some(button);
+        let body = details.filter(|_| open).map(|details| {
             div()
                 .id("chat-details-text")
                 .max_h(px(160.))
@@ -633,7 +638,8 @@ impl Workspace {
                 .bg(rgb(theme::RAISED))
                 .children(details.lines().map(code_text))
         });
-        Some(div().px_3().py_1().flex().flex_col().child(div().flex().child(button)).children(body))
+        let row = div().flex().items_center().gap_1().children(start).children(button);
+        Some(div().px_3().py_1().flex().flex_col().child(row).children(body))
     }
 
     /// Over a watched transcript: it is read-only, and Take over goes on with the session here
@@ -644,12 +650,8 @@ impl Workspace {
         let subject = subject.clone();
         let take = self.talk_button("chat-take-over", "Take over", tip).when(!ready, |b| b.opacity(0.4)).on_click(
             cx.listener(move |this, _, window, cx| {
-                let action = match &subject {
-                    Subject::Task(id) => Action::TaskTalk { id: *id },
-                    Subject::Session { runner, id } => Action::SessionOpen { runner: runner.clone(), id: id.clone() },
-                };
                 if this.model.take_over_ready(&subject) {
-                    this.dispatch(action, this.input, window, cx);
+                    this.dispatch(Action::TalkStart, this.input, window, cx);
                 }
             }),
         );
@@ -1192,7 +1194,7 @@ impl Workspace {
             _ if chat.transcript.turn.is_some() => {
                 ("Write the next message", "↵ sends once the turn ends · esc esc stops")
             }
-            _ if !chat.transcript.live => ("The agent ended", "a click on its task goes on with its session"),
+            _ if !chat.transcript.live => ("The agent ended", "Resume session above goes on with it"),
             _ => ("Message the agent", "↵ send · ⇧↵ new line · esc leave"),
         };
         let field = (!card || chat.deny).then(|| self.render_field_of("talk", placeholder, cx));

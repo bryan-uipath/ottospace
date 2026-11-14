@@ -319,6 +319,7 @@ impl Workspace {
                 return true;
             }
             ("talk", "talk-go", _) => Action::TalkGo,
+            ("talk", "talk-start", _) => Action::TalkStart,
             ("talk", "talk-brief", Some(id)) if self.model.brief == Some(id) => Action::BriefClose,
             ("talk", "talk-brief", Some(id)) => Action::BriefShow { id },
             ("talk", "talk-stop", _) => match shown {
@@ -438,6 +439,20 @@ impl Workspace {
             .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
             // The press must not reach the drawer, which takes the keyboard on a press.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+    }
+
+    /// Resume session (or Start agent) for the conversation shown, while `TalkStart` would do
+    /// something: the one way to start or go on with an agent once it is not running.
+    pub(crate) fn start_button(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        let resumes = self.model.talk_resumes()?;
+        let (label, tip) = match resumes {
+            true => ("Resume session", "Go on with this session here: nothing is sent again"),
+            false => ("Start agent", "Start this task's agent: its task is sent once"),
+        };
+        let button = self.talk_button("talk-start", label, tip).text_color(rgb(theme::PRIMARY));
+        Some(button.on_click(
+            cx.listener(|this, _, window, cx| drop(this.dispatch(Action::TalkStart, this.input, window, cx))),
+        ))
     }
 
     /// The conversation's header: state, title, model and time, then what can be done.
@@ -567,12 +582,8 @@ impl Workspace {
             // Nothing either while its session is read for a resume.
             let none = self.model.talk_note().is_none() && !self.model.talk_live(subject);
             // A task with a session (a conversation shown again at start, say) is gone on with by the user only.
-            let session = subject.task().and_then(|id| self.model.tasks.get(id)).is_some_and(|t| t.session.is_some());
-            let why = match session {
-                true => "Not running. A click on its task goes on with its session.",
-                false => "no agent runs for this conversation",
-            };
-            let why = none.then(|| muted(why.into()));
+            let why =
+                none.then(|| muted("Not running.".into()).child(div().pt_1().flex().children(self.start_button(cx))));
             return div().relative().flex_1().child(record).children(why).into_any_element();
         };
         let (screen, cell) = (agent.terminal.screen(), self.cell);
@@ -584,14 +595,15 @@ impl Workspace {
             div()
                 .px_3()
                 .py_1()
+                .flex()
+                .items_center()
+                .gap_2()
                 .text_xs()
                 .text_color(rgb(theme::MUTED))
                 .border_t_1()
                 .border_color(rgb(theme::BORDER))
-                .child(match subject {
-                    Subject::Task(_) => "The agent ended. A click on its task goes on with its session.",
-                    Subject::Session { .. } => "The agent ended. A click on its row goes on with its session.",
-                })
+                .child("The agent ended.")
+                .children(self.start_button(cx))
         });
         div()
             .flex_1()

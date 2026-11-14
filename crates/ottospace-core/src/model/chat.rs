@@ -436,6 +436,7 @@ impl Model {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::tests::started;
     use crate::model::{Action, Effect, Model, Origin};
     use crate::talk::Subject;
     use crate::tasks::State;
@@ -454,7 +455,7 @@ mod tests {
         }
         let ids: Vec<u32> = m.tasks.list.iter().map(|task| task.id).collect();
         for id in ids.iter().rev() {
-            m.update(Action::TaskTalk { id: *id });
+            started(&mut m, Action::TaskTalk { id: *id });
             let started = Action::AgentStarted { task: Subject::Task(*id), session: None, at: 1 };
             m.update(started.sent_by(Origin::System));
         }
@@ -646,6 +647,59 @@ mod tests {
         assert!(m.chat(&one).is_some_and(|chat| !chat.deny), "the message was for the withdrawn card");
         assert_eq!(m.update(Action::TalkAnswer { allow: true, ticket: 1 }), []);
         assert_eq!(m.chat(&one).map(|chat| chat.transcript.cards.len()), Some(1));
+    }
+
+    /// The bug of 0.1.0: each click on an ended task started it again, its prompt and "ended"
+    /// added each time. A click shows it; Resume session (`TalkStart`) goes on with it once: a
+    /// session never written starts afresh with its prompt, once; one written is resumed with none.
+    #[test]
+    fn selecting_an_ended_conversation_only_shows_it_and_resume_is_explicit() {
+        let mut m = two_live();
+        let one = first(&m);
+        let id = one.task().unwrap_or_default();
+        let link = crate::sessions::Link {
+            runner: "claude".into(),
+            id: "8f14e45f-ceea-467f-a8d3-0242ac130003".into(),
+            state: None,
+        };
+        m.tasks.link(id, link.clone());
+        events(&mut m, &one, vec![Event::Exited { code: Some(0), signal: None, details: false }]);
+        m.update(Action::SessionMissing { task: id, id: link.id.clone() }.sent_by(Origin::System));
+        m.update(Action::AgentExited { task: one.clone() }.sent_by(Origin::System));
+        let entries = |m: &Model| m.chat(&one).map(|chat| chat.transcript.items().len());
+        let before = entries(&m);
+        for _ in 0..3 {
+            assert_eq!(m.update(Action::TaskTalk { id }), []);
+            assert_eq!(m.update(Action::TalkPick { id: second(&m) }), []);
+            assert_eq!(m.update(Action::TalkPick { id: one.clone() }), []);
+        }
+        assert_eq!((entries(&m), m.agent_runs(&one), m.talk_resumes()), (before, false, Some(false)));
+        // Never written: a new session, its prompt once.
+        let effects = m.update(Action::TalkStart);
+        assert!(
+            matches!(&effects[..], [Effect::StartAgent { start: crate::agents::Start::New(_), .. }]),
+            "{effects:?}"
+        );
+        assert_eq!(m.update(Action::TalkStart.sent_by(Origin::Socket)), []);
+        m.update(Action::AgentStarted { task: one.clone(), session: None, at: 2 }.sent_by(Origin::System));
+        assert_eq!(entries(&m), before.map(|n| n + 1), "the prompt, once");
+        // Written: resumed, nothing sent again.
+        let link_id = link.id.clone();
+        m.tasks.link(id, link);
+        events(&mut m, &one, vec![Event::Exited { code: Some(0), signal: None, details: false }]);
+        m.update(Action::AgentExited { task: one.clone() }.sent_by(Origin::System));
+        assert_eq!(m.talk_resumes(), Some(true));
+        // Not listed: where it started is read first, then it is gone on with.
+        assert!(matches!(&m.update(Action::TalkStart)[..], [Effect::ReadSession { .. }]));
+        let read = Action::SessionRead { runner: "claude".into(), id: link_id.clone(), found: None };
+        let effects = m.update(read.sent_by(Origin::System));
+        assert!(matches!(&effects[..], [Effect::StartAgent { start: crate::agents::Start::Resume { .. }, .. }]));
+        let shown = entries(&m);
+        m.update(Action::AgentStarted { task: one.clone(), session: None, at: 3 }.sent_by(Origin::System));
+        let users = m
+            .chat(&one)
+            .map(|c| c.transcript.items().filter(|i| matches!(i.entry, crate::transcript::Entry::User { .. })).count());
+        assert_eq!((entries(&m), users), (shown.map(|n| n + 1), Some(2)), "a notice that it resumed, no prompt");
     }
 
     /// Stop while a switch waits for the process to end: nothing starts after.

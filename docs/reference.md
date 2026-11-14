@@ -30,7 +30,7 @@ running, and the rest of the design is not built: see the
 | A task's progress, kept in its file: when its agent started and when it was done, time at work (activity until a quiet gap of two minutes), and tokens by model (input, output, cached; a sub-agent's apart), summed from its sessions, so they outlive the session files. Tokens only: no prices | Works today |
 | "Pop next" (⌘⇧N): the conversation of the next task that needs you; the tab on show stays | Works today |
 | Sessions in the Tasks section: the Claude Code and Codex sessions of the listed repositories that are no task's (one you started by hand in a terminal). Each row shows the runner, the repository, the session's title, active or idle, what it does now, when it was last active, and the model. A click opens its conversation in the drawer (`claude --resume`, `codex resume`), unless it is at work in another terminal; Adopt makes a task of one; Hide removes it until the next start | Works today |
-| A task's agent in the right drawer: a click or ↵ on a task starts its agent (`claude` or `codex`, by its `@agent`, else `default_agent`) beside the workspace, which stays as it is. See [Flow of a task](#flow-of-a-task) | Works today |
+| A task's agent in the right drawer: ↵ in the new-task box, or Start agent in the drawer, starts its agent (`claude` or `codex`, by its `@agent`, else `default_agent`) beside the workspace, which stays as it is. A click on a task only shows its conversation; Resume session goes on with one that ended. See [Flow of a task](#flow-of-a-task) | Works today |
 | Native conversation for Claude Code: the drawer drives `claude -p` (stream-json) and draws the reply itself: markdown (headings, emphasis, lists, quotes, tables), code blocks with Copy, links that open only on your click (web pages in the browser; files of the task's repository revealed in Finder), local images of the repository as thumbnails, tool calls as compact rows, a file edit's change as a diff card under its call, a working row while a turn runs, Copy and Copy as Markdown on each message, and a composer (↵ send, ⇧↵ new line). Permission requests are cards: Allow this one request as shown, or Deny (with a message if you like); a request too long to show is opened in full before Allow is offered. `Chat \| Terminal` in the header switches to the CLI's own TUI and back on the same session. A session at work in another terminal is watched read-only (what it calls and edits, not what it says; "Watching · updates per message" in the header), with Take over once it is idle. Codex stays in a terminal. No text selection by dragging yet: copy by message or block | Works today |
 | Right rail: a badge per open conversation of a live task (needs you first, then running, then the last opened; at most 8), and `+` for a new task. A dismissed task leaves it; a done one stays only while shown or its agent runs | Works today |
 | New task (⌘N), in the drawer: one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`, picks for where and who, and a line that says what ↵ will do. `/path` and `$skill` are stored and shown; nothing acts on them yet | Works today |
@@ -218,9 +218,11 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    task with captures is told where its brief is. The workspace stays as it was: the same tab,
    panes and focus. That tab, if it is no task's and has panes, becomes the task's and gains its
    badge; on a tab of another task, or with nothing open, the task starts with no tab.
-3. **One verb.** A click or ↵ on a task is its conversation: started if it never ran, its
-   session gone on with if it has one and no agent runs, shown if one runs. A session is gone
-   on with in the folder it started in, which may be below the repository; with the Tasks
+3. **Selecting shows; starting is a button.** A click or ↵ on a task, its rail cell or its tab
+   shows its conversation and starts nothing. Not running, the drawer offers Start agent (it
+   never ran: its task is sent once) or Resume session (it has a session: gone on with, nothing
+   sent again; a session never written starts afresh). ↵ in an ended conversation's composer
+   resumes it and sends the message. A session is gone on with in the folder it started in, which may be below the repository; with the Tasks
    section closed that one session is read first. One at work in another terminal, or held
    open by another Claude Code, is not: the drawer says so. An agent you just stopped there is
    not another terminal's: it is gone on with at once. Going on with a session, the task runs.
@@ -482,7 +484,7 @@ unfolds it. A session at work does not unfold it.
 - **Order.** Sessions at work come first, in the order they started, so a row does not move
   while you reach for it. Then the idle ones, the most recently active first.
 - **Open** (a click on the row, or ↵ in list mode) shows its conversation in the drawer, and the
-  workspace stays as it is. No task is made. An idle session is gone on with there: `claude
+  workspace stays as it is. No task is made. Resume session goes on with an idle one there: `claude
   --resume <id>` or `codex resume <id>`, in the folder the session started in, which must be in
   a listed repository or worktree. One at work (its dot lit) or held by a live Claude Code
   process is not: the drawer says it is live in another terminal, and nothing is started. When
@@ -597,8 +599,8 @@ written a second after a change and at quit, readable by you alone.
   goes back in its pane; an app that is not running is not started: its pane says so and offers
   `Open <App>`. `restore_apps: true` starts it instead. Opening a workbook starts its apps: you
   asked for them; a start does not.
-- **The drawer** shows the task's conversation again, not running: a click on its task goes on
-  with its session, as always. No agent starts by itself.
+- **The drawer** shows the task's conversation again, not running: Resume session in the drawer
+  goes on with its session. No agent starts by itself.
 - A tab whose task no longer exists comes back as a tab of no task, so nothing is lost.
 - A file that cannot be read is set aside as `layout.json.bad`, and ottospace starts empty and
   says so. A file a newer build wrote is left as it is and not written over.
