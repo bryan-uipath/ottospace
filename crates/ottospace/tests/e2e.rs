@@ -5671,6 +5671,34 @@ fn the_command_palette_runs_a_command_by_name_for_the_user_alone() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn move_tab_to_task_in_the_palette_lists_the_tasks_and_moves_the_tab() {
+    let otto = Otto::launch("palette-move");
+    otto.call(json!({"cmd": "task_add", "title": "fix login", "state": "running"}));
+    otto.call(json!({"cmd": "task_add", "title": "docs", "state": "running"}));
+    assert_eq!(tab_titles(&otto.call(json!({"cmd": "state"}))), [("Tab 1".to_string(), Value::Null)]);
+    let names = |reply: &Value| -> Vec<Value> {
+        reply["palette_rows"].as_array().into_iter().flatten().map(|row| row["name"].clone()).collect()
+    };
+    let listed =
+        |o: &Otto| Some(o.call(json!({"cmd": "state"}))).filter(|r| r["palette_rows"][0]["group"] == "Move to");
+    // The command opens the palette again on the tasks, then no task.
+    otto.user_key("cmd-p m o v e space t a b space t o enter");
+    let reply = otto.wait_for("the tasks listed", listed);
+    let all = vec![json!("fix login"), json!("docs"), json!("No task")];
+    assert_eq!((names(&reply), &reply["mode"]), (all.clone(), &json!("palette")));
+    // Typing narrows them; ↵ moves the tab on show to that task.
+    otto.user_key("d o c");
+    let reply = otto.user_key("enter");
+    assert_eq!((tab_titles(&reply), &reply["mode"]), (vec![("Tab 1".to_string(), json!(2))], &json!("normal")));
+    // And back to no task.
+    otto.user_key("cmd-p m o v e space t a b space t o enter");
+    assert_eq!(names(&otto.wait_for("the tasks listed", listed)), all);
+    let reply = otto.user_key("n o space t a s k enter");
+    assert_eq!(tab_titles(&reply), [("Tab 1".to_string(), Value::Null)]);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn the_inspector_shows_a_trees_counts_and_roles_never_its_text() {
     let otto = Otto::launch("inspector");
     otto.call(json!({"cmd": "split", "kind": "empty"}));

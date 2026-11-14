@@ -237,7 +237,8 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    open drawer, starting nothing and leaving the keyboard where it was; a closed drawer stays
    closed, and a tab of no task leaves it as it is. ⌘T makes a tab in the group on show; New Tab
    outside the Task, one of no task. Drag a tab onto another group's tab or badge to move it
-   there, onto a tab of no task to unlink it; Remove Tab from Task does that from the palette.
+   there, onto a tab of no task to unlink it; Remove Tab from Task does that from the palette,
+   and Move Tab to Task… lists the tasks (and No task) to move the tab on show to.
 7. **Following.** The task runs while its agent works. Claude is given the session's id; Codex
    names its own, and ottospace finds it where Codex wrote it: the one session that started in
    the task's folder after the agent did and before the next agent there, that nothing else
@@ -269,6 +270,10 @@ key. Type to filter: the letters in order, ignoring case and spaces (`tr` finds 
 a word's first letter and letters side by side rank first, then a group's name (`dev` lists the
 Developer group). ↑/↓ or ⌃N/⌃P move, a click or ↵ runs the command as its menu item does, Esc, ⌘P
 or a click outside closes it. A command that nothing matches keeps the box open.
+
+Move Tab to Task… (Tabs, also File ▸ Move Tab to Task…) turns the box into a list of the tasks
+not dismissed, in their order, then No task. Type to filter by title; ↵ or a click moves the
+tab on show to the end of that task's group, or out of any task.
 
 The Developer group, also the Developer menu: Accessibility Overlay (⌘⌃A), [Accessibility
 Inspector](#accessibility-inspector), Copy State as JSON

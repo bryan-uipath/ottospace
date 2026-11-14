@@ -636,6 +636,7 @@ const MAKERS: &[Make] = &[
     |g| Action::PickerChoose { index: g.rng.coin().then(|| g.index(3)) },
     |_| Action::ClosePicker,
     |_| Action::PaletteOpen,
+    |_| Action::PaletteTasks,
     |g| Action::PaletteMove { delta: g.delta() },
     |g| Action::PaletteChoose { index: g.rng.coin().then(|| g.index(50)) },
     |_| Action::ClosePalette,
@@ -1258,7 +1259,7 @@ fn check(m: &Model) -> Result<(), String> {
     // The palette opens over nothing that has the keyboard, and nothing takes it from under it
     // but the quit question.
     if let Some(palette) = &m.palette {
-        let matches = palette.matches().len();
+        let matches = palette.count();
         ensure!(palette.selected < matches.max(1), "the palette selects {} of {matches}", palette.selected);
         ensure!(!boxed && !m.keys && m.visual.is_none() && m.live.is_none(), "the palette is open with {:?}", m.mode());
         ensure!(matches!(m.mode(), Mode::Palette | Mode::Confirm), "the palette is open in {:?} mode", m.mode());
@@ -1955,7 +1956,11 @@ impl Run {
         // Only the user opens the palette, types or moves in it, or chooses.
         let palette_own = matches!(
             action,
-            Action::PaletteOpen | Action::PaletteMove { .. } | Action::PaletteChoose { .. } | Action::ClosePalette
+            Action::PaletteOpen
+                | Action::PaletteTasks
+                | Action::PaletteMove { .. }
+                | Action::PaletteChoose { .. }
+                | Action::ClosePalette
         ) || (palette_typing && matches!(action, Action::FieldEdit { .. }));
         ensure!(
             origin == Origin::User || !palette_own || refused.is_some(),

@@ -624,8 +624,8 @@ actions!(ottospace, [StartFresh]);
 actions!(ottospace, [CapturePane]);
 // The right drawer: the keyboard in or out, closed to the rail or open, the task's workspace.
 actions!(ottospace, [TalkFocus, TalkToggle, TalkGo, StopAgent]);
-// A tab of no task, and the tab on show taken out of its task.
-actions!(ottospace, [NewTabOutside, RemoveTabFromTask]);
+// A tab of no task, and the tab on show taken out of its task or moved to another.
+actions!(ottospace, [NewTabOutside, RemoveTabFromTask, MoveTabToTask]);
 // App menu.
 actions!(ottospace, [Quit, Hide]);
 
@@ -5247,6 +5247,9 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &RemoveTabFromTask, window, cx| {
                 this.dispatch(Action::TabPlace { tab: None, at: TabAt::End(None) }, this.input, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &MoveTabToTask, window, cx| {
+                this.dispatch(Action::PaletteTasks, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| {
                 this.dispatch(Action::CycleTab { delta: 1 }, this.input, window, cx);

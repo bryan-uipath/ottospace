@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::edit::Field;
+use crate::tasks::TaskId;
 
 /// Why a client's request to the palette is refused.
 pub const USERS_ALONE: &str = "only the user runs the command palette";
@@ -93,6 +94,7 @@ commands! {
     // After New Task: a query of a name ranks a later tie lower.
     NewTabOutside: "New Tab outside the Task", Tabs;
     RemoveTabFromTask: "Remove Tab from Task", Tabs;
+    MoveTabToTask: "Move Tab to Task…", Tabs;
     NextTask: "Next Task", Tasks;
     CapturePane: "Capture the Pane", Tasks;
     TalkFocus: "Type in the Conversation", Tasks;
@@ -127,13 +129,37 @@ commands! {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Palette {
     pub query: Field,
-    /// Index into `matches()`.
+    /// Index into `matches()`, or `task_matches()` while it lists tasks.
     pub selected: usize,
+    /// Move Tab to Task…: the tasks to move the tab on show to, not commands.
+    pub tasks: Option<Vec<TaskChoice>>,
+}
+
+/// A task the tab may move to. `task` `None`: no task.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TaskChoice {
+    pub task: Option<TaskId>,
+    pub title: String,
 }
 
 impl Palette {
+    /// The commands the query matches; none while it lists tasks.
     pub fn matches(&self) -> Vec<Command> {
-        rank(self.query.text())
+        if self.tasks.is_some() { Vec::new() } else { rank(self.query.text()) }
+    }
+
+    /// The tasks the query matches, best first, ties in their order; none while it lists commands.
+    pub fn task_matches(&self) -> Vec<&TaskChoice> {
+        let query = letters(self.query.text());
+        let mut scored: Vec<(i64, &TaskChoice)> =
+            self.tasks.iter().flatten().filter_map(|choice| Some((score(&query, &choice.title)?, choice))).collect();
+        scored.sort_by_key(|(score, _)| -score);
+        scored.into_iter().map(|(_, choice)| choice).collect()
+    }
+
+    /// How many rows it shows.
+    pub fn count(&self) -> usize {
+        if self.tasks.is_some() { self.task_matches().len() } else { self.matches().len() }
     }
 }
 
@@ -141,7 +167,7 @@ impl Palette {
 /// command's name, else in its group and name ("dev" finds every Developer command). Nothing
 /// typed: all of them, in `ALL`'s order. Ties keep that order.
 pub fn rank(query: &str) -> Vec<Command> {
-    let query: Vec<char> = query.chars().filter(|c| !c.is_whitespace()).flat_map(char::to_lowercase).collect();
+    let query = letters(query);
     let mut scored: Vec<(i64, usize, Command)> = ALL
         .iter()
         .enumerate()
@@ -155,6 +181,11 @@ pub fn rank(query: &str) -> Vec<Command> {
         .collect();
     scored.sort_by_key(|(score, at, _)| (-score, *at));
     scored.into_iter().map(|(.., command)| command).collect()
+}
+
+/// A query as `score` takes it: lowercase, no spaces.
+fn letters(query: &str) -> Vec<char> {
+    query.chars().filter(|c| !c.is_whitespace()).flat_map(char::to_lowercase).collect()
 }
 
 /// How well `query` (lowercase, no spaces) runs through `text` in order: higher is better.
