@@ -1053,7 +1053,6 @@ impl Workspace {
         let turn = chat.transcript.turn.as_ref()?;
         let secs = crate::now_ms().saturating_sub(turn.since) / 1000;
         let doing = turn.tool.clone().unwrap_or_else(|| "thinking".into());
-        let hint = if chat.armed { "esc again stops" } else { "esc esc stops" };
         let stop = self
             .talk_button("chat-stop", "Stop", "Stop this turn; the session goes on")
             .text_color(rgb(theme::ERROR))
@@ -1078,7 +1077,6 @@ impl Workspace {
                     secs / 60,
                     secs % 60
                 )))
-                .child(hint)
                 .child(stop),
         )
     }
@@ -1184,18 +1182,18 @@ impl Workspace {
     /// The composer: the draft, what ↵ does now.
     fn chat_composer(&self, chat: &chat::Chat, cx: &mut Context<Self>) -> Div {
         let card = !chat.transcript.cards.is_empty();
+        // Only what is not how every text box works: the card's buttons show their own keys.
         let (placeholder, hint): (&'static str, &'static str) = match () {
             _ if card && chat.deny => ("Why deny it?", "↵ denies with this message · esc back to the request"),
-            _ if card => ("A request waits above", "a allow · d deny · s show all · m deny with a message"),
+            _ if card => ("", ""),
             _ if chat.transcript.turn.is_some() => {
-                ("Write the next message", "↵ sends once the turn ends · esc esc stops")
+                ("Write the next message", if chat.armed { "esc again stops" } else { "esc esc stops" })
             }
             _ if chat.queued.is_some() => ("Starting the agent…", "your message goes once it runs"),
-            _ if !chat.transcript.live && self.model.shown_draft_chat().is_some() => {
-                ("Write to go on with it", "↵ resumes the session and sends · ⇧↵ new line")
-            }
+            // Sending resumes the session.
+            _ if !chat.transcript.live && self.model.shown_draft_chat().is_some() => ("Resume…", ""),
             _ if !chat.transcript.live => ("The agent ended", "it cannot be gone on with from here"),
-            _ => ("Message the agent", "↵ send · ⇧↵ new line · esc leave"),
+            _ => ("Message", ""),
         };
         let open = chat.transcript.live || self.model.shown_draft_chat().is_some();
         let field = (open && (!card || chat.deny)).then(|| self.render_field_of("talk", placeholder, cx));
@@ -1209,7 +1207,7 @@ impl Workspace {
             .flex_col()
             .gap_1()
             .children(field.map(|field| div().text_sm().child(field)))
-            .child(div().text_xs().text_color(rgb(theme::MUTED)).child(hint))
+            .children((!hint.is_empty()).then(|| div().text_xs().text_color(rgb(theme::MUTED)).child(hint)))
     }
 
     /// The header's Chat | Terminal switch and the permission mode, for a Claude Code
