@@ -30,10 +30,12 @@ enum Now {
 
 /// The band's height above the status bar, its 1-point top line included; hover takes all of it.
 const BAND: f32 = 12.;
+/// Below the top line: what lanes and hover slices divide.
+const INNER: f32 = BAND - 1.;
 /// Calls and blocks are drawn between these margins; overlapping calls split the room into lanes
 /// `LANE_GAP` apart.
 const LANES_TOP: f32 = 2.5;
-const LANES_BOTTOM: f32 = 1.5;
+const LANES_BOTTOM: f32 = 1.;
 const LANE_GAP: f32 = 0.5;
 /// Blocks are this much fainter than a call of the same strength: a layer under the calls.
 const BLOCK_STRENGTH: f32 = 0.35;
@@ -369,7 +371,7 @@ impl Workspace {
             );
             drawn += 1;
         }
-        let room = BAND - LANES_TOP - LANES_BOTTOM;
+        let room = INNER - LANES_TOP - LANES_BOTTOM;
         for bar in &layout.calls {
             let Some(e) = event(bar.id) else { continue };
             let lanes = f32::from(bar.lanes.max(1));
@@ -388,12 +390,16 @@ impl Workspace {
                 .opacity(paint.alpha)
                 .child(mark(&self.marks, Mark::BandBlock(drawn)));
             drawn += 1;
-            // A lane is hovered over its slice of the band: every overlapping call can be.
+            // A lane is hovered from half way to the lane above to half way to the one below, the
+            // first and last to the band's edges: every overlapping call can be, where it is drawn.
             let more: Vec<&Event> = bar.more.iter().filter_map(|id| event(*id)).collect();
-            let slice = BAND / lanes;
+            let first = bar.lane == 0;
+            let last = f32::from(bar.lane) + 1. >= lanes;
+            let from = if first { 0. } else { top - LANE_GAP / 2. };
+            let to = if last { INNER } else { top + height + LANE_GAP / 2. };
             let hovered = hover(("meeting-bar", bar.id as usize).into(), calendar::card(e, &more, offset))
-                .top(px(f32::from(bar.lane) * slice))
-                .bottom(px(BAND - (f32::from(bar.lane) + 1.) * slice));
+                .top(px(from))
+                .bottom(px(INNER - to));
             out = out.child(at(bar.from, bar.to).min_w(px(MIN_BLOCK)).child(block).child(hovered));
         }
         // Now, last: over the blocks.

@@ -90,7 +90,7 @@ feed (Outlook's published ICS) has no attendees, descriptions or categories, but
   layer reads as time held and keeps the calls' lanes the full height; the strip read as one
   more line.
 - **Height**: 12 points, its 1-point top line included; calls between 2.5 points from the top
-  and 1.5 from the bottom, lanes 0.5 apart. Three lanes are 2.3 points each: thin, but each
+  and 1 from the bottom of the 11 below the line, lanes 0.5 apart. Three lanes are 2.2 points each: thin, but each
   distinct; 8 points gave three lanes of under 2.
 - **Out of hours**: a block wholly before or after the band (the 00:00 reminder) is a dot at that
   end's bottom, its cards on hover; only calls widen the band.
