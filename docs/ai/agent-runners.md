@@ -149,8 +149,8 @@ read with `RunnerId::named` where a decision needs it.
 - **Structured.** `status` (`Verified | Experimental | None`), `answers` (`AllowOnce`, `Deny`;
   never a session grant), `interrupt`.
 - **Disk.** `held` (the files name the live process) and `cwd` (the files record where it started).
-- **Attach.** `watch`, `take_over_when_idle` (`Yes | Unverified | No`) and `attach_live`
-  (`No | ViaOwnTerminal | ViaDaemon { verified }`), stated even where the answer is no.
+- **Attach.** `watch`, `take_over_when_idle` (`Yes | No`) and `attach_live`
+  (`No | ViaOwnTerminal | ViaDaemon`), stated even where the answer is no.
 
 The id type lives in the core (pure). `ottospace-sessions` and `ottospace-agents` depend on the
 core for it and are looked up by it: `ottospace_sessions::reader(id, &dirs)` gives a
@@ -171,7 +171,7 @@ The table, written by a test from the specs (`runner::tests`): every capability 
 | cwd on disk | true | true |
 | watch | Yes | Yes |
 | take over when idle | Yes | Yes |
-| attach live | ViaOwnTerminal | ViaDaemon { verified: true } |
+| attach live | ViaOwnTerminal | ViaDaemon |
 
 What is verified, and how:
 
@@ -210,7 +210,7 @@ session at work elsewhere is watched read-only, `Model::watch_target`) and
 ### Adding a third runner
 
 1. A variant in `RunnerId`, in `ALL`, and its `RunnerSpec` const in `runner.rs`; every field
-   stated, from its `--help`, with `Unverified` where nothing was seen.
+   stated, from its `--help`, with `No` where nothing was seen to work.
 2. The per-runner fields of the settings: `settings::AgentModels`, `settings::SessionDirs`,
    `ottospace_sessions::ConfigDirs`, `agents::Models` (and `Models::of`), `Action::SetAgents`,
    and `config::session_dirs` for its default folder.
