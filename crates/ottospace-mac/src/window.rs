@@ -342,7 +342,7 @@ pub fn set_dock_icon(icon: &[u8]) {
     }
 }
 
-/// Shows the standard About panel: "Version 0.1.0 (a4a2582, 2026-11-12)". A bare binary has no
+/// Shows the standard About panel: "Version 0.1.0 (a4a2582c0ffe, 2026-11-12T08:09:00Z)". A bare binary has no
 /// Info.plist to read them from. Does nothing off the main thread.
 pub fn show_about(version: &str, build: &str) {
     use objc2::runtime::AnyObject;

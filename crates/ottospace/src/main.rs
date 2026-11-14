@@ -2657,7 +2657,7 @@ impl Workspace {
             "parking": [parking.x, parking.y],
             // The registered return key, or null if there is none.
             "return_key": RETURN_KEY.get(),
-            // Which build this is, as the status bar's hover and About show it: "0.1.0 · a4a2582".
+            // Which build this is, short: "0.1.0 · a4a2582". About and the status bar's hover give it in full.
             "version": version_tag(env!("CARGO_PKG_VERSION"), option_env!("OTTOSPACE_COMMIT")),
             // The terminal font in use, and the size of one character cell in points.
             "font": terminal::font_in_use(),
@@ -4051,18 +4051,25 @@ impl Workspace {
         match &pane.kind {
             Kind::Empty => String::new(),
             Kind::Terminal => self.titles.get(&pane.id).cloned().unwrap_or_default(),
+            // A window with no title says whose it is.
+            Kind::App { title, name, .. } if title.is_empty() => name.clone(),
             Kind::App { title, .. } => title.clone(),
         }
     }
 
     /// Reads each terminal's directory and program for its header; redraws if one changed.
+    /// Only the drawn panes' are read again; others keep their last, so a tab comes back titled.
     fn read_titles(&mut self, cx: &mut Context<Self>) {
         let home = std::env::var("HOME").ok();
+        let drawn = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
         let titles: HashMap<PaneId, String> = self
             .terminals
             .iter()
-            .map(|(id, t)| {
-                (*id, terminal_title(t.cwd().as_deref(), t.foreground_command().as_deref(), home.as_deref()))
+            .filter_map(|(id, t)| match drawn.contains(id) {
+                true => {
+                    Some((*id, terminal_title(t.cwd().as_deref(), t.foreground_command().as_deref(), home.as_deref())))
+                }
+                false => Some((*id, self.titles.get(id)?.clone())),
             })
             .collect();
         if titles != self.titles {
@@ -5024,11 +5031,15 @@ impl Workspace {
             Mode::Visual => ("VISUAL", "esc"),
             Mode::List => ("LIST", "esc"),
             Mode::Compose => ("TASK", ""),
+            // Sneak turned the overlay off, and it stays off: say how to get it back.
+            Mode::Sneak if self.model.sneak.as_ref().is_some_and(|sneak| sneak.hid_overlay) => {
+                ("SNEAK", "esc · ⌘⌃A overlay")
+            }
             Mode::Sneak => ("SNEAK", "esc"),
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.dismiss.is_some()) => ("DISMISS?", ""),
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.paste.is_some()) => ("PASTE?", ""),
             Mode::Confirm => ("QUIT?", ""),
-            // The strip in the pane's header lists the annotate keys.
+            // The capture bar lists the annotate keys.
             Mode::Annotate => ("ANNOTATE", ""),
             Mode::Talk => ("TALK", ""),
             Mode::Mark => match self.model.mark_input {
@@ -5731,7 +5742,7 @@ fn build_of(commit: Option<&str>, date: Option<&str>) -> String {
     }
 }
 
-/// The build, short, for the state and the status bar's hover: `0.1.0 · a4a2582` (seven characters of the commit), or
+/// The build, short, for the state: `0.1.0 · a4a2582` (seven characters of the commit), or
 /// `0.1.0 · local` for a plain `cargo build`.
 fn version_tag(version: &str, commit: Option<&str>) -> String {
     match commit.filter(|c| !c.is_empty()) {
