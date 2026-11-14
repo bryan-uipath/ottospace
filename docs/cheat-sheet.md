@@ -61,6 +61,7 @@ ottospace            # opens on the Repos list
 | Stop a Dock app being suggested | Hover its row, Hide. Or ⌘⌃E, then `x`. Undo on the line at the top (six seconds), or `u` |
 | Find an app among all installed | Apps, "All apps (N)", then click the filter or `/` in list mode, and type |
 | Type in the app | Click its pane. The status bar turns `APP`; ottospace keys stop |
+| Scroll the app | Wheel or trackpad over its pane: the window comes up (`PEEK`) and goes back when the pointer leaves or you stop. The first scroll is lost |
 | Come back | Click ottospace itself, or the return key |
 | Give the window back to macOS | Come back to ottospace first, then ⌘W on its pane: the window returns to where it was |
 | Find a window lost off screen | `ottospace rescue` in a terminal, or Developer ▸ Bring All Windows Back |

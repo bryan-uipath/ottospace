@@ -36,3 +36,5 @@ pulldown-cmark = { version = "=0.13.6", default-features = false }
 
 [dev-dependencies]
 serde_json = "1"
+# The app-window loop moves the pointer and turns the wheel as the user's mouse does.
+objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGEvent", "CGEventTypes", "libc"] }

@@ -200,12 +200,14 @@ fn month_days_and_an_ordinal_weekday_meet() {
 
 #[test]
 fn an_unsupported_rule_gives_its_first_occurrence_only() {
-    let text =
-        feed(&event("SUMMARY:Odd\r\nDTSTART:20261113T090000Z\r\nRRULE:FREQ=MONTHLY;BYSETPOS=-1;BYDAY=MO,TU\r\n"));
+    let text = feed(&event("SUMMARY:Odd\r\nDTSTART:20261113T090000Z\r\nRRULE:FREQ=YEARLY;BYWEEKNO=20;BYDAY=MO,TU\r\n"));
     assert_eq!(on(&text, 2026, 11, 13, &utc()).len(), 1);
     assert!(on(&text, 2026, 12, 31, &utc()).is_empty());
     let hourly = feed(&event("SUMMARY:Hourly\r\nDTSTART:20261112T090000Z\r\nRRULE:FREQ=HOURLY\r\n"));
     assert!(on(&hourly, 2026, 11, 13, &utc()).is_empty());
+    // The last Monday of the year, not of January: needs the whole year's days, not read.
+    let yearly = feed(&event("SUMMARY:Y\r\nDTSTART:20260126T090000Z\r\nRRULE:FREQ=YEARLY;BYDAY=MO;BYSETPOS=-1\r\n"));
+    assert_eq!(dates_in(&yearly, (2026, 1, 1), (2028, 1, 1)), [(2026, 1, 26)]);
 }
 
 #[test]
@@ -247,6 +249,12 @@ fn any_text_is_read_without_a_panic() {
         "RRULE:FREQ=MONTHLY;BYMONTHDAY=-31,31;BYMONTH=2\r\n",
         "RRULE:FREQ=DAILY;UNTIL=20261113\r\n",
         "EXDATE:20261113T090000Z,x\r\n",
+        "RRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=1,-1;COUNT=99999\r\n",
+        "RRULE:FREQ=YEARLY;BYMONTH=1,6;BYDAY=SU;BYSETPOS=-366,2,366\r\n",
+        "RRULE:FREQ=WEEKLY;BYSETPOS=-1;WKST=SU\r\n",
+        "RDATE;VALUE=PERIOD:20261113T090000Z/PT1H,20261114/x\r\n",
+        "RDATE;TZID=Z:20261113T100000,20261113T090000Z\r\n",
+        "RDATE;VALUE=DATE:20261114\r\n",
         "RECURRENCE-ID:20261113T090000Z\r\n",
         "SUMMARY:a\\,b\\\r\n",
         " folded\r\n",
@@ -318,4 +326,268 @@ fn hostile_zones_and_rules_cost_no_more_than_the_budget() {
     ));
     let (_, work) = expand_counted(&parse(&feed(&one.repeat(3_000))), from, from + 2 * DAY, &utc());
     assert!(work <= SCAN_BUDGET + MAX_SCAN + 1_100, "{work}");
+
+    // Set positions over whole years, and long RDATE lists: each year's days are counted.
+    let rdates = exdates.replace("2025", "2026");
+    let yearly = event(&format!(
+        "SUMMARY:v\r\nDTSTART:20000101T090000Z\r\nRRULE:FREQ=YEARLY;BYMONTH=1,2,3,4,5,6,7,8,9,10,11,12;BYSETPOS=-1,1;COUNT=99999\r\nRDATE:{rdates}\r\n"
+    ));
+    let parsed = parse(&feed(&yearly));
+    let (_, one_work) = expand_counted(&parsed, from, from + 2 * DAY, &utc());
+    assert!(one_work >= MAX_SCAN, "the years scanned are charged: {one_work}");
+    let (_, work) = expand_counted(&parse(&feed(&yearly.repeat(3_000))), from, from + 2 * DAY, &utc());
+    assert!(work <= SCAN_BUDGET + MAX_SCAN + 1_500, "{work}");
+
+    // A span of millennia: the years' positions are charged as they are worked out.
+    let old =
+        event("SUMMARY:o\r\nDTSTART:00010101T090000Z\r\nRRULE:FREQ=YEARLY;BYMONTH=1,6;BYMONTHDAY=1;BYSETPOS=1\r\n");
+    let (_, work) = expand_counted(&parse(&feed(&old)), at(1, 1, 1, 0, 0), at(5000, 1, 1, 0, 0), &utc());
+    assert!(work <= SCAN_BUDGET + 400, "{work}");
+}
+
+#[test]
+fn many_rdates_keep_the_earliest_occurrences() {
+    // 300 events of 1,000 RDATEs a minute apart, the last event's earliest.
+    let rdates = |base: i64| {
+        (0..1_000).map(|n| format!("20261113T{:02}{:02}00Z", (base + n) / 60 % 24, (base + n) % 60)).collect::<Vec<_>>()
+    };
+    let events: String = (0..300)
+        .map(|n| {
+            let (summary, base) = if n == 299 { ("First", 0) } else { ("Later", 120) };
+            let list = rdates(base);
+            event(&format!(
+                "UID:{n}\r\nSUMMARY:{summary}\r\nDTSTART:20261113T230000Z\r\nRDATE:{}\r\nRDATE:{}\r\n",
+                list[..500].join(","),
+                list[500..].join(",")
+            ))
+        })
+        .collect();
+    let got = expand(&parse(&feed(&events)), at(2026, 11, 13, 0, 0), at(2026, 11, 14, 0, 0), &utc());
+    assert_eq!(got.len(), MAX_OCCURRENCES);
+    assert!(got[..120].iter().all(|o| o.summary == "First"), "{:?}", got[0].summary);
+    assert!(got.windows(2).all(|w| w[0].start <= w[1].start));
+}
+
+/// Year, month, day.
+type Ymd = (i64, i64, i64);
+
+/// The UTC dates occurrences start on, from one date up to another.
+fn dates_in(text: &str, from: Ymd, to: Ymd) -> Vec<Ymd> {
+    let (from, to) = (at(from.0, from.1, from.2, 0, 0), at(to.0, to.1, to.2, 0, 0));
+    expand(&parse(text), from, to, &utc()).iter().map(|o| civil(o.start.div_euclid(DAY))).collect()
+}
+
+/// Dates checked by hand against `cal`.
+#[test]
+fn set_positions_pick_among_a_periods_days() {
+    const WEEKDAYS: &str = "BYDAY=MO,TU,WE,TH,FR";
+    let cases: [(&str, &str, &str, Ymd, &[Ymd]); 13] = [
+        (
+            "first weekday",
+            "20261102T090000Z",
+            &format!("FREQ=MONTHLY;{WEEKDAYS};BYSETPOS=1"),
+            (2027, 3, 1),
+            &[(2026, 11, 2), (2026, 12, 1), (2027, 1, 1), (2027, 2, 1)],
+        ),
+        (
+            "last weekday",
+            "20261130T090000Z",
+            &format!("FREQ=MONTHLY;{WEEKDAYS};BYSETPOS=-1"),
+            (2027, 3, 1),
+            &[(2026, 11, 30), (2026, 12, 31), (2027, 1, 29), (2027, 2, 26)],
+        ),
+        (
+            "last weekend day",
+            "20261129T090000Z",
+            "FREQ=MONTHLY;BYDAY=SA,SU;BYSETPOS=-1",
+            (2027, 3, 1),
+            &[(2026, 11, 29), (2026, 12, 27), (2027, 1, 31), (2027, 2, 28)],
+        ),
+        (
+            "second-to-last weekday",
+            "20261127T090000Z",
+            &format!("FREQ=MONTHLY;{WEEKDAYS};BYSETPOS=-2"),
+            (2027, 3, 1),
+            &[(2026, 11, 27), (2026, 12, 30), (2027, 1, 28), (2027, 2, 25)],
+        ),
+        (
+            "first and last weekday",
+            "20261102T090000Z",
+            &format!("FREQ=MONTHLY;{WEEKDAYS};BYSETPOS=1,-1,1"),
+            (2027, 1, 15),
+            &[(2026, 11, 2), (2026, 11, 30), (2026, 12, 1), (2026, 12, 31), (2027, 1, 1)],
+        ),
+        (
+            "every other month",
+            "20261102T090000Z",
+            &format!("FREQ=MONTHLY;INTERVAL=2;{WEEKDAYS};BYSETPOS=1"),
+            (2027, 4, 1),
+            &[(2026, 11, 2), (2027, 1, 1), (2027, 3, 1)],
+        ),
+        (
+            "count: RFC 5545's third Tuesday, Wednesday or Thursday",
+            "19970904T090000Z",
+            "FREQ=MONTHLY;COUNT=3;BYDAY=TU,WE,TH;BYSETPOS=3",
+            (1998, 1, 1),
+            &[(1997, 9, 4), (1997, 10, 7), (1997, 11, 6)],
+        ),
+        (
+            "until",
+            "20261130T090000Z",
+            &format!("FREQ=MONTHLY;{WEEKDAYS};BYSETPOS=-1;UNTIL=20270115T000000Z"),
+            (2027, 3, 1),
+            &[(2026, 11, 30), (2026, 12, 31)],
+        ),
+        (
+            "a fifth Monday, where there is one",
+            "20261130T090000Z",
+            "FREQ=MONTHLY;BYDAY=MO;BYSETPOS=5",
+            (2027, 4, 1),
+            &[(2026, 11, 30), (2027, 3, 29)],
+        ),
+        (
+            "the last Sunday of March and October together: October's",
+            "20261025T090000Z",
+            "FREQ=YEARLY;BYMONTH=3,10;BYDAY=SU;BYSETPOS=-1",
+            (2028, 1, 1),
+            &[(2026, 10, 25), (2027, 10, 31)],
+        ),
+        (
+            "fourth Thursday of November",
+            "20261126T090000Z",
+            "FREQ=YEARLY;BYMONTH=11;BYDAY=TH;BYSETPOS=4",
+            (2028, 1, 1),
+            &[(2026, 11, 26), (2027, 11, 25)],
+        ),
+        (
+            "last of Monday, Wednesday and Friday: each week's Friday",
+            "20261106T090000Z",
+            "FREQ=WEEKLY;BYDAY=MO,WE,FR;BYSETPOS=-1",
+            (2026, 11, 16),
+            &[(2026, 11, 6), (2026, 11, 13)],
+        ),
+        (
+            "a day's only occurrence is its first and last, never its second",
+            "20261101T090000Z",
+            "FREQ=DAILY;BYDAY=SU;BYSETPOS=-1,2",
+            (2026, 11, 16),
+            &[(2026, 11, 1), (2026, 11, 8), (2026, 11, 15)],
+        ),
+    ];
+    for (name, start, rule, to, want) in cases {
+        let text = feed(&event(&format!("SUMMARY:{name}\r\nDTSTART:{start}\r\nDURATION:PT1H\r\nRRULE:{rule}\r\n")));
+        let first = |range: std::ops::Range<usize>| start[range].parse::<i64>().unwrap();
+        assert_eq!(dates_in(&text, (first(0..4), first(4..6), first(6..8)), to), want, "{name}");
+    }
+}
+
+#[test]
+fn an_exdate_on_a_set_position_removes_it_and_moves_nothing() {
+    let text = feed(&event(
+        "SUMMARY:Last weekday\r\nDTSTART:20261130T090000Z\r\nDURATION:PT1H\r\n\
+         RRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1\r\nEXDATE:20261231T090000Z\r\n",
+    ));
+    assert_eq!(dates_in(&text, (2026, 11, 1), (2027, 3, 1)), [(2026, 11, 30), (2027, 1, 29), (2027, 2, 26)]);
+}
+
+#[test]
+fn a_bad_set_position_rejects_the_rule() {
+    for bad in ["0", "400", "-367", "x", "1,,2", ""] {
+        let text = feed(&event(&format!(
+            "SUMMARY:Bad\r\nDTSTART:20261102T090000Z\r\nRRULE:FREQ=MONTHLY;BYDAY=MO;BYSETPOS={bad}\r\n"
+        )));
+        assert_eq!(parse(&text).events[0].rule, None, "{bad}");
+        assert_eq!(dates_in(&text, (2026, 11, 1), (2027, 3, 1)), [(2026, 11, 2)], "{bad}");
+    }
+    // A long list is read once each, as the other lists are.
+    let many = (0..5_000).map(|n| (n % 3 + 1).to_string()).collect::<Vec<_>>().join(",");
+    let rule = rule(&format!("FREQ=MONTHLY;BYDAY=MO;BYSETPOS={many}")).unwrap();
+    assert_eq!(rule.by_set_pos, [1, 2, 3]);
+}
+
+#[test]
+fn a_vtimezone_part_may_name_a_set_position() {
+    let berlin = BERLIN.replace("BYDAY=-1SU;BYMONTH=10", "BYMONTH=10;BYDAY=SU;BYSETPOS=-1");
+    let weekly =
+        event("UID:w\r\nSUMMARY:W\r\nDTSTART;TZID=W. Europe Standard Time:20261020T100000\r\nRRULE:FREQ=WEEKLY\r\n");
+    let text = feed(&format!("{berlin}{weekly}"));
+    assert_eq!(on(&text, 2026, 10, 20, &utc())[0].1, at(2026, 10, 20, 8, 0));
+    assert_eq!(on(&text, 2026, 10, 27, &utc())[0].1, at(2026, 10, 27, 9, 0));
+}
+
+#[test]
+fn rdates_add_occurrences() {
+    let zones = Zones { local: Table::fixed(0), named: vec![("Asia/Tokyo".into(), Table::fixed(9 * H))] };
+    let text = feed(&event(
+        "UID:r\r\nSUMMARY:Extra\r\nDTSTART:20261102T090000Z\r\nDURATION:PT30M\r\n\
+         RDATE:20261103T090000Z,20261102T090000Z\r\nRDATE;TZID=Asia/Tokyo:20261104T100000\r\n\
+         RDATE;VALUE=PERIOD:20261105T150000Z/PT2H,20261106T150000Z/20261106T160000Z\r\n\
+         RDATE;VALUE=DATE:20261107\r\nRDATE:bad,20261108T090000\r\n",
+    ));
+    assert_eq!(named_zones(&parse(&text)), ["Asia/Tokyo"]);
+    let from = at(2026, 11, 1, 0, 0);
+    let got: Vec<_> = expand(&parse(&text), from, from + 10 * DAY, &zones).iter().map(|o| (o.start, o.end)).collect();
+    // DTSTART once, though an RDATE names it too; a whole day for a timed event is left out.
+    let want = [
+        at(2026, 11, 2, 9, 0),
+        at(2026, 11, 3, 9, 0),
+        at(2026, 11, 4, 1, 0),
+        at(2026, 11, 5, 15, 0),
+        at(2026, 11, 6, 15, 0),
+        at(2026, 11, 8, 9, 0),
+    ];
+    assert_eq!(got, want.map(|s| (s, s + 30 * 60)));
+}
+
+#[test]
+fn whole_day_rdates_of_a_whole_day_event() {
+    let text = feed(&event(
+        "SUMMARY:Off\r\nDTSTART;VALUE=DATE:20261113\r\nRDATE;VALUE=DATE:20261120,20261127\r\nRDATE:20261124T090000Z\r\n",
+    ));
+    let from = at(2026, 11, 1, 0, 0);
+    let got = expand(&parse(&text), from, from + 30 * DAY, &utc());
+    assert!(got.iter().all(|o| o.all_day && o.end - o.start == DAY));
+    let days: Vec<_> = got.iter().map(|o| civil(o.start / DAY)).collect();
+    assert_eq!(days, [(2026, 11, 13), (2026, 11, 20), (2026, 11, 27)]);
+}
+
+#[test]
+fn rdates_meet_a_rule_exdates_and_overrides() {
+    let text = feed(&format!(
+        "{}{}",
+        event(
+            "UID:s\r\nSUMMARY:Sync\r\nDTSTART:20261102T090000Z\r\nDURATION:PT30M\r\n\
+             RRULE:FREQ=WEEKLY;UNTIL=20261110T000000Z\r\n\
+             RDATE:20261109T090000Z,20261111T090000Z,20261112T090000Z,20261113T090000Z,20261120T090000Z\r\n\
+             EXDATE:20261111T090000Z\r\n"
+        ),
+        event(
+            "UID:s\r\nRECURRENCE-ID:20261112T090000Z\r\nSUMMARY:Sync (moved)\r\nDTSTART:20261112T140000Z\r\nDURATION:PT30M\r\n"
+        ),
+    ));
+    let from = at(2026, 11, 1, 0, 0);
+    let got: Vec<_> =
+        expand(&parse(&text), from, from + 30 * DAY, &utc()).into_iter().map(|o| (o.summary, o.start)).collect();
+    // The 9th is the rule's and an RDATE: once. The 11th is excluded; the 12th moved. RDATEs pass UNTIL.
+    let want = [
+        ("Sync", at(2026, 11, 2, 9, 0)),
+        ("Sync", at(2026, 11, 9, 9, 0)),
+        ("Sync (moved)", at(2026, 11, 12, 14, 0)),
+        ("Sync", at(2026, 11, 13, 9, 0)),
+        ("Sync", at(2026, 11, 20, 9, 0)),
+    ];
+    assert_eq!(got, want.map(|(s, t)| (s.to_string(), t)));
+    // With no RRULE, an EXDATE may remove DTSTART itself.
+    let alone = feed(&event(
+        "SUMMARY:Once\r\nDTSTART:20261102T090000Z\r\nRDATE:20261103T090000Z\r\nEXDATE:20261102T090000Z\r\n",
+    ));
+    assert_eq!(dates_in(&alone, (2026, 11, 1), (2026, 12, 1)), [(2026, 11, 3)]);
+}
+
+#[test]
+fn rdates_are_capped() {
+    let list = |n: i64| (0..n).map(|d| format!("2026{:02}{:02}T090000Z", d % 12 + 1, d % 28 + 1)).collect::<Vec<_>>();
+    let one = list(1_500).join(",");
+    let text = feed(&event(&format!("SUMMARY:Many\r\nDTSTART:20261102T090000Z\r\nRDATE:{one}\r\nRDATE:{one}\r\n")));
+    assert_eq!(parse(&text).events[0].rdates.len(), MAX_RDATES);
 }

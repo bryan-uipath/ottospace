@@ -136,15 +136,17 @@ does no recurrence or zones). About 600 lines.
 Followed: line unfolding, text escapes, `DTSTART`/`DTEND`/`DURATION` as UTC, floating, `TZID=` and
 `VALUE=DATE`; `RRULE` with `FREQ` `DAILY`, `WEEKLY`, `MONTHLY`, `YEARLY`, `INTERVAL`, `UNTIL`,
 `COUNT`, `BYDAY` (with ordinals for monthly and yearly), `BYMONTHDAY` (negative too), `BYMONTH`,
-`WKST`; `EXDATE`; `RECURRENCE-ID` overrides (moved or cancelled occurrences); `STATUS:CANCELLED`;
+`BYSETPOS`, `WKST`; `EXDATE`; `RDATE` (a `VALUE=PERIOD` by its start, with the event's length);
+`RECURRENCE-ID` overrides (moved or cancelled occurrences); `STATUS:CANCELLED`;
 `VTIMEZONE` with `STANDARD`/`DAYLIGHT` rules (Outlook's Windows zone names work this way); other
 `TZID`s from the system's zone database. Only today and tomorrow are expanded.
 
 Not followed:
 
-- `BYSETPOS`, `BYWEEKNO`, `BYYEARDAY`, `BYHOUR`, `BYMINUTE`, `BYSECOND`, `HOURLY` and finer: such a
-  rule gives its first occurrence only.
-- `RDATE`, `VTODO`, `VJOURNAL`, `VALARM`, `EXRULE`.
+- `BYWEEKNO`, `BYYEARDAY`, `BYHOUR`, `BYMINUTE`, `BYSECOND`, `HOURLY` and finer: such a rule gives
+  its first occurrence only.
+- An `RDATE` of a whole day for a timed event, or of a time for a whole-day one.
+- `VTODO`, `VJOURNAL`, `VALARM`, `EXRULE`.
 - Declined meetings: `PARTSTAT=DECLINED` is the user's only if the feed says which attendee is
   the user, and it does not. A declined meeting still shows and alerts.
 - A `TZID` neither the feed nor the system knows is read as local time.
