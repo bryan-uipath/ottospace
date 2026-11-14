@@ -133,6 +133,15 @@ impl Gen<'_> {
         }
     }
 
+    /// A card's ticket: mostly the one shown, else another (one withdrawn, or none).
+    fn card(&mut self) -> u64 {
+        let front = self.m.shown_chat().and_then(|chat| chat.transcript.cards.front().map(|card| card.ticket));
+        match front.filter(|_| !self.rng.one_in(4)) {
+            Some(ticket) => ticket,
+            None => self.rng.below(3) as u64,
+        }
+    }
+
     /// A conversation's subject: a task's, or a session's.
     fn subject(&mut self) -> Subject {
         if self.rng.coin() {
@@ -1017,8 +1026,8 @@ const MAKERS: &[Make] = &[
         Action::AgentEvents { task, events, at: g.rng.pick(&[0, 1, 5_000]) }
     },
     |_| Action::TalkSend,
-    |g| Action::TalkAnswer { allow: g.rng.coin() },
-    |_| Action::TalkExpand,
+    |g| Action::TalkAnswer { allow: g.rng.coin(), ticket: g.card() },
+    |g| Action::TalkExpand { ticket: g.card() },
     |_| Action::TalkDenyNote,
     |_| Action::TalkEscape,
     |_| Action::TalkInterrupt,

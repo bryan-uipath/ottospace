@@ -18,7 +18,8 @@ use std::time::Duration;
 use ottospace_agents::claude::{self, Claude};
 use ottospace_agents::codex::{self, Codex};
 use ottospace_agents::driver::Driver;
-use ottospace_agents::{Answer, Event, Input, Outcome, Output, Process, Refused, Start, Wire};
+use ottospace_agents::{Answer, Event, Input, Output, Process, Refused, Start, Wire};
+use ottospace_core::transcript::Outcome;
 use serde_json::Value;
 
 const ASK: &str =

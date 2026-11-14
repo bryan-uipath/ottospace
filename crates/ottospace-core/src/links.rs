@@ -27,7 +27,11 @@ pub fn target(raw: &str, repo: Option<&str>) -> Option<Target> {
     if !plain(raw) || !plain(&decoded) {
         return None;
     }
-    match scheme(&decoded) {
+    // Only the schemes that may open are read as one: `main.rs:12` is a file and a line, and
+    // any other scheme (`javascript:`, `data:`) keeps its `:` and is no file either.
+    let named =
+        scheme(&decoded).filter(|(name, _)| matches!(name.to_ascii_lowercase().as_str(), "http" | "https" | "file"));
+    match named {
         Some((name, rest)) => match name.to_ascii_lowercase().as_str() {
             "http" | "https" => {
                 // Written out, not encoded: the scheme as typed must be the one judged.
@@ -45,13 +49,9 @@ pub fn target(raw: &str, repo: Option<&str>) -> Option<Target> {
     }
 }
 
-/// No control character, space, or mark that hides or reorders text.
+/// No control character, space, or mark that hides or reorders text (`capture::shows`).
 fn plain(text: &str) -> bool {
-    !text.chars().any(|c| {
-        c.is_control()
-            || c.is_whitespace()
-            || matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}')
-    })
+    text.chars().all(|c| crate::capture::shows(c) && !c.is_whitespace())
 }
 
 /// Percent-decoded, once. `None`: not UTF-8 once decoded.
@@ -166,6 +166,9 @@ mod tests {
             ("https://exa mple.com", None),
             ("https://example.com/\u{202e}fdp", None),
             ("https://example.com/%0d%0aX", None),
+            ("https://example.com/a\u{061c}b", None),
+            ("https://example.com/a%D8%9Cb", None),
+            ("https://example.com/a\u{2060}b", None),
             ("ht%74ps://example.com", None),
             ("https://example.com\\@evil.com", None),
             ("", None),
@@ -196,6 +199,10 @@ mod tests {
             ("file://host/w/app/x", None),
             ("C:\\x", None),
             ("~/.ssh/id_rsa", file_at("/w/app/~/.ssh/id_rsa")),
+            ("main.rs:12", file_at("/w/app/main.rs")),
+            ("README.md:4:2", file_at("/w/app/README.md")),
+            ("javascript:alert(1)", None),
+            ("mailto:a@b.c", None),
         ];
         for (raw, want) in cases {
             assert_eq!(target(raw, REPO), want, "{raw:?}");

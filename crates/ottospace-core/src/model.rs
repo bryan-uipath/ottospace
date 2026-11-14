@@ -1115,12 +1115,16 @@ pub enum Action {
     TalkSend,
     /// Allow or Deny the shown conversation's first card. Allow only once a cut card was opened
     /// in full (`TalkExpand`). Deny carries the draft when the user wrote one for it
-    /// (`TalkDenyNote`). Only the user's.
+    /// (`TalkDenyNote`). `ticket`: the card the user saw; another card first (the CLI withdrew
+    /// that one) gets nothing. Only the user's.
     TalkAnswer {
         allow: bool,
+        ticket: u64,
     },
-    /// "Show all" on the shown card. Only the user's.
-    TalkExpand,
+    /// "Show all" on the shown card, `ticket` as in `TalkAnswer`. Only the user's.
+    TalkExpand {
+        ticket: u64,
+    },
     /// The composer takes the user's words for a Deny of the shown card. Only the user's.
     TalkDenyNote,
     /// Esc in a native conversation: ends a Deny's message; while a turn runs, the first says
@@ -1531,7 +1535,7 @@ impl Action {
             | Action::AgentEvents { .. }
             | Action::TalkSend
             | Action::TalkAnswer { .. }
-            | Action::TalkExpand
+            | Action::TalkExpand { .. }
             | Action::TalkDenyNote
             | Action::TalkEscape
             | Action::TalkInterrupt
@@ -2283,7 +2287,7 @@ impl Model {
             // strong as typing into it, an answer grants a tool call.
             Action::TalkSend
             | Action::TalkAnswer { .. }
-            | Action::TalkExpand
+            | Action::TalkExpand { .. }
             | Action::TalkDenyNote
             | Action::TalkEscape
             | Action::TalkInterrupt
@@ -3773,7 +3777,7 @@ impl Model {
             action @ (Action::AgentEvents { .. }
             | Action::TalkSend
             | Action::TalkAnswer { .. }
-            | Action::TalkExpand
+            | Action::TalkExpand { .. }
             | Action::TalkDenyNote
             | Action::TalkEscape
             | Action::TalkInterrupt
@@ -3913,8 +3917,9 @@ impl Model {
                 }
             }
             Action::TaskStop { id } => {
-                // A resume waiting on its read is asked for no more.
+                // A resume waiting on its read is asked for no more, nor a switch of view.
                 self.awaiting.retain(|subject| *subject != id);
+                self.switching.retain(|subject| *subject != id);
                 if self.agent_runs(&id) {
                     effects.push(Effect::StopAgent { task: id });
                 }
@@ -6245,7 +6250,7 @@ mod tests {
         Action::AgentEvents { .. },
         Action::TalkSend,
         Action::TalkAnswer { .. },
-        Action::TalkExpand,
+        Action::TalkExpand { .. },
         Action::TalkDenyNote,
         Action::TalkEscape,
         Action::TalkInterrupt,
@@ -6462,8 +6467,8 @@ mod tests {
             Action::CalendarTomorrow,
             Action::AgentEvents { task: Subject::Task(1), events: Vec::new(), at: 0 },
             Action::TalkSend,
-            Action::TalkAnswer { allow: false },
-            Action::TalkExpand,
+            Action::TalkAnswer { allow: false, ticket: 1 },
+            Action::TalkExpand { ticket: 1 },
             Action::TalkDenyNote,
             Action::TalkEscape,
             Action::TalkInterrupt,
@@ -6484,7 +6489,7 @@ mod tests {
             action,
             Action::TalkSend
                 | Action::TalkAnswer { .. }
-                | Action::TalkExpand
+                | Action::TalkExpand { .. }
                 | Action::TalkDenyNote
                 | Action::TalkEscape
                 | Action::TalkInterrupt

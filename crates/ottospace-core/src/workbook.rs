@@ -65,31 +65,36 @@ fn plain_text(text: &str) -> String {
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
-            '\u{1b}' => match chars.next() {
-                // CSI: parameters, then one final byte from @ to ~.
-                Some('[') => {
-                    for c in chars.by_ref() {
-                        if ('@'..='~').contains(&c) {
-                            break;
-                        }
-                    }
-                }
-                // OSC, DCS, SOS, PM, APC: to BEL or ESC \.
-                Some(']' | 'P' | 'X' | '^' | '_') => {
-                    while let Some(c) = chars.next() {
-                        if c == '\u{7}' || (c == '\u{1b}' && chars.next_if_eq(&'\\').is_some()) {
-                            break;
-                        }
-                    }
-                }
-                _ => {}
-            },
+            '\u{1b}' => skip_escape(&mut chars),
             '\t' => out.push(' '),
             c if crate::capture::shows(c) => out.push(c),
             _ => {}
         }
     }
     out
+}
+
+/// Skips the rest of a terminal escape sequence whose ESC was just read: CSI to its final
+/// byte; OSC, DCS, SOS, PM and APC to BEL or `ESC \`; anything else, one character.
+pub fn skip_escape(chars: &mut std::iter::Peekable<std::str::Chars>) {
+    match chars.next() {
+        // CSI: parameters, then one final byte from @ to ~.
+        Some('[') => {
+            for c in chars.by_ref() {
+                if ('@'..='~').contains(&c) {
+                    break;
+                }
+            }
+        }
+        Some(']' | 'P' | 'X' | '^' | '_') => {
+            while let Some(c) = chars.next() {
+                if c == '\u{7}' || (c == '\u{1b}' && chars.next_if_eq(&'\\').is_some()) {
+                    break;
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 impl History {

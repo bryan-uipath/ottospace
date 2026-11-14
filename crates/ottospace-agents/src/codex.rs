@@ -8,13 +8,14 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use ottospace_core::runner::RunnerId;
+use ottospace_core::transcript::Outcome;
 use ottospace_sessions::station::{self, Station};
 use serde_json::{Value, json};
 
 use crate::payload::Payload;
 use crate::{
-    Answer, Argv, Event, Input, MAX_DETAIL, MAX_TEXT, Outcome, Output, Refused, Start, Ticket, TicketKind, Untrusted,
-    Wire, kind_of, model_of, opaque, session_of,
+    Answer, Argv, Event, Input, MAX_DETAIL, MAX_TEXT, Output, Refused, Start, Ticket, TicketKind, Untrusted, Wire,
+    kind_of, model_of, opaque, session_of,
 };
 
 /// `codex app-server`: stdio is its default transport. The model and the session go in the

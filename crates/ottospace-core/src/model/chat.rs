@@ -36,6 +36,11 @@ pub struct Chat {
 }
 
 impl Chat {
+    /// True if `ticket` is the card shown: an answer or Show all is for what the user saw.
+    pub fn front_is(&self, ticket: u64) -> bool {
+        self.transcript.cards.front().is_some_and(|card| card.ticket == ticket)
+    }
+
     fn new(subject: Subject) -> Self {
         let (transcript, draft) = (Transcript::default(), Field::new("", MAX_DRAFT));
         Self { subject, transcript, draft, deny: false, armed: false }
@@ -193,12 +198,14 @@ impl Model {
             Action::AgentEvents { task: subject, events, at } => {
                 let Some(chat) = self.chat_mut(&subject).filter(|chat| chat.transcript.live) else { return };
                 let before = (chat.transcript.turn.is_some(), chat.transcript.cards.is_empty());
+                let front = chat.transcript.cards.front().map(|card| card.ticket);
                 for event in events {
                     chat.transcript.fold(event, at);
                 }
                 let after = (chat.transcript.turn.is_some(), chat.transcript.cards.is_empty());
                 chat.armed &= after.0;
-                chat.deny &= !after.1;
+                // A Deny's message is for the card it was written under: another one in front ends it.
+                chat.deny &= chat.transcript.cards.front().map(|card| card.ticket) == front;
                 if before != after {
                     self.chat_state(&subject);
                 }
@@ -216,11 +223,12 @@ impl Model {
                 effects.push(Effect::AgentSend { task: subject.clone(), text });
                 self.chat_state(&subject);
             }
-            Action::TalkAnswer { allow } => {
-                let Some(chat) = self.shown_chat_mut() else { return };
+            Action::TalkAnswer { allow, ticket } => {
+                let Some(chat) = self.shown_chat_mut().filter(|chat| chat.front_is(ticket)) else { return };
                 let words = chat.draft.text().trim().to_string();
                 let message = (!allow && chat.deny && !words.is_empty()).then_some(words);
-                let Some(ticket) = chat.transcript.answer(allow) else { return };
+                let Some(answered) = chat.transcript.answer(allow) else { return };
+                debug_assert_eq!(answered, ticket);
                 if message.is_some() {
                     chat.draft = Field::new("", MAX_DRAFT);
                 }
@@ -229,8 +237,8 @@ impl Model {
                 effects.push(Effect::AgentAnswer { task: subject.clone(), ticket, allow, message });
                 self.chat_state(&subject);
             }
-            Action::TalkExpand => {
-                if let Some(chat) = self.shown_chat_mut() {
+            Action::TalkExpand { ticket } => {
+                if let Some(chat) = self.shown_chat_mut().filter(|chat| chat.front_is(ticket)) {
                     chat.transcript.expand();
                 }
             }
@@ -408,27 +416,62 @@ mod tests {
         m.update(Action::TalkPick { id: two.clone() });
         m.update(Action::TalkKeys { on: true });
         assert!(m.talk_typing());
-        assert_eq!(m.update(Action::TalkAnswer { allow: false }), [], "no card here");
+        assert_eq!(m.update(Action::TalkAnswer { allow: false, ticket: 1 }), [], "no card here");
         typed(&mut m, "draft two");
         events(&mut m, &one, vec![Event::TextDelta { text: Text::new("more") }]);
         m.update(Action::TalkPick { id: one.clone() });
         m.update(Action::TalkKeys { on: true });
         assert_eq!(m.chat(&two).map(|chat| chat.draft.text()), Some("draft two"), "its draft is kept");
-        assert_eq!(m.update(Action::TalkAnswer { allow: true }), [], "cut: Show all first");
-        assert_eq!(m.update(Action::TalkExpand.sent_by(Origin::Socket)), []);
-        assert_eq!(m.update(Action::TalkAnswer { allow: true }.sent_by(Origin::Socket)), []);
-        m.update(Action::TalkExpand);
+        assert_eq!(m.update(Action::TalkAnswer { allow: true, ticket: 1 }), [], "cut: Show all first");
+        assert_eq!(m.update(Action::TalkExpand { ticket: 1 }.sent_by(Origin::Socket)), []);
+        assert_eq!(m.update(Action::TalkAnswer { allow: true, ticket: 1 }.sent_by(Origin::Socket)), []);
+        // Show all and Allow for another card than the one shown do nothing.
+        assert_eq!(m.update(Action::TalkExpand { ticket: 2 }), []);
+        assert!(m.chat(&one).is_some_and(|chat| !chat.transcript.cards[0].expanded));
+        m.update(Action::TalkExpand { ticket: 1 });
         let allowed = Effect::AgentAnswer { task: one.clone(), ticket: 1, allow: true, message: None };
-        assert_eq!(m.update(Action::TalkAnswer { allow: true }), [allowed]);
-        assert_eq!(m.update(Action::TalkAnswer { allow: true }), [], "answered once");
+        assert_eq!(m.update(Action::TalkAnswer { allow: true, ticket: 1 }), [allowed]);
+        assert_eq!(m.update(Action::TalkAnswer { allow: true, ticket: 1 }), [], "answered once");
         events(&mut m, &one, vec![card(2, false)]);
         m.update(Action::TalkDenyNote);
         assert!(m.talk_typing());
         typed(&mut m, "use git diff");
         let denied =
             Effect::AgentAnswer { task: one.clone(), ticket: 2, allow: false, message: Some("use git diff".into()) };
-        assert_eq!(m.update(Action::TalkAnswer { allow: false }), [denied]);
+        assert_eq!(m.update(Action::TalkAnswer { allow: false, ticket: 2 }), [denied]);
         assert_eq!(m.chat(&one).map(|chat| (chat.draft.text(), chat.deny)), Some(("", false)));
+    }
+
+    /// A card the CLI withdrew takes its answer and its Deny's message with it: the next card gets neither.
+    #[test]
+    fn an_answer_for_a_withdrawn_card_reaches_no_other() {
+        let mut m = two_live();
+        let one = first(&m);
+        typed(&mut m, "go");
+        m.update(Action::TalkSend);
+        events(&mut m, &one, vec![card(1, false), card(2, false)]);
+        m.update(Action::TalkDenyNote);
+        typed(&mut m, "not that");
+        events(&mut m, &one, vec![Event::PermissionClosed { ticket: 1 }]);
+        assert!(m.chat(&one).is_some_and(|chat| !chat.deny), "the message was for the withdrawn card");
+        assert_eq!(m.update(Action::TalkAnswer { allow: true, ticket: 1 }), []);
+        assert_eq!(m.chat(&one).map(|chat| chat.transcript.cards.len()), Some(1));
+    }
+
+    /// Stop while a switch waits for the process to end: nothing starts after.
+    #[test]
+    fn a_stop_during_a_switch_starts_nothing_after() {
+        let mut m = two_live();
+        let one = first(&m);
+        let link = crate::sessions::Link {
+            runner: "claude".into(),
+            id: "8f14e45f-ceea-467f-a8d3-0242ac130003".into(),
+            state: None,
+        };
+        m.tasks.link(one.task().unwrap_or_default(), link);
+        assert_eq!(m.update(Action::TalkView { shows: View::Terminal }), [Effect::StopAgent { task: one.clone() }]);
+        m.update(Action::TaskStop { id: one.clone() });
+        assert_eq!(m.update(Action::AgentExited { task: one }.sent_by(Origin::System)), []);
     }
 
     /// Chat → Terminal ends the native process first; the session goes on in the terminal once it is gone.

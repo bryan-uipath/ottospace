@@ -9,7 +9,8 @@ use std::time::Duration;
 use ottospace_agents::claude::{self, Claude};
 use ottospace_agents::codex::{self, Codex};
 use ottospace_agents::driver::Driver;
-use ottospace_agents::{Answer, Argv, Event, Input, Outcome, Process, Start, Wire};
+use ottospace_agents::{Answer, Argv, Event, Input, Process, Start, Wire};
+use ottospace_core::transcript::Outcome;
 
 const CLAUDE_SESSION: &str = "8f14e45f-ceea-467f-a8d3-0242ac130003";
 const CODEX_THREAD: &str = "019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b";

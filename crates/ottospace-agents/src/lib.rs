@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 
 use ottospace_core::runner::RunnerId;
+use ottospace_core::transcript::Outcome;
 use ottospace_sessions::station::Station;
 use serde_json::Value;
 
@@ -196,17 +197,6 @@ pub enum Input {
     },
     /// End the current turn. The session goes on.
     Interrupt,
-}
-
-/// How a turn ended.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Outcome {
-    Completed,
-    Interrupted,
-    /// `kind` is a code from the runner's table, else `error`.
-    Failed {
-        kind: String,
-    },
 }
 
 /// What comes out of a runner. Ids are opaque (a hash), good only to pair a start with its end.

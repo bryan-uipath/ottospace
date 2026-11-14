@@ -6,6 +6,7 @@
 // The drawer's native view draws these: the next change in the stack.
 #![allow(dead_code)]
 
+use ottospace_core::ax::truncate as cap;
 use ottospace_core::links::{self, Target};
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 
@@ -252,6 +253,10 @@ impl Builder<'_> {
                 if let (true, Some(Target::File(path))) = (picture, &target) {
                     self.pictures.push(path.clone());
                 }
+                // An image inside a link is its text: alt text that names an address is checked too.
+                if let Some(open) = self.links.last_mut() {
+                    open.text.push_str(&alt);
+                }
                 // Never loaded from where it says: a link to it, under its alt text.
                 let shown = if alt.trim().is_empty() { "image".to_string() } else { alt };
                 let link = target.map(|target| Link { target, raw: clean(&raw) });
@@ -361,14 +366,6 @@ impl Builder<'_> {
     }
 }
 
-/// `text` cut to `max` characters, with `…` if it was longer.
-fn cap(text: &str, max: usize) -> String {
-    match text.char_indices().nth(max) {
-        Some((at, _)) => format!("{}…", &text[..at]),
-        None => text.to_string(),
-    }
-}
-
 /// Text as drawn: terminal escape sequences and other control characters out (a tab is four
 /// spaces), marks that hide or reorder text written out (`\u{202e}`).
 pub fn clean(text: &str) -> String {
@@ -376,34 +373,14 @@ pub fn clean(text: &str) -> String {
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
-            '\u{1b}' => match chars.next() {
-                // CSI: parameters, then one final byte.
-                Some('[') => {
-                    for c in chars.by_ref() {
-                        if ('\u{40}'..='\u{7e}').contains(&c) {
-                            break;
-                        }
-                    }
-                }
-                // OSC: until BEL or ESC \.
-                Some(']') => {
-                    while let Some(c) = chars.next() {
-                        if c == '\u{7}' || (c == '\u{1b}' && chars.next_if_eq(&'\\').is_some()) {
-                            break;
-                        }
-                    }
-                }
-                _ => {}
-            },
+            '\u{1b}' => ottospace_core::workbook::skip_escape(&mut chars),
             '\n' => out.push('\n'),
             '\t' => out.push_str("    "),
             c if c.is_control() => {}
-            '\u{200b}'..='\u{200f}'
-            | '\u{202a}'..='\u{202e}'
-            | '\u{2066}'..='\u{2069}'
-            | '\u{2028}'
-            | '\u{2029}'
-            | '\u{feff}' => out.extend(c.escape_unicode()),
+            // Hidden or reordering marks (`capture::shows`) and line separators, written out.
+            c if !ottospace_core::capture::shows(c) || matches!(c, '\u{2028}' | '\u{2029}') => {
+                out.extend(c.escape_unicode())
+            }
             c => out.push(c),
         }
     }
@@ -518,6 +495,11 @@ mod tests {
         assert!(!blocks.iter().any(|b| matches!(b, Block::Image { path } if path.contains("evil"))));
         // A link whose text is another address shows the real one.
         assert!(all.contains("https://good.com (https://evil.com)"), "{all}");
+        let image = plain(&parse("[![https://good.com](x.png)](https://evil.com)", REPO));
+        assert!(image.contains("(https://evil.com)"), "an image's alt text is the link's text: {image}");
+        // Every escape a terminal reads, and every hidden mark.
+        let hidden = plain(&parse("a\u{1b}Ppayload\u{1b}\\b \u{61c}c \u{2060}d", None));
+        assert_eq!(hidden, "ab \\u{61c}c \\u{2060}d");
     }
 
     #[test]
