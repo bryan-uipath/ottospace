@@ -16,8 +16,14 @@ const BINARY = process.env.OTTOSPACE_BIN || join(import.meta.dirname, "..", ".."
 const LIMIT_MS = 40_000;
 let launched = 0;
 
-/** Runs `body` against a fresh private instance, and kills the instance whatever happens. */
-export async function withOttospace(body: (client: Client, socketPath: string) => Promise<void>): Promise<void> {
+/**
+ * Runs `body` against a fresh private instance, and kills the instance whatever happens.
+ * `features`: the flags on (`OTTOSPACE_FEATURES`), else each as by default.
+ */
+export async function withOttospace(
+  body: (client: Client, socketPath: string) => Promise<void>,
+  features: string[] = [],
+): Promise<void> {
   if (!existsSync(BINARY)) throw new Error(`${BINARY} is not built: run \`cargo build -p ottospace\``);
   // Short: a Unix socket path holds about 100 characters.
   const socketPath = join(tmpdir(), `osdk-${process.pid}-${launched++}.sock`);
@@ -28,6 +34,7 @@ export async function withOttospace(body: (client: Client, socketPath: string) =
     // A plain shell: the tests must not depend on the user's shell profile.
     OTTOSPACE_SHELL: "/bin/sh",
     OTTOSPACE_REPOS: "",
+    OTTOSPACE_FEATURES: features.join(","),
   };
   // Never the user's `~/.ottospace`, and never hosting inherited from the caller's shell.
   delete env.OTTOSPACE_HOME;

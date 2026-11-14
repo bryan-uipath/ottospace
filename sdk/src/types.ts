@@ -26,6 +26,8 @@ export interface NativeChat {
     live: boolean;
     /** Read-only, from a session another terminal runs. */
     watched: boolean;
+    /** Lines from the agent no rule reads: a count, never what they said. */
+    not_understood: number;
   };
   /** Each reply's blocks by kind, and its links that open. */
   replies: { blocks: Record<string, number>; links: { web: number; file: number } }[];
@@ -36,6 +38,11 @@ export interface NativeChat {
   armed: boolean;
   /** Scrolled up: new text does not pull the view down. */
   away: boolean;
+  /** The ended agent left stderr to show (never in the state), and whether it is shown. */
+  details: boolean;
+  details_open: boolean;
+  /** The kinds of the lines not understood are shown. */
+  unread_open: boolean;
 }
 
 export type PaneId = number;
@@ -46,6 +53,8 @@ export type Subject = TaskId | { runner: string; id: string };
 export type Axis = "right" | "down";
 export type Dir = "left" | "right" | "up" | "down";
 export type Section = "apps" | "workbook" | "tasks" | "repos" | "marks" | "calendar";
+/** A feature flag (`features` in `settings.json`). Off, its requests answer "feature off: <name>". */
+export type Feature = "marks" | "apps_section";
 /** Pane kinds `split` may create. App panes come from `open_app`. */
 export type SplitKind = "terminal" | "empty";
 /** Who has the keyboard. */
@@ -592,6 +601,14 @@ export interface Palette {
   selected: number;
   /** Move Tab to Task…: the tasks it lists (task null: no task), in order; null while it lists commands. */
   tasks: PaletteTask[] | null;
+  /** Features…: the flags it lists, each with whether it is on; null while it lists commands. */
+  features: PaletteFeature[] | null;
+}
+
+/** A flag Features… lists: choosing it turns it the other way, in the settings. */
+export interface PaletteFeature {
+  feature: Feature;
+  on: boolean;
 }
 
 /** A task Move Tab to Task… may move the tab on show to. */
@@ -835,6 +852,8 @@ export interface Model {
   talk_wide: boolean;
   /** The conversations whose agent runs in the drawer. */
   agents: Subject[];
+  /** The feature flags that are on. Read-only: only the user turns one, in Features…. */
+  features: Feature[];
 }
 
 export interface Terminal {
@@ -973,6 +992,8 @@ export interface Snapshot {
   /** Each drawn pane's header, the handle a drag moves it by, and the × in it. */
   headers: Record<string, Rect>;
   closes: Record<string, Rect>;
+  /** Each drawn pane's header text: a terminal's directory and program (`app-api · cargo test`), an app's window title, "" for an empty pane. */
+  titles: Record<string, string>;
   /** Each tab on the bar, by place. */
   tabs: Rect[];
   /** The left column's title strip, and the open section's header (null: none open). */

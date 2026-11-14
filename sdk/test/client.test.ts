@@ -271,6 +271,14 @@ test("marks: add, list, go, rename, remove", async () => {
     assert.deepEqual([removed.marks.map((m) => m.name), removed.mark_removed], [["Tab 1"], "journal"]);
     await exactState(client);
     await assert.rejects(client.markGo({ name: "journal" }), { message: 'no mark named "journal"' });
+  }, ["marks"]);
+});
+
+test("a request of a feature that is off rejects with why", async () => {
+  await withOttospace(async (client) => {
+    assert.deepEqual((await client.state()).state.features, []);
+    await assert.rejects(client.marks(), { message: "feature off: marks" });
+    await assert.rejects(client.section({ section: "apps" }), { message: "feature off: apps_section" });
   });
 });
 

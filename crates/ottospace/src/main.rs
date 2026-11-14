@@ -30,6 +30,7 @@ use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::clip::{self, Verb};
 use ottospace_core::compose;
 use ottospace_core::edit::{self, Edit};
+use ottospace_core::features::Feature;
 use ottospace_core::hosted::{self as hosting, Click};
 use ottospace_core::key_use::{Binding, Line};
 use ottospace_core::keys::{self, FilterKey, Mods};
@@ -68,6 +69,7 @@ mod confirm;
 mod control;
 mod conversation;
 mod dialog;
+mod features;
 mod field;
 mod give_back;
 mod home;
@@ -552,7 +554,7 @@ actions!(ottospace, [TalkFocus, TalkToggle, TalkGo, StopAgent]);
 // A tab of no task, and the tab on show taken out of its task or moved to another.
 actions!(ottospace, [NewTabOutside, RemoveTabFromTask, MoveTabToTask]);
 // App menu.
-actions!(ottospace, [Quit, Hide]);
+actions!(ottospace, [Quit, Hide, About]);
 
 /// Every key binding: the menus show these keys.
 fn keymap() -> Vec<KeyBinding> {
@@ -647,7 +649,7 @@ enum Filing {
 /// What a line in the new-task box may hold, and what its keys do: in the box and where the
 /// Tasks section says how to add a task.
 const TAG_HINT: &str = "#project · >repo · @agent · /path · $skill · ^open · p1–p9";
-const KEYS_HINT: &str = "↵ start · ⇧↵ file for later · esc leaves";
+const KEYS_HINT: &str = "⇧↵ later";
 
 /// A heading's name in a control's id and on the socket: `needs_you`, `open`, ...
 fn heading_name(heading: Heading) -> String {
@@ -660,6 +662,8 @@ struct Workspace {
     hosted: HashMap<PaneId, Hosted>,
     /// Shell half of each terminal pane.
     terminals: HashMap<PaneId, Terminal>,
+    /// Each terminal's header, read from its processes a few times a second: `app-api · cargo test`.
+    titles: HashMap<PaneId, String>,
     /// The right drawer: each task's agent, and where its conversation was drawn.
     drawer: talk::Drawer,
     /// One terminal character cell.
@@ -945,6 +949,7 @@ impl Workspace {
                     this.store_key_use(false);
                     if tick % 15 == 0 {
                         this.poll_sessions(window, cx);
+                        this.read_titles(cx);
                     }
                     if hotkey::take_press() {
                         this.key_used(Binding::ReturnKey);
@@ -1060,6 +1065,8 @@ impl Workspace {
         let (on, notify) = (settings.calendar_ics.is_some(), settings.calendar_notify.unwrap_or(true));
         let links_only = settings.calendar_notify_for == Some(ottospace_core::settings::NotifyFor::Links);
         model.update(Action::SetCalendar { on, notify, links_only }.sent_by(Origin::System));
+        // Before what a restore reads: a section behind a flag that is off is not put back.
+        model.update(Action::SetFeatures { features: features::startup() }.sent_by(Origin::System));
         model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
         let kept = config::load_tasks();
         let unread = kept.unread;
@@ -1078,6 +1085,7 @@ impl Workspace {
             model,
             hosted: HashMap::new(),
             terminals: HashMap::new(),
+            titles: HashMap::new(),
             drawer: talk::Drawer::default(),
             cell: terminal::cell_size(window),
             dragging: None,
@@ -1214,6 +1222,7 @@ impl Workspace {
         // Opening the Apps section too: apps start and quit, and the Dock changes.
         if self.model.sidebar != Some(Section::Apps)
             && matches!(action, Action::ToggleSection { section: Section::Apps })
+            && self.on(Feature::AppsSection)
         {
             self.refresh_apps();
             self.offer_installed(cx);
@@ -1367,7 +1376,7 @@ impl Workspace {
                         hosted.park(window.scale_factor() as f64, crop);
                         // Going live activated the app. If it still has the keyboard, take it
                         // back, or keys keep going to its off-screen window while the status
-                        // bar says NORMAL. If the user moved to a third app, leave them there.
+                        // bar shows no mode. If the user moved to a third app, leave them there.
                         // Not when another pane goes live in this same step: that pane's app is
                         // taking the keyboard, and ottospace must not race it.
                         if !another_goes_live && ax::is_frontmost(hosted.pid) {
@@ -1380,6 +1389,7 @@ impl Workspace {
                 }
                 Effect::LaunchApp { name, path, axis, new_tab } => self.launch_picked(name, path, *axis, *new_tab),
                 Effect::SaveApps { changes } => self.save_apps(changes),
+                Effect::SaveFeature { feature, on } => self.save_feature(*feature, *on, cx),
                 Effect::SaveTasksView { view } => {
                     if let Err(why) = config::save_value("tasks_view", &serde_json::json!(view)) {
                         self.error = Some(format!("{}{why}", Self::NOT_WRITTEN));
@@ -1420,7 +1430,10 @@ impl Workspace {
                 }
                 // Carried out with its pane's `Opened`, before the shell starts.
                 Effect::History { .. } | Effect::EditSettings { .. } => {}
-                Effect::ApplySettings { settings } => config::set_live(settings.as_ref().clone()),
+                Effect::ApplySettings { settings } => {
+                    self.apply_features(settings, cx);
+                    config::set_live(settings.as_ref().clone())
+                }
                 // The text read at ⌘V, into the pane it was read for.
                 Effect::Paste { pane } => {
                     let text = self.pasting.take().filter(|(at, _)| at == pane).map(|(_, text)| text);
@@ -1703,6 +1716,10 @@ impl Workspace {
         }
         for Call { request, reply } in calls {
             if let Some(why) = control::test_refusal(&request, std::env::var_os("OTTOSPACE_E2E").is_some()) {
+                let _ = reply.send(control::error(why));
+                continue;
+            }
+            if let Some(why) = control::feature_refusal(&request, &self.model.features) {
                 let _ = reply.send(control::error(why));
                 continue;
             }
@@ -2255,7 +2272,7 @@ impl Workspace {
                 claude: models.claude,
                 codex: models.codex,
                 default: live.default_agent.clone(),
-                shows: live.conversation_view.unwrap_or_default(),
+                shows: live.conversation_view.unwrap_or(ottospace_core::settings::DEFAULT_VIEW),
             };
             self.dispatch(agents, Origin::System, window, cx);
         }
@@ -2635,6 +2652,8 @@ impl Workspace {
             // Each drawn pane's header (the handle a drag moves it by) and the × in it, and each
             // tab on the bar by place.
             "headers": marked(Mark::Header),
+            // Each drawn pane's header text (`pane_title`).
+            "titles": drawn.iter().filter_map(|id| Some((*id, self.pane_title(self.model.pane(*id)?)))).collect::<BTreeMap<_, _>>(),
             "closes": marked(Mark::Close),
             "tabs": tabs,
             // The left column's title strip, and the open section's header (null: none open).
@@ -2657,7 +2676,7 @@ impl Workspace {
             "parking": [parking.x, parking.y],
             // The registered return key, or null if there is none.
             "return_key": RETURN_KEY.get(),
-            // Which build this is, as the status bar shows it: "0.1.0 · a4a2582".
+            // Which build this is, short: "0.1.0 · a4a2582". About and the status bar's hover give it in full.
             "version": version_tag(env!("CARGO_PKG_VERSION"), option_env!("OTTOSPACE_COMMIT")),
             // The terminal font in use, and the size of one character cell in points.
             "font": terminal::font_in_use(),
@@ -2734,7 +2753,8 @@ impl Workspace {
             // The Apps section below the running apps: `not_running` (each with `name`, `path`,
             // `pinned`, `suggested`), `more` behind "and N more", `all` (every other installed
             // app, while `all_open`; `all_count` of them) narrowed by `filter`, and `undo`.
-            "apps_bar": self.model.apps_bar(),
+            // Empty with the section off (`apps_section`).
+            "apps_bar": if self.on(Feature::AppsSection) { self.model.apps_bar() } else { Default::default() },
             // The Apps list: what can be hosted now. `icon`: its icon was read.
             "apps": self.apps.iter().map(|app| serde_json::json!({
                 "name": app.name, "windows": app.windows, "icon": self.icons.contains_key(&app.name),
@@ -3230,7 +3250,8 @@ impl Workspace {
         }
         // ⌘⌥1..9 go to one of the first nine marks.
         let digit = key.key.parse::<usize>().ok().filter(|d| (1..=9).contains(d));
-        if let Some(digit) = digit.filter(|_| m.platform && m.alt && !m.shift && !m.control) {
+        if let Some(digit) = digit.filter(|_| m.platform && m.alt && !m.shift && !m.control && self.on(Feature::Marks))
+        {
             self.key_used(Binding::MarkNumber);
             let _ = self.go_to_mark(MarkRef::Place(digit - 1), Axis::Right, window, cx);
             cx.stop_propagation();
@@ -3758,9 +3779,7 @@ impl Workspace {
             .text_xs()
             .child(div().text_color(rgb(theme::PICK)).child(title))
             .child(self.render_field("type to filter", cx));
-        // The status bar no longer lists these keys, and ⌘/ closes the picker.
-        let texts = ("No match", "↑↓ move · ↵ open · esc close");
-        let panel = self.list_panel(panel, header, "picker", rows, texts);
+        let panel = self.list_panel(panel, header, "picker", rows, "No match");
         dialog::backdrop("picker-backdrop", 0.25, Action::ClosePicker, cx).child(panel)
     }
 
@@ -4063,6 +4082,39 @@ impl Workspace {
             )
             .child(header)
             .child(body)
+    }
+
+    /// A pane's header text: a terminal's directory and program, an app's window title, nothing
+    /// for an empty pane.
+    fn pane_title(&self, pane: &Pane) -> String {
+        match &pane.kind {
+            Kind::Empty => String::new(),
+            Kind::Terminal => self.titles.get(&pane.id).cloned().unwrap_or_default(),
+            // A window with no title says whose it is.
+            Kind::App { title, name, .. } if title.is_empty() => name.clone(),
+            Kind::App { title, .. } => title.clone(),
+        }
+    }
+
+    /// Reads each terminal's directory and program for its header; redraws if one changed.
+    /// Only the drawn panes' are read again; others keep their last, so a tab comes back titled.
+    fn read_titles(&mut self, cx: &mut Context<Self>) {
+        let home = std::env::var("HOME").ok();
+        let drawn = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
+        let titles: HashMap<PaneId, String> = self
+            .terminals
+            .iter()
+            .filter_map(|(id, t)| match drawn.contains(id) {
+                true => {
+                    Some((*id, terminal_title(t.cwd().as_deref(), t.foreground_command().as_deref(), home.as_deref())))
+                }
+                false => Some((*id, self.titles.get(id)?.clone())),
+            })
+            .collect();
+        if titles != self.titles {
+            self.titles = titles;
+            cx.notify();
+        }
     }
 
     /// Lists the apps that can be hosted now, and reads the icon of each one not seen before.
@@ -4496,10 +4548,11 @@ impl Workspace {
         let cell = self.cells.get(&id).cloned().unwrap_or_default();
         let frame = self.frames.get(&id).cloned().unwrap_or_default();
         let bar = self.hosted.get(&id).map_or(0.0, |h| h.bar as f32);
-        let (tag, tag_color, title) = match &pane.kind {
-            Kind::Empty => ("EMPTY", theme::MUTED, String::new()),
-            Kind::Terminal => ("TERM", theme::PRIMARY, "shell".into()),
-            Kind::App { title, .. } => ("APP", theme::APP, title.clone()),
+        // No kind word: the content says it. An app has its icon, if one was read.
+        let title = self.pane_title(pane);
+        let icon = match &pane.kind {
+            Kind::App { name, .. } => self.icons.get(name).cloned(),
+            _ => None,
         };
         // The window kept another size than the pane's: say so. In a narrow header the words
         // give way first: they shrink and are cut with an ellipsis.
@@ -4528,9 +4581,15 @@ impl Workspace {
         let drawn_on = self.model.annotated().filter(|m| m.pane == id && self.shots.contains_key(&m.n));
         let strip = drawn_on.map(|material| self.annotate_strip(material, cx));
         // flex_none: a short pane must not squeeze the header, or a raised bar would overlap the pane above.
-        let label: SharedString = if title.is_empty() { tag.into() } else { format!("{tag} {title}").into() };
+        let label: SharedString = match &pane.kind {
+            _ if !title.is_empty() => title.clone().into(),
+            Kind::App { name, .. } => name.clone().into(),
+            Kind::Terminal => "Terminal".into(),
+            Kind::Empty => "Empty pane".into(),
+        };
         // A marked pane says so, with its letter: ⌘B gives no other sign while the Marks list is shut.
-        let marked = self.model.mark_of(MarkOf::Pane(Some(id))).and_then(|mark| self.model.marks.get(mark));
+        let marked = self.model.mark_of(MarkOf::Pane(Some(id))).filter(|_| self.on(Feature::Marks));
+        let marked = marked.and_then(|mark| self.model.marks.get(mark));
         let marked = marked.map(|mark| mark.key.map_or("◆".to_string(), |key| format!("◆ {}", key.to_uppercase())));
         // The header is the pane's handle: a drag of it carries the pane to a drop zone or a tab.
         let workspace = cx.weak_entity();
@@ -4561,7 +4620,7 @@ impl Workspace {
             )
             .child(mark(&self.marks, Mark::Header(id)))
             .gap_2()
-            // The tag and the title keep a minimum; past it the title is cut, then the hint.
+            // The title keeps a minimum; past it the title is cut, then the hint.
             .child(
                 div()
                     .flex()
@@ -4569,7 +4628,8 @@ impl Workspace {
                     .min_w(px(HEADER_TITLE_MIN))
                     .gap_2()
                     .overflow_hidden()
-                    .child(div().flex_none().text_color(rgb(tag_color)).child(tag))
+                    .items_center()
+                    .children(icon.map(|icon| img(icon).size(px(14.)).flex_none()))
                     .child(div().min_w_0().truncate().child(title))
                     .children(marked.map(|sign| div().flex_none().text_color(rgb(theme::MARK)).child(sign))),
             )
@@ -4887,6 +4947,10 @@ impl Workspace {
                                 .drag_over::<DraggedPane>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
                                 .drag_over::<DraggedTab>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
                                 .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                                    // Dropped on itself: a click that moved a few points (GPUI drags past 2).
+                                    if dragged.0 == id {
+                                        return this.select_tab(id, window, cx);
+                                    }
                                     let at = TabAt::Before(id);
                                     this.dispatch(
                                         Action::TabPlace { tab: Some(dragged.0), at },
@@ -4930,6 +4994,7 @@ impl Workspace {
                                 .children(
                                     self.model
                                         .mark_of(MarkOf::Tab(Some(id)))
+                                        .filter(|_| self.on(Feature::Marks))
                                         .map(|_| div().text_color(rgb(theme::MARK)).child("◆")),
                                 )
                                 // A tab of a workbook: its icon, and the workbook's name on hover.
@@ -4988,54 +5053,50 @@ impl Workspace {
             )))
     }
 
-    /// Bottom bar: who has the keyboard, and the focused pane.
+    /// Bottom bar: who has the keyboard when it is not normal, and what needs saying.
     fn render_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let color = theme::accent(self.model.mode());
         // Name the return key only if it works: a wrong hint strands the user in the app.
         let app_hint = match RETURN_KEY.get() {
-            Some(key) => format!("keys go to the app · {key} or a click on ottospace returns"),
-            None => "keys go to the app · click ottospace to return".to_string(),
+            Some(key) => format!("{key} returns"),
+            None => "click to return".to_string(),
         };
         let peek = self.model.peek.as_ref().and_then(|peek| self.hosted.get(&peek.pane));
-        let peek_hint = peek.map(|hosted| format!("{} · a click or a key enters it", hosted.app));
+        let peek_hint = peek.map(|hosted| hosted.app.clone());
         let (mode, hint) = match self.model.mode() {
             // The app is up for a scroll: it has the keyboard until the peek ends.
             _ if peek_hint.is_some() => ("PEEK", peek_hint.as_deref().unwrap_or_default()),
-            // One hint, not the key list: ⌘/ shows the keys of every mode. A mode you can be in
-            // by accident also says how to leave. The picker and the new-task box show theirs.
-            Mode::Normal => ("NORMAL", "⌘/ keys"),
+            // A key, not the key list: ⌘/ shows the keys of every mode. A mode you can be in by
+            // accident names its way out. Normal is the focus border's colour alone: no chip.
+            Mode::Normal => ("", ""),
             Mode::Pick => ("PICK", ""),
             Mode::Palette => ("COMMAND", ""),
-            Mode::Inspect => ("INSPECT", "type to filter · ↑↓ select · esc leaves"),
+            Mode::Inspect => ("INSPECT", ""),
             Mode::App => ("APP", app_hint.as_str()),
-            Mode::Visual => ("VISUAL", "esc leaves · ⌘/ keys"),
-            Mode::List => ("LIST", "esc leaves · ⌘/ keys"),
+            Mode::Visual => ("VISUAL", "esc"),
+            Mode::List => ("LIST", "esc"),
             Mode::Compose => ("TASK", ""),
+            // Sneak turned the overlay off, and it stays off: say how to get it back.
             Mode::Sneak if self.model.sneak.as_ref().is_some_and(|sneak| sneak.hid_overlay) => {
-                ("SNEAK", "type a label · esc leaves · the accessibility overlay is hidden (⌘⌃A shows it)")
+                ("SNEAK", "esc · ⌘⌃A overlay")
             }
-            Mode::Sneak => ("SNEAK", "type a label · esc leaves"),
+            Mode::Sneak => ("SNEAK", "esc"),
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.dismiss.is_some()) => ("DISMISS?", ""),
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.paste.is_some()) => ("PASTE?", ""),
             Mode::Confirm => ("QUIT?", ""),
-            Mode::Annotate => ("ANNOTATE", "drag to circle · click for a note · ↵ title · esc leaves"),
-            Mode::Talk => ("TALK", "keys go to the task's agent"),
+            // The capture bar lists the annotate keys.
+            Mode::Annotate => ("ANNOTATE", ""),
+            Mode::Talk => ("TALK", ""),
             Mode::Mark => match self.model.mark_input {
-                Some(MarkInput::Rename { .. }) => ("MARK", "type its name · ↵ keeps it · esc cancels"),
+                Some(MarkInput::Rename { .. }) => ("MARK", ""),
                 Some(MarkInput::SetKey { .. }) => ("MARK", "a letter for the mark · ⌫ for none · esc cancels"),
-                Some(MarkInput::Workbook { .. }) => ("WORKBOOK", "type its name · ↵ keeps it · esc cancels"),
+                Some(MarkInput::Workbook { .. }) => ("WORKBOOK", ""),
                 _ => ("MARK?", "a mark's letter · esc cancels"),
             },
         };
         let hint = match self.sneak_app_hint() {
             Some(app) => format!("{hint} · {app}"),
             None => hint.to_string(),
-        };
-        let focused = match self.model.focused.and_then(|id| self.model.pane(id)).map(|p| &p.kind) {
-            Some(Kind::App { title, .. }) => title.clone(),
-            Some(Kind::Empty) => "empty pane".into(),
-            Some(Kind::Terminal) => "shell".into(),
-            None => "no pane".into(),
         };
         div()
             .h(px(24.))
@@ -5049,12 +5110,16 @@ impl Workspace {
             .text_xs()
             .text_color(rgb(theme::MUTED))
             .child(mark(&self.marks, Mark::Status))
-            .child(div().px_2().rounded_sm().bg(rgb(color)).text_color(rgb(theme::BACKGROUND)).child(mode))
-            // Long text gives way, so the build tag on the right stays in view.
-            .child(div().min_w_0().truncate().child(focused))
-            .child(div().flex_none().child(hint))
-            // Pushes what follows to the right. An auto margin there closed the gaps on the left.
-            .child(div().flex_1())
+            .when(!mode.is_empty(), |d| {
+                d.child(div().px_2().rounded_sm().bg(rgb(color)).text_color(rgb(theme::BACKGROUND)).child(mode))
+            })
+            .child(div().min_w_0().truncate().child(hint))
+            // Pushes what follows to the right (an auto margin there closed the gaps on the left).
+            // Its hover names the build.
+            .child(div().id("status-space").flex_1().h_full().tooltip(|_, cx| {
+                let (commit, date) = (option_env!("OTTOSPACE_COMMIT"), option_env!("OTTOSPACE_BUILD_DATE"));
+                AnyView::from(cx.new(|_| Tooltip(version_line(env!("CARGO_PKG_VERSION"), commit, date).into())))
+            }))
             // After a capture from a live app, with the draft gone: the way back to that app.
             .children(self.model.back_to.filter(|_| self.model.capture.is_none()).and_then(|pane| {
                 let Kind::App { name, .. } = &self.model.pane(pane)?.kind else { return None };
@@ -5068,8 +5133,13 @@ impl Workspace {
             .children(self.meeting_soon())
             // The one thing tasks put here: how many wait for the user.
             .children(Some(self.model.tasks.needs_you()).filter(|n| *n > 0).map(|n| {
-                let label = if n == 1 { "1 task needs you".to_string() } else { format!("{n} tasks need you") };
-                div().text_color(rgb(theme::SNEAK)).child(label)
+                let tip = |_: &mut Window, cx: &mut App| AnyView::from(cx.new(|_| Tooltip("Needs you".into())));
+                div()
+                    .id("status-needs-you")
+                    .flex_none()
+                    .text_color(rgb(theme::SNEAK))
+                    .child(format!("● {n}"))
+                    .tooltip(tip)
             }))
             // Shown here, not in the Apps list, so it is visible whichever section is open.
             // "Copied 3 lines", from anywhere: the status bar says each copy and paste.
@@ -5081,14 +5151,18 @@ impl Workspace {
                     .map(|clip| div().flex_none().text_color(rgb(theme::PRIMARY)).child(clip.text.clone())),
             )
             .children(self.problem().map(|e| div().min_w_0().truncate().text_color(rgb(theme::ERROR)).child(e)))
-            // Which build this is, last and dim: it matters when something looks wrong.
-            .child(
-                div()
-                    .flex_none()
-                    .text_color(rgb(theme::BORDER_STRONG))
-                    .child(version_tag(env!("CARGO_PKG_VERSION"), option_env!("OTTOSPACE_COMMIT"))),
-            )
     }
+}
+
+/// A terminal's header: its directory's last segment (`~` for home), then the program in front
+/// of the shell, if any: `app-api · cargo test`. Nothing read: empty.
+fn terminal_title(cwd: Option<&str>, program: Option<&str>, home: Option<&str>) -> String {
+    let dir = cwd.map(|cwd| match std::path::Path::new(cwd).file_name() {
+        _ if Some(cwd) == home => "~".to_string(),
+        Some(name) => name.to_string_lossy().into_owned(),
+        None => cwd.to_string(),
+    });
+    dir.into_iter().chain(program.map(str::to_string)).collect::<Vec<_>>().join(" · ")
 }
 
 /// A task's priority and title, as cells of a row.
@@ -5464,16 +5538,24 @@ impl Render for Workspace {
                 this.error = this.capture_pane(None, this.input, window, cx).err();
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &MarkPane, window, cx| this.toggle_mark(MarkOf::Pane(None), window, cx)))
-            .on_action(cx.listener(|this, _: &MarkTab, window, cx| this.toggle_mark(MarkOf::Tab(None), window, cx)))
+            // With marks off their keys are no keys of ottospace's: they go on as unbound.
+            .on_action(cx.listener(|this, _: &MarkPane, window, cx| match this.on(Feature::Marks) {
+                true => this.toggle_mark(MarkOf::Pane(None), window, cx),
+                false => cx.propagate(),
+            }))
+            .on_action(cx.listener(|this, _: &MarkTab, window, cx| match this.on(Feature::Marks) {
+                true => this.toggle_mark(MarkOf::Tab(None), window, cx),
+                false => cx.propagate(),
+            }))
             .on_action(cx.listener(|this, _: &SaveWorkbook, window, cx| this.save_workbook(window, cx)))
             .on_action(cx.listener(|this, _: &AddTabToWorkbook, window, cx| this.pick_workbook(window, cx)))
             .on_action(cx.listener(|this, _: &SaveAllWorkbook, window, cx| this.save_all_workbook(window, cx)))
             .on_action(cx.listener(|this, _: &StartFresh, window, cx| {
                 drop(this.dispatch(Action::StartFresh, this.input, window, cx))
             }))
-            .on_action(cx.listener(|this, _: &MarkJump, window, cx| {
-                this.dispatch(Action::MarkPrefix, this.input, window, cx);
+            .on_action(cx.listener(|this, _: &MarkJump, window, cx| match this.on(Feature::Marks) {
+                true => drop(this.dispatch(Action::MarkPrefix, this.input, window, cx)),
+                false => cx.propagate(),
             }))
             .on_action(cx.listener(|this, _: &NextTask, window, cx| {
                 this.dispatch(Action::Tick { now: now_ms() }, this.input, window, cx);
@@ -5703,14 +5785,19 @@ fn sessions(dir: Option<&String>) -> ! {
 /// The `--version` line. `scripts/package.sh` passes the commit and its date in at compile time;
 /// a plain `cargo build` has neither.
 fn version_line(version: &str, commit: Option<&str>, date: Option<&str>) -> String {
+    format!("ottospace {version} ({})", build_of(commit, date))
+}
+
+/// The build in the `--version` line and the About panel: `a4a2582c0ffe, 2026-11-12T08:09:00Z`.
+fn build_of(commit: Option<&str>, date: Option<&str>) -> String {
     match (commit.filter(|c| !c.is_empty()), date.filter(|d| !d.is_empty())) {
-        (Some(commit), Some(date)) => format!("ottospace {version} ({commit}, {date})"),
-        (Some(commit), None) => format!("ottospace {version} ({commit})"),
-        _ => format!("ottospace {version} (local build)"),
+        (Some(commit), Some(date)) => format!("{commit}, {date}"),
+        (Some(commit), None) => commit.to_string(),
+        _ => "local build".to_string(),
     }
 }
 
-/// The build, short, for the status bar: `0.1.0 · a4a2582` (seven characters of the commit), or
+/// The build, short, for the state: `0.1.0 · a4a2582` (seven characters of the commit), or
 /// `0.1.0 · local` for a plain `cargo build`.
 fn version_tag(version: &str, commit: Option<&str>) -> String {
     match commit.filter(|c| !c.is_empty()) {
@@ -5787,7 +5874,12 @@ fn main() {
         cx.bind_keys(keymap());
         // The menu bar lists the same actions; the app-level ones are handled here.
         cx.on_action(|_: &Hide, cx| cx.hide());
-        cx.set_menus(menus::app_menus());
+        cx.on_action(|_: &About, cx| {
+            let (commit, date) = (option_env!("OTTOSPACE_COMMIT"), option_env!("OTTOSPACE_BUILD_DATE"));
+            cx.activate(true);
+            ottospace_mac::window::show_about(env!("CARGO_PKG_VERSION"), &build_of(commit, date));
+        });
+        cx.set_menus(menus::app_menus(&features::startup()));
         let mut bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
         // A test run stays out of the user's way: a background app that never takes the keyboard,
         // with its window at a free corner of the screens, all but a sliver of it off screen.
@@ -5864,6 +5956,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_terminal_title_is_its_directory_then_its_program() {
+        let home = Some("/Users/me");
+        assert_eq!(terminal_title(Some("/Users/me/code/app-api"), Some("cargo test"), home), "app-api · cargo test");
+        assert_eq!(terminal_title(Some("/Users/me/code/app-api"), None, home), "app-api");
+        assert_eq!(terminal_title(Some("/Users/me"), None, home), "~");
+        assert_eq!(terminal_title(Some("/"), Some("top"), home), "/ · top");
+        assert_eq!(terminal_title(None, None, home), "");
+    }
+
+    #[test]
     fn version_line_names_the_commit_when_the_build_was_given_one() {
         assert_eq!(
             version_line("0.1.0", Some("a4a2582c0ffe"), Some("2026-11-12T08:09:00Z")),
@@ -5872,7 +5974,7 @@ mod tests {
         assert_eq!(version_line("0.1.0", Some("a4a2582c0ffe"), None), "ottospace 0.1.0 (a4a2582c0ffe)");
         assert_eq!(version_line("0.1.0", None, None), "ottospace 0.1.0 (local build)");
         assert_eq!(version_line("0.1.0", Some(""), Some("")), "ottospace 0.1.0 (local build)");
-        // The status bar's short form.
+        // The short form.
         assert_eq!(version_tag("0.1.0", Some("a4a2582c0ffe")), "0.1.0 · a4a2582");
         assert_eq!(
             (version_tag("0.1.0", None), version_tag("0.1.0", Some(""))),

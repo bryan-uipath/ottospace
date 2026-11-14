@@ -33,8 +33,8 @@ impl Proc {
         let mut command = Command::new(bin);
         // Never the user's settings, tasks or repositories.
         command.env(socket_var, &socket).env_remove("OTTOSPACE_HOME").env("OTTOSPACE_REPOS", "");
-        // Nor a key taken from every app, unless the test names one.
-        command.env_remove("OTTOSPACE_CAPTURE_KEY");
+        // Nor a key taken from every app, nor flags, unless the test names them.
+        command.env_remove("OTTOSPACE_CAPTURE_KEY").env_remove("OTTOSPACE_FEATURES");
         let child = command.envs(env.iter().copied()).spawn().expect("launch");
         let who = if socket_var == "OTTOSPACE_SOCKET" { "otto" } else { "canary" };
         if who == "otto" {
@@ -917,6 +917,7 @@ fn a_mark_hosts_its_canary_window_again_and_of_two_windows_the_one_with_its_titl
             ("OTTOSPACE_E2E", "1"),
             ("OTTOSPACE_HOST_ONLY", &canary.child.id().to_string()),
             ("OTTOSPACE_RETURN_KEY", "f19"),
+            ("OTTOSPACE_FEATURES", "marks"),
         ],
     );
     let state = || otto.call(json!({"cmd": "state"}));

@@ -135,8 +135,8 @@ fn claude_asks_is_allowed_is_interrupted_and_exits() {
     let usage = Event::Usage { context: None, window: Some(1_000_000), cost_micro_usd: Some(12_300) };
     assert!(first.contains(&usage), "{first:#?}");
     assert!(first.contains(&Event::Usage { context: Some(2322), window: None, cost_micro_usd: None }));
-    let Some(Event::Exited { code, stderr }) = second.last() else { panic!() };
-    assert_eq!((*code, stderr.text()), (Some(3), "fake claude: stdin closed\n"));
+    let Some(Event::Exited { code, signal, stderr }) = second.last() else { panic!() };
+    assert_eq!((*code, *signal, stderr.text()), (Some(3), None, "fake claude: stdin closed\n"));
 
     // argv is the table's, and no prompt is in it.
     let recorded = std::fs::read_to_string(dir.join("argv")).unwrap();
@@ -171,7 +171,7 @@ fn codex_asks_is_allowed_is_interrupted_and_exits() {
     assert!(first.iter().any(|event| matches!(event, Event::ToolEnd { failed: false, .. })));
     assert_eq!(texts(&first), ["+Checking ", "+the tests.", "=Checking the tests."]);
     assert!(first.contains(&Event::Usage { context: Some(12_300), window: Some(272_000), cost_micro_usd: None }));
-    let Some(Event::Exited { code, stderr }) = second.last() else { panic!() };
+    let Some(Event::Exited { code, stderr, .. }) = second.last() else { panic!() };
     assert_eq!((*code, stderr.text()), (Some(4), "fake codex: stdin closed\n"));
 
     assert_eq!(std::fs::read_to_string(dir.join("argv")).unwrap(), "app-server\n");
@@ -213,12 +213,25 @@ fn what_the_cli_started_ends_with_it() {
             driver.kill().unwrap();
         }
         let events = until(&driver, |event| matches!(event, Event::Exited { .. }));
-        let Some(Event::Exited { code, .. }) = events.last() else { unreachable!() };
-        assert_eq!(*code, if killed { None } else { Some(5) });
+        let Some(Event::Exited { code, signal, .. }) = events.last() else { unreachable!() };
+        assert_eq!((*code, *signal), if killed { (None, Some(libc::SIGKILL)) } else { (Some(5), None) });
         let probe = Command::new("/bin/kill").args(["-0", &pid]).stderr(std::process::Stdio::null()).status();
         assert!(!probe.unwrap().success(), "{name}: the background command {pid} still runs");
         std::fs::remove_dir_all(dir).unwrap();
     }
+}
+
+/// The CLI has no controlling terminal, even when ottospace was started from one: an
+/// interactive login shell before it cannot take that terminal (`zsh -i` would).
+#[test]
+fn the_cli_runs_in_a_session_of_its_own() {
+    let dir = record_dir("session");
+    let mut command = Command::new("/bin/sh");
+    let script = r#"if (exec </dev/tty) 2>/dev/null; then echo tty; else echo none; fi >"$FAKE_DIR/tty""#;
+    command.args(["-c", script]).env("FAKE_DIR", &*dir);
+    let driver = Driver::spawn(command, Claude::new()).unwrap();
+    until(&driver, |event| matches!(event, Event::Exited { .. }));
+    assert_eq!(std::fs::read_to_string(dir.join("tty")).unwrap(), "none\n");
 }
 
 /// A permission request too long to read cannot be answered: the session ends, not hangs.
@@ -243,6 +256,91 @@ fn a_send_never_waits_on_the_cli() {
     }
     driver.kill().unwrap();
     until(&driver, |event| matches!(event, Event::Exited { .. }));
+}
+
+/// Hands each line read back as an event, and sends text as a line: to see a line go through.
+struct Echo;
+
+impl Wire for Echo {
+    fn opening(&mut self) -> Vec<String> {
+        Vec::new()
+    }
+    fn read(&mut self, line: &str) -> ottospace_agents::Output {
+        ottospace_agents::Output { events: vec![Event::Unknown { kind: line.into() }], replies: vec![] }
+    }
+    fn write(&mut self, input: Input) -> Result<Vec<String>, ottospace_agents::Refused> {
+        match input {
+            Input::Send { text, .. } => Ok(vec![text]),
+            _ => Ok(vec![]),
+        }
+    }
+    fn awaits_answer(&self, _: &str) -> bool {
+        false
+    }
+}
+
+/// The bug of 0.1.0: started from a terminal, ottospace has a controlling terminal, and an
+/// interactive login shell (`zsh -lic`, as the shell runs the CLI) in a process group of its
+/// own was stopped over it before it ran the CLI, which never read its prompt. Here a helper
+/// (this test binary again) runs with a pseudo-terminal as its controlling terminal and spawns
+/// `zsh -lic 'exec "$@"' x /bin/cat` by `Driver::spawn`: a line sent must come back.
+#[test]
+fn an_interactive_login_shell_runs_the_cli_when_ottospace_has_a_terminal() {
+    use std::os::unix::process::CommandExt;
+    if !Path::new("/bin/zsh").exists() {
+        return;
+    }
+    let (mut master, mut slave) = (0, 0);
+    // SAFETY: `openpty` writes two descriptors into the integers given; the rest are null.
+    let opened = unsafe {
+        libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut())
+    };
+    assert_eq!(opened, 0, "{}", std::io::Error::last_os_error());
+    let dir = record_dir("pty");
+    let mut helper = Command::new(std::env::current_exe().unwrap());
+    helper.args(["--exact", "pty_helper", "--ignored", "--nocapture"]).env("OTTOSPACE_PTY_HELPER", &*dir);
+    helper.stdin(std::process::Stdio::null());
+    // SAFETY: `setsid` and `ioctl` are async-signal-safe; `slave` is a descriptor this process holds.
+    unsafe {
+        helper.pre_exec(move || {
+            libc::setsid();
+            if libc::ioctl(slave, libc::TIOCSCTTY as _, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let status = helper.status().unwrap();
+    // SAFETY: closing descriptors this process opened.
+    unsafe {
+        libc::close(master);
+        libc::close(slave);
+    }
+    let said = std::fs::read_to_string(dir.join("said")).unwrap_or_default();
+    assert!(status.success() && said == "echoed", "status {status}, said {said:?}");
+}
+
+/// The helper of the test above: a process with a controlling terminal. Runs only from it.
+#[test]
+#[ignore = "run by an_interactive_login_shell_runs_the_cli_when_ottospace_has_a_terminal"]
+fn pty_helper() {
+    let Some(dir) = std::env::var_os("OTTOSPACE_PTY_HELPER").map(PathBuf::from) else { return };
+    let tty = std::fs::OpenOptions::new().read(true).open("/dev/tty").is_ok();
+    // No rc files of the user's: an empty `ZDOTDIR`, and a home of its own.
+    let mut command = Command::new("/bin/zsh");
+    command.args(["-lic", "exec \"$@\"", "x", "/bin/cat"]).env("ZDOTDIR", &dir).env("HOME", &dir);
+    let driver = Driver::spawn(command, Echo).unwrap();
+    driver.send(Input::Send { text: "ping".into(), images: vec![] }).unwrap();
+    let seen = loop {
+        match driver.events().recv_timeout(Duration::from_secs(15)) {
+            Ok(Event::Unknown { kind }) if kind == "ping" => break "echoed",
+            Ok(Event::Exited { .. }) => break "exited",
+            Ok(_) => continue,
+            Err(_) => break "timed out",
+        }
+    };
+    let said = if tty { seen } else { "no controlling terminal in the helper" };
+    std::fs::write(dir.join("said"), said).unwrap();
 }
 
 fn tool_start(event: &Event) -> Option<String> {
