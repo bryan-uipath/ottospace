@@ -450,14 +450,10 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Copies what a model or a tool wrote: to the clipboard, never into the state reply's
-    /// `copied` (a client must not read it there). A test run's clipboard is `copied` itself.
+    /// Copies what a model or a tool wrote, as every copy goes (`copy_text`). The state reply's
+    /// `copied` shows only a test run's stand-in clipboard: a client never reads it there.
     fn copy_untrusted(&mut self, text: String, cx: &mut Context<Self>) {
-        match self.system_clipboard {
-            true => cx.write_to_clipboard(gpui::ClipboardItem::new_string(text)),
-            false => self.copied = Some(text),
-        }
-        cx.notify();
+        self.copy_text(text, None, ottospace_core::clip::Verb::Copied, cx);
     }
 
     /// The wheel over the transcript: scrolled up, it stays; back at the bottom, it follows again.

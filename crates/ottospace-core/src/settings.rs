@@ -125,6 +125,9 @@ pub struct Settings {
     /// Feature flags by name, e.g. `{ "marks": true }`: see `features`. One not named keeps its default.
     #[serde(default)]
     pub features: std::collections::BTreeMap<String, bool>,
+    /// When ⌘V into a terminal asks first: `multiline` (default: text with a line break) or `never`.
+    #[serde(default)]
+    pub paste_confirm: Option<crate::clip::PasteConfirm>,
 }
 
 /// Which meetings alert when they start (`calendar_notify_for`).
@@ -498,6 +501,7 @@ fn restart_keys(started: &Settings, now: &Settings) -> Vec<&'static str> {
         calendar_email,
         // Told to the core again on each good read, as Features… writes them.
         features: _,
+        paste_confirm: _,
     } = now;
     let changed = [
         ("terminal", *terminal != started.terminal),
