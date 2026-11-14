@@ -4941,8 +4941,6 @@ impl Workspace {
                     head.into_iter().chain(tabs).collect::<Vec<_>>()
                 }),
             ))
-            // Short of room, the meeting chip gives way with the tabs, never the buttons.
-            .children(self.render_meeting_chip().map(|chip| chip.mr_1()))
             // New tab and split buttons: a new empty tab, or the picker for that split.
             .child(div().flex_none().ml_auto().mr_2().flex().gap_1().children(SPLITS.iter().enumerate().map(
                 |(i, (name, icon, tip, axis, new_tab))| {
@@ -5042,7 +5040,6 @@ impl Workspace {
                         .on_click(cx.listener(|this, _, window, cx| this.click_capture("back", window, cx))),
                 )
             }))
-            .children(self.meeting_soon())
             // The one thing tasks put here: how many wait for the user.
             .children(Some(self.model.tasks.needs_you()).filter(|n| *n > 0).map(|n| {
                 let label = if n == 1 { "1 task needs you".to_string() } else { format!("{n} tasks need you") };

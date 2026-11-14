@@ -50,7 +50,7 @@ running, and the rest of the design is not built: see the
 | Workbooks (⌘⇧S): save tabs under a name (their splits, each terminal's directory, each app) and open them again from the Workbook section. Several tabs each: add a tab to one, or save all the tabs on the bar as one. Kept in `~/.ottospace/workbooks`. An app comes back as its window, not on the page or document it showed | Works today |
 | Tabs and layout come back after quitting: every tab (with its task and workbook), its splits and sizes, focus, the tab on show, the section and the drawer; terminals start again in their folders with their last lines and an offered command; running apps' windows go back in their panes. See [Restoring the layout](#restoring-the-layout) | Works today |
 | `settings.json`: terminal font, repository directories, tasks folder, apps to offer, window rules | Works today |
-| [Meeting timeline](#meeting-timeline): a calendar feed (`calendar_ics`) as a thin band of the workday above the status bar, a tick for now; the next meeting named beside the tab bar's buttons; a soft pulse as one comes near; a banner, a notification and a sound when one has started and you are in no call | Works today |
+| [Meeting timeline](#meeting-timeline): a calendar feed (`calendar_ics`) as a thin band of the workday above the status bar, a tick for now; a soft pulse as one comes near; a banner, a notification and a sound when one has started and you are in no call | Works today |
 
 ### Roadmap: designed, not built
 
@@ -644,18 +644,15 @@ the way.
   midnight is cut there). Meetings that overlap share two half-height lanes; all-day events are
   one small dot at the left end. Blocks are at least 3 points wide. Hover only, no click: a block
   shows its title, time, length, place and whether it has a Zoom, Meet or Teams link; a mark its
-  time; now the time and the next meeting.
-- **The chip**: beside the new-tab and split buttons, the next meeting today: `Design review ·
-  in 12m`, `· now` while it runs. Hidden when nothing is left today. Its tooltip says when the
-  feed was last read (`calendar: not updated since 09:40` when the last read failed).
-- **The pulse**: from 10 minutes before a meeting its block (its opacity) and the chip glow softly, slowly;
+  time; now the time, the next meeting (`Design review · 15:00`, `· now` while it runs) and when
+  the feed was last read (`calendar not updated since 09:40` when the last read failed).
+- **The pulse**: from 10 minutes before a meeting its block glows (its opacity) softly, slowly;
   from 2 minutes, faster; while it runs, steadily. With Reduce motion (System Settings,
   Accessibility, Display) the colour steps up instead, with no movement. Nothing else in
   ottospace pulses.
-- **The status bar** says `Design review in 4m` in amber from 5 minutes before.
 - **At the start**, if you are in no call, or still in an earlier one (on from 10 minutes before,
-  or the meeting before, running over): a banner under the title strip (the title, how long
-  ago it started, **Join** if the meeting has an `https:` link, **Dismiss**), which stays until
+  or the meeting before, running over): a banner under the title strip (`Meeting started`, the
+  title, how long ago it started, **Join** if the meeting has an `https:` link, **Dismiss**), which stays until
   you dismiss it, join, a call starts or the meeting ends; and a system notification with the
   alert sound, so you see it when ottospace is behind other windows. Once more 2 minutes later
   if you have not joined; never a third time. Only in a meeting's first 10 minutes: one you
@@ -681,7 +678,7 @@ the way.
   occurrences are followed; see [meeting-timeline.md](ai/meeting-timeline.md) for what is not.
 - **Declined meetings**: set `calendar_email` to your address as the feed lists you among a
   meeting's attendees, and a meeting (or one occurrence) you declined is left out everywhere: the
-  band, the chip, the section and the alerts. A feed published with limited detail (free/busy
+  band, the section and the alerts. A feed published with limited detail (free/busy
   only, or without attendees) does not say who declined; then nothing is left out. The address
   stays in `settings.json`: it is not sent with the feed's request, shown, logged or in the state.
 - **The Calendar section** (its rail cell, second, is there only while `calendar_ics` is set):

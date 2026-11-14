@@ -185,33 +185,20 @@ fn overlapping_events_share_two_half_lanes() {
 #[test]
 fn the_now_card_names_the_time_and_the_next_meeting() {
     let c = calendar(vec![event(1, NINE, 30), event(2, NINE + 2 * H, 60)]);
-    assert_eq!(c.now_card(NINE - 55 * M, 0), "08:05\nNext: Meeting 1 at 09:00 (in 55m)");
-    assert_eq!(c.now_card(NINE + 10 * M, 0), "09:10\nNow: Meeting 1");
-    assert_eq!(c.now_card(NINE + 4 * H, 0), "13:00\nNo more meetings today");
+    assert_eq!(c.now_card(NINE - 55 * M, 0), "08:05\nMeeting 1 · 09:00\ncalendar updated 08:00");
+    assert_eq!(c.now_card(NINE + 10 * M, 0), "09:10\nMeeting 1 · now\ncalendar updated 08:00");
+    assert_eq!(c.now_card(NINE + 4 * H, 0), "13:00\nNo more meetings today\ncalendar updated 08:00");
+    // One coming near is named over one that runs; tomorrow's do not count.
+    let back_to_back = calendar(vec![event(1, NINE, 30), event(2, NINE + 30 * M, 30)]);
+    assert!(back_to_back.now_card(NINE + 25 * M, 0).contains("\nMeeting 2 · 09:30\n"));
+    let tomorrow = calendar(vec![event(1, NINE + 20 * H, 30)]);
+    assert!(tomorrow.now_card(NINE, 0).contains("\nNo more meetings today\n"));
+    // A failed read says so, quietly, on the same card.
+    let mut failed = c.clone();
+    failed.read(None, failed.days, NINE);
+    assert!(failed.now_card(NINE, 0).ends_with("\ncalendar not updated since 08:00"));
     let (band, bars) = c.band(Workday::default(), NINE, UTC);
     assert_eq!((band.from, bars.len()), (NINE, 2));
-}
-
-#[test]
-fn the_chip_and_the_status_line() {
-    let c = calendar(vec![event(1, NINE, 30), event(2, NINE + 2 * H, 60)]);
-    assert_eq!(c.chip(NINE - 12 * M), Some(("Meeting 1 · in 12m".into(), Stage::Far)));
-    assert_eq!(c.chip(NINE - 8 * M), Some(("Meeting 1 · in 8m".into(), Stage::Approaching)));
-    assert_eq!(c.chip(NINE - 3 * H).map(|c| c.0), Some("Meeting 1 · in 3h".into()));
-    assert_eq!(c.chip(NINE + 5 * M), Some(("Meeting 1 · now".into(), Stage::Running)));
-    // One coming near is named over one that runs.
-    let back_to_back = calendar(vec![event(1, NINE, 30), event(2, NINE + 30 * M, 30)]);
-    assert_eq!(back_to_back.chip(NINE + 25 * M).map(|c| c.0), Some("Meeting 2 · in 5m".into()));
-    assert_eq!(c.chip(NINE + 40 * M).map(|c| c.0), Some("Meeting 2 · in 1h 20m".into()));
-    // Nothing left today: no chip. Tomorrow's events do not count.
-    let tomorrow = calendar(vec![event(1, NINE + 20 * H, 30)]);
-    assert_eq!(tomorrow.chip(NINE), None);
-    assert_eq!(c.chip(NINE + 4 * H), None);
-    // The status bar from five minutes before.
-    assert_eq!(c.soon(NINE - 5 * M - 1), None);
-    assert_eq!(c.soon(NINE - 5 * M), Some("Meeting 1 in 5m".into()));
-    assert_eq!(c.soon(NINE - 3 * M - 30_000), Some("Meeting 1 in 4m".into()));
-    assert_eq!(c.soon(NINE), None);
 }
 
 #[test]
@@ -580,6 +567,10 @@ fn clock_times_and_the_banner_line() {
     c.in_call = Some(false);
     c.tick(NINE + 30_000);
     assert_eq!(c.banner_line(NINE + 3 * M + 1), Some((1, "Meeting 1 · started 3m ago".into(), true)));
+    assert_eq!(started_line("Meeting 1", NINE, NINE + 59_999), "Meeting 1 · just started");
+    let notice = |title: &str| Notice { title: title.into(), started: NINE };
+    assert_eq!(notice("Meeting 1").body(NINE + 3 * M + 1), "Started 3m ago: Meeting 1");
+    assert_eq!(notice("-e do shell script").body(NINE), "Started just now: -e do shell script");
 }
 
 #[test]

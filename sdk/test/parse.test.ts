@@ -118,7 +118,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     badges: { "1": "FL" },
     calendar: {
       on: true, events_today: 3, all_day_today: 1, events_tomorrow: 2, next_start: 1794560400000, stage: "approaching",
-      updated: 1794556800000, stale: false, in_call: false, soon: true, bars: 3, chip: true,
+      updated: 1794556800000, stale: false, in_call: false, bars: 3,
       band: {
         rect: [6, 868, 1388, 8], span: [1794556800000, 1794585600000], workday: [1794556800000, 1794585600000],
         marks: [[6, 869.5, 1, 5], [1394, 869.5, 1, 5]], now: [659.5, 868, 1.5, 8],

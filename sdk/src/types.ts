@@ -1115,7 +1115,6 @@ export interface Snapshot {
     updated: number | null;
     stale: boolean;
     in_call: boolean | null;
-    soon: boolean;
     bars: number;
     /**
      * The band above the status bar, in window points (null without a feed): its rect, the times
@@ -1131,7 +1130,6 @@ export interface Snapshot {
       blocks: { start: number; end: number; rect: Rect | null }[];
       status_bar: Rect | null;
     } | null;
-    chip: boolean;
     banner: { join: Rect | null; dismiss: Rect | null } | null;
     alerts: number;
     joins: number | null;

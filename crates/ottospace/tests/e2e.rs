@@ -6125,11 +6125,11 @@ fn the_inspector_shows_a_trees_counts_and_roles_never_its_text() {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_tab_strip_ends_where_the_panes_end_and_its_buttons_stay_in_view() {
-    // A meeting soon, its title long: its chip shares the strip with the buttons.
+    // A meeting soon, its title long: nothing of it is drawn in the strip, the band says it.
     let title = "Quarterly planning with every team that has an opinion about the roadmap";
     let home = calendar_folder("strip", &feed(&[("a", title, 240, 3_600, "")]), None);
     let otto = Otto::launch_with("strip", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
-    assert_eq!(calendar_read(&otto)["chip"], true);
+    assert_eq!(calendar_read(&otto)["stage"], "approaching");
     otto.call(json!({"cmd": "split", "kind": "empty"}));
     for _ in 0..24 {
         otto.call(json!({"cmd": "new_tab"}));
@@ -6164,7 +6164,7 @@ fn the_tab_strip_ends_where_the_panes_end_and_its_buttons_stay_in_view() {
     let tree = json!({"root": root, "count": 1, "truncated": truncated});
     assert!(otto.call(json!({"cmd": "inspector_fixture", "app": "Fixture", "tree": tree}))["inspector"].is_object());
     fits("the inspector");
-    // A section open too: the strip is narrower than the chip and the buttons.
+    // A section open too: the strip is narrower than the tabs and the buttons.
     otto.call(json!({"cmd": "section", "section": "tasks"}));
     fits("the inspector and a section");
     let _ = std::fs::remove_dir_all(&home);
@@ -6464,11 +6464,11 @@ fn the_meeting_timeline_alerts_and_only_the_user_joins_or_dismisses() {
     let otto = Otto::launch_with("calendar", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
     let calendar = |o: &Otto| o.call(json!({"cmd": "state"}))["calendar"].clone();
     let read = calendar_read(&otto);
-    // Counts, times and stages: the next one comes near, so the status bar names it.
+    // Counts, times and stages: the next one comes near, and the band alone says so.
     assert_eq!(read["on"], true);
     let counted = read["events_today"].as_u64().unwrap() + read["events_tomorrow"].as_u64().unwrap();
     assert_eq!(counted, 4, "{read}");
-    assert_eq!((&read["stage"], &read["soon"], &read["chip"]), (&json!("approaching"), &json!(true), &json!(true)));
+    assert_eq!((&read["stage"], &read["soon"], &read["chip"]), (&json!("approaching"), &Value::Null, &Value::Null));
     assert!(read["bars"].as_u64() >= Some(3), "{read}");
     // No title or link reaches a client.
     let state = otto.call(json!({"cmd": "state"})).to_string();
@@ -6622,7 +6622,7 @@ fn the_calendar_request_gives_titles_and_busy_time_but_no_link_or_address() {
 fn no_feed_no_timeline() {
     let otto = Otto::launch("calendar-off");
     let calendar = otto.call(json!({"cmd": "state"}))["calendar"].clone();
-    assert_eq!((&calendar["on"], &calendar["bars"], &calendar["chip"]), (&json!(false), &json!(0), &json!(false)));
+    assert_eq!((&calendar["on"], &calendar["bars"]), (&json!(false), &json!(0)));
     assert_eq!(calendar["band"], Value::Null, "no band");
     let reply = otto.call(json!({"cmd": "calendar", "day": "tomorrow"}));
     assert_eq!(reply, json!({"ok": true, "configured": false}), "nothing but that");
