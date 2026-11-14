@@ -69,8 +69,9 @@ could press Delete or Send in another app. The user: "multi letter sneak labels 
   304 labels, past the cap of 150. Then the two-letter labels under a letter own labels share (a
   × at `ra` leaves `rd`, `rf`, ...), kept for last so a client can still type `r` toward the ×
   while apps fit elsewhere. Then three letters, the shortest in reading order first. With an app
-  pane in focus own labels leave at least one label free: at worst one letter, `p`, so 19
-  two-letter labels and three letters for the rest (150: 11 of two, 139 of three). The cap and
+  pane in focus own labels leave at least one label free. One letter, `p` (18 own): 19
+  two-letter labels, three letters for the rest (150: 11 of two, 139 of three). At worst one
+  two-letter label, `pp` (36 own, no ×): three and four letters (150: 11 of three, 139 of four). The cap and
   its order are unchanged: the 150 nearest the pane's top left get labels.
 - **Stable.** Labels are handed out on the first read and kept by element after (as above), so
   the split never moves while the mode is on. The epoch rule holds: a typed letter counts as
