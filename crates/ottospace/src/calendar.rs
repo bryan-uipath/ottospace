@@ -92,14 +92,16 @@ impl Timeline {
         // day turns: nothing that grows with the feed runs on the timer.
         std::thread::spawn(move || {
             let (mut feed, mut fetched, mut days) = (ics::Feed::default(), None::<Instant>, [0u64; 3]);
+            // When the feed was last read whole, and whether the last fetch failed: a new day's
+            // re-evaluation is no read, so it changes neither.
+            let (mut read_at, mut failed) = (None::<u64>, false);
             loop {
                 let now = now_ms();
                 let due = fetched.is_none_or(|at| at.elapsed() >= every);
                 let mut problem = None;
-                let mut failed = false;
                 if due {
                     match fetch(&source) {
-                        Ok(text) => feed = ics::parse_for(&text, me.as_deref()),
+                        Ok(text) => (feed, read_at, failed) = (ics::parse_for(&text, me.as_deref()), Some(now), false),
                         Err(why) => (failed, problem) = (true, why),
                     }
                     fetched = Some(Instant::now());
@@ -107,7 +109,8 @@ impl Timeline {
                 if due || now >= days[1] {
                     let (events, today) = evaluate(&feed, now);
                     days = today;
-                    let read = Read { events: (!failed).then_some(events), days, at: now, problem };
+                    let events = read_at.filter(|_| !failed).map(|_| events);
+                    let read = Read { events, days, at: read_at.unwrap_or(now), problem };
                     if tx.send(read).is_err() {
                         return;
                     }
@@ -184,7 +187,7 @@ fn curl(link: &str) -> Result<String, Option<&'static str>> {
 fn evaluate(feed: &ics::Feed, now: u64) -> (Vec<Event>, [u64; 3]) {
     let now = (now / 1_000) as i64;
     let local = local_zone(now);
-    let (from, to) = (now - 3 * 86_400, now + 11 * 86_400);
+    let (from, to) = zone_span(now);
     let days = ics::days(now, &local);
     let named = ics::named_zones(feed)
         .into_iter()
@@ -195,9 +198,15 @@ fn evaluate(feed: &ics::Feed, now: u64) -> (Vec<Event>, [u64; 3]) {
     (calendar::events(&occurrences), days.map(|day| (day.max(0) as u64) * 1_000))
 }
 
-/// The user's zone's offsets from 3 days before `now` (seconds) to 11 after: the days held and more.
+/// Zone tables cover 3 days before `now` (seconds) to 11 after: the days held and more.
+fn zone_span(now: i64) -> (i64, i64) {
+    (now - 3 * 86_400, now + 11 * 86_400)
+}
+
+/// The user's zone's offsets over `zone_span`.
 fn local_zone(now: i64) -> Table {
-    Table(meeting::local_table(now - 3 * 86_400, now + 11 * 86_400))
+    let (from, to) = zone_span(now);
+    Table(meeting::local_table(from, to))
 }
 
 impl Workspace {

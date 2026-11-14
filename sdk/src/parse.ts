@@ -1524,6 +1524,7 @@ export function calendarReply(value: unknown): CalendarReply {
     to: str(o.to, "to"),
     meetings: list(meeting)(o.meetings, "meetings"),
     more: num(o.more, "more"),
+    known_until: orNull(str)(o.known_until, "known_until"),
     workday: str(o.workday, "workday"),
     busy: list(timeSpan)(o.busy, "busy"),
     free: list(timeSpan)(o.free, "free"),

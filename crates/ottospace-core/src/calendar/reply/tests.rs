@@ -102,7 +102,8 @@ fn free_time_is_of_each_days_workday() {
     let change = midnight(2026, 3, 8) + 10 * 3_600;
     let la = Table(vec![(i64::MIN, -8 * 3_600), (change, -7 * 3_600)]);
     let span = span(None, None, change + 3_600, &la).expect("today");
-    let a = answer(&Calendar { on: true, ..Calendar::default() }, span, Workday::default(), &la);
+    let read = Calendar { on: true, updated: Some(0), ..Calendar::default() };
+    let a = answer(&read, span, Workday::default(), &la);
     assert_eq!(
         (a.free[0].start.as_str(), a.free[0].end.as_str()),
         ("2026-03-08T09:00:00-07:00", "2026-03-08T17:00:00-07:00")
@@ -267,4 +268,23 @@ fn a_reply_serializes_as_the_sdk_fixture_says() {
         serde_json::from_str(include_str!("../../../../../sdk/test/calendar.json")).unwrap();
     let got = serde_json::to_value(answer(&c, (from, to), Workday::default(), &la)).unwrap();
     assert_eq!(got, fixture, "{}", serde_json::to_string_pretty(&got).unwrap());
+}
+
+#[test]
+fn free_time_only_where_the_calendar_is_known() {
+    let (from, to) = (midnight(2026, 11, 16), midnight(2026, 11, 18));
+    // Not read yet: no free time, and nothing known from the start.
+    let unread = Calendar { on: true, ..Calendar::default() };
+    let a = answer(&unread, (from, to), Workday::default(), &utc());
+    assert_eq!((a.free.len(), a.known_until.as_deref()), (0, Some("2026-11-16T00:00:00+00:00")));
+    // Events cut at the cap: nothing known from the last one's start, Monday 12:00.
+    let day = monday();
+    let c = calendar((0..MAX_EVENTS as u64).map(|n| event(n, day + 10 * H + n * M / 4, 0)).collect());
+    let last = day + 10 * H + (MAX_EVENTS as u64 - 1) * M / 4;
+    let a = answer(&c, (from, to), Workday::default(), &utc());
+    assert_eq!(a.known_until, Some(rfc3339(last, &utc())));
+    let free: Vec<(&str, &str)> = a.free.iter().map(|s| (&s.start[..], &s.end[..])).collect();
+    assert_eq!(free, [("2026-11-16T09:00:00+00:00", &rfc3339(last, &utc())[..])], "and none on Tuesday");
+    // Fewer: all known.
+    assert_eq!(answer(&calendar(vec![]), (from, to), Workday::default(), &utc()).known_until, None);
 }

@@ -218,7 +218,12 @@ description is long untrusted text.
   back is one span); all-day events and those with no length are no busy time, tentative ones
   are. `free` is every gap between them inside each day's `calendar_workday` (09:00 to 17:00 by
   default), at that day's offsets, so a clock change moves it with the clock. The reply names
-  the `workday`.
+  the `workday`. `known_until` (null normally) is where what the app holds ends: the span's
+  start before the first read, or the last event's start when the 500 kept were cut; free
+  time stops there, so an unread or cut feed is never called free.
+- **`updated`** is when the feed was last fetched whole. The thread's re-evaluation at a new day
+  is no read: it sends the fetch's time, and no events while the last fetch failed (the events
+  held, of 8 days, still cover the new day), so `stale` and `updated` stay true to the fetch.
 - **Text**: titles and locations go through `capture::plain` again, and any word that looks
   like a link (`://`, `www.`, `host.tld/…`) is taken out: a location is often the Zoom link with
   its passcode. A passcode written as plain words ("Passcode 123") is not recognised.

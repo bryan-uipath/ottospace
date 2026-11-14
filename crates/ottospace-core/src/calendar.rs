@@ -498,6 +498,11 @@ pub struct Notice {
     pub started: u64,
 }
 
+/// The event overlaps `start..end` (ms), or starts in it with no length.
+fn overlaps(e: &Event, start: u64, end: u64) -> bool {
+    e.start < end && (e.end > start || e.start >= start)
+}
+
 /// The timeline's state in the model.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Calendar {
@@ -559,7 +564,7 @@ impl Calendar {
     /// Today's events, by start: those that overlap today.
     pub fn today(&self) -> impl Iterator<Item = &Event> {
         let [start, end, _] = self.days;
-        self.events.iter().filter(move |e| e.start < end && (e.end > start || e.start >= start))
+        self.events.iter().filter(move |e| overlaps(e, start, end))
     }
 
     pub fn tomorrow(&self) -> impl Iterator<Item = &Event> {

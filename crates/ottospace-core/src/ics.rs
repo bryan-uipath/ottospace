@@ -462,8 +462,13 @@ fn day_end(start: &When, duration: i64, local: &Table) -> i64 {
 
 /// Local midnight of the day `now` is in, of the next and of the one after: UTC seconds.
 pub fn days(now: i64, local: &Table) -> [i64; 3] {
-    let day = now.saturating_add(local.at(now)).div_euclid(DAY);
+    let day = local_day(now, local);
     [0, 1, 2].map(|n| local.to_utc((day + n) * DAY))
+}
+
+/// The local day `now` (UTC seconds) is in, as days since 1970.
+pub fn local_day(now: i64, local: &Table) -> i64 {
+    now.saturating_add(local.at(now)).div_euclid(DAY)
 }
 
 impl Zone {

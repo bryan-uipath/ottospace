@@ -7,7 +7,7 @@
 
 use serde::Serialize;
 
-use super::{Calendar, Event, MAX_TITLE, Workday, has_meeting_link};
+use super::{Calendar, Event, MAX_EVENTS, MAX_TITLE, Workday, has_meeting_link, overlaps};
 use crate::ics::{self, Table};
 
 const DAY: i64 = 86_400;
@@ -31,6 +31,9 @@ pub struct Answer {
     pub to: String,
     pub meetings: Vec<Meeting>,
     pub more: usize,
+    /// Null, or a time after which the app holds nothing (the feed not read yet, or more events
+    /// than it keeps): `free` stops there, as what follows is not known.
+    pub known_until: Option<String>,
     /// `calendar_workday`, `09:00-17:00`: what `free` is of.
     pub workday: String,
     /// Timed meetings merged, cut to the span; `free` is the rest of each day's workday.
@@ -74,18 +77,14 @@ pub fn reply(
 
 /// Local midnight of today and of `HELD_DAYS` later (UTC seconds): the span the feed's reads hold.
 pub fn held(now: i64, local: &Table) -> (i64, i64) {
-    let today = today(now, local);
+    let today = ics::local_day(now, local);
     (local.to_utc(today * DAY), local.to_utc((today + HELD_DAYS) * DAY))
-}
-
-fn today(now: i64, local: &Table) -> i64 {
-    now.saturating_add(local.at(now)).div_euclid(DAY)
 }
 
 /// The span asked for, in UTC seconds: local midnight of `day` (`today`, the default, `tomorrow`
 /// or `YYYY-MM-DD`) to that of `days` (1 to 7, default 1) later. Only within the days held.
 pub fn span(day: Option<&str>, days: Option<u32>, now: i64, local: &Table) -> Result<(i64, i64), &'static str> {
-    let today = today(now, local);
+    let today = ics::local_day(now, local);
     let first = match day.unwrap_or("today") {
         "today" => today,
         "tomorrow" => today + 1,
@@ -117,9 +116,15 @@ fn date_day(text: &str) -> Option<i64> {
 /// day's workday, and how fresh it is.
 pub fn answer(calendar: &Calendar, (from, to): (i64, i64), workday: Workday, local: &Table) -> Answer {
     let (from_ms, to_ms) = (ms(from), ms(to));
-    // As `Calendar::today`: what overlaps the span, and what starts in it with no length.
-    let within: Vec<&Event> =
-        calendar.events.iter().filter(|e| e.start < to_ms && (e.end > from_ms || e.start >= from_ms)).collect();
+    let within: Vec<&Event> = calendar.events.iter().filter(|e| overlaps(e, from_ms, to_ms)).collect();
+    // Nothing read yet: nothing known. Events cut at `MAX_EVENTS` (the earliest kept): nothing
+    // known from the last one's start.
+    let full = calendar.events.len() >= MAX_EVENTS;
+    let known = match calendar.updated {
+        None => Some(from_ms),
+        Some(_) => calendar.events.last().filter(|_| full).map(|e| e.start),
+    }
+    .filter(|known| *known < to_ms);
     let at = |ms: u64| rfc3339(ms, local);
     let meetings = within
         .iter()
@@ -137,13 +142,15 @@ pub fn answer(calendar: &Calendar, (from, to): (i64, i64), workday: Workday, loc
     let busy = busy(&within, from_ms, to_ms);
     let spans = |list: &[(u64, u64)]| list.iter().map(|&(s, e)| Span { start: at(s), end: at(e) }).collect();
     // Each day's workday, at that day's offsets: a clock change moves it with the clock.
-    let first = today(from, local);
+    let first = ics::local_day(from, local);
     let workdays: Vec<(u64, u64)> = (first..first + MAX_DAYS)
         .take_while(|day| local.to_utc(day * DAY) < to)
         .map(|day| {
             let at = |minutes: u32| ms(local.to_utc(day * DAY + i64::from(minutes) * 60));
-            (at(workday.start), at(workday.end))
+            let end = known.map_or(at(workday.end), |known| at(workday.end).min(known));
+            (at(workday.start), end)
         })
+        .filter(|(start, end)| start < end)
         .collect();
     let clock = |m: u32| format!("{:02}:{:02}", m / 60, m % 60);
     Answer {
@@ -155,6 +162,7 @@ pub fn answer(calendar: &Calendar, (from, to): (i64, i64), workday: Workday, loc
         to: at(to_ms),
         meetings,
         more: within.len().saturating_sub(MAX_MEETINGS),
+        known_until: known.map(at),
         workday: format!("{}-{}", clock(workday.start), clock(workday.end)),
         free: spans(&free(&busy, &workdays)),
         busy: spans(&busy),

@@ -1215,6 +1215,11 @@ export interface CalendarOn {
   /** At most 200, by start; `more` counts the rest. */
   meetings: Meeting[];
   more: number;
+  /**
+   * Null, or a time after which the app holds nothing (the feed not read yet, or more events than
+   * it keeps): `free` stops there, as what follows is not known.
+   */
+  known_until: string | null;
   /** `calendar_workday`, `09:00-17:00`: what `free` is of. */
   workday: string;
   /** Timed meetings merged; `free` is the rest of each day's workday. */
