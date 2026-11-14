@@ -2138,7 +2138,7 @@ impl Workspace {
                 claude: models.claude,
                 codex: models.codex,
                 default: settings.default_agent.clone(),
-                shows: settings.conversation_view.unwrap_or_default(),
+                shows: settings.conversation_view.unwrap_or(ottospace_core::settings::DEFAULT_VIEW),
             };
             self.dispatch(agents, Origin::System, window, cx);
         }

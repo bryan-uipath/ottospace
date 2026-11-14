@@ -493,6 +493,8 @@ mod tests {
 
     fn two_live() -> Model {
         let mut m = Model::default();
+        assert_eq!(m.conversation_view, View::Terminal, "terminal until a real-CLI check passes");
+        m.update(Action::SetAgents { claude: vec![], codex: vec![], default: None, shows: View::Native });
         for title in ["fix login", "write docs"] {
             add(&mut m, title);
         }

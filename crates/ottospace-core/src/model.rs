@@ -2137,7 +2137,7 @@ impl Default for Model {
             default_agent: None,
             chats: Vec::new(),
             views: Vec::new(),
-            conversation_view: crate::transcript::View::Native,
+            conversation_view: crate::settings::DEFAULT_VIEW,
             switching: Vec::new(),
             by_user: false,
             next_id: 0,
@@ -9725,11 +9725,9 @@ mod tests {
         assert_eq!(started(&mut m, Action::TaskTalk { id: 2 }), [read]);
         let none = Action::SessionRead { runner: "claude".into(), id: UUID.into(), found: None };
         assert_eq!(system(&mut m, none), [asked(2, resume, None)]);
-        // An agent the shell could not start is not running: the keyboard stays in its native
-        // composer, whose ↵ goes on with it (never in nothing).
+        // An agent the shell could not start is not running: the keyboard is not left in nothing.
         system(&mut m, Action::AgentExited { task: Subject::Task(2) });
-        assert_eq!((m.agent_runs(&Subject::Task(2)), m.mode(), m.talk_note().is_some()), (false, Mode::Talk, false));
-        assert_eq!(m.field().map(|(of, _)| of), Some("talk"));
+        assert_eq!((m.agent_runs(&Subject::Task(2)), m.mode(), m.talk_note().is_some()), (false, Mode::Normal, false));
 
         // A saved agent names no runner: the drawer says so and starts nothing.
         assert_eq!(started(&mut m, Action::TaskTalk { id: 3 }), []);

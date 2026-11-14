@@ -6332,7 +6332,7 @@ fn a_native_conversation_streams_asks_and_switches_to_the_terminal_and_back() {
     // The agents crate's stand-in, as `claude`: it records argv and stdin, and replays the fixtures.
     let fake = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ottospace-agents/tests/fakes/claude");
     std::fs::copy(&fake, bin.join("claude")).unwrap();
-    let home = user_folder("native", &json!({ "repos": [repos] }).to_string());
+    let home = user_folder("native", &json!({ "repos": [repos], "conversation_view": "native" }).to_string());
     let env = [
         ("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()),
         ("OTTOSPACE_HOME", home.to_str().unwrap()),
