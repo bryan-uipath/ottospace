@@ -2,9 +2,10 @@
 
 use serde::Deserialize;
 
-/// `conversation_view` when the settings name none. Terminal until the native view has passed
-/// a real-CLI check (`docs/ai/agent-runners.md`, "Real-CLI check").
-pub const DEFAULT_VIEW: crate::transcript::View = crate::transcript::View::Terminal;
+/// `conversation_view` when the settings name none. Native: it passed the real-CLI check
+/// (`docs/ai/agent-runners.md`, "Real-CLI check"). A runner without a verified structured mode
+/// still shows in a terminal (`Model::talk_view`).
+pub const DEFAULT_VIEW: crate::transcript::View = crate::transcript::View::Native;
 
 /// `~/.ottospace/settings.json`. Every key is optional. An unknown key is an error, so a typing
 /// mistake does not pass for a setting that silently does nothing.
@@ -17,7 +18,7 @@ pub const DEFAULT_VIEW: crate::transcript::View = crate::transcript::View::Termi
 ///   "session_dirs": { "claude": ["~/.claude"], "codex": "~/.codex" },
 ///   "session_quiet_minutes": 3,
 ///   "agent_models": { "claude": ["claude-opus-5-5"], "codex": ["gpt-6-astra"] },
-///   "conversation_view": "terminal",
+///   "conversation_view": "native",
 ///   "capture_key": "ctrl-alt-cmd-space",
 ///   "capture": { "keep_images": true, "ax": true },
 ///   "workbook_scrollback_lines": 500,
@@ -72,8 +73,8 @@ pub struct Settings {
     /// The agent a task with no `@agent` starts with: a name `@` takes. Default: `claude`.
     #[serde(default)]
     pub default_agent: Option<String>,
-    /// How the drawer shows a Claude Code conversation: `terminal` (default: the CLI's own TUI)
-    /// or `native` (drawn by ottospace). Codex always shows in a terminal for now.
+    /// How the drawer shows a Claude Code conversation: `native` (default: drawn by ottospace) or
+    /// `terminal` (the CLI's own TUI). Codex always shows in a terminal for now.
     #[serde(default)]
     pub conversation_view: Option<crate::transcript::View>,
     /// The key that captures the pane in use, from any app: modifiers and a key with `-`

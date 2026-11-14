@@ -10,7 +10,7 @@ ottospace            # opens on the Repos list
 
 - First run: grant your terminal Accessibility (ottospace will not start without it) and Screen Recording (for app panes), in System Settings ▸ Privacy & Security.
 - Repos lists each repository's name over its checkouts: the branch, then `Default` (its own directory) or a worktree's directory. Click one: a terminal opens there, in the empty pane or else in a split to the right (⇧-click: below).
-- The status bar (bottom left) shows who has the keyboard: `NORMAL`, `APP`, `PICK`, `COMMAND`, `INSPECT`, `LIST`, `TASK`, `VISUAL`, `SNEAK`, `QUIT?`.
+- The status bar (bottom left) shows who has the keyboard when it is not the focused pane's: `APP`, `PICK`, `COMMAND`, `INSPECT`, `LIST`, `TASK`, `VISUAL`, `SNEAK`, `QUIT?`. Nothing there: normal. Its right end shows `● 2` when two tasks need you; the version is under About ottospace (⌘P, or the app menu) and the hover of the bar's empty middle.
 - Stuck in an app? Click ottospace's rail or top bar. Or press the return key: F18, which most keyboards lack, so map Caps Lock to it (see [the return key](reference.md#the-return-key)) or start with `OTTOSPACE_RETURN_KEY=f13` (f13 to f20). The status bar names the key in use.
 
 ## Panes and tabs
@@ -26,6 +26,7 @@ ottospace            # opens on the Repos list
 | Give an app the room its window needs | ⌘⌃0, or `fit` in the pane header: shown when the app refused the pane's size and a split can move |
 | Swap the pane with its neighbour | ⌘⇧⌥ arrows or ⌘⇧⌥ H J K L |
 | Move the pane to another tab | ⌘⇧⌥1 … ⌘⇧⌥9. US keyboard layout only (US, ABC): on others the keys do nothing |
+| Read a pane's header | A terminal's directory, and its program while one runs (`app-api · cargo test`); an app's icon and window title |
 | Rearrange with the mouse | Drag a pane by its header: onto another pane's edge to split there, its centre to swap, a tab to move there. Esc cancels. Dragging an app you are in parks it: click it to go back in |
 | Close the pane | ⌘W |
 | New tab | ⌘T |
@@ -117,7 +118,7 @@ what can be opened, and its other panes are empty and say why. Marks are kept in
 | Start a task | ⌘N, type a line, ↵: its agent starts in the drawer on the right, beside your workspace. The + on the Tasks bar or the right rail opens the same box; its picks set where and who |
 | Add a task for later | ⌘N, type a line, ⇧↵ |
 | Talk to a task's agent | Click the task (or ↵ on it): its conversation shows in the drawer. Not running: Start agent, or Resume session once it ended (a click never starts one). ⌘L moves the keyboard in and out; ⌘⇧L closes the drawer to the right rail; Stop ends the agent; drag its left edge to resize |
-| Chat with Claude Code in the drawer | ↵ send, ⇧↵ new line, Esc leaves; Esc Esc stops a turn. Once the agent ended, ↵ goes on with its session and sends; an ended agent says why, and Show details opens what its program printed. Hover a message: Copy, Copy as Markdown; a code block has its own Copy. An edit shows its diff under its call. A link opens on your click only. A permission card: `a` allow (this one request), `d` deny, `m` deny with a message, `s` show all (needed before `a` on a long one); ↵ does nothing there. `Chat \| Terminal` in the header switches between the CLI's TUI and the native view (`conversation_view` sets the default: `terminal` for now) |
+| Chat with Claude Code in the drawer | ↵ send, ⇧↵ new line, Esc leaves; Esc Esc stops a turn. Once the agent ended, ↵ goes on with its session and sends; an ended agent says why, and Show details opens what its program printed. Hover a message: Copy, Copy as Markdown; a code block has its own Copy. An edit shows its diff under its call. A link opens on your click only. A permission card: `a` allow (this one request), `d` deny, `m` deny with a message, `s` show all (needed before `a` on a long one); ↵ does nothing there. `Chat \| Terminal` in the header switches to the CLI's TUI and back (`conversation_view` sets the default) |
 | Switch between running agents | Click a badge on the right rail, or ⌘⌃1 … ⌘⌃9. Hover a badge for what it is doing |
 | See a task's tabs | Click its row, or ⌘⇧N for the next that needs you: its space |
 | Point at something for a task ("this message", "this error") | ⌃⌥⌘Space, from any app: the pane in use freezes as a picture and a draft opens on the right. Drag to circle, ⇧-drag a box, ⌥-drag a line, click to type a note. ↵, type what you want, ↵ starts it (⇧↵ for later). Esc leaves the picture; Esc in the title cancels the draft. The task keeps the pictures and the text under what you circled as its brief: [Capture](reference.md#capture) |
@@ -216,7 +217,7 @@ setting takes its default.
 
 The Calendar section (second on the rail, only while `calendar_ics` is set) lists today's meetings and a folded "Tomorrow"; ↵ or `Join` opens a meeting's link. Its rail cell has an amber dot near a meeting, a filled badge while the banner is up.
 
-`calendar_ics`: your calendar's feed (an `https://` link or a file) for the [meeting timeline](reference.md#meeting-timeline): a band of the workday (`calendar_workday`, `"09:00-17:00"`) above the status bar, hover a block for its details, the next meeting beside the tab bar's buttons, a pulse from 10 minutes before, and at the start, if you are in no call (or still in an earlier one), a banner with Join and Dismiss and a notification. `calendar_notify: false` turns alerts off; `calendar_notify_for: "links"` alerts only meetings with a meeting link; `calendar_email` (your address in the feed) leaves out meetings you declined.
+`calendar_ics`: your calendar's feed (an `https://` link or a file) for the [meeting timeline](reference.md#meeting-timeline): a band of the workday (`calendar_workday`, `"09:00-17:00"`) above the status bar, hover a block for its details (now's tick: the next meeting and when the feed was read), a pulse from 10 minutes before, and at the start, if you are in no call (or still in an earlier one), a banner with Join and Dismiss and a notification. `calendar_notify: false` turns alerts off; `calendar_notify_for: "links"` alerts only meetings with a meeting link; `calendar_email` (your address in the feed) leaves out meetings you declined.
 
 `windows` rules name windows ottospace leaves alone, by `app`, `title` and `subrole`: [reference](reference.md#settings).
 

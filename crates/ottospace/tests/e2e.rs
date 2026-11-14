@@ -684,6 +684,27 @@ fn terminal_runs_a_typed_command() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn a_pane_header_names_the_directory_and_the_program_not_the_kind() {
+    let root = support::temp(&format!("ottospace-e2e-header-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("app-api")).unwrap();
+    let otto = Otto::launch("header");
+    otto.call(json!({"cmd": "split"}));
+    let title = |o: &Otto, pane: &str| o.call(json!({"cmd": "state"}))["titles"][pane].as_str().map(String::from);
+    let has = |pane: &'static str, want: &'static str| move |o: &Otto| title(o, pane).filter(|t| t == want);
+    otto.call(json!({"cmd": "type", "pane": 1, "text": format!("cd '{}/app-api'\r", root.display())}));
+    otto.wait_for("the directory's name", has("1", "app-api"));
+    // A program in front of the shell follows it; at the prompt again, the directory alone.
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "sleep 30\r"}));
+    otto.wait_for("the program", has("1", "app-api · sleep 30"));
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "\u{3}"}));
+    otto.wait_for("the program gone", has("1", "app-api"));
+    // An empty pane's header has no text.
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.wait_for("an empty header", has("2", ""));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn capture_and_wait_read_one_pane() {
     let otto = Otto::launch("capture");
     otto.call(json!({"cmd": "split"}));
@@ -1444,7 +1465,7 @@ fn settings_choose_the_font_the_repos_and_the_tasks_folder() {
     // Defaults: Menlo 13, rows 18 points high.
     let plain = Otto::launch("settings-none");
     let state = plain.call(json!({"cmd": "state"}));
-    // The build, as the status bar shows it: "0.1.0 · local" here.
+    // The build, short: "0.1.0 · local" here.
     let version = state["version"].as_str().unwrap_or_default();
     assert!(version.starts_with(concat!(env!("CARGO_PKG_VERSION"), " · ")), "{version}");
     assert_eq!(
@@ -2456,6 +2477,7 @@ fn a_path_typed_a_letter_at_a_time_keeps_its_dropdown_still() {
         ("plan my week ~/notes/2026/", &json!("~/notes/2026/"))
     );
     assert_eq!(reply["compose_plan"]["dir"], "~/notes/2026/");
+    assert_eq!(reply["compose_plan_line"], "↵ will start claude in ~/notes/2026/");
     // Esc closes the list and leaves the text as typed.
     let reply = key("escape");
     assert_eq!((field(&reply).0.as_str(), &reply["compose_menu"]), ("plan my week ~/notes/2026/", &Value::Null));
@@ -2591,6 +2613,11 @@ fn with_nothing_open_the_drawer_offers_a_new_task() {
     });
     let plan = json!({"agent": "codex", "starts": true, "dir": null, "branch": null});
     assert_eq!(reply["compose_plan"], plan);
+    // Not the default agent: the drawer says what ↵ does. Something typed: no tag hint.
+    assert_eq!(
+        (&reply["compose_plan_line"], &reply["compose_hint"]),
+        (&json!("↵ will start codex in your home folder"), &Value::Null)
+    );
     // Typing goes into it; ⇧↵ files the task for later and the box closes. A task is open now:
     // the drawer goes.
     key("cmd-a t i d y space # x");
@@ -2600,8 +2627,16 @@ fn with_nothing_open_the_drawer_offers_a_new_task() {
         (&reply["compose_host"], &reply["welcome"], &reply["mode"]),
         (&Value::Null, &json!(false), &json!("normal"))
     );
-    // ⌘N opens it again; Esc leaves.
-    assert_eq!(key("cmd-n")["compose_host"], "drawer");
+    // ⌘N opens it again, empty: the tag hint, and no plan line for the default.
+    let reply = key("cmd-n");
+    assert_eq!(reply["compose_host"], "drawer");
+    assert!(
+        reply["compose_hint"].as_str().is_some_and(|hint| hint.starts_with("#project")),
+        "{}",
+        reply["compose_hint"]
+    );
+    assert_eq!(reply["compose_plan_line"], Value::Null);
+    // Esc leaves.
     // Its left edge drags: 100 pt to the right narrows it by 100. (Wider is capped at half a
     // window, which may be no wider than it is.)
     let state = otto.drawn();
@@ -6063,6 +6098,8 @@ fn the_command_palette_runs_a_command_by_name_for_the_user_alone() {
     assert!(rows.len() > 30, "{rows:?}");
     let first = json!({"command": "split_right", "name": "Terminal Right", "group": "Panes", "key": "⌘D"});
     assert_eq!(rows[0], first);
+    // The version left the status bar for About.
+    assert!(rows.iter().any(|row| row["name"] == "About ottospace" && row["group"] == "App"), "{rows:?}");
     // Typing narrows the rows, best first. A client's key is refused, and its split waits.
     let reply = otto.user_key("t e r m space b e l");
     let typed = (&reply["state"]["palette"]["query"], &reply["palette_rows"][0]["name"]);
@@ -6204,11 +6241,11 @@ fn the_inspector_shows_a_trees_counts_and_roles_never_its_text() {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_tab_strip_ends_where_the_panes_end_and_its_buttons_stay_in_view() {
-    // A meeting soon, its title long: its chip shares the strip with the buttons.
+    // A meeting soon, its title long: nothing of it is drawn in the strip, the band says it.
     let title = "Quarterly planning with every team that has an opinion about the roadmap";
     let home = calendar_folder("strip", &feed(&[("a", title, 240, 3_600, "")]), None);
     let otto = Otto::launch_with("strip", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
-    assert_eq!(calendar_read(&otto)["chip"], true);
+    assert_eq!(calendar_read(&otto)["stage"], "approaching");
     otto.call(json!({"cmd": "split", "kind": "empty"}));
     for _ in 0..24 {
         otto.call(json!({"cmd": "new_tab"}));
@@ -6243,7 +6280,7 @@ fn the_tab_strip_ends_where_the_panes_end_and_its_buttons_stay_in_view() {
     let tree = json!({"root": root, "count": 1, "truncated": truncated});
     assert!(otto.call(json!({"cmd": "inspector_fixture", "app": "Fixture", "tree": tree}))["inspector"].is_object());
     fits("the inspector");
-    // A section open too: the strip is narrower than the chip and the buttons.
+    // A section open too: the strip is narrower than the tabs and the buttons.
     otto.call(json!({"cmd": "section", "section": "tasks"}));
     fits("the inspector and a section");
     let _ = std::fs::remove_dir_all(&home);
@@ -6541,11 +6578,11 @@ fn the_meeting_timeline_alerts_and_only_the_user_joins_or_dismisses() {
     let otto = Otto::launch_with("calendar", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
     let calendar = |o: &Otto| o.call(json!({"cmd": "state"}))["calendar"].clone();
     let read = calendar_read(&otto);
-    // Counts, times and stages: the next one comes near, so the status bar names it.
+    // Counts, times and stages: the next one comes near, and the band alone says so.
     assert_eq!(read["on"], true);
     let counted = read["events_today"].as_u64().unwrap() + read["events_tomorrow"].as_u64().unwrap();
     assert_eq!(counted, 4, "{read}");
-    assert_eq!((&read["stage"], &read["soon"], &read["chip"]), (&json!("approaching"), &json!(true), &json!(true)));
+    assert_eq!((&read["stage"], &read["soon"], &read["chip"]), (&json!("approaching"), &Value::Null, &Value::Null));
     assert!(read["bars"].as_u64() >= Some(3), "{read}");
     // No title or link reaches a client.
     let state = otto.call(json!({"cmd": "state"})).to_string();
@@ -6699,7 +6736,7 @@ fn the_calendar_request_gives_titles_and_busy_time_but_no_link_or_address() {
 fn no_feed_no_timeline() {
     let otto = Otto::launch("calendar-off");
     let calendar = otto.call(json!({"cmd": "state"}))["calendar"].clone();
-    assert_eq!((&calendar["on"], &calendar["bars"], &calendar["chip"]), (&json!(false), &json!(0), &json!(false)));
+    assert_eq!((&calendar["on"], &calendar["bars"]), (&json!(false), &json!(0)));
     assert_eq!(calendar["band"], Value::Null, "no band");
     let reply = otto.call(json!({"cmd": "calendar", "day": "tomorrow"}));
     assert_eq!(reply, json!({"ok": true, "configured": false}), "nothing but that");
@@ -7211,7 +7248,7 @@ fn a_click_on_a_tab_switches_with_the_drawer_open() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// The check the native view must pass before it is the default again: the real `claude`, on
+/// The check the native view passed to be the default again (2026-11-14): the real `claude`, on
 /// the cheapest model, in a private instance and a scratch repository. One short model session
 /// on the user's own account: never in CI, never by default; run only with the user's approval:
 ///
