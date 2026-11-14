@@ -66,6 +66,7 @@ mod give_back;
 mod home;
 mod inspector;
 mod layout_file;
+mod markdown;
 mod marks;
 mod menus;
 mod new_task;
@@ -1251,6 +1252,8 @@ impl Workspace {
                     }
                 }
                 Effect::StopAgent { task } => agents.extend(self.stop_agent(task)),
+                // Native conversations only: none runs until the shell draws them.
+                Effect::AgentSend { .. } | Effect::AgentAnswer { .. } | Effect::AgentInterrupt { .. } => {}
                 Effect::AgentMoved { from, to } => self.move_agent(from, to),
                 Effect::MeetingAlert { .. } | Effect::OpenLink { .. } => self.meeting_effect(effect),
                 Effect::ReadSession { runner, id } => agents.extend(self.read_session(runner, id)),
@@ -2128,6 +2131,8 @@ impl Workspace {
                 claude: models.claude,
                 codex: models.codex,
                 default: settings.default_agent.clone(),
+                // Until the shell draws native conversations, every one is a terminal.
+                shows: ottospace_core::transcript::View::Terminal,
             };
             self.dispatch(agents, Origin::System, window, cx);
         }

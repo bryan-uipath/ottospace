@@ -195,7 +195,8 @@ impl Codex {
             }
             Some(Asked::Thread) => {
                 let thread = &result["thread"]["id"];
-                out.events.push(Event::Started { session: session_of(thread), model: model_of(&result["model"]) });
+                let (session, model) = (session_of(thread), model_of(&result["model"]));
+                out.events.push(Event::Started { session, model, mode: None });
                 let Some(thread) = thread.as_str().filter(|id| !id.is_empty()) else { return };
                 self.thread = Some(thread.to_string());
                 for input in std::mem::take(&mut self.queued) {
@@ -587,7 +588,7 @@ mod tests {
         let thread = sent(&out.replies[1]);
         assert_eq!((&thread["method"], &thread["params"]["model"]), (&json!("thread/start"), &json!("gpt-6-astra")));
         let out = codex.read(&format!(r#"{{"id":1,"result":{{"thread":{{"id":"{UUID}"}},"model":"gpt-6-astra"}}}}"#));
-        let started = Event::Started { session: Some(UUID.into()), model: Some("gpt-6-astra".into()) };
+        let started = Event::Started { session: Some(UUID.into()), model: Some("gpt-6-astra".into()), mode: None };
         assert_eq!(out.events, [started]);
         let turn = sent(&out.replies[0]);
         assert_eq!((&turn["method"], &turn["params"]["threadId"]), (&json!("turn/start"), &json!(UUID)));

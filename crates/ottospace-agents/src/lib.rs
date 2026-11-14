@@ -214,10 +214,12 @@ pub enum Outcome {
 /// reach the socket. Everything `Untrusted` is for the drawer alone.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
-    /// The session is known. `session` is a UUID, `model` a name; else `None`.
+    /// The session is known. `session` is a UUID, `model` a name; else `None`. `mode`: the
+    /// permission mode the CLI runs in (Claude's `permissionMode`), a name, the user's own.
     Started {
         session: Option<String>,
         model: Option<String>,
+        mode: Option<String>,
     },
     TurnStarted,
     /// More of the reply being written.

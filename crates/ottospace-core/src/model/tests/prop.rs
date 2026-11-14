@@ -16,6 +16,7 @@ use crate::repos::{MAX_DIRS, RepoDir, RepoDirs, Worktree};
 use crate::sessions::{Link, Seen};
 use crate::settings::ListChange;
 use crate::sneak_apps;
+use crate::transcript::{Event as Said, Outcome, Text, View};
 use crate::workbook::{self, History, Workbook, WorkbookId};
 
 const WORDS: &[&str] = &["fix", "zoom", "flicker", "deploy", "x"];
@@ -102,6 +103,34 @@ impl Gen<'_> {
     fn task(&mut self) -> TaskId {
         let real: Vec<TaskId> = self.m.tasks.list.iter().map(|t| t.id).collect();
         self.one_of(&real, Self::stray)
+    }
+
+    /// A runner's event: turns, text, calls, requests (cut or not) and their end, an exit.
+    fn event(&mut self) -> Said {
+        let text = Text::new(&self.name(WORDS));
+        let id = self.rng.pick(&["a", "b"]).to_string();
+        let (tool, label) = ("Bash".to_string(), self.name(WORDS));
+        match self.rng.below(12) {
+            0 | 1 => Said::TurnStarted,
+            2 => Said::TextDelta { text },
+            3 => Said::Text { text },
+            4 => Said::ToolStart { id, sub: self.rng.coin(), tool, label, detail: text },
+            5 => Said::ToolEnd { id, failed: self.rng.coin() },
+            6 | 7 => {
+                let (ticket, cut) = (self.rng.below(3) as u64, self.rng.coin());
+                Said::Permission { ticket, tool, label, detail: text, len: 9, cut, claim: Text::default() }
+            }
+            8 => Said::PermissionClosed { ticket: self.rng.below(3) as u64 },
+            9 => Said::TurnFinished {
+                outcome: self.rng.pick(&[
+                    Outcome::Completed,
+                    Outcome::Interrupted,
+                    Outcome::Failed { kind: "error".into() },
+                ]),
+            },
+            10 => Said::Usage { context: Some(10), window: None, cost_micro_usd: None },
+            _ => Said::Exited { code: None },
+        }
     }
 
     /// A conversation's subject: a task's, or a session's.
@@ -977,7 +1006,23 @@ const MAKERS: &[Make] = &[
         claude: g.names(AGENTS, 2),
         codex: Vec::new(),
         default: g.rng.coin().then(|| g.name(AGENTS)),
+        shows: g.rng.pick(&[View::Native, View::Native, View::Terminal]),
     },
+    |g| {
+        // Mostly the conversation on show, so its cards and turns come and go.
+        let keep = !g.rng.one_in(4);
+        let shown = g.m.talk.as_ref().map(|talk| talk.task.clone()).filter(|_| keep);
+        let task = shown.unwrap_or_else(|| g.subject());
+        let events = (0..g.rng.below(4)).map(|_| g.event()).collect();
+        Action::AgentEvents { task, events, at: g.rng.pick(&[0, 1, 5_000]) }
+    },
+    |_| Action::TalkSend,
+    |g| Action::TalkAnswer { allow: g.rng.coin() },
+    |_| Action::TalkExpand,
+    |_| Action::TalkDenyNote,
+    |_| Action::TalkEscape,
+    |_| Action::TalkInterrupt,
+    |g| Action::TalkView { shows: g.rng.pick(&[View::Native, View::Terminal]) },
     |g| Action::TaskTalk { id: g.task() },
     |g| Action::TalkPick { id: g.subject() },
     |g| {
@@ -1124,6 +1169,17 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(calendar::stage(event, m.now) == calendar::Stage::Running, "a banner for an event that does not run");
         ensure!(m.calendar.in_call != Some(true), "a banner while a call is on");
     }
+    // Native conversations: live only while their agent runs; a card only while live; a
+    // Deny's message only over a card; one transcript each.
+    for chat in &m.chats {
+        let (subject, t) = (&chat.subject, &chat.transcript);
+        ensure!(!t.live || m.agent_runs(subject), "{subject:?} is live with no agent");
+        ensure!(t.cards.is_empty() || t.live, "{subject:?} has a card and no agent");
+        ensure!(!chat.deny || !t.cards.is_empty(), "{subject:?} writes a Deny with no card");
+        ensure!(!chat.armed || t.turn.is_some(), "{subject:?} waits for a second Esc with no turn");
+    }
+    let chats: Vec<String> = m.chats.iter().map(|chat| format!("{:?}", chat.subject)).collect();
+    ensure!(unique(&chats), "two transcripts for one conversation: {chats:?}");
     // Tabs, their trees and the panes.
     ensure!(!m.tabs.is_empty(), "no tabs");
     ensure!(m.active < m.tabs.len(), "tab {} is on show, of {}", m.active, m.tabs.len());
@@ -1279,6 +1335,8 @@ fn check(m: &Model) -> Result<(), String> {
             Mode::Pick | Mode::Palette | Mode::Inspect | Mode::Compose => true,
             Mode::Annotate => m.note().is_some(),
             Mode::List => m.app_lists.filtering,
+            // A native conversation's composer, while no card has the keys.
+            Mode::Talk => m.talk_typing(),
             _ => false,
         };
     ensure!(m.field().is_some() == has_keys, "a text field has the keyboard in {:?} mode", m.mode());
@@ -1830,6 +1888,7 @@ impl Run {
         let m = &mut self.m;
         let refused = m.refusal(&action, origin).map(|_| format!("{m:?}"));
         let awaiting = m.awaiting.clone();
+        let switching = m.switching.clone();
         let panes: Vec<PaneId> = m.panes.iter().map(|p| p.id).collect();
         let sneak = m.sneak.as_ref().map(|sneak| sneak.typed.clone());
         let labelled: Vec<String> =
@@ -2185,8 +2244,10 @@ impl Run {
                     // An agent runs with the user's rights: no client's action starts one. A
                     // session read answers a resume the user asked for, and only that.
                     let asked = awaiting.contains(subject) && matches!(action, Action::SessionRead { .. });
+                    // So does the end of an agent the user stopped to switch its view.
+                    let switched = switching.contains(subject) && matches!(action, Action::AgentExited { .. });
                     let resumes = matches!(start, agents::Start::Resume { .. });
-                    ensure!(user || (asked && resumes), "{origin:?} started an agent for {subject:?}");
+                    ensure!(user || ((asked || switched) && resumes), "{origin:?} started an agent for {subject:?}");
                     ensure!(!gone(subject) && m.agent_runs(subject), "an agent starts for nothing: {subject:?}");
                     // A session no task owns is gone on with only where it started, in a listed
                     // checkout, and only if nothing has it: not at work, held by no process.
@@ -2219,6 +2280,14 @@ impl Run {
                 }
                 Effect::StopAgent { task } => {
                     ensure!(user && m.agent_runs(task), "{origin:?} stops the agent of {task:?}, or none runs");
+                }
+                // A message, an answer or an interrupt is the user's, to the conversation shown.
+                Effect::AgentSend { task, .. } | Effect::AgentAnswer { task, .. } | Effect::AgentInterrupt { task } => {
+                    let shown = m.talk.as_ref().is_some_and(|talk| talk.open && talk.task == *task);
+                    ensure!(
+                        user && shown && m.agent_runs(task),
+                        "{origin:?} reached {task:?}: not the user, or not shown"
+                    );
                 }
                 Effect::AgentMoved { from, to } => {
                     let task = to.task().and_then(|id| m.tasks.get(id));
@@ -2711,6 +2780,7 @@ fn code(sent: &Envelope) -> String {
         // A conversation's: `TalkPick { id: Task(1) }`.
         ("task", "Subject"),
         ("id", "Subject"),
+        ("shows", "View"),
     ];
     // A mark is long, and half of it is JSON already: it is given as its file's text.
     if let Action::RestoreMarks { marks, extra } = &sent.action {
@@ -2734,6 +2804,21 @@ fn code(sent: &Envelope) -> String {
             serde_json::to_string(home).unwrap_or_default(),
         );
         return format!("restore_layout({layout:?}, {gone:?}, {home:?}, {launch}).sent_by(Origin::{:?})", sent.origin);
+    }
+    // An agent's events carry text whose `Debug` is its length: written as that many `x`.
+    if let Action::AgentEvents { task, events, at } = &sent.action {
+        let task = match task {
+            Subject::Task(id) => format!("Subject::Task({id})"),
+            Subject::Session { runner, id } => {
+                format!("Subject::Session {{ runner: {runner:?}.into(), id: {id:?}.into() }}")
+            }
+        };
+        let events: Vec<String> = events.iter().map(event_code).collect();
+        let events = events.join(", ");
+        return format!(
+            "Action::AgentEvents {{ task: {task}, events: vec![{events}], at: {at} }}.sent_by(Origin::{:?})",
+            sent.origin
+        );
     }
     if let Action::RestoreWorkbooks { workbooks } = &sent.action {
         let workbooks = serde_json::to_string(workbooks).unwrap_or_default();
@@ -2792,6 +2877,50 @@ fn code(sent: &Envelope) -> String {
         at = end;
     }
     format!("{out}.sent_by(Origin::{:?})", sent.origin)
+}
+
+/// One runner event as code, for `code`.
+fn event_code(event: &Said) -> String {
+    let text = |text: &Text| format!("Text::new(&\"x\".repeat({}))", text.len());
+    match event {
+        Said::Started { session, model, mode } => {
+            let some = |of: &Option<String>| of.as_ref().map_or("None".into(), |s| format!("Some({s:?}.into())"));
+            format!("Said::Started {{ session: {}, model: {}, mode: {} }}", some(session), some(model), some(mode))
+        }
+        Said::TurnStarted => "Said::TurnStarted".into(),
+        Said::TextDelta { text: t } => format!("Said::TextDelta {{ text: {} }}", text(t)),
+        Said::Text { text: t } => format!("Said::Text {{ text: {} }}", text(t)),
+        Said::ToolStart { id, sub, tool, label, detail } => format!(
+            "Said::ToolStart {{ id: {id:?}.into(), sub: {sub}, tool: {tool:?}.into(), label: {label:?}.into(), detail: {} }}",
+            text(detail)
+        ),
+        Said::ToolEnd { id, failed } => format!("Said::ToolEnd {{ id: {id:?}.into(), failed: {failed} }}"),
+        Said::Permission { ticket, tool, label, detail, len, cut, claim } => format!(
+            "Said::Permission {{ ticket: {ticket}, tool: {tool:?}.into(), label: {label:?}.into(), detail: {}, \
+             len: {len}, cut: {cut}, claim: {} }}",
+            text(detail),
+            text(claim)
+        ),
+        Said::PermissionClosed { ticket } => format!("Said::PermissionClosed {{ ticket: {ticket} }}"),
+        Said::AutoDenied { tool, label, reason, detail } => format!(
+            "Said::AutoDenied {{ tool: {tool:?}.into(), label: {label:?}.into(), reason: {reason:?}.into(), detail: {} }}",
+            text(detail)
+        ),
+        Said::Usage { context, window, cost_micro_usd } => {
+            format!("Said::Usage {{ context: {context:?}, window: {window:?}, cost_micro_usd: {cost_micro_usd:?} }}")
+        }
+        Said::Compaction => "Said::Compaction".into(),
+        Said::TurnFinished { outcome } => {
+            let outcome = match outcome {
+                Outcome::Completed => "Outcome::Completed".into(),
+                Outcome::Interrupted => "Outcome::Interrupted".into(),
+                Outcome::Failed { kind } => format!("Outcome::Failed {{ kind: {kind:?}.into() }}"),
+            };
+            format!("Said::TurnFinished {{ outcome: {outcome} }}")
+        }
+        Said::Error { kind, retrying } => format!("Said::Error {{ kind: {kind:?}.into(), retrying: {retrying} }}"),
+        Said::Exited { code } => format!("Said::Exited {{ code: {code:?} }}"),
+    }
 }
 
 /// `RestoreMarks` from the JSON of its marks and of the file's own keys, as `code` writes it.

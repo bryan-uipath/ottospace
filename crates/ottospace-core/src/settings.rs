@@ -13,6 +13,7 @@ use serde::Deserialize;
 ///   "session_dirs": { "claude": ["~/.claude"], "codex": "~/.codex" },
 ///   "session_quiet_minutes": 3,
 ///   "agent_models": { "claude": ["claude-opus-5-5"], "codex": ["gpt-6-astra"] },
+///   "conversation_view": "native",
 ///   "capture_key": "ctrl-alt-cmd-space",
 ///   "capture": { "keep_images": true, "ax": true },
 ///   "workbook_scrollback_lines": 500,
@@ -66,6 +67,10 @@ pub struct Settings {
     /// The agent a task with no `@agent` starts with: a name `@` takes. Default: `claude`.
     #[serde(default)]
     pub default_agent: Option<String>,
+    /// How the drawer shows a Claude Code conversation: `native` (default: drawn by ottospace) or
+    /// `terminal` (the CLI's own TUI). Codex always shows in a terminal for now.
+    #[serde(default)]
+    pub conversation_view: Option<crate::transcript::View>,
     /// The key that captures the pane in use, from any app: modifiers and a key with `-`
     /// between them. Default: `ctrl-alt-cmd-space`. `"off"`: no key.
     #[serde(default)]

@@ -112,7 +112,11 @@ fn claude_asks_is_allowed_is_interrupted_and_exits() {
     let mut driver = spawn(&argv, &dir, Claude::new());
     let (first, second) = two_turns(&mut driver);
 
-    let started = Event::Started { session: Some(CLAUDE_SESSION.into()), model: Some("claude-opus-5-5".into()) };
+    let started = Event::Started {
+        session: Some(CLAUDE_SESSION.into()),
+        model: Some("claude-opus-5-5".into()),
+        mode: Some("default".into()),
+    };
     assert_eq!(first[0], started);
     let (call, permission) = (first.iter().find_map(tool_start), first.iter().find_map(permission));
     assert_eq!(call.as_deref(), Some("Bash git status"));
@@ -155,7 +159,7 @@ fn codex_asks_is_allowed_is_interrupted_and_exits() {
     let mut driver = spawn(&codex::argv(), &dir, codex);
     let (first, second) = two_turns(&mut driver);
 
-    let started = Event::Started { session: Some(CODEX_THREAD.into()), model: Some("gpt-6-astra".into()) };
+    let started = Event::Started { session: Some(CODEX_THREAD.into()), model: Some("gpt-6-astra".into()), mode: None };
     assert_eq!(first[0], started, "{first:#?}");
     assert_eq!(first.iter().find_map(tool_start).as_deref(), Some("exec cargo test"));
     assert_eq!(

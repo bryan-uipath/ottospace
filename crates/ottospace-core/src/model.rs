@@ -1100,6 +1100,38 @@ pub enum Action {
         claude: Vec<String>,
         codex: Vec<String>,
         default: Option<String>,
+        /// `conversation_view`: how a Claude Code conversation shows by default.
+        shows: crate::transcript::View,
+    },
+    /// What a conversation's native agent said, in order, read at `at` (ms since 1970). Only
+    /// the shell's runner sends it (`Origin::System`).
+    AgentEvents {
+        task: Subject,
+        events: Vec<crate::transcript::Event>,
+        at: u64,
+    },
+    /// ↵ in the shown conversation's composer: its draft to the agent, if no turn runs and no
+    /// card waits. Only the user's.
+    TalkSend,
+    /// Allow or Deny the shown conversation's first card. Allow only once a cut card was opened
+    /// in full (`TalkExpand`). Deny carries the draft when the user wrote one for it
+    /// (`TalkDenyNote`). Only the user's.
+    TalkAnswer {
+        allow: bool,
+    },
+    /// "Show all" on the shown card. Only the user's.
+    TalkExpand,
+    /// The composer takes the user's words for a Deny of the shown card. Only the user's.
+    TalkDenyNote,
+    /// Esc in a native conversation: ends a Deny's message; while a turn runs, the first says
+    /// a second stops it; else the keyboard leaves to the workspace. Only the user's.
+    TalkEscape,
+    /// Stop the shown conversation's turn; the session goes on. Only the user's.
+    TalkInterrupt,
+    /// The shown conversation in the other view: its agent ends and its session goes on there.
+    /// Not while a turn runs or a card waits. Only the user's.
+    TalkView {
+        shows: crate::transcript::View,
     },
     /// A click or ↵ on a task: its conversation opens in the right drawer, with the keyboard.
     /// Its agent is started if it never ran, or its session gone on with if no terminal of it
@@ -1495,7 +1527,15 @@ impl Action {
             | Action::CallSeen { .. }
             | Action::CalendarDismiss { .. }
             | Action::CalendarJoin { .. }
-            | Action::CalendarTomorrow => false,
+            | Action::CalendarTomorrow
+            | Action::AgentEvents { .. }
+            | Action::TalkSend
+            | Action::TalkAnswer { .. }
+            | Action::TalkExpand
+            | Action::TalkDenyNote
+            | Action::TalkEscape
+            | Action::TalkInterrupt
+            | Action::TalkView { .. } => false,
         }
     }
 }
@@ -1714,6 +1754,22 @@ pub enum Effect {
     StopAgent {
         task: Subject,
     },
+    /// The user's message to a native agent.
+    AgentSend {
+        task: Subject,
+        text: String,
+    },
+    /// The user's answer to the request the shell numbered `ticket`: this one request, or not.
+    AgentAnswer {
+        task: Subject,
+        ticket: u64,
+        allow: bool,
+        message: Option<String>,
+    },
+    /// End a native agent's turn; its session goes on.
+    AgentInterrupt {
+        task: Subject,
+    },
     /// Read this one session now, off the main thread, and answer `SessionRead`.
     ReadSession {
         runner: String,
@@ -1778,6 +1834,8 @@ pub struct Group {
 }
 
 pub mod zones;
+
+pub mod chat;
 
 #[derive(Debug, Serialize)]
 pub struct Model {
@@ -1953,6 +2011,17 @@ pub struct Model {
     models: agents::Models,
     #[serde(skip)]
     default_agent: Option<String>,
+    /// The conversations drawn natively, with their transcripts and drafts (`chat`).
+    #[serde(skip)]
+    chats: Vec<chat::Chat>,
+    /// The view the user picked for a conversation, and the settings' default for Claude Code.
+    #[serde(skip)]
+    views: Vec<(Subject, crate::transcript::View)>,
+    #[serde(skip)]
+    conversation_view: crate::transcript::View,
+    /// Conversations whose agent was stopped for a switch of view: gone on with once it is gone.
+    #[serde(skip)]
+    switching: Vec<Subject>,
     /// The action being run is the user's own. False between actions.
     #[serde(skip)]
     by_user: bool,
@@ -2042,6 +2111,10 @@ impl Default for Model {
             talk_titles: Vec::new(),
             models: agents::Models::default(),
             default_agent: None,
+            chats: Vec::new(),
+            views: Vec::new(),
+            conversation_view: crate::transcript::View::Native,
+            switching: Vec::new(),
             by_user: false,
             next_id: 0,
             last_tab: Vec::new(),
@@ -2206,6 +2279,16 @@ impl Model {
             }
             // Which task a tab is of is the user's to say.
             Action::TabPlace { .. } | Action::NewTabOf { task: Some(_) } => Some(TABS_USERS),
+            // What reaches a native agent, or stops its turn, is the user's: a message is as
+            // strong as typing into it, an answer grants a tool call.
+            Action::TalkSend
+            | Action::TalkAnswer { .. }
+            | Action::TalkExpand
+            | Action::TalkDenyNote
+            | Action::TalkEscape
+            | Action::TalkInterrupt
+            | Action::TalkView { .. } => Some(chat::USERS_ALONE),
+            Action::AgentEvents { .. } if origin == Origin::Socket => Some(chat::RUNNERS_ALONE),
             // On a rail list keys move over the rail: the user's, as the move that got there.
             Action::ListMove { .. } | Action::ListChoose { .. } | Action::LeaveList if self.rail_focus.is_some() => {
                 Some(zones::RAILS_USERS)
@@ -2944,6 +3027,7 @@ impl Model {
                     }
                 }
                 Some("apps") => drop(self.app_lists.filter.apply(edit)),
+                Some("talk") => drop(self.talk_draft_mut().map(|draft| draft.apply(edit))),
                 Some(_) => {
                     if let Some(exact) = self.spelled_out(&edit) {
                         // A space after a name that is one of the rows takes that row.
@@ -3678,10 +3762,19 @@ impl Model {
                 self.brief = Some(id).filter(|_| briefed && shown);
             }
             Action::BriefClose => self.brief = None,
-            Action::SetAgents { claude, codex, default } => {
+            Action::SetAgents { claude, codex, default, shows } => {
                 self.models = agents::Models { claude, codex };
                 self.default_agent = default;
+                self.conversation_view = shows;
             }
+            action @ (Action::AgentEvents { .. }
+            | Action::TalkSend
+            | Action::TalkAnswer { .. }
+            | Action::TalkExpand
+            | Action::TalkDenyNote
+            | Action::TalkEscape
+            | Action::TalkInterrupt
+            | Action::TalkView { .. }) => self.chat_act(action, effects),
             Action::TaskTalk { id } => self.talk_to(Subject::Task(id), effects),
             // Under the inspector the rail's cell shows its conversation, as on a closed drawer.
             Action::TalkPick { id }
@@ -3701,6 +3794,7 @@ impl Model {
                 if let Some(place) = self.starting.iter().position(|(id, _)| *id == subject) {
                     let (_, runner) = self.starting.remove(place);
                     self.agents.push(subject.clone());
+                    self.chat_started(&subject, runner.is_none());
                     // A session's conversation is gone on with: nothing of a task to change.
                     let Some(task) = subject.task() else { return };
                     self.tasks.started(task, Some(at).filter(|at| *at > 0));
@@ -3762,6 +3856,8 @@ impl Model {
             }
             Action::AgentExited { task: subject } => {
                 let ran = self.agents.contains(&subject);
+                // A switch of view: the session goes on in the other once this one is gone.
+                let switched = self.chat_exited(&subject);
                 // What its session's file shows of the last moments is ours, not another terminal's.
                 if let Some((runner, id)) = self.session_of(&subject).filter(|_| ran) {
                     let now = self.now;
@@ -3771,7 +3867,11 @@ impl Model {
                 self.agents.retain(|id| *id != subject);
                 self.starting.retain(|(id, _)| *id != subject);
                 self.awaiting.retain(|id| *id != subject);
-                let Some(task) = subject.task() else { return };
+                let Some(task) = subject.task() else {
+                    return if switched {
+                        self.chat_restart(subject, effects)
+                    };
+                };
                 // No longer looked for: a later agent's session must not be taken for its.
                 self.seeking.retain(|seek| seek.task != task);
                 // Its program is gone: the session is no longer at work there.
@@ -3783,6 +3883,9 @@ impl Model {
                 if ran && self.tasks.get(task).is_some_and(|task| task.state == State::Running && !task.dismissed) {
                     self.tasks.set_state(task, State::NeedsYou);
                     self.tasks.followed(task, State::NeedsYou);
+                }
+                if switched {
+                    self.chat_restart(subject, effects);
                 }
             }
             Action::SessionRead { runner, id, found } => {
@@ -4077,7 +4180,10 @@ impl Model {
             let (group, working, tip) = match subject.task().and_then(|id| self.tasks.get(id)) {
                 Some(task) => {
                     let runs = self.agent_runs(&subject) && task.state == State::Running;
-                    (task.group(), runs || active, self.rail_tip(task, found.and_then(|found| found.label.as_deref())))
+                    // A native agent's call is known from its stream before its file says it.
+                    let native = self.chat(&subject).and_then(|chat| chat.transcript.live_label());
+                    let live = native.or(found.and_then(|found| found.label.as_deref()));
+                    (task.group(), runs || active, self.rail_tip(task, live))
                 }
                 None => {
                     let group = active.then_some(tasks::Group::Running);
@@ -4220,6 +4326,7 @@ impl Model {
         self.opened.iter_mut().for_each(rename);
         self.starting.iter_mut().for_each(|(subject, _)| rename(subject));
         self.talk.iter_mut().for_each(|talk| rename(&mut talk.task));
+        self.chat_moves(&from, &to);
         if runs {
             effects.push(Effect::AgentMoved { from, to });
         }
@@ -4256,6 +4363,7 @@ impl Model {
     /// The drawer is on a conversation there is, and the keyboard is in it only while it is
     /// open, its agent runs and nothing else has taken the keyboard.
     fn settle_talk(&mut self) {
+        self.settle_chats();
         let tasks = &self.tasks;
         let gone = |subject: &Subject| subject.task().is_some_and(|id| tasks.get(id).is_none());
         self.agents.retain(|id| !gone(id));
@@ -5132,6 +5240,7 @@ impl Model {
             "palette" => self.palette.as_ref().map(|palette| &palette.query),
             "inspector" => self.inspector.as_ref().map(|inspector| &inspector.filter),
             "note" => self.note(),
+            "talk" => self.talk_draft(),
             "apps" => Some(&self.app_lists.filter),
             "mark" => match &self.mark_input {
                 Some(MarkInput::Rename { text, .. }) => Some(text),
@@ -5159,6 +5268,7 @@ impl Model {
             Mode::Inspect => "inspector",
             Mode::Compose => "compose",
             Mode::Annotate => "note",
+            Mode::Talk if self.talk_typing() => "talk",
             Mode::List if self.app_lists.filtering => "apps",
             _ => return None,
         };
@@ -5682,6 +5792,7 @@ mod tests {
     use super::*;
     use crate::edit::Motion;
     use crate::layout::Axis::{Down, Right};
+    use crate::transcript::View;
 
     mod prop;
 
@@ -6128,6 +6239,14 @@ mod tests {
         Action::CalendarDismiss { .. },
         Action::CalendarJoin { .. },
         Action::CalendarTomorrow,
+        Action::AgentEvents { .. },
+        Action::TalkSend,
+        Action::TalkAnswer { .. },
+        Action::TalkExpand,
+        Action::TalkDenyNote,
+        Action::TalkEscape,
+        Action::TalkInterrupt,
+        Action::TalkView { .. },
         Action::WorkbookFold { .. }
     );
 
@@ -6317,7 +6436,7 @@ mod tests {
             Action::WorkbookRemove { workbook: 1, tab: None },
             Action::WorkbookFold { workbook: 1 },
             Action::WorkbookUndo,
-            Action::SetAgents { claude: Vec::new(), codex: Vec::new(), default: None },
+            Action::SetAgents { claude: Vec::new(), codex: Vec::new(), default: None, shows: View::Native },
             Action::TaskTalk { id: 1 },
             Action::ComposeEnter,
             Action::AgentStarted { task: Subject::Task(1), session: None, at: 0 },
@@ -6338,6 +6457,14 @@ mod tests {
             Action::CalendarDismiss { id: 1 },
             Action::CalendarJoin { id: 1 },
             Action::CalendarTomorrow,
+            Action::AgentEvents { task: Subject::Task(1), events: Vec::new(), at: 0 },
+            Action::TalkSend,
+            Action::TalkAnswer { allow: false },
+            Action::TalkExpand,
+            Action::TalkDenyNote,
+            Action::TalkEscape,
+            Action::TalkInterrupt,
+            Action::TalkView { shows: View::Terminal },
             Action::TasksView { view: TasksView::Project },
             Action::ToggleProject { project: None, done: false },
             Action::SessionWork { work: progress::Work::default() },
@@ -6346,6 +6473,20 @@ mod tests {
         places.sort_unstable();
         assert_eq!(places, (0..COUNT).collect::<Vec<_>>(), "one sample of every action");
         samples
+    }
+
+    /// What reaches a native agent: the user's alone, on any ground.
+    fn talks(action: &Action) -> bool {
+        matches!(
+            action,
+            Action::TalkSend
+                | Action::TalkAnswer { .. }
+                | Action::TalkExpand
+                | Action::TalkDenyNote
+                | Action::TalkEscape
+                | Action::TalkInterrupt
+                | Action::TalkView { .. }
+        )
     }
 
     /// A pin, a hide or their undo: refused from all but the user on its own ground.
@@ -6478,6 +6619,8 @@ mod tests {
                     | Action::TalkGo => Some(agents::USERS_ALONE),
                     Action::TabPlace { .. } | Action::NewTabOf { task: Some(_) } => Some(TABS_USERS),
                     Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
+                    _ if talks(action) => Some(chat::USERS_ALONE),
+                    Action::AgentEvents { .. } if origin == Origin::Socket => Some(chat::RUNNERS_ALONE),
                     _ if in_palette(action) && action_is_palettes(action) => Some(commands::USERS_ALONE),
                     _ if in_palette(action) => Some(inspect::USERS_ALONE),
                     Action::InspectorRead { .. } | Action::InspectorFailed { .. } if origin == Origin::Socket => {
@@ -8052,7 +8195,12 @@ mod tests {
             m.compose_plan().map(|plan| (plan.agent, plan.starts, plan.dir)),
             Some(("claude".into(), true, None))
         );
-        m.update(Action::SetAgents { claude: Vec::new(), codex: Vec::new(), default: Some("ana".into()) });
+        m.update(Action::SetAgents {
+            claude: Vec::new(),
+            codex: Vec::new(),
+            default: Some("ana".into()),
+            shows: View::Native,
+        });
         assert_eq!(m.compose_plan().map(|plan| plan.starts), Some(false));
         m.update(Action::CloseCompose);
         assert_eq!(
@@ -9325,7 +9473,13 @@ mod tests {
         );
         assert!(m.talk_note().is_some_and(|note| note.starts_with("@ana is a saved agent")));
         // The settings name the default agent.
-        system(&mut m, Action::SetAgents { claude: Vec::new(), codex: Vec::new(), default: Some("codex".into()) });
+        let codex = Action::SetAgents {
+            claude: Vec::new(),
+            codex: Vec::new(),
+            default: Some("codex".into()),
+            shows: View::Native,
+        };
+        system(&mut m, codex);
         m.update(Action::TaskFromLine { line: "other".into(), known: Default::default(), open: false });
         assert_eq!(m.update(Action::TaskTalk { id: 4 }), [asked(4, launch(RunnerId::Codex, None, "other"), None)]);
         // ↵ on a task's row is that click; the drawer's width stays within bounds.
@@ -10358,6 +10512,8 @@ mod tests {
                     | Action::TalkGo => Some(agents::USERS_ALONE),
                     Action::TabPlace { .. } | Action::NewTabOf { task: Some(_) } => Some(TABS_USERS),
                     Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
+                    _ if talks(action) => Some(chat::USERS_ALONE),
+                    Action::AgentEvents { .. } if origin == Origin::Socket => Some(chat::RUNNERS_ALONE),
                     _ if in_palette(action) && action_is_palettes(action) => Some(commands::USERS_ALONE),
                     _ if in_palette(action) => Some(inspect::USERS_ALONE),
                     Action::InspectorRead { .. } | Action::InspectorFailed { .. } if origin == Origin::Socket => {

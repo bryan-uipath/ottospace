@@ -106,6 +106,7 @@ impl Claude {
                 Some("init") => emit.push(Event::Started {
                     session: session_of(&record["session_id"]),
                     model: model_of(&record["model"]),
+                    mode: record["permissionMode"].as_str().filter(|mode| station::is_name(mode)).map(str::to_string),
                 }),
                 Some("compact_boundary") => emit.push(Event::Compaction),
                 Some("api_retry") => {
