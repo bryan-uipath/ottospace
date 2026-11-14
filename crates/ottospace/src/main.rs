@@ -669,6 +669,8 @@ struct Workspace {
     hosted: HashMap<PaneId, Hosted>,
     /// Shell half of each terminal pane.
     terminals: HashMap<PaneId, Terminal>,
+    /// Each terminal's header, read from its processes a few times a second: `app-api · cargo test`.
+    titles: HashMap<PaneId, String>,
     /// The right drawer: each task's agent, and where its conversation was drawn.
     drawer: talk::Drawer,
     /// One terminal character cell.
@@ -943,6 +945,7 @@ impl Workspace {
                     this.store_layout(false);
                     if tick % 15 == 0 {
                         this.poll_sessions(window, cx);
+                        this.read_titles(cx);
                     }
                     if hotkey::take_press() {
                         this.return_to_ottospace(window, cx);
@@ -1074,6 +1077,7 @@ impl Workspace {
             model,
             hosted: HashMap::new(),
             terminals: HashMap::new(),
+            titles: HashMap::new(),
             drawer: talk::Drawer::default(),
             cell: terminal::cell_size(window),
             dragging: None,
@@ -2629,6 +2633,8 @@ impl Workspace {
             // Each drawn pane's header (the handle a drag moves it by) and the × in it, and each
             // tab on the bar by place.
             "headers": marked(Mark::Header),
+            // Each drawn pane's header text (`pane_title`).
+            "titles": drawn.iter().filter_map(|id| Some((*id, self.pane_title(self.model.pane(*id)?)))).collect::<BTreeMap<_, _>>(),
             "closes": marked(Mark::Close),
             "tabs": tabs,
             // The left column's title strip, and the open section's header (null: none open).
@@ -4039,6 +4045,32 @@ impl Workspace {
             .child(body)
     }
 
+    /// A pane's header text: a terminal's directory and program, an app's window title, nothing
+    /// for an empty pane.
+    fn pane_title(&self, pane: &Pane) -> String {
+        match &pane.kind {
+            Kind::Empty => String::new(),
+            Kind::Terminal => self.titles.get(&pane.id).cloned().unwrap_or_default(),
+            Kind::App { title, .. } => title.clone(),
+        }
+    }
+
+    /// Reads each terminal's directory and program for its header; redraws if one changed.
+    fn read_titles(&mut self, cx: &mut Context<Self>) {
+        let home = std::env::var("HOME").ok();
+        let titles: HashMap<PaneId, String> = self
+            .terminals
+            .iter()
+            .map(|(id, t)| {
+                (*id, terminal_title(t.cwd().as_deref(), t.foreground_command().as_deref(), home.as_deref()))
+            })
+            .collect();
+        if titles != self.titles {
+            self.titles = titles;
+            cx.notify();
+        }
+    }
+
     /// Lists the apps that can be hosted now, and reads the icon of each one not seen before.
     /// The core is told which bundles run: it lists the pinned and suggested apps that do not.
     fn refresh_apps(&mut self) {
@@ -4470,10 +4502,11 @@ impl Workspace {
         let cell = self.cells.get(&id).cloned().unwrap_or_default();
         let frame = self.frames.get(&id).cloned().unwrap_or_default();
         let bar = self.hosted.get(&id).map_or(0.0, |h| h.bar as f32);
-        let (tag, tag_color, title) = match &pane.kind {
-            Kind::Empty => ("EMPTY", theme::MUTED, String::new()),
-            Kind::Terminal => ("TERM", theme::PRIMARY, "shell".into()),
-            Kind::App { title, .. } => ("APP", theme::APP, title.clone()),
+        // No kind word: the content says it. An app has its icon, if one was read.
+        let title = self.pane_title(pane);
+        let icon = match &pane.kind {
+            Kind::App { name, .. } => self.icons.get(name).cloned(),
+            _ => None,
         };
         // The window kept another size than the pane's: say so. In a narrow header the words
         // give way first: they shrink and are cut with an ellipsis.
@@ -4502,7 +4535,12 @@ impl Workspace {
         let drawn_on = self.model.annotated().filter(|m| m.pane == id && self.shots.contains_key(&m.n));
         let strip = drawn_on.map(|material| self.annotate_strip(material, cx));
         // flex_none: a short pane must not squeeze the header, or a raised bar would overlap the pane above.
-        let label: SharedString = if title.is_empty() { tag.into() } else { format!("{tag} {title}").into() };
+        let label: SharedString = match &pane.kind {
+            _ if !title.is_empty() => title.clone().into(),
+            Kind::App { name, .. } => name.clone().into(),
+            Kind::Terminal => "Terminal".into(),
+            Kind::Empty => "Empty pane".into(),
+        };
         // A marked pane says so, with its letter: ⌘B gives no other sign while the Marks list is shut.
         let marked = self.model.mark_of(MarkOf::Pane(Some(id))).and_then(|mark| self.model.marks.get(mark));
         let marked = marked.map(|mark| mark.key.map_or("◆".to_string(), |key| format!("◆ {}", key.to_uppercase())));
@@ -4535,7 +4573,7 @@ impl Workspace {
             )
             .child(mark(&self.marks, Mark::Header(id)))
             .gap_2()
-            // The tag and the title keep a minimum; past it the title is cut, then the hint.
+            // The title keeps a minimum; past it the title is cut, then the hint.
             .child(
                 div()
                     .flex()
@@ -4543,7 +4581,8 @@ impl Workspace {
                     .min_w(px(HEADER_TITLE_MIN))
                     .gap_2()
                     .overflow_hidden()
-                    .child(div().flex_none().text_color(rgb(tag_color)).child(tag))
+                    .items_center()
+                    .children(icon.map(|icon| img(icon).size(px(14.)).flex_none()))
                     .child(div().min_w_0().truncate().child(title))
                     .children(marked.map(|sign| div().flex_none().text_color(rgb(theme::MARK)).child(sign))),
             )
@@ -5057,6 +5096,17 @@ impl Workspace {
             )
             .children(self.problem().map(|e| div().min_w_0().truncate().text_color(rgb(theme::ERROR)).child(e)))
     }
+}
+
+/// A terminal's header: its directory's last segment (`~` for home), then the program in front
+/// of the shell, if any: `app-api · cargo test`. Nothing read: empty.
+fn terminal_title(cwd: Option<&str>, program: Option<&str>, home: Option<&str>) -> String {
+    let dir = cwd.map(|cwd| match std::path::Path::new(cwd).file_name() {
+        _ if Some(cwd) == home => "~".to_string(),
+        Some(name) => name.to_string_lossy().into_owned(),
+        None => cwd.to_string(),
+    });
+    dir.into_iter().chain(program.map(str::to_string)).collect::<Vec<_>>().join(" · ")
 }
 
 /// A task's priority and title, as cells of a row.
@@ -5915,6 +5965,16 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_terminal_title_is_its_directory_then_its_program() {
+        let home = Some("/Users/me");
+        assert_eq!(terminal_title(Some("/Users/me/code/app-api"), Some("cargo test"), home), "app-api · cargo test");
+        assert_eq!(terminal_title(Some("/Users/me/code/app-api"), None, home), "app-api");
+        assert_eq!(terminal_title(Some("/Users/me"), None, home), "~");
+        assert_eq!(terminal_title(Some("/"), Some("top"), home), "/ · top");
+        assert_eq!(terminal_title(None, None, home), "");
+    }
 
     #[test]
     fn version_line_names_the_commit_when_the_build_was_given_one() {

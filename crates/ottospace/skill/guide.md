@@ -73,6 +73,7 @@ ottospace ctl '{"cmd":"state"}'
 | `state.sidebar` | The open rail section, or null |
 | `terminals.<id>` | `cols`, `rows`, and `lines`: the visible text of that terminal pane. Also `history` (lines scrolled off the top), `display_offset` (how far the view is scrolled back; 0 is the bottom), `selection` (the selected text, or null), `selection_range` (its first and last cell as `[line, column]`, negative lines in `history`) and `visual_cursor` |
 | `state.clip` | Null, or what the status bar and the pane's header say for 2 seconds after a copy or a paste: `text` ("Copied 3 lines"), `verb` (`copied`, `cut`, `pasted`), `pane` (null: copied from no pane), `amount` (`lines`, `chars`, `newline`) and `at`. The copied text is never in the state |
+| `titles` | Each drawn pane's header text, by pane id: a terminal's directory and the program in front of its shell (`app-api · cargo test`), an app's window title, `""` for an empty pane |
 | `version` | The build, as the status bar's hover shows it: version and the first seven characters of the commit (`0.1.0 · a4a2582`), or `0.1.0 · local` for a build from source |
 | `font`, `cell` | The terminal font in use (`name`, `size`) and the size of one character cell `[w, h]` in points |
 | `notice` | Null, or the problem the status bar shows (a mistake in the settings, an app that could not be hosted). It is not `error`, which means the request failed |

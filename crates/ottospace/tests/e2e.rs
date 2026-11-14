@@ -677,6 +677,27 @@ fn terminal_runs_a_typed_command() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn a_pane_header_names_the_directory_and_the_program_not_the_kind() {
+    let root = support::temp(&format!("ottospace-e2e-header-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("app-api")).unwrap();
+    let otto = Otto::launch("header");
+    otto.call(json!({"cmd": "split"}));
+    let title = |o: &Otto, pane: &str| o.call(json!({"cmd": "state"}))["titles"][pane].as_str().map(String::from);
+    let has = |pane: &'static str, want: &'static str| move |o: &Otto| title(o, pane).filter(|t| t == want);
+    otto.call(json!({"cmd": "type", "pane": 1, "text": format!("cd '{}/app-api'\r", root.display())}));
+    otto.wait_for("the directory's name", has("1", "app-api"));
+    // A program in front of the shell follows it; at the prompt again, the directory alone.
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "sleep 30\r"}));
+    otto.wait_for("the program", has("1", "app-api · sleep 30"));
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "\u{3}"}));
+    otto.wait_for("the program gone", has("1", "app-api"));
+    // An empty pane's header has no text.
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.wait_for("an empty header", has("2", ""));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn capture_and_wait_read_one_pane() {
     let otto = Otto::launch("capture");
     otto.call(json!({"cmd": "split"}));

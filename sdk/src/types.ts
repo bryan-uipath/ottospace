@@ -965,6 +965,8 @@ export interface Snapshot {
   /** Each drawn pane's header, the handle a drag moves it by, and the × in it. */
   headers: Record<string, Rect>;
   closes: Record<string, Rect>;
+  /** Each drawn pane's header text: a terminal's directory and program (`app-api · cargo test`), an app's window title, "" for an empty pane. */
+  titles: Record<string, string>;
   /** Each tab on the bar, by place. */
   tabs: Rect[];
   /** The left column's title strip, and the open section's header (null: none open). */
