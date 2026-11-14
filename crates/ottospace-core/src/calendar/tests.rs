@@ -449,6 +449,15 @@ fn clock_times_and_the_banner_line() {
 }
 
 #[test]
+fn the_read_status_says_when() {
+    let mut c = calendar(Vec::new());
+    assert_eq!(c.read_status(0), "updated 08:00");
+    c.read(None, c.days, NINE);
+    assert_eq!(c.read_status(0), "not updated since 08:00");
+    assert_eq!(Calendar::default().read_status(0), "not read yet");
+}
+
+#[test]
 fn spans_round_up_to_the_minute() {
     assert_eq!(span(1), "1m");
     assert_eq!(span(12 * M), "12m");
@@ -503,6 +512,8 @@ fn the_calendar_section_is_there_only_with_a_feed() {
     assert_eq!(m.sections()[..2], [Section::Tasks, Section::Calendar]);
     m.update(Action::ToggleSection { section: Section::Calendar });
     assert_eq!(m.sidebar, Some(Section::Calendar));
+    // Not written to the layout: a build without the section could not read the file.
+    assert_eq!(m.layout_file(&[], &[], 0).section, None);
     // The feed goes (a later start without it): the section closes.
     m.update(Action::SetCalendar { on: false, notify: true, links_only: false }.sent_by(Origin::System));
     assert_eq!(m.sidebar, None);

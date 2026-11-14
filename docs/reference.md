@@ -627,7 +627,8 @@ the way.
   Below, a folded "Tomorrow · n". "Nothing today" when the day is empty; at the foot, when the feed
   was last read. The rail cell shows a steady amber dot while a meeting is 2 minutes off or runs,
   and a filled amber badge while the banner is up. In list mode (⌘⌃E) `j`/`k` move and ↵ joins
-  (or folds "Tomorrow"). A Calendar left open by a run with a feed is closed by one without.
+  (or folds "Tomorrow"). The open Calendar is not kept in the restored layout: a build without
+  the section could not read the file.
 - **Privacy**: titles and places are other people's text. They are shown, never sent anywhere,
   never in the trace or a task's brief, and not in the control socket's state, which has only
   counts, times and stages (`calendar`). An agent cannot read your calendar.

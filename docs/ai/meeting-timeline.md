@@ -37,8 +37,9 @@ User-facing description: [reference](../reference.md#meeting-timeline).
 
 A second pull request. `Section::Calendar`, second on the rail, exists only while a feed is set:
 `Model::sections()` drops it otherwise, and every place that walks the sections asks it (the rail,
-⌘⌃E's section cycling and the rails' focus, a restored layout, `ToggleSection`). A feed removed
-between runs: the restored section is dropped; `SetCalendar { on: false }` closes it and moves the
+⌘⌃E's section cycling and the rails' focus, a restored layout, `ToggleSection`). It is never
+written to `layout.json` (a build without it would set the whole file aside), and one read from
+another build is dropped without a feed; `SetCalendar { on: false }` closes it and moves the
 rail's keyboard to Tasks.
 
 - Rows (`Calendar::agenda`): today's all-day events, then the rest by start, then "Tomorrow · n"

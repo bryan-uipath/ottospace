@@ -538,6 +538,15 @@ impl Calendar {
         Some((format!("{} · {when}", event.title), stage))
     }
 
+    /// When the feed was read: `updated 09:40`, `not updated since 09:40`, `not read yet`.
+    pub fn read_status(&self, offset: i64) -> String {
+        match (self.updated, self.stale) {
+            (Some(at), false) => format!("updated {}", clock(at, offset)),
+            (Some(at), true) => format!("not updated since {}", clock(at, offset)),
+            (None, _) => "not read yet".to_string(),
+        }
+    }
+
     /// The status bar's line from `SOON` before a start: `Design review in 4m`.
     pub fn soon(&self, now: u64) -> Option<String> {
         let event = self.today().filter(|e| !e.all_day).find(|e| e.start > now && e.start - now <= SOON)?;

@@ -6085,9 +6085,9 @@ fn no_feed_no_timeline() {
 
 /// Whether sneak mode labels a control of this id: it is drawn.
 fn labelled(otto: &Otto, id: &str) -> bool {
-    let reply = otto.call(json!({"cmd": "sneak"}));
+    let (_, labels) = sneak(otto);
     otto.call(json!({"cmd": "key", "keys": "escape", "as": "user"}));
-    reply["sneak"]["targets"].as_array().unwrap().iter().any(|t| t["source"]["id"] == id)
+    labels.contains_key(id)
 }
 
 #[test]

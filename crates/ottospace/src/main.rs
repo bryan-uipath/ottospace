@@ -3280,6 +3280,8 @@ impl Workspace {
             // The offer to put a mark back, if it shows, is above the rows.
             Some(Section::Marks) => return Some(at + usize::from(self.mark_offered().is_some())),
             Some(Section::Workbook) => return Some(at + usize::from(self.model.workbooks.offered().is_some())),
+            // "Nothing today" is above the rows when the day is empty.
+            Some(Section::Calendar) => return Some(at + usize::from(self.model.calendar.today().next().is_none())),
             _ => return Some(at),
         }
         // The offer to undo, if it shows; how to add a task, if none is listed; then the headings

@@ -242,8 +242,9 @@ impl Model {
             width: self.talk_width,
             wide: self.talk_wide,
         };
-        let mut layout =
-            Layout { version: VERSION, selected, section: self.sidebar, drawer, tabs, extra: Extra::new() };
+        // Not the Calendar: a build without it could not read the file back.
+        let section = self.sidebar.filter(|s| *s != Section::Calendar);
+        let mut layout = Layout { version: VERSION, selected, section, drawer, tabs, extra: Extra::new() };
         // What is written always reads back: the last histories go first, then the last tabs.
         while write(&layout).len() > MAX_FILE_BYTES {
             let held = layout.tabs.iter_mut().flat_map(|saved| saved.tab.panes.iter_mut()).rev();

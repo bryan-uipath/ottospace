@@ -2883,9 +2883,9 @@ impl Model {
                 }
             }
             Action::Leave => self.leave(effects),
-            // The bar is ottospace's own UI, so using it takes the keyboard back.
             // No rail cell, no section: the Calendar is there only while a feed is set.
             Action::ToggleSection { section: Section::Calendar } if !self.calendar.on => {}
+            // The bar is ottospace's own UI, so using it takes the keyboard back.
             Action::ToggleSection { section } => {
                 self.leave(effects);
                 self.sidebar = (self.sidebar != Some(section)).then_some(section);
@@ -4720,13 +4720,13 @@ impl Model {
         Some(id)
     }
 
-    /// True if a `Tick` now would change what shows: a snoozed task's time has come, or the
-    /// offer to undo has run out. The shell asks; it does not look at the times itself.
     /// The left rail's sections, as drawn: Calendar only while a calendar feed is set.
     pub fn sections(&self) -> Vec<Section> {
         zones::SECTIONS.into_iter().filter(|s| *s != Section::Calendar || self.calendar.on).collect()
     }
 
+    /// True if a `Tick` now would change what shows: a snoozed task's time has come, or the
+    /// offer to undo has run out. The shell asks; it does not look at the times itself.
     pub fn due(&self, now: u64) -> bool {
         self.tasks.due(now)
             || self.undo_offer.is_some_and(|offer| offer.until <= now)

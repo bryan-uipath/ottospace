@@ -11,7 +11,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use gpui::{AnyElement, AnyView, Context, Div, Window, div, prelude::*, px, relative, rgb, transparent_black};
+use gpui::{AnyElement, AnyView, Context, Div, Window, div, prelude::*, px, relative, rgb};
 use ottospace_core::calendar::{self, Event, Lane, Stage};
 use ottospace_core::ics::{self, Table, Zones};
 use ottospace_core::list::ListRow;
@@ -19,7 +19,14 @@ use ottospace_core::settings::expand_home;
 use ottospace_core::{Action, Effect, Origin, theme};
 use ottospace_mac::meeting;
 
-use crate::{Tooltip, Workspace, config, now_ms, words};
+use crate::{Tooltip, Workspace, config, list_row, now_ms, words};
+
+/// Where the line for now goes on a meeting's row.
+#[derive(Clone, Copy)]
+enum Now {
+    Above,
+    Below,
+}
 
 /// The hairline's height: above the window's buttons, so it costs the title strip nothing.
 pub const HAIRLINE: f32 = 6.;
@@ -325,11 +332,7 @@ impl Workspace {
         let now = now_ms();
         let (text, stage) = calendar.chip(now).filter(|_| calendar.on)?;
         let offset = ottospace_mac::time::utc_offset((now / 1_000) as i64);
-        let read = match (calendar.updated, calendar.stale) {
-            (Some(at), false) => format!("calendar: updated {}", calendar::clock(at, offset)),
-            (Some(at), true) => format!("calendar: not updated since {}", calendar::clock(at, offset)),
-            (None, _) => "calendar: not read yet".to_string(),
-        };
+        let read = format!("calendar: {}", calendar.read_status(offset));
         let tip = calendar.next(now).map(|(e, _)| format!("{}\n{read}", calendar::describe(e, offset))).unwrap_or(read);
         let glow = calendar::glow(stage, now, self.timeline.reduce_motion);
         let lit = stage != Stage::Far;
@@ -474,8 +477,12 @@ impl Workspace {
         let offset = ottospace_mac::time::utc_offset((now / 1_000) as i64);
         let rows = calendar.agenda();
         let today = calendar.today().count();
-        // The first of today's timed meetings still to come: the line for now goes above it.
-        let next = calendar.today().find(|e| !e.all_day && e.start > now).map(|e| e.id);
+        // The line for now: above today's first meeting still to come, else below its last.
+        let timed: Vec<&Event> = calendar.today().filter(|e| !e.all_day).collect();
+        let now_line = |id: u64| match timed.iter().find(|e| e.start > now) {
+            Some(next) => (next.id == id).then_some(Now::Above),
+            None => timed.last().filter(|last| last.id == id).map(|_| Now::Below),
+        };
         let mut children: Vec<AnyElement> = Vec::new();
         if today == 0 {
             children
@@ -485,6 +492,7 @@ impl Workspace {
             let selected = self.model.list == Some(index);
             match row {
                 ListRow::MeetingsTomorrow => {
+                    // As the Apps section's fold lines.
                     let count = calendar.tomorrow().count();
                     let fold = if calendar.tomorrow_open { "▾" } else { "▸" };
                     let heading = div()
@@ -492,16 +500,15 @@ impl Workspace {
                         .relative()
                         .mt_2()
                         .px_2()
-                        .py_0p5()
-                        .rounded_md()
                         .flex()
-                        .gap_1()
+                        .items_center()
+                        .gap_1p5()
                         .text_xs()
                         .text_color(rgb(theme::MUTED))
                         .cursor_pointer()
-                        .hover(|s| s.bg(rgb(theme::SELECTED)))
-                        .when(selected, |d| d.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
-                        .child(fold)
+                        .hover(|s| s.text_color(rgb(theme::TEXT)))
+                        .when(selected, |d| d.pb_0p5().rounded_md().bg(rgb(theme::SELECTED)))
+                        .child(div().w(px(8.)).child(fold))
                         .child(format!("Tomorrow · {count}"))
                         .child(self.controls.mark("meetings-tomorrow"))
                         .on_click(cx.listener(|this, _, window, cx| {
@@ -511,17 +518,12 @@ impl Workspace {
                 }
                 ListRow::Meeting(id) => {
                     let Some(event) = calendar.events.iter().find(|e| e.id == *id) else { continue };
-                    children.push(self.meeting_row(event, (index, selected), (now, offset), next == Some(*id), cx));
+                    children.push(self.meeting_row(event, (index, selected), now, now_line(*id), cx));
                 }
                 _ => {}
             }
         }
-        let footer = match (calendar.updated, calendar.stale) {
-            (Some(at), false) => format!("updated {}", calendar::clock(at, offset)),
-            (Some(at), true) => format!("not updated since {}", calendar::clock(at, offset)),
-            (None, true) => "calendar feed not read".to_string(),
-            (None, false) => "reading the calendar feed…".to_string(),
-        };
+        let footer = calendar.read_status(offset);
         let list = div().id("calendar").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
         let list = list.track_scroll(&self.list_scroll).children(children);
         let footer = div().px_3().py_2().text_xs().text_color(rgb(theme::BORDER_STRONG)).child(footer);
@@ -539,16 +541,18 @@ impl Workspace {
         &self,
         event: &Event,
         (index, selected): (usize, bool),
-        (now, offset): (u64, i64),
-        now_above: bool,
+        now: u64,
+        now_line: Option<Now>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let id = event.id;
         let stage = calendar::stage(event, now);
+        // Each time in the offset it has: tomorrow may be after a clock change.
+        let clock = |ms: u64| calendar::clock(ms, ottospace_mac::time::utc_offset((ms / 1_000) as i64));
         let when = if event.all_day {
             "all day".to_string()
         } else {
-            format!("{}–{}", calendar::clock(event.start, offset), calendar::clock(event.end, offset))
+            format!("{}–{}", clock(event.start), clock(event.end))
         };
         let place = Some(event.location.clone())
             .filter(|l| !l.is_empty())
@@ -556,34 +560,29 @@ impl Workspace {
         let group: &'static str = "meeting-row";
         let join = event.link.as_ref().map(|_| {
             words::words(group, selected).top(px(4.)).child(self.word(
-                format!("meeting-join:{id}"),
+                format!("meeting-row-join:{id}"),
                 ("Join", "Open the meeting's link"),
                 move |this, window, cx| drop(this.dispatch(Action::CalendarJoin { id }, this.input, window, cx)),
                 cx,
             ))
         });
-        let running = stage == Stage::Running;
-        div()
-            .id(("meeting", index))
+        // An all-day event is no meeting in progress.
+        let running = !event.all_day && stage == Stage::Running;
+        let line = |d: Div| d.absolute().left_0().right_0().h(px(1.)).bg(rgb(theme::SNEAK));
+        list_row(("meeting", index), selected)
             .group(group)
-            .relative()
-            .px_2()
+            .pl_2()
             .py_1()
-            .rounded_md()
             .flex()
             .flex_col()
-            .border_1()
-            .border_color(transparent_black())
-            .text_size(px(13.))
             .text_color(rgb(theme::TEXT))
             .when(stage == Stage::Past, |d| d.opacity(0.45))
-            .when(running, |d| d.bg(rgb(theme::SELECTED)).border_color(rgb(theme::SNEAK)))
-            .when(selected, |d| d.bg(rgb(theme::SELECTED)).border_color(rgb(theme::LIST)))
-            .hover(|s| s.bg(rgb(theme::SELECTED)))
-            // Now falls between the meeting before and this one.
-            .when(now_above, |d| {
-                d.child(div().absolute().top(px(-3.)).left_0().right_0().h(px(1.)).bg(rgb(theme::SNEAK)))
-            })
+            .when(running && !selected, |d| d.bg(rgb(theme::SELECTED)).border_color(rgb(theme::SNEAK)))
+            // Now falls between this meeting and the one before or after.
+            .children(now_line.map(|at| match at {
+                Now::Above => line(div()).top(px(-3.)),
+                Now::Below => line(div()).bottom(px(-3.)),
+            }))
             .child(
                 div()
                     .flex()
