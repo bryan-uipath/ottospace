@@ -6114,7 +6114,13 @@ fn the_meeting_timeline_alerts_and_only_the_user_joins_or_dismisses() {
 fn a_feed_link_goes_to_curl_on_its_standard_input_not_its_arguments() {
     use std::os::unix::fs::PermissionsExt;
     let link = "https://calendar.example.com/private-s3cret/basic.ics";
-    let home = calendar_folder("calendar-link", &feed(&[("a", "Sync", 3_600, 5_400, "")]), Some(link));
+    // A meeting the user declined is left out; the address, like the link, stays in the settings.
+    let me = "me-s3cret@example.com";
+    let declined = format!("ATTENDEE;PARTSTAT=DECLINED:mailto:{me}\r\n");
+    let events = feed(&[("a", "Sync", 3_600, 5_400, ""), ("b", "Skipped", 3_600, 5_400, &declined)]);
+    let home = calendar_folder("calendar-link", &events, Some(link));
+    let settings = json!({ "calendar_ics": link, "calendar_email": me, "repos": [] });
+    std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
     // A stand-in for curl: writes what it was given, prints the feed, and the status code in
     // `code` to stderr, as `write-out` asks.
     let dir = home.to_str().unwrap();
@@ -6135,7 +6141,9 @@ fn a_feed_link_goes_to_curl_on_its_standard_input_not_its_arguments() {
     let config = std::fs::read_to_string(home.join("config")).unwrap();
     assert!(config.contains(&format!("url = \"{link}\"")) && config.contains("proto = \"=https\""), "{config}");
     assert!(!config.contains("location") && config.contains("max-redirs = 0"), "no redirect: {config}");
+    assert!(!config.contains(me), "the address is not sent: {config}");
     assert!(!otto.call(json!({"cmd": "state"})).to_string().contains("s3cret"), "the link is a secret");
+    assert!(!otto.call(json!({"cmd": "trace"})).to_string().contains("s3cret"), "nor in the trace");
     drop(otto);
     // A feed that redirects is not read: the status bar asks for its final address.
     std::fs::write(home.join("code"), "302").unwrap();

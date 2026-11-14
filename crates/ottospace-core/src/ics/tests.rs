@@ -188,6 +188,92 @@ fn exdates_overrides_and_cancelled_events() {
     assert!(on(&cancelled, 2026, 11, 13, &utc()).is_empty());
 }
 
+/// Made-up addresses only.
+const ME: &str = "me@example.com";
+
+/// The summaries on 13 November of a feed read as `ME`.
+fn mine(text: &str) -> Vec<String> {
+    let from = at(2026, 11, 13, 0, 0);
+    expand(&parse_for(text, Some(ME)), from, from + DAY, &utc()).into_iter().map(|o| o.summary).collect()
+}
+
+#[test]
+fn a_meeting_the_user_declined_is_left_out() {
+    let one = |attendees: &str| {
+        feed(&event(&format!("UID:a\r\nSUMMARY:Sync\r\nDTSTART:20261113T090000Z\r\nDURATION:PT30M\r\n{attendees}")))
+    };
+    let other = "ATTENDEE;PARTSTAT=ACCEPTED:mailto:other@example.com\r\n";
+    let cases: [(&str, String, bool); 13] = [
+        ("declined", "ATTENDEE;CN=Me;PARTSTAT=DECLINED:mailto:me@example.com\r\n".into(), false),
+        ("accepted", "ATTENDEE;PARTSTAT=ACCEPTED:mailto:me@example.com\r\n".into(), true),
+        ("tentative", "ATTENDEE;PARTSTAT=TENTATIVE:mailto:me@example.com\r\n".into(), true),
+        ("needs action", "ATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:me@example.com\r\n".into(), true),
+        ("no PARTSTAT", "ATTENDEE:mailto:me@example.com\r\n".into(), true),
+        ("not the user's line", "ATTENDEE;PARTSTAT=DECLINED:mailto:other@example.com\r\n".into(), true),
+        ("no attendees", String::new(), true),
+        ("case", "ATTENDEE;partstat=declined:MAILTO:Me@Example.COM\r\n".into(), false),
+        ("EMAIL=", "ATTENDEE;EMAIL=\"me@example.com\";PARTSTAT=DECLINED:urn:uuid:1\r\n".into(), false),
+        ("folded", "ATTENDEE;PARTSTAT=DECLINED:mailto:me@exa\r\n mple.com\r\n".into(), false),
+        // A quoted CN cannot fake a parameter or the address.
+        (
+            "CN with PARTSTAT",
+            "ATTENDEE;CN=\"x;PARTSTAT=DECLINED\";PARTSTAT=ACCEPTED:mailto:me@example.com\r\n".into(),
+            true,
+        ),
+        (
+            "CN with an address",
+            "ATTENDEE;CN=\"a:mailto:me@example.com\";PARTSTAT=DECLINED:mailto:o@example.com\r\n".into(),
+            true,
+        ),
+        // Past the cap of lines looked at, nothing is hidden.
+        ("cap", format!("{}ATTENDEE;PARTSTAT=DECLINED:mailto:me@example.com\r\n", other.repeat(MAX_ATTENDEES)), true),
+    ];
+    for (name, attendees, shown) in cases {
+        assert_eq!(mine(&one(&attendees)).len(), usize::from(shown), "{name}");
+        // With no address set, nothing is hidden.
+        assert_eq!(on(&one(&attendees), 2026, 11, 13, &utc()).len(), 1, "{name}, no address");
+    }
+    // The first line that is the user's counts.
+    let twice =
+        "ATTENDEE;PARTSTAT=ACCEPTED:mailto:me@example.com\r\nATTENDEE;PARTSTAT=DECLINED:mailto:me@example.com\r\n";
+    assert_eq!(mine(&one(twice)).len(), 1);
+    // No attendee's name or address is kept.
+    assert_eq!(format!("{:?}", parse_for(&one(other), Some(ME))).contains("other@"), false);
+}
+
+#[test]
+fn a_declined_occurrence_or_series_hides_only_what_was_declined() {
+    let attendee = |status: &str| format!("ATTENDEE;PARTSTAT={status}:mailto:me@example.com\r\n");
+    let series = |status: &str| {
+        event(&format!(
+            "UID:s\r\nSUMMARY:Standup\r\nDTSTART:20261112T090000Z\r\nDURATION:PT15M\r\nRRULE:FREQ=DAILY\r\n{}",
+            attendee(status)
+        ))
+    };
+    let moved = |status: &str| {
+        event(&format!(
+            "UID:s\r\nRECURRENCE-ID:20261113T090000Z\r\nSUMMARY:Standup (moved)\r\nDTSTART:20261113T100000Z\r\n\
+             DURATION:PT15M\r\n{}",
+            attendee(status)
+        ))
+    };
+    let mine_on = |text: &str, d: i64| {
+        let from = at(2026, 11, d, 0, 0);
+        expand(&parse_for(text, Some(ME)), from, from + DAY, &utc()).len()
+    };
+    // One occurrence of an accepted series declined: only that one goes.
+    let one_declined = feed(&format!("{}{}", series("ACCEPTED"), moved("DECLINED")));
+    assert_eq!((mine_on(&one_declined, 12), mine_on(&one_declined, 13), mine_on(&one_declined, 14)), (1, 0, 1));
+    // The series declined, one occurrence accepted: that one stays.
+    let one_accepted = feed(&format!("{}{}", series("DECLINED"), moved("ACCEPTED")));
+    assert_eq!(mine(&one_accepted), ["Standup (moved)"]);
+    assert_eq!((mine_on(&one_accepted, 12), mine_on(&one_accepted, 14)), (0, 0));
+    // An override with no line of the user's answers as the series does.
+    let silent = moved("X").replace("ATTENDEE;PARTSTAT=X:mailto:me@example.com\r\n", "");
+    assert_eq!(mine_on(&feed(&format!("{}{silent}", series("DECLINED"))), 13), 0);
+    assert_eq!(mine_on(&feed(&format!("{}{silent}", series("ACCEPTED"))), 13), 1);
+}
+
 #[test]
 fn month_days_and_an_ordinal_weekday_meet() {
     // The first Monday, if it is the 1st, 8th, 15th, 22nd or 29th: 1 June 2026 is a Monday.

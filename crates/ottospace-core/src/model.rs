@@ -1226,9 +1226,10 @@ pub enum Action {
         days: [u64; 3],
         at: u64,
     },
-    /// Whether the user is in a call, as the shell saw it. `None`: it could not tell.
+    /// Whether the user is in a call, as the shell saw it at `at`. `None`: it could not tell.
     CallSeen {
         in_call: Option<bool>,
+        at: u64,
     },
     /// The meeting banner's Dismiss: no more alerts of that event. Only the user's.
     CalendarDismiss {
@@ -4027,7 +4028,7 @@ impl Model {
                 }
             }
             Action::CalendarRead { events, days, at } => self.calendar.read(events, days, at),
-            Action::CallSeen { in_call } => self.calendar.call_seen(in_call),
+            Action::CallSeen { in_call, at } => self.calendar.call_seen(in_call, at),
             Action::CalendarDismiss { id } => self.calendar.dismiss(id),
             Action::CalendarTomorrow => self.calendar.tomorrow_open = !self.calendar.tomorrow_open,
             Action::CalendarJoin { id } => effects.extend(self.calendar.join(id).map(|url| Effect::OpenLink { url })),
@@ -6556,7 +6557,7 @@ mod tests {
             Action::TalkPick { id: Subject::Task(1) },
             Action::SetCalendar { on: true, notify: true, links_only: false },
             Action::CalendarRead { events: None, days: [0; 3], at: 0 },
-            Action::CallSeen { in_call: Some(false) },
+            Action::CallSeen { in_call: Some(false), at: 0 },
             Action::CalendarDismiss { id: 1 },
             Action::CalendarJoin { id: 1 },
             Action::CalendarTomorrow,

@@ -29,8 +29,9 @@ User-facing description: [reference](../reference.md#meeting-timeline).
 - **The chip** sits beside the new-tab and split buttons, the strip's one free place whatever
   the left column's width (beside the traffic lights there is no room with the section closed).
 - **The alert** comes once at the start and once 2 minutes later, only within the meeting's first
-  10 minutes, only if a call is known to be off (`in_call == Some(false)`), and not for a meeting
-  dismissed or joined. `calendar_notify_for: "links"` limits it to meetings with a Zoom, Meet or
+  10 minutes, only if a call is known to be off (`in_call == Some(false)`) or the call on was
+  first seen at least 10 minutes before the start (`Calendar::in_other_call`), and not for a
+  meeting dismissed or joined. `calendar_notify_for: "links"` limits it to meetings with a Zoom, Meet or
   Teams link; the default alerts every meeting (an open decision, made a setting).
 
 ## The Calendar section
@@ -75,6 +76,47 @@ Limits: a microphone in use for something else (dictation, a voice memo, a recor
 a call, so the alert is wrongly held back; and a user who joined without computer audio is "in no
 call", so the alert comes. The first is the safe failure for "non-intrusive", the second costs one
 Dismiss.
+
+## A meeting that starts in another call
+
+Bryan, 2026-11-13: "a meeting that starts while in a call should still have another alert".
+Before, any call held the alert back (`in_call == Some(false)` only), so a back-to-back meeting
+whose predecessor ran over alerted nothing, unless that call ended in its first 10 minutes.
+
+- `CallSeen { in_call, at }`: the core keeps when the call on was first seen (`call_since`),
+  forgotten when one is seen off or not known. A call first seen at least `JOINED_EARLY` (10
+  minutes) before a start, or before its last minute while another meeting ran (a short one
+  overrunning), is another call: the meeting alerts, and its banner shows in that call for its
+  first 10 minutes. One seen later, or after the start, is taken for this meeting: no alert.
+- A call that is on is watched (every 2 seconds) until it is seen off, not only near a meeting,
+  so `call_since` is of this call: a call that ended unseen and a new one would otherwise read
+  as the old one.
+- Once per occurrence, at most twice (start and 2 minutes on), as before: a feed read keeps the
+  alerts of an id, and the same call read again changes nothing. A new call ends the alert.
+- Limits: leaving one call and joining the next between two looks (2 seconds) reads as one call,
+  so the joined meeting alerts (one Dismiss; the banner goes after 10 minutes). Joining early
+  while another meeting's slot still runs reads as another call too. A call with no meeting
+  before it is first looked at a minute before the start, so it is taken for this meeting.
+
+## Declined meetings
+
+Bryan, 2026-11-13: "declined meetings hidden would be ideal; ok to add e-mail address in
+settings". `calendar_email` names the user's address; the shell's feed thread passes it to
+`ics::parse_for`, and only there is it compared. The model never holds it, so it is in no state,
+trace or failure folder, and the curl config holds only the link.
+
+- Of each VEVENT's `ATTENDEE` lines (at most 1,000 looked at), the first whose `mailto:` value or
+  `EMAIL=` parameter is the address (ASCII case ignored) gives one bool: its `PARTSTAT` is
+  `DECLINED`. No other attendee's name or address is kept.
+- Parameters split at `;` outside quotes (`content`), so `CN="x;PARTSTAT=DECLINED"` is one
+  parameter, and a colon in a quoted CN does not start the value.
+- An event declined is skipped as a cancelled one is: an override declined hides that occurrence
+  only (it still replaces the series' one); a series declined hides all but overrides with the
+  user's own other answer. An override with no line of the user's answers as its series does.
+- Not verified against real feeds (none was read): Google's secret iCal address is known to list
+  attendees with `PARTSTAT`. Outlook by default removes a meeting the user declines from their
+  calendar, so its published feed should not hold one; a feed published with limited detail
+  (free/busy, titles only) carries no attendees, and then nothing is hidden.
 
 ## The network
 
@@ -137,7 +179,8 @@ Followed: line unfolding, text escapes, `DTSTART`/`DTEND`/`DURATION` as UTC, flo
 `VALUE=DATE`; `RRULE` with `FREQ` `DAILY`, `WEEKLY`, `MONTHLY`, `YEARLY`, `INTERVAL`, `UNTIL`,
 `COUNT`, `BYDAY` (with ordinals for monthly and yearly), `BYMONTHDAY` (negative too), `BYMONTH`,
 `BYSETPOS`, `WKST`; `EXDATE`; `RDATE` (a `VALUE=PERIOD` by its start, with the event's length);
-`RECURRENCE-ID` overrides (moved or cancelled occurrences); `STATUS:CANCELLED`;
+`RECURRENCE-ID` overrides (moved or cancelled occurrences); `STATUS:CANCELLED`; the user's own
+`ATTENDEE` `PARTSTAT=DECLINED` (above);
 `VTIMEZONE` with `STANDARD`/`DAYLIGHT` rules (Outlook's Windows zone names work this way); other
 `TZID`s from the system's zone database. Only today and tomorrow are expanded.
 
@@ -147,8 +190,7 @@ Not followed:
   its first occurrence only.
 - An `RDATE` of a whole day for a timed event, or of a time for a whole-day one.
 - `VTODO`, `VJOURNAL`, `VALARM`, `EXRULE`.
-- Declined meetings: `PARTSTAT=DECLINED` is the user's only if the feed says which attendee is
-  the user, and it does not. A declined meeting still shows and alerts.
+- Declined meetings without `calendar_email`, or in a feed with no attendees: they show and alert.
 - A `TZID` neither the feed nor the system knows is read as local time.
 
 Caps: 5 MB, 20,000 components, 4,000 characters a value, 1,000 exception dates, 14 days an event,
@@ -158,8 +200,7 @@ cut-up feeds.
 ## Open questions
 
 - Alert every meeting, or only those with a meeting link? Built: every one (`calendar_notify_for`).
-- Declined meetings: read the user's address from somewhere (a setting, or Google's feed link,
-  which holds it) to drop them?
-- A call that has nothing to do with the meeting (an earlier one running over) holds the alert
-  back. Should a meeting that starts during another call still alert?
+- Declined meetings: built with a setting (`calendar_email`). Google's feed link holds the address
+  too; not read from it.
+- A meeting that starts during another call: built, it alerts (above).
 - Camera in use (CoreMediaIO) as a second signal, for a user who joins muted with audio off.

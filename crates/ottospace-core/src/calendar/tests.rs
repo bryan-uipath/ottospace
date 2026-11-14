@@ -182,16 +182,65 @@ fn the_repeat_keeps_to_the_first_ten_minutes_and_a_call_ends_the_alerts() {
     let mut c = calendar(vec![event(2, NINE, 60)]);
     c.in_call = Some(false);
     c.tick(NINE);
-    c.call_seen(Some(true));
-    c.call_seen(Some(false));
+    c.call_seen(Some(true), NINE + M);
+    c.call_seen(Some(false), NINE + 2 * M);
     assert!(c.tick(NINE + 3 * M).is_empty());
     assert_eq!(c.banner(NINE + 3 * M), None);
-    // In another call at the start, out of it soon after: this meeting is still missed.
+    // In a call first seen at the start, out of it soon after: this meeting is still missed.
     let mut other = calendar(vec![event(3, NINE, 60)]);
-    other.call_seen(Some(true));
+    other.call_seen(Some(true), NINE);
     assert!(other.tick(NINE).is_empty());
-    other.call_seen(Some(false));
+    other.call_seen(Some(false), NINE + 2 * M);
     assert_eq!(other.tick(NINE + 3 * M).len(), 1);
+}
+
+#[test]
+fn a_meeting_that_starts_in_another_call_alerts_once_and_twice_at_most() {
+    // Back to back: in the 08:00 meeting's call since 08:00, the 09:00 one alerts at its start.
+    let mut c = calendar(vec![event(1, NINE - H, 60), event(2, NINE, 30)]);
+    c.call_seen(Some(true), NINE - H);
+    assert!(c.watching(NINE - 30 * M), "a call on is watched until it ends");
+    assert!(c.tick(NINE - H + M).is_empty(), "the 08:00 one was joined");
+    assert_eq!(c.tick(NINE), [Notice { title: "Meeting 2".into(), started: NINE }]);
+    assert_eq!(c.banner(NINE + M).map(|e| e.id), Some(2), "the banner, in the other call");
+    // The same call going on, read again, or a feed read: no more than the one repeat.
+    c.call_seen(Some(true), NINE + M);
+    c.read(Some(vec![event(1, NINE - H, 60), event(2, NINE, 30)]), c.days, NINE + M);
+    assert!(c.tick(NINE + M).is_empty());
+    assert_eq!(c.tick(NINE + REPEAT).len(), 1, "the repeat");
+    assert!(c.tick(NINE + 5 * M).is_empty(), "never a third");
+    // Out of that call and into the new one: the alert ends.
+    let mut joined = calendar(vec![event(1, NINE - H, 60), event(2, NINE, 30)]);
+    joined.call_seen(Some(true), NINE - H);
+    assert_eq!(joined.tick(NINE).len(), 1);
+    joined.call_seen(Some(false), NINE + M);
+    joined.call_seen(Some(true), NINE + M + 4_000);
+    assert!(joined.banner(NINE + M + 4_000).is_none());
+    assert!(joined.tick(NINE + REPEAT).is_empty());
+    // A call first seen less than `JOINED_EARLY` before the start, or after it, is this meeting's.
+    for since in [NINE - JOINED_EARLY + 1, NINE - WATCH_BEFORE, NINE + M] {
+        let mut early = calendar(vec![event(3, NINE, 30)]);
+        early.call_seen(Some(true), since);
+        assert!(early.tick(NINE.max(since)).is_empty(), "{since}");
+        assert!(early.tick(NINE + REPEAT + M).is_empty(), "{since}");
+    }
+    // A short meeting before, running over: its call, first seen 5 minutes before, is another.
+    let mut short = calendar(vec![event(1, NINE - 5 * M, 5), event(2, NINE, 30)]);
+    short.call_seen(Some(true), NINE - 4 * M);
+    assert_eq!(short.tick(NINE).len(), 1);
+    // In that call, the banner stays only for the alert window: a switch unseen reads as one call.
+    assert!(short.banner(NINE + ALERT_WINDOW - 1).is_some());
+    assert!(short.banner(NINE + ALERT_WINDOW).is_none());
+    let mut before = calendar(vec![event(3, NINE, 30)]);
+    before.call_seen(Some(true), NINE - JOINED_EARLY);
+    assert_eq!(before.tick(NINE).len(), 1);
+    // Not known for a while: the call's start is forgotten, so it counts as this meeting's.
+    let mut unknown = calendar(vec![event(3, NINE, 30)]);
+    unknown.call_seen(Some(true), NINE - H);
+    unknown.call_seen(None, NINE - M);
+    assert!(unknown.tick(NINE).is_empty(), "no alert on a guess");
+    unknown.call_seen(Some(true), NINE);
+    assert!(unknown.tick(NINE + M).is_empty());
 }
 
 #[test]

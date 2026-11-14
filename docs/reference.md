@@ -627,19 +627,22 @@ the way.
   Accessibility, Display) the colour steps up instead, with no movement. Nothing else in
   ottospace pulses.
 - **The status bar** says `Design review in 4m` in amber from 5 minutes before.
-- **At the start**, if you are in no call: a banner under the title strip (the title, how long
+- **At the start**, if you are in no call, or still in an earlier one (on from 10 minutes before,
+  or the meeting before, running over): a banner under the title strip (the title, how long
   ago it started, **Join** if the meeting has an `https:` link, **Dismiss**), which stays until
   you dismiss it, join, a call starts or the meeting ends; and a system notification with the
   alert sound, so you see it when ottospace is behind other windows. Once more 2 minutes later
-  if you are still in no call; never a third time. Only in a meeting's first 10 minutes: one you
+  if you have not joined; never a third time. Only in a meeting's first 10 minutes: one you
   leave early alerts nothing. `calendar_notify: false` turns alerts off; `calendar_notify_for:
   "links"` alerts only meetings with a Zoom, Meet or Teams link (the default, `all`, alerts every
   meeting, as one with no link is still one you would miss).
 - **In a call** means a microphone is in use by any app (Zoom, Meet in a browser, Teams), as
   macOS's audio system says. ottospace reads no window, title or log for it and asks for no
   permission. A microphone in use for something else (dictation, a recording) also counts as a
-  call, and then no alert comes. Until it has looked (it looks every 2 seconds from a minute
-  before a meeting) no alert comes either.
+  call, and then no alert comes, unless it is an earlier call (above). Until
+  it has looked (it looks every 2 seconds from a minute before a meeting, and while a call it saw
+  goes on) no alert comes either. Leaving one call and joining the next within 2 seconds reads as
+  one call: Dismiss the alert.
 - **Join** opens the meeting's link with the app that handles it (Zoom for a Zoom link), only
   when you click it or choose it, and only an `https:` link. Never by itself.
 - **The feed** is read at start and every `calendar_refresh_minutes` (5), off the main thread,
@@ -650,6 +653,11 @@ the way.
   its arguments, and is never shown, logged or put in the state. A read that fails keeps the
   events of the last one. Recurring meetings, time zones, cancelled meetings and moved
   occurrences are followed; see [meeting-timeline.md](ai/meeting-timeline.md) for what is not.
+- **Declined meetings**: set `calendar_email` to your address as the feed lists you among a
+  meeting's attendees, and a meeting (or one occurrence) you declined is left out everywhere: the
+  hairline, the chip, the section and the alerts. A feed published with limited detail (free/busy
+  only, or without attendees) does not say who declined; then nothing is left out. The address
+  stays in `settings.json`: it is not sent with the feed's request, shown, logged or in the state.
 - **The Calendar section** (its rail cell, second, is there only while `calendar_ics` is set):
   today's meetings, all-day ones first, then by start: the time, the title, and the place (or the
   link's host) below. The meeting that runs is outlined in amber, past ones are dimmed, and a thin
@@ -810,8 +818,9 @@ optional:
 | `calendar_ics` | The [meeting timeline](#meeting-timeline)'s calendar feed: an `https://` link (to a host on the internet, not an address or `localhost`) or a file's path (`/…` or `~/…`). Never shown: a private feed's link holds a secret | none: no timeline |
 | `calendar_window_hours` | How many hours the hairline shows from now, 1 to 24 | `8` |
 | `calendar_refresh_minutes` | How often the feed is read again, at least 1 | `5` |
-| `calendar_notify` | A meeting that starts while you are in no call shows the banner, a notification and a sound | `true` |
+| `calendar_notify` | A meeting that starts while you are in no call, or in another call, shows the banner, a notification and a sound | `true` |
 | `calendar_notify_for` | Which meetings alert: `all`, or only those with a Zoom, Meet or Teams `links` | `all` |
+| `calendar_email` | Your address among a meeting's attendees in the feed: a meeting you declined is left out. Kept on this machine, never shown | none: nothing is left out |
 | `suggest_dock_apps` | List the Dock's apps that are not running under "Not running". `false`: only pinned apps are listed there, and the Dock is not read | `true` |
 
 A mistake in the file (a key that does not exist, a wrong value, a font that is not installed) is

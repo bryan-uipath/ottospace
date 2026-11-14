@@ -81,6 +81,8 @@ impl Timeline {
             Source::File(PathBuf::from(expand_home(feed, &config::user_home())))
         };
         let every = Duration::from_secs(60 * u64::from(settings.calendar_refresh_minutes.unwrap_or(5).max(1)));
+        // Only to match while parsing: never sent, stored in the model, or logged.
+        let me = settings.calendar_email.clone();
         let (tx, rx) = mpsc::channel();
         // The feed is parsed once a read, and its events worked out again only then or when the
         // day turns: nothing that grows with the feed runs on the timer.
@@ -93,7 +95,7 @@ impl Timeline {
                 let mut failed = false;
                 if due {
                     match fetch(&source) {
-                        Ok(text) => feed = ics::parse(&text),
+                        Ok(text) => feed = ics::parse_for(&text, me.as_deref()),
                         Err(why) => (failed, problem) = (true, why),
                     }
                     fetched = Some(Instant::now());
@@ -214,7 +216,7 @@ impl Workspace {
                 meeting::Call::Unknown => None,
             };
             if self.model.calendar.in_call != in_call {
-                self.dispatch(Action::CallSeen { in_call }, Origin::System, window, cx);
+                self.dispatch(Action::CallSeen { in_call, at: now }, Origin::System, window, cx);
             }
         }
         let calendar = &self.model.calendar;
