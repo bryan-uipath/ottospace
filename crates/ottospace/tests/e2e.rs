@@ -2271,6 +2271,12 @@ fn the_picker_filter_is_a_field_and_offers_apps_that_are_not_running() {
     let reply = key("t");
     assert_eq!(rows(&reply), ["terminal ", "closed Sketchpad"]);
     assert_eq!(key("down")["state"]["picker"]["selected"], 1);
+    // ⇧Tab moves up, as in the palette: from the first row round to the last. Tab moves down.
+    let reply = otto.call(json!({"cmd": "picker_query", "query": "e"}));
+    let last = rows(&reply).len() - 1;
+    assert!(last >= 2 && reply["state"]["picker"]["selected"] == 0, "{reply}");
+    assert_eq!(key("shift-tab")["state"]["picker"]["selected"], last);
+    assert_eq!(key("tab")["state"]["picker"]["selected"], 0);
     let reply = key("escape");
     assert_eq!(
         (reply["mode"].as_str(), &reply["field"], &reply["picker_rows"]),

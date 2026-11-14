@@ -198,7 +198,7 @@ impl Workspace {
         let keymap = cx.key_bindings();
         let keymap = keymap.borrow();
         let rows = palette.matches().into_iter().enumerate().map(|(i, command)| {
-            dialog::list_row(("command", i), i == palette.selected)
+            dialog::filter_row(("command", i), i == palette.selected)
                 .child(
                     div().w(px(72.)).flex_none().text_xs().text_color(rgb(theme::MUTED)).child(command.group().label()),
                 )

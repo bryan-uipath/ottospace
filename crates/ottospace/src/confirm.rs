@@ -31,7 +31,7 @@ impl Workspace {
         self.model.confirm.as_ref()?;
         let m = key.modifiers;
         // Fn counts as a modifier the core has no name for: with it no key is a yes.
-        let mods = Mods { ctrl: m.control, alt: m.alt, shift: m.shift || m.function, cmd: m.platform };
+        let mods = Mods { shift: m.shift || m.function, ..crate::mods(m) };
         Confirm::answer(&key.key, mods, origin)
     }
 

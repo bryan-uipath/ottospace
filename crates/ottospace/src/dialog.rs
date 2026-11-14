@@ -5,7 +5,7 @@ use gpui::{
     AnyElement, BoxShadow, Context, Div, ElementId, KeyDownEvent, MouseButton, SharedString, Stateful, Styled, Window,
     black, div, point, prelude::*, px, rgb,
 };
-use ottospace_core::keys::{self, FilterKey, Mods};
+use ottospace_core::keys::{self, FilterKey};
 use ottospace_core::{Action, theme};
 
 use crate::Workspace;
@@ -60,7 +60,7 @@ pub fn hint(text: &'static str) -> Div {
 }
 
 /// A row of a filtered list: highlighted while `selected` or under the pointer.
-pub fn list_row(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
+pub fn filter_row(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
     div()
         .id(id)
         .h(px(30.))
@@ -106,9 +106,7 @@ impl Workspace {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        let m = event.keystroke.modifiers;
-        let mods = Mods { ctrl: m.control, alt: m.alt, shift: m.shift, cmd: m.platform };
-        let Some(key) = keys::filter_key(&event.keystroke.key, mods) else {
+        let Some(key) = keys::filter_key(&event.keystroke.key, crate::mods(event.keystroke.modifiers)) else {
             // The filter is a text field: it edits, and what types text goes to the input method.
             if self.field_key(event, window, cx) {
                 cx.stop_propagation();

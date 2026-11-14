@@ -11,7 +11,7 @@ use gpui::{
     Pixels, ScrollWheelEvent, Stateful, Window, canvas, div, prelude::*, px, rgb, svg,
 };
 use ottospace_core::agents::{self, Command, Start};
-use ottospace_core::keys::{self, Mods};
+use ottospace_core::keys;
 use ottospace_core::talk::Subject;
 use ottospace_core::tasks::{Group, TaskId};
 use ottospace_core::terminal::scroll_key;
@@ -210,7 +210,7 @@ impl Workspace {
         let Some(agent) = self.model.talk.as_ref().and_then(|talk| self.drawer.agents.get(&talk.task)) else { return };
         let terminal = &agent.terminal;
         let (key, m) = (&event.keystroke, event.keystroke.modifiers);
-        let mods = Mods { ctrl: m.control, alt: m.alt, shift: m.shift, cmd: m.platform };
+        let mods = crate::mods(m);
         if let Some(scroll) = scroll_key(&key.key, mods, terminal.alt_screen()) {
             terminal.scroll(scroll);
             cx.notify();

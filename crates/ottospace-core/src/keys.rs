@@ -135,10 +135,11 @@ mod tests {
 
     #[test]
     fn shift_tab_moves_up_a_list() {
+        let ctrl = Mods { ctrl: true, ..NONE };
         assert_eq!(filter_key("tab", NONE), Some(FilterKey::Move(1)));
         assert_eq!(filter_key("tab", Mods { shift: true, ..NONE }), Some(FilterKey::Move(-1)));
-        assert_eq!(filter_key("tab", Mods { ctrl: true, ..NONE }), None);
-        assert_eq!(filter_key("p", Mods { ctrl: true, ..NONE }), Some(FilterKey::Move(-1)));
+        assert_eq!(filter_key("tab", ctrl), None);
+        assert_eq!(filter_key("p", ctrl), Some(FilterKey::Move(-1)));
         assert_eq!(filter_key("p", NONE), None);
     }
 

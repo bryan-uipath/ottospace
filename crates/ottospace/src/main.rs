@@ -3062,7 +3062,7 @@ impl Workspace {
         let Some(terminal) = self.model.focused.and_then(|id| self.terminals.get(&id)) else { return };
         let key = &event.keystroke;
         let m = key.modifiers;
-        let mods = Mods { ctrl: m.control, alt: m.alt, shift: m.shift, cmd: m.platform };
+        let mods = crate::mods(m);
         if let Some(scroll) = scroll_key(&key.key, mods, terminal.alt_screen()) {
             terminal.scroll(scroll);
             cx.notify();
@@ -3335,11 +3335,6 @@ impl Workspace {
     /// While the picker is open it takes every key: text edits the filter, ↑↓ move, enter opens.
     /// ⌘ shortcuts the filter does not use still reach their bindings.
     fn picker_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
-        // ⌃Tab moves down in the picker; in the palette it is Next Tab's.
-        if event.keystroke.key == "tab" && event.keystroke.modifiers.control {
-            self.dispatch(Action::PickerMove { delta: 1 }, self.input, window, cx);
-            return cx.stop_propagation();
-        }
         let action = |key| match key {
             FilterKey::Close => Action::ClosePicker,
             FilterKey::Choose => Action::PickerChoose { index: None },
@@ -3445,7 +3440,7 @@ impl Workspace {
                 PickItem::App { .. } => ("APP", theme::APP),
                 PickItem::Closed { .. } => ("APP", theme::MUTED),
             };
-            dialog::list_row(("pick", i), i == selected)
+            dialog::filter_row(("pick", i), i == selected)
                 .child(match item {
                     // An app shows its icon where the tag would be.
                     // A running app's icon is kept by its name, one that is not by its bundle.
@@ -4861,6 +4856,11 @@ fn day_start(now: u64) -> u64 {
 fn now_ms() -> u64 {
     let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
     since.map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
+/// A key's modifiers as the core names them.
+fn mods(m: gpui::Modifiers) -> Mods {
+    Mods { ctrl: m.control, alt: m.alt, shift: m.shift, cmd: m.platform }
 }
 
 /// A row of a secondary-bar list. A button at rest: its outline shows. Hover lifts it.
