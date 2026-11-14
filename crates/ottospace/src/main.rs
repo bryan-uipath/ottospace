@@ -29,7 +29,7 @@ use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::compose;
 use ottospace_core::edit::{self, Edit};
 use ottospace_core::hosted::{self as hosting, Click};
-use ottospace_core::keys::{self, Mods};
+use ottospace_core::keys::{self, FilterKey, Mods};
 use ottospace_core::list::{ListKey, list_key};
 use ottospace_core::marks::{Field, MarkInput, MarkOf, MarkRef, letter};
 use ottospace_core::model::CONFIRM_UP;
@@ -80,6 +80,7 @@ mod tags;
 mod talk;
 mod terminal;
 mod trace;
+mod words;
 mod workbook;
 use control::{Call, MouseAction, PaneKind, Request};
 use terminal::Terminal;
@@ -3334,25 +3335,17 @@ impl Workspace {
     /// While the picker is open it takes every key: text edits the filter, ↑↓ move, enter opens.
     /// ⌘ shortcuts the filter does not use still reach their bindings.
     fn picker_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
-        let key = &event.keystroke;
-        let m = key.modifiers;
-        let action = match key.key.as_str() {
-            "escape" => Action::ClosePicker,
-            "enter" => Action::PickerChoose { index: None },
-            "down" | "tab" => Action::PickerMove { delta: 1 },
-            "up" => Action::PickerMove { delta: -1 },
-            "n" if m.control => Action::PickerMove { delta: 1 },
-            "p" if m.control => Action::PickerMove { delta: -1 },
-            // The filter is a text field: it edits, and what types text goes to the input method.
-            _ => {
-                if self.field_key(event, window, cx) {
-                    cx.stop_propagation();
-                }
-                return;
-            }
+        // ⌃Tab moves down in the picker; in the palette it is Next Tab's.
+        if event.keystroke.key == "tab" && event.keystroke.modifiers.control {
+            self.dispatch(Action::PickerMove { delta: 1 }, self.input, window, cx);
+            return cx.stop_propagation();
+        }
+        let action = |key| match key {
+            FilterKey::Close => Action::ClosePicker,
+            FilterKey::Choose => Action::PickerChoose { index: None },
+            FilterKey::Move(delta) => Action::PickerMove { delta },
         };
-        self.dispatch(action, self.input, window, cx);
-        cx.stop_propagation();
+        self.filtered_list_key(event, action, window, cx);
     }
 
     /// The key reference: every shortcut, grouped. ⌘/ or Esc or a click closes it.
@@ -3426,25 +3419,12 @@ impl Workspace {
         // The columns keep their height inside the list: a flex row would stretch them to its own.
         let list = div().id("keys-rows").flex_1().overflow_y_scroll().child(columns);
         let panel = panel.child(self.bars.area("keys", list));
-        div()
-            .id("keys-backdrop")
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
+        dialog::backdrop("keys-backdrop", 0.5, Action::CloseKeys, cx)
             .p_6()
             .flex()
             .flex_col()
             .items_center()
             .justify_center()
-            .bg(black().opacity(0.5))
-            .occlude()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
-                    this.dispatch(Action::CloseKeys, this.input, window, cx);
-                }),
-            )
             .child(panel)
     }
 
@@ -3465,17 +3445,7 @@ impl Workspace {
                 PickItem::App { .. } => ("APP", theme::APP),
                 PickItem::Closed { .. } => ("APP", theme::MUTED),
             };
-            div()
-                .id(("pick", i))
-                .h(px(30.))
-                .px_3()
-                .flex()
-                .items_center()
-                .gap_3()
-                .text_sm()
-                .cursor_pointer()
-                .when(i == selected, |d| d.bg(rgb(theme::SELECTED)))
-                .hover(|s| s.bg(rgb(theme::SELECTED)))
+            dialog::list_row(("pick", i), i == selected)
                 .child(match item {
                     // An app shows its icon where the tag would be.
                     // A running app's icon is kept by its name, one that is not by its bundle.
@@ -3503,61 +3473,16 @@ impl Workspace {
             (false, Axis::Right) => "Split right with",
             (false, Axis::Down) => "Split down with",
         };
-        let panel = dialog::panel(theme::BORDER_STRONG)
-            .absolute()
-            .top(px(TOP_BAR + 6.))
-            .right(px(8.))
-            .w(px(320.))
-            .max_h(px(420.))
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            // A click inside the panel must not reach the backdrop, which closes the picker.
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(
-                div()
-                    .h(px(34.))
-                    .px_3()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .border_b_1()
-                    .border_color(rgb(theme::BORDER))
-                    .text_xs()
-                    .child(div().text_color(rgb(theme::PICK)).child(title))
-                    .child(self.render_field("type to filter", cx)),
-            )
-            .when(rows.is_empty(), |d| d.child(div().p_3().text_xs().text_color(rgb(theme::MUTED)).child("No match")))
-            // Long lists scroll inside the panel.
-            .child(
-                self.bars.area("picker", div().id("picker-rows").flex_1().min_h_0().overflow_y_scroll().children(rows)),
-            )
-            // The status bar no longer lists these, and ⌘/ closes the picker.
-            .child(
-                div()
-                    .px_3()
-                    .py_1p5()
-                    .border_t_1()
-                    .border_color(rgb(theme::BORDER))
-                    .text_xs()
-                    .text_color(rgb(theme::MUTED))
-                    .child("↑↓ move · ↵ open · esc close"),
-            );
-        div()
-            .id("picker-backdrop")
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .bg(black().opacity(0.25))
-            .occlude()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
-                    this.dispatch(Action::ClosePicker, this.input, window, cx);
-                }),
-            )
-            .child(panel)
+        let panel = dialog::floating(320.).absolute().top(px(TOP_BAR + 6.)).right(px(8.)).max_h(px(420.));
+        let header = div()
+            .h(px(34.))
+            .text_xs()
+            .child(div().text_color(rgb(theme::PICK)).child(title))
+            .child(self.render_field("type to filter", cx));
+        // The status bar no longer lists these keys, and ⌘/ closes the picker.
+        let texts = ("No match", "↑↓ move · ↵ open · esc close");
+        let panel = self.list_panel(panel, header, "picker", rows, texts);
+        dialog::backdrop("picker-backdrop", 0.25, Action::ClosePicker, cx).child(panel)
     }
 
     /// A click on a pane body. An app pane goes live, then the click is replayed so it lands in
@@ -4038,31 +3963,13 @@ impl Workspace {
         let key = format!("{}:{}", row.runner, row.id);
         let button = |name: &'static str, label: &'static str, tip: &'static str| {
             let (runner, id) = (row.runner.clone(), row.id.clone());
-            div()
-                .id(ElementId::Name(format!("{name}:{key}").into()))
-                .relative()
-                .child(self.controls.mark(format!("{name}:{key}")))
-                .px_1()
-                .rounded_sm()
-                .text_xs()
-                .text_color(rgb(theme::TEXT))
-                .hover(|s| s.bg(rgb(theme::BORDER_STRONG)))
-                .child(label)
-                .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    cx.stop_propagation(); // not a click on the row
-                    this.click_session_control(name, runner.clone(), id.clone(), window, cx);
-                }))
+            let click = move |this: &mut Self, window: &Window, cx: &mut Context<Self>| {
+                this.click_session_control(name, runner.clone(), id.clone(), window, cx)
+            };
+            self.word(format!("{name}:{key}"), (label, tip), click, cx)
         };
-        let actions = div()
-            .absolute()
-            .right(px(6.))
+        let actions = words::words("session-row", selected)
             .bottom(px(4.))
-            .flex()
-            .gap_0p5()
-            .pl_1()
-            .bg(rgb(theme::SELECTED))
-            .when(!selected, |d| d.invisible().group_hover("session-row", |s| s.visible()))
             .child(button("session-open", "Open", "Its conversation, in the drawer"))
             .child(button("session-adopt", "Adopt", "Make a task of this session"))
             .child(button("session-hide", "Hide", "Hide until ottospace starts again"));
@@ -4169,32 +4076,14 @@ impl Workspace {
         let id = task.id;
         // Words, as on a session's row: the icons said too little.
         let button = |name: &'static str, label: &'static str, tip: &'static str| {
-            div()
-                .id((name, id as usize))
-                .relative()
-                .child(self.controls.mark(format!("{name}:{id}")))
-                .px_1()
-                .rounded_sm()
-                .text_xs()
-                .text_color(rgb(theme::TEXT))
-                .hover(|s| s.bg(rgb(theme::BORDER_STRONG)))
-                .child(label)
-                .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    cx.stop_propagation(); // not a click on the row, which opens the task
-                    this.click_row_button(name, id, window, cx);
-                }))
+            let click = move |this: &mut Self, window: &Window, cx: &mut Context<Self>| {
+                this.click_row_button(name, id, window, cx)
+            };
+            self.word(format!("{name}:{id}"), (label, tip), click, cx)
         };
         // Over the end of the muted line, on the row's own colour: hidden, they take no room from it.
-        let actions = div()
-            .absolute()
-            .right(px(6.))
+        let actions = words::words("task-row", selected)
             .bottom(px(4.))
-            .flex()
-            .gap_0p5()
-            .pl_1()
-            .bg(rgb(theme::SELECTED))
-            .when(!selected, |d| d.invisible().group_hover("task-row", |s| s.visible()))
             // No Start or Show: a click on the row opens its conversation.
             .child(button("task-snooze", "Snooze", "Snooze 1 hour (S)"))
             // A finished task cannot be put on hold, and one on hold is there already: no button
