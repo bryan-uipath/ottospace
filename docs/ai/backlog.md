@@ -102,3 +102,27 @@ layout file names each terminal's session) and replaces nothing there: after a r
 A `keys` map in `settings.json` (action name → chord, e.g. `"focus_left": "cmd-ctrl-h"`) that
 replaces or adds to the default bindings. The menus and the ⌘/ list show the bindings in force;
 a chord ottospace cannot parse, or one bound twice, is reported and the default kept.
+
+## 12. Ask a hosted Electron app for its full accessibility tree
+
+Measured on 2026-11-13 with no assistive client: Spotify exposes 17 elements and Slack 12, of
+which 3 are pressable in each (the window's own buttons); Outlook exposes 372 or more. So sneak
+labels, the inspector and captures get nothing from Electron and Chromium apps.
+
+A screen reader gets the tree by setting an attribute on the app: `AXManualAccessibility`
+(Electron: build the tree, change nothing else) or `AXEnhancedUserInterface` (what VoiceOver
+sets; some apps then change window animation and resizing). ottospace sets neither.
+
+Idea: while an app has a window in a pane, and only for apps the user opted in:
+
+- On hosting: read the app's value, remember it, set `AXManualAccessibility`.
+- On release of its last hosted window: put the remembered value back. The hosted-window record
+  and the guardian do the same after a crash.
+- Off by default. A list in `settings.json` and a toggle in the accessibility inspector; a mark
+  on the pane header while it is on.
+- Electron only at first. `AXEnhancedUserInterface` (Spotify and other Chromium apps) is left out.
+
+To settle first: the setting is per app, not per window; whether Electron drops the tree again
+when it is turned off is not verified; while it is on, the app's text (messages, names) is
+readable by `ax_tree`, which a socket client may call, and by captures; the app pays CPU and
+memory for it.
