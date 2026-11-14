@@ -1,92 +1,72 @@
-//! The user's wheel or trackpad over a parked app pane, handed to that app's window, which stays
-//! where it is (`ottospace_core::app_wheel`). Scrolls are added up per frame, go through the
-//! core, and are checked against the pane's window when posted. See `docs/ai/sneak-apps.md`.
+//! The user's wheel or trackpad over a parked app pane brings its real window up over the pane
+//! for the scroll (a peek, `ottospace_core::app_wheel`); the app is activated so the window can
+//! show above ottospace. macOS then scrolls the window under the pointer itself; the scroll that
+//! started the peek reached ottospace, and is not passed on. The core says when the peek ends;
+//! this module looks. See `docs/ai/sneak-apps.md`.
 
-use gpui::{Context, ScrollDelta, ScrollWheelEvent, Window};
-use objc2_core_foundation::CGPoint;
-use ottospace_core::hosted::replay;
+use std::time::{Duration, Instant};
+
+use gpui::{Context, Window};
 use ottospace_core::{Action, Origin, PaneId};
-use ottospace_mac::wheel::Scroll;
+use ottospace_mac::{input, wheel};
 
-use crate::{Workspace, config};
+use crate::{Workspace, config, now_ms, on_screen};
 
-/// A scroll waiting for the next tick, for the window it was over when it came.
-struct Pending {
-    pane: PaneId,
-    origin: Origin,
-    pid: i32,
-    window: u32,
-    /// The point in the window's real place (global, top-left origin) under the pointer.
-    at: CGPoint,
-    scroll: Scroll,
-}
-
-/// The scrolls of this frame, and the one the core is being asked about.
+/// When the peek on now started, and counts for a test (the state's `counts`).
 #[derive(Default)]
 pub struct Wheel {
-    pending: Vec<Pending>,
-    posting: Option<Pending>,
-    /// Scrolls over an app pane's picture that were kept, and scrolls posted to an app: for a
-    /// test to tell where one stopped (the state's `counts`).
-    pub kept: u64,
-    pub posted: u64,
+    pub over: u64,
+    pub peeks: u64,
+    /// A click or a key after this went to the app.
+    since: Option<Instant>,
 }
 
 impl Workspace {
-    /// A scroll over app pane `pane`'s picture: kept for the next tick, at the point of the
-    /// window under the pointer. Over the gap beside a window smaller than the pane: nothing.
-    pub(crate) fn app_wheel(&mut self, pane: PaneId, event: &ScrollWheelEvent) {
+    /// A scroll over app pane `pane`'s picture: the core is asked for a peek.
+    pub(crate) fn app_wheel(&mut self, pane: PaneId, window: &Window, cx: &mut Context<Self>) {
+        self.wheel.over += 1;
+        // Not while a drag is on. Not from behind another app: its end gives ottospace the keyboard.
         let off = config::get().settings.wheel_to_apps == Some(false);
-        let Some(h) = self.hosted.get(&pane).filter(|_| !off && self.model.live != Some(pane)) else { return };
-        let preview = h.preview.get();
-        let x = f64::from(f32::from(event.position.x - preview.origin.x));
-        let y = f64::from(f32::from(event.position.y - preview.origin.y));
-        let Some((x, y)) = replay((x, y), (h.shown.width, h.shown.height)) else { return };
-        // The picture shows the window below its cropped title bar, unscaled from its top left.
-        let at = CGPoint::new(h.parked_at.x + x, h.parked_at.y + h.shown_crop + y);
-        // The system's own event, phases and momentum and all; a test's is made from its deltas.
-        let (delta, precise) = match event.delta {
-            ScrollDelta::Pixels(p) => ([f32::from(p.x).into(), f32::from(p.y).into()], true),
-            ScrollDelta::Lines(l) => ([l.x.into(), l.y.into()], false),
-        };
-        let made = || Scroll::new(delta[0], delta[1], precise);
-        let Some(scroll) = Scroll::current(delta).or_else(made) else { return };
-        let (origin, pid, window) = (self.input, h.pid, h.window_id);
-        self.wheel.kept += 1;
-        // Added to the last one of the same pane, window, sender and phase: one event a frame.
-        match self.wheel.pending.last_mut() {
-            Some(last)
-                if (last.pane, last.window, last.origin) == (pane, window, origin)
-                    && last.scroll.phases() == scroll.phases() =>
-            {
-                last.scroll.add(&scroll);
-                last.at = at;
-            }
-            _ => self.wheel.pending.push(Pending { pane, origin, pid, window, at, scroll }),
+        if off || input::left_button_down() || !window.is_window_active() {
+            return;
         }
+        let action = Action::AppWheel { pane, now: now_ms() };
+        if let Some(why) = self.model.refusal(&action, self.input) {
+            self.error = Some(why.into());
+        }
+        let effects = self.dispatch(action, self.input, window, cx);
+        let fields =
+            serde_json::json!({ "pane": pane, "origin": crate::trace::name(&self.input), "effects": effects.len() });
+        crate::trace::record("wheel", fields);
     }
 
-    /// Every tick: each scroll of the last frame goes to the core as its sender's, which says
-    /// whether it reaches the app (`Effect::AppWheel`) and how far.
-    pub(crate) fn flush_wheel(&mut self, window: &Window, cx: &mut Context<Self>) {
-        for pending in std::mem::take(&mut self.wheel.pending) {
-            let ([dx, dy], pane, origin) = (pending.scroll.points(), pending.pane, pending.origin);
-            self.wheel.posting = Some(pending);
-            self.dispatch(Action::AppWheel { pane, dx, dy }, origin, window, cx);
-            self.wheel.posting = None;
-        }
+    /// `Effect::Peek`: the window goes over its pane as on entering, its app activated (it cannot
+    /// be shown above ottospace otherwise).
+    pub(crate) fn peek(&mut self, pane: PaneId, window: &Window, cx: &mut Context<Self>) {
+        let Some(hosted) = self.hosted.get_mut(&pane) else { return };
+        crate::trace::record("peek", serde_json::json!({ "pane": pane, "window": hosted.window_id }));
+        // An inactive app's window stays under the active app's (AXRaise alone, or ottospace's
+        // window ordered below it, left it there on CI): the app is activated, as on entering.
+        hosted.bring_up(window, cx);
+        self.wheel.peeks += 1;
+        self.wheel.since = Some(Instant::now());
     }
 
-    /// `Effect::AppWheel`: posts the scroll being flushed, `dx`, `dy` points at most, to the app
-    /// alone. Only if the pane still hosts that window of that process, parked.
-    pub(crate) fn post_wheel(&mut self, pane: PaneId, dx: f64, dy: f64) {
-        let Some(mut pending) = self.wheel.posting.take().filter(|p| p.pane == pane) else { return };
-        let hosted = self.hosted.get(&pane);
-        let same = hosted.is_some_and(|h| (h.pid, h.window_id) == (pending.pid, pending.window));
-        if same && self.model.live != Some(pane) {
-            pending.scroll.limit([dx, dy]);
-            pending.scroll.post(pending.pid, pending.window, pending.at);
-            self.wheel.posted += 1;
-        }
+    /// While a peek is on: where the pointer is, whether a click or a key came since it began,
+    /// and when the last scroll was. The core decides what that ends.
+    pub(crate) fn check_peek(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let Some(pane) = self.model.peek.as_ref().map(|peek| peek.pane) else { return };
+        let Some(hosted) = self.hosted.get(&pane) else { return };
+        let (rect, at) = (on_screen(hosted.bounds.get(), window, cx), wheel::pointer());
+        let over = rect.origin.x <= at.x
+            && at.x < rect.origin.x + rect.size.width
+            && rect.origin.y <= at.y
+            && at.y < rect.origin.y + rect.size.height;
+        // The app has the keyboard and the pointer: any press since the peek began went to it.
+        let up = self.wheel.since.map_or(Duration::ZERO, |since| since.elapsed());
+        let pressed = wheel::since_press().is_some_and(|ago| ago < up);
+        let now = now_ms();
+        let scrolled = wheel::since_scroll().map(|ago| now.saturating_sub(ago.as_millis() as u64));
+        self.dispatch(Action::PeekCheck { now, over, pressed, scrolled }, Origin::System, window, cx);
     }
 }

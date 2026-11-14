@@ -808,9 +808,10 @@ const MAKERS: &[Make] = &[
         };
         Action::SneakApp { pane, read: (!g.rng.one_in(5)).then(|| g.app_read()) }
     },
+    |g| Action::AppWheel { pane: g.pane(), now: g.time() },
     |g| {
-        let delta = |g: &mut Gen| g.rng.pick(&[0., -40., 3.5, 1e9, f64::NAN]);
-        Action::AppWheel { pane: g.pane(), dx: delta(g), dy: delta(g) }
+        let scrolled = g.rng.coin().then(|| g.time());
+        Action::PeekCheck { now: g.time(), over: g.rng.coin(), pressed: g.rng.one_in(4), scrolled }
     },
     |g| {
         let one = |g: &mut Gen| Running {
@@ -1177,6 +1178,17 @@ fn check(m: &Model) -> Result<(), String> {
     }
     for (_, tab) in &m.last_tab {
         ensure!(tab_ids.contains(tab), "tab {tab} is remembered and gone");
+    }
+    // At most one peek, of a parked app pane on show, with no mode over the panes.
+    if let Some(peek) = &m.peek {
+        let app = m.pane(peek.pane).is_some_and(|p| matches!(p.kind, Kind::App { .. }));
+        ensure!(
+            app && shown.contains(&peek.pane) && m.live.is_none(),
+            "a peek of pane {}, not parked or shown",
+            peek.pane
+        );
+        let mode = matches!(m.mode(), Mode::Normal | Mode::List | Mode::Talk);
+        ensure!(mode && !m.keys && !m.ax_overlay, "a peek under {:?}", m.mode());
     }
 
     // The drawer is on a task there is; the keyboard is in it only while it is open, its agent
@@ -1787,6 +1799,8 @@ fn check_state(m: &Model) -> Result<(), String> {
 struct Shell {
     panes: Vec<PaneId>,
     live: Option<PaneId>,
+    /// The window up for a scroll.
+    peek: Option<PaneId>,
     visual: Option<PaneId>,
     /// What it keeps of the draft in the bar: (the draft, the capture's number).
     kept: Vec<(String, u32)>,
@@ -1898,8 +1912,15 @@ impl Run {
                 | Action::TalkPick { .. }
         );
 
+        let peek_before = m.peek.as_ref().map(|peek| peek.pane);
         let effects = m.update(sent);
         check(m)?;
+        // A peek that ends is parked again, made an entry, or its pane closed: never stranded.
+        if let Some(pane) = peek_before.filter(|pane| m.peek.as_ref().map(|p| p.pane) != Some(*pane)) {
+            let closed = |e: &Effect| matches!(e, Effect::Closed(p) if p.id == pane);
+            let back = effects.iter().any(|e| [Effect::Parked(pane), Effect::Live(pane)].contains(e) || closed(e));
+            ensure!(back, "the peek of pane {pane} ended with {effects:?}");
+        }
         check_zones(m)?;
         if !self.sparse || self.steps.len().is_multiple_of(8) {
             check_state(m)?;
@@ -2147,11 +2168,22 @@ impl Run {
                 }
                 Effect::Live(pane) => {
                     ensure!(self.shell.live.is_none(), "pane {pane} goes live over {:?}", self.shell.live);
+                    // Only a peek of this pane may still be up: it becomes the entry.
+                    let peek = self.shell.peek.take();
+                    ensure!(peek.is_none_or(|p| p == *pane), "pane {pane} goes live under the peek of {peek:?}");
                     self.shell.live = Some(*pane);
                 }
                 Effect::Parked(pane) => {
-                    ensure!(self.shell.live == Some(*pane), "pane {pane} is parked and {:?} was live", self.shell.live);
-                    self.shell.live = None;
+                    let (live, peek) = (self.shell.live, self.shell.peek);
+                    ensure!(
+                        live == Some(*pane) || peek == Some(*pane),
+                        "pane {pane} is parked: {live:?} live, {peek:?} up"
+                    );
+                    if live == Some(*pane) {
+                        self.shell.live = None;
+                    } else {
+                        self.shell.peek = None;
+                    }
                 }
                 Effect::Visual { pane, on: true } => {
                     ensure!(self.shell.visual.is_none(), "visual mode starts on {pane} over {:?}", self.shell.visual);
@@ -2228,16 +2260,16 @@ impl Run {
                         "{from:?} moved to {to:?}, and it runs for neither"
                     );
                 }
-                Effect::AppWheel { pane, dx, dy } => {
-                    // Only the user's own scroll reaches an app, capped, and only a parked app pane on show.
+                Effect::Peek(pane) => {
+                    // Only the user's own wheel brings an app's window up, over its parked pane.
                     ensure!(
                         user && matches!(action, Action::AppWheel { .. }),
-                        "{origin:?} scrolled an app: {action:?}"
+                        "{origin:?} brought an app's window up: {action:?}"
                     );
-                    let max = crate::app_wheel::MAX_POINTS;
-                    ensure!(dx.abs() <= max && dy.abs() <= max, "an uncapped scroll: {dx} {dy}");
-                    let app = m.pane(*pane).is_some_and(|p| matches!(p.kind, Kind::App { .. }));
-                    ensure!(app && m.live != Some(*pane), "a scroll reached pane {pane}, no parked app pane");
+                    let (live, peek) = (self.shell.live, self.shell.peek);
+                    ensure!(live.is_none() && peek.is_none(), "pane {pane} is peeked over {live:?} live, {peek:?} up");
+                    self.shell.peek = Some(*pane);
+                    ensure!(m.peek.as_ref().map(|p| p.pane) == Some(*pane), "pane {pane} peeked, the model says no");
                 }
                 Effect::PressApp { pane, path, role, at, .. } => {
                     // Only the user's own letter presses in another app, and only what was labelled.
@@ -2358,6 +2390,8 @@ impl Run {
             "the shell holds a pane the model closed without a word"
         );
         ensure!(self.shell.live == m.live, "the shell's live pane is {:?}; the model's {:?}", self.shell.live, m.live);
+        let peek = m.peek.as_ref().map(|peek| peek.pane);
+        ensure!(self.shell.peek == peek, "the shell's peek is {:?}; the model's {peek:?}", self.shell.peek);
         ensure!(
             self.shell.visual == m.visual,
             "the shell's visual pane is {:?}; the model's {:?}",
