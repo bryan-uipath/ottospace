@@ -1045,6 +1045,10 @@ export interface Snapshot {
   compose_host: "drawer" | "bar" | null;
   /** What ↵ in the box would do: start `agent` (unless a saved agent: `starts` false) in the repository `dir`, or the folder taken from the dropdown as typed (null: the home folder), on `branch`. Null while the box is closed. */
   compose_plan: { agent: string; starts: boolean; dir: string | null; branch: string | null } | null;
+  /** The line the drawer draws over the box: null when ↵ does the default (default agent, home folder) or the box is closed. */
+  compose_plan_line: string | null;
+  /** The tag hint under the box's line: only while the line is empty. */
+  compose_hint: string | null;
   /** The drawer's one-click picks: repository names and agent names. */
   compose_picks: { wheres: string[]; whos: string[] };
   /** Nothing is open yet (no pane, task or conversation): the drawer shows the new task by itself. */
@@ -1147,7 +1151,6 @@ export interface Snapshot {
     updated: number | null;
     stale: boolean;
     in_call: boolean | null;
-    soon: boolean;
     bars: number;
     /**
      * The band above the status bar, in window points (null without a feed): its rect, the times
@@ -1163,7 +1166,6 @@ export interface Snapshot {
       blocks: { start: number; end: number; rect: Rect | null }[];
       status_bar: Rect | null;
     } | null;
-    chip: boolean;
     banner: { join: Rect | null; dismiss: Rect | null } | null;
     alerts: number;
     joins: number | null;

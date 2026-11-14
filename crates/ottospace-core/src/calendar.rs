@@ -1,5 +1,5 @@
 //! The meeting timeline: today's events from the user's calendar feed, the band of the workday
-//! above the status bar, the next-meeting chip, the pulse as one comes near, and the alert when one has
+//! above the status bar, the pulse as one comes near, and the alert when one has
 //! started and the user is in no call. Pure: the shell passes the time and whether a call is on.
 //!
 //! Titles, places and descriptions are other people's text: kept cleaned and short, drawn, and
@@ -19,8 +19,6 @@ const MINUTE: u64 = 60_000;
 /// From here before its start a meeting pulses slowly; from `IMMINENT` faster.
 pub const APPROACHING: u64 = 10 * MINUTE;
 pub const IMMINENT: u64 = 2 * MINUTE;
-/// From here before its start the status bar names it.
-pub const SOON: u64 = 5 * MINUTE;
 /// The second alert comes this long after the first; there is no third.
 pub const REPEAT: u64 = 2 * MINUTE;
 /// A first alert only this long after the start: a meeting left early is no missed one.
@@ -498,6 +496,26 @@ pub struct Notice {
     pub started: u64,
 }
 
+/// The banner's line of a meeting that started: `Design review · started 3m ago`,
+/// `Design review · just started` in its first minute.
+pub(crate) fn started_line(title: &str, start: u64, now: u64) -> String {
+    match now.saturating_sub(start) / MINUTE {
+        0 => format!("{title} · just started"),
+        ago => format!("{title} · started {ago}m ago"),
+    }
+}
+
+impl Notice {
+    /// The notification's text: `Started 3m ago: Design review`. Our word first, so a title like
+    /// `-e …` is no option of the program that shows it.
+    pub fn body(&self, now: u64) -> String {
+        match now.saturating_sub(self.started) / MINUTE {
+            0 => format!("Started just now: {}", self.title),
+            ago => format!("Started {ago}m ago: {}", self.title),
+        }
+    }
+}
+
 /// The event overlaps `start..end` (ms), or starts in it with no length.
 fn overlaps(e: &Event, start: u64, end: u64) -> bool {
     e.start < end && (e.end > start || e.start >= start)
@@ -572,8 +590,8 @@ impl Calendar {
         self.events.iter().filter(move |e| e.start < end && e.start >= start)
     }
 
-    /// The event the chip names: one that starts within `APPROACHING`, else one that runs, else
-    /// the next today. `None` when nothing is left today.
+    /// The event the now marker's card names: one that starts within `APPROACHING`, else one that
+    /// runs, else the next today. `None` when nothing is left today.
     pub fn next(&self, now: u64) -> Option<(&Event, Stage)> {
         let timed: Vec<(&Event, Stage)> = self
             .today()
@@ -616,21 +634,15 @@ impl Calendar {
         }
     }
 
-    /// The chip's text: `Design review · in 12m`, `Design review · now`.
-    pub fn chip(&self, now: u64) -> Option<(String, Stage)> {
-        let (event, stage) = self.next(now)?;
-        let when = if stage == Stage::Running { "now".into() } else { format!("in {}", span(event.start - now)) };
-        Some((format!("{} · {when}", event.title), stage))
-    }
-
-    /// The now marker's hover card: `14:05`, then `Next: Design review at 15:00 (in 55m)`.
+    /// The now marker's hover card: `14:05`, `Design review · 15:00`, and when the feed was read
+    /// (`calendar updated 14:00`): the one place that shows it outside the Calendar section.
     pub fn now_card(&self, now: u64, offset: i64) -> String {
         let next = match self.next(now) {
-            Some((e, Stage::Running)) => format!("Now: {}", e.title),
-            Some((e, _)) => format!("Next: {} at {} (in {})", e.title, clock(e.start, offset), span(e.start - now)),
+            Some((e, Stage::Running)) => format!("{} · now", e.title),
+            Some((e, _)) => format!("{} · {}", e.title, clock(e.start, offset)),
             None => "No more meetings today".into(),
         };
-        format!("{}\n{next}", clock(now, offset))
+        format!("{}\n{next}\ncalendar {}", clock(now, offset), self.read_status(offset))
     }
 
     /// Today's band and its blocks. `offset(t)`: the local zone's at `t`, seconds east of UTC.
@@ -647,12 +659,6 @@ impl Calendar {
             (Some(at), true) => format!("not updated since {}", clock(at, offset)),
             (None, _) => "not read yet".to_string(),
         }
-    }
-
-    /// The status bar's line from `SOON` before a start: `Design review in 4m`.
-    pub fn soon(&self, now: u64) -> Option<String> {
-        let event = self.today().filter(|e| !e.all_day).find(|e| e.start > now && e.start - now <= SOON)?;
-        Some(format!("{} in {}", event.title, span(event.start - now)))
     }
 
     /// Whether the shell should look for a call now: an alert could come soon or is up, or a call
@@ -729,8 +735,7 @@ impl Calendar {
     /// The banner's line: `Design review · started 3m ago`.
     pub fn banner_line(&self, now: u64) -> Option<(u64, String, bool)> {
         let event = self.banner(now)?;
-        let ago = now.saturating_sub(event.start) / MINUTE;
-        Some((event.id, format!("{} · started {ago}m ago", event.title), event.link.is_some()))
+        Some((event.id, started_line(&event.title, event.start, now), event.link.is_some()))
     }
 
     /// Whether a call is on, as seen at `at`. A call that starts after an alert ends it: the user

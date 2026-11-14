@@ -141,6 +141,18 @@ Rules:
 - Workflows use `pull_request`, never `pull_request_target`, and name their `permissions:`. Pin
   actions by commit.
 
+## Pull requests
+
+- **Every pull request shows evidence.** A change to anything on screen has a before and an after
+  picture (or a short recording when the change is motion); a tool, CLI, parser or CI change has
+  the command's output, before and after where there is a before. No evidence, no merge.
+- Pictures come from a private test instance (`OTTOSPACE_E2E`, its own `OTTOSPACE_HOME` and
+  `OTTOSPACE_SOCKET` under `$TMPDIR`, made-up content), by window id only (`screencapture -l <id>`),
+  never a screen region, never the user's own windows. Look at each one before it is uploaded.
+  They go in the pull request's body through a secret gist, never into the repository.
+- If a picture cannot be taken (the screen is locked: a locked screen draws nothing), the pull
+  request says so and waits; it is not merged unseen.
+
 ## Install scripts
 
 - `install.sh` installs `scripts/osi`; `osi` installs builds (`main`, `pr <n>`, a release) into

@@ -1,5 +1,5 @@
-//! The meeting timeline's shell: reads the calendar feed off the main thread, draws the band,
-//! the next-meeting chip and the banner, looks whether a call is on, and alerts. The decisions are the core's
+//! The meeting timeline's shell: reads the calendar feed off the main thread, draws the band
+//! and the banner, looks whether a call is on, and alerts. The decisions are the core's
 //! (`ottospace_core::calendar`).
 //!
 //! The feed is ottospace's only network access: `/usr/bin/curl`, `https:` only, its link on curl's
@@ -271,8 +271,8 @@ impl Workspace {
         let test = std::env::var_os("OTTOSPACE_E2E").is_some();
         match effect {
             Effect::MeetingAlert { title, started } if !test => {
-                let ago = now_ms().saturating_sub(*started) / 60_000;
-                notify(&format!("Started {ago}m ago: {title}"));
+                let notice = calendar::Notice { title: title.clone(), started: *started };
+                notify(&notice.body(now_ms()));
                 meeting::beep();
             }
             // `joinable` again, at the door: the one allow-function.
@@ -376,43 +376,6 @@ impl Workspace {
         Some(band.child(out).into_any_element())
     }
 
-    /// The chip in the title strip that names the next event today: `Design review · in 12m`.
-    /// It pulses with the band. Its tooltip says when the feed was last read.
-    pub(crate) fn render_meeting_chip(&self) -> Option<Div> {
-        let calendar = &self.model.calendar;
-        let now = now_ms();
-        let (text, stage) = calendar.chip(now).filter(|_| calendar.on)?;
-        let offset = ottospace_mac::time::utc_offset((now / 1_000) as i64);
-        let read = format!("calendar: {}", calendar.read_status(offset));
-        let tip = calendar.next(now).map(|(e, _)| format!("{}\n{read}", calendar::describe(e, offset))).unwrap_or(read);
-        let glow = calendar::glow(stage, now, self.timeline.reduce_motion);
-        let lit = stage != Stage::Far;
-        let chip = div()
-            .id("meeting-chip")
-            .relative()
-            .h(px(22.))
-            .px_2()
-            .flex()
-            .items_center()
-            .rounded_md()
-            .min_w_0()
-            .max_w(px(260.))
-            .text_xs()
-            .text_color(rgb(if lit { theme::SNEAK } else { theme::MUTED }))
-            // The glow behind the text, so the text itself stays readable.
-            .child(div().absolute().inset_0().rounded_md().bg(rgb(theme::SNEAK)).opacity(0.25 * glow))
-            .child(div().relative().truncate().child(text))
-            .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone().into()))));
-        // It shrinks, text truncated, when the title strip is short of room.
-        Some(div().min_w_0().flex().items_center().child(chip))
-    }
-
-    /// The status bar's `Design review in 4m`, from five minutes before.
-    pub(crate) fn meeting_soon(&self) -> Option<Div> {
-        let line = self.model.calendar.soon(now_ms()).filter(|_| self.model.calendar.on)?;
-        Some(div().flex_none().text_color(rgb(theme::SNEAK)).child(line))
-    }
-
     /// Across the top, under the title strip, while a meeting runs and no call is on:
     /// its title, how long ago it started, Join (an `https:` link only) and Dismiss.
     pub(crate) fn render_meeting_banner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -458,7 +421,6 @@ impl Workspace {
             .text_xs()
             .child(div().flex_none().text_color(rgb(theme::SNEAK)).child("Meeting started"))
             .child(div().min_w_0().truncate().text_color(rgb(theme::TEXT)).child(line))
-            .child(div().flex_none().text_color(rgb(theme::MUTED)).child("you are in no call"))
             .child(div().flex_1())
             .children(join)
             .child(dismiss)
@@ -490,7 +452,6 @@ impl Workspace {
             "updated": calendar.updated,
             "stale": calendar.stale,
             "in_call": calendar.in_call,
-            "soon": calendar.soon(now).is_some(),
             "bars": bars.len(),
             // The band above the status bar, in window points: its rect, the times at its ends and
             // the workday's (ms), the workday's marks, now's tick, each block's times and rect.
@@ -506,7 +467,6 @@ impl Workspace {
                 }).collect::<Vec<_>>(),
                 "status_bar": drawn(Mark::Status),
             })),
-            "chip": calendar.chip(now).is_some(),
             "banner": banner.map(|id| serde_json::json!({
                 "join": at(format!("meeting-join:{id}")),
                 "dismiss": at(format!("meeting-dismiss:{id}")),

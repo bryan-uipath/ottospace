@@ -13,10 +13,10 @@ User-facing description: [reference](../reference.md#meeting-timeline).
 | Part | Where | What |
 |---|---|---|
 | Reader | `ottospace-core::ics` | A pure iCalendar reader: events, recurrence and time zones, for a span of time |
-| Rules | `ottospace-core::calendar` | Stages, the workday, the band's span, blocks and lanes, the hover cards, the chip and the status line, the alert rule, the link allow-function, the feed-link check and curl's config |
+| Rules | `ottospace-core::calendar` | Stages, the workday, the band's span, blocks and lanes, the hover cards, the alert rule, the link allow-function, the feed-link check and curl's config |
 | Model | `Calendar` in `Model` | The events of today and the next 7 days, whether a call is on, the alerts given. Actions `SetCalendar`, `CalendarRead`, `CallSeen`, `CalendarDismiss` and `CalendarJoin` (the last two the user's alone); effects `MeetingAlert` and `OpenLink` |
 | macOS | `ottospace-mac::meeting` | Zone offsets (CoreFoundation), whether a call is on (CoreAudio), Reduce motion, the alert sound, opening a link |
-| Shell | `ottospace::calendar` | The feed thread, the band, the chip, the banner, the state's `calendar`, the `calendar` request's reply (`calendar::reply` in the core) |
+| Shell | `ottospace::calendar` | The feed thread, the band, the banner, the state's `calendar`, the `calendar` request's reply (`calendar::reply` in the core) |
 
 - **Stages** by time to the start: far (more than 10 minutes), approaching (10), imminent (2),
   running, past. The glow is a cosine ease (2.4 s a period approaching, 0.9 s imminent), steady
@@ -24,8 +24,10 @@ User-facing description: [reference](../reference.md#meeting-timeline).
   while a meeting pulses; otherwise every 20 seconds, which moves now's tick about a point on a
   wide window (8 hours across 1440 points is 3 points a minute).
 - **The band** (below) replaced the first build's hairline across the top of the window.
-- **The chip** sits beside the new-tab and split buttons, the strip's one free place whatever
-  the left column's width (beside the traffic lights there is no room with the section closed).
+- **No chip, no status line** (`docs/ai/ux-simplification.md` §1.6): the first build named the next
+  meeting beside the tab strip's buttons and in the status bar from 5 minutes before. The band
+  says it; the chip's tooltip (when the feed was read) moved to now's card. The banner no longer
+  says "you are in no call": it also shows while in an earlier call.
 - **The alert** comes once at the start and once 2 minutes later, only within the meeting's first
   10 minutes, only if a call is known to be off (`in_call == Some(false)`) or the call on was
   first seen at least 10 minutes before the start (`Calendar::in_other_call`), and not for a
@@ -57,8 +59,9 @@ statusbar instead of at the top of the window too".
   each side and the band's full height. Hover only: no click handler, nothing occludes, so a
   pane split's drag and the status bar's tooltips are untouched.
 - Cards: a block's title, `09:00–09:30 · 30m · place`, and `Zoom link` (Meet, Teams) when it has
-  one (`calendar::describe`); a mark `Workday starts 09:00`; now `14:05` and the next meeting or
-  `No more meetings today` (`Calendar::now_card`). Drawn only: the state has bounds and times.
+  one (`calendar::describe`); a mark `Workday starts 09:00`; now `14:05`, the next meeting
+  (`Design review · 15:00`) or `No more meetings today`, and `calendar updated 14:00` (`not updated
+  since` after a failed read) (`Calendar::now_card`). Drawn only: the state has bounds and times.
 
 ## The Calendar section
 
@@ -181,7 +184,8 @@ instead of an HTTP and TLS crate: no new dependency, the system's TLS and proxy 
 ## The notification
 
 `osascript -e 'on run argv' -e 'display notification (item 1 of argv) with title "Meeting started"'
--e 'end run' 'Started 0m ago: <title>'`, then `NSBeep`. A binary started from a terminal has no
+-e 'end run' 'Started 3m ago: <title>'` (`Started just now: <title>` in its first minute,
+`Notice::body`), then `NSBeep`. A binary started from a terminal has no
 bundle identity for the UserNotifications API, so `osascript` it is; the notification is shown as
 Script Editor's. The text is an argument, never part of the script, and starts with our own word,
 so a title like `-e …` cannot be taken for an option. Not in a test run (the state counts

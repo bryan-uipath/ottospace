@@ -761,7 +761,7 @@ impl Workspace {
                 .justify_center()
                 .cursor_pointer()
                 .hover(|s| s.bg(rgb(theme::SELECTED)))
-                .when(cell.shown, |d| crate::raised_cell(d, ring, true, at == 0))
+                .when(cell.shown, |d| crate::raised_cell(d, ring, true))
                 .when(focused == Some(at), crate::focus_ring)
                 .child(badge)
                 .child(self.controls.mark(format!("rail-talk:{name}")))
