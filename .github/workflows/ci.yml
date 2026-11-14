@@ -46,6 +46,12 @@ jobs:
         run: >-
           cargo clippy -p ottospace-core -p ottospace-sessions -p ottospace-agents -p ottospace-mac
           --all-targets --locked -- -D unused -D unreachable_pub
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: cargo-machete@0.9.2
+      # A dependency no source names fails. False positives: `[package.metadata.cargo-machete]`.
+      - name: Unused dependencies
+        run: cargo machete --with-metadata
       - name: Unit tests
         run: cargo test --workspace --locked
       # The SDK without the app: its types, and that it has a method for every request.
