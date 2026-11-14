@@ -19,13 +19,7 @@ pub fn app_identity(pid: i32) -> (Option<String>, Option<String>) {
     (app.bundleIdentifier().map(|id| id.to_string()), app.localizedName().map(|name| name.to_string()))
 }
 
-/// Whether this process (or its parent terminal) has Accessibility access; optionally prompts.
-/// True while the app with this pid is the frontmost app (it has the keyboard).
-pub fn is_active(pid: i32) -> bool {
-    NSRunningApplication::runningApplicationWithProcessIdentifier(pid).is_some_and(|app| app.isActive())
-}
-
-/// True if the app with this pid is the front app, asked of the app itself. `is_active` reads a
+/// True if the app with this pid is the front app, asked of the app itself. `isActive` reads a
 /// value AppKit keeps for this process, which lags until the run loop has seen the change; this
 /// asks now.
 pub fn is_frontmost(pid: i32) -> bool {
@@ -33,6 +27,7 @@ pub fn is_frontmost(pid: i32) -> bool {
     copy_attr(&app, "AXFrontmost").and_then(|v| v.downcast::<CFBoolean>().ok()).is_some_and(|front| front.as_bool())
 }
 
+/// Whether this process (or its parent terminal) has Accessibility access; optionally prompts.
 pub fn is_trusted(prompt: bool) -> bool {
     let key = CFString::from_static_str("AXTrustedCheckOptionPrompt");
     let value = CFBoolean::new(prompt);

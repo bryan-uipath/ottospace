@@ -282,14 +282,6 @@ impl Marks {
             self.selected = None;
         }
     }
-
-    pub fn can_undo(&self) -> bool {
-        !self.past.is_empty()
-    }
-
-    pub fn can_redo(&self) -> bool {
-        !self.future.is_empty()
-    }
 }
 
 fn shape(tool: Tool, from: [f64; 2], to: [f64; 2], points: Vec<[f64; 2]>) -> Shape {
@@ -1067,14 +1059,14 @@ mod tests {
         assert_eq!(marks.shapes.len(), 2, "the removal is a step");
         marks.undo();
         marks.undo();
-        assert!(marks.shapes.is_empty() && !marks.can_undo());
+        assert!(marks.shapes.is_empty() && marks.past.is_empty());
         marks.undo();
         marks.redo();
         marks.redo();
         assert_eq!(marks.shapes.len(), 2);
         marks.undo();
         drag(&mut marks, [0.5, 0.5], [0.7, 0.7], Tool::Stroke);
-        assert!(!marks.can_redo());
+        assert!(marks.future.is_empty());
         marks.redo();
         assert_eq!(marks.shapes.len(), 2);
     }

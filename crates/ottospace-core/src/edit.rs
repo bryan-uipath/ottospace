@@ -499,14 +499,14 @@ pub(crate) mod fuzz {
     pub(crate) struct Rng(pub u64);
 
     impl Rng {
-        pub fn below(&mut self, n: usize) -> usize {
+        pub(crate) fn below(&mut self, n: usize) -> usize {
             self.0 ^= self.0 << 13;
             self.0 ^= self.0 >> 7;
             self.0 ^= self.0 << 17;
             (self.0 % n.max(1) as u64) as usize
         }
 
-        pub fn text(&mut self) -> String {
+        pub(crate) fn text(&mut self) -> String {
             const PIECES: &[&str] = &[
                 "a",
                 " ",
@@ -534,12 +534,12 @@ pub(crate) mod fuzz {
             (0..self.below(4)).map(|_| PIECES[self.below(PIECES.len())]).collect()
         }
 
-        pub fn range(&mut self, len: usize) -> Option<Range<usize>> {
+        pub(crate) fn range(&mut self, len: usize) -> Option<Range<usize>> {
             let (a, b) = (self.below(len + 3), self.below(len + 3));
             (self.below(3) > 0).then_some(a.min(b)..a.max(b))
         }
 
-        pub fn edit(&mut self, len: usize) -> Edit {
+        pub(crate) fn edit(&mut self, len: usize) -> Edit {
             let to = [Left, Right, WordLeft, WordRight, Start, End][self.below(6)];
             // Bytes and UTF-16 offsets from anywhere, inside a character and past the end too.
             let at = self.below(len + 3);
