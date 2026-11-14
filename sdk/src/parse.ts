@@ -1363,6 +1363,28 @@ function railMark(value: unknown, at: string): Snapshot["calendar"]["rail"] {
   throw wrong(at, "none, near or alert", value);
 }
 
+function band(value: unknown, at: string): NonNullable<Snapshot["calendar"]["band"]> {
+  const o = fields(value, at);
+  const pair = (v: unknown, at: string): [number, number] => {
+    const [a, b, ...rest] = list(num)(v, at);
+    if (a === undefined || b === undefined || rest.length > 0) throw wrong(at, "two numbers", v);
+    return [a, b];
+  };
+  const block = (v: unknown, at: string) => {
+    const b = fields(v, at);
+    return { start: num(b.start, `${at}.start`), end: num(b.end, `${at}.end`), rect: orNull(rect)(b.rect, `${at}.rect`) };
+  };
+  return {
+    rect: orNull(rect)(o.rect, `${at}.rect`),
+    span: pair(o.span, `${at}.span`),
+    workday: pair(o.workday, `${at}.workday`),
+    marks: list(orNull(rect))(o.marks, `${at}.marks`),
+    now: orNull(rect)(o.now, `${at}.now`),
+    blocks: list(block)(o.blocks, `${at}.blocks`),
+    status_bar: orNull(rect)(o.status_bar, `${at}.status_bar`),
+  };
+}
+
 function calendar(value: unknown, at: string): Snapshot["calendar"] {
   const o = fields(value, at);
   const banner = (v: unknown, at: string) => {
@@ -1381,6 +1403,7 @@ function calendar(value: unknown, at: string): Snapshot["calendar"] {
     in_call: orNull(bool)(o.in_call, `${at}.in_call`),
     soon: bool(o.soon, `${at}.soon`),
     bars: num(o.bars, `${at}.bars`),
+    band: orNull(band)(o.band, `${at}.band`),
     chip: bool(o.chip, `${at}.chip`),
     banner: orNull(banner)(o.banner, `${at}.banner`),
     alerts: num(o.alerts, `${at}.alerts`),
