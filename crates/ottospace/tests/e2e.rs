@@ -6347,6 +6347,17 @@ fn a_native_conversation_streams_asks_and_switches_to_the_terminal_and_back() {
     );
     let card = &first["transcript"]["cards"][0];
     assert_eq!((&card["tool"], &card["cut"]), (&json!("Bash"), &json!(false)), "{card}");
+    // Copy on the code block, while it is in view: the code, to the clipboard (a test run's own).
+    let targets = otto.call(json!({"cmd": "sneak"}))["sneak"]["targets"].clone();
+    otto.call(json!({"cmd": "key", "keys": "escape"}));
+    let copy = targets
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["source"]["id"].as_str().is_some_and(|id| id.starts_with("chat-code-copy:1:")));
+    let copy = copy.expect("a Copy on the code block");
+    let f = |key: &str| copy["frame"][key].as_f64().unwrap();
+    assert_eq!(otto.user_click(at([f("x"), f("y"), f("w"), f("h")], 0.5, 0.5))["copied"], "fn main() {}");
 
     // A client answers nothing, by key or click; ↵ on a card does nothing.
     assert_eq!(otto.call(json!({"cmd": "key", "keys": "a"}))["notice"], "only the user starts or stops a task's agent");
@@ -6388,17 +6399,6 @@ fn a_native_conversation_streams_asks_and_switches_to_the_terminal_and_back() {
     otto.user_key("escape");
     otto.wait_for("the interrupt", |o| chat(o)["transcript"]["turn"].is_null().then_some(()));
     assert!(stdin().contains(r#""subtype":"interrupt""#), "{}", stdin());
-    // Copy on the code block: the code, to the clipboard (a test run's own).
-    let targets = otto.call(json!({"cmd": "sneak"}))["sneak"]["targets"].clone();
-    otto.call(json!({"cmd": "key", "keys": "escape"}));
-    let copy = targets
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|t| t["source"]["id"].as_str().is_some_and(|id| id.starts_with("chat-code-copy:1:")));
-    let copy = copy.expect("a Copy on the code block");
-    let f = |key: &str| copy["frame"][key].as_f64().unwrap();
-    assert_eq!(otto.user_click(at([f("x"), f("y"), f("w"), f("h")], 0.5, 0.5))["copied"], "fn main() {}");
 
     // Chat → Terminal: the native process ends first, then the session goes on in the TUI.
     let state = otto.call(json!({"cmd": "state"}));
