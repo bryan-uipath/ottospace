@@ -2,7 +2,7 @@
 //! Pure: the shell reads the feed and passes in the offsets of the time zones it names.
 //!
 //! Read: VEVENT with DTSTART, DTEND or DURATION (UTC, floating, `TZID=`, `VALUE=DATE`), SUMMARY,
-//! LOCATION, DESCRIPTION, URL, UID, STATUS, RRULE (DAILY, WEEKLY, MONTHLY, YEARLY with INTERVAL,
+//! LOCATION, DESCRIPTION, URL, UID, STATUS, TRANSP, X-MICROSOFT-CDO-BUSYSTATUS, RRULE (DAILY, WEEKLY, MONTHLY, YEARLY with INTERVAL,
 //! UNTIL, COUNT, BYDAY, BYMONTHDAY, BYMONTH, BYSETPOS, WKST), EXDATE, RDATE, RECURRENCE-ID;
 //! VTIMEZONE with STANDARD and DAYLIGHT. An RDATE period (`VALUE=PERIOD`) counts by its start,
 //! with the event's own length; an RDATE of a whole day for a timed event, or the other way, is
@@ -85,6 +85,10 @@ pub struct Event {
     cancelled: bool,
     /// `STATUS:TENTATIVE`.
     tentative: bool,
+    /// `TRANSP:TRANSPARENT`: the time stays free.
+    transparent: bool,
+    /// `X-MICROSOFT-CDO-BUSYSTATUS`, which Outlook writes and which outranks the two above.
+    busy_status: Option<Show>,
     rule: Option<Rule>,
     exdates: Vec<When>,
     rdates: Vec<When>,
@@ -158,6 +162,41 @@ pub struct Zones {
     pub named: Vec<(String, Table)>,
 }
 
+/// How an entry holds the user's time, as the feed marks it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Show {
+    #[default]
+    Busy,
+    Tentative,
+    /// The time stays free: `TRANSP:TRANSPARENT`, or Outlook's FREE.
+    Free,
+    /// Out of office: Outlook's OOF.
+    Away,
+}
+
+impl Show {
+    pub fn name(self) -> &'static str {
+        match self {
+            Show::Busy => "busy",
+            Show::Tentative => "tentative",
+            Show::Free => "free",
+            Show::Away => "away",
+        }
+    }
+}
+
+impl Event {
+    /// Outlook's busy status, else `STATUS:TENTATIVE`, else `TRANSP:TRANSPARENT`, else busy.
+    fn show(&self) -> Show {
+        let fallback = match (self.tentative, self.transparent) {
+            (true, _) => Show::Tentative,
+            (false, true) => Show::Free,
+            (false, false) => Show::Busy,
+        };
+        self.busy_status.unwrap_or(fallback)
+    }
+}
+
 /// An event as it happens: UTC seconds.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Occurrence {
@@ -169,7 +208,7 @@ pub struct Occurrence {
     pub location: String,
     pub description: String,
     pub url: String,
-    pub tentative: bool,
+    pub show: Show,
 }
 
 /// Reads a feed. Anything it cannot read is left out; it never fails.
@@ -350,7 +389,7 @@ pub fn expand_counted(feed: &Feed, from: i64, to: i64, zones: &Zones) -> (Vec<Oc
                     location: event.location.clone(),
                     description: event.description.clone(),
                     url: event.url.clone(),
-                    tentative: event.tentative,
+                    show: event.show(),
                 });
             }
         };
@@ -664,6 +703,17 @@ fn event_property(event: &mut Event, name: &str, params: &[(String, String)], va
         "STATUS" => {
             event.cancelled = value.trim().eq_ignore_ascii_case("CANCELLED");
             event.tentative = value.trim().eq_ignore_ascii_case("TENTATIVE");
+        }
+        "TRANSP" => event.transparent = value.trim().eq_ignore_ascii_case("TRANSPARENT"),
+        // WORKINGELSEWHERE holds the time as BUSY does; an unknown value says nothing.
+        "X-MICROSOFT-CDO-BUSYSTATUS" => {
+            event.busy_status = match value.trim().to_ascii_uppercase().as_str() {
+                "FREE" => Some(Show::Free),
+                "TENTATIVE" => Some(Show::Tentative),
+                "BUSY" | "WORKINGELSEWHERE" => Some(Show::Busy),
+                "OOF" => Some(Show::Away),
+                _ => None,
+            }
         }
         "DTSTART" => event.start = when(value, zone(), date),
         "DTEND" => event.end = when(value, zone(), date),

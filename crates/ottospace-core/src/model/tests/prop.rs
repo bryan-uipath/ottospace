@@ -6,11 +6,12 @@
 
 use super::*;
 use crate::ax::{Frame, Source};
-use crate::calendar::Event;
+use crate::calendar::{ColorRule, Event};
 use crate::clip::{Amount, Verb};
 use crate::compose::{Known, Names, PathFound};
 use crate::features::{self, Feature, Features};
 use crate::fuzz::{self, Rng};
+use crate::ics::Show;
 use crate::layout_file;
 use crate::marks::{Mark, PaneRecord, RecordKind, TabRecord};
 use crate::progress;
@@ -199,7 +200,7 @@ impl Gen<'_> {
             title: self.text(),
             location: self.text(),
             link: link.map(String::from),
-            tentative: self.rng.coin(),
+            show: self.rng.pick(&[Show::Busy, Show::Tentative, Show::Free, Show::Away]),
         }
     }
 
@@ -1114,7 +1115,11 @@ const MAKERS: &[Make] = &[
     |g| Action::TalkKeys { on: g.rng.coin() },
     |g| Action::TalkResize { width: g.rng.pick(&[0., 400., 9e9, f32::NAN]) },
     |_| Action::TalkWide,
-    |g| Action::SetCalendar { on: g.rng.coin(), notify: g.rng.coin(), links_only: g.rng.coin() },
+    |g| {
+        let colors = g.rng.coin().then(|| ColorRule { text: g.text().to_lowercase(), color: 1 });
+        let (on, notify, links_only, hide_free) = (g.rng.coin(), g.rng.coin(), g.rng.coin(), g.rng.coin());
+        Action::SetCalendar { on, notify, links_only, hide_free, colors: colors.into_iter().collect() }
+    },
     |g| {
         let events = g.rng.coin().then(|| (0..g.rng.below(4)).map(|_| g.meeting()).collect());
         let day = g.m.now - g.m.now % 86_400_000;
@@ -1869,9 +1874,10 @@ fn check_layout(m: &Model) -> Result<(), String> {
     let mut fresh = Model::default();
     let floor = m.tasks.list.iter().map(|task| task.id).max().unwrap_or(0);
     let (on, notify, links_only) = (m.calendar.on, m.calendar.notify, m.calendar.links_only);
+    let (hide_free, colors) = (m.calendar.hide_free, m.calendar.rules.clone());
     for action in [
         // The settings are read before the layout, as at a start.
-        Action::SetCalendar { on, notify, links_only },
+        Action::SetCalendar { on, notify, links_only, hide_free, colors },
         Action::RestoreTasks { tasks: m.tasks.list.clone(), floor },
         Action::RestoreWorkbooks { workbooks: m.workbooks.list.clone() },
         Action::RestoreMarks { marks: m.marks.list.clone(), extra: m.marks.extra.clone() },
@@ -2969,6 +2975,7 @@ fn code(sent: &Envelope) -> String {
         "Truncated",
         "AppRead",
         "Event",
+        "ColorRule",
     ];
     const ENUM_OF: &[(&str, &str)] = &[
         ("verb", "Verb"),
@@ -2999,6 +3006,7 @@ fn code(sent: &Envelope) -> String {
         ("task", "Subject"),
         ("id", "Subject"),
         ("shows", "View"),
+        ("show", "Show"),
     ];
     // A mark is long, and half of it is JSON already: it is given as its file's text.
     if let Action::RestoreMarks { marks, extra } = &sent.action {

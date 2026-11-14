@@ -12,7 +12,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use gpui::{AnyElement, AnyView, Context, Div, Window, div, prelude::*, px, relative, rgb};
-use ottospace_core::calendar::{self, Event, Lane, Stage, Workday};
+use ottospace_core::calendar::{self, Event, Stage, Workday};
 use ottospace_core::ics::{self, Table, Zones};
 use ottospace_core::list::ListRow;
 use ottospace_core::settings::expand_home;
@@ -28,9 +28,15 @@ enum Now {
     Below,
 }
 
-/// The band's height above the status bar: blocks are drawn 5 points high in it, and hover
-/// takes all of it.
-const BAND: f32 = 8.;
+/// The band's height above the status bar, its 1-point top line included; hover takes all of it.
+const BAND: f32 = 12.;
+/// Calls and blocks are drawn between these margins; overlapping calls split the room into lanes
+/// `LANE_GAP` apart.
+const LANES_TOP: f32 = 2.5;
+const LANES_BOTTOM: f32 = 1.5;
+const LANE_GAP: f32 = 0.5;
+/// Blocks are this much fainter than a call of the same strength: a layer under the calls.
+const BLOCK_STRENGTH: f32 = 0.35;
 /// A block is drawn at least this wide, and hovered over this much more on each side.
 const MIN_BLOCK: f32 = 3.;
 const HOVER_PAD: f32 = 3.;
@@ -287,11 +293,12 @@ impl Workspace {
         }
     }
 
-    /// The band above the status bar: the workday from its left end to its right, a mark at its
-    /// start and end, flat blocks for meetings, a tick for now, a dot for all-day events. Hover
-    /// only: a card for each, no click.
+    /// The band above the status bar: a hairline along its top, the workday from its left end to
+    /// its right, a mark at its start and end, blocks of time held under the calls, calls in lanes,
+    /// a tick for now, a dot for all-day events and for blocks outside the band. Hover only: a
+    /// card for each, no click.
     pub(crate) fn render_timeline(&self) -> Option<AnyElement> {
-        self.marks.borrow_mut().retain(|m, _| !matches!(m, Mark::BandBlock(_)));
+        self.marks.borrow_mut().retain(|m, _| !matches!(m, Mark::BandBlock(_) | Mark::BandOut(_)));
         let calendar = &self.model.calendar;
         // Not before the first read: there is no day yet.
         if !calendar.on || calendar.days[1] == 0 {
@@ -299,7 +306,10 @@ impl Workspace {
         }
         let now = now_ms();
         let offset = zone_offset(now);
-        let (band, bars) = calendar.band(self.timeline.workday, now, &zone_offset);
+        let layout = calendar.band(self.timeline.workday, now, &zone_offset);
+        let band = layout.band;
+        let reduced = self.timeline.reduce_motion;
+        let event = |id: u64| calendar.events.iter().find(|e| e.id == id);
         let card = |tip: String| {
             move |_: &mut Window, cx: &mut gpui::App| AnyView::from(cx.new(|_| Tooltip(tip.clone().into())))
         };
@@ -311,40 +321,62 @@ impl Workspace {
         // Inset, so a mark or block at either end is drawn whole.
         let mut out = div().absolute().top_0().bottom_0().left(px(INSET)).right(px(INSET));
         out = out.child(mark(&self.marks, Mark::Band));
-        // In the left inset, under everything: it covers no block or mark.
-        let all_day: Vec<String> =
-            calendar.today().filter(|e| e.all_day).map(|e| calendar::describe(e, offset)).collect();
-        if !all_day.is_empty() {
-            let dot = div().absolute().left(px(1. - INSET)).top(px(2.)).size(px(4.)).rounded_full();
-            let dot = dot.bg(rgb(theme::MUTED)).child(hover("meeting-all-day".into(), all_day.join("\n")));
-            out = out.child(dot);
-        }
         for (n, (t, what)) in
             [(band.workday.0, "Workday starts"), (band.workday.1, "Workday ends")].into_iter().enumerate()
         {
             let x = band.at(t);
-            let tick = div().absolute().top(px(1.5)).h(px(5.)).w(px(1.)).bg(rgb(theme::MUTED)).opacity(0.6);
+            let tick = div().absolute().top(px(LANES_TOP)).bottom(px(LANES_BOTTOM)).w(px(1.)).bg(rgb(theme::MUTED));
             let tip = format!("{what} {}", calendar::clock(t, zone_offset(t)));
             out = out.child(
                 at(x, x)
-                    .child(tick.child(mark(&self.marks, Mark::BandEdge(n))))
+                    .child(tick.opacity(0.6).child(mark(&self.marks, Mark::BandEdge(n))))
                     .child(hover(("workday-mark", n).into(), tip)),
             );
         }
-        for (n, bar) in bars.iter().enumerate() {
-            let Some(event) = calendar.events.iter().find(|e| e.id == bar.id) else { continue };
-            let (top, height) = match bar.lane {
-                Lane::Full => (1.5, 5.),
-                Lane::Top => (1.5, 2.25),
-                Lane::Bottom => (4.25, 2.25),
-            };
-            // One calm colour; the pulse is its opacity, past meetings faint.
-            let glow = calendar::glow(bar.stage, now, self.timeline.reduce_motion);
-            let opacity = match bar.stage {
-                Stage::Past => 0.25,
-                Stage::Far => 0.6,
-                _ => 0.6 + 0.4 * glow,
-            };
+        // In the insets, over the workday marks: all-day events at the left's top; blocks wholly before
+        // or after the band at the bottom of its end (a reminder at 00:00 does not stretch it).
+        let dot = |left: bool, top: bool, tip: String, id: &'static str| {
+            let d = div().absolute().size(px(4.)).rounded_full().bg(rgb(theme::MUTED)).child(hover(id.into(), tip));
+            let d = if left { d.left(px(1. - INSET)) } else { d.right(px(1. - INSET)) };
+            if top { d.top(px(LANES_TOP)) } else { d.bottom(px(LANES_BOTTOM)) }
+        };
+        let all_day: Vec<String> =
+            calendar.today().filter(|e| e.all_day).map(|e| calendar::describe(e, offset)).collect();
+        if !all_day.is_empty() {
+            out = out.child(dot(true, true, all_day.join("\n"), "meeting-all-day"));
+        }
+        for (n, ids) in [&layout.early, &layout.late].into_iter().enumerate() {
+            let tips: Vec<String> =
+                ids.iter().filter_map(|id| event(*id)).map(|e| calendar::describe(e, offset)).collect();
+            if !tips.is_empty() {
+                let id = if n == 0 { "meeting-early" } else { "meeting-late" };
+                out = out.child(dot(n == 0, false, tips.join("\n"), id).child(mark(&self.marks, Mark::BandOut(n))));
+            }
+        }
+        // Blocks first, under the calls: time held with no call takes no lane.
+        let mut drawn = 0;
+        for block in &layout.blocks {
+            let Some(e) = event(block.id) else { continue };
+            let paint = calendar.paint(e, now, reduced);
+            let fill = div().absolute().left_0().right_0().top(px(LANES_TOP)).bottom(px(LANES_BOTTOM)).rounded_sm();
+            let fill = fill.bg(rgb(paint.color)).opacity(paint.alpha * BLOCK_STRENGTH);
+            let hovered = hover(("meeting-block", block.id as usize).into(), calendar::describe(e, offset));
+            out = out.child(
+                at(block.from, block.to)
+                    .min_w(px(MIN_BLOCK))
+                    .child(fill.child(mark(&self.marks, Mark::BandBlock(drawn))))
+                    .child(hovered),
+            );
+            drawn += 1;
+        }
+        let room = BAND - LANES_TOP - LANES_BOTTOM;
+        for bar in &layout.calls {
+            let Some(e) = event(bar.id) else { continue };
+            let lanes = f32::from(bar.lanes.max(1));
+            let height = (room - LANE_GAP * (lanes - 1.)) / lanes;
+            let top = LANES_TOP + f32::from(bar.lane) * (height + LANE_GAP);
+            // One colour per kind or rule; the pulse and the stage are its strength.
+            let paint = calendar.paint(e, now, reduced);
             let block = div()
                 .absolute()
                 .left_0()
@@ -352,27 +384,30 @@ impl Workspace {
                 .top(px(top))
                 .h(px(height))
                 .rounded_sm()
-                .bg(rgb(theme::SNEAK))
-                .opacity(opacity)
-                .child(mark(&self.marks, Mark::BandBlock(n)));
-            // A half lane is hovered over its half: both of two overlapping meetings can be.
-            let hovered = hover(("meeting-bar", bar.id as usize).into(), calendar::describe(event, offset));
-            let hovered = match bar.lane {
-                Lane::Full => hovered,
-                Lane::Top => hovered.bottom(px(BAND / 2.)),
-                Lane::Bottom => hovered.top(px(BAND / 2.)),
-            };
+                .bg(rgb(paint.color))
+                .opacity(paint.alpha)
+                .child(mark(&self.marks, Mark::BandBlock(drawn)));
+            drawn += 1;
+            // A lane is hovered over its slice of the band: every overlapping call can be.
+            let more: Vec<&Event> = bar.more.iter().filter_map(|id| event(*id)).collect();
+            let slice = BAND / lanes;
+            let hovered = hover(("meeting-bar", bar.id as usize).into(), calendar::card(e, &more, offset))
+                .top(px(f32::from(bar.lane) * slice))
+                .bottom(px(BAND - (f32::from(bar.lane) + 1.) * slice));
             out = out.child(at(bar.from, bar.to).min_w(px(MIN_BLOCK)).child(block).child(hovered));
         }
         // Now, last: over the blocks.
         let x = band.at(now);
-        let tick = div().absolute().top_0().h(px(BAND)).w(px(1.5)).ml(px(-0.75)).bg(rgb(theme::TEXT));
+        let tick = div().absolute().top_0().bottom_0().w(px(1.5)).ml(px(-0.75)).bg(rgb(theme::TEXT));
         out = out.child(
             at(x, x)
                 .child(tick.child(mark(&self.marks, Mark::BandNow)))
                 .child(hover("timeline-now".into(), calendar.now_card(now, offset))),
         );
+        // A hairline along the top, as the status bar's and the panes' edges: the band reads as
+        // part of the chrome, not empty space.
         let band = div().flex_none().relative().h(px(BAND)).w_full().bg(rgb(theme::BACKGROUND));
+        let band = band.border_t_1().border_color(rgb(theme::BORDER));
         Some(band.child(out).into_any_element())
     }
 
@@ -439,9 +474,24 @@ impl Workspace {
         let next = calendar.next(now);
         let banner = calendar.banner(now).map(|e| e.id);
         let at = |control: String| self.controls.bounds(&control).map(crate::rect);
-        let (band, bars) = calendar.band(self.timeline.workday, now, &zone_offset);
+        let layout = calendar.band(self.timeline.workday, now, &zone_offset);
+        let band = layout.band;
         let marks = self.marks.borrow();
         let drawn = |m: Mark| marks.get(&m).copied().map(crate::rect);
+        // Blocks, then calls: the order they are drawn and their marks numbered.
+        let block = |n: usize, id: u64, lane: Option<(u8, u8)>, more: usize| {
+            let e = calendar.events.iter().find(|e| e.id == id)?;
+            let paint = calendar.paint(e, now, false);
+            Some(serde_json::json!({
+                "start": e.start, "end": e.end, "rect": drawn(Mark::BandBlock(n)),
+                "kind": calendar::kind(e).name(), "show": e.show.name(), "color": paint.name,
+                "lane": lane.map(|l| l.0), "lanes": lane.map(|l| l.1), "more": more,
+            }))
+        };
+        let under = layout.blocks.iter().map(|b| (b.id, None, 0));
+        let calls = layout.calls.iter().map(|b| (b.id, Some((b.lane, b.lanes)), b.more.len()));
+        let blocks: Vec<serde_json::Value> =
+            under.chain(calls).enumerate().filter_map(|(n, (id, lane, more))| block(n, id, lane, more)).collect();
         serde_json::json!({
             "on": calendar.on,
             "events_today": today.iter().filter(|e| !e.all_day).count(),
@@ -452,19 +502,22 @@ impl Workspace {
             "updated": calendar.updated,
             "stale": calendar.stale,
             "in_call": calendar.in_call,
-            "bars": bars.len(),
+            "bars": layout.blocks.len() + layout.calls.len(),
             // The band above the status bar, in window points: its rect, the times at its ends and
-            // the workday's (ms), the workday's marks, now's tick, each block's times and rect.
+            // the workday's (ms), the workday's marks, now's tick, each block's times and rect, kind,
+            // status, colour name and lane (blocks under the calls have none), and the markers of
+            // blocks wholly before and after it (`outside`: counts and rects).
             "band": (calendar.on && calendar.days[1] > 0).then(|| serde_json::json!({
                 "rect": drawn(Mark::Band),
                 "span": [band.from, band.to],
                 "workday": [band.workday.0, band.workday.1],
                 "marks": [drawn(Mark::BandEdge(0)), drawn(Mark::BandEdge(1))],
                 "now": drawn(Mark::BandNow),
-                "blocks": bars.iter().enumerate().filter_map(|(n, bar)| {
-                    let e = calendar.events.iter().find(|e| e.id == bar.id)?;
-                    Some(serde_json::json!({ "start": e.start, "end": e.end, "rect": drawn(Mark::BandBlock(n)) }))
-                }).collect::<Vec<_>>(),
+                "blocks": blocks,
+                "outside": [
+                    { "count": layout.early.len(), "rect": drawn(Mark::BandOut(0)) },
+                    { "count": layout.late.len(), "rect": drawn(Mark::BandOut(1)) },
+                ],
                 "status_bar": drawn(Mark::Status),
             })),
             "banner": banner.map(|id| serde_json::json!({

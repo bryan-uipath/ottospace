@@ -28,7 +28,7 @@ fn event(id: u64, start: u64, minutes: u64) -> Event {
         title: format!("Meeting {id}"),
         location: String::new(),
         link: None,
-        tentative: false,
+        show: crate::ics::Show::Busy,
     }
 }
 
@@ -167,7 +167,7 @@ fn meetings_are_cleaned_capped_and_carry_no_link() {
         title: "Design\nreview\u{202e}\u{7} https://example.zoom.us/j/1?pwd=s3cret".into(),
         location: "Room 4 zoom.us/j/9?pwd=s3cret".into(),
         link: Some("https://example.zoom.us/j/1?pwd=s3cret".into()),
-        tentative: true,
+        show: crate::ics::Show::Tentative,
         ..event(1, day + 9 * H, 30)
     };
     let link_only = Event {
@@ -261,7 +261,7 @@ fn a_reply_serializes_as_the_sdk_fixture_says() {
             link: Some("https://example.zoom.us/j/1".into()),
             ..event(2, day + 9 * H, 30)
         },
-        Event { title: "Planning".into(), tentative: true, ..event(3, day + 9 * H + 30 * M, 60) },
+        Event { title: "Planning".into(), show: crate::ics::Show::Tentative, ..event(3, day + 9 * H + 30 * M, 60) },
     ]);
     c.call_seen(Some(false), day);
     let fixture: serde_json::Value =

@@ -10,7 +10,7 @@ use std::net::IpAddr;
 
 pub mod reply;
 
-use crate::ics::Occurrence;
+use crate::ics::{Occurrence, Show};
 
 /// Why a client's Join or Dismiss did nothing.
 pub const USERS_ALONE: &str = "only the user joins or dismisses a meeting";
@@ -46,8 +46,8 @@ pub struct Event {
     pub location: String,
     /// An `https:` link `joinable` allows: a Zoom, Meet or Teams link first, else the event's URL.
     pub link: Option<String>,
-    /// `STATUS:TENTATIVE`.
-    pub tentative: bool,
+    /// How it holds the user's time, as the feed says.
+    pub show: Show,
 }
 
 /// How near an event is.
@@ -97,22 +97,127 @@ pub fn glow(stage: Stage, now: u64, reduced: bool) -> f32 {
     }
 }
 
-/// Which part of the band a block takes: all of it, or a half when events overlap.
+/// A call (a Zoom, Meet or Teams link) or a block of time held with none.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Lane {
-    Full,
-    Top,
-    Bottom,
+pub enum Kind {
+    Call,
+    Block,
 }
 
-/// A block on the band: from and to as fractions of its width.
+impl Kind {
+    pub fn name(self) -> &'static str {
+        match self {
+            Kind::Call => "call",
+            Kind::Block => "block",
+        }
+    }
+}
+
+pub fn kind(event: &Event) -> Kind {
+    if has_meeting_link(event) { Kind::Call } else { Kind::Block }
+}
+
+/// Most lanes calls share on the band; a call more at once goes into a lane's hover card.
+pub const MAX_LANES: u8 = 4;
+
+/// A call on the band: from and to as fractions of its width, its lane of the `lanes` its
+/// overlapping calls share (0 the top), and the calls merged into it when more than `MAX_LANES`
+/// overlap.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Bar {
     pub id: u64,
     pub from: f32,
     pub to: f32,
-    pub lane: Lane,
+    pub lane: u8,
+    pub lanes: u8,
     pub stage: Stage,
+    pub more: Vec<u64>,
+}
+
+/// A block on the band, drawn under the calls.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Under {
+    pub id: u64,
+    pub from: f32,
+    pub to: f32,
+    pub stage: Stage,
+}
+
+/// The band of a day: its span, calls in lanes, blocks under them, and the blocks wholly before
+/// or after the span (a marker at that end each).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Layout {
+    pub band: Band,
+    pub calls: Vec<Bar>,
+    pub blocks: Vec<Under>,
+    pub early: Vec<u64>,
+    pub late: Vec<u64>,
+}
+
+/// A `calendar_colors` rule: a title that holds `text` takes the colour.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColorRule {
+    /// Lower case: matched anywhere in the title, case ignored.
+    pub text: String,
+    /// Into `theme::IDENTITY`.
+    pub color: u8,
+}
+
+const MAX_RULE_TEXT: usize = 100;
+/// Rules read of `calendar_colors`.
+pub const MAX_RULES: usize = 64;
+
+impl ColorRule {
+    /// `{"match": "1:1", "color": "teal"}`, or why not.
+    pub fn new(text: &str, color: &str) -> Result<ColorRule, String> {
+        let text = text.trim();
+        if text.is_empty() || text.chars().count() > MAX_RULE_TEXT {
+            return Err(format!("match must be 1 to {MAX_RULE_TEXT} characters"));
+        }
+        let names = crate::theme::IDENTITY_NAMES;
+        let at = names.iter().position(|name| name.eq_ignore_ascii_case(color.trim()));
+        let at = at.ok_or_else(|| format!("color is one of {}", names.join(", ")))?;
+        Ok(ColorRule { text: text.to_lowercase(), color: at as u8 })
+    }
+}
+
+/// The first rule whose text the title holds, case ignored.
+pub fn rule_for<'a>(title: &str, rules: &'a [ColorRule]) -> Option<&'a ColorRule> {
+    let title = title.to_lowercase();
+    rules.iter().find(|rule| title.contains(&rule.text))
+}
+
+/// How an entry is drawn: its colour, how strongly (0 to 1), and the colour's name for the state.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Paint {
+    pub color: u32,
+    pub alpha: f32,
+    pub name: &'static str,
+}
+
+/// An entry's colour: a rule's, else by kind (calls the meeting colour, blocks muted, away its
+/// own). Its strength: by how it holds the time (tentative lighter, free faint) and by stage
+/// (past faded, near pulsing up to the running one's full strength).
+pub fn paint(event: &Event, stage: Stage, glow: f32, rules: &[ColorRule]) -> Paint {
+    use crate::theme;
+    let (color, name) = match (rule_for(&event.title, rules), event.show, kind(event)) {
+        (Some(rule), ..) => (theme::identity(Some(rule.color)), theme::IDENTITY_NAMES[usize::from(rule.color)]),
+        (None, Show::Away, _) => (theme::MEETING_AWAY, "away"),
+        (None, _, Kind::Call) => (theme::MEETING, "meeting"),
+        (None, _, Kind::Block) => (theme::MEETING_BLOCK, "block"),
+    };
+    let held = match event.show {
+        Show::Busy | Show::Away => 1.,
+        Show::Tentative => 0.55,
+        Show::Free => 0.3,
+    };
+    let near = match stage {
+        Stage::Past => 0.35,
+        Stage::Far => 0.75,
+        Stage::Approaching | Stage::Imminent => 0.75 + 0.25 * glow,
+        Stage::Running => 1.,
+    };
+    Paint { color, alpha: held * near, name }
 }
 
 /// The workday (`calendar_workday`): its start and end, in minutes after local midnight.
@@ -179,52 +284,79 @@ fn of_day(events: &[Event], (start, end): (u64, u64)) -> impl Iterator<Item = &E
 }
 
 /// The band of the day from midnight `day.0` to `day.1`: the workday, widened to the day's
-/// earliest start and latest end, so no meeting is hidden; a meeting over midnight is cut there.
+/// earliest call and latest, so no call is hidden; one over midnight is cut there. Blocks never
+/// widen it: a reminder at 00:00 would stretch it for nothing.
 pub fn band(events: &[Event], day: (u64, u64), workday: Workday, offset: &dyn Fn(u64) -> i64) -> Band {
     let hours = (local(day.0, workday.start, offset), local(day.0, workday.end, offset).min(day.1));
     let mut band = Band { from: hours.0, to: hours.1, workday: hours };
-    for e in of_day(events, day) {
+    for e in of_day(events, day).filter(|e| kind(e) == Kind::Call) {
         band.from = band.from.min(e.start.max(day.0));
         band.to = band.to.max(e.end.min(day.1));
     }
     band
 }
 
-/// The band's blocks: the day's timed events at their clock places, past ones too.
-pub fn bars(events: &[Event], day: (u64, u64), band: &Band, now: u64) -> Vec<Bar> {
+/// The day's layout on `band`: calls in as many lanes as overlap (at most `MAX_LANES`, the rest
+/// merged into a lane's call), blocks under them, and blocks wholly outside it at its ends.
+pub fn layout(events: &[Event], day: (u64, u64), band: Band, now: u64) -> Layout {
     let mut shown: Vec<&Event> = of_day(events, day).collect();
     shown.sort_by_key(|e| (e.start, e.end));
-    let mut out = Vec::new();
-    // Events that overlap go in two half lanes; one with none takes both.
-    let mut cluster: Vec<&Event> = Vec::new();
-    let mut cluster_end = 0;
-    let mut flush = |cluster: &mut Vec<&Event>| {
-        let alone = cluster.len() == 1;
-        let (mut top_end, mut bottom_end) = (0, 0);
-        for event in cluster.drain(..) {
-            let lane = if alone {
-                Lane::Full
-            } else if event.start >= top_end || (event.start < bottom_end && top_end <= bottom_end) {
-                // The free lane, else the one that frees first.
-                top_end = top_end.max(event.end);
-                Lane::Top
-            } else {
-                bottom_end = bottom_end.max(event.end);
-                Lane::Bottom
-            };
-            let (from, to) = (band.at(event.start), band.at(event.end));
-            out.push(Bar { id: event.id, from, to, lane, stage: stage(event, now) });
+    let mut out = Layout { band, calls: Vec::new(), blocks: Vec::new(), early: Vec::new(), late: Vec::new() };
+    for e in shown.iter().filter(|e| kind(e) == Kind::Block) {
+        if e.start < band.from && e.end <= band.from {
+            out.early.push(e.id);
+        } else if e.start > band.to || (e.start == band.to && e.end > e.start) {
+            out.late.push(e.id);
+        } else {
+            out.blocks.push(Under { id: e.id, from: band.at(e.start), to: band.at(e.end), stage: stage(e, now) });
         }
-    };
-    for event in shown {
-        if !cluster.is_empty() && event.start >= cluster_end {
-            flush(&mut cluster);
-        }
-        cluster_end = if cluster.is_empty() { event.end } else { cluster_end.max(event.end) };
-        cluster.push(event);
     }
-    flush(&mut cluster);
+    // Calls that overlap, one after another, form a cluster: as many lanes as it needs.
+    let calls: Vec<&Event> = shown.into_iter().filter(|e| kind(e) == Kind::Call).collect();
+    let ends = |e: &Event| e.end.max(e.start + 1);
+    let mut at = 0;
+    while at < calls.len() {
+        let (first, mut end) = (at, ends(calls[at]));
+        while at + 1 < calls.len() && calls[at + 1].start < end {
+            at += 1;
+            end = end.max(ends(calls[at]));
+        }
+        at += 1;
+        // Each lane: when it frees, and its bar.
+        let mut lanes: Vec<(u64, usize)> = Vec::new();
+        let base = out.calls.len();
+        for e in &calls[first..at] {
+            let lane = match lanes.iter().position(|(until, _)| *until <= e.start) {
+                Some(lane) => lane,
+                None if lanes.len() < usize::from(MAX_LANES) => {
+                    lanes.push((0, 0));
+                    lanes.len() - 1
+                }
+                None => {
+                    // Merged into the call of the lane that frees first.
+                    let lane = (0..lanes.len()).min_by_key(|l| lanes[*l].0).unwrap_or(0);
+                    lanes[lane].0 = lanes[lane].0.max(ends(e));
+                    out.calls[lanes[lane].1].more.push(e.id);
+                    continue;
+                }
+            };
+            lanes[lane] = (ends(e), out.calls.len());
+            let (from, to, stage) = (band.at(e.start), band.at(e.end), stage(e, now));
+            out.calls.push(Bar { id: e.id, from, to, lane: lane as u8, lanes: 0, stage, more: Vec::new() });
+        }
+        let count = lanes.len() as u8;
+        out.calls[base..].iter_mut().for_each(|bar| bar.lanes = count);
+    }
     out
+}
+
+/// A call's hover card, with the calls merged into it: `+2 more: Sync, 1:1`.
+pub fn card(event: &Event, more: &[&Event], offset: i64) -> String {
+    let titles: Vec<&str> = more.iter().map(|e| e.title.as_str()).collect();
+    if titles.is_empty() {
+        return describe(event, offset);
+    }
+    format!("{}\n+{} more: {}", describe(event, offset), titles.len(), titles.join(", "))
 }
 
 /// `12m`, `1h 5m`, `3h`: a time to come, rounded up to the minute.
@@ -243,7 +375,8 @@ pub fn clock(ms: u64, offset: i64) -> String {
     format!("{:02}:{:02}", minutes.rem_euclid(1_440) / 60, minutes.rem_euclid(60))
 }
 
-/// What a block's hover card says: `Design review`, `09:00–09:30 · 30m · Room 4`, `Zoom link`.
+/// What a block's hover card says: `Design review`, `09:00–09:30 · 30m · Room 4`, `Zoom link ·
+/// tentative`.
 pub fn describe(event: &Event, offset: i64) -> String {
     let when = if event.all_day {
         "all day".to_string()
@@ -251,9 +384,18 @@ pub fn describe(event: &Event, offset: i64) -> String {
         let length = span(event.end.saturating_sub(event.start));
         format!("{}–{} · {length}", clock(event.start, offset), clock(event.end, offset))
     };
-    let place = Some(event.location.as_str()).filter(|l| !l.is_empty()).map(|l| format!(" · {l}")).unwrap_or_default();
-    let link = meeting_service(event).map(|name| format!("\n{name} link")).unwrap_or_default();
-    format!("{}\n{when}{place}{link}", event.title)
+    // The place without its links: a Zoom link often is the place, and holds a passcode.
+    let place = Some(reply::text(&event.location)).filter(|l| !l.is_empty()).map(|l| format!(" · {l}"));
+    let status = match event.show {
+        Show::Busy => None,
+        Show::Tentative => Some("tentative"),
+        Show::Free => Some("free"),
+        Show::Away => Some("out of office"),
+    };
+    let link = meeting_service(event).map(|name| format!("{name} link"));
+    let facts: Vec<String> = link.into_iter().chain(status.map(String::from)).collect();
+    let facts = if facts.is_empty() { String::new() } else { format!("\n{}", facts.join(" · ")) };
+    format!("{}\n{when}{}{facts}", event.title, place.unwrap_or_default())
 }
 
 /// The text of the events read, as shown: cleaned and capped. The last of `MAX_EVENTS` go.
@@ -271,7 +413,7 @@ pub fn events(occurrences: &[Occurrence]) -> Vec<Event> {
                 title: if title.is_empty() { "(no title)".into() } else { title },
                 location: crate::capture::plain(&o.location, MAX_TITLE),
                 link: link(&[&o.location, &o.description, &o.url]),
-                tentative: o.tentative,
+                show: o.show,
             }
         })
         .collect();
@@ -530,8 +672,15 @@ pub struct Calendar {
     pub notify: bool,
     /// `calendar_notify_for: "links"`: only an event with a Zoom, Meet or Teams link alerts.
     pub links_only: bool,
-    /// The events of today and the next 7 days (`reply::HELD_DAYS`), by start.
+    /// The events of today and the next 7 days (`reply::HELD_DAYS`), by start; without free
+    /// ones while `hide_free`.
     pub events: Vec<Event>,
+    /// As read, free ones too.
+    received: Vec<Event>,
+    /// `calendar_hide_free`: entries that leave the time free are left out.
+    pub hide_free: bool,
+    /// `calendar_colors`, in order.
+    pub rules: Vec<ColorRule>,
     /// Local midnight of today, tomorrow and the day after, in milliseconds.
     pub days: [u64; 3],
     /// When the feed was last read whole.
@@ -570,13 +719,36 @@ impl Calendar {
                 let mut seen = std::collections::HashSet::new();
                 events.retain(|e| seen.insert(e.id));
                 events.truncate(MAX_EVENTS);
-                self.alerts.retain(|a| events.iter().any(|e| e.id == a.id));
-                self.events = events;
+                self.received = events;
                 self.updated = Some(at);
                 self.stale = false;
+                self.shown();
             }
             None => self.stale = true,
         }
+    }
+
+    /// `calendar_hide_free` and `calendar_colors`, as the settings say now.
+    pub fn options(&mut self, hide_free: bool, rules: Vec<ColorRule>) {
+        self.rules = rules;
+        if hide_free != self.hide_free {
+            self.hide_free = hide_free;
+            self.shown();
+        }
+    }
+
+    /// `events` again from what was read.
+    fn shown(&mut self) {
+        let hide = self.hide_free;
+        self.events = self.received.iter().filter(|e| !(hide && e.show == Show::Free)).cloned().collect();
+        let events = &self.events;
+        self.alerts.retain(|a| events.iter().any(|e| e.id == a.id));
+    }
+
+    /// An event's paint now.
+    pub fn paint(&self, event: &Event, now: u64, reduced: bool) -> Paint {
+        let stage = stage(event, now);
+        paint(event, stage, glow(stage, now, reduced), &self.rules)
     }
 
     /// Today's events, by start: those that overlap today.
@@ -645,11 +817,10 @@ impl Calendar {
         format!("{}\n{next}\ncalendar {}", clock(now, offset), self.read_status(offset))
     }
 
-    /// Today's band and its blocks. `offset(t)`: the local zone's at `t`, seconds east of UTC.
-    pub fn band(&self, workday: Workday, now: u64, offset: &dyn Fn(u64) -> i64) -> (Band, Vec<Bar>) {
+    /// Today's band and what is on it. `offset(t)`: the local zone's at `t`, seconds east of UTC.
+    pub fn band(&self, workday: Workday, now: u64, offset: &dyn Fn(u64) -> i64) -> Layout {
         let today = (self.days[0], self.days[1]);
-        let band = band(&self.events, today, workday, offset);
-        (band, bars(&self.events, today, &band, now))
+        layout(&self.events, today, band(&self.events, today, workday, offset), now)
     }
 
     /// When the feed was read: `updated 09:40`, `not updated since 09:40`, `not read yet`.

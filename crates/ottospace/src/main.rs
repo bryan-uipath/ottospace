@@ -589,11 +589,13 @@ enum Mark {
     /// The left column's title strip, and the open section's header.
     Strip,
     BarHeader,
-    /// The meeting timeline's band, its workday marks (0 start, 1 end), now's tick, its n-th block.
+    /// The meeting timeline's band, its workday marks (0 start, 1 end), now's tick, its n-th block,
+    /// and the marker of blocks before (0) or after (1) it.
     Band,
     BandEdge(usize),
     BandNow,
     BandBlock(usize),
+    BandOut(usize),
     /// The status bar.
     Status,
 }
@@ -1058,7 +1060,8 @@ impl Workspace {
         let settings = &config::get().settings;
         let (on, notify) = (settings.calendar_ics.is_some(), settings.calendar_notify.unwrap_or(true));
         let links_only = settings.calendar_notify_for == Some(ottospace_core::settings::NotifyFor::Links);
-        model.update(Action::SetCalendar { on, notify, links_only }.sent_by(Origin::System));
+        let (hide_free, colors) = (settings.calendar_hide_free.unwrap_or(false), settings.color_rules());
+        model.update(Action::SetCalendar { on, notify, links_only, hide_free, colors }.sent_by(Origin::System));
         // Before what a restore reads: a section behind a flag that is off is not put back.
         model.update(Action::SetFeatures { features: features::startup() }.sent_by(Origin::System));
         model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));

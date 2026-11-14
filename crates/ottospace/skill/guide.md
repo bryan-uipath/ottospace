@@ -452,10 +452,11 @@ makes it fetch, and a span outside those days is refused. With no feed set the r
   user's offset then (`2026-11-16T09:00:00-08:00`).
 - `meetings`, by start, at most 200 (`more` counts the rest): `start`, `end`, `all_day`,
   `title`, `location` (or null), `has_call_link` (a Zoom, Meet or Teams link; the link itself is
-  never given), and `status` `tentative` when the feed says so. A meeting the user declined
+  never given), and `status` (`tentative`, `free`, or `away` for out of office; absent when
+  busy). A meeting the user declined
   is left out when they set their address. No description, link or attendee is given.
 - `busy`: the timed meetings merged (overlapping or back to back), cut to the span; all-day
-  events are not busy, tentative ones are. `workday`: the user's working hours
+  events and free ones are not busy, tentative ones are. `workday`: the user's working hours
   (`09:00-17:00`). `free`: the gaps between busy time inside each day's workday, up to
   `known_until` when that is not null: the app holds nothing after it (the feed is not read
   yet, or holds more events than the app keeps), so do not call that time free.

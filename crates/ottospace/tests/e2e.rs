@@ -6794,6 +6794,60 @@ fn the_timeline_band_spans_the_workday_directly_above_the_status_bar() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// A made-up busy day that repeats daily (`tests/fixtures/calendar-busy-day.ics`): 16 timed
+/// entries, three calls at once over a 4-hour block, a reminder at 00:00, tentative, free and
+/// out-of-office entries, an all-day one.
+const BUSY_DAY: &str = include_str!("fixtures/calendar-busy-day.ics");
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_busy_day_puts_calls_in_lanes_over_blocks_coloured_by_kind_and_rule() {
+    let home = calendar_folder("calendar-busy", BUSY_DAY, None);
+    let rules = json!([{ "match": "1:1", "color": "teal" }, { "match": "SYNC", "color": "pink" }]);
+    let settings = |hide_free: bool| {
+        json!({
+            "calendar_ics": home.join("today.ics"), "calendar_workday": "06:00-22:00", "repos": [],
+            "calendar_colors": rules, "calendar_hide_free": hide_free,
+        })
+        .to_string()
+    };
+    std::fs::write(home.join("settings.json"), settings(false)).unwrap();
+    let otto = Otto::launch_with("calendar-busy", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    calendar_read(&otto);
+    let band_of = |o: &Otto| o.call(json!({"cmd": "state"}))["calendar"]["band"].clone();
+    let band = otto.wait_for("the band drawn", |o| Some(band_of(o)).filter(|b| b["rect"].is_array()));
+    // The 00:00 reminder is a marker at the left end: the band is the workday, not stretched.
+    assert_eq!(band["span"], band["workday"], "{band}");
+    assert_eq!((&band["outside"][0]["count"], &band["outside"][1]["count"]), (&json!(1), &json!(0)), "{band}");
+    assert!(band["outside"][0]["rect"].is_array(), "{band}");
+    let blocks = band["blocks"].as_array().unwrap().clone();
+    let count = |key: &str, value: Value| blocks.iter().filter(|b| b[key] == value).count();
+    assert_eq!((count("kind", json!("call")), count("kind", json!("block"))), (11, 4), "{band}");
+    // Three calls at 09:00 share three lanes; the 4-hour block under them takes none.
+    assert_eq!(count("lanes", json!(3)), 3, "{band}");
+    assert!(blocks.iter().filter(|b| b["kind"] == "block").all(|b| b["lane"].is_null()), "{band}");
+    // Rules by title, case ignored; the rest by kind and status.
+    let colours = [("teal", 2), ("pink", 3), ("away", 1), ("block", 3), ("meeting", 6)];
+    for (name, n) in colours {
+        assert_eq!(count("color", json!(name)), n, "{name} in {band}");
+    }
+    assert_eq!((count("show", json!("tentative")), count("show", json!("free"))), (1, 1), "{band}");
+    // Within a lane's slice, each of three calls at once is drawn, a third of the band each.
+    let r = |v: &Value| -> Vec<f64> { v.as_array().expect("a rect").iter().filter_map(Value::as_f64).collect() };
+    let lanes: Vec<Vec<f64>> = blocks.iter().filter(|b| b["lanes"] == 3).map(|b| r(&b["rect"])).collect();
+    assert!(lanes.windows(2).all(|w| w[1][1] > w[0][1] + w[0][3] - 0.01), "stacked, not overlapping: {lanes:?}");
+    // Free entries leave as the settings are saved, with no restart.
+    std::fs::write(home.join("settings.json"), settings(true)).unwrap();
+    otto.wait_for("free entries hidden", |o| {
+        let b = band_of(o);
+        b["blocks"].as_array().is_some_and(|all| all.len() == blocks.len() - 1).then_some(())
+    });
+    assert!(otto.call(json!({"cmd": "state"}))["notice"].is_null(), "no restart asked");
+    assert!(!otto.call(json!({"cmd": "state"})).to_string().contains("Daily standup"), "no title in the state");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// Whether sneak mode labels a control of this id: it is drawn.
 fn labelled(otto: &Otto, id: &str) -> bool {
     let (_, labels) = sneak(otto);
