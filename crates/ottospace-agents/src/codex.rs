@@ -142,7 +142,7 @@ impl Codex {
         }
         let thread_request = match start {
             Start::New { .. } => ("thread/start", json!({"cwd": cwd, "model": model})),
-            Start::Resume { id } if crate::is_uuid(id) => {
+            Start::Resume { id } if ottospace_core::agents::is_uuid(id) => {
                 ("thread/resume", json!({"threadId": id, "cwd": cwd, "model": model}))
             }
             Start::Resume { .. } => return None,

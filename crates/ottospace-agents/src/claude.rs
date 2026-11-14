@@ -46,7 +46,7 @@ pub fn argv(model: Option<&str>, start: &Start) -> Option<Argv> {
         Start::New { id } => (chosen, id),
         Start::Resume { id } => (cli.resume, id),
     };
-    if !crate::is_uuid(id) {
+    if !ottospace_core::agents::is_uuid(id) {
         return None;
     }
     let model = model.into_iter().flat_map(|id| [cli.model_flag.to_string(), id.to_string()]);

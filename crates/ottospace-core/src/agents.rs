@@ -290,6 +290,14 @@ mod tests {
     }
 
     #[test]
+    fn uuids() {
+        assert!(is_uuid("8f14e45f-ceea-467f-a8d3-0242ac130003"));
+        for bad in ["", "--resume", "8f14e45f-ceea-467f-a8d3-0242ac13000", "8f14e45f-ceea-467f-a8d3-0242ac13000g"] {
+            assert!(!is_uuid(bad), "{bad}");
+        }
+    }
+
+    #[test]
     fn a_tag_reads_as_a_runner_a_runner_and_model_or_a_saved_agent() {
         let models = Models::default();
         let cases = [

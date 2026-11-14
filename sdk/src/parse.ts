@@ -62,6 +62,7 @@ import type {
   Picker,
   Palette,
   PaletteRow,
+  PaletteTask,
   Inspector,
   InspectorRow,
   InspectorState,
@@ -894,7 +895,16 @@ function picker(value: unknown, at: string): Picker {
 
 function palette(value: unknown, at: string): Palette {
   const o = fields(value, at);
-  return { query: str(o.query, `${at}.query`), selected: num(o.selected, `${at}.selected`) };
+  return {
+    query: str(o.query, `${at}.query`),
+    selected: num(o.selected, `${at}.selected`),
+    tasks: orNull(list(paletteTask))(o.tasks, `${at}.tasks`),
+  };
+}
+
+function paletteTask(value: unknown, at: string): PaletteTask {
+  const o = fields(value, at);
+  return { task: orNull(num)(o.task, `${at}.task`), title: str(o.title, `${at}.title`) };
 }
 
 function inspectorState(value: unknown, at: string): InspectorState {

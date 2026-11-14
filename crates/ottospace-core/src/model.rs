@@ -8,7 +8,7 @@ use crate::ax::Target;
 use crate::calendar::{self, Calendar};
 use crate::capture::{self, Content, Facts, Tool};
 use crate::capture_model::Collection;
-use crate::commands::{self, Command, Palette};
+use crate::commands::{self, Command, Palette, TaskChoice};
 use crate::complete::{self, Candidate, Dropdown, Row};
 use crate::compose::{self, Draft};
 use crate::edit::{Edit, Field, Motion};
@@ -489,6 +489,9 @@ pub enum Action {
     ClosePicker,
     /// Open the command palette. Only the user's: it runs any command as theirs.
     PaletteOpen,
+    /// Move Tab to Task…: the palette, listing the tasks (and no task) to move the tab on show
+    /// to. Only the user's, as is which task a tab is of.
+    PaletteTasks,
     /// Move the palette's highlight down (positive) or up; it wraps.
     PaletteMove {
         delta: i32,
@@ -1341,6 +1344,7 @@ impl Action {
             Action::Enter { .. }
             | Action::OpenPicker { .. }
             | Action::PaletteOpen
+            | Action::PaletteTasks
             | Action::InspectorFilter { on: true }
             | Action::OpenCompose { .. }
             | Action::ToggleKeys
@@ -2322,9 +2326,11 @@ impl Model {
             action if self.mark_input.is_some() && action.takes_keyboard() => Some(marks::INPUT_ON),
             // The palette runs any command as the user's: no client opens it, types in it, moves
             // in it or chooses. Nor does a client close it from under the user.
-            Action::PaletteOpen | Action::PaletteMove { .. } | Action::PaletteChoose { .. } | Action::ClosePalette => {
-                Some(commands::USERS_ALONE)
-            }
+            Action::PaletteOpen
+            | Action::PaletteTasks
+            | Action::PaletteMove { .. }
+            | Action::PaletteChoose { .. }
+            | Action::ClosePalette => Some(commands::USERS_ALONE),
             Action::FieldEdit { .. } if self.field().is_some_and(|(of, _)| of == "palette") => {
                 Some(commands::USERS_ALONE)
             }
@@ -2409,8 +2415,13 @@ impl Model {
         // A draft in the right bar is not a box: the workspace stays in use beside it.
         let modal = self.compose.is_some() && self.capture.is_none();
         // The palette opens over nothing that has the keyboard, and holds it as the picker does.
-        let opens =
-            matches!(action, Action::PaletteOpen | Action::InspectorFilter { on: true } | Action::InspectorOpen { .. });
+        let opens = matches!(
+            action,
+            Action::PaletteOpen
+                | Action::PaletteTasks
+                | Action::InspectorFilter { on: true }
+                | Action::InspectorOpen { .. }
+        );
         if opens && (self.holds_keyboard() || self.mark_input.is_some()) {
             return Some("something else has the keyboard");
         }
@@ -2571,6 +2582,7 @@ impl Model {
                 Action::QuitCancel
                     | Action::OpenPicker { .. }
                     | Action::PaletteOpen
+                    | Action::PaletteTasks
                     | Action::OpenCompose { .. }
                     | Action::ToggleKeys
                     | Action::ToggleVisual
@@ -3424,22 +3436,46 @@ impl Model {
                 }
             }
             Action::ClosePicker => self.picker = None,
-            Action::PaletteOpen => {
+            Action::PaletteOpen | Action::PaletteTasks => {
                 self.palette_over_talk = self.talk.as_ref().is_some_and(|talk| talk.keys);
                 self.leave(effects);
-                self.palette = Some(Palette { query: Field::new("", MAX_FILTER), selected: 0 });
+                // Live tasks in their order, then no task.
+                let tasks = matches!(action, Action::PaletteTasks).then(|| {
+                    let live = self.tasks.list.iter().filter(|task| !task.dismissed);
+                    let live = live.map(|task| TaskChoice { task: Some(task.id), title: task.title.clone() });
+                    live.chain([TaskChoice { task: None, title: "No task".into() }]).collect()
+                });
+                self.palette = Some(Palette { query: Field::new("", MAX_FILTER), selected: 0, tasks });
             }
             Action::PaletteMove { delta } => {
                 if let Some(palette) = &mut self.palette {
-                    let count = palette.matches().len() as i64;
+                    let count = palette.count() as i64;
                     if count > 0 {
                         palette.selected = (palette.selected as i64 + delta as i64).rem_euclid(count) as usize;
                     }
                 }
             }
             Action::PaletteChoose { index } => {
-                let Some(palette) = self.palette.take() else { return };
-                match palette.matches().get(index.unwrap_or(palette.selected)) {
+                let Some(mut palette) = self.palette.take() else { return };
+                let at = index.unwrap_or(palette.selected);
+                // Listing tasks: the tab on show moves to the end of the chosen one's group.
+                if let Some(tasks) = &palette.tasks {
+                    match palette.task_matches().get(at).map(|choice| choice.task) {
+                        // Dismissed since the list was read: its row goes, and the palette stays.
+                        Some(Some(id)) if self.tasks.live(id).is_none() => {
+                            let left = tasks.iter().filter(|choice| choice.task != Some(id)).cloned().collect();
+                            (palette.tasks, palette.selected) = (Some(left), 0);
+                            self.palette = Some(palette);
+                        }
+                        Some(task) => {
+                            self.palette_closed(effects);
+                            self.place_tab(None, TabAt::End(task));
+                        }
+                        None => self.palette = Some(palette),
+                    }
+                    return;
+                }
+                match palette.matches().get(at) {
                     // The command runs from where the keyboard was.
                     Some(&command) => {
                         self.palette_closed(effects);
@@ -3594,7 +3630,7 @@ impl Model {
                 if let Some(at) = scrolled {
                     peek.last = peek.last.max(at);
                 }
-                if now >= peek.last + crate::app_wheel::QUIET_MS {
+                if now >= peek.last.saturating_add(crate::app_wheel::QUIET_MS) {
                     self.end_peek(effects);
                 }
             }
@@ -6136,6 +6172,7 @@ mod tests {
         Action::PickerChoose { .. },
         Action::ClosePicker,
         Action::PaletteOpen,
+        Action::PaletteTasks,
         Action::PaletteMove { .. },
         Action::PaletteChoose { .. },
         Action::ClosePalette,
@@ -6347,6 +6384,7 @@ mod tests {
             Action::PickerChoose { index: None },
             Action::ClosePicker,
             Action::PaletteOpen,
+            Action::PaletteTasks,
             Action::PaletteMove { delta: 1 },
             Action::PaletteChoose { index: None },
             Action::ClosePalette,
@@ -7275,6 +7313,49 @@ mod tests {
         m.update(Action::TaskDismiss { id: a }.sent_by(Origin::Socket));
         m.update(theirs.sent_by(Origin::User));
         assert_eq!(m.tabs.iter().find(|tab| tab.id == 1).and_then(|tab| tab.task), None);
+    }
+
+    #[test]
+    fn move_tab_to_task_lists_the_live_tasks_and_no_task_and_moves_the_tab_on_show() {
+        let mut m = Model::default();
+        let (a, b, gone) = (
+            add_task(&mut m, "fix login", State::Running),
+            add_task(&mut m, "docs", State::Running),
+            add_task(&mut m, "old", State::Running),
+        );
+        m.update(Action::TaskDismiss { id: gone });
+        m.update(Action::NewTabOf { task: Some(a) }); // tab 2, on show
+        let titles = |m: &Model| -> Vec<String> {
+            let palette = m.palette.as_ref().map(|p| p.task_matches().into_iter().map(|c| c.title.clone()).collect());
+            palette.unwrap_or_default()
+        };
+        // A client opens nothing; the user's lists the live tasks in order, then no task.
+        assert!(m.update(Action::PaletteTasks.sent_by(Origin::Socket)).is_empty());
+        assert!(m.palette.is_none());
+        m.update(Action::PaletteTasks);
+        assert_eq!((m.mode(), titles(&m)), (Mode::Palette, vec!["fix login".into(), "docs".into(), "No task".into()]));
+        assert!(m.palette.as_ref().is_some_and(|p| p.matches().is_empty()));
+        // Typing narrows it; a client chooses nothing.
+        m.update(Action::FieldEdit { edit: Edit::Insert("doc".into()) });
+        assert_eq!(titles(&m), ["docs"]);
+        assert!(m.update(Action::PaletteChoose { index: None }.sent_by(Origin::Socket)).is_empty());
+        assert_eq!(m.tab_task(), Some(a));
+        // The user's ↵: the tab on show moves to the end of that task's group, still on show.
+        m.update(Action::PaletteChoose { index: None });
+        assert_eq!((m.palette.is_none(), m.tabs[m.active].id, m.tab_task()), (true, 2, Some(b)));
+        // No task: unlinked, at the end. Nothing matched: it stays open.
+        m.update(Action::PaletteTasks);
+        m.update(Action::FieldEdit { edit: Edit::Insert("zzz".into()) });
+        m.update(Action::PaletteChoose { index: None });
+        assert!(m.palette.is_some());
+        // A task dismissed while it is listed: choosing it takes its row off, and moves nothing.
+        m.update(Action::ClosePalette);
+        m.update(Action::PaletteTasks);
+        m.update(Action::TaskDismiss { id: a }.sent_by(Origin::Socket));
+        m.update(Action::PaletteChoose { index: Some(0) });
+        assert_eq!((titles(&m), m.tab_task()), (vec!["docs".into(), "No task".into()], Some(b)));
+        m.update(Action::PaletteChoose { index: Some(1) });
+        assert_eq!((m.tab_task(), m.active), (None, m.tabs.len() - 1));
     }
 
     #[test]

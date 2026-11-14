@@ -588,6 +588,14 @@ export interface Palette {
   query: string;
   /** An index into `palette_rows`. */
   selected: number;
+  /** Move Tab to Task…: the tasks it lists (task null: no task), in order; null while it lists commands. */
+  tasks: PaletteTask[] | null;
+}
+
+/** A task Move Tab to Task… may move the tab on show to. */
+export interface PaletteTask {
+  task: TaskId | null;
+  title: string;
 }
 
 /** The accessibility inspector, while it is open: the user's own. `state.inspector`. */
@@ -637,7 +645,7 @@ export interface Inspector {
   outline: Frame | null;
 }
 
-/** A row of the command palette: a command that needs no argument. */
+/** A row of the command palette: a command that needs no argument. While it lists tasks: `move_tab_to_task`, the task's title, group `Move to`. */
 export interface PaletteRow {
   /** Its id, e.g. `split_right`. */
   command: string;

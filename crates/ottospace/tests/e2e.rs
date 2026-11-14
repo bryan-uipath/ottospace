@@ -5672,6 +5672,34 @@ fn the_command_palette_runs_a_command_by_name_for_the_user_alone() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn move_tab_to_task_in_the_palette_lists_the_tasks_and_moves_the_tab() {
+    let otto = Otto::launch("palette-move");
+    otto.call(json!({"cmd": "task_add", "title": "fix login", "state": "running"}));
+    otto.call(json!({"cmd": "task_add", "title": "docs", "state": "running"}));
+    assert_eq!(tab_titles(&otto.call(json!({"cmd": "state"}))), [("Tab 1".to_string(), Value::Null)]);
+    let names = |reply: &Value| -> Vec<Value> {
+        reply["palette_rows"].as_array().into_iter().flatten().map(|row| row["name"].clone()).collect()
+    };
+    let listed =
+        |o: &Otto| Some(o.call(json!({"cmd": "state"}))).filter(|r| r["palette_rows"][0]["group"] == "Move to");
+    // The command opens the palette again on the tasks, then no task.
+    otto.user_key("cmd-p m o v e space t a b space t o enter");
+    let reply = otto.wait_for("the tasks listed", listed);
+    let all = vec![json!("fix login"), json!("docs"), json!("No task")];
+    assert_eq!((names(&reply), &reply["mode"]), (all.clone(), &json!("palette")));
+    // Typing narrows them; ↵ moves the tab on show to that task.
+    otto.user_key("d o c");
+    let reply = otto.user_key("enter");
+    assert_eq!((tab_titles(&reply), &reply["mode"]), (vec![("Tab 1".to_string(), json!(2))], &json!("normal")));
+    // And back to no task.
+    otto.user_key("cmd-p m o v e space t a b space t o enter");
+    assert_eq!(names(&otto.wait_for("the tasks listed", listed)), all);
+    let reply = otto.user_key("n o space t a s k enter");
+    assert_eq!(tab_titles(&reply), [("Tab 1".to_string(), Value::Null)]);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn the_inspector_shows_a_trees_counts_and_roles_never_its_text() {
     let otto = Otto::launch("inspector");
     otto.call(json!({"cmd": "split", "kind": "empty"}));
@@ -5872,6 +5900,10 @@ fn a_layout_file_that_does_not_read_is_set_aside_and_restore_layout_false_starts
     // Read: the tab, its history above the prompt, its command typed and not run.
     let home = user_folder("restore-hand", r#"{"repos": []}"#);
     std::fs::write(home.join("layout.json"), &layout).unwrap();
+    // A leftover `layout.json.bad`, a link out of the home: Start Fresh removes the link, not its target.
+    let target = Path::new(&dir).join("kept");
+    std::fs::write(&target, "not the home's").unwrap();
+    std::os::unix::fs::symlink(&target, home.join("layout.json.bad")).unwrap();
     let mut otto = Otto::launch_with("restore-hand", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
     let state = otto.call(json!({"cmd": "state"}));
     assert_eq!((tab_titles(&state), pane_dirs(&state)), (vec![("Hand".to_string(), Value::Null)], vec![json!(dir)]));
@@ -5887,6 +5919,8 @@ fn a_layout_file_that_does_not_read_is_set_aside_and_restore_layout_false_starts
     assert_eq!(theirs["state"]["palette"], Value::Null);
     otto.call(json!({"cmd": "key", "keys": "cmd-p s t a r t space f r e s h enter", "as": "user"}));
     assert!(!home.join("layout.json").exists());
+    assert!(std::fs::symlink_metadata(home.join("layout.json.bad")).is_err());
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "not the home's");
     otto.call(json!({"cmd": "quit"}));
     exits(&mut otto);
     assert!(!home.join("layout.json").exists());

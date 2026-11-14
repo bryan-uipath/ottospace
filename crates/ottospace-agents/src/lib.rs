@@ -363,13 +363,6 @@ impl<W: Wire + ?Sized> Wire for Box<W> {
     }
 }
 
-/// True if `id` is written as a UUID. Mirrors `agents::is_uuid` on the `task-start` branch (PR
-/// #84): whichever merges second makes this call the core's.
-pub fn is_uuid(id: &str) -> bool {
-    let dash = |at: usize| matches!(at, 8 | 13 | 18 | 23);
-    id.len() == 36 && id.bytes().enumerate().all(|(at, c)| if dash(at) { c == b'-' } else { c.is_ascii_hexdigit() })
-}
-
 /// Why a request was denied unseen.
 const TOO_LONG: &str = "too long to show in full";
 
@@ -436,7 +429,7 @@ fn model_of(value: &Value) -> Option<String> {
 
 /// A session id as a label: a UUID, else `None`.
 fn session_of(value: &Value) -> Option<String> {
-    value.as_str().filter(|id| is_uuid(id)).map(str::to_string)
+    value.as_str().filter(|id| ottospace_core::agents::is_uuid(id)).map(str::to_string)
 }
 
 #[cfg(test)]
@@ -475,13 +468,5 @@ mod tests {
         let model = |id: &str| model_of(&serde_json::json!(id));
         assert_eq!(model("claude-opus-5-5[1m]").as_deref(), Some("claude-opus-5-5[1m]"));
         assert_eq!((model("[1m]"), model("<synthetic>"), model("--yolo")), (None, None, None));
-    }
-
-    #[test]
-    fn uuids() {
-        assert!(is_uuid("8f14e45f-ceea-467f-a8d3-0242ac130003"));
-        for bad in ["", "--resume", "8f14e45f-ceea-467f-a8d3-0242ac13000", "8f14e45f-ceea-467f-a8d3-0242ac13000g"] {
-            assert!(!is_uuid(bad), "{bad}");
-        }
     }
 }

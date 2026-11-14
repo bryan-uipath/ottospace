@@ -5,7 +5,7 @@ use gpui::{
     Context, InteractiveElement, IntoElement, KeyDownEvent, Keymap, Keystroke, ParentElement, Styled, Window, actions,
     div, px, rgb,
 };
-use ottospace_core::commands::{Command, Palette};
+use ottospace_core::commands::{Command, Palette, TaskChoice};
 use ottospace_core::keys::FilterKey;
 use ottospace_core::{Action, theme};
 
@@ -49,6 +49,7 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::NewTab => Box::new(NewTab),
         Command::NewTabOutside => Box::new(NewTabOutside),
         Command::RemoveTabFromTask => Box::new(RemoveTabFromTask),
+        Command::MoveTabToTask => Box::new(MoveTabToTask),
         Command::NextTab => Box::new(NextTab),
         Command::PrevTab => Box::new(PrevTab),
         Command::CloseTab => Box::new(CloseTab),
@@ -175,20 +176,20 @@ impl Workspace {
         window.defer(cx, move |window, cx| window.dispatch_action(action(command), cx));
     }
 
-    /// The rows as drawn, for the state snapshot: each command's id, name, group and key.
+    /// The rows as drawn, for the state snapshot: each command's id, name, group and key. While
+    /// it lists tasks: Move Tab to Task's id, the task's title, "Move to" and no key.
     pub fn palette_rows(&self, cx: &App) -> Option<serde_json::Value> {
         let palette = self.model.palette.as_ref()?;
         let keymap = cx.key_bindings();
-        let keymap = keymap.borrow();
-        let row = |command: Command| {
+        let row = |(command, group, name, key)| {
             serde_json::json!({
                 "command": command,
-                "name": command.name(),
-                "group": command.group().label(),
-                "key": key_of(&keymap, command),
+                "name": name,
+                "group": group,
+                "key": key,
             })
         };
-        Some(palette.matches().into_iter().map(row).collect())
+        Some(palette_items(palette, &keymap.borrow()).into_iter().map(row).collect())
     }
 
     /// The palette: a box near the top, over the dimmed workspace. A click outside closes it.
@@ -198,30 +199,29 @@ impl Workspace {
         if SHOWN.replace(Some(now.clone())) != Some(now) {
             self.bars.scroll_to_item("palette", palette.selected);
         }
-        let keymap = cx.key_bindings();
-        let keymap = keymap.borrow();
-        let rows = palette.matches().into_iter().enumerate().map(|(i, command)| {
+        let items = palette_items(palette, &cx.key_bindings().borrow());
+        let rows = items.into_iter().enumerate().map(|(i, (_, group, name, key))| {
             dialog::filter_row(("command", i), i == palette.selected)
-                .child(
-                    div().w(px(72.)).flex_none().text_xs().text_color(rgb(theme::MUTED)).child(command.group().label()),
-                )
-                .child(div().flex_1().min_w_0().truncate().child(command.name()))
-                .children(
-                    key_of(&keymap, command)
-                        .map(|key| div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(key)),
-                )
+                .child(div().w(px(72.)).flex_none().text_xs().text_color(rgb(theme::MUTED)).child(group))
+                .child(div().flex_1().min_w_0().truncate().child(name))
+                .children(key.map(|key| div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(key)))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.dispatch(Action::PaletteChoose { index: Some(i) }, this.input, window, cx);
                 }))
                 .into_any_element()
         });
         let rows = rows.collect();
+        let tasks = palette.tasks.is_some();
+        let (title, hint) = if tasks { ("Move to", "type a task") } else { ("Run", "type a command") };
         let header = div()
             .h(px(40.))
-            .child(div().text_xs().text_color(rgb(theme::COMMAND)).child("Run"))
-            .child(self.render_field("type a command", cx));
+            .child(div().text_xs().text_color(rgb(theme::COMMAND)).child(title))
+            .child(self.render_field(hint, cx));
         let panel = dialog::floating(560.).max_w_full().max_h(px(440.));
-        let texts = ("No command matches", "↑↓ move · ↵ run · esc close");
+        let texts = match tasks {
+            true => ("No task matches", "↑↓ move · ↵ move the tab · esc close"),
+            false => ("No command matches", "↑↓ move · ↵ run · esc close"),
+        };
         let panel = self.list_panel(panel, header, "palette", rows, texts);
         dialog::backdrop("palette-backdrop", 0.35, Action::ClosePalette, cx)
             .pt(px(72.))
@@ -231,6 +231,17 @@ impl Workspace {
             .items_center()
             .child(panel)
     }
+}
+
+/// The palette's rows: (command, group, name, key). While it lists tasks, each task is a row of
+/// Move Tab to Task, under "Move to".
+fn palette_items(palette: &Palette, keymap: &Keymap) -> Vec<(Command, &'static str, String, Option<String>)> {
+    if palette.tasks.is_some() {
+        let task = |choice: &TaskChoice| (Command::MoveTabToTask, "Move to", choice.title.clone(), None);
+        return palette.task_matches().into_iter().map(task).collect();
+    }
+    let command = |c: Command| (c, c.group().label(), c.name().to_string(), key_of(keymap, c));
+    palette.matches().into_iter().map(command).collect()
 }
 
 /// Opens the user's folder, or a file in it, as Finder would. A test run that named no folder has none.
