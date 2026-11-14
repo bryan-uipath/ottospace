@@ -4110,7 +4110,8 @@ impl Model {
                     }
                     None => {
                         let default = self.default_agent();
-                        let launch = agents::launch(task.agent.as_deref(), default, &self.models, task.title.clone());
+                        let asked = agents::asked(&task.title, &task.paths);
+                        let launch = agents::launch(task.agent.as_deref(), default, &self.models, asked);
                         launch.map(|launch| (agents::Start::New(launch), task.repo.clone()))
                     }
                 }

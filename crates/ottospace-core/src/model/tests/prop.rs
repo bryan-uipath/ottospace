@@ -2349,11 +2349,16 @@ impl Run {
                         agents::Start::Resume { runner, session } => agents::resume(*runner, session),
                     };
                     ensure!(command.is_some(), "an agent that cannot be started is asked for: {start:?}");
-                    // Its prompt is the task's title alone: nothing captured from a pane or an app
-                    // (a title nobody typed is fixed words), and never the brief's text.
+                    // Its prompt is the task's title and the paths its line named alone: nothing
+                    // captured from a pane or an app (a title nobody typed is fixed words), and
+                    // never the brief's text.
                     if let agents::Start::New(launch) = start {
-                        let title = m.tasks.get(task).map(|task| task.title.as_str());
-                        ensure!(title == Some(launch.title.as_str()), "task {task} starts with {:?}", launch.title);
+                        let asked = m.tasks.get(task).map(|task| agents::asked(&task.title, &task.paths));
+                        ensure!(
+                            asked.as_deref() == Some(launch.title.as_str()),
+                            "task {task} starts with {:?}",
+                            launch.title
+                        );
                     }
                 }
                 Effect::ReadSession { runner, id } => {

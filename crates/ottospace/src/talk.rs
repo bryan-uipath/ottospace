@@ -33,7 +33,7 @@ pub struct Agent {
     /// The runner and id it was started with, if the id was chosen here, and where it runs: to
     /// see if its session was written.
     session: Option<(RunnerId, String)>,
-    cwd: Option<String>,
+    pub(crate) cwd: Option<String>,
     /// The core was told it ended.
     told: bool,
 }
@@ -476,6 +476,15 @@ impl Workspace {
         let agent = self.drawer.agents.get(subject).map(|agent| (agent.model.clone(), agent.since)).or(native);
         let runs = self.model.agent_runs(subject);
         let muted = |text: String| div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(text);
+        // Where the agent runs (or would): what it can see. Its process's folder, else the task's
+        // repository, else the home folder.
+        let ran = self.drawer.native.get(subject).and_then(|native| native.cwd.clone());
+        let ran = ran.or_else(|| self.drawer.agents.get(subject).and_then(|agent| agent.cwd.clone()));
+        let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
+        let folder = ran.or_else(|| self.repo_of(subject)).or_else(|| home.clone()).map(|dir| {
+            let short = home.as_deref().and_then(|home| dir.strip_prefix(home)).map(|rest| format!("~{rest}"));
+            short.unwrap_or(dir)
+        });
         let elapsed = agent.as_ref().filter(|_| runs).map(|(_, since)| {
             let secs = since.elapsed().as_secs();
             if secs < 3600 { format!("{}:{:02}", secs / 60, secs % 60) } else { format!("{}h", secs / 3600) }
@@ -543,6 +552,15 @@ impl Workspace {
                 .child(div().flex_1().min_w(px(72.)).truncate().text_sm().child(title))
                 // The model gives way before the title does.
                 .children(agent.map(|(model, _)| muted(model).flex_shrink().min_w_0().truncate()))
+                .children(folder.map(|folder| {
+                    let tip: gpui::SharedString = format!("The agent runs in {folder}").into();
+                    muted(folder)
+                        .id("talk-folder")
+                        .flex_shrink()
+                        .min_w_0()
+                        .truncate()
+                        .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone()))))
+                }))
                 .children(elapsed.map(muted))
                 .children(self.watch_chip(subject))
                 .children(self.view_switch(subject, cx))

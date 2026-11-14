@@ -405,8 +405,8 @@ impl Workspace {
         true
     }
 
-    /// The repository a conversation's links and images may be in.
-    fn repo_of(&self, subject: &Subject) -> Option<String> {
+    /// The repository a conversation's links and images may be in, and its agent runs in.
+    pub(crate) fn repo_of(&self, subject: &Subject) -> Option<String> {
         match subject {
             Subject::Task(id) => self.model.tasks.get(*id)?.repo.clone(),
             Subject::Session { runner, id } => self.model.session_repo(runner, id),

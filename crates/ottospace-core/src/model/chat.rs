@@ -198,7 +198,8 @@ impl Model {
             self.chats.push(Chat::new(subject.clone()));
         }
         // A new session is asked its task first: shown as the user's message, the brief's path aside.
-        let title = subject.task().and_then(|id| self.tasks.get(id)).map(|task| task.title.clone());
+        let title =
+            subject.task().and_then(|id| self.tasks.get(id)).map(|task| agents::asked(&task.title, &task.paths));
         let now = self.now;
         if let Some(chat) = self.chat_mut(subject) {
             chat.transcript.started(resumed);
@@ -692,6 +693,32 @@ mod tests {
         assert!(m.chat(&one).is_some_and(|chat| !chat.deny), "the message was for the withdrawn card");
         assert_eq!(m.update(Action::TalkAnswer { allow: true, ticket: 1 }), []);
         assert_eq!(m.chat(&one).map(|chat| chat.transcript.cards.len()), Some(1));
+    }
+
+    /// The bug of 0.1.0: "plan my week ~/notes folder" was filed as "plan my week folder", and
+    /// the agent was asked that alone: the `/path` it named never reached it.
+    #[test]
+    fn a_path_the_line_names_is_in_what_the_agent_is_asked() {
+        let mut m = Model::default();
+        m.update(Action::SetAgents { claude: vec![], codex: vec![], default: None, shows: View::Native });
+        let found = crate::compose::PathFound { typed: "~/notes".into(), resolved: "/Users/me/notes".into() };
+        let known = crate::compose::Known { paths: vec![found], ..Default::default() };
+        let line = "plan my week ~/notes folder".to_string();
+        m.update(Action::TaskFromLine { line, known, open: false });
+        let task = m.tasks.list[0].id;
+        assert_eq!(m.tasks.list[0].title, "plan my week folder");
+        let effects = started(&mut m, Action::TaskTalk { id: task });
+        let Some(Effect::StartAgent { start: crate::agents::Start::New(launch), .. }) = effects.first() else {
+            panic!("{effects:?}")
+        };
+        assert_eq!(launch.title, "plan my week folder (paths: ~/notes)");
+        m.update(Action::AgentStarted { task: Subject::Task(task), session: None, at: 1 }.sent_by(Origin::System));
+        let shown = m.chat(&Subject::Task(task)).and_then(|chat| chat.transcript.items().next().cloned());
+        let asked = shown.and_then(|item| match item.entry {
+            crate::transcript::Entry::User { text } => Some(text.text().to_string()),
+            _ => None,
+        });
+        assert_eq!(asked.as_deref(), Some("Task: plan my week folder (paths: ~/notes)"));
     }
 
     /// The bug of 0.1.0: each click on an ended task started it again, its prompt and "ended"
