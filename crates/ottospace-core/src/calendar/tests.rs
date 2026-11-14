@@ -172,6 +172,39 @@ fn no_alert_in_a_call_when_unknown_or_switched_off() {
 }
 
 #[test]
+fn the_repeat_keeps_to_the_first_ten_minutes_and_a_call_ends_the_alerts() {
+    // First alert at T+9m: the repeat at T+11m would be past the window.
+    let mut late = calendar(vec![event(1, NINE, 60)]);
+    late.in_call = Some(false);
+    assert_eq!(late.tick(NINE + 9 * M).len(), 1);
+    assert!(late.tick(NINE + 11 * M).is_empty());
+    // Alerted, then in a call, then out of it: nothing more, and no banner.
+    let mut c = calendar(vec![event(2, NINE, 60)]);
+    c.in_call = Some(false);
+    c.tick(NINE);
+    c.call_seen(Some(true));
+    c.call_seen(Some(false));
+    assert!(c.tick(NINE + 3 * M).is_empty());
+    assert_eq!(c.banner(NINE + 3 * M), None);
+    // In another call at the start, out of it soon after: this meeting is still missed.
+    let mut other = calendar(vec![event(3, NINE, 60)]);
+    other.call_seen(Some(true));
+    assert!(other.tick(NINE).is_empty());
+    other.call_seen(Some(false));
+    assert_eq!(other.tick(NINE + 3 * M).len(), 1);
+}
+
+#[test]
+fn the_same_occurrence_twice_alerts_once() {
+    let mut c = calendar(vec![event(1, NINE, 30), event(1, NINE, 30)]);
+    assert_eq!(c.events.len(), 1);
+    c.in_call = Some(false);
+    assert_eq!(c.tick(NINE).len(), 1);
+    assert_eq!(c.tick(NINE + REPEAT).len(), 1);
+    assert_eq!(c.given, 2);
+}
+
+#[test]
 fn with_links_only_an_event_without_a_meeting_link_is_not_alerted() {
     let plain = Event { link: Some("https://docs.example.com/agenda".into()), ..event(2, NINE, 30) };
     let mut c = calendar(vec![event(1, NINE, 30), plain, Event { link: None, ..event(3, NINE, 30) }]);
@@ -261,15 +294,54 @@ fn the_feed_link_is_refused_without_being_named() {
 }
 
 #[test]
-fn curls_config_holds_the_link_and_the_limits() {
-    let config = curl_config("https://calendar.example.com/private-abc/basic.ics").unwrap();
-    for line in ["proto = \"=https\"", "proto-redir = \"=https\"", "max-redirs = 3", "globoff", "fail", "max-time = 30"]
-    {
+fn curls_config_holds_the_link_and_the_limits_and_follows_no_redirect() {
+    let config = curl_config("https://calendar.example.com/private-abc/basic.ics", None).unwrap();
+    for line in ["proto = \"=https\"", "max-redirs = 0", "globoff", "fail", "max-time = 30", "connect-timeout = 10"] {
         assert!(config.lines().any(|l| l == line), "{line}: {config}");
     }
+    for never in ["location", "proto-redir", "cookie", "netrc", "show-error", "resolve"] {
+        assert!(!config.contains(never), "{never}: {config}");
+    }
+    assert!(config.contains("write-out = \"%{stderr}%{http_code}\""));
+    // Pinned to the address that was checked.
+    let ip = Some("93.184.215.14".parse().unwrap());
+    let pinned = curl_config("https://calendar.example.com:8443/a.ics", ip).unwrap();
+    assert!(pinned.contains("resolve = \"calendar.example.com:8443:93.184.215.14\"\n"), "{pinned}");
+    let v6 = curl_config("https://calendar.example.com/a.ics", Some("2606:2800:21f:cb07::1".parse().unwrap())).unwrap();
+    assert!(v6.contains("resolve = \"calendar.example.com:443:[2606:2800:21f:cb07::1]\"\n"), "{v6}");
     assert!(config.contains("max-filesize = 5242880"));
     assert!(config.ends_with("url = \"https://calendar.example.com/private-abc/basic.ics\"\n"));
-    assert_eq!(curl_config("https://calendar.example.com/a\"\nupload-file = /etc/passwd"), None);
+    assert_eq!(curl_config("https://calendar.example.com/a\"\nupload-file = /etc/passwd", None), None);
+}
+
+#[test]
+fn only_a_public_address_is_fetched_from_and_a_redirect_is_no_read() {
+    let private = [
+        "127.0.0.1",
+        "10.1.2.3",
+        "172.16.0.1",
+        "192.168.1.1",
+        "169.254.169.254",
+        "100.64.0.1",
+        "0.0.0.0",
+        "224.0.0.1",
+        "::1",
+        "::",
+        "fe80::1",
+        "fd00::1",
+        "::ffff:127.0.0.1",
+        "::ffff:169.254.169.254",
+    ];
+    for ip in private {
+        assert!(!public_address(ip.parse().unwrap()), "{ip}");
+    }
+    for ip in ["93.184.215.14", "8.8.8.8", "2606:4700::1111"] {
+        assert!(public_address(ip.parse().unwrap()), "{ip}");
+    }
+    assert_eq!(feed_host("https://calendar.example.com:8443/x"), Some(("calendar.example.com", 8443)));
+    assert_eq!(feed_host("https://calendar.example.com/x"), Some(("calendar.example.com", 443)));
+    let answers = [feed_answer("200"), feed_answer("302"), feed_answer("404"), feed_answer("")];
+    assert_eq!(answers, [Answer::Read, Answer::Moved, Answer::Failed, Answer::Failed]);
 }
 
 #[test]

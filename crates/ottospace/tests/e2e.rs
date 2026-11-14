@@ -5938,14 +5938,7 @@ fn a_test_leaves_nothing_in_the_temp_dir() {
 fn ics_time(offset: i64) -> String {
     let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64 + offset;
     let (days, secs) = (at.div_euclid(86_400), at.rem_euclid(86_400));
-    // Days to a date (proleptic Gregorian).
-    let z = days + 719_468;
-    let (era, doe) = (z.div_euclid(146_097), z.rem_euclid(146_097));
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let (d, m) = (doy - (153 * mp + 2) / 5 + 1, if mp < 10 { mp + 3 } else { mp - 9 });
-    let y = yoe + era * 400 + i64::from(m <= 2);
+    let (y, m, d) = ottospace_core::ics::civil(days);
     format!("{y:04}{m:02}{d:02}T{:02}{:02}{:02}Z", secs / 3600, secs / 60 % 60, secs % 60)
 }
 
@@ -6045,10 +6038,14 @@ fn a_feed_link_goes_to_curl_on_its_standard_input_not_its_arguments() {
     use std::os::unix::fs::PermissionsExt;
     let link = "https://calendar.example.com/private-s3cret/basic.ics";
     let home = calendar_folder("calendar-link", &feed(&[("a", "Sync", 3_600, 5_400, "")]), Some(link));
-    // A stand-in for curl: writes what it was given, prints the feed.
+    // A stand-in for curl: writes what it was given, prints the feed, and the status code in
+    // `code` to stderr, as `write-out` asks.
     let dir = home.to_str().unwrap();
-    let script =
-        format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{dir}/args'\ncat > '{dir}/config'\ncat '{dir}/today.ics'\n");
+    std::fs::write(home.join("code"), "200").unwrap();
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{dir}/args'\ncat > '{dir}/config'\ncat '{dir}/today.ics'\n\
+         cat '{dir}/code' >&2\n"
+    );
     std::fs::write(home.join("curl"), script).unwrap();
     std::fs::set_permissions(home.join("curl"), std::fs::Permissions::from_mode(0o755)).unwrap();
     let curl = home.join("curl");
@@ -6060,7 +6057,18 @@ fn a_feed_link_goes_to_curl_on_its_standard_input_not_its_arguments() {
     assert_eq!(std::fs::read_to_string(home.join("args")).unwrap(), "-q\n--config\n-\n");
     let config = std::fs::read_to_string(home.join("config")).unwrap();
     assert!(config.contains(&format!("url = \"{link}\"")) && config.contains("proto = \"=https\""), "{config}");
+    assert!(!config.contains("location") && config.contains("max-redirs = 0"), "no redirect: {config}");
     assert!(!otto.call(json!({"cmd": "state"})).to_string().contains("s3cret"), "the link is a secret");
+    drop(otto);
+    // A feed that redirects is not read: the status bar asks for its final address.
+    std::fs::write(home.join("code"), "302").unwrap();
+    let otto =
+        Otto::launch_with("calendar-moved", &[("OTTOSPACE_HOME", dir), ("OTTOSPACE_CURL", curl.to_str().unwrap())]);
+    let state = otto.wait_for("the failed read", |o| {
+        Some(o.call(json!({"cmd": "state"}))).filter(|s| s["notice"].as_str().is_some_and(|n| n.contains("redirects")))
+    });
+    assert_eq!((&state["calendar"]["updated"], &state["calendar"]["stale"]), (&Value::Null, &json!(true)));
+    assert!(!state.to_string().contains("s3cret"), "the link is a secret");
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
 }

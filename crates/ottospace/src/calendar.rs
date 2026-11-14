@@ -38,7 +38,13 @@ pub struct Read {
     events: Option<Vec<Event>>,
     days: [u64; 3],
     at: u64,
+    /// Why the read failed, when the user can do something about it. Never the link.
+    problem: Option<&'static str>,
 }
+
+/// What a failed read says in the status bar, never naming the link.
+const MOVED: &str = "calendar feed redirects: put its final https address in calendar_ics";
+const PRIVATE: &str = "calendar feed: its host is not on the internet";
 
 /// The timeline's shell state. Inert when no feed is set.
 #[derive(Default)]
@@ -68,28 +74,30 @@ impl Timeline {
         };
         let every = Duration::from_secs(60 * u64::from(settings.calendar_refresh_minutes.unwrap_or(5).max(1)));
         let (tx, rx) = mpsc::channel();
+        // The feed is parsed once a read, and its events worked out again only then or when the
+        // day turns: nothing that grows with the feed runs on the timer.
         std::thread::spawn(move || {
-            let (mut text, mut fetched, mut day): (Option<String>, Option<Instant>, Option<u64>) = (None, None, None);
+            let (mut feed, mut fetched, mut days) = (ics::Feed::default(), None::<Instant>, [0u64; 3]);
             loop {
+                let now = now_ms();
                 let due = fetched.is_none_or(|at| at.elapsed() >= every);
+                let mut problem = None;
                 let mut failed = false;
                 if due {
                     match fetch(&source) {
-                        Some(read) => text = Some(read),
-                        None => failed = true,
+                        Ok(text) => feed = ics::parse(&text),
+                        Err(why) => (failed, problem) = (true, why),
                     }
                     fetched = Some(Instant::now());
                 }
-                let now = now_ms();
-                let (events, days) = evaluate(text.as_deref().unwrap_or_default(), now);
-                // The day turned: today's events again, from the text read last.
-                if due || day != Some(days[0]) {
-                    let events = (!failed).then_some(events);
-                    if tx.send(Read { events, days, at: now }).is_err() {
+                if due || now >= days[1] {
+                    let (events, today) = evaluate(&feed, now);
+                    days = today;
+                    let read = Read { events: (!failed).then_some(events), days, at: now, problem };
+                    if tx.send(read).is_err() {
                         return;
                     }
                 }
-                day = Some(days[0]);
                 std::thread::sleep(WAKE);
             }
         });
@@ -97,57 +105,78 @@ impl Timeline {
     }
 }
 
-/// The feed's text, or `None`: what went wrong is not said, so the link is never in a message.
-fn fetch(source: &Source) -> Option<String> {
+/// The feed's text, or what the status bar may say of the failure (`None`: nothing more than
+/// "not updated"). The link is never in a message.
+fn fetch(source: &Source) -> Result<String, Option<&'static str>> {
     match source {
         Source::File(path) => {
-            let file = std::fs::File::open(path).ok()?;
+            let file = std::fs::File::open(path).map_err(|_| None)?;
             let mut bytes = Vec::new();
-            file.take(ics::MAX_BYTES as u64 + 1).read_to_end(&mut bytes).ok()?;
-            (bytes.len() <= ics::MAX_BYTES).then(|| String::from_utf8_lossy(&bytes).into_owned())
+            file.take(ics::MAX_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|_| None)?;
+            let fits = bytes.len() <= ics::MAX_BYTES;
+            fits.then(|| String::from_utf8_lossy(&bytes).into_owned()).ok_or(None)
         }
         Source::Link(link) => curl(link),
     }
 }
 
 /// `curl -q --config -`, the link and every limit in the config on its standard input
-/// (`calendar::curl_config`). `-q` first: no `.curlrc` of the user's applies. A test run may name
-/// another program in `OTTOSPACE_CURL`, which stands for curl and reads the same config.
-fn curl(link: &str) -> Option<String> {
-    let config = calendar::curl_config(link)?;
+/// (`calendar::curl_config`). `-q` first: no `.curlrc` of the user's applies. The host is looked
+/// up here, refused unless public, and curl is pinned to that address (`resolve`). A proxy in
+/// the user's environment (`https_proxy`) still applies; the proxy then looks the host up.
+/// A test run may name another program in `OTTOSPACE_CURL`, which stands for curl, reads the same
+/// config and is given no pinned address (a test looks nothing up).
+fn curl(link: &str) -> Result<String, Option<&'static str>> {
     let test = std::env::var_os("OTTOSPACE_E2E").and(std::env::var_os("OTTOSPACE_CURL"));
+    let pin = match test {
+        Some(_) => None,
+        None => {
+            use std::net::ToSocketAddrs;
+            let (host, port) = calendar::feed_host(link).ok_or(None)?;
+            let found: Vec<_> = (host, port).to_socket_addrs().map_err(|_| None)?.map(|a| a.ip()).collect();
+            Some(found.into_iter().find(|ip| calendar::public_address(*ip)).ok_or(Some(PRIVATE))?)
+        }
+    };
+    let config = calendar::curl_config(link, pin).ok_or(None)?;
     let program = test.map_or_else(|| PathBuf::from("/usr/bin/curl"), PathBuf::from);
     let mut child = Command::new(program)
         .args(["-q", "--config", "-"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        // curl's messages may quote the link.
-        .stderr(Stdio::null())
+        // Only the status code: `silent`, and no `show-error`, whose messages may quote the link.
+        .stderr(Stdio::piped())
         .spawn()
-        .ok()?;
-    child.stdin.take()?.write_all(config.as_bytes()).ok()?;
+        .map_err(|_| None)?;
+    child.stdin.take().ok_or(None)?.write_all(config.as_bytes()).map_err(|_| None)?;
     let mut bytes = Vec::new();
-    let read = child.stdout.take()?.take(ics::MAX_BYTES as u64 + 1).read_to_end(&mut bytes);
+    let read = child.stdout.take().ok_or(None)?.take(ics::MAX_BYTES as u64 + 1).read_to_end(&mut bytes);
     if read.is_err() || bytes.len() > ics::MAX_BYTES {
         let _ = child.kill();
     }
-    let ok = child.wait().ok()?.success();
-    (ok && read.is_ok() && bytes.len() <= ics::MAX_BYTES).then(|| String::from_utf8_lossy(&bytes).into_owned())
+    let mut code = String::new();
+    let _ = child.stderr.take().ok_or(None)?.take(16).read_to_string(&mut code);
+    let ok = child.wait().map_err(|_| None)?.success();
+    match calendar::feed_answer(&code) {
+        calendar::Answer::Moved => Err(Some(MOVED)),
+        calendar::Answer::Read if ok && read.is_ok() && bytes.len() <= ics::MAX_BYTES => {
+            Ok(String::from_utf8_lossy(&bytes).into_owned())
+        }
+        _ => Err(None),
+    }
 }
 
 /// Today's and tomorrow's events of a feed's text, in the user's zone; and local midnight of
 /// today, tomorrow and the day after (ms).
-fn evaluate(text: &str, now: u64) -> (Vec<Event>, [u64; 3]) {
+fn evaluate(feed: &ics::Feed, now: u64) -> (Vec<Event>, [u64; 3]) {
     let now = (now / 1_000) as i64;
     let (from, to) = (now - 3 * 86_400, now + 4 * 86_400);
     let local = Table(meeting::local_table(from, to));
     let days = ics::days(now, &local);
-    let feed = ics::parse(text);
-    let named = ics::named_zones(&feed)
+    let named = ics::named_zones(feed)
         .into_iter()
         .filter_map(|name| Some((name.clone(), Table(meeting::zone_table(&name, from, to)?))))
         .collect();
-    let occurrences = ics::expand(&feed, days[0], days[2], &Zones { local, named });
+    let occurrences = ics::expand(feed, days[0], days[2], &Zones { local, named });
     (calendar::events(&occurrences), days.map(|day| (day.max(0) as u64) * 1_000))
 }
 
@@ -156,7 +185,10 @@ impl Workspace {
     /// hairline pulses (10 a second) or slides (every 20 seconds).
     pub(crate) fn tick_timeline(&mut self, window: &Window, cx: &mut Context<Self>) {
         let reads: Vec<Read> = self.timeline.reads.iter().flat_map(|rx| rx.try_iter()).collect();
-        for Read { events, days, at } in reads {
+        for Read { events, days, at, problem } in reads {
+            if problem.is_some() {
+                self.error = problem.map(String::from);
+            }
             self.dispatch(Action::CalendarRead { events, days, at }, Origin::System, window, cx);
         }
         if !self.model.calendar.on {

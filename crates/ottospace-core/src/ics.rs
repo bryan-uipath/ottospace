@@ -22,6 +22,9 @@ const MAX_DURATION: i64 = 14 * DAY;
 /// Days a rule with COUNT is followed from its start, and all rules of a feed together.
 const MAX_SCAN: i64 = 7_400;
 const SCAN_BUDGET: i64 = 2_000_000;
+/// STANDARD and DAYLIGHT parts read of one VTIMEZONE, and changes of offset in one zone's table.
+const MAX_PARTS: usize = 16;
+const MAX_CHANGES: usize = 1_000;
 const DAY: i64 = 86_400;
 
 /// A time as the feed writes it. Seconds since 1970; `Local` and `Date` count as if the local
@@ -183,7 +186,9 @@ pub fn parse(text: &str) -> Feed {
                     "VEVENT" => feed.events.extend(event.take().filter(|e| e.start.is_some())),
                     "VTIMEZONE" => feed.zones.extend(zone.take().filter(|z| !z.id.is_empty())),
                     "STANDARD" | "DAYLIGHT" => {
-                        if let (Some(zone), Some(part)) = (zone.as_mut(), part.take()) {
+                        if let (Some(zone), Some(part)) = (zone.as_mut(), part.take())
+                            && zone.parts.len() < MAX_PARTS
+                        {
                             zone.parts.push(part);
                         }
                     }
@@ -235,8 +240,30 @@ pub fn named_zones(feed: &Feed) -> Vec<String> {
 
 /// The occurrences that overlap `from..to` (UTC seconds), by start, at most `MAX_OCCURRENCES`.
 pub fn expand(feed: &Feed, from: i64, to: i64, zones: &Zones) -> Vec<Occurrence> {
+    expand_counted(feed, from, to, zones).0
+}
+
+/// As `expand`, and the work it took: days looked at, for zones and rules together. Never more
+/// than `SCAN_BUDGET` and a little: a feed is other people's text.
+pub fn expand_counted(feed: &Feed, from: i64, to: i64, zones: &Zones) -> (Vec<Occurrence>, i64) {
+    let mut budget = SCAN_BUDGET;
     let years = year_of(from.saturating_sub(DAY))..=year_of(to.saturating_add(DAY));
-    let tables: Vec<(&str, Table)> = feed.zones.iter().map(|z| (z.id.as_str(), z.table(years.clone()))).collect();
+    // Only the zones an event names: a feed may define hundreds it never uses.
+    let named: Vec<&str> = feed
+        .events
+        .iter()
+        .flat_map(|e| [&e.start, &e.end, &e.recurrence_id].into_iter().flatten().chain(&e.exdates))
+        .filter_map(|when| match when {
+            When::Local { zone: Some(name), .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    let mut tables: Vec<(&str, Table)> = Vec::new();
+    for zone in feed.zones.iter().filter(|z| named.contains(&z.id.as_str())) {
+        if !tables.iter().any(|(id, _)| *id == zone.id) {
+            tables.push((zone.id.as_str(), zone.table(years.clone(), &mut budget)));
+        }
+    }
     let table = |zone: Option<&str>| -> &Table {
         let Some(name) = zone else { return &zones.local };
         let defined = tables.iter().find(|(id, _)| *id == name).map(|(_, t)| t);
@@ -250,9 +277,9 @@ pub fn expand(feed: &Feed, from: i64, to: i64, zones: &Zones) -> Vec<Occurrence>
         }
     };
     // Occurrences moved or changed by an event of their own: (uid, original start).
-    let overrides: Vec<(&str, i64)> =
+    let mut overrides: Vec<(&str, i64)> =
         feed.events.iter().filter_map(|e| Some((e.uid.as_str(), utc(e.recurrence_id.as_ref()?)))).collect();
-    let mut budget = SCAN_BUDGET;
+    overrides.sort_unstable();
     let mut out = Vec::new();
     for event in &feed.events {
         let Some(start) = event.start.as_ref() else { continue };
@@ -322,15 +349,25 @@ pub fn expand(feed: &Feed, from: i64, to: i64, zones: &Zones) -> Vec<Occurrence>
             When::Local { at, zone: None } => zone_table.to_utc(*at),
             other => utc(other),
         });
-        let excluded = |begin: i64, day: i64| {
-            event.exdates.iter().any(|ex| match ex {
-                When::Date(ex) => *ex == day,
-                other => utc(other) == begin,
-            })
-        };
+        // Exceptions converted once, then looked up: an event may list a thousand.
         let span_days = duration / DAY + 1;
         let low = (from.saturating_sub(DAY)).div_euclid(DAY) - span_days;
         let high = to.saturating_add(DAY).div_euclid(DAY);
+        budget -= event.exdates.len() as i64 + (high - low).max(0);
+        if budget <= 0 {
+            continue;
+        }
+        let (mut ex_days, mut ex_times): (Vec<i64>, Vec<i64>) = (Vec::new(), Vec::new());
+        for ex in &event.exdates {
+            match ex {
+                When::Date(day) => ex_days.push(*day),
+                other => ex_times.push(utc(other)),
+            }
+        }
+        ex_days.sort_unstable();
+        ex_times.sort_unstable();
+        let excluded =
+            |begin: i64, day: i64| ex_days.binary_search(&day).is_ok() || ex_times.binary_search(&begin).is_ok();
         for day in low.max(first_day)..=high.min(last_day) {
             if !occurs(rule, first_day, day) {
                 continue;
@@ -338,7 +375,7 @@ pub fn expand(feed: &Feed, from: i64, to: i64, zones: &Zones) -> Vec<Occurrence>
             let begin = zone_table.to_utc(day * DAY + time_of_day);
             if until.is_some_and(|until| begin > until)
                 || excluded(begin, day)
-                || overrides.contains(&(event.uid.as_str(), begin))
+                || overrides.binary_search(&(event.uid.as_str(), begin)).is_ok()
             {
                 continue;
             }
@@ -348,7 +385,7 @@ pub fn expand(feed: &Feed, from: i64, to: i64, zones: &Zones) -> Vec<Occurrence>
     }
     out.sort_by(|a, b| (a.start, a.end, &a.summary).cmp(&(b.start, b.end, &b.summary)));
     out.truncate(MAX_OCCURRENCES);
-    out
+    (out, SCAN_BUDGET - budget)
 }
 
 /// The end of a whole-day event that starts at `start` and lasts `duration`: a local midnight.
@@ -364,10 +401,13 @@ pub fn days(now: i64, local: &Table) -> [i64; 3] {
 }
 
 impl Zone {
-    /// The zone's offsets over these years.
-    fn table(&self, years: std::ops::RangeInclusive<i64>) -> Table {
+    /// The zone's offsets over these years. Each day looked at is charged to `budget`.
+    fn table(&self, years: std::ops::RangeInclusive<i64>, budget: &mut i64) -> Table {
         let mut changes: Vec<(i64, i64, i64)> = Vec::new(); // (utc, from, to)
         for part in &self.parts {
+            if *budget <= 0 || changes.len() >= MAX_CHANGES {
+                break;
+            }
             let (Some(start), Some(from), Some(to)) = (part.start, part.from, part.to) else { continue };
             match part.rule.as_ref().filter(|r| !r.unsupported) {
                 None => changes.push((start - from, from, to)),
@@ -378,6 +418,7 @@ impl Zone {
                             if rule.by_month.is_empty() { vec![civil(first_day).1] } else { rule.by_month.clone() };
                         for month in months {
                             for d in 1..=month_len(year, month) {
+                                *budget -= 1;
                                 let day = days_from_civil(year, month, d);
                                 let local = day * DAY + time;
                                 let until = rule.until.as_ref().map(|u| match u {
@@ -395,6 +436,7 @@ impl Zone {
             }
         }
         changes.sort_unstable();
+        changes.truncate(MAX_CHANGES);
         let Some(&(_, first, _)) = changes.first() else { return Table::fixed(0) };
         let mut table = vec![(i64::MIN, first)];
         table.extend(changes.iter().map(|(at, _, to)| (*at, *to)));
@@ -436,16 +478,18 @@ fn occurs(rule: &Rule, first: i64, day: i64) -> bool {
 /// Whether day `d` of the month is one the rule's BYMONTHDAY or BYDAY names, or `default`.
 fn in_month(rule: &Rule, y: i64, m: i64, d: i64, weekday: i64, default: i64) -> bool {
     let len = month_len(y, m);
-    if !rule.by_month_day.is_empty() {
-        return month_day(&rule.by_month_day, y, m, d)
-            && (rule.by_day.is_empty() || rule.by_day.iter().any(|(_, w)| *w == weekday));
-    }
-    if !rule.by_day.is_empty() {
-        return rule.by_day.iter().any(|&(n, w)| {
+    let by_day = || {
+        rule.by_day.iter().any(|&(n, w)| {
             w == weekday && (n == 0 || (n > 0 && (d - 1) / 7 + 1 == n) || (n < 0 && (len - d) / 7 + 1 == -n))
-        });
+        })
+    };
+    // Both lists: a day both name (`BYMONTHDAY=1,8,15;BYDAY=1MO` is the first Monday, if one of them).
+    match (rule.by_month_day.is_empty(), rule.by_day.is_empty()) {
+        (false, true) => month_day(&rule.by_month_day, y, m, d),
+        (false, false) => month_day(&rule.by_month_day, y, m, d) && by_day(),
+        (true, false) => by_day(),
+        (true, true) => d == default,
     }
-    d == default
 }
 
 fn month_day(days: &[i64], y: i64, m: i64, d: i64) -> bool {
@@ -458,7 +502,7 @@ fn weekday(day: i64) -> i64 {
     (day + 3).rem_euclid(7)
 }
 
-/// Days since 1970 of a date (proleptic Gregorian), and back.
+/// Days since 1970 of a date (proleptic Gregorian), and back (Howard Hinnant's algorithm).
 fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = y.div_euclid(400);
@@ -469,7 +513,7 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
-fn civil(days: i64) -> (i64, i64, i64) {
+pub fn civil(days: i64) -> (i64, i64, i64) {
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;
@@ -661,6 +705,13 @@ fn rule(value: &str) -> Option<Rule> {
         }
     }
     rule.freq = freq?;
+    // Each list once: `BYMONTH=1,1,1,…` must not multiply the work.
+    rule.by_day.sort_unstable();
+    rule.by_day.dedup();
+    rule.by_month_day.sort_unstable();
+    rule.by_month_day.dedup();
+    rule.by_month.sort_unstable();
+    rule.by_month.dedup();
     // An ordinal BYDAY of a year with no month counts weeks of the year: not followed.
     let ordinal = rule.by_day.iter().any(|(n, _)| *n != 0);
     if (rule.freq == Freq::Yearly && ordinal && rule.by_month.is_empty())

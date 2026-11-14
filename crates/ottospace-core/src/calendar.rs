@@ -5,6 +5,8 @@
 //! Titles, places and descriptions are other people's text: kept cleaned and short, drawn only,
 //! never in the control socket's state, the trace or a brief.
 
+use std::net::IpAddr;
+
 use crate::ics::Occurrence;
 
 /// Why a client's Join or Dismiss did nothing.
@@ -284,19 +286,84 @@ pub fn feed_refusal(url: &str) -> Option<&'static str> {
     (number || local || !host.contains('.')).then_some("calendar_ics must name a host on the internet, not an address")
 }
 
+/// The host and port a feed link names (443 unless it says).
+pub fn feed_host(url: &str) -> Option<(&str, u16)> {
+    let authority = url.strip_prefix("https://")?.split(['/', '?', '#']).next()?;
+    let port = match authority.split_once(':') {
+        Some((_, port)) => port.parse().ok()?,
+        None => 443,
+    };
+    Some((host(url)?, port))
+}
+
+/// An address a feed may come from: not this machine, a private or link-local network, carrier
+/// NAT, multicast, a documentation or unspecified one (IPv4, IPv6, and IPv4 inside IPv6).
+pub fn public_address(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let [a, b, ..] = v4.octets();
+            let special = v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_multicast()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+                || a == 0
+                || (a == 100 && (64..128).contains(&b))
+                || (a == 198 && (b == 18 || b == 19));
+            !special
+        }
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped().or_else(|| v6.to_ipv4().filter(|_| v6.segments()[..6] == [0; 6])) {
+                return public_address(IpAddr::V4(v4));
+            }
+            let first = v6.segments()[0];
+            let local = (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80;
+            !(v6.is_loopback() || v6.is_unspecified() || v6.is_multicast() || local)
+        }
+    }
+}
+
 /// The config `curl --config -` reads on its standard input: the link is not in its arguments,
-/// so `ps` does not show it. `https:` only, redirects too, at most 3; no globbing of `[]{}`; a
-/// size cap and time limits. `None` for a link `feed_refusal` refuses.
-pub fn curl_config(url: &str) -> Option<String> {
+/// so `ps` does not show it. `https:` only, no redirect (one could lead to this machine's
+/// network), no globbing of `[]{}`, a size cap and time limits. The status code goes to stderr
+/// (`feed_answer`). `pin`: the address the host was resolved to and checked (`public_address`),
+/// which curl then connects to, so a second lookup cannot answer otherwise. `None` for a link
+/// `feed_refusal` refuses.
+pub fn curl_config(url: &str, pin: Option<IpAddr>) -> Option<String> {
     if feed_refusal(url).is_some() {
         return None;
     }
+    let (host, port) = feed_host(url)?;
+    let resolve = match pin {
+        Some(IpAddr::V6(ip)) => format!("resolve = \"{host}:{port}:[{ip}]\"\n"),
+        Some(ip) => format!("resolve = \"{host}:{port}:{ip}\"\n"),
+        None => String::new(),
+    };
     // `joinable` leaves no quote, backslash or space in the link to escape.
     Some(format!(
-        "silent\nshow-error\nfail\ngloboff\nproto = \"=https\"\nproto-redir = \"=https\"\nmax-redirs = 3\n\
-         max-filesize = {}\nconnect-timeout = 10\nmax-time = 30\nurl = \"{url}\"\n",
+        "silent\nfail\ngloboff\nproto = \"=https\"\nmax-redirs = 0\nmax-filesize = {}\nconnect-timeout = 10\n\
+         max-time = 30\nwrite-out = \"%{{stderr}}%{{http_code}}\"\n{resolve}url = \"{url}\"\n",
         crate::ics::MAX_BYTES
     ))
+}
+
+/// What curl's status code (`write-out`) says of a read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Answer {
+    Read,
+    /// The feed moved: its final address belongs in the settings.
+    Moved,
+    Failed,
+}
+
+pub fn feed_answer(code: &str) -> Answer {
+    match code.trim().parse::<u16>() {
+        Ok(200..=299) => Answer::Read,
+        Ok(300..=399) => Answer::Moved,
+        _ => Answer::Failed,
+    }
 }
 
 /// The alert of one occurrence: how many were given (at most 2) and when the last was.
@@ -347,6 +414,9 @@ impl Calendar {
         match events {
             Some(mut events) => {
                 events.sort_by_key(|e| (e.start, e.end));
+                // The same occurrence written twice is one: one id, one alert.
+                let mut seen = std::collections::HashSet::new();
+                events.retain(|e| seen.insert(e.id));
                 events.truncate(MAX_EVENTS);
                 self.alerts.retain(|a| events.iter().any(|e| e.id == a.id));
                 self.events = events;
@@ -409,9 +479,12 @@ impl Calendar {
         }
         let wanted = |e: &&Event| !self.links_only || has_meeting_link(e);
         let running = self.today().filter(|e| !e.all_day && stage(e, now) == Stage::Running).filter(wanted);
+        // Both alerts only in the first minutes: a meeting left early is no missed one.
+        let early = |e: &&Event| now < e.start.saturating_add(ALERT_WINDOW);
         running
+            .filter(early)
             .filter_map(|e| match self.alerts.iter().find(|a| a.id == e.id) {
-                None if now < e.start.saturating_add(ALERT_WINDOW) => Some((e.id, false)),
+                None => Some((e.id, false)),
                 Some(a) if !a.done && a.count == 1 && now >= a.at.saturating_add(REPEAT) => Some((e.id, true)),
                 _ => None,
             })
@@ -451,6 +524,15 @@ impl Calendar {
         let event = self.banner(now)?;
         let ago = now.saturating_sub(event.start) / MINUTE;
         Some((event.id, format!("{} · started {ago}m ago", event.title), event.link.is_some()))
+    }
+
+    /// Whether a call is on, as seen. A call that starts after an alert ends it: the user joined,
+    /// so leaving later is not missing the meeting. A call on before any alert ends nothing.
+    pub fn call_seen(&mut self, in_call: Option<bool>) {
+        self.in_call = in_call;
+        if in_call == Some(true) {
+            self.alerts.iter_mut().for_each(|alert| alert.done = true);
+        }
     }
 
     pub fn dismiss(&mut self, id: u64) {

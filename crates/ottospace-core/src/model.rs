@@ -3822,7 +3822,7 @@ impl Model {
                 (self.calendar.on, self.calendar.notify, self.calendar.links_only) = (on, notify, links_only)
             }
             Action::CalendarRead { events, days, at } => self.calendar.read(events, days, at),
-            Action::CallSeen { in_call } => self.calendar.in_call = in_call,
+            Action::CallSeen { in_call } => self.calendar.call_seen(in_call),
             Action::CalendarDismiss { id } => self.calendar.dismiss(id),
             Action::CalendarJoin { id } => effects.extend(self.calendar.join(id).map(|url| Effect::OpenLink { url })),
         }

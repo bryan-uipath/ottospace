@@ -613,8 +613,10 @@ the way.
 - **Join** opens the meeting's link with the app that handles it (Zoom for a Zoom link), only
   when you click it or choose it, and only an `https:` link. Never by itself.
 - **The feed** is read at start and every `calendar_refresh_minutes` (5), off the main thread,
-  through `/usr/bin/curl`: `https:` only (redirects too, at most 3), at most 5 MB, 30 seconds. It
-  is ottospace's only network access. The link is handed to curl on its standard input, not in
+  through `/usr/bin/curl`: `https:` only, no redirects (a feed that has moved is not read: the
+  status bar asks for its final address), only from a host on the internet (looked up once,
+  checked, and curl pinned to that address), at most 5 MB, 30 seconds. A proxy set in your
+  environment (`https_proxy`) applies. It is ottospace's only network access. The link is handed to curl on its standard input, not in
   its arguments, and is never shown, logged or put in the state. A read that fails keeps the
   events of the last one. Recurring meetings, time zones, cancelled meetings and moved
   occurrences are followed; see [meeting-timeline.md](ai/meeting-timeline.md) for what is not.

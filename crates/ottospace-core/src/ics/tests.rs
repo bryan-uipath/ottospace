@@ -189,6 +189,16 @@ fn exdates_overrides_and_cancelled_events() {
 }
 
 #[test]
+fn month_days_and_an_ordinal_weekday_meet() {
+    // The first Monday, if it is the 1st, 8th, 15th, 22nd or 29th: 1 June 2026 is a Monday.
+    let text = feed(&event(
+        "SUMMARY:First Monday\r\nDTSTART:20260601T090000Z\r\nRRULE:FREQ=MONTHLY;BYMONTHDAY=1,8,15,22,29;BYDAY=1MO\r\n",
+    ));
+    assert_eq!(on(&text, 2026, 6, 1, &utc()).len(), 1);
+    assert!(on(&text, 2026, 6, 8, &utc()).is_empty(), "the second Monday");
+}
+
+#[test]
 fn an_unsupported_rule_gives_its_first_occurrence_only() {
     let text =
         feed(&event("SUMMARY:Odd\r\nDTSTART:20261113T090000Z\r\nRRULE:FREQ=MONTHLY;BYSETPOS=-1;BYDAY=MO,TU\r\n"));
@@ -272,4 +282,40 @@ fn a_huge_feed_is_capped() {
     assert!(feed.events.len() <= MAX_COMPONENTS);
     let from = at(2026, 11, 13, 0, 0);
     assert_eq!(expand(&feed, from, from + DAY, &utc()).len(), MAX_OCCURRENCES);
+}
+
+/// A feed is other people's text: none of these may cost more than the scan budget.
+#[test]
+fn hostile_zones_and_rules_cost_no_more_than_the_budget() {
+    let rule_part = "BEGIN:DAYLIGHT\r\nDTSTART:16010101T020000\r\nTZOFFSETFROM:+0100\r\nTZOFFSETTO:+0200\r\n\
+                     RRULE:FREQ=YEARLY;BYMONTH=1,2,3,4,5,6,7,8,9,10,11,12;BYMONTHDAY=1,2,3\r\nEND:DAYLIGHT\r\n";
+    let big_zone = format!("BEGIN:VTIMEZONE\r\nTZID:Big\r\n{}END:VTIMEZONE\r\n", rule_part.repeat(10_000));
+    let uses_big = event("SUMMARY:x\r\nDTSTART;TZID=Big:20261113T090000\r\nRRULE:FREQ=DAILY\r\n");
+    let parsed = parse(&feed(&format!("{big_zone}{uses_big}")));
+    assert_eq!(parsed.zones[0].parts.len(), MAX_PARTS);
+    let from = at(2026, 11, 13, 0, 0);
+    let (_, work) = expand_counted(&parsed, from, from + 2 * DAY, &utc());
+    assert!(work <= 16 * 2 * 366 + 100, "parts capped: {work}");
+
+    // BYMONTH written 5,000 times over: read once each.
+    let months = (0..5_000).map(|n| (n % 12 + 1).to_string()).collect::<Vec<_>>().join(",");
+    let long = event(&format!("SUMMARY:y\r\nDTSTART:20261113T090000Z\r\nRRULE:FREQ=MONTHLY;BYMONTH={months}\r\n"));
+    let rule = parse(&feed(&long)).events[0].rule.clone().unwrap();
+    assert!(rule.by_month.len() <= 12 && rule.by_month.windows(2).all(|w| w[0] < w[1]), "{:?}", rule.by_month);
+
+    // 500 zones no event names: none is worked out.
+    let unused: String =
+        (0..500).map(|n| format!("BEGIN:VTIMEZONE\r\nTZID:Z{n}\r\n{rule_part}END:VTIMEZONE\r\n")).collect();
+    let plain = event("SUMMARY:z\r\nDTSTART:20261113T090000Z\r\n");
+    let (got, work) = expand_counted(&parse(&feed(&format!("{unused}{plain}"))), from, from + 2 * DAY, &utc());
+    assert_eq!((got.len(), work), (1, 0));
+
+    // Thousands of recurring events with long exception lists: the budget holds.
+    let exdates =
+        (1..=999).map(|n| format!("2025{:02}{:02}T090000Z", n % 12 + 1, n % 28 + 1)).collect::<Vec<_>>().join(",");
+    let one = event(&format!(
+        "SUMMARY:w\r\nDTSTART:20200101T090000Z\r\nRRULE:FREQ=DAILY;COUNT=99999\r\nEXDATE:{exdates}\r\n"
+    ));
+    let (_, work) = expand_counted(&parse(&feed(&one.repeat(3_000))), from, from + 2 * DAY, &utc());
+    assert!(work <= SCAN_BUDGET + MAX_SCAN + 1_100, "{work}");
 }

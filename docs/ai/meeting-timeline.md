@@ -60,17 +60,31 @@ The feed is ottospace's first network access. `/usr/bin/curl` (which `install.sh
 instead of an HTTP and TLS crate: no new dependency, the system's TLS and proxy settings.
 
 - `curl -q --config -`: the argument list is fixed. `-q` first, so no `~/.curlrc` applies. The
-  config on standard input holds the link and the limits: `proto` and `proto-redir` `=https`,
-  `max-redirs 3`, `max-filesize` 5 MB (also cut at 5 MB while reading), `connect-timeout 10`,
-  `max-time 30`, `globoff`, `fail`. No cookie options: curl keeps none by default.
+  config on standard input holds the link and the limits: `proto =https`, no redirects
+  (`max-redirs 0`, no `location`), `max-filesize` 5 MB (also cut at 5 MB while reading),
+  `connect-timeout 10`, `max-time 30`, `globoff`, `fail`, and `write-out "%{stderr}%{http_code}"`.
+  No cookie or netrc options: curl uses neither unless asked. A proxy in the user's environment
+  (`https_proxy`) applies; then the proxy looks the host up and the pin below does not hold.
+- A redirect (a 3xx code) is no read: a redirect could point at this machine's network. The
+  status bar says `calendar feed redirects: put its final https address in calendar_ics`.
+- The host is looked up once in the shell; the first address that `calendar::public_address`
+  accepts (not loopback, private, link-local, carrier NAT, multicast, documentation, unspecified,
+  or such an address inside IPv6) is given to curl as `resolve = "host:port:address"`, so curl
+  connects there and a second lookup cannot answer otherwise (no DNS-rebinding window). A host with
+  no public address is refused with `calendar feed: its host is not on the internet`.
 - The link is a secret (a private feed's address holds a token). It is in `settings.json` only;
-  not in curl's arguments (so not in `ps`), not in the state, the trace or an error: a failed read
-  says nothing but "not updated since". curl's stderr is discarded, since it may quote the link.
+  not in curl's arguments (so not in `ps`), not in the state, the trace or an error. curl is run
+  `silent` without `show-error`, so its stderr holds only the status code, never a message that
+  could quote the link.
 - `calendar::feed_refusal` refuses anything but `https://` with a named host: no user name, no IP
   literal (any host whose last label is a number or `0x…`), no `localhost`, `.local`, `.internal`,
-  `.home`, `.lan`, `.arpa`, no single-label host. A name that resolves to a private address is not
-  caught (DNS rebinding); the link is the user's own setting. A local file is the separate form
-  (`/…`, `~/…`), read with the same 5 MB cap.
+  `.home`, `.lan`, `.arpa`, no single-label host. A local file is the separate form (`/…`, `~/…`),
+  read with the same 5 MB cap.
+- Checked by hand against the system curl with a public page (not calendar data): the config is
+  accepted, a pinned read answers `200`, a page that redirects answers `301` and is not followed.
+- The feed is parsed once a read, and its events worked out again only then or when the day turns.
+  The reader's work, zone tables included, is charged to one budget (`ics::expand_counted`), and
+  only zones an event names are worked out.
 - A test run may name a stand-in in `OTTOSPACE_CURL` (honoured only with `OTTOSPACE_E2E`); the e2e
   test checks its arguments and that the config carries the link.
 

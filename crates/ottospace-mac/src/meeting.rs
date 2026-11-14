@@ -39,13 +39,21 @@ pub fn local_table(from: i64, to: i64) -> Vec<(i64, i64)> {
 
 fn sample(from: i64, to: i64, offset: impl Fn(i64) -> i64) -> Vec<(i64, i64)> {
     let mut table = vec![(i64::MIN, offset(from))];
-    let mut at = from;
-    while at <= to {
+    let (mut before, mut at) = (from, from.div_euclid(STEP) * STEP + STEP);
+    while at <= to + STEP {
         let now = offset(at);
-        if table.last().is_some_and(|(_, last)| *last != now) {
-            table.push((at, now));
+        if let Some(&(_, last)) = table.last()
+            && last != now
+        {
+            // The second it changed, between the two samples.
+            let (mut low, mut high) = (before, at);
+            while high - low > 1 {
+                let mid = low + (high - low) / 2;
+                if offset(mid) == last { low = mid } else { high = mid }
+            }
+            table.push((high, now));
         }
-        at += STEP;
+        (before, at) = (at, at + STEP);
     }
     table
 }
@@ -90,49 +98,66 @@ const fn code(name: &[u8; 4]) -> u32 {
     u32::from_be_bytes(*name)
 }
 
-/// In a call: some process has a microphone (any input device) running, as CoreAudio says
-/// (`kAudioDevicePropertyDeviceIsRunningSomewhere`). Zoom, Meet in a browser and Teams all open
-/// one. Nothing of another app is read: no window, title or log, and no permission is asked.
-/// A microphone in use for something else (dictation, a recording) counts as a call too.
+/// In a call: some process records from a microphone, as CoreAudio says of each audio process
+/// (`kAudioProcessPropertyIsRunningInput`, macOS 14.2; before it, any input device running,
+/// `kAudioDevicePropertyDeviceIsRunningSomewhere`). Zoom, Meet in a browser and Teams all record.
+/// Nothing of another app is read: no name, window, title or log, and no permission is asked.
+/// A microphone in use for something else (dictation, a recording) counts as a call too. A read
+/// that fails makes the answer `Unknown`, unless another one already says `InCall`.
 pub fn call() -> Call {
-    let address = |selector: &[u8; 4], scope: &[u8; 4]| PropertyAddress {
-        selector: code(selector),
-        scope: code(scope),
-        element: 0,
+    // No process list (before 14.2): the input devices. None of those: no microphone to tell by.
+    let (list, flag, unknown) = match objects(b"prs#") {
+        Some(list) => (list, b"piri", false),
+        None => {
+            let inputs: Vec<u32> =
+                objects(b"dev#").unwrap_or_default().into_iter().filter(|id| has_input(*id)).collect();
+            let none = inputs.is_empty();
+            (inputs, b"gone", none)
+        }
     };
-    let (system, global, input) = (1, b"glob", b"inpt");
-    let devices = address(b"dev#", global);
+    let (mut running, mut failed) = (false, unknown);
+    for id in list {
+        match read_u32(id, flag) {
+            Some(on) => running |= on != 0,
+            None => failed = true,
+        }
+    }
+    match (running, failed) {
+        (true, _) => Call::InCall,
+        (false, true) => Call::Unknown,
+        (false, false) => Call::NotInCall,
+    }
+}
+
+fn address(selector: &[u8; 4], scope: &[u8; 4]) -> PropertyAddress {
+    PropertyAddress { selector: code(selector), scope: code(scope), element: 0 }
+}
+
+/// A list of audio object ids the system object has (`prs#` processes, `dev#` devices).
+fn objects(selector: &[u8; 4]) -> Option<Vec<u32>> {
+    let (system, what) = (1, address(selector, b"glob"));
     let mut size = 0u32;
-    if unsafe { AudioObjectGetPropertyDataSize(system, &devices, 0, std::ptr::null(), &mut size) } != 0 {
-        return Call::Unknown;
+    if unsafe { AudioObjectGetPropertyDataSize(system, &what, 0, std::ptr::null(), &mut size) } != 0 {
+        return None;
     }
     let mut ids = vec![0u32; size as usize / 4];
+    let read =
+        unsafe { AudioObjectGetPropertyData(system, &what, 0, std::ptr::null(), &mut size, ids.as_mut_ptr().cast()) };
+    (read == 0).then(|| ids.into_iter().take(size as usize / 4).collect())
+}
+
+fn has_input(device: u32) -> bool {
+    let mut size = 0u32;
+    let streams = address(b"stm#", b"inpt");
+    unsafe { AudioObjectGetPropertyDataSize(device, &streams, 0, std::ptr::null(), &mut size) == 0 && size > 0 }
+}
+
+fn read_u32(object: u32, selector: &[u8; 4]) -> Option<u32> {
+    let (what, mut value, mut size) = (address(selector, b"glob"), 0u32, 4u32);
     let read = unsafe {
-        AudioObjectGetPropertyData(system, &devices, 0, std::ptr::null(), &mut size, ids.as_mut_ptr().cast())
+        AudioObjectGetPropertyData(object, &what, 0, std::ptr::null(), &mut size, (&mut value as *mut u32).cast())
     };
-    if read != 0 {
-        return Call::Unknown;
-    }
-    let (mut inputs, mut running) = (0, false);
-    for id in ids {
-        let streams = address(b"stm#", input);
-        let mut streams_size = 0u32;
-        let has = unsafe { AudioObjectGetPropertyDataSize(id, &streams, 0, std::ptr::null(), &mut streams_size) };
-        if has != 0 || streams_size == 0 {
-            continue;
-        }
-        inputs += 1;
-        let (somewhere, mut on, mut on_size) = (address(b"gone", global), 0u32, 4u32);
-        let got = unsafe {
-            AudioObjectGetPropertyData(id, &somewhere, 0, std::ptr::null(), &mut on_size, (&mut on as *mut u32).cast())
-        };
-        running |= got == 0 && on != 0;
-    }
-    match (inputs, running) {
-        (0, _) => Call::Unknown,
-        (_, true) => Call::InCall,
-        (_, false) => Call::NotInCall,
-    }
+    (read == 0).then_some(value)
 }
 
 /// The user asked for less motion (System Settings, Accessibility, Display).
@@ -157,6 +182,9 @@ mod tests {
         // 2026-03-01 to 2026-04-30 UTC: Berlin goes from +1 to +2 on 29 March, 01:00 UTC.
         let table = super::zone_table("Europe/Berlin", 1_772_323_200, 1_777_507_200).expect("a known zone");
         assert_eq!(table, [(i64::MIN, 3_600), (1_774_746_000, 7_200)]);
+        // Read from a time off the quarter hour: the change still falls on its own second.
+        let off = super::zone_table("Europe/Berlin", 1_772_323_637, 1_777_507_200).expect("a known zone");
+        assert_eq!(off, table);
         assert_eq!(super::zone_table("Not/AZone", 0, 1), None);
     }
 }
