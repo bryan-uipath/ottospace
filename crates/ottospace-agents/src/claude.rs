@@ -6,14 +6,15 @@
 //! `control_response` lines, whose shape the docs do not print: UNVERIFIED, see the design note.
 
 use ottospace_core::runner::{RunnerId, SessionId};
+use ottospace_core::transcript::Outcome;
 use ottospace_sessions::claude::describe;
 use ottospace_sessions::station;
 use serde_json::{Value, json};
 
 use crate::payload::Payload;
 use crate::{
-    Answer, Argv, Event, Input, MAX_DETAIL, MAX_TEXT, Outcome, Output, Refused, Start, Ticket, TicketKind, Untrusted,
-    Wire, kind_of, model_of, opaque, session_of,
+    Answer, Argv, Event, Input, MAX_DETAIL, MAX_TEXT, Output, Refused, Start, Ticket, TicketKind, Untrusted, Wire,
+    kind_of, model_of, opaque, session_of,
 };
 
 /// Flags every session gets. Streams in and out, partial text, and permission prompts to us.
@@ -106,6 +107,7 @@ impl Claude {
                 Some("init") => emit.push(Event::Started {
                     session: session_of(&record["session_id"]),
                     model: model_of(&record["model"]),
+                    mode: record["permissionMode"].as_str().filter(|mode| station::is_name(mode)).map(str::to_string),
                 }),
                 Some("compact_boundary") => emit.push(Event::Compaction),
                 Some("api_retry") => {

@@ -21,6 +21,7 @@ pub mod inspect;
 pub mod keys;
 pub mod layout;
 pub mod layout_file;
+pub mod links;
 pub mod list;
 pub mod marks;
 pub mod model;
@@ -41,6 +42,7 @@ pub mod tasks;
 pub mod terminal;
 pub mod theme;
 pub mod titlebar;
+pub mod transcript;
 pub mod workbook;
 
 pub use layout::{Axis, Dir, Node, Rect, Zone};

@@ -9,7 +9,8 @@ use std::time::Duration;
 use ottospace_agents::claude::{self, Claude};
 use ottospace_agents::codex::{self, Codex};
 use ottospace_agents::driver::Driver;
-use ottospace_agents::{Answer, Argv, Event, Input, Outcome, Process, Start, Wire};
+use ottospace_agents::{Answer, Argv, Event, Input, Process, Start, Wire};
+use ottospace_core::transcript::Outcome;
 
 const CLAUDE_SESSION: &str = "8f14e45f-ceea-467f-a8d3-0242ac130003";
 const CODEX_THREAD: &str = "019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b";
@@ -112,7 +113,11 @@ fn claude_asks_is_allowed_is_interrupted_and_exits() {
     let mut driver = spawn(&argv, &dir, Claude::new());
     let (first, second) = two_turns(&mut driver);
 
-    let started = Event::Started { session: Some(CLAUDE_SESSION.into()), model: Some("claude-opus-5-5".into()) };
+    let started = Event::Started {
+        session: Some(CLAUDE_SESSION.into()),
+        model: Some("claude-opus-5-5".into()),
+        mode: Some("default".into()),
+    };
     assert_eq!(first[0], started);
     let (call, permission) = (first.iter().find_map(tool_start), first.iter().find_map(permission));
     assert_eq!(call.as_deref(), Some("Bash git status"));
@@ -155,7 +160,7 @@ fn codex_asks_is_allowed_is_interrupted_and_exits() {
     let mut driver = spawn(&codex::argv(), &dir, codex);
     let (first, second) = two_turns(&mut driver);
 
-    let started = Event::Started { session: Some(CODEX_THREAD.into()), model: Some("gpt-6-astra".into()) };
+    let started = Event::Started { session: Some(CODEX_THREAD.into()), model: Some("gpt-6-astra".into()), mode: None };
     assert_eq!(first[0], started, "{first:#?}");
     assert_eq!(first.iter().find_map(tool_start).as_deref(), Some("exec cargo test"));
     assert_eq!(

@@ -39,11 +39,10 @@ pub fn escaped(value: &str) -> String {
     value.chars().flat_map(escape).collect()
 }
 
-/// A character as shown: `\` `\n` `\r` `\t` written out, other control characters and
-/// bidirectional controls as `\u{…}`, the rest as is.
+/// A character as shown: `\` `\n` `\r` `\t` written out, other control characters, marks that
+/// hide or reorder text (`capture::shows`) and line separators as `\u{…}`, the rest as is.
 fn escape(c: char) -> Vec<char> {
-    let hidden = c.is_control()
-        || matches!(c, '\u{200e}' | '\u{200f}' | '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}');
+    let hidden = !ottospace_core::capture::shows(c) || matches!(c, '\u{2028}' | '\u{2029}');
     match c {
         '\\' => vec!['\\', '\\'],
         '\n' => vec!['\\', 'n'],

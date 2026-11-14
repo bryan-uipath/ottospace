@@ -28,6 +28,9 @@ alacritty_terminal = "0.26"
 regex = "1"
 # The trace is written on SIGUSR1: a test's timeout.
 libc = "0.2"
+# A reply's markdown parsed into blocks the drawer lays out (`markdown.rs`). MIT, pure Rust, no
+# I/O; pinned. No `html` feature: nothing is ever rendered as HTML. Its deps are in the lock already.
+pulldown-cmark = { version = "=0.13.6", default-features = false }
 
 [dev-dependencies]
 serde_json = "1"

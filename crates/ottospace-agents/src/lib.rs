@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 
 use ottospace_core::runner::RunnerId;
+use ottospace_core::transcript::Outcome;
 use ottospace_sessions::station::Station;
 use serde_json::Value;
 
@@ -198,26 +199,17 @@ pub enum Input {
     Interrupt,
 }
 
-/// How a turn ended.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Outcome {
-    Completed,
-    Interrupted,
-    /// `kind` is a code from the runner's table, else `error`.
-    Failed {
-        kind: String,
-    },
-}
-
 /// What comes out of a runner. Ids are opaque (a hash), good only to pair a start with its end.
 /// `tool`, `label`, `kind`, `model` and `session` follow `docs/ai/sessions.md`'s label rules: may
 /// reach the socket. Everything `Untrusted` is for the drawer alone.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
-    /// The session is known. `session` is a UUID, `model` a name; else `None`.
+    /// The session is known. `session` is a UUID, `model` a name; else `None`. `mode`: the
+    /// permission mode the CLI runs in (Claude's `permissionMode`), a name, the user's own.
     Started {
         session: Option<String>,
         model: Option<String>,
+        mode: Option<String>,
     },
     TurnStarted,
     /// More of the reply being written.
