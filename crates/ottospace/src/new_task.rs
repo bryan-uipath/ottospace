@@ -284,6 +284,7 @@ impl Workspace {
         };
         // The one key a text box does not have; none while the dropdown lists rows.
         let keys = menu.as_ref().is_none_or(|menu| menu.rows.is_empty()).then_some(KEYS_HINT);
+        let hint = self.model.compose_hint().filter(|_| !above);
         let muted = |text: &'static str| div().text_xs().text_color(rgb(theme::MUTED)).child(text);
         // What the box could not do: a name with no room, files left out.
         let note =
@@ -390,11 +391,18 @@ impl Workspace {
             .child(line)
             .children(under)
             .children(note)
-            // One row, kept while typing: the line above it does not move.
-            .when(!above, |d| {
-                d.child(div().h(px(16.)).children(self.model.compose_hint().map(|hint| muted(hint).truncate())))
+            // One row: the tag hint while the line is empty, the key beside it. Typing drops the hint, not the row.
+            .when(hint.is_some() || keys.is_some(), |d| {
+                let hint = hint.map(|hint| muted(hint).flex_1().min_w_0().truncate());
+                d.child(
+                    div()
+                        .h(px(16.))
+                        .flex()
+                        .gap_3()
+                        .children(hint)
+                        .children(keys.map(|k| muted(k).flex_none().ml_auto())),
+                )
             })
-            .children(keys.map(muted))
     }
 
     /// The drawer in its new-task state, `width` points wide: one-click picks for where and who,
