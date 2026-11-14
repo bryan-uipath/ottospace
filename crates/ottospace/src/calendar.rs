@@ -263,11 +263,12 @@ impl Workspace {
     pub(crate) fn render_timeline(&self) -> Option<AnyElement> {
         self.marks.borrow_mut().retain(|m, _| !matches!(m, Mark::BandBlock(_)));
         let calendar = &self.model.calendar;
-        if !calendar.on {
+        // Not before the first read: there is no day yet.
+        if !calendar.on || calendar.days[1] == 0 {
             return None;
         }
         let now = now_ms();
-        let offset = ottospace_mac::time::utc_offset((now / 1_000) as i64);
+        let offset = zone_offset(now);
         let (band, bars) = calendar.band(self.timeline.workday, now, &zone_offset);
         let card = |tip: String| {
             move |_: &mut Window, cx: &mut gpui::App| AnyView::from(cx.new(|_| Tooltip(tip.clone().into())))
@@ -280,12 +281,20 @@ impl Workspace {
         // Inset, so a mark or block at either end is drawn whole.
         let mut out = div().absolute().top_0().bottom_0().left(px(INSET)).right(px(INSET));
         out = out.child(mark(&self.marks, Mark::Band));
+        // In the left inset, under everything: it covers no block or mark.
+        let all_day: Vec<String> =
+            calendar.today().filter(|e| e.all_day).map(|e| calendar::describe(e, offset)).collect();
+        if !all_day.is_empty() {
+            let dot = div().absolute().left(px(1. - INSET)).top(px(2.)).size(px(4.)).rounded_full();
+            let dot = dot.bg(rgb(theme::MUTED)).child(hover("meeting-all-day".into(), all_day.join("\n")));
+            out = out.child(dot);
+        }
         for (n, (t, what)) in
             [(band.workday.0, "Workday starts"), (band.workday.1, "Workday ends")].into_iter().enumerate()
         {
             let x = band.at(t);
             let tick = div().absolute().top(px(1.5)).h(px(5.)).w(px(1.)).bg(rgb(theme::MUTED)).opacity(0.6);
-            let tip = format!("{what} {}", calendar::clock(t, offset));
+            let tip = format!("{what} {}", calendar::clock(t, zone_offset(t)));
             out = out.child(
                 at(x, x)
                     .child(tick.child(mark(&self.marks, Mark::BandEdge(n))))
@@ -310,22 +319,20 @@ impl Workspace {
                 .absolute()
                 .left_0()
                 .right_0()
-                .min_w(px(MIN_BLOCK))
                 .top(px(top))
                 .h(px(height))
                 .rounded_sm()
                 .bg(rgb(theme::SNEAK))
                 .opacity(opacity)
                 .child(mark(&self.marks, Mark::BandBlock(n)));
-            let tip = calendar::describe(event, offset);
-            out =
-                out.child(at(bar.from, bar.to).child(block).child(hover(("meeting-bar", bar.id as usize).into(), tip)));
-        }
-        let all_day: Vec<String> =
-            calendar.today().filter(|e| e.all_day).map(|e| calendar::describe(e, offset)).collect();
-        if !all_day.is_empty() {
-            let dot = div().absolute().left(px(2.)).top(px(2.)).size(px(4.)).rounded_full().bg(rgb(theme::MUTED));
-            out = out.child(dot.child(hover("meeting-all-day".into(), all_day.join("\n"))));
+            // A half lane is hovered over its half: both of two overlapping meetings can be.
+            let hovered = hover(("meeting-bar", bar.id as usize).into(), calendar::describe(event, offset));
+            let hovered = match bar.lane {
+                Lane::Full => hovered,
+                Lane::Top => hovered.bottom(px(BAND / 2.)),
+                Lane::Bottom => hovered.top(px(BAND / 2.)),
+            };
+            out = out.child(at(bar.from, bar.to).min_w(px(MIN_BLOCK)).child(block).child(hovered));
         }
         // Now, last: over the blocks.
         let x = band.at(now);
@@ -456,7 +463,7 @@ impl Workspace {
             "bars": bars.len(),
             // The band above the status bar, in window points: its rect, the times at its ends and
             // the workday's (ms), the workday's marks, now's tick, each block's times and rect.
-            "band": calendar.on.then(|| serde_json::json!({
+            "band": (calendar.on && calendar.days[1] > 0).then(|| serde_json::json!({
                 "rect": drawn(Mark::Band),
                 "span": [band.from, band.to],
                 "workday": [band.workday.0, band.workday.1],

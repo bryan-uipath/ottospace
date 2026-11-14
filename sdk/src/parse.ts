@@ -1365,11 +1365,6 @@ function railMark(value: unknown, at: string): Snapshot["calendar"]["rail"] {
 
 function band(value: unknown, at: string): NonNullable<Snapshot["calendar"]["band"]> {
   const o = fields(value, at);
-  const pair = (v: unknown, at: string): [number, number] => {
-    const [a, b, ...rest] = list(num)(v, at);
-    if (a === undefined || b === undefined || rest.length > 0) throw wrong(at, "two numbers", v);
-    return [a, b];
-  };
   const block = (v: unknown, at: string) => {
     const b = fields(v, at);
     return { start: num(b.start, `${at}.start`), end: num(b.end, `${at}.end`), rect: orNull(rect)(b.rect, `${at}.rect`) };

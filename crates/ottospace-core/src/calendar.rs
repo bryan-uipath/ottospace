@@ -162,10 +162,11 @@ impl Band {
 }
 
 /// The local wall time `minutes` after the midnight `day` (ms), in a zone `offset(t)` seconds east
-/// of UTC at `t`: 09:00 stays 09:00 on a day the clocks change.
+/// of UTC at `t`: 09:00 stays 09:00 on a day the clocks change, at midnight too (the offset
+/// just before `day` is the one its wall clock started from).
 fn local(day: u64, minutes: u32, offset: &dyn Fn(u64) -> i64) -> u64 {
     let naive = day + u64::from(minutes) * MINUTE;
-    let shift = (offset(naive) - offset(day)) * 1_000;
+    let shift = (offset(naive) - offset(day.saturating_sub(1))) * 1_000;
     naive.saturating_add_signed(-shift)
 }
 

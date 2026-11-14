@@ -161,6 +161,15 @@ fn the_workday_keeps_its_clock_on_a_day_the_clocks_change() {
     // 09:00 local is 13:00 UTC, 8 hours before 17:00 local: not 14:00 and 22:00.
     assert_eq!(band.workday, (midnight + 8 * H, midnight + 16 * H));
     assert_eq!(clock(band.from, -4 * 3_600), "09:00");
+    // Clocks go forward at midnight itself (Santiago): the day starts at 01:00, at the change
+    // (04:00 UTC).
+    let change = NINE - 5 * H;
+    let offset: &dyn Fn(u64) -> i64 = &|t| if t < change { -4 * 3_600 } else { -3 * 3_600 };
+    let band = super::band(&[], (change, change + 23 * H), Workday::default(), offset);
+    assert_eq!(
+        (clock(band.workday.0, -3 * 3_600), clock(band.workday.1, -3 * 3_600)),
+        ("09:00".into(), "17:00".into())
+    );
 }
 
 #[test]
