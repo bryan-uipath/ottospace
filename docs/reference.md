@@ -29,7 +29,7 @@ running, and the rest of the design is not built: see the
 | Tasks by project: State \| Project in the section's header, kept in `tasks_view` in the settings. One foldable group a `#project`, by name, with a bar of its tasks' states (hover for the numbers), its open tasks (needs you, running, later), then a folded "Done · n"; the tasks of no project last. Under the list: `Today  n done · n running · agent time` | Works today |
 | A task's progress, kept in its file: when its agent started and when it was done, time at work (activity until a quiet gap of two minutes), and tokens by model (input, output, cached; a sub-agent's apart), summed from its sessions, so they outlive the session files. Tokens only: no prices | Works today |
 | "Pop next" (⌘⇧N): the conversation of the next task that needs you; the tab on show stays | Works today |
-| Sessions in the Tasks section: the Claude Code and Codex sessions of the listed repositories that are no task's (one you started by hand in a terminal). Each row shows the runner, the repository, the session's title, active or idle, what it does now, when it was last active, and the model. A click opens its conversation in the drawer (`claude --resume`, `codex resume`), unless it is at work in another terminal; Adopt makes a task of one; Hide removes it until the next start | Works today |
+| Sessions in the Tasks section: the Claude Code and Codex sessions of the listed repositories that are no task's (one you started by hand in a terminal). Under Elsewhere, each row is one line: a dot lit while it works, its title (else its repository) and its runner; hover it for its card (repository, what it does now, model, when last active, its pane). Listed: the last 7 days. A click opens its conversation in the drawer (`claude --resume`, `codex resume`), unless it is at work in another terminal; Track makes a task of one; Hide removes it until the next start | Works today |
 | A task's agent in the right drawer: ↵ in the new-task box, or Start agent in the drawer, starts its agent (`claude` or `codex`, by its `@agent`, else `default_agent`) beside the workspace, which stays as it is. A click on a task only shows its conversation; Resume session goes on with one that ended. See [Flow of a task](#flow-of-a-task) | Works today |
 | Native conversation for Claude Code: the drawer drives `claude -p` (stream-json) and draws the reply itself: markdown (headings, emphasis, lists, quotes, tables), code blocks with Copy, links that open only on your click (web pages in the browser; files of the task's repository revealed in Finder), local images of the repository as thumbnails, tool calls as compact rows, a file edit's change as a diff card under its call, a working row while a turn runs, Copy and Copy as Markdown on each message, and a composer (↵ send, ⇧↵ new line). Permission requests are cards: Allow this one request as shown, or Deny (with a message if you like); a request too long to show is opened in full before Allow is offered. `Chat \| Terminal` in the header switches to the CLI's own TUI and back on the same session. A session at work in another terminal is watched read-only (what it calls and edits, not what it says; "Watching · updates per message" in the header), with Take over once it is idle. Codex stays in a terminal. No text selection by dragging yet: copy by message or block | Works today |
 | Right rail: a badge per open conversation of a live task (needs you first, then running, then the last opened; at most 8), and `+` for a new task. A dismissed task leaves it; a done one stays only while shown or its agent runs | Works today |
@@ -262,10 +262,10 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    the task's folder after the agent did and before the next agent there, that nothing else
    has. When two could be its (another Codex started there at the same moment), neither is
    taken: the task runs, following none. When the agent ends while the task runs, the task needs you.
-8. **A session that is no task's.** A click or ↵ on its row under Other sessions opens its
+8. **A session that is no task's.** A click or ↵ on its row under Elsewhere opens its
    conversation the same way, with no task: it gets a badge on the rail (from its title, else
-   its repository) and Adopt in the drawer's header. Adopt, there or on the row, makes the task,
-   and the conversation is the task's: the same agent if it runs, else gone on with. Adopt opens
+   its repository) and Track in the drawer's header. Track, there or on the row, makes the task,
+   and the conversation is the task's: the same agent if it runs, else gone on with. Track opens
    no terminal tab.
 9. **Who may.** Only you start or stop an agent, and only you say which task a tab is of: a
    client's ↵ files the task with no tab, its `task_open` goes to tabs the task has, its
@@ -483,26 +483,25 @@ Design: [capture.md](ai/capture.md).
 ## Sessions
 
 An agent is a saved definition. A session is one running conversation of Claude Code or Codex.
-The Tasks section lists, under **Other sessions**, the sessions of your listed repositories
+The Tasks section lists, under **Elsewhere**, the sessions of your listed repositories
 (worktrees included) that no task has adopted: for example a Claude Code you started by hand in a
 terminal. The group is folded at first: its heading shows the count, and a click, ↵ or space
 unfolds it. A session at work does not unfold it.
 
-- **What a row shows.** The runner (`claude` or `codex`), the repository or worktree, a dot that
-  is lit while the session is active (its file changed in the last 30 seconds), what it does now
-  (`shell · cargo test`, `network · git push`, `files · src/main.rs`), and when it was last
-  active.
-- **Range.** Unfolded, its heading has a switch, Today | 7 days | 30 days | All (kept in the settings as
-  `sessions_range`): Today lists the sessions active since the local day began, the others
-  those active within that many days, All every one listed. A session at work is always
-  listed. The heading counts those in range; hover it for how many there are in all. The
+- **What a row shows.** One line: a dot that is lit while the session is active (its file
+  changed in the last 30 seconds), its title (below), else its repository or worktree, and the
+  runner (`claude` or `codex`). Hover it for its card: the repository, what it does now (`shell ·
+  cargo test`, `network · git push`, `files · src/main.rs`), the model, when it was last active
+  and the pane it runs in.
+- **Range.** The sessions active in the last 7 days. Nothing on screen changes it; for
+  another, set `sessions_range` in the settings: `today` (since the local day began), `month`
+  (30 days) or `all` (every one listed). A session at work is always listed. The heading counts those in range; hover it for how many there are in all. The
   range only narrows what was read: at most 200 sessions are listed, the most recent, so All
   shows those 200.
-- **Title and model.** Between the two lines a row shows the session's title, on one line, when
-  the runner keeps one: the name you gave a Claude Code session (`/rename`), else the title
+- **Title and model.** A row shows the session's title, on one line, when the runner keeps one: the name you gave a Claude Code session (`/rename`), else the title
   Claude Code wrote for it; for Codex, the thread's name in its `session_index.jsonl`, which
-  not every session has. ottospace writes no title itself and calls no model. The last line
-  ends with the model in short: `claude-opus-4-7` shows as `opus-4.7`, another name as it is.
+  not every session has. ottospace writes no title itself and calls no model. The card shows
+  the model in short: `claude-opus-4-7` shows as `opus-4.7`, another name as it is.
   A title is text a model wrote from what the session read, so it is only drawn: one line, at
   most 80 characters, no control or invisible characters. It never names a task, sets a tag or
   reaches a terminal.
@@ -513,8 +512,8 @@ unfolds it. A session at work does not unfold it.
   --resume <id>` or `codex resume <id>`, in the folder the session started in, which must be in
   a listed repository or worktree. One at work (its dot lit) or held by a live Claude Code
   process is not: the drawer says it is live in another terminal, and nothing is started. When
-  the row says "in pane N", that pane is focused too.
-- **Adopt** makes a task of the session: named after the repository, with `>repo` set to that
+  the card says it runs in a pane, that pane is focused too.
+- **Track** makes a task of the session: named after the repository, with `>repo` set to that
   repository (wherever in it the session started) and `@agent` to its runner. The session is
   that task's from then on and leaves the group. Rename the task later. The task keeps the
   session's runner and id, and no path from the session's file. Its conversation opens in the
@@ -543,7 +542,7 @@ unfolds it. A session at work does not unfold it.
   bar says so once.
 - **Read, then gone on with only by you.** ottospace reads the runners' own session files, every
   5 seconds while the Tasks section is open and never while it is closed. It does not attach to
-  a session, type into it or signal it. Only Open or Adopt, by you, starts the runner's own
+  a session, type into it or signal it. Only Open or Track, by you, starts the runner's own
   resume command on it. Only derived facts are shown: names from fixed tables, counts and
   times. Never a prompt, a file's contents or a command line. The one free text is the
   session's title (above). Design: [sessions.md](ai/sessions.md).
@@ -856,7 +855,7 @@ A change is read when the file is saved: what is wrong in it is said in the stat
 | `terminal.font_size` | In points, 6 to 72 | `13` |
 | `repos` | Directories that are repositories or hold them, for the Repos section. `OTTOSPACE_REPOS` (`:` between directories) wins over it. The section's + adds the folder you pick (a repository, or one that holds some), by its full path; if the file named none, `~/code` and `~/notes` are written with it. Remove, on a repository's name under the pointer, takes off a directory listed as itself; one that comes from a folder holding several is yours to edit. At most 64 through + | `~/code`, `~/notes` |
 | `tasks` | Where tasks are kept, one JSON file each. A relative path is inside `~/.ottospace` | `tasks` |
-| `sessions` | List agent sessions that are no task's under Other sessions in the Tasks section. `false`: no session file is ever read | `true` |
+| `sessions` | List agent sessions that are no task's under Elsewhere in the Tasks section. `false`: no session file is ever read | `true` |
 | `session_dirs` | Where the runners keep their sessions: `claude` is a list of Claude Code config directories (one for each account), `codex` is Codex's home. A runner left out keeps its default. An app started from the Dock does not see `CLAUDE_CONFIG_DIR` or `CODEX_HOME`: name other directories here | `~/.claude`, `~/.codex` |
 | `session_quiet_minutes` | A task adopted from a session moves to Needs you once the session has been quiet this many minutes. `0`: a quiet session never moves its task | `3` |
 | `agent_models` | The models the `@agent` dropdown offers after each runner, in place of the built-in list: ids as the runner's CLI takes them. `claude` and `codex` are each a list; a runner left out keeps its own, an empty list offers the runner alone. An id that does not start with the runner's name gets it in the tag: `gpt-6-astra` is `@codex-gpt-6-astra`, `opus` is `@claude-opus`. An entry that is not a name (letters and digits, with `.`, `-` or `_` between them one at a time; at most 64) is left out and named in the status bar | `claude-fable-5-2`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`; `gpt-6-astra` |
@@ -866,7 +865,7 @@ A change is read when the file is saved: what is wrong in it is said in the stat
 | `restore_layout` | [Restore the layout](#restoring-the-layout) at start and keep it in `layout.json`. `false`: every start is empty | `true` |
 | `restore_apps` | At a restore, start an app a pane names that is not running. `false`: its pane waits and offers `Open <App>` | `false` |
 | `tasks_view` | How the Tasks section groups: `state` or `project`. Written when you pick one in the section's header | `state` |
-| `sessions_range` | Which sessions Other sessions lists: `today`, `week` (7 days), `month` (30 days) or `all`. Written when you pick one on its heading | `today` |
+| `sessions_range` | Which sessions Elsewhere lists: `today`, `week` (7 days), `month` (30 days) or `all`. Set by hand: nothing on screen picks it | `week` |
 | `capture_key` | The key that captures the pane in use, from any app: modifiers (`ctrl`, `alt`, `cmd`, `shift`) and a key, with `-` between them. `"off"`: no key. `OTTOSPACE_CAPTURE_KEY` wins over it. Not `ctrl-alt-space`: macOS uses it to change the input source | `ctrl-alt-cmd-space` |
 | `capture.keep_images` | Keep a capture's pictures on disk. `false`: no picture is ever written | `true` |
 | `capture.ax` | Read an app pane's accessibility tree with its picture. `false`: it is never read for a capture | `true` |

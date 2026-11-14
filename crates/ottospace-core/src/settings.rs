@@ -98,8 +98,8 @@ pub struct Settings {
     /// user picks one in the section's header.
     #[serde(default)]
     pub tasks_view: Option<crate::model::TasksView>,
-    /// Which sessions Other sessions lists: `today` (default), `week`, `month` or `all`. Written
-    /// when the user picks one on its heading.
+    /// Which sessions Elsewhere lists: `today`, `week` (default), `month` or `all`. Set by hand:
+    /// nothing on screen picks it.
     #[serde(default)]
     pub sessions_range: Option<crate::sessions::Range>,
     /// The calendar feed of the meeting timeline: an `https://` link (a private feed's link holds

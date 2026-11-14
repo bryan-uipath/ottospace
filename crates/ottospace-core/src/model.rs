@@ -790,8 +790,8 @@ pub enum Action {
         runner: String,
         id: String,
     },
-    /// Which sessions Other sessions lists, by when each was last active. The user's pick is
-    /// written to the settings.
+    /// Which sessions Elsewhere lists, by when each was last active: 7 days unless the settings
+    /// say otherwise (`sessions_range`). Nothing on screen picks it; nothing is written.
     SessionsRange {
         range: sessions::Range,
     },
@@ -1972,10 +1972,6 @@ pub enum Effect {
     SaveTasksView {
         view: TasksView,
     },
-    /// The user picked the range of Other sessions: write `sessions_range` in the settings file.
-    SaveSessionsRange {
-        range: sessions::Range,
-    },
     /// The pinned or hidden apps changed: make these changes to `apps` and `apps_hidden` in
     /// the settings file, as it is then.
     SaveApps {
@@ -2283,7 +2279,7 @@ pub struct Model {
     /// Sessions the user hid, as (runner, id). Not kept between runs.
     #[serde(skip)]
     hidden: Vec<(String, String)>,
-    /// Which sessions Other sessions lists (`sessions_range` in the settings), and the start of
+    /// Which sessions Elsewhere lists (`sessions_range` in the settings), and the start of
     /// the local day the shell last read them in.
     #[serde(skip)]
     pub sessions_range: sessions::Range,
@@ -3641,12 +3637,7 @@ impl Model {
                     self.focus(pane, effects);
                 }
             }
-            Action::SessionsRange { range } => {
-                if self.by_user && range != self.sessions_range {
-                    effects.push(Effect::SaveSessionsRange { range });
-                }
-                self.sessions_range = range;
-            }
+            Action::SessionsRange { range } => self.sessions_range = range,
             Action::ToggleGroup { heading } => {
                 let open = !self.collapsed.contains(&heading);
                 self.collapsed.retain(|h| *h != heading);
@@ -5840,7 +5831,7 @@ impl Model {
         (another.is_none() && session.active && at_work == 1).then_some(pane.id)
     }
 
-    /// The Other sessions group as drawn, at the time of the last `Tick`: sessions found that are
+    /// The Elsewhere group as drawn, at the time of the last `Tick`: sessions found that are
     /// no task's, active first, those in the range alone.
     pub fn sessions_bar(&self) -> sessions::Bar {
         let (range, now, day) = (self.sessions_range, self.now, self.session_day);
@@ -9640,7 +9631,7 @@ mod tests {
         let bar = m.sessions_bar();
         assert_eq!((bar.count, bar.collapsed, bar.rows.len()), (1, true, 0));
         assert_eq!(m.list_rows(), [ListRow::Heading(Heading::Sessions)]);
-        assert_eq!(Heading::Sessions.title(), "Other sessions");
+        assert_eq!(Heading::Sessions.title(), "Elsewhere");
         // ↵ on the heading unfolds it, as any other.
         m.update(Action::FocusList);
         m.update(Action::ListChoose { axis: Right });
@@ -9654,7 +9645,7 @@ mod tests {
         Found { runner, id, cwd, repo, started, last_activity, active, station, label, title, model, held }
     }
 
-    /// The Other sessions group as (count in range, ids of the rows drawn, count in all).
+    /// The Elsewhere group as (count in range, ids of the rows drawn, count in all).
     fn session_rows(m: &Model) -> (usize, Vec<String>, usize) {
         let bar = m.sessions_bar();
         (bar.count, bar.rows.into_iter().map(|row| row.id).collect(), bar.total)
@@ -9678,7 +9669,9 @@ mod tests {
             ],
             day: now - 5 * hour,
         });
-        // Today, at first: the one at work and the one idle since the day started.
+        // 7 days, at first; Today: the one at work and the one idle since the day started.
+        assert_eq!(session_rows(&m), (3, vec!["busy".into(), "idle".into(), "old".into()], 3));
+        m.update(Action::SessionsRange { range: sessions::Range::Today });
         assert_eq!(session_rows(&m), (2, vec!["busy".into(), "idle".into()], 3));
         let rows = m.sessions_bar().rows;
         // Named after the listed repository or worktree, wherever below it the session started.
@@ -9702,20 +9695,11 @@ mod tests {
             ),
             ("codex", "app-2", false, None, Some("3h"))
         );
-        // 7 days takes in the one of three days ago. The user's pick is written; a client's is not.
+        // 7 days takes in the one of three days ago. A range is read, never written.
         let week = Action::SessionsRange { range: sessions::Range::Week };
         assert_eq!(m.update(week.clone().sent_by(Origin::Socket)), []);
         assert_eq!(session_rows(&m), (3, vec!["busy".into(), "idle".into(), "old".into()], 3));
-        let today = Action::SessionsRange { range: sessions::Range::Today };
-        assert_eq!(
-            m.update(today.sent_by(Origin::User)),
-            [Effect::SaveSessionsRange { range: sessions::Range::Today }]
-        );
-        assert_eq!(
-            m.update(week.clone().sent_by(Origin::User)),
-            [Effect::SaveSessionsRange { range: sessions::Range::Week }]
-        );
-        assert_eq!(m.update(week.sent_by(Origin::User)), [], "the same range: nothing to write");
+        assert_eq!(m.update(week.sent_by(Origin::User)), []);
         // The heading folds like any other.
         m.update(Action::ToggleGroup { heading: Heading::Sessions });
         assert_eq!(session_rows(&m), (3, vec![], 3));

@@ -1389,11 +1389,6 @@ impl Workspace {
                         self.error = Some(format!("{}{why}", Self::NOT_WRITTEN));
                     }
                 }
-                Effect::SaveSessionsRange { range } => {
-                    if let Err(why) = config::save_value("sessions_range", &serde_json::json!(range)) {
-                        self.error = Some(format!("{}{why}", Self::NOT_WRITTEN));
-                    }
-                }
                 Effect::SaveRepos { changes } => self.save_apps(changes),
                 Effect::Notice { text } => self.error = Some(text.clone()),
                 // A picture of the pane is asked for: the cursor's going scrolls the terminal to
@@ -1464,13 +1459,7 @@ impl Workspace {
         }
         // The app wrote `settings.json`: the status bar speaks of the file as written.
         let wrote = effects.iter().any(|effect| {
-            matches!(
-                effect,
-                Effect::SaveApps { .. }
-                    | Effect::SaveRepos { .. }
-                    | Effect::SaveTasksView { .. }
-                    | Effect::SaveSessionsRange { .. }
-            )
+            matches!(effect, Effect::SaveApps { .. } | Effect::SaveRepos { .. } | Effect::SaveTasksView { .. })
         });
         if wrote {
             self.read_settings_now(true, window, cx);
@@ -4176,9 +4165,8 @@ impl Workspace {
         cx.notify();
     }
 
-    /// A click on a session's row or on one of its buttons, by the control's name: `session` or
-    /// `session-open` (its conversation in the drawer), `session-adopt` (a task is made of it)
-    /// or `session-hide`.
+    /// A click on a session's row or on one of its buttons, by the control's name: `session` (its
+    /// conversation in the drawer), `session-adopt` (Track: a task is made of it) or `session-hide`.
     pub(crate) fn click_session_control(
         &mut self,
         control: &str,
@@ -4190,7 +4178,7 @@ impl Workspace {
         let action = match control {
             // A client's click on the row is the one it always was: the pane, else the row.
             "session" if self.input != Origin::User => Action::SessionClick { runner, id },
-            "session" | "session-open" => Action::SessionOpen { runner, id },
+            "session" => Action::SessionOpen { runner, id },
             "session-adopt" => Action::SessionAdopt { runner, id },
             "session-hide" => Action::SessionHide { runner, id },
             _ => return,
@@ -4233,7 +4221,7 @@ impl Workspace {
             .on_click(cx.listener(move |this, _, window, cx| this.click_heading(heading, window, cx)))
     }
 
-    /// The Other sessions group: agent sessions found for the listed repositories that are no
+    /// The Elsewhere group: agent sessions found for the listed repositories that are no
     /// task's, those in its range. Empty when none is listed. `listed`: how many rows of the list
     /// come before; the heading and each session are rows, as list mode walks them.
     fn render_sessions(&self, mut listed: usize, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -4242,15 +4230,10 @@ impl Workspace {
             return Vec::new();
         }
         let selected = self.model.list == Some(listed);
-        // Unfolded, the heading holds the range switch, on a line below when narrow; its count is
-        // of those in range.
+        // Its count is of those in range (7 days unless the settings say otherwise).
         let heading = self.heading_row(Heading::Sessions, bar.count, bar.collapsed, selected, cx);
         let total = SharedString::from(format!("{} in all", bar.total));
-        let heading = heading
-            .flex_wrap()
-            .gap_y_1()
-            .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(total.clone()))))
-            .children((!bar.collapsed).then(|| self.sessions_range_switch(cx)));
+        let heading = heading.tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(total.clone()))));
         let mut rows = vec![heading.into_any_element()];
         listed += 1;
         for row in &bar.rows {
@@ -4260,9 +4243,8 @@ impl Workspace {
         rows
     }
 
-    /// A session's row: a dot (lit while it is active), where it runs and which runner, its title
-    /// if it has one, then what it is doing, how long ago, and the model. Hover (or list mode's
-    /// selection) shows Open, Adopt and Hide.
+    /// A session's row, one line: a dot (lit while it is active), its title (`Row::title`) and its
+    /// runner. The rest is in its hover card. Hover (or list mode's selection) shows Track and Hide.
     fn session_row(&self, row: &ottospace_core::sessions::Row, selected: bool, cx: &mut Context<Self>) -> AnyElement {
         let key = format!("{}:{}", row.runner, row.id);
         let button = |name: &'static str, label: &'static str, tip: &'static str| {
@@ -4272,53 +4254,23 @@ impl Workspace {
             };
             self.word(format!("{name}:{key}"), (label, tip), click, cx)
         };
+        // A click on the row opens it: no Open word.
         let actions = words::words("session-row", selected)
-            .bottom(px(4.))
-            .child(button("session-open", "Open", "Its conversation, in the drawer"))
-            .child(button("session-adopt", "Adopt", "Make a task of this session"))
-            .child(button("session-hide", "Hide", "Hide until ottospace starts again"));
-        let state = if row.active { row.doing.clone().unwrap_or_else(|| "active".into()) } else { "idle".into() };
-        let detail = [Some(state), row.age.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+            .top(px(2.))
+            .child(button("session-adopt", "Track", "Track as a task"))
+            .child(button("session-hide", "Hide", "Hide"));
         let color = if row.active { theme::task(Group::Running) } else { theme::BORDER_STRONG };
-        let muted = || div().flex_none().text_xs().text_color(rgb(theme::MUTED));
-        let (runner, id) = (row.runner.clone(), row.id.clone());
+        let (runner, id, card) = (row.runner.clone(), row.id.clone(), row.clone());
         list_button(ElementId::Name(format!("session:{key}").into()), selected)
             .group("session-row")
             .relative()
-            .items_start()
             .child(div().h(px(20.)).flex().items_center().child(home::dot(color)))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(div().flex_1().min_w_0().truncate().child(row.name.clone()))
-                            .children(row.pane.map(|pane| muted().child(format!("in pane {pane}"))))
-                            .child(muted().child(row.runner.clone())),
-                    )
-                    // The session's title: text a model wrote, drawn as it is on one line.
-                    .children(row.quoted_title.clone().map(|title| {
-                        let color = gpui::Hsla::from(rgb(theme::TEXT)).opacity(0.8);
-                        div().w_full().truncate().text_xs().line_height(px(18.)).text_color(color).child(title)
-                    }))
-                    .child(
-                        div()
-                            .h(px(20.))
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(muted().flex_1().min_w_0().truncate().child(detail))
-                            .children(row.model.clone().map(|model| muted().child(model))),
-                    ),
-            )
+            // The title may be text a model wrote: drawn as it is, on one line.
+            .child(div().flex_1().min_w_0().truncate().child(row.title().to_string()))
+            .child(div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(row.runner.clone()))
             .child(actions)
             .child(self.controls.mark(format!("session:{key}")))
+            .tooltip(move |_, cx| AnyView::from(cx.new(|_| progress::SessionCard(card.clone()))))
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.click_session_control("session", runner.clone(), id.clone(), window, cx);
             }))

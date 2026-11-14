@@ -8,8 +8,8 @@ use gpui::{
 };
 use ottospace_core::model::{Card, ProjectGroup, TasksView};
 use ottospace_core::progress::count;
-use ottospace_core::sessions::Range;
-use ottospace_core::tasks::Segments;
+use ottospace_core::sessions::Row;
+use ottospace_core::tasks::{Group, Segments};
 use ottospace_core::{Action, theme};
 
 use crate::{Tooltip, Workspace, home};
@@ -111,6 +111,41 @@ pub fn card_tip(workspace: &Workspace, id: u32) -> Option<impl Fn(&mut Window, &
     Some(move |_: &mut Window, cx: &mut gpui::App| AnyView::from(cx.new(|_| CardView(card.clone()))))
 }
 
+/// An Elsewhere row's hover card: what its one line leaves out. Its title is quoted text.
+pub struct SessionCard(pub Row);
+
+impl Render for SessionCard {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let row = &self.0;
+        let fact = |name: &'static str, value: String| {
+            let name = div().w(px(72.)).text_color(rgb(theme::MUTED)).child(name);
+            div().flex().gap_2().text_xs().child(name).child(div().min_w_0().truncate().child(value))
+        };
+        let state = if row.active { row.doing.clone().unwrap_or_else(|| "active".into()) } else { "idle".into() };
+        let color = if row.active { theme::task(Group::Running) } else { theme::BORDER_STRONG };
+        div()
+            .w(px(300.))
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_1p5()
+            .rounded_md()
+            .bg(rgb(theme::RAISED))
+            .border_1()
+            .border_color(rgb(theme::BORDER_STRONG))
+            .text_color(rgb(theme::TEXT))
+            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).truncate().child(row.title().to_string()))
+            .child(div().flex().items_center().gap_1p5().child(home::dot(color)).child(div().text_xs().child(state)))
+            .child(fact("Repository", row.name.clone()))
+            .child(fact("Runner", row.runner.clone()))
+            .children(row.model.clone().map(|model| fact("Model", model)))
+            .children(
+                row.age.clone().map(|age| fact("Last active", if age == "now" { age } else { format!("{age} ago") })),
+            )
+            .children(row.pane.map(|pane| fact("Runs in", format!("pane {pane}"))))
+    }
+}
+
 /// The bar of a project's states: one segment a state, as wide as its share of the tasks.
 fn bar(segments: Segments) -> Div {
     let shares = segments.shares();
@@ -163,24 +198,6 @@ impl Workspace {
         ];
         let views = [TasksView::State, TasksView::Project];
         self.switch(&options, move |this, at, window, cx| this.click_tasks_view(views[at], window, cx), cx)
-    }
-
-    /// The Other sessions heading's switch: Today | 7 days | 30 days | All. A click picks one.
-    pub(crate) fn sessions_range_switch(&self, cx: &mut Context<Self>) -> Div {
-        let range = self.model.sessions_range;
-        let name = |of: Range| match of {
-            Range::Today => "sessions-range:today",
-            Range::Week => "sessions-range:week",
-            Range::Month => "sessions-range:month",
-            Range::All => "sessions-range:all",
-        };
-        let options = Range::EVERY.map(|of| (name(of), of.label(), of == range));
-        self.switch(&options, |this, at, window, cx| this.click_sessions_range(Range::EVERY[at], window, cx), cx)
-    }
-
-    pub(crate) fn click_sessions_range(&mut self, range: Range, window: &Window, cx: &mut Context<Self>) {
-        self.dispatch(Action::SessionsRange { range }, self.input, window, cx);
-        cx.notify();
     }
 
     pub(crate) fn click_tasks_view(&mut self, view: TasksView, window: &Window, cx: &mut Context<Self>) {

@@ -104,7 +104,7 @@ export type Heading = "needs_you" | "running" | "later" | "done" | "sessions";
 /** How the Tasks section groups its tasks. */
 export type TasksView = "state" | "project";
 
-/** Which sessions Other sessions lists: since the local day began, 7 or 30 days back, or all. */
+/** Which sessions Elsewhere lists: since the local day began, 7 (the default) or 30 days back, or all. */
 export type SessionsRange = "today" | "week" | "month" | "all";
 
 /** Tokens of one model, summed. `input` counts every prompt token, cached or not. */
@@ -417,7 +417,7 @@ export interface AppsBar {
   undo: string | null;
 }
 
-/** The Other sessions group of the Tasks section. */
+/** The Elsewhere group of the Tasks section. */
 export interface SessionsBar {
   /** Sessions in `range`, and listed in all. A session at work is always in range. */
   count: number;

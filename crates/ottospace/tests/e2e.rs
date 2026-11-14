@@ -1738,8 +1738,8 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
     let bar = otto.call(json!({"cmd": "state"}))["sessions_bar"].clone();
     assert_eq!((&bar["enabled"], &bar["reads"], &bar["count"]), (&json!(true), &json!(0), &json!(0)));
     assert_eq!(bar["slow_reads"], 0, "no task follows a session: nothing to look at");
-    // Open: read at once. The group starts folded: its heading alone, until unfolded. Then Today:
-    // the active session first (the idle one too, unless the day began less than 2 hours ago).
+    // Open: read at once. The group starts folded: its heading alone, until unfolded. Then 7 days:
+    // the active session first, then the idle one of two hours ago.
     otto.call(json!({"cmd": "section", "section": "tasks"}));
     let folded = otto.wait_for("the sessions to be read", |o| {
         Some(o.call(json!({"cmd": "state"}))).filter(|reply| reply["sessions_bar"]["total"] == 3)
@@ -1750,12 +1750,14 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
         Some(o.call(json!({"cmd": "state"}))).filter(|reply| reply["sessions_bar"]["total"] == 3)
     });
     assert_eq!(
-        (rows(&reply)[0].clone(), &reply["sessions_bar"]["range"]),
-        (row("claude", busy, true), &json!("today"))
+        (rows(&reply), &reply["sessions_bar"]["range"]),
+        (vec![row("claude", busy, true), row("codex", idle, false)], &json!("week"))
     );
-    // 7 days: the two of today and two hours ago. A client's pick lasts the run, unwritten.
+    // Today: the active one (the idle one too, unless the day began less than 2 hours ago). A
+    // client's pick lasts the run, unwritten. Then 7 days again.
+    let reply = otto.call(json!({"cmd": "sessions_range", "range": "today"}));
+    assert_eq!(rows(&reply)[0], row("claude", busy, true));
     let reply = otto.call(json!({"cmd": "sessions_range", "range": "week"}));
-    assert_eq!(rows(&reply), [row("claude", busy, true), row("codex", idle, false)]);
     let written = || std::fs::read_to_string(home.join("settings.json")).unwrap();
     assert!(!written().contains("sessions_range"), "{}", written());
     let bar = &reply["sessions_bar"];
@@ -1772,10 +1774,13 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
     let reply = otto.call(json!({"cmd": "sessions_range", "range": "all"}));
     assert_eq!(rows(&reply)[2], row("codex", old, false));
     assert_eq!(named(&reply["sessions_bar"]["rows"][2]), (Value::Null, json!("gpt-5.4")), "no title: none shown");
-    // The user's click on the heading's switch is written to the settings.
-    let reply = otto.user_click(at(otto.control("sessions-range:week"), 0.5, 0.5));
-    assert_eq!((&reply["sessions_bar"]["range"], &reply["sessions_bar"]["collapsed"]), (&json!("week"), &json!(false)));
-    assert!(written().contains("\"sessions_range\": \"week\""), "{}", written());
+    // No switch on the heading: the range is the settings' alone. A row's words are Track and Hide.
+    let reply = otto.call(json!({"cmd": "sneak"}));
+    otto.call(json!({"cmd": "key", "keys": "escape"}));
+    let ids: Vec<String> =
+        reply["sneak"]["targets"].as_array().unwrap().iter().map(|t| t["source"]["id"].to_string()).collect();
+    assert!(!ids.iter().any(|id| id.contains("sessions-range") || id.contains("session-open")), "{ids:?}");
+    otto.call(json!({"cmd": "sessions_range", "range": "week"}));
     // The words of the made-up conversation are nowhere in what the app says.
     let said = otto.call(json!({"cmd": "state"})).to_string();
     assert!(!said.contains("Add a greeting") && !said.contains("made-up"), "{said}");

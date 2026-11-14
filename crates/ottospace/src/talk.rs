@@ -515,7 +515,7 @@ impl Workspace {
             // Only a listed session can be adopted: not with the Tasks section closed, nor hidden.
             Subject::Session { runner, id } if self.model.session_listed(runner, id) => {
                 let (runner, id) = (runner.clone(), id.clone());
-                Some(self.talk_button("talk-adopt", "Adopt", "Make a task of this session").on_click(cx.listener(
+                Some(self.talk_button("talk-adopt", "Track", "Track as a task").on_click(cx.listener(
                     move |this, _, window, cx| {
                         let adopt = Action::SessionAdopt { runner: runner.clone(), id: id.clone() };
                         this.dispatch(adopt, this.input, window, cx);
