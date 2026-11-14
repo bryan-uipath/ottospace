@@ -79,6 +79,7 @@ mod marks;
 mod menus;
 mod new_task;
 mod progress;
+mod record;
 mod repos;
 mod running;
 #[cfg(test)]
@@ -729,6 +730,8 @@ struct Workspace {
     visual_after: Vec<PaneId>,
     /// A global key that could not be registered, for the status bar.
     key_notice: Option<String>,
+    /// A test run's recording of its own window (`record_start`).
+    recording: Option<record::Recording>,
     /// Each pane's body bounds in window coordinates, recorded during prepaint.
     cells: HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>,
     /// Each pane's bounds inside its border, for e2e to check the live window's gap.
@@ -1117,6 +1120,7 @@ impl Workspace {
             pending: Vec::new(),
             visual_after: Vec::new(),
             key_notice: None,
+            recording: None,
             cells: HashMap::new(),
             frames: HashMap::new(),
             renders: 0,
@@ -2133,6 +2137,32 @@ impl Workspace {
                     continue;
                 }
                 Request::CalendarCall { in_call } => Some(Action::CallSeen { in_call, at: now_ms() }),
+                Request::RecordStart { dir } => {
+                    let size = to_cg(window.bounds().size);
+                    let id = ns_view(window).map(|view| unsafe { ottospace_mac::window::number(view) });
+                    let started = match (&self.recording, id) {
+                        (Some(_), _) => Err("already recording".to_string()),
+                        (None, Some(id)) if id > 0 => record::start(id as u32, size, dir.into()),
+                        (None, _) => Err("the window has no number".to_string()),
+                    };
+                    let answer = match started {
+                        Ok(recording) => {
+                            self.recording = Some(recording);
+                            serde_json::json!({ "ok": true }).to_string()
+                        }
+                        Err(why) => control::error(&why),
+                    };
+                    let _ = reply.send(answer);
+                    continue;
+                }
+                Request::RecordStop => {
+                    let answer = match self.recording.take() {
+                        Some(recording) => serde_json::json!({ "ok": true, "frames": recording.stop() }).to_string(),
+                        None => control::error("not recording"),
+                    };
+                    let _ = reply.send(answer);
+                    continue;
+                }
                 Request::Trace => {
                     let _ = reply.send(serde_json::json!({ "ok": true, "trace": trace::jsonl() }).to_string());
                     continue;
@@ -3886,7 +3916,7 @@ impl Workspace {
                         .when(active, |d| {
                             // Amber on Tasks while a task needs the user, as its dot is.
                             let tasks = section == Section::Tasks && needs_you;
-                            raised_cell(d, if tasks { theme::SNEAK } else { theme::PRIMARY }, false, i == 0)
+                            raised_cell(d, if tasks { theme::SNEAK } else { theme::PRIMARY }, false)
                         })
                         .when(self.model.rail_focus == Some(RailFocus::Left(section)), |d| focus_ring(d.relative()))
                         .child(svg().path(*icon).size(px(20.)).text_color(rgb(if active {
@@ -5294,21 +5324,19 @@ fn title_shadow() -> Div {
     }])
 }
 
-/// A rail's open cell, raised: the panel's background, a soft shadow above and below it, a
-/// lighter line along its top, and an accent bar at the window's edge (`right`: the right rail's).
-/// The `first` cell has neither line nor shadow above: the title strip's border is the one line there.
-pub(crate) fn raised_cell(cell: Stateful<Div>, accent: u32, right: bool, first: bool) -> Stateful<Div> {
-    let shadow = |y: f32| BoxShadow {
+/// A rail's open cell, raised: the panel's background, a soft shadow below it, and an accent bar
+/// at the window's edge (`right`: the right rail's). No line or shadow above: every cell reads
+/// as the first one does, under one border.
+pub(crate) fn raised_cell(cell: Stateful<Div>, accent: u32, right: bool) -> Stateful<Div> {
+    let shadow = BoxShadow {
         color: black().opacity(0.85),
-        offset: point(px(0.), px(y)),
+        offset: point(px(0.), px(7.)),
         blur_radius: px(9.),
         spread_radius: px(-6.),
     };
     let bar = div().absolute().top_0().w(px(2.)).h_full().bg(rgb(accent));
     let bar = if right { bar.right_0() } else { bar.left_0() };
-    let shadows = if first { vec![shadow(7.)] } else { vec![shadow(-7.), shadow(7.)] };
-    let line = (!first).then(|| div().absolute().top_0().left_0().w_full().h(px(1.)).bg(rgb(0x303036)));
-    cell.relative().bg(rgb(theme::RAISED)).shadow(shadows).children(line).child(bar)
+    cell.relative().bg(rgb(theme::RAISED)).shadow(vec![shadow]).child(bar)
 }
 
 /// A rail cell with the keyboard (`zones`): a ring in list mode's colour, apart from "open".
@@ -6184,8 +6212,15 @@ mod tests {
     /// them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        const TESTS_ONLY: [&str; 5] =
-            ["capture_start", "repo_add", "inspector_fixture", "sneak_app_tree", "calendar_call"];
+        const TESTS_ONLY: [&str; 7] = [
+            "capture_start",
+            "repo_add",
+            "inspector_fixture",
+            "sneak_app_tree",
+            "calendar_call",
+            "record_start",
+            "record_stop",
+        ];
         assert!(TESTS_ONLY.iter().all(|name| !SKILL_GUIDE.contains(name)));
         for name in request_names().into_iter().filter(|name| !TESTS_ONLY.contains(&name.as_str())) {
             assert!(SKILL_GUIDE.contains(&format!(r#""cmd":"{name}""#)), "the guide has no example of `{name}`");
