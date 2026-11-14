@@ -3599,6 +3599,7 @@ impl Workspace {
                 let active = open == Some(section);
                 div()
                     .id(("rail", i))
+                    .flex_none()
                     .w(px(RAIL))
                     .h(px(RAIL_CELL))
                     .flex()
@@ -5699,5 +5700,12 @@ mod tests {
         for path in icons {
             assert!(Assets.load(path).unwrap().is_some(), "{path} is not in Assets::load");
         }
+    }
+
+    /// The rail is drawn in the order the core moves through it.
+    #[test]
+    fn the_rail_is_drawn_in_the_cores_order() {
+        let drawn: Vec<Section> = SECTIONS.iter().map(|(section, ..)| *section).collect();
+        assert_eq!(drawn, ottospace_core::model::zones::SECTIONS);
     }
 }

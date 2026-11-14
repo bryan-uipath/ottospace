@@ -1206,7 +1206,6 @@ impl Action {
                 | Action::CloseSidebar
                 | Action::NewTab
                 | Action::NewEmptyTab
-                | Action::NewEmptyTab
                 | Action::SelectTab { .. }
                 | Action::SelectVisibleTab { .. }
                 | Action::TaskLeave
@@ -2363,7 +2362,6 @@ impl Model {
                 | Action::DropPane { .. }
                 | Action::Enter { .. }
                 | Action::NewTab
-                | Action::NewEmptyTab
                 | Action::NewEmptyTab
                 | Action::SelectTab { .. }
                 | Action::SelectVisibleTab { .. }
