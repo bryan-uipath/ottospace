@@ -350,15 +350,9 @@ impl Workspace {
                 }
                 None
             }
-            ("session" | "session-open" | "session-adopt" | "session-hide", _) => {
+            ("session" | "session-adopt" | "session-hide", _) => {
                 if let Some((runner, id)) = name.split_once(':') {
                     self.click_session_control(kind, runner.into(), id.into(), window, cx);
-                }
-                None
-            }
-            ("sessions-range", _) => {
-                if let Ok(range) = serde_json::from_value(serde_json::json!(name)) {
-                    self.click_sessions_range(range, window, cx);
                 }
                 None
             }

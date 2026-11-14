@@ -1920,7 +1920,7 @@ fn check_state(m: &Model) -> Result<(), String> {
     ensure!(round_trips(&m.found), "the sessions do not read back as written");
     ensure!(m.panes.iter().all(|pane| round_trips(&pane.kind)), "a pane's kind does not read back as written");
     ensure!(round_trips(&(m.sidebar, m.collapsed.clone())), "the bar does not read back as written");
-    // Other sessions: each row once and in range; under All every listed one, unless folded.
+    // Elsewhere: each row once and in range; under All every listed one, unless folded.
     let bar = m.sessions_bar();
     let ids: Vec<(String, String)> = bar.rows.iter().map(|row| (row.runner.clone(), row.id.clone())).collect();
     ensure!(unique(&ids), "a session is listed twice: {ids:?}");
@@ -2553,9 +2553,6 @@ impl Run {
                 // The settings file is the user's.
                 Effect::SaveTasksView { view } => {
                     ensure!(user && m.tasks_view == *view, "{origin:?} wrote tasks_view {view:?}")
-                }
-                Effect::SaveSessionsRange { range } => {
-                    ensure!(user && m.sessions_range == *range, "{origin:?} wrote sessions_range {range:?}")
                 }
                 Effect::Run { command } => {
                     ensure!(user && matches!(action, Action::PaletteChoose { .. }), "{command:?} run by {action:?}")

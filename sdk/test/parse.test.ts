@@ -176,6 +176,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
         opened: ["web"],
       },
       goes_to: null,
+      line: null,
       note: null,
       rail: [
         { task: 1, mono: "FL", group: "running", working: true, shown: true, tip: "fix login\nRunning\napp · @claude · now" },

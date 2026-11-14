@@ -1395,11 +1395,6 @@ impl Workspace {
                         self.error = Some(format!("{}{why}", Self::NOT_WRITTEN));
                     }
                 }
-                Effect::SaveSessionsRange { range } => {
-                    if let Err(why) = config::save_value("sessions_range", &serde_json::json!(range)) {
-                        self.error = Some(format!("{}{why}", Self::NOT_WRITTEN));
-                    }
-                }
                 Effect::SaveRepos { changes } => self.save_apps(changes),
                 Effect::Notice { text } => self.error = Some(text.clone()),
                 // A picture of the pane is asked for: the cursor's going scrolls the terminal to
@@ -1470,13 +1465,7 @@ impl Workspace {
         }
         // The app wrote `settings.json`: the status bar speaks of the file as written.
         let wrote = effects.iter().any(|effect| {
-            matches!(
-                effect,
-                Effect::SaveApps { .. }
-                    | Effect::SaveRepos { .. }
-                    | Effect::SaveTasksView { .. }
-                    | Effect::SaveSessionsRange { .. }
-            )
+            matches!(effect, Effect::SaveApps { .. } | Effect::SaveRepos { .. } | Effect::SaveTasksView { .. })
         });
         if wrote {
             self.read_settings_now(true, window, cx);
@@ -4182,14 +4171,12 @@ impl Workspace {
         cx.notify();
     }
 
-    /// A click on a button of a task's row, by the button's name: `task-snooze`,
-    /// `task-hold` or `task-dismiss`. Each offers to be undone.
+    /// A click on a button of a task's row, by the button's name: `task-snooze` or `task-dismiss`
+    /// (Done). Each offers to be undone.
     pub(crate) fn click_row_button(&mut self, button: &str, id: TaskId, window: &Window, cx: &mut Context<Self>) {
         let action = match button {
             "task-snooze" => Action::RowSnooze { id, until: now_ms().saturating_add(SNOOZE_MS) },
-            "task-hold" => Action::RowHold { id },
             "task-dismiss" => Action::RowDismiss { id },
-            "task-claim" => Action::TabPlace { tab: None, at: TabAt::End(Some(id)) },
             _ => return,
         };
         self.dispatch(action, self.input, window, cx);
@@ -4224,9 +4211,8 @@ impl Workspace {
         cx.notify();
     }
 
-    /// A click on a session's row or on one of its buttons, by the control's name: `session` or
-    /// `session-open` (its conversation in the drawer), `session-adopt` (a task is made of it)
-    /// or `session-hide`.
+    /// A click on a session's row or on one of its buttons, by the control's name: `session` (its
+    /// conversation in the drawer), `session-adopt` (Track: a task is made of it) or `session-hide`.
     pub(crate) fn click_session_control(
         &mut self,
         control: &str,
@@ -4238,7 +4224,7 @@ impl Workspace {
         let action = match control {
             // A client's click on the row is the one it always was: the pane, else the row.
             "session" if self.input != Origin::User => Action::SessionClick { runner, id },
-            "session" | "session-open" => Action::SessionOpen { runner, id },
+            "session" => Action::SessionOpen { runner, id },
             "session-adopt" => Action::SessionAdopt { runner, id },
             "session-hide" => Action::SessionHide { runner, id },
             _ => return,
@@ -4281,7 +4267,7 @@ impl Workspace {
             .on_click(cx.listener(move |this, _, window, cx| this.click_heading(heading, window, cx)))
     }
 
-    /// The Other sessions group: agent sessions found for the listed repositories that are no
+    /// The Elsewhere group: agent sessions found for the listed repositories that are no
     /// task's, those in its range. Empty when none is listed. `listed`: how many rows of the list
     /// come before; the heading and each session are rows, as list mode walks them.
     fn render_sessions(&self, mut listed: usize, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -4290,15 +4276,10 @@ impl Workspace {
             return Vec::new();
         }
         let selected = self.model.list == Some(listed);
-        // Unfolded, the heading holds the range switch, on a line below when narrow; its count is
-        // of those in range.
+        // Its count is of those in range (7 days unless the settings say otherwise).
         let heading = self.heading_row(Heading::Sessions, bar.count, bar.collapsed, selected, cx);
         let total = SharedString::from(format!("{} in all", bar.total));
-        let heading = heading
-            .flex_wrap()
-            .gap_y_1()
-            .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(total.clone()))))
-            .children((!bar.collapsed).then(|| self.sessions_range_switch(cx)));
+        let heading = heading.tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(total.clone()))));
         let mut rows = vec![heading.into_any_element()];
         listed += 1;
         for row in &bar.rows {
@@ -4308,9 +4289,8 @@ impl Workspace {
         rows
     }
 
-    /// A session's row: a dot (lit while it is active), where it runs and which runner, its title
-    /// if it has one, then what it is doing, how long ago, and the model. Hover (or list mode's
-    /// selection) shows Open, Adopt and Hide.
+    /// A session's row, one line: a dot (lit while it is active), its title (`Row::title`) and its
+    /// runner. The rest is in its hover card. Hover (or list mode's selection) shows Track and Hide.
     fn session_row(&self, row: &ottospace_core::sessions::Row, selected: bool, cx: &mut Context<Self>) -> AnyElement {
         let key = format!("{}:{}", row.runner, row.id);
         let button = |name: &'static str, label: &'static str, tip: &'static str| {
@@ -4320,53 +4300,23 @@ impl Workspace {
             };
             self.word(format!("{name}:{key}"), (label, tip), click, cx)
         };
+        // A click on the row opens it: no Open word.
         let actions = words::words("session-row", selected)
-            .bottom(px(4.))
-            .child(button("session-open", "Open", "Its conversation, in the drawer"))
-            .child(button("session-adopt", "Adopt", "Make a task of this session"))
-            .child(button("session-hide", "Hide", "Hide until ottospace starts again"));
-        let state = if row.active { row.doing.clone().unwrap_or_else(|| "active".into()) } else { "idle".into() };
-        let detail = [Some(state), row.age.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+            .top(px(2.))
+            .child(button("session-adopt", "Track", "Track as a task"))
+            .child(button("session-hide", "Hide", "Hide"));
         let color = if row.active { theme::task(Group::Running) } else { theme::BORDER_STRONG };
-        let muted = || div().flex_none().text_xs().text_color(rgb(theme::MUTED));
-        let (runner, id) = (row.runner.clone(), row.id.clone());
+        let (runner, id, card) = (row.runner.clone(), row.id.clone(), row.clone());
         list_button(ElementId::Name(format!("session:{key}").into()), selected)
             .group("session-row")
             .relative()
-            .items_start()
             .child(div().h(px(20.)).flex().items_center().child(home::dot(color)))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(div().flex_1().min_w_0().truncate().child(row.name.clone()))
-                            .children(row.pane.map(|pane| muted().child(format!("in pane {pane}"))))
-                            .child(muted().child(row.runner.clone())),
-                    )
-                    // The session's title: text a model wrote, drawn as it is on one line.
-                    .children(row.quoted_title.clone().map(|title| {
-                        let color = gpui::Hsla::from(rgb(theme::TEXT)).opacity(0.8);
-                        div().w_full().truncate().text_xs().line_height(px(18.)).text_color(color).child(title)
-                    }))
-                    .child(
-                        div()
-                            .h(px(20.))
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(muted().flex_1().min_w_0().truncate().child(detail))
-                            .children(row.model.clone().map(|model| muted().child(model))),
-                    ),
-            )
+            // The title may be text a model wrote: drawn as it is, on one line.
+            .child(div().flex_1().min_w_0().truncate().child(row.title().to_string()))
+            .child(div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(row.runner.clone()))
             .child(actions)
             .child(self.controls.mark(format!("session:{key}")))
+            .tooltip(move |_, cx| AnyView::from(cx.new(|_| progress::SessionCard(card.clone()))))
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.click_session_control("session", runner.clone(), id.clone(), window, cx);
             }))
@@ -4423,9 +4373,9 @@ impl Workspace {
         div().flex_1().min_h_0().flex().flex_col().child(list).children(footer)
     }
 
-    /// A task's row: a dot in its state's colour, priority and title, then a muted line of where
-    /// it is filed and how old it is. Hover (or list mode's selection) shows what list mode's
-    /// keys do, as buttons.
+    /// A task's row: its badge with the state dot, title (`P1` before it when urgent) and one fact
+    /// at the right; while its agent works, a muted line of what it does. The rest is in its hover
+    /// card. Hover (or list mode's selection) shows Snooze and Done.
     fn task_row(&self, task: &Task, row: &TaskRow, selected: bool, cx: &mut Context<Self>) -> AnyElement {
         let id = task.id;
         // Words, as on a session's row: the icons said too little.
@@ -4435,25 +4385,15 @@ impl Workspace {
             };
             self.word(format!("{name}:{id}"), (label, tip), click, cx)
         };
-        // Over the end of the muted line, on the row's own colour: hidden, they take no room from it.
+        // Over the end of the title line, on the row's own colour: hidden, they take no room from it.
+        // No Start or Show: a click on the row opens its conversation. Hold is `h` in list mode.
         let actions = words::words("task-row", selected)
-            .bottom(px(4.))
-            // No Start or Show: a click on the row opens its conversation.
-            .child(button("task-snooze", "Snooze", "Snooze 1 hour (S)"))
-            // A finished task cannot be put on hold, and one on hold is there already: no button
-            // for a move that would change nothing.
-            .children(
-                (!matches!(row.group, Group::Done | Group::OnHold)).then(|| button("task-hold", "Hold", "Hold (H)")),
-            )
-            // The tab on show, of no task, can become this task's.
-            .children(
-                (self.model.tab_task().is_none() && row.group != Group::Done)
-                    .then(|| button("task-claim", "Claim tab", "Make the tab on show this task's")),
-            )
-            .child(button("task-dismiss", "Dismiss", "Dismiss (X)"));
+            .top(px(2.))
+            .child(button("task-snooze", "Snooze", "1 hour · S"))
+            .child(button("task-dismiss", "Done", "X"));
         // The task on show: a bar at the row's edge, and its title in bold.
         let bar = div().absolute().left(px(-1.)).top(px(5.)).bottom(px(5.)).w(px(3.)).rounded_full();
-        let detail = div().flex_1().min_w_0().truncate().text_xs().text_color(rgb(theme::MUTED));
+        let muted = || div().text_xs().text_color(rgb(theme::MUTED));
         list_button(("task", id as usize), selected)
             .group("task-row")
             .relative()
@@ -4468,39 +4408,17 @@ impl Workspace {
                     .flex_col()
                     .child(
                         div()
+                            .h(px(20.))
                             .flex()
                             .items_center()
                             .gap_2()
                             .when(row.current, |d| d.font_weight(FontWeight::SEMIBOLD))
-                            // The tags are on the line below.
                             .children(task_title_cells(task))
-                            // Under Needs you with its tabs open: said here, as it is not under Open.
-                            .children((matches!(row.group, Group::NeedsYou | Group::Done) && row.tabs > 0).then(
-                                || {
-                                    let mark = div().flex_none().px_1().rounded_sm().bg(rgb(theme::SELECTED));
-                                    mark.text_xs()
-                                        .font_weight(FontWeight::NORMAL)
-                                        .text_color(rgb(theme::MUTED))
-                                        .child("open")
-                                },
-                            )),
+                            .children(row.fact.clone().map(|fact| muted().flex_none().child(fact))),
                     )
-                    // What its session does now, while it works, else its tags and age; its model.
-                    .child(
-                        div()
-                            .h(px(20.))
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(detail.child(row.live.clone().unwrap_or_else(|| row.detail.clone())))
-                            .children(
-                                row.model.clone().map(|model| {
-                                    div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(model)
-                                }),
-                            )
-                            .child(actions),
-                    ),
+                    .children(row.live.clone().map(|live| muted().h(px(18.)).truncate().child(live))),
             )
+            .child(actions)
             .child(self.controls.mark(format!("task:{id}")))
             .when_some(progress::card_tip(self, id), |row, tip| row.tooltip(tip))
             .on_click(open_task(id, cx))
@@ -5193,10 +5111,10 @@ fn terminal_title(cwd: Option<&str>, program: Option<&str>, home: Option<&str>) 
 }
 
 /// A task's priority and title, as cells of a row.
-fn task_title_cells(task: &Task) -> [Div; 2] {
-    let urgent = if task.priority == 1 { theme::ERROR } else { theme::MUTED };
-    let priority = div().flex_none().text_xs().text_color(rgb(urgent)).child(format!("P{}", task.priority));
-    [priority, div().flex_1().min_w_0().truncate().child(task.title.clone())]
+fn task_title_cells(task: &Task) -> impl Iterator<Item = Div> {
+    // Only P1 is said: the other priorities are on the card.
+    let priority = (task.priority == 1).then(|| div().flex_none().text_xs().text_color(rgb(theme::ERROR)).child("P1"));
+    priority.into_iter().chain([div().flex_1().min_w_0().truncate().child(task.title.clone())])
 }
 
 /// A task's tags as a cell at the end of its row, no wider than `width`. No tags: no cell.
