@@ -112,6 +112,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
       content: { x: 60, y: 40, w: 400, h: 272 },
       tree: { role: "AXWindow", children: [{ role: "AXButton", actions: ["AXPress"], frame: { x: 10, y: 40, w: 60, h: 24 } }] },
     }),
+  (c) => c.calendarCall({ in_call: false }),
   (c) => c.marks(),
   (c) => c.markAdd({ pane: 1, name: "notes", key: "n" }),
   (c) => c.markGo({ name: "notes", axis: "down" }),

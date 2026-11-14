@@ -397,6 +397,11 @@ pub enum Request {
         content: Frame,
         tree: Node,
     },
+    /// For tests (`test_refusal`): whether the user is in a call, as if seen (null: not known).
+    /// A test run never looks at the microphones.
+    CalendarCall {
+        in_call: Option<bool>,
+    },
     /// The marks, in the user's order: `{"ok":true,"marks":[{"name":"notes","key":"n",
     /// "kind":"terminal","open":true,"available":true,..}]}`, not the state.
     Marks,
@@ -494,7 +499,8 @@ pub enum Modifier {
 /// own, and end sneak mode or answer the quit question in their place. `capture_start`: a
 /// capture hands over a hosted app's picture and text, and outside a test only the user starts one.
 /// `repo_add`: it writes the user's settings, as only the user's own choice in the folder picker does.
-/// `sneak_app_tree`: it would choose what sneak mode labels in another app.
+/// `sneak_app_tree`: it would choose what sneak mode labels in another app. `calendar_call`: it
+/// would raise or silence the user's meeting alert.
 pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
     match request {
         _ if e2e => None,
@@ -515,6 +521,9 @@ pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
         }
         Request::SneakAppTree { .. } => {
             Some("sneak_app_tree is for tests (OTTOSPACE_E2E): sneak mode reads the app's window itself")
+        }
+        Request::CalendarCall { .. } => {
+            Some("calendar_call is for tests (OTTOSPACE_E2E): ottospace looks whether a call is on itself")
         }
         _ => None,
     }

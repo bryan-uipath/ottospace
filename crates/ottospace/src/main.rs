@@ -54,6 +54,7 @@ use screencapturekit::prelude::*;
 mod app_wheel;
 mod apps;
 mod ax_debug;
+mod calendar;
 mod collect;
 mod commands;
 mod config;
@@ -792,6 +793,8 @@ struct Workspace {
     control: Option<Receiver<Call>>,
     /// The accessibility overlay's last read. Drawn while `model.ax_overlay` is on.
     ax_overlay: Option<ax_debug::Overlay>,
+    /// The meeting timeline's feed reader and what it draws.
+    timeline: calendar::Timeline,
     focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -970,6 +973,7 @@ impl Workspace {
                         this.sync_sneak(window, cx);
                         this.read_sneak_app(window, cx);
                         this.flush_wheel(window, cx);
+                        this.tick_timeline(window, cx);
                     });
                     this.take_snapshots(window, cx);
                     if this.hosted.values().any(|h| h.latest.dirty.swap(false, Relaxed)) {
@@ -1007,6 +1011,10 @@ impl Workspace {
         model.update(Action::TasksView { view }.sent_by(Origin::System));
         let range = config::get().settings.sessions_range.unwrap_or_default();
         model.update(Action::SessionsRange { range }.sent_by(Origin::System));
+        let settings = &config::get().settings;
+        let (on, notify) = (settings.calendar_ics.is_some(), settings.calendar_notify.unwrap_or(true));
+        let links_only = settings.calendar_notify_for == Some(ottospace_core::settings::NotifyFor::Links);
+        model.update(Action::SetCalendar { on, notify, links_only }.sent_by(Origin::System));
         model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
         let kept = config::load_tasks();
         let unread = kept.unread;
@@ -1096,6 +1104,7 @@ impl Workspace {
             host_only,
             control,
             ax_overlay: None,
+            timeline: calendar::Timeline::start(),
             focus,
             _subscriptions: subscriptions,
         };
@@ -1241,6 +1250,7 @@ impl Workspace {
                 }
                 Effect::StopAgent { task } => agents.extend(self.stop_agent(task)),
                 Effect::AgentMoved { from, to } => self.move_agent(from, to),
+                Effect::MeetingAlert { .. } | Effect::OpenLink { .. } => self.meeting_effect(effect),
                 Effect::ReadSession { runner, id } => agents.extend(self.read_session(runner, id)),
                 Effect::Opened(id) => {
                     if self.model.pane(*id).is_some_and(|p| p.kind == Kind::Terminal) {
@@ -1971,6 +1981,7 @@ impl Workspace {
                     let _ = reply.send(serde_json::json!({ "ok": true, "marks": self.marks_json() }).to_string());
                     continue;
                 }
+                Request::CalendarCall { in_call } => Some(Action::CallSeen { in_call }),
                 Request::Trace => {
                     let _ = reply.send(serde_json::json!({ "ok": true, "trace": trace::jsonl() }).to_string());
                     continue;
@@ -2618,6 +2629,8 @@ impl Workspace {
             // The tab bar's groups (`task`, `tabs` as places), and each live task's badge letters.
             "groups": self.model.groups(),
             "badges": self.model.badges(&[]).into_iter().filter_map(|(subject, mono)| Some((subject.task()?.to_string(), serde_json::Value::from(mono)))).collect::<serde_json::Map<String, serde_json::Value>>(),
+            // The meeting timeline: counts, times and stages only, never a title or a place.
+            "calendar": self.calendar_snapshot(),
             // Frames drawn (`number`), actions dispatched (`seq`) and how many of them the last
             // frame drew (`drawn`); `waited_ms`: how long a test run's reply waited for that frame.
             // `window`: the window's number, for `screencapture -l`.
@@ -4696,8 +4709,8 @@ impl Workspace {
                 head.into_iter().chain(tabs).collect::<Vec<_>>()
             }))
             // New tab and split buttons: a new empty tab, or the picker for that split.
-            .child(div().ml_auto().mr_2().flex().gap_1().children(SPLITS.iter().enumerate().map(
-                |(i, (name, icon, tip, axis, new_tab))| {
+            .child(div().ml_auto().mr_2().flex().gap_1().children(self.render_meeting_chip()).children(
+                SPLITS.iter().enumerate().map(|(i, (name, icon, tip, axis, new_tab))| {
                     let (tip, axis, new_tab) = (*tip, *axis, *new_tab);
                     div()
                         .id(("split", i))
@@ -4713,8 +4726,8 @@ impl Workspace {
                         .child(self.controls.mark(format!("top:{name}")))
                         .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
                         .on_click(cx.listener(move |this, _, window, cx| this.top_button(axis, new_tab, window, cx)))
-                },
-            )))
+                }),
+            ))
     }
 
     /// Bottom bar: who has the keyboard, and the focused pane.
@@ -4788,6 +4801,7 @@ impl Workspace {
                         .on_click(cx.listener(|this, _, window, cx| this.click_capture("back", window, cx))),
                 )
             }))
+            .children(self.meeting_soon())
             // The one thing tasks put here: how many wait for the user.
             .children(Some(self.model.tasks.needs_you()).filter(|n| *n > 0).map(|n| {
                 let label = if n == 1 { "1 task needs you".to_string() } else { format!("{n} tasks need you") };
@@ -5326,7 +5340,10 @@ impl Render for Workspace {
                     .child(zone_shadow(left, true))
                     .child(zone_shadow(right_width, false))
                     // Highest, the title strip: its shadow falls on all three zones.
-                    .child(title_shadow()),
+                    .child(title_shadow())
+                    // Over the strip's top edge, above the window's buttons: the meeting timeline.
+                    .children(self.render_hairline())
+                    .children(self.render_meeting_banner(cx)),
             )
             .child(self.render_status(cx))
             // Only over a parked, drawn pane: a live window sits above ottospace and would cover it.
@@ -5693,7 +5710,8 @@ mod tests {
     /// them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        const TESTS_ONLY: [&str; 4] = ["capture_start", "repo_add", "inspector_fixture", "sneak_app_tree"];
+        const TESTS_ONLY: [&str; 5] =
+            ["capture_start", "repo_add", "inspector_fixture", "sneak_app_tree", "calendar_call"];
         assert!(TESTS_ONLY.iter().all(|name| !SKILL_GUIDE.contains(name)));
         for name in request_names().into_iter().filter(|name| !TESTS_ONLY.contains(&name.as_str())) {
             assert!(SKILL_GUIDE.contains(&format!(r#""cmd":"{name}""#)), "the guide has no example of `{name}`");

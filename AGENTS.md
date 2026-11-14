@@ -10,7 +10,7 @@ macOS agent multiplexer: terminals and real app windows tiled in one workspace. 
 | `ottospace-mac` | macOS calls: AX, ScreenCaptureKit, displays, input | system APIs |
 | `ottospace-sessions` | Reads Claude Code and Codex session files: sessions of a directory, events, snapshot | std, serde, read-only files. No network, clock, writes |
 | `ottospace-agents` | Speaks to agent CLIs in their structured modes: starts, sends, reads events | std, serde_json, the two crates above; spawns child processes. No network of its own, clock decisions, or reading other apps |
-| `ottospace` | Shell: GPUI views, control socket. Turns input into `Action`s, carries out `Effect`s | everything |
+| `ottospace` | Shell: GPUI views, control socket. Turns input into `Action`s, carries out `Effect`s | everything; the network only to read the calendar feed (`calendar_ics`), through `/usr/bin/curl`, `https:` only |
 
 Rules:
 

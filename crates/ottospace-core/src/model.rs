@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::agents;
 use crate::apps;
 use crate::ax::Target;
+use crate::calendar::{self, Calendar};
 use crate::capture::{self, Content, Facts, Tool};
 use crate::capture_model::Collection;
 use crate::commands::{self, Command, Palette};
@@ -1162,6 +1163,32 @@ pub enum Action {
     TalkPick {
         id: Subject,
     },
+    /// The settings name a calendar feed (`on`), and whether a meeting that starts alerts.
+    SetCalendar {
+        on: bool,
+        notify: bool,
+        /// Only events with a Zoom, Meet or Teams link alert (`calendar_notify_for: "links"`).
+        links_only: bool,
+    },
+    /// The feed was read at `at`: today's and tomorrow's events, or `None` when the read failed
+    /// (the last events stay). `days`: local midnight of today, tomorrow and the day after.
+    CalendarRead {
+        events: Option<Vec<calendar::Event>>,
+        days: [u64; 3],
+        at: u64,
+    },
+    /// Whether the user is in a call, as the shell saw it. `None`: it could not tell.
+    CallSeen {
+        in_call: Option<bool>,
+    },
+    /// The meeting banner's Dismiss: no more alerts of that event. Only the user's.
+    CalendarDismiss {
+        id: u64,
+    },
+    /// Join: the event's `https:` link opens in its app. Only the user's.
+    CalendarJoin {
+        id: u64,
+    },
 }
 
 /// What the right drawer shows (see `Model::drawer_view`).
@@ -1457,7 +1484,12 @@ impl Action {
             | Action::TalkKeys { on: false }
             | Action::TalkResize { .. }
             | Action::TalkGo
-            | Action::TalkWide => false,
+            | Action::TalkWide
+            | Action::SetCalendar { .. }
+            | Action::CalendarRead { .. }
+            | Action::CallSeen { .. }
+            | Action::CalendarDismiss { .. }
+            | Action::CalendarJoin { .. } => false,
         }
     }
 }
@@ -1686,6 +1718,16 @@ pub enum Effect {
     AgentMoved {
         from: Subject,
         to: Subject,
+    },
+    /// A meeting started and no Zoom meeting is open: the system's notification and its sound.
+    /// `title` is other people's text: shown, never logged.
+    MeetingAlert {
+        title: String,
+        started: u64,
+    },
+    /// Open this `https:` link (`calendar::joinable`) with its app: the user's Join.
+    OpenLink {
+        url: String,
     },
 }
 
@@ -1918,6 +1960,9 @@ pub struct Model {
     /// False after Start Fresh: no change is told to the shell.
     #[serde(skip)]
     pub(crate) layout_kept: bool,
+    /// The meeting timeline. Not in the state: its text is other people's (`calendar_snapshot`).
+    #[serde(skip)]
+    pub calendar: Calendar,
 }
 
 impl Default for Model {
@@ -1998,6 +2043,7 @@ impl Default for Model {
             next_tab: 0,
             layout_seen: None,
             layout_kept: true,
+            calendar: Calendar::default(),
         };
         model.push_tab();
         model
@@ -2095,6 +2141,9 @@ impl Model {
             }
             // So do a directory added to the Repos list and one taken off it.
             Action::RepoAdd { .. } | Action::RepoRemove { .. } => Some(apps::USERS_ALONE),
+            // A meeting's link opens only by the user's own click or key; nor does a client
+            // silence an alert meant for the user.
+            Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
             Action::ListDismiss | Action::ListUndo if self.sidebar == Some(Section::Apps) => Some(apps::USERS_ALONE),
             // The layout file is read by the shell at start, and its app panes start the user's apps.
             Action::RestoreLayout { .. } if origin == Origin::Socket => Some(crate::layout_file::USERS_ALONE),
@@ -2626,6 +2675,8 @@ impl Model {
                 self.tasks.tick(now);
                 self.workbooks.tick(now);
                 self.undo_offer = self.undo_offer.filter(|offer| offer.until > now);
+                let alerts = self.calendar.tick(now);
+                effects.extend(alerts.into_iter().map(|n| Effect::MeetingAlert { title: n.title, started: n.started }));
             }
             // ⌘⇧N: the next task's conversation; the tab stays.
             Action::TaskGo { id: None } if self.by_user => {
@@ -3767,6 +3818,13 @@ impl Model {
             }
             Action::TalkResize { width } => self.talk_width = talk::width(width),
             Action::TalkWide => self.talk_wide = !self.talk_wide,
+            Action::SetCalendar { on, notify, links_only } => {
+                (self.calendar.on, self.calendar.notify, self.calendar.links_only) = (on, notify, links_only)
+            }
+            Action::CalendarRead { events, days, at } => self.calendar.read(events, days, at),
+            Action::CallSeen { in_call } => self.calendar.in_call = in_call,
+            Action::CalendarDismiss { id } => self.calendar.dismiss(id),
+            Action::CalendarJoin { id } => effects.extend(self.calendar.join(id).map(|url| Effect::OpenLink { url })),
         }
     }
 
@@ -4644,7 +4702,10 @@ impl Model {
     /// True if a `Tick` now would change what shows: a snoozed task's time has come, or the
     /// offer to undo has run out. The shell asks; it does not look at the times itself.
     pub fn due(&self, now: u64) -> bool {
-        self.tasks.due(now) || self.undo_offer.is_some_and(|offer| offer.until <= now) || self.workbooks.due(now)
+        self.tasks.due(now)
+            || self.undo_offer.is_some_and(|offer| offer.until <= now)
+            || self.workbooks.due(now)
+            || self.calendar.due(now)
     }
 
     /// Everything the marks and the workbooks need, each once: what the shell looks for on
@@ -6027,6 +6088,11 @@ mod tests {
         Action::TalkResize { .. },
         Action::TalkWide,
         Action::TalkPick { .. },
+        Action::SetCalendar { .. },
+        Action::CalendarRead { .. },
+        Action::CallSeen { .. },
+        Action::CalendarDismiss { .. },
+        Action::CalendarJoin { .. },
         Action::WorkbookFold { .. }
     );
 
@@ -6231,6 +6297,11 @@ mod tests {
             Action::TalkResize { width: 400. },
             Action::TalkWide,
             Action::TalkPick { id: Subject::Task(1) },
+            Action::SetCalendar { on: true, notify: true, links_only: false },
+            Action::CalendarRead { events: None, days: [0; 3], at: 0 },
+            Action::CallSeen { in_call: Some(false) },
+            Action::CalendarDismiss { id: 1 },
+            Action::CalendarJoin { id: 1 },
             Action::TasksView { view: TasksView::Project },
             Action::ToggleProject { project: None, done: false },
             Action::SessionWork { work: progress::Work::default() },
@@ -6370,6 +6441,7 @@ mod tests {
                     | Action::TaskStop { .. }
                     | Action::TalkGo => Some(agents::USERS_ALONE),
                     Action::TabPlace { .. } | Action::NewTabOf { task: Some(_) } => Some(TABS_USERS),
+                    Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
                     _ if in_palette(action) && action_is_palettes(action) => Some(commands::USERS_ALONE),
                     _ if in_palette(action) => Some(inspect::USERS_ALONE),
                     Action::InspectorRead { .. } | Action::InspectorFailed { .. } if origin == Origin::Socket => {
@@ -10249,6 +10321,7 @@ mod tests {
                     | Action::TaskStop { .. }
                     | Action::TalkGo => Some(agents::USERS_ALONE),
                     Action::TabPlace { .. } | Action::NewTabOf { task: Some(_) } => Some(TABS_USERS),
+                    Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
                     _ if in_palette(action) && action_is_palettes(action) => Some(commands::USERS_ALONE),
                     _ if in_palette(action) => Some(inspect::USERS_ALONE),
                     Action::InspectorRead { .. } | Action::InspectorFailed { .. } if origin == Origin::Socket => {
