@@ -36,7 +36,8 @@ pub struct Job {
 pub struct Read {
     pub call: u64,
     pub line: String,
-    pub typing: Option<String>,
+    /// The folder listed, as typed and where it is.
+    pub typing: Option<(String, String)>,
     pub names: Option<Names>,
     pub paths: Vec<PathFound>,
     pub entries: Vec<String>,
@@ -93,8 +94,11 @@ fn read(job: Job, models: &Models, agents_dir: Option<&Path>, skill_dirs: &[Path
     let names = job.names.then(|| Names { agents: agents(models, agents_dir), skills: skills(skill_dirs, repo) });
     let roots = Roots::now();
     let paths = paths(&compose::path_words(&job.line), repo, &roots);
-    let entries = job.typing.as_deref().map(|folder| entries(folder, repo, &roots)).unwrap_or_default();
-    Read { call: job.call, line: job.line, typing: job.typing, names, paths, entries }
+    // The folder, with where it is: a folder taken from it is there, with no second read.
+    let place = |folder: String| Some((roots.place(&folder, repo)?.to_string_lossy().into_owned(), folder));
+    let typing = job.typing.and_then(place).map(|(place, folder)| (folder, place));
+    let entries = typing.as_ref().map(|(folder, _)| entries(folder, repo, &roots)).unwrap_or_default();
+    Read { call: job.call, line: job.line, typing, names, paths, entries }
 }
 
 /// What a path word may reach. `home`: the folder `~` stands for. `inside`: a path in none of

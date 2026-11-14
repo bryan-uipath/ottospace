@@ -725,6 +725,7 @@ const MAKERS: &[Make] = &[
         // For the path at the cursor, or (an answer that is late) for another.
         let typing =
             g.m.compose_typing().filter(|_| g.rng.coin()).or_else(|| g.rng.one_in(4).then(|| "/src/".to_string()));
+        let typing = typing.map(|folder| (folder.clone(), format!("/r/{folder}")));
         Action::SetKnown {
             line,
             typing,

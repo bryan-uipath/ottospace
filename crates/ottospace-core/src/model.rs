@@ -184,8 +184,19 @@ pub enum Host {
 struct KeptDraft {
     line: Field,
     refs: Vec<Ref>,
-    folder: Option<String>,
+    folder: Option<Taken>,
     theirs: bool,
+}
+
+/// A folder the user took from a path's dropdown.
+#[derive(Clone, Debug, PartialEq)]
+struct Taken {
+    /// As the line has it: `~/notes/`, `./src/`.
+    typed: String,
+    /// Where it is: the listed folder's place and its name.
+    place: String,
+    /// The repository a `./` or `../` folder was in.
+    repo: Option<String>,
 }
 
 /// How many repositories the drawer offers as picks.
@@ -582,12 +593,13 @@ pub enum Action {
         assign: Assign,
     },
     /// What the shell read for `line` in the new-task box. `names`: the agents and skills a tag
-    /// may name, when they were read again. `paths` and `entries` count only while the box
-    /// still holds `line`: an answer for a line since changed is dropped.
+    /// may name, when they were read again. `paths` count only while the box still holds
+    /// `line`: an answer for a line since changed is dropped. `entries` only while their folder
+    /// is typed (in the same repository, for `./`).
     SetKnown {
         line: String,
-        /// The path being typed at the cursor that `entries` finish, if one was.
-        typing: Option<String>,
+        /// The folder `entries` list, as typed (`~/`) and where it was found (`/Users/me`).
+        typing: Option<(String, String)>,
         names: Option<compose::Names>,
         paths: Vec<compose::PathFound>,
         entries: Vec<String>,
@@ -1902,19 +1914,22 @@ pub struct Model {
     /// The line `known`'s paths were read for.
     #[serde(skip)]
     known_line: Option<String>,
-    /// The folder `known.entries` list, as typed: `~/`, `./src/`.
+    /// The folder `known.entries` list, as typed (`~/`, `./src/`), with the repository a `./`
+    /// one is in; and where the shell found it.
     #[serde(skip)]
-    known_typing: Option<String>,
+    known_typing: Option<(String, Option<String>)>,
+    #[serde(skip)]
+    known_place: Option<String>,
     #[serde(skip)]
     menu: Menu,
-    /// The rows a path's dropdown last showed fresh, by where its word starts: they stay on
-    /// show while the next folder is read, so the list never blinks empty.
+    /// The rows a path's dropdown last showed fresh, by where its word starts and its folder:
+    /// they stay on show while the next folder is read, so the list never blinks empty.
     #[serde(skip)]
-    path_shown: Option<(usize, Vec<Row>)>,
-    /// The folder the user took from the dropdown, as the line has it (`~/notes/`): the task's
-    /// agent runs there while a word of the line still names it.
+    path_shown: Option<(usize, String, Vec<Row>)>,
+    /// The folder the user took from the dropdown: the task's agent runs there while a word of
+    /// the line still names it.
     #[serde(skip)]
-    compose_folder: Option<String>,
+    compose_folder: Option<Taken>,
     /// What the line's `^references` pointed at when each went in: kept if it closes since.
     #[serde(skip)]
     compose_refs: Vec<Ref>,
@@ -2086,6 +2101,7 @@ impl Default for Model {
             known: compose::Known::default(),
             known_line: None,
             known_typing: None,
+            known_place: None,
             menu: Menu::default(),
             path_shown: None,
             compose_folder: None,
@@ -2795,12 +2811,15 @@ impl Model {
                 if let Some(names) = names {
                     self.known.names = names;
                 }
+                // A folder's entries hold while that folder is typed, whatever else changed.
+                if let Some((folder, place)) = typing {
+                    let key = self.listing(&folder, &line);
+                    if Some(&key) == self.listing_now().as_ref() {
+                        (self.known.entries, self.known_typing, self.known_place) = (entries, Some(key), Some(place));
+                    }
+                }
                 if self.compose_line() == Some(&line) {
                     (self.known.paths, self.known_line) = (paths, Some(line));
-                }
-                // A folder's entries hold while that folder is typed, whatever else changed.
-                if typing.is_some() && typing == self.path_at_cursor().map(|(_, folder)| folder) {
-                    (self.known.entries, self.known_typing) = (entries, typing);
                 }
             }
             Action::SetTerminals { terminals, home } => (self.terminals, self.home) = (terminals, home),
@@ -3031,7 +3050,7 @@ impl Model {
                 self.compose = Some(Field::new(&text, MAX_TITLE));
                 // Paths read for another line say nothing of this one.
                 (self.known.paths, self.known.entries, self.known_line) = (Vec::new(), Vec::new(), None);
-                self.known_typing = None;
+                (self.known_typing, self.known_place) = (None, None);
                 self.compose_reset();
                 // An empty box takes back the line a conversation put aside, with what it pointed at.
                 if text.is_empty()
@@ -4519,20 +4538,31 @@ impl Model {
     }
 
     /// The folder the user took from the dropdown, as the line has it (`~/notes/`), while a word
-    /// of the line still names it: the box shows it, and the task's agent runs there.
+    /// of the line still names it, and a `./` one is in the same repository: the box shows it,
+    /// and the task's agent runs there.
     pub fn compose_folder(&self) -> Option<&str> {
-        let (folder, line) = (self.compose_folder.as_deref()?, self.compose_line()?);
-        let bare = folder.strip_suffix('/').unwrap_or(folder);
-        let named = compose::path_words(line).into_iter().flatten().any(|path| path == folder || path == bare);
-        named.then_some(folder)
+        self.compose_taken().map(|taken| taken.typed.as_str())
     }
 
-    /// Where `compose_folder` was found: the absolute path, once the shell read the line.
-    fn compose_folder_found(&self) -> Option<String> {
-        let folder = self.compose_folder()?;
+    fn compose_taken(&self) -> Option<&Taken> {
+        let (taken, line) = (self.compose_folder.as_ref()?, self.compose_line()?);
+        let folder = taken.typed.as_str();
         let bare = folder.strip_suffix('/').unwrap_or(folder);
-        let found = self.known.paths.iter().find(|path| path.typed == folder || path.typed == bare);
-        found.map(|path| path.resolved.clone())
+        let named = compose::path_words(line).into_iter().flatten().any(|path| path == folder || path == bare);
+        let same = !compose::relative(folder) || self.draft_repo(line) == taken.repo;
+        (named && same).then_some(taken)
+    }
+
+    /// What the shell's listing for `folder` in `line` is good for: the folder, and the
+    /// repository a `./` or `../` one is in.
+    fn listing(&self, folder: &str, line: &str) -> (String, Option<String>) {
+        (folder.to_string(), self.draft_repo(line).filter(|_| compose::relative(folder)))
+    }
+
+    /// The listing the path at the cursor needs.
+    fn listing_now(&self) -> Option<(String, Option<String>)> {
+        let (_, folder) = self.path_at_cursor()?;
+        Some(self.listing(&folder, self.compose_line()?))
     }
 
     /// What a `^name` points at: what is open by that name now; and for the box's own line
@@ -4731,8 +4761,8 @@ impl Model {
     /// The folder the shell lists next, as typed (`~/`, `./src/`): that of the path at the
     /// cursor of the new-task box, while it is not listed yet.
     pub fn compose_typing(&self) -> Option<String> {
-        let (_, folder) = self.path_at_cursor()?;
-        (self.known_typing.as_ref() != Some(&folder)).then_some(folder)
+        let listing = self.listing_now()?;
+        (self.known_typing.as_ref() != Some(&listing)).then_some(listing.0)
     }
 
     /// The path at the cursor of the new-task box and its folder. None for `./` or `../` while
@@ -4795,13 +4825,15 @@ impl Model {
     }
 
     /// The rows of the path at the cursor, and whether they are fresh: listed for its folder.
-    /// While the folder is being read the rows last shown for this word stay. `None`: nothing
-    /// to show yet, or no path at the cursor.
+    /// While the folder is being read the rows last shown for this word stay, if that word went
+    /// down or up from their folder (`~/` to `~/notes/`, not to `/`). `None`: nothing to show
+    /// yet, or no path at the cursor.
     fn path_menu(&self, start: usize) -> Option<(Vec<Row>, Option<String>, bool)> {
         let (typed, folder) = self.path_at_cursor()?;
-        if self.known_typing.as_ref() != Some(&folder) {
-            let (at, rows) = self.path_shown.as_ref()?;
-            return (*at == start).then(|| (rows.clone(), None, false));
+        if self.known_typing != self.listing_now() {
+            let (at, shown, rows) = self.path_shown.as_ref()?;
+            let near = folder.starts_with(shown.as_str()) || shown.starts_with(folder.as_str());
+            return (*at == start && near).then(|| (rows.clone(), None, false));
         }
         let (found, more) = compose::path_rows(&typed, &self.known.entries);
         let kind = |path: &str| if path.ends_with('/') { "folder" } else { "file" };
@@ -4855,8 +4887,10 @@ impl Model {
         let shown = self.dropdown().filter(|menu| menu.mark == '/' && !menu.stale);
         match (key, shown) {
             (None, _) => self.path_shown = None,
-            (Some(_), Some(menu)) => self.path_shown = Some((menu.start, menu.rows)),
-            (Some((start, ..)), None) if self.path_shown.as_ref().is_some_and(|(at, _)| *at != start) => {
+            (Some(_), Some(menu)) => {
+                self.path_shown = Some((menu.start, compose::path_folder(&menu.typed), menu.rows));
+            }
+            (Some((start, ..)), None) if self.path_shown.as_ref().is_some_and(|(at, ..)| *at != start) => {
                 self.path_shown = None;
             }
             (Some(_), None) => {}
@@ -4908,6 +4942,14 @@ impl Model {
                 self.capture(reference);
             }
         }
+        // Where a folder taken is, from where its listing was found: no second read to wait for.
+        let name = row.name.get(compose::path_folder(&menu.typed).len()..).unwrap_or("").trim_end_matches('/');
+        let taken = self.known_place.as_ref().filter(|_| menu.mark == '/' && row.kind == "folder" && self.by_user);
+        let taken = taken.map(|place| Taken {
+            typed: row.name.clone(),
+            place: format!("{}/{name}", place.trim_end_matches('/')),
+            repo: self.known_typing.as_ref().and_then(|(_, repo)| repo.clone()),
+        });
         let Some(field) = &mut self.compose else { return };
         let spaced = text.ends_with(' ') || text.ends_with('/');
         field.splice(word, &text);
@@ -4915,8 +4957,8 @@ impl Model {
         if !spaced {
             field.apply(Edit::Move { to: Motion::Right, select: false });
         }
-        if menu.mark == '/' && row.kind == "folder" && self.by_user {
-            self.compose_folder = Some(row.name.clone());
+        if taken.is_some() {
+            self.compose_folder = taken;
         }
         (self.menu, self.compose_note) = (Menu::default(), None);
     }
@@ -4966,9 +5008,9 @@ impl Model {
             return None;
         }
         let path = draft.repo.as_deref().and_then(|name| self.repo_named(name));
-        // The folder the user took for the box's own line, once it was found on disk.
+        // The folder the user took for the box's own line.
         let own = known.is_none() && self.compose_line().map(String::as_str) == Some(line);
-        let folder = self.compose_folder_found().filter(|_| own);
+        let folder = self.compose_taken().filter(|_| own).map(|taken| taken.place.clone());
         let id = self.file(draft.title, draft.priority.unwrap_or(3), State::Captured);
         self.tasks.tag(id, draft.project, path);
         self.tasks.set_folder(id, folder);
@@ -8026,7 +8068,13 @@ mod tests {
         // The shell lists a folder: the core narrows its entries to what is typed.
         let read = |m: &mut Model, folder: &str, entries: &[&str]| {
             let (line, entries) = (m.compose_line().cloned().unwrap(), entries.iter().map(|e| e.to_string()).collect());
-            m.update(Action::SetKnown { line, typing: Some(folder.into()), names: None, paths: vec![], entries });
+            m.update(Action::SetKnown {
+                line,
+                typing: Some((folder.into(), folder.replace('~', "/Users/me"))),
+                names: None,
+                paths: vec![],
+                entries,
+            });
         };
         keys(&mut m, "see /src/ex");
         // Not read yet: no dropdown, not "no match". The shell is asked for the folder.
@@ -8071,7 +8119,13 @@ mod tests {
         let mut m = composing();
         let read = |m: &mut Model, folder: &str, entries: Vec<String>| {
             let line = m.compose_line().cloned().unwrap();
-            m.update(Action::SetKnown { line, typing: Some(folder.into()), names: None, paths: vec![], entries });
+            m.update(Action::SetKnown {
+                line,
+                typing: Some((folder.into(), folder.replace('~', "/Users/me"))),
+                names: None,
+                paths: vec![],
+                entries,
+            });
         };
         keys(&mut m, "plan ~");
         let many: Vec<String> = (0..12).map(|n| format!("~/n{n:02}/")).chain(["~/notes.md".into()]).collect();
@@ -8100,6 +8154,24 @@ mod tests {
         m.update(Action::CloseCompose);
         m.update(Action::OpenCompose { text: "fix >app ./sr".into() });
         assert_eq!(m.compose_typing().as_deref(), Some("./"));
+        let line = m.compose_line().cloned().unwrap();
+        let entries = vec!["./src/".to_string()];
+        m.update(Action::SetKnown {
+            line,
+            typing: Some(("./".into(), "/code/app".into())),
+            names: None,
+            paths: vec![],
+            entries,
+        });
+        assert_eq!((offered(&m), m.compose_typing()), (vec!["./src/".to_string()], None));
+        // Another repository named: what was listed in the first is not offered as its own.
+        for _ in "./sr".chars() {
+            m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::Left, select: false } });
+        }
+        keys(&mut m, ">app-2 ");
+        m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::End, select: false } });
+        assert_eq!(m.compose_typing().as_deref(), Some("./"), "{:?}", m.compose_line());
+        assert!(m.dropdown().is_none_or(|menu| menu.stale), "{:?}", m.dropdown());
         // Prose with a `/` in it opens nothing and asks for nothing.
         for prose in ["fix and/or", "due 11/14", "see https://x.io/a"] {
             m.update(Action::CloseCompose);
@@ -8113,7 +8185,13 @@ mod tests {
         let mut m = composing();
         let read = |m: &mut Model, folder: &str, entries: &[&str], paths: Vec<compose::PathFound>| {
             let (line, entries) = (m.compose_line().cloned().unwrap(), entries.iter().map(|e| e.to_string()).collect());
-            m.update(Action::SetKnown { line, typing: Some(folder.into()), names: None, paths, entries });
+            m.update(Action::SetKnown {
+                line,
+                typing: Some((folder.into(), folder.replace('~', "/Users/me"))),
+                names: None,
+                paths,
+                entries,
+            });
         };
         let found = |typed: &str| compose::PathFound { typed: typed.into(), resolved: "/Users/me/notes/".into() };
         keys(&mut m, "help me plan my next week ~/no");
@@ -8130,13 +8208,13 @@ mod tests {
         keys(&mut m, " folder");
         // ↵ will start the agent there; the path stays in the title as typed.
         assert_eq!(m.compose_plan().and_then(|plan| plan.dir).as_deref(), Some("~/notes/"));
-        read(&mut m, "~/", &[], vec![found("~/notes/")]);
+        // ↵ at once, before the shell read the line again: the folder is where its listing was.
         m.update(Action::ComposeSubmit { open: false });
         let task = m.tasks.list.last().unwrap();
         assert_eq!(task.title, "help me plan my next week ~/notes/ folder");
         assert_eq!(
             (task.folder.as_deref(), task.dir().map(String::as_str)),
-            (Some("/Users/me/notes/"), Some("/Users/me/notes/"))
+            (Some("/Users/me/notes"), Some("/Users/me/notes"))
         );
         // The × takes the folder off, and the line keeps the path. Edited away, it is gone too.
         m.update(Action::OpenCompose { text: String::new() });
@@ -8620,7 +8698,7 @@ mod tests {
         assert!(!m.compose_read());
         let stale = Action::SetKnown {
             line: "see /e".into(),
-            typing: Some("/".into()),
+            typing: Some(("/".into(), "/".into())),
             names: Some(names.clone()),
             paths: vec![found.clone()],
             entries: list(&["/elsewhere/"]),
@@ -8629,7 +8707,7 @@ mod tests {
         assert_eq!((offered(&m), m.compose_read()), (vec![], false));
         m.update(Action::SetKnown {
             line: "see /src/ex".into(),
-            typing: Some("/src/".into()),
+            typing: Some(("/src/".into(), "/src/".into())),
             names: None,
             paths: Vec::new(),
             entries: list(&["/src/export/", "/src/extra.rs"]),
