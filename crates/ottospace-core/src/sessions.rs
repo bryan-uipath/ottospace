@@ -43,6 +43,9 @@ pub const ENDED_MS: u64 = 60_000;
 /// Our agent's last writes may land this long after the core was told it ended.
 pub const ENDED_GRACE_MS: u64 = 2_000;
 
+/// A listing asked for before our agent ended may still record its process: two rounds.
+pub const ENDED_HELD_MS: u64 = 10_000;
+
 /// An adopted session's file, as the shell last saw it while the Tasks section was closed: no
 /// more than when it last changed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

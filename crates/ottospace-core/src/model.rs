@@ -20,7 +20,7 @@ use crate::list::ListRow;
 use crate::marks::{self, Extra, MarkId, MarkInput, MarkOf, MarkRef, Marks, Need};
 use crate::progress;
 use crate::repos::{self, Repo};
-use crate::sessions::{self, ENDED_GRACE_MS, ENDED_MS, Found};
+use crate::sessions::{self, ENDED_GRACE_MS, ENDED_HELD_MS, ENDED_MS, Found};
 use crate::settings::{Installed, closed_apps};
 use crate::sneak::{Sneak, Typed};
 use crate::talk::{self, Subject, Talk};
@@ -3649,7 +3649,7 @@ impl Model {
                         // Where it started, if it was read (outside the listed checkouts: not at
                         // all); else the task's repository.
                         let cwd = match self.facts(&link.runner, &link.id).flatten() {
-                            Some(s) if s.held && !self.ours(s) => return None,
+                            Some(s) if self.held_elsewhere(s) => return None,
                             Some(s) => Some(self.resume_dir(s)?),
                             None => task.repo.clone(),
                         };
@@ -3684,7 +3684,7 @@ impl Model {
                     return Some(format!("@{agent} is a saved agent: starting one is not built yet"));
                 }
                 task.session.as_ref().is_some_and(|link| {
-                    let held = found(&link.runner, &link.id).is_some_and(|s| s.held && !self.ours(s));
+                    let held = found(&link.runner, &link.id).is_some_and(|s| self.held_elsewhere(s));
                     link.state == Some(State::Running) || held
                 })
             }
@@ -3738,7 +3738,17 @@ impl Model {
     /// True if something other than our own ended agent has the session: at work, or held by a
     /// live process.
     pub(crate) fn in_use(&self, session: &Found) -> bool {
-        (session.active || session.held) && !self.ours(session)
+        (session.active && !self.ours(session)) || self.held_elsewhere(session)
+    }
+
+    /// True if a live process other than our ended agent holds the session. A read made for a
+    /// resume came after our agent ended: it is believed. A listing may be older, for a while.
+    fn held_elsewhere(&self, session: &Found) -> bool {
+        let listed = self.found.iter().any(|s| (&s.runner, &s.id) == (&session.runner, &session.id));
+        let stale = self.ended.iter().any(|(runner, id, at)| {
+            (runner, id) == (&session.runner, &session.id) && self.now.saturating_sub(*at) <= ENDED_HELD_MS
+        });
+        session.held && !(listed && stale)
     }
 
     /// The session a conversation is of: a session's own, or its task's.
@@ -8082,20 +8092,35 @@ mod tests {
         assert!(m.talk_note().is_some_and(|note| note.contains("live in another terminal")));
 
         // A task's the same: its agent stopped, the stale record of its process is ours.
-        let mut m = conversations();
-        m.update(Action::SessionAdopt { runner: "claude".into(), id: IDLE.into() });
-        system(&mut m, Action::AgentStarted { task: Subject::Task(1), session: None, at: now });
-        listed(&mut m, now, true);
-        m.update(Action::TaskStop { id: Subject::Task(1) });
-        system(&mut m, Action::AgentExited { task: Subject::Task(1) });
-        // A read in flight when it stopped says the session is at work: the task is not moved by it.
-        listed(&mut m, now, true);
+        let stopped = || {
+            let mut m = conversations();
+            m.update(Action::SessionAdopt { runner: "claude".into(), id: IDLE.into() });
+            system(&mut m, Action::AgentStarted { task: Subject::Task(1), session: None, at: now });
+            listed(&mut m, now, true);
+            m.update(Action::TaskStop { id: Subject::Task(1) });
+            system(&mut m, Action::AgentExited { task: Subject::Task(1) });
+            // A read in flight when it stopped says the session is at work: the task is not moved by it.
+            listed(&mut m, now, true);
+            m
+        };
+        let mut m = stopped();
         assert_eq!(m.tasks.get(1).map(|task| task.state), Some(State::NeedsYou));
         assert_eq!(m.talk_note(), None);
-        assert_eq!(
-            m.update(Action::TaskTalk { id: 1 }),
-            [resumed(Subject::Task(1), "claude", IDLE, "/code/app/crates/core")]
-        );
+        let resumes = [resumed(Subject::Task(1), "claude", IDLE, "/code/app/crates/core")];
+        assert_eq!(m.update(Action::TaskTalk { id: 1 }), resumes);
+        // Two rounds on, a listing that records a process for it is believed.
+        let mut m = stopped();
+        system(&mut m, Action::Tick { now: now + ENDED_HELD_MS + 1 });
+        listed(&mut m, now, true);
+        assert_eq!(m.update(Action::TaskTalk { id: 1 }), []);
+        // A read made for the resume came after it stopped: a process it records is another's.
+        let mut m = stopped();
+        system(&mut m, Action::SetSessions { found: Vec::new() });
+        assert_eq!(m.update(Action::TaskTalk { id: 1 }).len(), 1);
+        let held = Found { held: true, repo: "/code/app".into(), ..session("claude", IDLE, "/code/app", false, now) };
+        let read = Action::SessionRead { runner: "claude".into(), id: IDLE.into(), found: Some(held) };
+        assert_eq!(system(&mut m, read), []);
+        assert!(m.talk_note().is_some_and(|note| note.contains("live in another terminal")));
     }
 
     /// An adopted session gone on with in the drawer: its task runs at once, as on a new start.
