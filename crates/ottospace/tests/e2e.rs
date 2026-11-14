@@ -1082,11 +1082,11 @@ fn list_mode_drives_the_bar_with_the_keyboard() {
     let reply = key("k space");
     assert_eq!(
         (&reply["state"]["collapsed"], reply["state"]["list"].as_u64()),
-        (&json!(["done", "needs_you"]), Some(0))
+        (&json!(["done", "sessions", "needs_you"]), Some(0))
     );
     assert_eq!(reply["tasks_bar"]["sections"][0]["rows"], json!([]));
     let reply = key("enter");
-    assert_eq!((&reply["state"]["collapsed"], reply["mode"].as_str()), (&json!(["done"]), Some("list")));
+    assert_eq!((&reply["state"]["collapsed"], reply["mode"].as_str()), (&json!(["done", "sessions"]), Some("list")));
 
     // Esc gives the keyboard back. While the bar has it, keys do not reach the terminal.
     assert_eq!(key("escape")["mode"], "normal");

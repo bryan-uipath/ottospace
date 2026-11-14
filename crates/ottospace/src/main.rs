@@ -4885,11 +4885,17 @@ fn day_start(now: u64) -> u64 {
     const SINCE_2001: f64 = 978_307_200.;
     let zone = CFTimeZone::system();
     let offset_at = |ms: i64| (zone.seconds_from_gmt(CFDate::new(ms as f64 / 1000. - SINCE_2001)) * 1000.) as i64;
-    let midnight = |offset: i64| {
-        let local = now as i64 + offset;
-        local - local.rem_euclid(86_400_000) - offset
-    };
-    midnight(offset_at(midnight(offset_at(now as i64)))).max(0) as u64
+    midnight_of(now, offset_at)
+}
+
+/// `day_start` with the zone's offset at a time (`offset_at`, in milliseconds). The date is
+/// now's, by now's offset; only the offset is midnight's. e.g. 23:30 on the day clocks went back
+/// is of that day, not the next.
+fn midnight_of(now: u64, offset_at: impl Fn(i64) -> i64) -> u64 {
+    let now_offset = offset_at(now as i64);
+    let local = now as i64 + now_offset;
+    let date = local - local.rem_euclid(86_400_000);
+    (date - offset_at(date - now_offset)).max(0) as u64
 }
 
 fn now_ms() -> u64 {
@@ -5686,6 +5692,21 @@ mod tests {
         for path in icons {
             assert!(Assets.load(path).unwrap().is_some(), "{path} is not in Assets::load");
         }
+    }
+
+    /// Los Angeles: UTC-7 until 2026-11-01 09:00 UTC (2:00 PDT), UTC-8 after; UTC-8 until
+    /// 2026-03-08 10:00 UTC (2:00 PST), UTC-7 after.
+    #[test]
+    fn the_day_starts_at_local_midnight_across_a_clock_change() {
+        const H: i64 = 3_600_000;
+        let (back, forward) = (1_793_523_600_000_i64, 1_772_964_000_000_i64);
+        let la = |ms: i64| if (forward..back).contains(&ms) { -7 * H } else { -8 * H };
+        // 2026-11-01 23:30 PST: the day began at 00:00 PDT (07:00 UTC), not 23:00 PST.
+        assert_eq!(midnight_of((back + 22 * H + 30 * 60_000) as u64, la), (back - 2 * H) as u64);
+        // 2026-03-08 23:00 PDT: the day began at 00:00 PST (08:00 UTC).
+        assert_eq!(midnight_of((forward + 20 * H) as u64, la), (forward - 2 * H) as u64);
+        // A day with no change: 04:00 PST began at 08:00 UTC.
+        assert_eq!(midnight_of((back + 27 * H) as u64, la), (back + 23 * H) as u64);
     }
 
     /// The rail is drawn in the order the core moves through it.
