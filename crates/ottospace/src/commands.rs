@@ -2,10 +2,11 @@
 //! Running one dispatches its menu item's action, so it does what that key or menu item does.
 
 use gpui::{
-    Context, InteractiveElement, IntoElement, KeyDownEvent, Keymap, Keystroke, MouseButton, ParentElement, Styled,
-    Window, actions, black, div, px, rgb,
+    Context, InteractiveElement, IntoElement, KeyDownEvent, Keymap, Keystroke, ParentElement, Styled, Window, actions,
+    div, px, rgb,
 };
 use ottospace_core::commands::{Command, Palette};
+use ottospace_core::keys::FilterKey;
 use ottospace_core::{Action, theme};
 
 use crate::*;
@@ -158,25 +159,12 @@ impl Workspace {
     /// While the palette is open it takes every key: text edits the filter, ↑↓ move, ↵ runs.
     /// ⌘ shortcuts the filter does not use still reach their bindings, and wait behind it.
     pub fn palette_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
-        let m = event.keystroke.modifiers;
-        let action = match event.keystroke.key.as_str() {
-            "escape" => Action::ClosePalette,
-            "enter" => Action::PaletteChoose { index: None },
-            "down" => Action::PaletteMove { delta: 1 },
-            // ⌃Tab is Next Tab's: it reaches its binding, and waits.
-            "tab" if !m.control => Action::PaletteMove { delta: if m.shift { -1 } else { 1 } },
-            "up" => Action::PaletteMove { delta: -1 },
-            "n" if m.control => Action::PaletteMove { delta: 1 },
-            "p" if m.control => Action::PaletteMove { delta: -1 },
-            _ => {
-                if self.field_key(event, window, cx) {
-                    cx.stop_propagation();
-                }
-                return;
-            }
+        let action = |key| match key {
+            FilterKey::Close => Action::ClosePalette,
+            FilterKey::Choose => Action::PaletteChoose { index: None },
+            FilterKey::Move(delta) => Action::PaletteMove { delta },
         };
-        self.dispatch(action, self.input, window, cx);
-        cx.stop_propagation();
+        self.filtered_list_key(event, action, window, cx);
     }
 
     /// The command chosen: its menu item's action, dispatched as a key's binding would be.
@@ -210,17 +198,7 @@ impl Workspace {
         let keymap = cx.key_bindings();
         let keymap = keymap.borrow();
         let rows = palette.matches().into_iter().enumerate().map(|(i, command)| {
-            div()
-                .id(("command", i))
-                .h(px(30.))
-                .px_3()
-                .flex()
-                .items_center()
-                .gap_3()
-                .text_sm()
-                .cursor_pointer()
-                .when(i == palette.selected, |d| d.bg(rgb(theme::SELECTED)))
-                .hover(|s| s.bg(rgb(theme::SELECTED)))
+            dialog::filter_row(("command", i), i == palette.selected)
                 .child(
                     div().w(px(72.)).flex_none().text_xs().text_color(rgb(theme::MUTED)).child(command.group().label()),
                 )
@@ -232,62 +210,22 @@ impl Workspace {
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.dispatch(Action::PaletteChoose { index: Some(i) }, this.input, window, cx);
                 }))
+                .into_any_element()
         });
-        let rows: Vec<_> = rows.collect();
-        let empty = rows.is_empty();
-        let panel = dialog::panel(theme::BORDER_STRONG)
-            .w(px(560.))
-            .max_w_full()
-            .max_h(px(440.))
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            // A click inside the panel must not reach the backdrop, which closes it.
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(
-                div()
-                    .h(px(40.))
-                    .px_3()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .border_b_1()
-                    .border_color(rgb(theme::BORDER))
-                    .child(div().text_xs().text_color(rgb(theme::COMMAND)).child("Run"))
-                    .child(self.render_field("type a command", cx)),
-            )
-            .when(empty, |d| d.child(div().p_3().text_xs().text_color(rgb(theme::MUTED)).child("No command matches")))
-            .child(
-                self.bars
-                    .area("palette", div().id("palette-rows").flex_1().min_h_0().overflow_y_scroll().children(rows)),
-            )
-            .child(
-                div()
-                    .px_3()
-                    .py_1p5()
-                    .border_t_1()
-                    .border_color(rgb(theme::BORDER))
-                    .text_xs()
-                    .text_color(rgb(theme::MUTED))
-                    .child("↑↓ move · ↵ run · esc close"),
-            );
-        div()
-            .id("palette-backdrop")
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
+        let rows = rows.collect();
+        let header = div()
+            .h(px(40.))
+            .child(div().text_xs().text_color(rgb(theme::COMMAND)).child("Run"))
+            .child(self.render_field("type a command", cx));
+        let panel = dialog::floating(560.).max_w_full().max_h(px(440.));
+        let texts = ("No command matches", "↑↓ move · ↵ run · esc close");
+        let panel = self.list_panel(panel, header, "palette", rows, texts);
+        dialog::backdrop("palette-backdrop", 0.35, Action::ClosePalette, cx)
             .pt(px(72.))
             .px_4()
             .flex()
             .flex_col()
             .items_center()
-            .bg(black().opacity(0.35))
-            .occlude()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, window, cx| drop(this.dispatch(Action::ClosePalette, this.input, window, cx))),
-            )
             .child(panel)
     }
 }

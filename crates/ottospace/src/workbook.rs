@@ -1,13 +1,13 @@
 //! Workbooks in the shell: the Workbook section and the files in `~/.ottospace/workbooks`.
 //! What one holds and what opening it does are the core's (`ottospace_core::workbook`).
 
-use gpui::{AnyView, Context, Div, ElementId, Stateful, Window, div, prelude::*, px, rgb};
+use gpui::{Context, Div, ElementId, Window, div, prelude::*, px, rgb};
 use ottospace_core::marks::MarkInput;
 use ottospace_core::model::Section;
 use ottospace_core::workbook::{self, History, WorkbookId, WorkbookRow};
 use ottospace_core::{Action, Origin, PaneId, theme};
 
-use crate::{Tooltip, Workspace, config, list_button, marks, now_ms, rect};
+use crate::{Workspace, config, list_button, marks, now_ms, rect, words};
 
 /// What the workbooks folder and this run last said, kept between frames.
 #[derive(Default)]
@@ -229,47 +229,6 @@ impl Workspace {
         self.model.workbooks.get(id).map(|book| book.name.clone())
     }
 
-    /// A word at the end of a row: `control` is its control's id, `name` the kind of click.
-    fn workbook_word(
-        &self,
-        control: String,
-        name: &'static str,
-        (label, tip): (&'static str, &'static str),
-        (id, tab): (WorkbookId, Option<usize>),
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
-        div()
-            .id(ElementId::Name(control.clone().into()))
-            .relative()
-            .child(self.controls.mark(control))
-            .px_1()
-            .rounded_sm()
-            .text_xs()
-            .text_color(rgb(theme::TEXT))
-            .hover(|s| s.bg(rgb(theme::BORDER_STRONG)))
-            .child(label)
-            .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
-            .on_click(cx.listener(move |this, _, window, cx| {
-                cx.stop_propagation(); // not a click on the row
-                this.click_workbook(name, id, tab, window, cx);
-            }))
-    }
-
-    /// The words over the end of a row, so the name keeps its room while they are hidden.
-    fn workbook_words(group: &'static str, selected: bool) -> Div {
-        div()
-            .absolute()
-            .right(px(6.))
-            .top_0()
-            .bottom_0()
-            .flex()
-            .items_center()
-            .gap_0p5()
-            .pl_1()
-            .bg(rgb(theme::SELECTED))
-            .when(!selected, |d| d.invisible().group_hover(group, |s| s.visible()))
-    }
-
     /// The name being typed, or `name` cut to fit.
     fn workbook_name(&self, renaming: bool, name: String, cx: &mut Context<Self>) -> Div {
         match renaming {
@@ -326,14 +285,20 @@ impl Workspace {
             let title = div().w_full().flex().items_center().gap_1().children(fold).child(name.flex_1().min_w_0());
             let title = title.child(dot(row.open));
             let summary = div().w_full().truncate().text_xs().text_color(rgb(theme::MUTED)).child(row.summary.clone());
-            let word = |control: &str, name, words, cx: &mut Context<Self>| {
-                self.workbook_word(format!("{control}:{id}"), name, words, (id, None), cx)
+            let word = |control: &'static str, words, cx: &mut Context<Self>| {
+                let click = move |this: &mut Self, window: &Window, cx: &mut Context<Self>| {
+                    this.click_workbook(control, id, None, window, cx)
+                };
+                self.word(format!("{control}:{id}"), words, click, cx)
             };
-            let words = Self::workbook_words("workbook-row", selected)
-                .child(word("workbook-open", "workbook-open", ("Open", "Open its tabs (↵)"), cx))
-                .child(word("workbook-add", "workbook-add", ("Add tab", "Add this tab to it (A)"), cx))
-                .child(word("workbook-rename", "workbook-rename", ("Rename", "Type its name (R)"), cx))
-                .child(word("workbook-delete", "workbook-delete", ("Delete", "Delete it (X)"), cx));
+            let words = words::words("workbook-row", selected)
+                .top_0()
+                .bottom_0()
+                .items_center()
+                .child(word("workbook-open", ("Open", "Open its tabs (↵)"), cx))
+                .child(word("workbook-add", ("Add tab", "Add this tab to it (A)"), cx))
+                .child(word("workbook-rename", ("Rename", "Type its name (R)"), cx))
+                .child(word("workbook-delete", ("Delete", "Delete it (X)"), cx));
             let book = list_button(ElementId::Name(format!("workbook:{id}").into()), selected)
                 .group("workbook-row")
                 .relative()
@@ -356,9 +321,15 @@ impl Workspace {
                 index += 1;
                 let renaming = typing(id, Some(at));
                 let word = |control: &'static str, words, cx: &mut Context<Self>| {
-                    self.workbook_word(tab_control(control, id, at), control, words, (id, Some(at)), cx)
+                    let click = move |this: &mut Self, window: &Window, cx: &mut Context<Self>| {
+                        this.click_workbook(control, id, Some(at), window, cx)
+                    };
+                    self.word(tab_control(control, id, at), words, click, cx)
                 };
-                let words = Self::workbook_words("workbook-tab-row", selected)
+                let words = words::words("workbook-tab-row", selected)
+                    .top_0()
+                    .bottom_0()
+                    .items_center()
                     .child(word("workbook-tab-open", ("Open", "Open this tab (↵)"), cx))
                     .child(word("workbook-tab-rename", ("Rename", "Type its title (R)"), cx))
                     .child(word("workbook-tab-remove", ("Remove", "Take it out of the workbook (X)"), cx));

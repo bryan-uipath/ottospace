@@ -8,13 +8,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gpui::{AnyElement, AnyView, ClickEvent, Context, ElementId, KeyDownEvent, Window, div, prelude::*, px, rgb};
+use gpui::{AnyElement, ClickEvent, Context, ElementId, KeyDownEvent, Window, div, prelude::*, px, rgb};
 use ottospace_core::apps::{Entry, Group, Row};
 use ottospace_core::settings::{Installed, expand_home};
 use ottospace_core::{Action, Axis, Origin, Section, theme};
 use ottospace_mac::icon;
 
-use crate::{ICON_PIXELS, Tooltip, Workspace, config, list_button};
+use crate::{ICON_PIXELS, Workspace, config, list_button, words};
 
 /// A scan older than this is done again when the picker or the Apps section opens.
 const FRESH: Duration = Duration::from_secs(60);
@@ -282,21 +282,10 @@ impl Workspace {
         let waiting = self.launching.iter().any(|launch| launch.app.path == row.path);
         let button = |name: &'static str, label: &'static str, tip: &'static str| {
             let path = row.path.clone();
-            div()
-                .id(ElementId::Name(format!("{name}:{}", row.path).into()))
-                .relative()
-                .child(self.controls.mark(format!("{name}:{}", row.path)))
-                .px_1()
-                .rounded_sm()
-                .text_xs()
-                .text_color(rgb(theme::TEXT))
-                .hover(|s| s.bg(rgb(theme::BORDER_STRONG)))
-                .child(label)
-                .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    cx.stop_propagation(); // not a click on the row
-                    this.click_app_control(name, &path, Axis::Right, window, cx);
-                }))
+            let click = move |this: &mut Self, window: &Window, cx: &mut Context<Self>| {
+                this.click_app_control(name, &path, Axis::Right, window, cx)
+            };
+            self.word(format!("{name}:{}", row.path), (label, tip), click, cx)
         };
         let pin = match row.pinned {
             true => button("app-pin", "Unpin", "Take off the pinned apps (P)"),
@@ -304,19 +293,8 @@ impl Workspace {
         };
         let hide = row.suggested.then(|| button("app-hide", "Hide", "Do not suggest this app (X)"));
         // Over the end of the row, so the name keeps its room while they are hidden.
-        let actions = div()
-            .absolute()
-            .right(px(6.))
-            .top_0()
-            .bottom_0()
-            .flex()
-            .items_center()
-            .gap_0p5()
-            .pl_1()
-            .bg(rgb(theme::SELECTED))
-            .when(!selected, |d| d.invisible().group_hover("closed-app-row", |s| s.visible()))
-            .child(pin)
-            .children(hide);
+        let actions =
+            words::words("closed-app-row", selected).top_0().bottom_0().items_center().child(pin).children(hide);
         let path = row.path.clone();
         list_button(ElementId::Name(format!("closed-app:{}", row.path).into()), selected)
             .group("closed-app-row")

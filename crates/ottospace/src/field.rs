@@ -14,7 +14,6 @@ use gpui::{
     UTF16Selection, UnderlineStyle, Window, div, fill, point, prelude::*, px, relative, rgb, size,
 };
 use ottospace_core::edit::{self, Edit, Key};
-use ottospace_core::keys::Mods;
 use ottospace_core::{Action, theme};
 
 use crate::Workspace;
@@ -67,7 +66,7 @@ impl Workspace {
     /// False: it types text (the input method inserts it) or is a ⌘ shortcut for a binding.
     pub fn field_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) -> bool {
         let (key, m) = (&event.keystroke.key, event.keystroke.modifiers);
-        let mods = Mods { ctrl: m.control, alt: m.alt, shift: m.shift, cmd: m.platform };
+        let mods = crate::mods(m);
         match edit::key(key, mods) {
             _ if self.model.field().is_none() => return false,
             Some(Key::Edit(edit)) => self.edit(edit, window, cx),

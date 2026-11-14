@@ -1,11 +1,11 @@
 //! The quit question: ⌘Q asks before it ends a program running in a terminal.
 
-use gpui::{Context, Keystroke, MouseButton, Window, black, div, prelude::*, px, rgb};
+use gpui::{Context, Keystroke, Window, div, prelude::*, rgb};
 use ottospace_core::keys::Mods;
 use ottospace_core::model::{Confirm, Running};
 use ottospace_core::{Action, Origin, theme};
 
-use crate::Workspace;
+use crate::{Workspace, dialog};
 
 impl Workspace {
     /// ⌘Q, Quit in the menu or the window's close button: the core quits, or asks if a terminal
@@ -31,7 +31,7 @@ impl Workspace {
         self.model.confirm.as_ref()?;
         let m = key.modifiers;
         // Fn counts as a modifier the core has no name for: with it no key is a yes.
-        let mods = Mods { ctrl: m.control, alt: m.alt, shift: m.shift || m.function, cmd: m.platform };
+        let mods = Mods { shift: m.shift || m.function, ..crate::mods(m) };
         Confirm::answer(&key.key, mods, origin)
     }
 
@@ -65,12 +65,7 @@ impl Workspace {
             n => Some(format!("{n} tasks' agents will be stopped")),
         };
         let lines = confirm.lines().into_iter().chain(draft).chain(agents).map(|line| div().child(line));
-        let panel = crate::dialog::panel(theme::BORDER_STRONG)
-            .w(px(320.))
-            .flex()
-            .flex_col()
-            // A click inside the panel must not reach the backdrop, which cancels.
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        let panel = dialog::floating(320.)
             .child(
                 div()
                     .px_3()
@@ -92,33 +87,11 @@ impl Workspace {
                     .child("Quitting ends these:")
                     .children(lines),
             )
-            .child(
-                div()
-                    .px_3()
-                    .py_1p5()
-                    .border_t_1()
-                    .border_color(rgb(theme::BORDER))
-                    .text_xs()
-                    .text_color(rgb(theme::MUTED))
-                    .child("↵ quit · esc cancel"),
-            );
-        div()
-            .id("confirm-backdrop")
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
+            .child(dialog::hint("↵ quit · esc cancel"));
+        dialog::backdrop("confirm-backdrop", 0.5, Action::QuitCancel, cx)
             .flex()
             .items_center()
             .justify_center()
-            .bg(black().opacity(0.5))
-            .occlude()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
-                    this.dispatch(Action::QuitCancel, this.input, window, cx);
-                }),
-            )
             .child(panel)
     }
 }

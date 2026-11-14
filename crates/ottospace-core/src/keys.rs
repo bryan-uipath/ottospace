@@ -105,9 +105,43 @@ pub fn move_to_tab_key(key: &str, shift: bool, us_layout: bool) -> Option<usize>
     }
 }
 
+/// What a key does in a filtered list (the picker, the palette).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FilterKey {
+    Close,
+    Choose,
+    /// Down (positive) or up.
+    Move(i32),
+}
+
+/// The list's keys: Esc, ↵, ↑↓, Tab/⇧Tab, ⌃N/⌃P. `None`: the filter's field takes the key.
+/// ⌃Tab is Next Tab's: it reaches its binding.
+pub fn filter_key(key: &str, mods: Mods) -> Option<FilterKey> {
+    Some(match key {
+        "escape" => FilterKey::Close,
+        "enter" => FilterKey::Choose,
+        "down" => FilterKey::Move(1),
+        "tab" if !mods.ctrl => FilterKey::Move(if mods.shift { -1 } else { 1 }),
+        "up" => FilterKey::Move(-1),
+        "n" if mods.ctrl => FilterKey::Move(1),
+        "p" if mods.ctrl => FilterKey::Move(-1),
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shift_tab_moves_up_a_list() {
+        let ctrl = Mods { ctrl: true, ..NONE };
+        assert_eq!(filter_key("tab", NONE), Some(FilterKey::Move(1)));
+        assert_eq!(filter_key("tab", Mods { shift: true, ..NONE }), Some(FilterKey::Move(-1)));
+        assert_eq!(filter_key("tab", ctrl), None);
+        assert_eq!(filter_key("p", ctrl), Some(FilterKey::Move(-1)));
+        assert_eq!(filter_key("p", NONE), None);
+    }
 
     const NONE: Mods = Mods { ctrl: false, alt: false, shift: false, cmd: false };
 
