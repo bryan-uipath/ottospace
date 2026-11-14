@@ -33,7 +33,7 @@ running, and the rest of the design is not built: see the
 | A task's agent in the right drawer: ↵ in the new-task box, or Start agent in the drawer, starts its agent (`claude` or `codex`, by its `@agent`, else `default_agent`) beside the workspace, which stays as it is. A click on a task only shows its conversation; Resume session goes on with one that ended. See [Flow of a task](#flow-of-a-task) | Works today |
 | Native conversation for Claude Code: the drawer drives `claude -p` (stream-json) and draws the reply itself: markdown (headings, emphasis, lists, quotes, tables), code blocks with Copy, links that open only on your click (web pages in the browser; files of the task's repository revealed in Finder), local images of the repository as thumbnails, tool calls as compact rows, a file edit's change as a diff card under its call, a working row while a turn runs, Copy and Copy as Markdown on each message, and a composer (↵ send, ⇧↵ new line). Permission requests are cards: Allow this one request as shown, or Deny (with a message if you like); a request too long to show is opened in full before Allow is offered. `Chat \| Terminal` in the header switches to the CLI's own TUI and back on the same session. A session at work in another terminal is watched read-only (what it calls and edits, not what it says; "Watching · updates per message" in the header), with Take over once it is idle. Codex stays in a terminal. No text selection by dragging yet: copy by message or block | Works today |
 | Right rail: a badge per open conversation of a live task (needs you first, then running, then the last opened; at most 8), and `+` for a new task. A dismissed task leaves it; a done one stays only while shown or its agent runs | Works today |
-| New task (⌘N), in the drawer: one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`, picks for where and who, and a line that says what ↵ will do. A `/path` stays in the title the agent reads, and a folder taken from its dropdown is where the agent runs; `$skill` is stored and shown, nothing acts on it yet | Works today |
+| New task (⌘N), in the drawer: one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`, picks for where and who, and a line that says what ↵ will do when it is not the default. A `/path` stays in the title the agent reads, and a folder taken from its dropdown is where the agent runs; `$skill` is stored and shown, nothing acts on it yet | Works today |
 | Home screen: a tab with no panes says what goes there (Open an app ⌘E, Terminal ⌘D), the tasks that need you, and each listed task as a node on a lattice (left to right by project; within a project the older task is farther). A click on a node or a row opens its conversation. With nothing open at all, the drawer shows a new task by itself | Works today |
 | Task groups on the one tab bar: a tab may be a task's, and each task's tabs sit side by side behind its badge (its two letters, bordered in its own colour, its state as a dot), underlined in its colour; the tabs of no task last. Starting a task takes the tab on show if that is no task's; ⌘T joins the task on show; drag a tab onto a group to move it there. The same badge on its panes, its row, the rail and the drawer. Selecting a task's tab shows its conversation in the open drawer | Works today |
 | Tabs, each with its own split tree | Works today |
@@ -51,7 +51,7 @@ running, and the rest of the design is not built: see the
 | Workbooks (⌘⇧S): save tabs under a name (their splits, each terminal's directory, each app) and open them again from the Workbook section. Several tabs each: add a tab to one, or save all the tabs on the bar as one. Kept in `~/.ottospace/workbooks`. An app comes back as its window, not on the page or document it showed | Works today |
 | Tabs and layout come back after quitting: every tab (with its task and workbook), its splits and sizes, focus, the tab on show, the section and the drawer; terminals start again in their folders with their last lines and an offered command; running apps' windows go back in their panes. See [Restoring the layout](#restoring-the-layout) | Works today |
 | `settings.json`: terminal font, repository directories, tasks folder, apps to offer, window rules | Works today |
-| [Meeting timeline](#meeting-timeline): a calendar feed (`calendar_ics`) as a thin band of the workday above the status bar, a tick for now; the next meeting named beside the tab bar's buttons; a soft pulse as one comes near; a banner, a notification and a sound when one has started and you are in no call | Works today |
+| [Meeting timeline](#meeting-timeline): a calendar feed (`calendar_ics`) as a thin band of the workday above the status bar, a tick for now; a soft pulse as one comes near; a banner, a notification and a sound when one has started and you are in no call | Works today |
 
 ### Roadmap: designed, not built
 
@@ -150,9 +150,11 @@ A line wider than the field scrolls with the cursor. The picker's filter holds 2
 While the quit question is over a field, nothing edits it.
 
 **The new-task box.** ⌘N, the Tasks section's `+` and the right rail's `+` open it in the drawer,
-beside the workspace. Over it: picks for WHERE (the first listed repositories, "no repository")
-and WHO (the default agent, then each runner and its models), which set the line's `>repo` and
-`@agent`, and a line that says what ↵ will do: "↵ will start claude in app on main".
+beside the workspace. Over it: picks for where (the first listed repositories, "no repository")
+and who (the default agent, then each runner and its models), which set the line's `>repo` and
+`@agent`, and, unless ↵ would start the default agent in your home folder, a line that says what
+it will do: "↵ will start claude in app on main", or for a saved agent "↵ files it; nothing
+starts". Under the line, while it is empty, the tags it may hold; the dropdown teaches the rest.
 
 | Key | Action |
 |---|---|
@@ -653,18 +655,15 @@ the way.
   midnight is cut there). Meetings that overlap share two half-height lanes; all-day events are
   one small dot at the left end. Blocks are at least 3 points wide. Hover only, no click: a block
   shows its title, time, length, place and whether it has a Zoom, Meet or Teams link; a mark its
-  time; now the time and the next meeting.
-- **The chip**: beside the new-tab and split buttons, the next meeting today: `Design review ·
-  in 12m`, `· now` while it runs. Hidden when nothing is left today. Its tooltip says when the
-  feed was last read (`calendar: not updated since 09:40` when the last read failed).
-- **The pulse**: from 10 minutes before a meeting its block (its opacity) and the chip glow softly, slowly;
+  time; now the time, the next meeting (`Design review · 15:00`, `· now` while it runs) and when
+  the feed was last read (`calendar not updated since 09:40` when the last read failed).
+- **The pulse**: from 10 minutes before a meeting its block glows (its opacity) softly, slowly;
   from 2 minutes, faster; while it runs, steadily. With Reduce motion (System Settings,
   Accessibility, Display) the colour steps up instead, with no movement. Nothing else in
   ottospace pulses.
-- **The status bar** says `Design review in 4m` in amber from 5 minutes before.
 - **At the start**, if you are in no call, or still in an earlier one (on from 10 minutes before,
-  or the meeting before, running over): a banner under the title strip (the title, how long
-  ago it started, **Join** if the meeting has an `https:` link, **Dismiss**), which stays until
+  or the meeting before, running over): a banner under the title strip (`Meeting started`, the
+  title, how long ago it started, **Join** if the meeting has an `https:` link, **Dismiss**), which stays until
   you dismiss it, join, a call starts or the meeting ends; and a system notification with the
   alert sound, so you see it when ottospace is behind other windows. Once more 2 minutes later
   if you have not joined; never a third time. Only in a meeting's first 10 minutes: one you
@@ -690,7 +689,7 @@ the way.
   occurrences are followed; see [meeting-timeline.md](ai/meeting-timeline.md) for what is not.
 - **Declined meetings**: set `calendar_email` to your address as the feed lists you among a
   meeting's attendees, and a meeting (or one occurrence) you declined is left out everywhere: the
-  band, the chip, the section and the alerts. A feed published with limited detail (free/busy
+  band, the section and the alerts. A feed published with limited detail (free/busy
   only, or without attendees) does not say who declined; then nothing is left out. The address
   stays in `settings.json`: it is not sent with the feed's request, shown, logged or in the state.
 - **The Calendar section** (its rail cell, second, is there only while `calendar_ics` is set):

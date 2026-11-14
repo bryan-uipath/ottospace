@@ -211,6 +211,9 @@ struct Taken {
 /// How many repositories the drawer offers as picks.
 pub const PICKS: usize = 4;
 
+/// What a line in the new-task box may hold, shown while it is empty.
+pub const TAG_HINT: &str = "#project · >repo · @agent · /path · $skill · ^open · p1–p9";
+
 /// The new-task line's one-click picks: repository names (WHERE) and agent names (WHO).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Picks {
@@ -5220,6 +5223,30 @@ impl Model {
         Some(Plan { agent, starts, dir, branch })
     }
 
+    /// The plan said over the box, only when not the default (the default agent, starting, in the
+    /// home folder): `↵ will start codex in app on main`, `↵ files it; nothing starts`.
+    pub fn compose_plan_line(&self) -> Option<String> {
+        let plan = self.compose_plan()?;
+        let default = plan.starts && plan.dir.is_none() && plan.agent.eq_ignore_ascii_case(self.default_agent());
+        if default {
+            return None;
+        }
+        if !plan.starts {
+            return Some("↵ files it; nothing starts".into());
+        }
+        let place = match (&plan.dir, &plan.branch) {
+            (Some(dir), Some(branch)) => format!("in {dir} on {branch}"),
+            (Some(dir), None) => format!("in {dir}"),
+            (None, _) => "in your home folder".into(),
+        };
+        Some(format!("↵ will start {} {place}", plan.agent))
+    }
+
+    /// The tags a line may hold, said only while the box's line is empty: the dropdown teaches the rest.
+    pub fn compose_hint(&self) -> Option<&'static str> {
+        self.compose_line().filter(|line| line.is_empty()).map(|_| TAG_HINT)
+    }
+
     /// The folder the shell lists next, as typed (`~/`, `./src/`): that of the path at the
     /// cursor of the new-task box, while it is not listed yet.
     pub fn compose_typing(&self) -> Option<String> {
@@ -8826,6 +8853,7 @@ mod tests {
         keys(&mut m, " folder");
         // ↵ will start the agent there; the path stays in the title as typed.
         assert_eq!(m.compose_plan().and_then(|plan| plan.dir).as_deref(), Some("~/notes/"));
+        assert_eq!(m.compose_plan_line().as_deref(), Some("↵ will start claude in ~/notes/"));
         // ↵ at once, before the shell read the line again: the folder is where its listing was.
         m.update(Action::ComposeSubmit { open: false });
         let task = m.tasks.list.last().unwrap();
@@ -9221,6 +9249,30 @@ mod tests {
             (m.compose_plan(), m.update(Action::ComposePick { mark: '>', name: Some("app".into()) })),
             (None, vec![])
         );
+    }
+
+    #[test]
+    fn the_box_says_its_plan_only_off_the_default_and_its_tags_only_on_an_empty_line() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        assert_eq!((m.compose_plan_line(), m.compose_hint()), (None, None), "closed");
+        m.update(Action::OpenCompose { text: String::new() });
+        assert_eq!((m.compose_plan_line(), m.compose_hint()), (None, Some(TAG_HINT)));
+        // Typing hides the hint; the default agent in the home folder says nothing.
+        keys(&mut m, "fix zoom");
+        assert_eq!((m.compose_plan_line(), m.compose_hint()), (None, None));
+        m.update(Action::ComposePick { mark: '@', name: Some("claude".into()) });
+        assert_eq!(m.compose_plan_line(), None, "the default, named");
+        m.update(Action::ComposePick { mark: '>', name: Some("app".into()) });
+        assert_eq!(m.compose_plan_line().as_deref(), Some("↵ will start claude in app"));
+        m.update(Action::ComposePick { mark: '>', name: None });
+        m.update(Action::ComposePick { mark: '@', name: Some("codex-gpt-6-astra".into()) });
+        assert_eq!(m.compose_plan_line().as_deref(), Some("↵ will start codex-gpt-6-astra in your home folder"));
+        // A saved agent as the default: ↵ starts nothing, and the box says so.
+        m.update(Action::ComposePick { mark: '@', name: None });
+        let saved = Some("ana".into());
+        m.update(Action::SetAgents { claude: Vec::new(), codex: Vec::new(), default: saved, shows: View::Native });
+        assert_eq!(m.compose_plan_line().as_deref(), Some("↵ files it; nothing starts"));
     }
 
     #[test]
