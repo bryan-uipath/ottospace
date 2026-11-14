@@ -64,6 +64,7 @@
 {"cmd":"sneak"}
 {"cmd":"sneak_app_tree","window":{"x":0,"y":0,"w":400,"h":300},"crop":28,"content":{"x":60,"y":40,"w":400,"h":272},"tree":{"role":"AXWindow","children":[{"role":"AXButton","actions":["AXPress"],"frame":{"x":10,"y":40,"w":60,"h":24}}]}}
 {"cmd":"calendar_call","in_call":false}
+{"cmd":"calendar","day":"tomorrow","days":2}
 {"cmd":"marks"}
 {"cmd":"mark_add","pane":1,"name":"notes","key":"n"}
 {"cmd":"mark_go","name":"notes","axis":"down"}

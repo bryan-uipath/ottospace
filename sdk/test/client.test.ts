@@ -282,6 +282,13 @@ test("a request of a feature that is off rejects with why", async () => {
   });
 });
 
+test("calendar: with no feed set it says only that", async () => {
+  await withOttospace(async (client) => {
+    assert.deepEqual(await client.send({ cmd: "calendar" }), { ok: true, configured: false });
+    assert.deepEqual(await client.calendar({ day: "tomorrow", days: 2 }), { ok: true, configured: false });
+  });
+});
+
 test("a refused request rejects with the app's message", async () => {
   await withOttospace(async (client) => {
     await assert.rejects(client.taskOpen({ id: 99 }), { name: "Error", message: "no task 99" });
