@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::ax::{Frame, Source};
+use crate::calendar::Event;
 use crate::compose::{Known, Names, PathFound};
 use crate::fuzz::{self, Rng};
 use crate::layout_file;
@@ -130,6 +131,28 @@ impl Gen<'_> {
 
     fn text(&mut self) -> String {
         fuzz::hostile(self.rng)
+    }
+
+    /// A meeting near the model's time, with an allowed link, one that is not, or none.
+    fn meeting(&mut self) -> Event {
+        let now = self.m.now;
+        let near = [60_000, 600_000].map(|ms| now.saturating_add(ms));
+        let start = self.rng.pick(&[now, now.saturating_sub(60_000), near[0], near[1], 0, u64::MAX / 2]);
+        let link = self.rng.pick(&[None, Some("https://example.zoom.us/j/1"), Some("http://example.com")]);
+        Event {
+            id: self.rng.pick(&[1, 2, 3]),
+            start,
+            end: start.saturating_add(self.rng.pick(&[0, 60_000, 1_800_000])),
+            all_day: self.rng.one_in(5),
+            title: self.text(),
+            location: self.text(),
+            link: link.map(String::from),
+        }
+    }
+
+    fn meeting_id(&mut self) -> u64 {
+        let real: Vec<u64> = self.m.calendar.events.iter().map(|e| e.id).collect();
+        self.one_of(&real, |g| g.rng.pick(&[0, 9, u64::MAX]))
     }
 
     /// A plain name from `pool`, else hostile text.
@@ -997,6 +1020,15 @@ const MAKERS: &[Make] = &[
     |g| Action::TalkKeys { on: g.rng.coin() },
     |g| Action::TalkResize { width: g.rng.pick(&[0., 400., 9e9, f32::NAN]) },
     |_| Action::TalkWide,
+    |g| Action::SetCalendar { on: g.rng.coin(), notify: g.rng.coin(), links_only: g.rng.coin() },
+    |g| {
+        let events = g.rng.coin().then(|| (0..g.rng.below(4)).map(|_| g.meeting()).collect());
+        let day = g.m.now - g.m.now % 86_400_000;
+        Action::CalendarRead { events, days: [0, 1, 2].map(|n: u64| day.saturating_add(n * 86_400_000)), at: g.time() }
+    },
+    |g| Action::CallSeen { in_call: g.rng.pick(&[None, Some(true), Some(false)]) },
+    |g| Action::CalendarDismiss { id: g.meeting_id() },
+    |g| Action::CalendarJoin { id: g.meeting_id() },
 ];
 
 /// The way out of each box and mode. Picked one time in 8: with every action as likely as any
@@ -1081,6 +1113,11 @@ fn drawn(material: &crate::capture::Material) -> Vec<crate::capture::Shape> {
 }
 
 fn check(m: &Model) -> Result<(), String> {
+    // The meeting banner is of an event that runs, with no call on.
+    if let Some(event) = m.calendar.banner(m.now) {
+        ensure!(calendar::stage(event, m.now) == calendar::Stage::Running, "a banner for an event that does not run");
+        ensure!(m.calendar.in_call != Some(true), "a banner while a call is on");
+    }
     // Tabs, their trees and the panes.
     ensure!(!m.tabs.is_empty(), "no tabs");
     ensure!(m.active < m.tabs.len(), "tab {} is on show, of {}", m.active, m.tabs.len());
@@ -1906,6 +1943,13 @@ impl Run {
             _ => false,
         };
         ensure!(!inspector_own || refused.is_some(), "a client's {action:?} reached the inspector");
+        // A meeting's link opens only on the user's own Join, and only one the allow-function passes.
+        for effect in &effects {
+            if let Effect::OpenLink { url } = effect {
+                let joins = matches!(action, Action::CalendarJoin { .. }) && origin == Origin::User;
+                ensure!(joins && calendar::joinable(url), "{origin:?}'s {action:?} opened {url:?}");
+            }
+        }
         // A resume waits on a read only when the user asked for it.
         let waits_more = m.awaiting.iter().any(|subject| !awaiting.contains(subject));
         ensure!(origin == Origin::User || !waits_more, "{origin:?}'s {action:?} asked for a resume");
@@ -2231,6 +2275,11 @@ impl Run {
                     ensure!(user && matches!(action, Action::StartFresh), "{origin:?} forgot the layout: {action:?}");
                     ensure!(!m.layout_kept, "the layout is forgotten and still kept");
                 }
+                // An alert comes with time passing, of an event that runs.
+                Effect::MeetingAlert { started, .. } => {
+                    ensure!(matches!(action, Action::Tick { .. }) && *started <= m.now, "an alert by {action:?}")
+                }
+                Effect::OpenLink { .. } => {}
                 Effect::Quit => {
                     ensure!(
                         matches!(action, Action::QuitAsked { .. } | Action::QuitConfirm | Action::Quit),
@@ -2624,6 +2673,7 @@ fn code(sent: &Envelope) -> String {
         "Node",
         "Truncated",
         "AppRead",
+        "Event",
     ];
     const ENUM_OF: &[(&str, &str)] = &[
         ("axis", "Axis"),

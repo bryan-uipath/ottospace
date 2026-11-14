@@ -446,6 +446,13 @@ export class Client {
   sneakAppTree(args: { window: Frame; crop?: number; content: Frame; tree: AxNode }): Promise<Snapshot> {
     return this.snapshot({ cmd: "sneak_app_tree", ...args });
   }
+  /**
+   * For tests (`OTTOSPACE_E2E`): whether the user is in a call, as if seen. Rejects outside a test
+   * run: only ottospace looks whether a call is on.
+   */
+  calendarCall(args: { in_call: boolean | null }): Promise<Snapshot> {
+    return this.snapshot({ cmd: "calendar_call", ...args });
+  }
   /** The marks, in the user's order. */
   async marks(): Promise<MarksReply> {
     return marksReply(await this.send({ cmd: "marks" }));

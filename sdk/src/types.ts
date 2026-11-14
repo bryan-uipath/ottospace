@@ -780,6 +780,9 @@ export interface Terminal {
 /** `[x, y, w, h]` in points. */
 export type Rect = [number, number, number, number];
 
+/** How near the next meeting is. */
+export type MeetingStage = "far" | "approaching" | "imminent" | "running" | "past";
+
 /** A rect in points, top-left origin. */
 export interface Frame {
   x: number;
@@ -1001,6 +1004,28 @@ export interface Snapshot {
     note: string | null;
     /** The right rail's conversations, in order: badge, state, at work, shown, and the tooltip's text. */
     rail: { task: Subject; mono: string; group: Group | null; working: boolean; shown: boolean; tip: string }[];
+  };
+  /**
+   * The meeting timeline, if `calendar_ics` is set: counts, times (ms) and stages only. No title or
+   * place: they are other people's text, not for a client. `banner`: where its buttons are drawn,
+   * while a meeting runs and no call is on. `joins`: in a test run, links a Join opened.
+   */
+  calendar: {
+    on: boolean;
+    events_today: number;
+    all_day_today: number;
+    events_tomorrow: number;
+    next_start: number | null;
+    stage: MeetingStage | null;
+    updated: number | null;
+    stale: boolean;
+    in_call: boolean | null;
+    soon: boolean;
+    bars: number;
+    chip: boolean;
+    banner: { join: Rect | null; dismiss: Rect | null } | null;
+    alerts: number;
+    joins: number | null;
   };
   /**
    * Frames drawn (`number`), actions dispatched (`seq`) and how many of them the last frame drew

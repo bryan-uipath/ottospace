@@ -1,0 +1,321 @@
+//! Made-up feeds only: no real calendar's data.
+
+use super::*;
+use crate::fuzz::{Rng, caught, hostile};
+
+const H: i64 = 3_600;
+
+/// UTC seconds of a date and time.
+fn at(y: i64, m: i64, d: i64, h: i64, min: i64) -> i64 {
+    days_from_civil(y, m, d) * DAY + h * H + min * 60
+}
+
+fn feed(events: &str) -> String {
+    format!("BEGIN:VCALENDAR\r\nVERSION:2.0\r\n{events}END:VCALENDAR\r\n")
+}
+
+fn event(lines: &str) -> String {
+    format!("BEGIN:VEVENT\r\n{lines}END:VEVENT\r\n")
+}
+
+/// The occurrences on a UTC day, as (summary, start, end).
+fn on(text: &str, y: i64, m: i64, d: i64, zones: &Zones) -> Vec<(String, i64, i64)> {
+    let from = at(y, m, d, 0, 0);
+    expand(&parse(text), from, from + DAY, zones).into_iter().map(|o| (o.summary, o.start, o.end)).collect()
+}
+
+fn utc() -> Zones {
+    Zones { local: Table::fixed(0), named: Vec::new() }
+}
+
+#[test]
+fn dates_and_weekdays_are_right() {
+    assert_eq!(civil(days_from_civil(2026, 11, 13)), (2026, 11, 13));
+    assert_eq!(weekday(days_from_civil(2026, 11, 13)), 4, "a Friday");
+    assert_eq!(civil(days_from_civil(2024, 2, 29)), (2024, 2, 29));
+    assert_eq!(days_from_civil(1970, 1, 1), 0);
+}
+
+#[test]
+fn a_utc_event_with_folded_and_escaped_text() {
+    let text = feed(&event(
+        "UID:a@example\r\nSUMMARY:Design\r\n  review\\, part 2\\nnotes\r\nLOCATION:Room 4\\; east\r\n\
+         DTSTART:20261113T140000Z\r\nDTEND:20261113T143000Z\r\n",
+    ));
+    let feed = parse(&text);
+    assert_eq!(feed.events[0].summary, "Design review, part 2\nnotes");
+    assert_eq!(feed.events[0].location, "Room 4; east");
+    assert_eq!(
+        on(&text, 2026, 11, 13, &utc()),
+        [("Design review, part 2\nnotes".into(), at(2026, 11, 13, 14, 0), at(2026, 11, 13, 14, 30))]
+    );
+    assert!(on(&text, 2026, 11, 14, &utc()).is_empty());
+}
+
+#[test]
+fn bare_newlines_and_a_duration_are_read() {
+    let text = "BEGIN:VCALENDAR\nBEGIN:VEVENT\nSUMMARY:Standup\nDTSTART:20261113T090000Z\nDURATION:PT15M\nEND:VEVENT\nEND:VCALENDAR\n";
+    assert_eq!(on(text, 2026, 11, 13, &utc()), [("Standup".into(), at(2026, 11, 13, 9, 0), at(2026, 11, 13, 9, 15))]);
+}
+
+#[test]
+fn floating_and_all_day_events_are_in_the_local_zone() {
+    // UTC-5 all day.
+    let zones = Zones { local: Table::fixed(-5 * H), named: Vec::new() };
+    let text = feed(&format!(
+        "{}{}",
+        event("SUMMARY:Lunch\r\nDTSTART:20261113T120000\r\nDTEND:20261113T130000\r\n"),
+        event("SUMMARY:Holiday\r\nDTSTART;VALUE=DATE:20261113\r\nDTEND;VALUE=DATE:20261114\r\n"),
+    ));
+    let feed = parse(&text);
+    let from = at(2026, 11, 13, 5, 0); // local midnight
+    let got = expand(&feed, from, from + DAY, &zones);
+    assert_eq!(got.len(), 2);
+    assert_eq!(
+        (got[0].summary.as_str(), got[0].start, got[0].end, got[0].all_day),
+        ("Holiday", from, from + DAY, true)
+    );
+    assert_eq!((got[1].start, got[1].all_day), (at(2026, 11, 13, 17, 0), false));
+}
+
+#[test]
+fn a_named_zone_uses_the_shells_offsets() {
+    let zones = Zones { local: Table::fixed(0), named: vec![("Asia/Tokyo".into(), Table::fixed(9 * H))] };
+    let text = feed(&event("SUMMARY:Sync\r\nDTSTART;TZID=Asia/Tokyo:20261113T100000\r\nDURATION:PT1H\r\n"));
+    assert_eq!(named_zones(&parse(&text)), ["Asia/Tokyo"]);
+    assert_eq!(on(&text, 2026, 11, 13, &zones)[0].1, at(2026, 11, 13, 1, 0));
+    // A zone nobody knows is read as local time.
+    assert_eq!(on(&text, 2026, 11, 13, &utc())[0].1, at(2026, 11, 13, 10, 0));
+}
+
+const BERLIN: &str = "BEGIN:VTIMEZONE\r\nTZID:W. Europe Standard Time\r\n\
+    BEGIN:STANDARD\r\nDTSTART:16010101T030000\r\nTZOFFSETFROM:+0200\r\nTZOFFSETTO:+0100\r\n\
+    RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10\r\nEND:STANDARD\r\n\
+    BEGIN:DAYLIGHT\r\nDTSTART:16010101T020000\r\nTZOFFSETFROM:+0100\r\nTZOFFSETTO:+0200\r\n\
+    RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3\r\nEND:DAYLIGHT\r\nEND:VTIMEZONE\r\n";
+
+#[test]
+fn a_vtimezone_of_the_feed_gives_summer_and_winter_offsets() {
+    let weekly = event(
+        "UID:w\r\nSUMMARY:Weekly\r\nDTSTART;TZID=W. Europe Standard Time:20261020T100000\r\n\
+         DTEND;TZID=W. Europe Standard Time:20261020T110000\r\nRRULE:FREQ=WEEKLY;BYDAY=TU\r\n",
+    );
+    let text = feed(&format!("{BERLIN}{weekly}"));
+    assert!(named_zones(&parse(&text)).is_empty(), "defined in the feed");
+    // 2026-10-20 is summer time (+2); 2026-10-27 is after the last Sunday of October (+1).
+    assert_eq!(on(&text, 2026, 10, 20, &utc())[0].1, at(2026, 10, 20, 8, 0));
+    assert_eq!(on(&text, 2026, 10, 27, &utc())[0].1, at(2026, 10, 27, 9, 0));
+    // Summer again after the last Sunday of March.
+    assert_eq!(on(&text, 2027, 3, 30, &utc())[0].1, at(2027, 3, 30, 8, 0));
+}
+
+#[test]
+fn local_time_in_a_changing_zone() {
+    let table = Table(vec![(i64::MIN, H), (at(2026, 10, 25, 1, 0), H), (at(2026, 3, 29, 1, 0), 2 * H)]);
+    let mut sorted = table.0.clone();
+    sorted.sort();
+    let table = Table(sorted);
+    assert_eq!(table.to_utc(at(2026, 6, 1, 12, 0)), at(2026, 6, 1, 10, 0));
+    assert_eq!(table.to_utc(at(2026, 12, 1, 12, 0)), at(2026, 12, 1, 11, 0));
+    // 02:30 on 29 March does not exist: the clock before the change.
+    assert_eq!(table.to_utc(at(2026, 3, 29, 2, 30)), at(2026, 3, 29, 1, 30));
+}
+
+#[test]
+fn daily_and_weekly_rules_with_interval_until_and_count() {
+    let text = feed(&format!(
+        "{}{}{}{}",
+        event(
+            "UID:d\r\nSUMMARY:Daily\r\nDTSTART:20261101T090000Z\r\nDTEND:20261101T091500Z\r\nRRULE:FREQ=DAILY;INTERVAL=2\r\n"
+        ),
+        event(
+            "UID:w\r\nSUMMARY:MWF\r\nDTSTART:20261102T100000Z\r\nDURATION:PT30M\r\nRRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR;UNTIL=20261112T235959Z\r\n"
+        ),
+        event("UID:c\r\nSUMMARY:Five\r\nDTSTART:20261109T110000Z\r\nDURATION:PT30M\r\nRRULE:FREQ=DAILY;COUNT=5\r\n"),
+        event(
+            "UID:b\r\nSUMMARY:Biweekly\r\nDTSTART:20261030T150000Z\r\nDURATION:PT1H\r\nRRULE:FREQ=WEEKLY;INTERVAL=2\r\n"
+        ),
+    ));
+    let names = |d| on(&text, 2026, 11, d, &utc()).into_iter().map(|o| o.0).collect::<Vec<_>>();
+    // Every other day from the 1st; five days from the 9th; MWF until the 12th; every other Friday.
+    assert_eq!(names(13), ["Daily", "Five", "Biweekly"]);
+    assert_eq!(names(11), ["Daily", "MWF", "Five"]);
+    assert_eq!(names(14), Vec::<String>::new());
+    assert_eq!(names(27), ["Daily", "Biweekly"]);
+}
+
+#[test]
+fn monthly_and_yearly_rules() {
+    let text = feed(&format!(
+        "{}{}{}",
+        event(
+            "UID:m\r\nSUMMARY:Second Friday\r\nDTSTART:20260109T160000Z\r\nDURATION:PT1H\r\nRRULE:FREQ=MONTHLY;BYDAY=2FR\r\n"
+        ),
+        event(
+            "UID:l\r\nSUMMARY:Last day\r\nDTSTART:20260131T080000Z\r\nDURATION:PT1H\r\nRRULE:FREQ=MONTHLY;BYMONTHDAY=-1\r\n"
+        ),
+        event("UID:y\r\nSUMMARY:Birthday\r\nDTSTART;VALUE=DATE:20201113\r\nRRULE:FREQ=YEARLY\r\n"),
+    ));
+    let names = |m, d| on(&text, 2026, m, d, &utc()).into_iter().map(|o| o.0).collect::<Vec<_>>();
+    assert_eq!(names(11, 13), ["Birthday", "Second Friday"]);
+    assert_eq!(names(11, 30), ["Last day"]);
+    assert_eq!(names(2, 28), ["Last day"]);
+    assert_eq!(names(11, 6), Vec::<String>::new());
+}
+
+#[test]
+fn exdates_overrides_and_cancelled_events() {
+    let text = feed(&format!(
+        "{}{}{}",
+        event(
+            "UID:s\r\nSUMMARY:Standup\r\nDTSTART:20261109T090000Z\r\nDURATION:PT15M\r\nRRULE:FREQ=DAILY\r\n\
+             EXDATE:20261111T090000Z,20261112T090000Z\r\n"
+        ),
+        event(
+            "UID:s\r\nRECURRENCE-ID:20261113T090000Z\r\nSUMMARY:Standup (moved)\r\nDTSTART:20261113T100000Z\r\nDURATION:PT15M\r\n"
+        ),
+        event("UID:x\r\nSUMMARY:Gone\r\nSTATUS:CANCELLED\r\nDTSTART:20261113T120000Z\r\nDURATION:PT15M\r\n"),
+    ));
+    assert!(on(&text, 2026, 11, 11, &utc()).is_empty());
+    assert!(on(&text, 2026, 11, 12, &utc()).is_empty());
+    assert_eq!(
+        on(&text, 2026, 11, 13, &utc()),
+        [("Standup (moved)".into(), at(2026, 11, 13, 10, 0), at(2026, 11, 13, 10, 15))]
+    );
+    assert_eq!(on(&text, 2026, 11, 14, &utc())[0].0, "Standup");
+    // A cancelled occurrence of a series is an override with STATUS:CANCELLED.
+    let cancelled = text.replace("SUMMARY:Standup (moved)", "STATUS:CANCELLED");
+    assert!(on(&cancelled, 2026, 11, 13, &utc()).is_empty());
+}
+
+#[test]
+fn month_days_and_an_ordinal_weekday_meet() {
+    // The first Monday, if it is the 1st, 8th, 15th, 22nd or 29th: 1 June 2026 is a Monday.
+    let text = feed(&event(
+        "SUMMARY:First Monday\r\nDTSTART:20260601T090000Z\r\nRRULE:FREQ=MONTHLY;BYMONTHDAY=1,8,15,22,29;BYDAY=1MO\r\n",
+    ));
+    assert_eq!(on(&text, 2026, 6, 1, &utc()).len(), 1);
+    assert!(on(&text, 2026, 6, 8, &utc()).is_empty(), "the second Monday");
+}
+
+#[test]
+fn an_unsupported_rule_gives_its_first_occurrence_only() {
+    let text =
+        feed(&event("SUMMARY:Odd\r\nDTSTART:20261113T090000Z\r\nRRULE:FREQ=MONTHLY;BYSETPOS=-1;BYDAY=MO,TU\r\n"));
+    assert_eq!(on(&text, 2026, 11, 13, &utc()).len(), 1);
+    assert!(on(&text, 2026, 12, 31, &utc()).is_empty());
+    let hourly = feed(&event("SUMMARY:Hourly\r\nDTSTART:20261112T090000Z\r\nRRULE:FREQ=HOURLY\r\n"));
+    assert!(on(&hourly, 2026, 11, 13, &utc()).is_empty());
+}
+
+#[test]
+fn days_are_local_midnights() {
+    let local = Table::fixed(-5 * H);
+    let now = at(2026, 11, 13, 3, 0); // 22:00 on the 12th, local
+    assert_eq!(days(now, &local), [at(2026, 11, 12, 5, 0), at(2026, 11, 13, 5, 0), at(2026, 11, 14, 5, 0)]);
+}
+
+#[test]
+fn broken_lines_and_values_are_left_out() {
+    let text = feed(&format!(
+        "{}{}{}",
+        event("SUMMARY:No start\r\n"),
+        event("SUMMARY:Bad date\r\nDTSTART:20261340T250000Z\r\n"),
+        event("garbage without a colon\r\nSUMMARY:Fine\r\nDTSTART:20261113T090000Z\r\nRRULE:FREQ=DAILY;INTERVAL=x\r\n"),
+    ));
+    assert_eq!(on(&text, 2026, 11, 13, &utc()).into_iter().map(|o| o.0).collect::<Vec<_>>(), ["Fine"]);
+}
+
+/// Arbitrary bytes, made-up feeds cut and spliced: never a panic, and the caps hold.
+#[test]
+fn any_text_is_read_without_a_panic() {
+    let pieces = [
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VTIMEZONE\r\nTZID:Z\r\n",
+        "BEGIN:STANDARD\r\nDTSTART:16010101T030000\r\nTZOFFSETFROM:+0200\r\nTZOFFSETTO:+0100\r\n",
+        "RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10\r\n",
+        "END:STANDARD\r\n",
+        "END:VTIMEZONE\r\n",
+        "DTSTART:20261113T090000Z\r\n",
+        "DTSTART;TZID=Z:20261113T090000\r\n",
+        "DTSTART;VALUE=DATE:20261113\r\n",
+        "DTEND:20261113T100000Z\r\n",
+        "DURATION:P1W2DT3H4M5S\r\n",
+        "RRULE:FREQ=WEEKLY;BYDAY=MO,-1FR;COUNT=99999;INTERVAL=1\r\n",
+        "RRULE:FREQ=MONTHLY;BYMONTHDAY=-31,31;BYMONTH=2\r\n",
+        "RRULE:FREQ=DAILY;UNTIL=20261113\r\n",
+        "EXDATE:20261113T090000Z,x\r\n",
+        "RECURRENCE-ID:20261113T090000Z\r\n",
+        "SUMMARY:a\\,b\\\r\n",
+        " folded\r\n",
+        "END:VCALENDAR\r\n",
+    ];
+    for seed in 0..400 {
+        let mut rng = Rng::new(seed);
+        let mut text = String::new();
+        for _ in 0..rng.below(60) {
+            match rng.below(4) {
+                0 => text.push_str(&hostile(&mut rng)),
+                1 => {
+                    let bytes: Vec<u8> = (0..rng.below(40)).map(|_| rng.next() as u8).collect();
+                    text.push_str(&String::from_utf8_lossy(&bytes));
+                }
+                _ => text.push_str(rng.pick(&pieces)),
+            }
+        }
+        let from = at(2026, 11, 13, 0, 0) + rng.below(1000) as i64 * DAY - 500 * DAY;
+        let zones = Zones { local: Table::fixed(rng.below(50_000) as i64 - 25_000), named: Vec::new() };
+        let got = caught(|| expand(&parse(&text), from, from + 2 * DAY, &zones))
+            .unwrap_or_else(|p| panic!("seed {seed}: {p}"));
+        assert!(got.len() <= MAX_OCCURRENCES);
+        assert!(got.iter().all(|o| o.end - o.start <= MAX_DURATION && o.summary.chars().count() <= MAX_VALUE));
+    }
+}
+
+#[test]
+fn a_huge_feed_is_capped() {
+    let one = event("SUMMARY:Many\r\nDTSTART:20261113T090000Z\r\n");
+    let text = feed(&one.repeat(30_000));
+    let feed = parse(&text);
+    assert!(feed.events.len() <= MAX_COMPONENTS);
+    let from = at(2026, 11, 13, 0, 0);
+    assert_eq!(expand(&feed, from, from + DAY, &utc()).len(), MAX_OCCURRENCES);
+}
+
+/// A feed is other people's text: none of these may cost more than the scan budget.
+#[test]
+fn hostile_zones_and_rules_cost_no_more_than_the_budget() {
+    let rule_part = "BEGIN:DAYLIGHT\r\nDTSTART:16010101T020000\r\nTZOFFSETFROM:+0100\r\nTZOFFSETTO:+0200\r\n\
+                     RRULE:FREQ=YEARLY;BYMONTH=1,2,3,4,5,6,7,8,9,10,11,12;BYMONTHDAY=1,2,3\r\nEND:DAYLIGHT\r\n";
+    let big_zone = format!("BEGIN:VTIMEZONE\r\nTZID:Big\r\n{}END:VTIMEZONE\r\n", rule_part.repeat(10_000));
+    let uses_big = event("SUMMARY:x\r\nDTSTART;TZID=Big:20261113T090000\r\nRRULE:FREQ=DAILY\r\n");
+    let parsed = parse(&feed(&format!("{big_zone}{uses_big}")));
+    assert_eq!(parsed.zones[0].parts.len(), MAX_PARTS);
+    let from = at(2026, 11, 13, 0, 0);
+    let (_, work) = expand_counted(&parsed, from, from + 2 * DAY, &utc());
+    assert!(work <= 16 * 2 * 366 + 100, "parts capped: {work}");
+
+    // BYMONTH written 5,000 times over: read once each.
+    let months = (0..5_000).map(|n| (n % 12 + 1).to_string()).collect::<Vec<_>>().join(",");
+    let long = event(&format!("SUMMARY:y\r\nDTSTART:20261113T090000Z\r\nRRULE:FREQ=MONTHLY;BYMONTH={months}\r\n"));
+    let rule = parse(&feed(&long)).events[0].rule.clone().unwrap();
+    assert!(rule.by_month.len() <= 12 && rule.by_month.windows(2).all(|w| w[0] < w[1]), "{:?}", rule.by_month);
+
+    // 500 zones no event names: none is worked out.
+    let unused: String =
+        (0..500).map(|n| format!("BEGIN:VTIMEZONE\r\nTZID:Z{n}\r\n{rule_part}END:VTIMEZONE\r\n")).collect();
+    let plain = event("SUMMARY:z\r\nDTSTART:20261113T090000Z\r\n");
+    let (got, work) = expand_counted(&parse(&feed(&format!("{unused}{plain}"))), from, from + 2 * DAY, &utc());
+    assert_eq!((got.len(), work), (1, 0));
+
+    // Thousands of recurring events with long exception lists: the budget holds.
+    let exdates =
+        (1..=999).map(|n| format!("2025{:02}{:02}T090000Z", n % 12 + 1, n % 28 + 1)).collect::<Vec<_>>().join(",");
+    let one = event(&format!(
+        "SUMMARY:w\r\nDTSTART:20200101T090000Z\r\nRRULE:FREQ=DAILY;COUNT=99999\r\nEXDATE:{exdates}\r\n"
+    ));
+    let (_, work) = expand_counted(&parse(&feed(&one.repeat(3_000))), from, from + 2 * DAY, &utc());
+    assert!(work <= SCAN_BUDGET + MAX_SCAN + 1_100, "{work}");
+}

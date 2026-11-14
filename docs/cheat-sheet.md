@@ -201,6 +201,8 @@ setting takes its default.
 
 `capture_key`: the key that captures the pane in use (`"off"` for none). `capture`: `keep_images` `false` writes no picture; `ax` `false` reads no accessibility tree for a capture.
 
+`calendar_ics`: your calendar's feed (an `https://` link or a file) for the [meeting timeline](reference.md#meeting-timeline): a hairline of the next `calendar_window_hours` (8) across the top, the next meeting beside the tab bar's buttons, a pulse from 10 minutes before, and at the start, if you are in no call, a banner with Join and Dismiss and a notification. `calendar_notify: false` turns alerts off; `calendar_notify_for: "links"` alerts only meetings with a meeting link.
+
 `windows` rules name windows ottospace leaves alone, by `app`, `title` and `subrole`: [reference](reference.md#settings).
 
 `OTTOSPACE_REPOS` (directories, `:` between them) wins over `repos`. `OTTOSPACE_HOME` names another folder than `~/.ottospace`.

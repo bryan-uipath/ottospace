@@ -109,6 +109,11 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     capture: { key: null, bar: null, picture: null, encoded: [], pending: 0, dir: null, brief: null },
     groups: [{ task: 1, tabs: [0] }, { task: null, tabs: [1] }],
     badges: { "1": "FL" },
+    calendar: {
+      on: true, events_today: 3, all_day_today: 1, events_tomorrow: 2, next_start: 1794560400000, stage: "approaching",
+      updated: 1794556800000, stale: false, in_call: false, soon: true, bars: 3, chip: true,
+      banner: { join: [0, 28, 40, 20], dismiss: [44, 28, 60, 20] }, alerts: 1, joins: null,
+    },
     drawer: {
       body: [880, 40, 470, 820],
       width: 470,

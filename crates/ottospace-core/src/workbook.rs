@@ -132,16 +132,7 @@ pub fn history_of(pane: &PaneRecord) -> Option<History> {
 fn local_minute(ms: u64, offset: i64) -> String {
     let at = (ms / 1000) as i64 + offset;
     let (days, secs) = (at.div_euclid(86_400), at.rem_euclid(86_400));
-    // Days to a civil date (Howard Hinnant's algorithm).
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
+    let (year, month, day) = crate::ics::civil(days);
     format!("{year}-{month:02}-{day:02} {:02}:{:02}", secs / 3600, secs % 3600 / 60)
 }
 

@@ -5933,3 +5933,152 @@ fn a_test_leaves_nothing_in_the_temp_dir() {
     let left: Vec<_> = std::fs::read_dir(&tmp).unwrap().flatten().map(|e| e.file_name()).collect();
     assert!(left.is_empty(), "left in $TMPDIR: {left:?}");
 }
+
+/// `20261113T140000Z`: a UTC time `offset` seconds from now, as a feed writes it.
+fn ics_time(offset: i64) -> String {
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64 + offset;
+    let (days, secs) = (at.div_euclid(86_400), at.rem_euclid(86_400));
+    let (y, m, d) = ottospace_core::ics::civil(days);
+    format!("{y:04}{m:02}{d:02}T{:02}{:02}{:02}Z", secs / 3600, secs / 60 % 60, secs % 60)
+}
+
+/// A made-up feed: (uid, title, start and end from now in seconds, more lines).
+fn feed(events: &[(&str, &str, i64, i64, &str)]) -> String {
+    let mut text = String::from("BEGIN:VCALENDAR\r\nVERSION:2.0\r\n");
+    for (uid, title, start, end, more) in events {
+        let (start, end) = (ics_time(*start), ics_time(*end));
+        text += &format!(
+            "BEGIN:VEVENT\r\nUID:{uid}\r\nSUMMARY:{title}\r\nDTSTART:{start}\r\nDTEND:{end}\r\n{more}END:VEVENT\r\n"
+        );
+    }
+    text + "END:VCALENDAR\r\n"
+}
+
+fn centre(rect: &Value) -> [f64; 2] {
+    let r: Vec<f64> = rect.as_array().expect("a rect").iter().filter_map(Value::as_f64).collect();
+    [r[0] + r[2] / 2., r[1] + r[3] / 2.]
+}
+
+/// A private folder whose settings name `feed` (a file in it, or a link) as the calendar.
+fn calendar_folder(name: &str, feed_text: &str, link: Option<&str>) -> PathBuf {
+    let home = user_folder(name, "{}");
+    std::fs::write(home.join("today.ics"), feed_text).unwrap();
+    let source = link.map_or_else(|| json!(home.join("today.ics")), |link| json!(link));
+    std::fs::write(home.join("settings.json"), json!({ "calendar_ics": source, "repos": [] }).to_string()).unwrap();
+    home
+}
+
+fn calendar_read(otto: &Otto) -> Value {
+    otto.wait_for("the feed read", |o| {
+        Some(o.call(json!({"cmd": "state"}))["calendar"].clone()).filter(|c| c["updated"].is_number())
+    })
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_meeting_timeline_alerts_and_only_the_user_joins_or_dismisses() {
+    let home = calendar_folder(
+        "calendar",
+        &feed(&[
+            ("a", "Design review", -30, 1_800, "LOCATION:https://example.zoom.us/j/123\r\n"),
+            ("b", "Standup", -60, 1_800, ""),
+            ("c", "Planning", 240, 3_600, ""),
+            ("d", "Retro", 86_400, 90_000, ""),
+        ]),
+        None,
+    );
+    let otto = Otto::launch_with("calendar", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    let calendar = |o: &Otto| o.call(json!({"cmd": "state"}))["calendar"].clone();
+    let read = calendar_read(&otto);
+    // Counts, times and stages: the next one comes near, so the status bar names it.
+    assert_eq!(read["on"], true);
+    let counted = read["events_today"].as_u64().unwrap() + read["events_tomorrow"].as_u64().unwrap();
+    assert_eq!(counted, 4, "{read}");
+    assert_eq!((&read["stage"], &read["soon"], &read["chip"]), (&json!("approaching"), &json!(true), &json!(true)));
+    assert!(read["bars"].as_u64() >= Some(3), "{read}");
+    // No title or link reaches a client.
+    let state = otto.call(json!({"cmd": "state"})).to_string();
+    assert!(!state.contains("Design review") && !state.contains("example.zoom.us"), "{state}");
+    // Not known whether a call is on, then in one: no alert.
+    assert_eq!((&read["alerts"], &read["banner"]), (&json!(0), &Value::Null));
+    otto.call(json!({"cmd": "calendar_call", "in_call": true}));
+    std::thread::sleep(Duration::from_millis(1_200));
+    assert_eq!(calendar(&otto)["alerts"], 0);
+    // In no call: both running meetings alert, and the banner shows the later one.
+    otto.call(json!({"cmd": "calendar_call", "in_call": false}));
+    let banner = otto.wait_for("the banner", |o| {
+        let c = calendar(o);
+        (c["alerts"] == 2 && c["banner"]["join"].is_array()).then(|| c["banner"].clone())
+    });
+    // A client's click on Join opens nothing; on Dismiss it dismisses nothing.
+    otto.click(centre(&banner["join"]), 1);
+    otto.click(centre(&banner["dismiss"]), 1);
+    let after = calendar(&otto);
+    assert_eq!((&after["joins"], after["banner"].is_object()), (&json!(0), true), "{after}");
+    // The user's Join opens the link (counted in a test run) and ends that banner; the other
+    // meeting's has no Join, and the user dismisses it.
+    otto.user_click(centre(&banner["join"]));
+    let next = otto.wait_for("the other banner", |o| {
+        let c = calendar(o);
+        (c["joins"] == 1 && c["banner"].is_object()).then(|| c["banner"].clone())
+    });
+    assert_eq!(next["join"], Value::Null, "Standup has no link");
+    otto.user_click(centre(&next["dismiss"]));
+    otto.wait_for("no banner", |o| calendar(o)["banner"].is_null().then_some(()));
+    assert_eq!(calendar(&otto)["alerts"], 2, "no third alert");
+    let trace = otto.call(json!({"cmd": "trace"}))["trace"].to_string();
+    assert!(!trace.contains("Design review") && !trace.contains("Standup"), "the trace holds no title");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_feed_link_goes_to_curl_on_its_standard_input_not_its_arguments() {
+    use std::os::unix::fs::PermissionsExt;
+    let link = "https://calendar.example.com/private-s3cret/basic.ics";
+    let home = calendar_folder("calendar-link", &feed(&[("a", "Sync", 3_600, 5_400, "")]), Some(link));
+    // A stand-in for curl: writes what it was given, prints the feed, and the status code in
+    // `code` to stderr, as `write-out` asks.
+    let dir = home.to_str().unwrap();
+    std::fs::write(home.join("code"), "200").unwrap();
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{dir}/args'\ncat > '{dir}/config'\ncat '{dir}/today.ics'\n\
+         cat '{dir}/code' >&2\n"
+    );
+    std::fs::write(home.join("curl"), script).unwrap();
+    std::fs::set_permissions(home.join("curl"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let curl = home.join("curl");
+    let otto =
+        Otto::launch_with("calendar-link", &[("OTTOSPACE_HOME", dir), ("OTTOSPACE_CURL", curl.to_str().unwrap())]);
+    let read = calendar_read(&otto);
+    let counted = read["events_today"].as_u64().unwrap() + read["events_tomorrow"].as_u64().unwrap();
+    assert_eq!((&read["stale"], counted), (&json!(false), 1), "{read}");
+    assert_eq!(std::fs::read_to_string(home.join("args")).unwrap(), "-q\n--config\n-\n");
+    let config = std::fs::read_to_string(home.join("config")).unwrap();
+    assert!(config.contains(&format!("url = \"{link}\"")) && config.contains("proto = \"=https\""), "{config}");
+    assert!(!config.contains("location") && config.contains("max-redirs = 0"), "no redirect: {config}");
+    assert!(!otto.call(json!({"cmd": "state"})).to_string().contains("s3cret"), "the link is a secret");
+    drop(otto);
+    // A feed that redirects is not read: the status bar asks for its final address.
+    std::fs::write(home.join("code"), "302").unwrap();
+    let otto =
+        Otto::launch_with("calendar-moved", &[("OTTOSPACE_HOME", dir), ("OTTOSPACE_CURL", curl.to_str().unwrap())]);
+    let state = otto.wait_for("the failed read", |o| {
+        Some(o.call(json!({"cmd": "state"}))).filter(|s| s["notice"].as_str().is_some_and(|n| n.contains("redirects")))
+    });
+    assert_eq!((&state["calendar"]["updated"], &state["calendar"]["stale"]), (&Value::Null, &json!(true)));
+    assert!(!state.to_string().contains("s3cret"), "the link is a secret");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn no_feed_no_timeline() {
+    let otto = Otto::launch("calendar-off");
+    let calendar = otto.call(json!({"cmd": "state"}))["calendar"].clone();
+    assert_eq!((&calendar["on"], &calendar["bars"], &calendar["chip"]), (&json!(false), &json!(0), &json!(false)));
+    // `calendar_call` answers only in a test run; an agent cannot learn it from the guide.
+    assert!(!include_str!("../skill/guide.md").contains("calendar_call"));
+}
