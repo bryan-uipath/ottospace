@@ -175,7 +175,10 @@ resume." What was on screen comes back as history; the command is offered, never
 **Save.** For each terminal pane the shell reads, besides its directory:
 
 - its last N lines of scrollback and screen as plain text (`workbook_scrollback_lines`, default
-  500, at most 2000; 0 keeps no terminal text at all, the command line included);
+  500, at most 2000; 0 keeps no terminal text at all, the command line included). Only once
+  something typed into it (`Terminal::write`: keys, paste, a client's `type`; not a command the
+  workbook typed). A terminal that opened with history keeps that as it was, then its divider
+  and what printed below it (`workbook::next_history`): saved again, it never stacks;
 - the command line of the program in front of its shell, if one runs. How: the PTY's
   foreground process group (`tcgetpgrp`); the core's `terminal::running` decides whether that
   is the shell at its prompt, a background job, or a program in front (the same rule as the
