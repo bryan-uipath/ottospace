@@ -9,6 +9,8 @@ default-run = "ottospace"
 
 [dependencies]
 ottospace-sessions = { path = "../ottospace-sessions" }
+# Drives agent CLIs in their structured modes: the drawer's native conversation.
+ottospace-agents = { path = "../ottospace-agents" }
 ottospace-core = { path = "../ottospace-core" }
 ottospace-mac = { path = "../ottospace-mac" }
 # Same version gpui uses: reaches the native window.

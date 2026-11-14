@@ -110,7 +110,9 @@ impl Gen<'_> {
         let text = Text::new(&self.name(WORDS));
         let id = self.rng.pick(&["a", "b"]).to_string();
         let (tool, label) = ("Bash".to_string(), self.name(WORDS));
-        match self.rng.below(12) {
+        match self.rng.below(14) {
+            12 => Said::MessageElsewhere,
+            13 => Said::WatchFromStart,
             0 | 1 => Said::TurnStarted,
             2 => Said::TextDelta { text },
             3 => Said::Text { text },
@@ -1186,6 +1188,8 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(!t.live || m.agent_runs(subject), "{subject:?} is live with no agent");
         ensure!(t.cards.is_empty() || t.live, "{subject:?} has a card and no agent");
         ensure!(!chat.deny || !t.cards.is_empty(), "{subject:?} writes a Deny with no card");
+        // A watched transcript is read-only: no turn to stop.
+        ensure!(t.live || t.turn.is_none(), "{subject:?} has a turn and no agent");
         ensure!(!chat.armed || t.turn.is_some(), "{subject:?} waits for a second Esc with no turn");
     }
     let chats: Vec<String> = m.chats.iter().map(|chat| format!("{:?}", chat.subject)).collect();
@@ -2974,6 +2978,8 @@ fn event_code(event: &Said) -> String {
         }
         Said::Error { kind, retrying } => format!("Said::Error {{ kind: {kind:?}.into(), retrying: {retrying} }}"),
         Said::Exited { code } => format!("Said::Exited {{ code: {code:?} }}"),
+        Said::MessageElsewhere => "Said::MessageElsewhere".into(),
+        Said::WatchFromStart => "Said::WatchFromStart".into(),
     }
 }
 

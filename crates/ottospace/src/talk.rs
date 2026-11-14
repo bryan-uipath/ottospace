@@ -53,10 +53,20 @@ pub struct Drawer {
     reading: Option<std::sync::mpsc::Receiver<Vec<agents::Started>>>,
     /// Reads of one session each under way, for resumes that wait on them (`SessionRead`).
     session_reads: Vec<(String, String, std::sync::mpsc::Receiver<Action>)>,
+    /// Native conversations' agents, and what the drawer keeps of each one's look (`conversation`).
+    pub native: HashMap<Subject, crate::conversation::Native>,
+    pub looks: HashMap<Subject, crate::conversation::Look>,
+    pub thumbs: HashMap<String, crate::conversation::Thumb>,
+    /// The kinds of link the user opened (`web`, `file`): a test run opens nothing and reads these.
+    pub opened: Vec<&'static str>,
+    /// Agents stopped for a switch of view, until their process is gone (`Stopping`).
+    pub stopping: Vec<(Subject, crate::conversation::Stopping)>,
+    /// The watched session's file being followed (`Model::watch_target`).
+    pub watch: Option<crate::conversation::Watch>,
 }
 
 /// A new session's id: a random (version 4) UUID. `None`: no random bytes could be read.
-fn new_uuid() -> Option<String> {
+pub(crate) fn new_uuid() -> Option<String> {
     use std::io::Read;
     let mut b = [0u8; 16];
     std::fs::File::open("/dev/urandom").and_then(|mut source| source.read_exact(&mut b)).ok()?;
@@ -68,7 +78,7 @@ fn new_uuid() -> Option<String> {
 /// Where a runner's program is found. A test run may name a folder of stand-ins for it
 /// (`OTTOSPACE_AGENTS_DIR`): never outside one, so no test starts a real agent by mistake.
 /// A test run that names no such folder starts no agent at all.
-fn program(name: &str) -> Result<String, String> {
+pub(crate) fn program(name: &str) -> Result<String, String> {
     if std::env::var_os("OTTOSPACE_E2E").is_none() {
         return Ok(name.to_string());
     }
@@ -108,6 +118,10 @@ impl Workspace {
         let brief =
             brief.zip(task).and_then(|(dir, task)| collect::task_dir(task, dir)).map(|dir| dir.join("brief.md"));
         let brief = brief.as_ref().and_then(|path| path.to_str());
+        // Drawn natively: the runner's structured mode, not its TUI.
+        if self.model.talk_view(subject) == ottospace_core::transcript::View::Native {
+            return self.start_native(subject, start, cwd, brief);
+        }
         let (command, session, model) = match start {
             Start::New(launch) => {
                 let session = new_uuid().ok_or("no random bytes for a session id")?;
@@ -143,7 +157,7 @@ impl Workspace {
     }
 
     /// `dir`, its links resolved, is in a listed repository or worktree, also resolved.
-    fn in_checkout(&self, dir: &str) -> Result<(), String> {
+    pub(crate) fn in_checkout(&self, dir: &str) -> Result<(), String> {
         let real = std::fs::canonicalize(dir).map_err(|err| format!("{dir}: {err}"))?;
         let roots = self.model.repo_names().filter_map(|(_, path)| std::fs::canonicalize(path).ok());
         roots
@@ -154,9 +168,21 @@ impl Workspace {
     }
 
     /// Ends a conversation's agent: dropping its terminal hangs up on it. Returns what the core is told.
+    /// Stopped for a switch of view, it is told only once its process is gone, so the other
+    /// view never starts on a session still held.
     pub(crate) fn stop_agent(&mut self, subject: &Subject) -> Vec<Action> {
+        // Already ending for a switch: it says it ended once its process has, not before.
+        if self.drawer.stopping.iter().any(|(of, _)| of == subject) {
+            return Vec::new();
+        }
         let missing = self.session_missing(subject);
-        self.drawer.agents.remove(subject);
+        let terminal = self.drawer.agents.remove(subject).map(|agent| agent.terminal);
+        let native = self.drawer.native.remove(subject);
+        if self.model.is_switching(subject) && (terminal.is_some() || native.is_some()) {
+            let stopping = crate::conversation::Stopping::new(terminal, native);
+            self.drawer.stopping.push((subject.clone(), stopping));
+            return missing.into_iter().collect();
+        }
         missing.into_iter().chain([Action::AgentExited { task: subject.clone() }]).collect()
     }
 
@@ -181,15 +207,29 @@ impl Workspace {
         if let Some(agent) = self.drawer.agents.remove(from) {
             self.drawer.agents.insert(to.clone(), agent);
         }
+        if let Some(native) = self.drawer.native.remove(from) {
+            self.drawer.native.insert(to.clone(), native);
+        }
+        if let Some(look) = self.drawer.looks.remove(from) {
+            self.drawer.looks.insert(to.clone(), look);
+        }
+        // One ending for a switch ends under its new name: the core knows it by that one now.
+        for (subject, _) in &mut self.drawer.stopping {
+            if subject == from {
+                *subject = to.clone();
+            }
+        }
     }
 
     /// The session id a task's gone agent was started with, if its runner's folders hold no file
     /// for it (Claude: `projects/<folder>/<id>.jsonl`): it was never written. `None` too when
     /// sessions are not read (`"sessions": false`): nothing is known.
-    fn session_missing(&self, subject: &Subject) -> Option<Action> {
+    pub(crate) fn session_missing(&self, subject: &Subject) -> Option<Action> {
         let task = subject.task()?;
-        let agent = self.drawer.agents.get(subject)?;
-        let ((runner, id), cwd) = (agent.session.clone()?, agent.cwd.as_ref()?);
+        // Its terminal's, or its native process's.
+        let native = self.drawer.native.get(subject).map(|native| (&native.session, &native.cwd));
+        let (session, cwd) = self.drawer.agents.get(subject).map(|agent| (&agent.session, &agent.cwd)).or(native)?;
+        let ((runner, id), cwd) = (session.clone()?, cwd.as_ref()?);
         let dirs = crate::config::session_dirs()?;
         std::fs::canonicalize(cwd).ok()?;
         let written = ottospace_sessions::reader(runner, &dirs).and_then(|reader| reader.path_of(cwd.as_ref(), &id));
@@ -233,6 +273,7 @@ impl Workspace {
         for action in read {
             self.dispatch(action, Origin::System, window, cx);
         }
+        self.sync_native(window, cx);
         if redraw {
             cx.notify();
         }
@@ -240,11 +281,14 @@ impl Workspace {
 
     /// A key while the conversation has the keyboard: to the agent, as a terminal pane's keys go
     /// to its program. Esc too: it is the agent's. ⌘ shortcuts fall through to their bindings.
-    pub(crate) fn talk_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+    pub(crate) fn talk_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
         // An agent runs with the user's rights: a client types nothing into it (⌃C, ⌃D included).
         if self.input != Origin::User {
             self.error = Some(agents::USERS_ALONE.into());
             return cx.stop_propagation();
+        }
+        if self.model.shown_chat().is_some() {
+            return self.chat_key(event, window, cx);
         }
         let Some(agent) = self.model.talk.as_ref().and_then(|talk| self.drawer.agents.get(&talk.task)) else { return };
         let terminal = &agent.terminal;
@@ -283,6 +327,20 @@ impl Workspace {
                 _ => return true,
             },
             ("talk", "talk-close", _) => Action::TalkToggle,
+            // The native conversation's buttons: the core says who may.
+            ("talk", "chat-allow" | "chat-deny" | "chat-show-all", _) => {
+                let shown = self.model.shown_chat().and_then(|chat| chat.transcript.cards.front());
+                let Some(ticket) = shown.map(|card| card.ticket) else { return true };
+                match name {
+                    "chat-allow" => Action::TalkAnswer { allow: true, ticket },
+                    "chat-deny" => Action::TalkAnswer { allow: false, ticket },
+                    _ => Action::TalkExpand { ticket },
+                }
+            }
+            ("talk", "chat-deny-note", _) => Action::TalkDenyNote,
+            ("talk", "chat-stop", _) => Action::TalkInterrupt,
+            ("talk", "view-chat", _) => Action::TalkView { shows: ottospace_core::transcript::View::Native },
+            ("talk", "view-terminal", _) => Action::TalkView { shows: ottospace_core::transcript::View::Terminal },
             ("rail-talk", id, _) => match subject(id) {
                 Some(id) => Action::TalkPick { id },
                 None => return true,
@@ -358,7 +416,7 @@ pub(crate) fn badge(mono: &str, colour: u32, state: Option<u32>, size: f32) -> D
 
 impl Workspace {
     /// A small button of the drawer's header or the rail, named for sneak mode and tests.
-    fn talk_button(&self, name: &'static str, label: &str, tip: &'static str) -> Stateful<Div> {
+    pub(crate) fn talk_button(&self, name: &'static str, label: &str, tip: &'static str) -> Stateful<Div> {
         div()
             .id(name)
             .relative()
@@ -395,11 +453,13 @@ impl Workspace {
             }
             (None, Subject::Task(_)) => return None,
         };
-        let agent = self.drawer.agents.get(subject);
+        // The model and since when: of the agent's terminal, or of its native process.
+        let native = self.drawer.native.get(subject).map(|native| (native.model.clone(), native.since));
+        let agent = self.drawer.agents.get(subject).map(|agent| (agent.model.clone(), agent.since)).or(native);
         let runs = self.model.agent_runs(subject);
         let muted = |text: String| div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(text);
-        let elapsed = agent.filter(|_| runs).map(|agent| {
-            let secs = agent.since.elapsed().as_secs();
+        let elapsed = agent.as_ref().filter(|_| runs).map(|(_, since)| {
+            let secs = since.elapsed().as_secs();
             if secs < 3600 { format!("{}:{:02}", secs / 60, secs % 60) } else { format!("{}h", secs / 3600) }
         });
         // ⌘↵: to the task's tabs; with none, claim the tab on show or make it a new one.
@@ -462,9 +522,11 @@ impl Workspace {
                     Some(badge) => badge,
                     None => home::dot(color),
                 })
-                .child(div().flex_1().min_w_0().truncate().text_sm().child(title))
-                .children(agent.map(|agent| muted(agent.model.clone())))
+                .child(div().flex_1().min_w(px(72.)).truncate().text_sm().child(title))
+                // The model gives way before the title does.
+                .children(agent.map(|(model, _)| muted(model).flex_shrink().min_w_0().truncate()))
                 .children(elapsed.map(muted))
+                .children(self.view_switch(subject, cx))
                 .children(go)
                 .children(brief)
                 .children(adopt)
@@ -479,6 +541,23 @@ impl Workspace {
         let at = self.drawer.body.clone();
         let record = canvas(move |bounds, _, _| at.set(bounds), |_, _, _, _| {}).absolute().size_full();
         let muted = |text: String| div().p_3().text_sm().text_color(rgb(theme::MUTED)).child(text);
+        // Drawn natively, or watched read-only: the transcript.
+        if self.is_native(subject) {
+            return div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(record)
+                .child(self.chat_body(subject, cx))
+                .into_any_element();
+        }
+        if self.drawer.stopping.iter().any(|(of, _)| of == subject) {
+            let wait = muted("Ending the other view's process before this one starts…".into());
+            return div().relative().flex_1().child(record).child(wait).into_any_element();
+        }
         let Some(agent) = self.drawer.agents.get(subject) else {
             // The note, if there is one, is the line under the header (`render_talk`): once.
             // Nothing either while its session is read for a resume.
@@ -755,6 +834,7 @@ impl Workspace {
             "body": shown.then(|| crate::rect(self.drawer.body.get())),
             "width": self.drawer.width,
             "agents": agents,
+            "native": self.chats_snapshot(),
             "goes_to": self.model.talk_go(),
             // The right rail's conversations, in order: task, badge, state, at work, shown, tooltip.
             "rail": self.model.rail(),

@@ -142,6 +142,28 @@ pub enum Event {
     Exited {
         code: Option<i32>,
     },
+    /// A watched session's file says a message was sent there: its words stay in the file.
+    MessageElsewhere,
+    /// A watched session's file is read again from its start: what was built from it goes.
+    WatchFromStart,
+}
+
+impl Event {
+    /// True if a watched session's transcript shows it: what happened, never a turn to stop or
+    /// a request to answer here.
+    pub fn shows_when_watched(&self) -> bool {
+        matches!(
+            self,
+            Event::Started { .. }
+                | Event::ToolStart { .. }
+                | Event::ToolEnd { .. }
+                | Event::Usage { .. }
+                | Event::Compaction
+                | Event::Error { .. }
+                | Event::MessageElsewhere
+                | Event::WatchFromStart
+        )
+    }
 }
 
 /// A tool call's state.
@@ -177,6 +199,8 @@ pub enum Notice {
     },
     /// The session was gone on with: earlier turns are in its file, not here.
     Resumed,
+    /// A message was sent in the terminal that runs the watched session.
+    MessageElsewhere,
     Ended {
         code: Option<i32>,
     },
@@ -275,6 +299,8 @@ pub struct Transcript {
     pub cost_micro_usd: Option<u64>,
     /// Its process runs.
     pub live: bool,
+    /// Built from a session another program runs (`Model::watch_target`): read-only.
+    pub watched: bool,
 }
 
 impl Transcript {
@@ -333,7 +359,7 @@ impl Transcript {
 
     /// A process for this conversation started (again).
     pub fn started(&mut self, resumed: bool) {
-        self.live = true;
+        (self.live, self.watched) = (true, false);
         if resumed {
             self.push(Entry::Notice(Notice::Resumed));
         }
@@ -436,6 +462,13 @@ impl Transcript {
                 (self.turn, self.cards, self.live) = (None, VecDeque::new(), false);
                 self.push(Entry::Notice(Notice::Ended { code }));
             }
+            // Only a watched transcript is rebuilt; a live one is the stream's.
+            Event::WatchFromStart if !self.live => *self = Transcript { watched: true, ..Transcript::default() },
+            Event::WatchFromStart => {}
+            Event::MessageElsewhere => {
+                self.settle();
+                self.push(Entry::Notice(Notice::MessageElsewhere));
+            }
         }
     }
 
@@ -469,6 +502,7 @@ impl Transcript {
             context: self.context,
             window: self.window,
             live: self.live,
+            watched: self.watched,
         }
     }
 }
@@ -487,6 +521,7 @@ pub struct Summary {
     pub context: Option<u64>,
     pub window: Option<u64>,
     pub live: bool,
+    pub watched: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

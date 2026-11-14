@@ -40,6 +40,11 @@ fn terminal_font() -> settings::Terminal {
     FONT.get().cloned().unwrap_or_default()
 }
 
+/// The terminal font's family: code in the drawer is drawn in it.
+pub(crate) fn font_family() -> gpui::SharedString {
+    terminal_font().font.into()
+}
+
 /// Takes the terminal font from the settings. A font that is not installed would be replaced by
 /// some other one, perhaps not monospaced: the default is used, and the reply says so.
 pub fn choose_font(window: &Window) -> Option<String> {
@@ -540,6 +545,17 @@ impl Screen {
     }
 }
 
+impl Terminal {
+    /// Sends `signal` to the program it runs (SIGHUP to hang up, SIGKILL to end it), keeping the
+    /// terminal to see when the program is gone (`exited`).
+    pub fn signal(&self, signal: i32) {
+        if !self.exited() {
+            // SAFETY: plain integers; the child is ours and not reaped while `exited` is false.
+            unsafe { libc::kill(self.child as i32, signal) };
+        }
+    }
+}
+
 impl Drop for Terminal {
     fn drop(&mut self) {
         let _ = self.input.send(Msg::Shutdown);
@@ -554,7 +570,7 @@ fn grid_point(term: &Term<Listener>, at: CellPoint) -> (Point, Side) {
 
 /// The user's `$SHELL` if it reads `exec "$@"` as a POSIX shell does, else zsh: e.g. fish
 /// names its arguments otherwise.
-fn login_shell() -> String {
+pub(crate) fn login_shell() -> String {
     let shell = std::env::var("SHELL").unwrap_or_default();
     let name = shell.rsplit('/').next().unwrap_or_default();
     let posix = shell.starts_with('/') && matches!(name, "zsh" | "bash" | "sh" | "ksh" | "dash");

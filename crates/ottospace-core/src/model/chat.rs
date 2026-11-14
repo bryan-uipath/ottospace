@@ -6,7 +6,7 @@
 use super::{Action, Effect, Model};
 use crate::agents;
 use crate::edit::Field;
-use crate::runner::{RunnerId, Status};
+use crate::runner::{RunnerId, Status, Support};
 use crate::talk::Subject;
 use crate::tasks::State;
 use crate::transcript::{Event, Transcript, View};
@@ -42,8 +42,48 @@ impl Chat {
     }
 
     fn new(subject: Subject) -> Self {
-        let (transcript, draft) = (Transcript::default(), Field::new("", MAX_DRAFT));
+        let (transcript, draft) = (Transcript::default(), Field::lines(MAX_DRAFT));
         Self { subject, transcript, draft, deny: false, armed: false }
+    }
+}
+
+/// What a key does in a native conversation that has the keyboard.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Key {
+    /// Dispatch this action.
+    Act(Action),
+    /// ⇧↵: a new line in the draft.
+    Newline,
+    /// To the composer's field: an editing key, or text the input method types.
+    Field,
+    /// Nothing at all: a card has the keys, and this one is not among its answers.
+    Swallow,
+    /// Not the conversation's: a ⌘ shortcut goes on to its binding.
+    Pass,
+}
+
+/// The key `key` with `mods`, while a card waits (`card`: its ticket, and no Deny's message is
+/// written) or not.
+/// On a card ↵ does nothing, so an Allow is never a reflex: `a` allows, `d` denies, `s` shows
+/// all, `m` writes a message for the Deny. In the composer ↵ sends (or denies with the message),
+/// ⇧↵ starts a new line, Esc leaves, or stops a turn when pressed twice.
+pub fn key(key: &str, mods: crate::keys::Mods, card: Option<u64>) -> Key {
+    if mods.cmd {
+        return Key::Pass;
+    }
+    let bare = !mods.ctrl && !mods.alt && !mods.shift;
+    match key {
+        "escape" => Key::Act(Action::TalkEscape),
+        _ if let Some(ticket) = card => match key {
+            "a" if bare => Key::Act(Action::TalkAnswer { allow: true, ticket }),
+            "d" if bare => Key::Act(Action::TalkAnswer { allow: false, ticket }),
+            "s" if bare => Key::Act(Action::TalkExpand { ticket }),
+            "m" if bare => Key::Act(Action::TalkDenyNote),
+            _ => Key::Swallow,
+        },
+        "enter" if mods.shift => Key::Newline,
+        "enter" if bare => Key::Act(Action::TalkSend),
+        _ => Key::Field,
     }
 }
 
@@ -110,14 +150,13 @@ impl Model {
         picked.filter(|_| native).unwrap_or(if native { self.conversation_view } else { View::Terminal })
     }
 
-    /// True if the shown conversation may switch views now: not while a turn runs, a card
-    /// waits or the agent is at work in its terminal; and only one that can be drawn natively.
+    /// True if the shown conversation may switch views now: only one that can be drawn natively,
+    /// and not while its native turn runs or a card waits (Stop ends the turn first). From the
+    /// terminal at any time: the TUI is hung up on, as Stop does, whatever it was doing.
     pub fn talk_switchable(&self) -> bool {
         let Some(subject) = self.talk.as_ref().map(|talk| &talk.task) else { return false };
         let busy = self.chat(subject).is_some_and(|chat| chat.transcript.live && chat.transcript.busy());
-        let task = subject.task().and_then(|id| self.tasks.get(id));
-        let at_work = task.is_some_and(|task| task.state == State::Running) && self.agent_runs(subject);
-        self.drawable(subject) && !busy && !(at_work && self.talk_view(subject) == View::Terminal)
+        self.drawable(subject) && !busy
     }
 
     /// An agent started: drawn natively, its conversation gets a live transcript (kept from
@@ -135,9 +174,15 @@ impl Model {
             }
             self.chats.push(Chat::new(subject.clone()));
         }
+        // A new session is asked its task first: shown as the user's message, the brief's path aside.
+        let title = subject.task().and_then(|id| self.tasks.get(id)).map(|task| task.title.clone());
+        let now = self.now;
         if let Some(chat) = self.chat_mut(subject) {
             chat.transcript.started(resumed);
             (chat.deny, chat.armed) = (false, false);
+            if let Some(title) = title.filter(|_| !resumed) {
+                chat.transcript.send(&agents::prompt(&title, None), now);
+            }
         }
     }
 
@@ -183,6 +228,56 @@ impl Model {
         self.switching.iter_mut().for_each(rename);
     }
 
+    /// The repository a listed session is of: its links and images may be there.
+    pub fn session_repo(&self, runner: &str, id: &str) -> Option<String> {
+        self.session(runner, id).map(|found| found.repo.clone())
+    }
+
+    /// True if the conversation's agent was stopped for a switch of view and has not ended yet:
+    /// the shell waits for its process to exit before it says so (`AgentExited`).
+    pub fn is_switching(&self, subject: &Subject) -> bool {
+        self.switching.contains(subject)
+    }
+
+    /// The session to watch: the open drawer's conversation, when its agent does not run here,
+    /// its session is at work or held elsewhere, and its runner's file can be followed live
+    /// (`attach.watch`). The shell reads that file and sends what it says (`AgentEvents`):
+    /// a read-only transcript of labels, never the text.
+    pub fn watch_target(&self) -> Option<(Subject, RunnerId, String, String)> {
+        let subject = self.talk.as_ref().filter(|talk| talk.open)?.task.clone();
+        let runner = self.runner_of(&subject)?;
+        if self.agent_runs(&subject) || runner.spec().attach.watch != Support::Yes {
+            return None;
+        }
+        let (name, id) = self.session_of(&subject)?;
+        let found = self.facts(&name, &id).flatten()?;
+        self.in_use(found).then(|| (subject, runner, id, found.cwd.clone()))
+    }
+
+    /// True if the watched session may be taken over here now: idle, and its runner can go on
+    /// with an idle session (`attach.take_over_when_idle`). Taking over is the user's click on
+    /// it, which resumes it.
+    pub fn take_over_ready(&self, subject: &Subject) -> bool {
+        let idle =
+            self.session_of(subject).and_then(|(r, i)| self.facts(&r, &i).flatten()).is_some_and(|s| !self.in_use(s));
+        let can = self.runner_of(subject).is_some_and(|r| r.spec().attach.take_over_when_idle == Support::Yes);
+        can && idle && !self.agent_runs(subject)
+    }
+
+    /// The views the user picked for tasks' conversations, for the layout file.
+    pub(crate) fn saved_views(&self) -> Vec<(crate::tasks::TaskId, View)> {
+        self.views.iter().filter_map(|(subject, view)| Some((subject.task()?, *view))).collect()
+    }
+
+    /// The views a layout file kept: each task's, as the user last picked it.
+    pub(crate) fn restore_views(&mut self, views: Vec<(crate::tasks::TaskId, View)>) {
+        for (task, view) in views {
+            let subject = Subject::Task(task);
+            self.views.retain(|(of, _)| *of != subject);
+            self.views.push((subject, view));
+        }
+    }
+
     /// The conversations gone with their tasks take their transcripts with them.
     pub(super) fn settle_chats(&mut self) {
         let tasks = &self.tasks;
@@ -197,6 +292,29 @@ impl Model {
         match action {
             // The shell's runner alone reports events: a key or click of the user's is none.
             Action::AgentEvents { .. } if self.by_user => {}
+            // A watched session's file: what it shows, read-only. No turn, no card: nothing here
+            // can be answered or stopped, and nothing reaches its agent.
+            Action::AgentEvents { task: subject, events, at }
+                if !self.chat(&subject).is_some_and(|chat| chat.transcript.live) =>
+            {
+                if self.watch_target().is_none_or(|(watched, ..)| watched != subject) {
+                    return;
+                }
+                if self.chat(&subject).is_none() {
+                    self.chats.retain(|chat| chat.transcript.live || chat.subject != subject);
+                    if self.chats.len() >= KEPT
+                        && let Some(at) = self.chats.iter().position(|chat| !chat.transcript.live)
+                    {
+                        self.chats.remove(at);
+                    }
+                    self.chats.push(Chat::new(subject.clone()));
+                }
+                let Some(chat) = self.chat_mut(&subject) else { return };
+                chat.transcript.watched = true;
+                for event in events.into_iter().filter(Event::shows_when_watched) {
+                    chat.transcript.fold(event, at);
+                }
+            }
             Action::AgentEvents { task: subject, events, at } => {
                 let Some(chat) = self.chat_mut(&subject).filter(|chat| chat.transcript.live) else { return };
                 // A turn's start or end, or a request's, may cancel out within one batch: the task's
@@ -222,6 +340,13 @@ impl Model {
                     self.chat_state(&subject);
                 }
             }
+            // ↵ while the user writes a Deny's message: the Deny, with it.
+            Action::TalkSend if self.shown_chat().is_some_and(|chat| chat.deny) => {
+                let front = self.shown_chat().and_then(|chat| chat.transcript.cards.front().map(|card| card.ticket));
+                if let Some(ticket) = front {
+                    self.chat_act(Action::TalkAnswer { allow: false, ticket }, effects)
+                }
+            }
             Action::TalkSend => {
                 let now = self.now;
                 let Some(chat) = self.shown_chat_mut().filter(|chat| !chat.transcript.busy()) else { return };
@@ -230,7 +355,7 @@ impl Model {
                     return;
                 }
                 chat.transcript.send(&text, now);
-                chat.draft = Field::new("", MAX_DRAFT);
+                chat.draft = Field::lines(MAX_DRAFT);
                 let subject = chat.subject.clone();
                 effects.push(Effect::AgentSend { task: subject.clone(), text });
                 self.chat_state(&subject);
@@ -242,7 +367,7 @@ impl Model {
                 let Some(answered) = chat.transcript.answer(allow) else { return };
                 debug_assert_eq!(answered, ticket);
                 if message.is_some() {
-                    chat.draft = Field::new("", MAX_DRAFT);
+                    chat.draft = Field::lines(MAX_DRAFT);
                 }
                 chat.deny = false;
                 let subject = chat.subject.clone();
@@ -333,6 +458,10 @@ mod tests {
             let started = Action::AgentStarted { task: Subject::Task(*id), session: None, at: 1 };
             m.update(started.sent_by(Origin::System));
         }
+        // The first prompts' turns are over.
+        for id in ids {
+            events(&mut m, &Subject::Task(id), vec![Event::TurnFinished { outcome: Outcome::Completed }]);
+        }
         m
     }
 
@@ -386,6 +515,12 @@ mod tests {
         assert_eq!(m.refusal(&edit, Origin::Socket), Some(super::USERS_ALONE));
         m.update(edit.sent_by(Origin::Socket));
         assert_eq!(m.chat(&one).map(|chat| chat.draft.text()), Some(""));
+        // A line break typed or pasted is kept: the composer holds lines.
+        typed(&mut m, "two\nlines");
+        m.update(Action::FieldEdit { edit: crate::edit::Edit::Paste("\r\nand\tmore".into()) });
+        assert_eq!(m.chat(&one).map(|chat| chat.draft.text()), Some("two\nlines\nand    more"));
+        m.update(Action::FieldEdit { edit: crate::edit::Edit::SelectAll });
+        m.update(Action::FieldEdit { edit: crate::edit::Edit::Cut });
         typed(&mut m, "hello");
         let sent = m.update(Action::TalkSend.sent_by(Origin::Socket));
         assert!(sent.is_empty() && m.refusal(&Action::TalkSend, Origin::Socket).is_some());
@@ -412,6 +547,33 @@ mod tests {
         m.tasks.set_state(one.task().unwrap_or_default(), State::Running);
         events(&mut m, &one, turn);
         assert_eq!(m.tasks.get(one.task().unwrap_or_default()).map(|t| t.state), Some(State::NeedsYou));
+    }
+
+    #[test]
+    fn on_a_card_enter_does_nothing_and_letters_answer() {
+        use super::{Key, key};
+        use crate::keys::Mods;
+        let (none, shift) = (Mods::default(), Mods { shift: true, ..Mods::default() });
+        let cmd = Mods { cmd: true, ..Mods::default() };
+        let card = Some(4);
+        assert_eq!(key("enter", none, card), Key::Swallow, "no reflex Allow");
+        assert_eq!(key("a", none, card), Key::Act(Action::TalkAnswer { allow: true, ticket: 4 }));
+        assert_eq!(key("A", shift, card), Key::Swallow);
+        assert_eq!(key("d", none, card), Key::Act(Action::TalkAnswer { allow: false, ticket: 4 }));
+        assert_eq!(key("s", none, card), Key::Act(Action::TalkExpand { ticket: 4 }));
+        assert_eq!(key("m", none, card), Key::Act(Action::TalkDenyNote));
+        assert_eq!(key("x", none, card), Key::Swallow);
+        assert_eq!(key("escape", none, card), Key::Act(Action::TalkEscape));
+        assert_eq!(key("enter", none, None), Key::Act(Action::TalkSend));
+        assert_eq!(key("enter", shift, None), Key::Newline);
+        assert_eq!((key("a", none, None), key("l", cmd, card)), (Key::Field, Key::Pass));
+    }
+
+    #[test]
+    fn a_new_session_shows_its_first_prompt() {
+        let m = two_live();
+        let shapes = m.chat(&first(&m)).map(|chat| chat.transcript.summary().entries);
+        assert!(matches!(shapes.as_deref(), Some([crate::transcript::Shape::User { .. }])), "{shapes:?}");
     }
 
     #[test]

@@ -153,14 +153,16 @@ Not built yet: "Move Tab to Task…" (a filtered list of tasks in the palette).
    Unknown keys of the file are kept (`Task::extra`): the session-restore layer can add a task's
    tabs and layout there with no format break.
 
-One seam: the drawer asks one function what to show for a conversation. Stage 1 answers "the
-agent's terminal".
+One seam: the drawer asks one function what to show for a conversation (`talk_body`). Stage 1
+answers "the agent's terminal"; stage 2 answers "the native transcript" when `Model::talk_view`
+says so (`Workspace::is_native`).
+
+4. Stage 2 (built for Claude Code): the native conversation, `docs/ai/agent-runners.md`
+   ("Native view: what is built"): the runner's structured mode drawn in the drawer, markdown,
+   copy, links on the user's click, permission cards, a composer, `Chat | Terminal` on the same
+   session, a read-only watch of a session at work elsewhere with Take over.
 
 ## Later stages (not built)
-
-- **Stage 2: a native conversation.** Drawn from `ottospace-sessions` events: text that copies
-  and pastes, links that open, markdown and code drawn as such, pictures shown. The terminal
-  stays as a fallback tab.
 - **Stage 3: activity.** The agent at the center, spokes to files, shell, network, MCP,
   ottospace and sub-agents, and context as a ring; a strip of the same at the top of the
   drawer. Quick answers. Read access to workspace panes for the agent.

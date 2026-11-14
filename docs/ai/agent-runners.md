@@ -4,7 +4,8 @@ Stage 1 (`task-conversation.md`, PR #84) puts the agent's own TUI in a docked te
 right. The user asks for more: "a non-terminal" conversation, "easy to copy and paste,
 potentially visualize images, make links clickable, render markdown or code snippets properly",
 an activity view, and "a Rust abstraction over agent runners". This note picks how, and
-`crates/ottospace-agents` is the non-UI part of it. Nothing is wired into the app yet.
+`crates/ottospace-agents` is the non-UI part of it. Stages 2a and 2b are built for Claude Code: see
+"Native view: what is built".
 
 Written 2026-11-13 against Claude Code 2.1.323 and codex-cli 0.166.0 on macOS.
 
@@ -193,11 +194,15 @@ Where the UI asks the spec today: a new session's id (`chooses_session`: the tas
 once, or its session is sought), the sessions sought and read (`reader`), the held check
 (`disk.held`), and a resume (`take_over_when_idle`). Seams not wired, on purpose:
 
-- `attach.watch`: a read-only live view of a session started elsewhere (stage 2's native view).
 - `attach.attach_live`: joining a running session (Claude's background attach, Codex's daemon).
-- `structured.status`: the drawer's Chat | Terminal default (`Verified` → Chat).
-- `structured.answers` and `interrupt`: the permission card's buttons and Stop.
+- `structured.answers` and `interrupt`: the card always offers Allow (once) and Deny, and Stop; both
+  runners' specs say so.
 - `display`: the drawer header and rows still show `name`, as before.
+
+Wired with the native view: `structured.status` (`Verified` → the drawer may draw it natively,
+`Model::drawable`; Codex is `Experimental` and stays in a terminal), `attach.watch` (`Yes` → a
+session at work elsewhere is watched read-only, `Model::watch_target`) and
+`take_over_when_idle` (`Yes` → Take over once it is idle, `Model::take_over_ready`).
 
 ### Adding a third runner
 
@@ -229,7 +234,7 @@ pub trait Process {                         // driver::Driver implements it
 enum Input { Send { text, images }, Answer { ticket, answer }, Interrupt }
 enum Answer { Allow, Deny { message } }                // this one request, or not
 enum Event {
-    Started { session, model }, TurnStarted,
+    Started { session, model, mode }, TurnStarted,
     TextDelta { text: Untrusted }, Text { text: Untrusted },
     ToolStart { id, parent, tool, station, label, detail: Untrusted }, ToolEnd { id, failed },
     Permission { ticket, tool, station, label, detail: Untrusted, len, cut, claim: Untrusted },
@@ -279,7 +284,23 @@ reaches a label or `Debug`). Two ignored probes of the real CLIs (`tests/real.rs
 ## Trust rules
 
 Everything in the stream is model- or tool-written, including what looks like the CLI's own
-words (a tool result, a file the model read, a web page it fetched).
+words (a tool result, a file the model read, a web page it fetched). The four that sum them up,
+each held by code named here:
+
+- **A grant is never wider than what was displayed.** The card shows the payload `Payload::field`
+  built, and Allow sends that one request back as it came (`Answer::Allow`). A request cut at
+  4 KB cannot be allowed until it was shown whole (`Card::allowable`, `TalkExpand`); past 1 MB it
+  is denied unseen. No "always", no session rule.
+- **Nothing is fetched.** No `img()` of model text: a web image is a link, a local one a thumbnail
+  read by us (`conversation::read_thumb`). The watch view reads only the session's own file.
+- **Nothing opens without the user's click.** `links::target` is the one judge; the shell opens
+  only what it gave, only for `Origin::User` (`open_link`), and checks a file again with its links
+  resolved. A test run opens nothing (`drawer.native.opened` records it).
+- **Only the user answers.** Sends, answers, Show all, the Deny's message, Esc, interrupts and the
+  Chat | Terminal switch are `Origin::User` only (`chat::USERS_ALONE`), and only for the
+  conversation shown; the composer's text too (`FieldEdit` on `talk`). `AgentEvents` comes from
+  the shell's runner (`System`); a client's is refused (`chat::RUNNERS_ALONE`). The property test
+  checks each.
 
 1. **Untrusted is a type.** Text, command lines, paths, tool input and stderr are `Untrusted`:
    no `Serialize`, and `Debug` prints a length. Only labels (`tool`, `label`, `station`, `kind`,
@@ -294,11 +315,13 @@ words (a tool result, a file the model read, a web page it fetched).
    - Local images only from the task's repository or from what the user attached, read by us
      (`Image::load`: regular file, 20 MB, sniffed PNG/JPEG/GIF/WebP; no SVG).
    - Links: shown with their real target on hover; opened only on the user's click; only
-     `https`, `http` and `mailto` (scheme checked case-insensitively after percent-decoding),
-     everything else drawn as text. A link's text that looks like a URL but differs from its
-     target shows both.
-   - File paths in text become links only inside the task's repository, after resolving
-     symlinks and `..`; a click reveals or opens in the user's editor, never runs.
+     `https` and `http` (scheme checked case-insensitively, as written and after
+     percent-decoding; a plain host, no user name; no control, space or bidi character),
+     everything else drawn as text (`mailto` too, for now). A link's text that looks like a URL
+     but differs from its target shows both.
+   - A link to a path becomes a link only inside the task's repository (`..` resolved, then
+     links resolved again before the click acts); a click reveals it in Finder (`reveal_path`),
+     never opens or runs it. Bare paths in text are not made links.
    - No HTML blocks or inline HTML rendered: shown as text. No autolinking of bare hosts.
    - Code blocks: monospace, a copy button, no execution affordance. Terminal escapes in text
      are stripped before drawing.
@@ -308,13 +331,53 @@ words (a tool result, a file the model read, a web page it fetched).
    plan.
 4. **Argv.** A fixed table plus a name-shaped model and a UUID. The shell runs it through the
    login shell for `PATH` as stage 1 does (`"$SHELL" -lic 'exec "$@"' -- claude …`).
-5. **Data exposure.** stderr may hold tokens: it is `Untrusted`, shown on request in the drawer,
-   never logged or put in the state. Images the user attaches are read once and sent; nothing
+5. **Data exposure.** stderr may hold tokens: it is `Untrusted`, kept in the driver, never
+   logged, never in the core or the state (not shown in the drawer yet either).
+   Copy of a message or block goes to the clipboard, never to the state's `copied` (a test
+   run's clipboard is `copied` itself). Images the user attaches are read once and sent; nothing
    is cached on disk by ottospace.
 6. **Prompt injection** cannot be prevented here; the defence is the approval step being a real
    human act with the real command shown, and nothing auto-approved by ottospace.
 
-## Native view stages (not built)
+## Native view: what is built
+
+- **Core** (`transcript.rs`, `model/chat.rs`, `links.rs`): a transcript per conversation folded
+  from the runner's events (user messages, streamed text replaced by the whole block, tool rows
+  with label and state, sub-agent calls marked, auto-denials, notices, usage), capped at 400
+  entries or 4 MB (256 KB an entry); the oldest are counted and dropped from memory, the session
+  file keeps them; scroll-back does not read them again. A draft, a Deny's message and Esc's
+  state per conversation, so the conversation shown can change at any time. Cards queue in
+  order and are answered once. Task state follows the stream: Running while a turn runs, Needs
+  you while a card waits or once it ends; the rail's live line is the stream's current call.
+  The view (`Model::talk_view`): the user's pick, else `conversation_view` where the spec's
+  structured mode is verified, else Terminal; kept in `layout.json` (`drawer.views`).
+- **Shell** (`conversation.rs`, `markdown.rs`): `structured(...)` from the spec, through the
+  login shell, the first prompt on stdin; events translated, tickets numbered; markdown blocks
+  (pulldown-cmark 0.13.6, no `html` feature) drawn with `StyledText`/`InteractiveText`; code
+  blocks with Copy; Copy and Copy as Markdown per message; a working row; the card; a multi-line
+  composer (`field.rs`, up to 8 lines). Keys (`chat::key`): on a card ↵ does nothing, `a` `d`
+  `s` `m`; in the composer ↵ sends (or denies with the message), ⇧↵ a new line, Esc leaves, Esc
+  Esc interrupts. While a turn runs ↵ sends nothing (the draft waits).
+- **Switch.** Chat → Terminal is refused while a turn runs or a card waits; Terminal → Chat at
+  any time (the TUI is hung up on, as Stop). The core marks the switch and stops the agent; the
+  shell kills the native group or hangs up on the TUI (SIGKILL after 3 s) and says
+  `AgentExited` only once the process is gone; then the core resumes the session in the other
+  view. Never two processes on one session.
+- **Watch.** A session at work or held elsewhere, whose spec says `watch: Yes`, is followed from
+  its file (`ottospace-sessions`, read each second): its calls, sub-agents, errors and a notice
+  per message, never its text; no turn, no card. Take over, when `take_over_when_idle` and it is
+  idle, is the user's open of it (a resume).
+- **Not built:** Codex native (its `Wire` exists; the drawer keeps it in a terminal until its
+  app server is probed), images attached from the composer (the runner takes them; no picker
+  yet), stderr on request, syntax colouring, drag selection, rich tool results (diffs), the
+  radial activity view (2c), mailto links, bare paths as links.
+- **Unverified against the real CLI:** that `claude -p --session-id` writes the session file
+  as the TUI does (the docs' `--no-session-persistence`, "only works with --print", implies it
+  does; the driver tests use a fake), so time and tokens per model, the resume after a switch
+  and the watch view depend on it; the shape of `permissionMode` in `system/init` beyond the
+  probe's `default`/`auto`.
+
+### The stages as planned
 
 - **2a. Transcript and composer.** Markdown via `pulldown-cmark` (pure Rust, no I/O; already in
   the local cargo registry as 0.13.x, not yet a dependency) into GPUI elements. GPUI 0.2.2 (the

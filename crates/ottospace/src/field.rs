@@ -39,6 +39,10 @@ pub struct Drawn {
     viewport: Pixels,
     /// Where the new-task box's content was last drawn.
     panel: Bounds<Pixels>,
+    /// A field of several lines (the conversation's composer): each line drawn, where it starts
+    /// in the text and its top; and the pointer's last height, to pick the line it is over.
+    rows: Vec<(usize, ShapedLine, Pixels)>,
+    pointer_y: Pixels,
 }
 
 impl Drawn {
@@ -130,6 +134,11 @@ impl Workspace {
         let drawn = self.drawn();
         let drawn = drawn.borrow();
         let empty = self.model.field().is_none_or(|(_, field)| field.text().is_empty());
+        // Several lines: the one the pointer is over, else the last above it.
+        let row = drawn.rows.iter().rev().find(|(_, _, top)| *top <= drawn.pointer_y).or(drawn.rows.first());
+        if let Some((start, line, _)) = row.filter(|_| !empty) {
+            return start + line.closest_index_for_x(x - drawn.bounds.left() + drawn.scroll);
+        }
         match &drawn.line {
             Some(line) if !empty => line.closest_index_for_x(x - drawn.bounds.left() + drawn.scroll),
             _ => 0,
@@ -246,6 +255,7 @@ impl Workspace {
                     if of == "compose" && this.model.capture.is_some() && !this.model.compose_keys() {
                         this.dispatch(Action::CaptureTitle, this.input, window, cx);
                     }
+                    this.drawn_of(of).borrow_mut().pointer_y = event.position.y;
                     this.field_press(event.position.x, event.click_count, event.modifiers.shift, window, cx);
                     // A mark's name sits in its row: the row's click would go to the mark, and
                     // the section's take the keyboard back. Either ends the rename.
@@ -266,6 +276,7 @@ impl Workspace {
                 marked: field.marked(),
                 placeholder: placeholder.into(),
                 accent: theme::accent(self.model.mode()),
+                rows: if of == "talk" { ROWS } else { 1 },
             })
     }
 }
@@ -367,7 +378,12 @@ struct FieldElement {
     marked: Option<Range<usize>>,
     placeholder: SharedString,
     accent: u32,
+    /// The most lines it shows: 1, one line that scrolls sideways; more, a line per `\n`.
+    rows: usize,
 }
+
+/// The most lines the conversation's composer shows; past them, those around the cursor.
+const ROWS: usize = 8;
 
 impl IntoElement for FieldElement {
     type Element = Self;
@@ -398,7 +414,8 @@ impl Element for FieldElement {
     ) -> (LayoutId, ()) {
         let mut style = Style::default();
         style.size.width = relative(1.).into();
-        style.size.height = window.line_height().into();
+        let lines = self.text.split('\n').count().clamp(1, self.rows);
+        style.size.height = (window.line_height() * lines as f32).into();
         (window.request_layout(style, [], cx), ())
     }
 
@@ -426,6 +443,10 @@ impl Element for FieldElement {
         // The workspace's root has the focus, so the field gets text without taking it.
         if self.active {
             window.handle_input(&self.focus, ElementInputHandler::new(bounds, self.workspace.clone()), cx);
+        }
+        if self.rows > 1 {
+            self.paint_rows(bounds, window, cx);
+            return self.listen(window);
         }
 
         let style = window.text_style();
@@ -469,23 +490,7 @@ impl Element for FieldElement {
         drawn.scroll = drawn.scroll.max(cursor_x - width).min(cursor_x).min(furthest).max(px(0.));
         let origin = bounds.origin - point(drawn.scroll, px(0.));
 
-        let now = Instant::now();
-        if drawn.shown != (self.text.clone(), self.cursor) {
-            drawn.shown = (self.text.clone(), self.cursor);
-            drawn.since = Some(now);
-        }
-        let caret_on = ((now - drawn.since.unwrap_or(now)).as_millis() / BLINK.as_millis()).is_multiple_of(2);
-        // Only the field with the keyboard blinks: one that only shows asks for no redraw.
-        if self.active && !drawn.ticking {
-            drawn.ticking = true;
-            let (shared, workspace) = (self.drawn.clone(), self.workspace.downgrade());
-            cx.spawn(async move |cx| {
-                cx.background_executor().timer(BLINK).await;
-                shared.borrow_mut().ticking = false;
-                let _ = workspace.update(cx, |_, cx| cx.notify());
-            })
-            .detach();
-        }
+        let caret_on = self.blink(&mut drawn, cx);
 
         let selection = self.selection.clone();
         let line_height = window.line_height();
@@ -509,15 +514,111 @@ impl Element for FieldElement {
             }
         });
         drawn.line = Some(line);
+        drawn.rows.clear();
         drawn.bounds = bounds;
         drawn.viewport = window.viewport_size().height;
         drop(drawn);
+        self.listen(window);
+    }
+}
 
+impl FieldElement {
+    /// True while the caret shows. Asks for the redraw of the next blink, for the field with
+    /// the keyboard only: one that only shows asks for none.
+    fn blink(&self, drawn: &mut Drawn, cx: &mut App) -> bool {
+        let now = Instant::now();
+        if drawn.shown != (self.text.clone(), self.cursor) {
+            drawn.shown = (self.text.clone(), self.cursor);
+            drawn.since = Some(now);
+        }
+        let caret_on = ((now - drawn.since.unwrap_or(now)).as_millis() / BLINK.as_millis()).is_multiple_of(2);
+        if self.active && !drawn.ticking {
+            drawn.ticking = true;
+            let (shared, workspace) = (self.drawn.clone(), self.workspace.downgrade());
+            cx.spawn(async move |cx| {
+                cx.background_executor().timer(BLINK).await;
+                shared.borrow_mut().ticking = false;
+                let _ = workspace.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+        }
+        caret_on
+    }
+
+    /// A field of several lines: a line per `\n`, at most `rows`, those around the cursor; the
+    /// selection and the caret on the lines they are on. Long lines are cut at the edge.
+    fn paint_rows(&mut self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
+        let style = window.text_style();
+        let empty = self.text.is_empty();
+        let (shown, color) = match empty {
+            true => (self.placeholder.clone(), rgb(theme::MUTED).into()),
+            false => (self.text.clone(), style.color),
+        };
+        let font_size = style.font_size.to_pixels(window.rem_size());
+        let line_height = window.line_height();
+        let mut starts = vec![0];
+        starts.extend(shown.match_indices('\n').map(|(at, _)| at + 1));
+        let on = starts.iter().rposition(|start| *start <= self.cursor).unwrap_or(0);
+        let first = (on + 1).saturating_sub(self.rows);
+        let mut drawn = self.drawn.borrow_mut();
+        let caret_on = self.blink(&mut drawn, cx);
+        drawn.rows.clear();
+        window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            for (row, start) in starts.iter().copied().enumerate().skip(first).take(self.rows) {
+                let end = starts.get(row + 1).map_or(shown.len(), |next| next - 1);
+                let text: SharedString = shown[start..end].to_string().into();
+                let marked = self.marked.clone().filter(|m| !empty && m.start >= start && m.end <= end);
+                let run = |len: usize, underline: bool| TextRun {
+                    len,
+                    font: style.font(),
+                    color,
+                    background_color: None,
+                    underline: underline.then_some(UnderlineStyle {
+                        color: Some(color),
+                        thickness: px(1.),
+                        wavy: false,
+                    }),
+                    strikethrough: None,
+                };
+                let runs = match marked {
+                    Some(m) => {
+                        let parts = [(m.start - start, false), (m.end - m.start, true), (end - m.end, false)];
+                        parts.into_iter().filter(|(len, _)| *len > 0).map(|(len, under)| run(len, under)).collect()
+                    }
+                    None => vec![run(text.len(), false)],
+                };
+                let line = window.text_system().shape_line(text, font_size, &runs, None);
+                let top = bounds.top() + line_height * (row - first) as f32;
+                let x = |index: usize| bounds.left() + if empty { px(0.) } else { line.x_for_index(index - start) };
+                let (from, to) = (self.selection.start.max(start), self.selection.end.min(end));
+                if from < to || (self.selection.start < start && self.selection.end > end) {
+                    let quad = Bounds::from_corners(point(x(from), top), point(x(to.max(from)), top + line_height));
+                    window.paint_quad(fill(quad, rgb(theme::SELECTION)));
+                }
+                let _ = line.paint(point(bounds.left(), top), line_height, window, cx);
+                if self.selection.is_empty() && caret_on && self.active && row == on {
+                    let caret = Bounds::new(point(x(self.cursor), top), size(px(2.), line_height));
+                    window.paint_quad(fill(caret, rgb(self.accent)));
+                }
+                drawn.rows.push((start, line, top));
+            }
+        });
+        drawn.line = drawn.rows.iter().find(|(start, ..)| *start == starts[on]).map(|(_, line, _)| line.clone());
+        drawn.scroll = px(0.);
+        drawn.bounds = bounds;
+        drawn.viewport = window.viewport_size().height;
+    }
+
+    /// The mouse and modifier handlers every field has.
+    fn listen(&self, window: &mut Window) {
         // On the window, not the field: a drag goes on past its edges, and ends anywhere.
-        let workspace = self.workspace.clone();
+        let (workspace, shared) = (self.workspace.clone(), self.drawn.clone());
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
             if phase != DispatchPhase::Bubble {
                 return;
+            }
+            if event.pressed_button == Some(MouseButton::Left) {
+                shared.borrow_mut().pointer_y = event.position.y;
             }
             workspace.update(cx, |this, cx| {
                 if event.pressed_button == Some(MouseButton::Left) {

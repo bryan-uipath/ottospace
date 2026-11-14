@@ -16,6 +16,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use conversation::NativeInput;
 use core_foundation::base::TCFType;
 use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 use gpui::{
@@ -60,6 +61,7 @@ mod commands;
 mod config;
 mod confirm;
 mod control;
+mod conversation;
 mod dialog;
 mod field;
 mod give_back;
@@ -1256,8 +1258,12 @@ impl Workspace {
                     }
                 }
                 Effect::StopAgent { task } => agents.extend(self.stop_agent(task)),
-                // Native conversations only: none runs until the shell draws them.
-                Effect::AgentSend { .. } | Effect::AgentAnswer { .. } | Effect::AgentInterrupt { .. } => {}
+                Effect::AgentSend { task, text } => self.native_input(task, NativeInput::Send(text.clone())),
+                Effect::AgentAnswer { task, ticket, allow, message } => {
+                    let answer = NativeInput::Answer { ticket: *ticket, allow: *allow, message: message.clone() };
+                    self.native_input(task, answer);
+                }
+                Effect::AgentInterrupt { task } => self.native_input(task, NativeInput::Interrupt),
                 Effect::AgentMoved { from, to } => self.move_agent(from, to),
                 Effect::MeetingAlert { .. } | Effect::OpenLink { .. } => self.meeting_effect(effect),
                 Effect::ReadSession { runner, id } => agents.extend(self.read_session(runner, id)),
@@ -2130,8 +2136,7 @@ impl Workspace {
                 claude: models.claude,
                 codex: models.codex,
                 default: settings.default_agent.clone(),
-                // Until the shell draws native conversations, every one is a terminal.
-                shows: ottospace_core::transcript::View::Terminal,
+                shows: settings.conversation_view.unwrap_or_default(),
             };
             self.dispatch(agents, Origin::System, window, cx);
         }
@@ -3124,7 +3129,7 @@ impl Workspace {
             return;
         }
         if self.model.mode() == Mode::Talk {
-            return self.talk_key(event, cx);
+            return self.talk_key(event, window, cx);
         }
         let Some(terminal) = self.model.focused.and_then(|id| self.terminals.get(&id)) else { return };
         let key = &event.keystroke;

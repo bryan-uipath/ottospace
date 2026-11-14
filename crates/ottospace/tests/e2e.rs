@@ -4949,6 +4949,7 @@ fn a_click_on_a_task_starts_its_agent_in_the_drawer_and_the_workspace_stays() {
     let settings = json!({
         "repos": [repos],
         "session_dirs": {"claude": [sessions.join("claude")], "codex": codex_home},
+        "conversation_view": "terminal",
     });
     let home = user_folder("talk", &settings.to_string());
     let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
@@ -5053,7 +5054,7 @@ fn a_new_task_takes_the_tab_on_show_and_the_drawer_follows_the_tab() {
     fake_agents(&bin, &sessions);
     fake_repo(&repos.join("app"));
     let app = repos.join("app").canonicalize().unwrap();
-    let settings = json!({"repos": [repos], "session_dirs": {"claude": [sessions.join("claude")]}});
+    let settings = json!({"repos": [repos], "session_dirs": {"claude": [sessions.join("claude")]}, "conversation_view": "terminal"});
     let home = user_folder("groups", &settings.to_string());
     let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
     let otto = Otto::launch_with("groups", &env);
@@ -5167,7 +5168,7 @@ fn a_click_on_a_session_goes_on_with_it_in_the_drawer() {
     std::fs::write(claude.join("sessions/1.json"), live.to_string()).unwrap();
     let rollout = format!("sessions/2026/11/12/rollout-2026-11-12T09-30-00-{busy}.jsonl");
     session_fixture(&format!("codex/{rollout}"), &codex.join(&rollout), &repo, hours(0));
-    let settings = json!({"repos": [repos], "session_dirs": {"claude": [claude], "codex": codex}});
+    let settings = json!({"repos": [repos], "session_dirs": {"claude": [claude], "codex": codex}, "conversation_view": "terminal"});
     let home = user_folder("session-open", &settings.to_string());
     let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
     let otto = Otto::launch_with("session-open", &env);
@@ -5786,7 +5787,7 @@ fn tabs_and_layout_come_back_after_quitting_and_no_agent_starts() {
     let real = |dir: &Path| dir.canonicalize().unwrap().to_string_lossy().into_owned();
     let (one, two) = (real(&one), real(&two));
     let dirs = json!({"claude": [sessions.join("claude")], "codex": sessions.join("codex")});
-    let settings = json!({"repos": [repos], "session_dirs": dirs});
+    let settings = json!({"repos": [repos], "session_dirs": dirs, "conversation_view": "terminal"});
     let home = user_folder("restore", &settings.to_string());
     let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
     let mut otto = Otto::launch_with("restore-1", &env);
@@ -6130,4 +6131,186 @@ fn the_calendar_section_lists_the_day_and_only_the_user_joins_from_it() {
     assert!(!labelled(&otto, "rail:calendar"));
     assert!(labelled(&otto, "rail:tasks"));
     assert_eq!(otto.call(json!({"cmd": "section", "section": "calendar"}))["state"]["sidebar"], Value::Null);
+}
+
+/// Hand-written stream-json for the stand-in `claude -p` (`ottospace-agents/tests/fakes/claude`),
+/// by fixture name. Made-up text: a reply with markdown, a call asked and denied, a long call
+/// asked and allowed once shown in full, and a turn interrupted.
+fn native_fixtures(dir: &Path) {
+    const S: &str = r#""session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003""#;
+    let long = "x".repeat(6000);
+    let ask = |id: &str, command: &str| {
+        format!(
+            r#"{{"type":"control_request","request_id":"{id}","request":{{"subtype":"can_use_tool","tool_name":"Bash","input":{{"command":"{command}","description":"Show changes"}},"tool_use_id":"toolu_{id}"}}}}"#
+        )
+    };
+    let tool = |id: &str, command: &str| {
+        format!(
+            r#"{{"type":"assistant",{S},"parent_tool_use_id":null,"message":{{"content":[{{"type":"tool_use","id":"toolu_{id}","name":"Bash","input":{{"command":"{command}"}}}}]}}}}"#
+        )
+    };
+    let text = |text: &str| {
+        let text = serde_json::to_string(text).unwrap();
+        format!(
+            r#"{{"type":"assistant",{S},"parent_tool_use_id":null,"message":{{"content":[{{"type":"text","text":{text}}}]}}}}"#
+        )
+    };
+    let result = |id: &str| {
+        format!(
+            r#"{{"type":"user",{S},"parent_tool_use_id":null,"message":{{"content":[{{"type":"tool_result","tool_use_id":"toolu_{id}","content":"ok","is_error":false}}]}}}}"#
+        )
+    };
+    let delta = |text: &str| {
+        format!(
+            r#"{{"type":"stream_event",{S},"parent_tool_use_id":null,"event":{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"{text}"}}}}}}"#
+        )
+    };
+    let done = r#"{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01,"modelUsage":{"claude-opus-5-5":{"contextWindow":1000000}}}"#;
+    let reply = "## Plan\n\nThe login loop comes from **two redirects** in `auth.rs`. See [the docs](https://example.com/docs) \
+                 and [main](src/main.rs:3); not [this](javascript:alert(1)).\n\n- drop the second redirect\n- keep the \
+                 *session* cookie\n\n> Tests pass on the fixed branch.\n\n```rust\nfn main() {}\n```\n\n| a | b |\n|---|---|\n\
+                 | 1 | 2 |\n\n<script>alert(1)</script>";
+    let init =
+        format!(r#"{{"type":"system","subtype":"init",{S},"model":"claude-opus-5-5","permissionMode":"default"}}"#);
+    let interrupted =
+        r#"{"type":"result","subtype":"error_during_execution","is_error":true,"terminal_reason":"aborted_streaming"}"#;
+    let files = [
+        (
+            "turn1.jsonl",
+            [init, delta("Looking "), text(reply), tool("1", "git status --short"), ask("1", "git status --short")]
+                .join("\n"),
+        ),
+        ("turn1-denied.jsonl", [text("Fine, I will not."), done.into()].join("\n")),
+        ("turn2.jsonl", [tool("2", &long), ask("2", &long)].join("\n")),
+        ("turn2-allowed.jsonl", [result("2"), text("Done."), done.into()].join("\n")),
+        ("turn3.jsonl", delta("Working on it")),
+        ("turn2-interrupted.jsonl", interrupted.into()),
+    ];
+    std::fs::create_dir_all(dir).unwrap();
+    for (name, body) in files {
+        std::fs::write(dir.join(name), format!("{body}\n")).unwrap();
+    }
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_native_conversation_streams_asks_and_switches_to_the_terminal_and_back() {
+    let root = support::temp(&format!("ottospace-e2e-native-{}", std::process::id()));
+    let (bin, repos) = (root.join("bin"), root.join("repos"));
+    let (record, fixtures) = (root.join("record"), root.join("fixtures"));
+    fake_repo(&repos.join("app"));
+    native_fixtures(&fixtures);
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::create_dir_all(&record).unwrap();
+    // The agents crate's stand-in, as `claude`: it records argv and stdin, and replays the fixtures.
+    let fake = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ottospace-agents/tests/fakes/claude");
+    std::fs::copy(&fake, bin.join("claude")).unwrap();
+    let home = user_folder("native", &json!({ "repos": [repos] }).to_string());
+    let env = [
+        ("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()),
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+        ("FAKE_DIR", record.to_str().unwrap()),
+        ("FAKE_FIXTURES", fixtures.to_str().unwrap()),
+    ];
+    let otto = Otto::launch_with("native", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "fix login >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    let stdin = || std::fs::read_to_string(record.join("stdin")).unwrap_or_default();
+    let argv = || std::fs::read_to_string(record.join("argv")).unwrap_or_default();
+
+    // The user's click starts it natively: the prompt on stdin, the reply drawn, a card at the end.
+    otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
+    let first = otto.wait_for("a permission card", |o| {
+        let chat = chat(o);
+        (chat["transcript"]["cards"].as_array()?.len() == 1).then_some(chat)
+    });
+    assert!(argv().lines().any(|a| a == "-p") && argv().contains("--session-id"), "{}", argv());
+    assert!(stdin().contains("Task: fix login"), "the prompt goes on stdin, never in argv");
+    let entries = first["transcript"]["entries"].as_array().unwrap();
+    let kinds: Vec<&str> = entries.iter().filter_map(|e| e["kind"].as_str()).collect();
+    assert_eq!(kinds, ["user", "assistant", "tool"], "{first}");
+    let view = (&first["view"], &first["native"], &first["transcript"]["mode"]);
+    assert_eq!(view, (&json!("native"), &json!(true), &json!("default")));
+    // The reply's structure: a heading, a code block, a table; one web link and one file link
+    // (the `javascript:` one is text). The script tag is a paragraph of text.
+    let reply = &first["replies"][0];
+    let blocks = (&reply["blocks"]["code"], &reply["blocks"]["table"], &reply["blocks"]["heading"]);
+    assert_eq!(blocks, (&json!(1), &json!(1), &json!(1)), "{reply}");
+    assert_eq!(reply["links"], json!({"web": 1, "file": 1}), "{reply}");
+    // Labels only (the call's `git status` is one): no word of the reply, its links or the prompt.
+    let said = first.to_string();
+    assert!(
+        ["example.com", "Looking", "Plan", "fix login", "Show changes"].iter().all(|w| !said.contains(w)),
+        "{said}"
+    );
+    let card = &first["transcript"]["cards"][0];
+    assert_eq!((&card["tool"], &card["cut"]), (&json!("Bash"), &json!(false)), "{card}");
+
+    // A client answers nothing, by key or click; ↵ on a card does nothing.
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "a"}))["notice"], "only the user starts or stops a task's agent");
+    otto.click(at(otto.control("talk:chat-allow"), 0.5, 0.5), 1);
+    otto.user_key("enter");
+    assert!(!stdin().contains("behavior"), "{}", stdin());
+    assert_eq!(chat(&otto)["transcript"]["cards"].as_array().map(Vec::len), Some(1));
+    // `d`: denied, this one call; the turn ends.
+    otto.user_key("d");
+    otto.wait_for("the denied turn to end", |o| chat(o)["transcript"]["turn"].is_null().then_some(()));
+    assert!(stdin().contains(r#""behavior":"deny""#) && !stdin().contains(r#""behavior":"allow""#), "{}", stdin());
+
+    // The composer: ⇧↵ a new line, ↵ sends. The next request is cut: Allow waits for Show all.
+    otto.user_key("h i shift-enter y o enter");
+    let cut = otto.wait_for("a cut card", |o| {
+        let card = chat(o)["transcript"]["cards"][0].clone();
+        (card["cut"] == true).then_some(card)
+    });
+    assert_eq!(cut["expanded"], false);
+    assert!(stdin().contains(r#""text":"hi\nyo""#), "{}", stdin());
+    otto.user_key("a");
+    assert!(!stdin().contains(r#""behavior":"allow""#), "a cut request is not allowed unseen");
+    otto.user_key("s");
+    assert_eq!(chat(&otto)["transcript"]["cards"][0]["expanded"], true);
+    otto.user_key("a");
+    otto.wait_for("the allowed turn to end", |o| chat(o)["transcript"]["turn"].is_null().then_some(()));
+    assert!(stdin().contains(r#""behavior":"allow""#), "{}", stdin());
+
+    // A turn that runs: Esc once arms, twice interrupts.
+    otto.user_key("g o enter");
+    otto.wait_for("a running turn", |o| chat(o)["transcript"]["turn"].is_string().then_some(()));
+    otto.user_key("escape");
+    assert_eq!(chat(&otto)["armed"], true);
+    otto.user_key("escape");
+    otto.wait_for("the interrupt", |o| chat(o)["transcript"]["turn"].is_null().then_some(()));
+    assert!(stdin().contains(r#""subtype":"interrupt""#), "{}", stdin());
+    // Copy on the code block: the code, to the clipboard (a test run's own).
+    let targets = otto.call(json!({"cmd": "sneak"}))["sneak"]["targets"].clone();
+    otto.call(json!({"cmd": "key", "keys": "escape"}));
+    let copy = targets
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["source"]["id"].as_str().is_some_and(|id| id.starts_with("chat-code-copy:1:")));
+    let copy = copy.expect("a Copy on the code block");
+    let f = |key: &str| copy["frame"][key].as_f64().unwrap();
+    assert_eq!(otto.user_click(at([f("x"), f("y"), f("w"), f("h")], 0.5, 0.5))["copied"], "fn main() {}");
+
+    // Chat → Terminal: the native process ends first, then the session goes on in the TUI.
+    let state = otto.call(json!({"cmd": "state"}));
+    let session = state["state"]["tasks"]["list"][0]["session"]["id"].as_str().expect("a session").to_string();
+    otto.click(at(otto.control("talk:view-terminal"), 0.5, 0.5), 1);
+    assert!(otto.call(json!({"cmd": "state"}))["drawer"]["agents"]["1"].is_null(), "a client switches nothing");
+    otto.user_click(at(otto.control("talk:view-terminal"), 0.5, 0.5));
+    let terminal = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["agents"]["1"].is_object();
+    otto.wait_for("the terminal", |o| terminal(o).then_some(()));
+    assert_eq!(chat(&otto)["native"], false, "one process at a time");
+    otto.wait_for("claude --resume", |_| (argv().lines().next() == Some("--resume")).then_some(()));
+    assert_eq!(argv().lines().collect::<Vec<_>>(), ["--resume", session.as_str()]);
+    // And back: the TUI is hung up on, then the session goes on natively.
+    otto.user_click(at(otto.control("talk:view-chat"), 0.5, 0.5));
+    otto.wait_for("chat again", |o| (chat(o)["native"] == true && !terminal(o)).then_some(()));
+    let native = || argv().lines().any(|a| a == "-p") && argv().contains(&session);
+    otto.wait_for("claude -p --resume", |_| native().then_some(()));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
 }
