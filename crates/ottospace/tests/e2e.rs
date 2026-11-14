@@ -5493,7 +5493,9 @@ fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_works
     });
     // Codex started in its own space: task 1's tab stays task 1's.
     assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["tabs"][1]["space"]["id"], 1);
-    // A client's click on a row opens the task's space and starts nothing.
+    // A client's click on a row opens the task's space and starts nothing: once the user's keys
+    // are out of the chat (while they type there, it waits).
+    otto.user_key("cmd-l");
     otto.call(json!({"cmd": "new_tab"}));
     let theirs = otto.click(at(otto.control("task:1"), 0.3, 0.3), 1);
     assert_eq!((&theirs["state"]["active"], &theirs["state"]["agents"]), (&json!(2), &json!([2])), "{theirs}");
@@ -5654,7 +5656,8 @@ fn a_click_shows_a_session_and_resume_goes_on_with_it_in_the_drawer() {
     let reply = otto.user_start();
     let talk = json!({"runner": "claude", "id": idle});
     assert_eq!((&reply["mode"], &reply["state"]["talk"]["task"]), (&json!("talk"), &talk), "{reply}");
-    let argv = otto.wait_for("claude --resume", |_| agent_argv(&bin, "claude"));
+    // The fake writes its argv as it goes: wait for all of it.
+    let argv = otto.wait_for("claude --resume", |_| agent_argv(&bin, "claude").filter(|argv| argv.len() >= 3));
     assert_eq!(argv, [below.to_str().unwrap(), "--resume", idle]);
     let key = format!("claude:{idle}");
     let state = otto.wait_for("the agent to say it is ready", |o| {
@@ -7205,6 +7208,8 @@ fn a_click_on_a_tab_switches_with_the_drawer_open() {
     otto.call(json!({"cmd": "task_new", "line": "plan the week >app"}));
     otto.call(json!({"cmd": "section", "section": "tasks"}));
     otto.start_task(1);
+    // Out of the chat: a client's new tab is not shown under the user's typing.
+    otto.user_key("cmd-l");
     otto.call(json!({"cmd": "new_tab"}));
     otto.call(json!({"cmd": "split", "kind": "empty"}));
     let state = otto.call(json!({"cmd": "state"}));

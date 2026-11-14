@@ -537,7 +537,10 @@ tab that space showed last; `select_tab` takes an index in `state.tabs` and sele
 `cycle_tab` stays in the selected space. `hide_space` takes a space off the row: its tabs, panes,
 terminals and agent go on, and `open_space` (or the user's row in Tasks or Workbook) brings it back
 where it was. `new_tab` from you is Workspace's. While the user types in the chat (`mode` `talk`),
-a request that would select another space fails with `the user is typing in the chat`. Closing a
+a request that would select another space, take the keyboard, open the list or close the drawer
+fails with `the user is typing in the chat`, and nothing else you send moves their keys. While the
+user writes a new task, your `escape`, ↵ and close of the box fail with `the user is writing a new
+task` (a line you put or typed in is yours to file). Closing a
 space's last tab closes the space; Workspace gets an empty tab. A workbook's space opens from the
 user's Workbook section only.
 

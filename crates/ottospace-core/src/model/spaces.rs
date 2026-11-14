@@ -76,6 +76,8 @@ pub struct SpaceRow {
 
 /// Why a client's change of space waits: the user's keys are in the chat.
 pub const CHAT_TYPING: &str = "the user is typing in the chat";
+/// Why a client's Esc or close of the new-task box is refused: the user is writing in it.
+pub const BOX_TYPING: &str = "the user is writing a new task";
 
 impl Model {
     /// The selected space: the one of the tab on show.
@@ -232,7 +234,25 @@ impl Model {
             Action::SpaceOpen { space: of } => other(Some(of)),
             Action::TaskGo { id } => id.is_none_or(|id| other(Some(&Owner::Task { id }))),
             Action::OpenRepo { .. } => *self.space() != Owner::Workspace,
+            // The selected space's last tab closed: the space goes.
+            Action::CloseTab { index } => {
+                let at = index.unwrap_or(self.active);
+                at == self.active && self.space_tabs(self.space()).len() == 1
+            }
             _ => false,
+        }
+    }
+
+    /// Shows tab `id` again if a step selected another space under the user's typing: what it
+    /// made stays, in the background. Nothing else changes: the keys stay where they were.
+    pub(crate) fn keep_shown(&mut self, id: u32, effects: &mut Vec<Effect>) {
+        let Some(at) = self.tabs.iter().position(|tab| tab.id == id) else { return };
+        if self.tabs[at].space != *self.space() {
+            // An app it made live there would stay up over the tab shown again.
+            self.leave(effects);
+            self.park_active();
+            self.active = at;
+            self.unpark_active();
         }
     }
 
@@ -297,7 +317,9 @@ impl Model {
         if open && self.compose_host() == Some(Host::Drawer) {
             self.put_compose_aside();
         }
-        let keys = open && drawer_keys && origin == Origin::User && self.talk_live(&subject);
+        // Not under an app, the list, visual mode or a picture being drawn on.
+        let free = self.live.is_none() && self.list.is_none() && self.visual.is_none() && self.annotated().is_none();
+        let keys = open && drawer_keys && free && origin == Origin::User && self.talk_live(&subject);
         self.talk = Some(Talk { task: subject.clone(), open, keys });
         self.drawer_open = open;
         self.opened.retain(|seen| *seen != subject);

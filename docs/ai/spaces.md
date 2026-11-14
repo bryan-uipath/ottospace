@@ -34,8 +34,13 @@ rail's cells and the drawer's go word (`docs/ai/ux-simplification.md` §1.7, §3
 ## Who may do what
 
 Socket clients may select spaces and tabs, hide and open task spaces (`select_space`,
-`hide_space`, `open_space`), as they may select tabs. Not while the user types in the chat: a
-request that would change the selected space fails (`CHAT_TYPING`). Moving a tab between spaces
+`hide_space`, `open_space`), as they may select tabs. No one but the user moves what the user
+types to: while the keys are in the chat, a client's selection of another space, a request that
+takes the keyboard, opens the list or closes the drawer is refused (`CHAT_TYPING`), and any other
+step of theirs that would show another space (a new tab, a closed one, a Repos row) leaves the
+tab on show where it was and the keys in the chat (`Model::keep_shown`). The new task the user is
+writing is not closed or filed by a client (`BOX_TYPING`). The property test checks both for
+every action of a client or the system. Moving a tab between spaces
 is the user's alone (`TABS_USERS`), so is opening a workbook's space (it starts their apps). A
 client's new tab is Workspace's.
 

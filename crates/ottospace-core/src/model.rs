@@ -2679,8 +2679,23 @@ impl Model {
             }
             // Which space a tab is of is the user's to say.
             Action::TabPlace { .. } => Some(TABS_USERS),
-            // A client changes no space under the user's keys in the chat.
+            // A client changes no space under the user's keys in the chat, nor takes them.
             action if self.space_refusal(action, origin).is_some() => self.space_refusal(action, origin),
+            action
+                if self.talk.as_ref().is_some_and(|talk| talk.keys)
+                    && (action.takes_keyboard() || matches!(action, Action::TalkToggle | Action::FocusList)) =>
+            {
+                Some(spaces::CHAT_TYPING)
+            }
+            // Nor closes or files the new task the user is writing; one a client wrote in, it may.
+            Action::CloseCompose | Action::ComposeEscape | Action::ComposeSubmit { .. } | Action::ComposeEnter
+                if self.composing()
+                    && !self.compose_theirs
+                    && self.capture.is_none()
+                    && self.compose_line().is_some_and(|line| !line.is_empty()) =>
+            {
+                Some(spaces::BOX_TYPING)
+            }
             // What reaches a native agent, or stops its turn, is the user's: a message is as
             // strong as typing into it, an answer grants a tool call.
             Action::TalkSend
@@ -2847,7 +2862,9 @@ impl Model {
         let listed = self.sidebar.zip(self.list);
         let undo = matches!(sent.action, Action::TaskUndo | Action::ListUndo);
         // Where the keyboard was before the step: a tab change moves it out of the drawer.
-        let drawer_keys = self.talk.as_ref().is_some_and(|talk| talk.open && talk.keys) || self.composing();
+        // A capture draft's title is in the bar, not the drawer.
+        let boxed = self.composing() && self.compose_host() == Some(Host::Drawer);
+        let drawer_keys = self.talk.as_ref().is_some_and(|talk| talk.open && talk.keys) || boxed;
         let mut effects = self.step(sent);
         // A peek ends when what it was over changes: the tab, the tree, the mode.
         if let Some(peek) = &self.peek
@@ -3102,7 +3119,21 @@ impl Model {
         self.by_user = user;
         // The inspector shows in the drawer's place: what the drawer is asked to show next takes it back.
         let (drawer, inspecting) = (self.drawer_view(), matches!(action, Action::InspectorOpen { .. }));
+        // While the user types in the drawer, no one else moves what their keys go to.
+        let typing = !user && (self.talk.as_ref().is_some_and(|talk| talk.keys) || self.composing());
+        let shown = typing.then(|| (self.tabs[self.active].id, self.talk.clone()));
         self.act(action, &mut effects);
+        if let Some((id, talk)) = shown {
+            self.keep_shown(id, &mut effects);
+            // A pane opened, focused or closed beside the user, a row selected, takes no keys from
+            // the chat.
+            if let (Some(was), Some(now)) = (talk.filter(|t| t.keys), self.talk.as_mut())
+                && now.task == was.task
+            {
+                now.keys = true;
+                (self.list, self.rail_focus) = (None, None);
+            }
+        }
         let view = self.drawer_view();
         if !inspecting && view != drawer && view.shows() {
             self.inspector = None;
@@ -8239,6 +8270,63 @@ mod tests {
     }
 
     #[test]
+    fn no_client_moves_what_the_user_types_to() {
+        // The user types to task 1's agent; Workspace has a tab with a pane, the task's space two tabs.
+        let typing = || {
+            let mut m = Model::default();
+            m.update(Action::SetRepos { repos: listed() });
+            term(&mut m);
+            let a = add_task(&mut m, "a", State::Captured);
+            started(&mut m, Action::TaskTalk { id: a });
+            assert_eq!(m.mode(), Mode::Talk);
+            m
+        };
+        let siblings = [
+            Action::NewTab,
+            Action::NewEmptyTab,
+            Action::SelectVisibleTab { index: 0 },
+            Action::SelectTab { index: 0 },
+            Action::CloseTab { index: None },
+            Action::SpaceSelect { index: 0 },
+            Action::SpaceCycle { delta: 1 },
+            Action::SpaceHide { index: None },
+            Action::SpaceOpen { space: Owner::Workspace },
+            Action::TaskGo { id: None },
+            Action::OpenRepo { path: "/code/app".into(), axis: Right },
+            Action::OpenPicker { axis: Right, new_tab: true, items: vec![PickItem::Terminal] },
+            Action::OpenCompose { text: "theirs".into() },
+            Action::Focus { pane: 1 },
+            Action::Split { axis: Right, kind: Kind::Terminal },
+            Action::FocusList,
+            Action::TalkToggle,
+        ];
+        for action in siblings {
+            for origin in [Origin::Socket, Origin::System] {
+                let mut m = typing();
+                let (talk, tab) = (m.talk.clone(), m.tabs[m.active].id);
+                m.update(action.clone().sent_by(origin));
+                let what = format!("{origin:?}'s {action:?}");
+                assert_eq!((&m.talk, m.mode(), m.tabs[m.active].id), (&talk, Mode::Talk, tab), "{what}");
+            }
+        }
+        // The user's own: the keys go where the user went.
+        let mut m = typing();
+        m.update(Action::SpaceSelect { index: 0 });
+        assert_eq!((m.talk.is_none(), m.mode()), (true, Mode::Normal));
+        // The new task being written: a client neither closes nor files it.
+        let mut m = Model::default();
+        m.update(Action::OpenCompose { text: String::new() });
+        keys(&mut m, "mine");
+        for action in
+            [Action::CloseCompose, Action::ComposeEscape, Action::ComposeEnter, Action::ComposeSubmit { open: false }]
+        {
+            assert_eq!(m.refusal(&action, Origin::Socket), Some(spaces::BOX_TYPING), "{action:?}");
+        }
+        m.update(Action::NewTab.sent_by(Origin::Socket));
+        assert_eq!((line(&m), m.tasks.list.len(), m.active), ("mine", 0, 0));
+    }
+
+    #[test]
     fn the_drawer_is_only_ever_on_the_selected_spaces_agent() {
         let mut m = Model::default();
         term(&mut m);
@@ -10866,8 +10954,12 @@ mod tests {
             (m.tasks.list.len(), m.mode(), m.talk.as_ref().and_then(|talk| talk.task.task())),
             (5, Mode::Talk, Some(5))
         );
-        // A client's ↵ files the task: no agent, and no tab.
-        m.update(Action::OpenCompose { text: "theirs".into() }.sent_by(Origin::Socket));
+        // A client opens no box under the user's keys in the chat; once they are out, its ↵ files
+        // the task: no agent, and no tab.
+        let theirs = Action::OpenCompose { text: "theirs".into() };
+        assert_eq!(m.refusal(&theirs, Origin::Socket), Some(spaces::CHAT_TYPING));
+        m.update(Action::TalkKeys { on: false });
+        m.update(theirs.sent_by(Origin::Socket));
         assert_eq!(m.update(Action::ComposeEnter.sent_by(Origin::Socket)), []);
         assert_eq!((m.tasks.list.len(), m.tab_task(), m.agent_runs(&Subject::Task(6))), (6, Some(5), false));
     }

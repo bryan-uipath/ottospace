@@ -1363,7 +1363,8 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(!gone(&talk.task), "the drawer is on task {:?}, which is gone", talk.task);
         let free = m.live.is_none() && m.list.is_none() && m.visual.is_none() && m.annotated().is_none();
         ensure!(
-            !talk.keys || (talk.open && m.talk_live(&talk.task) && free),
+            // An ended native chat's composer takes keys too: sending goes on with it.
+            !talk.keys || (talk.open && m.talk_writable(&talk.task) && free),
             "the keyboard is in a conversation that is closed, has no agent, or under another: {talk:?}"
         );
     }
@@ -2119,6 +2120,9 @@ impl Run {
         );
         let hides = matches!(action, Action::SpaceHide { .. });
         let owners_before: Vec<(u32, Owner)> = m.tabs.iter().map(|tab| (tab.id, tab.space.clone())).collect();
+        let typing_to = m.talk.clone().filter(|talk| talk.keys && origin != Origin::User);
+        let written = m.compose_line().is_some_and(|line| !line.is_empty());
+        let composing_before = m.composing() && written && !m.compose_theirs && origin != Origin::User;
         let agents_before = (m.agents.clone(), m.starting.clone());
         let spaces_before: Vec<Owner> = m.spaces.iter().map(|space| space.of.clone()).collect();
 
@@ -2168,6 +2172,20 @@ impl Run {
         let tabs_kept = m.tabs.iter().map(|tab| tab.id).collect::<Vec<_>>() == tabs_before;
         let row_kept = m.spaces.iter().map(|space| space.of.clone()).collect::<Vec<_>>() == spaces_before;
         ensure!(!hides || (tabs_kept && row_kept), "{action:?} changed the tabs or the spaces");
+        // Nobody but the user moves what the user types to: not the chat (its agent may end), not
+        // the new-task box.
+        if let Some(was) = &typing_to {
+            let now = m.talk.as_ref();
+            let gone = was.task.task().is_some_and(|id| m.tasks.live(id).is_none());
+            let kept = now.is_some_and(|t| t.task == was.task);
+            ensure!(kept || gone, "{origin:?}'s {action:?} moved the chat typed in: {now:?}");
+            let ended = gone || !m.talk_live(&was.task);
+            ensure!(now.is_some_and(|t| t.keys) || ended, "{origin:?}'s {action:?} took the keys from the chat");
+        }
+        ensure!(
+            !composing_before || m.compose.is_some(),
+            "{origin:?}'s {action:?} took the new-task box from the user"
+        );
         // A tab changes space only by a move of the user's, a task started from it, its space
         // gone (Workspace's then), an undo of a dismissal, or a session made a task.
         for (id, was) in &owners_before {
