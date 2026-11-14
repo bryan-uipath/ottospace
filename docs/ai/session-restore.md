@@ -37,7 +37,10 @@ The file is `layout.json`, not `session.json`, and a pane is kept as a workbook 
 - **What**: one ordered list of tabs, each a workbook's `TabRecord` (title, `task`, split tree
   with ratios, focused pane, panes: terminal with `cwd` and the workbook's `history`, app by
   bundle id and name and never a title, empty), plus the workbook's tab it stands for and the
-  marks that stood for it or its panes (by the mark's `id`). Then `selected` (the tab on show,
+  marks that stood for it or its panes (by the mark's `id`), and `settings`: the record id of the
+  pane Open Settings opened (kept without history; restored, the core sends `EditSettings` for
+  that terminal and the shell runs its own fixed editor command; one at most, only on a terminal).
+  A pane `kind` this build does not know reads as `empty`. Then `selected` (the tab on show,
   by place), `section`, and `drawer` (`task`, `open`, `width`, `wide`). A session's
   conversation that is no task's is not kept. No scope on show: per-task tab sets are going away;
   restored on today's model, the tab on show brings its task's tabs with it.

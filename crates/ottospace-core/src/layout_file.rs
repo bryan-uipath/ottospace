@@ -80,6 +80,10 @@ pub struct SavedTab {
     /// The marks that stood for it, or for one of its panes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub marks: Vec<MarkLink>,
+    /// The terminal pane, by its id in the record, that Open Settings opened: restored, it runs
+    /// the editor on `settings.json` again. A mark, not a command: the shell builds the command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -193,6 +197,9 @@ impl Model {
         let known = |task: Option<TaskId>| task.filter(|id| self.tasks.get(*id).is_some());
         // A mark is named by its id for good, if no other mark has it.
         let unique = |uid: &str| plain_uid(uid) && self.marks.list.iter().filter(|mark| mark.uid == uid).count() == 1;
+        // An editor's screen is not history: the Settings pane keeps none.
+        let histories: Vec<(PaneId, History)> =
+            histories.into_iter().filter(|(pane, _)| Some(*pane) != self.settings_pane).collect();
         let (mut records, mut links, mut selected) = (Vec::new(), Vec::new(), None);
         for (index, tab) in self.tabs.iter().enumerate().take(MAX_TABS) {
             let Some(mut record) = self.tab_record(index, cwds, &histories) else { continue };
@@ -233,12 +240,13 @@ impl Model {
                 marked.push(MarkLink { id: mark.uid.clone(), pane });
             }
             marked.truncate(MAX_LINKS);
+            let settings = self.settings_pane.and_then(new_id);
             records.push(record);
-            links.push((book, marked));
+            links.push((book, marked, settings));
         }
         workbook::fit_history(&mut records);
         let tabs = records.into_iter().zip(links);
-        let tabs = tabs.map(|(tab, (workbook, marks))| SavedTab { tab, workbook, marks }).collect();
+        let tabs = tabs.map(|(tab, (workbook, marks, settings))| SavedTab { tab, workbook, marks, settings }).collect();
         let drawer = Drawer {
             task: self.talk.as_ref().and_then(|talk| known(talk.task.task())),
             open: self.talk.as_ref().is_some_and(|talk| talk.open && known(talk.task.task()).is_some()),
@@ -319,6 +327,13 @@ impl Model {
             let panes: Vec<PaneId> = (base + 1..).take(record.shown().len()).collect();
             for (pane, kept) in panes.iter().zip(record.shown()) {
                 let started = self.pane(*pane).is_some_and(|open| open.kind == Kind::Terminal);
+                // The Settings tab's terminal: the editor again, once, with no history. Its title
+                // is the one kept ("Settings").
+                if started && saved.settings == Some(kept.id) && self.settings_pane.is_none() {
+                    self.settings_pane = Some(*pane);
+                    effects.push(Effect::EditSettings { pane: *pane });
+                    continue;
+                }
                 if let Some(history) = workbook::history_of(kept).filter(|_| started) {
                     effects.push(Effect::History { pane: *pane, history });
                 }
@@ -483,6 +498,7 @@ mod tests {
             },
             workbook: None,
             marks: Vec::new(),
+            settings: None,
         };
         file.tabs = vec![tab("a", None), tab("b", Some(2)), tab("c", Some(1)), tab("d", Some(2)), tab("e", None)];
         file.selected = Some(3);
@@ -683,5 +699,65 @@ mod tests {
         assert_eq!(m.update(Action::StartFresh), [Effect::ForgetLayout]);
         split(&mut m, Right, Kind::Terminal);
         assert!(!m.layout_moved());
+    }
+
+    #[test]
+    fn the_settings_tab_is_kept_as_a_mark_and_comes_back_running_the_editor_once() {
+        let mut m = Model::default();
+        split(&mut m, Right, Kind::Terminal);
+        m.update(Action::EditSettings);
+        let pane = m.settings_pane.unwrap_or_default();
+        // Kept as a mark on its pane, with none of its screen: an editor's screen is not history.
+        let screen = History { lines: vec!["~ settings.json".into()], command: Some("vi".into()), saved: 1 };
+        let file = m.layout_file(&[], &[(pane, screen)], 500);
+        let text = write(&file);
+        assert!(
+            text.contains("\"settings\": 1") && !text.contains("settings.json") && !text.contains("\"vi\""),
+            "{text}"
+        );
+        let read = parse(&text).unwrap();
+        assert_eq!(read, file);
+        // Restored by the shell at start: the editor again, in its tab, and no history there.
+        let (mut r, effects) = restored(&m, read.clone(), &[], false);
+        let again = r.settings_pane.unwrap_or_default();
+        assert!(effects.contains(&Effect::EditSettings { pane: again }) && effects.contains(&Effect::Opened(again)));
+        assert!(!effects.iter().any(|effect| matches!(effect, Effect::History { .. })), "{effects:?}");
+        assert_eq!(r.tabs.iter().map(|tab| tab.title.as_str()).collect::<Vec<_>>(), ["Tab 1", "Settings"]);
+        // ⌘, brings it forward: no second one.
+        r.update(Action::SelectTab { index: 0 });
+        assert_eq!((r.update(Action::EditSettings), r.tabs.len(), r.active), (vec![], 2, 1));
+        // A client restores nothing, and opens none.
+        let mut fresh = Model::default();
+        assert!(fresh.update(restore(read).sent_by(Origin::Socket)).is_empty());
+        assert_eq!(fresh.refusal(&Action::EditSettings, Origin::Socket), Some(crate::model::SETTINGS_USERS));
+    }
+
+    #[test]
+    fn a_hand_made_settings_mark_runs_the_editor_only_in_a_terminal_of_its_tab_and_once() {
+        let mut m = Model::default();
+        split(&mut m, Right, Kind::Terminal);
+        let slack = Kind::App { window: 9, title: "general".into(), bundle: None, name: "Slack".into() };
+        m.update(Action::Open { kind: slack, axis: Right, beside: None });
+        m.update(Action::NewTab);
+        split(&mut m, Right, Kind::Terminal);
+        let mut file = m.layout_file(&[], &[], 0);
+        // On the app pane, on no pane, and twice on terminals: one editor, in the first.
+        for (marks, editors) in [([Some(2), None], 0), ([Some(99), Some(99)], 0), ([Some(1), Some(1)], 1)] {
+            file.tabs[0].settings = marks[0];
+            file.tabs[1].settings = marks[1];
+            let (r, effects) = restored(&m, file.clone(), &[], false);
+            let edits: Vec<&Effect> = effects.iter().filter(|e| matches!(e, Effect::EditSettings { .. })).collect();
+            assert_eq!((edits.len(), r.settings_pane.is_some()), (editors, editors == 1), "{marks:?}");
+        }
+    }
+
+    #[test]
+    fn a_kind_this_build_does_not_know_is_an_empty_pane_not_an_unread_file() {
+        let text = r#"{"version": 1, "tabs": [{"title": "t", "layout": {"leaf": 1},
+            "panes": [{"id": 1, "kind": {"type": "hologram", "size": 3}}]}]}"#;
+        let file = parse(text).unwrap();
+        assert_eq!(file.tabs[0].tab.panes[0].kind, RecordKind::Empty);
+        let (r, _) = restored(&Model::default(), file, &[], false);
+        assert_eq!(r.panes.iter().map(|pane| pane.kind.clone()).collect::<Vec<_>>(), [Kind::Empty]);
     }
 }

@@ -1557,6 +1557,71 @@ fn open_settings_edits_the_file_and_the_status_bar_says_what_is_wrong_until_it_i
     });
 }
 
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_settings_tab_comes_back_after_a_restart_running_the_editor_again() {
+    let home = support::temp(&format!("ottospace-e2e-home-settings-tab-{}", std::process::id()));
+    std::fs::create_dir_all(&home).unwrap();
+    let bin = support::temp(&format!("ottospace-e2e-editor-tab-{}", std::process::id()));
+    std::fs::create_dir_all(&bin).unwrap();
+    // The stand-in editor: says what it was given, then waits until it is killed.
+    let editor = bin.join("edit");
+    let script = format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > {}/args\nwhile :; do sleep 0.1; done\n", bin.display());
+    std::fs::write(&editor, script).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let editor = editor.to_str().unwrap();
+    let env = |visual: &'static str| -> Vec<(&str, String)> {
+        let visual = if visual.is_empty() { editor.to_string() } else { visual.to_string() };
+        vec![
+            ("OTTOSPACE_HOME", home.to_str().unwrap().to_string()),
+            ("VISUAL", visual),
+            ("EDITOR", "/usr/bin/false".into()),
+        ]
+    };
+    let launch = |name: &str, visual: &'static str| {
+        let env = env(visual);
+        let env: Vec<(&str, &str)> = env.iter().map(|(key, value)| (*key, value.as_str())).collect();
+        Otto::launch_with(name, &env)
+    };
+    let titles = |reply: &Value| -> Vec<String> {
+        let tabs = reply["state"]["tabs"].as_array().unwrap();
+        tabs.iter().map(|tab| tab["title"].as_str().unwrap().to_string()).collect()
+    };
+    let args = bin.join("args");
+    let editing = |o: &Otto| std::fs::read_to_string(&args).ok().map(|_| o.call(json!({"cmd": "state"})));
+
+    let mut otto = launch("settings-tab-1", "");
+    otto.user_key("cmd-,");
+    otto.wait_for("the editor", editing);
+    otto.call(json!({"cmd": "quit"}));
+    exits(&mut otto);
+    // Kept as a mark on its pane: no command, no screen.
+    let text = std::fs::read_to_string(home.join("layout.json")).unwrap();
+    assert!(text.contains("\"settings\": 1") && !text.contains("history") && !text.contains(editor), "{text}");
+
+    // Started again: one Settings tab, the editor on the file again.
+    std::fs::remove_file(&args).unwrap();
+    let mut otto = launch("settings-tab-2", "");
+    let state = otto.wait_for("the editor again", editing);
+    assert_eq!(std::fs::read_to_string(&args).unwrap(), format!("{}\n", home.join("settings.json").display()));
+    assert_eq!(titles(&state), ["Tab 1", "Settings"]);
+    // ⌘, from the first tab: that tab comes forward, no second one.
+    otto.call(json!({"cmd": "select_tab", "index": 0}));
+    let reply = otto.user_key("cmd-,");
+    assert_eq!((titles(&reply), &reply["state"]["active"]), (vec!["Tab 1".to_string(), "Settings".into()], &json!(1)));
+    otto.call(json!({"cmd": "quit"}));
+    exits(&mut otto);
+
+    // An editor that is gone: its pane closes as an exited shell's does, and nothing runs again.
+    let otto = launch("settings-tab-3", "/no/such/editor");
+    let closed = |o: &Otto| Some(o.call(json!({"cmd": "state"}))).filter(|state| pane_ids(state).is_empty());
+    let state = otto.wait_for("the editor's pane to close", closed);
+    assert_eq!(titles(&state), ["Tab 1", "Settings"]);
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(pane_ids(&otto.call(json!({"cmd": "state"}))).is_empty());
+}
+
 /// Terminal 1's entry in the state dump.
 fn term1(o: &Otto) -> Value {
     o.call(json!({"cmd": "state"}))["terminals"]["1"].clone()
