@@ -42,7 +42,7 @@ impl Chat {
     }
 
     fn new(subject: Subject) -> Self {
-        let (transcript, draft) = (Transcript::default(), Field::new("", MAX_DRAFT));
+        let (transcript, draft) = (Transcript::default(), Field::lines(MAX_DRAFT));
         Self { subject, transcript, draft, deny: false, armed: false }
     }
 }
@@ -355,7 +355,7 @@ impl Model {
                     return;
                 }
                 chat.transcript.send(&text, now);
-                chat.draft = Field::new("", MAX_DRAFT);
+                chat.draft = Field::lines(MAX_DRAFT);
                 let subject = chat.subject.clone();
                 effects.push(Effect::AgentSend { task: subject.clone(), text });
                 self.chat_state(&subject);
@@ -367,7 +367,7 @@ impl Model {
                 let Some(answered) = chat.transcript.answer(allow) else { return };
                 debug_assert_eq!(answered, ticket);
                 if message.is_some() {
-                    chat.draft = Field::new("", MAX_DRAFT);
+                    chat.draft = Field::lines(MAX_DRAFT);
                 }
                 chat.deny = false;
                 let subject = chat.subject.clone();
@@ -515,6 +515,12 @@ mod tests {
         assert_eq!(m.refusal(&edit, Origin::Socket), Some(super::USERS_ALONE));
         m.update(edit.sent_by(Origin::Socket));
         assert_eq!(m.chat(&one).map(|chat| chat.draft.text()), Some(""));
+        // A line break typed or pasted is kept: the composer holds lines.
+        typed(&mut m, "two\nlines");
+        m.update(Action::FieldEdit { edit: crate::edit::Edit::Paste("\r\nand\tmore".into()) });
+        assert_eq!(m.chat(&one).map(|chat| chat.draft.text()), Some("two\nlines\nand    more"));
+        m.update(Action::FieldEdit { edit: crate::edit::Edit::SelectAll });
+        m.update(Action::FieldEdit { edit: crate::edit::Edit::Cut });
         typed(&mut m, "hello");
         let sent = m.update(Action::TalkSend.sent_by(Origin::Socket));
         assert!(sent.is_empty() && m.refusal(&Action::TalkSend, Origin::Socket).is_some());

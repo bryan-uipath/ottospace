@@ -24,7 +24,7 @@ use ottospace_core::agents::{self, Start};
 use ottospace_core::links::Target;
 use ottospace_core::model::chat::{self, Key};
 use ottospace_core::talk::Subject;
-use ottospace_core::transcript::{Call, Entry, Event, Item, Notice, Text, View};
+use ottospace_core::transcript::{Call, Entry, Event, Item, MAX_CARDS, Notice, Text, View};
 use ottospace_core::{Action, Origin, theme};
 
 use crate::markdown::{self, Block, Span};
@@ -38,6 +38,10 @@ pub struct Native {
     pub since: Instant,
     /// What the header names: the model, else the runner.
     pub model: String,
+    /// The runner and the id it was started with, if the id was chosen here, and where it runs:
+    /// to see, once it ends, whether its session was written (`session_missing`).
+    pub session: Option<(ottospace_core::runner::RunnerId, String)>,
+    pub cwd: Option<String>,
 }
 
 /// What the drawer keeps of a conversation's look, not its state: where it is scrolled, the
@@ -128,6 +132,10 @@ impl Watch {
             let Some(reader) = ottospace_sessions::reader(runner, &dirs) else { return };
             let Ok(sessions) = reader.sessions(&[std::path::PathBuf::from(&cwd)]) else { return };
             let Some(session) = sessions.into_iter().find(|session| session.id == id) else { return };
+            // Read from the start again: what an earlier watch built goes first.
+            if send.send(vec![Event::WatchFromStart]).is_err() {
+                return;
+            }
             let mut cursor = ottospace_sessions::Cursor::default();
             while !stopped.load(std::sync::atomic::Ordering::Relaxed) {
                 let Ok(batch) = reader.read(&session, cursor.clone(), WATCH_BUDGET) else { return };
@@ -220,7 +228,8 @@ impl Workspace {
         // arguments as positional parameters. The script is fixed text.
         let (shell, flags) = match std::env::var("OTTOSPACE_SHELL") {
             Ok(test) => (test, "-c"),
-            Err(_) => (crate::terminal::login_shell(), "-lc"),
+            // Interactive, as the terminal's: a `PATH` set in `.zshrc` finds the program too.
+            Err(_) => (crate::terminal::login_shell(), "-lic"),
         };
         let mut command = Command::new(shell);
         command.args([flags, "exec \"$@\"", "ottospace-agent", &program]).args(&argv.args);
@@ -236,7 +245,9 @@ impl Workspace {
             driver.send(Input::Send { text, images: Vec::new() }).map_err(|err| format!("{name}: {err}"))?;
         }
         let model = model.unwrap_or_else(|| name.into());
-        let native = Native { driver, tickets: Vec::new(), next: 0, since: Instant::now(), model };
+        let given = session.clone().map(|id| (runner, id));
+        let (tickets, since, cwd) = (Vec::new(), Instant::now(), dir.map(str::to_string));
+        let native = Native { driver, tickets, next: 0, since, model, session: given, cwd };
         self.drawer.native.insert(subject.clone(), native);
         Ok(session)
     }
@@ -294,8 +305,12 @@ impl Workspace {
             self.dispatch(Action::AgentEvents { task, events, at: crate::now_ms() }, Origin::System, window, cx);
         }
         for task in ended {
+            // A session id it never wrote is not followed: the next click starts a new one.
+            let missing = self.session_missing(&task);
             self.drawer.native.remove(&task);
-            self.dispatch(Action::AgentExited { task }, Origin::System, window, cx);
+            for action in missing.into_iter().chain([Action::AgentExited { task }]) {
+                self.dispatch(action, Origin::System, window, cx);
+            }
         }
         // A process stopped for a switch: the core hears it ended only once it has.
         let mut gone = Vec::new();
@@ -412,7 +427,7 @@ impl Workspace {
         let test = std::env::var_os("OTTOSPACE_E2E").is_some();
         match target {
             Target::Web(url) => {
-                self.drawer.opened.push(("web", url.clone()));
+                self.drawer.opened.push("web");
                 if !test {
                     cx.open_url(url);
                 }
@@ -422,7 +437,7 @@ impl Workspace {
                 let root = self.repo_of(subject).and_then(|repo| std::fs::canonicalize(repo).ok());
                 match real.zip(root).filter(|(real, root)| real.starts_with(root)) {
                     Some((real, _)) => {
-                        self.drawer.opened.push(("file", real.to_string_lossy().into_owned()));
+                        self.drawer.opened.push("file");
                         if !test {
                             cx.reveal_path(&real);
                         }
@@ -487,6 +502,7 @@ impl Workspace {
             .id(ElementId::Name(format!("chat-scroll:{key}").into()))
             .flex_1()
             .min_h_0()
+            .min_w_0()
             .overflow_y_scroll()
             .track_scroll(&scroll)
             .px_3()
@@ -506,9 +522,13 @@ impl Workspace {
                 .on_click(cx.listener(move |this, _, _, cx| this.chat_latest(&subject, cx)))
         });
         let watching = (t.watched && !t.live).then(|| self.watch_banner(subject, cx));
+        // As wide as the drawer, never wider: text wraps, code scrolls sideways.
         div()
             .flex_1()
             .min_h_0()
+            .w_full()
+            .min_w_0()
+            .overflow_hidden()
             .flex()
             .flex_col()
             .children(watching)
@@ -866,12 +886,15 @@ impl Workspace {
                 .flex()
                 .gap_1p5()
                 .child(div().flex_none().text_color(rgb(theme::MUTED)).child(format!("{label}:")))
-                .child(div().min_w_0().child(markdown::clean(value)))
+                .child(div().flex_1().min_w_0().child(markdown::clean(value)))
         });
+        // A few lines as they are; more scroll in a box of fixed height (a scroll box grows to its cap).
+        // Rows as drawn, about: a long line wraps.
+        let rows: usize = payload.lines().map(|line| line.chars().count() / 60 + 1).sum();
+        let most = if card.expanded { 16 } else { 8 };
         let body = div()
             .id("chat-card-payload")
-            .max_h(px(if card.expanded { 280. } else { 160. }))
-            .overflow_y_scroll()
+            .when(rows > most, |d| d.h(px(18. * most as f32)).overflow_y_scroll())
             .font_family(crate::terminal::font_family())
             .text_xs()
             .flex()
@@ -1031,8 +1054,7 @@ impl Workspace {
                 }),
             );
         }
-        let opened: Vec<&str> = self.drawer.opened.iter().map(|(kind, _)| *kind).collect();
-        serde_json::json!({ "chats": out, "opened": opened })
+        serde_json::json!({ "chats": out, "opened": self.drawer.opened })
     }
 }
 
@@ -1067,6 +1089,13 @@ fn translate(native: &mut Native, said: Said) -> Option<Event> {
             Event::ToolStart { id, sub: parent.is_some(), tool, label, detail: text(&detail) }
         }
         Said::ToolEnd { id, failed } => Event::ToolEnd { id, failed },
+        // Past `MAX_CARDS` waiting, denied at once: no request is left waiting unseen.
+        Said::Permission { ticket, tool, label, detail, .. } if native.tickets.len() >= MAX_CARDS => {
+            let answer = Answer::Deny { message: Some("Too many requests at once: ask again.".into()) };
+            let _ = native.driver.send(Input::Answer { ticket, answer });
+            let reason = "too many requests at once".to_string();
+            Event::AutoDenied { tool, label, reason, detail: text(&detail) }
+        }
         Said::Permission { ticket, tool, label, detail, len, cut, claim, .. } => {
             native.next += 1;
             native.tickets.push((native.next, ticket));

@@ -144,6 +144,8 @@ pub enum Event {
     },
     /// A watched session's file says a message was sent there: its words stay in the file.
     MessageElsewhere,
+    /// A watched session's file is read again from its start: what was built from it goes.
+    WatchFromStart,
 }
 
 impl Event {
@@ -159,6 +161,7 @@ impl Event {
                 | Event::Compaction
                 | Event::Error { .. }
                 | Event::MessageElsewhere
+                | Event::WatchFromStart
         )
     }
 }
@@ -459,6 +462,9 @@ impl Transcript {
                 (self.turn, self.cards, self.live) = (None, VecDeque::new(), false);
                 self.push(Entry::Notice(Notice::Ended { code }));
             }
+            // Only a watched transcript is rebuilt; a live one is the stream's.
+            Event::WatchFromStart if !self.live => *self = Transcript { watched: true, ..Transcript::default() },
+            Event::WatchFromStart => {}
             Event::MessageElsewhere => {
                 self.settle();
                 self.push(Entry::Notice(Notice::MessageElsewhere));

@@ -244,7 +244,8 @@ impl Model {
             open: self.talk.as_ref().is_some_and(|talk| talk.open && known(talk.task.task()).is_some()),
             width: self.talk_width,
             wide: self.talk_wide,
-            views: self.saved_views().into_iter().filter_map(|(task, view)| Some((known(Some(task))?, view))).collect(),
+            // Of live tasks only, as a restore keeps them: a dismissed task's pick goes with it.
+            views: self.saved_views().into_iter().filter(|(task, _)| self.tasks.live(*task).is_some()).collect(),
         };
         // Not the Calendar: a build without it could not read the file back.
         let section = self.sidebar.filter(|s| *s != Section::Calendar);

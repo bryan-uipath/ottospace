@@ -8832,6 +8832,19 @@ mod tests {
         let t = &m.chat(&held).expect("a watched transcript").transcript;
         assert!(t.watched && !t.live && t.turn.is_none() && t.cards.is_empty(), "{t:?}");
         assert_eq!(t.items().len(), 1);
+        // Watched again, the file is read from its start: what it shows once, not twice.
+        let again = vec![
+            Event::WatchFromStart,
+            Event::ToolStart {
+                id: "a".into(),
+                sub: false,
+                tool: "Bash".into(),
+                label: "git".into(),
+                detail: Text::default(),
+            },
+        ];
+        m.update(Action::AgentEvents { task: held.clone(), events: again, at: 2 }.sent_by(Origin::System));
+        assert_eq!(m.chat(&held).map(|chat| chat.transcript.items().len()), Some(1));
         // Idle and no longer held: no more watching, and Take over (the user's open) goes on with it.
         let free = Found { repo: "/code/app".into(), ..session("claude", HELD, "/code/app", false, 2_000) };
         m.update(Action::SetSessions { found: vec![free], day: 0 });

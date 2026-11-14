@@ -57,8 +57,8 @@ pub struct Drawer {
     pub native: HashMap<Subject, crate::conversation::Native>,
     pub looks: HashMap<Subject, crate::conversation::Look>,
     pub thumbs: HashMap<String, crate::conversation::Thumb>,
-    /// Links the user opened, by kind and target: a test run opens nothing and reads these.
-    pub opened: Vec<(&'static str, String)>,
+    /// The kinds of link the user opened (`web`, `file`): a test run opens nothing and reads these.
+    pub opened: Vec<&'static str>,
     /// Agents stopped for a switch of view, until their process is gone (`Stopping`).
     pub stopping: Vec<(Subject, crate::conversation::Stopping)>,
     /// The watched session's file being followed (`Model::watch_target`).
@@ -171,6 +171,10 @@ impl Workspace {
     /// Stopped for a switch of view, it is told only once its process is gone, so the other
     /// view never starts on a session still held.
     pub(crate) fn stop_agent(&mut self, subject: &Subject) -> Vec<Action> {
+        // Already ending for a switch: it says it ended once its process has, not before.
+        if self.drawer.stopping.iter().any(|(of, _)| of == subject) {
+            return Vec::new();
+        }
         let missing = self.session_missing(subject);
         let terminal = self.drawer.agents.remove(subject).map(|agent| agent.terminal);
         let native = self.drawer.native.remove(subject);
@@ -209,15 +213,23 @@ impl Workspace {
         if let Some(look) = self.drawer.looks.remove(from) {
             self.drawer.looks.insert(to.clone(), look);
         }
+        // One ending for a switch ends under its new name: the core knows it by that one now.
+        for (subject, _) in &mut self.drawer.stopping {
+            if subject == from {
+                *subject = to.clone();
+            }
+        }
     }
 
     /// The session id a task's gone agent was started with, if its runner's folders hold no file
     /// for it (Claude: `projects/<folder>/<id>.jsonl`): it was never written. `None` too when
     /// sessions are not read (`"sessions": false`): nothing is known.
-    fn session_missing(&self, subject: &Subject) -> Option<Action> {
+    pub(crate) fn session_missing(&self, subject: &Subject) -> Option<Action> {
         let task = subject.task()?;
-        let agent = self.drawer.agents.get(subject)?;
-        let ((runner, id), cwd) = (agent.session.clone()?, agent.cwd.as_ref()?);
+        // Its terminal's, or its native process's.
+        let native = self.drawer.native.get(subject).map(|native| (&native.session, &native.cwd));
+        let (session, cwd) = self.drawer.agents.get(subject).map(|agent| (&agent.session, &agent.cwd)).or(native)?;
+        let ((runner, id), cwd) = (session.clone()?, cwd.as_ref()?);
         let dirs = crate::config::session_dirs()?;
         std::fs::canonicalize(cwd).ok()?;
         let written = ottospace_sessions::reader(runner, &dirs).and_then(|reader| reader.path_of(cwd.as_ref(), &id));
@@ -510,8 +522,9 @@ impl Workspace {
                     Some(badge) => badge,
                     None => home::dot(color),
                 })
-                .child(div().flex_1().min_w_0().truncate().text_sm().child(title))
-                .children(agent.map(|(model, _)| muted(model)))
+                .child(div().flex_1().min_w(px(72.)).truncate().text_sm().child(title))
+                // The model gives way before the title does.
+                .children(agent.map(|(model, _)| muted(model).flex_shrink().min_w_0().truncate()))
                 .children(elapsed.map(muted))
                 .children(self.view_switch(subject, cx))
                 .children(go)
@@ -534,7 +547,9 @@ impl Workspace {
                 .relative()
                 .flex_1()
                 .min_h_0()
+                .min_w_0()
                 .flex()
+                .flex_col()
                 .child(record)
                 .child(self.chat_body(subject, cx))
                 .into_any_element();

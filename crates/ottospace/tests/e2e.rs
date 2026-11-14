@@ -6155,6 +6155,11 @@ fn native_fixtures(dir: &Path) {
             r#"{{"type":"assistant",{S},"parent_tool_use_id":null,"message":{{"content":[{{"type":"text","text":{text}}}]}}}}"#
         )
     };
+    let result = |id: &str| {
+        format!(
+            r#"{{"type":"user",{S},"parent_tool_use_id":null,"message":{{"content":[{{"type":"tool_result","tool_use_id":"toolu_{id}","content":"ok","is_error":false}}]}}}}"#
+        )
+    };
     let delta = |text: &str| {
         format!(
             r#"{{"type":"stream_event",{S},"parent_tool_use_id":null,"event":{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"{text}"}}}}}}"#
@@ -6177,7 +6182,7 @@ fn native_fixtures(dir: &Path) {
         ),
         ("turn1-denied.jsonl", [text("Fine, I will not."), done.into()].join("\n")),
         ("turn2.jsonl", [tool("2", &long), ask("2", &long)].join("\n")),
-        ("turn2-allowed.jsonl", [text("Done."), done.into()].join("\n")),
+        ("turn2-allowed.jsonl", [result("2"), text("Done."), done.into()].join("\n")),
         ("turn3.jsonl", delta("Working on it")),
         ("turn2-interrupted.jsonl", interrupted.into()),
     ];
@@ -6254,14 +6259,14 @@ fn a_native_conversation_streams_asks_and_switches_to_the_terminal_and_back() {
     otto.wait_for("the denied turn to end", |o| chat(o)["transcript"]["turn"].is_null().then_some(()));
     assert!(stdin().contains(r#""behavior":"deny""#) && !stdin().contains(r#""behavior":"allow""#), "{}", stdin());
 
-    // The composer: ↵ sends. The next request is cut: Allow waits for Show all.
-    otto.user_key("h i enter");
+    // The composer: ⇧↵ a new line, ↵ sends. The next request is cut: Allow waits for Show all.
+    otto.user_key("h i shift-enter y o enter");
     let cut = otto.wait_for("a cut card", |o| {
         let card = chat(o)["transcript"]["cards"][0].clone();
         (card["cut"] == true).then_some(card)
     });
     assert_eq!(cut["expanded"], false);
-    assert!(stdin().contains(r#""text":"hi""#), "{}", stdin());
+    assert!(stdin().contains(r#""text":"hi\nyo""#), "{}", stdin());
     otto.user_key("a");
     assert!(!stdin().contains(r#""behavior":"allow""#), "a cut request is not allowed unseen");
     otto.user_key("s");
@@ -6304,7 +6309,8 @@ fn a_native_conversation_streams_asks_and_switches_to_the_terminal_and_back() {
     // And back: the TUI is hung up on, then the session goes on natively.
     otto.user_click(at(otto.control("talk:view-chat"), 0.5, 0.5));
     otto.wait_for("chat again", |o| (chat(o)["native"] == true && !terminal(o)).then_some(()));
-    assert!(argv().lines().any(|a| a == "-p") && argv().contains(&session), "{}", argv());
+    let native = || argv().lines().any(|a| a == "-p") && argv().contains(&session);
+    otto.wait_for("claude -p --resume", |_| native().then_some(()));
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
 }

@@ -110,8 +110,9 @@ impl Gen<'_> {
         let text = Text::new(&self.name(WORDS));
         let id = self.rng.pick(&["a", "b"]).to_string();
         let (tool, label) = ("Bash".to_string(), self.name(WORDS));
-        match self.rng.below(13) {
+        match self.rng.below(14) {
             12 => Said::MessageElsewhere,
+            13 => Said::WatchFromStart,
             0 | 1 => Said::TurnStarted,
             2 => Said::TextDelta { text },
             3 => Said::Text { text },
@@ -2944,6 +2945,7 @@ fn event_code(event: &Said) -> String {
         Said::Error { kind, retrying } => format!("Said::Error {{ kind: {kind:?}.into(), retrying: {retrying} }}"),
         Said::Exited { code } => format!("Said::Exited {{ code: {code:?} }}"),
         Said::MessageElsewhere => "Said::MessageElsewhere".into(),
+        Said::WatchFromStart => "Said::WatchFromStart".into(),
     }
 }
 

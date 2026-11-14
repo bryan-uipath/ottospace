@@ -154,6 +154,8 @@ pub struct Field {
     /// What the last click selected, and its count: a drag extends from it by that unit.
     /// `None` once the text has changed: a drag then goes on from the selection's fixed end.
     pressed: Option<(Range<usize>, usize)>,
+    /// It holds several lines (a conversation's composer): `\n` is kept, typed or pasted.
+    lines: bool,
 }
 
 impl Serialize for Field {
@@ -170,6 +172,20 @@ impl Field {
         field.anchor = field.text.len();
         field.head = field.anchor;
         field
+    }
+
+    /// An empty field of several lines: a line break typed or pasted is kept.
+    pub fn lines(limit: usize) -> Self {
+        Self { limit, lines: true, ..Self::default() }
+    }
+
+    /// `text` as this field takes it: control characters out, line breaks kept if it holds lines.
+    fn cleaned(&self, text: &str, paste: bool) -> String {
+        if !self.lines {
+            return clean(text, paste);
+        }
+        let text = text.replace("\r\n", "\n").replace('\r', "\n").replace('\t', "    ");
+        text.split('\n').map(|line| clean(line, false)).collect::<Vec<_>>().join("\n")
     }
 
     pub fn text(&self) -> &str {
@@ -301,7 +317,7 @@ impl Field {
     /// that completes a word; `range` must lie on character boundaries.
     pub fn splice(&mut self, range: Range<usize>, text: &str) {
         self.record(false);
-        self.put(range, &clean(text, false));
+        self.put(range, &self.cleaned(text, false));
     }
 
     /// Replaces `range` with as much of `text` as fits; the cursor goes after it.
@@ -322,8 +338,8 @@ impl Field {
     pub fn apply(&mut self, edit: Edit) -> bool {
         let before = self.text.clone();
         match edit {
-            Edit::Insert(text) => self.insert(&clean(&text, false), true),
-            Edit::Paste(text) => self.insert(&clean(&text, true), false),
+            Edit::Insert(text) => self.insert(&self.cleaned(&text, false), true),
+            Edit::Paste(text) => self.insert(&self.cleaned(&text, true), false),
             Edit::Delete { to } => {
                 let range = match self.selection() {
                     selection if !selection.is_empty() => selection,
@@ -373,14 +389,16 @@ impl Field {
             Edit::Undo => self.step(true),
             Edit::Redo => self.step(false),
             // Plain typing arrives this way too: with nothing named or marked it is an insert.
-            Edit::Replace { range: None, text } if self.marked.is_none() => self.insert(&clean(&text, false), true),
+            Edit::Replace { range: None, text } if self.marked.is_none() => {
+                self.insert(&self.cleaned(&text, false), true)
+            }
             Edit::Replace { range, text } => {
                 let range = self.ime_range(range);
                 // A composition recorded its step when it began.
                 if self.marked.is_none() {
                     self.record(range.is_empty());
                 }
-                self.put(range, &clean(&text, false));
+                self.put(range, &self.cleaned(&text, false));
                 self.forget_no_change();
             }
             Edit::Mark { range, text, selected } => {
@@ -388,7 +406,7 @@ impl Field {
                 if self.marked.is_none() {
                     self.record(false);
                 }
-                let marked = self.put(range, &clean(&text, false));
+                let marked = self.put(range, &self.cleaned(&text, false));
                 if let Some(selected) = selected {
                     let inside = &self.text[marked.clone()];
                     let at = |utf16: usize| {
