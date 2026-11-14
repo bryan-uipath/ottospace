@@ -410,7 +410,7 @@ impl Workspace {
             ("top", "task_leave") => Some(Action::TaskLeave),
             ("top", _) => {
                 if let Some((.., axis, new_tab)) = SPLITS.iter().find(|(top, ..)| *top == name) {
-                    self.open_picker(*axis, *new_tab, window, cx);
+                    self.top_button(*axis, *new_tab, window, cx);
                 }
                 None
             }

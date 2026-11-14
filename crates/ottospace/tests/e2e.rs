@@ -2639,6 +2639,21 @@ fn tabs_keep_their_own_panes() {
     assert!(reply["terminals"].get("3").is_none(), "{reply}");
     let reply = otto.call(json!({"cmd": "cycle_tab", "delta": 1}));
     assert_eq!(reply["state"]["tabs"].as_array().unwrap().len(), 2);
+
+    // ⌘T: a new tab with one empty pane, and no picker. ⌘E picks what goes in it.
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-t"}));
+    let state = &reply["state"];
+    let empty = state["panes"].as_array().unwrap().iter().find(|p| p["id"] == state["focused"]).unwrap();
+    assert_eq!(
+        (state["tabs"].as_array().unwrap().len(), &state["picker"], &reply["mode"]),
+        (3, &Value::Null, &json!("normal"))
+    );
+    assert_eq!(
+        (reply["tab_panes"][2].as_array().map(Vec::len), &empty["kind"]),
+        (Some(1), &json!({"type": "empty"})),
+        "{reply}"
+    );
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-e"}))["mode"], "pick");
 }
 
 #[test]
@@ -5121,22 +5136,38 @@ fn a_click_on_a_session_goes_on_with_it_in_the_drawer() {
 }
 
 /// The window's buttons sit at its top left, 80 points wide and as tall as the tab strip (28).
+/// Every rail cell is as tall as a section's header; the first starts where the strip ends.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn nothing_is_drawn_over_the_window_buttons_with_a_section_or_the_drawer_open_or_not() {
     let otto = Otto::launch("lights");
     otto.call(json!({"cmd": "split", "kind": "empty"}));
+    let state = otto.call(json!({"cmd": "section", "section": "tasks"}));
+    // Both rects end inside a 1 pt bottom border: the strip is 28 tall, the header 40 like a cell.
+    let (mut strip, mut header) = (rect(&state["strip"]), rect(&state["bar_header"]));
+    (strip[3], header[3]) = (strip[3] + 1.0, header[3] + 1.0);
+    assert_eq!((header[1], strip[1] + strip[3]), (28.0, 28.0), "header {header:?} under the strip {strip:?}");
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
     let clear = |what: &str| {
         let state = otto.call(json!({"cmd": "state"}));
         for tab in state["tabs"].as_array().unwrap() {
             assert!(tab[0].as_f64().unwrap() >= 80.0, "{what}: a tab at {tab}");
         }
         // Sneak mode, which says where controls are, does not start over the new-task box.
-        let rails: &[&str] = if state["mode"] == "compose" { &[] } else { &["rail:apps", "rail:tasks"] };
+        let rails: &[&str] = match state["mode"] == "compose" {
+            true => &[],
+            false => &["rail:tasks", "rail:apps", "rail:workbook", "rail:repos", "rail:marks", "rail:new-task"],
+        };
         for rail in rails {
             let cell = otto.control(rail);
-            let square = (cell[2] - cell[3]).abs() <= 1.0;
-            assert!(cell[1] >= 28.0 && square, "{what}: {rail} at {cell:?}, not square below the strip");
+            assert!(
+                cell[1] >= 28.0 && cell[3] == header[3],
+                "{what}: {rail} at {cell:?}, not {header:?} tall below the strip"
+            );
+        }
+        // Tasks, the first cell, joins the strip: no gap, no line of its own.
+        if let Some(first) = rails.first() {
+            assert_eq!(otto.control(first)[1], strip[1] + strip[3], "{what}: {first} under the strip {strip:?}");
         }
     };
     clear("no section");
@@ -5426,7 +5457,8 @@ fn focus_moves_across_the_zones_to_the_rails_and_back() {
     assert_eq!(focus(&otto.call(json!({"cmd": "key", "keys": FOCUS_LEFT}))), json!({"pane": 1}));
     // The user's goes on: the left rail (no section open), its cells by ↓, a section's list by →.
     let rail = otto.user_key(FOCUS_LEFT);
-    assert_eq!((focus(&rail), &rail["mode"]), (json!({"rail": "apps"}), &json!("list")));
+    assert_eq!((focus(&rail), &rail["mode"]), (json!({"rail": "tasks"}), &json!("list")));
+    assert_eq!(focus(&otto.user_key("down")), json!({"rail": "apps"}));
     assert_eq!(focus(&otto.user_key("down")), json!({"rail": "workbook"}));
     let list = otto.user_key("right");
     assert_eq!((list["focus"].get("list").is_some(), &list["state"]["sidebar"]), (true, &json!("workbook")), "{list}");

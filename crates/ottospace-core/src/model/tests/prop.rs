@@ -586,6 +586,7 @@ const MAKERS: &[Make] = &[
         Action::OpenPicker { axis: g.axis(), new_tab: g.rng.coin(), items }
     },
     |_| Action::NewTab,
+    |_| Action::NewEmptyTab,
     |g| Action::SelectTab { index: g.index(g.m.tabs.len()) },
     |g| Action::CycleTab { delta: g.delta() },
     |g| Action::CloseTab { index: g.rng.coin().then(|| g.index(g.m.tabs.len())) },
@@ -3392,6 +3393,20 @@ fn a_repository_is_never_removed_by_a_path_that_is_no_directory() {
         }
         .sent_by(Origin::User),
         Action::RepoRemove { path: "".into() }.sent_by(Origin::User),
+    ])
+    .unwrap();
+}
+
+#[test]
+fn a_layout_restored_over_an_emptied_tab_leaves_no_workbook_standing_for_it() {
+    replay(&[
+        Action::NewTab.sent_by(Origin::User),
+        Action::Open { kind: Kind::App { window: 3, title: "w3".into(), bundle: None, name: "app".into() }, axis: Axis::Right, beside: None }.sent_by(Origin::User),
+        Action::SelectTab { index: 0 }.sent_by(Origin::User),
+        Action::CloseTab { index: None }.sent_by(Origin::User),
+        Action::WorkbookSaveAll { uid: "00000000000000a2".into(), cwds: vec![], histories: vec![] }.sent_by(Origin::User),
+        Action::Close { pane: None }.sent_by(Origin::User),
+        restore_layout("{\"version\":1,\"selected\":2,\"section\":\"repos\",\"drawer\":{\"task\":1,\"open\":false,\"width\":480.0,\"wide\":false},\"tabs\":[{\"title\":\"Tab 2\",\"layout\":null,\"panes\":[],\"workbook\":{\"id\":\"00000000000000a2\",\"tab\":0}},{\"title\":\"Tab 1\",\"layout\":null,\"panes\":[]}]}", "[\"/Users/me/My Notes\",\"relative\"]", "null", false).sent_by(Origin::User),
     ])
     .unwrap();
 }

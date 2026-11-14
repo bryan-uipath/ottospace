@@ -390,6 +390,9 @@ const TRAFFIC_LIGHTS: f32 = 80.;
 /// The left rail's width, and the section list's beside it.
 const RAIL: f32 = 56.;
 const SECTION: f32 = 260.;
+/// Height of every rail cell (left and right) and of the section panel's header: the open cell
+/// and the header end on one line.
+const RAIL_CELL: f32 = 40.;
 /// The drawer is never narrower than this, unless the window is.
 const MIN_DRAWER: f32 = ottospace_core::talk::MIN_WIDTH;
 /// Height of a pane's header (label and close button).
@@ -398,9 +401,9 @@ const PANE_HEADER: f32 = 28.;
 const HEADER_TITLE_MIN: f32 = 72.;
 
 /// Top-bar buttons: the name in the control's id (`top:new_tab`), icon, tooltip, split direction,
-/// and whether the pick opens in a new tab.
+/// and whether it makes a new tab (no picker) instead.
 const SPLITS: [(&str, &str, &str, Axis, bool); 3] = [
-    ("new_tab", "icons/plus.svg", "New tab…  ⌘T", Axis::Right, true),
+    ("new_tab", "icons/plus.svg", "New tab  ⌘T", Axis::Right, true),
     ("split_right", "icons/split-right.svg", "Split right…  ⌘E", Axis::Right, false),
     ("split_down", "icons/split-down.svg", "Split down…  ⌘⇧E", Axis::Down, false),
 ];
@@ -431,7 +434,7 @@ const KEYS_DRAG: &[(&str, &str)] = &[
     ("", "A live app is parked: click it to go back in"),
 ];
 const KEYS_TABS: &[(&str, &str)] = &[
-    ("⌘T", "New tab: pick what opens in it"),
+    ("⌘T", "New tab, with an empty pane: ⌘E picks what goes in it"),
     ("⌘1 … ⌘9", "Go to a tab"),
     ("⌘⇧] / ⌘⇧[", "Next / previous tab"),
     ("⌃Tab / ⌃⇧Tab", "Next / previous tab"),
@@ -452,7 +455,7 @@ const KEYS_TERMINAL: &[(&str, &str)] = &[
     ("⌘C", "Copy the selection"),
     ("⌘V", "Paste"),
     ("⌘⇧C", "Visual mode: select with the keyboard"),
-    ("⌘⌃E", "List mode: keys for the bar (Apps, Workbook, Tasks, Repos, Marks). ↵ or space on a heading folds it"),
+    ("⌘⌃E", "List mode: keys for the bar (Tasks, Apps, Workbook, Repos, Marks). ↵ or space on a heading folds it"),
     ("⌘; or ⌘⌃G", "Sneak mode: a letter label on every control"),
     ("⌘N", "New task: type a line, ↵ adds it. ↑↓ ↵ pick from its list; ⌘O adds files"),
     ("⌘⇧N", "Next task: show the tabs of the first that needs you"),
@@ -502,9 +505,9 @@ const KEYS_SNEAK: &[(&str, &str)] = &[
 
 /// Rail sections in order, with their icon and label.
 const SECTIONS: [(Section, &str, &str); 5] = [
+    (Section::Tasks, "icons/tasks.svg", "Tasks"),
     (Section::Apps, "icons/apps.svg", "Apps"),
     (Section::Workbook, "icons/workbook.svg", "Workbook"),
-    (Section::Tasks, "icons/tasks.svg", "Tasks"),
     (Section::Repos, "icons/repos.svg", "Repos"),
     (Section::Marks, "icons/marks.svg", "Marks"),
 ];
@@ -565,6 +568,9 @@ enum Mark {
     Repo(usize),
     /// A checkout's row in the Repos section, by its place in the list.
     Checkout(usize),
+    /// The left column's title strip, and the open section's header.
+    Strip,
+    BarHeader,
 }
 
 type Marks = Rc<RefCell<HashMap<Mark, Bounds<Pixels>>>>;
@@ -2465,6 +2471,9 @@ impl Workspace {
             "headers": marked(Mark::Header),
             "closes": marked(Mark::Close),
             "tabs": tabs,
+            // The left column's title strip, and the open section's header (null: none open).
+            "strip": marks.get(&Mark::Strip).copied().map(rect),
+            "bar_header": marks.get(&Mark::BarHeader).copied().map(rect),
             // While a pane is dragged: the pane a drop would land on and the zone of it, both
             // null over anything else. Null with no drag.
             "drag": cx.has_active_drag().then(|| serde_json::json!({
@@ -3338,6 +3347,15 @@ impl Workspace {
         }
     }
 
+    /// A top-bar button: + makes a new tab with an empty pane; a split opens the picker.
+    pub(crate) fn top_button(&mut self, axis: Axis, new_tab: bool, window: &Window, cx: &mut Context<Self>) {
+        if new_tab {
+            self.dispatch(Action::NewEmptyTab, self.input, window, cx);
+        } else {
+            self.open_picker(axis, false, window, cx);
+        }
+    }
+
     /// Opens the pane picker: a terminal, then each running app.
     fn open_picker(&mut self, axis: Axis, new_tab: bool, window: &Window, cx: &mut Context<Self>) {
         self.refresh_apps();
@@ -3563,8 +3581,9 @@ impl Workspace {
 
     /// Left rail: one icon per section. The open section's icon is raised.
     fn render_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        // Square cells as wide as the rail. The open section's cell has the list's background,
-        // an accent bar at its left edge and no border on its right: it reads as joined to the list.
+        // Cells as wide as the rail, as tall as the list's header. The open section's cell has the
+        // list's background, an accent bar at its left edge and no border on its right: it reads as
+        // joined to the list.
         let open = self.model.sidebar;
         let needs_you = self.model.tasks.needs_you() > 0;
         div()
@@ -3580,7 +3599,9 @@ impl Workspace {
                 let active = open == Some(section);
                 div()
                     .id(("rail", i))
-                    .size(px(RAIL))
+                    .flex_none()
+                    .w(px(RAIL))
+                    .h(px(RAIL_CELL))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -3590,7 +3611,7 @@ impl Workspace {
                     .when(active, |d| {
                         // Amber on Tasks while a task needs the user, as its dot is.
                         let tasks = section == Section::Tasks && needs_you;
-                        raised_cell(d, if tasks { theme::SNEAK } else { theme::PRIMARY }, false)
+                        raised_cell(d, if tasks { theme::SNEAK } else { theme::PRIMARY }, false, i == 0)
                     })
                     .when(self.model.rail_focus == Some(RailFocus::Left(section)), |d| focus_ring(d.relative()))
                     .child(svg().path(*icon).size(px(20.)).text_color(rgb(if active {
@@ -3611,7 +3632,8 @@ impl Workspace {
     /// window by.
     fn render_lights(&self, cx: &mut Context<Self>) -> impl IntoElement {
         // No line runs up through it beside the window's buttons.
-        div().h(px(TOP_BAR)).flex_none().border_b_1().border_color(rgb(theme::BORDER)).on_mouse_down(
+        let strip = div().relative().h(px(TOP_BAR)).flex_none().border_b_1().border_color(rgb(theme::BORDER));
+        strip.child(mark(&self.marks, Mark::Strip)).on_mouse_down(
             MouseButton::Left,
             cx.listener(|this, e: &MouseDownEvent, window, cx| {
                 this.dispatch(Action::Leave, this.input, window, cx);
@@ -3648,7 +3670,10 @@ impl Workspace {
             _ => None,
         };
         div()
-            .h(px(40.))
+            .relative()
+            .flex_none()
+            .h(px(RAIL_CELL))
+            .child(mark(&self.marks, Mark::BarHeader))
             .pl_3()
             .pr_1()
             .flex()
@@ -4662,7 +4687,7 @@ impl Workspace {
                             .on_click(cx.listener(move |this, _, window, cx| this.select_tab(id, window, cx)))
                     }),
             )
-            // New tab and split buttons: each opens the picker for that target.
+            // New tab and split buttons: a new empty tab, or the picker for that split.
             .child(div().ml_auto().mr_2().flex().gap_1().children(SPLITS.iter().enumerate().map(
                 |(i, (name, icon, tip, axis, new_tab))| {
                     let (tip, axis, new_tab) = (*tip, *axis, *new_tab);
@@ -4679,7 +4704,7 @@ impl Workspace {
                         .child(svg().path(*icon).size(px(16.)).text_color(rgb(theme::MUTED)))
                         .child(self.controls.mark(format!("top:{name}")))
                         .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
-                        .on_click(cx.listener(move |this, _, window, cx| this.open_picker(axis, new_tab, window, cx)))
+                        .on_click(cx.listener(move |this, _, window, cx| this.top_button(axis, new_tab, window, cx)))
                 },
             )))
     }
@@ -4822,7 +4847,8 @@ fn title_shadow() -> Div {
 
 /// A rail's open cell, raised: the panel's background, a soft shadow above and below it, a
 /// lighter line along its top, and an accent bar at the window's edge (`right`: the right rail's).
-pub(crate) fn raised_cell(cell: Stateful<Div>, accent: u32, right: bool) -> Stateful<Div> {
+/// The `first` cell has neither line nor shadow above: the title strip's border is the one line there.
+pub(crate) fn raised_cell(cell: Stateful<Div>, accent: u32, right: bool, first: bool) -> Stateful<Div> {
     let shadow = |y: f32| BoxShadow {
         color: black().opacity(0.85),
         offset: point(px(0.), px(y)),
@@ -4830,11 +4856,10 @@ pub(crate) fn raised_cell(cell: Stateful<Div>, accent: u32, right: bool) -> Stat
         spread_radius: px(-6.),
     };
     let bar = div().absolute().top_0().w(px(2.)).h_full().bg(rgb(accent));
-    cell.relative()
-        .bg(rgb(theme::RAISED))
-        .shadow(vec![shadow(-7.), shadow(7.)])
-        .child(div().absolute().top_0().left_0().w_full().h(px(1.)).bg(rgb(0x303036)))
-        .child(if right { bar.right_0() } else { bar.left_0() })
+    let bar = if right { bar.right_0() } else { bar.left_0() };
+    let shadows = if first { vec![shadow(7.)] } else { vec![shadow(-7.), shadow(7.)] };
+    let line = (!first).then(|| div().absolute().top_0().left_0().w_full().h(px(1.)).bg(rgb(0x303036)));
+    cell.relative().bg(rgb(theme::RAISED)).shadow(shadows).children(line).child(bar)
 }
 
 /// A rail cell with the keyboard (`zones`): a ring in list mode's colour, apart from "open".
@@ -5011,7 +5036,7 @@ impl Render for Workspace {
         self.controls.begin();
         self.bars.begin();
         // The Repos list is noted again only while it is drawn.
-        self.marks.borrow_mut().retain(|mark, _| !matches!(mark, Mark::Repo(_) | Mark::Checkout(_)));
+        self.marks.borrow_mut().retain(|mark, _| !matches!(mark, Mark::Repo(_) | Mark::Checkout(_) | Mark::BarHeader));
         // The pane drag is over, however it ended (a drop, Esc, a release outside the window):
         // no drop zone may stay drawn.
         if !cx.has_active_drag() {
@@ -5172,7 +5197,7 @@ impl Render for Workspace {
                     cx.notify();
                 }
             }))
-            .on_action(cx.listener(|this, _: &NewTab, window, cx| this.open_picker(Axis::Right, true, window, cx)))
+            .on_action(cx.listener(|this, _: &NewTab, window, cx| this.top_button(Axis::Right, true, window, cx)))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| {
                 this.dispatch(Action::CycleTab { delta: 1 }, this.input, window, cx);
             }))
@@ -5675,5 +5700,12 @@ mod tests {
         for path in icons {
             assert!(Assets.load(path).unwrap().is_some(), "{path} is not in Assets::load");
         }
+    }
+
+    /// The rail is drawn in the order the core moves through it.
+    #[test]
+    fn the_rail_is_drawn_in_the_cores_order() {
+        let drawn: Vec<Section> = SECTIONS.iter().map(|(section, ..)| *section).collect();
+        assert_eq!(drawn, ottospace_core::model::zones::SECTIONS);
     }
 }
