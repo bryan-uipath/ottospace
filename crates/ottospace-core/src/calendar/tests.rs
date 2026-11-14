@@ -191,7 +191,7 @@ fn the_workday_keeps_its_clock_on_a_day_the_clocks_change() {
 #[test]
 fn overlapping_calls_get_as_many_lanes_as_they_need() {
     // (calls, each call's (id, lane, lanes), merged into a call)
-    let table: [(&str, Vec<Event>, Vec<(u64, u8, u8)>, Vec<(u64, Vec<u64>)>); 6] = [
+    let table: [(&str, Vec<Event>, Vec<(u64, u8, u8)>, Vec<(u64, Vec<u64>)>); 7] = [
         ("alone: the full height", vec![event(1, NINE, 60)], vec![(1, 0, 1)], vec![]),
         (
             "back to back: no overlap",
@@ -226,7 +226,13 @@ fn overlapping_calls_get_as_many_lanes_as_they_need() {
             "five at once: four lanes, the fifth in the lane that frees first",
             (1..=5).map(|n| event(n, NINE + n * M, 60 - n * 5)).collect(),
             vec![(1, 0, 4), (2, 1, 4), (3, 2, 4), (4, 3, 4)],
-            vec![(4, vec![5])],
+            vec![(1, vec![5])],
+        ),
+        (
+            "five at once, the fifth the longest: it is drawn, the one it took the lane of is named",
+            (1..=4).map(|n| event(n, NINE, 30)).chain([event(5, NINE, 180)]).collect(),
+            vec![(1, 0, 4), (2, 1, 4), (3, 2, 4), (5, 3, 4)],
+            vec![(5, vec![4])],
         ),
     ];
     for (name, events, want, merged) in table {

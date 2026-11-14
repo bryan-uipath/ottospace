@@ -196,7 +196,7 @@ impl ColorRule {
 }
 
 /// The first rule whose text the title holds, case ignored.
-pub fn rule_for<'a>(title: &str, rules: &'a [ColorRule]) -> Option<&'a ColorRule> {
+fn rule_for<'a>(title: &str, rules: &'a [ColorRule]) -> Option<&'a ColorRule> {
     let title = title.to_lowercase();
     rules.iter().find(|rule| title.contains(&rule.text))
 }
@@ -312,7 +312,7 @@ pub fn band(events: &[Event], day: (u64, u64), workday: Workday, offset: &dyn Fn
 
 /// The day's layout on `band`: calls in as many lanes as overlap (at most `MAX_LANES`, the rest
 /// merged into a lane's call), blocks under them, and blocks wholly outside it at its ends.
-pub fn layout(events: &[Event], day: (u64, u64), band: Band, now: u64) -> Layout {
+fn layout(events: &[Event], day: (u64, u64), band: Band, now: u64) -> Layout {
     let mut shown: Vec<&Event> = of_day(events, day).collect();
     shown.sort_by_key(|e| (e.start, e.end));
     let mut out = Layout { band, calls: Vec::new(), blocks: Vec::new(), early: Vec::new(), late: Vec::new() };
@@ -347,10 +347,19 @@ pub fn layout(events: &[Event], day: (u64, u64), band: Band, now: u64) -> Layout
                     lanes.len() - 1
                 }
                 None => {
-                    // Merged into the call of the lane that frees first.
-                    let lane = (0..lanes.len()).min_by_key(|l| lanes[*l].0).unwrap_or(0);
-                    lanes[lane].0 = lanes[lane].0.max(ends(e));
-                    out.calls[lanes[lane].1].more.push(e.id);
+                    // Merged into the lane that frees last; the longer of the two is drawn, so a
+                    // long call is never hidden behind a short one.
+                    let lane = (0..lanes.len()).max_by_key(|l| lanes[*l].0).unwrap_or(0);
+                    let bar = &mut out.calls[lanes[lane].1];
+                    if ends(e) > lanes[lane].0 {
+                        let (from, to, stage) = (band.at(e.start), band.at(e.end), stage(e, now));
+                        let id = std::mem::replace(&mut bar.id, e.id);
+                        (bar.from, bar.to, bar.stage) = (bar.from.min(from), to, stage);
+                        bar.more.push(id);
+                        lanes[lane].0 = ends(e);
+                    } else {
+                        bar.more.push(e.id);
+                    }
                     continue;
                 }
             };

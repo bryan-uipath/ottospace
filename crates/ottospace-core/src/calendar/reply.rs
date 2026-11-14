@@ -126,10 +126,11 @@ pub fn answer(calendar: &Calendar, (from, to): (i64, i64), workday: Workday, loc
     let within: Vec<&Event> = calendar.events.iter().filter(|e| overlaps(e, from_ms, to_ms)).collect();
     // Nothing read yet: nothing known. Events cut at `MAX_EVENTS` (the earliest kept): nothing
     // known from the last one's start.
-    let full = calendar.events.len() >= MAX_EVENTS;
+    // Of what was read, free entries too: hiding them cuts nothing more.
+    let full = calendar.received.len() >= MAX_EVENTS;
     let known = match calendar.updated {
         None => Some(from_ms),
-        Some(_) => calendar.events.last().filter(|_| full).map(|e| e.start),
+        Some(_) => calendar.received.last().filter(|_| full).map(|e| e.start),
     }
     .filter(|known| *known < to_ms);
     let at = |ms: u64| rfc3339(ms, local);
