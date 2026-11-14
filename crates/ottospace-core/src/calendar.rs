@@ -729,6 +729,9 @@ pub struct Calendar {
     /// The Calendar section's day, from today: 0 is today, -1 yesterday. Back to today when the
     /// day turns.
     pub day: i32,
+    /// The first local midnight the events are whole from (ms): a past day before it was cut by
+    /// the cap on events, and is neither shown nor answered for.
+    pub held_from: u64,
 }
 
 /// What the Calendar's rail cell shows.
@@ -809,10 +812,19 @@ impl Calendar {
         self.events.iter().filter(move |e| e.start < end && e.start >= start)
     }
 
+    /// The first day back held whole (`held_from`), from today.
+    pub fn first_day(&self) -> i32 {
+        (1..=BACK as i32).rev().map(|n| -n).find(|n| self.span(*n).0 >= self.held_from).unwrap_or(0)
+    }
+
     /// The Calendar section's day moved a step, within the days held.
     pub fn step(&mut self, step: DayStep) {
+        // No day before the first read.
+        if self.span(0).1 == 0 {
+            return;
+        }
         self.day = match step {
-            DayStep::Back => (self.day - 1).max(-(BACK as i32)),
+            DayStep::Back => (self.day - 1).max(self.first_day()),
             DayStep::Forward => (self.day + 1).min(AHEAD),
             DayStep::Today => 0,
         };

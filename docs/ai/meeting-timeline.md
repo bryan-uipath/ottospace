@@ -123,10 +123,12 @@ feed was read is on the date's tooltip). The "Tomorrow" fold went: the day chang
   opens the section if closed, and selects the day's first row in list mode. A read whose today
   differs from the last (the day turned) puts it back to today; so does a start.
 - **The days held**: the feed thread expands the 7 days before today too, after today on, within
-  one expansion's work (`ics::expand_within` gets what the first left) and the 500 kept (today on
-  first, then the last of the week back that fit). A past day may so be short in a feed with more
-  than 500 entries in the 15 days; `known_until` still speaks only of today on. The model holds 16
-  local midnights (`calendar::DAYS`, `days[BACK]` today).
+  one expansion's work (`ics::expand_within` gets what the first left) and the 500 kept: today on
+  first, then the week back a whole day at a time, yesterday first, until a day does not fit. The
+  first day held whole is `held_from` (in `CalendarRead`): the section does not go back past it,
+  and the `calendar` request refuses a day before it. `known_until` counts only today on. The model
+  holds 16 local midnights (`calendar::DAYS`, `days[BACK]` today). ← to a day with no meeting
+  keeps list mode (the selection on no row), so the next key still moves the day.
 
 A second pull request. `Section::Calendar`, second on the rail, exists only while a feed is set:
 `Model::sections()` drops it otherwise, and every place that walks the sections asks it (the rail,

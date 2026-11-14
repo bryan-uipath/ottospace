@@ -75,6 +75,10 @@ pub fn reply(
         return Ok(serde_json::json!({ "configured": false }));
     }
     let span = span(day, days, seconds(now), local)?;
+    // A past day the read could not hold whole: nothing said of it is known.
+    if ms(span.0) < calendar.held_from {
+        return Err("the calendar holds fewer days back: the feed has more entries than it keeps");
+    }
     serde_json::to_value(answer(calendar, span, workday, local)).map_err(|_| "the calendar could not be written")
 }
 
@@ -126,8 +130,10 @@ pub fn answer(calendar: &Calendar, (from, to): (i64, i64), workday: Workday, loc
     let within: Vec<&Event> = calendar.events.iter().filter(|e| overlaps(e, from_ms, to_ms)).collect();
     // Nothing read yet: nothing known. Events cut at `MAX_EVENTS` (the earliest kept): nothing
     // known from the last one's start.
-    // Of what was read, free entries too: hiding them cuts nothing more.
-    let full = calendar.received.len() >= MAX_EVENTS;
+    // Of what was read, free entries too: hiding them cuts nothing more. Only today on is cut at
+    // its end; the week back is cut at its start (`held_from`).
+    let ahead = calendar.received.iter().filter(|e| e.start >= calendar.span(0).0).count();
+    let full = ahead >= MAX_EVENTS;
     let known = match calendar.updated {
         None => Some(from_ms),
         Some(_) => calendar.received.last().filter(|_| full).map(|e| e.start),

@@ -1296,6 +1296,8 @@ pub enum Action {
         events: Option<Vec<calendar::Event>>,
         days: [u64; calendar::DAYS],
         at: u64,
+        /// The first local midnight the events are whole from: a past day before it was cut.
+        held_from: u64,
     },
     /// Whether the user is in a call, as the shell saw it at `at`. `None`: it could not tell.
     CallSeen {
@@ -4480,7 +4482,14 @@ impl Model {
                     }
                 }
             }
-            Action::CalendarRead { events, days, at } => self.calendar.read(events, days, at),
+            Action::CalendarRead { events, days, at, held_from } => {
+                if events.is_some() {
+                    self.calendar.held_from = held_from;
+                }
+                self.calendar.read(events, days, at);
+                // A day no longer held whole is not shown.
+                self.calendar.day = self.calendar.day.max(self.calendar.first_day());
+            }
             Action::CallSeen { in_call, at } => self.calendar.call_seen(in_call, at),
             Action::CalendarDismiss { id } => self.calendar.dismiss(id),
             Action::CalendarDay { step } => {
@@ -4491,9 +4500,10 @@ impl Model {
                     self.act(Action::ToggleSection { section: Section::Calendar }, effects);
                 }
                 self.calendar.step(step);
-                // The first row of the day shown, if the keyboard is on the rows.
+                // The first row of the day shown, if the keyboard is on the rows; on a day with none
+                // the keyboard stays in list mode, so the next key still changes the day.
                 if self.list.is_some() {
-                    self.list = Some(0).filter(|_| !self.calendar.agenda().is_empty());
+                    self.list = Some(0);
                 }
             }
             Action::CalendarJoin { id } => effects.extend(self.calendar.join(id).map(|url| Effect::OpenLink { url })),
@@ -7252,7 +7262,7 @@ mod tests {
             Action::TalkPick { id: Subject::Task(1) },
             Action::TalkStart,
             Action::SetCalendar { on: true, notify: true, links_only: false, hide_free: false, colors: Vec::new() },
-            Action::CalendarRead { events: None, days: [0; calendar::DAYS], at: 0 },
+            Action::CalendarRead { events: None, days: [0; calendar::DAYS], at: 0, held_from: 0 },
             Action::CallSeen { in_call: Some(false), at: 0 },
             Action::CalendarDismiss { id: 1 },
             Action::CalendarJoin { id: 1 },

@@ -298,3 +298,20 @@ fn free_time_only_where_the_calendar_is_known() {
     // Fewer: all known.
     assert_eq!(answer(&calendar(vec![]), (from, to), Workday::default(), &utc()).known_until, None);
 }
+
+#[test]
+fn the_week_back_is_cut_at_its_start_and_never_cuts_today_on() {
+    let day = monday();
+    // 300 meetings ahead and 200 back: 500 held, nothing ahead cut, so nothing ahead unknown.
+    let ahead = (0..300).map(|n| event(n, day + n * M, 1));
+    let back = (0..200).map(|n| event(1_000 + n, day - 24 * H + n * M, 1));
+    let mut c = calendar(ahead.chain(back).collect());
+    let (from, to) = (midnight(2026, 11, 16), midnight(2026, 11, 23));
+    assert_eq!(answer(&c, (from, to), Workday::default(), &utc()).known_until, None);
+    // Held whole only from Sunday: Saturday is refused, Sunday answered.
+    c.held_from = day - 24 * H;
+    let now = day + 8 * H;
+    let refused = reply(&c, Some("2026-11-14"), None, (now, Workday::default()), &utc());
+    assert_eq!(refused, Err("the calendar holds fewer days back: the feed has more entries than it keeps"));
+    assert!(reply(&c, Some("yesterday"), None, (now, Workday::default()), &utc()).is_ok());
+}

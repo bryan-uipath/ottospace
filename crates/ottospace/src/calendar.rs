@@ -51,6 +51,7 @@ pub struct Read {
     events: Option<Vec<Event>>,
     days: [u64; calendar::DAYS],
     at: u64,
+    held_from: u64,
     /// Why the read failed, when the user can do something about it. Never the link.
     problem: Option<&'static str>,
 }
@@ -108,10 +109,10 @@ impl Timeline {
                     fetched = Some(Instant::now());
                 }
                 if due || now >= days[calendar::BACK + 1] {
-                    let (events, today) = evaluate(&feed, now);
+                    let (events, today, held_from) = evaluate(&feed, now);
                     days = today;
                     let events = read_at.filter(|_| !failed).map(|_| events);
-                    let read = Read { events, days, at: read_at.unwrap_or(now), problem };
+                    let read = Read { events, days, at: read_at.unwrap_or(now), held_from, problem };
                     if tx.send(read).is_err() {
                         return;
                     }
@@ -186,7 +187,7 @@ fn curl(link: &str) -> Result<String, Option<&'static str>> {
 /// The events of the days held (a week back to a week on) of a feed's text, in the user's zone;
 /// and their local midnights (ms). Today on first: the 500 kept are today's and the week ahead's
 /// before the week back's, within one expansion's work.
-fn evaluate(feed: &ics::Feed, now: u64) -> (Vec<Event>, [u64; calendar::DAYS]) {
+fn evaluate(feed: &ics::Feed, now: u64) -> (Vec<Event>, [u64; calendar::DAYS], u64) {
     let now = (now / 1_000) as i64;
     let local = local_zone(now);
     let (from, to) = zone_span(now);
@@ -195,15 +196,26 @@ fn evaluate(feed: &ics::Feed, now: u64) -> (Vec<Event>, [u64; calendar::DAYS]) {
         .into_iter()
         .filter_map(|name| Some((name.clone(), Table(meeting::zone_table(&name, from, to)?))))
         .collect();
-    let (back, today, end) = calendar::reply::held(now, &local);
+    let (_, today, end) = calendar::reply::held(now, &local);
     let zones = Zones { local, named };
-    let (mut ahead, work) = ics::expand_counted(feed, today, end, &zones);
-    let (past, _) = ics::expand_within(feed, (back, today), &zones, ics::SCAN_BUDGET - work);
-    // The last of the week back, as many as there is room for.
-    let room = ics::MAX_OCCURRENCES.saturating_sub(ahead.len());
-    let before: Vec<_> = past.into_iter().filter(|o| o.start < today).collect();
-    ahead.splice(0..0, before[before.len().saturating_sub(room)..].iter().cloned());
-    (calendar::events(&ahead), days.map(|day| (day.max(0) as u64) * 1_000))
+    let (mut held, work) = ics::expand_counted(feed, today, end, &zones);
+    let mut budget = ics::SCAN_BUDGET - work;
+    // The week back a whole day at a time, yesterday first, while the work and the 500 allow:
+    // a day that does not fit is left out, and so is every day before it.
+    let mut held_from = today;
+    for back in (0..calendar::BACK).rev() {
+        let (from, to) = (days[back], days[back + 1]);
+        let (day, used) = ics::expand_within(feed, (from, to), &zones, budget);
+        budget -= used;
+        let day: Vec<_> = day.into_iter().filter(|o| o.start >= from).collect();
+        if budget <= 0 || held.len() + day.len() > ics::MAX_OCCURRENCES {
+            break;
+        }
+        held.splice(0..0, day);
+        held_from = from;
+    }
+    let ms = |at: i64| (at.max(0) as u64) * 1_000;
+    (calendar::events(&held), days.map(ms), ms(held_from))
 }
 
 /// Zone tables cover 10 days before `now` (seconds) to 11 after: the days held and more.
@@ -237,11 +249,11 @@ impl Workspace {
     /// band pulses (10 a second), else every 20 seconds, as now moves along it.
     pub(crate) fn tick_timeline(&mut self, window: &Window, cx: &mut Context<Self>) {
         let reads: Vec<Read> = self.timeline.reads.iter().flat_map(|rx| rx.try_iter()).collect();
-        for Read { events, days, at, problem } in reads {
+        for Read { events, days, at, held_from, problem } in reads {
             if problem.is_some() {
                 self.error = problem.map(String::from);
             }
-            self.dispatch(Action::CalendarRead { events, days, at }, Origin::System, window, cx);
+            self.dispatch(Action::CalendarRead { events, days, at, held_from }, Origin::System, window, cx);
         }
         if !self.model.calendar.on {
             return;

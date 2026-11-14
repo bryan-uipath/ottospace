@@ -1124,7 +1124,8 @@ const MAKERS: &[Make] = &[
         let events = g.rng.coin().then(|| (0..g.rng.below(4)).map(|_| g.meeting()).collect());
         let day = g.m.now - g.m.now % 86_400_000;
         let days = std::array::from_fn(|n| day.saturating_add(n as u64 * 86_400_000).saturating_sub(7 * 86_400_000));
-        Action::CalendarRead { events, days, at: g.time() }
+        let held_from = g.rng.pick(&[0, days[7], days[3]]);
+        Action::CalendarRead { events, days, at: g.time(), held_from }
     },
     |g| Action::CallSeen { in_call: g.rng.pick(&[None, Some(true), Some(false)]), at: g.time() },
     |g| Action::CalendarDismiss { id: g.meeting_id() },
@@ -1239,6 +1240,7 @@ fn check(m: &Model) -> Result<(), String> {
         m.sidebar == Some(Section::Calendar) || m.rail_focus == Some(zones::RailFocus::Left(Section::Calendar));
     ensure!(!calendar_shown || m.calendar.on, "the Calendar section with no feed");
     ensure!((-7..=7).contains(&m.calendar.day), "the Calendar's day {} is not held", m.calendar.day);
+    ensure!(m.calendar.day >= m.calendar.first_day(), "the Calendar shows day {}, cut by the cap", m.calendar.day);
     // "Paste 4 lines?" is a question of its own, and only of text with a line break.
     if let Some(confirm) = m.confirm.as_ref().filter(|c| c.paste.is_some()) {
         let alone = confirm.running.is_empty() && confirm.dismiss.is_none();

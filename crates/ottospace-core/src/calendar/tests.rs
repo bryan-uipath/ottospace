@@ -808,6 +808,14 @@ fn the_sections_day_stays_within_the_days_held_and_comes_back_when_the_day_turns
     // The day turns: back to today.
     c.read(None, days_of(NINE + 24 * H), NINE + 24 * H);
     assert_eq!(c.day, 0);
+    // A past day the read could not hold whole is not shown: back stops at the first held whole.
+    c.held_from = c.span(-3).0;
+    (0..9).for_each(|_| c.step(DayStep::Back));
+    assert_eq!(c.day, -3);
+    // Before the first read there is no day to move to.
+    let mut unread = Calendar { on: true, ..Calendar::default() };
+    unread.step(DayStep::Forward);
+    assert_eq!(unread.day, 0);
 }
 
 #[test]
@@ -879,7 +887,8 @@ fn enter_on_a_meeting_joins_it_for_the_user_only() {
             .sent_by(Origin::System),
     );
     let days = days_of(NINE);
-    m.update(Action::CalendarRead { events: Some(vec![event(7, NINE, 30)]), days, at: NINE }.sent_by(Origin::System));
+    let read = Action::CalendarRead { events: Some(vec![event(7, NINE, 30)]), days, at: NINE, held_from: 0 };
+    m.update(read.sent_by(Origin::System));
     m.update(Action::ToggleSection { section: Section::Calendar });
     m.update(Action::FocusList);
     assert_eq!(m.list, Some(0));
@@ -902,7 +911,8 @@ fn the_sections_day_moves_by_key_or_click_from_anyone_and_opens_the_section() {
             .sent_by(Origin::System),
     );
     let events = vec![event(1, NINE, 30), event(2, NINE + H, 30), event(3, NINE - 24 * H, 30)];
-    m.update(Action::CalendarRead { events: Some(events), days: days_of(NINE), at: NINE }.sent_by(Origin::System));
+    let read = Action::CalendarRead { events: Some(events), days: days_of(NINE), at: NINE, held_from: 0 };
+    m.update(read.sent_by(Origin::System));
     // From the palette, with the section closed: it opens on the day before.
     m.update(step(DayStep::Back));
     assert_eq!((m.calendar.day, m.sidebar), (-1, Some(Section::Calendar)));
@@ -912,5 +922,6 @@ fn the_sections_day_moves_by_key_or_click_from_anyone_and_opens_the_section() {
     assert_eq!((m.calendar.day, m.list), (0, Some(0)));
     m.update(Action::ListMove { delta: 1 });
     m.update(step(DayStep::Forward));
-    assert_eq!((m.calendar.day, m.list), (1, None), "no meeting tomorrow: no row");
+    assert_eq!((m.calendar.day, m.list), (1, Some(0)), "no meeting tomorrow: still in list mode");
+    assert!(m.calendar.agenda().is_empty());
 }
