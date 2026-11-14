@@ -1193,7 +1193,8 @@ impl Workspace {
         let ending = self.model.is_ending(subject);
         // Only what is not how every text box works: the card's buttons show their own keys.
         let (placeholder, hint): (&'static str, &'static str) = match () {
-            _ if ending => ("", "Stopping…"),
+            // ↵ meanwhile: sent once the session is gone on with, after the process is gone.
+            _ if ending => ("Stopping…", ""),
             _ if card && chat.deny => ("Why deny it?", "↵ denies with this message · esc back to the request"),
             _ if card => ("", ""),
             _ if chat.transcript.turn.is_some() => {
@@ -1205,7 +1206,7 @@ impl Workspace {
             _ if !chat.transcript.live => ("The agent ended", "it cannot be gone on with from here"),
             _ => ("Message", ""),
         };
-        let open = !ending && (chat.transcript.live || self.model.shown_draft_chat().is_some());
+        let open = chat.transcript.live || self.model.shown_draft_chat().is_some();
         let field = (open && (!card || chat.deny)).then(|| self.render_field_of("talk", placeholder, cx));
         let button = self.model.composer_button().and_then(|primary| match primary {
             Primary::Stop => Some(

@@ -4016,3 +4016,73 @@ fn an_ended_agent_lets_the_keyboard_go() {
     ])
     .unwrap();
 }
+
+/// Seed 1627 (long run): the tab a brief showed with was closed by the system; the brief stayed.
+#[test]
+fn a_brief_goes_with_its_tab() {
+    replay(&[
+        Action::SetSessions {
+            found: vec![
+                Found {
+                    runner: "claude".into(),
+                    id: "s1".into(),
+                    cwd: "/code/app".into(),
+                    repo: "/code/app".into(),
+                    started: Some(1),
+                    last_activity: Some(999000),
+                    active: true,
+                    station: None,
+                    label: None,
+                    title: None,
+                    model: None,
+                    held: false,
+                },
+                Found {
+                    runner: "claude".into(),
+                    id: "s2".into(),
+                    cwd: "/code/app".into(),
+                    repo: "/code/app".into(),
+                    started: Some(1),
+                    last_activity: Some(5),
+                    active: false,
+                    station: None,
+                    label: None,
+                    title: None,
+                    model: None,
+                    held: false,
+                },
+            ],
+            day: 0,
+        }
+        .sent_by(Origin::User),
+        Action::Open {
+            kind: Kind::App { window: 9, title: "w9".into(), bundle: None, name: "app".into() },
+            axis: Axis::Right,
+            beside: None,
+        }
+        .sent_by(Origin::User),
+        Action::CaptureStart {
+            pane: None,
+            draft: "u3".into(),
+            word: "w0rdw0rdw0rd".into(),
+            facts: vec![
+                Facts { pane: 3, cwd: None, program: Some("".into()), title: Some("".into()), ignored: false },
+                Facts {
+                    pane: 2,
+                    cwd: Some("S".repeat(657)),
+                    program: Some("/p#../..p1".into()),
+                    title: None,
+                    ignored: false,
+                },
+            ],
+            images: true,
+        }
+        .sent_by(Origin::User),
+        Action::ComposeEnter.sent_by(Origin::User),
+        Action::SessionAdopt { runner: "claude".into(), id: "s2".into() }.sent_by(Origin::User),
+        Action::TalkGo.sent_by(Origin::User),
+        Action::TaskGo { id: Some(1) }.sent_by(Origin::User),
+        Action::CloseTab { index: None }.sent_by(Origin::System),
+    ])
+    .unwrap();
+}

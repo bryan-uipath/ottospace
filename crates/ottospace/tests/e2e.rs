@@ -7263,6 +7263,41 @@ fn stop_the_agent(otto: &Otto) {
 /// no line not understood.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn a_message_right_after_stop_resumes_once_and_nothing_says_it_cannot() {
+    let fixtures = [("turn1.jsonl", recorded("real-2.1.325-turn.jsonl"))];
+    let (root, record, mut env) = native_setup("stop-send", &fixtures, &[]);
+    env.push(("FAKE_SESSIONS".into(), root.join("sessions/claude").to_str().unwrap().into()));
+    let otto = launch_env("stop-send", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "plan the week >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    let starts = || std::fs::read_to_string(record.join("starts")).unwrap_or_default().lines().count();
+    let sent = || std::fs::read_to_string(record.join("stdin")).unwrap_or_default().matches("say hello").count();
+    otto.start_task(1);
+    otto.wait_for("the reply", |o| {
+        let chat = chat(o);
+        (chat["transcript"]["turn"].is_null() && chat["replies"].as_array()?.len() == 1).then_some(())
+    });
+    // Stop, and at once a message and ↵: no refusal, then one resume, and the message once.
+    stop_the_agent(&otto);
+    let typed = otto.user_key("s a y space h e l l o enter");
+    assert_eq!((&typed["drawer"]["note"], &typed["notice"]), (&Value::Null, &Value::Null), "nothing says it cannot");
+    otto.wait_for("one resume, and the message", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        assert_eq!(state["drawer"]["note"], Value::Null, "nothing says it cannot");
+        (starts() == 2 && sent() == 1).then_some(())
+    });
+    let argv = std::fs::read_to_string(record.join("argv")).unwrap_or_default();
+    assert!(argv.lines().any(|a| a == "--resume"), "{argv}");
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!((starts(), sent()), (2, 1), "once each");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn a_stopped_agent_resumes_as_one_conversation() {
     let resume = [
         r#"{"type":"system","subtype":"hook_started","hook_name":"SessionStart:resume","session_id":"s"}"#,

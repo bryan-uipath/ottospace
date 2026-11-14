@@ -2854,6 +2854,11 @@ impl Model {
         // Only the user's own undo links a dismissed task's tabs again.
         self.settle_tasks(undo && origin == Origin::User);
         self.follow_tab(shown, origin, drawer_keys);
+        // A brief shows with its task, on show in a tab or the drawer: its tab closed, it goes.
+        let talked = self.talk.as_ref().and_then(|talk| talk.task.task());
+        let shown = |id: &TaskId| self.tab_task() == Some(*id) || talked == Some(*id);
+        let briefed = |id: &TaskId| self.tasks.get(*id).is_some_and(|task| !task.materials.is_empty());
+        self.brief = self.brief.filter(|id| shown(id) && briefed(id));
         // However the list was left (Esc, a click on a pane), ⌘⌃← comes back to its row.
         if self.list.is_none() && listed.is_some() {
             self.list_kept = zones::KeptRow(listed);
@@ -4383,6 +4388,10 @@ impl Model {
             }
             Action::AgentExited { task: subject } => {
                 let ran = self.agents.contains(&subject);
+                // Stopped with a message written meanwhile, on show: gone on with now that it is gone.
+                let shown = self.talk.as_ref().is_some_and(|talk| talk.open && talk.task == subject);
+                let queued = self.chat(&subject).is_some_and(|chat| chat.queued.is_some());
+                let resume = shown && queued && self.ending.contains(&subject);
                 // A switch of view: the session goes on in the other once this one is gone.
                 let switched = self.chat_exited(&subject);
                 // What its session's file shows of the last moments is ours, not another terminal's.
@@ -4396,6 +4405,9 @@ impl Model {
                 self.awaiting.retain(|id| *id != subject);
                 self.ending.retain(|id| *id != subject);
                 let Some(task) = subject.task() else {
+                    if resume {
+                        self.chat_resume(&subject, effects);
+                    }
                     return if switched {
                         self.chat_restart(subject, effects)
                     };
@@ -4411,6 +4423,10 @@ impl Model {
                 if ran && self.tasks.get(task).is_some_and(|task| task.state == State::Running && !task.dismissed) {
                     self.tasks.set_state(task, State::NeedsYou);
                     self.tasks.followed(task, State::NeedsYou);
+                }
+                // Once its task no longer follows the session as running: else nothing could start.
+                if resume {
+                    self.chat_resume(&subject, effects);
                 }
                 if switched {
                     self.chat_restart(subject, effects);
