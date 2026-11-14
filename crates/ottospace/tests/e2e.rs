@@ -1369,7 +1369,8 @@ fn user_folder(name: &str, settings: &str) -> PathBuf {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn tasks_are_kept_between_runs() {
-    let home = user_folder("tasks", r#"{"repos": []}"#); // no repositories: not the user's own
+    // Each run after the first starts with nothing open: no layout is restored.
+    let home = user_folder("tasks", r#"{"repos": [], "restore_layout": false}"#); // no repositories: not the user's own
     let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
     let titles = |o: &Otto| -> Vec<(String, String)> {
         let rows = o.call(json!({"cmd": "task_list"}))["inbox"].as_array().unwrap().clone();
@@ -3515,7 +3516,8 @@ fn a_marks_wait_for_a_letter_is_the_users_and_a_mark_taken_off_by_mistake_comes_
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_hand_written_marks_file_is_checked_and_commands_in_it_are_never_typed() {
     // A wrong key in the settings too: the two problems are both said.
-    let home = user_folder("marks-file", r#"{"repos": [], "nope": 1}"#);
+    // Each run after the first starts with nothing open: no layout is restored.
+    let home = user_folder("marks-file", r#"{"repos": [], "nope": 1, "restore_layout": false}"#);
     std::fs::create_dir_all(home.join("work")).unwrap();
     let work = home.join("work").canonicalize().unwrap();
     let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
@@ -4703,7 +4705,8 @@ fn agent_argv(dir: &Path, name: &str) -> Option<Vec<String>> {
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_saved_tab_is_a_workbook_kept_between_runs() {
     use std::os::unix::fs::PermissionsExt;
-    let home = user_folder("workbook", r#"{"repos": [], "workbook_scrollback_lines": 0}"#);
+    // Each run after the first starts with nothing open: no layout is restored.
+    let home = user_folder("workbook", r#"{"repos": [], "workbook_scrollback_lines": 0, "restore_layout": false}"#);
     let dir = |name: &str| {
         std::fs::create_dir_all(home.join(name)).unwrap();
         home.join(name).canonicalize().unwrap()
@@ -5141,7 +5144,9 @@ fn nothing_is_drawn_over_the_window_buttons_with_a_section_or_the_drawer_open_or
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_workbook_keeps_several_tabs_and_opens_them_in_order() {
-    let home = user_folder("workbook-tabs", r#"{"repos": [], "workbook_scrollback_lines": 0}"#);
+    // Each run after the first starts with nothing open: no layout is restored.
+    let home =
+        user_folder("workbook-tabs", r#"{"repos": [], "workbook_scrollback_lines": 0, "restore_layout": false}"#);
     let dir = |name: &str| {
         std::fs::create_dir_all(home.join(name)).unwrap();
         home.join(name).canonicalize().unwrap()
@@ -5228,7 +5233,9 @@ fn running(line: &str) -> usize {
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_workbooks_terminal_comes_back_with_its_lines_and_its_command_typed_not_run() {
     const SLEEP: &str = "sleep 2931";
-    let home = user_folder("workbook-history", r#"{"repos": [], "workbook_scrollback_lines": 50}"#);
+    // Each run after the first starts with nothing open: no layout is restored.
+    let home =
+        user_folder("workbook-history", r#"{"repos": [], "workbook_scrollback_lines": 50, "restore_layout": false}"#);
     let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
     let saved = |reply: &Value| {
         let text = reply.to_string();
@@ -5317,7 +5324,8 @@ fn tasks_show_by_state_or_project_with_time_tokens_a_footer_and_a_card() {
     session_fixture(&format!("{fixture}.jsonl"), &project.join(format!("{busy}.jsonl")), &repo, Duration::ZERO);
     let sub = format!("{busy}/subagents/agent-a1.jsonl");
     session_fixture(&format!("{fixture}/subagents/agent-a1.jsonl"), &project.join(&sub), &repo, Duration::ZERO);
-    let settings = json!({"repos": [home.join("src")], "session_dirs": {"claude": [claude]}});
+    // Each run after the first starts with nothing open: no layout is restored.
+    let settings = json!({"repos": [home.join("src")], "session_dirs": {"claude": [claude]}, "restore_layout": false});
     std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
     let otto = Otto::launch_with("progress", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
     otto.call(json!({"cmd": "section", "section": "tasks"}));
