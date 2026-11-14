@@ -586,6 +586,7 @@ const MAKERS: &[Make] = &[
         Action::OpenPicker { axis: g.axis(), new_tab: g.rng.coin(), items }
     },
     |_| Action::NewTab,
+    |_| Action::NewEmptyTab,
     |g| Action::SelectTab { index: g.index(g.m.tabs.len()) },
     |g| Action::CycleTab { delta: g.delta() },
     |g| Action::CloseTab { index: g.rng.coin().then(|| g.index(g.m.tabs.len())) },

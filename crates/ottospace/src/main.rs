@@ -401,9 +401,9 @@ const PANE_HEADER: f32 = 28.;
 const HEADER_TITLE_MIN: f32 = 72.;
 
 /// Top-bar buttons: the name in the control's id (`top:new_tab`), icon, tooltip, split direction,
-/// and whether the pick opens in a new tab.
+/// and whether it makes a new tab (no picker) instead.
 const SPLITS: [(&str, &str, &str, Axis, bool); 3] = [
-    ("new_tab", "icons/plus.svg", "New tab…  ⌘T", Axis::Right, true),
+    ("new_tab", "icons/plus.svg", "New tab  ⌘T", Axis::Right, true),
     ("split_right", "icons/split-right.svg", "Split right…  ⌘E", Axis::Right, false),
     ("split_down", "icons/split-down.svg", "Split down…  ⌘⇧E", Axis::Down, false),
 ];
@@ -434,7 +434,7 @@ const KEYS_DRAG: &[(&str, &str)] = &[
     ("", "A live app is parked: click it to go back in"),
 ];
 const KEYS_TABS: &[(&str, &str)] = &[
-    ("⌘T", "New tab: pick what opens in it"),
+    ("⌘T", "New tab, with an empty pane: ⌘E picks what goes in it"),
     ("⌘1 … ⌘9", "Go to a tab"),
     ("⌘⇧] / ⌘⇧[", "Next / previous tab"),
     ("⌃Tab / ⌃⇧Tab", "Next / previous tab"),
@@ -3347,6 +3347,15 @@ impl Workspace {
         }
     }
 
+    /// A top-bar button: + makes a new tab with an empty pane; a split opens the picker.
+    pub(crate) fn top_button(&mut self, axis: Axis, new_tab: bool, window: &Window, cx: &mut Context<Self>) {
+        if new_tab {
+            self.dispatch(Action::NewEmptyTab, self.input, window, cx);
+        } else {
+            self.open_picker(axis, false, window, cx);
+        }
+    }
+
     /// Opens the pane picker: a terminal, then each running app.
     fn open_picker(&mut self, axis: Axis, new_tab: bool, window: &Window, cx: &mut Context<Self>) {
         self.refresh_apps();
@@ -4677,7 +4686,7 @@ impl Workspace {
                             .on_click(cx.listener(move |this, _, window, cx| this.select_tab(id, window, cx)))
                     }),
             )
-            // New tab and split buttons: each opens the picker for that target.
+            // New tab and split buttons: a new empty tab, or the picker for that split.
             .child(div().ml_auto().mr_2().flex().gap_1().children(SPLITS.iter().enumerate().map(
                 |(i, (name, icon, tip, axis, new_tab))| {
                     let (tip, axis, new_tab) = (*tip, *axis, *new_tab);
@@ -4694,7 +4703,7 @@ impl Workspace {
                         .child(svg().path(*icon).size(px(16.)).text_color(rgb(theme::MUTED)))
                         .child(self.controls.mark(format!("top:{name}")))
                         .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
-                        .on_click(cx.listener(move |this, _, window, cx| this.open_picker(axis, new_tab, window, cx)))
+                        .on_click(cx.listener(move |this, _, window, cx| this.top_button(axis, new_tab, window, cx)))
                 },
             )))
     }
@@ -5187,7 +5196,7 @@ impl Render for Workspace {
                     cx.notify();
                 }
             }))
-            .on_action(cx.listener(|this, _: &NewTab, window, cx| this.open_picker(Axis::Right, true, window, cx)))
+            .on_action(cx.listener(|this, _: &NewTab, window, cx| this.top_button(Axis::Right, true, window, cx)))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| {
                 this.dispatch(Action::CycleTab { delta: 1 }, this.input, window, cx);
             }))

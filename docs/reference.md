@@ -101,7 +101,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘/ | Show every key. In a small window the list scrolls: J / K or the arrows, space or Page Down / Page Up, Home / End |
 | ⌘P | [Command palette](#command-palette): run any command of the menu bar by name. Type to filter, ↑/↓ or ⌃N/⌃P move, ↵ runs, Esc or ⌘P closes |
 | F18 | From any app: take the keyboard back and bring ottospace forward |
-| ⌘T | New tab: pick what opens in it |
+| ⌘T | New tab, with an empty pane: ⌘E picks what goes in it |
 | ⌘1 … ⌘9 | Select a tab on the bar |
 | ⌘⇧] / ⌘⇧[ or ⌃Tab / ⌃⇧Tab | Next / previous tab |
 | ⌘⇧W | Close the tab and its panes |

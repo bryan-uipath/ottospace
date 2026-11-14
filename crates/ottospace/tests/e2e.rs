@@ -2639,6 +2639,21 @@ fn tabs_keep_their_own_panes() {
     assert!(reply["terminals"].get("3").is_none(), "{reply}");
     let reply = otto.call(json!({"cmd": "cycle_tab", "delta": 1}));
     assert_eq!(reply["state"]["tabs"].as_array().unwrap().len(), 2);
+
+    // ⌘T: a new tab with one empty pane, and no picker. ⌘E picks what goes in it.
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-t"}));
+    let state = &reply["state"];
+    let empty = state["panes"].as_array().unwrap().iter().find(|p| p["id"] == state["focused"]).unwrap();
+    assert_eq!(
+        (state["tabs"].as_array().unwrap().len(), &state["picker"], &reply["mode"]),
+        (3, &Value::Null, &json!("normal"))
+    );
+    assert_eq!(
+        (reply["tab_panes"][2].as_array().map(Vec::len), &empty["kind"]),
+        (Some(1), &json!({"type": "empty"})),
+        "{reply}"
+    );
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-e"}))["mode"], "pick");
 }
 
 #[test]

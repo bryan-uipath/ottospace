@@ -430,6 +430,8 @@ pub enum Action {
     },
     /// A new, empty tab. It becomes the active tab.
     NewTab,
+    /// ⌘T: a new tab holding one empty pane, shown. No picker: ⌘E picks what goes in it.
+    NewEmptyTab,
     SelectTab {
         index: usize,
     },
@@ -1203,6 +1205,8 @@ impl Action {
                 | Action::ToggleSection { .. }
                 | Action::CloseSidebar
                 | Action::NewTab
+                | Action::NewEmptyTab
+                | Action::NewEmptyTab
                 | Action::SelectTab { .. }
                 | Action::SelectVisibleTab { .. }
                 | Action::TaskLeave
@@ -1278,6 +1282,7 @@ impl Action {
             | Action::ToggleSection { .. }
             | Action::CloseSidebar
             | Action::NewTab
+            | Action::NewEmptyTab
             | Action::SelectTab { .. }
             | Action::CycleTab { .. }
             | Action::CloseTab { .. }
@@ -2163,8 +2168,8 @@ impl Model {
             return Some("visual mode is on");
         }
         // The new-task box has the keyboard, as the picker does: what is behind it waits, and
-        // neither opens over the other. (The picker may open again over itself: ⌘T while it is
-        // open turns the pick into a new tab.) The box does not open under the key reference
+        // neither opens over the other. (The picker may open again over itself: a `picker`
+        // request while it is open.) The box does not open under the key reference
         // or in visual mode.
         // A draft in the right bar is not a box: the workspace stays in use beside it.
         let modal = self.compose.is_some() && self.capture.is_none();
@@ -2358,6 +2363,8 @@ impl Model {
                 | Action::DropPane { .. }
                 | Action::Enter { .. }
                 | Action::NewTab
+                | Action::NewEmptyTab
+                | Action::NewEmptyTab
                 | Action::SelectTab { .. }
                 | Action::SelectVisibleTab { .. }
                 | Action::TaskLeave
@@ -2609,6 +2616,10 @@ impl Model {
                 self.leave(effects);
                 self.park_active();
                 self.push_tab();
+            }
+            Action::NewEmptyTab => {
+                self.act(Action::NewTab, effects);
+                self.open(Kind::Empty, Axis::Right, None, effects);
             }
             Action::SelectTab { index } => self.select_tab(index, effects),
             Action::CycleTab { delta } => {
@@ -5600,6 +5611,7 @@ mod tests {
         Action::CloseSidebar,
         Action::OpenPicker { .. },
         Action::NewTab,
+        Action::NewEmptyTab,
         Action::SelectTab { .. },
         Action::CycleTab { .. },
         Action::CloseTab { .. },
@@ -5793,6 +5805,7 @@ mod tests {
             Action::CloseSidebar,
             Action::OpenPicker { axis: Right, new_tab: false, items: Vec::new() },
             Action::NewTab,
+            Action::NewEmptyTab,
             Action::SelectTab { index: 0 },
             Action::CycleTab { delta: 1 },
             Action::CloseTab { index: None },
@@ -6596,6 +6609,20 @@ mod tests {
         m.update(Action::FocusCycle { delta: -1 });
         assert_eq!(m.focused, Some(2));
         assert_eq!(Model::default().update(Action::FocusCycle { delta: 1 }), []);
+    }
+
+    #[test]
+    fn an_empty_tab_has_one_empty_pane_and_opens_no_picker() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        let effects = m.update(Action::NewEmptyTab.sent_by(Origin::User));
+        assert_eq!((m.tabs.len(), m.active, m.tabs[1].title.as_str()), (2, 1, "Tab 2"));
+        assert_eq!((m.layout.as_ref().map(Node::leaves), m.focused), (Some(vec![2]), Some(2)));
+        assert_eq!(
+            (m.pane(2).map(|p| p.kind.clone()), m.mode(), m.picker.is_none()),
+            (Some(Kind::Empty), Mode::Normal, true)
+        );
+        assert_eq!(effects, [Effect::Opened(2)]);
     }
 
     #[test]
