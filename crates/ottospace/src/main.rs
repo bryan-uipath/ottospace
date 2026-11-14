@@ -655,9 +655,7 @@ enum Filing {
     Task { title: String, priority: u8, state: State, tab: Option<u32>, assign: Assign },
 }
 
-/// What a line in the new-task box may hold, and what its keys do: in the box and where the
-/// Tasks section says how to add a task.
-const TAG_HINT: &str = "#project · >repo · @agent · /path · $skill · ^open · p1–p9";
+/// What the new-task box's keys do: in the box and where the Tasks section says how to add a task.
 const KEYS_HINT: &str = "⇧↵ later";
 
 /// A heading's name in a control's id and on the socket: `needs_you`, `open`, ...
@@ -2702,6 +2700,9 @@ impl Workspace {
             // What ↵ in the box would do (`agent`, `starts`, `dir`, `branch`), or null; and the
             // drawer's picks: repository names (`wheres`) and agent names (`whos`).
             "compose_plan": self.model.compose_plan(),
+            // The plan's line over the box, null when it is the default; the tag hint, null once typed.
+            "compose_plan_line": self.model.compose_plan_line(),
+            "compose_hint": self.model.compose_hint(),
             "compose_picks": self.model.compose_picks(),
             // Nothing is open yet: the drawer shows the new task by itself.
             "welcome": self.model.welcome(),
@@ -3862,7 +3863,7 @@ impl Workspace {
                         .when(active, |d| {
                             // Amber on Tasks while a task needs the user, as its dot is.
                             let tasks = section == Section::Tasks && needs_you;
-                            raised_cell(d, if tasks { theme::SNEAK } else { theme::PRIMARY }, false, i == 0)
+                            raised_cell(d, if tasks { theme::SNEAK } else { theme::PRIMARY }, false)
                         })
                         .when(self.model.rail_focus == Some(RailFocus::Left(section)), |d| focus_ring(d.relative()))
                         .child(svg().path(*icon).size(px(20.)).text_color(rgb(if active {
@@ -4938,8 +4939,6 @@ impl Workspace {
                     head.into_iter().chain(tabs).collect::<Vec<_>>()
                 }),
             ))
-            // Short of room, the meeting chip gives way with the tabs, never the buttons.
-            .children(self.render_meeting_chip().map(|chip| chip.mr_1()))
             // New tab and split buttons: a new empty tab, or the picker for that split.
             .child(div().flex_none().ml_auto().mr_2().flex().gap_1().children(SPLITS.iter().enumerate().map(
                 |(i, (name, icon, tip, axis, new_tab))| {
@@ -5039,7 +5038,6 @@ impl Workspace {
                         .on_click(cx.listener(|this, _, window, cx| this.click_capture("back", window, cx))),
                 )
             }))
-            .children(self.meeting_soon())
             // The one thing tasks put here: how many wait for the user.
             .children(Some(self.model.tasks.needs_you()).filter(|n| *n > 0).map(|n| {
                 let tip = |_: &mut Window, cx: &mut App| AnyView::from(cx.new(|_| Tooltip("Needs you".into())));
@@ -5125,21 +5123,19 @@ fn title_shadow() -> Div {
     }])
 }
 
-/// A rail's open cell, raised: the panel's background, a soft shadow above and below it, a
-/// lighter line along its top, and an accent bar at the window's edge (`right`: the right rail's).
-/// The `first` cell has neither line nor shadow above: the title strip's border is the one line there.
-pub(crate) fn raised_cell(cell: Stateful<Div>, accent: u32, right: bool, first: bool) -> Stateful<Div> {
-    let shadow = |y: f32| BoxShadow {
+/// A rail's open cell, raised: the panel's background, a soft shadow below it, and an accent bar
+/// at the window's edge (`right`: the right rail's). No line or shadow above: every cell reads
+/// as the first one does, under one border.
+pub(crate) fn raised_cell(cell: Stateful<Div>, accent: u32, right: bool) -> Stateful<Div> {
+    let shadow = BoxShadow {
         color: black().opacity(0.85),
-        offset: point(px(0.), px(y)),
+        offset: point(px(0.), px(7.)),
         blur_radius: px(9.),
         spread_radius: px(-6.),
     };
     let bar = div().absolute().top_0().w(px(2.)).h_full().bg(rgb(accent));
     let bar = if right { bar.right_0() } else { bar.left_0() };
-    let shadows = if first { vec![shadow(7.)] } else { vec![shadow(-7.), shadow(7.)] };
-    let line = (!first).then(|| div().absolute().top_0().left_0().w_full().h(px(1.)).bg(rgb(0x303036)));
-    cell.relative().bg(rgb(theme::RAISED)).shadow(shadows).children(line).child(bar)
+    cell.relative().bg(rgb(theme::RAISED)).shadow(vec![shadow]).child(bar)
 }
 
 /// A rail cell with the keyboard (`zones`): a ring in list mode's colour, apart from "open".
