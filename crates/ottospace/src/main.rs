@@ -465,7 +465,7 @@ const KEYS_TERMINAL: &[(&str, &str)] = &[
     ("⌘C", "Copy the selection"),
     ("⌘V", "Paste"),
     ("⌘⇧C", "Visual mode: select with the keyboard"),
-    ("⌘⌃E", "List mode: keys for the bar (Tasks, Apps, Workbook, Repos, Marks). ↵ or space on a heading folds it"),
+    ("⌘⌃E", "List mode: keys for the bar's sections. ↵ or space on a heading folds it"),
     ("⌘; or ⌘⌃G", "Sneak mode: a letter label on every control"),
     ("⌘N", "New task: type a line, ↵ adds it. ↑↓ ↵ pick from its list; ⌘O adds files"),
     ("⌘⇧N", "Next task: show the tabs of the first that needs you"),
@@ -3547,7 +3547,15 @@ impl Workspace {
                         .child(div().min_w_0().text_color(rgb(theme::MUTED)).child(what))
                 }))
         };
-        let rows = |list: &[(&str, &'static str)]| list.iter().map(|(k, w)| (k.to_string(), *w)).collect::<Vec<_>>();
+        // A row of a feature that is off is not listed: "Mark: …" with marks off, "Apps: …" with the section off.
+        let (marks, apps) = (self.on(Feature::Marks), self.on(Feature::AppsSection));
+        let shown = |what: &str| {
+            (marks || !what.starts_with("Mark:"))
+                && (apps || !what.starts_with("Apps:") && !what.starts_with("App not"))
+        };
+        let rows = |list: &[(&str, &'static str)]| {
+            list.iter().filter(|(_, w)| shown(w)).map(|(k, w)| (k.to_string(), *w)).collect::<Vec<_>>()
+        };
         let columns = div()
             .p_4()
             .flex()

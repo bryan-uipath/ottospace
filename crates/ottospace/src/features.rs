@@ -19,13 +19,17 @@ pub fn startup() -> Features {
 /// The features on as `settings` say, or in a test run as `OTTOSPACE_FEATURES` lists them
 /// (`marks,apps_section`), which no other run reads, and which wins over the file.
 fn of(settings: &Settings) -> Features {
-    let listed = std::env::var("OTTOSPACE_FEATURES").ok().filter(|_| std::env::var_os("OTTOSPACE_E2E").is_some());
-    match listed.map(|list| Features::parse_list(&list)) {
+    match listed().map(|list| Features::parse_list(&list)) {
         Some(Ok(features)) => features,
         // A test that names a flag no feature has must not pass for one with every flag off.
         Some(Err(why)) => panic!("OTTOSPACE_FEATURES: {why}"),
         None => settings.features(),
     }
+}
+
+/// `OTTOSPACE_FEATURES`, in a test run only.
+fn listed() -> Option<String> {
+    std::env::var("OTTOSPACE_FEATURES").ok().filter(|_| std::env::var_os("OTTOSPACE_E2E").is_some())
 }
 
 impl Workspace {
@@ -40,9 +44,10 @@ impl Workspace {
     }
 
     /// `settings.json` read again and right (`Effect::ApplySettings`): its flags apply at once.
+    /// Not in a test run that named its flags: they were set at start, and Features… since.
     pub fn apply_features(&mut self, settings: &Settings, cx: &mut App) {
         let features = of(settings);
-        if features != self.model.features {
+        if listed().is_none() && features != self.model.features {
             self.set_features(features, cx);
         }
     }

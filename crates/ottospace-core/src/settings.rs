@@ -276,7 +276,7 @@ impl Settings {
         // A flag no feature has is a mistake; one retired is ignored (`read` warns of it).
         let retired = |name: &String| crate::features::RETIRED.contains(&name.as_str());
         let unknown = settings.features.keys().filter(|name| !retired(name));
-        if let Some(why) = unknown.filter_map(|name| crate::features::wrong(name, &true.into(), &[])).next() {
+        if let Some(why) = unknown.filter_map(|name| crate::features::wrong(name, &true.into())).next() {
             return Err(why);
         }
         Ok(settings)
@@ -316,11 +316,13 @@ impl Settings {
                 named
             });
         }
-        // So does a flag that is wrong, or retired: the other flags stay.
+        // So does a flag that is wrong: the other flags stay. A retired one is dropped, and only
+        // warned of (`retired_flags`): it is no mistake.
         if let Some(flags) = keys.get_mut("features").and_then(serde_json::Value::as_object_mut) {
             flags.retain(|name, on| {
-                let why = crate::features::wrong(name, on, crate::features::RETIRED);
-                wrong.extend(why.as_ref().map(|why| format!("features: {why}")));
+                let why = crate::features::wrong(name, on);
+                let gone = crate::features::RETIRED.contains(&name.as_str());
+                wrong.extend(why.as_ref().filter(|_| !gone).map(|why| format!("features: {why}")));
                 why.is_none()
             });
         }
@@ -357,6 +359,8 @@ pub struct Watch {
     problems: Vec<String>,
     /// Keys changed since the start that apply at the next one.
     restart: Vec<&'static str>,
+    /// Flags of features that are stable now: a warning, which blocks nothing.
+    retired: Vec<String>,
 }
 
 /// The longest problem the status bar shows, in characters.
@@ -369,6 +373,7 @@ impl Watch {
     /// `apps_hidden`) are the ones it holds.
     pub fn read(&mut self, text: &str, written: bool) -> Option<Settings> {
         let (settings, problems) = problems(text);
+        self.retired = retired_flags(text, crate::features::RETIRED);
         // At start what is right applies, as `Settings::read` says: that is what was applied.
         let started = self.started.get_or_insert_with(|| settings.clone());
         self.problems = problems;
@@ -395,10 +400,20 @@ impl Watch {
         match self.problems.first() {
             Some(first) if more > 0 => Some(format!("{first} (+{more} more)")),
             Some(first) => Some(first.clone()),
-            None if self.restart.is_empty() => None,
+            None if self.restart.is_empty() => {
+                self.retired.first().map(|why| format!("settings.json: features: {why}"))
+            }
             None => Some(format!("settings.json: restart to apply {}", self.restart.join(", "))),
         }
     }
+}
+
+/// The flags under `features` that are in `retired`, each as its warning.
+fn retired_flags(text: &str, retired: &[&str]) -> Vec<String> {
+    let flags = object(text).ok().and_then(|mut keys| keys.remove("features"));
+    let names: Vec<String> =
+        flags.and_then(|flags| flags.as_object().map(|f| f.keys().cloned().collect())).unwrap_or_default();
+    names.iter().filter_map(|name| crate::features::retired(name, retired)).collect()
 }
 
 /// The file's settings as `Settings::read` takes them, and its problems as the status bar says
@@ -528,12 +543,7 @@ pub struct ListChange {
 /// `Err`: the file is not a JSON object, or a list to change is not a list of names. It must
 /// then be left alone: nothing in it is dropped for not being understood.
 pub fn with_changes(text: &str, changes: &[ListChange]) -> Result<String, String> {
-    let body = text.trim_start_matches('\u{feff}');
-    let keys = match serde_json::from_str::<serde_json::Value>(if body.trim().is_empty() { "{}" } else { body }) {
-        Ok(serde_json::Value::Object(keys)) => keys,
-        Ok(_) => return Err("the file must be a JSON object: { ... }".into()),
-        Err(err) => return Err(format!("not valid JSON: {err}")),
-    };
+    let keys = object(text)?;
     let mut new = text.to_string();
     for key in ["apps", "apps_hidden", "repos"] {
         let mine: Vec<&ListChange> = changes.iter().filter(|change| change.key == key).collect();
@@ -575,11 +585,7 @@ pub fn with_changes(text: &str, changes: &[ListChange]) -> Result<String, String
 /// they were. e.g. `"tasks_view": "project"`.
 pub fn with_value(text: &str, key: &str, value: &serde_json::Value) -> Result<String, String> {
     let body = text.trim_start_matches('\u{feff}');
-    let mut keys = match serde_json::from_str::<serde_json::Value>(if body.trim().is_empty() { "{}" } else { body }) {
-        Ok(serde_json::Value::Object(keys)) => keys,
-        Ok(_) => return Err("the file must be a JSON object: { ... }".into()),
-        Err(err) => return Err(format!("not valid JSON: {err}")),
-    };
+    let mut keys = object(text)?;
     if keys.get(key) == Some(value) {
         return Ok(text.to_string());
     }
@@ -597,19 +603,23 @@ pub fn with_value(text: &str, key: &str, value: &serde_json::Value) -> Result<St
 /// `text` with `features.<name>` set to `on`: the other flags, and every other key, as they were.
 /// e.g. `{"features": {"marks": true}}` and `apps_section` on → both named.
 pub fn with_feature(text: &str, name: &str, on: bool) -> Result<String, String> {
-    let body = text.trim_start_matches('\u{feff}');
-    let flags = match serde_json::from_str::<serde_json::Value>(if body.trim().is_empty() { "{}" } else { body }) {
-        Ok(serde_json::Value::Object(mut keys)) => keys.remove("features"),
-        Ok(_) => return Err("the file must be a JSON object: { ... }".into()),
-        Err(err) => return Err(format!("not valid JSON: {err}")),
-    };
-    let mut flags = match flags {
+    let mut flags = match object(text)?.remove("features") {
         None => serde_json::Map::new(),
         Some(serde_json::Value::Object(flags)) => flags,
         Some(_) => return Err("`features` is not an object: { \"marks\": true }".into()),
     };
     flags.insert(name.to_string(), on.into());
     with_value(text, "features", &serde_json::Value::Object(flags))
+}
+
+/// The settings file's keys: no file or an empty one is `{}`. `Err`: it is not a JSON object.
+fn object(text: &str) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let body = text.trim_start_matches('\u{feff}');
+    match serde_json::from_str::<serde_json::Value>(if body.trim().is_empty() { "{}" } else { body }) {
+        Ok(serde_json::Value::Object(keys)) => Ok(keys),
+        Ok(_) => Err("the file must be a JSON object: { ... }".into()),
+        Err(err) => Err(format!("not valid JSON: {err}")),
+    }
 }
 
 /// As `with_changes`, with both lists given whole.
@@ -626,11 +636,7 @@ fn with_list(text: &str, key: &str, list: &[String]) -> Result<String, String> {
     if body.trim().is_empty() {
         return Ok(if list.is_empty() { text.to_string() } else { format!("{{\n  \"{key}\": {value}\n}}\n") });
     }
-    let mut keys = match serde_json::from_str::<serde_json::Value>(body) {
-        Ok(serde_json::Value::Object(keys)) => keys,
-        Ok(_) => return Err("the file must be a JSON object: { ... }".into()),
-        Err(err) => return Err(format!("not valid JSON: {err}")),
-    };
+    let mut keys = object(body)?;
     if list.is_empty() && !keys.contains_key(key) {
         return Ok(text.to_string());
     }
@@ -1080,6 +1086,10 @@ mod tests {
         assert_eq!(Settings::read(&set).0.features(), crate::features::Features::all());
         assert_eq!(with_feature("", "marks", false).unwrap(), "{\n  \"features\": {\n    \"marks\": false\n  }\n}\n");
         assert!(with_feature(r#"{"features": true}"#, "marks", true).unwrap_err().contains("not an object"));
+        // A retired flag only warns: the rest of the file still applies.
+        let text = r#"{"features": {"tabs": true, "marks": true}}"#;
+        assert_eq!(retired_flags(text, &["tabs"]).len(), 1);
+        assert!(retired_flags(text, crate::features::RETIRED).is_empty());
     }
 
     #[test]

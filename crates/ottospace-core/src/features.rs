@@ -119,12 +119,13 @@ impl Features {
     }
 }
 
+/// The warning for a flag in `retired` (`RETIRED`, given so a test can name one): no error.
+pub fn retired(name: &str, retired: &[&str]) -> Option<String> {
+    retired.contains(&name).then(|| format!("{name:?} is stable now and has no flag: the setting does nothing"))
+}
+
 /// What is wrong with `"name": value` under `features`: `None` if it is a flag and a bool.
-/// `retired`: `RETIRED`, given so a test can name one.
-pub fn wrong(name: &str, value: &serde_json::Value, retired: &[&str]) -> Option<String> {
-    if retired.contains(&name) {
-        return Some(format!("{name:?} is stable now and has no flag: the setting does nothing"));
-    }
+pub fn wrong(name: &str, value: &serde_json::Value) -> Option<String> {
     if Feature::named(name).is_none() {
         return Some(unknown(name));
     }
@@ -289,12 +290,12 @@ mod tests {
     #[test]
     fn an_unknown_name_lists_the_flags_and_a_retired_one_only_warns() {
         let yes = serde_json::json!(true);
-        assert_eq!(wrong("marks", &yes, RETIRED), None);
+        assert_eq!(wrong("marks", &yes), None);
         assert_eq!(
-            wrong("bookmarks", &yes, RETIRED).unwrap(),
+            wrong("bookmarks", &yes).unwrap(),
             "\"bookmarks\" is not a feature: the features are marks, apps_section"
         );
-        assert_eq!(wrong("marks", &serde_json::json!("on"), RETIRED).unwrap(), "\"marks\" must be true or false");
-        assert!(wrong("tabs", &yes, &["tabs"]).unwrap().contains("stable now"));
+        assert_eq!(wrong("marks", &serde_json::json!("on")).unwrap(), "\"marks\" must be true or false");
+        assert!(retired("tabs", &["tabs"]).unwrap().contains("stable now") && retired("marks", RETIRED).is_none());
     }
 }
