@@ -6626,6 +6626,97 @@ fn a_click_on_a_tab_switches_with_the_drawer_open() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// The check the native view must pass before it is the default again: the real `claude`, on
+/// the cheapest model, in a private instance and a scratch repository. One short model session
+/// on the user's own account: never in CI, never by default; run only with the user's approval:
+///
+/// `OTTOSPACE_REAL_CLI=1 cargo test -p ottospace --test e2e -- --ignored --nocapture real_cli_native_smoke`
+///
+/// A task started natively → a reply → a second message → Chat → Terminal → Chat → its session
+/// file exists → another task shown and back: no bubble added, nothing started again.
+#[test]
+#[ignore = "starts the real Claude Code: OTTOSPACE_REAL_CLI=1, with the user's approval"]
+fn real_cli_native_smoke() {
+    if std::env::var("OTTOSPACE_REAL_CLI").as_deref() != Ok("1") {
+        return;
+    }
+    let root = support::temp(&format!("ottospace-e2e-real-{}", std::process::id()));
+    let (bin, repos, record) = (root.join("bin"), root.join("repos"), root.join("record"));
+    fake_repo(&repos.join("app"));
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::create_dir_all(&record).unwrap();
+    // The real program as the user's login shell finds it, behind a stand-in that counts its starts.
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    let found = Command::new(&shell).args(["-lic", "command -v claude"]).output().unwrap();
+    let claude = String::from_utf8_lossy(&found.stdout).lines().last().unwrap_or_default().trim().to_string();
+    assert!(Path::new(&claude).is_file(), "no claude on the login shell's PATH: {claude:?}");
+    let starts = record.join("starts");
+    let wrapper = format!("#!/bin/sh\necho start >>'{}'\nexec '{claude}' \"$@\"\n", starts.display());
+    std::fs::write(bin.join("claude"), wrapper).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(bin.join("claude"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let config = std::env::var("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(std::env::var("HOME").unwrap()).join(".claude"));
+    let settings = json!({"repos": [repos], "conversation_view": "native", "default_agent": "claude-haiku-5-5",
+        "session_dirs": {"claude": [config]}});
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
+    let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let app = Otto::launch_with("real-cli", &env);
+    let otto = &app;
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    let count = || std::fs::read_to_string(&starts).unwrap_or_default().lines().count();
+    // A model turn takes longer than `TIMEOUT`.
+    let slow = |what: &str, check: &dyn Fn() -> Option<Value>| {
+        let start = Instant::now();
+        loop {
+            if let Some(value) = check() {
+                return value;
+            }
+            assert!(start.elapsed() < Duration::from_secs(180), "{what}: {}", chat(otto));
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    };
+    let replies = |n: usize| {
+        move || {
+            let chat = chat(otto);
+            (chat["transcript"]["turn"].is_null() && chat["replies"].as_array()?.len() >= n).then_some(chat)
+        }
+    };
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "Reply with the single word ok >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.start_task(1);
+    let first = slow("the first reply", &replies(1));
+    println!("first: {}", first["transcript"]["entries"]);
+    otto.user_key("R e p l y space w i t h space o k enter");
+    let second = slow("the second reply", &replies(2));
+    println!("second: {}", second["transcript"]["entries"]);
+    // Chat → Terminal → Chat: one process at a time, the same session.
+    otto.user_click(at(otto.control("talk:view-terminal"), 0.5, 0.5));
+    slow("the terminal", &|| {
+        otto.call(json!({"cmd": "state"}))["drawer"]["agents"]["1"].is_object().then_some(json!(null))
+    });
+    otto.user_click(at(otto.control("talk:view-chat"), 0.5, 0.5));
+    slow("chat again", &|| (chat(otto)["native"] == true).then_some(json!(null)));
+    // Its session file, where Claude Code keeps it.
+    let state = otto.call(json!({"cmd": "state"}));
+    let id = state["state"]["tasks"]["list"][0]["session"]["id"].as_str().expect("a session").to_string();
+    let cwd = repos.join("app").canonicalize().unwrap();
+    let file = config.join("projects").join(ottospace_sessions::claude::slug(&cwd)).join(format!("{id}.jsonl"));
+    assert!(file.is_file(), "no session file at {}", file.display());
+    // Another task shown and back: nothing added, nothing started.
+    let (entries, started) = (chat(otto)["transcript"]["entries"].as_array().map(Vec::len), count());
+    otto.call(json!({"cmd": "task_new", "line": "other"}));
+    otto.user_click(at(otto.control("task:2"), 0.3, 0.3));
+    otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
+    assert_eq!((chat(otto)["transcript"]["entries"].as_array().map(Vec::len), count()), (entries, started));
+    drop(app);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A session another process holds is watched from its file: the header says so, and each
 /// record that lands shows, an edit with its card. The state has the card's counts only.
 #[test]

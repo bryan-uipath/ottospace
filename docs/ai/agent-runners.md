@@ -484,6 +484,34 @@ OTTOSPACE_PROBE_ISOLATED=1 OTTOSPACE_REAL_CLI=1 cargo test -p ottospace-agents -
 OTTOSPACE_REAL_CLI=1 cargo test -p ottospace-agents --test real -- --ignored --nocapture codex_real
 ```
 
+## Real-CLI check
+
+0.1.0 shipped the native view as the default, tested only against the fake `claude`, and it
+never got a reply from the real one (the CLI was stopped over the terminal ottospace was
+started from; see the driver's `setsid`). Until this check passes, `conversation_view`
+defaults to `terminal` (`settings::DEFAULT_VIEW`). Before it flips back, run, with the user's
+approval (one short model session on their account, on `claude-haiku-5-5`):
+
+```
+OTTOSPACE_REAL_CLI=1 cargo test -p ottospace --test e2e -- --ignored --nocapture real_cli_native_smoke
+```
+
+It drives a private instance (`OTTOSPACE_HOME` and the socket under temp, a scratch repository)
+and fails unless each step holds. By hand, the same shape, with ottospace started from a
+terminal (the case that failed) and once from Finder, `"conversation_view": "native"`:
+
+1. A new task with a trivial prompt ("Reply with the single word ok"), ↵: the reply shows,
+   the header names the model and the folder the agent runs in.
+2. A second message: its reply shows; no "lines not understood" row.
+3. Chat → Terminal: the TUI opens on the same session; Terminal → Chat: the transcript is
+   back, "Session resumed".
+4. Its session file exists: `<config dir>/projects/<repo slug>/<session id>.jsonl`.
+5. Another task's row, then this one's, its rail cell, its tab: no bubble is added, nothing
+   starts again, nothing flickers.
+6. Stop, then type a message and ↵: it starts again and the message is sent.
+7. A broken start (`PATH` without `claude`, say): the chat says how it ended, and Show details
+   shows the CLI's words.
+
 ## Fixtures
 
 `crates/ottospace-agents/tests/fixtures/claude`: what the fake `claude` (`tests/fakes/claude`)
