@@ -40,12 +40,12 @@ ottospace            # opens on the Repos list
 | Save the tab as a workbook | ⌘⇧S |
 | Fill the screen | ⌘⌃F (again to restore) |
 
-## The bar on the left (Tasks, Calendar, Apps, Workbook, Repos, Marks)
+## The bar on the left (Tasks, Calendar, Workbook, Repos; Apps and Marks behind flags)
 
 | I want to | Do |
 |---|---|
 | Open a section | Click its icon on the rail |
-| Use it from the keyboard | ⌘⌃E (the open section, or Apps), then `j` `k` move · ↵ open · ⇧↵ open below · Tab next section · Esc leave |
+| Use it from the keyboard | ⌘⌃E (the open section, else Apps, or with it off the first), then `j` `k` move · ↵ open · ⇧↵ open below · Tab next section · Esc leave |
 | Read the lists again | Close and open the section, or ⌘⌃E: Apps and Repos are read when they open |
 | Add something | + in the bar's header: a new task in Tasks, the tab on show in Workbook, a repository in Repos (pick a folder that is one or holds some; it goes into `repos` in the settings) |
 | Stop listing a repository | Point at its name in Repos: Remove. Only for one added as itself |
@@ -53,6 +53,9 @@ ottospace            # opens on the Repos list
 | Click anything without the mouse | ⌘; or ⌘⌃G: every control gets a letter label (a × gets two), and so do the buttons and text fields of the focused app pane, in orange, two letters or more. Type it · ⌫ takes a letter back · Esc or a wrong letter leaves. An orange label presses that button in the app, or puts you in its text field |
 
 ## Apps
+
+The Apps section is behind the `apps_section` flag, off by default: turn it on in ⌘P ▸ Features….
+Without it, ⌘E puts an app in a pane.
 
 | I want to | Do |
 |---|---|
@@ -90,7 +93,8 @@ folder. Kept in `~/.ottospace/workbooks`.
 
 ## Marks
 
-A mark is a named way back to a pane or a whole tab. It is kept between runs.
+A mark is a named way back to a pane or a whole tab. It is kept between runs. Marks are behind
+the `marks` flag, off by default: turn it on in ⌘P ▸ Features….
 
 | I want to | Do |
 |---|---|
@@ -193,7 +197,8 @@ restart, and the rest applies at once:
   "apps": ["Microsoft Outlook", "Slack"],
   "apps_hidden": ["Music"],
   "suggest_dock_apps": true,
-  "windows": [{ "app": "us.zoom.xos", "title": "Zoom Meeting", "do": "ignore" }]
+  "windows": [{ "app": "us.zoom.xos", "title": "Zoom Meeting", "do": "ignore" }],
+  "features": { "marks": false, "apps_section": false }
 }
 ```
 
@@ -204,6 +209,8 @@ setting takes its default.
 `sessions`: `false` reads no agent session files. `session_dirs` names where Claude Code and Codex keep them, if not `~/.claude` and `~/.codex`. `session_quiet_minutes`: a task adopted from a session moves to Needs you after the session has been quiet this long (default 3; 0 never). `agent_models`: the models `@` offers after each runner, as its CLI names them, in place of the built-in list.
 
 `apps`: the pinned apps, by name or bundle path. `apps_hidden`: Dock apps not to suggest. Pin, Unpin and Hide in Apps write these two and leave the rest of the file as it is. `suggest_dock_apps`: `false` lists no Dock apps.
+
+`features`: [feature flags](reference.md#features), each `true` or `false`; ⌘P ▸ Features… writes them. A flag is temporary and about readiness; a preference is a normal setting.
 
 `capture_key`: the key that captures the pane in use (`"off"` for none). `capture`: `keep_images` `false` writes no picture; `ax` `false` reads no accessibility tree for a capture.
 
