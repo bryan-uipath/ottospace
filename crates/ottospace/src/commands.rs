@@ -92,6 +92,7 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::OpenFolder => Box::new(OpenFolder),
         Command::BringBack => Box::new(BringBack),
         Command::EditSettings => Box::new(EditSettings),
+        Command::About => Box::new(About),
         Command::Hide => Box::new(Hide),
         Command::Quit => Box::new(Quit),
     }
@@ -238,12 +239,12 @@ impl Workspace {
             .child(div().text_xs().text_color(rgb(theme::COMMAND)).child(title))
             .child(self.render_field(hint, cx));
         let panel = dialog::floating(560.).max_w_full().max_h(px(440.));
-        let texts = match (tasks, palette.features.is_some()) {
-            (true, _) => ("No task matches", "↑↓ move · ↵ move the tab · esc close"),
-            (_, true) => ("No feature matches", "↑↓ move · ↵ turn on or off · esc close"),
-            _ => ("No command matches", "↑↓ move · ↵ run · esc close"),
+        let empty = match (tasks, palette.features.is_some()) {
+            (true, _) => "No task matches",
+            (_, true) => "No feature matches",
+            _ => "No command matches",
         };
-        let panel = self.list_panel(panel, header, "palette", rows, texts);
+        let panel = self.list_panel(panel, header, "palette", rows, empty);
         dialog::backdrop("palette-backdrop", 0.35, Action::ClosePalette, cx)
             .pt(px(72.))
             .px_4()
