@@ -391,7 +391,7 @@ static RETURN_KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 const TOP_BAR: f32 = 28.;
 const TRAFFIC_LIGHTS: f32 = 80.;
 /// The narrowest a tab shrinks to when the strip is full: a few letters of its title and its ×.
-const MIN_TAB: f32 = 72.;
+const MIN_TAB: f32 = 80.;
 /// The left rail's width, and the section list's beside it.
 const RAIL: f32 = 56.;
 const SECTION: f32 = 260.;
@@ -4623,7 +4623,7 @@ impl Workspace {
             )
             // Each task's tabs side by side behind its badge, the tabs of no task last. They shrink
             // to `MIN_TAB`, then clip: the buttons on the right always show.
-            .child(div().flex_1().min_w_0().h_full().flex().overflow_hidden().children(
+            .child(div().flex_auto().min_w_0().h_full().flex().overflow_hidden().children(
                 self.model.groups().into_iter().flat_map(|group| {
                     let task = group.task.and_then(|id| self.model.tasks.get(id));
                     let shown = task.is_some_and(|task| self.talk_names(task.id));
@@ -4685,6 +4685,8 @@ impl Workspace {
                                 }))
                                 .h_full()
                                 .min_w(px(MIN_TAB))
+                                // At its narrowest it clips, never paints over the next tab.
+                                .overflow_hidden()
                                 .pl_3()
                                 .pr_1()
                                 .flex()
@@ -4739,9 +4741,11 @@ impl Workspace {
                     head.into_iter().chain(tabs).collect::<Vec<_>>()
                 }),
             ))
+            // Short of room, the meeting chip gives way with the tabs, never the buttons.
+            .children(self.render_meeting_chip().map(|chip| chip.mr_1()))
             // New tab and split buttons: a new empty tab, or the picker for that split.
-            .child(div().flex_none().ml_auto().mr_2().flex().gap_1().children(self.render_meeting_chip()).children(
-                SPLITS.iter().enumerate().map(|(i, (name, icon, tip, axis, new_tab))| {
+            .child(div().flex_none().ml_auto().mr_2().flex().gap_1().children(SPLITS.iter().enumerate().map(
+                |(i, (name, icon, tip, axis, new_tab))| {
                     let (tip, axis, new_tab) = (*tip, *axis, *new_tab);
                     div()
                         .id(("split", i))
@@ -4757,8 +4761,8 @@ impl Workspace {
                         .child(self.controls.mark(format!("top:{name}")))
                         .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
                         .on_click(cx.listener(move |this, _, window, cx| this.top_button(axis, new_tab, window, cx)))
-                }),
-            ))
+                },
+            )))
     }
 
     /// Bottom bar: who has the keyboard, and the focused pane.
