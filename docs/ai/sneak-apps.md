@@ -143,7 +143,8 @@ raise the app when mousewheel is there". So the app goes live for the scroll.
   peek that ends is parked, made an entry or its pane closed. The shell reads the system's input
   times and the pointer's place; it watches no events and posts none.
 - **Not under** sneak mode, the palette, a box, the quit question, the accessibility overlay, or a
-  drag (the left button down).
+  drag (the left button down), nor while another app is in front (its end would give ottospace,
+  not that app, the keyboard).
 - **Off.** `"wheel_to_apps": false` in `settings.json`.
 - **Verified on CI** (`e2e-apps`, a real HID scroll at the pointer): the peek starts, the window
   covers the pane under the pointer, the canary is in front, the next scroll reaches it, the mode

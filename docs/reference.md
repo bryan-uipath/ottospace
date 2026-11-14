@@ -689,7 +689,7 @@ lost; the ones after it go to the window. The window parks again, and ottospace 
 keyboard back, when the pointer leaves the pane or 1.5 s pass with no scroll. A click or a key in
 the app makes it a normal entry (`APP`), and the return key leaves as ever. Only your own wheel
 peeks: a socket client's scroll brings nothing up. No peek starts under sneak mode, the palette,
-a box, the quit question, the accessibility overlay or a drag.
+a box, the quit question, the accessibility overlay or a drag, nor while another app is in front.
 
 Click an app pane to give it the keyboard (`APP` mode). If you bring a hosted app forward from
 outside (its Dock icon, ⌘Tab) and the window it shows is one ottospace holds, ottospace comes

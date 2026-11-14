@@ -334,6 +334,15 @@ impl Hosted {
         self.placed = rect;
     }
 
+    /// Places the window over its pane and activates its app: entering, and a peek. The app may
+    /// have resized its window since it was parked: a click is judged against what it covers now.
+    fn bring_up(&mut self, window: &Window, cx: &App) {
+        let rect = on_screen(self.bounds.get(), window, cx);
+        self.place(rect, self.crop_at(rect, top_limit(window, cx)));
+        self.window.raise();
+        self.show(window.scale_factor() as f64);
+    }
+
     /// The crop for this window with its pane content at `rect`; see `titlebar::crop`.
     fn crop_at(&self, rect: CGRect, limit: f64) -> f64 {
         titlebar::crop(self.bar as f32, rect.origin.y as f32, limit as f32) as f64
@@ -1225,7 +1234,8 @@ impl Workspace {
     }
 
     fn carry_out(&mut self, effects: &[Effect], window: &Window, cx: &mut Context<Self>) {
-        let another_goes_live = effects.iter().any(|effect| matches!(effect, Effect::Live(_)));
+        // A peek's app takes the keyboard too.
+        let another_goes_live = effects.iter().any(|effect| matches!(effect, Effect::Live(_) | Effect::Peek(_)));
         // Every window of this pass that could not be hosted, not only the last.
         let asked = effects.iter().any(|effect| matches!(effect, Effect::HostWindow { .. }));
         let mut unhosted: Vec<String> = Vec::new();
@@ -1363,12 +1373,7 @@ impl Workspace {
                     self.went_live += 1;
                     if let Some(hosted) = self.hosted.get_mut(id) {
                         trace::record("unpark", serde_json::json!({ "pane": id, "window": hosted.window_id }));
-                        let rect = on_screen(hosted.bounds.get(), window, cx);
-                        hosted.place(rect, hosted.crop_at(rect, top_limit(window, cx)));
-                        hosted.window.raise();
-                        // The app may have resized its window since it was parked: a click is
-                        // judged against what the window covers now.
-                        hosted.show(window.scale_factor() as f64);
+                        hosted.bring_up(window, cx);
                     }
                 }
             }
@@ -2915,7 +2920,8 @@ impl Workspace {
                 let _ = hosted.stream.stop_capture();
                 give_back::forget(hosted.window_id);
                 // Its app may still be frontmost with no window here: take the keyboard back.
-                if self.model.live == Some(id) && ax::is_frontmost(hosted.pid) {
+                let peeked = self.model.peek.as_ref().is_some_and(|peek| peek.pane == id);
+                if (self.model.live == Some(id) || peeked) && ax::is_frontmost(hosted.pid) {
                     cx.activate(true);
                 }
             }
@@ -4412,9 +4418,7 @@ impl Workspace {
                         .h(px(hosted.shown.height as f32))
                         // The wheel brings the app's window up for the scroll (a peek).
                         .on_scroll_wheel(
-                            cx.listener(move |this, e: &ScrollWheelEvent, window, cx| {
-                                this.app_wheel(id, e, window, cx)
-                            }),
+                            cx.listener(move |this, _: &ScrollWheelEvent, window, cx| this.app_wheel(id, window, cx)),
                         )
                         .child(surface(buffer).size_full())
                         // Record where the preview is drawn (e2e reads it), and mask the window's

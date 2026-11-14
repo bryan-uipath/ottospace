@@ -6,11 +6,11 @@
 
 use std::time::{Duration, Instant};
 
-use gpui::{Context, ScrollWheelEvent, Window};
+use gpui::{Context, Window};
 use ottospace_core::{Action, Origin, PaneId};
 use ottospace_mac::{input, wheel};
 
-use crate::{Workspace, config, now_ms, on_screen, top_limit};
+use crate::{Workspace, config, now_ms, on_screen};
 
 /// When the peek on now started, and counts for a test (the state's `counts`).
 #[derive(Default)]
@@ -23,10 +23,11 @@ pub struct Wheel {
 
 impl Workspace {
     /// A scroll over app pane `pane`'s picture: the core is asked for a peek.
-    pub(crate) fn app_wheel(&mut self, pane: PaneId, _: &ScrollWheelEvent, window: &Window, cx: &mut Context<Self>) {
+    pub(crate) fn app_wheel(&mut self, pane: PaneId, window: &Window, cx: &mut Context<Self>) {
         self.wheel.over += 1;
-        // Not while a drag is on.
-        if config::get().settings.wheel_to_apps == Some(false) || input::left_button_down() {
+        // Not while a drag is on. Not from behind another app: its end gives ottospace the keyboard.
+        let off = config::get().settings.wheel_to_apps == Some(false);
+        if off || input::left_button_down() || !window.is_window_active() {
             return;
         }
         let action = Action::AppWheel { pane, now: now_ms() };
@@ -44,12 +45,9 @@ impl Workspace {
     pub(crate) fn peek(&mut self, pane: PaneId, window: &Window, cx: &mut Context<Self>) {
         let Some(hosted) = self.hosted.get_mut(&pane) else { return };
         crate::trace::record("peek", serde_json::json!({ "pane": pane, "window": hosted.window_id }));
-        let rect = on_screen(hosted.bounds.get(), window, cx);
-        hosted.place(rect, hosted.crop_at(rect, top_limit(window, cx)));
         // An inactive app's window stays under the active app's (AXRaise alone, or ottospace's
         // window ordered below it, left it there on CI): the app is activated, as on entering.
-        hosted.window.raise();
-        hosted.show(window.scale_factor() as f64);
+        hosted.bring_up(window, cx);
         self.wheel.peeks += 1;
         self.wheel.since = Some(Instant::now());
     }

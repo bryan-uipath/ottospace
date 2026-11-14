@@ -3489,15 +3489,19 @@ impl Model {
             Action::PeekCheck { now, over, pressed, scrolled } => {
                 let Some(peek) = &mut self.peek else { return };
                 let pane = peek.pane;
-                if pressed {
-                    // A click or a key in the app: a normal entry.
-                    self.act(Action::Enter { pane }, effects);
-                    return;
+                // Away from the pane first: a click there went to another window, not the app.
+                if !over {
+                    return self.end_peek(effects);
                 }
-                if over && let Some(at) = scrolled {
+                if pressed {
+                    // A click or a key in the app: a normal entry, the list's keys given up as on entering.
+                    (self.list, self.rail_focus) = (None, None);
+                    return self.act(Action::Enter { pane }, effects);
+                }
+                if let Some(at) = scrolled {
                     peek.last = peek.last.max(at);
                 }
-                if !over || now >= peek.last + crate::app_wheel::QUIET_MS {
+                if now >= peek.last + crate::app_wheel::QUIET_MS {
                     self.end_peek(effects);
                 }
             }

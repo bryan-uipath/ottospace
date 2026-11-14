@@ -1514,6 +1514,17 @@ fn hid(x: f64, y: f64, lines: Option<i32>) {
     }
 }
 
+/// What a test saw and does not assert yet: on stderr, and in the CI job's summary, which a
+/// passing test's captured output never reaches.
+fn report(line: &str) {
+    eprintln!("{line}");
+    if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY")
+        && let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(path)
+    {
+        let _ = writeln!(file, "\n`{}`", line.replace('`', "'"));
+    }
+}
+
 /// A global point of pane 1's picture on the main screen, once its stream shows.
 fn on_picture(otto: &Proc) -> [f64; 2] {
     let state = || otto.call(json!({"cmd": "state"}));
@@ -1585,12 +1596,12 @@ fn the_users_wheel_brings_a_parked_app_window_up_and_the_next_scroll_reaches_it(
     hid(x, y, Some(-3));
     let next = soft(8, &|| scrolled().abs() > first.abs());
     let (mode, live) = (state()["mode"].clone(), state()["state"]["live"].clone());
-    eprintln!(
+    report(&format!(
         "peek: canary in front {front} ({}), first scroll {first}, next landed {next}, scrolled {}, mode {mode}, live {live}, {}",
         in_front(),
         scrolled(),
         wheels()
-    );
+    ));
     assert!(next, "a scroll over the peeked window did not reach it");
     assert!(front, "the canary was not activated");
     // The app is in front for the peek, but it is no entry: the mode is not APP.
@@ -1619,11 +1630,11 @@ fn the_users_wheel_brings_a_parked_app_window_up_and_the_next_scroll_reaches_it(
     }
     otto.call(json!({"cmd": "quit"}));
     let restored = soft(100, &|| global_frame(&canary, 0).is_some_and(|f| (0..4).all(|i| close(f[i], original[i]))));
-    eprintln!(
+    report(&format!(
         "peek after: parked when the pointer left {left}, ottospace in front again {back}, parked when quiet {quiet} \
          (after {quiet_after:?}), a click entered {entered}, restored at quit {restored}, the client's wheel told why {told} \
          ({notice})"
-    );
+    ));
 }
 
 #[test]

@@ -20,7 +20,7 @@ fn since(kinds: &[CGEventType]) -> Option<Duration> {
 
 /// How long ago the last click or key press came.
 pub fn since_press() -> Option<Duration> {
-    since(&[CGEventType::LeftMouseDown, CGEventType::RightMouseDown, CGEventType::KeyDown])
+    since(&[CGEventType::LeftMouseDown, CGEventType::RightMouseDown, CGEventType::OtherMouseDown, CGEventType::KeyDown])
 }
 
 /// How long ago the last scroll came.

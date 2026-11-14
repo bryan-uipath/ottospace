@@ -101,6 +101,17 @@ mod tests {
         // The window is already up: no park in between.
         assert_eq!(m.update(check(100, true, true, None)), [Effect::Live(1)]);
         assert_eq!((m.peek.clone(), m.live, m.mode(), m.focused), (None, Some(1), Mode::App, Some(1)));
+        // A press with the pointer off the pane went elsewhere: the peek ends, no entry.
+        let mut m = hosted();
+        m.update(wheel(0));
+        assert_eq!(m.update(check(100, false, true, None)), [Effect::Parked(1)]);
+        assert_eq!((m.peek.clone(), m.live), (None, None));
+        // From list mode the entry gives up the list's keys, as entering does.
+        let mut m = hosted();
+        m.update(Action::FocusList);
+        m.update(wheel(0));
+        assert_eq!(m.update(check(100, true, true, None)), [Effect::Live(1)]);
+        assert_eq!((m.list, m.mode()), (None, Mode::App));
         // A live pane is not peeked; leaving parks it once.
         assert_eq!(m.update(wheel(200)), []);
         assert_eq!(m.update(Action::Leave), [Effect::Parked(1)]);
