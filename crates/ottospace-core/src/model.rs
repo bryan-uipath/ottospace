@@ -3502,7 +3502,7 @@ impl Model {
                 if let Some(at) = scrolled {
                     peek.last = peek.last.max(at);
                 }
-                if now >= peek.last + crate::app_wheel::QUIET_MS {
+                if now >= peek.last.saturating_add(crate::app_wheel::QUIET_MS) {
                     self.end_peek(effects);
                 }
             }

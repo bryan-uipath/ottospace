@@ -3613,3 +3613,19 @@ fn a_restored_drawer_task_is_on_the_rail_once() {
     ])
     .unwrap();
 }
+
+/// Seed 1507: a wheel and a peek check at the clock's last millisecond overflowed the peek's end.
+#[test]
+fn a_peek_at_the_clocks_end_does_not_overflow() {
+    replay(&[
+        Action::Open {
+            kind: Kind::App { window: 9, title: "w9".into(), bundle: None, name: "app".into() },
+            axis: Axis::Right,
+            beside: None,
+        }
+        .into(),
+        Action::AppWheel { pane: 1, now: u64::MAX }.into(),
+        Action::PeekCheck { now: u64::MAX, over: true, pressed: false, scrolled: None }.into(),
+    ])
+    .unwrap();
+}
