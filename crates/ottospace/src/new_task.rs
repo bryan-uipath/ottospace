@@ -9,7 +9,7 @@ use gpui::{
     Bounds, Context, Div, ExternalPaths, FontWeight, KeyDownEvent, MouseButton, MouseDownEvent, PathPromptOptions,
     Pixels, Point, Window, div, prelude::*, px, rgb,
 };
-use ottospace_core::complete::{Dropdown, Row};
+use ottospace_core::complete::{self, Dropdown, Row};
 use ottospace_core::model::{Pointed, TerminalInfo};
 use ottospace_core::{Action, Origin, theme};
 
@@ -237,15 +237,18 @@ impl Workspace {
     /// the window has no room below.
     fn render_dropdown(&self, menu: &Dropdown, cx: &mut Context<Self>) -> (Div, bool) {
         let rows = menu.rows.iter().enumerate().map(|(i, row)| self.dropdown_row(i, row, menu, cx).into_any_element());
-        let note = menu.note.map(|note| {
+        let note = menu.note.clone().map(|note| {
             div().h(px(ROW)).px_2().flex().items_center().text_xs().text_color(rgb(theme::MUTED)).child(note)
         });
-        let height = px(ROW * (menu.rows.len().max(1)) as f32 + 10.);
+        // Above or below by the tallest it can be, not by its rows now: it never jumps as they change.
+        let height = px(ROW * (complete::MAX_ROWS + 1) as f32 + 10.);
         let place = self.field_place(menu.start);
         // The line's left edge is the content's: the dropdown is pushed right to sit under its tag.
         let indent = place.map_or(px(0.), |(x, field, _)| (x - field.left()).min(field.size.width - px(MENU_WIDTH)));
         let above = place.is_some_and(|(_, field, viewport)| field.bottom() + height + px(90.) > viewport);
+        let drawn = self.field.clone();
         let list = div()
+            .relative()
             .w(px(MENU_WIDTH))
             .max_w_full()
             .ml(indent.max(px(0.)))
@@ -257,6 +260,11 @@ impl Workspace {
             .border_1()
             .border_color(rgb(theme::BORDER_STRONG))
             .overflow_hidden()
+            .child(
+                gpui::canvas(move |bounds, _, _| drawn.borrow_mut().menu = bounds, |_, _, _, _| {})
+                    .absolute()
+                    .size_full(),
+            )
             .children(rows)
             .children(note);
         (list, above)
@@ -300,6 +308,46 @@ impl Workspace {
                     cx.stop_propagation();
                 }),
             );
+        // The folder taken from the dropdown: the agent runs there. × leaves the path in the line.
+        let folder = self.model.compose_folder().map(|folder| {
+            let clear = div()
+                .id("compose-folder-clear")
+                .px_1()
+                .rounded_sm()
+                .cursor_pointer()
+                .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
+                .child("×")
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, window, cx| {
+                        this.dispatch(Action::ComposeFolderClear, this.input, window, cx);
+                        cx.stop_propagation();
+                    }),
+                );
+            div()
+                .id("compose-folder")
+                .h(px(20.))
+                .max_w(px(220.))
+                .overflow_hidden()
+                .flex()
+                .items_center()
+                .gap_1()
+                .pl_2()
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(theme::BORDER_STRONG))
+                .text_xs()
+                .text_color(rgb(theme::MUTED))
+                .child("runs in")
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(rgb(theme::TEXT))
+                        .child(ottospace_core::transcript::clean(folder)),
+                )
+                .child(div().flex_none().child(clear))
+        });
         let line = div()
             .min_h(px(34.))
             .px_2()
@@ -324,6 +372,8 @@ impl Workspace {
             }))
             .child(
                 div()
+                    // As high with the folder as without: the line under it stays put.
+                    .h(px(20.))
                     .flex()
                     .items_center()
                     .justify_between()
@@ -331,7 +381,7 @@ impl Workspace {
                     .child(div().text_xs().text_color(rgb(theme::COMPOSE)).children(
                         (self.model.compose_host() == Some(ottospace_core::model::Host::Bar)).then_some("NEW TASK"),
                     ))
-                    .child(attach),
+                    .child(div().flex().items_center().gap_2().children(folder).child(attach)),
             )
             // Where the content is drawn: an ⌥-click over it references nothing.
             .child(

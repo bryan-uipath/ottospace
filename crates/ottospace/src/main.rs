@@ -1404,8 +1404,7 @@ impl Workspace {
         let names = self.tags_repo.as_ref() != Some(&repo);
         self.tags_repo = Some(repo.clone());
         if let Some(reader) = &self.tags {
-            let whole = self.model.compose_attached().to_vec();
-            reader.ask(tags::Job { call: 0, line, typing, whole, repo, names });
+            reader.ask(tags::Job { call: 0, line, typing, repo, names });
         }
     }
 
@@ -1484,7 +1483,7 @@ impl Workspace {
         };
         self.calls += 1;
         let repo = self.model.draft_repo(&line);
-        reader.ask(tags::Job { call: self.calls, line, typing: None, whole: Vec::new(), repo, names: true });
+        reader.ask(tags::Job { call: self.calls, line, typing: None, repo, names: true });
         self.filing.push((self.calls, filing, reply));
     }
 
@@ -2566,6 +2565,11 @@ impl Workspace {
             // The dropdown that finishes the tag at the cursor, or null: its `mark`, what is
             // `typed`, the `rows` (name, kind, detail, matched letters) and the one `selected`.
             "compose_menu": self.model.dropdown(),
+            // Where that dropdown was drawn, or null without one.
+            "compose_menu_bounds": self.model.dropdown().map(|_| rect(self.field.borrow().menu)),
+            // The folder taken from a path's dropdown that the task's agent will run in, as the
+            // line has it (`~/notes/`), or null.
+            "compose_folder": self.model.compose_folder(),
             // What the box says it could not do ("no room in the line for that name"), or null.
             "compose_note": self.model.compose_note(),
             // The tab or pane an ⌥-click would reference, outlined while ⌥ is held over it

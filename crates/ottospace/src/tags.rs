@@ -5,14 +5,16 @@
 //! offline), so a thread of its own does it (`Reader`): the window asks, and takes the answers
 //! when they are there. Nothing here is called on the window's thread but `Reader`'s methods.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use ottospace_core::agents::{self, Models};
-use ottospace_core::complete::MAX_ROWS;
 use ottospace_core::compose::{self, Names, PathFound};
 
 use crate::config;
+
+/// The most entries of one folder listed: the core narrows them to what is typed.
+const MAX_LISTED: usize = 2000;
 
 /// What to read.
 pub struct Job {
@@ -20,12 +22,9 @@ pub struct Job {
     /// call's own number: every one of those is answered, in order.
     pub call: u64,
     pub line: String,
-    /// The path being typed at the cursor, to list what finishes it.
+    /// The folder of the path being typed at the cursor (`~/`, `./src/`), to list.
     pub typing: Option<String>,
-    /// Path words that were put into the line whole (dropped, picked, pasted): each is that
-    /// very path, and is not looked for inside the repository.
-    pub whole: Vec<String>,
-    /// The repository the line names with `>name`: a `/path` may be inside it, and its
+    /// The repository the line names with `>name`: a `./path` is inside it, and its
     /// `.claude/skills` count.
     pub repo: Option<String>,
     /// Read the agents and skills too. They change seldom: once when the box opens, and when
@@ -37,7 +36,8 @@ pub struct Job {
 pub struct Read {
     pub call: u64,
     pub line: String,
-    pub typing: Option<String>,
+    /// The folder listed, as typed and where it is.
+    pub typing: Option<(String, String)>,
     pub names: Option<Names>,
     pub paths: Vec<PathFound>,
     pub entries: Vec<String>,
@@ -92,13 +92,57 @@ impl Reader {
 fn read(job: Job, models: &Models, agents_dir: Option<&Path>, skill_dirs: &[PathBuf]) -> Read {
     let repo = job.repo.as_deref().map(Path::new);
     let names = job.names.then(|| Names { agents: agents(models, agents_dir), skills: skills(skill_dirs, repo) });
-    let paths = paths(&compose::path_words(&job.line), repo, &job.whole);
-    let entries = job.typing.as_deref().map(|typed| entries(typed, repo)).unwrap_or_default();
-    Read { call: job.call, line: job.line, typing: job.typing, names, paths, entries }
+    let roots = Roots::now();
+    let paths = paths(&compose::path_words(&job.line), repo, &roots);
+    // The folder, with where it is: a folder taken from it is there, with no second read.
+    let place = |folder: String| Some((roots.place(&folder, repo)?.to_string_lossy().into_owned(), folder));
+    let typing = job.typing.and_then(place).map(|(place, folder)| (folder, place));
+    let entries = typing.as_ref().map(|(folder, _)| entries(folder, repo, &roots)).unwrap_or_default();
+    Read { call: job.call, line: job.line, typing, names, paths, entries }
 }
 
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").filter(|home| !home.is_empty()).map(PathBuf::from)
+/// What a path word may reach. `home`: the folder `~` stands for. `inside`: a path in none of
+/// these is never looked at; `None`: any is.
+struct Roots {
+    home: Option<PathBuf>,
+    inside: Option<Vec<PathBuf>>,
+}
+
+impl Roots {
+    /// `$HOME`, anywhere. A test run (`OTTOSPACE_E2E`) reads no folder of the user's: `~` is
+    /// `OTTOSPACE_PATH_HOME` (none named: no folder), and nothing outside the temp folder is
+    /// looked at, where a test makes its own.
+    fn now() -> Self {
+        let var = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty()).map(PathBuf::from);
+        let test = std::env::var_os("OTTOSPACE_E2E").is_some();
+        let home = var("OTTOSPACE_PATH_HOME").or_else(|| var("HOME").filter(|_| !test));
+        // As named and with its links resolved: `/var/folders/..` is `/private/var/folders/..`.
+        let temp = std::env::temp_dir();
+        let inside = test.then(|| temp.canonicalize().into_iter().chain([temp.clone()]).collect());
+        Roots { home, inside }
+    }
+
+    /// Where a path word is, with `.` and `..` taken out by its text: `~/x` in the home folder,
+    /// `./x` and `../x` beside the repository's own, `/x` from the root of the disk. `None`: it
+    /// has none, or one out of reach.
+    fn place(&self, word: &str, repo: Option<&Path>) -> Option<PathBuf> {
+        let place = match word.strip_prefix("~/") {
+            Some(rest) => self.home.as_ref()?.join(rest),
+            None if compose::relative(word) => repo?.join(word),
+            None if word.starts_with('/') => PathBuf::from(word),
+            None => return None,
+        };
+        let mut plain = PathBuf::new();
+        for part in place.components() {
+            match part {
+                Component::CurDir => {}
+                Component::ParentDir => drop(plain.pop()),
+                part => plain.push(part),
+            }
+        }
+        let reached = self.inside.as_ref().is_none_or(|inside| inside.iter().any(|dir| plain.starts_with(dir)));
+        reached.then_some(plain)
+    }
 }
 
 /// The user's folder of saved agents, if there is a user's folder.
@@ -144,51 +188,29 @@ fn skills(dirs: &[PathBuf], repo: Option<&Path>) -> Vec<String> {
     names
 }
 
-/// Where a path word may be, most likely first: `~/x` under the home folder; `/x` inside `repo`,
-/// then at the root.
-fn places(word: &str, repo: Option<&Path>) -> Vec<PathBuf> {
-    match word.strip_prefix("~/") {
-        Some(rest) => home().map(|home| home.join(rest)).into_iter().collect(),
-        None => {
-            let inside = repo.map(|repo| repo.join(word.trim_start_matches('/')));
-            inside.into_iter().chain([PathBuf::from(word)]).collect()
-        }
-    }
-}
-
 /// The path words that name a file or directory, with where each was found. For each word, the
-/// first of what it may be (`compose::path_words`) that is somewhere, in the first place it is.
-fn paths(words: &[Vec<String>], repo: Option<&Path>, whole: &[String]) -> Vec<PathFound> {
+/// first of what it may be (`compose::path_words`) that is there.
+fn paths(words: &[Vec<String>], repo: Option<&Path>, roots: &Roots) -> Vec<PathFound> {
     let found = |typed: &String| {
-        // A path dropped on the box is that file: `/tmp/a.txt`, not the repository's `tmp/a.txt`.
-        let repo = repo.filter(|_| !whole.contains(typed));
-        let place = places(typed, repo).into_iter().find(|place| place.exists())?;
+        let place = roots.place(typed, repo).filter(|place| place.exists())?;
         Some(PathFound { typed: typed.clone(), resolved: place.to_string_lossy().into_owned() })
     };
     words.iter().filter_map(|candidates| candidates.iter().find_map(found)).collect()
 }
 
-/// Paths that finish `typed`: the entries of its folder whose names start as its last part does.
-/// e.g. `/src/ex` → `/src/export/`. Those inside the repository come before those at the root.
-/// Hidden files only when a `.` is typed. At most `MAX_ROWS`: only those are looked at
-/// to see which is a directory.
-fn entries(typed: &str, repo: Option<&Path>) -> Vec<String> {
-    let cut = typed.rfind('/').map_or(0, |at| at + 1);
-    let (folder, start) = typed.split_at(cut);
-    let fits = |name: &String| name.starts_with(start) && (start.starts_with('.') || !name.starts_with('.'));
-    let mut found: Vec<(PathBuf, String)> = Vec::new();
-    for place in places(folder, repo) {
-        let mut names: Vec<String> = dir_names(Some(&place), |_| true).into_iter().filter(fits).collect();
-        names.sort();
-        for name in names {
-            if !found.iter().any(|(_, seen)| *seen == name) {
-                found.push((place.join(&name), name));
-            }
-        }
+/// The entries of `folder` (as typed, ending in `/`), each written after it, a directory's with
+/// a `/`: `~/` → `~/notes/`, `~/notes.md`. At most `MAX_LISTED`. A link is listed as what it
+/// points at, and never followed further. A folder that does not read lists nothing.
+fn entries(folder: &str, repo: Option<&Path>, roots: &Roots) -> Vec<String> {
+    let listed = roots.place(folder, repo).and_then(|place| std::fs::read_dir(place).ok());
+    let mut found = Vec::new();
+    for entry in listed.into_iter().flatten().flatten().take(MAX_LISTED) {
+        let Ok(name) = entry.file_name().into_string() else { continue };
+        let linked = |entry: &std::fs::DirEntry| std::fs::metadata(entry.path()).is_ok_and(|meta| meta.is_dir());
+        let dir = entry.file_type().is_ok_and(|kind| kind.is_dir() || (kind.is_symlink() && linked(&entry)));
+        found.push(format!("{folder}{name}{}", if dir { "/" } else { "" }));
     }
-    found.truncate(MAX_ROWS);
-    let slash = |path: &Path| if path.is_dir() { "/" } else { "" };
-    found.iter().map(|(path, name)| format!("{folder}{name}{}", slash(path))).collect()
+    found
 }
 
 #[cfg(test)]
@@ -205,43 +227,59 @@ mod tests {
     }
 
     #[test]
-    fn a_path_is_looked_for_inside_the_repository_then_at_the_root() {
-        let repo = temp("paths");
+    fn a_path_is_in_the_home_folder_the_repository_or_from_the_root() {
+        let dir = temp("paths");
+        let (repo, home) = (dir.join("app"), dir.join("home"));
         std::fs::create_dir_all(repo.join("src/export")).unwrap();
         std::fs::create_dir_all(repo.join("My Notes")).unwrap();
+        std::fs::create_dir_all(home.join("notes")).unwrap();
         std::fs::write(repo.join("src/extra.rs"), "").unwrap();
         std::fs::write(repo.join("src/.hidden"), "").unwrap();
         std::fs::write(repo.join("src/v1."), "").unwrap();
-        // `/tmp` is at the root of every Mac; inside the repository it is the repository's.
-        std::fs::create_dir_all(repo.join("tmp")).unwrap();
+        std::os::unix::fs::symlink(repo.join("src"), home.join("linked")).unwrap();
+        let roots = Roots { home: Some(home.clone()), inside: None };
         let inside = Some(&*repo);
         let at = |part: &str| repo.join(part).to_string_lossy().into_owned();
         let found = |typed: &str, resolved: String| PathFound { typed: typed.into(), resolved };
 
-        let read = paths(&words("see /src/export, /nowhere-at-all and /tmp"), inside, &[]);
-        assert_eq!(read, [found("/src/export", at("src/export")), found("/tmp", at("tmp"))]);
-        // Put in whole, `/tmp` is the root's, whatever the repository has of that name.
-        let whole = paths(&words("see /src/export and /tmp"), inside, &["/tmp".to_string()]);
-        assert_eq!(whole, [found("/src/export", at("src/export")), found("/tmp", "/tmp".into())]);
-        // Without the repository the same word is the root's, or nothing.
-        assert_eq!(paths(&words("see /src/export and /tmp"), None, &[]), [found("/tmp", "/tmp".into())]);
+        // `./` is the repository's, `~/` the home folder's, `/` the root's.
+        let read = paths(&words("see ./src/export, ~/notes, ./nowhere and /tmp"), inside, &roots);
+        let home_notes = home.join("notes").to_string_lossy().into_owned();
+        assert_eq!(
+            read,
+            [found("./src/export", at("src/export")), found("~/notes", home_notes), found("/tmp", "/tmp".into())]
+        );
+        // `/src/export` is no longer looked for inside the repository; `./` without one is nothing.
+        assert_eq!(paths(&words("see /src/export and ./src"), None, &roots), []);
+        assert_eq!(paths(&words("see ../app/src"), inside, &roots), [found("../app/src", at("src"))]);
         // An absolute path counts by itself.
         let absolute = format!("look in {}", at("src"));
-        assert_eq!(paths(&words(&absolute), None, &[]), [found(&at("src"), at("src"))]);
+        assert_eq!(paths(&words(&absolute), None, &roots), [found(&at("src"), at("src"))]);
         // The word as typed first: a name may end in a dot. A space is written with a backslash.
-        let read = paths(&words(r"read /src/v1. and /src/extra.rs. in /My\ Notes"), inside, &[]);
+        let read = paths(&words(r"read ./src/v1. and ./src/extra.rs. in ./My\ Notes"), inside, &roots);
         let typed: Vec<&str> = read.iter().map(|path| path.typed.as_str()).collect();
-        assert_eq!(typed, ["/src/v1.", "/src/extra.rs", "/My Notes"]);
+        assert_eq!(typed, ["./src/v1.", "./src/extra.rs", "./My Notes"]);
 
-        // Completion: the repository's entries first, then the root's; a directory ends in `/`.
-        assert_eq!(entries("/src/ex", inside), ["/src/export/", "/src/extra.rs"]);
-        assert_eq!(entries("/src/.", inside), ["/src/.hidden"]);
-        assert_eq!(entries("/My", inside), ["/My Notes/"]);
-        let both = entries("/tm", inside);
-        assert_eq!(both, ["/tmp/"], "the repository's and the root's are one name: once");
-        assert!(entries("/", inside).len() <= MAX_ROWS);
-        assert_eq!(entries("/", inside)[0], "/My Notes/", "the repository's come first");
-        let _ = std::fs::remove_dir_all(&repo);
+        // A folder is listed whole, a directory (or a link to one) with a `/`; the core narrows it.
+        let mut listed = entries("./src/", inside, &roots);
+        listed.sort();
+        assert_eq!(listed, ["./src/.hidden", "./src/export/", "./src/extra.rs", "./src/v1."]);
+        let mut listed = entries("~/", inside, &roots);
+        listed.sort();
+        assert_eq!(listed, ["~/linked/", "~/notes/"]);
+        assert_eq!(
+            entries("./nowhere/", inside, &roots),
+            Vec::<String>::new(),
+            "a folder that is not there lists nothing"
+        );
+        // No home folder: `~` lists nothing. Kept inside a folder: nothing outside it is looked at.
+        let homeless = Roots { home: None, inside: None };
+        assert_eq!((entries("~/", None, &homeless), paths(&words("~/notes"), None, &homeless)), (vec![], vec![]));
+        let kept = Roots { home: Some(home.clone()), inside: Some(vec![dir.to_path_buf()]) };
+        assert_eq!((entries("/", None, &kept), paths(&words("see /tmp"), None, &kept)), (vec![], vec![]));
+        assert_eq!(entries("../../", inside, &kept), Vec::<String>::new(), "`..` leads out of it by its text");
+        assert_eq!(entries("~/", None, &kept).len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -120,6 +120,7 @@ what can be opened, and its other panes are empty and say why. Marks are kept in
 | Give an agent a task's brief | In a terminal of the task: `ottospace ctl "{\"cmd\":\"task_brief\",\"id\":$OTTOSPACE_TASK}"` |
 | Tag the task | In that line: `#project` · `>repo` · `@agent` · `/path` · `$skill` · `^reference` · `p1` … `p9`. A dropdown finishes the tag at the cursor: ↑↓ move, ↵ or Tab takes a row, Esc closes it. [All tags](reference.md#tags) |
 | Add files to the task | Drag them from Finder onto the box, ⌘O, or copy in Finder and ⌘V: each becomes a `/path` |
+| Run the agent in a folder | Type `~/`, `/` or (with a `>repo`) `./`, and take a folder from the dropdown: "runs in ~/notes/ ×" shows it. The path stays in the title |
 | Point the task at a tab, a pane, a mark or an app | `^name` in the line, or ⌥-click the tab or pane while the box is open |
 | A task's tabs | Side by side behind its badge on the one bar. Starting a task takes the tab on show (if it is no task's); ⌘T joins the task on show; drag a tab onto another group; palette: New Tab outside the Task, Remove Tab from Task, Move Tab to Task…; Claim tab on a row |
 | The next task that needs me | ⌘⇧N: its conversation; the tab stays |
