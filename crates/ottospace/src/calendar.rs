@@ -21,13 +21,6 @@ use ottospace_mac::meeting;
 
 use crate::{Mark, Tooltip, Workspace, config, list_row, mark, now_ms, words};
 
-/// Where the line for now goes on a meeting's row.
-#[derive(Clone, Copy)]
-enum Now {
-    Above,
-    Below,
-}
-
 /// The band's height above the status bar, its 1-point top line included; hover takes all of it.
 const BAND: f32 = 12.;
 /// Calls and blocks are drawn between these margins; overlapping calls split the room into lanes
@@ -54,7 +47,7 @@ enum Source {
 /// One read of the feed, for `Action::CalendarRead`.
 pub struct Read {
     events: Option<Vec<Event>>,
-    days: [u64; 3],
+    days: [u64; calendar::DAYS],
     at: u64,
     /// Why the read failed, when the user can do something about it. Never the link.
     problem: Option<&'static str>,
@@ -97,7 +90,7 @@ impl Timeline {
         // The feed is parsed once a read, and its events worked out again only then or when the
         // day turns: nothing that grows with the feed runs on the timer.
         std::thread::spawn(move || {
-            let (mut feed, mut fetched, mut days) = (ics::Feed::default(), None::<Instant>, [0u64; 3]);
+            let (mut feed, mut fetched, mut days) = (ics::Feed::default(), None::<Instant>, [0u64; calendar::DAYS]);
             // When the feed was last read whole, and whether the last fetch failed: a new day's
             // re-evaluation is no read, so it changes neither.
             let (mut read_at, mut failed) = (None::<u64>, false);
@@ -112,7 +105,7 @@ impl Timeline {
                     }
                     fetched = Some(Instant::now());
                 }
-                if due || now >= days[1] {
+                if due || now >= days[calendar::BACK + 1] {
                     let (events, today) = evaluate(&feed, now);
                     days = today;
                     let events = read_at.filter(|_| !failed).map(|_| events);
@@ -188,25 +181,32 @@ fn curl(link: &str) -> Result<String, Option<&'static str>> {
     }
 }
 
-/// The events of today and the next 7 days (`reply::HELD_DAYS`) of a feed's text, in the user's
-/// zone; and local midnight of today, tomorrow and the day after (ms).
-fn evaluate(feed: &ics::Feed, now: u64) -> (Vec<Event>, [u64; 3]) {
+/// The events of the days held (a week back to a week on) of a feed's text, in the user's zone;
+/// and their local midnights (ms). Today on first: the 500 kept are today's and the week ahead's
+/// before the week back's, within one expansion's work.
+fn evaluate(feed: &ics::Feed, now: u64) -> (Vec<Event>, [u64; calendar::DAYS]) {
     let now = (now / 1_000) as i64;
     let local = local_zone(now);
     let (from, to) = zone_span(now);
-    let days = ics::days(now, &local);
+    let days: [i64; calendar::DAYS] = ics::days(now, &local, calendar::BACK as i64);
     let named = ics::named_zones(feed)
         .into_iter()
         .filter_map(|name| Some((name.clone(), Table(meeting::zone_table(&name, from, to)?))))
         .collect();
-    let (start, end) = calendar::reply::held(now, &local);
-    let occurrences = ics::expand(feed, start, end, &Zones { local, named });
-    (calendar::events(&occurrences), days.map(|day| (day.max(0) as u64) * 1_000))
+    let (back, today, end) = calendar::reply::held(now, &local);
+    let zones = Zones { local, named };
+    let (mut ahead, work) = ics::expand_counted(feed, today, end, &zones);
+    let (past, _) = ics::expand_within(feed, (back, today), &zones, ics::SCAN_BUDGET - work);
+    // The last of the week back, as many as there is room for.
+    let room = ics::MAX_OCCURRENCES.saturating_sub(ahead.len());
+    let before: Vec<_> = past.into_iter().filter(|o| o.start < today).collect();
+    ahead.splice(0..0, before[before.len().saturating_sub(room)..].iter().cloned());
+    (calendar::events(&ahead), days.map(|day| (day.max(0) as u64) * 1_000))
 }
 
-/// Zone tables cover 3 days before `now` (seconds) to 11 after: the days held and more.
+/// Zone tables cover 10 days before `now` (seconds) to 11 after: the days held and more.
 fn zone_span(now: i64) -> (i64, i64) {
-    (now - 3 * 86_400, now + 11 * 86_400)
+    (now - 10 * 86_400, now + 11 * 86_400)
 }
 
 /// The user's zone's offsets over `zone_span`.
@@ -301,7 +301,7 @@ impl Workspace {
         self.marks.borrow_mut().retain(|m, _| !matches!(m, Mark::BandBlock(_) | Mark::BandOut(_)));
         let calendar = &self.model.calendar;
         // Not before the first read: there is no day yet.
-        if !calendar.on || calendar.days[1] == 0 {
+        if !calendar.on || calendar.span(0).1 == 0 {
             return None;
         }
         let now = now_ms();
@@ -507,7 +507,7 @@ impl Workspace {
             // the workday's (ms), the workday's marks, now's tick, each block's times and rect, kind,
             // status, colour name and lane (blocks under the calls have none), and the markers of
             // blocks wholly before and after it (`outside`: counts and rects).
-            "band": (calendar.on && calendar.days[1] > 0).then(|| serde_json::json!({
+            "band": (calendar.on && calendar.span(0).1 > 0).then(|| serde_json::json!({
                 "rect": drawn(Mark::Band),
                 "span": [band.from, band.to],
                 "workday": [band.workday.0, band.workday.1],
@@ -525,14 +525,22 @@ impl Workspace {
                 "dismiss": at(format!("meeting-dismiss:{id}")),
             })),
             "alerts": calendar.given,
-            // The Calendar section: how many rows, the rail cell's mark, "Tomorrow" unfolded.
+            // The Calendar section: its day (0 today, -1 yesterday) and that day's local midnight,
+            // how many rows, the rail cell's mark, where the day's controls are (`today` while on
+            // another day).
             "rows": calendar.agenda().len(),
             "rail": match calendar.rail(now) {
                 calendar::RailMark::None => "none",
                 calendar::RailMark::Near => "near",
                 calendar::RailMark::Alert => "alert",
             },
-            "tomorrow_open": calendar.tomorrow_open,
+            "day": calendar.day,
+            "day_start": calendar.span(calendar.day).0,
+            "nav": serde_json::json!({
+                "back": at("calendar-day:back".into()),
+                "forward": at("calendar-day:forward".into()),
+                "today": at("calendar-day:today".into()),
+            }),
             "joins": std::env::var_os("OTTOSPACE_E2E").map(|_| self.timeline.joins),
         })
     }
@@ -556,133 +564,138 @@ fn notify(body: &str) {
 }
 
 impl Workspace {
-    /// The Calendar section: today's meetings (all-day first, then by start), the running one
-    /// lit, past ones dimmed, a line where now falls; a folded "Tomorrow · n"; when the feed was
-    /// read. Join on a row with an `https:` link, on hover or selection. Display only: titles and
-    /// places are other people's text.
+    /// The Calendar section: the day's all-day events on one line, then one row per meeting:
+    /// its colour, start, title and at most one quiet fact (`now`, `in 12m`). The rest is on the
+    /// row's hover card, the band's. Join on hover or selection. Display only: titles and places
+    /// are other people's text.
     pub(crate) fn render_calendar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let calendar = &self.model.calendar;
         let now = now_ms();
         let offset = ottospace_mac::time::utc_offset((now / 1_000) as i64);
-        let rows = calendar.agenda();
-        let today = calendar.today().count();
-        // The line for now: above today's first meeting still to come, else below its last.
-        let timed: Vec<&Event> = calendar.today().filter(|e| !e.all_day).collect();
-        let now_line = |id: u64| match timed.iter().find(|e| e.start > now) {
-            Some(next) => (next.id == id).then_some(Now::Above),
-            None => timed.last().filter(|last| last.id == id).map(|_| Now::Below),
-        };
         let mut children: Vec<AnyElement> = Vec::new();
-        if today == 0 {
-            children
-                .push(div().px_2().text_xs().text_color(rgb(theme::MUTED)).child("Nothing today").into_any_element());
+        let all_day: Vec<&Event> = calendar.on(calendar.day).filter(|e| e.all_day).collect();
+        if !all_day.is_empty() {
+            let titles: Vec<&str> = all_day.iter().map(|e| e.title.as_str()).collect();
+            let tip = all_day.iter().map(|e| calendar::describe(e, offset)).collect::<Vec<_>>().join("\n");
+            let line = div().id("meetings-all-day").px_2().pb_1().truncate().text_xs().text_color(rgb(theme::MUTED));
+            let line = line.child(format!("All day · {}", titles.join(", ")));
+            children.push(
+                line.tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone().into())))).into_any_element(),
+            );
+        }
+        let rows = calendar.agenda();
+        if rows.is_empty() {
+            children.push(div().px_2().text_xs().text_color(rgb(theme::MUTED)).child("No meetings").into_any_element());
         }
         for (index, row) in rows.iter().enumerate() {
-            let selected = self.model.list == Some(index);
-            match row {
-                ListRow::MeetingsTomorrow => {
-                    // As the Apps section's fold lines.
-                    let count = calendar.tomorrow().count();
-                    let fold = if calendar.tomorrow_open { "▾" } else { "▸" };
-                    let heading = div()
-                        .id("meetings-tomorrow")
-                        .relative()
-                        .mt_2()
-                        .px_2()
-                        .flex()
-                        .items_center()
-                        .gap_1p5()
-                        .text_xs()
-                        .text_color(rgb(theme::MUTED))
-                        .cursor_pointer()
-                        .hover(|s| s.text_color(rgb(theme::TEXT)))
-                        .when(selected, |d| d.pb_0p5().rounded_md().bg(rgb(theme::SELECTED)))
-                        .child(div().w(px(8.)).child(fold))
-                        .child(format!("Tomorrow · {count}"))
-                        .child(self.controls.mark("meetings-tomorrow"))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.dispatch(Action::CalendarTomorrow, this.input, window, cx);
-                        }));
-                    children.push(heading.into_any_element());
-                }
-                ListRow::Meeting(id) => {
-                    let Some(event) = calendar.events.iter().find(|e| e.id == *id) else { continue };
-                    children.push(self.meeting_row(event, (index, selected), now, now_line(*id), cx));
-                }
-                _ => {}
-            }
+            let ListRow::Meeting(id) = row else { continue };
+            let Some(event) = calendar.events.iter().find(|e| e.id == *id) else { continue };
+            children.push(self.meeting_row(event, (index, self.model.list == Some(index)), now, cx));
         }
-        let footer = calendar.read_status(offset);
         let list = div().id("calendar").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
         let list = list.track_scroll(&self.list_scroll).children(children);
-        let footer = div().px_3().py_2().text_xs().text_color(rgb(theme::BORDER_STRONG)).child(footer);
-        div()
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .child(self.bars.tracked("calendar", list, &self.list_scroll))
-            .child(footer)
+        div().flex_1().min_h_0().flex().flex_col().child(self.bars.tracked("calendar", list, &self.list_scroll))
     }
 
-    /// One meeting: its time and title, and its place or its link's host below.
+    /// The header's day: `‹ Today ›`, `‹ Mon 16 Nov ›`, and Today while on another day. Its
+    /// tooltip says when the feed was read.
+    pub(crate) fn calendar_day_switch(&self, cx: &mut Context<Self>) -> Div {
+        let calendar = &self.model.calendar;
+        let now = now_ms();
+        let offset = ottospace_mac::time::utc_offset((now / 1_000) as i64);
+        // Noon of the day shown, in its own offset: a clock change at midnight moves no date.
+        let noon = calendar.span(calendar.day).0 + 12 * 3_600_000;
+        let label = match calendar.day {
+            0 => "Today".to_string(),
+            _ => calendar::day_name(noon, ottospace_mac::time::utc_offset((noon / 1_000) as i64)),
+        };
+        let read = format!("calendar {}", calendar.read_status(offset));
+        let step = |name: &'static str, text: &'static str, tip: &'static str, step: calendar::DayStep| {
+            let control = format!("calendar-day:{name}");
+            div()
+                .id(gpui::ElementId::Name(control.clone().into()))
+                .relative()
+                .px_1()
+                .rounded_sm()
+                .cursor_pointer()
+                .text_color(rgb(theme::MUTED))
+                .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
+                .child(text)
+                .child(self.controls.mark(control))
+                .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.dispatch(Action::CalendarDay { step }, this.input, window, cx);
+                }))
+        };
+        let date = div().id("calendar-date").min_w(px(74.)).flex().justify_center().text_color(rgb(theme::TEXT));
+        let date = date.child(label).tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(read.clone().into()))));
+        div()
+            .ml_2()
+            .mr_1()
+            .flex()
+            .items_center()
+            .gap_0p5()
+            .child(step("back", "‹", "The day before (←)", calendar::DayStep::Back))
+            .child(date)
+            .child(step("forward", "›", "The day after (→)", calendar::DayStep::Forward))
+            .children(
+                (calendar.day != 0)
+                    .then(|| step("today", "Today", "Back to today (t)", calendar::DayStep::Today).ml_1()),
+            )
+    }
+
+    /// One meeting on one line: a dot and a faint tint in its colour (the band's), its start, its
+    /// title and one quiet fact. Past ones faded, the one that runs stronger with now's colour.
     fn meeting_row(
         &self,
         event: &Event,
         (index, selected): (usize, bool),
         now: u64,
-        now_line: Option<Now>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let id = event.id;
+        let calendar = &self.model.calendar;
         let stage = calendar::stage(event, now);
-        // Each time in the offset it has: tomorrow may be after a clock change.
+        let paint = calendar.paint(event, now, true);
+        // Each time in the offset it has: another day may be across a clock change.
         let clock = |ms: u64| calendar::clock(ms, ottospace_mac::time::utc_offset((ms / 1_000) as i64));
-        let when = if event.all_day {
-            "all day".to_string()
-        } else {
-            format!("{}–{}", clock(event.start), clock(event.end))
-        };
-        let place = Some(event.location.clone())
-            .filter(|l| !l.is_empty())
-            .or_else(|| event.link.as_deref().and_then(calendar::host).map(String::from));
+        let card = calendar::describe(event, ottospace_mac::time::utc_offset((event.start / 1_000) as i64));
         let group: &'static str = "meeting-row";
         let join = event.link.as_ref().map(|_| {
-            words::words(group, selected).top(px(4.)).child(self.word(
+            words::words(group, selected).top(px(2.)).child(self.word(
                 format!("meeting-row-join:{id}"),
                 ("Join", "Open the meeting's link"),
                 move |this, window, cx| drop(this.dispatch(Action::CalendarJoin { id }, this.input, window, cx)),
                 cx,
             ))
         });
-        // An all-day event is no meeting in progress.
-        let running = !event.all_day && stage == Stage::Running;
-        let line = |d: Div| d.absolute().left_0().right_0().h(px(1.)).bg(rgb(theme::SNEAK));
+        let running = stage == Stage::Running;
+        let tint = div().absolute().inset_0().rounded_md().bg(rgb(paint.color));
+        let tint = tint.opacity(if running { 0.22 } else { 0.1 * paint.alpha.max(0.4) });
+        let dot = div().absolute().left(px(10.)).top(px(6.)).size(px(6.)).rounded_full().bg(rgb(paint.color));
+        let fact = calendar.row_fact(event, now);
         list_row(("meeting", index), selected)
             .group(group)
-            .pl_2()
-            .py_1()
-            .flex()
-            .flex_col()
             .text_color(rgb(theme::TEXT))
-            .when(stage == Stage::Past, |d| d.opacity(0.45))
-            .when(running && !selected, |d| d.bg(rgb(theme::SELECTED)).border_color(rgb(theme::SNEAK)))
-            // Now falls between this meeting and the one before or after.
-            .children(now_line.map(|at| match at {
-                Now::Above => line(div()).top(px(-3.)),
-                Now::Below => line(div()).bottom(px(-3.)),
-            }))
+            .when(stage == Stage::Past, |d| d.opacity(0.5))
+            .child(tint)
+            .child(dot.opacity(paint.alpha.max(0.5)))
+            // Now's colour, as the band's tick: a bar at the left edge of the meeting that runs.
+            .children(
+                running
+                    .then(|| div().absolute().left_0().top_1().bottom_1().w(px(2.)).rounded_sm().bg(rgb(theme::TEXT))),
+            )
             .child(
                 div()
+                    .relative()
                     .flex()
                     .gap_2()
-                    .child(div().flex_none().w(px(78.)).text_xs().text_color(rgb(theme::MUTED)).child(when))
-                    .child(div().min_w_0().truncate().child(event.title.clone())),
+                    .child(div().flex_none().w(px(38.)).text_color(rgb(theme::MUTED)).child(clock(event.start)))
+                    .child(div().flex_1().min_w_0().truncate().child(event.title.clone()))
+                    .children(fact.map(|fact| div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(fact))),
             )
-            .children(place.map(|place| {
-                div().pl(px(86.)).min_w_0().truncate().text_xs().text_color(rgb(theme::MUTED)).child(place)
-            }))
             .children(join)
+            .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(card.clone().into()))))
             .into_any_element()
     }
 

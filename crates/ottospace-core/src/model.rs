@@ -1290,11 +1290,11 @@ pub enum Action {
         /// `calendar_colors`.
         colors: Vec<calendar::ColorRule>,
     },
-    /// The feed was read at `at`: today's and tomorrow's events, or `None` when the read failed
-    /// (the last events stay). `days`: local midnight of today, tomorrow and the day after.
+    /// The feed was read at `at`: the events of the days held, or `None` when the read failed
+    /// (the last events stay). `days`: local midnights from a week back (`calendar::DAYS`).
     CalendarRead {
         events: Option<Vec<calendar::Event>>,
-        days: [u64; 3],
+        days: [u64; calendar::DAYS],
         at: u64,
     },
     /// Whether the user is in a call, as the shell saw it at `at`. `None`: it could not tell.
@@ -1310,8 +1310,10 @@ pub enum Action {
     CalendarJoin {
         id: u64,
     },
-    /// Fold or unfold the Calendar section's "Tomorrow" group.
-    CalendarTomorrow,
+    /// The Calendar section's day: a day back or on, or today. Opens the section.
+    CalendarDay {
+        step: calendar::DayStep,
+    },
     /// The features that are on, as the settings say (`features`). What a feature turned off
     /// shows goes from view; what it keeps (marks, pins) stays as it is.
     SetFeatures {
@@ -1629,7 +1631,7 @@ impl Action {
             | Action::CallSeen { .. }
             | Action::CalendarDismiss { .. }
             | Action::CalendarJoin { .. }
-            | Action::CalendarTomorrow
+            | Action::CalendarDay { .. }
             | Action::AgentEvents { .. }
             | Action::TalkSend
             | Action::TalkAnswer { .. }
@@ -1860,7 +1862,7 @@ impl Action {
             | Action::CallSeen { .. }
             | Action::CalendarDismiss { .. }
             | Action::CalendarJoin { .. }
-            | Action::CalendarTomorrow
+            | Action::CalendarDay { .. }
             | Action::EditSettings
             | Action::SettingsRead { .. }
             | Action::Copied { .. }
@@ -3063,6 +3065,7 @@ impl Model {
                 | Action::FocusList
                 | Action::RepoAdd { .. }
                 | Action::SessionClick { .. }
+                | Action::CalendarDay { .. }
         );
         let selected = self.list.and_then(|at| self.list_rows().into_iter().nth(at)).filter(|_| !own_move);
         // The notice offers back one move. Another move, by key or socket, is not the one it names.
@@ -3749,7 +3752,6 @@ impl Model {
                 Some(ListRow::AllApps) => self.apps_toggle(apps::Group::All),
                 // ↵ on a meeting is its Join: the user's alone (`refusal`).
                 Some(ListRow::Meeting(id)) => self.act(Action::CalendarJoin { id }, effects),
-                Some(ListRow::MeetingsTomorrow) => self.act(Action::CalendarTomorrow, effects),
                 None => {}
             },
             Action::ListSnooze { until } => {
@@ -4481,7 +4483,19 @@ impl Model {
             Action::CalendarRead { events, days, at } => self.calendar.read(events, days, at),
             Action::CallSeen { in_call, at } => self.calendar.call_seen(in_call, at),
             Action::CalendarDismiss { id } => self.calendar.dismiss(id),
-            Action::CalendarTomorrow => self.calendar.tomorrow_open = !self.calendar.tomorrow_open,
+            Action::CalendarDay { step } => {
+                if !self.calendar.on {
+                    return;
+                }
+                if self.sidebar != Some(Section::Calendar) {
+                    self.act(Action::ToggleSection { section: Section::Calendar }, effects);
+                }
+                self.calendar.step(step);
+                // The first row of the day shown, if the keyboard is on the rows.
+                if self.list.is_some() {
+                    self.list = Some(0).filter(|_| !self.calendar.agenda().is_empty());
+                }
+            }
             Action::CalendarJoin { id } => effects.extend(self.calendar.join(id).map(|url| Effect::OpenLink { url })),
             Action::SetFeatures { features } => self.set_features(features),
         }
@@ -7014,7 +7028,7 @@ mod tests {
         Action::CallSeen { .. },
         Action::CalendarDismiss { .. },
         Action::CalendarJoin { .. },
-        Action::CalendarTomorrow,
+        Action::CalendarDay { .. },
         Action::AgentEvents { .. },
         Action::TalkSend,
         Action::TalkAnswer { .. },
@@ -7238,11 +7252,11 @@ mod tests {
             Action::TalkPick { id: Subject::Task(1) },
             Action::TalkStart,
             Action::SetCalendar { on: true, notify: true, links_only: false, hide_free: false, colors: Vec::new() },
-            Action::CalendarRead { events: None, days: [0; 3], at: 0 },
+            Action::CalendarRead { events: None, days: [0; calendar::DAYS], at: 0 },
             Action::CallSeen { in_call: Some(false), at: 0 },
             Action::CalendarDismiss { id: 1 },
             Action::CalendarJoin { id: 1 },
-            Action::CalendarTomorrow,
+            Action::CalendarDay { step: calendar::DayStep::Back },
             Action::AgentEvents { task: Subject::Task(1), events: Vec::new(), at: 0 },
             Action::TalkSend,
             Action::TalkAnswer { allow: false, ticket: 1 },

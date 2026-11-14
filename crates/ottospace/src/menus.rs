@@ -67,6 +67,10 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
                 item("Label the Controls", SneakMode),
                 item("Fill the Screen", Zoom),
                 item("Command Palette…", commands::CommandPalette),
+                MenuItem::separator(),
+                item("Previous Day in Calendar", commands::CalendarBack),
+                item("Next Day in Calendar", commands::CalendarForward),
+                item("Today in Calendar", commands::CalendarToday),
             ]
             .into_iter()
             .chain(mark_tab.into_iter().filter(|_| marks))

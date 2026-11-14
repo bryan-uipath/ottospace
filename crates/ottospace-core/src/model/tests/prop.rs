@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::ax::{Frame, Source};
-use crate::calendar::{ColorRule, Event};
+use crate::calendar::{ColorRule, DayStep, Event};
 use crate::clip::{Amount, Verb};
 use crate::compose::{Known, Names, PathFound};
 use crate::features::{self, Feature, Features};
@@ -1123,12 +1123,13 @@ const MAKERS: &[Make] = &[
     |g| {
         let events = g.rng.coin().then(|| (0..g.rng.below(4)).map(|_| g.meeting()).collect());
         let day = g.m.now - g.m.now % 86_400_000;
-        Action::CalendarRead { events, days: [0, 1, 2].map(|n: u64| day.saturating_add(n * 86_400_000)), at: g.time() }
+        let days = std::array::from_fn(|n| day.saturating_add(n as u64 * 86_400_000).saturating_sub(7 * 86_400_000));
+        Action::CalendarRead { events, days, at: g.time() }
     },
     |g| Action::CallSeen { in_call: g.rng.pick(&[None, Some(true), Some(false)]), at: g.time() },
     |g| Action::CalendarDismiss { id: g.meeting_id() },
     |g| Action::CalendarJoin { id: g.meeting_id() },
-    |_| Action::CalendarTomorrow,
+    |g| Action::CalendarDay { step: g.rng.pick(&[DayStep::Back, DayStep::Forward, DayStep::Today]) },
     // Random flags: what a feature turned off shows goes, and its actions do nothing (`Run::step`).
     |g| {
         let on: Vec<&str> = features::ALL.into_iter().filter(|_| g.rng.coin()).map(Feature::name).collect();
@@ -1237,6 +1238,7 @@ fn check(m: &Model) -> Result<(), String> {
     let calendar_shown =
         m.sidebar == Some(Section::Calendar) || m.rail_focus == Some(zones::RailFocus::Left(Section::Calendar));
     ensure!(!calendar_shown || m.calendar.on, "the Calendar section with no feed");
+    ensure!((-7..=7).contains(&m.calendar.day), "the Calendar's day {} is not held", m.calendar.day);
     // "Paste 4 lines?" is a question of its own, and only of text with a line break.
     if let Some(confirm) = m.confirm.as_ref().filter(|c| c.paste.is_some()) {
         let alone = confirm.running.is_empty() && confirm.dismiss.is_none();
@@ -3007,6 +3009,7 @@ fn code(sent: &Envelope) -> String {
         ("id", "Subject"),
         ("shows", "View"),
         ("show", "Show"),
+        ("step", "DayStep"),
     ];
     // A mark is long, and half of it is JSON already: it is given as its file's text.
     if let Action::RestoreMarks { marks, extra } = &sent.action {

@@ -15,6 +15,8 @@ const DAY: i64 = 86_400;
 pub const MAX_DAYS: i64 = 7;
 /// Days the feed's reads hold, from the start of today: today and the next `MAX_DAYS`.
 pub const HELD_DAYS: i64 = MAX_DAYS + 1;
+/// Days before today the feed's reads hold too, for the Calendar section and this request.
+pub const BACK_DAYS: i64 = 7;
 /// Meetings in one reply; `more` counts those left out.
 pub const MAX_MEETINGS: usize = 200;
 
@@ -76,27 +78,31 @@ pub fn reply(
     serde_json::to_value(answer(calendar, span, workday, local)).map_err(|_| "the calendar could not be written")
 }
 
-/// Local midnight of today and of `HELD_DAYS` later (UTC seconds): the span the feed's reads hold.
-pub fn held(now: i64, local: &Table) -> (i64, i64) {
+/// Local midnight `BACK_DAYS` before today, of today and of `HELD_DAYS` later (UTC seconds): the
+/// days the feed's reads hold, the past and today on.
+pub fn held(now: i64, local: &Table) -> (i64, i64, i64) {
     let today = ics::local_day(now, local);
-    (local.to_utc(today * DAY), local.to_utc((today + HELD_DAYS) * DAY))
+    let at = |day: i64| local.to_utc(day * DAY);
+    (at(today - BACK_DAYS), at(today), at(today + HELD_DAYS))
 }
 
-/// The span asked for, in UTC seconds: local midnight of `day` (`today`, the default, `tomorrow`
-/// or `YYYY-MM-DD`) to that of `days` (1 to 7, default 1) later. Only within the days held.
+/// The span asked for, in UTC seconds: local midnight of `day` (`today`, the default, `tomorrow`,
+/// `yesterday` or `YYYY-MM-DD`) to that of `days` (1 to 7, default 1) later. Only within the days
+/// held.
 pub fn span(day: Option<&str>, days: Option<u32>, now: i64, local: &Table) -> Result<(i64, i64), &'static str> {
     let today = ics::local_day(now, local);
     let first = match day.unwrap_or("today") {
         "today" => today,
         "tomorrow" => today + 1,
-        date => date_day(date).ok_or("day is today, tomorrow or a date such as 2026-11-16")?,
+        "yesterday" => today - 1,
+        date => date_day(date).ok_or("day is today, tomorrow, yesterday or a date such as 2026-11-16")?,
     };
     let count = i64::from(days.unwrap_or(1));
     if !(1..=MAX_DAYS).contains(&count) {
         return Err("days is 1 to 7");
     }
-    if first < today || first + count > today + HELD_DAYS {
-        return Err("the calendar holds today and the next 7 days only");
+    if first < today - BACK_DAYS || first + count > today + HELD_DAYS {
+        return Err("the calendar holds the 7 days before today, today and the next 7 only");
     }
     Ok((local.to_utc(first * DAY), local.to_utc((first + count) * DAY)))
 }

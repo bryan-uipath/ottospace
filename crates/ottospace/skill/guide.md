@@ -118,7 +118,7 @@ ottospace ctl '{"cmd":"state"}'
 | `state.back_to` | Null, or the app pane the capture key took the keyboard from |
 | `capture` | `key` (the registered capture key, or null), `bar` and `picture` (where the right bar and the picture being annotated are drawn), `encoded`, `pending` (pictures asked for and not taken yet), `dir` (the draft's folder, or null) and `brief` |
 | `state.mark_input` | Null, or what a mark waits for while `mode` is `mark`: `{"type":"jump"}` (⌘' was pressed: the next letter goes to that mark), `{"type":"rename","mark":1,"text":".."}` or `{"type":"set_key","mark":1}`. Also `{"type":"workbook","workbook":1,"text":".."}` (with `"tab":0`: the title of that tab of it): the user is typing a workbook's name, and your keys are refused until they finish |
-| `calendar` | The user's meeting timeline, if they set a calendar feed: `on`, `events_today`, `all_day_today`, `events_tomorrow`, `next_start` (ms since 1970, or null), `stage` (`far`, `approaching`, `imminent`, `running`, or null), `updated`, `stale` (the last read failed), `in_call`, `bars`, `band` (the band above the status bar in window points: `rect`, `span` and `workday` as two times, its two `marks`, `now`, each of `blocks` with its `start`, `end` and `rect`, and `status_bar`; null without a feed) and `banner` (where its buttons are, while a meeting runs and the user is in no call or in an earlier one). Counts, times and stages only: every reply carries the state, so titles and places are not in it; read them with `calendar` (below). Links and the feed's address are not readable over the socket. Joining and dismissing are the user's alone: a key, click or label you send for them is refused. `rows`, `rail` (`none`, `near`, `alert`) and `tomorrow_open` describe the Calendar section (`state.sidebar` `calendar`, a rail cell only while a feed is set); its rows' content is not readable over the socket, and ↵ on a row from you opens nothing |
+| `calendar` | The user's meeting timeline, if they set a calendar feed: `on`, `events_today`, `all_day_today`, `events_tomorrow`, `next_start` (ms since 1970, or null), `stage` (`far`, `approaching`, `imminent`, `running`, or null), `updated`, `stale` (the last read failed), `in_call`, `bars`, `band` (the band above the status bar in window points: `rect`, `span` and `workday` as two times, its two `marks`, `now`, each of `blocks` with its `start`, `end` and `rect`, and `status_bar`; null without a feed) and `banner` (where its buttons are, while a meeting runs and the user is in no call or in an earlier one). Counts, times and stages only: every reply carries the state, so titles and places are not in it; read them with `calendar` (below). Links and the feed's address are not readable over the socket. Joining and dismissing are the user's alone: a key, click or label you send for them is refused. `rows`, `rail` (`none`, `near`, `alert`), `day` (the day shown, 0 today, -1 yesterday), `day_start` and `nav` (its ‹, › and Today, the last only off today) describe the Calendar section (`state.sidebar` `calendar`, a rail cell only while a feed is set); its rows' content is not readable over the socket, and ↵ on a row from you opens nothing |
 | `bounds.<id>` | Where each pane of the active tab is drawn: `[x, y, w, h]` |
 | `frame` | `number` (frames drawn), `seq` (actions handled), `drawn` (how many of them the last frame drew), `waited_ms` and `window` (the window's number, or null). While `drawn` is below `seq`, what is drawn (`bounds`, `headers`, rows) may be a frame old |
 
@@ -436,14 +436,15 @@ The user's calendar (if they set a calendar feed):
 ```sh
 ottospace ctl '{"cmd":"calendar"}'
 ottospace ctl '{"cmd":"calendar","day":"tomorrow"}'
+ottospace ctl '{"cmd":"calendar","day":"yesterday"}'
 ottospace ctl '{"cmd":"calendar","day":"2026-11-16","days":5}'
 ```
 
 Use it to plan around the user's meetings, to answer "am I free at 3?", and before you interrupt
 them: a meeting that runs and `in_call` true mean they are in a call. It does not reply with the
-state. `day` is `today` (the default), `tomorrow` or a date; `days` is 1 to 7 (default 1). The
-app holds today and the next 7 days, read from the feed on its own schedule: the request never
-makes it fetch, and a span outside those days is refused. With no feed set the reply is
+state. `day` is `today` (the default), `tomorrow`, `yesterday` or a date; `days` is 1 to 7
+(default 1). The app holds the 7 days before today, today and the next 7, read from the feed on
+its own schedule: the request never makes it fetch, and a span outside those days is refused. With no feed set the reply is
 `{"ok":true,"configured":false}` and nothing else. Otherwise:
 
 - `updated`: when the feed was last read whole; `stale` true: the last read failed, and what

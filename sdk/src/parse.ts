@@ -1464,6 +1464,15 @@ function band(value: unknown, at: string): NonNullable<Snapshot["calendar"]["ban
   };
 }
 
+function nav(value: unknown, at: string): Snapshot["calendar"]["nav"] {
+  const o = fields(value, at);
+  return {
+    back: orNull(rect)(o.back, `${at}.back`),
+    forward: orNull(rect)(o.forward, `${at}.forward`),
+    today: orNull(rect)(o.today, `${at}.today`),
+  };
+}
+
 function calendar(value: unknown, at: string): Snapshot["calendar"] {
   const o = fields(value, at);
   const banner = (v: unknown, at: string) => {
@@ -1487,7 +1496,9 @@ function calendar(value: unknown, at: string): Snapshot["calendar"] {
     joins: orNull(num)(o.joins, `${at}.joins`),
     rows: num(o.rows, `${at}.rows`),
     rail: railMark(o.rail, `${at}.rail`),
-    tomorrow_open: bool(o.tomorrow_open, `${at}.tomorrow_open`),
+    day: num(o.day, `${at}.day`),
+    day_start: num(o.day_start, `${at}.day_start`),
+    nav: nav(o.nav, `${at}.nav`),
   };
 }
 

@@ -5,6 +5,7 @@ use gpui::{
     Context, InteractiveElement, IntoElement, KeyDownEvent, Keymap, Keystroke, ParentElement, Styled, Window, actions,
     div, px, rgb,
 };
+use ottospace_core::calendar::DayStep;
 use ottospace_core::commands::{Command, FeatureChoice, Palette, TaskChoice};
 use ottospace_core::keys::FilterKey;
 use ottospace_core::{Action, theme};
@@ -28,7 +29,10 @@ actions!(
         AxInspector,
         InspectorFilter,
         InspectorRefresh,
-        BringBack
+        BringBack,
+        CalendarBack,
+        CalendarForward,
+        CalendarToday
     ]
 );
 
@@ -88,6 +92,9 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::InspectorFilter => Box::new(InspectorFilter),
         Command::InspectorRefresh => Box::new(InspectorRefresh),
         Command::CopyState => Box::new(CopyState),
+        Command::CalendarBack => Box::new(CalendarBack),
+        Command::CalendarForward => Box::new(CalendarForward),
+        Command::CalendarToday => Box::new(CalendarToday),
         Command::OpenSettings => Box::new(OpenSettings),
         Command::OpenFolder => Box::new(OpenFolder),
         Command::BringBack => Box::new(BringBack),
@@ -123,6 +130,11 @@ fn key_text(stroke: &Keystroke) -> String {
 }
 
 impl Workspace {
+    /// The Calendar's day, from the palette or the View menu.
+    fn calendar_step(&mut self, step: DayStep, window: &Window, cx: &mut Context<Self>) {
+        self.dispatch(Action::CalendarDay { step }, self.input, window, cx);
+    }
+
     /// The palette's actions and the Developer menu's, on the workspace's root element.
     pub fn command_actions<E: InteractiveElement>(&self, root: E, cx: &mut Context<Self>) -> E {
         root.on_action(cx.listener(|this, _: &CommandPalette, window, cx| this.toggle_palette(window, cx)))
@@ -138,6 +150,13 @@ impl Workspace {
                 this.dispatch(Action::PaletteFeatures, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &EditSettings, window, cx| this.edit_settings(window, cx)))
+            .on_action(cx.listener(|this, _: &CalendarBack, window, cx| this.calendar_step(DayStep::Back, window, cx)))
+            .on_action(
+                cx.listener(|this, _: &CalendarForward, window, cx| this.calendar_step(DayStep::Forward, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &CalendarToday, window, cx| this.calendar_step(DayStep::Today, window, cx)),
+            )
             .on_action(cx.listener(|this, _: &AxInspector, window, cx| this.toggle_inspector(window, cx)))
             .on_action(
                 cx.listener(|this, _: &InspectorFilter, window, cx| this.inspector_command("filter", window, cx)),

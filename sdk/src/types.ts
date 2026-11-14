@@ -1168,10 +1168,14 @@ export interface Snapshot {
     banner: { join: Rect | null; dismiss: Rect | null } | null;
     alerts: number;
     joins: number | null;
-    /** The Calendar section's rows, its rail cell's mark, and whether "Tomorrow" is unfolded. */
+    /** The Calendar section's rows (the timed meetings of its day), its rail cell's mark. */
     rows: number;
     rail: "none" | "near" | "alert";
-    tomorrow_open: boolean;
+    /** The day shown, from today (0; -1 yesterday, 7 back to 7 on), and its local midnight (ms). */
+    day: number;
+    day_start: number;
+    /** Its header's ‹ and ›, and Today while on another day. */
+    nav: { back: Rect | null; forward: Rect | null; today: Rect | null };
   };
   /**
    * Frames drawn (`number`), actions dispatched (`seq`) and how many of them the last frame drew
@@ -1450,7 +1454,7 @@ export interface WaitArgs {
   timeout_ms?: number;
 }
 export interface CalendarArgs {
-  /** `today` (the default), `tomorrow` or `YYYY-MM-DD`: today or one of the next 7 days. */
+  /** `today` (the default), `tomorrow`, `yesterday` or `YYYY-MM-DD`: a day from 7 back to 7 on. */
   day?: string;
   /** Days from `day`, 1 to 7 (default 1), within the days held. */
   days?: number;

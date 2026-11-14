@@ -27,6 +27,7 @@ use gpui::{
     prelude::*, px, quad, relative, rgb, size, surface, svg, transparent_black,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+use ottospace_core::calendar::DayStep;
 use ottospace_core::clip::{self, Verb};
 use ottospace_core::compose;
 use ottospace_core::edit::{self, Edit};
@@ -3448,11 +3449,18 @@ impl Workspace {
             Some(ListKey::Pin) => Action::ListPin,
             Some(ListKey::Filter) => Action::AppsFilter { on: true },
             Some(ListKey::Leave) => Action::LeaveList,
-            // On a rail ← and → cross zones; on a row they do nothing.
+            // On a rail ← and → cross zones; in the Calendar they change its day; elsewhere nothing.
             Some(ListKey::Side(side)) if self.model.rail_focus.is_some() => {
                 Action::FocusDir { dir: if side < 0 { Dir::Left } else { Dir::Right } }
             }
-            Some(ListKey::Side(_)) | None => return,
+            Some(ListKey::Side(side)) if self.model.sidebar == Some(Section::Calendar) => {
+                let step = if side < 0 { DayStep::Back } else { DayStep::Forward };
+                Action::CalendarDay { step }
+            }
+            Some(ListKey::Today) if self.model.sidebar == Some(Section::Calendar) => {
+                Action::CalendarDay { step: DayStep::Today }
+            }
+            Some(ListKey::Side(_) | ListKey::Today) | None => return,
         };
         self.dispatch(action, self.input, window, cx);
         if let Some(child) = self.selected_child() {
@@ -3481,8 +3489,11 @@ impl Workspace {
             // The offer to put a mark back, if it shows, is above the rows.
             Some(Section::Marks) => return Some(at + usize::from(self.mark_offered().is_some())),
             Some(Section::Workbook) => return Some(at + usize::from(self.model.workbooks.offered().is_some())),
-            // "Nothing today" is above the rows when the day is empty.
-            Some(Section::Calendar) => return Some(at + usize::from(self.model.calendar.today().next().is_none())),
+            // The day's all-day line is above the rows.
+            Some(Section::Calendar) => {
+                let calendar = &self.model.calendar;
+                return Some(at + usize::from(calendar.on(calendar.day).any(|e| e.all_day)));
+            }
             _ => return Some(at),
         }
         // The offer to undo, if it shows; how to add a task, if none is listed; then the headings
@@ -3952,6 +3963,7 @@ impl Workspace {
                 badge.line_height(px(16.)).text_color(rgb(theme::task(Group::NeedsYou))).child(n.to_string())
             }))
             .children((section == Section::Tasks).then(|| self.tasks_view_switch(cx)))
+            .children((section == Section::Calendar).then(|| self.calendar_day_switch(cx)))
             .child(div().flex_1())
             .children(add.map(|(tip, mark)| {
                 button("bar-add", "icons/plus.svg", tip)

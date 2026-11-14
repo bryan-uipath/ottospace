@@ -32,6 +32,20 @@ const MAX_TITLE: usize = 120;
 const MAX_LINK: usize = 2_000;
 /// Events kept of the days held (`reply::HELD_DAYS`): as many as one expansion gives.
 const MAX_EVENTS: usize = crate::ics::MAX_OCCURRENCES;
+/// Days held before today, and the local midnights the model knows: from `BACK` days before today
+/// to the end of the last day held. Today starts at `days[BACK]`.
+pub const BACK: usize = reply::BACK_DAYS as usize;
+pub const DAYS: usize = BACK + reply::HELD_DAYS as usize + 1;
+/// The Calendar section's day, from today: `BACK` days back to `reply::MAX_DAYS` ahead.
+const AHEAD: i32 = reply::MAX_DAYS as i32;
+
+/// A step of the Calendar section's day.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DayStep {
+    Back,
+    Forward,
+    Today,
+}
 
 /// One occurrence of an event, as shown. Times in milliseconds since 1970.
 #[derive(Clone, Debug, PartialEq)]
@@ -375,6 +389,15 @@ pub fn clock(ms: u64, offset: i64) -> String {
     format!("{:02}:{:02}", minutes.rem_euclid(1_440) / 60, minutes.rem_euclid(60))
 }
 
+/// `Mon 16 Nov`: the date of `ms` in a zone `offset` seconds east of UTC.
+pub fn day_name(ms: u64, offset: i64) -> String {
+    let day = ((ms / 1_000) as i64 + offset).div_euclid(86_400);
+    let (_, month, date) = crate::ics::civil(day);
+    let weekday = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"][day.rem_euclid(7) as usize];
+    let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    format!("{weekday} {date} {}", months[(month - 1).clamp(0, 11) as usize])
+}
+
 /// What a block's hover card says: `Design review`, `09:00–09:30 · 30m · Room 4`, `Zoom link ·
 /// tentative`.
 pub fn describe(event: &Event, offset: i64) -> String {
@@ -672,8 +695,8 @@ pub struct Calendar {
     pub notify: bool,
     /// `calendar_notify_for: "links"`: only an event with a Zoom, Meet or Teams link alerts.
     pub links_only: bool,
-    /// The events of today and the next 7 days (`reply::HELD_DAYS`), by start; without free
-    /// ones while `hide_free`.
+    /// The events of the 7 days before today, today and the next 7 (`reply::HELD_DAYS`), by
+    /// start; without free ones while `hide_free`.
     pub events: Vec<Event>,
     /// As read, free ones too.
     received: Vec<Event>,
@@ -681,8 +704,8 @@ pub struct Calendar {
     pub hide_free: bool,
     /// `calendar_colors`, in order.
     pub rules: Vec<ColorRule>,
-    /// Local midnight of today, tomorrow and the day after, in milliseconds.
-    pub days: [u64; 3],
+    /// Local midnights in milliseconds, `BACK` days before today on (`DAYS`).
+    pub days: [u64; DAYS],
     /// When the feed was last read whole.
     pub updated: Option<u64>,
     /// The last read failed: `events` are of the one before.
@@ -694,8 +717,9 @@ pub struct Calendar {
     alerts: Vec<Alert>,
     /// Alerts given this run (both of an event count), for a test.
     pub given: u32,
-    /// The Calendar section's "Tomorrow" group is unfolded.
-    pub tomorrow_open: bool,
+    /// The Calendar section's day, from today: 0 is today, -1 yesterday. Back to today when the
+    /// day turns.
+    pub day: i32,
 }
 
 /// What the Calendar's rail cell shows.
@@ -710,7 +734,10 @@ pub enum RailMark {
 
 impl Calendar {
     /// A read of the feed: its events, or `None` when it failed (the last ones stay).
-    pub fn read(&mut self, events: Option<Vec<Event>>, days: [u64; 3], at: u64) {
+    pub fn read(&mut self, events: Option<Vec<Event>>, days: [u64; DAYS], at: u64) {
+        if days[BACK] != self.days[BACK] {
+            self.day = 0;
+        }
         self.days = days;
         match events {
             Some(mut events) => {
@@ -751,15 +778,35 @@ impl Calendar {
         paint(event, stage, glow(stage, now, reduced), &self.rules)
     }
 
-    /// Today's events, by start: those that overlap today.
-    pub fn today(&self) -> impl Iterator<Item = &Event> {
-        let [start, end, _] = self.days;
+    /// The day `from` today, midnight to midnight (ms): 0 today. Before the first read, nothing.
+    pub fn span(&self, from: i32) -> (u64, u64) {
+        let at = |n: i32| usize::try_from(BACK as i32 + n).ok().and_then(|n| self.days.get(n)).copied().unwrap_or(0);
+        (at(from), at(from + 1))
+    }
+
+    /// The events that overlap the day `from` today, by start.
+    pub fn on(&self, from: i32) -> impl Iterator<Item = &Event> {
+        let (start, end) = self.span(from);
         self.events.iter().filter(move |e| overlaps(e, start, end))
     }
 
+    /// Today's events, by start: those that overlap today.
+    pub fn today(&self) -> impl Iterator<Item = &Event> {
+        self.on(0)
+    }
+
     pub fn tomorrow(&self) -> impl Iterator<Item = &Event> {
-        let [_, start, end] = self.days;
+        let (start, end) = self.span(1);
         self.events.iter().filter(move |e| e.start < end && e.start >= start)
+    }
+
+    /// The Calendar section's day moved a step, within the days held.
+    pub fn step(&mut self, step: DayStep) {
+        self.day = match step {
+            DayStep::Back => (self.day - 1).max(-(BACK as i32)),
+            DayStep::Forward => (self.day + 1).min(AHEAD),
+            DayStep::Today => 0,
+        };
     }
 
     /// The event the now marker's card names: one that starts within `APPROACHING`, else one that
@@ -776,23 +823,25 @@ impl Calendar {
         near.or(running).or(timed.first()).copied()
     }
 
-    /// The Calendar section's rows: today's all-day events, then today's others by start, then the
-    /// "Tomorrow" group, and tomorrow's events (all-day first) while it is unfolded.
+    /// The Calendar section's rows: the timed meetings of its day, by start. Its all-day events
+    /// are one line above them, no row.
     pub fn agenda(&self) -> Vec<crate::list::ListRow> {
-        use crate::list::ListRow;
-        let ordered = |events: Vec<&Event>| {
-            let (all_day, timed): (Vec<&Event>, Vec<&Event>) = events.into_iter().partition(|e| e.all_day);
-            all_day.into_iter().chain(timed).map(|e| ListRow::Meeting(e.id)).collect::<Vec<_>>()
-        };
-        let mut rows = ordered(self.today().collect());
-        let tomorrow: Vec<&Event> = self.tomorrow().collect();
-        if !tomorrow.is_empty() {
-            rows.push(ListRow::MeetingsTomorrow);
-            if self.tomorrow_open {
-                rows.extend(ordered(tomorrow));
+        self.on(self.day).filter(|e| !e.all_day).map(|e| crate::list::ListRow::Meeting(e.id)).collect()
+    }
+
+    /// The one quiet fact at a row's end: `now` while it runs, `in 12m` for the next one within
+    /// the hour, else nothing. Only on today.
+    pub fn row_fact(&self, event: &Event, now: u64) -> Option<String> {
+        let next = self.today().filter(|e| !e.all_day && e.start > now).map(|e| e.start).min();
+        match stage(event, now) {
+            _ if self.day != 0 || event.all_day => None,
+            Stage::Running => Some("now".into()),
+            Stage::Past => None,
+            _ if Some(event.start) == next && event.start - now <= 60 * MINUTE => {
+                Some(format!("in {}", span(event.start - now)))
             }
+            _ => None,
         }
-        rows
     }
 
     /// The rail cell's mark: the alert's badge, else a dot while a meeting is imminent or runs.
@@ -819,7 +868,7 @@ impl Calendar {
 
     /// Today's band and what is on it. `offset(t)`: the local zone's at `t`, seconds east of UTC.
     pub fn band(&self, workday: Workday, now: u64, offset: &dyn Fn(u64) -> i64) -> Layout {
-        let today = (self.days[0], self.days[1]);
+        let today = self.span(0);
         layout(&self.events, today, band(&self.events, today, workday, offset), now)
     }
 

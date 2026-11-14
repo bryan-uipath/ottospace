@@ -123,6 +123,9 @@ commands! {
     VisualMode: "Select with the Keyboard", View;
     Zoom: "Fill the Screen", View;
     ShowKeys: "Keys", View;
+    CalendarBack: "Previous Day in Calendar", View;
+    CalendarForward: "Next Day in Calendar", View;
+    CalendarToday: "Today in Calendar", View;
     AxOverlay: "Accessibility Overlay", Developer;
     AxInspector: "Accessibility Inspector", Developer;
     InspectorFilter: "Filter the Accessibility Inspector", Developer;
