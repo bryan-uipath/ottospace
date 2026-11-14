@@ -2355,9 +2355,9 @@ pub struct Model {
     pub calendar: Calendar,
     /// The features that are on (`SetFeatures`). In the state, their names.
     pub features: Features,
-    /// The pane Open Settings opened, while it may still be there.
+    /// The pane Open Settings opened (or a restore opened again), while it may still be there.
     #[serde(skip)]
-    settings_pane: Option<PaneId>,
+    pub(crate) settings_pane: Option<PaneId>,
     /// What the status bar says of `settings.json` (`settings_line`).
     #[serde(skip)]
     settings_file: crate::settings::Watch,

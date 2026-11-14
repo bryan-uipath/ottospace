@@ -1003,6 +1003,10 @@ const MAKERS: &[Make] = &[
             saved.tab.panes.iter_mut().for_each(|pane| pane.cwd = Some(g.name(DIRS)));
             saved.marks = vec![layout_file::MarkLink { id: g.name(UIDS), pane: g.rng.coin().then(|| g.stray()) }];
         }
+        // A Settings mark on a tab, on what may be no pane of it or no terminal.
+        if let Some(saved) = layout.tabs.last_mut().filter(|_| g.rng.one_in(3)) {
+            saved.settings = Some(g.rng.pick(&[1, 2, 99]));
+        }
         layout.selected = g.rng.coin().then(|| g.rng.pick(&[0, 1, 2, 99]));
         layout.drawer.task = g.rng.coin().then(|| g.task());
         let layout = layout_file::parse(&layout_file::write(&layout)).unwrap_or(layout);
@@ -2325,8 +2329,11 @@ impl Run {
                 Effect::EditSettings { pane } => {
                     let opened = effects.contains(&Effect::Opened(*pane));
                     let terminal = m.pane(*pane).is_some_and(|p| p.kind == Kind::Terminal);
+                    // Or the layout file's Settings tab, read by the shell at start.
+                    let restored = origin == Origin::System && matches!(action, Action::RestoreLayout { .. });
+                    let users = user && matches!(action, Action::EditSettings);
                     ensure!(
-                        user && opened && terminal && matches!(action, Action::EditSettings),
+                        opened && terminal && (users || restored) && m.settings_pane == Some(*pane),
                         "{origin:?} ran the editor in pane {pane}: {action:?}"
                     );
                 }
