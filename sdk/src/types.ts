@@ -945,6 +945,8 @@ export interface Snapshot {
   tab_panes: PaneId[][];
   /** ottospace's own window frame. */
   window: Rect;
+  /** Whether that window has the keyboard. */
+  window_active: boolean;
   /** Where parked windows go: `[x, y]`. */
   parking: [number, number];
   return_key: string | null;

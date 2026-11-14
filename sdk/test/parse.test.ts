@@ -59,6 +59,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     shown: {},
     tab_panes: [[]],
     window: [1907, 985, 1400, 900],
+    window_active: false,
     parking: [1919, 1079],
     return_key: null,
     version: "0.1.0 · local",

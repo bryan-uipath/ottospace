@@ -2520,6 +2520,8 @@ impl Workspace {
             "tab_panes": self.model.tab_panes(),
             // ottospace's own window frame, so a test can turn pane bounds into screen positions.
             "window": frame,
+            // Whether that window has the keyboard: a user's wheel over a parked app pane peeks only then.
+            "window_active": window.is_window_active(),
             // Where parked windows go, so a test can tell "parked" from "moved somewhere".
             "parking": [parking.x, parking.y],
             // The registered return key, or null if there is none.
@@ -2614,6 +2616,9 @@ impl Workspace {
                 // none).
                 "wheels": self.wheel.over,
                 "peeks": self.wheel.peeks,
+                // Scrolls that asked for none: with the left button down, or the window not active.
+                "wheels_held": self.wheel.held,
+                "wheels_inactive": self.wheel.inactive,
                 "peek": self.model.peek.as_ref().map_or(0, |peek| peek.pane),
             })),
             // Test runs only: each press in an app a sneak label asked for, `[pane, path]`; else null.
