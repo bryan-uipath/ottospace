@@ -1,0 +1,5 @@
+{"type":"_fixture","note":"SYNTHETIC: no recording of this shape. A retry, then a turn that fails, from the headless docs' system/api_retry and the SDK's result error subtypes; then a result subtype and a record type no rule knows."}
+{"type":"system","subtype":"api_retry","attempt":1,"max_retries":10,"retry_delay_ms":500,"error_status":529,"error":"overloaded","uuid":"00000000-0000-4000-8000-000000000201","session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003"}
+{"type":"result","subtype":"error_during_execution","is_error":true,"duration_ms":1,"num_turns":1,"session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003","uuid":"00000000-0000-4000-8000-000000000202"}
+{"type":"result","subtype":"error_made_up_kind","is_error":true,"session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003","uuid":"00000000-0000-4000-8000-000000000203"}
+{"type":"made_up_error","error":"made_up_code","session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003"}
