@@ -766,13 +766,6 @@ impl Workspace {
             .child(new)
     }
 
-    /// ⌘⌃1 … ⌘⌃9: the nth conversation of the right rail, as a click on its cell.
-    pub(crate) fn rail_key(&mut self, n: usize, window: &Window, cx: &mut Context<Self>) {
-        if let Some(cell) = self.model.rail().into_iter().nth(n) {
-            self.dispatch(Action::TalkPick { id: cell.task }, self.input, window, cx);
-        }
-    }
-
     /// About once a second while an agent's session is not known (`Model::seeking`): reads, on a
     /// thread of its own, the sessions their runners wrote in those folders, and tells the core
     /// (`AgentSessions`), which links each agent to its own.
