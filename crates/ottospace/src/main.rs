@@ -1991,7 +1991,7 @@ impl Workspace {
                     let _ = reply.send(serde_json::json!({ "ok": true, "marks": self.marks_json() }).to_string());
                     continue;
                 }
-                Request::CalendarCall { in_call } => Some(Action::CallSeen { in_call }),
+                Request::CalendarCall { in_call } => Some(Action::CallSeen { in_call, at: now_ms() }),
                 Request::Trace => {
                     let _ = reply.send(serde_json::json!({ "ok": true, "trace": trace::jsonl() }).to_string());
                     continue;

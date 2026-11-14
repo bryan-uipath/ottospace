@@ -1084,7 +1084,7 @@ const MAKERS: &[Make] = &[
         let day = g.m.now - g.m.now % 86_400_000;
         Action::CalendarRead { events, days: [0, 1, 2].map(|n: u64| day.saturating_add(n * 86_400_000)), at: g.time() }
     },
-    |g| Action::CallSeen { in_call: g.rng.pick(&[None, Some(true), Some(false)]) },
+    |g| Action::CallSeen { in_call: g.rng.pick(&[None, Some(true), Some(false)]), at: g.time() },
     |g| Action::CalendarDismiss { id: g.meeting_id() },
     |g| Action::CalendarJoin { id: g.meeting_id() },
     |_| Action::CalendarTomorrow,
@@ -1179,7 +1179,7 @@ fn check(m: &Model) -> Result<(), String> {
     // The meeting banner is of an event that runs, with no call on.
     if let Some(event) = m.calendar.banner(m.now) {
         ensure!(calendar::stage(event, m.now) == calendar::Stage::Running, "a banner for an event that does not run");
-        ensure!(m.calendar.in_call != Some(true), "a banner while a call is on");
+        ensure!(m.calendar.in_call != Some(true) || m.calendar.in_other_call(event), "a banner in the meeting's call");
     }
     // Native conversations: live only while their agent runs; a card only while live; a
     // Deny's message only over a card; one transcript each.

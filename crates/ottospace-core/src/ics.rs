@@ -7,7 +7,8 @@
 //! VTIMEZONE with STANDARD and DAYLIGHT. An RDATE period (`VALUE=PERIOD`) counts by its start,
 //! with the event's own length; an RDATE of a whole day for a timed event, or the other way, is
 //! left out. A rule with another part (BYWEEKNO, BYYEARDAY, BYHOUR...) gives its first occurrence
-//! only. VTODO, VJOURNAL and attendees are not read.
+//! only. VTODO and VJOURNAL are not read. Of ATTENDEE lines, only the user's own PARTSTAT, when
+//! the caller names the user's address (`parse_for`): no other attendee is kept.
 
 /// The most of a feed that is read: the rest is left out.
 pub const MAX_BYTES: usize = 5 * 1024 * 1024;
@@ -18,6 +19,8 @@ const MAX_VALUE: usize = 4_000;
 /// Dates of one EXDATE list, and of all of an event's; the same for RDATE.
 const MAX_EXDATES: usize = 1_000;
 const MAX_RDATES: usize = 1_000;
+/// ATTENDEE lines of one event looked at for the user's own.
+const MAX_ATTENDEES: usize = 1_000;
 /// Occurrences one expansion returns.
 pub const MAX_OCCURRENCES: usize = 500;
 /// The longest event: a longer one is cut to this.
@@ -84,6 +87,9 @@ pub struct Event {
     exdates: Vec<When>,
     rdates: Vec<When>,
     recurrence_id: Option<When>,
+    /// The user's own ATTENDEE line: whether it says DECLINED. `None`: no line for the user.
+    declined: Option<bool>,
+    attendees: usize,
 }
 
 impl Event {
@@ -165,6 +171,11 @@ pub struct Occurrence {
 
 /// Reads a feed. Anything it cannot read is left out; it never fails.
 pub fn parse(text: &str) -> Feed {
+    parse_for(text, None)
+}
+
+/// As `parse`, and an event `me` (the user's address) declined is left out of `expand`.
+pub fn parse_for(text: &str, me: Option<&str>) -> Feed {
     let text = cut(text, MAX_BYTES);
     let mut feed = Feed::default();
     let mut path: Vec<String> = Vec::new();
@@ -213,7 +224,7 @@ pub fn parse(text: &str) -> Feed {
                 match here {
                     Some("VEVENT") => {
                         if let Some(event) = event.as_mut() {
-                            event_property(event, &name, &params, value);
+                            event_property(event, &name, &params, value, me);
                         }
                     }
                     Some("VTIMEZONE") if name == "TZID" => {
@@ -299,7 +310,8 @@ pub fn expand_counted(feed: &Feed, from: i64, to: i64, zones: &Zones) -> (Vec<Oc
             earliest(&mut out);
         }
         let Some(start) = event.start.as_ref() else { continue };
-        if event.cancelled {
+        // An override declined or cancelled hides its occurrence only; a series, all but overrides.
+        if event.cancelled || event.declined == Some(true) {
             continue;
         }
         let all_day = matches!(start, When::Date(_));
@@ -622,7 +634,7 @@ fn month_len(y: i64, m: i64) -> i64 {
     }
 }
 
-fn event_property(event: &mut Event, name: &str, params: &[(String, String)], value: &str) {
+fn event_property(event: &mut Event, name: &str, params: &[(String, String)], value: &str, me: Option<&str>) {
     let zone = || param(params, "TZID").map(|z| cut(z.trim_start_matches('/'), 200).to_string());
     let date = param(params, "VALUE").is_some_and(|v| v.eq_ignore_ascii_case("DATE"));
     match name {
@@ -637,6 +649,18 @@ fn event_property(event: &mut Event, name: &str, params: &[(String, String)], va
         "DURATION" => event.duration = duration(value),
         "RRULE" => event.rule = rule(value),
         "RECURRENCE-ID" => event.recurrence_id = when(value, zone(), date),
+        "ATTENDEE" if event.attendees < MAX_ATTENDEES => {
+            event.attendees += 1;
+            let address = |a: &str| {
+                let a = a.trim();
+                let bare = a.get(..7).filter(|s| s.eq_ignore_ascii_case("mailto:")).map_or(a, |_| &a[7..]);
+                me.is_some_and(|me| !me.is_empty() && bare.eq_ignore_ascii_case(me.trim()))
+            };
+            // The first line that is the user's counts.
+            if event.declined.is_none() && (address(value) || param(params, "EMAIL").is_some_and(address)) {
+                event.declined = Some(param(params, "PARTSTAT").is_some_and(|p| p.eq_ignore_ascii_case("DECLINED")));
+            }
+        }
         "EXDATE" => dates(&mut event.exdates, MAX_EXDATES, value, zone, date),
         "RDATE" => dates(&mut event.rdates, MAX_RDATES, value, zone, date),
         _ => {}
@@ -863,7 +887,12 @@ fn content(line: &str) -> Option<Line<'_>> {
         *c == ':' && !quoted
     })?;
     let (head, value) = (&line[..colon.0], &line[colon.0 + 1..]);
-    let mut parts = head.split(';');
+    // Split at `;` outside quotes: `CN="a;PARTSTAT=DECLINED"` is one parameter.
+    let mut quoted = false;
+    let mut parts = head.split(|c| {
+        quoted ^= c == '"';
+        c == ';' && !quoted
+    });
     let name = parts.next()?.trim().to_ascii_uppercase();
     if name.is_empty() || name.len() > 64 {
         return None;

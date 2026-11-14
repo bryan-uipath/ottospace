@@ -24,6 +24,9 @@ pub const REPEAT: u64 = 2 * MINUTE;
 pub const ALERT_WINDOW: u64 = 10 * MINUTE;
 /// Whether a call is on is looked at from this long before a start.
 const WATCH_BEFORE: u64 = MINUTE;
+/// A call first seen less than this before a start is taken for that meeting, joined early; one
+/// on from before is another call (the meeting before, running over), and the meeting alerts.
+const JOINED_EARLY: u64 = APPROACHING;
 const MAX_TITLE: usize = 120;
 const MAX_LINK: usize = 2_000;
 /// Events kept of two days.
@@ -439,6 +442,8 @@ pub struct Calendar {
     pub stale: bool,
     /// Whether the user is in a call (a microphone is in use), as last seen. `None`: not known.
     pub in_call: Option<bool>,
+    /// When the call that is on was first seen (ms).
+    call_since: Option<u64>,
     alerts: Vec<Alert>,
     /// Alerts given this run (both of an event count), for a test.
     pub given: u32,
@@ -553,19 +558,29 @@ impl Calendar {
         Some(format!("{} in {}", event.title, span(event.start - now)))
     }
 
-    /// Whether the shell should look for a call now: an alert could come soon or is up.
+    /// Whether the shell should look for a call now: an alert could come soon or is up, or a call
+    /// is on (watched until it ends, so `call_since` is of this call).
     pub fn watching(&self, now: u64) -> bool {
         self.on
             && self.notify
-            && self.today().any(|e| !e.all_day && e.start <= now.saturating_add(WATCH_BEFORE) && now < e.end)
+            && (self.in_call == Some(true)
+                || self.today().any(|e| !e.all_day && e.start <= now.saturating_add(WATCH_BEFORE) && now < e.end))
+    }
+
+    /// A call is on that the user was in before `event` came near: not this meeting.
+    pub fn in_other_call(&self, event: &Event) -> bool {
+        self.in_call == Some(true)
+            && self.call_since.is_some_and(|since| since.saturating_add(JOINED_EARLY) <= event.start)
     }
 
     /// The alerts due now: (event, whether it is the second).
     fn due_alerts(&self, now: u64) -> Vec<(u64, bool)> {
-        if !self.on || !self.notify || self.in_call != Some(false) {
+        if !self.on || !self.notify || self.in_call.is_none() {
             return Vec::new();
         }
-        let wanted = |e: &&Event| !self.links_only || has_meeting_link(e);
+        let wanted = |e: &&Event| {
+            (!self.links_only || has_meeting_link(e)) && (self.in_call == Some(false) || self.in_other_call(e))
+        };
         let running = self.today().filter(|e| !e.all_day && stage(e, now) == Stage::Running).filter(wanted);
         // Both alerts only in the first minutes: a meeting left early is no missed one.
         let early = |e: &&Event| now < e.start.saturating_add(ALERT_WINDOW);
@@ -602,7 +617,7 @@ impl Calendar {
     pub fn banner(&self, now: u64) -> Option<&Event> {
         let shown = |e: &&Event| {
             let alerted = self.alerts.iter().any(|a| a.id == e.id && !a.done);
-            alerted && stage(e, now) == Stage::Running && self.in_call != Some(true)
+            alerted && stage(e, now) == Stage::Running && (self.in_call != Some(true) || self.in_other_call(e))
         };
         self.events.iter().rfind(shown)
     }
@@ -614,12 +629,17 @@ impl Calendar {
         Some((event.id, format!("{} · started {ago}m ago", event.title), event.link.is_some()))
     }
 
-    /// Whether a call is on, as seen. A call that starts after an alert ends it: the user joined,
-    /// so leaving later is not missing the meeting. A call on before any alert ends nothing.
-    pub fn call_seen(&mut self, in_call: Option<bool>) {
+    /// Whether a call is on, as seen at `at`. A call that starts after an alert ends it: the user
+    /// joined, so leaving later is not missing the meeting. A call on before any alert ends nothing.
+    pub fn call_seen(&mut self, in_call: Option<bool>, at: u64) {
         self.in_call = in_call;
-        if in_call == Some(true) {
-            self.alerts.iter_mut().for_each(|alert| alert.done = true);
+        match in_call {
+            Some(true) if self.call_since.is_none() => {
+                self.call_since = Some(at);
+                self.alerts.iter_mut().for_each(|alert| alert.done = true);
+            }
+            Some(true) => {}
+            _ => self.call_since = None,
         }
     }
 

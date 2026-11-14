@@ -114,6 +114,10 @@ pub struct Settings {
     /// Which meetings alert: `all` (default) or only those with a Zoom, Meet or Teams `links`.
     #[serde(default)]
     pub calendar_notify_for: Option<NotifyFor>,
+    /// The user's address among a meeting's attendees: one it declined is left out. Stays on this
+    /// machine: never in the state, a log or the feed's request.
+    #[serde(default)]
+    pub calendar_email: Option<String>,
 }
 
 /// Which meetings alert when they start (`calendar_notify_for`).
@@ -257,6 +261,14 @@ impl Settings {
         }
         if settings.calendar_refresh_minutes == Some(0) {
             return Err("calendar_refresh_minutes must be at least 1".into());
+        }
+        // Never names the address.
+        if let Some(email) = settings.calendar_email.as_deref() {
+            let (user, host) = email.split_once('@').unwrap_or_default();
+            let plain = email.len() <= 254 && email.chars().all(|c| !c.is_whitespace() && !c.is_control());
+            if !plain || user.is_empty() || host.is_empty() || host.contains('@') {
+                return Err("calendar_email must be an e-mail address, as me@example.com".into());
+            }
         }
         Ok(settings)
     }
@@ -702,6 +714,14 @@ mod tests {
         assert_eq!(read(r#"{"calendar_notify": false}"#).0.calendar_notify, Some(false));
         assert_eq!(read(r#"{"calendar_notify_for": "links"}"#).0.calendar_notify_for, Some(NotifyFor::Links));
         assert_eq!(read(r#"{"calendar_notify_for": "some"}"#).1.len(), 1);
+        assert_eq!(read(r#"{"calendar_email": "me@example.com"}"#).0.calendar_email.as_deref(), Some("me@example.com"));
+        for bad in
+            ["s3cret", "s3cret@", "@s3cret.example", "s3cret@a@b.example", "s3 cret@b.example", "s3cret@b.example\n"]
+        {
+            let (settings, wrong) = read(&serde_json::json!({ "calendar_email": bad }).to_string());
+            assert!(settings.calendar_email.is_none() && wrong.len() == 1, "{bad:?}");
+            assert!(wrong[0].starts_with("calendar_email: ") && !wrong[0].contains("s3"), "{wrong:?}");
+        }
     }
 
     #[test]
