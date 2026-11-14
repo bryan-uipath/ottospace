@@ -692,9 +692,11 @@ pub enum Action {
     SessionWork {
         work: progress::Work,
     },
-    /// Replace the sessions the shell found on this machine for the listed repositories.
+    /// Replace the sessions the shell found on this machine for the listed repositories. `day`:
+    /// the start of the local day they were read in, from which Today lists.
     SetSessions {
         found: Vec<Found>,
+        day: u64,
     },
     /// How long an adopted session must be quiet before its task needs the user, in
     /// milliseconds: the `session_quiet_minutes` setting. 0: never.
@@ -728,8 +730,11 @@ pub enum Action {
         runner: String,
         id: String,
     },
-    /// Show or hide the idle sessions older than a day.
-    ToggleOlderSessions,
+    /// Which sessions Other sessions lists, by when each was last active. The user's pick is
+    /// written to the settings.
+    SessionsRange {
+        range: sessions::Range,
+    },
     /// Replace the Apps list with the apps the shell can host now.
     SetApps {
         names: Vec<String>,
@@ -1340,7 +1345,7 @@ impl Action {
             | Action::SessionAdopt { .. }
             | Action::SessionHide { .. }
             | Action::SessionClick { .. }
-            | Action::ToggleOlderSessions
+            | Action::SessionsRange { .. }
             | Action::RowSnooze { .. }
             | Action::RowHold { .. }
             | Action::RowDismiss { .. }
@@ -1534,6 +1539,10 @@ pub enum Effect {
     /// The user picked how the Tasks section groups: write `tasks_view` in the settings file.
     SaveTasksView {
         view: TasksView,
+    },
+    /// The user picked the range of Other sessions: write `sessions_range` in the settings file.
+    SaveSessionsRange {
+        range: sessions::Range,
     },
     /// The pinned or hidden apps changed: make these changes to `apps` and `apps_hidden` in
     /// the settings file, as it is then.
@@ -1766,9 +1775,12 @@ pub struct Model {
     /// Sessions the user hid, as (runner, id). Not kept between runs.
     #[serde(skip)]
     hidden: Vec<(String, String)>,
-    /// The idle sessions older than a day are shown.
+    /// Which sessions Other sessions lists (`sessions_range` in the settings), and the start of
+    /// the local day the shell last read them in.
     #[serde(skip)]
-    older_sessions: bool,
+    pub sessions_range: sessions::Range,
+    #[serde(skip)]
+    pub(crate) session_day: u64,
     /// The time of the last `Tick`: when a task filed now was filed. 0: never told.
     #[serde(skip)]
     pub(crate) now: u64,
@@ -1898,7 +1910,8 @@ impl Default for Model {
             found: Vec::new(),
             session_quiet_ms: sessions::QUIET_MS,
             hidden: Vec::new(),
-            older_sessions: false,
+            sessions_range: sessions::Range::default(),
+            session_day: 0,
             now: 0,
             picker: None,
             palette: None,
@@ -2917,8 +2930,9 @@ impl Model {
                     self.start(id, open, effects);
                 }
             }
-            Action::SetSessions { found } => {
+            Action::SetSessions { found, day } => {
                 self.found = sessions::kept(found);
+                self.session_day = day;
                 let seen = self.found.iter().map(|s| (s.runner.clone(), s.id.clone(), s.active, s.last_activity));
                 self.follow_sessions(seen.collect());
             }
@@ -2977,7 +2991,12 @@ impl Model {
                     self.focus(pane, effects);
                 }
             }
-            Action::ToggleOlderSessions => self.older_sessions = !self.older_sessions,
+            Action::SessionsRange { range } => {
+                if self.by_user && range != self.sessions_range {
+                    effects.push(Effect::SaveSessionsRange { range });
+                }
+                self.sessions_range = range;
+            }
             Action::ToggleGroup { heading } => {
                 let open = !self.collapsed.contains(&heading);
                 self.collapsed.retain(|h| *h != heading);
@@ -3067,7 +3086,6 @@ impl Model {
                         self.act(Action::SessionClick { runner, id }, effects);
                     }
                 }
-                Some(ListRow::OlderSessions) => self.act(Action::ToggleOlderSessions, effects),
                 Some(ListRow::Mark(id)) => self.mark_go(id, axis, effects),
                 Some(ListRow::Workbook(id)) => self.workbook_open(id, None, self.home.clone(), effects),
                 Some(ListRow::WorkbookTab(id, at)) => self.workbook_open(id, Some(at), self.home.clone(), effects),
@@ -4765,12 +4783,13 @@ impl Model {
         (another.is_none() && session.active && at_work == 1).then_some(pane.id)
     }
 
-    /// The Sessions group as drawn, at the time of the last `Tick`: sessions found that are no
-    /// task's, active first. Idle ones older than a day are counted behind "N older" until shown.
+    /// The Other sessions group as drawn, at the time of the last `Tick`: sessions found that are
+    /// no task's, active first, those in the range alone.
     pub fn sessions_bar(&self) -> sessions::Bar {
-        let (recent, old): (Vec<&Found>, Vec<&Found>) = self.unadopted().partition(|s| !s.old(self.now));
+        let (range, now, day) = (self.sessions_range, self.now, self.session_day);
+        let (shown, out): (Vec<&Found>, Vec<&Found>) = self.unadopted().partition(|s| s.in_range(range, now, day));
         let collapsed = self.collapsed.contains(&Heading::Sessions);
-        let drawn = recent.iter().chain(old.iter().filter(|_| self.older_sessions)).filter(|_| !collapsed);
+        let drawn = shown.iter().filter(|_| !collapsed);
         let row = |s: &&Found| sessions::Row {
             runner: s.runner.clone(),
             id: s.id.clone(),
@@ -4783,13 +4802,7 @@ impl Model {
             model: s.model.clone(),
         };
         let rows = drawn.map(row).collect();
-        sessions::Bar {
-            count: recent.len() + old.len(),
-            collapsed,
-            rows,
-            older: old.len(),
-            older_open: self.older_sessions,
-        }
+        sessions::Bar { count: shown.len(), total: shown.len() + out.len(), range, collapsed, rows }
     }
 
     /// Every listed repository and worktree, as (name, path).
@@ -4931,18 +4944,12 @@ impl Model {
                 }
             }
         }
-        // Then the sessions that are no task's, as drawn: the heading, those of the last
-        // day, "N older", and the older ones while they are shown.
+        // Then the sessions that are no task's, as drawn: the heading (while any is listed, in
+        // the range or not), and those in the range.
         let bar = self.sessions_bar();
-        if bar.count > 0 {
+        if bar.total > 0 {
             rows.push(ListRow::Heading(Heading::Sessions));
-            let session = |row: &sessions::Row| ListRow::Session(row.runner.clone(), row.id.clone());
-            let (recent, old) = bar.rows.split_at(bar.recent());
-            rows.extend(recent.iter().map(session));
-            if bar.older > 0 && !bar.collapsed {
-                rows.push(ListRow::OlderSessions);
-            }
-            rows.extend(old.iter().map(session));
+            rows.extend(bar.rows.iter().map(|row| ListRow::Session(row.runner.clone(), row.id.clone())));
         }
         rows
     }
@@ -5679,7 +5686,7 @@ mod tests {
         Action::SessionHide { .. },
         Action::SessionClick { .. },
         Action::SessionOpen { .. },
-        Action::ToggleOlderSessions,
+        Action::SessionsRange { .. },
         Action::SetApps { .. },
         Action::SetAppSettings { .. },
         Action::SetDock { .. },
@@ -5864,14 +5871,14 @@ mod tests {
             Action::ComposeSubmit { open: false },
             Action::CloseCompose,
             Action::ToggleGroup { heading: Heading::Done },
-            Action::SetSessions { found: Vec::new() },
+            Action::SetSessions { found: Vec::new(), day: 0 },
             Action::SessionQuiet { ms: 0 },
             Action::SessionsSeen { seen: Vec::new() },
             Action::SessionAdopt { runner: text(), id: text() },
             Action::SessionHide { runner: text(), id: text() },
             Action::SessionClick { runner: text(), id: text() },
             Action::SessionOpen { runner: text(), id: text() },
-            Action::ToggleOlderSessions,
+            Action::SessionsRange { range: sessions::Range::All },
             Action::RowSnooze { id: 1, until: 0 },
             Action::RowHold { id: 1 },
             Action::RowDismiss { id: 1 },
@@ -7965,7 +7972,7 @@ mod tests {
         let mut m = Model::default();
         m.update(Action::SetRepos { repos: listed() });
         m.update(Action::Tick { now: 5_000 });
-        m.update(Action::SetSessions { found: vec![session("claude", "busy", "/code/app", true, 5_000)] });
+        m.update(Action::SetSessions { found: vec![session("claude", "busy", "/code/app", true, 5_000)], day: 0 });
         m.update(Action::ToggleSection { section: Section::Tasks });
         // At work, and still folded: the heading counts it, list mode has the heading alone.
         let bar = m.sessions_bar();
@@ -7985,29 +7992,32 @@ mod tests {
         Found { runner, id, cwd, repo, started, last_activity, active, station, label, title, model, held }
     }
 
-    /// The Sessions group as (count, ids of the rows drawn, how many are older).
+    /// The Other sessions group as (count in range, ids of the rows drawn, count in all).
     fn session_rows(m: &Model) -> (usize, Vec<String>, usize) {
         let bar = m.sessions_bar();
-        (bar.count, bar.rows.into_iter().map(|row| row.id).collect(), bar.older)
+        (bar.count, bar.rows.into_iter().map(|row| row.id).collect(), bar.total)
     }
 
     #[test]
-    fn sessions_that_are_no_tasks_are_listed_active_first_and_old_ones_wait() {
+    fn sessions_that_are_no_tasks_are_listed_active_first_and_in_their_range() {
         let mut m = Model::default();
         m.update(Action::ToggleGroup { heading: Heading::Sessions }); // folded at first
         m.update(Action::SetRepos { repos: listed() });
-        let now = 10 * sessions::OLD_MS;
+        // 10 days in; the local day started 5 hours ago.
+        let (now, hour) = (10 * sessions::DAY_MS, 3_600_000);
         m.update(Action::Tick { now });
         let mut busy = session("claude", "busy", "/code/app/crates", true, now - 2_000);
         (busy.repo, busy.station, busy.label) = ("/code/app".into(), Some("shell".into()), Some("cargo test".into()));
         m.update(Action::SetSessions {
             found: vec![
-                session("codex", "old", "/code/app", false, now - 3 * sessions::OLD_MS),
-                session("codex", "idle", "/code/app-2", false, now - 3 * 3_600_000),
+                session("codex", "old", "/code/app", false, now - 3 * sessions::DAY_MS),
+                session("codex", "idle", "/code/app-2", false, now - 3 * hour),
                 busy,
             ],
+            day: now - 5 * hour,
         });
-        assert_eq!(session_rows(&m), (3, vec!["busy".into(), "idle".into()], 1));
+        // Today, at first: the one at work and the one idle since the day started.
+        assert_eq!(session_rows(&m), (2, vec!["busy".into(), "idle".into()], 3));
         let rows = m.sessions_bar().rows;
         // Named after the listed repository or worktree, wherever below it the session started.
         assert_eq!(
@@ -8030,14 +8040,25 @@ mod tests {
             ),
             ("codex", "app-2", false, None, Some("3h"))
         );
-        // "1 older" shows the rest, after the others; the heading folds like any other.
-        m.update(Action::ToggleOlderSessions);
-        assert_eq!(session_rows(&m), (3, vec!["busy".into(), "idle".into(), "old".into()], 1));
+        // 7 days takes in the one of three days ago. The user's pick is written; a client's is not.
+        let week = Action::SessionsRange { range: sessions::Range::Week };
+        assert_eq!(m.update(week.clone().sent_by(Origin::Socket)), []);
+        assert_eq!(session_rows(&m), (3, vec!["busy".into(), "idle".into(), "old".into()], 3));
+        let today = Action::SessionsRange { range: sessions::Range::Today };
+        assert_eq!(
+            m.update(today.sent_by(Origin::User)),
+            [Effect::SaveSessionsRange { range: sessions::Range::Today }]
+        );
+        assert_eq!(
+            m.update(week.clone().sent_by(Origin::User)),
+            [Effect::SaveSessionsRange { range: sessions::Range::Week }]
+        );
+        assert_eq!(m.update(week.sent_by(Origin::User)), [], "the same range: nothing to write");
+        // The heading folds like any other.
         m.update(Action::ToggleGroup { heading: Heading::Sessions });
-        assert_eq!(session_rows(&m), (3, vec![], 1));
+        assert_eq!(session_rows(&m), (3, vec![], 3));
         m.update(Action::ToggleGroup { heading: Heading::Sessions });
-        m.update(Action::ToggleOlderSessions);
-        // List mode walks the tasks, then the sessions as drawn: their heading, the rows, "1 older".
+        // List mode walks the tasks, then the sessions as drawn: their heading, the rows.
         m.update(Action::TaskAdd {
             title: "a".into(),
             priority: 2,
@@ -8048,22 +8069,21 @@ mod tests {
         m.update(Action::ToggleSection { section: Section::Tasks });
         let row = |id: &str, runner: &str| ListRow::Session(runner.into(), id.into());
         let tasks = [ListRow::Heading(Heading::Later), ListRow::Task(1), ListRow::Heading(Heading::Sessions)];
-        let sessions = [row("busy", "claude"), row("idle", "codex"), ListRow::OlderSessions];
+        let sessions = [row("busy", "claude"), row("idle", "codex"), row("old", "codex")];
         assert_eq!(m.list_rows(), [&tasks[..], &sessions[..]].concat());
-        // ↵ on "1 older" shows the older ones after it; ↵ on the heading folds the group.
+        // ↵ on the heading folds the group. None in range: the heading stays, to widen it again.
         m.update(Action::FocusList);
-        m.update(Action::ListMove { delta: 4 });
-        m.update(Action::ListChoose { axis: Right });
-        assert_eq!((m.list_rows().len(), m.list_rows()[6].clone(), m.list), (7, row("old", "codex"), Some(5)));
-        m.update(Action::ListChoose { axis: Right });
-        m.update(Action::ListMove { delta: -3 });
+        m.update(Action::ListMove { delta: 1 });
         m.update(Action::ListChoose { axis: Right });
         assert_eq!((m.list_rows(), m.list), (tasks.to_vec(), Some(2)));
         m.update(Action::ListChoose { axis: Right });
         m.update(Action::LeaveList);
+        m.update(Action::Tick { now: now + 9 * sessions::DAY_MS });
+        m.update(Action::SetSessions { found: vec![session("codex", "old", "/code/app", false, 0)], day: now });
+        assert_eq!((session_rows(&m), m.list_rows().len()), ((0, vec![], 1), 3));
         // Hidden: gone for this run, whatever the shell finds again. The group goes with its last row.
-        m.update(Action::SessionHide { runner: "claude".into(), id: "busy".into() });
-        m.update(Action::SetSessions { found: vec![session("claude", "busy", "/code/app", true, now)] });
+        m.update(Action::SessionHide { runner: "codex".into(), id: "old".into() });
+        m.update(Action::SetSessions { found: vec![session("codex", "old", "/code/app", true, now)], day: 0 });
         assert_eq!(session_rows(&m), (0, vec![], 0));
     }
 
@@ -8076,7 +8096,10 @@ mod tests {
         let mut titled = session("claude", "s1", "/code/app", false, 4_000);
         titled.title = Some("Rename it #urgent >app-2 @codex p0\nand run this".into());
         titled.model = Some("claude-opus-4-7[1m]".into());
-        m.update(Action::SetSessions { found: vec![titled, session("codex", "s2", "/code/app", false, 1_000)] });
+        m.update(Action::SetSessions {
+            found: vec![titled, session("codex", "s2", "/code/app", false, 1_000)],
+            day: 0,
+        });
         let rows = m.sessions_bar().rows;
         let shown = |row: &sessions::Row| (row.quoted_title.clone(), row.model.clone());
         assert_eq!(shown(&rows[0]), (Some("Rename it #urgent >app-2 @codex p0".into()), Some("opus-4.7".into())));
@@ -8109,7 +8132,7 @@ mod tests {
             below("claude", ASTRAY, "/code/app/../other"),
             session("claude", "plain", "/code/app", false, 500),
         ];
-        m.update(Action::SetSessions { found });
+        m.update(Action::SetSessions { found, day: 0 });
         m
     }
 
@@ -8186,7 +8209,7 @@ mod tests {
                 false => s.clone(),
             });
             let found = found.collect();
-            system(m, Action::SetSessions { found });
+            system(m, Action::SetSessions { found, day: 0 });
         };
         let now = 9_000_000;
         m.update(open.clone());
@@ -8231,7 +8254,7 @@ mod tests {
         assert_eq!(m.update(Action::TaskTalk { id: 1 }), []);
         // A read made for the resume came after it stopped: a process it records is another's.
         let mut m = stopped();
-        system(&mut m, Action::SetSessions { found: Vec::new() });
+        system(&mut m, Action::SetSessions { found: Vec::new(), day: 0 });
         assert_eq!(m.update(Action::TaskTalk { id: 1 }).len(), 1);
         let held = Found { held: true, repo: "/code/app".into(), ..session("claude", IDLE, "/code/app", false, now) };
         let read = Action::SessionRead { runner: "claude".into(), id: IDLE.into(), found: Some(held) };
@@ -8265,7 +8288,7 @@ mod tests {
         m.update(
             Action::AgentStarted { task: of_session("claude", IDLE), session: None, at: 1 }.sent_by(Origin::System),
         );
-        m.update(Action::SetSessions { found: Vec::new() }.sent_by(Origin::System));
+        m.update(Action::SetSessions { found: Vec::new(), day: 0 }.sent_by(Origin::System));
         assert_eq!(m.session_title("claude", IDLE), "Fix the login");
         assert_eq!(m.rail()[0].mono, "FT");
         assert!(m.rail()[0].tip.starts_with("Fix the login\n"), "{}", m.rail()[0].tip);
@@ -8304,6 +8327,7 @@ mod tests {
         // Not open: the task's conversation, gone on with where the session started.
         m.update(Action::SetSessions {
             found: vec![Found { repo: "/code/app".into(), ..session("claude", HELD, "/code/app/web", false, 2_000) }],
+            day: 0,
         });
         assert_eq!(adopt(&mut m, "claude", HELD), [resumed(Subject::Task(2), "claude", HELD, "/code/app/web")]);
         assert_eq!(m.tasks.get(2).and_then(|task| task.repo.as_deref()), Some("/code/app"));
@@ -8372,7 +8396,7 @@ mod tests {
         // A live process holds it: not gone on with.
         let mut m = conversations();
         let found = m.found.iter().map(|s| Found { held: s.id == IDLE, ..s.clone() }).collect();
-        m.update(Action::SetSessions { found });
+        m.update(Action::SetSessions { found, day: 0 });
         m.update(Action::RestoreTasks { tasks: vec![serde_json::from_str(&kept).expect("a task as kept")], floor: 7 });
         assert_eq!(m.update(Action::TaskTalk { id: 7 }), []);
         assert!(m.talk_note().is_some_and(|note| note.contains("live in another terminal")));
@@ -8394,6 +8418,7 @@ mod tests {
                 session("claude", "s1", "/code/app-2", true, 4_000),
                 session("codex", "s2", "/code/app", false, 1_000),
             ],
+            day: 0,
         });
         m.update(Action::SessionAdopt { runner: "claude".into(), id: "s1".into() });
         let task = &m.tasks.list[0];
@@ -8403,7 +8428,7 @@ mod tests {
         assert_eq!(task.session, Some(link));
         assert_eq!(m.task_tags(task), ">app-2 · @claude");
         // It left the Sessions group, and stays out when the shell finds it again or the task is dismissed.
-        assert_eq!(session_rows(&m), (1, vec!["s2".into()], 0));
+        assert_eq!(session_rows(&m), (1, vec!["s2".into()], 1));
         m.update(Action::SessionAdopt { runner: "claude".into(), id: "s1".into() });
         m.update(Action::TaskDismiss { id: 1 });
         m.update(Action::SetSessions {
@@ -8411,13 +8436,14 @@ mod tests {
                 session("claude", "s1", "/code/app-2", true, 4_500),
                 session("codex", "s2", "/code/app", false, 1_000),
             ],
+            day: 0,
         });
-        assert_eq!((session_rows(&m), m.tasks.list.len()), ((1, vec!["s2".into()], 0), 1));
+        assert_eq!((session_rows(&m), m.tasks.list.len()), ((1, vec!["s2".into()], 1), 1));
         // One that started below a listed repository is that repository's task: the tag names
         // it, and opening the task opens a terminal there. Where below is not kept.
         let mut below = session("claude", "s3", "/code/app/crates/core", true, 4_800);
         below.repo = "/code/app".into();
-        m.update(Action::SetSessions { found: vec![below, session("codex", "s2", "/code/app", false, 1_000)] });
+        m.update(Action::SetSessions { found: vec![below, session("codex", "s2", "/code/app", false, 1_000)], day: 0 });
         m.update(Action::SessionAdopt { runner: "claude".into(), id: "s3".into() });
         let task = m.tasks.list.last().unwrap().clone();
         assert_eq!(
@@ -8448,7 +8474,7 @@ mod tests {
         let at = |m: &mut Model, now: u64, ago: u64| {
             m.update(Action::Tick { now }.sent_by(Origin::System));
             let found = vec![session("claude", "s1", "/code/app", ago <= 30_000, now - ago)];
-            m.update(Action::SetSessions { found }.sent_by(Origin::System));
+            m.update(Action::SetSessions { found, day: 0 }.sent_by(Origin::System));
         };
         let state = |m: &Model| (m.tasks.list[0].state, m.tasks.list[0].session.as_ref().and_then(|link| link.state));
         at(&mut m, start, 0);
@@ -8501,7 +8527,7 @@ mod tests {
         m.update(Action::TaskSetState { id: 1, state: State::Done }.sent_by(Origin::Socket));
         assert_eq!(m.followed_sessions(), Vec::<(String, String)>::new());
         seen(&mut m, start + 100 * MINUTE, 0);
-        m.update(Action::SetSessions { found: Vec::new() }.sent_by(Origin::System));
+        m.update(Action::SetSessions { found: Vec::new(), day: 0 }.sent_by(Origin::System));
         m.update(Action::SessionsSeen { seen: Vec::new() }.sent_by(Origin::System));
         assert_eq!(state(&m).0, State::Done);
     }
@@ -8513,7 +8539,7 @@ mod tests {
         let found: Vec<Found> = (0..sessions::MAX_FOUND + 5)
             .map(|n| session("claude", &format!("s{n:04}"), "/code/app", true, 9))
             .collect();
-        m.update(Action::SetSessions { found });
+        m.update(Action::SetSessions { found, day: 0 });
         assert_eq!(m.sessions_bar().count, sessions::MAX_FOUND);
         // Hiding some makes room for those behind them.
         for n in 0..5 {
@@ -8537,6 +8563,7 @@ mod tests {
                 session("claude", "here", "/code/app", true, 9),
                 session("claude", "there", "/code/app-2", true, 8),
             ],
+            day: 0,
         });
         assert_eq!(m.sessions_bar().rows.iter().map(|row| row.pane).collect::<Vec<_>>(), [Some(2), None]);
         click(&mut m, "here");
@@ -8558,6 +8585,7 @@ mod tests {
                 session("claude", "one", "/code/app-2", true, 9),
                 session("claude", "two", "/code/app-2", true, 8),
             ],
+            day: 0,
         });
         click(&mut m, "one");
         assert_eq!(m.list_rows()[m.list.unwrap()], ListRow::Session("claude".into(), "one".into()));
@@ -8567,6 +8595,7 @@ mod tests {
         // Two sessions at work started there, or two panes opened there: which is which is not known.
         m.update(Action::SetSessions {
             found: vec![session("claude", "here", "/code/app", true, 9), session("codex", "too", "/code/app", true, 8)],
+            day: 0,
         });
         assert_eq!(m.sessions_bar().rows.iter().map(|row| row.pane).collect::<Vec<_>>(), [None, None]);
         // A past session in the same directory is no doubt: nor one hidden, nor one that is a task's.
@@ -8578,7 +8607,7 @@ mod tests {
                 session("codex", "adopted", "/code/app", true, 7),
             ]
         };
-        m.update(Action::SetSessions { found: found() });
+        m.update(Action::SetSessions { found: found(), day: 0 });
         m.update(Action::SessionHide { runner: "codex".into(), id: "hidden".into() });
         m.update(Action::SessionAdopt { runner: "codex".into(), id: "adopted".into() });
         let panes = |m: &Model| m.sessions_bar().rows.iter().map(|row| (row.id.clone(), row.pane)).collect::<Vec<_>>();
@@ -8606,7 +8635,7 @@ mod tests {
             }
             m.update(release);
         }
-        m.update(Action::SetSessions { found: vec![session("claude", "here", "/code/app", true, 9)] });
+        m.update(Action::SetSessions { found: vec![session("claude", "here", "/code/app", true, 9)], day: 0 });
         m.update(Action::OpenRepo { path: "/code/app".into(), axis: Right });
         assert_eq!(m.sessions_bar().rows[0].pane, None);
     }

@@ -1,5 +1,5 @@
 //! Agent sessions found on this machine that no task has adopted: what the Tasks section lists
-//! under "Sessions" (a Claude Code or Codex started by hand in some terminal). The shell reads
+//! under "Other sessions" (a Claude Code or Codex started by hand in some terminal). The shell reads
 //! them, off the main thread, and passes them in. Pure.
 //!
 //! An "agent" is a saved definition; a running conversation is a "session".
@@ -19,8 +19,8 @@ use crate::tasks::State;
 /// The runners whose sessions are listed.
 pub const RUNNERS: [&str; 2] = ["claude", "codex"];
 
-/// An idle session whose last activity is older than this is behind "N older".
-pub const OLD_MS: u64 = 86_400_000;
+/// A day, for the ranges of the Other sessions group.
+pub const DAY_MS: u64 = 86_400_000;
 
 /// The most sessions listed (after those that are a task's or hidden are left out), the most
 /// kept of what the shell read, and the longest label shown.
@@ -159,23 +159,52 @@ pub struct Row {
     pub model: Option<String>,
 }
 
-/// The Sessions group, as drawn. No sessions: no group.
+/// The Other sessions group, as drawn. No sessions: no group.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Bar {
-    /// Sessions listed, the older ones included.
+    /// Sessions in `range`, and listed in all.
     pub count: usize,
+    pub total: usize,
+    pub range: Range,
     pub collapsed: bool,
-    /// None while collapsed. The older ones only while they are shown.
+    /// Those in `range`. None while collapsed.
     pub rows: Vec<Row>,
-    /// How many are behind "N older".
-    pub older: usize,
-    pub older_open: bool,
 }
 
-impl Bar {
-    /// How many of `rows` are of the last day: they come first, before "N older" and the older ones.
-    pub fn recent(&self) -> usize {
-        self.rows.len().saturating_sub(if self.older_open { self.older } else { 0 })
+/// Which sessions the Other sessions group lists, by when each was last active. A session at
+/// work is always in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Range {
+    /// Since the start of the local day.
+    #[default]
+    Today,
+    Week,
+    Month,
+    All,
+}
+
+impl Range {
+    pub const EVERY: [Range; 4] = [Range::Today, Range::Week, Range::Month, Range::All];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Range::Today => "Today",
+            Range::Week => "7 days",
+            Range::Month => "30 days",
+            Range::All => "All",
+        }
+    }
+
+    /// The earliest last activity in range at `now`. `day`: the start of the local day, which the
+    /// shell knows. e.g. 7 days at day 10, noon: from day 3, noon.
+    pub fn since(self, now: u64, day: u64) -> u64 {
+        match self {
+            Range::Today => day,
+            Range::Week => now.saturating_sub(7 * DAY_MS),
+            Range::Month => now.saturating_sub(30 * DAY_MS),
+            Range::All => 0,
+        }
     }
 }
 
@@ -246,9 +275,9 @@ pub fn kept(found: Vec<Found>) -> Vec<Found> {
 }
 
 impl Found {
-    /// Behind "N older": idle, and last active more than a day before `now` (or never known).
-    pub fn old(&self, now: u64) -> bool {
-        !self.active && self.last_activity.is_none_or(|at| now.saturating_sub(at) > OLD_MS)
+    /// Listed in `range`: at work, last active since its start, or any under All.
+    pub fn in_range(&self, range: Range, now: u64, day: u64) -> bool {
+        self.active || range == Range::All || self.last_activity.is_some_and(|at| at >= range.since(now, day))
     }
 
     /// `shell · cargo test`, `files`, or nothing: only while active.
@@ -408,12 +437,20 @@ mod tests {
     }
 
     #[test]
-    fn old_is_idle_for_more_than_a_day() {
-        let now = 10 * OLD_MS;
-        assert!(found("claude", "a", "/a", false, now - OLD_MS - 1).old(now));
-        assert!(!found("claude", "a", "/a", false, now - OLD_MS).old(now));
-        assert!(!found("claude", "a", "/a", true, 0).old(now), "an active one is never old");
-        let unknown = Found { last_activity: None, ..found("claude", "a", "/a", false, 0) };
-        assert!(unknown.old(now));
+    fn a_range_starts_at_the_local_day_or_so_many_days_back() {
+        // 40 days in, at 15:00; the local day started at 02:00 UTC.
+        let (day, now) = (40 * DAY_MS + 2 * 3_600_000, 40 * DAY_MS + 15 * 3_600_000);
+        let idle = |at| found("claude", "a", "/a", false, at);
+        let at = |range: Range, at: u64| idle(at).in_range(range, now, day);
+        assert_eq!((at(Range::Today, day), at(Range::Today, day - 1)), (true, false));
+        assert_eq!((at(Range::Week, now - 7 * DAY_MS), at(Range::Week, now - 7 * DAY_MS - 1)), (true, false));
+        assert_eq!((at(Range::Month, now - 30 * DAY_MS), at(Range::Month, now - 30 * DAY_MS - 1)), (true, false));
+        assert!(at(Range::All, 0));
+        // At work: in every range. Never active and no time known: under All alone.
+        assert!(found("claude", "a", "/a", true, 0).in_range(Range::Today, now, day));
+        let unknown = Found { last_activity: None, ..idle(0) };
+        assert_eq!(Range::EVERY.map(|range| unknown.in_range(range, now, day)), [false, false, false, true]);
+        // Early in the run: no underflow.
+        assert_eq!(Range::Month.since(5, 0), 0);
     }
 }

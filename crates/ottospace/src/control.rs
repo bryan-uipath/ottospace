@@ -292,8 +292,12 @@ pub enum Request {
         runner: String,
         id: String,
     },
-    /// Shows or hides the idle sessions older than a day ("N older").
-    SessionsOlder,
+    /// Which sessions Other sessions lists, by when each was last active: `today`, `week`,
+    /// `month` or `all`. `{"cmd":"sessions_range","range":"week"}`. For this run: the settings
+    /// are written for the user's pick alone.
+    SessionsRange {
+        range: ottospace_core::sessions::Range,
+    },
     /// Opens the new-task box for the user, with `text` in it to edit: a draft, not a filed task.
     Compose {
         #[serde(default)]

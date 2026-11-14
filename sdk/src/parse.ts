@@ -32,6 +32,7 @@ import type {
   ProjectGroup,
   TasksProgress,
   TasksView,
+  SessionsRange,
   Tokens,
   Work,
   Focus,
@@ -211,6 +212,11 @@ function heading(value: unknown, at: string): Heading {
 function tasksView(value: unknown, at: string): TasksView {
   if (value === "state" || value === "project") return value;
   throw wrong(at, "state or project", value);
+}
+
+function sessionsRange(value: unknown, at: string): SessionsRange {
+  if (value === "today" || value === "week" || value === "month" || value === "all") return value;
+  throw wrong(at, "today, week, month or all", value);
 }
 
 function tokens(value: unknown, at: string): Tokens {
@@ -689,10 +695,10 @@ function sessionsBar(value: unknown, at: string): SessionsBar {
   const o = fields(value, at);
   return {
     count: num(o.count, `${at}.count`),
+    total: num(o.total, `${at}.total`),
+    range: sessionsRange(o.range, `${at}.range`),
     collapsed: bool(o.collapsed, `${at}.collapsed`),
     rows: list(sessionRow)(o.rows, `${at}.rows`),
-    older: num(o.older, `${at}.older`),
-    older_open: bool(o.older_open, `${at}.older_open`),
     enabled: bool(o.enabled, `${at}.enabled`),
     reads: num(o.reads, `${at}.reads`),
     slow_reads: num(o.slow_reads, `${at}.slow_reads`),

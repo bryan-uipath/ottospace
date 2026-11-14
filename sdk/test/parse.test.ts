@@ -91,7 +91,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       today: { done: 0, running: 0, agent_ms: 0, line: "0 done · 0 running · 0s" },
       cards: {},
     },
-    sessions_bar: { count: 0, collapsed: false, rows: [], older: 0, older_open: false, enabled: false, reads: 0, slow_reads: 0 },
+    sessions_bar: { count: 0, total: 0, range: "today", collapsed: true, rows: [], enabled: false, reads: 0, slow_reads: 0 },
     repos_bar: [],
     home: { nodes: [], needs_you: [], counts: { needs_you: 0, running: 0, captured: 0, on_hold: 0, done: 0 } },
     home_drawn: { area: [0, 30, 1400, 846], panel: [80, 300, 520, 120], nodes: {}, lattice_builds: 1, lattice_paints: 2 },

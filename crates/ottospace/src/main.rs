@@ -996,6 +996,8 @@ impl Workspace {
         // The Tasks section as the user last grouped it.
         let view = config::get().settings.tasks_view.unwrap_or_default();
         model.update(Action::TasksView { view }.sent_by(Origin::System));
+        let range = config::get().settings.sessions_range.unwrap_or_default();
+        model.update(Action::SessionsRange { range }.sent_by(Origin::System));
         model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
         let kept = config::load_tasks();
         let unread = kept.unread;
@@ -1288,6 +1290,11 @@ impl Workspace {
                 Effect::SaveApps { changes } => self.save_apps(changes),
                 Effect::SaveTasksView { view } => {
                     if let Err(why) = config::save_value("tasks_view", &serde_json::json!(view)) {
+                        self.error = Some(format!("{}{why}", Self::NOT_WRITTEN));
+                    }
+                }
+                Effect::SaveSessionsRange { range } => {
+                    if let Err(why) = config::save_value("sessions_range", &serde_json::json!(range)) {
                         self.error = Some(format!("{}{why}", Self::NOT_WRITTEN));
                     }
                 }
@@ -1842,7 +1849,7 @@ impl Workspace {
                 Request::SessionAdopt { runner, id } => Some(Action::SessionAdopt { runner, id }),
                 Request::SessionHide { runner, id } => Some(Action::SessionHide { runner, id }),
                 Request::SessionClick { runner, id } => Some(Action::SessionClick { runner, id }),
-                Request::SessionsOlder => Some(Action::ToggleOlderSessions),
+                Request::SessionsRange { range } => Some(Action::SessionsRange { range }),
                 Request::TaskSetState { id, .. }
                 | Request::TaskSnooze { id, .. }
                 | Request::TaskHold { id }
@@ -2135,9 +2142,9 @@ impl Workspace {
         let found = if open && !stopped { found } else { self.sessions_listed.then(Vec::new) };
         if let Some(found) = found {
             self.sessions_listed = open && !stopped;
-            // The time too: ages and "older" are counted from it.
+            // The time too: ages and the range are counted from it.
             self.dispatch(Action::Tick { now }, Origin::System, window, cx);
-            self.dispatch(Action::SetSessions { found }, Origin::System, window, cx);
+            self.dispatch(Action::SetSessions { found, day: day_start(now) }, Origin::System, window, cx);
             cx.notify();
         }
         if stopped && !self.sessions_stopped {
@@ -3909,12 +3916,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// A click on "N older" under Sessions.
-    pub(crate) fn click_older_sessions(&mut self, window: &Window, cx: &mut Context<Self>) {
-        self.dispatch(Action::ToggleOlderSessions, self.input, window, cx);
-        cx.notify();
-    }
-
     /// A heading of the Tasks section, the Sessions one too: a fold mark, its name and how many
     /// it holds. A click folds it. `selected`: list mode is on it, and ↵ or space folds it.
     fn heading_row(
@@ -3924,7 +3925,7 @@ impl Workspace {
         collapsed: bool,
         selected: bool,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> Stateful<Div> {
         let color = match heading {
             Heading::NeedsYou => theme::task(Group::NeedsYou),
             _ => theme::MUTED,
@@ -3947,46 +3948,29 @@ impl Workspace {
             .relative()
             .child(self.controls.mark(format!("task-heading:{}", heading_name(heading))))
             .on_click(cx.listener(move |this, _, window, cx| this.click_heading(heading, window, cx)))
-            .into_any_element()
     }
 
-    /// The Sessions group: agent sessions found for the listed repositories that are no task's.
-    /// Empty when there are none. `listed`: how many rows of the list come before; the heading,
-    /// each session and "N older" are rows, as list mode walks them.
+    /// The Other sessions group: agent sessions found for the listed repositories that are no
+    /// task's, those in its range. Empty when none is listed. `listed`: how many rows of the list
+    /// come before; the heading and each session are rows, as list mode walks them.
     fn render_sessions(&self, mut listed: usize, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let bar = self.model.sessions_bar();
-        if bar.count == 0 {
+        if bar.total == 0 {
             return Vec::new();
         }
-        let small = |selected: bool| {
-            let line = div().px_2().flex().items_center().gap_1p5().text_xs().text_color(rgb(theme::MUTED));
-            line.relative().when(selected, |d| d.pb_0p5().rounded_md().bg(rgb(theme::SELECTED)))
-        };
         let selected = self.model.list == Some(listed);
-        let mut rows = vec![self.heading_row(Heading::Sessions, bar.count, bar.collapsed, selected, cx)];
+        // Unfolded, the heading holds the range switch, on a line below when narrow; its count is
+        // of those in range.
+        let heading = self.heading_row(Heading::Sessions, bar.count, bar.collapsed, selected, cx);
+        let total = SharedString::from(format!("{} in all", bar.total));
+        let heading = heading
+            .flex_wrap()
+            .gap_y_1()
+            .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(total.clone()))))
+            .children((!bar.collapsed).then(|| self.sessions_range_switch(cx)));
+        let mut rows = vec![heading.into_any_element()];
         listed += 1;
-        let (recent, old) = bar.rows.split_at(bar.recent());
-        for row in recent {
-            rows.push(self.session_row(row, self.model.list == Some(listed), cx));
-            listed += 1;
-        }
-        // "N older" sits between the sessions of the last day and the older ones.
-        if bar.older > 0 && !bar.collapsed {
-            rows.push(
-                small(self.model.list == Some(listed))
-                    .id("sessions-older")
-                    .py_0p5()
-                    .cursor_pointer()
-                    .hover(|s| s.text_color(rgb(theme::TEXT)))
-                    .child(div().w(px(8.)).child(if bar.older_open { "▾" } else { "▸" }))
-                    .child(format!("{} older", bar.older))
-                    .child(self.controls.mark("sessions-older"))
-                    .on_click(cx.listener(|this, _, window, cx| this.click_older_sessions(window, cx)))
-                    .into_any_element(),
-            );
-            listed += 1;
-        }
-        for row in old {
+        for row in &bar.rows {
             rows.push(self.session_row(row, self.model.list == Some(listed), cx));
             listed += 1;
         }
@@ -4070,7 +4054,9 @@ impl Workspace {
         }
         for section in self.model.task_sections(now_ms()).into_iter().filter(|_| by_state) {
             let selected = self.model.list == Some(listed);
-            rows.push(self.heading_row(section.heading, section.count, section.collapsed, selected, cx));
+            rows.push(
+                self.heading_row(section.heading, section.count, section.collapsed, selected, cx).into_any_element(),
+            );
             listed += 1;
             for row in &section.rows {
                 if let Some(task) = self.model.tasks.get(row.id) {

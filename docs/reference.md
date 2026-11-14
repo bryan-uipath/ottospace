@@ -422,7 +422,13 @@ unfolds it. A session at work does not unfold it.
 - **What a row shows.** The runner (`claude` or `codex`), the repository or worktree, a dot that
   is lit while the session is active (its file changed in the last 30 seconds), what it does now
   (`shell · cargo test`, `network · git push`, `files · src/main.rs`), and when it was last
-  active. Idle sessions older than a day are behind "N older".
+  active.
+- **Range.** Unfolded, its heading has a switch, Today | 7 days | 30 days | All (kept in the settings as
+  `sessions_range`): Today lists the sessions active since the local day began, the others
+  those active within that many days, All every one listed. A session at work is always
+  listed. The heading counts those in range; hover it for how many there are in all. The
+  range only narrows what was read: at most 200 sessions are listed, the most recent, so All
+  shows those 200.
 - **Title and model.** Between the two lines a row shows the session's title, on one line, when
   the runner keeps one: the name you gave a Claude Code session (`/rename`), else the title
   Claude Code wrote for it; for Codex, the thread's name in its `session_index.jsonl`, which
@@ -686,6 +692,7 @@ optional:
 | `restore_layout` | [Restore the layout](#restoring-the-layout) at start and keep it in `layout.json`. `false`: every start is empty | `true` |
 | `restore_apps` | At a restore, start an app a pane names that is not running. `false`: its pane waits and offers `Open <App>` | `false` |
 | `tasks_view` | How the Tasks section groups: `state` or `project`. Written when you pick one in the section's header | `state` |
+| `sessions_range` | Which sessions Other sessions lists: `today`, `week` (7 days), `month` (30 days) or `all`. Written when you pick one on its heading | `today` |
 | `capture_key` | The key that captures the pane in use, from any app: modifiers (`ctrl`, `alt`, `cmd`, `shift`) and a key, with `-` between them. `"off"`: no key. `OTTOSPACE_CAPTURE_KEY` wins over it. Not `ctrl-alt-space`: macOS uses it to change the input source | `ctrl-alt-cmd-space` |
 | `capture.keep_images` | Keep a capture's pictures on disk. `false`: no picture is ever written | `true` |
 | `capture.ax` | Read an app pane's accessibility tree with its picture. `false`: it is never read for a capture | `true` |

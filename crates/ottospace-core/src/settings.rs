@@ -88,6 +88,10 @@ pub struct Settings {
     /// user picks one in the section's header.
     #[serde(default)]
     pub tasks_view: Option<crate::model::TasksView>,
+    /// Which sessions Other sessions lists: `today` (default), `week`, `month` or `all`. Written
+    /// when the user picks one on its heading.
+    #[serde(default)]
+    pub sessions_range: Option<crate::sessions::Range>,
 }
 
 /// The default capture key. Not ⌃⌥Space: macOS gives that to "Select next source in Input menu".
@@ -491,6 +495,8 @@ mod tests {
         // Read back: the key is known (`x` is the one that is not).
         let (settings, wrong) = Settings::read(&set);
         assert_eq!((settings.tasks_view, wrong.len()), (Some(crate::model::TasksView::Project), 1));
+        let (settings, wrong) = Settings::read("{\"sessions_range\": \"week\"}");
+        assert_eq!((settings.sessions_range, wrong.len()), (Some(crate::sessions::Range::Week), 0));
     }
 
     #[test]
