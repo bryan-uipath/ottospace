@@ -109,7 +109,8 @@ Rules:
   cargo-nextest (`.config/nextest.toml`): up to three tries, a test that passes on a retry is
   listed as flaky in the job summary. The same job then runs the SDK's tests against a private
   instance.
-- Unused code is deleted, or its `cfg`/visibility fixed. `#[allow(dead_code)]` only with a one-line
+- Unused code is deleted, or its `cfg`/visibility fixed. A library's `pub` item that no crate uses
+  is not caught: make `pub(crate)` what only its own crate uses. `#[allow(dead_code)]` only with a one-line
   reason; a machete false positive goes in `[package.metadata.cargo-machete] ignored`, with one.
 - `.github/workflows/reliability.yml`, nightly and by hand: `cargo e2e` and `cargo e2e-apps` five
   times each, tallied; the nightly run keeps the issue "Flaky tests" (`issues: write` on that job
