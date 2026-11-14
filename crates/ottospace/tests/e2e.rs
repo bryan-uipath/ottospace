@@ -1431,7 +1431,7 @@ fn settings_choose_the_font_the_repos_and_the_tasks_folder() {
     // Defaults: Menlo 13, rows 18 points high.
     let plain = Otto::launch("settings-none");
     let state = plain.call(json!({"cmd": "state"}));
-    // The build, as the status bar shows it: "0.1.0 · local" here.
+    // The build, as the status bar's hover shows it: "0.1.0 · local" here.
     let version = state["version"].as_str().unwrap_or_default();
     assert!(version.starts_with(concat!(env!("CARGO_PKG_VERSION"), " · ")), "{version}");
     assert_eq!(
@@ -5972,6 +5972,8 @@ fn the_command_palette_runs_a_command_by_name_for_the_user_alone() {
     assert!(rows.len() > 30, "{rows:?}");
     let first = json!({"command": "split_right", "name": "Terminal Right", "group": "Panes", "key": "⌘D"});
     assert_eq!(rows[0], first);
+    // The version left the status bar for About.
+    assert!(rows.iter().any(|row| row["name"] == "About ottospace" && row["group"] == "App"), "{rows:?}");
     // Typing narrows the rows, best first. A client's key is refused, and its split waits.
     let reply = otto.user_key("t e r m space b e l");
     let typed = (&reply["state"]["palette"]["query"], &reply["palette_rows"][0]["name"]);

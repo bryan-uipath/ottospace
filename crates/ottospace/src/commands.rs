@@ -91,6 +91,7 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::OpenFolder => Box::new(OpenFolder),
         Command::BringBack => Box::new(BringBack),
         Command::EditSettings => Box::new(EditSettings),
+        Command::About => Box::new(About),
         Command::Hide => Box::new(Hide),
         Command::Quit => Box::new(Quit),
     }

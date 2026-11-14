@@ -643,7 +643,7 @@ actions!(ottospace, [TalkFocus, TalkToggle, TalkGo, StopAgent]);
 // A tab of no task, and the tab on show taken out of its task or moved to another.
 actions!(ottospace, [NewTabOutside, RemoveTabFromTask, MoveTabToTask]);
 // App menu.
-actions!(ottospace, [Quit, Hide]);
+actions!(ottospace, [Quit, Hide, About]);
 
 /// What a socket call files once its tags are read.
 enum Filing {
@@ -2651,7 +2651,7 @@ impl Workspace {
             "parking": [parking.x, parking.y],
             // The registered return key, or null if there is none.
             "return_key": RETURN_KEY.get(),
-            // Which build this is, as the status bar shows it: "0.1.0 · a4a2582".
+            // Which build this is, as the status bar's hover and About show it: "0.1.0 · a4a2582".
             "version": version_tag(env!("CARGO_PKG_VERSION"), option_env!("OTTOSPACE_COMMIT")),
             // The terminal font in use, and the size of one character cell in points.
             "font": terminal::font_in_use(),
@@ -4962,7 +4962,7 @@ impl Workspace {
             )))
     }
 
-    /// Bottom bar: who has the keyboard, and the focused pane.
+    /// Bottom bar: who has the keyboard when it is not normal, and what needs saying.
     fn render_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let color = theme::accent(self.model.mode());
         // Name the return key only if it works: a wrong hint strands the user in the app.
@@ -4976,8 +4976,8 @@ impl Workspace {
             // The app is up for a scroll: it has the keyboard until the peek ends.
             _ if peek_hint.is_some() => ("PEEK", peek_hint.as_deref().unwrap_or_default()),
             // A key, not the key list: ⌘/ shows the keys of every mode. A mode you can be in by
-            // accident names its way out.
-            Mode::Normal => ("NORMAL", "⌘/ keys"),
+            // accident names its way out. Normal is the focus border's colour alone: no chip.
+            Mode::Normal => ("", ""),
             Mode::Pick => ("PICK", ""),
             Mode::Palette => ("COMMAND", ""),
             Mode::Inspect => ("INSPECT", ""),
@@ -5003,12 +5003,6 @@ impl Workspace {
             Some(app) => format!("{hint} · {app}"),
             None => hint.to_string(),
         };
-        let focused = match self.model.focused.and_then(|id| self.model.pane(id)).map(|p| &p.kind) {
-            Some(Kind::App { title, .. }) => title.clone(),
-            Some(Kind::Empty) => "empty pane".into(),
-            Some(Kind::Terminal) => "shell".into(),
-            None => "no pane".into(),
-        };
         div()
             .h(px(24.))
             .px_2()
@@ -5021,12 +5015,16 @@ impl Workspace {
             .text_xs()
             .text_color(rgb(theme::MUTED))
             .child(mark(&self.marks, Mark::Status))
-            .child(div().px_2().rounded_sm().bg(rgb(color)).text_color(rgb(theme::BACKGROUND)).child(mode))
-            // Long text gives way, so the build tag on the right stays in view.
-            .child(div().min_w_0().truncate().child(focused))
-            .child(div().flex_none().child(hint))
-            // Pushes what follows to the right. An auto margin there closed the gaps on the left.
-            .child(div().flex_1())
+            .when(!mode.is_empty(), |d| {
+                d.child(div().px_2().rounded_sm().bg(rgb(color)).text_color(rgb(theme::BACKGROUND)).child(mode))
+            })
+            .child(div().min_w_0().truncate().child(hint))
+            // Pushes what follows to the right (an auto margin there closed the gaps on the left).
+            // Its hover names the build.
+            .child(div().id("status-space").flex_1().h_full().tooltip(|_, cx| {
+                let (commit, date) = (option_env!("OTTOSPACE_COMMIT"), option_env!("OTTOSPACE_BUILD_DATE"));
+                AnyView::from(cx.new(|_| Tooltip(version_line(env!("CARGO_PKG_VERSION"), commit, date).into())))
+            }))
             // After a capture from a live app, with the draft gone: the way back to that app.
             .children(self.model.back_to.filter(|_| self.model.capture.is_none()).and_then(|pane| {
                 let Kind::App { name, .. } = &self.model.pane(pane)?.kind else { return None };
@@ -5040,8 +5038,13 @@ impl Workspace {
             .children(self.meeting_soon())
             // The one thing tasks put here: how many wait for the user.
             .children(Some(self.model.tasks.needs_you()).filter(|n| *n > 0).map(|n| {
-                let label = if n == 1 { "1 task needs you".to_string() } else { format!("{n} tasks need you") };
-                div().text_color(rgb(theme::SNEAK)).child(label)
+                let tip = |_: &mut Window, cx: &mut App| AnyView::from(cx.new(|_| Tooltip("Needs you".into())));
+                div()
+                    .id("status-needs-you")
+                    .flex_none()
+                    .text_color(rgb(theme::SNEAK))
+                    .child(format!("● {n}"))
+                    .tooltip(tip)
             }))
             // Shown here, not in the Apps list, so it is visible whichever section is open.
             // "Copied 3 lines", from anywhere: the status bar says each copy and paste.
@@ -5053,13 +5056,6 @@ impl Workspace {
                     .map(|clip| div().flex_none().text_color(rgb(theme::PRIMARY)).child(clip.text.clone())),
             )
             .children(self.problem().map(|e| div().min_w_0().truncate().text_color(rgb(theme::ERROR)).child(e)))
-            // Which build this is, last and dim: it matters when something looks wrong.
-            .child(
-                div()
-                    .flex_none()
-                    .text_color(rgb(theme::BORDER_STRONG))
-                    .child(version_tag(env!("CARGO_PKG_VERSION"), option_env!("OTTOSPACE_COMMIT"))),
-            )
     }
 }
 
@@ -5673,14 +5669,19 @@ fn sessions(dir: Option<&String>) -> ! {
 /// The `--version` line. `scripts/package.sh` passes the commit and its date in at compile time;
 /// a plain `cargo build` has neither.
 fn version_line(version: &str, commit: Option<&str>, date: Option<&str>) -> String {
+    format!("ottospace {version} ({})", build_of(commit, date))
+}
+
+/// The build in the `--version` line and the About panel: `a4a2582c0ffe, 2026-11-12T08:09:00Z`.
+fn build_of(commit: Option<&str>, date: Option<&str>) -> String {
     match (commit.filter(|c| !c.is_empty()), date.filter(|d| !d.is_empty())) {
-        (Some(commit), Some(date)) => format!("ottospace {version} ({commit}, {date})"),
-        (Some(commit), None) => format!("ottospace {version} ({commit})"),
-        _ => format!("ottospace {version} (local build)"),
+        (Some(commit), Some(date)) => format!("{commit}, {date}"),
+        (Some(commit), None) => commit.to_string(),
+        _ => "local build".to_string(),
     }
 }
 
-/// The build, short, for the status bar: `0.1.0 · a4a2582` (seven characters of the commit), or
+/// The build, short, for the state and the status bar's hover: `0.1.0 · a4a2582` (seven characters of the commit), or
 /// `0.1.0 · local` for a plain `cargo build`.
 fn version_tag(version: &str, commit: Option<&str>) -> String {
     match commit.filter(|c| !c.is_empty()) {
@@ -5834,6 +5835,11 @@ fn main() {
         ]);
         // The menu bar lists the same actions; the app-level ones are handled here.
         cx.on_action(|_: &Hide, cx| cx.hide());
+        cx.on_action(|_: &About, cx| {
+            let (commit, date) = (option_env!("OTTOSPACE_COMMIT"), option_env!("OTTOSPACE_BUILD_DATE"));
+            cx.activate(true);
+            ottospace_mac::window::show_about(env!("CARGO_PKG_VERSION"), &build_of(commit, date));
+        });
         cx.set_menus(menus::app_menus());
         let mut bounds = Bounds::centered(None, size(px(1400.), px(900.)), cx);
         // A test run stays out of the user's way: a background app that never takes the keyboard,
@@ -5919,7 +5925,7 @@ mod tests {
         assert_eq!(version_line("0.1.0", Some("a4a2582c0ffe"), None), "ottospace 0.1.0 (a4a2582c0ffe)");
         assert_eq!(version_line("0.1.0", None, None), "ottospace 0.1.0 (local build)");
         assert_eq!(version_line("0.1.0", Some(""), Some("")), "ottospace 0.1.0 (local build)");
-        // The status bar's short form.
+        // The short form.
         assert_eq!(version_tag("0.1.0", Some("a4a2582c0ffe")), "0.1.0 · a4a2582");
         assert_eq!(
             (version_tag("0.1.0", None), version_tag("0.1.0", Some(""))),

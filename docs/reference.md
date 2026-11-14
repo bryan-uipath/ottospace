@@ -20,7 +20,7 @@ running, and the rest of the design is not built: see the
 | Capability | State |
 |---|---|
 | Split panes mixing terminals and real app windows | Works today |
-| Key bindings and a status bar showing `NORMAL` / `APP` mode | Works today |
+| Key bindings and a status bar showing the mode (`APP`, `PICK`…; none when normal) | Works today |
 | Control socket and `ottospace ctl` for agents and tests | Works today |
 | Terminal scrollback, mouse selection, copy and paste | Works today |
 | Scrollbars on every list that scrolls, the key reference and a terminal's scrollback: drag the thumb, click the track to page (in a terminal a click beside the thumb is the terminal's). They follow the system's "Show scroll bars" setting | Works today |
@@ -309,6 +309,9 @@ or a click outside closes it. A command that nothing matches keeps the box open.
 
 Open Settings (App, also ottospace ▸ Open Settings, ⌘,) opens `settings.json` in your editor in a
 tab titled Settings; see [Settings](#settings).
+
+About ottospace (App, also ottospace ▸ About ottospace) shows the version and build in the Mac's
+About panel. The hover of the status bar's empty middle shows them too.
 
 Move Tab to Task… (Tabs, also File ▸ Move Tab to Task…) turns the box into a list of the tasks
 not dismissed, in their order, then No task. Type to filter by title; ↵ or a click moves the

@@ -341,3 +341,19 @@ pub fn set_dock_icon(icon: &[u8]) {
         unsafe { NSApplication::sharedApplication(mtm).setApplicationIconImage(Some(&image)) };
     }
 }
+
+/// Shows the standard About panel: "Version 0.1.0 (a4a2582, 2026-11-12)". A bare binary has no
+/// Info.plist to read them from. Does nothing off the main thread.
+pub fn show_about(version: &str, build: &str) {
+    use objc2::runtime::AnyObject;
+    use objc2_app_kit::{NSAboutPanelOptionApplicationVersion, NSAboutPanelOptionVersion};
+    use objc2_foundation::{NSDictionary, NSString};
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let (version, build) = (NSString::from_str(version), NSString::from_str(build));
+    let values: [&AnyObject; 2] = [version.as_ref(), build.as_ref()];
+    // SAFETY: AppKit's own keys, on the main thread.
+    let keys = unsafe { [NSAboutPanelOptionApplicationVersion, NSAboutPanelOptionVersion] };
+    let options = NSDictionary::from_slices(&keys, &values);
+    let app = NSApplication::sharedApplication(mtm);
+    unsafe { app.orderFrontStandardAboutPanelWithOptions(&options) };
+}
