@@ -1015,13 +1015,15 @@ fn the_tasks_section_lists_what_needs_you_then_what_runs_then_what_waits() {
     // The same from the socket: its task has no tab to show.
     let filed = otto.call(json!({"cmd": "task_new", "line": "write the notes", "open": true}));
     assert_eq!((&filed["task"]["id"], &filed["opened"]), (&json!(5), &json!(false)));
-    // A task that needs you stays under Needs you when its tab is on show; its row says what it has open.
+    // A task that needs you stays under Needs you when its tab is on show; its card says what it has
+    // open. Its row's one fact: none for needs you (the dot says it), how long it waited under Later.
     otto.call(json!({"cmd": "split", "kind": "empty"}));
     let reply = otto.claim(1);
     assert_eq!(bar(&reply)[..3], [section("needs_you", &[1]), section("running", &[2]), section("later", &[3, 4, 5])]);
     let row = &reply["tasks_bar"]["sections"][0]["rows"][0];
-    assert_eq!((&row["tabs"], &row["current"]), (&json!(1), &json!(true)));
-    assert!(row["detail"].as_str().unwrap().starts_with("1 tab, 1 pane"), "{row}");
+    assert_eq!((&row["current"], &row["fact"]), (&json!(true), &Value::Null), "{row}");
+    assert_eq!(reply["tasks_bar"]["sections"][2]["rows"][0]["fact"], "now");
+    assert_eq!(reply["tasks_progress"]["cards"]["1"]["workspace"], "1 tab · 1 pane");
 
     // Where a control is drawn: sneak mode's targets give each one's frame. Then a real click
     // there, through the window's own handlers.
@@ -1049,17 +1051,18 @@ fn the_tasks_section_lists_what_needs_you_then_what_runs_then_what_waits() {
     // A click on that line does what `u` does, and the offer goes.
     let reply = press("task-undo");
     assert_eq!((&reply["tasks_bar"]["undo"], bar(&reply)[1].clone()), (&json!(null), section("running", &[2])));
-    // A click on Hold. Left alone, the offer goes after a few seconds; the move stays.
-    let reply = press("task-hold:2");
-    assert_eq!(reply["tasks_bar"]["undo"], "On hold");
+    // A click on Snooze. Left alone, the offer goes after a few seconds; the move stays.
+    let reply = press("task-snooze:2");
+    assert_eq!(reply["tasks_bar"]["undo"], "Snoozed");
     otto.wait_for("the offer to undo to go", |o| {
         o.call(json!({"cmd": "state"}))["tasks_bar"]["undo"].is_null().then_some(())
     });
-    assert_eq!(bar(&otto.call(json!({"cmd": "state"}))).last(), Some(&section("later", &[3, 2, 4, 5])));
-    // On the row of a task on hold there is no Hold button: it would change nothing.
-    // Rows now: Needs you, 1, Later, 3, 2, 4, 5. The selection went with its task.
-    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["list"], 4);
-    assert!(drawn("task-dismiss:2") && !drawn("task-hold:2"));
+    let reply = otto.call(json!({"cmd": "state"}));
+    assert_eq!(bar(&reply)[1], section("later", &[3, 4, 5]), "Running is gone");
+    // The row's words are Snooze and Done; Hold is `h` alone. Rows: Needs you, 1, Later, 3, ...
+    let up = reply["state"]["list"].as_u64().unwrap() - 1;
+    key(&vec!["k"; up as usize].join(" "));
+    assert!(drawn("task-snooze:1") && drawn("task-dismiss:1") && !drawn("task-hold:1"));
     // The same moves from the socket (an agent's) offer nothing.
     assert_eq!(otto.call(json!({"cmd": "task_dismiss", "id": 3}))["tasks_bar"]["undo"], json!(null));
     // A client's click on a row goes to the task's tabs: only the user's starts an agent.
@@ -1590,7 +1593,10 @@ fn open_settings_edits_the_file_and_the_status_bar_says_what_is_wrong_until_it_i
         (reply["settings_errors"] == 1).then_some(reply)
     };
     let reply = otto.wait_for("the problem said", said);
-    assert_eq!(reply["notice"], "settings.json:3:1 trailing comma");
+    assert_eq!(
+        (&reply["notice"], &reply["notice_level"]),
+        (&json!("settings.json:3:1 trailing comma"), &json!("error"))
+    );
     assert_eq!(reply["state"]["tasks_view"], "state");
     // Removed: as at a start with no file, the defaults, and nothing to say.
     std::fs::remove_file(&file).unwrap();
@@ -1611,6 +1617,8 @@ fn open_settings_edits_the_file_and_the_status_bar_says_what_is_wrong_until_it_i
         notice.filter(|notice| notice.contains("restart"))
     };
     assert_eq!(otto.wait_for("a restart asked for", restart), "settings.json: restart to apply terminal");
+    // Information, not an error: drawn muted.
+    assert_eq!(otto.call(json!({"cmd": "state"}))["notice_level"], "info");
 
     // Again, from the first tab: the Settings tab comes forward, no second one.
     otto.call(json!({"cmd": "select_tab", "index": 0}));
@@ -1774,8 +1782,8 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
     let bar = otto.call(json!({"cmd": "state"}))["sessions_bar"].clone();
     assert_eq!((&bar["enabled"], &bar["reads"], &bar["count"]), (&json!(true), &json!(0), &json!(0)));
     assert_eq!(bar["slow_reads"], 0, "no task follows a session: nothing to look at");
-    // Open: read at once. The group starts folded: its heading alone, until unfolded. Then Today:
-    // the active session first (the idle one too, unless the day began less than 2 hours ago).
+    // Open: read at once. The group starts folded: its heading alone, until unfolded. Then 7 days:
+    // the active session first, then the idle one of two hours ago.
     otto.call(json!({"cmd": "section", "section": "tasks"}));
     let folded = otto.wait_for("the sessions to be read", |o| {
         Some(o.call(json!({"cmd": "state"}))).filter(|reply| reply["sessions_bar"]["total"] == 3)
@@ -1786,12 +1794,14 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
         Some(o.call(json!({"cmd": "state"}))).filter(|reply| reply["sessions_bar"]["total"] == 3)
     });
     assert_eq!(
-        (rows(&reply)[0].clone(), &reply["sessions_bar"]["range"]),
-        (row("claude", busy, true), &json!("today"))
+        (rows(&reply), &reply["sessions_bar"]["range"]),
+        (vec![row("claude", busy, true), row("codex", idle, false)], &json!("week"))
     );
-    // 7 days: the two of today and two hours ago. A client's pick lasts the run, unwritten.
+    // Today: the active one (the idle one too, unless the day began less than 2 hours ago). A
+    // client's pick lasts the run, unwritten. Then 7 days again.
+    let reply = otto.call(json!({"cmd": "sessions_range", "range": "today"}));
+    assert_eq!(rows(&reply)[0], row("claude", busy, true));
     let reply = otto.call(json!({"cmd": "sessions_range", "range": "week"}));
-    assert_eq!(rows(&reply), [row("claude", busy, true), row("codex", idle, false)]);
     let written = || std::fs::read_to_string(home.join("settings.json")).unwrap();
     assert!(!written().contains("sessions_range"), "{}", written());
     let bar = &reply["sessions_bar"];
@@ -1808,10 +1818,13 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
     let reply = otto.call(json!({"cmd": "sessions_range", "range": "all"}));
     assert_eq!(rows(&reply)[2], row("codex", old, false));
     assert_eq!(named(&reply["sessions_bar"]["rows"][2]), (Value::Null, json!("gpt-5.4")), "no title: none shown");
-    // The user's click on the heading's switch is written to the settings.
-    let reply = otto.user_click(at(otto.control("sessions-range:week"), 0.5, 0.5));
-    assert_eq!((&reply["sessions_bar"]["range"], &reply["sessions_bar"]["collapsed"]), (&json!("week"), &json!(false)));
-    assert!(written().contains("\"sessions_range\": \"week\""), "{}", written());
+    // No switch on the heading: the range is the settings' alone. A row's words are Track and Hide.
+    let reply = otto.call(json!({"cmd": "sneak"}));
+    otto.call(json!({"cmd": "key", "keys": "escape"}));
+    let ids: Vec<String> =
+        reply["sneak"]["targets"].as_array().unwrap().iter().map(|t| t["source"]["id"].to_string()).collect();
+    assert!(!ids.iter().any(|id| id.contains("sessions-range") || id.contains("session-open")), "{ids:?}");
+    otto.call(json!({"cmd": "sessions_range", "range": "week"}));
     // The words of the made-up conversation are nowhere in what the app says.
     let said = otto.call(json!({"cmd": "state"})).to_string();
     assert!(!said.contains("Add a greeting") && !said.contains("made-up"), "{said}");
@@ -1839,7 +1852,8 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
     assert_eq!((&task["title"], &task["state"], &task["agent"]), (&json!("app"), &json!("running"), &json!("claude")));
     assert_eq!((task["repo"].as_str(), task["session"]["id"].as_str()), (repo.to_str(), Some(busy)));
     assert!(task["session"].get("cwd").is_none(), "{task}");
-    assert_eq!(reply["tasks_bar"]["sections"][0]["rows"][0]["detail"], ">app · @claude · now");
+    let card = &reply["tasks_progress"]["cards"]["1"];
+    assert_eq!((&card["tags"], &card["filed"]), (&json!([">app", "@claude"]), &json!("now")));
     assert_eq!(rows(&reply), [row("codex", idle, false)]);
     // One that started below the repository is the repository's task too: `>app`, not `>crates`.
     let reply = otto.call(json!({"cmd": "session_adopt", "runner": "codex", "id": idle}));
@@ -2510,6 +2524,7 @@ fn a_path_typed_a_letter_at_a_time_keeps_its_dropdown_still() {
         ("plan my week ~/notes/2026/", &json!("~/notes/2026/"))
     );
     assert_eq!(reply["compose_plan"]["dir"], "~/notes/2026/");
+    assert_eq!(reply["compose_plan_line"], "↵ will start claude in ~/notes/2026/");
     // Esc closes the list and leaves the text as typed.
     let reply = key("escape");
     assert_eq!((field(&reply).0.as_str(), &reply["compose_menu"]), ("plan my week ~/notes/2026/", &Value::Null));
@@ -2645,6 +2660,11 @@ fn with_nothing_open_the_drawer_offers_a_new_task() {
     });
     let plan = json!({"agent": "codex", "starts": true, "dir": null, "branch": null});
     assert_eq!(reply["compose_plan"], plan);
+    // Not the default agent: the drawer says what ↵ does. Something typed: no tag hint.
+    assert_eq!(
+        (&reply["compose_plan_line"], &reply["compose_hint"]),
+        (&json!("↵ will start codex in your home folder"), &Value::Null)
+    );
     // Typing goes into it; ⇧↵ files the task for later and the box closes. A task is open now:
     // the drawer goes.
     key("cmd-a t i d y space # x");
@@ -2654,8 +2674,16 @@ fn with_nothing_open_the_drawer_offers_a_new_task() {
         (&reply["compose_host"], &reply["welcome"], &reply["mode"]),
         (&Value::Null, &json!(false), &json!("normal"))
     );
-    // ⌘N opens it again; Esc leaves.
-    assert_eq!(key("cmd-n")["compose_host"], "drawer");
+    // ⌘N opens it again, empty: the tag hint, and no plan line for the default.
+    let reply = key("cmd-n");
+    assert_eq!(reply["compose_host"], "drawer");
+    assert!(
+        reply["compose_hint"].as_str().is_some_and(|hint| hint.starts_with("#project")),
+        "{}",
+        reply["compose_hint"]
+    );
+    assert_eq!(reply["compose_plan_line"], Value::Null);
+    // Esc leaves.
     // Its left edge drags: 100 pt to the right narrows it by 100. (Wider is capped at half a
     // window, which may be no wider than it is.)
     let state = otto.drawn();
@@ -4916,7 +4944,7 @@ fn a_pane_is_captured_annotated_and_becomes_a_task_with_a_brief() {
     let name = file.strip_suffix("/1.json").filter(|name| name.starts_with("1-") && name.len() >= 10).expect(file);
     assert_eq!((&task["title"], task["materials"].as_array().map(Vec::len)), (&json!("fix it"), Some(1)));
     assert_ne!(name, "1-0ldw0rd0ldw0rd");
-    assert!(reply["tasks_bar"]["sections"][0]["rows"][0]["detail"].as_str().is_some_and(|d| d.contains("1 material")));
+    assert!(reply["tasks_progress"]["cards"]["1"]["tags"].as_array().unwrap().contains(&json!("1 capture")));
     let kept = materials.join(name);
     assert!(!dir.exists(), "the draft's folder is the task's now");
     let files = ["1.annotated.png", "1.json", "1.png", "brief.json", "brief.md"];
@@ -5488,9 +5516,11 @@ fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_works
     assert_eq!(otto.user_key("cmd-ctrl-1")["state"]["talk"]["open"], false);
     assert_eq!(otto.user_click(at(otto.control("rail-talk:1"), 0.5, 0.5))["state"]["talk"]["open"], true);
 
-    // Stop ends it: the task needs the user.
-    let stopped = otto.user_click(at(otto.control("talk:talk-stop"), 0.5, 0.5));
-    assert_eq!(stopped["state"]["agents"], json!([]));
+    // Stop ends it, once its process is gone: the task needs the user.
+    otto.user_click(at(otto.control("talk:talk-stop"), 0.5, 0.5));
+    let stopped = otto.wait_for("its process gone", |o| {
+        Some(o.call(json!({"cmd": "state"}))).filter(|s| s["state"]["agents"] == json!([]))
+    });
     assert_eq!(stopped["state"]["tasks"]["list"][0]["state"], "needs_you");
 
     // A task tagged with a Codex model starts Codex with that model, in the home folder.
@@ -5738,8 +5768,11 @@ fn a_click_shows_a_session_and_resume_goes_on_with_it_in_the_drawer() {
     let reads = |o: &Otto| o.call(json!({"cmd": "state"}))["sessions_bar"]["reads"].as_u64().unwrap_or(0);
     let read = reads(&otto);
     otto.wait_for("a read that sees the agent's process", |o| (reads(o) > read + 1).then_some(()));
-    let stopped = otto.user_click(at(otto.control("talk:talk-stop"), 0.5, 0.5));
-    assert_eq!(stopped["state"]["agents"], json!([]), "{stopped}");
+    otto.user_click(at(otto.control("talk:talk-stop"), 0.5, 0.5));
+    // Nothing starts on the session until its process is gone.
+    otto.wait_for("its process gone", |o| {
+        (o.call(json!({"cmd": "state"}))["state"]["agents"] == json!([])).then_some(())
+    });
     otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
     let again = otto.user_start();
     assert_eq!((&again["drawer"]["note"], &again["state"]["agents"]), (&Value::Null, &json!([1])), "{again}");
@@ -5751,6 +5784,9 @@ fn a_click_shows_a_session_and_resume_goes_on_with_it_in_the_drawer() {
     // resume, which goes on in the folder it started in, not the repository.
     std::fs::remove_file(bin.join("claude.argv")).unwrap();
     otto.user_click(at(otto.control("talk:talk-stop"), 0.5, 0.5));
+    otto.wait_for("its process gone", |o| {
+        (o.call(json!({"cmd": "state"}))["state"]["agents"] == json!([])).then_some(())
+    });
     otto.call(json!({"cmd": "section", "section": "tasks"}));
     otto.wait_for("nothing listed", |o| (o.call(json!({"cmd": "state"}))["sessions_bar"]["count"] == 0).then_some(()));
     otto.user_key("cmd-shift-l");
@@ -6013,7 +6049,10 @@ fn tasks_show_by_state_or_project_with_time_tokens_a_footer_and_a_card() {
     assert_eq!(headings, ["needs_you", "running", "later", "done"]);
     assert_eq!((&sections[3]["count"], &sections[3]["collapsed"]), (&json!(1), &json!(true)));
     let running = &sections[1]["rows"][0];
-    assert_eq!((&running["live"], &running["model"]), (&json!("network · git push"), &json!("fable-5.2")), "{running}");
+    // Its one fact: how long it has run, as its card's Started. Its model is on the card.
+    let card = &reply["tasks_progress"]["cards"]["1"];
+    assert_eq!((&running["live"], &running["fact"]), (&json!("network · git push"), &card["started"]), "{running}");
+    assert_eq!((&card["model"], &card["priority"]), (&json!("fable-5.2"), &json!(3)), "{card}");
 
     // The task keeps what its session did: tokens by model, a sub-agent's apart, and time at work.
     let card = otto.wait_for("the session's work", |o| {
@@ -6261,11 +6300,11 @@ fn the_inspector_shows_a_trees_counts_and_roles_never_its_text() {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_tab_strip_ends_where_the_panes_end_and_its_buttons_stay_in_view() {
-    // A meeting soon, its title long: its chip shares the strip with the buttons.
+    // A meeting soon, its title long: nothing of it is drawn in the strip, the band says it.
     let title = "Quarterly planning with every team that has an opinion about the roadmap";
     let home = calendar_folder("strip", &feed(&[("a", title, 240, 3_600, "")]), None);
     let otto = Otto::launch_with("strip", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
-    assert_eq!(calendar_read(&otto)["chip"], true);
+    assert_eq!(calendar_read(&otto)["stage"], "approaching");
     otto.call(json!({"cmd": "split", "kind": "empty"}));
     for _ in 0..24 {
         otto.call(json!({"cmd": "new_tab"}));
@@ -6300,7 +6339,7 @@ fn the_tab_strip_ends_where_the_panes_end_and_its_buttons_stay_in_view() {
     let tree = json!({"root": root, "count": 1, "truncated": truncated});
     assert!(otto.call(json!({"cmd": "inspector_fixture", "app": "Fixture", "tree": tree}))["inspector"].is_object());
     fits("the inspector");
-    // A section open too: the strip is narrower than the chip and the buttons.
+    // A section open too: the strip is narrower than the tabs and the buttons.
     otto.call(json!({"cmd": "section", "section": "tasks"}));
     fits("the inspector and a section");
     let _ = std::fs::remove_dir_all(&home);
@@ -6600,12 +6639,13 @@ fn the_meeting_timeline_alerts_and_only_the_user_joins_or_dismisses() {
     let otto = Otto::launch_with("calendar", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
     let calendar = |o: &Otto| o.call(json!({"cmd": "state"}))["calendar"].clone();
     let read = calendar_read(&otto);
-    // Counts, times and stages: the next one comes near, so the status bar names it.
+    // Counts, times and stages: the next one comes near, and the band alone says so.
     assert_eq!(read["on"], true);
     let counted = read["events_today"].as_u64().unwrap() + read["events_tomorrow"].as_u64().unwrap();
     assert_eq!(counted, 4, "{read}");
-    assert_eq!((&read["stage"], &read["soon"], &read["chip"]), (&json!("approaching"), &json!(true), &json!(true)));
-    assert!(read["bars"].as_u64() >= Some(3), "{read}");
+    assert_eq!((&read["stage"], &read["soon"], &read["chip"]), (&json!("approaching"), &Value::Null, &Value::Null));
+    // Planning is 4 minutes off: on the band unless that is past midnight.
+    assert!(read["bars"].as_u64() >= Some(2), "{read}");
     // No title or link reaches a client.
     let state = otto.call(json!({"cmd": "state"})).to_string();
     assert!(!state.contains("Design review") && !state.contains("example.zoom.us"), "{state}");
@@ -6758,7 +6798,7 @@ fn the_calendar_request_gives_titles_and_busy_time_but_no_link_or_address() {
 fn no_feed_no_timeline() {
     let otto = Otto::launch("calendar-off");
     let calendar = otto.call(json!({"cmd": "state"}))["calendar"].clone();
-    assert_eq!((&calendar["on"], &calendar["bars"], &calendar["chip"]), (&json!(false), &json!(0), &json!(false)));
+    assert_eq!((&calendar["on"], &calendar["bars"]), (&json!(false), &json!(0)));
     assert_eq!(calendar["band"], Value::Null, "no band");
     let reply = otto.call(json!({"cmd": "calendar", "day": "tomorrow"}));
     assert_eq!(reply, json!({"ok": true, "configured": false}), "nothing but that");
@@ -6817,6 +6857,87 @@ fn the_timeline_band_spans_the_workday_directly_above_the_status_bar() {
     assert!(!otto.call(json!({"cmd": "state"})).to_string().contains("Gamma"));
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
+}
+
+/// A made-up busy day that repeats daily (`tests/fixtures/calendar-busy-day.ics`): 16 timed
+/// entries, three calls at once over a 4-hour block, a reminder at 00:00, tentative, free and
+/// out-of-office entries, an all-day one.
+const BUSY_DAY: &str = include_str!("fixtures/calendar-busy-day.ics");
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_busy_day_puts_calls_in_lanes_over_blocks_coloured_by_kind_and_rule() {
+    let home = calendar_folder("calendar-busy", BUSY_DAY, None);
+    let rules = json!([{ "match": "1:1", "color": "teal" }, { "match": "SYNC", "color": "pink" }]);
+    let settings = |hide_free: bool| {
+        json!({
+            "calendar_ics": home.join("today.ics"), "calendar_workday": "06:00-22:00", "repos": [],
+            "calendar_colors": rules, "calendar_hide_free": hide_free,
+        })
+        .to_string()
+    };
+    std::fs::write(home.join("settings.json"), settings(false)).unwrap();
+    let otto = Otto::launch_with("calendar-busy", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    calendar_read(&otto);
+    let band_of = |o: &Otto| o.call(json!({"cmd": "state"}))["calendar"]["band"].clone();
+    let band = otto.wait_for("the band drawn", |o| Some(band_of(o)).filter(|b| b["rect"].is_array()));
+    // The 00:00 reminder is a marker at the left end: the band is the workday, not stretched.
+    assert_eq!(band["span"], band["workday"], "{band}");
+    assert_eq!((&band["outside"][0]["count"], &band["outside"][1]["count"]), (&json!(1), &json!(0)), "{band}");
+    assert!(band["outside"][0]["rect"].is_array(), "{band}");
+    let blocks = band["blocks"].as_array().unwrap().clone();
+    let count = |key: &str, value: Value| blocks.iter().filter(|b| b[key] == value).count();
+    assert_eq!((count("kind", json!("call")), count("kind", json!("block"))), (11, 4), "{band}");
+    // Three calls at 09:00 share three lanes; the 4-hour block under them takes none.
+    assert_eq!(count("lanes", json!(3)), 3, "{band}");
+    assert!(blocks.iter().filter(|b| b["kind"] == "block").all(|b| b["lane"].is_null()), "{band}");
+    // Rules by title, case ignored; the rest by kind and status.
+    let colours = [("teal", 2), ("pink", 3), ("away", 1), ("block", 3), ("meeting", 6)];
+    for (name, n) in colours {
+        assert_eq!(count("color", json!(name)), n, "{name} in {band}");
+    }
+    assert_eq!((count("show", json!("tentative")), count("show", json!("free"))), (1, 1), "{band}");
+    // Within a lane's slice, each of three calls at once is drawn, a third of the band each.
+    let r = |v: &Value| -> Vec<f64> { v.as_array().expect("a rect").iter().filter_map(Value::as_f64).collect() };
+    let lanes: Vec<Vec<f64>> = blocks.iter().filter(|b| b["lanes"] == 3).map(|b| r(&b["rect"])).collect();
+    assert!(lanes.windows(2).all(|w| w[1][1] > w[0][1] + w[0][3] - 0.01), "stacked, not overlapping: {lanes:?}");
+    // Free entries leave as the settings are saved, with no restart.
+    std::fs::write(home.join("settings.json"), settings(true)).unwrap();
+    otto.wait_for("free entries hidden", |o| {
+        let b = band_of(o);
+        b["blocks"].as_array().is_some_and(|all| all.len() == blocks.len() - 1).then_some(())
+    });
+    assert!(otto.call(json!({"cmd": "state"}))["notice"].is_null(), "no restart asked");
+    assert!(!otto.call(json!({"cmd": "state"})).to_string().contains("Daily standup"), "no title in the state");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// A test run films its own window for `scripts/shot --record`: a raw frame of the window's size
+/// per change, each listed with its time. One recording at a time.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_test_run_records_its_own_window() {
+    let otto = Otto::launch("record");
+    let dir = support::temp(&format!("ottospace-e2e-record-{}", std::process::id()));
+    assert_eq!(otto.raw(r#"{"cmd":"record_stop"}"#)["error"], "not recording");
+    otto.call(json!({"cmd": "record_start", "dir": dir}));
+    let again = otto.raw(&json!({"cmd": "record_start", "dir": dir}).to_string());
+    assert_eq!(again["error"], "already recording");
+    otto.call(json!({"cmd": "split"}));
+    let index = dir.join("frames.jsonl");
+    let lines = |_: &Otto| std::fs::read_to_string(&index).ok().filter(|text| !text.is_empty());
+    otto.wait_for("a recorded frame", lines);
+    let frames = otto.call(json!({"cmd": "record_stop"}))["frames"].as_u64().expect("frames");
+    assert!(frames >= 1);
+    let text = std::fs::read_to_string(&index).unwrap();
+    let first: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+    // One pixel a point: the window's size, four bytes a pixel.
+    let window = otto.call(json!({"cmd": "state"}))["window"].clone();
+    let (w, h) = (first["w"].as_u64().unwrap(), first["h"].as_u64().unwrap());
+    assert_eq!((w as f64, h as f64), (window[2].as_f64().unwrap(), window[3].as_f64().unwrap()), "{first}");
+    let bytes = std::fs::metadata(dir.join(format!("{}.bgra", first["n"]))).unwrap().len();
+    assert_eq!(bytes, w * h * 4);
 }
 
 /// Whether sneak mode labels a control of this id: it is drawn.
@@ -6992,6 +7113,14 @@ fn a_native_conversation_streams_asks_and_switches_to_the_terminal_and_back() {
     assert_eq!(kinds, ["user", "assistant", "tool"], "{first}");
     let view = (&first["view"], &first["native"], &first["transcript"]["mode"]);
     assert_eq!(view, (&json!("native"), &json!(true), &json!("default")));
+    // The header names no model, mode, time or folder (its task's own): the title's hover does;
+    // the drawer's foot says the model. A mode that asks is not at the foot.
+    let line = otto.call(json!({"cmd": "state"}))["drawer"]["line"].clone();
+    assert_eq!((&line["folder"], &line["bypass"]), (&Value::Null, &json!(false)), "{line}");
+    let foot = line["foot"].as_str().expect("the model at the foot");
+    assert!(!foot.contains("default") && !foot.contains('·'), "{line}");
+    let facts: Vec<&str> = line["facts"].as_array().unwrap().iter().filter_map(|f| f[0].as_str()).collect();
+    assert_eq!(facts, ["Model", "Mode", "Running", "Folder"], "{line}");
     // The reply's structure: a heading, a code block, a table; one web link and one file link
     // (the `javascript:` one is text). The script tag is a paragraph of text.
     let reply = &first["replies"][0];
@@ -7147,8 +7276,7 @@ fn an_agent_that_ends_before_replying_says_why() {
         (chat["transcript"]["live"] == false && chat["details"] == true).then_some(chat)
     });
     let last = ended["transcript"]["entries"].as_array().unwrap().last().cloned().unwrap();
-    let notice =
-        json!({"kind": "notice", "notice": "ended", "code": 0, "signal": null, "replied": false, "details": true});
+    let notice = json!({"kind": "notice", "notice": "ended", "code": 0, "signal": null, "replied": false, "details": true, "by_user": false});
     assert_eq!(last, notice, "{ended}");
     assert_eq!(ended["transcript"]["not_understood"], 1, "hook lines are quiet, the made-up kind is not");
     let state = otto.call(json!({"cmd": "state"})).to_string();
@@ -7202,7 +7330,7 @@ fn a_message_after_the_agent_ended_starts_it_again_and_is_sent() {
     let kinds: Vec<&str> =
         replied["transcript"]["entries"].as_array().unwrap().iter().filter_map(|e| e["kind"].as_str()).collect();
     assert_eq!((kinds, &replied["transcript"]["not_understood"]), (vec!["user", "assistant"], &json!(0)), "{replied}");
-    otto.user_click(at(otto.control("talk:talk-stop"), 0.5, 0.5));
+    stop_the_agent(&otto);
     otto.wait_for("the end", |o| (chat(o)["transcript"]["live"] == false).then_some(()));
     // A client's words reach nothing; the user's ↵ starts it again and sends them.
     otto.call(json!({"cmd": "key", "keys": "x enter"}));
@@ -7211,6 +7339,113 @@ fn a_message_after_the_agent_ended_starts_it_again_and_is_sent() {
     otto.user_key("s a y space h e l l o enter");
     otto.wait_for("the message", |_| (starts() == 2 && stdin().contains(r#""text":"say hello""#)).then_some(()));
     assert_eq!(chat(&otto)["draft_chars"], 0);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The user's "Stop the Agent", from the palette: a native drawer has no Stop for the agent.
+fn stop_the_agent(otto: &Otto) {
+    otto.user_key("cmd-p");
+    otto.user_key("s t o p space t h e space a g e n t");
+    otto.user_key("enter");
+}
+
+/// Stop is at the composer while a turn runs, nowhere else. The agent stopped: nothing says it
+/// cannot be resumed, no Resume until its process is gone; Resume (the composer's button) goes
+/// on with the session, and the conversation reads on: one quiet divider, no sentence of an end
+/// or of turns elsewhere, and the resume's hook lines (SYNTHETIC: no recording of a resume) are
+/// no line not understood.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_message_right_after_stop_resumes_once_and_nothing_says_it_cannot() {
+    let fixtures = [("turn1.jsonl", recorded("real-2.1.325-turn.jsonl"))];
+    let (root, record, mut env) = native_setup("stop-send", &fixtures, &[]);
+    env.push(("FAKE_SESSIONS".into(), root.join("sessions/claude").to_str().unwrap().into()));
+    let otto = launch_env("stop-send", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "plan the week >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    let starts = || std::fs::read_to_string(record.join("starts")).unwrap_or_default().lines().count();
+    let sent = || std::fs::read_to_string(record.join("stdin")).unwrap_or_default().matches("say hello").count();
+    otto.start_task(1);
+    otto.wait_for("the reply", |o| {
+        let chat = chat(o);
+        (chat["transcript"]["turn"].is_null() && chat["replies"].as_array()?.len() == 1).then_some(())
+    });
+    // Stop, and at once a message and ↵: no refusal, then one resume, and the message once.
+    stop_the_agent(&otto);
+    let typed = otto.user_key("s a y space h e l l o enter");
+    assert_eq!((&typed["drawer"]["note"], &typed["notice"]), (&Value::Null, &Value::Null), "nothing says it cannot");
+    otto.wait_for("one resume, and the message", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        assert_eq!(state["drawer"]["note"], Value::Null, "nothing says it cannot");
+        (starts() == 2 && sent() == 1).then_some(())
+    });
+    let argv = std::fs::read_to_string(record.join("argv")).unwrap_or_default();
+    assert!(argv.lines().any(|a| a == "--resume"), "{argv}");
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!((starts(), sent()), (2, 1), "once each");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_stopped_agent_resumes_as_one_conversation() {
+    let resume = [
+        r#"{"type":"system","subtype":"hook_started","hook_name":"SessionStart:resume","session_id":"s"}"#,
+        r#"{"type":"system","subtype":"hook_progress","hook_name":"SessionStart:resume","session_id":"s"}"#,
+        r#"{"type":"system","subtype":"hook_response","hook_name":"SessionStart:resume","session_id":"s"}"#,
+    ]
+    .join("\n");
+    let fixtures = [("turn1.jsonl", recorded("real-2.1.325-turn.jsonl")), ("resume.jsonl", resume)];
+    let (root, record, mut env) = native_setup("stop-resume", &fixtures, &[]);
+    env.push(("FAKE_SESSIONS".into(), root.join("sessions/claude").to_str().unwrap().into()));
+    let otto = launch_env("stop-resume", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "plan the week >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    let argv = || std::fs::read_to_string(record.join("argv")).unwrap_or_default();
+    let ids = |o: &Otto| -> Vec<String> { o.controls().into_iter().map(|(id, _)| id).collect() };
+    otto.start_task(1);
+    otto.wait_for("the reply", |o| {
+        let chat = chat(o);
+        (chat["transcript"]["turn"].is_null() && chat["replies"].as_array()?.len() == 1).then_some(())
+    });
+    // No turn: no Stop anywhere. A turn: Stop at the composer, none in the header.
+    assert!(!ids(&otto).iter().any(|id| id == "talk:chat-stop" || id == "talk:talk-stop"), "{:?}", ids(&otto));
+    otto.user_click(at(otto.control("talk"), 0.5, 0.5));
+    otto.user_key("g o space o n enter");
+    otto.wait_for("a turn", |o| (!chat(o)["transcript"]["turn"].is_null()).then_some(()));
+    let drawn = ids(&otto);
+    assert!(
+        drawn.iter().any(|id| id == "talk:chat-stop") && !drawn.iter().any(|id| id == "talk:talk-stop"),
+        "{drawn:?}"
+    );
+    // The agent stopped: until it is gone and after, nothing says it cannot go on.
+    stop_the_agent(&otto);
+    let ended = otto.wait_for("the end", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        assert_eq!(state["drawer"]["note"], Value::Null, "no 'cannot' while it stops");
+        (state["drawer"]["native"]["chats"]["1"]["transcript"]["live"] == false).then_some(state)
+    });
+    assert_eq!(ended["drawer"]["note"], Value::Null);
+    let before = chat(&otto)["transcript"]["entries"].as_array().unwrap().len();
+    otto.user_start();
+    otto.wait_for("claude --resume", |_| argv().lines().any(|a| a == "--resume").then_some(()));
+    let resumed = otto.wait_for("it runs again", |o| (chat(o)["transcript"]["live"] == true).then_some(chat(o)));
+    let entries = resumed["transcript"]["entries"].as_array().unwrap().clone();
+    // The end gave way to one divider: as many entries as before, the last a resume with its turns on show.
+    assert_eq!(entries.len(), before, "{resumed}");
+    let last = entries.last().unwrap();
+    assert_eq!(
+        (&last["notice"], &last["here"], &last["ended"]["by_user"]),
+        (&json!("resumed"), &json!(true), &json!(true)),
+        "{last}"
+    );
+    assert_eq!(resumed["transcript"]["not_understood"], 0, "hook lines are quiet");
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -7264,7 +7499,7 @@ fn a_click_on_a_tab_switches_with_the_drawer_open() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// The check the native view must pass before it is the default again: the real `claude`, on
+/// The check the native view passed to be the default again (2026-11-14): the real `claude`, on
 /// the cheapest model, in a private instance and a scratch repository. One short model session
 /// on the user's own account: never in CI, never by default; run only with the user's approval:
 ///

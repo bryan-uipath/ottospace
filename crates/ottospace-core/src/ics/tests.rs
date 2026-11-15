@@ -677,3 +677,36 @@ fn rdates_are_capped() {
     let text = feed(&event(&format!("SUMMARY:Many\r\nDTSTART:20261102T090000Z\r\nRDATE:{one}\r\nRDATE:{one}\r\n")));
     assert_eq!(parse(&text).events[0].rdates.len(), MAX_RDATES);
 }
+
+#[test]
+fn how_an_entry_holds_the_time() {
+    let show = |lines: &str| {
+        let text =
+            feed(&event(&format!("UID:a\r\nSUMMARY:Sync\r\nDTSTART:20261113T090000Z\r\nDURATION:PT30M\r\n{lines}")));
+        let from = at(2026, 11, 13, 0, 0);
+        expand(&parse(&text), from, from + DAY, &utc()).first().map(|o| o.show)
+    };
+    let table: [(&str, Show); 13] = [
+        ("", Show::Busy),
+        ("STATUS:CONFIRMED\r\n", Show::Busy),
+        ("STATUS:TENTATIVE\r\n", Show::Tentative),
+        ("TRANSP:TRANSPARENT\r\n", Show::Free),
+        ("TRANSP:OPAQUE\r\n", Show::Busy),
+        ("X-MICROSOFT-CDO-BUSYSTATUS:FREE\r\n", Show::Free),
+        ("X-MICROSOFT-CDO-BUSYSTATUS:tentative\r\n", Show::Tentative),
+        ("X-MICROSOFT-CDO-BUSYSTATUS:OOF\r\n", Show::Away),
+        ("X-MICROSOFT-CDO-BUSYSTATUS:WORKINGELSEWHERE\r\n", Show::Busy),
+        // Outlook's own status outranks STATUS and TRANSP.
+        ("STATUS:TENTATIVE\r\nX-MICROSOFT-CDO-BUSYSTATUS:BUSY\r\n", Show::Busy),
+        ("TRANSP:TRANSPARENT\r\nX-MICROSOFT-CDO-BUSYSTATUS:OOF\r\n", Show::Away),
+        // An unknown value says nothing: the others decide.
+        ("TRANSP:TRANSPARENT\r\nX-MICROSOFT-CDO-BUSYSTATUS:MAYBE\r\n", Show::Free),
+        // The organiser's intended status is not the user's own: read nowhere.
+        ("X-MICROSOFT-CDO-INTENDEDSTATUS:FREE\r\n", Show::Busy),
+    ];
+    for (lines, want) in table {
+        assert_eq!(show(lines), Some(want), "{lines:?}");
+    }
+    // A free entry is still read; a cancelled one is not.
+    assert_eq!(show("STATUS:CANCELLED\r\nX-MICROSOFT-CDO-BUSYSTATUS:FREE\r\n"), None);
+}

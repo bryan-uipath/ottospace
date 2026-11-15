@@ -69,6 +69,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     font: { name: "Menlo", size: 13 },
     cell: [7.82666015625, 18],
     notice: null,
+    notice_level: null,
     settings_errors: 0,
     hosted: {},
     crop: {},
@@ -83,6 +84,8 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     compose_read: false,
     compose_host: null,
     compose_plan: null,
+    compose_plan_line: null,
+    compose_hint: null,
     compose_picks: { wheres: ["app"], whos: ["claude", "codex"] },
     welcome: false,
     compose_menu: null,
@@ -119,11 +122,15 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     badges: { "1": "FL" },
     calendar: {
       on: true, events_today: 3, all_day_today: 1, events_tomorrow: 2, next_start: 1794560400000, stage: "approaching",
-      updated: 1794556800000, stale: false, in_call: false, soon: true, bars: 3, chip: true,
+      updated: 1794556800000, stale: false, in_call: false, bars: 3,
       band: {
         rect: [6, 868, 1388, 8], span: [1794556800000, 1794585600000], workday: [1794556800000, 1794585600000],
         marks: [[6, 869.5, 1, 5], [1394, 869.5, 1, 5]], now: [659.5, 868, 1.5, 8],
-        blocks: [{ start: 1794560400000, end: 1794562200000, rect: [179.5, 869.5, 86.75, 5] }], status_bar: [0, 877, 1400, 23],
+        blocks: [{
+          start: 1794560400000, end: 1794562200000, rect: [179.5, 869.5, 86.75, 5],
+          kind: "call", show: "tentative", color: "teal", lane: 0, lanes: 3, more: 0,
+        }],
+        outside: [{ count: 1, rect: [1, 870.5, 4, 4] }, { count: 0, rect: null }], status_bar: [0, 877, 1400, 23],
       },
       banner: { join: [0, 28, 40, 20], dismiss: [44, 28, 60, 20] }, alerts: 1, joins: null,
       rows: 4, rail: "near", tomorrow_open: false,
@@ -170,6 +177,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
         opened: ["web"],
       },
       goes_to: null,
+      line: null,
       note: null,
       rail: [
         { task: 1, mono: "FL", group: "running", working: true, shown: true, tip: "fix login\nRunning\napp · @claude · now" },
@@ -218,5 +226,5 @@ test("a calendar reply parses whole, and with no feed says only that", () => {
   assert.deepEqual(calendarReply(raw), raw);
   assert.deepEqual(calendarReply({ ok: true, configured: false }), { ok: true, configured: false });
   const meetings = [{ start: "a", end: "b", all_day: false, title: "t", location: null, has_call_link: false, status: "maybe" }];
-  assert.throws(() => calendarReply({ ...raw, meetings }), /meetings\[0\]\.status should be tentative/);
+  assert.throws(() => calendarReply({ ...raw, meetings }), /meetings\[0\]\.status should be busy, tentative, free or away/);
 });

@@ -1,0 +1,6 @@
+#!/bin/sh
+# The agents crate's stand-in. Its second start ends before it replies: an ended agent.
+if [ -s "$FAKE_DIR/starts" ]; then
+  export FAKE_EXIT=1 FAKE_STDERR="Error: made-up failure"
+fi
+exec "{REPO}/crates/ottospace-agents/tests/fakes/claude" "$@"

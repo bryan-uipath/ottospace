@@ -25,15 +25,15 @@ running, and the rest of the design is not built: see the
 | Terminal scrollback, mouse selection, copy and paste | Works today |
 | Scrollbars on every list that scrolls, the key reference and a terminal's scrollback: drag the thumb, click the track to page (in a terminal a click beside the thumb is the terminal's). They follow the system's "Show scroll bars" setting | Works today |
 | Visual mode: select terminal text with vi keys | Works today |
-| Tasks inbox, by state: Needs you, Running, Later (captured or on hold), Done (last, folded). Headings fold (click, or ↵ or space in list mode). Each row shows its tags, what it has open and its age, or while its session works what it does now; and the session's model. A click opens its conversation; hover it for its card (state, tags, started, agent time, workspace, tokens by model, context) and for snooze, hold and dismiss buttons. After one of those by mouse, a line at the top offers Undo for 6 seconds. Kept in `~/.ottospace/tasks` | Works today |
+| Tasks inbox, by state: Needs you, Running, Later (captured or on hold), Done (last, folded). Headings fold (click, or ↵ or space in list mode). Each row is one line: its badge with the state dot, its title (`P1` before an urgent one) and one fact at the right: how long it has run, waited or been done (none under Needs you: the dot says it); while its session works, a muted line under says what it does now. A click opens its conversation; hover it for its card (priority, state, what it does now and its model, tags and counts of paths, skills, references and captures, filed, started, agent time, workspace, tokens by model, context) and for Snooze and Done (dismiss) buttons; hold is `h` in list mode. After one of those by mouse, a line at the top offers Undo for 6 seconds. Kept in `~/.ottospace/tasks` | Works today |
 | Tasks by project: State \| Project in the section's header, kept in `tasks_view` in the settings. One foldable group a `#project`, by name, with a bar of its tasks' states (hover for the numbers), its open tasks (needs you, running, later), then a folded "Done · n"; the tasks of no project last. Under the list: `Today  n done · n running · agent time` | Works today |
 | A task's progress, kept in its file: when its agent started and when it was done, time at work (activity until a quiet gap of two minutes), and tokens by model (input, output, cached; a sub-agent's apart), summed from its sessions, so they outlive the session files. Tokens only: no prices | Works today |
 | "Pop next" (⌘⇧N): the conversation of the next task that needs you; the tab on show stays | Works today |
-| Sessions in the Tasks section: the Claude Code and Codex sessions of the listed repositories that are no task's (one you started by hand in a terminal). Each row shows the runner, the repository, the session's title, active or idle, what it does now, when it was last active, and the model. A click opens its conversation in the drawer (`claude --resume`, `codex resume`), unless it is at work in another terminal; Adopt makes a task of one; Hide removes it until the next start | Works today |
+| Sessions in the Tasks section: the Claude Code and Codex sessions of the listed repositories that are no task's (one you started by hand in a terminal). Under Elsewhere, each row is one line: a dot lit while it works, its title (else its repository) and its runner; hover it for its card (repository, what it does now, model, when last active, its pane). Listed: the last 7 days. A click opens its conversation in the drawer (`claude --resume`, `codex resume`), unless it is at work in another terminal; Track makes a task of one; Hide removes it until the next start | Works today |
 | A task's agent in the right drawer: ↵ in the new-task box, or Start agent in the drawer, starts its agent (`claude` or `codex`, by its `@agent`, else `default_agent`) beside the workspace, which stays as it is. A click on a task only shows its conversation; Resume session goes on with one that ended. See [Flow of a task](#flow-of-a-task) | Works today |
 | Native conversation for Claude Code: the drawer drives `claude -p` (stream-json) and draws the reply itself: markdown (headings, emphasis, lists, quotes, tables), code blocks with Copy, links that open only on your click (web pages in the browser; files of the task's repository revealed in Finder), local images of the repository as thumbnails, tool calls as compact rows, a file edit's change as a diff card under its call, a working row while a turn runs, Copy and Copy as Markdown on each message, and a composer (↵ send, ⇧↵ new line). Permission requests are cards: Allow this one request as shown, or Deny (with a message if you like); a request too long to show is opened in full before Allow is offered. `Chat \| Terminal` in the header switches to the CLI's own TUI and back on the same session. A session at work in another terminal is watched read-only (what it calls and edits, not what it says; "Watching · updates per message" in the header), with Take over once it is idle. Codex stays in a terminal. No text selection by dragging yet: copy by message or block | Works today |
 | Right rail: a badge per open conversation of a live task (needs you first, then running, then the last opened; at most 8), and `+` for a new task. A dismissed task leaves it; a done one stays only while shown or its agent runs | Works today |
-| New task (⌘N), in the drawer: one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`, picks for where and who, and a line that says what ↵ will do. A `/path` stays in the title the agent reads, and a folder taken from its dropdown is where the agent runs; `$skill` is stored and shown, nothing acts on it yet | Works today |
+| New task (⌘N), in the drawer: one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`, picks for where and who, and a line that says what ↵ will do when it is not the default. A `/path` stays in the title the agent reads, and a folder taken from its dropdown is where the agent runs; `$skill` is stored and shown, nothing acts on it yet | Works today |
 | Home screen: a tab with no panes says what goes there (Open an app ⌘E, Terminal ⌘D), the tasks that need you, and each listed task as a node on a lattice (left to right by project; within a project the older task is farther). A click on a node or a row opens its conversation. With nothing open at all, the drawer shows a new task by itself | Works today |
 | Task groups on the one tab bar: a tab may be a task's, and each task's tabs sit side by side behind its badge (its two letters, bordered in its own colour, its state as a dot), underlined in its colour; the tabs of no task last. Starting a task takes the tab on show if that is no task's; ⌘T joins the task on show; drag a tab onto a group to move it there. The same badge on its panes, its row, the rail and the drawer. Selecting a task's tab shows its conversation in the open drawer | Works today |
 | Tabs, each with its own split tree | Works today |
@@ -51,7 +51,7 @@ running, and the rest of the design is not built: see the
 | Workbooks (⌘⇧S): save tabs under a name (their splits, each terminal's directory, each app) and open them again from the Workbook section. Several tabs each: add a tab to one, or save all the tabs on the bar as one. Kept in `~/.ottospace/workbooks`. An app comes back as its window, not on the page or document it showed | Works today |
 | Tabs and layout come back after quitting: every tab (with its task and workbook), its splits and sizes, focus, the tab on show, the section and the drawer; terminals start again in their folders with their last lines and an offered command; running apps' windows go back in their panes. See [Restoring the layout](#restoring-the-layout) | Works today |
 | `settings.json`: terminal font, repository directories, tasks folder, apps to offer, window rules | Works today |
-| [Meeting timeline](#meeting-timeline): a calendar feed (`calendar_ics`) as a thin band of the workday above the status bar, a tick for now; the next meeting named beside the tab bar's buttons; a soft pulse as one comes near; a banner, a notification and a sound when one has started and you are in no call | Works today |
+| [Meeting timeline](#meeting-timeline): a calendar feed (`calendar_ics`) as a thin band of the workday above the status bar, a tick for now; a soft pulse as one comes near; a banner, a notification and a sound when one has started and you are in no call | Works today |
 
 ### Roadmap: designed, not built
 
@@ -150,9 +150,11 @@ A line wider than the field scrolls with the cursor. The picker's filter holds 2
 While the quit question is over a field, nothing edits it.
 
 **The new-task box.** ⌘N, the Tasks section's `+` and the right rail's `+` open it in the drawer,
-beside the workspace. Over it: picks for WHERE (the first listed repositories, "no repository")
-and WHO (the default agent, then each runner and its models), which set the line's `>repo` and
-`@agent`, and a line that says what ↵ will do: "↵ will start claude in app on main".
+beside the workspace. Over it: picks for where (the first listed repositories, "no repository")
+and who (the default agent, then each runner and its models), which set the line's `>repo` and
+`@agent`, and, unless ↵ would start the default agent in your home folder, a line that says what
+it will do: "↵ will start claude in app on main", or for a saved agent "↵ files it; nothing
+starts". Under the line, while it is empty, the tags it may hold; the dropdown teaches the rest.
 
 | Key | Action |
 |---|---|
@@ -224,10 +226,9 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    for later. With nothing open at all the drawer shows a new task by itself.
 2. **It starts at once.** The agent (`@claude`, `@codex-gpt-6-astra`, …; with no `@agent`, the
    `default_agent` setting, else `claude`) runs in the drawer, in the task's repository (no
-   `>repo`: the home folder), with the keyboard, in a terminal (the CLI's own TUI);
-   `conversation_view: "native"`, or Chat in the drawer's header, draws Claude Code natively
-   (its structured mode, see step 11). Terminal is the default until the native view has
-   passed a check against the real CLI. It is asked `Task: <title>`; a
+   `>repo`: the home folder), with the keyboard: Claude Code drawn natively (its structured
+   mode, see step 11), Codex in a terminal (its TUI); `conversation_view: "terminal"` puts
+   Claude Code in a terminal too. It is asked `Task: <title>`; a
    task with captures is told where its brief is. The workspace stays as it was: the same tab,
    panes and focus. That tab, if it is no task's and has panes, becomes the task's and gains its
    badge; on a tab of another task, or with nothing open, the task starts with no tab.
@@ -240,11 +241,15 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    open by another Claude Code, is not: the drawer says so. An agent you just stopped there is
    not another terminal's: it is gone on with at once. Going on with a session, the task runs.
    A saved agent cannot be started yet: the drawer says so too.
-4. **The drawer.** Its header: the task's badge, title, model and time; Go to its tabs (⌘↵)
+4. **The drawer.** Its header: the task's badge and title (hover it for the model, the
+   permission mode, how long the agent has run and its folder), the folder itself only when it
+   is not the task's repository; Go to its tabs (⌘↵)
    shows the one of them shown last; a task with none offers Claim this tab (the tab on show is
-   no task's) or New tab (a shell in its repository); Brief (when it has captures); Stop ends the agent;
+   no task's) or New tab (a shell in its repository); Brief (when it has captures); Stop ends the agent (in the terminal view; drawn natively, "Stop the Agent" in the palette or the menu);
    × (⌘⇧L) closes the drawer to the right rail and the agent goes on. ⌘L moves the keyboard in
-   and out. Drag its left edge to make it wider or narrower. Opening a conversation, or a click on a tab, while a new
+   and out. At its foot, muted, the model in short, and a permission mode that lets the agent
+   act without asking (`auto`, `accept edits`; `bypass` in the warning colour): `haiku-5.5 ·
+   auto`. It stays once the agent ended. Drag its left edge to make it wider or narrower. Opening a conversation, or a click on a tab, while a new
    task is half written puts the line aside: the box gets it back when it opens again.
 5. **The right rail.** The task's badge per open conversation: its border in the task's own
    colour, its state as the corner dot; hover for its card. A click shows it, and the tab stays;
@@ -262,20 +267,20 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    the task's folder after the agent did and before the next agent there, that nothing else
    has. When two could be its (another Codex started there at the same moment), neither is
    taken: the task runs, following none. When the agent ends while the task runs, the task needs you.
-8. **A session that is no task's.** A click or ↵ on its row under Other sessions opens its
+8. **A session that is no task's.** A click or ↵ on its row under Elsewhere opens its
    conversation the same way, with no task: it gets a badge on the rail (from its title, else
-   its repository) and Adopt in the drawer's header. Adopt, there or on the row, makes the task,
-   and the conversation is the task's: the same agent if it runs, else gone on with. Adopt opens
+   its repository) and Track in the drawer's header. Track, there or on the row, makes the task,
+   and the conversation is the task's: the same agent if it runs, else gone on with. Track opens
    no terminal tab.
 9. **Who may.** Only you start or stop an agent, and only you say which task a tab is of: a
    client's ↵ files the task with no tab, its `task_open` goes to tabs the task has, its
    `session_adopt` makes the task, and none starts anything.
-10. **Progress.** While the task is open its session is read on: what it does now and its model
-   show on its row, and the task keeps in its file when its agent started, when it was done, its
+10. **Progress.** While the task is open its session is read on: what it does now shows on its
+   row and its model on its card, and the task keeps in its file when its agent started, when it was done, its
    time at work (activity until a quiet gap of two minutes) and its tokens by model (input,
    output, cached; a sub-agent's apart), summed over its sessions. They stay when the session
-   files go. Hover the task, or its badge, for its card: state and what it does now, tags,
-   Started, Agent time, Workspace (tabs · panes), the tokens and how full its context is. The
+   files go. Hover the task, or its badge, for its card: priority, state, what it does now and
+   its model, tags and counts, Filed, Started, Agent time, Workspace (tabs · panes), the tokens and how full its context is. The
    Tasks section groups by state (Needs you, Running, Later, Done) or by project (State |
    Project in its header), and says under the list what was done today, what runs, and how
    long agents worked today. A key of a task's file this build does not know is kept as it is.
@@ -289,8 +294,13 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    in the browser, a file inside the task's repository revealed in Finder; anything else is
    text. Nothing is fetched: an image on the web is a link, a local image in the repository a
    thumbnail. The composer at the bottom: ↵ sends, ⇧↵ starts a new line, Esc leaves; while a
-   turn runs ↵ sends nothing (write the next message meanwhile), Esc Esc or Stop ends the turn
-   and the session goes on. A permission request is a card in place of the composer: the
+   turn runs ↵ sends nothing (write the next message meanwhile), and Stop sits at the composer's
+   right: it, or Esc Esc, ends the turn and the session goes on. No turn, no Stop. Once the agent
+   ended (or was stopped: nothing starts on its session until its process is gone), Resume
+   session (or Start agent) takes that place. A stop and the resume after it are one thin
+   divider (`stopped · resumed`) in the same conversation; "Earlier turns are in its file" only
+   when its turns are not on show. Lines no rule reads are a small mark at the end (`? 2`): its
+   hover and click say what they were. Hook lines (`system.hook_*`) are read on purpose by nothing. A permission request is a card in place of the composer: the
    request as the CLI asked it, a labelled line per field, and the agent's own words apart.
    `a` allows this one request, `d` denies it, `m` writes a message for the Deny (↵ denies with
    it), `s` shows all of a request cut at 4 KB, which must be seen before `a` works. ↵ does
@@ -492,26 +502,25 @@ Design: [capture.md](ai/capture.md).
 ## Sessions
 
 An agent is a saved definition. A session is one running conversation of Claude Code or Codex.
-The Tasks section lists, under **Other sessions**, the sessions of your listed repositories
+The Tasks section lists, under **Elsewhere**, the sessions of your listed repositories
 (worktrees included) that no task has adopted: for example a Claude Code you started by hand in a
 terminal. The group is folded at first: its heading shows the count, and a click, ↵ or space
 unfolds it. A session at work does not unfold it.
 
-- **What a row shows.** The runner (`claude` or `codex`), the repository or worktree, a dot that
-  is lit while the session is active (its file changed in the last 30 seconds), what it does now
-  (`shell · cargo test`, `network · git push`, `files · src/main.rs`), and when it was last
-  active.
-- **Range.** Unfolded, its heading has a switch, Today | 7 days | 30 days | All (kept in the settings as
-  `sessions_range`): Today lists the sessions active since the local day began, the others
-  those active within that many days, All every one listed. A session at work is always
-  listed. The heading counts those in range; hover it for how many there are in all. The
+- **What a row shows.** One line: a dot that is lit while the session is active (its file
+  changed in the last 30 seconds), its title (below), else its repository or worktree, and the
+  runner (`claude` or `codex`). Hover it for its card: the repository, what it does now (`shell ·
+  cargo test`, `network · git push`, `files · src/main.rs`), the model, when it was last active
+  and the pane it runs in.
+- **Range.** The sessions active in the last 7 days. Nothing on screen changes it; for
+  another, set `sessions_range` in the settings: `today` (since the local day began), `month`
+  (30 days) or `all` (every one listed). A session at work is always listed. The heading counts those in range; hover it for how many there are in all. The
   range only narrows what was read: at most 200 sessions are listed, the most recent, so All
   shows those 200.
-- **Title and model.** Between the two lines a row shows the session's title, on one line, when
-  the runner keeps one: the name you gave a Claude Code session (`/rename`), else the title
+- **Title and model.** A row shows the session's title, on one line, when the runner keeps one: the name you gave a Claude Code session (`/rename`), else the title
   Claude Code wrote for it; for Codex, the thread's name in its `session_index.jsonl`, which
-  not every session has. ottospace writes no title itself and calls no model. The last line
-  ends with the model in short: `claude-opus-4-7` shows as `opus-4.7`, another name as it is.
+  not every session has. ottospace writes no title itself and calls no model. The card shows
+  the model in short: `claude-opus-4-7` shows as `opus-4.7`, another name as it is.
   A title is text a model wrote from what the session read, so it is only drawn: one line, at
   most 80 characters, no control or invisible characters. It never names a task, sets a tag or
   reaches a terminal.
@@ -522,8 +531,8 @@ unfolds it. A session at work does not unfold it.
   --resume <id>` or `codex resume <id>`, in the folder the session started in, which must be in
   a listed repository or worktree. One at work (its dot lit) or held by a live Claude Code
   process is not: the drawer says it is live in another terminal, and nothing is started. When
-  the row says "in pane N", that pane is focused too.
-- **Adopt** makes a task of the session: named after the repository, with `>repo` set to that
+  the card says it runs in a pane, that pane is focused too.
+- **Track** makes a task of the session: named after the repository, with `>repo` set to that
   repository (wherever in it the session started) and `@agent` to its runner. The session is
   that task's from then on and leaves the group. Rename the task later. The task keeps the
   session's runner and id, and no path from the session's file. Its conversation opens in the
@@ -552,7 +561,7 @@ unfolds it. A session at work does not unfold it.
   bar says so once.
 - **Read, then gone on with only by you.** ottospace reads the runners' own session files, every
   5 seconds while the Tasks section is open and never while it is closed. It does not attach to
-  a session, type into it or signal it. Only Open or Adopt, by you, starts the runner's own
+  a session, type into it or signal it. Only Open or Track, by you, starts the runner's own
   resume command on it. Only derived facts are shown: names from fixed tables, counts and
   times. Never a prompt, a file's contents or a command line. The one free text is the
   session's title (above). Design: [sessions.md](ai/sessions.md).
@@ -655,26 +664,38 @@ Set `calendar_ics` to your calendar's feed (an `https://` link, such as a calend
 address in iCal format", or a file's path) and ottospace shows your day's meetings, never in
 the way.
 
-- **The band**: 8 points high, directly above the status bar, the window's width; panes give up
-  that height. It is the workday (`calendar_workday`, 09:00 to 17:00), fixed through the day: a
-  small mark at its start and one at its end, each meeting a flat block at its clock place (past
-  ones faint), and a bright tick for now that moves along it (pinned to an end before or after
-  hours). A meeting outside the workday widens the band to hold it, never past midnight (one over
-  midnight is cut there). Meetings that overlap share two half-height lanes; all-day events are
-  one small dot at the left end. Blocks are at least 3 points wide. Hover only, no click: a block
-  shows its title, time, length, place and whether it has a Zoom, Meet or Teams link; a mark its
-  time; now the time and the next meeting.
-- **The chip**: beside the new-tab and split buttons, the next meeting today: `Design review ·
-  in 12m`, `· now` while it runs. Hidden when nothing is left today. Its tooltip says when the
-  feed was last read (`calendar: not updated since 09:40` when the last read failed).
-- **The pulse**: from 10 minutes before a meeting its block (its opacity) and the chip glow softly, slowly;
+- **The band**: 12 points high, directly above the status bar, the window's width, with a
+  hairline along its top as the status bar has; panes give up that height. It is the workday
+  (`calendar_workday`, 09:00 to 17:00), fixed through the day: a small mark at its start and one
+  at its end, and a bright tick for now that moves along it (pinned to an end before or after
+  hours). A **call** (an entry with a Zoom, Meet or Teams link) is a solid block at its clock
+  place; calls that overlap split the height into as many lanes as overlap (up to 4; a fifth at
+  once is named in a lane's hover card, `+1 more: …`), and a call alone takes the full height. A
+  **block** (an entry with no call link: focus time, a reminder, a room booking) is a faint layer
+  the full height under the calls, so a 4-hour block under three calls takes no lane. A call
+  outside the workday widens the band to hold it, never past midnight (one over midnight is cut
+  there); a block never does: one wholly outside the band (a reminder at 00:00) is a small dot at
+  that end, its details on hover. All-day events are one small dot at the left end's top. Blocks
+  are at least 3 points wide. Hover only, no click: a block shows its title, time, length, place
+  (links taken out), whether it has a Zoom, Meet or Teams link and whether it is tentative, free
+  or out of office; a mark its time; now the time, the next meeting (`Design review · 15:00`,
+  `· now` while it runs) and when the feed was last read (`calendar not updated since 09:40` when
+  the last read failed).
+- **Colours**: calls in the meeting amber, blocks a muted grey, out of office (Outlook's OOF) a
+  quiet slate. Tentative entries are lighter, free ones (Outlook's FREE, or `TRANSP:TRANSPARENT`)
+  faint, past ones faded and the one that runs at full strength. `calendar_colors` colours by
+  title: `[{"match": "1:1", "color": "teal"}, {"match": "focus", "color": "lime"}]`, the first
+  rule whose `match` the title holds (case ignored) giving the hue; tentative, free and past
+  still lighten it. A colour is one of `red`, `indigo`, `orange`, `pink`, `lime`, `purple`, `tan`,
+  `teal` (the tasks' own colours); `match` is plain text, not a pattern: titles are other
+  people's text, and a pattern of yours run over them is risk for no gain.
+- **The pulse**: from 10 minutes before a meeting its block glows (its opacity) softly, slowly;
   from 2 minutes, faster; while it runs, steadily. With Reduce motion (System Settings,
   Accessibility, Display) the colour steps up instead, with no movement. Nothing else in
   ottospace pulses.
-- **The status bar** says `Design review in 4m` in amber from 5 minutes before.
 - **At the start**, if you are in no call, or still in an earlier one (on from 10 minutes before,
-  or the meeting before, running over): a banner under the title strip (the title, how long
-  ago it started, **Join** if the meeting has an `https:` link, **Dismiss**), which stays until
+  or the meeting before, running over): a banner under the title strip (`Meeting started`, the
+  title, how long ago it started, **Join** if the meeting has an `https:` link, **Dismiss**), which stays until
   you dismiss it, join, a call starts or the meeting ends; and a system notification with the
   alert sound, so you see it when ottospace is behind other windows. Once more 2 minutes later
   if you have not joined; never a third time. Only in a meeting's first 10 minutes: one you
@@ -700,9 +721,12 @@ the way.
   occurrences are followed; see [meeting-timeline.md](ai/meeting-timeline.md) for what is not.
 - **Declined meetings**: set `calendar_email` to your address as the feed lists you among a
   meeting's attendees, and a meeting (or one occurrence) you declined is left out everywhere: the
-  band, the chip, the section and the alerts. A feed published with limited detail (free/busy
-  only, or without attendees) does not say who declined; then nothing is left out. The address
-  stays in `settings.json`: it is not sent with the feed's request, shown, logged or in the state.
+  band, the section and the alerts. A feed published with limited detail (free/busy
+  only, or without attendees, as Outlook's published calendars are) does not say who declined;
+  then nothing is left out, and `calendar_email` does nothing. Outlook removes a meeting you
+  decline from your calendar, so it is usually not in the feed at all; one kept is marked free,
+  and `calendar_hide_free: true` leaves every free entry out. The address stays in
+  `settings.json`: it is not sent with the feed's request, shown, logged or in the state.
 - **The Calendar section** (its rail cell, second, is there only while `calendar_ics` is set):
   today's meetings, all-day ones first, then by start: the time, the title, and the place (or the
   link's host) below. The meeting that runs is outlined in amber, past ones are dimmed, and a thin
@@ -715,7 +739,8 @@ the way.
 - **Agents**: the `calendar` request gives an agent the meetings of a day, or of up to 7 from
   it (`{"cmd":"calendar","day":"tomorrow","days":2}`; today and the next 7 days are held): start
   and end (RFC 3339 with your offset), all day or not, title, place, whether it has a Zoom, Meet
-  or Teams link, tentative; busy time (meetings merged) and free time (the gaps in each day's
+  or Teams link, `status` (`tentative`, `free` or `away`; none when busy); busy time (meetings
+  merged, free ones left out) and free time (the gaps in each day's
   `calendar_workday`); when the feed was read and whether you are in a call. It reads only what the app holds and never makes it fetch.
 - **Privacy**: titles and places are other people's text. They are shown, and given to an agent
   only by the `calendar` request, with links taken out; never sent anywhere, never in the trace
@@ -830,7 +855,7 @@ first. Again while that tab is open brings it forward; quitting the editor close
 you open it: a socket client's ⌘, does nothing. Open at quit, it comes back at the next start,
 the editor running again ([Restoring the layout](#restoring-the-layout)).
 
-A change is read when the file is saved: what is wrong in it is said in the status bar (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify`, `calendar_notify_for`, `paste_confirm` and `features` apply at once; any other key changed says "restart to apply" with its name (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
+A change is read when the file is saved: what is wrong in it is said in the status bar (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify`, `calendar_notify_for`, `calendar_hide_free`, `calendar_colors`, `paste_confirm` and `features` apply at once; any other key changed says "restart to apply" with its name, in muted text: information, not an error (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
 
 
 ```json
@@ -843,7 +868,7 @@ A change is read when the file is saved: what is wrong in it is said in the stat
   "session_quiet_minutes": 3,
   "agent_models": { "claude": ["claude-opus-5-5"], "codex": ["gpt-6-astra"] },
   "default_agent": "claude",
-  "conversation_view": "terminal",
+  "conversation_view": "native",
   "capture_key": "ctrl-alt-cmd-space",
   "capture": { "keep_images": true, "ax": true },
   "workbook_scrollback_lines": 500,
@@ -865,17 +890,17 @@ A change is read when the file is saved: what is wrong in it is said in the stat
 | `terminal.font_size` | In points, 6 to 72 | `13` |
 | `repos` | Directories that are repositories or hold them, for the Repos section. `OTTOSPACE_REPOS` (`:` between directories) wins over it. The section's + adds the folder you pick (a repository, or one that holds some), by its full path; if the file named none, `~/code` and `~/notes` are written with it. Remove, on a repository's name under the pointer, takes off a directory listed as itself; one that comes from a folder holding several is yours to edit. At most 64 through + | `~/code`, `~/notes` |
 | `tasks` | Where tasks are kept, one JSON file each. A relative path is inside `~/.ottospace` | `tasks` |
-| `sessions` | List agent sessions that are no task's under Other sessions in the Tasks section. `false`: no session file is ever read | `true` |
+| `sessions` | List agent sessions that are no task's under Elsewhere in the Tasks section. `false`: no session file is ever read | `true` |
 | `session_dirs` | Where the runners keep their sessions: `claude` is a list of Claude Code config directories (one for each account), `codex` is Codex's home. A runner left out keeps its default. An app started from the Dock does not see `CLAUDE_CONFIG_DIR` or `CODEX_HOME`: name other directories here | `~/.claude`, `~/.codex` |
 | `session_quiet_minutes` | A task adopted from a session moves to Needs you once the session has been quiet this many minutes. `0`: a quiet session never moves its task | `3` |
 | `agent_models` | The models the `@agent` dropdown offers after each runner, in place of the built-in list: ids as the runner's CLI takes them. `claude` and `codex` are each a list; a runner left out keeps its own, an empty list offers the runner alone. An id that does not start with the runner's name gets it in the tag: `gpt-6-astra` is `@codex-gpt-6-astra`, `opus` is `@claude-opus`. An entry that is not a name (letters and digits, with `.`, `-` or `_` between them one at a time; at most 64) is left out and named in the status bar | `claude-fable-5-2`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`; `gpt-6-astra` |
 | `default_agent` | The agent a task with no `@agent` starts: a runner (`claude`, `codex`) or a runner and a model (`claude-opus-5-5`, `codex-gpt-6-astra`). The first WHO pick in the drawer | `claude` |
-| `conversation_view` | How the drawer shows a Claude Code conversation: `native` (drawn by ottospace: markdown, cards for permission requests, a composer) or `terminal` (the CLI's own TUI). The header's `Chat \| Terminal` switches one conversation, and the layout keeps the pick. Codex always shows in a terminal for now. Terminal is the default until the native view has passed a check against the real CLI | `terminal` |
+| `conversation_view` | How the drawer shows a Claude Code conversation: `native` (drawn by ottospace: markdown, cards for permission requests, a composer) or `terminal` (the CLI's own TUI). The header's `Chat \| Terminal` switches one conversation, and the layout keeps the pick. Codex always shows in a terminal for now | `native` |
 | `workbook_scrollback_lines` | How many of a terminal's last lines a [workbook](#workbooks), and the [restored layout](#restoring-the-layout), keeps, shown again above its prompt when it opens. At most `2000`. `0`: none is kept | `500` |
 | `restore_layout` | [Restore the layout](#restoring-the-layout) at start and keep it in `layout.json`. `false`: every start is empty | `true` |
 | `restore_apps` | At a restore, start an app a pane names that is not running. `false`: its pane waits and offers `Open <App>` | `false` |
 | `tasks_view` | How the Tasks section groups: `state` or `project`. Written when you pick one in the section's header | `state` |
-| `sessions_range` | Which sessions Other sessions lists: `today`, `week` (7 days), `month` (30 days) or `all`. Written when you pick one on its heading | `today` |
+| `sessions_range` | Which sessions Elsewhere lists: `today`, `week` (7 days), `month` (30 days) or `all`. Set by hand: nothing on screen picks it | `week` |
 | `capture_key` | The key that captures the pane in use, from any app: modifiers (`ctrl`, `alt`, `cmd`, `shift`) and a key, with `-` between them. `"off"`: no key. `OTTOSPACE_CAPTURE_KEY` wins over it. Not `ctrl-alt-space`: macOS uses it to change the input source | `ctrl-alt-cmd-space` |
 | `capture.keep_images` | Keep a capture's pictures on disk. `false`: no picture is ever written | `true` |
 | `capture.ax` | Read an app pane's accessibility tree with its picture. `false`: it is never read for a capture | `true` |
@@ -888,7 +913,9 @@ A change is read when the file is saved: what is wrong in it is said in the stat
 | `calendar_refresh_minutes` | How often the feed is read again, at least 1 | `5` |
 | `calendar_notify` | A meeting that starts while you are in no call, or in another call, shows the banner, a notification and a sound | `true` |
 | `calendar_notify_for` | Which meetings alert: `all`, or only those with a Zoom, Meet or Teams `links` | `all` |
-| `calendar_email` | Your address among a meeting's attendees in the feed: a meeting you declined is left out. Kept on this machine, never shown | none: nothing is left out |
+| `calendar_email` | Your address among a meeting's attendees in the feed: a meeting you declined is left out. Kept on this machine, never shown. A feed with no attendees (Outlook's published calendars) cannot say who declined: use `calendar_hide_free` | none: nothing is left out |
+| `calendar_hide_free` | Leave out entries that keep the time free (Outlook's FREE, `TRANSP:TRANSPARENT`): the band, the section, the alerts and the `calendar` request | `false` |
+| `calendar_colors` | Colours by title, first match wins: `[{"match": "1:1", "color": "teal"}]`. `match`: plain text the title holds, case ignored (not a pattern); `color`: `red`, `indigo`, `orange`, `pink`, `lime`, `purple`, `tan` or `teal`. At most 64 | none: colours by kind |
 | `suggest_dock_apps` | List the Dock's apps that are not running under "Not running". `false`: only pinned apps are listed there, and the Dock is not read | `true` |
 | `features` | [Feature flags](#features), by name: `true` or `false`. A name that is no flag is a mistake, named in the status bar with the flags there are; the others still apply | each flag's default |
 | `paste_confirm` | When ⌘V into a terminal asks first: `multiline` (text with a line break, even a last one, bracketed paste or not: a shell may run each line) or `never` | `multiline` |

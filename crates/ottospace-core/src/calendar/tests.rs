@@ -16,14 +16,39 @@ fn event(id: u64, start: u64, minutes: u64) -> Event {
         title: format!("Meeting {id}"),
         location: String::new(),
         link: Some("https://example.zoom.us/j/123".into()),
-        tentative: false,
+        show: crate::ics::Show::Busy,
     }
+}
+
+/// A block: no call link.
+fn block(id: u64, start: u64, minutes: u64) -> Event {
+    Event { link: None, ..event(id, start, minutes) }
+}
+
+/// The calls on `band` at `now`.
+fn bars(events: &[Event], day: (u64, u64), band: &Band, now: u64) -> Vec<Bar> {
+    layout(events, day, *band, now).calls
 }
 
 fn calendar(events: Vec<Event>) -> Calendar {
     let mut c = Calendar { on: true, notify: true, ..Calendar::default() };
     c.read(Some(events), [NINE - 9 * H, NINE + 15 * H, NINE + 39 * H], NINE - H);
     c
+}
+
+#[test]
+fn a_meeting_just_after_midnight_is_near_alerts_and_is_watched_from_the_day_before() {
+    // 00:02 tomorrow, seen at 23:58 and at 00:03, before the day's next read moves `days`.
+    let midnight = DAY.1;
+    let mut c = calendar(vec![event(1, midnight + 2 * M, 30)]);
+    let before = midnight - 2 * M;
+    assert_eq!(c.next(before).map(|(e, s)| (e.id, s)), Some((1, Stage::Approaching)));
+    assert_eq!(c.rail(midnight + M), RailMark::Near, "imminent at 00:01");
+    assert!(c.watching(midnight + M), "the call is looked for from a minute before");
+    c.call_seen(Some(false), midnight + M);
+    assert_eq!(c.tick(midnight + 3 * M).len(), 1, "it alerts at its start, in the new day");
+    // Far off tomorrow is not near today.
+    assert_eq!(calendar(vec![event(2, midnight + 9 * H, 30)]).next(before), None);
 }
 
 #[test]
@@ -104,7 +129,7 @@ fn a_band_spans_the_workday_and_meetings_sit_at_their_clock_places() {
     assert!((bars[0].from - 3. / 16.).abs() < 1e-6 && (bars[0].to - 3.5 / 16.).abs() < 1e-6);
     assert!((bars[1].from - 8. / 16.).abs() < 1e-6 && (bars[1].to - 9. / 16.).abs() < 1e-6);
     // The band does not move with the clock; past meetings stay, as past.
-    let later = super::bars(&e, DAY, &band, NINE + 7 * H);
+    let later = layout(&e, DAY, band, NINE + 7 * H).calls;
     assert_eq!((later[0].from, later[0].stage, later[1].stage), (bars[0].from, Stage::Past, Stage::Past));
 }
 
@@ -148,7 +173,7 @@ fn a_zero_length_event_is_a_point() {
     let e = [event(1, NINE + 2 * H, 0)];
     let band = band(&e, DAY, Workday::default(), UTC);
     let bar = &bars(&e, DAY, &band, NINE)[0];
-    assert_eq!((bar.from, bar.to, bar.lane), (0.25, 0.25, Lane::Full));
+    assert_eq!((bar.from, bar.to, bar.lane, bar.lanes), (0.25, 0.25, 0, 1));
 }
 
 #[test]
@@ -174,44 +199,177 @@ fn the_workday_keeps_its_clock_on_a_day_the_clocks_change() {
 }
 
 #[test]
-fn overlapping_events_share_two_half_lanes() {
-    let events =
-        [event(1, NINE, 60), event(2, NINE + 30 * M, 60), event(3, NINE + 3 * H, 30), event(4, NINE + 45 * M, 10)];
-    let band = band(&events, DAY, Workday::default(), UTC);
-    let lanes: Vec<(u64, Lane)> = bars(&events, DAY, &band, NINE - H).iter().map(|b| (b.id, b.lane)).collect();
-    assert_eq!(lanes, [(1, Lane::Top), (2, Lane::Bottom), (4, Lane::Top), (3, Lane::Full)]);
+fn overlapping_calls_get_as_many_lanes_as_they_need() {
+    // (calls, each call's (id, lane, lanes), merged into a call)
+    let table: [(&str, Vec<Event>, Vec<(u64, u8, u8)>, Vec<(u64, Vec<u64>)>); 7] = [
+        ("alone: the full height", vec![event(1, NINE, 60)], vec![(1, 0, 1)], vec![]),
+        (
+            "back to back: no overlap",
+            vec![event(1, NINE, 30), event(2, NINE + 30 * M, 30)],
+            vec![(1, 0, 1), (2, 0, 1)],
+            vec![],
+        ),
+        (
+            "three at 09:45, then one alone",
+            vec![
+                event(1, NINE, 60),
+                event(2, NINE + 30 * M, 60),
+                event(3, NINE + 3 * H, 30),
+                event(4, NINE + 45 * M, 10),
+            ],
+            vec![(1, 0, 3), (2, 1, 3), (4, 2, 3), (3, 0, 1)],
+            vec![],
+        ),
+        (
+            "three at once",
+            vec![event(1, NINE, 60), event(2, NINE + 10 * M, 30), event(3, NINE + 20 * M, 30)],
+            vec![(1, 0, 3), (2, 1, 3), (3, 2, 3)],
+            vec![],
+        ),
+        (
+            "a lane freed is used again",
+            vec![event(1, NINE, 120), event(2, NINE, 30), event(3, NINE + 10 * M, 30), event(4, NINE + 30 * M, 30)],
+            vec![(2, 0, 3), (1, 1, 3), (3, 2, 3), (4, 0, 3)],
+            vec![],
+        ),
+        (
+            "five at once: four lanes, the fifth in the lane that frees first",
+            (1..=5).map(|n| event(n, NINE + n * M, 60 - n * 5)).collect(),
+            vec![(1, 0, 4), (2, 1, 4), (3, 2, 4), (4, 3, 4)],
+            vec![(1, vec![5])],
+        ),
+        (
+            "five at once, the fifth the longest: it is drawn, the one it took the lane of is named",
+            (1..=4).map(|n| event(n, NINE, 30)).chain([event(5, NINE, 180)]).collect(),
+            vec![(1, 0, 4), (2, 1, 4), (3, 2, 4), (5, 3, 4)],
+            vec![(5, vec![4])],
+        ),
+    ];
+    for (name, events, want, merged) in table {
+        let band = band(&events, DAY, Workday::default(), UTC);
+        let bars = bars(&events, DAY, &band, NINE - H);
+        let lanes: Vec<(u64, u8, u8)> = bars.iter().map(|b| (b.id, b.lane, b.lanes)).collect();
+        assert_eq!(lanes, want, "{name}");
+        let more: Vec<(u64, Vec<u64>)> =
+            bars.iter().filter(|b| !b.more.is_empty()).map(|b| (b.id, b.more.clone())).collect();
+        assert_eq!(more, merged, "{name}");
+    }
+}
+
+#[test]
+fn blocks_go_under_the_calls_and_never_widen_the_band() {
+    let w = workday("06:00-22:00");
+    // A 4-hour block under three calls, a reminder at 00:00, a block after hours, a call at 05:00.
+    let events = [
+        block(1, DAY.0, 15),
+        event(2, NINE - 4 * H, 30),
+        block(3, NINE, 240),
+        event(4, NINE + H, 30),
+        event(5, NINE + H, 60),
+        event(6, NINE + H + 15 * M, 30),
+        block(7, NINE + 14 * H, 30),
+        block(8, NINE - 5 * H, 120),
+    ];
+    let layout = layout(&events, DAY, band(&events, DAY, w, UTC), NINE);
+    // Widened to the 05:00 call only, not to the reminder or the late block.
+    assert_eq!((layout.band.from, layout.band.to), (NINE - 4 * H, NINE + 13 * H));
+    assert_eq!((layout.early.clone(), layout.late.clone()), (vec![1], vec![7]));
+    // Under: the long block, and the one that runs into the band from before it.
+    let under: Vec<(u64, f32)> = layout.blocks.iter().map(|b| (b.id, b.from)).collect();
+    assert_eq!(under, [(8, 0.), (3, 4. / 17.)]);
+    // The three calls at 10:00 take three lanes, the block took none.
+    let lanes: Vec<(u64, u8, u8)> = layout.calls.iter().map(|b| (b.id, b.lane, b.lanes)).collect();
+    assert_eq!(lanes, [(2, 0, 1), (4, 0, 3), (5, 1, 3), (6, 2, 3)]);
+}
+
+#[test]
+fn a_call_card_names_the_calls_merged_into_it() {
+    let (one, two, three) = (event(1, NINE, 30), event(2, NINE, 30), event(3, NINE, 30));
+    assert_eq!(card(&one, &[], 0), describe(&one, 0));
+    assert_eq!(card(&one, &[&two, &three], 0), format!("{}\n+2 more: Meeting 2, Meeting 3", describe(&one, 0)));
+}
+
+#[test]
+fn colours_by_kind_and_by_rule_and_strength_by_status_and_stage() {
+    use crate::theme;
+    let rules = vec![ColorRule::new("1:1", "teal").unwrap(), ColorRule::new("SYNC", "pink").unwrap()];
+    let titled = |title: &str, e: Event| Event { title: title.into(), ..e };
+    let call = event(1, NINE, 30);
+    let away = Event { show: Show::Away, ..block(2, NINE, 30) };
+    // (what, event, stage, colour, name, strength)
+    let table: [(&str, Event, Stage, u32, &str, f32); 10] = [
+        ("a call", call.clone(), Stage::Running, theme::MEETING, "meeting", 1.),
+        ("a block", block(1, NINE, 30), Stage::Running, theme::MEETING_BLOCK, "block", 1.),
+        ("away", away.clone(), Stage::Running, theme::MEETING_AWAY, "away", 1.),
+        ("far off", call.clone(), Stage::Far, theme::MEETING, "meeting", 0.75),
+        ("past", call.clone(), Stage::Past, theme::MEETING, "meeting", 0.35),
+        ("tentative", Event { show: Show::Tentative, ..call.clone() }, Stage::Running, theme::MEETING, "meeting", 0.55),
+        ("free", Event { show: Show::Free, ..call.clone() }, Stage::Running, theme::MEETING, "meeting", 0.3),
+        // A rule takes the hue, case ignored, first match winning; never the treatment.
+        ("a rule", titled("Ana / Bo 1:1", call.clone()), Stage::Running, theme::IDENTITY[7], "teal", 1.),
+        ("first wins", titled("1:1 sync", block(1, NINE, 30)), Stage::Past, theme::IDENTITY[7], "teal", 0.35),
+        (
+            "case ignored, tentative kept",
+            Event { show: Show::Tentative, ..titled("Weekly Sync", away) },
+            Stage::Running,
+            theme::IDENTITY[3],
+            "pink",
+            0.55,
+        ),
+    ];
+    for (what, e, stage, color, name, alpha) in table {
+        let p = paint(&e, stage, 0., &rules);
+        assert_eq!((p.color, p.name), (color, name), "{what}");
+        assert!((p.alpha - alpha).abs() < 1e-6, "{what}: {}", p.alpha);
+    }
+    // Near: from the far strength up to full with the glow.
+    assert!((paint(&call, Stage::Imminent, 1., &[]).alpha - 1.).abs() < 1e-6);
+}
+
+#[test]
+fn a_color_rule_names_a_colour_of_the_palette() {
+    assert_eq!(ColorRule::new(" Focus ", "Teal"), Ok(ColorRule { text: "focus".into(), color: 7 }));
+    let wrong = ColorRule::new("x", "blue").unwrap_err();
+    assert_eq!(wrong, "color is one of red, indigo, orange, pink, lime, purple, tan, teal");
+    assert!(ColorRule::new("  ", "red").is_err() && ColorRule::new(&"x".repeat(101), "red").is_err());
+    assert_eq!(theme_names_match(), true);
+}
+
+fn theme_names_match() -> bool {
+    crate::theme::IDENTITY_NAMES.len() == crate::theme::IDENTITY.len()
+}
+
+#[test]
+fn free_entries_are_left_out_while_the_setting_says() {
+    let free = Event { show: Show::Free, ..event(2, NINE + H, 30) };
+    let mut c = calendar(vec![event(1, NINE, 30), free]);
+    assert_eq!(c.events.len(), 2);
+    c.options(true, Vec::new());
+    assert_eq!(c.events.iter().map(|e| e.id).collect::<Vec<_>>(), [1]);
+    // A read while hidden stays hidden; turned off, it is back without a read.
+    c.read(Some(c.received.clone()), c.days, NINE);
+    assert_eq!(c.events.len(), 1);
+    c.options(false, Vec::new());
+    assert_eq!(c.events.len(), 2);
 }
 
 #[test]
 fn the_now_card_names_the_time_and_the_next_meeting() {
     let c = calendar(vec![event(1, NINE, 30), event(2, NINE + 2 * H, 60)]);
-    assert_eq!(c.now_card(NINE - 55 * M, 0), "08:05\nNext: Meeting 1 at 09:00 (in 55m)");
-    assert_eq!(c.now_card(NINE + 10 * M, 0), "09:10\nNow: Meeting 1");
-    assert_eq!(c.now_card(NINE + 4 * H, 0), "13:00\nNo more meetings today");
-    let (band, bars) = c.band(Workday::default(), NINE, UTC);
-    assert_eq!((band.from, bars.len()), (NINE, 2));
-}
-
-#[test]
-fn the_chip_and_the_status_line() {
-    let c = calendar(vec![event(1, NINE, 30), event(2, NINE + 2 * H, 60)]);
-    assert_eq!(c.chip(NINE - 12 * M), Some(("Meeting 1 · in 12m".into(), Stage::Far)));
-    assert_eq!(c.chip(NINE - 8 * M), Some(("Meeting 1 · in 8m".into(), Stage::Approaching)));
-    assert_eq!(c.chip(NINE - 3 * H).map(|c| c.0), Some("Meeting 1 · in 3h".into()));
-    assert_eq!(c.chip(NINE + 5 * M), Some(("Meeting 1 · now".into(), Stage::Running)));
-    // One coming near is named over one that runs.
+    assert_eq!(c.now_card(NINE - 55 * M, 0), "08:05\nMeeting 1 · 09:00\ncalendar updated 08:00");
+    assert_eq!(c.now_card(NINE + 10 * M, 0), "09:10\nMeeting 1 · now\ncalendar updated 08:00");
+    assert_eq!(c.now_card(NINE + 4 * H, 0), "13:00\nNo more meetings today\ncalendar updated 08:00");
+    // One coming near is named over one that runs; tomorrow's do not count.
     let back_to_back = calendar(vec![event(1, NINE, 30), event(2, NINE + 30 * M, 30)]);
-    assert_eq!(back_to_back.chip(NINE + 25 * M).map(|c| c.0), Some("Meeting 2 · in 5m".into()));
-    assert_eq!(c.chip(NINE + 40 * M).map(|c| c.0), Some("Meeting 2 · in 1h 20m".into()));
-    // Nothing left today: no chip. Tomorrow's events do not count.
+    assert!(back_to_back.now_card(NINE + 25 * M, 0).contains("\nMeeting 2 · 09:30\n"));
     let tomorrow = calendar(vec![event(1, NINE + 20 * H, 30)]);
-    assert_eq!(tomorrow.chip(NINE), None);
-    assert_eq!(c.chip(NINE + 4 * H), None);
-    // The status bar from five minutes before.
-    assert_eq!(c.soon(NINE - 5 * M - 1), None);
-    assert_eq!(c.soon(NINE - 5 * M), Some("Meeting 1 in 5m".into()));
-    assert_eq!(c.soon(NINE - 3 * M - 30_000), Some("Meeting 1 in 4m".into()));
-    assert_eq!(c.soon(NINE), None);
+    assert!(tomorrow.now_card(NINE, 0).contains("\nNo more meetings today\n"));
+    // A failed read says so, quietly, on the same card.
+    let mut failed = c.clone();
+    failed.read(None, failed.days, NINE);
+    assert!(failed.now_card(NINE, 0).ends_with("\ncalendar not updated since 08:00"));
+    let layout = c.band(Workday::default(), NINE, UTC);
+    assert_eq!((layout.band.from, layout.calls.len()), (NINE, 2));
 }
 
 #[test]
@@ -532,7 +690,7 @@ fn events_are_cleaned_capped_and_linked() {
         location: location.into(),
         description: description.into(),
         url: url.into(),
-        tentative: false,
+        show: crate::ics::Show::Busy,
     };
     let got = events(&[
         occurrence(
@@ -576,10 +734,21 @@ fn clock_times_and_the_banner_line() {
     assert_eq!(describe(&e, 0), "Meeting 1\n09:00–09:30 · 30m · Room 4\nZoom link");
     let plain = Event { link: None, ..event(2, NINE, 90) };
     assert_eq!(describe(&plain, 0), "Meeting 2\n09:00–10:30 · 1h 30m");
+    // A link in the place is left out (a join link may hold a passcode); the status is said.
+    let linked =
+        Event { location: "Room 4 https://example.zoom.us/j/1?pwd=x".into(), show: Show::Tentative, ..e.clone() };
+    assert_eq!(describe(&linked, 0), "Meeting 1\n09:00–09:30 · 30m · Room 4\nZoom link · tentative");
+    let away = Event { location: "https://example.zoom.us/j/1".into(), show: Show::Away, ..plain.clone() };
+    assert_eq!(describe(&away, 0), "Meeting 2\n09:00–10:30 · 1h 30m\nout of office");
+    assert!(describe(&Event { show: Show::Free, ..plain.clone() }, 0).ends_with("\nfree"));
     let mut c = calendar(vec![e]);
     c.in_call = Some(false);
     c.tick(NINE + 30_000);
     assert_eq!(c.banner_line(NINE + 3 * M + 1), Some((1, "Meeting 1 · started 3m ago".into(), true)));
+    assert_eq!(started_line("Meeting 1", NINE, NINE + 59_999), "Meeting 1 · just started");
+    let notice = |title: &str| Notice { title: title.into(), started: NINE };
+    assert_eq!(notice("Meeting 1").body(NINE + 3 * M + 1), "Started 3m ago: Meeting 1");
+    assert_eq!(notice("-e do shell script").body(NINE), "Started just now: -e do shell script");
 }
 
 #[test]
@@ -642,14 +811,20 @@ fn the_calendar_section_is_there_only_with_a_feed() {
     assert!(!m.sections().contains(&Section::Calendar));
     m.update(Action::ToggleSection { section: Section::Calendar });
     assert_eq!(m.sidebar, None, "no feed: no section to open");
-    m.update(Action::SetCalendar { on: true, notify: true, links_only: false }.sent_by(Origin::System));
+    m.update(
+        Action::SetCalendar { on: true, notify: true, links_only: false, hide_free: false, colors: Vec::new() }
+            .sent_by(Origin::System),
+    );
     assert_eq!(m.sections()[..2], [Section::Tasks, Section::Calendar]);
     m.update(Action::ToggleSection { section: Section::Calendar });
     assert_eq!(m.sidebar, Some(Section::Calendar));
     // Not written to the layout: a build without the section could not read the file.
     assert_eq!(m.layout_file(&[], &[], 0).section, None);
     // The feed goes (a later start without it): the section closes.
-    m.update(Action::SetCalendar { on: false, notify: true, links_only: false }.sent_by(Origin::System));
+    m.update(
+        Action::SetCalendar { on: false, notify: true, links_only: false, hide_free: false, colors: Vec::new() }
+            .sent_by(Origin::System),
+    );
     assert_eq!(m.sidebar, None);
 }
 
@@ -657,7 +832,10 @@ fn the_calendar_section_is_there_only_with_a_feed() {
 fn enter_on_a_meeting_joins_it_for_the_user_only() {
     use crate::model::{Action, Effect, Model, Origin, Section};
     let mut m = Model::default();
-    m.update(Action::SetCalendar { on: true, notify: true, links_only: false }.sent_by(Origin::System));
+    m.update(
+        Action::SetCalendar { on: true, notify: true, links_only: false, hide_free: false, colors: Vec::new() }
+            .sent_by(Origin::System),
+    );
     let days = [NINE - 9 * H, NINE + 15 * H, NINE + 39 * H];
     m.update(Action::CalendarRead { events: Some(vec![event(7, NINE, 30)]), days, at: NINE }.sent_by(Origin::System));
     m.update(Action::ToggleSection { section: Section::Calendar });

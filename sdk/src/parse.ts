@@ -3,12 +3,14 @@
 // Keys the types do not name are dropped, so a test can compare the result with the raw reply.
 
 import type {
+  AgentLine,
   AppEntry,
   Feature,
   CalendarReply,
   Meeting,
   TimeSpan,
   NativeChat,
+  MeetingShow,
   MeetingStage,
   AxNode,
   AxOverlay,
@@ -56,6 +58,7 @@ import type {
   MarkInput,
   MarkReply,
   MarksReply,
+  RecordReply,
   TraceReply,
   Workbook,
   WorkbookPane,
@@ -288,6 +291,8 @@ function card(value: unknown, at: string): Card {
   return {
     id: num(o.id, `${at}.id`),
     title: str(o.title, `${at}.title`),
+    priority: num(o.priority, `${at}.priority`),
+    filed: orNull(str)(o.filed, `${at}.filed`),
     state: str(o.state, `${at}.state`),
     group: orNull(group)(o.group, `${at}.group`),
     live: orNull(str)(o.live, `${at}.live`),
@@ -323,12 +328,9 @@ function taskRow(value: unknown, at: string): TaskRow {
   return {
     id: num(o.id, `${at}.id`),
     group: group(o.group, `${at}.group`),
-    tabs: num(o.tabs, `${at}.tabs`),
-    panes: num(o.panes, `${at}.panes`),
     current: bool(o.current, `${at}.current`),
-    detail: str(o.detail, `${at}.detail`),
+    fact: orNull(str)(o.fact, `${at}.fact`),
     live: orNull(str)(o.live, `${at}.live`),
-    model: orNull(str)(o.model, `${at}.model`),
   };
 }
 
@@ -662,9 +664,29 @@ function railCell(value: unknown, at: string): Snapshot["drawer"]["rail"][number
   };
 }
 
+function noticeLevel(value: unknown, at: string): "info" | "error" {
+  if (value === "info" || value === "error") return value;
+  throw new Error(`${at}: not a level: ${JSON.stringify(value)}`);
+}
+
 function goWord(value: unknown, at: string): "tabs" | "claim" | "new" {
   if (value === "tabs" || value === "claim" || value === "new") return value;
   throw new Error(`${at}: not a go word: ${JSON.stringify(value)}`);
+}
+
+function agentLine(value: unknown, at: string): AgentLine {
+  const o = fields(value, at);
+  const pair = (v: unknown, p: string): [string, string] => {
+    const [name, text] = list(str)(v, p);
+    if (name === undefined || text === undefined) throw new Error(`${p}: not a [name, value] pair`);
+    return [name, text];
+  };
+  return {
+    foot: orNull(str)(o.foot, `${at}.foot`),
+    bypass: bool(o.bypass, `${at}.bypass`),
+    folder: orNull(str)(o.folder, `${at}.folder`),
+    facts: list(pair)(o.facts, `${at}.facts`),
+  };
 }
 
 function tabGroup(value: unknown, at: string): Snapshot["groups"][number] {
@@ -756,6 +778,7 @@ function drawerDrawn(value: unknown, at: string): Snapshot["drawer"] {
     agents: map(agent)(o.agents, `${at}.agents`),
     native: native(o.native, `${at}.native`),
     goes_to: orNull(goWord)(o.goes_to, `${at}.goes_to`),
+    line: orNull(agentLine)(o.line, `${at}.line`),
     note: orNull(str)(o.note, `${at}.note`),
     rail: list(railCell)(o.rail, `${at}.rail`),
   };
@@ -1361,6 +1384,7 @@ export function snapshot(value: unknown): Snapshot {
     font: { name: str(fields(o.font, "font").name, "font.name"), size: num(fields(o.font, "font").size, "font.size") },
     cell: pair(o.cell, "cell"),
     notice: orNull(str)(o.notice, "notice"),
+    notice_level: orNull(noticeLevel)(o.notice_level, "notice_level"),
     settings_errors: num(o.settings_errors, "settings_errors"),
     hosted: map(rect)(o.hosted, "hosted"),
     crop: map(num)(o.crop, "crop"),
@@ -1375,6 +1399,8 @@ export function snapshot(value: unknown): Snapshot {
     compose_read: bool(o.compose_read, "compose_read"),
     compose_host: orNull(composeHost)(o.compose_host, "compose_host"),
     compose_plan: orNull(composePlan)(o.compose_plan, "compose_plan"),
+    compose_plan_line: orNull(str)(o.compose_plan_line, "compose_plan_line"),
+    compose_hint: orNull(str)(o.compose_hint, "compose_hint"),
     compose_picks: composePicks(o.compose_picks, "compose_picks"),
     welcome: bool(o.welcome, "welcome"),
     compose_menu: orNull(composeMenu)(o.compose_menu, "compose_menu"),
@@ -1423,11 +1449,35 @@ function railMark(value: unknown, at: string): Snapshot["calendar"]["rail"] {
   throw wrong(at, "none, near or alert", value);
 }
 
+function blockKind(value: unknown, at: string): "call" | "block" {
+  if (value === "call" || value === "block") return value;
+  throw wrong(at, "call or block", value);
+}
+
+function meetingShow(value: unknown, at: string): MeetingShow {
+  if (value === "busy" || value === "tentative" || value === "free" || value === "away") return value;
+  throw wrong(at, "busy, tentative, free or away", value);
+}
+
 function band(value: unknown, at: string): NonNullable<Snapshot["calendar"]["band"]> {
   const o = fields(value, at);
   const block = (v: unknown, at: string) => {
     const b = fields(v, at);
-    return { start: num(b.start, `${at}.start`), end: num(b.end, `${at}.end`), rect: orNull(rect)(b.rect, `${at}.rect`) };
+    return {
+      start: num(b.start, `${at}.start`),
+      end: num(b.end, `${at}.end`),
+      rect: orNull(rect)(b.rect, `${at}.rect`),
+      kind: blockKind(b.kind, `${at}.kind`),
+      show: meetingShow(b.show, `${at}.show`),
+      color: str(b.color, `${at}.color`),
+      lane: orNull(num)(b.lane, `${at}.lane`),
+      lanes: orNull(num)(b.lanes, `${at}.lanes`),
+      more: num(b.more, `${at}.more`),
+    };
+  };
+  const outside = (v: unknown, at: string) => {
+    const b = fields(v, at);
+    return { count: num(b.count, `${at}.count`), rect: orNull(rect)(b.rect, `${at}.rect`) };
   };
   return {
     rect: orNull(rect)(o.rect, `${at}.rect`),
@@ -1436,6 +1486,7 @@ function band(value: unknown, at: string): NonNullable<Snapshot["calendar"]["ban
     marks: list(orNull(rect))(o.marks, `${at}.marks`),
     now: orNull(rect)(o.now, `${at}.now`),
     blocks: list(block)(o.blocks, `${at}.blocks`),
+    outside: list(outside)(o.outside, `${at}.outside`),
     status_bar: orNull(rect)(o.status_bar, `${at}.status_bar`),
   };
 }
@@ -1456,10 +1507,8 @@ function calendar(value: unknown, at: string): Snapshot["calendar"] {
     updated: orNull(num)(o.updated, `${at}.updated`),
     stale: bool(o.stale, `${at}.stale`),
     in_call: orNull(bool)(o.in_call, `${at}.in_call`),
-    soon: bool(o.soon, `${at}.soon`),
     bars: num(o.bars, `${at}.bars`),
     band: orNull(band)(o.band, `${at}.band`),
-    chip: bool(o.chip, `${at}.chip`),
     banner: orNull(banner)(o.banner, `${at}.banner`),
     alerts: num(o.alerts, `${at}.alerts`),
     joins: orNull(num)(o.joins, `${at}.joins`),
@@ -1487,6 +1536,10 @@ function staleMark(value: unknown, at: string): true {
 
 export function traceReply(value: unknown): TraceReply {
   return { ok: true, trace: str(fields(value, "reply").trace, "trace") };
+}
+
+export function recordReply(value: unknown): RecordReply {
+  return { ok: true, frames: num(fields(value, "reply").frames, "frames") };
 }
 
 function scrollbar(value: unknown, at: string): Scrollbar {
@@ -1557,14 +1610,15 @@ function timeSpan(value: unknown, at: string): TimeSpan {
 
 function meeting(value: unknown, at: string): Meeting {
   const o = fields(value, at);
-  if (o.status !== undefined && o.status !== "tentative") throw wrong(`${at}.status`, "tentative", o.status);
+  const status = o.status === undefined ? undefined : meetingShow(o.status, `${at}.status`);
+  if (status === "busy") throw wrong(`${at}.status`, "tentative, free or away", o.status);
   return {
     ...timeSpan(value, at),
     all_day: bool(o.all_day, `${at}.all_day`),
     title: str(o.title, `${at}.title`),
     location: orNull(str)(o.location, `${at}.location`),
     has_call_link: bool(o.has_call_link, `${at}.has_call_link`),
-    ...(o.status === "tentative" ? { status: o.status } : {}),
+    ...(status === undefined ? {} : { status }),
   };
 }
 

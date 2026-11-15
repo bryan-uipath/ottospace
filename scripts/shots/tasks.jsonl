@@ -1,0 +1,25 @@
+# The Tasks section: needs you, running, later and done, then a task's hover card; then
+# Elsewhere, Codex sessions of the repository that no task has (tasks/codex), and a row's card.
+{"cmd":"split","kind":"empty"}
+{"cmd":"task_new","line":"Review the zoom fix #canvas p1"}
+{"cmd":"task_new","line":"Approve the retry plan #minter p2"}
+{"cmd":"task_new","line":"Socket guide for agents #docs"}
+{"cmd":"task_new","line":"Minimap spike #canvas"}
+{"cmd":"task_new","line":"Slack bug from Ana #support"}
+{"cmd":"task_new","line":"Ship the release notes #docs"}
+{"cmd":"task_set_state","id":1,"state":"needs_you"}
+{"cmd":"task_set_state","id":2,"state":"needs_you"}
+{"cmd":"task_set_state","id":3,"state":"running"}
+{"cmd":"task_set_state","id":6,"state":"done"}
+{"cmd":"section","section":"tasks"}
+{"shot":"list"}
+{"hover":"task:3","at":[0.3,0.5]}
+{"sleep_ms":1200}
+{"shot":"hover-card"}
+{"until":"sessions_bar.total"}
+{"cmd":"task_group","heading":"sessions"}
+{"until":"sessions_bar.rows.0"}
+{"shot":"elsewhere"}
+{"hover":"session:codex:c0de0001-0000-4000-8000-000000000001","at":[0.3,0.5]}
+{"sleep_ms":1200}
+{"shot":"elsewhere-card"}

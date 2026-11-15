@@ -1,0 +1,4 @@
+{"_fixture":"SYNTHETIC: what a resume prints before it reads stdin, the user's SessionStart hook. No recording of a resume exists."}
+{"type":"system","subtype":"hook_started","hook_name":"SessionStart:resume","session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003"}
+{"type":"system","subtype":"hook_progress","hook_name":"SessionStart:resume","session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003"}
+{"type":"system","subtype":"hook_response","hook_name":"SessionStart:resume","session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003"}

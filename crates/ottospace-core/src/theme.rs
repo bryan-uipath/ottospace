@@ -55,6 +55,17 @@ pub const IDENTITY: [u32; crate::tasks::COLOURS as usize] =
     // Neighbours in the order given are far apart: the first tasks look the most different.
     [0xf87171, 0x818cf8, 0xfb923c, 0xf472b6, 0xbef264, 0xc084fc, 0xd6a77a, 0x5eead4];
 
+/// The names of `IDENTITY`'s colours, in its order: what `calendar_colors` may name.
+pub const IDENTITY_NAMES: [&str; crate::tasks::COLOURS as usize] =
+    ["red", "indigo", "orange", "pink", "lime", "purple", "tan", "teal"];
+
+/// A meeting with a call link, on the band and in the Calendar section.
+pub const MEETING: u32 = SNEAK;
+/// A meeting with no call link: time held, drawn under the calls.
+pub const MEETING_BLOCK: u32 = MUTED;
+/// Out of office.
+pub const MEETING_AWAY: u32 = 0x7c86a2;
+
 /// A task's identity colour; with none, the muted grey.
 pub fn identity(colour: Option<u8>) -> u32 {
     colour.and_then(|at| IDENTITY.get(usize::from(at))).copied().unwrap_or(MUTED)

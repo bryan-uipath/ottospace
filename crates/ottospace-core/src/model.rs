@@ -212,6 +212,9 @@ struct Taken {
 /// How many repositories the drawer offers as picks.
 pub const PICKS: usize = 4;
 
+/// What a line in the new-task box may hold, shown while it is empty.
+pub const TAG_HINT: &str = "#project · >repo · @agent · /path · $skill · ^open · p1–p9";
+
 /// The new-task line's one-click picks: repository names (WHERE) and agent names (WHO).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Picks {
@@ -803,8 +806,8 @@ pub enum Action {
         runner: String,
         id: String,
     },
-    /// Which sessions Other sessions lists, by when each was last active. The user's pick is
-    /// written to the settings.
+    /// Which sessions Elsewhere lists, by when each was last active: 7 days unless the settings
+    /// say otherwise (`sessions_range`). Nothing on screen picks it; nothing is written.
     SessionsRange {
         range: sessions::Range,
     },
@@ -1295,6 +1298,10 @@ pub enum Action {
         notify: bool,
         /// Only events with a Zoom, Meet or Teams link alert (`calendar_notify_for: "links"`).
         links_only: bool,
+        /// `calendar_hide_free`.
+        hide_free: bool,
+        /// `calendar_colors`.
+        colors: Vec<calendar::ColorRule>,
     },
     /// The feed was read at `at`: today's and tomorrow's events, or `None` when the read failed
     /// (the last events stay). `days`: local midnight of today, tomorrow and the day after.
@@ -1944,12 +1951,16 @@ impl Today {
 pub struct Card {
     pub id: TaskId,
     pub title: String,
+    /// 1 is most urgent.
+    pub priority: u8,
+    /// How long ago it was filed: `3h`.
+    pub filed: Option<String>,
     /// Its state's heading, and what its session does now with its model.
     pub state: &'static str,
     pub group: Option<tasks::Group>,
     pub live: Option<String>,
     pub model: Option<String>,
-    /// `#project`, `>repo`, `@agent`.
+    /// `#project`, `>repo`, `@agent`, then counts: `2 paths`, `1 skill`, `1 reference`, `1 capture`.
     pub tags: Vec<String>,
     /// How long ago its agent first started: `3h`.
     pub started: Option<String>,
@@ -1986,10 +1997,6 @@ pub enum Effect {
     /// The user picked how the Tasks section groups: write `tasks_view` in the settings file.
     SaveTasksView {
         view: TasksView,
-    },
-    /// The user picked the range of Other sessions: write `sessions_range` in the settings file.
-    SaveSessionsRange {
-        range: sessions::Range,
     },
     /// The pinned or hidden apps changed: make these changes to `apps` and `apps_hidden` in
     /// the settings file, as it is then.
@@ -2298,7 +2305,7 @@ pub struct Model {
     /// Sessions the user hid, as (runner, id). Not kept between runs.
     #[serde(skip)]
     hidden: Vec<(String, String)>,
-    /// Which sessions Other sessions lists (`sessions_range` in the settings), and the start of
+    /// Which sessions Elsewhere lists (`sessions_range` in the settings), and the start of
     /// the local day the shell last read them in.
     #[serde(skip)]
     pub sessions_range: sessions::Range,
@@ -2399,6 +2406,10 @@ pub struct Model {
     /// Conversations whose agent was stopped for a switch of view: gone on with once it is gone.
     #[serde(skip)]
     switching: Vec<Subject>,
+    /// Conversations whose agent was asked to stop and has not ended yet: nothing starts on
+    /// its session until its process is gone (the shell says `AgentExited` only then).
+    #[serde(skip)]
+    ending: Vec<Subject>,
     /// The action being run is the user's own. False between actions.
     #[serde(skip)]
     by_user: bool,
@@ -2506,6 +2517,7 @@ impl Default for Model {
             views: Vec::new(),
             conversation_view: crate::settings::DEFAULT_VIEW,
             switching: Vec::new(),
+            ending: Vec::new(),
             by_user: false,
             next_id: 0,
             last_tab: Vec::new(),
@@ -2879,6 +2891,11 @@ impl Model {
         // Only the user's own undo links a dismissed task's tabs again.
         self.settle_tasks(undo && origin == Origin::User);
         self.follow_tab(shown, origin, drawer_keys);
+        // A brief shows with its task, on show in a tab or the drawer: its tab closed, it goes.
+        let talked = self.talk.as_ref().and_then(|talk| talk.task.task());
+        let shown = |id: &TaskId| self.tab_task() == Some(*id) || talked == Some(*id);
+        let briefed = |id: &TaskId| self.tasks.get(*id).is_some_and(|task| !task.materials.is_empty());
+        self.brief = self.brief.filter(|id| shown(id) && briefed(id));
         // However the list was left (Esc, a click on a pane), ⌘⌃← comes back to its row.
         if self.list.is_none() && listed.is_some() {
             self.list_kept = zones::KeptRow(listed);
@@ -3670,12 +3687,7 @@ impl Model {
                     self.focus(pane, effects);
                 }
             }
-            Action::SessionsRange { range } => {
-                if self.by_user && range != self.sessions_range {
-                    effects.push(Effect::SaveSessionsRange { range });
-                }
-                self.sessions_range = range;
-            }
+            Action::SessionsRange { range } => self.sessions_range = range,
             Action::ToggleGroup { heading } => {
                 let open = !self.collapsed.contains(&heading);
                 self.collapsed.retain(|h| *h != heading);
@@ -4415,6 +4427,10 @@ impl Model {
             }
             Action::AgentExited { task: subject } => {
                 let ran = self.agents.contains(&subject);
+                // Stopped with a message written meanwhile, on show: gone on with now that it is gone.
+                let shown = self.talk.as_ref().is_some_and(|talk| talk.open && talk.task == subject);
+                let queued = self.chat(&subject).is_some_and(|chat| chat.queued.is_some());
+                let resume = shown && queued && self.ending.contains(&subject);
                 // A switch of view: the session goes on in the other once this one is gone.
                 let switched = self.chat_exited(&subject);
                 // What its session's file shows of the last moments is ours, not another terminal's.
@@ -4426,7 +4442,11 @@ impl Model {
                 self.agents.retain(|id| *id != subject);
                 self.starting.retain(|(id, _)| *id != subject);
                 self.awaiting.retain(|id| *id != subject);
+                self.ending.retain(|id| *id != subject);
                 let Some(task) = subject.task() else {
+                    if resume {
+                        self.chat_resume(&subject, effects);
+                    }
                     return if switched {
                         self.chat_restart(subject, effects)
                     };
@@ -4442,6 +4462,10 @@ impl Model {
                 if ran && self.tasks.get(task).is_some_and(|task| task.state == State::Running && !task.dismissed) {
                     self.tasks.set_state(task, State::NeedsYou);
                     self.tasks.followed(task, State::NeedsYou);
+                }
+                // Once its task no longer follows the session as running: else nothing could start.
+                if resume {
+                    self.chat_resume(&subject, effects);
                 }
                 if switched {
                     self.chat_restart(subject, effects);
@@ -4473,6 +4497,13 @@ impl Model {
                 self.awaiting.retain(|subject| *subject != id);
                 self.switching.retain(|subject| *subject != id);
                 if self.agent_runs(&id) {
+                    // Its end is the stop asked for, not an error; and it is not over until it exits.
+                    if let Some(chat) = self.chats.iter_mut().find(|chat| chat.subject == id) {
+                        chat.transcript.stopping = true;
+                    }
+                    if !self.ending.contains(&id) {
+                        self.ending.push(id.clone());
+                    }
                     effects.push(Effect::StopAgent { task: id });
                 }
             }
@@ -4496,8 +4527,9 @@ impl Model {
             }
             Action::TalkResize { width } => self.talk_width = talk::width(width),
             Action::TalkWide => self.talk_wide = !self.talk_wide,
-            Action::SetCalendar { on, notify, links_only } => {
+            Action::SetCalendar { on, notify, links_only, hide_free, colors } => {
                 (self.calendar.on, self.calendar.notify, self.calendar.links_only) = (on, notify, links_only);
+                self.calendar.options(hide_free, colors);
                 if !on {
                     self.sidebar = self.sidebar.filter(|s| *s != Section::Calendar);
                     if self.rail_focus == Some(zones::RailFocus::Left(Section::Calendar)) {
@@ -4930,6 +4962,7 @@ impl Model {
             }
         };
         self.agents.iter_mut().for_each(rename);
+        self.ending.iter_mut().for_each(rename);
         self.opened.iter_mut().for_each(rename);
         self.starting.iter_mut().for_each(|(subject, _)| rename(subject));
         self.talk.iter_mut().for_each(|talk| rename(&mut talk.task));
@@ -4978,6 +5011,7 @@ impl Model {
         self.seeking.retain(|seek| tasks.get(seek.task).is_some_and(|task| task.session.is_none()));
         self.starting.retain(|(id, _)| !gone(id));
         self.awaiting.retain(|id| !gone(id));
+        self.ending.retain(|id| !gone(id));
         self.talk = self.talk.take().filter(|talk| !gone(&talk.task));
         // A picture being drawn on keeps the keyboard, as an app, the list and visual mode do.
         let drawing = self.annotated().is_some();
@@ -5253,6 +5287,30 @@ impl Model {
         let found = path.and_then(|path| checkouts.into_iter().find(|(at, ..)| **at == path));
         let (dir, branch) = found.map_or((None, None), |(_, name, branch)| (Some(name.clone()), branch.clone()));
         Some(Plan { agent, starts, dir, branch })
+    }
+
+    /// The plan said over the box, only when not the default (the default agent, starting, in the
+    /// home folder): `↵ will start codex in app on main`, `↵ files it; nothing starts`.
+    pub fn compose_plan_line(&self) -> Option<String> {
+        let plan = self.compose_plan()?;
+        let default = plan.starts && plan.dir.is_none() && plan.agent.eq_ignore_ascii_case(self.default_agent());
+        if default {
+            return None;
+        }
+        if !plan.starts {
+            return Some("↵ files it; nothing starts".into());
+        }
+        let place = match (&plan.dir, &plan.branch) {
+            (Some(dir), Some(branch)) => format!("in {dir} on {branch}"),
+            (Some(dir), None) => format!("in {dir}"),
+            (None, _) => "in your home folder".into(),
+        };
+        Some(format!("↵ will start {} {place}", plan.agent))
+    }
+
+    /// The tags a line may hold, said only while the box's line is empty: the dropdown teaches the rest.
+    pub fn compose_hint(&self) -> Option<&'static str> {
+        self.compose_line().filter(|line| line.is_empty()).map(|_| TAG_HINT)
     }
 
     /// The folder the shell lists next, as typed (`~/`, `./src/`): that of the path at the
@@ -5693,18 +5751,9 @@ impl Model {
 
     /// A task's row as drawn, at `now`.
     fn task_row(&self, task: &Task, group: tasks::Group, now: u64) -> TaskRow {
-        let (tabs, panes) = self.task_open(task.id);
-        let plural = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
-        let open = (tabs > 0).then(|| format!("{}, {}", plural(tabs, "tab"), plural(panes, "pane")));
-        let tags = Some(self.task_tags(task)).filter(|tags| !tags.is_empty());
-        // What was captured for it: its brief shows when it is opened.
-        let kept = Some(task.materials.len()).filter(|n| *n > 0).map(|n| plural(n, "material"));
-        let age = task.created.map(|created| tasks::age(created, now));
-        let detail = [tags, kept, open, age].into_iter().flatten().collect::<Vec<_>>().join(" · ");
         let current = self.tab_task() == Some(task.id);
-        let session = self.task_session(task);
-        let (live, model) = (session.and_then(Found::doing), session.and_then(|s| s.model.clone()));
-        TaskRow { live, model, id: task.id, group, tabs, panes, current, detail }
+        let live = self.task_session(task).and_then(Found::doing);
+        TaskRow { live, id: task.id, group, current, fact: tasks::fact(task, group, now) }
     }
 
     /// The Tasks section's State view as drawn: Needs you, Running, Later (captured and on hold),
@@ -5771,10 +5820,16 @@ impl Model {
             task.repo.as_ref().map(|path| format!(">{}", self.repo_name(path).unwrap_or_else(|| repos::name_of(path)))),
         );
         tags.extend(task.agent.as_ref().map(|a| format!("@{a}")));
+        // What the row no longer says: how many paths, skills, references and captures it has.
+        let counts = [(task.paths.len(), "path"), (task.skills.len(), "skill"), (task.refs.len(), "reference")];
+        let counts = counts.into_iter().chain([(task.materials.len(), "capture")]);
+        tags.extend(counts.filter(|(n, _)| *n > 0).map(|(n, word)| plural(n, word)));
         let last = task.work.last();
         Some(Card {
             id,
             title: task.title.clone(),
+            priority: task.priority,
+            filed: task.created.map(|at| tasks::age(at, now)),
             state: task.group().map_or("Not listed", tasks::Group::title),
             group: task.group(),
             live: session.and_then(Found::doing),
@@ -5901,7 +5956,7 @@ impl Model {
         (another.is_none() && session.active && at_work == 1).then_some(pane.id)
     }
 
-    /// The Other sessions group as drawn, at the time of the last `Tick`: sessions found that are
+    /// The Elsewhere group as drawn, at the time of the last `Tick`: sessions found that are
     /// no task's, active first, those in the range alone.
     pub fn sessions_bar(&self) -> sessions::Bar {
         let (range, now, day) = (self.sessions_range, self.now, self.session_day);
@@ -6321,13 +6376,19 @@ impl Model {
         self.act(Action::SetAgents { claude, codex, default, shows }, effects);
         let (notify, links_only) = (settings.calendar_notify.unwrap_or(true), settings.calendar_notify_for);
         let links_only = links_only == Some(crate::settings::NotifyFor::Links);
-        self.act(Action::SetCalendar { on: self.calendar.on, notify, links_only }, effects);
+        let (hide_free, colors) = (settings.calendar_hide_free.unwrap_or(false), settings.color_rules());
+        self.act(Action::SetCalendar { on: self.calendar.on, notify, links_only, hide_free, colors }, effects);
         effects.push(Effect::ApplySettings { settings: Box::new(settings) });
     }
 
     /// What the status bar says of `settings.json`: its first problem, or the keys that need a restart.
     pub fn settings_line(&self) -> Option<String> {
         self.settings_file.line()
+    }
+
+    /// How the status bar draws `settings_line`.
+    pub fn settings_level(&self) -> crate::settings::Level {
+        self.settings_file.level()
     }
 
     /// How many problems the last read of `settings.json` found.
@@ -7272,7 +7333,7 @@ mod tests {
             Action::TalkWide,
             Action::TalkPick { id: Subject::Task(1) },
             Action::TalkStart,
-            Action::SetCalendar { on: true, notify: true, links_only: false },
+            Action::SetCalendar { on: true, notify: true, links_only: false, hide_free: false, colors: Vec::new() },
             Action::CalendarRead { events: None, days: [0; 3], at: 0 },
             Action::CallSeen { in_call: Some(false), at: 0 },
             Action::CalendarDismiss { id: 1 },
@@ -8898,6 +8959,7 @@ mod tests {
         keys(&mut m, " folder");
         // ↵ will start the agent there; the path stays in the title as typed.
         assert_eq!(m.compose_plan().and_then(|plan| plan.dir).as_deref(), Some("~/notes/"));
+        assert_eq!(m.compose_plan_line().as_deref(), Some("↵ will start claude in ~/notes/"));
         // ↵ at once, before the shell read the line again: the folder is where its listing was.
         m.update(Action::ComposeSubmit { open: false });
         let task = m.tasks.list.last().unwrap();
@@ -9296,6 +9358,30 @@ mod tests {
     }
 
     #[test]
+    fn the_box_says_its_plan_only_off_the_default_and_its_tags_only_on_an_empty_line() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        assert_eq!((m.compose_plan_line(), m.compose_hint()), (None, None), "closed");
+        m.update(Action::OpenCompose { text: String::new() });
+        assert_eq!((m.compose_plan_line(), m.compose_hint()), (None, Some(TAG_HINT)));
+        // Typing hides the hint; the default agent in the home folder says nothing.
+        keys(&mut m, "fix zoom");
+        assert_eq!((m.compose_plan_line(), m.compose_hint()), (None, None));
+        m.update(Action::ComposePick { mark: '@', name: Some("claude".into()) });
+        assert_eq!(m.compose_plan_line(), None, "the default, named");
+        m.update(Action::ComposePick { mark: '>', name: Some("app".into()) });
+        assert_eq!(m.compose_plan_line().as_deref(), Some("↵ will start claude in app"));
+        m.update(Action::ComposePick { mark: '>', name: None });
+        m.update(Action::ComposePick { mark: '@', name: Some("codex-gpt-6-astra".into()) });
+        assert_eq!(m.compose_plan_line().as_deref(), Some("↵ will start codex-gpt-6-astra in your home folder"));
+        // A saved agent as the default: ↵ starts nothing, and the box says so.
+        m.update(Action::ComposePick { mark: '@', name: None });
+        let saved = Some("ana".into());
+        m.update(Action::SetAgents { claude: Vec::new(), codex: Vec::new(), default: saved, shows: View::Native });
+        assert_eq!(m.compose_plan_line().as_deref(), Some("↵ files it; nothing starts"));
+    }
+
+    #[test]
     fn any_keys_in_the_box_leave_a_line_that_reads_and_a_dropdown_that_holds() {
         use unicode_segmentation::UnicodeSegmentation;
         let mut rng = crate::edit::fuzz::Rng(0x2545_f491_4f6c_dd1d);
@@ -9486,14 +9572,17 @@ mod tests {
             [(Heading::NeedsYou, 1, vec![1]), (Heading::Running, 1, vec![2]), (Heading::Later, 2, vec![4, 3])],
             "Later holds what is captured and what is on hold"
         );
-        // Each row: its tags, what it has open, how old it is. The one on show is marked.
-        let sections = m.task_sections(1_000 + 3 * 3_600_000);
+        // Each row: one fact, by its state (none for needs you); the one on show is marked. Its
+        // tags and what it has open are on its card.
+        let now = 1_000 + 3 * 3_600_000;
+        let sections = m.task_sections(now);
         let (needs, later) = (&sections[0].rows[0], &sections[2].rows[0]);
-        assert_eq!(
-            (needs.detail.as_str(), needs.tabs, needs.current, needs.group),
-            ("1 tab, 0 panes · 3h", 1, true, tasks::Group::NeedsYou)
-        );
-        assert_eq!((later.detail.as_str(), later.current), ("#canvas · >app-2 · 2 tabs, 1 pane · 3h", false));
+        assert_eq!((&needs.fact, needs.current, needs.group), (&None, true, tasks::Group::NeedsYou));
+        assert_eq!((later.fact.as_deref(), later.current), (Some("3h"), false));
+        let (needs, later) = (m.card(1, now).unwrap(), m.card(4, now).unwrap());
+        assert_eq!((needs.workspace.as_str(), needs.filed.as_deref()), ("1 tab · 0 panes", Some("3h")));
+        assert_eq!((later.tags.as_slice(), later.priority), (&["#canvas".to_string(), ">app-2".into()][..], 1));
+        assert_eq!(later.workspace, "2 tabs · 1 pane");
         // List mode walks the headings and rows in the order drawn.
         m.update(Action::ToggleSection { section: Section::Tasks });
         let (heading, task) = (ListRow::Heading, ListRow::Task);
@@ -9640,6 +9729,9 @@ mod tests {
             ("Done", &["#web".to_string()][..], Some("3h"))
         );
         assert_eq!((card.agent_time.as_str(), card.workspace.as_str()), ("1m", "0 tabs · 0 panes"));
+        // Counts the row no longer shows: of paths, skills, references and captures it has.
+        (m.tasks.list[0].paths, m.tasks.list[0].materials) = (vec!["a".into(), "b".into()], vec!["c".into()]);
+        assert_eq!(m.card(1, 0).unwrap().tags, ["#web", "2 paths", "1 capture"]);
         let table: Vec<_> = card.tokens.iter().map(|t| (t.model.as_str(), t.sub, t.input)).collect();
         assert_eq!(table, [("opus-5.5", false, 10), ("haiku-5", true, 4)]);
         assert_eq!((card.context, card.window), (Some(50_000), Some(200_000)));
@@ -9705,7 +9797,7 @@ mod tests {
         let bar = m.sessions_bar();
         assert_eq!((bar.count, bar.collapsed, bar.rows.len()), (1, true, 0));
         assert_eq!(m.list_rows(), [ListRow::Heading(Heading::Sessions)]);
-        assert_eq!(Heading::Sessions.title(), "Other sessions");
+        assert_eq!(Heading::Sessions.title(), "Elsewhere");
         // ↵ on the heading unfolds it, as any other.
         m.update(Action::FocusList);
         m.update(Action::ListChoose { axis: Right });
@@ -9719,7 +9811,7 @@ mod tests {
         Found { runner, id, cwd, repo, started, last_activity, active, station, label, title, model, held }
     }
 
-    /// The Other sessions group as (count in range, ids of the rows drawn, count in all).
+    /// The Elsewhere group as (count in range, ids of the rows drawn, count in all).
     fn session_rows(m: &Model) -> (usize, Vec<String>, usize) {
         let bar = m.sessions_bar();
         (bar.count, bar.rows.into_iter().map(|row| row.id).collect(), bar.total)
@@ -9743,7 +9835,9 @@ mod tests {
             ],
             day: now - 5 * hour,
         });
-        // Today, at first: the one at work and the one idle since the day started.
+        // 7 days, at first; Today: the one at work and the one idle since the day started.
+        assert_eq!(session_rows(&m), (3, vec!["busy".into(), "idle".into(), "old".into()], 3));
+        m.update(Action::SessionsRange { range: sessions::Range::Today });
         assert_eq!(session_rows(&m), (2, vec!["busy".into(), "idle".into()], 3));
         let rows = m.sessions_bar().rows;
         // Named after the listed repository or worktree, wherever below it the session started.
@@ -9767,20 +9861,11 @@ mod tests {
             ),
             ("codex", "app-2", false, None, Some("3h"))
         );
-        // 7 days takes in the one of three days ago. The user's pick is written; a client's is not.
+        // 7 days takes in the one of three days ago. A range is read, never written.
         let week = Action::SessionsRange { range: sessions::Range::Week };
         assert_eq!(m.update(week.clone().sent_by(Origin::Socket)), []);
         assert_eq!(session_rows(&m), (3, vec!["busy".into(), "idle".into(), "old".into()], 3));
-        let today = Action::SessionsRange { range: sessions::Range::Today };
-        assert_eq!(
-            m.update(today.sent_by(Origin::User)),
-            [Effect::SaveSessionsRange { range: sessions::Range::Today }]
-        );
-        assert_eq!(
-            m.update(week.clone().sent_by(Origin::User)),
-            [Effect::SaveSessionsRange { range: sessions::Range::Week }]
-        );
-        assert_eq!(m.update(week.sent_by(Origin::User)), [], "the same range: nothing to write");
+        assert_eq!(m.update(week.sent_by(Origin::User)), []);
         // The heading folds like any other.
         m.update(Action::ToggleGroup { heading: Heading::Sessions });
         assert_eq!(session_rows(&m), (3, vec![], 3));
@@ -10606,9 +10691,11 @@ mod tests {
         assert_eq!(started(&mut m, Action::TaskTalk { id: 2 }), [read]);
         let none = Action::SessionRead { runner: "claude".into(), id: UUID.into(), found: None };
         assert_eq!(system(&mut m, none), [asked(2, resume, None)]);
-        // An agent the shell could not start is not running: the keyboard is not left in nothing.
+        // An agent the shell could not start is not running: the keyboard stays in its native
+        // composer, whose ↵ goes on with it (never in nothing).
         system(&mut m, Action::AgentExited { task: Subject::Task(2) });
-        assert_eq!((m.agent_runs(&Subject::Task(2)), m.mode(), m.talk_note().is_some()), (false, Mode::Normal, false));
+        assert_eq!((m.agent_runs(&Subject::Task(2)), m.mode(), m.talk_note().is_some()), (false, Mode::Talk, false));
+        assert_eq!(m.field().map(|(of, _)| of), Some("talk"));
 
         // A saved agent names no runner: the drawer says so and starts nothing.
         assert_eq!(started(&mut m, Action::TaskTalk { id: 3 }), []);
