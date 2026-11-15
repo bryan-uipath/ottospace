@@ -210,8 +210,10 @@ impl Workspace {
                 }))
         };
         // The badge alone, always at the row's end, under the whole chip when that fits.
-        let short = pill("agent-chip").child(self.controls.mark("agent-chip"));
-        let short = div().absolute().top_0().bottom_0().right(px(CHIP_EDGE)).flex().items_center().child(short);
+        let short_pill = pill("agent-chip").child(self.controls.mark("agent-chip"));
+        // Opaque to the row's end: a tab under it does not show beside it.
+        let short = div().absolute().top_0().bottom_0().right_0().pl_1().pr(px(CHIP_EDGE)).bg(rgb(theme::BACKGROUND));
+        let short = short.flex().items_center().child(short_pill);
         // The whole chip is second in a row that wraps: with no room, it goes to a line not drawn.
         let seen = self.chip_line.clone();
         let note = move |bounds: Bounds<Pixels>, window: &mut Window, _: &mut gpui::App| {
