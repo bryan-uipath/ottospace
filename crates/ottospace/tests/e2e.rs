@@ -5411,16 +5411,18 @@ fn only_the_user_starts_a_capture() {
     let more = |t: &&Value| t["source"]["id"] == "draft:more";
     let frame = &labelled["sneak"]["targets"].as_array().unwrap().iter().find(more).expect("the button")["frame"];
     let f = |key: &str| frame[key].as_f64().unwrap();
-    let button = [f("x") + f("w") / 2.0, f("y") + f("h") / 2.0];
+    // The button, as low as the notice bar in `reply` puts it: the refusal's notice opens the bar.
+    let high = |reply: &Value| reply["notice_bar"]["height"].as_f64().unwrap_or(0.0);
+    let read_at = high(&labelled);
+    let button = |reply: &Value| [f("x") + f("w") / 2.0, f("y") + f("h") / 2.0 + high(reply) - read_at];
     let reply = otto.call(json!({"cmd": "key", "keys": letters(&labels["draft:more"])}));
     assert!(count(&reply) == 2 && refused(&reply), "{reply}");
     if reply["mode"] == "sneak" {
         otto.user_key("escape");
     }
-    let reply = otto.click(button, 1);
+    let reply = otto.click(button(&otto.drawn()), 1);
     assert!(count(&reply) == 2 && refused(&reply), "{}", reply["notice"]);
-    // The refusal's notice moved the bar down: the button where it is now.
-    let reply = otto.user_click(at(otto.control("draft:more"), 0.5, 0.5));
+    let reply = otto.user_click(button(&reply));
     assert_eq!(count(&reply), 3, "{}", reply["notice"]);
     let state = pictured(&otto);
 
@@ -5623,10 +5625,11 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
     let otto = Otto::launch_with("workbook-2", &env);
     let listed = otto.call(json!({"cmd": "section", "section": "workbook"}));
     assert_eq!((names(&listed), &listed["workbooks"][0]["open"]), (vec!["dri".to_string()], &json!(false)));
-    let row = at(rect(&otto.drawn()["workbooks"][0]["row"]), 0.3, 0.3);
-    let refused = otto.click(row, 1);
+    // Where the row is now: the refusal's notice moves the list down.
+    let row = || at(rect(&otto.drawn()["workbooks"][0]["row"]), 0.3, 0.3);
+    let refused = otto.click(row(), 1);
     assert!(pane_ids(&refused).is_empty() && users(&refused), "{refused}");
-    let opened = otto.user_click(row);
+    let opened = otto.user_click(row());
     assert_eq!(
         (titles(&opened), &opened["state"]["active"], pane_ids(&opened)),
         (vec!["Tab 1".into(), "dri".to_string()], &json!(1), vec![1, 2])
@@ -5637,7 +5640,7 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
     shell_is_in(&otto, 2, &two);
     // Its tab is open: the row selects it, and opens no second one.
     otto.call(json!({"cmd": "select_tab", "index": 0}));
-    let again = otto.user_click(row);
+    let again = otto.user_click(row());
     assert_eq!((titles(&again).len(), &again["state"]["active"], pane_ids(&again)), (2, &json!(1), vec![1, 2]));
 
     // Saving its tab again, with the header's +, updates the workbook and offers the old one back.
