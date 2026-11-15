@@ -68,7 +68,9 @@ pub fn chip_line(state: Pulse, label: Option<&str>) -> String {
         Pulse::Ended => "Ended",
         Pulse::Error => "Failed",
     };
-    let label = label.map(|label| crate::transcript::clean(label).replace('\n', " "));
+    // Cut before it is cleaned, and after: a label may be long.
+    let label = label.map(|label| label.chars().take(4 * CHIP_LABEL).collect::<String>());
+    let label = label.map(|label| crate::transcript::clean(&label).replace('\n', " "));
     let label: Option<String> = label.map(|label| label.trim().chars().take(CHIP_LABEL).collect());
     match label.filter(|label| !label.is_empty()) {
         Some(label) if matches!(state, Pulse::Running | Pulse::NeedsYou) => format!("{word} · {label}"),

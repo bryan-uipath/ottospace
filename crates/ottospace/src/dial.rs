@@ -10,7 +10,7 @@ use gpui::{
     prelude::*, px, rgb, size,
 };
 use ottospace_core::activity::{self, Dial, Pulse, Station};
-use ottospace_core::talk::{Chip, Subject};
+use ottospace_core::talk::Subject;
 use ottospace_core::{Action, theme};
 
 use crate::{Tooltip, Workspace};
@@ -21,6 +21,8 @@ const MARK: f32 = 18.;
 /// The agent chip: its height, and the most its line takes.
 const CHIP: f32 = 24.;
 const CHIP_LINE: f32 = 220.;
+/// Between the chip and the row's end.
+const CHIP_EDGE: f32 = 8.;
 /// Radii in the dial: the centre, the context ring, where the spokes start and end, the stations.
 const CENTRE: f32 = 12.;
 const RING: f32 = 17.;
@@ -168,9 +170,10 @@ impl Workspace {
         face.child(rings.absolute().size_full()).child(self.glyph(subject, dial, 9.))
     }
 
-    /// The agent chip (`Model::agent_chip`) at the end of a row `height` tall. It takes the room
-    /// the row has left and moves nothing: short of room for its line, it is the badge alone.
-    pub(crate) fn agent_chip(&self, height: f32, cx: &Context<Self>) -> Option<Div> {
+    /// The agent chip (`Model::agent_chip`) for the end of a `relative` row `height` tall, as
+    /// (the badge alone, over the row's end; the whole chip, in the room the row has left).
+    /// Neither takes room of its own: nothing in the row moves. The badge goes first.
+    pub(crate) fn agent_chip(&self, height: f32, cx: &Context<Self>) -> Option<(Div, Div)> {
         let chip = self.model.agent_chip()?;
         let needs = chip.state == Pulse::NeedsYou;
         let colour = if needs || chip.state == Pulse::Error { theme::pulse(chip.state) } else { theme::MUTED };
@@ -202,46 +205,35 @@ impl Workspace {
                 .children(marker)
                 .children(dot)
                 .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone()))))
-                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| {
                     drop(this.dispatch(Action::SpaceClick { index: space }, this.input, window, cx))
                 }))
         };
         // The badge alone, always at the row's end, under the whole chip when that fits.
         let short = pill("agent-chip").child(self.controls.mark("agent-chip"));
-        let short = div().absolute().top_0().bottom_0().right_0().flex().items_center().child(short);
+        let short = div().absolute().top_0().bottom_0().right(px(CHIP_EDGE)).flex().items_center().child(short);
         // The whole chip is second in a row that wraps: with no room, it goes to a line not drawn.
         let seen = self.chip_line.clone();
         let note = move |bounds: Bounds<Pixels>, window: &mut Window, _: &mut gpui::App| {
             let shown = bounds.intersect(&window.content_mask().bounds);
-            seen.set((shown.size.height > px(1.)).then_some(bounds));
+            seen.set((shown.size.height > px(1.) && shown.size.width > px(1.)).then_some(shown));
         };
         let line = div().max_w(px(CHIP_LINE)).pr_1().truncate().child(chip.line.clone());
         let full = pill("agent-chip-line").child(line).child(canvas(note, |_, _, _, _| {}).absolute().size_full());
-        let full = div().flex_none().h(px(height)).flex().items_center().child(full);
-        Some(
-            div()
-                .relative()
-                .flex_1()
-                .min_w(px(self.chip_short(&chip)))
-                .h(px(height))
-                .ml_1()
-                .mr_2()
-                .flex()
-                .flex_wrap()
-                .content_start()
-                .justify_end()
-                .overflow_hidden()
-                .child(short)
-                .child(div().w_0().h(px(height)))
-                .child(full),
-        )
+        let full = div().flex_none().h(px(height)).pl_1().pr(px(CHIP_EDGE)).flex().items_center().child(full);
+        let room = div().flex_1().min_w_0().h(px(height)).flex().flex_wrap().content_start().justify_end();
+        Some((short, room.overflow_hidden().child(div().w_0().h(px(height))).child(full)))
     }
 
-    /// How wide the chip is as its badge alone: the badge, and the marker of a native one.
-    fn chip_short(&self, chip: &Chip) -> f32 {
+    /// The room the top row keeps for the chip's badge while the chip is there (a space of one
+    /// tab has no second row): the badge, the marker of a native one, and its edges.
+    pub(crate) fn chip_reserve(&self) -> f32 {
+        let Some(chip) = self.model.agent_chip() else { return 0. };
+        if self.model.space_tabs(self.model.space()).len() > 1 {
+            return 0.;
+        }
         let both = chip.task.task().is_some() && self.dial_of(&chip.task).is_some();
-        10. + MARK + if both { MARK + 4. } else { 0. }
+        10. + MARK + if both { MARK + 4. } else { 0. } + 2. * CHIP_EDGE
     }
 
     /// What the state reply says of the agent chip: the core's, and where it was drawn (`rect`,

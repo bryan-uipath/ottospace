@@ -5315,8 +5315,11 @@ impl Workspace {
                     this.dispatch(Action::SpaceCycle { delta: 1 }, this.input, window, cx);
                 }))
         });
-        let one_tab = self.model.space_tabs(&selected).len() < 2;
-        let chip = one_tab.then(|| self.agent_chip(TOP_BAR, cx)).flatten();
+        // With one tab there is no second row: the agent chip is here, in room kept for its badge.
+        let reserve = self.chip_reserve();
+        let chip = self.agent_chip(TOP_BAR, cx).filter(|_| reserve > 0.).map(|(badge, whole)| {
+            div().relative().flex_1().min_w(px(reserve)).h_full().flex().child(badge).child(whole)
+        });
         let new_task = div()
             .id("new-task")
             .flex_none()
@@ -5358,7 +5361,6 @@ impl Workspace {
             .child(div().flex_shrink().min_w_0().h_full().flex().overflow_hidden().children(spaces))
             .children(more)
             .child(new_task)
-            // With one tab there is no second row: the agent chip is here, before the buttons.
             .children(chip)
             .child(self.render_top_buttons(cx))
     }
@@ -5395,6 +5397,7 @@ impl Workspace {
             return None;
         }
         let colour = self.space_colour(&of);
+        let chip = self.agent_chip(SPACE_TABS, cx);
         let tabs =
             places.into_iter().filter_map(|place| Some((place, self.model.tabs.get(place)?))).map(|(place, tab)| {
                 let (active, id) = (place == self.model.active, tab.id);
@@ -5479,8 +5482,9 @@ impl Workspace {
                 .text_color(rgb(theme::MUTED))
                 .overflow_hidden()
                 .children(tabs)
-                // The agent chip, in the room the tabs leave.
-                .children(self.agent_chip(SPACE_TABS, cx)),
+                // The agent chip, in the room the tabs leave: its badge over the row's end.
+                .relative()
+                .children(chip.into_iter().flat_map(|(badge, whole)| [badge, whole])),
         )
     }
 
@@ -5880,10 +5884,10 @@ impl Render for Workspace {
         let right = self.render_inspector(drawer, cx);
         let right = right.or_else(|| self.render_draft(cx)).or_else(|| self.render_drawer(drawer, cx));
         let right_width = if right.is_some() { drawer } else { 0. };
-        // The top row's room for its spaces: over the centre and the drawer, less the lights, the +
-        // and the buttons.
+        // The top row's room for its spaces: over the centre and the drawer, less the lights, the +,
+        // the buttons and the agent chip's badge.
         let centre = f32::from(window.viewport_size().width) - left;
-        let room = centre - (TRAFFIC_LIGHTS - left).max(0.) - 140.;
+        let room = centre - (TRAFFIC_LIGHTS - left).max(0.) - 140. - self.chip_reserve();
         div()
             .size_full()
             .flex()

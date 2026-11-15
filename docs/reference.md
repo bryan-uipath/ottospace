@@ -383,7 +383,7 @@ a space with one tab has no tab row, so it sits on the top row, left of the spli
 - A click opens the conversation, as ⌘⇧L does. So does a click on the selected space on the top
   row; a click on another space only selects it. Its hover names the key.
 - It takes the room the row has left and moves nothing: short of room for the line it is the
-  badge alone. It is not there while the drawer's place shows something else (a new task, a
+  badge alone, and on a full tab row the badge lies over the row's end. It is not there while the drawer's place shows something else (a new task, a
   draft, a brief, the inspector).
 - Only your own click opens the conversation: a socket client's click on the chip or on the
   selected space does not. The state reply has it as `agent_chip`.

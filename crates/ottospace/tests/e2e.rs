@@ -5882,7 +5882,11 @@ fn the_agent_chip_brings_a_closed_conversation_back() {
     let short = short.expect("the row filled");
     let badge = rect(&short["agent_chip"]["rect"]);
     assert!(badge[2] < drawn[2] && badge[0] + badge[2] <= drawn[0] + drawn[2] + 1., "{badge:?} {drawn:?}");
-    let opened = otto.user_click(centre(&short["agent_chip"]["rect"]));
+    // More tabs than the row holds: the badge stays at its end, over them, and the tabs fit
+    // as with no chip.
+    let full = (0..8).map(|_| otto.user_key("cmd-t")).last().expect("a reply");
+    assert_eq!(rect(&full["agent_chip"]["rect"]), badge, "{}", full["agent_chip"]);
+    let opened = otto.user_click(centre(&full["agent_chip"]["rect"]));
     assert_eq!(opened["state"]["talk"]["open"], true, "{opened}");
 
     // Workspace: no conversation, no chip, whatever the drawer was.
