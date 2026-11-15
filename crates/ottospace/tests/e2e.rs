@@ -2644,7 +2644,7 @@ fn with_nothing_open_the_drawer_offers_a_new_task() {
     // window, which may be no wider than it is.)
     let state = otto.drawn();
     let (window, width) = (rect(&state["window"]), state["drawer"]["width"].as_f64().unwrap_or_default());
-    let edge = window[2] - 48. - width;
+    let edge = window[2] - width;
     otto.drag([edge, 300.], [edge + 100., 300.]);
     let narrower = otto.drawn()["drawer"]["width"].as_f64().unwrap_or_default();
     assert!((width - narrower - 100.).abs() < 1.5, "{width} → {narrower}");
@@ -3311,7 +3311,7 @@ fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
     for id in ["space:0", "top:new_task", "top:new_tab", "top:split_right", "top:split_down"] {
         assert!(ids.contains(&id), "no label for {id}: {ids:?}");
     }
-    for id in ["home:open_app", "home:terminal", "home-row:1", "home-node:1", "rail:new-task"] {
+    for id in ["home:open_app", "home:terminal", "home-row:1", "home-node:1", "top:new_task"] {
         assert!(ids.contains(&id), "no label for {id}: {ids:?}");
     }
     let mut unique: Vec<&String> = labels.values().collect();
@@ -3373,7 +3373,7 @@ fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
     assert_eq!(sneak_to(&otto, "home-node:1")["state"]["active"], 1);
     otto.call(json!({"cmd": "select_space", "index": 0}));
     // The rail's + opens the box, a top-bar button the picker. Neither lets sneak mode start.
-    assert_eq!(sneak_to(&otto, "rail:new-task")["mode"], "compose");
+    assert_eq!(sneak_to(&otto, "top:new_task")["mode"], "compose");
     let refused = otto.raw(r#"{"cmd":"sneak"}"#);
     assert!(refused["error"].as_str().is_some_and(|e| e.contains("normal, list or talk")), "{refused}");
     otto.call(json!({"cmd": "key", "keys": "escape"}));
@@ -3722,7 +3722,7 @@ fn a_feature_that_is_off_is_absent_and_features_turns_it_on_live() {
     assert_eq!(otto.call(json!({"cmd": "section", "section": "repos"}))["state"]["sidebar"], "repos");
     // No rail cell: Tasks, Workbook, Repos.
     let (_, labels) = sneak(&otto);
-    let rails: Vec<&String> = labels.keys().filter(|id| id.starts_with("rail:") && *id != "rail:new-task").collect();
+    let rails: Vec<&String> = labels.keys().filter(|id| id.starts_with("rail:")).collect();
     assert_eq!(rails, ["rail:repos", "rail:tasks", "rail:workbook"], "{labels:?}");
     otto.call(json!({"cmd": "key", "keys": "escape"}));
     // The keys do nothing: no mark, no wait for a letter.
@@ -5455,11 +5455,9 @@ fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_works
     let tab = state["space_rects"][1].as_array().expect("a space");
     assert!(tab[0].as_f64().unwrap() + tab[2].as_f64().unwrap() <= body[0].as_f64().unwrap(), "{tab:?} {body:?}");
 
-    // Its cell on the right rail: a badge, and the tooltip names it, its state, where and who.
-    let cell = &state["drawer"]["rail"][0];
-    assert_eq!((&cell["task"], &cell["mono"], &cell["shown"]), (&json!(1), &json!("FL"), &json!(true)), "{cell}");
-    assert_eq!(cell["tip"], "fix login\nRunning\napp · @claude · now");
-    otto.control("rail-talk:1");
+    // Its space on the top row, with its badge.
+    assert_eq!(state["badges"]["1"], "FL");
+    otto.control("space:1");
     // A client's keys do not reach it: it runs with the user's rights.
     let theirs = otto.call(json!({"cmd": "key", "keys": "x ctrl-d"}));
     assert_eq!(theirs["notice"], "only the user starts or stops a task's agent", "{theirs}");
@@ -5477,9 +5475,8 @@ fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_works
     // ⌘⌃1 selects Workspace: no chat. ⌘⌃2 the task again, its chat as the drawer was.
     assert_eq!(otto.user_key("cmd-ctrl-1")["state"]["talk"], Value::Null);
     assert_eq!(otto.user_key("cmd-ctrl-2")["state"]["talk"]["open"], true);
-    // A click on its cell of the rail: the one shown closes, then opens.
-    assert_eq!(otto.user_click(at(otto.control("rail-talk:1"), 0.5, 0.5))["state"]["talk"]["open"], false);
-    assert_eq!(otto.user_click(at(otto.control("rail-talk:1"), 0.5, 0.5))["state"]["talk"]["open"], true);
+    // A click on its space on the top row: it stays, its chat open.
+    assert_eq!(otto.user_click(at(otto.control("space:1"), 0.5, 0.5))["state"]["talk"]["open"], true);
 
     // Stop ends it: the task needs the user.
     let stopped = otto.user_click(at(otto.control("talk:talk-stop"), 0.5, 0.5));
@@ -5674,10 +5671,9 @@ fn a_click_shows_a_session_and_resume_goes_on_with_it_in_the_drawer() {
     // Its space, after Workspace's tab as it was, holds one empty tab.
     let tabs = state["state"]["tabs"].as_array().unwrap();
     assert_eq!((&tabs[0], tabs[1]["space"]["kind"].as_str()), (&before["state"]["tabs"][0], Some("session")));
-    // On the right rail like a task's conversation: its title's badge, named by runner and id.
-    let cell = &state["drawer"]["rail"][0];
-    assert_eq!((&cell["task"], &cell["mono"], &cell["shown"]), (&talk, &json!("GT"), &json!(true)), "{cell}");
-    otto.control(&format!("rail-talk:{key}"));
+    // On the top row like a task's space.
+    assert_eq!(state["spaces"][1]["selected"], true);
+    otto.control("space:1");
     // A second click shows the same one: no second program on it.
     std::fs::remove_file(bin.join("claude.argv")).unwrap();
     otto.user_click(row(idle));
@@ -5739,8 +5735,7 @@ fn a_click_shows_a_session_and_resume_goes_on_with_it_in_the_drawer() {
     otto.user_click(at(otto.control("talk:talk-stop"), 0.5, 0.5));
     otto.call(json!({"cmd": "section", "section": "tasks"}));
     otto.wait_for("nothing listed", |o| (o.call(json!({"cmd": "state"}))["sessions_bar"]["count"] == 0).then_some(()));
-    otto.user_key("cmd-shift-l");
-    otto.user_click(at(otto.control("rail-talk:1"), 0.5, 0.5));
+    otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
     let reading = otto.user_start();
     assert_eq!((&reading["mode"], &reading["state"]["talk"]["task"]), (&json!("talk"), &json!(1)), "{reading}");
     let argv = otto.wait_for("claude --resume, read first", |_| agent_argv(&bin, "claude"));
@@ -5772,7 +5767,7 @@ fn nothing_is_drawn_over_the_window_buttons_with_a_section_or_the_drawer_open_or
         // Sneak mode, which says where controls are, does not start over the new-task box.
         let rails: &[&str] = match state["mode"] == "compose" {
             true => &[],
-            false => &["rail:tasks", "rail:apps", "rail:workbook", "rail:repos", "rail:marks", "rail:new-task"],
+            false => &["rail:tasks", "rail:apps", "rail:workbook", "rail:repos", "rail:marks"],
         };
         for rail in rails {
             let cell = otto.control(rail);
@@ -6080,14 +6075,14 @@ fn focus_moves_across_the_zones_to_the_rails_and_back() {
     assert_eq!((list["focus"].get("list").is_some(), &list["state"]["sidebar"]), (true, &json!("workbook")), "{list}");
     assert_eq!(focus(&otto.user_key(FOCUS_LEFT)), json!({"rail": "workbook"}));
     otto.user_key(FOCUS_RIGHT);
-    // Back to the pane it came from, then across to the right rail (no conversation: its +).
+    // Back to the pane it came from; across to the right, the last pane is the end (no chat runs).
     assert_eq!(focus(&otto.user_key(FOCUS_RIGHT)), json!({"pane": 1}));
     otto.user_key(FOCUS_RIGHT);
-    assert_eq!(focus(&otto.user_key(FOCUS_RIGHT)), json!({"right": 0}));
-    // Esc returns to the pane.
-    assert_eq!(focus(&otto.user_key("escape")), json!({"pane": 2}));
-    // The rail cell with the keyboard is drawn, with a ring apart from the open one.
-    otto.user_key(FOCUS_RIGHT);
+    assert_eq!(focus(&otto.user_key(FOCUS_RIGHT)), json!({"pane": 2}));
+    // Back left past the list to the rail: its cell with the keyboard is drawn, with a ring.
+    otto.user_key(FOCUS_LEFT);
+    otto.user_key(FOCUS_LEFT);
+    otto.user_key(FOCUS_LEFT);
     assert_eq!(otto.drawn()["mode"], "list");
 }
 
@@ -6283,7 +6278,7 @@ fn the_tab_strip_ends_where_the_panes_end_and_its_buttons_stay_in_view() {
             assert!(b[0] + b[2] <= end + 4.0, "{what}: {id} {b:?} runs past the panes' end {end}");
         }
     };
-    fits("the right rail alone");
+    fits("no drawer");
     // The drawer dragged to its widest, half the window, then closed: it keeps that width.
     otto.user_key("cmd-n");
     let pane = otto.bounds(&[1])[0];
@@ -7181,14 +7176,14 @@ fn an_agent_that_ends_before_replying_says_why() {
     let state = otto.call(json!({"cmd": "state"})).to_string();
     assert!(!state.contains("made-up failure") && !state.contains("sk-ant"), "{state}");
 
-    // Clicks on its row and its rail cell only show it: nothing starts, nothing is added.
+    // Clicks on its row and its space only show it: nothing starts, nothing is added.
     let starts = || std::fs::read_to_string(record.join("starts")).unwrap_or_default().lines().count();
     let entries = |o: &Otto| chat(o)["transcript"]["entries"].as_array().map(Vec::len);
     let before = entries(&otto);
     for _ in 0..3 {
         otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
-        otto.user_click(at(otto.control("rail-talk:1"), 0.5, 0.5));
-        otto.user_click(at(otto.control("rail-talk:1"), 0.5, 0.5));
+        otto.user_click(at(otto.control("space:0"), 0.5, 0.5));
+        otto.user_click(at(otto.control("space:1"), 0.5, 0.5));
     }
     assert_eq!((starts(), entries(&otto)), (1, before), "a selection starts nothing");
     // Resume session: its session was never written, so it starts afresh, its prompt once.

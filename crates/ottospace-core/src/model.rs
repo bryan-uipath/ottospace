@@ -1274,7 +1274,7 @@ pub enum Action {
     TaskStop {
         id: Subject,
     },
-    /// Close the drawer to the right rail, or open it again on the same conversation.
+    /// Close the chat, or open it again on the same conversation.
     TalkToggle,
     /// The keyboard goes into the conversation, or back to the workspace.
     TalkKeys {
@@ -2343,7 +2343,7 @@ pub struct Model {
     pub back_to: Option<PaneId>,
     /// The task whose brief the right bar shows.
     pub brief: Option<TaskId>,
-    /// The conversation the right drawer is on. `None`: no drawer and no right rail.
+    /// The conversation the right drawer is on. `None`: no drawer.
     pub talk: Option<Talk>,
     /// The drawer's width in points, and whether it is widened to half the window.
     pub talk_width: f32,

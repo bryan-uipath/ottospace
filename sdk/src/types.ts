@@ -857,7 +857,7 @@ export interface Model {
   /** The task whose brief the right bar shows. */
   brief: TaskId | null;
   /**
-   * The conversation the right drawer is on, or null. `open` false: closed to the right rail.
+   * The conversation the right drawer is on, or null. `open` false: closed.
    * `keys`: the keyboard is in it, and keys go to its agent.
    */
   talk: { task: Subject; open: boolean; keys: boolean } | null;

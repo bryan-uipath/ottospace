@@ -25,11 +25,13 @@ rail's cells and the drawer's go word (`docs/ai/ux-simplification.md` §1.7, §3
   terminal in the task's folder (a tab opened from the Repos section), that tab moves into the
   new space as its first (`Model::bind_tab`). Nothing else moves.
 - **Repos**: a click on a repository or worktree opens a terminal there in a Workspace tab of its
-  own (the empty one on show, else a new one) and selects it.
-- A tab changes space only by: the user's move (drag onto a space, Move Tab to Task…), a task
+  own (the empty one on show, else a new one) and selects it. A row a live task works in carries
+  that task's badge, and its click (`RepoClick`) selects the task's space instead (the latest
+  started, if several); Terminal, on hover, opens the terminal anyway (`OpenRepo`).
+- A tab changes space only by: the user's move (drag onto a space, Move Tab to…), a task
   started from it (above), its space gone (task dismissed or deleted, workbook deleted:
-  Workspace's), the undo of a dismissal, or a session adopted as a task (its space becomes the
-  task's). The property test checks exactly this.
+  Workspace's), the undo of a dismissal, a session adopted as a task (its space becomes the
+  task's), or its workbook opened (a Workspace tab of it joins the workbook's space). The property test checks exactly this.
 
 ## Who may do what
 

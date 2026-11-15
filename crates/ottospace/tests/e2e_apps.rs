@@ -812,7 +812,7 @@ fn a_refused_size_is_named_in_the_pane_header_and_fit_gives_the_window_room() {
     };
     let ratio = |path: &[&str]| path.iter().fold(state()["state"]["layout"].clone(), |at, key| at[*key].clone());
     // The Repos section, open at start, closes: on a CI runner's small screen the panes need
-    // its room beside the right rail.
+    // its room.
     otto.call(json!({"cmd": "section", "section": "repos"}));
 
     // Three panes side by side, 1 | (2 | 3): ordinary, fixed size, a minimum width.

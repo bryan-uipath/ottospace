@@ -1185,10 +1185,8 @@ macro_rules! ensure {
 /// selecting, opening or hiding a space (a task's by its row, `TaskGo`, a conversation shown or
 /// started), the user's drag of a pane or a click into one, and what goes to a mark, a
 /// workbook, a picked app or a capture's pane.
-fn selects_tab(action: &Action, origin: Origin) -> bool {
-    // The user's keys over the right rail show a cell's conversation, and so its space.
-    let rail = origin == Origin::User && matches!(action, Action::FocusDir { .. });
-    rail || matches!(
+fn selects_tab(action: &Action) -> bool {
+    matches!(
         action,
         Action::SelectTab { .. }
             | Action::SelectVisibleTab { .. }
@@ -2206,7 +2204,7 @@ impl Run {
         // Only a move to a tab changes the tab on show, or its closing.
         let tab_now = m.tabs[m.active].id;
         ensure!(
-            tab_now == tab_before || !m.tabs.iter().any(|tab| tab.id == tab_before) || selects_tab(&action, origin),
+            tab_now == tab_before || !m.tabs.iter().any(|tab| tab.id == tab_before) || selects_tab(&action),
             "{origin:?}'s {action:?} changed the tab on show from {tab_before} to {tab_now}"
         );
         // Starting, going on with, adopting or clicking a conversation closes no tab, and makes at
