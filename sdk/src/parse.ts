@@ -663,6 +663,11 @@ function railCell(value: unknown, at: string): Snapshot["drawer"]["rail"][number
   };
 }
 
+function noticeLevel(value: unknown, at: string): "info" | "error" {
+  if (value === "info" || value === "error") return value;
+  throw new Error(`${at}: not a level: ${JSON.stringify(value)}`);
+}
+
 function goWord(value: unknown, at: string): "tabs" | "claim" | "new" {
   if (value === "tabs" || value === "claim" || value === "new") return value;
   throw new Error(`${at}: not a go word: ${JSON.stringify(value)}`);
@@ -1378,6 +1383,7 @@ export function snapshot(value: unknown): Snapshot {
     font: { name: str(fields(o.font, "font").name, "font.name"), size: num(fields(o.font, "font").size, "font.size") },
     cell: pair(o.cell, "cell"),
     notice: orNull(str)(o.notice, "notice"),
+    notice_level: orNull(noticeLevel)(o.notice_level, "notice_level"),
     settings_errors: num(o.settings_errors, "settings_errors"),
     hosted: map(rect)(o.hosted, "hosted"),
     crop: map(num)(o.crop, "crop"),
