@@ -22,8 +22,8 @@ use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
+use ottospace_core::activity::Station;
 use ottospace_core::runner::RunnerId;
-use station::Station;
 
 /// Where the runners keep their files on this machine, by the environment.
 pub struct ConfigDirs {

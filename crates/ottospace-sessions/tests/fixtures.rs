@@ -5,13 +5,13 @@ use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
+use ottospace_core::activity::Station;
 use ottospace_core::runner::RunnerId;
 use ottospace_sessions::claude::Claude;
 use ottospace_sessions::codex::Codex;
 use ottospace_sessions::git::checkouts;
 use ottospace_sessions::report::report;
 use ottospace_sessions::snapshot::Snapshot;
-use ottospace_sessions::station::Station;
 use ottospace_sessions::tally::{Reader, Tally};
 use ottospace_sessions::{Cursor, SessionReader, SessionRef, Usage, What, read_all};
 

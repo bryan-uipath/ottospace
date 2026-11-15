@@ -1,0 +1,13 @@
+#!/bin/sh
+# The agents crate's stand-in. Its first start also writes a session another process holds
+# (pid 1, busy, made-up): the Sessions group lists it, and its conversation is watched.
+if [ ! -s "$FAKE_DIR/starts" ]; then
+  id=44444444-4444-4444-8444-444444444444
+  cwd="$(pwd -P)"
+  dir="{ROOT}/sessions/claude/projects/$(printf '%s' "$cwd" | sed 's/[^A-Za-z0-9]/-/g')"
+  now="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+  mkdir -p "$dir" "{ROOT}/sessions/claude/sessions"
+  sed -e "s|@CWD@|$cwd|g" -e "s|@NOW@|$now|g" -e "s|@ID@|$id|g" "$FAKE_FIXTURES/watched.jsonl" >"$dir/$id.jsonl"
+  printf '{"pid":1,"sessionId":"%s","status":"busy"}\n' "$id" >"{ROOT}/sessions/claude/sessions/1.json"
+fi
+exec "{REPO}/crates/ottospace-agents/tests/fakes/claude" "$@"

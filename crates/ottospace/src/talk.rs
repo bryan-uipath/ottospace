@@ -536,6 +536,7 @@ impl Workspace {
                     Some(badge) => badge,
                     None => home::dot(color),
                 })
+                .children(self.dial_marker(subject, cx))
                 // Model, mode, time and folder are on its hover; the model is at the drawer's foot too.
                 .child(
                     div()
@@ -650,9 +651,13 @@ impl Workspace {
     pub(crate) fn render_talk(&self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
         let talk = self.model.talk.as_ref().filter(|talk| talk.open)?;
         let header = self.talk_header(&talk.task, cx)?;
+        let brief = self.model.brief.is_some() && self.model.brief == talk.task.task();
+        // The dial is the conversation's: not over the brief, nor over the editor.
+        let editor = self.model.editor_shown();
+        let dial = (!brief && !editor).then(|| self.dial_section(&talk.task, width, cx)).flatten();
         // The user's editor takes the conversation's place while it has its draft.
-        let body = match self.model.brief.is_some() && self.model.brief == talk.task.task() {
-            _ if self.model.editor_shown() => self.editor_body(cx),
+        let body = match brief {
+            _ if editor => self.editor_body(cx),
             true => self.brief_content(cx).unwrap_or_else(|| div().into_any_element()),
             false => self.talk_body(&talk.task, cx),
         };
@@ -681,6 +686,7 @@ impl Workspace {
                     .talk_note()
                     .map(|note| div().px_3().py_1().text_xs().text_color(rgb(theme::ERROR)).child(note)),
             )
+            .children(dial)
             .child(body)
             .children(self.agent_foot(&talk.task));
         Some(drawer.into_any_element())

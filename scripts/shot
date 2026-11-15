@@ -15,6 +15,7 @@ and `{TODAY+34200}` (09:30 today, local) are replaced in both. Lines starting wi
   {"settle":true}             wait for the frame that draws the last request (`settle`:500: and 500 ms)
   {"click":"task:1"}          the user's click on a named control (ids: {"controls":true}); "at":[x,y]
   {"hover":"task:1"}          the pointer over a named control, or {"hover":{"rect":"calendar.band.blocks.0.rect"}}
+  {"drag":{"rect":"drawer.body"},"at":[0,0.5],"by":[150,0]}   the user's drag from a control or rect, by points
   {"until":"drawer.native.chats.1.transcript.cards","len":1}   wait on the state ("is", "exists")
   {"sleep_ms":700}            wait (motion while recording)
   {"record":"start"}          with --record: what the recording covers (default: all of it)
@@ -420,6 +421,10 @@ def run_scenario(binary, scenario, out, record=False):
             elif "hover" in step:
                 x, y = inst.control(step["hover"], step.get("at", [0.5, 0.5]))
                 inst.ok({"cmd": "mouse", "action": "move", "x": x, "y": y, "as": "user"})
+            elif "drag" in step:
+                x, y = inst.control(step["drag"], step.get("at", [0.5, 0.5]))
+                dx, dy = step.get("by", [0, 0])
+                inst.ok({"cmd": "drag", "from": [x, y], "to": [x + dx, y + dy], "as": "user"})
             elif "until" in step:
                 def met(step=step):
                     value = path_get(inst.state(), step["until"])

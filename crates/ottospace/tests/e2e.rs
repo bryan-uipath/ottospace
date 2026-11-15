@@ -7556,6 +7556,133 @@ fn launch_env(name: &str, env: &[(String, String)]) -> Otto {
     Otto::launch_with(name, &env)
 }
 
+/// Made-up stream-json for the dial: a turn of calls of each kind, one failing, a hook and the
+/// context at 75%; the next with an edit, `cargo test` still running and the context at 92%.
+fn dial_fixtures() -> Vec<(&'static str, String)> {
+    const S: &str = r#""session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003","parent_tool_use_id":null"#;
+    let call = |id: &str, name: &str, input: Value| {
+        let block = json!({"type": "tool_use", "id": format!("toolu_{id}"), "name": name, "input": input});
+        format!(r#"{{"type":"assistant",{S},"message":{{"content":[{block}]}}}}"#)
+    };
+    let result = |id: &str, failed: bool| {
+        format!(
+            r#"{{"type":"user",{S},"message":{{"content":[{{"type":"tool_result","tool_use_id":"toolu_{id}","content":"ok","is_error":{failed}}}]}}}}"#
+        )
+    };
+    let said = |tokens: u64| {
+        format!(
+            r#"{{"type":"assistant",{S},"message":{{"content":[{{"type":"text","text":"made-up"}}],"usage":{{"input_tokens":{tokens}}}}}}}"#
+        )
+    };
+    let init = r#"{"type":"system","subtype":"init","session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003","model":"claude-opus-5-5","permissionMode":"default"}"#;
+    let hook = r#"{"type":"system","subtype":"hook_started","session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003"}"#;
+    let done = r#"{"type":"result","subtype":"success","is_error":false,"modelUsage":{"claude-opus-5-5":{"contextWindow":200000}}}"#;
+    let turn1 = [
+        init.to_string(),
+        said(20_000),
+        call("r", "Read", json!({"file_path": "/made/up/src/auth.rs"})),
+        result("r", false),
+        call("g", "Grep", json!({"pattern": "redirect"})),
+        result("g", false),
+        call("w", "WebFetch", json!({"url": "https://example.com/docs", "prompt": "x"})),
+        result("w", false),
+        hook.to_string(),
+        call("b", "Bash", json!({"command": "cargo build"})),
+        result("b", true),
+        call("t", "Task", json!({"description": "review", "prompt": "x"})),
+        result("t", false),
+        said(150_000),
+        done.to_string(),
+    ];
+    let turn2 = [
+        call("e", "Edit", json!({"file_path": "/made/up/src/auth.rs", "old_string": "a", "new_string": "b"})),
+        result("e", false),
+        call("c", "Bash", json!({"command": "cargo test"})),
+        said(184_000),
+    ];
+    vec![("turn1.jsonl", turn1.join("\n")), ("turn2.jsonl", turn2.join("\n"))]
+}
+
+/// The dial over a native chat: each call lights and counts at its station; a failure's red dot
+/// goes with the user's next message; the ring turns amber at 70% and red at 90%. The user's
+/// click (or ⌘⇧A) collapses it to its marker and back; a client's state says counts only, and
+/// the user's choice outlives a restart.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_dial_counts_calls_by_station_and_keeps_the_users_collapse() {
+    let (root, _record, mut env) = native_setup("dial", &dial_fixtures(), &[]);
+    // The session is written, so the next run can go on with it.
+    env.push(("FAKE_SESSIONS".into(), root.join("sessions/claude").to_string_lossy().into_owned()));
+    let otto = launch_env("dial", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "fix login >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let dial = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"]["dial"].clone();
+    let spot = |dial: &Value, name: &str| {
+        let spots = dial["stations"].as_array().cloned().unwrap_or_default();
+        let spot = spots.into_iter().find(|s| s["station"] == name).unwrap_or_default();
+        (spot["calls"].clone(), spot["failing"].clone(), spot["lit"].clone())
+    };
+    otto.start_task(1);
+    let first = otto.wait_for("the first turn's end", |o| Some(dial(o)).filter(|d| d["level"] == "amber"));
+    assert_eq!(spot(&first, "shell"), (json!(1), json!(1), json!(false)), "{first}");
+    assert_eq!(spot(&first, "files"), (json!(2), json!(0), json!(false)), "{first}");
+    for (name, calls) in [("network", 1), ("agents", 1), ("hooks", 1), ("you", 1)] {
+        assert_eq!(spot(&first, name).0, calls, "{name}: {first}");
+    }
+    assert_eq!((&first["pulse"], &first["failed"], &first["lit"]), (&json!("idle"), &json!(true), &json!(false)));
+    assert_eq!((&first["context"], &first["collapsed"]), (&json!(0.75), &json!(false)), "open while it runs");
+    // Counts and stations only: no command, path or host.
+    let said = first.to_string();
+    assert!(!said.contains("cargo") && !said.contains("auth.rs") && !said.contains("example.com"), "{said}");
+
+    // The user's next message: the red dot goes; Shell is lit while its call runs; the ring is red.
+    otto.user_click(at(otto.control("talk"), 0.5, 0.5));
+    otto.user_key("g o enter");
+    let second = otto.wait_for("the second turn's call", |o| Some(dial(o)).filter(|d| d["level"] == "red"));
+    assert_eq!(spot(&second, "shell"), (json!(2), json!(0), json!(true)), "{second}");
+    assert_eq!((&second["pulse"], &second["failed"], &second["lit"]), (&json!("running"), &json!(false), &json!(true)));
+    assert_eq!(second["context"], json!(0.92));
+
+    // A client's click collapses nothing; the user's does, and the marker opens it again.
+    otto.click(at(otto.control("talk:dial"), 0.5, 0.5), 1);
+    assert_eq!(dial(&otto)["collapsed"], false);
+    otto.user_click(at(otto.control("talk:dial"), 0.5, 0.5));
+    assert_eq!(dial(&otto)["collapsed"], true);
+    let collapsed = otto.controls();
+    assert!(collapsed.iter().all(|(id, _)| id != "talk:dial"), "it costs no room collapsed");
+    otto.user_click(at(otto.control("talk:dial-marker"), 0.5, 0.5));
+    assert_eq!(dial(&otto)["collapsed"], false);
+    // ⌘⇧A, the palette's Toggle Agent Dial, does the same.
+    otto.user_key("cmd-shift-a");
+    assert_eq!(dial(&otto)["collapsed"], true);
+
+    // The user stops it (a running task is not gone on with from another run).
+    otto.user_key("cmd-p");
+    otto.user_key("s t o p space t h e space a g e n t");
+    otto.user_key("enter");
+    otto.wait_for("its end", |o| Some(dial(o)).filter(|d| d["pulse"] != "running" && d["pulse"] != "idle").map(|_| ()));
+    // Kept with the layout: the next run goes on with the session and the dial stays collapsed,
+    // though its agent runs (open by default then).
+    let layout =
+        std::path::PathBuf::from(&env.iter().find(|(k, _)| k == "OTTOSPACE_HOME").unwrap().1).join("layout.json");
+    otto.wait_for("the layout written", |_| {
+        std::fs::read_to_string(&layout).ok().filter(|text| text.contains("\"dials\"")).map(|_| ())
+    });
+    drop(otto);
+    let again = launch_env("dial-2", &env);
+    // Resume session shows once its session is read.
+    let start = again.wait_for("Resume session", |o| {
+        o.controls().into_iter().find(|(id, _)| id == "talk:talk-start").map(|(_, frame)| frame)
+    });
+    again.user_click(at(start, 0.5, 0.5));
+    let resumed = again.wait_for("the resumed chat", |o| Some(dial(o)).filter(|d| d.is_object()));
+    assert_eq!(resumed["collapsed"], true, "{resumed}");
+    again.control("talk:dial-marker");
+    drop(again);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A fixture of the agents crate's, by file name.
 fn recorded(name: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ottospace-agents/tests/fixtures/claude").join(name);

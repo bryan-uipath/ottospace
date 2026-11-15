@@ -1,0 +1,3 @@
+{"type": "user", "session_id": "8f14e45f-ceea-467f-a8d3-0242ac130003", "parent_tool_use_id": null, "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_b2", "content": "test result: ok", "is_error": false}]}}
+{"type": "assistant", "session_id": "8f14e45f-ceea-467f-a8d3-0242ac130003", "parent_tool_use_id": null, "message": {"content": [{"type": "text", "text": "Stopped; the tests had passed."}], "usage": {"input_tokens": 186000, "output_tokens": 0}}}
+{"type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0.03, "modelUsage": {"claude-opus-5-5": {"contextWindow": 200000}}}

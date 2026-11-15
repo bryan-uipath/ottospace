@@ -112,6 +112,7 @@ commands! {
     EditMessage: "Edit Message in Editor", Tasks;
     TalkToggle: "Open or Close the Conversation", Tasks;
     StopAgent: "Stop the Agent", Tasks;
+    DialToggle: "Toggle Agent Dial", Tasks;
     SaveWorkbook: "Save Tab as Workbook", Workbook;
     AddTabToWorkbook: "Add Tab to Workbook…", Workbook;
     SaveAllWorkbook: "Save All Tabs as Workbook", Workbook;

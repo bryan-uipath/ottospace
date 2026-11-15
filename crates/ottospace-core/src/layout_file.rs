@@ -85,6 +85,9 @@ pub struct Drawer {
     /// The view each task's conversation was switched to (Chat or Terminal), where the user picked one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub views: Vec<(TaskId, crate::transcript::View)>,
+    /// Each task's dial as the user left it: collapsed (true) or open.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dials: Vec<(TaskId, bool)>,
 }
 
 fn width() -> f32 {
@@ -93,7 +96,7 @@ fn width() -> f32 {
 
 impl Default for Drawer {
     fn default() -> Self {
-        Drawer { task: None, open: false, width: talk::WIDTH, wide: false, views: Vec::new() }
+        Drawer { task: None, open: false, width: talk::WIDTH, wide: false, views: Vec::new(), dials: Vec::new() }
     }
 }
 
@@ -327,6 +330,7 @@ impl Model {
             wide: self.talk_wide,
             // Of live tasks only, as a restore keeps them: a dismissed task's pick goes with it.
             views: self.saved_views().into_iter().filter(|(task, _)| self.tasks.live(*task).is_some()).collect(),
+            dials: self.saved_dials().into_iter().filter(|(task, _)| self.tasks.live(*task).is_some()).collect(),
         };
         // Not the Calendar: a build without it could not read the file back.
         let section = self.sidebar.filter(|s| *s != Section::Calendar);
@@ -463,7 +467,10 @@ impl Model {
         let live = |task: &TaskId| self.tasks.live(*task).is_some();
         let views = layout.drawer.views.iter().filter(|(task, _)| live(task)).map(|(task, view)| (*task, *view));
         let views: Vec<_> = views.collect();
+        let dials = layout.drawer.dials.iter().filter(|(task, _)| live(task)).map(|(task, c)| (*task, *c));
+        let dials: Vec<_> = dials.collect();
         self.restore_views(views);
+        self.restore_dials(dials);
         // The selected space's conversation, shown to go on with: never started here.
         self.drawer_open = layout.drawer.open;
         if let Some(subject) = self.space().subject() {
@@ -683,6 +690,13 @@ mod tests {
         assert_eq!(file.drawer.views, [(1, crate::transcript::View::Terminal)], "a task that is gone is not kept");
         let (back, _) = restored(&picked, file, &[], false);
         assert_eq!(back.talk_view(&Subject::Task(1)), crate::transcript::View::Terminal);
+        // So does the dial the user opened on its ended agent.
+        let mut opened = workspace();
+        opened.restore_dials(vec![(1, false), (99, true)]);
+        let file = parse(&write(&opened.layout_file(&[], &[], 0))).unwrap();
+        assert_eq!(file.drawer.dials, [(1, false)], "a task that is gone is not kept");
+        let (back, _) = restored(&opened, file, &[], false);
+        assert!(!back.dial_collapsed(&Subject::Task(1)) && workspace().dial_collapsed(&Subject::Task(1)));
         assert!(!effects.iter().any(|effect| matches!(effect, Effect::StartAgent { .. } | Effect::ReadSession { .. })));
         // The app pane waits for its window: no app is started for it.
         let hosts: Vec<&Effect> = effects.iter().filter(|e| matches!(e, Effect::HostWindow { .. })).collect();

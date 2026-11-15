@@ -1,0 +1,39 @@
+# The agent dial over a native chat: a turn of calls (one failing, a hook), the next turn with
+# Shell lit and the context red, idle, ended (collapsed to its marker), narrow, and a watched
+# session. The stand-in `claude` replays dial/fixtures and writes the watched session's file.
+{"env":{"OTTOSPACE_AGENTS_DIR":"{ROOT}/bin"}}
+{"cmd":"split","kind":"empty"}
+{"cmd":"task_new","line":"fix the login loop >app"}
+{"cmd":"section","section":"tasks"}
+{"click":"task:1","at":[0.3,0.3]}
+{"click":"talk:talk-start"}
+{"until":"drawer.native.chats.1.dial.level","is":"amber"}
+{"settle":300}
+{"shot":"failed"}
+{"click":"talk"}
+{"cmd":"key","keys":"r u n space t h e space t e s t s enter","as":"user"}
+{"until":"drawer.native.chats.1.dial.level","is":"red"}
+{"settle":1500}
+{"shot":"running"}
+{"click":"talk:chat-stop"}
+{"until":"drawer.native.chats.1.transcript.turn","is":null}
+{"settle":300}
+{"shot":"idle"}
+{"cmd":"key","keys":"cmd-p","as":"user"}
+{"cmd":"key","keys":"s t o p space t h e space a g e n t","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"until":"drawer.native.chats.1.dial.collapsed","is":true}
+{"settle":300}
+{"shot":"ended"}
+{"drag":{"rect":"drawer.body"},"at":[0,0.5],"by":[150,0]}
+{"click":"talk:dial-marker"}
+{"until":"drawer.native.chats.1.dial.collapsed","is":false}
+{"settle":300}
+{"shot":"narrow"}
+{"cmd":"task_group","heading":"sessions"}
+{"cmd":"sessions_range","range":"all"}
+{"until":"sessions_bar.count","is":1}
+{"click":"session:claude:44444444-4444-4444-8444-444444444444","at":[0.3,0.3]}
+{"until":"drawer.native.chats.claude:44444444-4444-4444-8444-444444444444.transcript.watched","is":true}
+{"settle":1500}
+{"shot":"watched"}

@@ -1,0 +1,6 @@
+{"type":"user","message":{"role":"user","content":"made-up prompt"},"timestamp":"@NOW@","cwd":"@CWD@","sessionId":"@ID@"}
+{"type":"assistant","message":{"id":"msg_1","model":"claude-opus-5-5","content":[{"type":"tool_use","id":"toolu_w1","name":"Read","input":{"file_path":"@CWD@/src/auth.rs"}}],"usage":{"input_tokens":30000,"output_tokens":200}},"timestamp":"@NOW@","sessionId":"@ID@"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_w1","is_error":false,"content":"ok"}]},"timestamp":"@NOW@","sessionId":"@ID@"}
+{"type":"assistant","message":{"id":"msg_2","model":"claude-opus-5-5","content":[{"type":"tool_use","id":"toolu_w2","name":"WebSearch","input":{"query":"made-up"}}],"usage":{"input_tokens":52000,"output_tokens":300}},"timestamp":"@NOW@","sessionId":"@ID@"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_w2","is_error":false,"content":"ok"}]},"timestamp":"@NOW@","sessionId":"@ID@"}
+{"type":"assistant","message":{"id":"msg_3","model":"claude-opus-5-5","content":[{"type":"tool_use","id":"toolu_w3","name":"Bash","input":{"command":"cargo test"}}],"usage":{"input_tokens":61000,"output_tokens":300}},"timestamp":"@NOW@","sessionId":"@ID@"}

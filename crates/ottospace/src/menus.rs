@@ -126,6 +126,7 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
                 item("Edit Message in Editor", EditMessage),
                 item("Open or Close the Conversation", TalkToggle),
                 item("Stop the Agent", StopAgent),
+                item("Toggle Agent Dial", DialToggle),
             ],
         },
         Menu {

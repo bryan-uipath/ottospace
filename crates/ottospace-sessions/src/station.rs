@@ -3,24 +3,7 @@
 //! A label for a command is built only from the tables in this file: a known program's name,
 //! and a subcommand on that program's list. Nothing else from a command line is ever shown.
 
-use serde::Serialize;
-
-/// Where work goes. `You`, `Model` and `Hooks` are not tools; the rest classify tool calls.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Station {
-    You,
-    Model,
-    Memory,
-    Files,
-    Shell,
-    Network,
-    Browser,
-    Agents,
-    Skills,
-    Hooks,
-    Other,
-}
+use ottospace_core::activity::Station;
 
 use Station::*;
 
