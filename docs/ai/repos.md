@@ -29,18 +29,21 @@ The Repos section lists each repository's name over its checkouts. Clicks on a r
    no `..`, `@{`, `@` or `HEAD`, no part that is empty, starts with `.` or ends with `.lock`, no
    trailing `.`. A refused name is said in the status bar and the field stays.
 3. The folder: `<worktrees_dir>/<repo>/<branch>` (`worktree_dir`). `worktrees_dir` is the
-   setting, else `worktrees` in the ottospace folder (`OTTOSPACE_HOME` honoured; a test run
+   setting (a relative path is inside the ottospace folder), else `worktrees` in the ottospace folder (`OTTOSPACE_HOME` honoured; a test run
    with no folder of its own has none, and the + says so). `<repo>` is the repository's folder
    name, with `-<6 hex digits>` (FNV-1a of its path) when another listed repository has the same
    folder name. Slashes in the branch become `-`.
 4. The shell (`worktree.rs`), off the main thread: the folder must be two plain names under
    `worktrees_dir` (resolved); `<repo>` a real folder, not a link (made if missing); the
-   worktree's folder must not exist (not even as a link). Then, with `-C <repo>`, no prompt
+   worktree's folder must not exist (not even as a link); `<repo>` must not be a checkout itself
+   (`worktrees_dir` inside the repositories' folder). Then, with `-C <repo>`, no prompt
    (`GIT_TERMINAL_PROMPT=0`), no `GIT_DIR`-like variables, nothing on standard input, a 120 s
    timeout:
    - `git rev-parse --verify --quiet refs/heads/<branch>`
    - there: `git worktree add -- <folder> <branch>`
-   - not there: `git worktree add -b <branch> -- <folder> HEAD`
+   - only a remote has it (exactly one remote; `git for-each-ref --format=%(refname) refs/remotes/*/<branch>`):
+     `git worktree add --track -b <branch> -- <folder> <remote>/<branch>`
+   - neither: `git worktree add -b <branch> -- <folder> HEAD`
 5. Made: the list is read again and the worktree opens as its row's click would
    (`WorktreeAdded`, `Origin::System`). Not made: git's message, cleaned and cut to 200
    characters, in the status bar; an empty `<repo>` folder made in step 4 goes; anything git

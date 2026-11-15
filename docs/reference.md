@@ -263,8 +263,8 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    Closing a space's last tab closes the space. A click on a Repos row opens a terminal there in
    a Workspace tab of its own; a row a live task works in carries its badge, and its click selects
    that task (Terminal, on hover, opens a terminal anyway). See `docs/ai/spaces.md`. A
-   repository's + (on its name, under the pointer) asks for a branch: an existing one is checked
-   out, a new name is made from the repository's HEAD, in `<worktrees_dir>/<repo>/<branch>`; the
+   repository's + (on its name, under the pointer) asks for a branch: a local one is checked out, one only a remote has is
+   tracked, a new name is made from the repository's HEAD, in `<worktrees_dir>/<repo>/<branch>`; the
    new worktree opens the same way. See `docs/ai/repos.md`.
 7. **Following.** The task runs while its agent works. Claude is given the session's id; Codex
    names its own, and ottospace finds it where Codex wrote it: the one session that started in
@@ -903,7 +903,7 @@ A change is read when the file is saved: what is wrong in it is said in the stat
 | `terminal.font_size` | In points, 6 to 72 | `13` |
 | `repos` | Directories that are repositories or hold them, for the Repos section. `OTTOSPACE_REPOS` (`:` between directories) wins over it. The section's + adds the folder you pick (a repository, or one that holds some), by its full path; if the file named none, `~/code` and `~/notes` are written with it. Remove, on a repository's name under the pointer, takes off a directory listed as itself; one that comes from a folder holding several is yours to edit. At most 64 through + | `~/code`, `~/notes` |
 | `tasks` | Where tasks are kept, one JSON file each. A relative path is inside `~/.ottospace` | `tasks` |
-| `worktrees_dir` | Where + on a repository's name makes worktrees: `<dir>/<repo>/<branch>`, slashes in the branch as `-`; a repository whose folder name another listed one shares gets a short hash of its path after it (`app-1f2e3d`). Read each time | `worktrees` in `~/.ottospace` |
+| `worktrees_dir` | Where + on a repository's name makes worktrees: `<dir>/<repo>/<branch>`, slashes in the branch as `-`; a repository whose folder name another listed one shares gets a short hash of its path after it (`app-1f2e3d`). A relative path is inside `~/.ottospace`. Read each time | `worktrees` in `~/.ottospace` |
 | `sessions` | List agent sessions that are no task's under Elsewhere in the Tasks section. `false`: no session file is ever read | `true` |
 | `session_dirs` | Where the runners keep their sessions: `claude` is a list of Claude Code config directories (one for each account), `codex` is Codex's home. A runner left out keeps its default. An app started from the Dock does not see `CLAUDE_CONFIG_DIR` or `CODEX_HOME`: name other directories here | `~/.claude`, `~/.codex` |
 | `session_quiet_minutes` | A task adopted from a session moves to Needs you once the session has been quiet this many minutes. `0`: a quiet session never moves its task | `3` |

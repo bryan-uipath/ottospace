@@ -3,11 +3,10 @@
 //! `worktrees_dir`. Runs off the main thread; nothing is ever deleted but a folder made here, empty.
 
 use std::ffi::OsStr;
-use std::io::Read;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::{fs, io};
 
 use ottospace_core::repos::git_said;
@@ -33,20 +32,30 @@ pub fn start(repo: String, branch: String, path: String, root: String, done: mps
     });
 }
 
-/// Makes the worktree: an existing branch is checked out, a new one made from the repository's HEAD.
+/// Makes the worktree: a local branch is checked out; one only a remote has (`origin/feat`, of one
+/// remote) is made to track it; any other name is a new branch from the repository's HEAD.
 fn add(repo: &Path, branch: &str, path: &Path, root: &Path) -> Result<PathBuf, String> {
     let (target, made) = target(path, root)?;
     let local = format!("refs/heads/{branch}");
     let exists = git(repo, &["rev-parse", "--verify", "--quiet", &local])?.0;
-    let target_arg = target.as_os_str();
-    let args: Vec<&OsStr> = match exists {
-        true => ["worktree", "add", "--"].map(OsStr::new).into_iter().chain([target_arg, OsStr::new(branch)]).collect(),
-        false => ["worktree", "add", "-b", branch, "--"]
+    let remote = if exists { None } else { remote_branch(repo, branch) };
+    let target = target.as_os_str();
+    let args: Vec<&OsStr> = match (exists, &remote) {
+        (true, _) => {
+            ["worktree", "add", "--"].map(OsStr::new).into_iter().chain([target, OsStr::new(branch)]).collect()
+        }
+        (false, Some(remote)) => ["worktree", "add", "--track", "-b", branch, "--"]
             .map(OsStr::new)
             .into_iter()
-            .chain([target_arg, OsStr::new("HEAD")])
+            .chain([target, OsStr::new(remote)])
+            .collect(),
+        (false, None) => ["worktree", "add", "-b", branch, "--"]
+            .map(OsStr::new)
+            .into_iter()
+            .chain([target, OsStr::new("HEAD")])
             .collect(),
     };
+    let target = PathBuf::from(target);
     let (ok, stderr) = git(repo, &args)?;
     if ok {
         return Ok(target);
@@ -60,6 +69,20 @@ fn add(repo: &Path, branch: &str, path: &Path, root: &Path) -> Result<PathBuf, S
         let _ = fs::remove_dir(folder);
     }
     Err(said)
+}
+
+/// The one remote's branch of that name (`origin/feat/map`), if exactly one remote has it.
+fn remote_branch(repo: &Path, branch: &str) -> Option<String> {
+    let pattern = format!("refs/remotes/*/{branch}");
+    let mut command = Command::new("git");
+    command.arg("-C").arg(repo).args(["for-each-ref", "--format=%(refname)", &pattern]);
+    command.env("GIT_TERMINAL_PROMPT", "0");
+    let said = crate::child::run(command, TIMEOUT, MAX_OUTPUT).ok().filter(|said| said.ok)?;
+    let refs: Vec<&str> = said.out.lines().filter_map(|line| line.strip_prefix("refs/remotes/")).collect();
+    match refs[..] {
+        [one] => Some(one.to_string()),
+        _ => None,
+    }
 }
 
 /// The folder to make, resolved: `path` is `<root>/<repo>/<branch>`, two plain names under
@@ -81,6 +104,10 @@ fn target(path: &Path, root: &Path) -> Result<(PathBuf, Option<PathBuf>), String
     let root = root.canonicalize().map_err(|err| failed(root, err))?;
     let folder = root.join(folder);
     let made = match fs::symlink_metadata(&folder) {
+        // `worktrees_dir` inside the repositories' folder: the worktree would be in a checkout.
+        Ok(meta) if meta.is_dir() && folder.join(".git").exists() => {
+            return Err(format!("{} is a repository: set worktrees_dir to a folder of its own", folder.display()));
+        }
         Ok(meta) if meta.is_dir() => None,
         Ok(_) => return Err(format!("{} is a link or a file, not a folder", folder.display())),
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
@@ -97,45 +124,25 @@ fn target(path: &Path, root: &Path) -> Result<(PathBuf, Option<PathBuf>), String
     }
 }
 
-/// Runs `git -C <repo> <args>`: no prompt, no environment that points it at another repository,
-/// nothing on its standard input. Whether it succeeded, and its standard error.
+/// Runs `git -C <repo> <args>`: no prompt, no environment that points it at another repository.
+/// Whether it succeeded, and what it said.
 fn git<S: AsRef<OsStr>>(repo: &Path, args: &[S]) -> Result<(bool, String), String> {
     let mut command = Command::new("git");
     command.arg("-C").arg(repo).args(args);
     for name in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"] {
         command.env_remove(name);
     }
-    command.env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(|err| format!("git: {err}"))?;
-    // Read on a thread: a full pipe would hold git up while this waits.
-    let stderr = child.stderr.take();
-    let reader = std::thread::spawn(move || {
-        let mut text = String::new();
-        if let Some(stderr) = stderr {
-            let _ = stderr.take(MAX_OUTPUT).read_to_string(&mut text);
-        }
-        text
-    });
-    let deadline = Instant::now() + TIMEOUT;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("git took longer than {} seconds", TIMEOUT.as_secs()));
-            }
-            Err(err) => return Err(format!("git: {err}")),
-        }
-    };
-    Ok((status.success(), reader.join().unwrap_or_default()))
+    command.env("GIT_TERMINAL_PROMPT", "0");
+    let said = crate::child::run(command, TIMEOUT, MAX_OUTPUT)?;
+    // Its message, on standard error, else on standard output.
+    Ok((said.ok, if said.err.trim().is_empty() { said.out } else { said.err }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::scratch::Scratch;
+    use std::process::Stdio;
 
     /// git with none of the user's settings (a signing key, hooks): the test's own repository.
     fn git_in(dir: &Path, args: &[&str]) {
@@ -193,6 +200,16 @@ mod tests {
         let err = add(&repo, "feat/map", &root.join("app/again"), &root).unwrap_err();
         assert!(err.starts_with("git: ") && err.contains("feat/map"), "{err}");
         assert!(!root.join("app/again").exists());
+        // A branch only the remote has: tracked, not made anew from HEAD.
+        let clone = scratch.join("clone");
+        git_in(&scratch, &["clone", "-q", repo.to_str().unwrap(), clone.to_str().unwrap()]);
+        add(&clone, "feat/map", &root.join("clone/feat-map"), &root).unwrap();
+        let mut tracks = Command::new("git");
+        tracks.arg("-C").arg(root.join("clone/feat-map")).args(["rev-parse", "--abbrev-ref", "@{u}"]);
+        assert_eq!(String::from_utf8_lossy(&tracks.output().unwrap().stdout).trim(), "origin/feat/map");
+        // A worktrees folder that is a checkout itself is not put into.
+        let err = add(&repo, "x", &scratch.join("app/x"), &scratch).unwrap_err();
+        assert!(err.ends_with("set worktrees_dir to a folder of its own"), "{err}");
         // Not a repository: said, and the empty folder made for it goes.
         let err = add(&scratch.join("none"), "x", &root.join("none/x"), &root).unwrap_err();
         assert!(err.starts_with("git"), "{err}");

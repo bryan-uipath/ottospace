@@ -93,7 +93,7 @@ pub struct Checkout {
     pub branch: String,
     /// True for the repository's own directory. A linked worktree is not the default.
     pub default: bool,
-    /// Its directory's name, for the row's tooltip.
+    /// Its directory's name.
     pub label: String,
 }
 
@@ -161,10 +161,7 @@ pub fn git_said(stderr: &str) -> String {
     let picked: Vec<&str> = if lines.iter().any(said) { lines.into_iter().filter(said).collect() } else { lines };
     let bare = |line: &str| line.trim_start_matches("fatal:").trim_start_matches("error:").trim().to_string();
     let joined = picked.into_iter().map(bare).collect::<Vec<_>>().join("; ");
-    let mut out: String = joined.chars().take(MAX_SAID).collect();
-    if joined.chars().count() > MAX_SAID {
-        out.push('…');
-    }
+    let out = crate::ax::truncate(&joined, MAX_SAID);
     if out.is_empty() { "git failed".into() } else { format!("git: {out}") }
 }
 

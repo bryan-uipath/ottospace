@@ -59,6 +59,7 @@ mod app_wheel;
 mod apps;
 mod ax_debug;
 mod calendar;
+mod child;
 mod clipboard;
 mod collect;
 mod commands;
@@ -4127,6 +4128,11 @@ impl Workspace {
         for worktree::Made { repo, result } in made {
             let repos = repos::scan();
             match result {
+                // Made from a repository listed only as a worktree of another: not in the list to open.
+                Ok(path) if !repos.iter().any(|r| r.worktrees.iter().any(|w| w.path == path)) => {
+                    self.error = Some(format!("Made {path}: its repository is not listed"));
+                    self.dispatch(Action::SetRepos { repos }, Origin::System, window, cx);
+                }
                 Ok(path) => {
                     drop(self.dispatch(Action::WorktreeAdded { repo, path, repos }, Origin::System, window, cx))
                 }
@@ -4649,23 +4655,16 @@ impl Workspace {
             let badge = div().flex_none().px_1p5().rounded_full().bg(rgb(theme::BORDER)).text_xs();
             badge.text_color(rgb(theme::MUTED)).line_height(px(15.)).child(count.to_string())
         });
-        div()
-            .id(("repo-head", n))
-            .flex_none()
-            .relative()
+        // A checkout row's look (hover, selection), on one line of its own height.
+        list_row(("repo-head", n), selected)
             .group("repo-name")
             .when(n > 0, |d| d.mt_2())
             .h(px(26.))
             .px_2()
+            .py_0()
             .flex()
             .items_center()
             .gap_1p5()
-            .rounded_md()
-            .border_1()
-            .border_color(transparent_black())
-            .cursor_pointer()
-            .hover(|s| s.bg(rgb(theme::SELECTED)))
-            .when(selected, |d| d.bg(rgb(theme::SELECTED)).border_color(rgb(theme::LIST)))
             .child(div().flex_none().w(px(10.)).text_xs().text_color(rgb(theme::MUTED)).child(if folded {
                 "▸"
             } else {
