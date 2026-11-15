@@ -8,7 +8,7 @@ macOS agent multiplexer: terminals and real app windows tiled in one workspace. 
 |---|---|---|
 | `ottospace-core` | State and rules. `Model::update(Envelope { action, origin }) -> Vec<Effect>` | std, serde, unicode-segmentation. No I/O, UI, clock, threads |
 | `ottospace-mac` | macOS calls: AX, ScreenCaptureKit, displays, input | system APIs |
-| `ottospace-sessions` | Reads Claude Code and Codex session files: sessions of a directory, events, snapshot. A `SessionReader` per `RunnerId` | std, serde, read-only files, `ottospace-core` (pure: for `runner::RunnerId`). No network, clock, writes |
+| `ottospace-sessions` | Reads Claude Code and Codex session files: sessions of a directory, events, snapshot. A `SessionReader` per `RunnerId` | std, serde, read-only files, `ottospace-core` (pure: for `runner::RunnerId`, `activity::Station`). No network, clock, writes |
 | `ottospace-agents` | Speaks to agent CLIs in their structured modes: starts, sends, reads events. A `Wire` per `RunnerId` | std, serde_json, the two crates above; spawns child processes. No network of its own, clock decisions, or reading other apps |
 | `ottospace` | Shell: GPUI views, control socket. Turns input into `Action`s, carries out `Effect`s | everything; the network only to read the calendar feed (`calendar_ics`), through `/usr/bin/curl`, `https:` only, and the open pull requests of listed GitHub repositories, through the user's `gh` (`repos_prs`; `prs.rs`), read-only, a fixed argv |
 

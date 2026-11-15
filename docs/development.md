@@ -137,6 +137,7 @@ folder), `{REPO}` (the checkout), `{NOW+3600}` (an ICS time from now) and `{TODA
 | `{"cmd":..}` | a request; it must answer `ok` |
 | `{"shot":"name"}` | waits for the frame, takes `name.png` |
 | `{"click":"task:1"}`, `{"hover":"task:1"}` | the user's pointer on a named control (`"at":[0.3,0.5]`), or on a rect of the state: `{"hover":{"rect":"calendar.band.blocks.2.rect"}}` |
+| `{"drag":{"rect":"drawer.body"},"at":[0,0.5],"by":[150,0]}` | the user's drag from a control or a rect of the state, by points (here: the drawer's edge, 150 narrower) |
 | `{"until":"drawer.native.chats.1.transcript.cards","len":1}` | waits on the state (`"is"`, `"len"`, or there at all) |
 | `{"settle":500}`, `{"sleep_ms":700}` | waits |
 | `{"record":"start"}`, `{"record":"stop"}` | what `--record` covers (default: all of it) |

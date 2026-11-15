@@ -662,7 +662,7 @@ mod tests {
             r#"{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"t","name":"Read","input":{"file_path":"/a/b/c.rs"}}]}}"#,
         );
         let Some(Event::ToolStart { station, label, .. }) = out.events.get(1) else { panic!("{out:?}") };
-        assert_eq!((*station, label.as_str()), (station::Station::Files, "b/c.rs"));
+        assert_eq!((*station, label.as_str()), (ottospace_core::activity::Station::Files, "b/c.rs"));
     }
 
     #[test]

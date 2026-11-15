@@ -20,6 +20,7 @@ use gpui::{
 };
 use ottospace_agents::driver::Driver;
 use ottospace_agents::{Answer, Event as Said, Input, Process, Ticket};
+use ottospace_core::activity::Station;
 use ottospace_core::agents::{self, Start};
 use ottospace_core::diff::{self, Change, Diff, Sign};
 use ottospace_core::links::Target;
@@ -174,15 +175,23 @@ fn watched(event: &ottospace_sessions::Event) -> Vec<Event> {
             let started = model.clone().map(|model| Event::Started { session: None, model: Some(model), mode: None });
             started.into_iter().chain([usage]).collect()
         }
-        What::ToolStart { id, tool, summary, diff, .. } => {
-            let (tool, label, diff) = (tool.clone(), summary.clone(), diff.clone());
-            vec![Event::ToolStart { id: id.clone(), sub: false, tool, label, detail: Text::default(), diff }]
+        What::ToolStart { id, tool, station, summary, diff } => {
+            let (tool, station, label, diff) = (tool.clone(), *station, summary.clone(), diff.clone());
+            vec![Event::ToolStart { id: id.clone(), sub: false, tool, station, label, detail: Text::default(), diff }]
         }
         What::ToolEnd { id, failed, .. } => vec![Event::ToolEnd { id: id.clone(), failed: *failed }],
         What::Error { kind } => vec![Event::Error { kind: kind.clone(), retrying: false }],
         What::SubAgentStart { id, label } => {
-            let (tool, label) = ("Agent".to_string(), label.clone());
-            vec![Event::ToolStart { id: id.clone(), sub: true, tool, label, detail: Text::default(), diff: None }]
+            let (tool, label, station) = ("Agent".to_string(), label.clone(), Station::Agents);
+            vec![Event::ToolStart {
+                id: id.clone(),
+                sub: true,
+                tool,
+                station,
+                label,
+                detail: Text::default(),
+                diff: None,
+            }]
         }
         What::SubAgentEnd { id } => vec![Event::ToolEnd { id: id.clone(), failed: false }],
         What::Compaction { .. } => vec![Event::Compaction],
@@ -1305,6 +1314,7 @@ impl Workspace {
                     "details": self.drawer.details.contains_key(&subject),
                     "details_open": look.is_some_and(|look| look.details),
                     "unread_open": look.is_some_and(|look| look.unread),
+                    "dial": self.dial_snapshot(&subject),
                 }),
             );
         }
@@ -1339,8 +1349,8 @@ fn translate(native: &mut Native, said: Said, details: bool) -> Option<Event> {
         Said::TurnStarted => Event::TurnStarted,
         Said::TextDelta { text: t } => Event::TextDelta { text: text(&t) },
         Said::Text { text: t } => Event::Text { text: text(&t) },
-        Said::ToolStart { id, parent, tool, label, detail, diff, .. } => {
-            Event::ToolStart { id, sub: parent.is_some(), tool, label, detail: text(&detail), diff }
+        Said::ToolStart { id, parent, tool, station, label, detail, diff } => {
+            Event::ToolStart { id, sub: parent.is_some(), tool, station, label, detail: text(&detail), diff }
         }
         Said::ToolEnd { id, failed } => Event::ToolEnd { id, failed },
         // Past `MAX_CARDS` waiting, denied at once: no request is left waiting unseen.
@@ -1369,6 +1379,8 @@ fn translate(native: &mut Native, said: Said, details: bool) -> Option<Event> {
         Said::Error { kind, retrying } => Event::Error { kind, retrying },
         // Its stderr may hold tokens: the core hears only that there is some.
         Said::Exited { code, signal, .. } => Event::Exited { code, signal, details },
+        // A hook of the user's that starts: the dial's Hooks station. Its other lines are quiet.
+        Said::Unknown { kind } if kind == "system.hook_started" => Event::Hook,
         Said::Unknown { kind } if ottospace_agents::is_quiet(&kind) => return None,
         Said::Unknown { kind } => Event::Unknown { kind },
     })

@@ -1348,6 +1348,8 @@ pub enum Action {
     },
     /// Widen the drawer to half the window, or back.
     TalkWide,
+    /// Collapse the shown conversation's dial to its marker, or open it again: kept per task.
+    DialToggle,
     /// Start the shown conversation's agent, or go on with its session: the drawer's Resume
     /// session (Start agent), Take over, ↵ in an ended composer. Selecting a conversation (its
     /// row, its rail cell, its tab) never starts one. Only the user's.
@@ -1715,6 +1717,7 @@ impl Action {
             | Action::TalkKeys { on: false }
             | Action::TalkResize { .. }
             | Action::TalkWide
+            | Action::DialToggle
             | Action::SetCalendar { .. }
             | Action::CalendarRead { .. }
             | Action::CallSeen { .. }
@@ -1959,6 +1962,7 @@ impl Action {
             | Action::TalkKeys { .. }
             | Action::TalkResize { .. }
             | Action::TalkWide
+            | Action::DialToggle
             | Action::TalkStart
             | Action::SetCalendar { .. }
             | Action::CalendarRead { .. }
@@ -2521,6 +2525,9 @@ pub struct Model {
     /// The view the user picked for a conversation, and the settings' default for Claude Code.
     #[serde(skip)]
     views: Vec<(Subject, crate::transcript::View)>,
+    /// Dials the user collapsed (true) or opened again, by conversation (`Model::dial_collapsed`).
+    #[serde(skip)]
+    dials: Vec<(Subject, bool)>,
     #[serde(skip)]
     conversation_view: crate::transcript::View,
     /// Conversations whose agent was stopped for a switch of view: gone on with once it is gone.
@@ -2645,6 +2652,7 @@ impl Default for Model {
             default_agent: None,
             chats: Vec::new(),
             views: Vec::new(),
+            dials: Vec::new(),
             conversation_view: crate::settings::DEFAULT_VIEW,
             switching: Vec::new(),
             ending: Vec::new(),
@@ -2881,6 +2889,8 @@ impl Model {
             | Action::TalkEscape
             | Action::TalkInterrupt
             | Action::TalkView { .. } => Some(chat::USERS_ALONE),
+            // How the user keeps their drawer, and the layout file that keeps it.
+            Action::DialToggle => Some(chat::DIAL_USERS),
             // The editor writes what ↵ will send, and has the keyboard: only the user opens it or
             // moves to it; only the shell says what it saved.
             Action::EditorOpen | Action::EditorKeys { .. } => Some(editor::USERS_ALONE),
@@ -4769,6 +4779,7 @@ impl Model {
             Action::TalkKeys { on } => self.talk_keys(on, effects),
             Action::TalkResize { width } => self.talk_width = talk::width(width),
             Action::TalkWide => self.talk_wide = !self.talk_wide,
+            Action::DialToggle => self.dial_toggle(),
             Action::SetCalendar { on, notify, links_only, hide_free, colors } => {
                 (self.calendar.on, self.calendar.notify, self.calendar.links_only) = (on, notify, links_only);
                 self.calendar.options(hide_free, colors);
@@ -7381,6 +7392,7 @@ mod tests {
         Action::TalkKeys { .. },
         Action::TalkResize { .. },
         Action::TalkWide,
+        Action::DialToggle,
         Action::TalkStart,
         Action::SetCalendar { .. },
         Action::CalendarRead { .. },
@@ -7623,6 +7635,7 @@ mod tests {
             Action::TalkKeys { on: true },
             Action::TalkResize { width: 400. },
             Action::TalkWide,
+            Action::DialToggle,
             Action::TalkStart,
             Action::SetCalendar { on: true, notify: true, links_only: false, hide_free: false, colors: Vec::new() },
             Action::CalendarRead { events: None, days: [0; calendar::DAYS], at: 0, held_from: 0 },
@@ -7798,6 +7811,7 @@ mod tests {
                     Action::TabPlace { .. } => Some(TABS_USERS),
                     Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
                     _ if talks(action) => Some(chat::USERS_ALONE),
+                    Action::DialToggle => Some(chat::DIAL_USERS),
                     Action::AgentEvents { .. } if origin == Origin::Socket => Some(chat::RUNNERS_ALONE),
                     _ if in_palette(action) && action_is_palettes(action) => Some(commands::USERS_ALONE),
                     _ if in_palette(action) => Some(inspect::USERS_ALONE),
@@ -10413,6 +10427,7 @@ mod tests {
             id: "a".into(),
             sub: false,
             tool: "Bash".into(),
+            station: crate::activity::Station::Shell,
             label: "git".into(),
             detail: Text::default(),
             diff: None,
@@ -10439,6 +10454,7 @@ mod tests {
                 id: "a".into(),
                 sub: false,
                 tool: "Bash".into(),
+                station: crate::activity::Station::Shell,
                 label: "git".into(),
                 detail: Text::default(),
                 diff: None,
@@ -12421,6 +12437,7 @@ mod tests {
                     Action::TabPlace { .. } => Some(TABS_USERS),
                     Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
                     _ if talks(action) => Some(chat::USERS_ALONE),
+                    Action::DialToggle => Some(chat::DIAL_USERS),
                     Action::AgentEvents { .. } if origin == Origin::Socket => Some(chat::RUNNERS_ALONE),
                     _ if in_palette(action) && action_is_palettes(action) => Some(commands::USERS_ALONE),
                     _ if in_palette(action) => Some(inspect::USERS_ALONE),
