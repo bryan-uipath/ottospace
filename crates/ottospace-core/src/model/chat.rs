@@ -19,7 +19,7 @@ pub const RUNNERS_ALONE: &str = "only ottospace's own runner reports an agent's 
 /// The most characters a composer draft holds.
 pub const MAX_DRAFT: usize = 100_000;
 
-/// The most conversations whose transcript is kept: those of the rail, and as many ended.
+/// The most conversations whose transcript is kept: twice the sessions whose reads are kept.
 const KEPT: usize = crate::talk::KEPT * 2;
 
 /// One conversation drawn natively.

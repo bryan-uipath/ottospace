@@ -655,7 +655,7 @@ actions!(ottospace, [SaveWorkbook, AddTabToWorkbook, SaveAllWorkbook]);
 actions!(ottospace, [StartFresh]);
 // What the capture key does, from the menu.
 actions!(ottospace, [CapturePane]);
-// The right drawer: the keyboard in or out, closed to the rail or open, the task's workspace.
+// The right drawer: the keyboard in or out, closed or open, the task's workspace.
 actions!(ottospace, [TalkFocus, TalkToggle, TalkGo, StopAgent]);
 // A tab of no task, and the tab on show taken out of its task or moved to another.
 actions!(ottospace, [MoveTabToTask]);

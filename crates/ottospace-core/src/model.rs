@@ -536,7 +536,7 @@ pub enum Action {
     ClosePicker,
     /// Open the command palette. Only the user's: it runs any command as theirs.
     PaletteOpen,
-    /// Move Tab to Task…: the palette, listing the tasks (and no task) to move the tab on show
+    /// Move Tab to…: the palette, listing the spaces to move the tab on show
     /// to. Only the user's, as is which task a tab is of.
     PaletteTasks,
     /// Features…: the palette, listing the flags to turn on or off. Only the user's.
@@ -10609,7 +10609,7 @@ mod tests {
         );
         // A second click starts no second agent.
         assert_eq!(started(&mut m, Action::TaskTalk { id: 1 }), []);
-        // The keyboard goes back to the workspace and in again; closing to the rail takes it out.
+        // The keyboard goes back to the workspace and in again; closing the chat takes it out.
         m.update(Action::TalkKeys { on: false });
         assert_eq!((m.mode(), m.talk.as_ref().map(|talk| talk.open)), (Mode::Normal, Some(true)));
         m.update(Action::TalkKeys { on: true });

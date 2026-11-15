@@ -257,8 +257,8 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    chat, none for Workspace. Selecting starts nothing; a closed drawer stays closed. A task
    started (↵ in the box, or its row clicked) opens its space with one empty tab; started from a
    Workspace tab a Repos row opened for its folder, that tab moves into it. ⌘T makes a tab in the
-   space on show. Drag a tab onto another space's tab or badge to move it there; Remove Tab from
-   Move Tab to… lists Workspace, the tasks and the workbooks.
+   space on show. Drag a tab onto another space's tab or badge to move it there; Move Tab to…
+   lists Workspace, the tasks and the workbooks.
    Closing a space's last tab closes the space. A click on a Repos row opens a terminal there in
    a Workspace tab of its own; a row a live task works in carries its badge, and its click selects
    that task (Terminal, on hover, opens a terminal anyway). See `docs/ai/spaces.md`.

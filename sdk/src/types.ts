@@ -102,7 +102,7 @@ export type Focus =
   | "inspector"
   | "nothing";
 
-/** A rail that has the keyboard (in list mode): a left-rail section, or a right-rail place. */
+/** The rail cell that has the keyboard (in list mode): a section. */
 export type RailFocus = { left: Section };
 
 /** A heading of the Tasks section, in the order drawn. `open`: tasks with tabs open that do not need the user. */
@@ -622,7 +622,7 @@ export interface Palette {
   query: string;
   /** An index into `palette_rows`. */
   selected: number;
-  /** Move Tab to Task…: the spaces it lists (Workspace, the live tasks, the workbooks), in order; null while it lists commands. */
+  /** Move Tab to…: the spaces it lists (Workspace, the live tasks, the workbooks), in order; null while it lists commands. */
   tasks: PaletteTask[] | null;
   /** Features…: the flags it lists, each with whether it is on; null while it lists commands. */
   features: PaletteFeature[] | null;
@@ -634,7 +634,7 @@ export interface PaletteFeature {
   on: boolean;
 }
 
-/** A space Move Tab to Task… may move the tab on show to. */
+/** A space Move Tab to… may move the tab on show to. */
 export interface PaletteTask {
   to: Owner;
   title: string;
@@ -997,7 +997,7 @@ export interface AppEntry {
 export interface Snapshot {
   ok: true;
   mode: Mode;
-  /** Where the keyboard is: a pane, a row of the section list, a left-rail cell, the drawer, a right-rail place (its `+` last), or nothing. */
+  /** Where the keyboard is: a pane, a row of the section list, a rail cell, the drawer, or nothing. */
   focus: Focus;
   state: Model;
   /** Where each pane of the active tab is drawn, by pane id. */

@@ -145,7 +145,7 @@ pub struct Palette {
     pub query: Field,
     /// Index into `matches()`, or `task_matches()` while it lists tasks.
     pub selected: usize,
-    /// Move Tab to Task…: the tasks to move the tab on show to, not commands.
+    /// Move Tab to…: the spaces to move the tab on show to, not commands.
     pub tasks: Option<Vec<TaskChoice>>,
     /// Features…: the flags, each with whether it is on, not commands.
     pub features: Option<Vec<FeatureChoice>>,

@@ -5480,7 +5480,7 @@ fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_works
         let state = o.call(json!({"cmd": "state"}));
         state["drawer"]["agents"]["1"]["lines"].as_array()?.iter().any(|l| l == "hi").then_some(())
     });
-    // ⌘L gives the keyboard back; ⌘⇧L closes the drawer to the rail and opens it again.
+    // ⌘L gives the keyboard back; ⌘⇧L closes the drawer and opens it again.
     assert_eq!(otto.user_key("cmd-l")["mode"], "normal");
     let closed = otto.user_key("cmd-shift-l");
     assert_eq!((&closed["state"]["talk"]["open"], &closed["drawer"]["body"]), (&json!(false), &json!(null)));

@@ -3071,7 +3071,7 @@ fn code(sent: &Envelope) -> String {
         ("view", "TasksView"),
         ("range", "sessions::Range"),
         ("runner", "RunnerId"),
-        // A conversation's: `TalkPick { id: Task(1) }`.
+        // A conversation's: `TaskStop { id: Task(1) }`.
         ("task", "Subject"),
         ("id", "Subject"),
         ("shows", "View"),
