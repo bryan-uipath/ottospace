@@ -4655,7 +4655,8 @@ impl Workspace {
                 .children(badge.map(|badge| badge.absolute().right(px(8.)).top(px(5.))))
                 .children(pr.map(|(marker, _)| marker.absolute().right(px(8. + badge_room)).top(px(4.))))
                 .child(div().truncate().child(checkout.branch))
-                .children(terminal.map(|words| words.top(px(4.))))
+                // Left of the marks at its end, so the pull request stays there to click.
+                .children(terminal.map(|words| words.top(px(4.)).right(px(room - 2.))))
                 .child(mark(&self.marks, Mark::Checkout(index)))
                 .child(self.controls.mark(format!("repo:{}", checkout.path)))
                 .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone().into()))))
