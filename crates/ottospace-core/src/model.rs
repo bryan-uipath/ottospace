@@ -1295,6 +1295,10 @@ pub enum Action {
         notify: bool,
         /// Only events with a Zoom, Meet or Teams link alert (`calendar_notify_for: "links"`).
         links_only: bool,
+        /// `calendar_hide_free`.
+        hide_free: bool,
+        /// `calendar_colors`.
+        colors: Vec<calendar::ColorRule>,
     },
     /// The feed was read at `at`: today's and tomorrow's events, or `None` when the read failed
     /// (the last events stay). `days`: local midnight of today, tomorrow and the day after.
@@ -4544,8 +4548,9 @@ impl Model {
             Action::TalkKeys { on } => self.talk_keys(on, effects),
             Action::TalkResize { width } => self.talk_width = talk::width(width),
             Action::TalkWide => self.talk_wide = !self.talk_wide,
-            Action::SetCalendar { on, notify, links_only } => {
+            Action::SetCalendar { on, notify, links_only, hide_free, colors } => {
                 (self.calendar.on, self.calendar.notify, self.calendar.links_only) = (on, notify, links_only);
+                self.calendar.options(hide_free, colors);
                 if !on {
                     self.sidebar = self.sidebar.filter(|s| *s != Section::Calendar);
                     if self.rail_focus == Some(zones::RailFocus::Left(Section::Calendar)) {
@@ -6334,7 +6339,8 @@ impl Model {
         self.act(Action::SetAgents { claude, codex, default, shows }, effects);
         let (notify, links_only) = (settings.calendar_notify.unwrap_or(true), settings.calendar_notify_for);
         let links_only = links_only == Some(crate::settings::NotifyFor::Links);
-        self.act(Action::SetCalendar { on: self.calendar.on, notify, links_only }, effects);
+        let (hide_free, colors) = (settings.calendar_hide_free.unwrap_or(false), settings.color_rules());
+        self.act(Action::SetCalendar { on: self.calendar.on, notify, links_only, hide_free, colors }, effects);
         effects.push(Effect::ApplySettings { settings: Box::new(settings) });
     }
 
@@ -7288,7 +7294,7 @@ mod tests {
             Action::TalkWide,
             Action::TalkPick { id: Subject::Task(1) },
             Action::TalkStart,
-            Action::SetCalendar { on: true, notify: true, links_only: false },
+            Action::SetCalendar { on: true, notify: true, links_only: false, hide_free: false, colors: Vec::new() },
             Action::CalendarRead { events: None, days: [0; 3], at: 0 },
             Action::CallSeen { in_call: Some(false), at: 0 },
             Action::CalendarDismiss { id: 1 },
