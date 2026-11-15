@@ -4595,7 +4595,7 @@ impl Workspace {
             let typing =
                 matches!(&self.model.mark_input, Some(MarkInput::Worktree { repo: of, .. }) if *of == repo.path);
             if typing {
-                let field = self.render_field("Branch: an existing one, or new from HEAD", cx);
+                let field = self.render_field("Branch, existing or new from HEAD", cx);
                 let line = div().flex_none().pl(px(26.)).pr_2().py_0p5().rounded_md().border_1();
                 items.push(line.border_color(rgb(theme::MARK)).text_size(px(13.)).child(field).into_any_element());
             }
