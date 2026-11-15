@@ -1240,6 +1240,19 @@ pub enum Action {
     },
     /// Take the last delete or update of a workbook back.
     WorkbookUndo,
+    /// … on a row of the bar: its menu (`row_menu`). On the row whose menu is open: close it.
+    RowMenu {
+        row: ListRow,
+    },
+    /// Down (positive) or up the open menu. It wraps.
+    RowMenuMove {
+        delta: i32,
+    },
+    /// Take an item of the open menu (default: the one the keys are on).
+    RowMenuChoose {
+        index: Option<usize>,
+    },
+    RowMenuClose,
     /// What the settings say of agents, read at start: each runner's models (`agent_models`)
     /// and the agent a task with no `@agent` starts with (`default_agent`).
     SetAgents {
@@ -1712,6 +1725,10 @@ impl Action {
             | Action::WorkbookOpen { .. }
             | Action::WorkbookRemove { .. }
             | Action::WorkbookFold { .. }
+            | Action::RowMenu { .. }
+            | Action::RowMenuMove { .. }
+            | Action::RowMenuChoose { .. }
+            | Action::RowMenuClose
             | Action::WorkbookUndo => false,
             | Action::SetAgents { .. }
             | Action::ComposeEnter
@@ -1949,6 +1966,10 @@ impl Action {
             | Action::WorkbookEdit { .. }
             | Action::WorkbookRemove { .. }
             | Action::WorkbookFold { .. }
+            | Action::RowMenu { .. }
+            | Action::RowMenuMove { .. }
+            | Action::RowMenuChoose { .. }
+            | Action::RowMenuClose
             | Action::WorkbookUndo
             | Action::SetAgents { .. }
             | Action::AgentEvents { .. }
@@ -2487,6 +2508,9 @@ pub struct Model {
     /// The workbooks. Not in the state as they are kept: `workbook_rows` is what it shows.
     #[serde(skip)]
     pub workbooks: Workbooks,
+    /// The menu of a row of the bar, while it is open.
+    #[serde(skip)]
+    pub(crate) row_menu: Option<crate::row_menu::RowMenu>,
     /// What a mark waits for, while one has the keyboard. Also a workbook's name being typed.
     pub mark_input: Option<MarkInput>,
     /// The draft in the right bar, while there is one: `compose` is its title.
@@ -2642,6 +2666,7 @@ impl Default for Model {
             sneak: None,
             marks: Marks::default(),
             workbooks: Workbooks::default(),
+            row_menu: None,
             mark_input: None,
             capture: None,
             back_to: None,
@@ -2805,6 +2830,10 @@ impl Model {
             | Action::WorkbookOpen { .. }
             | Action::WorkbookEdit { .. }
             | Action::WorkbookRemove { .. }
+            | Action::RowMenu { .. }
+            | Action::RowMenuMove { .. }
+            | Action::RowMenuChoose { .. }
+            | Action::RowMenuClose
             | Action::WorkbookUndo => Some(workbook::USERS_ALONE),
             Action::ListChoose { .. } | Action::ListDismiss | Action::ListUndo | Action::ListMarkEdit { .. }
                 if self.sidebar == Some(Section::Workbook) =>
@@ -3085,6 +3114,7 @@ impl Model {
         self.settle_spaces();
         self.follow_space(origin, drawer_keys);
         self.settle_brief();
+        self.settle_row_menu();
         // However the list was left (Esc, a click on a pane), ⌘⌃← comes back to its row.
         if self.list.is_none() && listed.is_some() {
             self.list_kept = zones::KeptRow(listed);
@@ -3140,6 +3170,14 @@ impl Model {
         let own_mark = own_mark || (renaming && matches!(action, Action::FieldEdit { .. }));
         if user && !own_mark {
             self.mark_input = None;
+        }
+        // A row's menu closes on the user's other moves; sneak mode's labels reach its items.
+        let own_menu = matches!(
+            action,
+            Action::RowMenu { .. } | Action::RowMenuMove { .. } | Action::RowMenuChoose { .. } | Action::RowMenuClose
+        );
+        if user && !own && !own_menu {
+            self.row_menu = None;
         }
         // The inspector's filter gives the keyboard back on the user's other moves.
         // ← and → leave it by the zones (`zones`), which know it had the keyboard.
@@ -4513,6 +4551,10 @@ impl Model {
             Action::WorkbookEdit { workbook, tab } => self.workbook_edit(workbook, tab),
             Action::WorkbookRemove { workbook, tab } => self.workbook_remove(workbook, tab),
             Action::WorkbookFold { workbook } => self.workbook_fold(workbook),
+            Action::RowMenu { row } => self.row_menu_open(row),
+            Action::RowMenuMove { delta } => self.row_menu_move(delta),
+            Action::RowMenuChoose { index } => self.row_menu_choose(index),
+            Action::RowMenuClose => self.row_menu = None,
             Action::WorkbookUndo => self.workbook_undo(),
             Action::ListReorder { delta } => match self.selected_mark() {
                 // The selection goes with the mark.
@@ -7425,6 +7467,10 @@ mod tests {
         Action::EditorKeys { .. },
         Action::EditorDone { .. },
         Action::WorkbookFold { .. },
+        Action::RowMenu { .. },
+        Action::RowMenuMove { .. },
+        Action::RowMenuChoose { .. },
+        Action::RowMenuClose,
         Action::SetFeatures { .. }
     );
 
@@ -7635,6 +7681,10 @@ mod tests {
             Action::WorkbookEdit { workbook: 1, tab: None },
             Action::WorkbookRemove { workbook: 1, tab: None },
             Action::WorkbookFold { workbook: 1 },
+            Action::RowMenu { row: ListRow::Workbook(1) },
+            Action::RowMenuMove { delta: 1 },
+            Action::RowMenuChoose { index: None },
+            Action::RowMenuClose,
             Action::WorkbookUndo,
             Action::SetAgents { claude: Vec::new(), codex: Vec::new(), default: None, shows: View::Native },
             Action::TaskTalk { id: 1 },
@@ -7712,6 +7762,10 @@ mod tests {
                 | Action::WorkbookEdit { .. }
                 | Action::WorkbookRemove { .. }
                 | Action::WorkbookUndo
+                | Action::RowMenu { .. }
+                | Action::RowMenuMove { .. }
+                | Action::RowMenuChoose { .. }
+                | Action::RowMenuClose
                 | Action::SpaceOpen { space: Owner::Workbook { .. } }
         )
     }

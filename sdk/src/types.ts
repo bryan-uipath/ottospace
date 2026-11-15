@@ -839,9 +839,18 @@ export interface WorkbookTab {
   /** It is open now: `tab` is that tab's `id`. */
   open: boolean;
   tab: number | null;
-  /** Where the Workspaces section drew its row and the row's words (while unfolded), or null. */
+  /** Where the Workspaces section drew its row (while unfolded), or null; `menu`: its …, while it shows (the pointer on the row, or list mode's selection). */
   row: Rect | null;
-  buttons: { open: Rect | null; rename: Rect | null; remove: Rect | null };
+  buttons: { menu: Rect | null };
+}
+
+/** The open menu of a row of the bar (its …): whose row, the item the keys are on, and its items. Only the user opens one or chooses from it. */
+export interface RowMenu {
+  /** The workspace whose row it is of; `tab`: that tab's row, by place. */
+  workbook: number | null;
+  tab: number | null;
+  selected: number;
+  items: { item: "rename" | "delete" | "remove"; label: string; key: string; rect: Rect | null }[];
 }
 
 /** A workspace of the user's (the user reads "workspace"; the state keeps `workbook`): a named set of saved tabs, none in a new one. No directory is listed: `panes` names kinds only. */
@@ -859,9 +868,9 @@ export interface Workbook {
   tabs: WorkbookTab[];
   /** Its tabs are listed under its row. */
   unfolded: boolean;
-  /** Where the Workspaces section drew its row and the row's words, or null. */
+  /** Where the Workspaces section drew its row, or null; `fold`: its ▸; `menu`: its …, while it shows (the pointer on the row, or list mode's selection). */
   row: Rect | null;
-  buttons: { open: Rect | null; add: Rect | null; fold: Rect | null; rename: Rect | null; delete: Rect | null };
+  buttons: { fold: Rect | null; menu: Rect | null };
 }
 
 /** A mark: a named, saved way back to a pane or a tab. */
@@ -1192,6 +1201,8 @@ export interface Snapshot {
   workbooks: Workbook[];
   /** What the Workspaces section offers to take back, while it offers. */
   workbook_offer: "deleted" | "updated" | null;
+  /** The open menu of a row of the bar, or null. */
+  row_menu: RowMenu | null;
   /** Each scroll area whose content does not fit, by id (`tasks`, `picker`, `keys`, `terminal:1`). */
   scrollbars: Record<string, Scrollbar>;
   /** The capture key, and what was drawn of the draft or the brief in the right bar. */

@@ -35,6 +35,28 @@ Built (stage 1):
   not in the section. It is the home of tabs that are of nothing (below). Folding it into the
   list did not fall out naturally: it has no file and cannot be deleted.
 
+## The row in the Workspaces section
+
+The owner: "clicking the body should open it, and we should have an ellipsis on hover that lets
+us rename if we desire or delete". Built:
+
+- A click anywhere on a row opens the workspace (selects it if open). No words on hover.
+- The pointer on a row, or list mode's selection, shows one …. Its menu (`row_menu.rs`): Rename
+  (R), Delete (X); a tab's row: Rename, Remove. ↓ ↑ or j k move, ↵ takes, an item's letter takes
+  it at once, Esc, any other key or a click outside closes. Delete keeps its Undo. Sneak labels
+  reach the … and the items. The user's alone; any other move of the user's closes it.
+- `Add tab` left the row: `a` in list mode and File ▸ Add Tab to Workspace… do it.
+- The menu is one list of items per kind of row (`row_items`), drawn by one function: another
+  row gets a menu by naming its items. No more than that.
+
+**What a workspace keeps of what is open in it.** Made with +, a terminal added, closed with ×
+and opened from the list: the same terminal, still running (× hides, it ends nothing). Closed,
+then a restart, then opened from the list: its tabs, splits and each terminal's folder come
+back from `layout.json`, which keeps hidden spaces too; a new shell, and its last lines as the
+`workbook_scrollback_lines` setting says, as for any restored tab. Both are an e2e test. Lost
+only where the user said so: `restore_layout: false` or Start Fresh (no layout is restored: a
+tab never saved with ⌘⇧S is gone), and a tab closed with ⌘⇧W.
+
 ## The model (core: `model/spaces.rs`)
 
 - A **space** is one of: **Workspace** (the first), an open **task**, a **session** the user
@@ -100,7 +122,6 @@ workspace with only a task or worktree, and a workspace with both".
    open in it")? Today the file changes only when the user saves; session restore keeps the rest.
 3. The first space: keep it apart, or make it an ordinary first workspace once links exist
    (strays then go to the workspace selected last)?
-4. The row in the section: body opens, one … for Rename and Delete (asked for; its own change).
 
 ## Who may do what
 

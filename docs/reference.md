@@ -622,7 +622,7 @@ workspace.
   keeps none; only once you typed in it: a shell left at its prompt keeps none) and the command line of the program in front of its shell, if one runs. No window
   title, URL or document. A tab with nothing in it is not saved. What is saved is what opens
   again once its tabs are closed; a tab not saved comes back only with the [layout](#restoring-the-layout).
-- **Add a tab**: `Add tab` on a workspace's row, `a` on it in list mode, or File ▸ Add Tab to
+- **Add a tab**: `a` on a workspace's row in list mode, or File ▸ Add Tab to
   Workspace… (it opens the section in list mode: pick the row, `a`). **All tabs**: File ▸ Save All
   Tabs as Workspace saves every tab on the bar that has something in it, in bar order, as one new
   workspace (at most 32; with more it saves none and says so). A tab stands for one workspace's tab at most: added to another, it leaves the first.
@@ -648,10 +648,13 @@ workspace.
   marks its saved tabs with the workspace icon (hover: its name). A row with nothing saved says
   `no saved tabs`.
 - **Its tabs**: ▸ before a workspace of several saved tabs (space in list mode) lists them under it.
-  Each opens alone (click, ↵), and has `Rename` (its title, `r`) and `Remove` (`x`: out of the
+  Each opens alone (click, ↵), and its … has Rename (its title, `r`) and Remove (`x`: out of the
   workspace; the last one deletes the workspace).
-- **Rename, Delete**: the words on its row (hover it, or select it in list mode), or `r` and
-  `x` in list mode. Deleting leaves the open tabs alone; `Workspace deleted · Undo` shows for six
+- **The row**: a click anywhere on it opens the workspace, or selects it if it is open. The
+  pointer on it (or list mode's selection) shows one …: its menu has Rename (`r`) and Delete
+  (`x`). In the menu ↓ ↑ move, ↵ takes the item, its letter takes it at once, Esc or a click
+  outside closes it. In list mode `r` and `x` do the same with no menu. Deleting leaves the open
+  tabs alone; `Workspace deleted · Undo` shows for six
   seconds (`u` in list mode).
 - Kept lines and commands can hold secrets a tool printed, or a token in a command line. They
   stay in your workspace files, plain text with escape sequences taken out, at most 64 KB a

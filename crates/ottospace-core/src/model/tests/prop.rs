@@ -85,6 +85,15 @@ impl Gen<'_> {
     }
 
     /// A workbook as a file may hold it: sound or not, with keys this build does not know.
+    /// A row for `RowMenu`: mostly a workbook's or one of its tabs', listed or not.
+    fn menu_row(&mut self) -> ListRow {
+        match self.rng.below(4) {
+            0 => ListRow::Task(self.task()),
+            1 => ListRow::WorkbookTab(self.workbook(), self.rng.below(3)),
+            _ => ListRow::Workbook(self.workbook()),
+        }
+    }
+
     fn kept_workbook(&mut self) -> Workbook {
         let panes = vec![self.record(1), self.record(2)];
         let split =
@@ -1120,6 +1129,10 @@ const MAKERS: &[Make] = &[
     |g| Action::WorkbookEdit { workbook: g.workbook(), tab: g.book_tab() },
     |g| Action::WorkbookRemove { workbook: g.workbook(), tab: g.book_tab() },
     |g| Action::WorkbookFold { workbook: g.workbook() },
+    |g| Action::RowMenu { row: g.menu_row() },
+    |g| Action::RowMenuMove { delta: g.delta() },
+    |g| Action::RowMenuChoose { index: g.rng.coin().then(|| g.rng.below(3)) },
+    |_| Action::RowMenuClose,
     |_| Action::WorkbookUndo,
     |g| Action::SetAgents {
         claude: g.names(AGENTS, 2),
@@ -1852,6 +1865,11 @@ fn check(m: &Model) -> Result<(), String> {
         );
     }
 
+    // A row's menu is of a row the open section lists, on one of its items.
+    if let Some((menu, items)) = m.row_menu() {
+        ensure!(m.list_rows().contains(&menu.row), "a menu of {:?}, which is not listed", menu.row);
+        ensure!(menu.selected < items.len(), "a menu on item {} of {}", menu.selected, items.len());
+    }
     // Workbooks: each is one file, named by its id, that reads back as it was written.
     let books = &m.workbooks.list;
     let book_ids: Vec<WorkbookId> = books.iter().map(|book| book.id).collect();
@@ -2211,6 +2229,7 @@ impl Run {
         let hides = matches!(action, Action::SpaceHide { .. });
         let owners_before: Vec<(u32, Owner)> = m.tabs.iter().map(|tab| (tab.id, tab.space.clone())).collect();
         let books_before: Vec<String> = m.workbooks.list.iter().map(workbook::write).collect();
+        let menu_before = m.row_menu.clone();
         let typing_to = m.talk.clone().filter(|talk| talk.keys && origin != Origin::User);
         let written = m.compose_line().is_some_and(|line| !line.is_empty());
         let composing_before = m.composing() && written && !m.compose_theirs && origin != Origin::User;
@@ -2321,6 +2340,9 @@ impl Run {
                 "{origin:?}'s {action:?} moved tab {id} from {was:?} to {now:?}"
             );
         }
+        // Only the user opens a row's menu or moves in it: another's step leaves it, or its row went.
+        let menu_kept = m.row_menu.is_none() || m.row_menu == menu_before;
+        ensure!(origin == Origin::User || menu_kept, "{origin:?}'s {action:?} opened or moved a row's menu");
         // + makes at most one workbook, of no tab, with a new empty tab on show in its space;
         // it records nothing in any other, and no tab there was changes space (above).
         if let Action::WorkbookNew { .. } = action {
@@ -3293,6 +3315,7 @@ fn code(sent: &Envelope) -> String {
         ("shows", "View"),
         ("binding", "Binding"),
         ("space", "Owner"),
+        ("row", "ListRow"),
         ("show", "Show"),
         ("step", "DayStep"),
     ];

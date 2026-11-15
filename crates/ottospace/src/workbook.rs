@@ -3,12 +3,13 @@
 //! What one holds and what opening it does are the core's (`ottospace_core::workbook`).
 
 use gpui::{Context, Div, ElementId, Window, div, prelude::*, px, rgb};
+use ottospace_core::list::ListRow;
 use ottospace_core::marks::MarkInput;
 use ottospace_core::model::Section;
 use ottospace_core::workbook::{self, History, WorkbookId, WorkbookRow};
 use ottospace_core::{Action, Origin, PaneId, theme};
 
-use crate::{Workspace, config, list_button, marks, now_ms, rect, words};
+use crate::{Workspace, config, list_button, marks, now_ms, rect};
 
 /// What the workbooks folder and this run last said, kept between frames.
 #[derive(Default)]
@@ -144,10 +145,10 @@ impl Workspace {
         cx.notify();
     }
 
-    /// A click on a workbook's row, one of its tabs' rows, or one of their words, by the
-    /// control's name: `workbook` and `workbook-open` open it, `workbook-add` adds the tab on
-    /// show to it, `workbook-fold` lists its tabs, `workbook-rename` types its name,
-    /// `workbook-delete` deletes it. `workbook-tab-*` do the same to its tab `tab`.
+    /// A click on a workbook's row or one of its tabs' rows, by the control's name: `workbook`
+    /// opens it, `workbook-fold` lists its tabs, `workbook-menu` opens its menu (Rename, Delete);
+    /// `workbook-tab` and `workbook-tab-menu` do the same to its tab `tab`. `workbook-add` (`a`
+    /// in list mode) adds the tab on show to it.
     pub(crate) fn click_workbook(
         &mut self,
         control: &str,
@@ -158,11 +159,9 @@ impl Workspace {
     ) {
         let tab = tab.filter(|_| control.starts_with("workbook-tab"));
         match control {
-            "workbook-rename" | "workbook-tab-rename" => {
-                let _ = self.workbook_act(Action::WorkbookEdit { workbook: id, tab }, window, cx);
-            }
-            "workbook-delete" | "workbook-tab-remove" => {
-                let _ = self.workbook_act(Action::WorkbookRemove { workbook: id, tab }, window, cx);
+            "workbook-menu" | "workbook-tab-menu" => {
+                let row = tab.map_or(ListRow::Workbook(id), |at| ListRow::WorkbookTab(id, at));
+                self.row_menu_act(Action::RowMenu { row }, window, cx);
             }
             "workbook-add" => {
                 let refused = self.model.workbook_add_refusal(id);
@@ -206,20 +205,16 @@ impl Workspace {
             let id = row.id;
             let mut value = serde_json::json!(row);
             value["row"] = serde_json::json!(drawn(format!("workbook:{id}")));
+            // `menu`: its …, null while it is not shown (no pointer on the row, not selected).
+            let shown = |row: ListRow, control: String| drawn(control).filter(|_| self.dots_shown(&row));
             value["buttons"] = serde_json::json!({
-                "open": drawn(format!("workbook-open:{id}")),
-                "add": drawn(format!("workbook-add:{id}")),
                 "fold": drawn(format!("workbook-fold:{id}")),
-                "rename": drawn(format!("workbook-rename:{id}")),
-                "delete": drawn(format!("workbook-delete:{id}")),
+                "menu": shown(ListRow::Workbook(id), format!("workbook-menu:{id}")),
             });
             for (at, tab) in value["tabs"].as_array_mut().into_iter().flatten().enumerate() {
                 tab["row"] = serde_json::json!(drawn(tab_control("workbook-tab", id, at)));
-                tab["buttons"] = serde_json::json!({
-                    "open": drawn(tab_control("workbook-tab-open", id, at)),
-                    "rename": drawn(tab_control("workbook-tab-rename", id, at)),
-                    "remove": drawn(tab_control("workbook-tab-remove", id, at)),
-                });
+                let menu = shown(ListRow::WorkbookTab(id, at), tab_control("workbook-tab-menu", id, at));
+                tab["buttons"] = serde_json::json!({ "menu": menu });
             }
             value
         };
@@ -232,6 +227,22 @@ impl Workspace {
         self.model.workbooks.get(id).map(|book| book.name.clone())
     }
 
+    /// The pointer came onto a row, or left it: its … shows while it is there.
+    fn row_hover(&mut self, row: ListRow, over: bool, cx: &mut Context<Self>) {
+        if over {
+            self.row_hovered = Some(row);
+        } else if self.row_hovered.as_ref() == Some(&row) {
+            self.row_hovered = None;
+        }
+        cx.notify();
+    }
+
+    /// Whether a row's … shows: the pointer is on the row, or list mode's selection is.
+    fn dots_shown(&self, row: &ListRow) -> bool {
+        let selected = self.model.list.and_then(|at| self.model.list_rows().into_iter().nth(at));
+        self.row_hovered.as_ref() == Some(row) || selected.as_ref() == Some(row)
+    }
+
     /// The name being typed, or `name` cut to fit.
     fn workbook_name(&self, renaming: bool, name: String, cx: &mut Context<Self>) -> Div {
         match renaming {
@@ -241,8 +252,8 @@ impl Workspace {
         }
     }
 
-    /// The Workbook section: each workbook's name and what its tabs hold, and the tabs of an
-    /// unfolded one under it. A click opens; hover (or list mode's selection) shows the words.
+    /// The Workspaces section: each workbook's name and what its tabs hold, and the tabs of an
+    /// unfolded one under it. A click opens; hover (or list mode's selection) shows its ….
     pub(crate) fn render_workbooks(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let rows = self.model.workbook_rows();
         let empty = rows.is_empty().then(|| {
@@ -288,30 +299,22 @@ impl Workspace {
             let title = div().w_full().flex().items_center().gap_1().children(fold).child(name.flex_1().min_w_0());
             let title = title.child(dot(row.open));
             let summary = div().w_full().truncate().text_xs().text_color(rgb(theme::MUTED)).child(row.summary.clone());
-            let word = |control: &'static str, words, cx: &mut Context<Self>| {
-                let click = move |this: &mut Self, window: &Window, cx: &mut Context<Self>| {
-                    this.click_workbook(control, id, None, window, cx)
-                };
-                self.word(format!("{control}:{id}"), words, click, cx)
-            };
-            let words = words::words("workbook-row", selected)
-                .top_0()
-                .bottom_0()
-                .items_center()
-                .child(word("workbook-open", ("Open", "Open its tabs (↵)"), cx))
-                .child(word("workbook-add", ("Add tab", "Add this tab to it (A)"), cx))
-                .child(word("workbook-rename", ("Rename", "Type its name (R)"), cx))
-                .child(word("workbook-delete", ("Delete", "Delete it (X)"), cx));
+            let dots = self.row_dots(
+                format!("workbook-menu:{id}"),
+                ListRow::Workbook(id),
+                self.dots_shown(&ListRow::Workbook(id)),
+                cx,
+            );
             let book = list_button(ElementId::Name(format!("workbook:{id}").into()), selected)
-                .group("workbook-row")
                 .relative()
+                .on_hover(cx.listener(move |this, over: &bool, _, cx| this.row_hover(ListRow::Workbook(id), *over, cx)))
                 .flex_col()
                 .items_start()
                 .gap_0p5()
                 .child(title)
                 .child(summary)
                 .child(self.controls.mark(format!("workbook:{id}")))
-                .when(!renaming, |d| d.child(words))
+                .when(!renaming, |d| d.child(dots))
                 .on_click(
                     cx.listener(move |this, _, window, cx| this.click_workbook("workbook", id, None, window, cx)),
                 );
@@ -323,26 +326,18 @@ impl Workspace {
                 let selected = self.model.list == Some(index);
                 index += 1;
                 let renaming = typing(id, Some(at));
-                let word = |control: &'static str, words, cx: &mut Context<Self>| {
-                    let click = move |this: &mut Self, window: &Window, cx: &mut Context<Self>| {
-                        this.click_workbook(control, id, Some(at), window, cx)
-                    };
-                    self.word(tab_control(control, id, at), words, click, cx)
-                };
-                let words = words::words("workbook-tab-row", selected)
-                    .top_0()
-                    .bottom_0()
-                    .items_center()
-                    .child(word("workbook-tab-open", ("Open", "Open this tab (↵)"), cx))
-                    .child(word("workbook-tab-rename", ("Rename", "Type its title (R)"), cx))
-                    .child(word("workbook-tab-remove", ("Remove", "Take it out of the workspace (X)"), cx));
+                let row = ListRow::WorkbookTab(id, at);
+                let dots =
+                    self.row_dots(tab_control("workbook-tab-menu", id, at), row.clone(), self.dots_shown(&row), cx);
                 let name = self.workbook_name(renaming, tab.title, cx);
                 let title = div().w_full().flex().items_center().gap_2().child(name.flex_1().min_w_0());
                 let summary = div().w_full().truncate().text_xs().text_color(rgb(theme::MUTED)).child(tab.summary);
                 let control = tab_control("workbook-tab", id, at);
                 let tab_row = list_button(ElementId::Name(control.clone().into()), selected)
-                    .group("workbook-tab-row")
                     .relative()
+                    .on_hover(cx.listener(move |this, over: &bool, _, cx| {
+                        this.row_hover(ListRow::WorkbookTab(id, at), *over, cx)
+                    }))
                     .ml_4()
                     .flex_col()
                     .items_start()
@@ -350,7 +345,7 @@ impl Workspace {
                     .child(title.child(dot(tab.open)))
                     .child(summary)
                     .child(self.controls.mark(control))
-                    .when(!renaming, |d| d.child(words))
+                    .when(!renaming, |d| d.child(dots))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.click_workbook("workbook-tab", id, Some(at), window, cx)
                     }));

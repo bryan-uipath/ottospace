@@ -35,6 +35,7 @@ pub mod progress;
 pub mod prs;
 pub mod repos;
 pub mod restore;
+pub mod row_menu;
 pub mod rules;
 pub mod runner;
 pub mod scrollbar;

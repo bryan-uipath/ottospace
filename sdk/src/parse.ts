@@ -99,6 +99,7 @@ import type {
   Snapshot,
   Station,
   SpaceRow,
+  RowMenu,
   Owner,
   Tab,
   Task,
@@ -1211,11 +1212,7 @@ function workbook(value: unknown, at: string): Workbook {
       open: bool(t.open, `${at}.open`),
       tab: orNull(num)(t.tab, `${at}.tab`),
       row: orNull(rect)(t.row, `${at}.row`),
-      buttons: {
-        open: orNull(rect)(words.open, `${at}.buttons.open`),
-        rename: orNull(rect)(words.rename, `${at}.buttons.rename`),
-        remove: orNull(rect)(words.remove, `${at}.buttons.remove`),
-      },
+      buttons: { menu: orNull(rect)(words.menu, `${at}.buttons.menu`) },
     };
   };
   return {
@@ -1229,12 +1226,25 @@ function workbook(value: unknown, at: string): Workbook {
     unfolded: bool(o.unfolded, `${at}.unfolded`),
     row: orNull(rect)(o.row, `${at}.row`),
     buttons: {
-      open: orNull(rect)(buttons.open, `${at}.buttons.open`),
-      add: orNull(rect)(buttons.add, `${at}.buttons.add`),
       fold: orNull(rect)(buttons.fold, `${at}.buttons.fold`),
-      rename: orNull(rect)(buttons.rename, `${at}.buttons.rename`),
-      delete: orNull(rect)(buttons.delete, `${at}.buttons.delete`),
+      menu: orNull(rect)(buttons.menu, `${at}.buttons.menu`),
     },
+  };
+}
+
+function rowMenu(value: unknown, at: string): RowMenu {
+  const o = fields(value, at);
+  const item = (value: unknown, at: string): RowMenu["items"][number] => {
+    const i = fields(value, at);
+    const kind = i.item;
+    if (kind !== "rename" && kind !== "delete" && kind !== "remove") throw wrong(`${at}.item`, "a menu item", kind);
+    return { item: kind, label: str(i.label, `${at}.label`), key: str(i.key, `${at}.key`), rect: orNull(rect)(i.rect, `${at}.rect`) };
+  };
+  return {
+    workbook: orNull(num)(o.workbook, `${at}.workbook`),
+    tab: orNull(num)(o.tab, `${at}.tab`),
+    selected: num(o.selected, `${at}.selected`),
+    items: list(item)(o.items, `${at}.items`),
   };
 }
 
@@ -1529,6 +1539,7 @@ export function snapshot(value: unknown): Snapshot {
     mark_removed: orNull(str)(o.mark_removed, "mark_removed"),
     workbooks: list(workbook)(o.workbooks, "workbooks"),
     workbook_offer: orNull(workbookOffer)(o.workbook_offer, "workbook_offer"),
+    row_menu: orNull(rowMenu)(o.row_menu, "row_menu"),
     scrollbars: map(scrollbar)(o.scrollbars, "scrollbars"),
     capture: captureDrawn(o.capture, "capture"),
     spaces: list(spaceRow)(o.spaces, "spaces"),

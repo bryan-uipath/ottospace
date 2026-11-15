@@ -86,6 +86,7 @@ mod progress;
 mod prs;
 mod record;
 mod repos;
+mod row_menu;
 mod running;
 #[cfg(test)]
 mod scratch;
@@ -806,6 +807,10 @@ struct Workspace {
     kept_marks: marks::Kept,
     /// The workbooks' files as last read and written.
     kept_workbooks: workbook::Kept,
+    /// The row of the bar the pointer is on, if it has a menu: its … shows.
+    row_hovered: Option<ottospace_core::list::ListRow>,
+    /// Where the … of the open row menu was when it opened: the menu hangs under it.
+    row_menu_at: Option<Bounds<Pixels>>,
     kept_layout: layout_file::Kept,
     /// `keys.json` as last read and written.
     kept_keys: key_use::Kept,
@@ -1231,6 +1236,8 @@ impl Workspace {
             stored: Vec::new(),
             kept_marks: marks::Kept::default(),
             kept_workbooks: workbook::Kept::default(),
+            row_hovered: None,
+            row_menu_at: None,
             kept_layout: layout_file::Kept::default(),
             kept_keys: key_use::Kept::default(),
             hosting,
@@ -2950,6 +2957,9 @@ impl Workspace {
             "workbooks": self.workbooks_json(),
             // What the Workbook section offers to take back (`deleted`, `updated`), or null.
             "workbook_offer": self.model.workbooks.offered(),
+            // A row's open menu (its …), or null: `workbook` and `tab` (whose row), `selected`
+            // (the item the keys are on), `items` (each `item`, `label`, `key` and `rect`).
+            "row_menu": self.row_menu_json(),
             // Each scroll area whose content does not fit, by its id (`tasks`, `repos`, `apps`,
             // `marks`, `picker`, `keys`, `terminal:<pane>`): its bar's `track` and `thumb` in
             // window points, and the bar's `opacity` (0 once it has faded).
@@ -3374,6 +3384,12 @@ impl Workspace {
                 self.bars.step("keys", step);
                 cx.notify();
             }
+            cx.stop_propagation();
+            return;
+        }
+        // A row's open menu takes plain keys: its own, and any other closes it.
+        let plain = !(key.modifiers.platform || key.modifiers.control || key.modifiers.alt);
+        if plain && self.model.sneak.is_none() && self.row_menu_key(&key.key, window, cx) {
             cx.stop_propagation();
             return;
         }
@@ -6192,6 +6208,7 @@ impl Render for Workspace {
             )
             .children(self.render_inspector_outline())
             // Over everything of ottospace's own. It is never on while an app's window is.
+            .children(self.render_row_menu(window, cx))
             .children(self.model.sneak.as_ref().map(sneak::labels))
             .children(self.model.picker.as_ref().map(|picker| self.render_picker(picker, cx)))
             .children(self.model.palette.as_ref().map(|palette| self.render_palette(palette, cx)))
