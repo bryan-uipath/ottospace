@@ -72,6 +72,7 @@
 {"cmd":"record_start","dir":"/tmp/rec"}
 {"cmd":"record_stop"}
 {"cmd":"calendar","day":"tomorrow","days":2}
+{"cmd":"calendar","day":"yesterday"}
 {"cmd":"marks"}
 {"cmd":"mark_add","pane":1,"name":"notes","key":"n"}
 {"cmd":"mark_go","name":"notes","axis":"down"}

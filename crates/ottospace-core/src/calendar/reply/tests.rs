@@ -35,7 +35,7 @@ fn event(id: u64, start: u64, minutes: u64) -> Event {
 fn calendar(events: Vec<Event>) -> Calendar {
     let mut c = Calendar { on: true, ..Calendar::default() };
     let day = monday();
-    c.read(Some(events), [day, day + 24 * H, day + 48 * H], day + 8 * H);
+    c.read(Some(events), std::array::from_fn(|n| day + n as u64 * 24 * H - 7 * 24 * H), day + 8 * H);
     c
 }
 
@@ -123,7 +123,7 @@ fn a_day_with_a_clock_change() {
     // A meeting each side of the change keeps its own offset; the free time spans it.
     let mut c = Calendar { on: true, ..Calendar::default() };
     let (before, after) = (ms(from) + H, ms(from) + 10 * H);
-    c.read(Some(vec![event(1, before, 30), event(2, after, 30)]), [0; 3], ms(now));
+    c.read(Some(vec![event(1, before, 30), event(2, after, 30)]), [0; crate::calendar::DAYS], ms(now));
     let a = answer(&c, (from, to), WHOLE, &la);
     assert_eq!(a.meetings[0].start, "2026-03-08T01:00:00-08:00");
     assert_eq!(a.meetings[1].start, "2026-03-08T11:00:00-07:00");
@@ -145,10 +145,13 @@ fn the_span_asked_for() {
     assert_eq!(days(span(Some("tomorrow"), None, now, &la)), Ok((32, 1)));
     assert_eq!(days(span(Some("2026-11-23"), None, now, &la)), Ok((8 + 7 * 24, 1)), "the last day held");
     assert_eq!(days(span(Some("2026-11-17"), Some(7), now, &la)), Ok((32, 7)));
-    let not_held = "the calendar holds today and the next 7 days only";
+    // The 7 days before today are held too: yesterday, and a week back.
+    assert_eq!(days(span(Some("yesterday"), None, now, &la)), Ok((8 - 24, 1)));
+    assert_eq!(days(span(Some("2026-11-09"), Some(7), now, &la)), Ok((8 - 7 * 24, 7)), "the first day held");
+    let not_held = "the calendar holds the 7 days before today, today and the next 7 only";
     assert_eq!(span(Some("2026-11-24"), None, now, &la), Err(not_held));
     assert_eq!(span(Some("2026-11-18"), Some(7), now, &la), Err(not_held));
-    assert_eq!(span(Some("2026-11-15"), None, now, &la), Err(not_held), "yesterday is not held");
+    assert_eq!(span(Some("2026-11-08"), None, now, &la), Err(not_held), "8 days back is not held");
     for count in [0, 8, 400] {
         assert_eq!(span(None, Some(count), now, &la), Err("days is 1 to 7"));
     }
@@ -156,8 +159,9 @@ fn the_span_asked_for() {
     {
         assert!(span(Some(bad), None, now, &la).is_err_and(|e| e.starts_with("day is")), "{bad}");
     }
-    let (from, to) = held(now, &la);
+    let (back, from, to) = held(now, &la);
     assert_eq!(((from - midnight(2026, 11, 16)) / 3_600, (to - from) / DAY), (8, HELD_DAYS));
+    assert_eq!((from - back) / DAY, BACK_DAYS);
 }
 
 #[test]
@@ -239,7 +243,7 @@ fn a_declined_meeting_is_not_in_the_reply() {
     let zones = ics::Zones { local: utc(), named: vec![] };
     let events = super::super::events(&ics::expand(&ics::parse_for(&feed, Some(me)), from, to, &zones));
     let mut c = Calendar { on: true, ..Calendar::default() };
-    c.read(Some(events), [0; 3], monday());
+    c.read(Some(events), [0; crate::calendar::DAYS], monday());
     let json = serde_json::to_string(&answer(&c, (from, to), WHOLE, &utc())).unwrap();
     assert!(json.contains("\"title\":\"Sync\"") && json.contains("\"status\":\"tentative\""), "{json}");
     for never in ["Skipped", me, "ana@example.com", "Ana"] {
@@ -293,4 +297,21 @@ fn free_time_only_where_the_calendar_is_known() {
     assert_eq!(answer(&hidden, (from, to), Workday::default(), &utc()).known_until, Some(rfc3339(last, &utc())));
     // Fewer: all known.
     assert_eq!(answer(&calendar(vec![]), (from, to), Workday::default(), &utc()).known_until, None);
+}
+
+#[test]
+fn the_week_back_is_cut_at_its_start_and_never_cuts_today_on() {
+    let day = monday();
+    // 300 meetings ahead and 200 back: 500 held, nothing ahead cut, so nothing ahead unknown.
+    let ahead = (0..300).map(|n| event(n, day + n * M, 1));
+    let back = (0..200).map(|n| event(1_000 + n, day - 24 * H + n * M, 1));
+    let mut c = calendar(ahead.chain(back).collect());
+    let (from, to) = (midnight(2026, 11, 16), midnight(2026, 11, 23));
+    assert_eq!(answer(&c, (from, to), Workday::default(), &utc()).known_until, None);
+    // Held whole only from Sunday: Saturday is refused, Sunday answered.
+    c.held_from = day - 24 * H;
+    let now = day + 8 * H;
+    let refused = reply(&c, Some("2026-11-14"), None, (now, Workday::default()), &utc());
+    assert_eq!(refused, Err("the calendar holds fewer days back: the feed has more entries than it keeps"));
+    assert!(reply(&c, Some("yesterday"), None, (now, Workday::default()), &utc()).is_ok());
 }

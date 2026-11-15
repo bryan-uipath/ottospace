@@ -1,7 +1,7 @@
 # A busy day, made up, at fixed times today ({TODAY+32400} is 09:00): three calls at once over a
 # 4-hour block, a 00:00 reminder, tentative, free, out-of-office and all-day entries, a 65-character
 # title; title rules for "1:1" and "sync". Tomorrow is light. The band, the Calendar section, a
-# call's hover card.
+# call's hover card, the section on tomorrow (its Today control) by its list-mode key.
 {"cmd":"split","kind":"empty"}
 {"until":"calendar.band.blocks.3"}
 {"cmd":"section","section":"calendar"}
@@ -9,3 +9,6 @@
 {"hover":{"rect":"calendar.band.blocks.5.rect"}}
 {"sleep_ms":1200}
 {"shot":"hover"}
+{"cmd":"key","keys":"cmd-ctrl-e","as":"user"}
+{"cmd":"key","keys":"right","as":"user"}
+{"shot":"tomorrow"}
