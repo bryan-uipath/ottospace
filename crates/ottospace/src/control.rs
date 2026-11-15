@@ -313,9 +313,8 @@ pub enum Request {
         runner: String,
         id: String,
     },
-    /// Which sessions Other sessions lists, by when each was last active: `today`, `week`,
-    /// `month` or `all`. `{"cmd":"sessions_range","range":"week"}`. For this run: the settings
-    /// are written for the user's pick alone.
+    /// Which sessions Elsewhere lists, by when each was last active: `today`, `week`,
+    /// `month` or `all`. `{"cmd":"sessions_range","range":"week"}`. For this run, never written.
     SessionsRange {
         range: ottospace_core::sessions::Range,
     },

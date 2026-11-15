@@ -49,6 +49,17 @@ impl Chat {
     }
 }
 
+/// The button at the composer's right (`Model::composer_button`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Primary {
+    /// The turn: the session goes on (`TalkInterrupt`).
+    Stop,
+    /// `TalkStart`: go on with its session, or start its task's agent.
+    Resume,
+    Start,
+}
+
 /// A message that waited on a start back in the composer, unless the user wrote another since.
 fn unqueue(chat: &mut Chat) {
     if let Some(text) = chat.queued.take().filter(|_| chat.draft.text().is_empty()) {
@@ -187,7 +198,8 @@ impl Model {
     pub fn talk_switchable(&self) -> bool {
         let Some(subject) = self.talk.as_ref().map(|talk| &talk.task) else { return false };
         let busy = self.chat(subject).is_some_and(|chat| chat.transcript.live && chat.transcript.busy());
-        self.drawable(subject) && !busy
+        // Stopping: the stop stands; a switch now would start it again in the other view.
+        self.drawable(subject) && !busy && !self.is_ending(subject)
     }
 
     /// An agent started: drawn natively, its conversation gets a live transcript (kept from
@@ -242,6 +254,17 @@ impl Model {
         switching
     }
 
+    /// A message written while its agent stopped: the session is gone on with, and it is sent
+    /// once the agent runs (`chat_started`). Nothing to go on with: it is back in the composer.
+    pub(super) fn chat_resume(&mut self, subject: &Subject, effects: &mut Vec<Effect>) {
+        self.talk_to(subject.clone(), true, effects);
+        if !self.talk_live(subject)
+            && let Some(chat) = self.chat_mut(subject)
+        {
+            unqueue(chat);
+        }
+    }
+
     /// After a switch: the session is gone on with in the view picked, now that the other
     /// process is gone. Never two processes on one session.
     pub(super) fn chat_restart(&mut self, subject: Subject, effects: &mut Vec<Effect>) {
@@ -277,6 +300,27 @@ impl Model {
     /// the shell waits for its process to exit before it says so (`AgentExited`).
     pub fn is_switching(&self, subject: &Subject) -> bool {
         self.switching.contains(subject)
+    }
+
+    /// The one button at the right of the shown native conversation's composer: Stop while a
+    /// turn runs, Resume (or Start) once its agent ended and it can be gone on with; none while
+    /// it stops, while it idles, or in a terminal (its header has Stop and its body Start).
+    pub fn composer_button(&self) -> Option<Primary> {
+        let subject = &self.talk.as_ref().filter(|talk| talk.open)?.task;
+        let chat = self.chat(subject).filter(|_| self.talk_view(subject) == View::Native)?;
+        if self.is_ending(subject) || chat.transcript.watched {
+            return None;
+        }
+        if chat.transcript.live {
+            return chat.transcript.turn.is_some().then_some(Primary::Stop);
+        }
+        self.talk_resumes().map(|resumes| if resumes { Primary::Resume } else { Primary::Start })
+    }
+
+    /// True if the conversation's agent was asked to stop and its process has not exited yet:
+    /// no Resume or Start until it has, and the composer says it is stopping.
+    pub fn is_ending(&self, subject: &Subject) -> bool {
+        self.ending.contains(subject)
     }
 
     /// The session to watch: the open drawer's conversation, when its agent does not run here,
@@ -388,6 +432,16 @@ impl Model {
                 if turns {
                     self.chat_state(&subject);
                 }
+            }
+            // ↵ while its agent stops: the message waits; once the process is gone the session is
+            // gone on with and it is sent (`AgentExited`). Never sent to the one stopping.
+            Action::TalkSend if self.talk.as_ref().is_some_and(|talk| talk.open && self.is_ending(&talk.task)) => {
+                let Some(chat) = self.shown_draft_chat_mut() else { return };
+                let text = chat.draft.text().to_string();
+                if text.trim().is_empty() || chat.queued.is_some() {
+                    return;
+                }
+                (chat.queued, chat.draft) = (Some(text), Field::lines(MAX_DRAFT));
             }
             // ↵ while the user writes a Deny's message: the Deny, with it.
             Action::TalkSend if self.shown_chat().is_some_and(|chat| chat.deny) => {
@@ -583,6 +637,74 @@ mod tests {
         assert_eq!(m.talk_view(&codex), View::Terminal, "Codex has no native view yet");
         m.update(Action::SetAgents { claude: vec![], codex: vec![], default: None, shows: View::Terminal });
         assert_eq!(m.talk_view(&second(&m)), View::Terminal);
+    }
+
+    /// Stop is at the composer while a turn runs. The agent stopped: nothing can be started on
+    /// its session until its process is gone (no Resume, no "cannot"), then Resume is the
+    /// composer's button, and its end is the user's, not an error.
+    #[test]
+    fn a_stopped_agent_is_resumed_only_once_gone_and_its_end_is_no_error() {
+        use super::Primary;
+        let mut m = two_live();
+        let one = first(&m);
+        assert_eq!(m.composer_button(), None, "no turn: no Stop anywhere");
+        typed(&mut m, "go on");
+        m.update(Action::TalkSend);
+        assert_eq!(m.composer_button(), Some(Primary::Stop));
+        // The agent asked to stop: until its process exits, nothing to start and nothing to say.
+        assert_eq!(m.update(Action::TaskStop { id: one.clone() }), [Effect::StopAgent { task: one.clone() }]);
+        assert!(m.is_ending(&one));
+        assert_eq!((m.composer_button(), m.talk_resumes(), m.talk_note()), (None, None, None));
+        // While it stops: no switch of view (it would start it again there), nothing typed or sent.
+        assert!(!m.talk_switchable());
+        assert_eq!(m.update(Action::TalkView { shows: View::Terminal }), []);
+        assert_eq!(m.update(Action::TalkSend), [], "an empty composer sends nothing");
+        let exited = m.update(Action::AgentExited { task: one.clone() }.sent_by(Origin::System));
+        assert!(!exited.iter().any(|e| matches!(e, Effect::StartAgent { .. })), "the stop stands: {exited:?}");
+        assert!(!m.is_ending(&one));
+        let link = m.tasks.get(one.task().unwrap_or_default()).and_then(|task| task.session.clone());
+        let resumes = link.is_some();
+        let primary = if resumes { Primary::Resume } else { Primary::Start };
+        assert_eq!((m.composer_button(), m.talk_note()), (Some(primary), None));
+        let end = m.chat(&one).and_then(|chat| chat.transcript.items().last()).map(|item| item.entry.clone());
+        let by_user = matches!(
+            end,
+            Some(crate::transcript::Entry::Notice(crate::transcript::Notice::Ended { by_user: true, .. }))
+        );
+        assert!(by_user, "{end:?}");
+    }
+
+    /// The user's report: Stop, then at once a message and ↵. Nothing is refused or said
+    /// against it; nothing reaches the process stopping; once it is gone the session is gone on
+    /// with, once, and the message is sent to that agent, once.
+    #[test]
+    fn a_message_right_after_stop_resumes_once_with_no_refusal() {
+        let mut m = Model::default();
+        add(&mut m, "plan the week");
+        let one = first(&m);
+        started(&mut m, Action::TaskTalk { id: 1 });
+        let id = "8f14e45f-ceea-467f-a8d3-0242ac130003";
+        m.update(Action::AgentStarted { task: one.clone(), session: Some(id.into()), at: 1 }.sent_by(Origin::System));
+        events(&mut m, &one, vec![Event::TurnFinished { outcome: Outcome::Completed }]);
+        m.update(Action::TaskStop { id: one.clone() });
+        typed(&mut m, "go on");
+        assert_eq!(m.update(Action::TalkSend), [], "never to the process that stops");
+        assert_eq!((m.talk_note(), m.talk_resumes()), (None, None), "no 'cannot', and no second start yet");
+        let exited = m.update(Action::AgentExited { task: one.clone() }.sent_by(Origin::System));
+        let starts = |effects: &[Effect]| {
+            effects.iter().filter(|e| matches!(e, Effect::StartAgent { .. } | Effect::ReadSession { .. })).count()
+        };
+        assert_eq!(starts(&exited), 1, "gone on with once: {exited:?}");
+        assert_eq!(m.talk_note(), None);
+        // Not listed: where it started is read first; then it starts, and gets the message once.
+        let read = Action::SessionRead { runner: "claude".into(), id: id.into(), found: None };
+        let read = m.update(read.sent_by(Origin::System));
+        let resumed = matches!(&exited[..], [Effect::StartAgent { start: crate::agents::Start::Resume { .. }, .. }])
+            || matches!(&read[..], [Effect::StartAgent { start: crate::agents::Start::Resume { .. }, .. }]);
+        assert!(resumed, "{exited:?} {read:?}");
+        let again = m.update(Action::AgentStarted { task: one.clone(), session: None, at: 2 }.sent_by(Origin::System));
+        assert_eq!(again, [Effect::AgentSend { task: one.clone(), text: "go on".into() }]);
+        assert_eq!(m.update(Action::TalkSend), [], "sent once");
     }
 
     #[test]
@@ -804,7 +926,14 @@ mod tests {
         let users = m
             .chat(&one)
             .map(|c| c.transcript.items().filter(|i| matches!(i.entry, crate::transcript::Entry::User { .. })).count());
-        assert_eq!((entries(&m), users), (shown.map(|n| n + 1), Some(2)), "a notice that it resumed, no prompt");
+        // Its end gives way to one divider that it resumed, its turns above; no prompt again.
+        assert_eq!((entries(&m), users), (shown, Some(2)), "one divider in place of the end, no prompt");
+        let last = m.chat(&one).and_then(|c| c.transcript.items().last()).map(|i| i.entry.clone());
+        let divider = crate::transcript::Notice::Resumed {
+            here: true,
+            ended: Some(crate::transcript::End { code: Some(0), signal: None, by_user: false }),
+        };
+        assert_eq!(last, Some(crate::transcript::Entry::Notice(divider)));
     }
 
     /// The bug of 0.1.0: "say hello" after the agent ended went nowhere (the composer took no

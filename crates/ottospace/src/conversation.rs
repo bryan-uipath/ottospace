@@ -23,7 +23,7 @@ use ottospace_agents::{Answer, Event as Said, Input, Process, Ticket};
 use ottospace_core::agents::{self, Start};
 use ottospace_core::diff::{self, Change, Diff, Sign};
 use ottospace_core::links::Target;
-use ottospace_core::model::chat::{self, Key};
+use ottospace_core::model::chat::{self, Key, Primary};
 use ottospace_core::talk::Subject;
 use ottospace_core::transcript::{Call, Entry, Event, Item, MAX_CARDS, Notice, Text, View, clean};
 use ottospace_core::{Action, Origin, theme};
@@ -552,10 +552,10 @@ impl Workspace {
             .children(watching)
             .child(list)
             .children(latest.map(|button| div().flex().justify_center().py_0p5().child(button)))
-            .children(self.chat_working(chat, cx))
+            .children(self.chat_working(chat))
             .children(self.chat_card(subject, chat, cx))
             .children(self.chat_ended(subject, chat, cx))
-            .child(self.chat_composer(chat, cx))
+            .child(self.chat_composer(subject, chat, cx))
             .into_any_element()
     }
 
@@ -568,22 +568,26 @@ impl Workspace {
     ) -> Div {
         let open = self.drawer.looks.get(subject).is_some_and(|look| look.unread);
         let n = t.unread_lines();
-        let line = format!(
-            "{n} line{} from the agent not understood {}",
-            if n == 1 { "" } else { "s" },
-            if open { "▾" } else { "▸" }
-        );
+        // Diagnostics, not conversation: a small mark at the end, its words on hover and click.
+        let tip: gpui::SharedString =
+            format!("{n} line{} from the agent not understood", if n == 1 { "" } else { "s" }).into();
         let subject = subject.clone();
-        let kinds = open.then(|| t.unread.iter().map(|(kind, n)| muted(format!("{} × {n}", clean(kind))).ml_4()));
+        let kinds = open.then(|| t.unread.iter().map(|(kind, n)| muted(format!("{} × {n}", clean(kind)))));
         div()
             .flex()
             .flex_col()
+            .items_end()
             .child(
                 div()
                     .id("chat-unread")
                     .relative()
                     .cursor_pointer()
-                    .child(muted(line))
+                    .px_1()
+                    .rounded_sm()
+                    .text_color(gpui::Hsla::from(rgb(theme::MUTED)).opacity(0.7))
+                    .hover(|s| s.bg(rgb(theme::SELECTED)))
+                    .child(div().text_xs().child(format!("? {n}")))
+                    .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone()))))
                     .child(self.controls.mark("talk:chat-unread".to_string()))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let look = this.drawer.looks.entry(subject.clone()).or_default();
@@ -601,12 +605,9 @@ impl Workspace {
         if t.live || t.watched {
             return None;
         }
-        let start = self.start_button(cx);
-        let details = self.drawer.details.get(subject);
-        if start.is_none() && details.is_none() {
-            return None;
-        }
-        let open = details.is_some() && self.drawer.looks.get(subject).is_some_and(|look| look.details);
+        // Resume and Start are the composer's (`composer_button`): here only its details.
+        let details = self.drawer.details.get(subject)?;
+        let open = self.drawer.looks.get(subject).is_some_and(|look| look.details);
         let label = if open { "Hide details" } else { "Show details" };
         let who = subject.clone();
         let button = self
@@ -620,8 +621,7 @@ impl Workspace {
                 look.details = !look.details;
                 cx.notify();
             }));
-        let button = details.is_some().then_some(button);
-        let body = details.filter(|_| open).map(|details| {
+        let body = open.then(|| {
             div()
                 .id("chat-details-text")
                 .max_h(px(160.))
@@ -634,7 +634,7 @@ impl Workspace {
                 .bg(rgb(theme::RAISED))
                 .children(details.lines().map(code_text))
         });
-        let row = div().flex().items_center().gap_1().children(start).children(button);
+        let row = div().flex().items_center().gap_1().child(button);
         Some(div().px_3().py_1().flex().flex_col().child(row).children(body))
     }
 
@@ -747,7 +747,21 @@ impl Workspace {
                 let line = format!("Denied without asking ({reason}): {tool} · {label}");
                 self.row(subject, key, id, ("✕", theme::ERROR), line, detail, cx)
             }
-            Entry::Notice(notice) => muted(notice_text(notice)).into_any_element(),
+            Entry::Notice(notice) => match divider(notice) {
+                Some((word, tip)) => {
+                    let rule = || div().flex_1().h(px(1.)).bg(rgb(theme::BORDER));
+                    let line = div().id(ElementId::Name(format!("chat-divider:{key}:{id}").into()));
+                    let line = line.flex().items_center().gap_2().text_xs().text_color(rgb(theme::MUTED));
+                    let line = line.child(rule()).child(word).child(rule());
+                    match tip {
+                        Some(tip) => line
+                            .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone().into()))))
+                            .into_any_element(),
+                        None => line.into_any_element(),
+                    }
+                }
+                None => muted(notice_text(notice)).into_any_element(),
+            },
         }
     }
 
@@ -1048,18 +1062,11 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// While a turn runs: what it waits on and for how long. Steady; Stop ends the turn.
-    fn chat_working(&self, chat: &chat::Chat, cx: &mut Context<Self>) -> Option<Div> {
+    /// While a turn runs: what it waits on and for how long. Steady; Stop is at the composer.
+    fn chat_working(&self, chat: &chat::Chat) -> Option<Div> {
         let turn = chat.transcript.turn.as_ref()?;
         let secs = crate::now_ms().saturating_sub(turn.since) / 1000;
         let doing = turn.tool.clone().unwrap_or_else(|| "thinking".into());
-        let hint = if chat.armed { "esc again stops" } else { "esc esc stops" };
-        let stop = self
-            .talk_button("chat-stop", "Stop", "Stop this turn; the session goes on")
-            .text_color(rgb(theme::ERROR))
-            .on_click(
-                cx.listener(|this, _, window, cx| drop(this.dispatch(Action::TalkInterrupt, this.input, window, cx))),
-            );
         Some(
             div()
                 .px_3()
@@ -1077,9 +1084,7 @@ impl Workspace {
                     clean(&doing),
                     secs / 60,
                     secs % 60
-                )))
-                .child(hint)
-                .child(stop),
+                ))),
         )
     }
 
@@ -1181,24 +1186,42 @@ impl Workspace {
         )
     }
 
-    /// The composer: the draft, what ↵ does now.
-    fn chat_composer(&self, chat: &chat::Chat, cx: &mut Context<Self>) -> Div {
+    /// The composer: the draft, what ↵ does now, and at its right the one button the core
+    /// names (`composer_button`): Stop while a turn runs, Resume or Start once the agent ended.
+    fn chat_composer(&self, subject: &Subject, chat: &chat::Chat, cx: &mut Context<Self>) -> Div {
         let card = !chat.transcript.cards.is_empty();
+        let ending = self.model.is_ending(subject);
+        // Only what is not how every text box works: the card's buttons show their own keys.
         let (placeholder, hint): (&'static str, &'static str) = match () {
+            // ↵ meanwhile: sent once the session is gone on with, after the process is gone.
+            _ if ending => ("Stopping…", ""),
             _ if card && chat.deny => ("Why deny it?", "↵ denies with this message · esc back to the request"),
-            _ if card => ("A request waits above", "a allow · d deny · s show all · m deny with a message"),
+            _ if card => ("", ""),
             _ if chat.transcript.turn.is_some() => {
-                ("Write the next message", "↵ sends once the turn ends · esc esc stops")
+                ("Write the next message", if chat.armed { "esc again stops" } else { "esc esc stops" })
             }
             _ if chat.queued.is_some() => ("Starting the agent…", "your message goes once it runs"),
-            _ if !chat.transcript.live && self.model.shown_draft_chat().is_some() => {
-                ("Write to go on with it", "↵ resumes the session and sends · ⇧↵ new line")
-            }
+            // Sending resumes the session.
+            _ if !chat.transcript.live && self.model.shown_draft_chat().is_some() => ("Resume…", ""),
             _ if !chat.transcript.live => ("The agent ended", "it cannot be gone on with from here"),
-            _ => ("Message the agent", "↵ send · ⇧↵ new line · esc leave"),
+            _ => ("Message", ""),
         };
         let open = chat.transcript.live || self.model.shown_draft_chat().is_some();
         let field = (open && (!card || chat.deny)).then(|| self.render_field_of("talk", placeholder, cx));
+        let button = self.model.composer_button().and_then(|primary| match primary {
+            Primary::Stop => Some(
+                self.talk_button("chat-stop", "Stop", "Stop this turn; the session goes on (esc esc)")
+                    .text_color(rgb(theme::ERROR))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        drop(this.dispatch(Action::TalkInterrupt, this.input, window, cx))
+                    })),
+            ),
+            Primary::Resume | Primary::Start => self.start_button(cx),
+        });
+        // A card waits and no turn to stop: nothing to write and nothing to say, so no empty strip.
+        if field.is_none() && hint.is_empty() && button.is_none() {
+            return div();
+        }
         div()
             .flex_none()
             .px_3()
@@ -1208,11 +1231,18 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap_1()
-            .children(field.map(|field| div().text_sm().child(field)))
-            .child(div().text_xs().text_color(rgb(theme::MUTED)).child(hint))
+            .child(
+                div()
+                    .flex()
+                    .items_end()
+                    .gap_2()
+                    .child(div().flex_1().min_w_0().text_sm().children(field))
+                    .children(button.map(|button| button.flex_none())),
+            )
+            .children((!hint.is_empty()).then(|| div().text_xs().text_color(rgb(theme::MUTED)).child(hint)))
     }
 
-    /// The header's Chat | Terminal switch and the permission mode, for a Claude Code
+    /// The header's Chat | Terminal switch, for a Claude Code
     /// conversation. Greyed while it cannot switch (a turn runs, a card waits).
     pub(crate) fn view_switch(&self, subject: &Subject, cx: &mut Context<Self>) -> Option<Div> {
         if !self.model.drawable(subject) {
@@ -1229,16 +1259,12 @@ impl Workspace {
                     drop(this.dispatch(Action::TalkView { shows: view }, this.input, window, cx))
                 }))
         };
-        let mode = self.model.chat(subject).and_then(|chat| chat.transcript.mode.clone());
-        Some(
-            div()
-                .flex()
-                .items_center()
-                .gap_0p5()
-                .children(mode.map(|mode| muted(format!("mode: {mode}")).pr_1()))
-                .child(button("view-chat", "Chat", View::Native))
-                .child(button("view-terminal", "Terminal", View::Terminal)),
-        )
+        // The permission mode is on the title's hover, and at the foot when it acts unasked.
+        Some(div().flex().items_center().gap_0p5().child(button("view-chat", "Chat", View::Native)).child(button(
+            "view-terminal",
+            "Terminal",
+            View::Terminal,
+        )))
     }
 
     /// What the state reply says of native conversations: structure, counts and labels, never
@@ -1336,7 +1362,7 @@ fn translate(native: &mut Native, said: Said, details: bool) -> Option<Event> {
         Said::Error { kind, retrying } => Event::Error { kind, retrying },
         // Its stderr may hold tokens: the core hears only that there is some.
         Said::Exited { code, signal, .. } => Event::Exited { code, signal, details },
-        Said::Unknown { kind } if ottospace_agents::QUIET.contains(&kind.as_str()) => return None,
+        Said::Unknown { kind } if ottospace_agents::is_quiet(&kind) => return None,
         Said::Unknown { kind } => Event::Unknown { kind },
     })
 }
@@ -1410,6 +1436,32 @@ fn shape(blocks: &[Block]) -> serde_json::Value {
     serde_json::json!({ "blocks": counts, "links": { "web": web, "file": links.len() - web } })
 }
 
+/// A notice drawn as a thin rule with a word, not a sentence: the user's stop, and a resume
+/// with the turns above it. The word, and how it ended, for the hover.
+fn divider(notice: &Notice) -> Option<(&'static str, Option<String>)> {
+    match notice {
+        Notice::Ended { by_user: true, code, signal, .. } => Some(("stopped", how(*code, *signal))),
+        Notice::Resumed { here: true, ended: Some(end) } if end.by_user => {
+            Some(("stopped · resumed", how(end.code, end.signal)))
+        }
+        Notice::Resumed { here: true, ended: Some(end) } => {
+            let how = how(end.code, end.signal).map_or(String::new(), |how| format!(" ({how})"));
+            Some(("ended · resumed", Some(format!("The agent ended{how}"))))
+        }
+        Notice::Resumed { here: true, ended: None } => Some(("resumed", None)),
+        _ => None,
+    }
+}
+
+/// How an agent ended, when its program said: `exit 1`, `signal 9`.
+fn how(code: Option<i32>, signal: Option<i32>) -> Option<String> {
+    match (code, signal) {
+        (_, Some(signal)) => Some(format!("signal {signal}")),
+        (Some(code), None) => Some(format!("exit {code}")),
+        (None, None) => None,
+    }
+}
+
 /// The fixed words a notice says.
 fn notice_text(notice: &Notice) -> String {
     match notice {
@@ -1420,14 +1472,14 @@ fn notice_text(notice: &Notice) -> String {
         Notice::Compacted => "The context was compacted.".into(),
         Notice::Allowed { tool, label } => format!("You allowed {tool} · {label}."),
         Notice::Denied { tool, label } => format!("You denied {tool} · {label}."),
-        Notice::Resumed => "Session resumed. Earlier turns are in its file: Terminal shows them.".into(),
+        Notice::Resumed { here: true, .. } => "Resumed.".into(),
+        Notice::Resumed { here: false, .. } => {
+            "Session resumed. Earlier turns are in its file: Terminal shows them.".into()
+        }
         Notice::MessageElsewhere => "A message, in the other terminal.".into(),
+        Notice::Ended { by_user: true, .. } => "Stopped.".into(),
         Notice::Ended { code, signal, replied, .. } => {
-            let how = match (code, signal) {
-                (_, Some(signal)) => format!(" (signal {signal})"),
-                (Some(code), None) => format!(" (exit {code})"),
-                (None, None) => String::new(),
-            };
+            let how = how(*code, *signal).map_or(String::new(), |how| format!(" ({how})"));
             match replied {
                 true => format!("The agent ended{how}."),
                 false => format!("The agent ended before replying{how}. Terminal view may show why."),

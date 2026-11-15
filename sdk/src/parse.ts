@@ -3,6 +3,7 @@
 // Keys the types do not name are dropped, so a test can compare the result with the raw reply.
 
 import type {
+  AgentLine,
   AppEntry,
   Feature,
   CalendarReply,
@@ -289,6 +290,8 @@ function card(value: unknown, at: string): Card {
   return {
     id: num(o.id, `${at}.id`),
     title: str(o.title, `${at}.title`),
+    priority: num(o.priority, `${at}.priority`),
+    filed: orNull(str)(o.filed, `${at}.filed`),
     state: str(o.state, `${at}.state`),
     group: orNull(group)(o.group, `${at}.group`),
     live: orNull(str)(o.live, `${at}.live`),
@@ -324,12 +327,9 @@ function taskRow(value: unknown, at: string): TaskRow {
   return {
     id: num(o.id, `${at}.id`),
     group: group(o.group, `${at}.group`),
-    tabs: num(o.tabs, `${at}.tabs`),
-    panes: num(o.panes, `${at}.panes`),
     current: bool(o.current, `${at}.current`),
-    detail: str(o.detail, `${at}.detail`),
+    fact: orNull(str)(o.fact, `${at}.fact`),
     live: orNull(str)(o.live, `${at}.live`),
-    model: orNull(str)(o.model, `${at}.model`),
   };
 }
 
@@ -667,6 +667,26 @@ function composePicks(value: unknown, at: string): Snapshot["compose_picks"] {
   return { wheres: list(str)(o.wheres, `${at}.wheres`), whos: list(str)(o.whos, `${at}.whos`) };
 }
 
+function noticeLevel(value: unknown, at: string): "info" | "error" {
+  if (value === "info" || value === "error") return value;
+  throw new Error(`${at}: not a level: ${JSON.stringify(value)}`);
+}
+
+function agentLine(value: unknown, at: string): AgentLine {
+  const o = fields(value, at);
+  const pair = (v: unknown, p: string): [string, string] => {
+    const [name, text] = list(str)(v, p);
+    if (name === undefined || text === undefined) throw new Error(`${p}: not a [name, value] pair`);
+    return [name, text];
+  };
+  return {
+    foot: orNull(str)(o.foot, `${at}.foot`),
+    bypass: bool(o.bypass, `${at}.bypass`),
+    folder: orNull(str)(o.folder, `${at}.folder`),
+    facts: list(pair)(o.facts, `${at}.facts`),
+  };
+}
+
 function spaceRow(value: unknown, at: string): SpaceRow {
   const o = fields(value, at);
   return {
@@ -760,6 +780,7 @@ function drawerDrawn(value: unknown, at: string): Snapshot["drawer"] {
     width: num(o.width, `${at}.width`),
     agents: map(agent)(o.agents, `${at}.agents`),
     native: native(o.native, `${at}.native`),
+    line: orNull(agentLine)(o.line, `${at}.line`),
     note: orNull(str)(o.note, `${at}.note`),
   };
 }
@@ -1365,6 +1386,7 @@ export function snapshot(value: unknown): Snapshot {
     font: { name: str(fields(o.font, "font").name, "font.name"), size: num(fields(o.font, "font").size, "font.size") },
     cell: pair(o.cell, "cell"),
     notice: orNull(str)(o.notice, "notice"),
+    notice_level: orNull(noticeLevel)(o.notice_level, "notice_level"),
     settings_errors: num(o.settings_errors, "settings_errors"),
     hosted: map(rect)(o.hosted, "hosted"),
     crop: map(num)(o.crop, "crop"),

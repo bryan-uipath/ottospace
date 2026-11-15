@@ -1,0 +1,23 @@
+# Native chat: Stop while a turn runs, the agent stopped, then Resume. The stand-in `claude`
+# writes its session file so the stop can be gone on with; its resume prints hook lines.
+{"env":{"OTTOSPACE_AGENTS_DIR":"{ROOT}/bin"}}
+{"cmd":"split","kind":"empty"}
+{"cmd":"task_new","line":"plan the week >app"}
+{"cmd":"section","section":"tasks"}
+{"click":"task:1","at":[0.3,0.3]}
+{"click":"talk:talk-start"}
+{"until":"drawer.native.chats.1.replies","len":1}
+{"click":"talk"}
+{"cmd":"key","keys":"g o space o n enter","as":"user"}
+{"until":"drawer.native.chats.1.transcript.turn"}
+{"settle":800}
+{"shot":"turn"}
+{"cmd":"key","keys":"cmd-p","as":"user"}
+{"cmd":"key","keys":"s t o p space t h e space a g e n t","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"until":"drawer.native.chats.1.transcript.live","is":false}
+{"shot":"stopped"}
+{"click":"talk:talk-start"}
+{"until":"drawer.native.chats.1.transcript.live","is":true}
+{"settle":800}
+{"shot":"resumed"}

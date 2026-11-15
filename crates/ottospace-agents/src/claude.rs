@@ -601,10 +601,7 @@ mod tests {
     }
 
     fn loud(events: &[Event]) -> Vec<&Event> {
-        events
-            .iter()
-            .filter(|e| !matches!(e, Event::Unknown { kind } if crate::QUIET.contains(&kind.as_str())))
-            .collect()
+        events.iter().filter(|e| !matches!(e, Event::Unknown { kind } if crate::is_quiet(kind))).collect()
     }
 
     /// The recorded 2.1.325 turn: hooks and status are quiet; the reply, once, as a delta then

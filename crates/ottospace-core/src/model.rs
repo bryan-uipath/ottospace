@@ -811,8 +811,8 @@ pub enum Action {
         runner: String,
         id: String,
     },
-    /// Which sessions Other sessions lists, by when each was last active. The user's pick is
-    /// written to the settings.
+    /// Which sessions Elsewhere lists, by when each was last active: 7 days unless the settings
+    /// say otherwise (`sessions_range`). Nothing on screen picks it; nothing is written.
     SessionsRange {
         range: sessions::Range,
     },
@@ -1945,12 +1945,16 @@ impl Today {
 pub struct Card {
     pub id: TaskId,
     pub title: String,
+    /// 1 is most urgent.
+    pub priority: u8,
+    /// How long ago it was filed: `3h`.
+    pub filed: Option<String>,
     /// Its state's heading, and what its session does now with its model.
     pub state: &'static str,
     pub group: Option<tasks::Group>,
     pub live: Option<String>,
     pub model: Option<String>,
-    /// `#project`, `>repo`, `@agent`.
+    /// `#project`, `>repo`, `@agent`, then counts: `2 paths`, `1 skill`, `1 reference`, `1 capture`.
     pub tags: Vec<String>,
     /// How long ago its agent first started: `3h`.
     pub started: Option<String>,
@@ -1987,10 +1991,6 @@ pub enum Effect {
     /// The user picked how the Tasks section groups: write `tasks_view` in the settings file.
     SaveTasksView {
         view: TasksView,
-    },
-    /// The user picked the range of Other sessions: write `sessions_range` in the settings file.
-    SaveSessionsRange {
-        range: sessions::Range,
     },
     /// The pinned or hidden apps changed: make these changes to `apps` and `apps_hidden` in
     /// the settings file, as it is then.
@@ -2289,7 +2289,7 @@ pub struct Model {
     /// Sessions the user hid, as (runner, id). Not kept between runs.
     #[serde(skip)]
     hidden: Vec<(String, String)>,
-    /// Which sessions Other sessions lists (`sessions_range` in the settings), and the start of
+    /// Which sessions Elsewhere lists (`sessions_range` in the settings), and the start of
     /// the local day the shell last read them in.
     #[serde(skip)]
     pub sessions_range: sessions::Range,
@@ -2387,6 +2387,10 @@ pub struct Model {
     /// Conversations whose agent was stopped for a switch of view: gone on with once it is gone.
     #[serde(skip)]
     switching: Vec<Subject>,
+    /// Conversations whose agent was asked to stop and has not ended yet: nothing starts on
+    /// its session until its process is gone (the shell says `AgentExited` only then).
+    #[serde(skip)]
+    ending: Vec<Subject>,
     /// The action being run is the user's own. False between actions.
     #[serde(skip)]
     by_user: bool,
@@ -2493,6 +2497,7 @@ impl Default for Model {
             views: Vec::new(),
             conversation_view: crate::settings::DEFAULT_VIEW,
             switching: Vec::new(),
+            ending: Vec::new(),
             by_user: false,
             next_id: 0,
             spaces: vec![Space { of: Owner::Workspace, hidden: false, last: None }],
@@ -3267,8 +3272,8 @@ impl Model {
                 }
             }
             Action::SelectVisibleTab { index } => {
-                if let Some(at) = self.space_tabs(self.space()).get(index) {
-                    self.select_tab(*at, effects);
+                if let Some(at) = self.visible_tab(index) {
+                    self.select_tab(at, effects);
                 }
             }
             Action::RepoClick { path, axis } => match self.repo_task(&path) {
@@ -3698,12 +3703,7 @@ impl Model {
                     self.focus(pane, effects);
                 }
             }
-            Action::SessionsRange { range } => {
-                if self.by_user && range != self.sessions_range {
-                    effects.push(Effect::SaveSessionsRange { range });
-                }
-                self.sessions_range = range;
-            }
+            Action::SessionsRange { range } => self.sessions_range = range,
             Action::ToggleGroup { heading } => {
                 let open = !self.collapsed.contains(&heading);
                 self.collapsed.retain(|h| *h != heading);
@@ -3897,14 +3897,11 @@ impl Model {
                 self.leave(effects);
                 // Workspace, the live tasks in their order, then the workbooks.
                 let tasks = matches!(action, Action::PaletteTasks).then(|| {
-                    let workspace = TaskChoice { to: Owner::Workspace, title: "Workspace".into() };
                     let live = self.tasks.list.iter().filter(|task| !task.dismissed);
-                    let live =
-                        live.map(|task| TaskChoice { to: Owner::Task { id: task.id }, title: task.title.clone() });
-                    let books = self.workbooks.list.iter();
-                    let books =
-                        books.map(|book| TaskChoice { to: Owner::Workbook { id: book.id }, title: book.name.clone() });
-                    std::iter::once(workspace).chain(live).chain(books).collect()
+                    let live = live.map(|task| Owner::Task { id: task.id });
+                    let books = self.workbooks.list.iter().map(|book| Owner::Workbook { id: book.id });
+                    let all = std::iter::once(Owner::Workspace).chain(live).chain(books);
+                    all.map(|to| TaskChoice { title: self.space_title(&to), to }).collect()
                 });
                 let features = matches!(action, Action::PaletteFeatures).then(|| {
                     let choice = |feature| FeatureChoice { feature, on: self.features.on(feature) };
@@ -4437,6 +4434,10 @@ impl Model {
             }
             Action::AgentExited { task: subject } => {
                 let ran = self.agents.contains(&subject);
+                // Stopped with a message written meanwhile, on show: gone on with now that it is gone.
+                let shown = self.talk.as_ref().is_some_and(|talk| talk.open && talk.task == subject);
+                let queued = self.chat(&subject).is_some_and(|chat| chat.queued.is_some());
+                let resume = shown && queued && self.ending.contains(&subject);
                 // A switch of view: the session goes on in the other once this one is gone.
                 let switched = self.chat_exited(&subject);
                 // What its session's file shows of the last moments is ours, not another terminal's.
@@ -4448,7 +4449,11 @@ impl Model {
                 self.agents.retain(|id| *id != subject);
                 self.starting.retain(|(id, _)| *id != subject);
                 self.awaiting.retain(|id| *id != subject);
+                self.ending.retain(|id| *id != subject);
                 let Some(task) = subject.task() else {
+                    if resume {
+                        self.chat_resume(&subject, effects);
+                    }
                     return if switched {
                         self.chat_restart(subject, effects)
                     };
@@ -4464,6 +4469,10 @@ impl Model {
                 if ran && self.tasks.get(task).is_some_and(|task| task.state == State::Running && !task.dismissed) {
                     self.tasks.set_state(task, State::NeedsYou);
                     self.tasks.followed(task, State::NeedsYou);
+                }
+                // Once its task no longer follows the session as running: else nothing could start.
+                if resume {
+                    self.chat_resume(&subject, effects);
                 }
                 if switched {
                     self.chat_restart(subject, effects);
@@ -4495,6 +4504,13 @@ impl Model {
                 self.awaiting.retain(|subject| *subject != id);
                 self.switching.retain(|subject| *subject != id);
                 if self.agent_runs(&id) {
+                    // Its end is the stop asked for, not an error; and it is not over until it exits.
+                    if let Some(chat) = self.chats.iter_mut().find(|chat| chat.subject == id) {
+                        chat.transcript.stopping = true;
+                    }
+                    if !self.ending.contains(&id) {
+                        self.ending.push(id.clone());
+                    }
                     effects.push(Effect::StopAgent { task: id });
                 }
             }
@@ -4816,6 +4832,7 @@ impl Model {
             }
         };
         self.agents.iter_mut().for_each(rename);
+        self.ending.iter_mut().for_each(rename);
         self.opened.iter_mut().for_each(rename);
         self.starting.iter_mut().for_each(|(subject, _)| rename(subject));
         self.talk.iter_mut().for_each(|talk| rename(&mut talk.task));
@@ -4867,6 +4884,7 @@ impl Model {
         self.seeking.retain(|seek| tasks.get(seek.task).is_some_and(|task| task.session.is_none()));
         self.starting.retain(|(id, _)| !gone(id));
         self.awaiting.retain(|id| !gone(id));
+        self.ending.retain(|id| !gone(id));
         self.talk = self.talk.take().filter(|talk| !gone(&talk.task));
         // A picture being drawn on keeps the keyboard, as an app, the list and visual mode do.
         let drawing = self.annotated().is_some();
@@ -5599,18 +5617,9 @@ impl Model {
 
     /// A task's row as drawn, at `now`.
     fn task_row(&self, task: &Task, group: tasks::Group, now: u64) -> TaskRow {
-        let (tabs, panes) = self.task_open(task.id);
-        let plural = |n: usize, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
-        let open = (tabs > 0).then(|| format!("{}, {}", plural(tabs, "tab"), plural(panes, "pane")));
-        let tags = Some(self.task_tags(task)).filter(|tags| !tags.is_empty());
-        // What was captured for it: its brief shows when it is opened.
-        let kept = Some(task.materials.len()).filter(|n| *n > 0).map(|n| plural(n, "material"));
-        let age = task.created.map(|created| tasks::age(created, now));
-        let detail = [tags, kept, open, age].into_iter().flatten().collect::<Vec<_>>().join(" · ");
         let current = self.tab_task() == Some(task.id);
-        let session = self.task_session(task);
-        let (live, model) = (session.and_then(Found::doing), session.and_then(|s| s.model.clone()));
-        TaskRow { live, model, id: task.id, group, tabs, panes, current, detail }
+        let live = self.task_session(task).and_then(Found::doing);
+        TaskRow { live, id: task.id, group, current, fact: tasks::fact(task, group, now) }
     }
 
     /// The Tasks section's State view as drawn: Needs you, Running, Later (captured and on hold),
@@ -5677,10 +5686,16 @@ impl Model {
             task.repo.as_ref().map(|path| format!(">{}", self.repo_name(path).unwrap_or_else(|| repos::name_of(path)))),
         );
         tags.extend(task.agent.as_ref().map(|a| format!("@{a}")));
+        // What the row no longer says: how many paths, skills, references and captures it has.
+        let counts = [(task.paths.len(), "path"), (task.skills.len(), "skill"), (task.refs.len(), "reference")];
+        let counts = counts.into_iter().chain([(task.materials.len(), "capture")]);
+        tags.extend(counts.filter(|(n, _)| *n > 0).map(|(n, word)| plural(n, word)));
         let last = task.work.last();
         Some(Card {
             id,
             title: task.title.clone(),
+            priority: task.priority,
+            filed: task.created.map(|at| tasks::age(at, now)),
             state: task.group().map_or("Not listed", tasks::Group::title),
             group: task.group(),
             live: session.and_then(Found::doing),
@@ -5780,7 +5795,7 @@ impl Model {
         (another.is_none() && session.active && at_work == 1).then_some(pane.id)
     }
 
-    /// The Other sessions group as drawn, at the time of the last `Tick`: sessions found that are
+    /// The Elsewhere group as drawn, at the time of the last `Tick`: sessions found that are
     /// no task's, active first, those in the range alone.
     pub fn sessions_bar(&self) -> sessions::Bar {
         let (range, now, day) = (self.sessions_range, self.now, self.session_day);
@@ -6187,6 +6202,11 @@ impl Model {
     /// What the status bar says of `settings.json`: its first problem, or the keys that need a restart.
     pub fn settings_line(&self) -> Option<String> {
         self.settings_file.line()
+    }
+
+    /// How the status bar draws `settings_line`.
+    pub fn settings_level(&self) -> crate::settings::Level {
+        self.settings_file.level()
     }
 
     /// How many problems the last read of `settings.json` found.
@@ -7922,6 +7942,8 @@ mod tests {
         m.update(Action::NewTab.sent_by(Origin::Socket));
         assert_eq!((m.active, m.space()), (1, &Owner::Workspace));
         assert_eq!(row(&m), [(Owner::Workspace, false, vec![0, 1]), (task_space(1), false, vec![2, 3])]);
+        // ⌘1… (and ⌘⇧⌥1…) count the selected space's tabs only.
+        assert_eq!((m.visible_tab(1), m.visible_tab(2)), (Some(1), None));
         // Cycling stays in the space; a space shows the tab it showed last.
         m.update(Action::CycleTab { delta: 1 });
         m.update(Action::CycleTab { delta: 1 });
@@ -9500,14 +9522,17 @@ mod tests {
             [(Heading::NeedsYou, 1, vec![1]), (Heading::Running, 1, vec![2]), (Heading::Later, 2, vec![4, 3])],
             "Later holds what is captured and what is on hold"
         );
-        // Each row: its tags, what it has open, how old it is. The one on show is marked.
-        let sections = m.task_sections(1_000 + 3 * 3_600_000);
+        // Each row: one fact, by its state (none for needs you); the one on show is marked. Its
+        // tags and what it has open are on its card.
+        let now = 1_000 + 3 * 3_600_000;
+        let sections = m.task_sections(now);
         let (needs, later) = (&sections[0].rows[0], &sections[2].rows[0]);
-        assert_eq!(
-            (needs.detail.as_str(), needs.tabs, needs.current, needs.group),
-            ("1 tab, 0 panes · 3h", 1, true, tasks::Group::NeedsYou)
-        );
-        assert_eq!((later.detail.as_str(), later.current), ("#canvas · >app-2 · 2 tabs, 0 panes · 3h", false));
+        assert_eq!((&needs.fact, needs.current, needs.group), (&None, true, tasks::Group::NeedsYou));
+        assert_eq!((later.fact.as_deref(), later.current), (Some("3h"), false));
+        let (needs, later) = (m.card(1, now).unwrap(), m.card(4, now).unwrap());
+        assert_eq!((needs.workspace.as_str(), needs.filed.as_deref()), ("1 tab · 0 panes", Some("3h")));
+        assert_eq!((later.tags.as_slice(), later.priority), (&["#canvas".to_string(), ">app-2".into()][..], 1));
+        assert_eq!(later.workspace, "2 tabs · 0 panes");
         // List mode walks the headings and rows in the order drawn.
         m.update(Action::ToggleSection { section: Section::Tasks });
         let (heading, task) = (ListRow::Heading, ListRow::Task);
@@ -9654,6 +9679,9 @@ mod tests {
             ("Done", &["#web".to_string()][..], Some("3h"))
         );
         assert_eq!((card.agent_time.as_str(), card.workspace.as_str()), ("1m", "0 tabs · 0 panes"));
+        // Counts the row no longer shows: of paths, skills, references and captures it has.
+        (m.tasks.list[0].paths, m.tasks.list[0].materials) = (vec!["a".into(), "b".into()], vec!["c".into()]);
+        assert_eq!(m.card(1, 0).unwrap().tags, ["#web", "2 paths", "1 capture"]);
         let table: Vec<_> = card.tokens.iter().map(|t| (t.model.as_str(), t.sub, t.input)).collect();
         assert_eq!(table, [("opus-5.5", false, 10), ("haiku-5", true, 4)]);
         assert_eq!((card.context, card.window), (Some(50_000), Some(200_000)));
@@ -9719,7 +9747,7 @@ mod tests {
         let bar = m.sessions_bar();
         assert_eq!((bar.count, bar.collapsed, bar.rows.len()), (1, true, 0));
         assert_eq!(m.list_rows(), [ListRow::Heading(Heading::Sessions)]);
-        assert_eq!(Heading::Sessions.title(), "Other sessions");
+        assert_eq!(Heading::Sessions.title(), "Elsewhere");
         // ↵ on the heading unfolds it, as any other.
         m.update(Action::FocusList);
         m.update(Action::ListChoose { axis: Right });
@@ -9733,7 +9761,7 @@ mod tests {
         Found { runner, id, cwd, repo, started, last_activity, active, station, label, title, model, held }
     }
 
-    /// The Other sessions group as (count in range, ids of the rows drawn, count in all).
+    /// The Elsewhere group as (count in range, ids of the rows drawn, count in all).
     fn session_rows(m: &Model) -> (usize, Vec<String>, usize) {
         let bar = m.sessions_bar();
         (bar.count, bar.rows.into_iter().map(|row| row.id).collect(), bar.total)
@@ -9757,7 +9785,9 @@ mod tests {
             ],
             day: now - 5 * hour,
         });
-        // Today, at first: the one at work and the one idle since the day started.
+        // 7 days, at first; Today: the one at work and the one idle since the day started.
+        assert_eq!(session_rows(&m), (3, vec!["busy".into(), "idle".into(), "old".into()], 3));
+        m.update(Action::SessionsRange { range: sessions::Range::Today });
         assert_eq!(session_rows(&m), (2, vec!["busy".into(), "idle".into()], 3));
         let rows = m.sessions_bar().rows;
         // Named after the listed repository or worktree, wherever below it the session started.
@@ -9781,20 +9811,11 @@ mod tests {
             ),
             ("codex", "app-2", false, None, Some("3h"))
         );
-        // 7 days takes in the one of three days ago. The user's pick is written; a client's is not.
+        // 7 days takes in the one of three days ago. A range is read, never written.
         let week = Action::SessionsRange { range: sessions::Range::Week };
         assert_eq!(m.update(week.clone().sent_by(Origin::Socket)), []);
         assert_eq!(session_rows(&m), (3, vec!["busy".into(), "idle".into(), "old".into()], 3));
-        let today = Action::SessionsRange { range: sessions::Range::Today };
-        assert_eq!(
-            m.update(today.sent_by(Origin::User)),
-            [Effect::SaveSessionsRange { range: sessions::Range::Today }]
-        );
-        assert_eq!(
-            m.update(week.clone().sent_by(Origin::User)),
-            [Effect::SaveSessionsRange { range: sessions::Range::Week }]
-        );
-        assert_eq!(m.update(week.sent_by(Origin::User)), [], "the same range: nothing to write");
+        assert_eq!(m.update(week.sent_by(Origin::User)), []);
         // The heading folds like any other.
         m.update(Action::ToggleGroup { heading: Heading::Sessions });
         assert_eq!(session_rows(&m), (3, vec![], 3));

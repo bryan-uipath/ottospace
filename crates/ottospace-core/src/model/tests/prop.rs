@@ -1278,6 +1278,11 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(t.live || t.turn.is_none(), "{subject:?} has a turn and no agent");
         ensure!(!chat.armed || t.turn.is_some(), "{subject:?} waits for a second Esc with no turn");
     }
+    // A stop asked for is of an agent that runs, until its process is gone.
+    for subject in &m.ending {
+        ensure!(m.agent_runs(subject), "{subject:?} is ending with no agent");
+        ensure!(!m.switching.contains(subject), "{subject:?} is ending and switching: it would start again");
+    }
     let chats: Vec<String> = m.chats.iter().map(|chat| format!("{:?}", chat.subject)).collect();
     ensure!(unique(&chats), "two transcripts for one conversation: {chats:?}");
     // Tabs, their trees and the panes.
@@ -1354,7 +1359,7 @@ fn check(m: &Model) -> Result<(), String> {
     }
 
     // The drawer is on a task there is; the keyboard is in it only while it is open, its agent
-    // runs, and no app, list or visual mode has the keyboard.
+    // runs (or its native composer can go on with it), and no app, list or visual mode has it.
     let gone = |subject: &Subject| subject.task().is_some_and(|id| m.tasks.get(id).is_none());
     if let Some(talk) = &m.talk {
         ensure!(!gone(&talk.task), "the drawer is on task {:?}, which is gone", talk.task);
@@ -1929,7 +1934,7 @@ fn check_state(m: &Model) -> Result<(), String> {
     ensure!(round_trips(&m.found), "the sessions do not read back as written");
     ensure!(m.panes.iter().all(|pane| round_trips(&pane.kind)), "a pane's kind does not read back as written");
     ensure!(round_trips(&(m.sidebar, m.collapsed.clone())), "the bar does not read back as written");
-    // Other sessions: each row once and in range; under All every listed one, unless folded.
+    // Elsewhere: each row once and in range; under All every listed one, unless folded.
     let bar = m.sessions_bar();
     let ids: Vec<(String, String)> = bar.rows.iter().map(|row| (row.runner.clone(), row.id.clone())).collect();
     ensure!(unique(&ids), "a session is listed twice: {ids:?}");
@@ -2617,9 +2622,6 @@ impl Run {
                 // The settings file is the user's.
                 Effect::SaveTasksView { view } => {
                     ensure!(user && m.tasks_view == *view, "{origin:?} wrote tasks_view {view:?}")
-                }
-                Effect::SaveSessionsRange { range } => {
-                    ensure!(user && m.sessions_range == *range, "{origin:?} wrote sessions_range {range:?}")
                 }
                 Effect::Run { command } => {
                     ensure!(user && matches!(action, Action::PaletteChoose { .. }), "{command:?} run by {action:?}")
@@ -4100,6 +4102,103 @@ fn a_rail_cell_reached_by_keys_shows_its_space() {
         by(Origin::System, Action::NewEmptyTab),
         Action::FocusDir { dir: Dir::Right }.into(),
         Action::FocusDir { dir: Dir::Left }.into(),
+    ])
+    .unwrap();
+}
+
+/// Seed 1247 (long run): the drawer's native agent ended while it had the keyboard; its composer
+/// can go on with it (#130), so the keyboard may stay. The check asked for a running agent.
+#[test]
+fn an_ended_agent_lets_the_keyboard_go() {
+    let none = || Assign { agent: None, paths: vec![], resolved: vec![], skills: vec![] };
+    let known = Known { names: Names { agents: vec![], skills: vec![] }, paths: vec![], entries: vec![] };
+    replay(&[
+        Action::TaskAdd { title: "a".into(), priority: 2, state: State::Running, tab: None, assign: none() }.into(),
+        Action::TaskAdd { title: "b".into(), priority: 1, state: State::NeedsYou, tab: None, assign: none() }.into(),
+        Action::TaskFromLine { line: "fix zoom #canvas >app p1".into(), known, open: false }.into(),
+        Action::SpaceOpen { space: Owner::Task { id: 3 } }.into(),
+        Action::Split { axis: Axis::Down, kind: Kind::Terminal }.into(),
+        Action::NewTab.into(),
+        Action::CycleTab { delta: 2 }.into(),
+        Action::TaskTalk { id: 1 }.into(),
+        Action::MovePane { pane: None, tab: 1 }.into(),
+        Action::TalkStart.into(),
+        Action::AgentStarted {
+            task: Subject::Task(3),
+            session: Some("8f14e45f-ceea-467f-a8d3-0242ac130003".into()),
+            at: 32,
+        }
+        .into(),
+        by(Origin::System, Action::AgentExited { task: Subject::Task(3) }),
+    ])
+    .unwrap();
+}
+
+/// Seed 1627 (long run): the tab a brief showed with was closed by the system; the brief stayed.
+#[test]
+fn a_brief_goes_with_its_tab() {
+    replay(&[
+        Action::SetSessions {
+            found: vec![
+                Found {
+                    runner: "claude".into(),
+                    id: "s1".into(),
+                    cwd: "/code/app".into(),
+                    repo: "/code/app".into(),
+                    started: Some(1),
+                    last_activity: Some(999000),
+                    active: true,
+                    station: None,
+                    label: None,
+                    title: None,
+                    model: None,
+                    held: false,
+                },
+                Found {
+                    runner: "claude".into(),
+                    id: "s2".into(),
+                    cwd: "/code/app".into(),
+                    repo: "/code/app".into(),
+                    started: Some(1),
+                    last_activity: Some(5),
+                    active: false,
+                    station: None,
+                    label: None,
+                    title: None,
+                    model: None,
+                    held: false,
+                },
+            ],
+            day: 0,
+        }
+        .sent_by(Origin::User),
+        Action::Open {
+            kind: Kind::App { window: 9, title: "w9".into(), bundle: None, name: "app".into() },
+            axis: Axis::Right,
+            beside: None,
+        }
+        .sent_by(Origin::User),
+        Action::CaptureStart {
+            pane: None,
+            draft: "u3".into(),
+            word: "w0rdw0rdw0rd".into(),
+            facts: vec![
+                Facts { pane: 3, cwd: None, program: Some("".into()), title: Some("".into()), ignored: false },
+                Facts {
+                    pane: 2,
+                    cwd: Some("S".repeat(657)),
+                    program: Some("/p#../..p1".into()),
+                    title: None,
+                    ignored: false,
+                },
+            ],
+            images: true,
+        }
+        .sent_by(Origin::User),
+        Action::ComposeEnter.sent_by(Origin::User),
+        Action::SessionAdopt { runner: "claude".into(), id: "s2".into() }.sent_by(Origin::User),
+        Action::TaskGo { id: Some(1) }.sent_by(Origin::User),
+        Action::CloseTab { index: None }.sent_by(Origin::System),
     ])
     .unwrap();
 }
