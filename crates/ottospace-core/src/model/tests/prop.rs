@@ -2495,6 +2495,9 @@ impl Run {
             let gone = gone
                 || matches!(&mark_input, Some(MarkInput::Workbook { workbook, tab, .. })
                     if m.workbooks.get(*workbook).is_none_or(|book| tab.is_some_and(|at| at >= book.tabs.len() || book.tabs.len() < 2)));
+            // A branch being typed goes with its repository (`repo_field_gone`).
+            let gone = gone
+                || matches!(&mark_input, Some(MarkInput::Worktree { repo, .. }) if !m.repos.iter().any(|r| r.path == *repo));
             // Marks turned off take a mark's wait with them; an action of a feature off ends none.
             let gone = gone || (!m.features.on(Feature::Marks) && matches!(action, Action::SetFeatures { .. }));
             let kept =
@@ -4536,6 +4539,23 @@ fn seed_30549_the_users_enter_on_a_meeting_row_is_its_join() {
         Action::FocusList.sent_by(Origin::Socket),
         Action::CalendarDay { step: DayStep::Today }.sent_by(Origin::System),
         Action::ListChoose { axis: Axis::Right }.sent_by(Origin::User),
+    ])
+    .unwrap();
+}
+
+/// Seed 953: a list read again without the repository closed the branch being typed for it, and
+/// the rule kept every wait but the user's own. The field has nowhere to go: the rule was wrong.
+#[test]
+fn seed_953_a_branch_being_typed_goes_with_its_repository() {
+    replay(&[
+        Action::SetRepos {
+            repos: vec![Repo { name: "app".into(), path: "/code/app".into(), branch: None, worktrees: vec![] }],
+        }
+        .sent_by(Origin::System),
+        Action::SetRepoDirs { dirs: RepoDirs { dirs: vec![], fixed: false, worktrees: Some("/w".into()) } }
+            .sent_by(Origin::User),
+        Action::WorktreeEdit { repo: "/code/app".into() }.sent_by(Origin::User),
+        Action::SetRepos { repos: vec![] }.sent_by(Origin::System),
     ])
     .unwrap();
 }
