@@ -32,7 +32,7 @@ impl Group {
             Group::Panes => "Panes",
             Group::Tabs => "Tabs",
             Group::Tasks => "Tasks",
-            Group::Workbook => "Workbook",
+            Group::Workbook => "Workspace",
             Group::Marks => "Marks",
             Group::View => "View",
             Group::Developer => "Developer",
@@ -113,9 +113,9 @@ commands! {
     TalkToggle: "Open or Close the Conversation", Tasks;
     StopAgent: "Stop the Agent", Tasks;
     DialToggle: "Toggle Agent Dial", Tasks;
-    SaveWorkbook: "Save Tab as Workbook", Workbook;
-    AddTabToWorkbook: "Add Tab to Workbook…", Workbook;
-    SaveAllWorkbook: "Save All Tabs as Workbook", Workbook;
+    SaveWorkbook: "Save Tab as Workspace", Workbook;
+    AddTabToWorkbook: "Add Tab to Workspace…", Workbook;
+    SaveAllWorkbook: "Save All Tabs as Workspace", Workbook;
     StartFresh: "Start Fresh", App;
     Features: "Features…", App;
     MarkPane: "Mark Pane", Marks;

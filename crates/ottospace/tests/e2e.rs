@@ -3640,10 +3640,10 @@ fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
     for id in ["rail:apps", "rail:workbook", "rail:tasks", "rail:repos", "bar:add", "bar:close", row.as_str()] {
         assert!(ids.contains(&id), "no label for {id}: {ids:?}");
     }
-    for id in ["space:0", "top:new_task", "top:new_tab", "top:split_right", "top:split_down"] {
+    for id in ["space:0", "top:new_workspace", "top:new_tab", "top:split_right", "top:split_down"] {
         assert!(ids.contains(&id), "no label for {id}: {ids:?}");
     }
-    for id in ["home:open_app", "home:terminal", "home-row:1", "home-node:1", "top:new_task"] {
+    for id in ["home:open_app", "home:terminal", "home-row:1", "home-node:1", "top:new_workspace"] {
         assert!(ids.contains(&id), "no label for {id}: {ids:?}");
     }
     let mut unique: Vec<&String> = labels.values().collect();
@@ -3704,8 +3704,10 @@ fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
     otto.call(json!({"cmd": "select_space", "index": 0}));
     assert_eq!(sneak_to(&otto, "home-node:1")["state"]["active"], 1);
     otto.call(json!({"cmd": "select_space", "index": 0}));
-    // The rail's + opens the box, a top-bar button the picker. Neither lets sneak mode start.
-    assert_eq!(sneak_to(&otto, "top:new_task")["mode"], "compose");
+    // The top row's + is the user's: a client's label on it makes no workspace.
+    assert_eq!(sneak_to(&otto, "top:new_workspace")["workbooks"], json!([]));
+    // ⌘N opens the box, a top-bar button the picker. Neither lets sneak mode start.
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-n"}))["mode"], "compose");
     let refused = otto.raw(r#"{"cmd":"sneak"}"#);
     assert!(refused["error"].as_str().is_some_and(|e| e.contains("normal, list or talk")), "{refused}");
     otto.call(json!({"cmd": "key", "keys": "escape"}));
@@ -5527,6 +5529,95 @@ fn agent_argv(dir: &Path, name: &str) -> Option<Vec<String>> {
     Some(text.split_terminator('\0').map(str::to_string).collect())
 }
 
+/// The owner's report: the section's + took the tab on show (another session's), and a second +
+/// said "Updated". + makes a new, empty workspace each time, on the top row and in the section.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn plus_makes_a_new_empty_workspace_each_time_kept_between_runs() {
+    let home = user_folder("workspace-new", r#"{"repos": []}"#);
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let names = |reply: &Value| -> Vec<String> {
+        let rows = reply["workbooks"].as_array().cloned().unwrap_or_default();
+        rows.iter().filter_map(|row| row["name"].as_str().map(str::to_string)).collect()
+    };
+    // The top row: each space's kind, whether it is selected, and its tabs' places.
+    let row = |reply: &Value| -> Vec<(String, bool, Value)> {
+        let spaces = reply["spaces"].as_array().cloned().unwrap_or_default();
+        let space =
+            |s: &Value| (s["of"]["kind"].as_str().unwrap_or("").to_string(), s["selected"] == true, s["tabs"].clone());
+        spaces.iter().filter(|s| s["hidden"] == false).map(space).collect()
+    };
+    let kept = |file: &Path| -> Value { serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap() };
+    {
+        let mut otto = Otto::launch_with("workspace-new-1", &env);
+        // A terminal in Workspace, and a task's space with a tab: neither is taken by +.
+        otto.call(json!({"cmd": "split"}));
+        otto.call(json!({"cmd": "task_add", "title": "theirs", "state": "running"}));
+        otto.call(json!({"cmd": "open_space", "space": {"kind": "task", "id": 1}}));
+        let plus = at(otto.control("top:new_workspace"), 0.5, 0.5);
+        // A client's click on + makes nothing: a workspace is the user's file.
+        let refused = otto.click(plus, 1);
+        assert!(names(&refused).is_empty() && workbook_files(&home).is_empty(), "{refused}");
+        // The user's: a new workspace after the selected space, one empty tab, selected.
+        let made = otto.user_click(plus);
+        assert_eq!(names(&made), ["Workspace 2"]);
+        assert_eq!(
+            row(&made),
+            [
+                ("workspace".into(), false, json!([0])),
+                ("task".into(), false, json!([1])),
+                ("workbook".into(), true, json!([2]))
+            ],
+            "{made}"
+        );
+        assert_eq!(
+            (pane_ids(&made), &made["state"]["layout"], &made["workbook_offer"]),
+            (vec![1], &Value::Null, &Value::Null)
+        );
+        assert_eq!(made["workbooks"][0]["open"], true);
+        // Again, by its label: another, named apart. Nothing is "updated".
+        let (_, labels) = sneak(&otto);
+        let second = otto.user_key(&letters(&labels["top:new_workspace"]));
+        assert_eq!(
+            (names(&second), &second["workbook_offer"]),
+            (vec!["Workspace 2".to_string(), "Workspace 3".to_string()], &Value::Null)
+        );
+        assert_eq!(row(&second).len(), 4, "{second}");
+        // The section's + does the same, and so does not save the tab on show.
+        otto.call(json!({"cmd": "section", "section": "workbook"}));
+        let (_, labels) = sneak(&otto);
+        let third = otto.user_key(&letters(&labels["bar:add"]));
+        assert_eq!(
+            (names(&third).len(), &third["workbook_offer"], &third["mode"]),
+            (3, &Value::Null, &json!("normal"))
+        );
+        // Three files, each of no tab: the terminal and the task's tab were recorded nowhere.
+        let files = workbook_files(&home);
+        assert_eq!(files.len(), 3, "{files:?}");
+        assert!(files.iter().all(|file| kept(file)["tabs"] == json!([])), "{files:?}");
+        assert_eq!(third["state"]["tabs"][0]["space"]["kind"], "workspace");
+        assert_eq!(third["state"]["tabs"][1]["space"]["kind"], "task");
+        // Ready for a terminal: ⌘D opens one in the new workspace's empty tab.
+        let filled = otto.user_key("cmd-d");
+        assert_eq!((pane_ids(&filled), &filled["state"]["focused"]), (vec![1, 2], &json!(2)));
+        // × takes it off the row, and it stays listed; its row brings it back with its terminal.
+        let shown = row(&filled).len();
+        let hidden = otto.user_key("cmd-ctrl-w");
+        assert_eq!((row(&hidden).len(), names(&hidden).len(), pane_ids(&hidden)), (shown - 1, 3, vec![1, 2]));
+        let at_row = at(rect(&otto.drawn()["workbooks"][2]["row"]), 0.3, 0.3);
+        let back = otto.user_click(at_row);
+        assert_eq!((row(&back).len(), &back["state"]["focused"]), (shown, &json!(2)), "{back}");
+        otto.call(json!({"cmd": "quit"}));
+        exits(&mut otto);
+    }
+    // Another run: the workspaces are listed and their spaces are on the row again.
+    let otto = Otto::launch_with("workspace-new-2", &env);
+    let again = otto.call(json!({"cmd": "state"}));
+    assert_eq!(names(&again), ["Workspace 2", "Workspace 3", "Workspace 4"]);
+    let books = row(&again).iter().filter(|(kind, ..)| kind == "workbook").count();
+    assert_eq!((books, pane_ids(&again).len()), (3, 2), "{again}");
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_saved_tab_is_a_workbook_kept_between_runs() {
@@ -5623,10 +5714,9 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
     let again = otto.user_click(row);
     assert_eq!((titles(&again).len(), &again["state"]["active"], pane_ids(&again)), (2, &json!(1), vec![1, 2]));
 
-    // Saving its tab again, with the header's +, updates the workbook and offers the old one back.
+    // Saving its tab again (⌘⇧S) updates the workbook and offers the old one back.
     otto.call(json!({"cmd": "split"}));
-    let (_, labels) = sneak(&otto);
-    let updated = otto.user_key(&letters(&labels["bar:save_tab"]));
+    let updated = otto.user_key("cmd-shift-s");
     assert_eq!(
         (&updated["workbooks"][0]["summary"], &updated["workbook_offer"], &updated["mode"]),
         (&json!("3 terminals"), &json!("updated"), &json!("normal"))
@@ -5676,7 +5766,7 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
     let otto = Otto::launch_with("workbook-3", &env);
     let listed = otto.call(json!({"cmd": "section", "section": "workbook"}));
     let notice = listed["notice"].as_str().unwrap_or_default();
-    assert!(names(&listed) == ["ops"] && notice.contains("workbooks: 2 file(s) could not be read"), "{listed}");
+    assert!(names(&listed) == ["ops"] && notice.contains("workspaces: 2 file(s) could not be read"), "{listed}");
     let row = at(rect(&otto.drawn()["workbooks"][0]["row"]), 0.3, 0.3);
     let said = "is gone; its terminal starts in your home folder";
     let opened = otto.wait_for("the missing directory to be noticed", |o| {
@@ -6580,7 +6670,7 @@ fn the_tab_strip_ends_where_the_panes_end_and_its_buttons_stay_in_view() {
             assert!(b[0] + b[2] <= window[2], "{what}: {id} {b:?} runs past the window's end {}", window[2]);
             first = first.min(b[0]);
         }
-        let new_task = frames.iter().find(|(i, _)| i == "top:new_task").map(|(_, b)| b[0]).expect("the +");
+        let new_task = frames.iter().find(|(i, _)| i == "top:new_workspace").map(|(_, b)| b[0]).expect("the +");
         let spaces: Vec<_> = frames.iter().filter(|(i, _)| i.starts_with("space:")).collect();
         assert!(!spaces.is_empty() && new_task < first, "{what}: no space drawn, or the + under the buttons");
         for (id, b) in spaces {

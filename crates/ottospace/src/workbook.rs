@@ -1,4 +1,5 @@
-//! Workbooks in the shell: the Workbook section and the files in `~/.ottospace/workbooks`.
+//! Workbooks in the shell (the user reads "workspace"): the Workspaces section and the files in
+//! `~/.ottospace/workbooks`.
 //! What one holds and what opening it does are the core's (`ottospace_core::workbook`).
 
 use gpui::{Context, Div, ElementId, Window, div, prelude::*, px, rgb};
@@ -33,7 +34,7 @@ impl Workspace {
         let read = |(uid, text): &(String, String)| workbook::parse(text, uid).ok();
         let workbooks: Vec<workbook::Workbook> = kept.files.iter().filter_map(read).collect();
         let unread = kept.unread + kept.files.len() - workbooks.len();
-        let unread = (unread > 0).then(|| format!("workbooks: {unread} file(s) could not be read; left as they are"));
+        let unread = (unread > 0).then(|| format!("workspaces: {unread} file(s) could not be read; left as they are"));
         self.kept_workbooks.notice = kept.error.or(unread);
         self.model.update(Action::RestoreWorkbooks { workbooks }.sent_by(Origin::System));
         // What was read needs no writing back: a stage 1 file is written as version 2 at its next change.
@@ -75,14 +76,14 @@ impl Workspace {
             match config::save_workbook(uid, text) {
                 Ok(()) => stored.push((uid.clone(), text.clone())),
                 Err(err) => {
-                    failed = Some(format!("workbooks: could not save one: {err}"));
+                    failed = Some(format!("workspaces: could not save one: {err}"));
                     stored.extend(was(uid).cloned()); // what the file still holds, if there is one
                 }
             }
         }
         for (uid, text) in before.iter().filter(|(uid, _)| !now.iter().any(|(kept, _)| kept == uid)) {
             if let Err(err) = config::remove_workbook(uid) {
-                failed = Some(format!("workbooks: could not delete one: {err}"));
+                failed = Some(format!("workspaces: could not delete one: {err}"));
                 stored.push((uid.clone(), text.clone()));
             }
         }
@@ -103,7 +104,13 @@ impl Workspace {
         true
     }
 
-    /// ⌘⇧S, the menu, the header's +: saves the tab on show, or updates the workbook it came from.
+    /// + on the top row, in the section's header, and the empty section's words: a new workbook
+    /// of no tab, its space open with one empty tab. Never the tab on show.
+    pub(crate) fn new_workspace(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let _ = self.workbook_act(Action::WorkbookNew { uid: marks::new_uid() }, window, cx);
+    }
+
+    /// ⌘⇧S and the menu: saves the tab on show, or updates the workbook it came from.
     pub(crate) fn save_workbook(&mut self, window: &Window, cx: &mut Context<Self>) {
         let refused = self.model.workbook_save_refusal();
         let action = Action::WorkbookSave { uid: marks::new_uid(), cwds: self.cwds(), histories: self.histories() };
@@ -133,7 +140,7 @@ impl Workspace {
         if self.model.list.is_none() {
             self.dispatch(Action::FocusList, self.input, window, cx);
         }
-        self.error = Some("pick a workbook: A adds this tab to it".into());
+        self.error = Some("pick a workspace: A adds this tab to it".into());
         cx.notify();
     }
 
@@ -186,7 +193,7 @@ impl Workspace {
         self.error = Some(self.error.take().map_or(gone.clone(), |unhosted| format!("{gone}; {unhosted}")));
     }
 
-    /// A click on "Updated · Undo" or "Workbook deleted · Undo", or its label.
+    /// A click on "Updated · Undo" or "Workspace deleted · Undo", or its label.
     pub(crate) fn undo_workbook(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.workbook_act(Action::WorkbookUndo, window, cx);
     }
@@ -239,16 +246,16 @@ impl Workspace {
     pub(crate) fn render_workbooks(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let rows = self.model.workbook_rows();
         let empty = rows.is_empty().then(|| {
-            let save = div()
-                .id("workbook-save")
+            let new = div()
+                .id("workbook-new")
                 .relative()
                 .cursor_pointer()
                 .text_color(rgb(theme::PRIMARY))
-                .child("Save this tab")
-                .child(self.controls.mark("workbook-save"))
-                .on_click(cx.listener(|this, _, window, cx| this.save_workbook(window, cx)));
+                .child("New workspace")
+                .child(self.controls.mark("workbook-new"))
+                .on_click(cx.listener(|this, _, window, cx| this.new_workspace(window, cx)));
             let line = div().px_2().flex().flex_wrap().gap_1().text_xs().text_color(rgb(theme::MUTED));
-            line.child("No workbooks yet —").child(save)
+            line.child("No workspaces yet —").child(new)
         });
         let typing = |id: WorkbookId, at: Option<usize>| matches!(&self.model.mark_input, Some(MarkInput::Workbook { workbook, tab, .. }) if *workbook == id && *tab == at);
         // A dot while it is open.
@@ -328,7 +335,7 @@ impl Workspace {
                     .items_center()
                     .child(word("workbook-tab-open", ("Open", "Open this tab (↵)"), cx))
                     .child(word("workbook-tab-rename", ("Rename", "Type its title (R)"), cx))
-                    .child(word("workbook-tab-remove", ("Remove", "Take it out of the workbook (X)"), cx));
+                    .child(word("workbook-tab-remove", ("Remove", "Take it out of the workspace (X)"), cx));
                 let name = self.workbook_name(renaming, tab.title, cx);
                 let title = div().w_full().flex().items_center().gap_2().child(name.flex_1().min_w_0());
                 let summary = div().w_full().truncate().text_xs().text_color(rgb(theme::MUTED)).child(tab.summary);

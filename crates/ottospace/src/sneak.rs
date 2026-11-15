@@ -294,7 +294,7 @@ impl Workspace {
         }
         let action = match (kind, name) {
             ("rail", _) => {
-                let section = SECTIONS.iter().find(|(_, _, label)| label.eq_ignore_ascii_case(name));
+                let section = SECTIONS.iter().find(|(_, _, label)| crate::rail_id(label) == format!("rail:{name}"));
                 section.map(|(section, ..)| Action::ToggleSection { section: *section })
             }
             ("bar", "close") => Some(Action::CloseSidebar),
@@ -334,8 +334,8 @@ impl Workspace {
             ("task" | "home-row" | "home-node", _) => number.map(|id| Action::TaskGo { id: Some(id) }),
             ("space", _) => name.parse().ok().map(|index| Action::SpaceSelect { index }),
             ("space-hide", _) => name.parse().ok().map(|index| Action::SpaceHide { index: Some(index) }),
-            ("top", "new_task") => {
-                self.new_task(window, cx);
+            ("top", "new_workspace") | ("workbook-new", _) => {
+                self.new_workspace(window, cx);
                 None
             }
             ("tasks-view", _) => {
@@ -409,10 +409,6 @@ impl Workspace {
             }
             ("workbook-undo", _) => {
                 self.undo_workbook(window, cx);
-                None
-            }
-            ("bar", "save_tab") | ("workbook-save", _) => {
-                self.save_workbook(window, cx);
                 None
             }
             ("top", _) => {
