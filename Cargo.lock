@@ -3839,7 +3839,6 @@ name = "ottospace-sessions"
 version = "0.1.0"
 dependencies = [
  "ottospace-core",
- "serde",
  "serde_json",
 ]
 

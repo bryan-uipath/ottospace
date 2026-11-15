@@ -377,7 +377,7 @@ impl Model {
     /// The shown conversation's dial, the other way: the user's pick, kept for its task.
     pub(super) fn dial_toggle(&mut self) {
         let Some(subject) = self.talk.as_ref().filter(|talk| talk.open).map(|talk| talk.task.clone()) else { return };
-        if self.chat(&subject).is_none() {
+        if self.chat(&subject).is_none() || self.talk_view(&subject) != View::Native {
             return;
         }
         let collapsed = !self.dial_collapsed(&subject);

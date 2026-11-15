@@ -448,6 +448,8 @@ impl Transcript {
     /// is one quiet divider, in place of the end just before it: one conversation, not two.
     pub fn started(&mut self, resumed: bool) {
         (self.live, self.watched, self.replied, self.stopping) = (true, false, false, false);
+        // Calls a watched file never ended are not this process's.
+        self.activity.settle(None, 0);
         if !resumed {
             return;
         }
@@ -565,8 +567,8 @@ impl Transcript {
                 self.push(Entry::AutoDenied { tool, label, reason, detail })
             }
             Event::Usage { context, window, cost_micro_usd } => {
-                // A model request's usage: a step, when no reply or call said so first (watched).
-                if context.is_some() {
+                // A watched model request: its file says no more of it. Live, its replies and calls say it.
+                if context.is_some() && self.watched {
                     self.activity.step(at);
                 }
                 self.context = context.or(self.context);
@@ -621,6 +623,8 @@ impl Transcript {
             Event::WatchFromStart => {}
             Event::Hook => self.activity.hook(at),
             Event::MessageElsewhere => {
+                // A new message there: its calls before it are over.
+                self.activity.settle(None, at);
                 self.activity.message(at);
                 self.settle();
                 self.push(Entry::Notice(Notice::MessageElsewhere));
@@ -828,6 +832,40 @@ mod tests {
         fresh.fold(Event::Exited { code: None, signal: None, details: false }, 4);
         fresh.started(true);
         assert_eq!(fresh.items().len(), 3, "{:?}", texts(&fresh));
+    }
+
+    /// Live, a usage line after a call is no second model request; a watched call left open is
+    /// over at the next message there, and at a start here.
+    #[test]
+    fn the_dial_counts_a_step_once_and_drops_calls_left_open() {
+        let call = |id: &str| Event::ToolStart {
+            id: id.into(),
+            sub: false,
+            tool: "Bash".into(),
+            station: Station::Shell,
+            label: "ls".into(),
+            detail: Text::default(),
+            diff: None,
+        };
+        let usage = Event::Usage { context: Some(5), window: None, cost_micro_usd: None };
+        let mut t = Transcript::default();
+        t.started(false);
+        t.send("go", 0);
+        t.fold(call("a"), 1);
+        t.fold(Event::ToolEnd { id: "a".into(), failed: false }, 2);
+        t.fold(usage.clone(), 3);
+        let model = |t: &Transcript| t.dial(4).spot(Station::Model).map(|spot| spot.calls);
+        assert_eq!(model(&t), Some(1));
+        let lit = |t: &Transcript| t.dial(9).spot(Station::Shell).is_some_and(|spot| spot.lit);
+        let mut w = Transcript { watched: true, ..Transcript::default() };
+        w.fold(usage, 1);
+        w.fold(call("b"), 2);
+        assert!(model(&w) == Some(1) && lit(&w));
+        w.fold(Event::MessageElsewhere, 3);
+        assert!(!lit(&w), "a new message there");
+        w.fold(call("c"), 4);
+        w.started(true);
+        assert!(!lit(&w), "taken over here");
     }
 
     #[test]
