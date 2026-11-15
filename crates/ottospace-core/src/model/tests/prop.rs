@@ -2128,8 +2128,7 @@ impl Run {
         let composing = m.composing();
         let palette_typing = m.field().is_some_and(|(of, _)| of == "palette");
         // ↵ in list mode on a meeting row of the Calendar section: that row's Join.
-        let on_meeting = m.sidebar == Some(Section::Calendar)
-            && matches!(m.list.and_then(|at| m.list_rows().into_iter().nth(at)), Some(ListRow::Meeting(_)));
+        let on_meeting = matches!(m.list.and_then(|at| m.list_rows().into_iter().nth(at)), Some(ListRow::Meeting(_)));
         let tab_before = m.tabs[m.active].id;
         let tabs_before: Vec<u32> = m.tabs.iter().map(|tab| tab.id).collect();
         let talks = matches!(
