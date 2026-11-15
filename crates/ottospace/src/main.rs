@@ -441,12 +441,19 @@ const SPLITS: [(&str, &str, &str, Axis, bool); 3] = [
     ("split_down", "icons/split-down.svg", "Split down…  ⌘⇧E", Axis::Down, false),
 ];
 
+/// A rail cell's control id: `rail:tasks`. The Workspaces cell keeps `rail:workbook`, as the
+/// requests and the state keep that name.
+pub(crate) fn rail_id(label: &str) -> String {
+    let name = if label == "Workspaces" { "workbook".into() } else { label.to_lowercase() };
+    format!("rail:{name}")
+}
+
 /// Rail sections in order, with their icon and label.
 const SECTIONS: [(Section, &str, &str); 6] = [
     (Section::Tasks, "icons/tasks.svg", "Tasks"),
     (Section::Calendar, "icons/calendar.svg", "Calendar"),
     (Section::Apps, "icons/apps.svg", "Apps"),
-    (Section::Workbook, "icons/workbook.svg", "Workbook"),
+    (Section::Workbook, "icons/workbook.svg", "Workspaces"),
     (Section::Repos, "icons/repos.svg", "Repos"),
     (Section::Marks, "icons/marks.svg", "Marks"),
 ];
@@ -4058,7 +4065,7 @@ impl Workspace {
                         })))
                         .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(label.into()))))
                         .children((section == Section::Calendar).then(|| self.calendar_rail_mark()).flatten())
-                        .child(self.controls.mark(format!("rail:{}", label.to_lowercase())))
+                        .child(self.controls.mark(rail_id(label)))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.dispatch(Action::ToggleSection { section }, this.input, window, cx);
                         }))
@@ -4105,7 +4112,7 @@ impl Workspace {
         let add = match section {
             Section::Tasks => Some(("New task (⌘N)", "bar:add")),
             Section::Repos => Some(("Add a repository…", "bar:add")),
-            Section::Workbook => Some(("Save this tab as a workbook (⌘⇧S)", "bar:save_tab")),
+            Section::Workbook => Some(("New workspace", "bar:add")),
             _ => None,
         };
         div()
@@ -4144,12 +4151,12 @@ impl Workspace {
             ))
     }
 
-    /// The header's +: a new task in Tasks, a repository to list in Repos, the tab on show in Workbook.
+    /// The header's +: a new task in Tasks, a repository to list in Repos, a new workspace in Workspaces.
     pub(crate) fn bar_add(&mut self, section: Section, window: &Window, cx: &mut Context<Self>) {
         match section {
             Section::Tasks => self.new_task(window, cx),
             Section::Repos => self.pick_repo(window, cx),
-            Section::Workbook => self.save_workbook(window, cx),
+            Section::Workbook => self.new_workspace(window, cx),
             _ => {}
         }
     }
@@ -5314,8 +5321,8 @@ impl Workspace {
                     this.dispatch(Action::SpaceCycle { delta: 1 }, this.input, window, cx);
                 }))
         });
-        let new_task = div()
-            .id("new-task")
+        let new_space = div()
+            .id("new-workspace")
             .flex_none()
             .w(px(28.))
             .h(px(24.))
@@ -5328,9 +5335,9 @@ impl Workspace {
             .text_color(rgb(theme::MUTED))
             .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
             .child("+")
-            .child(self.controls.mark("top:new_task"))
-            .tooltip(|_, cx| AnyView::from(cx.new(|_| Tooltip("New task (⌘N)".into()))))
-            .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)));
+            .child(self.controls.mark("top:new_workspace"))
+            .tooltip(|_, cx| AnyView::from(cx.new(|_| Tooltip("New workspace".into()))))
+            .on_click(cx.listener(|this, _, window, cx| this.new_workspace(window, cx)));
         // The traffic lights sit over the left column: room for them only where it is narrower.
         div()
             .h(px(TOP_BAR))
@@ -5354,7 +5361,7 @@ impl Workspace {
             )
             .child(div().flex_shrink().min_w_0().h_full().flex().overflow_hidden().children(spaces))
             .children(more)
-            .child(new_task)
+            .child(new_space)
             .child(self.render_top_buttons(cx))
     }
 
@@ -5441,7 +5448,7 @@ impl Workspace {
                     .when_some(self.workbook_of(id), |d, book| {
                         let icon = svg().path("icons/workbook.svg").size(px(12.)).flex_none();
                         d.child(icon.text_color(rgb(theme::MUTED))).tooltip(move |_, cx| {
-                            AnyView::from(cx.new(|_| Tooltip(format!("Workbook: {book}").into())))
+                            AnyView::from(cx.new(|_| Tooltip(format!("Workspace: {book}").into())))
                         })
                     })
                     .child(div().flex_1().min_w_0().truncate().child(tab.title.clone()))
@@ -5515,7 +5522,7 @@ impl Workspace {
             Mode::Mark => match self.model.mark_input {
                 Some(MarkInput::Rename { .. }) => ("MARK", ""),
                 Some(MarkInput::SetKey { .. }) => ("MARK", "a letter for the mark · ⌫ for none · esc cancels"),
-                Some(MarkInput::Workbook { .. }) => ("WORKBOOK", ""),
+                Some(MarkInput::Workbook { .. }) => ("WORKSPACE", ""),
                 Some(MarkInput::Worktree { .. }) => ("WORKTREE", "↵ add · esc cancels"),
                 _ => ("MARK?", "a mark's letter · esc cancels"),
             },
