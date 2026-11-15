@@ -1554,7 +1554,10 @@ fn open_settings_edits_the_file_and_the_status_bar_says_what_is_wrong_until_it_i
         (reply["settings_errors"] == 1).then_some(reply)
     };
     let reply = otto.wait_for("the problem said", said);
-    assert_eq!(reply["notice"], "settings.json:3:1 trailing comma");
+    assert_eq!(
+        (&reply["notice"], &reply["notice_level"]),
+        (&json!("settings.json:3:1 trailing comma"), &json!("error"))
+    );
     assert_eq!(reply["state"]["tasks_view"], "state");
     // Removed: as at a start with no file, the defaults, and nothing to say.
     std::fs::remove_file(&file).unwrap();
@@ -1575,6 +1578,8 @@ fn open_settings_edits_the_file_and_the_status_bar_says_what_is_wrong_until_it_i
         notice.filter(|notice| notice.contains("restart"))
     };
     assert_eq!(otto.wait_for("a restart asked for", restart), "settings.json: restart to apply terminal");
+    // Information, not an error: drawn muted.
+    assert_eq!(otto.call(json!({"cmd": "state"}))["notice_level"], "info");
 
     // Again, from the first tab: the Settings tab comes forward, no second one.
     otto.call(json!({"cmd": "select_tab", "index": 0}));
@@ -5472,9 +5477,11 @@ fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_works
     assert_eq!(otto.user_key("cmd-ctrl-1")["state"]["talk"]["open"], false);
     assert_eq!(otto.user_click(at(otto.control("rail-talk:1"), 0.5, 0.5))["state"]["talk"]["open"], true);
 
-    // Stop ends it: the task needs the user.
-    let stopped = otto.user_click(at(otto.control("talk:talk-stop"), 0.5, 0.5));
-    assert_eq!(stopped["state"]["agents"], json!([]));
+    // Stop ends it, once its process is gone: the task needs the user.
+    otto.user_click(at(otto.control("talk:talk-stop"), 0.5, 0.5));
+    let stopped = otto.wait_for("its process gone", |o| {
+        Some(o.call(json!({"cmd": "state"}))).filter(|s| s["state"]["agents"] == json!([]))
+    });
     assert_eq!(stopped["state"]["tasks"]["list"][0]["state"], "needs_you");
 
     // A task tagged with a Codex model starts Codex with that model, in the home folder.
@@ -5722,8 +5729,11 @@ fn a_click_shows_a_session_and_resume_goes_on_with_it_in_the_drawer() {
     let reads = |o: &Otto| o.call(json!({"cmd": "state"}))["sessions_bar"]["reads"].as_u64().unwrap_or(0);
     let read = reads(&otto);
     otto.wait_for("a read that sees the agent's process", |o| (reads(o) > read + 1).then_some(()));
-    let stopped = otto.user_click(at(otto.control("talk:talk-stop"), 0.5, 0.5));
-    assert_eq!(stopped["state"]["agents"], json!([]), "{stopped}");
+    otto.user_click(at(otto.control("talk:talk-stop"), 0.5, 0.5));
+    // Nothing starts on the session until its process is gone.
+    otto.wait_for("its process gone", |o| {
+        (o.call(json!({"cmd": "state"}))["state"]["agents"] == json!([])).then_some(())
+    });
     otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
     let again = otto.user_start();
     assert_eq!((&again["drawer"]["note"], &again["state"]["agents"]), (&Value::Null, &json!([1])), "{again}");
@@ -5735,6 +5745,9 @@ fn a_click_shows_a_session_and_resume_goes_on_with_it_in_the_drawer() {
     // resume, which goes on in the folder it started in, not the repository.
     std::fs::remove_file(bin.join("claude.argv")).unwrap();
     otto.user_click(at(otto.control("talk:talk-stop"), 0.5, 0.5));
+    otto.wait_for("its process gone", |o| {
+        (o.call(json!({"cmd": "state"}))["state"]["agents"] == json!([])).then_some(())
+    });
     otto.call(json!({"cmd": "section", "section": "tasks"}));
     otto.wait_for("nothing listed", |o| (o.call(json!({"cmd": "state"}))["sessions_bar"]["count"] == 0).then_some(()));
     otto.user_key("cmd-shift-l");
@@ -7260,8 +7273,7 @@ fn an_agent_that_ends_before_replying_says_why() {
         (chat["transcript"]["live"] == false && chat["details"] == true).then_some(chat)
     });
     let last = ended["transcript"]["entries"].as_array().unwrap().last().cloned().unwrap();
-    let notice =
-        json!({"kind": "notice", "notice": "ended", "code": 0, "signal": null, "replied": false, "details": true});
+    let notice = json!({"kind": "notice", "notice": "ended", "code": 0, "signal": null, "replied": false, "details": true, "by_user": false});
     assert_eq!(last, notice, "{ended}");
     assert_eq!(ended["transcript"]["not_understood"], 1, "hook lines are quiet, the made-up kind is not");
     let state = otto.call(json!({"cmd": "state"})).to_string();
@@ -7315,7 +7327,7 @@ fn a_message_after_the_agent_ended_starts_it_again_and_is_sent() {
     let kinds: Vec<&str> =
         replied["transcript"]["entries"].as_array().unwrap().iter().filter_map(|e| e["kind"].as_str()).collect();
     assert_eq!((kinds, &replied["transcript"]["not_understood"]), (vec!["user", "assistant"], &json!(0)), "{replied}");
-    otto.user_click(at(otto.control("talk:talk-stop"), 0.5, 0.5));
+    stop_the_agent(&otto);
     otto.wait_for("the end", |o| (chat(o)["transcript"]["live"] == false).then_some(()));
     // A client's words reach nothing; the user's ↵ starts it again and sends them.
     otto.call(json!({"cmd": "key", "keys": "x enter"}));
@@ -7324,6 +7336,113 @@ fn a_message_after_the_agent_ended_starts_it_again_and_is_sent() {
     otto.user_key("s a y space h e l l o enter");
     otto.wait_for("the message", |_| (starts() == 2 && stdin().contains(r#""text":"say hello""#)).then_some(()));
     assert_eq!(chat(&otto)["draft_chars"], 0);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The user's "Stop the Agent", from the palette: a native drawer has no Stop for the agent.
+fn stop_the_agent(otto: &Otto) {
+    otto.user_key("cmd-p");
+    otto.user_key("s t o p space t h e space a g e n t");
+    otto.user_key("enter");
+}
+
+/// Stop is at the composer while a turn runs, nowhere else. The agent stopped: nothing says it
+/// cannot be resumed, no Resume until its process is gone; Resume (the composer's button) goes
+/// on with the session, and the conversation reads on: one quiet divider, no sentence of an end
+/// or of turns elsewhere, and the resume's hook lines (SYNTHETIC: no recording of a resume) are
+/// no line not understood.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_message_right_after_stop_resumes_once_and_nothing_says_it_cannot() {
+    let fixtures = [("turn1.jsonl", recorded("real-2.1.325-turn.jsonl"))];
+    let (root, record, mut env) = native_setup("stop-send", &fixtures, &[]);
+    env.push(("FAKE_SESSIONS".into(), root.join("sessions/claude").to_str().unwrap().into()));
+    let otto = launch_env("stop-send", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "plan the week >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    let starts = || std::fs::read_to_string(record.join("starts")).unwrap_or_default().lines().count();
+    let sent = || std::fs::read_to_string(record.join("stdin")).unwrap_or_default().matches("say hello").count();
+    otto.start_task(1);
+    otto.wait_for("the reply", |o| {
+        let chat = chat(o);
+        (chat["transcript"]["turn"].is_null() && chat["replies"].as_array()?.len() == 1).then_some(())
+    });
+    // Stop, and at once a message and ↵: no refusal, then one resume, and the message once.
+    stop_the_agent(&otto);
+    let typed = otto.user_key("s a y space h e l l o enter");
+    assert_eq!((&typed["drawer"]["note"], &typed["notice"]), (&Value::Null, &Value::Null), "nothing says it cannot");
+    otto.wait_for("one resume, and the message", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        assert_eq!(state["drawer"]["note"], Value::Null, "nothing says it cannot");
+        (starts() == 2 && sent() == 1).then_some(())
+    });
+    let argv = std::fs::read_to_string(record.join("argv")).unwrap_or_default();
+    assert!(argv.lines().any(|a| a == "--resume"), "{argv}");
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!((starts(), sent()), (2, 1), "once each");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_stopped_agent_resumes_as_one_conversation() {
+    let resume = [
+        r#"{"type":"system","subtype":"hook_started","hook_name":"SessionStart:resume","session_id":"s"}"#,
+        r#"{"type":"system","subtype":"hook_progress","hook_name":"SessionStart:resume","session_id":"s"}"#,
+        r#"{"type":"system","subtype":"hook_response","hook_name":"SessionStart:resume","session_id":"s"}"#,
+    ]
+    .join("\n");
+    let fixtures = [("turn1.jsonl", recorded("real-2.1.325-turn.jsonl")), ("resume.jsonl", resume)];
+    let (root, record, mut env) = native_setup("stop-resume", &fixtures, &[]);
+    env.push(("FAKE_SESSIONS".into(), root.join("sessions/claude").to_str().unwrap().into()));
+    let otto = launch_env("stop-resume", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "plan the week >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    let argv = || std::fs::read_to_string(record.join("argv")).unwrap_or_default();
+    let ids = |o: &Otto| -> Vec<String> { o.controls().into_iter().map(|(id, _)| id).collect() };
+    otto.start_task(1);
+    otto.wait_for("the reply", |o| {
+        let chat = chat(o);
+        (chat["transcript"]["turn"].is_null() && chat["replies"].as_array()?.len() == 1).then_some(())
+    });
+    // No turn: no Stop anywhere. A turn: Stop at the composer, none in the header.
+    assert!(!ids(&otto).iter().any(|id| id == "talk:chat-stop" || id == "talk:talk-stop"), "{:?}", ids(&otto));
+    otto.user_click(at(otto.control("talk"), 0.5, 0.5));
+    otto.user_key("g o space o n enter");
+    otto.wait_for("a turn", |o| (!chat(o)["transcript"]["turn"].is_null()).then_some(()));
+    let drawn = ids(&otto);
+    assert!(
+        drawn.iter().any(|id| id == "talk:chat-stop") && !drawn.iter().any(|id| id == "talk:talk-stop"),
+        "{drawn:?}"
+    );
+    // The agent stopped: until it is gone and after, nothing says it cannot go on.
+    stop_the_agent(&otto);
+    let ended = otto.wait_for("the end", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        assert_eq!(state["drawer"]["note"], Value::Null, "no 'cannot' while it stops");
+        (state["drawer"]["native"]["chats"]["1"]["transcript"]["live"] == false).then_some(state)
+    });
+    assert_eq!(ended["drawer"]["note"], Value::Null);
+    let before = chat(&otto)["transcript"]["entries"].as_array().unwrap().len();
+    otto.user_start();
+    otto.wait_for("claude --resume", |_| argv().lines().any(|a| a == "--resume").then_some(()));
+    let resumed = otto.wait_for("it runs again", |o| (chat(o)["transcript"]["live"] == true).then_some(chat(o)));
+    let entries = resumed["transcript"]["entries"].as_array().unwrap().clone();
+    // The end gave way to one divider: as many entries as before, the last a resume with its turns on show.
+    assert_eq!(entries.len(), before, "{resumed}");
+    let last = entries.last().unwrap();
+    assert_eq!(
+        (&last["notice"], &last["here"], &last["ended"]["by_user"]),
+        (&json!("resumed"), &json!(true), &json!(true)),
+        "{last}"
+    );
+    assert_eq!(resumed["transcript"]["not_understood"], 0, "hook lines are quiet");
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
 }

@@ -69,6 +69,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     font: { name: "Menlo", size: 13 },
     cell: [7.82666015625, 18],
     notice: null,
+    notice_level: null,
     settings_errors: 0,
     hosted: {},
     crop: {},
