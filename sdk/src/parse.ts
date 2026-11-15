@@ -89,6 +89,7 @@ import type {
   ReposGroup,
   RepoDirs,
   CheckoutRow,
+  PullRequest,
   AppsBar,
   ClosedApp,
   Sneak,
@@ -845,7 +846,29 @@ function checkoutRow(value: unknown, at: string): CheckoutRow {
     branch: str(o.branch, `${at}.branch`),
     default: bool(o.default, `${at}.default`),
     label: str(o.label, `${at}.label`),
+    pr: orNull(pullRequest)(o.pr, `${at}.pr`),
     row: orNull(rect)(o.row, `${at}.row`),
+  };
+}
+
+/** One of `kinds`, or a parse error. */
+function oneOf<T extends string>(kinds: readonly T[], what: string): Parse<T> {
+  return (value, at) => {
+    if (typeof value === "string" && (kinds as readonly string[]).includes(value)) return value as T;
+    throw wrong(at, what, value);
+  };
+}
+
+function pullRequest(value: unknown, at: string): PullRequest {
+  const o = fields(value, at);
+  return {
+    number: num(o.number, `${at}.number`),
+    draft: bool(o.draft, `${at}.draft`),
+    look: oneOf(["failing", "draft", "pending", "ready", "open"] as const, "a pull request's look")(o.look, `${at}.look`),
+    checks: oneOf(["none", "passing", "running", "failing"] as const, "checks")(o.checks, `${at}.checks`),
+    failed: num(o.failed, `${at}.failed`),
+    review: oneOf(["none", "approved", "changes_requested", "required"] as const, "a review")(o.review, `${at}.review`),
+    merge: oneOf(["clean", "conflicts", "behind", "blocked", "unknown"] as const, "a merge state")(o.merge, `${at}.merge`),
   };
 }
 

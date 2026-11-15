@@ -54,6 +54,7 @@ ottospace            # opens on the Repos list
 | Stop listing a repository | Point at its name in Repos: the trash. Only for one added as itself; nothing on disk is touched. While a task works there it asks first (↵ unlists, Esc keeps it) |
 | New worktree | Point at a repository's name in Repos: +, type a branch, ↵. It goes in `~/.ottospace/worktrees/<repo>/<branch>` (`worktrees_dir`) and opens as a terminal tab |
 | Fold a repository | Its chevron, or ← / → in list mode |
+| A worktree's pull request | Its `#number` at the row's end: muted draft, ✓ ready, amber waiting, red failing. Hover for checks, review and merge; click opens it (via `gh`, `repos_prs`) |
 | Close the bar | × in its header |
 | Click anything without the mouse | ⌘; or ⌘⌃G: every control gets a letter label (a × gets two), and so do the buttons and text fields of the focused app pane, in orange, two letters or more. Type it · ⌫ takes a letter back · Esc or a wrong letter leaves. An orange label presses that button in the app, or puts you in its text field |
 

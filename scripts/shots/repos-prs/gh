@@ -1,0 +1,4 @@
+#!/bin/sh
+# A stand-in for gh: logged in, and each repository's fixture.
+[ "$1" = auth ] && exit 0
+cat "{ROOT}/prs/$(basename "$PWD").json"

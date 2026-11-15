@@ -49,6 +49,36 @@ The Repos section lists each repository's name over its checkouts. Clicks on a r
    characters, in the status bar; an empty `<repo>` folder made in step 4 goes; anything git
    left is left, and said.
 
+## Pull requests (`prs.rs` in the core and the shell; `SetPrs`, `PrOpen`, `Effect::OpenPr`)
+
+- **When**: only while the Repos section is open (`prs::due`): a repository is read every 5
+  minutes, and on the section's opening if its last read is a minute old or more. Only a
+  repository whose `origin` is on github.com (`.git/config`). `repos_prs`: `auto` (default),
+  `on`, `off`. gh is found in the absolute folders of `PATH`, then `/opt/homebrew/bin`, `/usr/local/bin`; a test run uses
+  only `OTTOSPACE_GH`, a stand-in.
+- **What runs**, on its own thread, 20 s each, no prompt, no colour, no update check:
+  - once, and again after 5 minutes while it fails: `gh auth status --hostname github.com`
+  - per repository, in its folder: `git config --get-regexp '^(branch\..*\.remote|remote\..*\.url)$'`,
+    `git -C <checkout> rev-parse HEAD` per checkout, then
+    `gh pr list --state open --limit 100 --json number,title,isDraft,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,baseRefName,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,url`
+- **Whose pull request** (`prs::pick`): of the checkout's branch name, and from the repository
+  the branch pushes to: its own remote (`branch.<name>.remote`) by `owner/name`, else `origin`,
+  and then only a same-repository pull request (`isCrossRepository` false). A fork's pull
+  request with the same branch name is never a worktree's. Two candidates: the one whose
+  `headRefOid` is the checkout's commit; else none.
+- **The mark** (`Summary::look`), by precedence: `failing` (a failed check, changes requested,
+  a conflict: red dot), `draft` (number muted, no dot), `pending` (checks running, review
+  required: amber dot), `ready` (approved, checks passing or none, mergeable and clean: green
+  tick), else `open` (the number alone).
+- **The card** on hover: title, `Draft`/`Open` → base, checks (passing, running, or up to three
+  failing names and how many more), review, merge. Titles and check names are other people's
+  text: cleaned (`transcript::clean`), one line, cut short, never a link, never in the state
+  (the state's `pr` is numbers and kinds). Nothing gh says is ever an argument or a path.
+- **Open**: the user's click only (`PrOpen` is refused from anyone else), and only a link of the
+  form `https://github.com/<owner>/<repo>/pull/<n>` (`openable`, checked again at the door).
+- **Failures** (no gh, logged out, rate-limited, a timeout): no marks, no popup; with
+  `"repos_prs": "on"` one quiet line at the pane's foot says why.
+
 ## Never done
 
 - No worktree is removed: that deletes a folder, and was not asked for.

@@ -1050,6 +1050,118 @@ fn a_repository_folds_and_the_users_plus_makes_a_worktree_there() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn a_worktrees_pull_request_is_marked_from_a_stand_in_gh_and_only_the_users_click_opens_it() {
+    use std::os::unix::fs::PermissionsExt;
+    // A real repository whose origin is on github.com (never fetched), a worktree for each branch.
+    let root = support::temp(&format!("ottospace-e2e-prs-{}", std::process::id()));
+    let app = root.join("repos/app");
+    std::fs::create_dir_all(&app).unwrap();
+    git(&app, &["init", "-q", "-b", "main"]);
+    git(&app, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "one"]);
+    git(&app, &["remote", "add", "origin", "git@github.com:o/app.git"]);
+    let branches = ["draft", "ready", "failing", "conflict", "forked"];
+    for branch in branches {
+        git(&app, &["worktree", "add", "-q", "-b", branch, root.join(format!("repos/app-{branch}")).to_str().unwrap()]);
+    }
+    let root = root.canonicalize().unwrap();
+    let dir = |name: &str| root.join("repos").join(name).to_string_lossy().into_owned();
+    // gh's answer: one pull request per branch; `forked` is a fork's, of the same branch name.
+    let check =
+        |conclusion: &str| json!({"name": format!("ci {conclusion}"), "status": "COMPLETED", "conclusion": conclusion});
+    let pr = |n: u32,
+              branch: &str,
+              draft: bool,
+              checks: Value,
+              review: &str,
+              mergeable: &str,
+              state: &str,
+              owner: &str| {
+        json!({"number": n, "title": format!("Secret title {n}"), "isDraft": draft, "headRefName": branch,
+            "headRepository": {"name": "app"}, "headRepositoryOwner": {"login": owner}, "isCrossRepository": owner != "o",
+            "baseRefName": "main", "mergeable": mergeable, "mergeStateStatus": state, "reviewDecision": review,
+            "statusCheckRollup": checks, "url": format!("https://github.com/o/app/pull/{n}")})
+    };
+    let answer = json!([
+        pr(11, "draft", true, json!([]), "", "MERGEABLE", "DRAFT", "o"),
+        pr(12, "ready", false, json!([check("SUCCESS")]), "APPROVED", "MERGEABLE", "CLEAN", "o"),
+        pr(
+            13,
+            "failing",
+            false,
+            json!([check("FAILURE"), check("TIMED_OUT")]),
+            "REVIEW_REQUIRED",
+            "MERGEABLE",
+            "BLOCKED",
+            "o"
+        ),
+        pr(14, "conflict", false, json!([check("SUCCESS")]), "APPROVED", "CONFLICTING", "DIRTY", "o"),
+        pr(15, "forked", false, json!([check("SUCCESS")]), "APPROVED", "MERGEABLE", "CLEAN", "mallory"),
+    ]);
+    // The stand-in for gh: logged in, and lists that; it writes how it was called.
+    std::fs::write(root.join("answer.json"), answer.to_string()).unwrap();
+    let gh = root.join("gh");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{log}'\n[ \"$1\" = auth ] && exit 0\ncat '{answer}'\n",
+        log = root.join("gh.argv").display(),
+        answer = root.join("answer.json").display()
+    );
+    std::fs::write(&gh, script).unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let settings = json!({"repos": [root.join("repos")], "restore_layout": false}).to_string();
+    let home = user_folder("prs", &settings);
+    let env = [
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+        ("OTTOSPACE_GH", gh.to_str().unwrap()),
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+        ("GIT_CONFIG_NOSYSTEM", "1"),
+    ];
+    let otto = Otto::launch_with("prs", &env);
+    // Read when the section opens; never before.
+    assert!(!root.join("gh.argv").exists(), "gh ran with the Repos section closed");
+    otto.call(json!({"cmd": "section", "section": "repos"}));
+    let marked = |o: &Otto| {
+        let s = o.drawn();
+        let rows = s["repos_bar"][0]["rows"].as_array()?.clone();
+        rows.iter().any(|r| !r["pr"].is_null()).then_some(s)
+    };
+    let state = otto.wait_for("the pull requests", marked);
+    let row = |name: &str| {
+        let rows = state["repos_bar"][0]["rows"].as_array().unwrap();
+        rows.iter().find(|r| r["path"] == dir(name)).unwrap_or_else(|| panic!("no row {name}")).clone()
+    };
+    let look = |name: &str| row(name)["pr"]["look"].clone();
+    assert_eq!(
+        [look("app-draft"), look("app-ready"), look("app-failing"), look("app-conflict")],
+        [json!("draft"), json!("ready"), json!("failing"), json!("failing")]
+    );
+    // The card's facts, as kinds: what the hover says of checks, review and merge.
+    let failing = row("app-failing")["pr"].clone();
+    assert_eq!(
+        (&failing["checks"], &failing["failed"], &failing["review"]),
+        (&json!("failing"), &json!(2), &json!("required"))
+    );
+    assert_eq!(row("app-conflict")["pr"]["merge"], "conflicts");
+    // A fork's pull request of the same branch name is not this worktree's; main has none.
+    assert!(row("app-forked")["pr"].is_null() && row("app")["pr"].is_null(), "{}", state["repos_bar"]);
+    // Other people's text is never in the state.
+    assert!(!state.to_string().contains("Secret title"), "a title is in the state");
+    // gh was asked with the fixed argv.
+    let argv = std::fs::read_to_string(root.join("gh.argv")).unwrap();
+    assert!(
+        argv.starts_with("auth status --hostname github.com\npr list --state open --limit 100 --json number,"),
+        "{argv}"
+    );
+    // A client's click on the mark opens nothing; the user's opens its link.
+    let mark = format!("repo-pr:{}", dir("app-ready"));
+    let frame = otto.control(&mark);
+    assert_eq!(otto.click(at(frame, 0.5, 0.5), 1)["counts"]["pr_opens"], 0);
+    assert_eq!(otto.user_click(at(frame, 0.5, 0.5))["counts"]["pr_opens"], 1);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn tasks_are_listed_as_an_inbox_and_pop_opens_the_next() {
     let otto = Otto::launch("tasks");
     otto.call(json!({"cmd": "split"}));

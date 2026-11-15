@@ -4,7 +4,6 @@
 
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
 use std::sync::mpsc;
 use std::time::Duration;
 use std::{fs, io};
@@ -74,9 +73,8 @@ fn add(repo: &Path, branch: &str, path: &Path, root: &Path) -> Result<PathBuf, S
 /// The one remote's branch of that name (`origin/feat/map`), if exactly one remote has it.
 fn remote_branch(repo: &Path, branch: &str) -> Option<String> {
     let pattern = format!("refs/remotes/*/{branch}");
-    let mut command = Command::new("git");
-    command.arg("-C").arg(repo).args(["for-each-ref", "--format=%(refname)", &pattern]);
-    command.env("GIT_TERMINAL_PROMPT", "0");
+    let mut command = crate::child::git(repo);
+    command.args(["for-each-ref", "--format=%(refname)", &pattern]);
     let said = crate::child::run(command, TIMEOUT, MAX_OUTPUT).ok().filter(|said| said.ok)?;
     let refs: Vec<&str> = said.out.lines().filter_map(|line| line.strip_prefix("refs/remotes/")).collect();
     match refs[..] {
@@ -127,12 +125,8 @@ fn target(path: &Path, root: &Path) -> Result<(PathBuf, Option<PathBuf>), String
 /// Runs `git -C <repo> <args>`: no prompt, no environment that points it at another repository.
 /// Whether it succeeded, and what it said.
 fn git<S: AsRef<OsStr>>(repo: &Path, args: &[S]) -> Result<(bool, String), String> {
-    let mut command = Command::new("git");
-    command.arg("-C").arg(repo).args(args);
-    for name in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"] {
-        command.env_remove(name);
-    }
-    command.env("GIT_TERMINAL_PROMPT", "0");
+    let mut command = crate::child::git(repo);
+    command.args(args);
     let said = crate::child::run(command, TIMEOUT, MAX_OUTPUT)?;
     // Its message, on standard error, else on standard output.
     Ok((said.ok, if said.err.trim().is_empty() { said.out } else { said.err }))
@@ -142,7 +136,7 @@ fn git<S: AsRef<OsStr>>(repo: &Path, args: &[S]) -> Result<(bool, String), Strin
 mod tests {
     use super::*;
     use crate::scratch::Scratch;
-    use std::process::Stdio;
+    use std::process::{Command, Stdio};
 
     /// git with none of the user's settings (a signing key, hooks): the test's own repository.
     fn git_in(dir: &Path, args: &[&str]) {
