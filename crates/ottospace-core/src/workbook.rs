@@ -869,6 +869,15 @@ impl Model {
             }
         }
         self.list = None;
+        // Its tabs open in Workspace (one saved from there) come into its space; a task's stays the task's.
+        let of = Owner::Workbook { id };
+        let live: Vec<u32> =
+            self.workbooks.get(id).map(|book| book.live.iter().flatten().copied().collect()).unwrap_or_default();
+        self.add_space(&of);
+        for tab in self.tabs.iter_mut().filter(|tab| live.contains(&tab.id) && tab.space == Owner::Workspace) {
+            tab.space = of.clone();
+        }
+        self.regroup();
         let first = self.workbooks.get(id).and_then(|book| self.open_tab(book.live(first)));
         if let Some(index) = first {
             self.select_tab(index, effects);
@@ -1178,15 +1187,16 @@ mod tests {
         m.update(Action::FieldEdit { edit: Edit::Insert("DRI".into()) });
         m.update(Action::MarkSubmit);
         let shares = m.layout.clone();
-        // Its tab is open: it comes forward, and no second one is built.
+        // Its tab is open: it comes into the workbook's space, forward, and no second one is built.
         m.update(Action::NewTab);
         assert_eq!(
             (m.update(Action::WorkbookOpen { workbook: 1, tab: None, home: None }), m.active, m.tabs.len()),
-            (vec![], 0, 2)
+            (vec![], 1, 2)
         );
+        assert_eq!(m.space(), &Owner::Workbook { id: 1 });
         // Closed, it is built again: the splits and ratios, a terminal in its directory, the
         // app asked of the shell as a mark's tab asks, and the empty pane empty.
-        m.update(Action::CloseTab { index: Some(0) });
+        m.update(Action::CloseTab { index: Some(1) });
         assert_eq!(m.workbook_rows()[0].open, false);
         m.workbooks.list[0].tabs[0].panes[1].extra.insert("url".into(), serde_json::json!("https://x"));
         let effects = m.update(Action::WorkbookOpen { workbook: 1, tab: None, home: None });
@@ -1419,7 +1429,8 @@ mod tests {
         let effects = m.update(Action::WorkbookOpen { workbook: 1, tab: None, home: None });
         // Only the closed tab is built: its terminal starts, and Slack is asked for, into it.
         let titles: Vec<&str> = m.tabs.iter().map(|tab| tab.title.as_str()).collect();
-        assert_eq!((titles, m.active, m.tabs.len()), (vec!["Tab 2", "Tab 1"], 1, 2));
+        // The open one comes into its space too; Workspace keeps a tab of its own.
+        assert_eq!((titles, m.active, m.tabs.len()), (vec!["Tab 3", "Tab 2", "Tab 1"], 2, 3));
         assert_eq!(effects.len(), 2, "{effects:?}");
         assert!(
             matches!(&effects[1], Effect::HostWindow { into: Some(_), name, .. } if name == "Slack"),
@@ -1429,13 +1440,13 @@ mod tests {
         // pane asks for Slack again, as a tab's mark does.
         m.update(Action::SelectTab { index: 0 });
         let again = m.update(Action::WorkbookOpen { workbook: 1, tab: None, home: None });
-        assert_eq!((again, m.active, m.tabs.len()), (vec![effects[1].clone()], 1, 2));
+        assert_eq!((again, m.active, m.tabs.len()), (vec![effects[1].clone()], 2, 3));
         // All closed: both are built, in order, and the first is on show.
+        m.update(Action::CloseTab { index: Some(2) });
         m.update(Action::CloseTab { index: Some(1) });
-        m.update(Action::CloseTab { index: Some(0) });
         m.update(Action::WorkbookOpen { workbook: 1, tab: None, home: None });
         let titles: Vec<&str> = m.tabs.iter().map(|tab| tab.title.as_str()).collect();
-        assert_eq!((titles, m.active), (vec!["Tab 1", "Tab 1", "Tab 2"], 1));
+        assert_eq!((titles, m.active), (vec!["Tab 3", "Tab 1", "Tab 2"], 1));
         let row = &m.workbook_rows()[0];
         assert_eq!((row.tabs[0].tab, row.tabs[1].tab), (Some(m.tabs[1].id), Some(m.tabs[2].id)));
         // One tab alone, by its place.
@@ -1516,7 +1527,8 @@ mod tests {
         m.update(Action::CloseTab { index: Some(1) });
         m.list = Some(2);
         m.update(Action::ListChoose { axis: Right });
-        assert_eq!((m.tabs.len(), m.tabs[m.active].title.as_str()), (2, "logs"));
+        // Both its tabs in its space now; Workspace keeps one of its own.
+        assert_eq!((m.tabs.len(), m.tabs[m.active].title.as_str()), (3, "logs"));
         // Removing a workbook's last tab deletes it.
         m.update(Action::WorkbookRemove { workbook: 1, tab: Some(0) });
         m.update(Action::WorkbookRemove { workbook: 1, tab: Some(0) });

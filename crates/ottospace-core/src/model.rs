@@ -3338,9 +3338,9 @@ impl Model {
                 self.workbook_open(id, None, self.home.clone(), effects)
             }
             Action::SpaceOpen { space: of } => self.open_space(of, effects),
-            // Within the selected space.
+            // Along the tabs of the spaces on the row, as the one bar draws them.
             Action::CycleTab { delta } => {
-                let tabs = self.space_tabs(self.space());
+                let tabs: Vec<usize> = (0..self.tabs.len()).filter(|at| !self.tab_hidden(*at)).collect();
                 let at = tabs.iter().position(|at| *at == self.active).unwrap_or(0) as i64;
                 let to = tabs[(at + delta as i64).rem_euclid(tabs.len() as i64) as usize];
                 self.select_tab(to, effects);
@@ -5663,7 +5663,9 @@ impl Model {
         // Only the user's own ↵ starts an agent, in the drawer. A client's "open" starts nothing,
         // and a new task has no tab to go to.
         if open && self.by_user {
-            self.bind_tab(id);
+            if self.agent_start(&Subject::Task(id)).is_some() {
+                self.bind_tab(id);
+            }
             self.talk_to(Subject::Task(id), true, effects);
         } else if open {
             self.list = None;
@@ -6122,7 +6124,7 @@ impl Model {
     /// Where a tab joining space `of` goes: after its last tab, else before the tabs of the
     /// spaces after it on the row.
     fn space_end(&self, of: &Owner) -> usize {
-        let rank = |space: &Owner| self.spaces.iter().position(|s| s.of == *space).unwrap_or(usize::MAX);
+        let rank = |space: &Owner| self.space_rank(space);
         let end = self.tabs.iter().rposition(|t| t.space == *of).map(|at| at + 1);
         let later = || self.tabs.iter().position(|t| rank(&t.space) > rank(of));
         end.or_else(later).unwrap_or(self.tabs.len())
@@ -6166,8 +6168,7 @@ impl Model {
 
     /// Keeps each space's tabs side by side, in row order. The tab on show stays on show.
     pub(crate) fn regroup(&mut self) {
-        let rank = |space: &Owner| self.spaces.iter().position(|s| s.of == *space).unwrap_or(usize::MAX);
-        let ranks: Vec<usize> = self.tabs.iter().map(|tab| rank(&tab.space)).collect();
+        let ranks: Vec<usize> = self.tabs.iter().map(|tab| self.space_rank(&tab.space)).collect();
         if ranks.is_sorted() {
             return;
         }
@@ -8032,16 +8033,14 @@ mod tests {
         m.update(Action::NewTab.sent_by(Origin::Socket));
         assert_eq!((m.active, m.space()), (1, &Owner::Workspace));
         assert_eq!(row(&m), [(Owner::Workspace, false, vec![0, 1]), (task_space(1), false, vec![2, 3])]);
-        // Cycling stays in the space; a space shows the tab it showed last.
+        // Cycling goes along the bar's tabs; a space shows the tab it showed last.
         m.update(Action::CycleTab { delta: 1 });
         m.update(Action::CycleTab { delta: 1 });
+        assert_eq!(m.active, 3);
+        m.update(Action::SpaceSelect { index: 0 });
         assert_eq!(m.active, 1);
         m.update(Action::SpaceSelect { index: 1 });
-        m.update(Action::CycleTab { delta: -1 });
-        assert_eq!(m.active, 2);
-        m.update(Action::SpaceSelect { index: 0 });
-        m.update(Action::SpaceSelect { index: 1 });
-        assert_eq!(m.active, 2);
+        assert_eq!(m.active, 3);
         // Going to a task opens its space; a task there is not opens none.
         m.update(Action::TaskGo { id: Some(2) });
         assert_eq!((m.space(), m.tabs.len()), (&task_space(2), 5));
