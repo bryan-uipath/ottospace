@@ -4,3 +4,8 @@
 {"shot":"list"}
 {"cmd":"open_repo","path":"{ROOT}/repos/canvas-app-2"}
 {"shot":"opened"}
+# A task in a repository: its row carries the task's badge, and a click on it selects the task.
+{"cmd":"task_new","line":"Fix the canvas zoom >canvas-app"}
+{"shot":"task-badge"}
+{"click":"repo:{ROOT}/repos/canvas-app"}
+{"shot":"task-selected"}

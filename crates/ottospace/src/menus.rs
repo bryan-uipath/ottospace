@@ -33,8 +33,7 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
             name: "File".into(),
             items: vec![
                 item("New Tab", NewTab),
-                item("Remove Tab from Task", RemoveTabFromTask),
-                item("Move Tab to Task…", MoveTabToTask),
+                item("Move Tab to…", MoveTabToTask),
                 item("Save Tab as Workbook", SaveWorkbook),
                 item("Add Tab to Workbook…", AddTabToWorkbook),
                 item("Save All Tabs as Workbook", SaveAllWorkbook),
@@ -76,9 +75,9 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
             .chain([MenuItem::separator(), item("Next Tab", NextTab), item("Previous Tab", PrevTab)])
             .chain([
                 MenuItem::separator(),
-                item("Next Task Tab", NextSpace),
-                item("Previous Task Tab", PrevSpace),
-                item("Hide Task", HideSpace),
+                item("Next Tab Group", NextSpace),
+                item("Previous Tab Group", PrevSpace),
+                item("Hide", HideSpace),
             ])
             .collect(),
         },

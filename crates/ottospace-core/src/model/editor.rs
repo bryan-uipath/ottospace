@@ -308,13 +308,13 @@ mod tests {
         typed(&mut m, "one's");
         m.update(Action::EditorOpen);
         // Another conversation shown: not the editor; ⌃G there says where it is.
-        m.update(Action::TalkPick { id: two.clone() });
+        m.update(Action::TaskTalk { id: two.task().unwrap_or_default() });
         assert!(!m.editor_shown());
         assert!(matches!(&m.update(Action::EditorOpen)[..], [Effect::Notice { .. }]));
         finished(&mut m, Some("one's, edited\n"), false);
         assert_eq!((draft(&m, &one), draft(&m, &two)), ("one's, edited".into(), String::new()));
         // Back on it, and its task dismissed meanwhile: to the clipboard, and said.
-        m.update(Action::TalkPick { id: one.clone() });
+        m.update(Action::TaskTalk { id: one.task().unwrap_or_default() });
         m.update(Action::TalkKeys { on: true });
         m.update(Action::EditorOpen);
         assert!(m.edits(&one));

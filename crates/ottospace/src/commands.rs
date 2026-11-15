@@ -61,7 +61,6 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::SwapUp => Box::new(SwapUp),
         Command::SwapDown => Box::new(SwapDown),
         Command::NewTab => Box::new(NewTab),
-        Command::RemoveTabFromTask => Box::new(RemoveTabFromTask),
         Command::MoveTabToTask => Box::new(MoveTabToTask),
         Command::NextTab => Box::new(NextTab),
         Command::NextSpace => Box::new(NextSpace),
@@ -215,7 +214,7 @@ impl Workspace {
     }
 
     /// The rows as drawn, for the state snapshot: each command's id, name, group and key. While
-    /// it lists tasks: Move Tab to Task's id, the task's title, "Move to" and no key.
+    /// it lists spaces: Move Tab to…'s id, the space's title, "Move to" and no key.
     pub fn palette_rows(&self, cx: &App) -> Option<serde_json::Value> {
         let palette = self.model.palette.as_ref()?;
         let keymap = cx.key_bindings();
@@ -277,7 +276,7 @@ impl Workspace {
 }
 
 /// The palette's rows: (command, group, name, key). While it lists tasks, each task is a row of
-/// Move Tab to Task, under "Move to".
+/// Move Tab to…, under "Move to".
 fn palette_items(palette: &Palette, keymap: &Keymap) -> Vec<(Command, &'static str, String, Option<String>)> {
     if palette.tasks.is_some() {
         let task = |choice: &TaskChoice| (Command::MoveTabToTask, "Move to", choice.title.clone(), None);

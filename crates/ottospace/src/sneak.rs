@@ -320,7 +320,8 @@ impl Workspace {
                 self.click_apps_control(kind, window, cx);
                 None
             }
-            ("repo", _) => Some(Action::OpenRepo { path: name.into(), axis: Axis::Right }),
+            ("repo", _) => Some(Action::RepoClick { path: name.into(), axis: Axis::Right }),
+            ("repo-terminal", _) => Some(Action::OpenRepo { path: name.into(), axis: Axis::Right }),
             // The one verb, as a click: the user's starts the conversation, a client's shows the tabs.
             ("task" | "home-row" | "home-node", _) if self.input == ottospace_core::Origin::User => {
                 number.map(|id| Action::TaskTalk { id })
