@@ -1436,7 +1436,20 @@ impl Workspace {
                         self.error = Some(format!("{}{why}", Self::NOT_WRITTEN));
                     }
                 }
-                Effect::SaveRepos { changes } => self.save_apps(changes),
+                // Later reads of the list look where the model now does (also after "Unlist?" is
+                // answered); a file not written leaves them as the settings are.
+                Effect::SaveRepos { changes } => {
+                    let said = self.error.take();
+                    self.save_apps(changes);
+                    let failed = self.error.as_ref().is_some_and(|error| error.starts_with(Self::NOT_WRITTEN));
+                    self.error = self.error.take().or(said);
+                    if failed {
+                        self.model.update(Action::SetRepoDirs { dirs: config::repo_dirs() }.sent_by(Origin::System));
+                        self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
+                    } else {
+                        config::set_repo_roots(&self.model.repo_dirs);
+                    }
+                }
                 Effect::AddWorktree { repo, branch, path, root } => {
                     let done = self.worktrees.0.clone();
                     worktree::start(repo.clone(), branch.clone(), path.clone(), root.clone(), done);
