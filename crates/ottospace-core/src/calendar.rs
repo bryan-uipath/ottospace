@@ -131,6 +131,22 @@ pub fn kind(event: &Event) -> Kind {
     if has_meeting_link(event) { Kind::Call } else { Kind::Block }
 }
 
+/// A focus block: a block (no call link) whose title starts with the word `Focus` or the words
+/// `Deep Work`, case and leading space ignored: `Focus: writing`, not `Focusing` or a `Focus sync` call.
+pub fn focus(event: &Event) -> bool {
+    kind(event) == Kind::Block && focus_title(&event.title)
+}
+
+fn focus_title(title: &str) -> bool {
+    let title = title.trim_start().to_lowercase();
+    // "deep", then space, then "work".
+    let deep = title.strip_prefix("deep").map(|rest| (rest, rest.trim_start()));
+    let deep = deep.and_then(|(rest, work)| work.strip_prefix("work").filter(|_| work.len() < rest.len()));
+    let rest = title.strip_prefix("focus").or(deep);
+    // The prefix ends at a word's end: not `Focusing`.
+    rest.is_some_and(|rest| !rest.starts_with(char::is_alphanumeric))
+}
+
 /// Most lanes calls share on the band; a call more at once goes into a lane's hover card.
 pub const MAX_LANES: u8 = 4;
 
@@ -210,7 +226,7 @@ pub struct Paint {
 }
 
 /// An entry's colour: a rule's, else by kind (calls the meeting colour, blocks muted, away its
-/// own). Its strength: by how it holds the time (tentative lighter, free faint) and by stage
+/// own, a focus block its own). Its strength: by how it holds the time (tentative lighter, free faint) and by stage
 /// (past faded, near pulsing up to the running one's full strength).
 pub fn paint(event: &Event, stage: Stage, glow: f32, rules: &[ColorRule]) -> Paint {
     use crate::theme;
@@ -218,6 +234,7 @@ pub fn paint(event: &Event, stage: Stage, glow: f32, rules: &[ColorRule]) -> Pai
         (Some(rule), ..) => (theme::identity(Some(rule.color)), theme::IDENTITY_NAMES[usize::from(rule.color)]),
         (None, Show::Away, _) => (theme::MEETING_AWAY, "away"),
         (None, _, Kind::Call) => (theme::MEETING, "meeting"),
+        (None, _, Kind::Block) if focus_title(&event.title) => (theme::MEETING_FOCUS, "focus"),
         (None, _, Kind::Block) => (theme::MEETING_BLOCK, "block"),
     };
     let held = match event.show {
