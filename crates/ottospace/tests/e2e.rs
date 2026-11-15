@@ -6284,15 +6284,17 @@ fn the_tab_strip_ends_where_the_panes_end_and_its_buttons_stay_in_view() {
         otto.call(json!({"cmd": "new_tab"}));
     }
     otto.call(json!({"cmd": "select_tab", "index": 0}));
-    // Each button lies within the pane area; each tab's drawn part, left of the buttons.
+    // Each button of the top row lies within the window (the row runs over the drawer); each
+    // space left of the +; each tab of the second row within the pane area.
     let fits = |what: &str| {
         let end = otto.bounds(&[1])[0];
         let end = end[0] + end[2];
+        let window = rect(&otto.call(json!({"cmd": "state"}))["window"]);
         let frames = otto.controls();
         let mut first = f64::MAX;
         for id in ["top:new_tab", "top:split_right", "top:split_down"] {
             let b = frames.iter().find(|(i, _)| i == id).unwrap_or_else(|| panic!("{what}: no {id}")).1;
-            assert!(b[0] + b[2] <= end + 0.5, "{what}: {id} {b:?} runs past the panes' end {end}");
+            assert!(b[0] + b[2] <= window[2], "{what}: {id} {b:?} runs past the window's end {}", window[2]);
             first = first.min(b[0]);
         }
         let new_task = frames.iter().find(|(i, _)| i == "top:new_task").map(|(_, b)| b[0]).expect("the +");
