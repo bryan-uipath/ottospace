@@ -126,7 +126,7 @@ impl Workspace {
             // The picker and the palette are never open together.
             "picker" | "palette" => self.picker_field.clone(),
             "apps" => self.apps_field.clone(),
-            "mark" | "workbook" => self.mark_field.clone(),
+            "mark" | "workbook" | "worktree" => self.mark_field.clone(),
             "inspector" => self.inspector_field.clone(),
             _ => self.field.clone(),
         }
@@ -155,7 +155,7 @@ impl Workspace {
 
     /// A field opened, closed or lost the keyboard: a drag begun before is over.
     pub fn field_changed_hands(&mut self) {
-        for of in ["compose", "note", "picker", "apps", "mark", "workbook", "inspector"] {
+        for of in ["compose", "note", "picker", "apps", "mark", "workbook", "worktree", "inspector"] {
             self.drawn_of(of).borrow_mut().selecting = false;
         }
         // The new-task box closed: its panel is nowhere, and nothing is pointed at.
@@ -167,7 +167,7 @@ impl Workspace {
     /// True if a mark's name is being typed and `position` is in its field: a click there
     /// places the cursor, and does not end the typing.
     pub fn in_mark_name(&self, position: gpui::Point<Pixels>) -> bool {
-        let renaming = self.model.field().is_some_and(|(of, _)| matches!(of, "mark" | "workbook"));
+        let renaming = self.model.field().is_some_and(|(of, _)| matches!(of, "mark" | "workbook" | "worktree"));
         renaming && self.drawn_of("mark").borrow().bounds.contains(&position)
     }
 

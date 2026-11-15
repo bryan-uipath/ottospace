@@ -9,7 +9,7 @@ ottospace            # opens on the Repos list
 ```
 
 - First run: grant your terminal Accessibility (ottospace will not start without it) and Screen Recording (for app panes), in System Settings ▸ Privacy & Security.
-- Repos lists each repository's name over its checkouts: the branch, then `Default` (its own directory) or a worktree's directory. Click one: a terminal opens there, in a Workspace tab of its own. A row a task works in carries the task's badge, and its click shows that task (Terminal, on hover, opens a terminal anyway).
+- Repos lists each repository's name over its checkouts, one line each: the branch, a dot on the repository's own folder. The chevron (or a click on the name) folds a repository; a count shows while folded. Point at a name: + makes a worktree (an existing branch, or a new one from HEAD), the trash stops listing it. Click a row: a terminal opens there, in a Workspace tab of its own. A row a task works in carries the task's badge, and its click shows that task (Terminal, on hover, opens a terminal anyway).
 - The status bar (bottom left) shows who has the keyboard when it is not the focused pane's: `APP`, `PICK`, `COMMAND`, `INSPECT`, `LIST`, `TASK`, `VISUAL`, `SNEAK`, `QUIT?`. Nothing there: normal. Its right end shows `● 2` when two tasks need you; the version is under About ottospace (⌘P, or the app menu) and the hover of the bar's empty middle.
 - Stuck in an app? Click ottospace's rail or top bar. Or press the return key: F18, which most keyboards lack, so map Caps Lock to it (see [the return key](reference.md#the-return-key)) or start with `OTTOSPACE_RETURN_KEY=f13` (f13 to f20). The status bar names the key in use.
 
@@ -51,7 +51,9 @@ ottospace            # opens on the Repos list
 | Use it from the keyboard | ⌘⌃E (the open section, else Apps, or with it off the first), then `j` `k` move · ↵ open · ⇧↵ open below · Tab next section · Esc leave |
 | Read the lists again | Close and open the section, or ⌘⌃E: Apps and Repos are read when they open |
 | Add something | + in the bar's header: a new task in Tasks, the tab on show in Workbook, a repository in Repos (pick a folder that is one or holds some; it goes into `repos` in the settings) |
-| Stop listing a repository | Point at its name in Repos: Remove. Only for one added as itself |
+| Stop listing a repository | Point at its name in Repos: the trash. Only for one added as itself; nothing on disk is touched. While a task works there it asks first (↵ unlists, Esc keeps it) |
+| New worktree | Point at a repository's name in Repos: +, type a branch, ↵. It goes in `~/.ottospace/worktrees/<repo>/<branch>` (`worktrees_dir`) and opens as a terminal tab |
+| Fold a repository | Its chevron, or ← / → in list mode |
 | Close the bar | × in its header |
 | Click anything without the mouse | ⌘; or ⌘⌃G: every control gets a letter label (a × gets two), and so do the buttons and text fields of the focused app pane, in orange, two letters or more. Type it · ⌫ takes a letter back · Esc or a wrong letter leaves. An orange label presses that button in the app, or puts you in its text field |
 

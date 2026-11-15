@@ -186,20 +186,27 @@ pub enum MarkInput {
         tab: Option<usize>,
         text: crate::edit::Field,
     },
+    /// A new worktree's branch is being typed in the rows of the repository at `repo`, as a
+    /// workbook's name is. The user's alone.
+    Worktree { repo: String, text: crate::edit::Field },
 }
 
 impl MarkInput {
-    /// The name being typed, a mark's or a workbook's.
+    /// The name being typed, a mark's, a workbook's or a new worktree's branch.
     pub fn text(&self) -> Option<&crate::edit::Field> {
         match self {
-            MarkInput::Rename { text, .. } | MarkInput::Workbook { text, .. } => Some(text),
+            MarkInput::Rename { text, .. } | MarkInput::Workbook { text, .. } | MarkInput::Worktree { text, .. } => {
+                Some(text)
+            }
             MarkInput::Jump | MarkInput::SetKey { .. } => None,
         }
     }
 
     pub(crate) fn text_mut(&mut self) -> Option<&mut crate::edit::Field> {
         match self {
-            MarkInput::Rename { text, .. } | MarkInput::Workbook { text, .. } => Some(text),
+            MarkInput::Rename { text, .. } | MarkInput::Workbook { text, .. } | MarkInput::Worktree { text, .. } => {
+                Some(text)
+            }
             MarkInput::Jump | MarkInput::SetKey { .. } => None,
         }
     }
@@ -1170,7 +1177,9 @@ impl Model {
                 None => self.mark_input = Some(MarkInput::SetKey { mark }),
             },
             // A name is typed in its text field (`FieldEdit`), not here.
-            renaming @ Some(MarkInput::Rename { .. } | MarkInput::Workbook { .. }) => self.mark_input = renaming,
+            renaming @ Some(MarkInput::Rename { .. } | MarkInput::Workbook { .. } | MarkInput::Worktree { .. }) => {
+                self.mark_input = renaming
+            }
             None => {}
         }
     }
@@ -1179,7 +1188,7 @@ impl Model {
     pub(crate) fn mark_backspace(&mut self) {
         match &mut self.mark_input {
             // A name's ⌫ is its text field's.
-            Some(MarkInput::Rename { .. } | MarkInput::Workbook { .. }) => {}
+            Some(MarkInput::Rename { .. } | MarkInput::Workbook { .. } | MarkInput::Worktree { .. }) => {}
             Some(MarkInput::SetKey { mark }) => {
                 let mark = *mark;
                 self.marks.set_key(mark, None);
@@ -1190,7 +1199,7 @@ impl Model {
     }
 
     /// ↵: keeps the typed name.
-    pub(crate) fn mark_submit(&mut self) {
+    pub(crate) fn mark_submit(&mut self, effects: &mut Vec<Effect>) {
         match &self.mark_input {
             Some(MarkInput::Rename { mark, text }) => {
                 let (mark, text) = (*mark, text.text().to_string());
@@ -1201,6 +1210,10 @@ impl Model {
                 let (workbook, tab, text) = (*workbook, *tab, text.text().to_string());
                 self.workbook_rename(workbook, tab, &text);
                 self.mark_input = None;
+            }
+            Some(MarkInput::Worktree { repo, text }) => {
+                let (repo, branch) = (repo.clone(), text.text().trim().to_string());
+                self.worktree_submit(repo, branch, effects);
             }
             _ => {}
         }

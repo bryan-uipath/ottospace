@@ -832,14 +832,15 @@ fn a_directory_is_added_to_the_repos_list_and_removed_in_the_settings() {
     let reply = add(&format!("{}/plain/../elsewhere/zed", root.display()));
     let added = listing(&[dir("code"), dir("elsewhere/zed")]);
     assert_eq!((names(&reply), file()), (vec!["app".to_string(), "web".into(), "zed".into()], added.clone()));
-    assert_eq!((reply["mode"].as_str(), reply["state"]["list"].as_u64()), (Some("list"), Some(2)));
+    // Each name is a row of the list too: app 0-1, web 2-3, zed 4-5.
+    assert_eq!((reply["mode"].as_str(), reply["state"]["list"].as_u64()), (Some("list"), Some(5)));
     // What the last try said is gone: the status bar is back to what it said at start.
     assert!(reply["notice"].as_str().is_some_and(|notice| notice.starts_with("settings.json: colour")), "{reply}");
     // It is still listed when the list is read again.
     assert_eq!(names(&otto.call(json!({"cmd": "repos"}))), ["app", "web", "zed"]);
     // Listed already, as itself or through `code`: its row is selected and nothing is written.
-    assert_eq!((add(&dir("code/web"))["state"]["list"].as_u64(), file()), (Some(1), added.clone()));
-    assert_eq!((add(&dir("elsewhere/zed"))["state"]["list"].as_u64(), file()), (Some(2), added.clone()));
+    assert_eq!((add(&dir("code/web"))["state"]["list"].as_u64(), file()), (Some(3), added.clone()));
+    assert_eq!((add(&dir("elsewhere/zed"))["state"]["list"].as_u64(), file()), (Some(5), added.clone()));
 
     // "Remove" shows on the name under the pointer. A client's label does nothing with it.
     let header = |reply: &Value, n: usize| at(rect(&reply["repos_bar"][n]["header"]), 0.5, 0.5);
@@ -848,11 +849,21 @@ fn a_directory_is_added_to_the_repos_list_and_removed_in_the_settings() {
     let reply = otto.mouse("move", header(&otto.drawn(), 2));
     assert_eq!(reply["repos_bar"][2]["name"], "zed");
     let client = sneak_to(&otto, &remove);
-    assert_eq!((names(&client), file()), (vec!["app".to_string(), "web".into(), "zed".into()], added));
-    // The user's does: the directory comes off the settings, and the repository off the list.
+    assert_eq!((names(&client), file()), (vec!["app".to_string(), "web".into(), "zed".into()], added.clone()));
+    // The user's asks first, since a task works there: Esc keeps it, ↵ takes the directory off the
+    // settings and the repository off the list, and the status bar says nothing on disk changed.
+    otto.call(json!({"cmd": "task_new", "line": "zoom >zed"}));
+    otto.mouse("move", header(&otto.drawn(), 2));
     let (_, labels) = sneak(&otto);
-    let reply = otto.user_key(&letters(&labels[&remove]));
+    let asked = otto.user_key(&letters(&labels[&remove]));
+    assert_eq!((asked["mode"].as_str(), names(&asked).len(), file()), (Some("confirm"), 3, added.clone()));
+    assert_eq!(otto.user_key("escape")["mode"], "normal");
+    otto.mouse("move", header(&otto.drawn(), 2));
+    let (_, labels) = sneak(&otto);
+    otto.user_key(&letters(&labels[&remove]));
+    let reply = otto.user_key("enter");
     assert_eq!((names(&reply), file()), (vec!["app".to_string(), "web".into()], settings.clone()));
+    assert_eq!(reply["notice"], "Unlisted zed · nothing on disk changed");
     // One that a folder of the settings holds is not removed: the status bar says where it comes from.
     otto.mouse("move", header(&otto.drawn(), 0));
     let (_, labels) = sneak(&otto);
@@ -864,7 +875,7 @@ fn a_directory_is_added_to_the_repos_list_and_removed_in_the_settings() {
     fake_repo(&root.join("code/new"));
     let reply = add(&dir("code/new"));
     assert_eq!((names(&reply), file()), (vec!["app".to_string(), "new".into(), "web".into()], settings));
-    assert_eq!(reply["state"]["list"].as_u64(), Some(1));
+    assert_eq!(reply["state"]["list"].as_u64(), Some(3));
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&home);
 }
@@ -890,11 +901,11 @@ fn a_long_repos_list_keeps_each_name_over_its_checkouts() {
     let reply = otto.wait_for("the Repos list to be drawn", drawn);
     assert!(!reply["scrollbars"]["repos"].is_null(), "the list does not overflow: {}", reply["scrollbars"]);
 
-    // What each row says: the repository's own directory is the default, a worktree shows its directory.
+    // What each row says: the repository's own directory is the default; each names its directory.
     let groups = reply["repos_bar"].as_array().unwrap();
     assert_eq!(groups.len(), 40);
     let said = |row: &Value| (row["branch"].clone(), row["default"].clone(), row["label"].clone());
-    assert_eq!(said(&groups[2]["rows"][0]), (json!("main"), json!(true), json!("Default")));
+    assert_eq!(said(&groups[2]["rows"][0]), (json!("main"), json!(true), json!("repo-02")));
     assert_eq!(said(&groups[2]["rows"][1]), (json!("fix/zoom"), json!(false), json!("zoom")));
     // Every name is drawn, however long the list: over its rows, each row under the one before.
     let mut bottom = 0.0;
@@ -906,14 +917,14 @@ fn a_long_repos_list_keeps_each_name_over_its_checkouts() {
         bottom = header[1] + header[3];
         for row in group["rows"].as_array().unwrap() {
             let row = rect(&row["row"]);
-            assert!(row[1] >= bottom && (30.0..=40.0).contains(&row[3]), "{name}: a row at {row:?}, after {bottom}");
+            assert!(row[1] >= bottom && (24.0..=30.0).contains(&row[3]), "{name}: a row at {row:?}, after {bottom}");
             bottom = row[1] + row[3];
         }
     }
 
-    // List mode walks the rows, not the names: the worktree is the fourth row, and ↵ opens it.
-    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-e j j j"}));
-    assert_eq!((reply["mode"].as_str(), reply["state"]["list"].as_u64()), (Some("list"), Some(3)));
+    // List mode starts on the first checkout and walks the names too: the worktree is the seventh row, and ↵ opens it.
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-e j j j j j"}));
+    assert_eq!((reply["mode"].as_str(), reply["state"]["list"].as_u64()), (Some("list"), Some(6)));
     let reply = otto.call(json!({"cmd": "key", "keys": "enter"}));
     assert_eq!(reply["state"]["panes"][0]["cwd"], at("zoom"));
     // With the bar closed nothing of it is drawn.
@@ -923,6 +934,118 @@ fn a_long_repos_list_keeps_each_name_over_its_checkouts() {
     let reply = otto.wait_for("the Repos list to go", shut);
     assert!(reply["repos_bar"][0]["rows"][0]["row"].is_null(), "{}", reply["repos_bar"][0]);
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// git with none of the user's settings, on the test's own repository: no signing, no hooks.
+fn git(dir: &Path, args: &[&str]) {
+    let mut git = Command::new("git");
+    git.arg("-C").arg(dir).args(args).env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1");
+    assert!(git.stdin(std::process::Stdio::null()).status().unwrap().success(), "git {args:?}");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_repository_folds_and_the_users_plus_makes_a_worktree_there() {
+    // A real repository, one commit on `main` and a branch `feat/map`; a made-up one beside it.
+    let root = support::temp(&format!("ottospace-e2e-worktrees-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("repos/app")).unwrap();
+    let app = root.join("repos/app");
+    git(&app, &["init", "-q", "-b", "main"]);
+    git(&app, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "one"]);
+    git(&app, &["branch", "feat/map"]);
+    fake_repo(&root.join("repos/web"));
+    let root = root.canonicalize().unwrap();
+    let app = root.join("repos/app").to_string_lossy().into_owned();
+    let settings = json!({"repos": [root.join("repos")], "restore_layout": false}).to_string();
+    let home = user_folder("worktrees", &settings);
+    // New worktrees go in `<home>/worktrees/<repo>/<branch>`; git reads none of the user's settings.
+    let otto = Otto::launch_with(
+        "worktrees",
+        &[("OTTOSPACE_HOME", home.to_str().unwrap()), ("GIT_CONFIG_GLOBAL", "/dev/null"), ("GIT_CONFIG_NOSYSTEM", "1")],
+    );
+    let worktree =
+        |name: &str| home.canonicalize().unwrap().join("worktrees/app").join(name).to_string_lossy().into_owned();
+    otto.call(json!({"cmd": "section", "section": "repos"}));
+    let drawn = |o: &Otto| Some(o.drawn()).filter(|s| !s["repos_bar"][0]["header"].is_null());
+    let state = otto.wait_for("the Repos list", drawn);
+    assert_eq!((&state["repos_bar"][0]["name"], &state["repos_bar"][0]["folded"]), (&json!("app"), &json!(false)));
+
+    // The user's click on a name folds its rows under it, and again unfolds them.
+    let header = |s: &Value| at(rect(&s["repos_bar"][0]["header"]), 0.25, 0.5);
+    let folded = otto.user_click(header(&state));
+    let folded = Some(folded).filter(|s| s["repos_bar"][0]["folded"] == true).unwrap_or_else(|| otto.drawn());
+    assert_eq!(folded["repos_bar"][0]["folded"], true, "{}", folded["repos_bar"]);
+    assert!(folded["repos_bar"][0]["rows"][0]["row"].is_null(), "a folded row is drawn: {}", folded["repos_bar"][0]);
+    assert!(!folded["repos_bar"][1]["rows"][0]["row"].is_null(), "web's row is not drawn");
+    otto.user_click(header(&otto.drawn()));
+    let open = otto.drawn();
+    assert_eq!(
+        (&open["repos_bar"][0]["folded"], open["repos_bar"][0]["rows"][0]["row"].is_null()),
+        (&json!(false), false)
+    );
+    // In list mode ← folds the selected row's repository and selects its name; → unfolds.
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-e left"}));
+    assert_eq!((&reply["state"]["list"], &otto.drawn()["repos_bar"][0]["folded"]), (&json!(0), &json!(true)));
+    otto.call(json!({"cmd": "key", "keys": "right escape"}));
+    assert_eq!(otto.drawn()["repos_bar"][0]["folded"], false);
+
+    // The + shows on the name under the pointer. A client's click or label opens no field.
+    let plus = format!("repo-add:{app}");
+    otto.mouse("move", at(rect(&otto.drawn()["repos_bar"][0]["header"]), 0.5, 0.5));
+    let frame = otto.control(&plus);
+    let reply = otto.click(at(frame, 0.5, 0.5), 1);
+    assert!(reply["state"]["mark_input"].is_null(), "a client's click opened {}", reply["state"]["mark_input"]);
+    otto.mouse("move", at(frame, 0.5, 0.5));
+    assert!(sneak_to(&otto, &plus)["state"]["mark_input"].is_null());
+
+    // The user's: a field in the repository's rows. A client's keys do not type in it.
+    let open_field = || {
+        otto.mouse("move", at(frame, 0.5, 0.5));
+        let reply = otto.user_click(at(frame, 0.5, 0.5));
+        assert_eq!(reply["state"]["mark_input"]["type"], "worktree", "{}", reply["state"]["mark_input"]);
+        reply
+    };
+    open_field();
+    let reply = otto.call(json!({"cmd": "key", "keys": "x enter"}));
+    assert_eq!(reply["state"]["mark_input"]["text"], "", "a client typed: {}", reply["state"]["mark_input"]);
+    // A new branch: made from HEAD, in its folder (slashes as dashes), opened as a terminal tab.
+    otto.user_key("f i x / z o o m enter");
+    let made = |path: String| {
+        move |o: &Otto| {
+            let s = o.call(json!({"cmd": "state"}));
+            let listed = s["state"]["repos"][0]["worktrees"].as_array()?.iter().any(|w| w["path"] == path);
+            let shown = s["state"]["panes"].as_array()?.iter().any(|p| p["cwd"] == path);
+            (listed && shown).then_some(s)
+        }
+    };
+    let reply = otto.wait_for("the new worktree", made(worktree("fix-zoom")));
+    let listed = reply["state"]["repos"][0]["worktrees"].as_array().unwrap().clone();
+    assert!(listed.iter().any(|w| w["branch"] == "fix/zoom" && w["name"] == "fix-zoom"), "{listed:?}");
+    // A branch there is: checked out, not made again.
+    open_field();
+    otto.user_key("f e a t / m a p enter");
+    let reply = otto.wait_for("the worktree on feat/map", made(worktree("feat-map")));
+    let listed = reply["state"]["repos"][0]["worktrees"].as_array().unwrap().clone();
+    assert!(listed.iter().any(|w| w["branch"] == "feat/map"), "{listed:?}");
+
+    // A name git does not take is said, and the field stays to fix it.
+    open_field();
+    let reply = otto.user_key("b a d . . n a m e enter");
+    assert_eq!(reply["notice"], "Not a branch name git takes");
+    assert_eq!(reply["state"]["mark_input"]["text"], "bad..name");
+    otto.user_key("escape");
+    // A folder that is there already is not used: said, and nothing is made.
+    std::fs::create_dir_all(home.join("worktrees/app/taken")).unwrap();
+    open_field();
+    otto.user_key("t a k e n enter");
+    let said = |o: &Otto| {
+        let s = o.call(json!({"cmd": "state"}));
+        s["notice"].as_str().is_some_and(|n| n.ends_with("is there already")).then_some(s)
+    };
+    let reply = otto.wait_for("the refusal", said);
+    assert_eq!(reply["state"]["repos"][0]["worktrees"].as_array().map(Vec::len), Some(2));
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[test]

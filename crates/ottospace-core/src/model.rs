@@ -128,6 +128,9 @@ pub struct Confirm {
     pub dismiss: Option<TaskId>,
     /// Not the quit question: "Paste 4 lines?" in that pane (`clip::asks`).
     pub paste: Option<clip::PasteAsk>,
+    /// Not the quit question: "Unlist this repository?" for the one at this path, which a live
+    /// task works in. Nothing on disk changes either way.
+    pub unlist: Option<String>,
 }
 
 impl Confirm {
@@ -151,6 +154,9 @@ impl Confirm {
     pub fn title(&self) -> String {
         if self.dismiss.is_some() {
             return "Stop its agent and dismiss?".into();
+        }
+        if self.unlist.is_some() {
+            return "Unlist this repository?".into();
         }
         if let Some(ask) = self.paste {
             return ask.title();
@@ -621,6 +627,23 @@ pub enum Action {
     RepoClick {
         path: String,
         axis: Axis,
+    },
+    /// Fold a repository's rows under its name (`fold`: `None` toggles what is shown).
+    RepoFold {
+        path: String,
+        fold: Option<bool>,
+    },
+    /// The user's + on a repository's name: a field in its rows for a new worktree's branch.
+    /// `MarkSubmit` asks the shell to make it (`Effect::AddWorktree`).
+    WorktreeEdit {
+        repo: String,
+    },
+    /// The shell made the worktree at `path` of the repository at `repo`: `repos` as read after.
+    /// It opens as its row's click would. A failure is the shell's to say.
+    WorktreeAdded {
+        repo: String,
+        path: String,
+        repos: Vec<Repo>,
     },
     /// Start from the tasks kept on disk. `floor`: new ids start above it (see `Tasks::restore`).
     RestoreTasks {
@@ -1473,7 +1496,9 @@ impl Action {
             // A new workbook's name is typed in its row.
             | Action::WorkbookSave { .. }
             | Action::WorkbookSaveAll { .. }
-            | Action::WorkbookEdit { .. } => true,
+            | Action::WorkbookEdit { .. }
+            // So is a new worktree's branch.
+            | Action::WorktreeEdit { .. } => true,
             | Action::TaskTalk { .. }
             | Action::SessionOpen { .. }
             | Action::TalkStart
@@ -1524,6 +1549,8 @@ impl Action {
             | Action::RepoRemove { .. }
             | Action::OpenRepo { .. }
             | Action::RepoClick { .. }
+            | Action::RepoFold { .. }
+            | Action::WorktreeAdded { .. }
             | Action::RestoreTasks { .. }
             | Action::TaskAdd { .. }
             | Action::SetKnown { .. }
@@ -1776,6 +1803,9 @@ impl Action {
             | Action::RepoRemove { .. }
             | Action::OpenRepo { .. }
             | Action::RepoClick { .. }
+            | Action::RepoFold { .. }
+            | Action::WorktreeEdit { .. }
+            | Action::WorktreeAdded { .. }
             | Action::RestoreTasks { .. }
             | Action::TaskAdd { .. }
             | Action::SetKnown { .. }
@@ -2029,6 +2059,18 @@ pub enum Effect {
     SaveRepos {
         changes: Vec<crate::settings::ListChange>,
     },
+    /// Say `text` in the status bar as information: what the user's own step did.
+    Told {
+        text: String,
+    },
+    /// The user asked for a worktree of the repository at `repo` on `branch` (checked) at `path`,
+    /// inside `root` (`worktrees_dir`): `git worktree add`, then `Action::WorktreeAdded`.
+    AddWorktree {
+        repo: String,
+        branch: String,
+        path: String,
+        root: String,
+    },
     /// Pane `pane` was just opened (`Opened`) for the user's editor on `settings.json`: its
     /// terminal runs that, not a shell. Carried out with the pane's `Opened`.
     EditSettings {
@@ -2265,6 +2307,14 @@ pub struct Model {
     pub repos: Vec<Repo>,
     /// The directories it is read from.
     pub repo_dirs: repos::RepoDirs,
+    /// Repositories whose rows are folded under their name, by path. Kept in `layout.json`; how
+    /// each is drawn: `repo_folded`.
+    #[serde(skip)]
+    pub repos_folded: Vec<String>,
+    /// Of those, the ones folded while a task there ran or needed the user: shown folded all
+    /// the same, until that ends.
+    #[serde(skip)]
+    repos_held: Vec<String>,
     pub tasks: Tasks,
     /// What the new-task box's tags may name, as the shell last read it.
     #[serde(skip)]
@@ -2478,6 +2528,8 @@ impl Default for Model {
             apps: Vec::new(),
             repos: Vec::new(),
             repo_dirs: repos::RepoDirs::default(),
+            repos_folded: Vec::new(),
+            repos_held: Vec::new(),
             tasks: Tasks::default(),
             known: compose::Known::default(),
             known_line: None,
@@ -2694,6 +2746,21 @@ impl Model {
             {
                 Some(workbook::USERS_ALONE)
             }
+            // A new worktree runs git in the user's repository: only their +, keys and ↵ make one,
+            // and only the shell says it is made.
+            Action::WorktreeEdit { .. } => Some(repos::USERS_ALONE),
+            Action::WorktreeAdded { .. } if origin == Origin::Socket => Some(repos::USERS_ALONE),
+            Action::FieldEdit { .. }
+            | Action::MarkSubmit
+            | Action::MarkType { .. }
+            | Action::MarkBackspace
+            | Action::MarkCancel
+            | Action::MarkPrefix
+            | Action::MarkEdit { .. }
+                if matches!(self.mark_input, Some(MarkInput::Worktree { .. })) =>
+            {
+                Some(repos::USERS_ALONE)
+            }
             // An agent runs with the user's rights: no client's request, key or label starts
             // or stops one. A client's ↵ in the box files the task and starts none (`start`).
             Action::TaskTalk { .. } | Action::SessionOpen { .. } | Action::TalkStart | Action::TaskStop { .. } => {
@@ -2705,6 +2772,12 @@ impl Model {
                 if self.confirm.as_ref().is_some_and(|confirm| confirm.paste.is_some()) =>
             {
                 Some(clip::USERS_ALONE)
+            }
+            // So is "Unlist this repository?": it writes the settings.
+            Action::QuitConfirm | Action::QuitCancel
+                if self.confirm.as_ref().is_some_and(|confirm| confirm.unlist.is_some()) =>
+            {
+                Some(apps::USERS_ALONE)
             }
             // "Stop its agent and dismiss?" is the user's to answer yes to.
             Action::QuitConfirm | Action::QuitCancel
@@ -2918,6 +2991,7 @@ impl Model {
             self.end_peek(&mut effects);
         }
         self.tasks.finished(&states, self.now);
+        self.repo_unhold();
         // Only the user's own undo links a dismissed task's tabs again.
         self.settle_tasks(undo && origin == Origin::User);
         self.settle_spaces();
@@ -3230,6 +3304,8 @@ impl Model {
                 Some(id) => self.agent_runs(&Subject::Task(id)),
                 // "Paste 4 lines?" goes with its pane.
                 None if let Some(ask) = confirm.paste => panes.iter().any(|p| p.id == ask.pane),
+                // "Unlist this repository?" goes once it is not listed.
+                None if let Some(path) = &confirm.unlist => self.repos.iter().any(|r| r.path == *path),
                 None => !confirm.running.is_empty() || discards || !self.agents.is_empty() || self.editing.is_some(),
             };
             if !asks {
@@ -3258,10 +3334,26 @@ impl Model {
                 effects.push(Effect::Opened(id));
             }
             Action::Open { kind, axis, beside } => drop(self.open(kind, axis, beside, effects)),
-            Action::SetRepos { repos } => self.repos = repos::arrange(repos),
+            Action::SetRepos { repos } => {
+                self.repos = repos::arrange(repos);
+                self.repo_field_gone();
+            }
             Action::SetRepoDirs { dirs } => self.repo_dirs = dirs,
             Action::RepoAdd { dir, found } => self.repo_add(dir, found, effects),
+            // A repository a live task works in: asked first (the trash is one hover away).
+            Action::RepoRemove { path } if self.repo_worked_in(&path) && self.repo_dirs.to_remove(&path).is_ok() => {
+                self.leave(effects);
+                self.confirm = Some(Confirm { running: Vec::new(), dismiss: None, paste: None, unlist: Some(path) });
+            }
             Action::RepoRemove { path } => self.repo_remove(&path, effects),
+            Action::RepoFold { path, fold } => self.repo_fold(&path, fold),
+            Action::WorktreeEdit { repo } => self.worktree_edit(repo, effects),
+            Action::WorktreeAdded { repo, path, repos } => {
+                self.repos = repos::arrange(repos);
+                self.repo_field_gone();
+                self.repos_folded.retain(|folded| *folded != repo);
+                self.act(Action::OpenRepo { path, axis: Axis::Right }, effects);
+            }
             Action::RestoreTasks { tasks, floor } => {
                 self.tasks.restore(tasks, floor);
                 // A tab of a task that is not among them is a tab of no task: `update` unlinks it.
@@ -3545,7 +3637,7 @@ impl Model {
             // To the field that has the keyboard: more than one can be open (the draft's title in
             // the right bar beside a note, a filter or a mark's name).
             Action::FieldEdit { edit } => match self.field().map(|(of, _)| of) {
-                Some("mark" | "workbook") => {
+                Some("mark" | "workbook" | "worktree") => {
                     if let Some(text) = self.mark_input.as_mut().and_then(MarkInput::text_mut) {
                         text.apply(edit);
                     }
@@ -3826,6 +3918,8 @@ impl Model {
                 // The shell hosts the window, then opens the pane; the list keeps the keys if it fails.
                 Some(ListRow::App(name)) => effects.push(Effect::HostApp { name, axis, new_tab: false }),
                 Some(ListRow::Repo(path)) => self.act(Action::RepoClick { path, axis }, effects),
+                // The selection stays on the name: the same key unfolds it again.
+                Some(ListRow::RepoHead(path)) => self.repo_fold(&path, None),
                 // The user's ↵ on a task is a click on it: its conversation. A client's goes to its tabs.
                 Some(ListRow::Task(id)) if self.by_user => self.talk_to(Subject::Task(id), false, effects),
                 Some(ListRow::Task(id)) => {
@@ -4187,14 +4281,14 @@ impl Model {
                     || self
                         .confirm
                         .as_ref()
-                        .is_some_and(|confirm| confirm.dismiss.is_none() && confirm.paste.is_none()) =>
+                        .is_some_and(|confirm| confirm.dismiss.is_none() && confirm.paste.is_none() && confirm.unlist.is_none()) =>
             {
                 effects.push(Effect::Quit)
             }
             Action::QuitAsked { running } => {
                 // The question is ottospace's own UI: a live window would cover it.
                 self.leave(effects);
-                self.confirm = Some(Confirm { running, dismiss: None, paste: None });
+                self.confirm = Some(Confirm { running, dismiss: None, paste: None, unlist: None });
             }
             // Yes to "Paste 4 lines?": into its pane, if that is still a terminal.
             Action::QuitConfirm if let Some(ask) = self.confirm.as_ref().and_then(|confirm| confirm.paste) => {
@@ -4209,6 +4303,7 @@ impl Model {
                             running: Vec::new(),
                             dismiss: None,
                             paste: Some(clip::PasteAsk { pane, amount }),
+                            unlist: None,
                         })
                     }
                     false => self.pasted(pane, amount, effects),
@@ -4223,6 +4318,11 @@ impl Model {
                 self.confirm = None;
                 self.act(Action::TaskStop { id: Subject::Task(id) }, effects);
                 self.row_move(id, Moved::Dismissed, |tasks| tasks.dismiss(id));
+            }
+            // Yes to "Unlist this repository?".
+            Action::QuitConfirm if let Some(path) = self.confirm.as_ref().and_then(|confirm| confirm.unlist.clone()) => {
+                self.confirm = None;
+                self.repo_remove(&path, effects);
             }
             Action::QuitConfirm if self.confirm.is_some() => effects.push(Effect::Quit),
             Action::QuitConfirm | Action::QuitCancel => {}
@@ -4269,7 +4369,7 @@ impl Model {
             }
             Action::MarkType { text } => self.mark_type(&text, effects),
             Action::MarkBackspace => self.mark_backspace(),
-            Action::MarkSubmit => self.mark_submit(),
+            Action::MarkSubmit => self.mark_submit(effects),
             Action::MarkCancel => self.mark_input = None,
             Action::ListMarkEdit { field } => {
                 if let Some(id) = self.selected_mark() {
@@ -4632,7 +4732,7 @@ impl Model {
         {
             self.rail_focus = Some(zones::RailFocus::Left(Section::Tasks));
         }
-        let marking = !matches!(self.mark_input, None | Some(MarkInput::Workbook { .. }));
+        let marking = !matches!(self.mark_input, None | Some(MarkInput::Workbook { .. } | MarkInput::Worktree { .. }));
         if marking && !self.features.on(Feature::Marks) {
             self.mark_input = None;
         }
@@ -5559,7 +5659,7 @@ impl Model {
 
     /// The row list mode starts on: the first that is not a heading.
     fn first_row(&self) -> usize {
-        self.list_rows().iter().position(|row| !matches!(row, ListRow::Heading(_))).unwrap_or(0)
+        self.list_rows().iter().position(|row| !matches!(row, ListRow::Heading(_) | ListRow::RepoHead(_))).unwrap_or(0)
     }
 
     /// The paste goes to terminal `pane`, and its notice says so. A pane closed since: nothing.
@@ -5585,7 +5685,7 @@ impl Model {
         if self.agent_runs(&Subject::Task(id)) && self.tasks.live(id).is_some() {
             // The question is ottospace's own UI: a live window would cover it.
             self.leave(effects);
-            self.confirm = Some(Confirm { running: Vec::new(), dismiss: Some(id), paste: None });
+            self.confirm = Some(Confirm { running: Vec::new(), dismiss: Some(id), paste: None, unlist: None });
             return;
         }
         match moved {
@@ -5913,6 +6013,7 @@ impl Model {
         match &self.mark_input {
             Some(MarkInput::Rename { text, .. }) => return Some(("mark", text)),
             Some(MarkInput::Workbook { text, .. }) => return Some(("workbook", text)),
+            Some(MarkInput::Worktree { text, .. }) => return Some(("worktree", text)),
             _ => {}
         }
         let picker = self.picker.as_ref().map(|picker| ("picker", &picker.query));
@@ -5940,6 +6041,10 @@ impl Model {
                 Some(MarkInput::Rename { text, .. }) => Some(text),
                 _ => None,
             },
+            "worktree" => match &self.mark_input {
+                Some(MarkInput::Worktree { text, .. }) => Some(text),
+                _ => None,
+            },
             "workbook" => match &self.mark_input {
                 Some(MarkInput::Workbook { text, .. }) => Some(text),
                 _ => None,
@@ -5956,6 +6061,7 @@ impl Model {
         // letter is over the filter, not in it.
         let of = match self.mode() {
             Mode::Mark if matches!(self.mark_input, Some(MarkInput::Workbook { .. })) => "workbook",
+            Mode::Mark if matches!(self.mark_input, Some(MarkInput::Worktree { .. })) => "worktree",
             Mode::Mark => "mark",
             Mode::Pick => "picker",
             Mode::Palette => "palette",
@@ -5980,9 +6086,8 @@ impl Model {
     pub fn list_rows(&self) -> Vec<ListRow> {
         match self.sidebar {
             Some(Section::Apps) => self.app_rows(),
-            Some(Section::Repos) => {
-                self.repos.iter().flat_map(Repo::checkouts).map(|checkout| ListRow::Repo(checkout.path)).collect()
-            }
+            // Each repository's name, then its rows unless it is folded.
+            Some(Section::Repos) => self.repos.iter().flat_map(|repo| self.repo_rows(repo)).collect(),
             Some(Section::Tasks) => self.task_list_rows(self.tasks_view, false),
             Some(Section::Marks) => self.marks.list.iter().map(|mark| ListRow::Mark(mark.id)).collect(),
             Some(Section::Calendar) => self.calendar.agenda(),
@@ -6357,8 +6462,121 @@ impl Model {
         }
         self.leave(effects);
         self.sidebar = Some(Section::Repos);
+        self.repos_folded.retain(|folded| !wanted.contains(folded));
         let row = |row: &ListRow| matches!(row, ListRow::Repo(path) if wanted.contains(path));
         self.list = self.list_rows().iter().position(row);
+    }
+
+    /// A repository's rows in list mode: its name, then its checkouts unless it is folded.
+    fn repo_rows(&self, repo: &Repo) -> Vec<ListRow> {
+        let folded = self.repo_folded(repo);
+        let rows = repo.checkouts().into_iter().filter(|_| !folded).map(|checkout| ListRow::Repo(checkout.path));
+        std::iter::once(ListRow::RepoHead(repo.path.clone())).chain(rows).collect()
+    }
+
+    /// True if a live task in one of `repo`'s checkouts runs or needs the user.
+    fn repo_busy(&self, repo: &Repo) -> bool {
+        let paths: Vec<&String> = std::iter::once(&repo.path).chain(repo.worktrees.iter().map(|w| &w.path)).collect();
+        let busy = |task: &&Task| !task.dismissed && matches!(task.state, State::Running | State::NeedsYou);
+        self.tasks.list.iter().filter(busy).any(|task| task.dir().is_some_and(|dir| paths.contains(&dir)))
+    }
+
+    /// Whether `repo`'s rows are drawn folded under its name: the user folded them, and no task
+    /// there runs or needs them (then they show until that ends), unless folded while one did.
+    pub fn repo_folded(&self, repo: &Repo) -> bool {
+        self.repos_folded.contains(&repo.path) && (self.repos_held.contains(&repo.path) || !self.repo_busy(repo))
+    }
+
+    /// Folds or unfolds a repository's rows, as shown now: `None` toggles. List mode's selection
+    /// stays on its row, or goes to the repository's name when that row is folded away.
+    fn repo_fold(&mut self, path: &str, fold: Option<bool>) {
+        let Some(repo) = self.repos.iter().find(|repo| repo.path == path).cloned() else { return };
+        let selected = self.list.and_then(|at| self.list_rows().into_iter().nth(at));
+        let folded = self.repo_folded(&repo);
+        match fold.unwrap_or(!folded) {
+            true if !folded => {
+                self.repos_folded.retain(|p| p != path);
+                self.repos_folded.push(path.to_string());
+                if self.repo_busy(&repo) {
+                    self.repos_held.push(path.to_string());
+                }
+            }
+            false => {
+                self.repos_folded.retain(|p| p != path);
+                self.repos_held.retain(|p| p != path);
+            }
+            true => {}
+        }
+        if let (Some(row), Some(_)) = (selected, self.list) {
+            let rows = self.list_rows();
+            let head = ListRow::RepoHead(path.to_string());
+            self.list = rows.iter().position(|r| *r == row).or_else(|| rows.iter().position(|r| *r == head));
+        }
+    }
+
+    /// The branch being typed is for a repository no longer listed: the field closes.
+    fn repo_field_gone(&mut self) {
+        if matches!(&self.mark_input, Some(MarkInput::Worktree { repo, .. }) if !self.repos.iter().any(|r| r.path == *repo))
+        {
+            self.mark_input = None;
+        }
+    }
+
+    /// A folded repository is held folded only while a task there runs or needs the user.
+    fn repo_unhold(&mut self) {
+        if self.repos_held.is_empty() {
+            return;
+        }
+        let busy: Vec<String> =
+            self.repos.iter().filter(|repo| self.repo_busy(repo)).map(|repo| repo.path.clone()).collect();
+        self.repos_held.retain(|path| busy.contains(path));
+    }
+
+    /// True if a live task works in one of the checkouts of the repository at `path`.
+    fn repo_worked_in(&self, path: &str) -> bool {
+        let repo = self.repos.iter().find(|repo| repo.path == path);
+        repo.is_some_and(|repo| repo.checkouts().iter().any(|c| self.repo_task(&c.path).is_some()))
+    }
+
+    /// The repository whose rows list mode's selection is on: its name or one of its checkouts.
+    pub fn selected_repo(&self) -> Option<String> {
+        let row = self.list.and_then(|at| self.list_rows().into_iter().nth(at))?;
+        let of = |repo: &&Repo| match &row {
+            ListRow::RepoHead(path) => repo.path == *path,
+            ListRow::Repo(path) => repo.checkouts().iter().any(|checkout| checkout.path == *path),
+            _ => false,
+        };
+        self.repos.iter().find(of).map(|repo| repo.path.clone())
+    }
+
+    /// The user's +: a field in the repository's rows for the branch of a new worktree. None
+    /// while no folder is set for worktrees (a test run with no folder of its own).
+    fn worktree_edit(&mut self, repo: String, effects: &mut Vec<Effect>) {
+        if !self.repos.iter().any(|r| r.path == repo) || !self.mark_input_may_start() {
+            return;
+        }
+        if self.repo_dirs.worktrees.is_none() {
+            return effects.push(Effect::Notice { text: repos::WORKTREES_NONE.into() });
+        }
+        self.repo_fold(&repo, Some(false));
+        let text = Field::new("", repos::MAX_BRANCH);
+        self.mark_input = Some(MarkInput::Worktree { repo, text });
+    }
+
+    /// ↵ in the field: a branch name git takes asks the shell for the worktree, and the field
+    /// closes; one it does not is said in the status bar, and the field stays to fix it.
+    pub(crate) fn worktree_submit(&mut self, repo: String, branch: String, effects: &mut Vec<Effect>) {
+        let listed = self.repos.iter().any(|r| r.path == repo);
+        let Some(root) = self.repo_dirs.worktrees.clone().filter(|_| listed) else {
+            self.mark_input = None;
+            return;
+        };
+        if let Err(text) = repos::check_branch(&branch) {
+            return effects.push(Effect::Notice { text });
+        }
+        let path = repos::worktree_dir(&root, &repo, &self.repos, &branch);
+        self.mark_input = None;
+        effects.push(Effect::AddWorktree { repo, branch, path, root });
     }
 
     /// "Remove" on a repository's name: its directory comes off the settings, or a notice says
@@ -6372,6 +6590,9 @@ impl Model {
                 self.repo_dirs.dirs.retain(|d| *d != dir);
                 let held = self.repo_dirs.holder(path).is_some();
                 self.repos.retain(|repo| held || repo.path != path);
+                self.repo_field_gone();
+                let text = format!("Unlisted {} · nothing on disk changed", repos::name_of(path));
+                effects.push(Effect::Told { text });
             }
         }
     }
@@ -6860,6 +7081,9 @@ mod tests {
         Action::RepoRemove { .. },
         Action::OpenRepo { .. },
         Action::RepoClick { .. },
+        Action::RepoFold { .. },
+        Action::WorktreeEdit { .. },
+        Action::WorktreeAdded { .. },
         Action::RestoreTasks { .. },
         Action::TaskAdd { .. },
         Action::SetKnown { .. },
@@ -7090,6 +7314,9 @@ mod tests {
             Action::RepoRemove { path: text() },
             Action::OpenRepo { path: text(), axis: Right },
             Action::RepoClick { path: text(), axis: Right },
+            Action::RepoFold { path: text(), fold: None },
+            Action::WorktreeEdit { repo: text() },
+            Action::WorktreeAdded { repo: text(), path: text(), repos: Vec::new() },
             Action::RestoreTasks { tasks: Vec::new(), floor: 0 },
             Action::TaskAdd { title: text(), priority: 3, state: State::Running, tab: None, assign: Assign::default() },
             Action::SetKnown { line: text(), typing: None, names: None, paths: Vec::new(), entries: Vec::new() },
@@ -7429,6 +7656,8 @@ mod tests {
                     }
                     Action::EditorOpen | Action::EditorKeys { .. } => Some(editor::USERS_ALONE),
                     Action::EditorDone { .. } if origin == Origin::Socket => Some(editor::SHELLS_ALONE),
+                    Action::WorktreeEdit { .. } => Some(crate::repos::USERS_ALONE),
+                    Action::WorktreeAdded { .. } if origin == Origin::Socket => Some(crate::repos::USERS_ALONE),
                     _ => action.takes_keyboard().then_some("sneak mode is on"),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");
@@ -8474,10 +8703,16 @@ mod tests {
         m.update(Action::FocusList);
         m.update(Action::ToggleSection { section: Section::Repos });
         m.update(Action::FocusList);
-        assert_eq!((m.mode(), m.sidebar, m.list), (Mode::List, Some(Section::Repos), Some(0)));
-        assert_eq!(m.list_rows(), [ListRow::Repo("/code/app".into()), ListRow::Repo("/code/app-2".into())]);
-        m.update(Action::ListMove { delta: -1 }); // wraps to the last row
-        assert_eq!(m.list, Some(1));
+        // The repository's name is a row, over its checkouts; the list starts on the first checkout.
+        assert_eq!((m.mode(), m.sidebar, m.list), (Mode::List, Some(Section::Repos), Some(1)));
+        let rows = [
+            ListRow::RepoHead("/code/app".into()),
+            ListRow::Repo("/code/app".into()),
+            ListRow::Repo("/code/app-2".into()),
+        ];
+        assert_eq!(m.list_rows(), rows);
+        m.update(Action::ListMove { delta: -2 }); // wraps to the last row
+        assert_eq!(m.list, Some(2));
         // Opening the row: a terminal in the worktree, and the keyboard goes to it.
         assert_eq!(m.update(Action::ListChoose { axis: Down }), [Effect::Opened(1)]);
         assert_eq!((m.pane(1).unwrap().cwd.as_deref(), m.mode()), (Some("/code/app-2"), Mode::Normal));
@@ -10942,7 +11177,9 @@ mod tests {
         let change = |add: bool, text: &str| crate::settings::ListChange { key: "repos", add, text: text.into() };
         let notice = |text: &str| vec![Effect::Notice { text: text.into() }];
         let mut m = Model::default();
-        m.update(Action::SetRepoDirs { dirs: repos::RepoDirs { dirs: vec![dir("~/code", "/code")], fixed: false } });
+        m.update(Action::SetRepoDirs {
+            dirs: repos::RepoDirs { dirs: vec![dir("~/code", "/code")], fixed: false, worktrees: None },
+        });
         m.update(Action::SetRepos { repos: listed() });
         let add = |dir: &str, found: Vec<Repo>| Action::RepoAdd { dir: dir.into(), found };
         // A client writes no settings: refused, and nothing changes.
@@ -10954,19 +11191,46 @@ mod tests {
         let saved = vec![Effect::SaveRepos { changes: vec![change(true, "/src/zed")] }];
         assert_eq!(m.update(add("/src/zed", vec![repo("/src/zed")])), saved);
         assert_eq!(m.repo_dirs.dirs[1], dir("/src/zed", "/src/zed"));
-        assert_eq!((m.sidebar, m.mode(), m.list), (Some(Section::Repos), Mode::List, Some(2)));
-        assert_eq!(m.list_rows()[2], ListRow::Repo("/src/zed".into()));
+        assert_eq!((m.sidebar, m.mode(), m.list), (Some(Section::Repos), Mode::List, Some(4)));
+        assert_eq!(m.list_rows()[4], ListRow::Repo("/src/zed".into()));
         // Listed already, as itself or through `~/code`: selected, nothing written.
         m.update(Action::LeaveList);
-        assert_eq!((m.update(add("/src/zed", vec![repo("/src/zed")])), m.list), (vec![], Some(2)));
-        assert_eq!((m.update(add("/code/app", vec![repo("/code/app")])), m.list), (vec![], Some(0)));
+        assert_eq!((m.update(add("/src/zed", vec![repo("/src/zed")])), m.list), (vec![], Some(4)));
+        assert_eq!((m.update(add("/code/app", vec![repo("/code/app")])), m.list), (vec![], Some(1)));
         assert_eq!(m.repo_dirs.dirs.len(), 2);
         // Remove: only a directory named as itself. One held by `~/code` is the user's to edit.
         let through = "app is listed through ~/code: take that directory out of `repos` in settings.json";
         assert_eq!(m.update(Action::RepoRemove { path: "/code/app".into() }), notice(through));
-        let saved = vec![Effect::SaveRepos { changes: vec![change(false, "/src/zed")] }];
+        // Unlisted: said, as information, so nobody wonders whether files went.
+        let told = Effect::Told { text: "Unlisted zed · nothing on disk changed".into() };
+        let saved = vec![Effect::SaveRepos { changes: vec![change(false, "/src/zed")] }, told];
         assert_eq!(m.update(Action::RepoRemove { path: "/src/zed".into() }), saved);
         assert_eq!((m.repo_dirs.dirs.len(), m.repos.len(), m.repo_listed("/src/zed")), (1, 1, false));
+    }
+
+    #[test]
+    fn the_trash_asks_before_unlisting_a_repository_a_live_task_works_in() {
+        let dir = |text: &str| repos::RepoDir { text: text.into(), path: text.into() };
+        let mut m = Model::default();
+        m.update(Action::SetRepoDirs { dirs: repos::RepoDirs { dirs: vec![dir("/code/app")], ..Default::default() } });
+        m.update(Action::SetRepos { repos: listed() });
+        m.update(Action::TaskFromLine { line: "zoom >app-2".into(), known: Default::default(), open: false });
+        let remove = Action::RepoRemove { path: "/code/app".into() };
+        // Asked, and nothing written yet; Esc keeps it listed.
+        assert_eq!((m.update(remove.clone()), m.mode()), (vec![], Mode::Confirm));
+        assert_eq!(m.confirm.as_ref().map(Confirm::title).as_deref(), Some("Unlist this repository?"));
+        // Only the user answers: a client's ↵ is refused.
+        assert_eq!(m.refusal(&Action::QuitConfirm, Origin::Socket), Some(apps::USERS_ALONE));
+        m.update(Action::QuitCancel);
+        assert!(m.confirm.is_none() && m.repo_listed("/code/app"));
+        // ↵: unlisted, said, and the settings written.
+        m.update(remove);
+        let effects = m.update(Action::QuitConfirm);
+        assert!(
+            effects.contains(&Effect::Told { text: "Unlisted app · nothing on disk changed".into() }),
+            "{effects:?}"
+        );
+        assert!(!m.repo_listed("/code/app") && m.confirm.is_none());
     }
 
     #[test]
@@ -10987,6 +11251,117 @@ mod tests {
     fn listed() -> Vec<Repo> {
         let worktree = repos::Worktree { name: "app-2".into(), path: "/code/app-2".into(), branch: None };
         vec![Repo { name: "app".into(), path: "/code/app".into(), branch: None, worktrees: vec![worktree] }]
+    }
+
+    #[test]
+    fn a_repository_folds_under_its_name_and_shows_while_a_task_there_runs_or_needs_the_user() {
+        let mut m = Model::default();
+        let zed = Repo { name: "zed".into(), path: "/code/zed".into(), branch: None, worktrees: vec![] };
+        m.update(Action::SetRepos { repos: [listed(), vec![zed]].concat() });
+        m.update(Action::ToggleSection { section: Section::Repos });
+        let folded = |m: &Model| m.repos.iter().map(|repo| m.repo_folded(repo)).collect::<Vec<_>>();
+        let fold = |fold| Action::RepoFold { path: "/code/app".into(), fold };
+        // Anyone may fold: it changes what is drawn, not what runs. Folded, its rows are not list rows.
+        m.update(fold(None).sent_by(Origin::Socket));
+        assert_eq!(folded(&m), [true, false]);
+        let head = |path: &str| ListRow::RepoHead(path.into());
+        assert_eq!(m.list_rows(), [head("/code/app"), head("/code/zed"), ListRow::Repo("/code/zed".into())]);
+        m.update(fold(Some(true)));
+        assert_eq!(folded(&m), [true, false], "folding a folded one again leaves it folded");
+        // A task in its worktree runs: it shows, and is folded again once the task waits for later.
+        m.update(Action::TaskFromLine { line: "zoom >app-2".into(), known: Default::default(), open: false });
+        assert_eq!(folded(&m), [true, false], "a task filed for later shows nothing");
+        m.update(Action::TaskSetState { id: 1, state: State::Running });
+        assert_eq!(folded(&m), [false, false]);
+        m.update(Action::TaskSetState { id: 1, state: State::NeedsYou });
+        assert_eq!(folded(&m), [false, false]);
+        // The user folds it while the task needs them: it stays folded, until that ends; then
+        // a task that runs there again shows it again.
+        m.update(fold(None));
+        assert_eq!(folded(&m), [true, false]);
+        m.update(Action::TaskSetState { id: 1, state: State::Captured });
+        m.update(Action::TaskSetState { id: 1, state: State::Running });
+        assert_eq!(folded(&m), [false, false]);
+        // Unfolded for good: a task's end leaves it open.
+        m.update(fold(Some(false)));
+        m.update(Action::TaskSetState { id: 1, state: State::Captured });
+        assert_eq!(folded(&m), [false, false]);
+        assert!(m.repos_folded.is_empty());
+    }
+
+    #[test]
+    fn list_mode_folds_a_repository_on_its_name_and_keeps_the_selection_on_it() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        m.update(Action::ToggleSection { section: Section::Repos });
+        m.update(Action::FocusList);
+        m.update(Action::ListMove { delta: 1 }); // the worktree's row
+        assert_eq!((m.list, m.selected_repo().as_deref()), (Some(2), Some("/code/app")));
+        // ← folds the repository of the row: the selection goes to its name, and ↵ there unfolds.
+        m.update(Action::RepoFold { path: "/code/app".into(), fold: Some(true) });
+        assert_eq!((m.list_rows().len(), m.list), (1, Some(0)));
+        assert_eq!((m.update(Action::ListChoose { axis: Right }), m.list_rows().len(), m.list), (vec![], 3, Some(0)));
+        assert_eq!(m.selected_repo().as_deref(), Some("/code/app"));
+    }
+
+    #[test]
+    fn the_users_plus_takes_a_branch_and_asks_for_a_worktree_in_the_repositorys_folder() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        let edit = Action::WorktreeEdit { repo: "/code/app".into() };
+        // No folder for worktrees (a test run with no folder of its own): said, and no field.
+        assert_eq!(m.update(edit.clone()), [Effect::Notice { text: repos::WORKTREES_NONE.into() }]);
+        let dirs = repos::RepoDirs { worktrees: Some("/home/.ottospace/worktrees".into()), ..Default::default() };
+        m.update(Action::SetRepoDirs { dirs });
+        // A client's +, keys and ↵ do nothing with it.
+        assert_eq!(m.refusal(&edit, Origin::Socket), Some(repos::USERS_ALONE));
+        m.update(edit.clone().sent_by(Origin::Socket));
+        assert_eq!(m.mark_input, None);
+        m.update(Action::RepoFold { path: "/code/app".into(), fold: Some(true) });
+        m.update(edit);
+        // The field opens in the repository's rows, unfolded, and has the keyboard.
+        assert_eq!(
+            (m.mode(), m.field().map(|(of, _)| of), m.repo_folded(&m.repos[0])),
+            (Mode::Mark, Some("worktree"), false)
+        );
+        for origin in [Origin::Socket, Origin::System] {
+            let keys = Action::FieldEdit { edit: Edit::Insert("x".into()) };
+            assert_eq!(m.refusal(&keys, origin), Some(repos::USERS_ALONE));
+            assert_eq!(m.refusal(&Action::MarkSubmit, origin), Some(repos::USERS_ALONE));
+        }
+        // A name git would not take is said, and the field stays to fix it.
+        m.update(Action::FieldEdit { edit: Edit::Insert("-f".into()) });
+        let refused = m.update(Action::MarkSubmit);
+        assert_eq!(refused, [Effect::Notice { text: "A branch name cannot start with -".into() }]);
+        assert_eq!(m.field().map(|(_, field)| field.text()), Some("-f"));
+        m.update(Action::FieldEdit { edit: Edit::SelectAll });
+        m.update(Action::FieldEdit { edit: Edit::Insert("fix/zoom".into()) });
+        let path = "/home/.ottospace/worktrees/app/fix-zoom";
+        let asked = Effect::AddWorktree {
+            repo: "/code/app".into(),
+            branch: "fix/zoom".into(),
+            path: path.into(),
+            root: "/home/.ottospace/worktrees".into(),
+        };
+        assert_eq!((m.update(Action::MarkSubmit), &m.mark_input), (vec![asked], &None));
+        // Made: the list as read again, and a terminal there in a Workspace tab of its own.
+        let mut repos = listed();
+        repos[0].worktrees.push(repos::Worktree { name: "fix-zoom".into(), path: path.into(), branch: None });
+        let made = Action::WorktreeAdded { repo: "/code/app".into(), path: path.into(), repos };
+        assert_eq!(m.refusal(&made, Origin::Socket), Some(repos::USERS_ALONE));
+        assert_eq!(m.update(made.sent_by(Origin::System)), [Effect::Opened(1)]);
+        assert_eq!((m.pane(1).and_then(|p| p.cwd.as_deref()), m.space()), (Some(path), &Owner::Workspace));
+    }
+
+    #[test]
+    fn the_branch_field_closes_when_its_repository_is_no_longer_listed() {
+        let mut m = Model::default();
+        m.update(Action::SetRepoDirs { dirs: repos::RepoDirs { worktrees: Some("/w".into()), ..Default::default() } });
+        m.update(Action::SetRepos { repos: listed() });
+        m.update(Action::WorktreeEdit { repo: "/code/app".into() });
+        assert_eq!(m.field().map(|(of, _)| of), Some("worktree"));
+        m.update(Action::SetRepos { repos: Vec::new() }.sent_by(Origin::System));
+        assert_eq!(m.mark_input, None);
     }
 
     #[test]
@@ -11632,7 +12007,10 @@ mod tests {
         assert_eq!(m.update(Action::QuitConfirm), [], "no question, no answer");
         assert_eq!(m.update(Action::QuitAsked { running: vec![running(1, "sleep")] }), []);
         assert_eq!(m.mode(), Mode::Confirm);
-        assert_eq!(m.confirm, Some(Confirm { running: vec![running(1, "sleep")], dismiss: None, paste: None }));
+        assert_eq!(
+            m.confirm,
+            Some(Confirm { running: vec![running(1, "sleep")], dismiss: None, paste: None, unlist: None })
+        );
         assert_eq!(m.update(Action::QuitConfirm), [Effect::Quit]);
     }
 
@@ -11776,7 +12154,10 @@ mod tests {
         m.update(Action::Close { pane: Some(3) });
         assert_eq!(m.confirm.as_ref().map(|c| c.running.len()), Some(2), "pane 3 ran nothing");
         m.update(Action::Close { pane: Some(1) });
-        assert_eq!(m.confirm, Some(Confirm { running: vec![running(2, "vim")], dismiss: None, paste: None }));
+        assert_eq!(
+            m.confirm,
+            Some(Confirm { running: vec![running(2, "vim")], dismiss: None, paste: None, unlist: None })
+        );
         // Nothing left to ask about: no question, and no quit either.
         let effects = m.update(Action::Close { pane: Some(2) });
         assert!(!effects.contains(&Effect::Quit), "{effects:?}");
@@ -11850,6 +12231,8 @@ mod tests {
                     }
                     Action::EditorOpen | Action::EditorKeys { .. } => Some(editor::USERS_ALONE),
                     Action::EditorDone { .. } if origin == Origin::Socket => Some(editor::SHELLS_ALONE),
+                    Action::WorktreeEdit { .. } => Some(crate::repos::USERS_ALONE),
+                    Action::WorktreeAdded { .. } if origin == Origin::Socket => Some(crate::repos::USERS_ALONE),
                     _ => action.takes_keyboard().then_some(CONFIRM_UP),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");
@@ -11893,7 +12276,10 @@ mod tests {
         assert_eq!((m.mode(), ids(&m)), (Mode::Confirm, vec![1, 2]));
         // A shell exits: its pane drops off the list.
         m.update(Action::Close { pane: Some(1) }.sent_by(Origin::System));
-        assert_eq!(m.confirm, Some(Confirm { running: vec![running(2, "vim")], dismiss: None, paste: None }));
+        assert_eq!(
+            m.confirm,
+            Some(Confirm { running: vec![running(2, "vim")], dismiss: None, paste: None, unlist: None })
+        );
         // A client may not take the keyboard from under it, nor ask again as the user's yes.
         for taking in [Action::ToggleKeys, Action::Enter { pane: 2 }, ask.clone()] {
             assert_eq!(m.refusal(&taking, Origin::Socket), Some(CONFIRM_UP), "{taking:?}");
@@ -11929,16 +12315,22 @@ mod tests {
             running: vec![Running { pane: 4, program: None, background: false }],
             dismiss: None,
             paste: None,
+            unlist: None,
         };
         assert_eq!((one.title().as_str(), one.lines()), ("1 terminal is running", vec!["pane 4".to_string()]));
         let job = Confirm {
             running: vec![Running { pane: 2, program: Some("sleep".into()), background: true }],
             dismiss: None,
             paste: None,
+            unlist: None,
         };
         assert_eq!(job.lines(), ["pane 2 · sleep (background)"]);
-        let seven =
-            Confirm { running: (1..=7).map(|pane| running(pane, "claude")).collect(), dismiss: None, paste: None };
+        let seven = Confirm {
+            running: (1..=7).map(|pane| running(pane, "claude")).collect(),
+            dismiss: None,
+            paste: None,
+            unlist: None,
+        };
         assert_eq!(seven.title(), "7 terminals are running");
         let lines = seven.lines();
         assert_eq!((lines.len(), lines[0].as_str(), lines[5].as_str()), (6, "pane 1 · claude", "and 2 more"));

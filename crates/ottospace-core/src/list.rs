@@ -11,6 +11,8 @@ pub enum ListRow {
     App(String),
     /// A repository or worktree, by path.
     Repo(String),
+    /// A repository's name over its rows, by path. Opening it folds or unfolds them.
+    RepoHead(String),
     Task(TaskId),
     /// A heading of the Tasks section. Opening it folds or unfolds it.
     Heading(Heading),

@@ -59,6 +59,7 @@ mod app_wheel;
 mod apps;
 mod ax_debug;
 mod calendar;
+mod child;
 mod clipboard;
 mod collect;
 mod commands;
@@ -94,6 +95,7 @@ mod terminal;
 mod trace;
 mod words;
 mod workbook;
+mod worktree;
 use control::{Call, MouseAction, PaneKind, Request};
 use terminal::Terminal;
 
@@ -379,6 +381,7 @@ impl AssetSource for Assets {
             "icons/split-down.svg" => Some(include_bytes!("../assets/icons/split-down.svg")),
             "icons/plus.svg" => Some(include_bytes!("../assets/icons/plus.svg")),
             "icons/dismiss.svg" => Some(include_bytes!("../assets/icons/dismiss.svg")),
+            "icons/trash.svg" => Some(include_bytes!("../assets/icons/trash.svg")),
             _ => None,
         };
         Ok(bytes.map(Into::into))
@@ -504,6 +507,7 @@ const KEYS_LIST: &[(&str, &str)] = &[
     ("A / space", "Workbook: add this tab / list its tabs"),
     ("P / X / U", "App not running: pin or unpin / hide a suggestion / undo"),
     ("/", "Apps: filter all apps"),
+    ("← → / A", "Repos: fold / unfold a repository / new worktree"),
     ("Esc", "Leave"),
 ];
 const KEYS_VISUAL: &[(&str, &str)] = &[
@@ -817,6 +821,10 @@ struct Workspace {
     tags: Option<tags::Reader>,
     /// The repository the agents and skills were last asked for, while the new-task box is open.
     tags_repo: Option<Option<String>>,
+    /// Worktrees asked for (`Effect::AddWorktree`) and made, or not, off the main thread.
+    worktrees: (Sender<worktree::Made>, Receiver<worktree::Made>),
+    /// What the user's last step did, said for a few seconds as information (`Effect::Told`).
+    told: Option<(String, Instant)>,
     /// Socket calls that file a task and wait for the reader: (the call's number, what to file, where to reply).
     filing: Vec<(u64, Filing, Sender<String>)>,
     /// How many such calls there were: each has its own number.
@@ -891,6 +899,8 @@ const E2E_SLIVER: f32 = 12.;
 
 /// How long the `s` key snoozes a task: one hour.
 const SNOOZE_MS: u64 = 3_600_000;
+/// How long a step's information (`Effect::Told`) stays in the status bar.
+const TOLD_FOR: Duration = Duration::from_secs(8);
 
 /// Longest a `wait` request may run: 10 minutes.
 const MAX_WAIT_MS: u64 = 600_000;
@@ -1048,6 +1058,7 @@ impl Workspace {
                             this.check_peek(window, cx);
                         }
                         this.tick_timeline(window, cx);
+                        this.take_worktrees(window, cx);
                     });
                     this.take_snapshots(window, cx);
                     if this.hosted.values().any(|h| h.latest.dirty.swap(false, Relaxed)) {
@@ -1169,6 +1180,8 @@ impl Workspace {
             minute: 0,
             tags: tags::Reader::start(),
             tags_repo: None,
+            worktrees: std::sync::mpsc::channel(),
+            told: None,
             filing: Vec::new(),
             calls: 0,
             sessions: sessions::Poller::start(),
@@ -1423,8 +1436,26 @@ impl Workspace {
                         self.error = Some(format!("{}{why}", Self::NOT_WRITTEN));
                     }
                 }
-                Effect::SaveRepos { changes } => self.save_apps(changes),
+                // Later reads of the list look where the model now does (also after "Unlist?" is
+                // answered); a file not written leaves them as the settings are.
+                Effect::SaveRepos { changes } => {
+                    let said = self.error.take();
+                    self.save_apps(changes);
+                    let failed = self.error.as_ref().is_some_and(|error| error.starts_with(Self::NOT_WRITTEN));
+                    self.error = self.error.take().or(said);
+                    if failed {
+                        self.model.update(Action::SetRepoDirs { dirs: config::repo_dirs() }.sent_by(Origin::System));
+                        self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
+                    } else {
+                        config::set_repo_roots(&self.model.repo_dirs);
+                    }
+                }
+                Effect::AddWorktree { repo, branch, path, root } => {
+                    let done = self.worktrees.0.clone();
+                    worktree::start(repo.clone(), branch.clone(), path.clone(), root.clone(), done);
+                }
                 Effect::Notice { text } => self.error = Some(text.clone()),
+                Effect::Told { text } => self.told = Some((text.clone(), Instant::now())),
                 // A picture of the pane is asked for: the cursor's going scrolls the terminal to
                 // its bottom, so it waits until the picture of what is on show is taken.
                 Effect::Visual { pane, on: false } if self.snapshot_pending(*pane) => self.visual_after.push(*pane),
@@ -1647,7 +1678,9 @@ impl Workspace {
         let unsaved = self.unsaved.clone().or(self.kept_marks.unsaved.clone()).or(self.kept_workbooks.unsaved.clone());
         let unsaved = unsaved.or(self.kept_layout.unsaved.clone());
         let editor = self.model.editor_note().map(|text| (text.to_string(), Level::Info));
-        error(self.error.clone()).or(error(unsaved)).or(start).or(editor)
+        let told =
+            self.told.as_ref().filter(|(_, at)| at.elapsed() < TOLD_FOR).map(|(text, _)| (text.clone(), Level::Info));
+        error(self.error.clone()).or(error(unsaved)).or(told).or(start).or(editor)
     }
 
     /// Reads `settings.json` again once a change to it has held for one look: a file an editor
@@ -2284,9 +2317,10 @@ impl Workspace {
         self.model.tasks.inbox().into_iter().map(row).collect()
     }
 
-    /// The Repos section as laid out: each repository's `name` and `path` with its `header`, and
-    /// its `rows` (a checkout's `path`, `branch`, `default`, `label`) each with its `row`. Rects
-    /// are in window points, scrolled out of view or not; null while the section is not drawn.
+    /// The Repos section as laid out: each repository's `name` and `path` with its `header`,
+    /// whether it is drawn `folded`, and its `rows` (a checkout's `path`, `branch`, `default`,
+    /// `label`) each with its `row`. Rects are in window points, scrolled out of view or not; null
+    /// while the section is not drawn (a folded repository's rows too).
     fn repos_bar(&self) -> Vec<serde_json::Value> {
         let marks = self.marks.borrow();
         let drawn = |mark: Mark| marks.get(&mark).copied().map(rect);
@@ -2299,7 +2333,8 @@ impl Workspace {
                 row
             };
             let rows: Vec<serde_json::Value> = repo.checkouts().into_iter().map(row).collect();
-            serde_json::json!({ "name": repo.name, "path": repo.path, "header": drawn(Mark::Repo(n)), "rows": rows })
+            let (header, folded) = (drawn(Mark::Repo(n)), self.model.repo_folded(repo));
+            serde_json::json!({ "name": repo.name, "path": repo.path, "header": header, "folded": folded, "rows": rows })
         };
         self.model.repos.iter().enumerate().map(group).collect()
     }
@@ -3498,6 +3533,13 @@ impl Workspace {
                 };
                 return self.click_workbook(control, id, tab, window, cx);
             }
+            // In Repos: a new worktree of the selected row's repository.
+            Some(ListKey::Add) if self.model.sidebar == Some(Section::Repos) => {
+                if let Some(path) = self.model.selected_repo() {
+                    self.add_worktree(&path, window, cx);
+                }
+                return cx.notify();
+            }
             Some(ListKey::Add) => match self.model.selected_workbook() {
                 Some((id, _)) => return self.click_workbook("workbook-add", id, None, window, cx),
                 None => return,
@@ -3528,6 +3570,11 @@ impl Workspace {
                 let step = if side < 0 { DayStep::Back } else { DayStep::Forward };
                 Action::CalendarDay { step }
             }
+            // In Repos ← folds the selected row's repository under its name, → unfolds it.
+            Some(ListKey::Side(side)) if self.model.sidebar == Some(Section::Repos) => {
+                let Some(path) = self.model.selected_repo() else { return };
+                Action::RepoFold { path, fold: Some(side < 0) }
+            }
             Some(ListKey::Today) if self.model.sidebar == Some(Section::Calendar) => {
                 Action::CalendarDay { step: DayStep::Today }
             }
@@ -3547,15 +3594,16 @@ impl Workspace {
         let at = self.model.list?;
         match self.model.sidebar {
             Some(Section::Tasks) => {}
-            // A heading before each repository's rows.
+            // Each repository's name is a row; the new worktree's field, under one, is not.
             Some(Section::Repos) => {
-                let mut rows = 0;
-                let headings = self.model.repos.iter().take_while(|repo| {
-                    let starts_before = rows <= at;
-                    rows += repo.checkouts().len();
-                    starts_before
-                });
-                return Some(at + headings.count());
+                let typed = match &self.model.mark_input {
+                    Some(MarkInput::Worktree { repo, .. }) => {
+                        Some(ottospace_core::list::ListRow::RepoHead(repo.clone()))
+                    }
+                    _ => None,
+                };
+                let field = typed.and_then(|head| self.model.list_rows().iter().position(|row| *row == head));
+                return Some(at + usize::from(field.is_some_and(|field| at > field)));
             }
             Some(Section::Apps) => return Some(self.apps_child(at)),
             // The offer to put a mark back, if it shows, is above the rows.
@@ -4095,6 +4143,36 @@ impl Workspace {
         self.change_repos(Action::RepoAdd { dir: dir.into(), found }, origin, window, cx);
     }
 
+    /// Worktrees git made, or did not: the list is read again; a made one opens, a failure is said.
+    fn take_worktrees(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let made: Vec<worktree::Made> = self.worktrees.1.try_iter().collect();
+        for worktree::Made { repo, result } in made {
+            let repos = repos::scan();
+            match result {
+                // Made from a repository listed only as a worktree of another: not in the list to open.
+                Ok(path) if !repos.iter().any(|r| r.worktrees.iter().any(|w| w.path == path)) => {
+                    self.error = Some(format!("Made {path}: its repository is not listed"));
+                    self.dispatch(Action::SetRepos { repos }, Origin::System, window, cx);
+                }
+                Ok(path) => {
+                    drop(self.dispatch(Action::WorktreeAdded { repo, path, repos }, Origin::System, window, cx))
+                }
+                Err(why) => {
+                    self.error = Some(why);
+                    self.dispatch(Action::SetRepos { repos }, Origin::System, window, cx);
+                }
+            }
+            cx.notify();
+        }
+    }
+
+    /// The user's + on a repository's name: the field for a new worktree's branch, with the
+    /// worktrees folder as the settings say now.
+    pub(crate) fn add_worktree(&mut self, repo: &str, window: &Window, cx: &mut Context<Self>) {
+        self.model.update(Action::SetRepoDirs { dirs: config::repo_dirs() }.sent_by(Origin::System));
+        self.dispatch(Action::WorktreeEdit { repo: repo.into() }, self.input, window, cx);
+    }
+
     /// "Remove" on a repository's name in the Repos section.
     pub(crate) fn remove_repo(&mut self, path: &str, window: &Window, cx: &mut Context<Self>) {
         self.change_repos(Action::RepoRemove { path: path.into() }, self.input, window, cx);
@@ -4481,11 +4559,10 @@ impl Workspace {
     /// Repositories, each with its worktrees under it. A click opens a terminal there: it fills
     /// the focused pane if that is empty, else splits it (right, or down with shift).
     fn render_repos(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        // One checkout: the branch it is on; under it "Default", or a linked worktree's directory.
-        let row = |index: usize, checkout: Checkout| {
-            let place = if checkout.default { theme::PRIMARY } else { theme::MUTED };
-            let icon = svg().path("icons/repos.svg").size(px(12.)).text_color(rgb(theme::MUTED));
-            let label = div().truncate().text_xs().line_height(px(15.)).text_color(rgb(place));
+        // One checkout, on one line: its branch, cut short before the marks at its end. The
+        // repository's own folder has a dot in the gutter; the path is in the tooltip.
+        let row = |index: usize, at: usize, checkout: Checkout, cx: &mut Context<Self>| {
+            let selected = self.model.list == Some(at);
             // The task working there: its badge; a click selects it, and a word opens a terminal anyway.
             let task = self.model.repo_task(&checkout.path);
             let terminal = task.map(|_| {
@@ -4494,7 +4571,6 @@ impl Workspace {
                     this.dispatch(Action::OpenRepo { path: path.clone(), axis: Axis::Right }, this.input, window, cx);
                 };
                 let tip = ("Terminal", "A terminal here, in Workspace");
-                let selected = self.model.list == Some(index);
                 words::words("repo-row", selected).child(self.word(
                     format!("repo-terminal:{}", checkout.path),
                     tip,
@@ -4502,51 +4578,53 @@ impl Workspace {
                     cx,
                 ))
             });
-            list_row(("repo", index), self.model.list == Some(index))
+            let badge = task.and_then(|id| self.task_badge(id, 16.));
+            // Room at the end for what is drawn there, so the branch never runs under it.
+            let room = if badge.is_some() { 30. } else { 8. };
+            let dot = checkout.default.then(|| {
+                div().absolute().left(px(12.)).top(px(11.)).size(px(5.)).rounded_full().bg(rgb(theme::PRIMARY))
+            });
+            let tip = match checkout.default {
+                true => format!("{} · the repository's own folder", checkout.path),
+                false => checkout.path.clone(),
+            };
+            list_row(("repo", index), selected)
                 .group("repo-row")
-                // Beside the lines, not in a flex row with them: text in a flex row's cell is
-                // first measured with no width, and is then never cut.
-                .child(icon.absolute().left(px(8.)).top(px(5.)))
-                .children(
-                    task.and_then(|id| self.task_badge(id, 16.))
-                        .map(|badge| badge.absolute().right(px(8.)).top(px(9.))),
-                )
+                .py_1()
+                .pr(px(room))
+                .children(dot)
+                .children(badge.map(|badge| badge.absolute().right(px(8.)).top(px(5.))))
                 .child(div().truncate().child(checkout.branch))
-                .child(label.child(checkout.label))
-                .children(terminal)
+                .children(terminal.map(|words| words.top(px(4.))))
                 .child(mark(&self.marks, Mark::Checkout(index)))
                 .child(self.controls.mark(format!("repo:{}", checkout.path)))
+                .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone().into()))))
                 .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                     let axis = if e.modifiers().shift { Axis::Down } else { Axis::Right };
                     this.dispatch(Action::RepoClick { path: checkout.path.clone(), axis }, this.input, window, cx);
                 }))
         };
-        // The repository's name as a heading, then its checkouts: its own directory first.
+        // Each repository's name (a list row of its own), then its checkouts unless folded: its
+        // own folder first. `index` counts checkouts, drawn or not; `at` the list's rows.
         let mut items: Vec<AnyElement> = Vec::new();
-        let mut index = 0;
+        let (mut index, mut at) = (0, 0);
         for (n, repo) in self.model.repos.iter().enumerate() {
-            // `flex_none`: a heading that may shrink is squeezed to nothing once the list overflows.
-            let name = div().flex_none().px_2().pb_0p5().text_xs().font_weight(FontWeight::SEMIBOLD);
-            let name = name.text_color(rgb(theme::MUTED)).map(|d| if n == 0 { d.pt_1() } else { d.pt_3() });
-            let name = name.child(mark(&self.marks, Mark::Repo(n))).child(div().truncate().child(repo.name.clone()));
-            // Under the pointer: a word that stops listing the repository. Not while
-            // `OTTOSPACE_REPOS` names the directories: there is no setting to take it from.
-            let path = repo.path.clone();
-            let remove = (!self.model.repo_dirs.fixed).then(|| {
-                let click =
-                    move |this: &mut Self, window: &Window, cx: &mut Context<Self>| this.remove_repo(&path, window, cx);
-                let tip = ("Remove", "Stop listing this repository");
-                let word = self.word(format!("repo-remove:{}", repo.path), tip, click, cx);
-                // On the heading's colour, not a row's; the heading's weight would make it bold.
-                words::words("repo-name", false)
-                    .bottom(px(1.))
-                    .bg(rgb(theme::RAISED))
-                    .font_weight(FontWeight::NORMAL)
-                    .child(word)
-            });
-            items.push(name.group("repo-name").relative().children(remove).into_any_element());
-            for checkout in repo.checkouts() {
-                items.push(row(index, checkout).into_any_element());
+            let checkouts = repo.checkouts();
+            let folded = self.model.repo_folded(repo);
+            items.push(self.repo_heading(n, at, repo, folded, checkouts.len(), cx).into_any_element());
+            at += 1;
+            let typing =
+                matches!(&self.model.mark_input, Some(MarkInput::Worktree { repo: of, .. }) if *of == repo.path);
+            if typing {
+                let field = self.render_field("Branch (new ones from HEAD)", cx);
+                let line = div().flex_none().pl(px(26.)).pr_2().py_0p5().rounded_md().border_1();
+                items.push(line.border_color(rgb(theme::MARK)).text_size(px(13.)).child(field).into_any_element());
+            }
+            for checkout in checkouts {
+                if !folded {
+                    items.push(row(index, at, checkout, cx).into_any_element());
+                    at += 1;
+                }
                 index += 1;
             }
         }
@@ -4564,6 +4642,72 @@ impl Workspace {
             list.track_scroll(&self.list_scroll).children(empty).children(items),
             &self.list_scroll,
         )
+    }
+
+    /// A repository's name: a chevron that folds its rows (a click anywhere on the line does),
+    /// the name, the number of its checkouts while folded; under the pointer, + (a worktree) and
+    /// the trash (stop listing it). `at`: its place among the list's rows.
+    fn repo_heading(
+        &self,
+        n: usize,
+        at: usize,
+        repo: &Repo,
+        folded: bool,
+        count: usize,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let selected = self.model.list == Some(at);
+        let path = repo.path.clone();
+        let add = {
+            let path = path.clone();
+            let click =
+                move |this: &mut Self, window: &Window, cx: &mut Context<Self>| this.add_worktree(&path, window, cx);
+            self.icon_word(format!("repo-add:{path}", path = repo.path), ("icons/plus.svg", "New worktree…"), click, cx)
+        };
+        // Not while `OTTOSPACE_REPOS` names the directories: there is no setting to take it from.
+        let remove = (!self.model.repo_dirs.fixed).then(|| {
+            let path = path.clone();
+            let click =
+                move |this: &mut Self, window: &Window, cx: &mut Context<Self>| this.remove_repo(&path, window, cx);
+            let tip = ("icons/trash.svg", "Stop listing this repository (nothing on disk is touched)");
+            self.icon_word(format!("repo-remove:{}", repo.path), tip, click, cx)
+        });
+        let count = folded.then(|| {
+            let badge = div().flex_none().px_1p5().rounded_full().bg(rgb(theme::BORDER)).text_xs();
+            badge.text_color(rgb(theme::MUTED)).line_height(px(15.)).child(count.to_string())
+        });
+        // A checkout row's look (hover, selection), on one line of its own height.
+        list_row(("repo-head", n), selected)
+            .group("repo-name")
+            .when(n > 0, |d| d.mt_2())
+            .h(px(26.))
+            .px_2()
+            .py_0()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .child(div().flex_none().w(px(10.)).text_xs().text_color(rgb(theme::MUTED)).child(if folded {
+                "▸"
+            } else {
+                "▾"
+            }))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(rgb(theme::TEXT))
+                    .child(repo.name.clone()),
+            )
+            .children(count)
+            .child(words::words("repo-name", selected).top(px(3.)).child(add).children(remove))
+            .child(mark(&self.marks, Mark::Repo(n)))
+            .child(self.controls.mark(format!("repo-fold:{path}")))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.dispatch(Action::RepoFold { path: path.clone(), fold: None }, this.input, window, cx);
+            }))
     }
 
     fn render_pane(&self, pane: &Pane, cx: &mut Context<Self>) -> impl IntoElement {
@@ -5235,6 +5379,7 @@ impl Workspace {
             }
             Mode::Sneak => ("SNEAK", "esc"),
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.dismiss.is_some()) => ("DISMISS?", ""),
+            Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.unlist.is_some()) => ("UNLIST?", ""),
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.paste.is_some()) => ("PASTE?", ""),
             Mode::Confirm => ("QUIT?", ""),
             // The capture bar lists the annotate keys.
@@ -5244,6 +5389,7 @@ impl Workspace {
                 Some(MarkInput::Rename { .. }) => ("MARK", ""),
                 Some(MarkInput::SetKey { .. }) => ("MARK", "a letter for the mark · ⌫ for none · esc cancels"),
                 Some(MarkInput::Workbook { .. }) => ("WORKBOOK", ""),
+                Some(MarkInput::Worktree { .. }) => ("WORKTREE", "↵ add · esc cancels"),
                 _ => ("MARK?", "a mark's letter · esc cancels"),
             },
         };
