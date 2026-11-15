@@ -14,7 +14,11 @@ rail's cells and the drawer's go word (`docs/ai/ux-simplification.md` §1.7, §3
 - **One selection.** The selected space is the tab on show's. Selecting a space shows the tab it
   showed last. The drawer is only ever on the selected space's conversation: a task's or a
   session's agent; none for Workspace or a workbook. ⌘⇧L opens and closes the drawer; switching
-  spaces keeps it open or closed. Selecting starts nothing: only `TalkStart` (and the user's ↵ on
+  spaces keeps it open or closed. Closed on a conversation, with nothing else in the drawer's
+  place, the **agent chip** (`Model::agent_chip`) is at the end of the tab row (the top row, for
+  a space of one tab): the badge, the dial's marker and what the agent does. The user's click on
+  it, or on the selected space (`SpaceClick`), opens the conversation as ⌘⇧L does; a client's
+  click only selects. Selecting starts nothing: only `TalkStart` (and the user's ↵ on
   a new task) starts or resumes an agent.
 - **Hide** (`SpaceHide`, × on the space) takes a space off the row. Nothing ends: agent, tabs,
   panes, terminals stay; hosted windows stay parked as for any tab not on show. Its row in Tasks

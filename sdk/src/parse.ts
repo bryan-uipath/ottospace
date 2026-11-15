@@ -3,6 +3,7 @@
 // Keys the types do not name are dropped, so a test can compare the result with the raw reply.
 
 import type {
+  AgentChip,
   AgentDial,
   AgentLine,
   AppEntry,
@@ -768,13 +769,26 @@ function station(value: unknown, at: string): Station {
   throw wrong(at, "a station", value);
 }
 
+function pulse(value: unknown, at: string): AgentDial["pulse"] {
+  if (value === "running" || value === "needs_you" || value === "idle" || value === "ended") return value;
+  if (value === "error") return value;
+  throw wrong(at, "a dial's state", value);
+}
+
+function agentChip(value: unknown, at: string): AgentChip {
+  const o = fields(value, at);
+  return {
+    task: subject(o.task, `${at}.task`),
+    space: num(o.space, `${at}.space`),
+    state: pulse(o.state, `${at}.state`),
+    line: str(o.line, `${at}.line`),
+    rect: orNull(rect)(o.rect, `${at}.rect`),
+    short: bool(o.short, `${at}.short`),
+  };
+}
+
 function agentDial(value: unknown, at: string): AgentDial {
   const o = fields(value, at);
-  const pulse = (value: unknown, at: string): AgentDial["pulse"] => {
-    if (value === "running" || value === "needs_you" || value === "idle" || value === "ended") return value;
-    if (value === "error") return value;
-    throw wrong(at, "a dial's state", value);
-  };
   const level = (value: unknown, at: string): AgentDial["level"] => {
     if (value === "calm" || value === "amber" || value === "red") return value;
     throw wrong(at, "calm, amber or red", value);
@@ -1457,6 +1471,7 @@ export function snapshot(value: unknown): Snapshot {
     titles: map(str)(o.titles, "titles"),
     tabs: list(orNull(rect))(o.tabs, "tabs"),
     space_rects: list(orNull(rect))(o.space_rects, "space_rects"),
+    agent_chip: orNull(agentChip)(o.agent_chip, "agent_chip"),
     strip: orNull(rect)(o.strip, "strip"),
     bar_header: orNull(rect)(o.bar_header, "bar_header"),
     drag: orNull(drag)(o.drag, "drag"),

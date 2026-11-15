@@ -495,6 +495,11 @@ pub enum Action {
     SpaceSelect {
         index: usize,
     },
+    /// A click on the space at `index` of the top row, or on the agent chip: the user's on the
+    /// selected space opens its closed conversation; any other is `SpaceSelect` (`space_click`).
+    SpaceClick {
+        index: usize,
+    },
     /// The next (positive) or previous space on the top row. It wraps.
     SpaceCycle {
         delta: i32,
@@ -1467,6 +1472,7 @@ impl Action {
                 | Action::SelectTab { .. }
                 | Action::SelectVisibleTab { .. }
                 | Action::SpaceSelect { .. }
+                | Action::SpaceClick { .. }
                 | Action::SpaceCycle { .. }
                 | Action::SpaceHide { .. }
                 | Action::SpaceOpen { .. }
@@ -1600,6 +1606,7 @@ impl Action {
             | Action::TaskUndo
             | Action::TaskGo { .. }
             | Action::SpaceSelect { .. }
+            | Action::SpaceClick { .. }
             | Action::SpaceCycle { .. }
             | Action::SpaceHide { .. }
             | Action::SpaceOpen { .. }
@@ -1798,6 +1805,7 @@ impl Action {
             | Action::NewTab
             | Action::NewEmptyTab
             | Action::SpaceSelect { .. }
+            | Action::SpaceClick { .. }
             | Action::SpaceCycle { .. }
             | Action::SpaceHide { .. }
             | Action::SpaceOpen { .. }
@@ -3033,7 +3041,7 @@ impl Model {
     }
 
     pub fn update(&mut self, sent: impl Into<Envelope>) -> Vec<Effect> {
-        let sent = sent.into();
+        let sent = self.space_click(sent.into());
         // A feature that is off is absent: its actions change nothing and ask for nothing.
         if self.disabled(&sent.action).is_some() {
             return Vec::new();
@@ -3212,6 +3220,7 @@ impl Model {
             action,
             Action::SelectTab { .. }
                 | Action::SpaceSelect { .. }
+                | Action::SpaceClick { .. }
                 | Action::SpaceCycle { .. }
                 | Action::SpaceHide { .. }
                 | Action::SpaceOpen { .. }
@@ -3247,6 +3256,7 @@ impl Model {
                 | Action::SelectTab { .. }
                 | Action::SelectVisibleTab { .. }
                 | Action::SpaceSelect { .. }
+                | Action::SpaceClick { .. }
                 | Action::SpaceCycle { .. }
                 | Action::SpaceHide { .. }
                 | Action::SpaceOpen { .. }
@@ -3561,7 +3571,8 @@ impl Model {
             }
             Action::TabPlace { tab, at } => self.place_tab(tab, at),
             Action::SelectTab { index } => self.select_tab(index, effects),
-            Action::SpaceSelect { index } => self.select_space(index, effects),
+            // A click is one of the two by now (`space_click`).
+            Action::SpaceSelect { index } | Action::SpaceClick { index } => self.select_space(index, effects),
             Action::SpaceCycle { delta } => self.cycle_space(delta, effects),
             Action::SpaceHide { index } => self.hide_space(index, effects),
             Action::SpaceOpen { space: Owner::Workbook { id } } => {
@@ -7231,6 +7242,7 @@ mod tests {
         Action::TaskGo { .. },
         Action::TabPlace { .. },
         Action::SpaceSelect { .. },
+        Action::SpaceClick { .. },
         Action::SpaceCycle { .. },
         Action::SpaceHide { .. },
         Action::SpaceOpen { .. },
@@ -7467,6 +7479,7 @@ mod tests {
             Action::TaskGo { id: None },
             Action::TabPlace { tab: None, at: TabAt::End(Owner::Workspace) },
             Action::SpaceSelect { index: 0 },
+            Action::SpaceClick { index: 0 },
             Action::SpaceCycle { delta: 1 },
             Action::SpaceHide { index: None },
             Action::SpaceOpen { space: Owner::Task { id: 1 } },
@@ -8637,6 +8650,7 @@ mod tests {
             Action::SelectTab { index: 0 },
             Action::CloseTab { index: None },
             Action::SpaceSelect { index: 0 },
+            Action::SpaceClick { index: 0 },
             Action::SpaceCycle { delta: 1 },
             Action::SpaceHide { index: None },
             Action::SpaceOpen { space: Owner::Workspace },

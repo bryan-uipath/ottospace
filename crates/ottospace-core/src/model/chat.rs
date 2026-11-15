@@ -4,11 +4,12 @@
 //! Design: `docs/ai/agent-runners.md`.
 
 use super::{Action, Effect, Model};
+use crate::activity::Pulse;
 use crate::agents;
 use crate::edit::Field;
 use crate::runner::{RunnerId, Status, Support};
-use crate::talk::Subject;
-use crate::tasks::State;
+use crate::talk::{self, Chip, Subject};
+use crate::tasks::{Group, State};
 use crate::transcript::{Event, Transcript, View};
 
 /// Why a client's send, answer, interrupt or switch is refused.
@@ -370,6 +371,36 @@ impl Model {
         }
     }
 
+    /// The agent chip: the selected space's conversation while it is closed and nothing else
+    /// is in the drawer's place. What its agent does, with no clock in it.
+    pub fn agent_chip(&self) -> Option<Chip> {
+        let subject = &self.talk.as_ref().filter(|talk| !talk.open)?.task;
+        if self.drawer_view().shows() || self.inspector.is_some() {
+            return None;
+        }
+        let space = self.shown_spaces().iter().position(|space| space.of == *self.space())?;
+        let chat = self.chat(subject);
+        // Its transcript says it while it is fed: drawn natively, or watched.
+        let fed = chat.filter(|chat| chat.transcript.live || chat.transcript.watched);
+        let pulse = match fed {
+            Some(chat) => chat.transcript.pulse(),
+            None if self.talk_working(subject) => Pulse::Running,
+            None if self.agent_runs(subject) => Pulse::Idle,
+            // Over: failed, if its transcript kept why.
+            None => chat.map_or(Pulse::Ended, |chat| chat.transcript.pulse()),
+        };
+        let task = subject.task().and_then(|id| self.tasks.get(id));
+        let needs = task.is_some_and(|task| task.group() == Some(Group::NeedsYou));
+        // Alive and waiting, its task under Needs you: its turn is over, the next word is the user's.
+        let state = if needs && pulse == Pulse::Idle { Pulse::NeedsYou } else { pulse };
+        let label = fed.and_then(|chat| match pulse {
+            Pulse::NeedsYou => chat.transcript.cards.front().map(|card| card.label.as_str()),
+            Pulse::Running => chat.transcript.live_label(),
+            _ => None,
+        });
+        Some(Chip { task: subject.clone(), space, state, line: talk::chip_line(state, label) })
+    }
+
     /// True if the conversation's dial shows as its marker in the header: as the user left it,
     /// else open while its agent runs (or is watched) and collapsed once it has ended.
     pub fn dial_collapsed(&self, subject: &Subject) -> bool {
@@ -686,6 +717,116 @@ mod tests {
         assert!(m.dial_collapsed(&second(&m)), "ended: collapsed");
         m.update(Action::DialToggle);
         assert!(!m.dial_collapsed(&one) && m.dial_collapsed(&second(&m)), "only the shown one");
+    }
+
+    /// The chip is there only while the selected space's conversation is closed and nothing
+    /// else is in the drawer's place; it says what the agent does, and that it needs the user.
+    #[test]
+    fn the_agent_chip_says_what_the_agent_of_a_closed_conversation_does() {
+        use crate::activity::{Pulse, Station};
+        let mut m = two_live();
+        let one = first(&m);
+        let chip = |m: &Model| m.agent_chip().map(|chip| (chip.state, chip.line));
+        let said = |state, line: &str| Some((state, line.to_string()));
+        assert_eq!(chip(&m), None, "open: no chip");
+        m.update(Action::TalkToggle);
+        // Its turn over, its task under Needs you: the next word is the user's.
+        assert_eq!(chip(&m), said(Pulse::NeedsYou, "Needs you"));
+        assert_eq!(m.agent_chip().map(|chip| chip.task), Some(one.clone()));
+        // A turn: the call it waits on, cleaned and cut; then the turn alone.
+        let label = format!("cargo\u{1b}[31m test {}", "x".repeat(100));
+        let call = Event::ToolStart {
+            id: "a".into(),
+            sub: false,
+            tool: "Bash".into(),
+            station: Station::Shell,
+            label,
+            detail: Text::default(),
+            diff: None,
+        };
+        events(&mut m, &one, vec![Event::TurnStarted, call]);
+        let (state, line) = chip(&m).unwrap();
+        assert!(state == Pulse::Running && line.starts_with("Working · cargo test xx"), "{line:?}");
+        assert_eq!(line.chars().count(), "Working · ".chars().count() + crate::talk::CHIP_LABEL);
+        events(&mut m, &one, vec![Event::ToolEnd { id: "a".into(), failed: false }]);
+        assert_eq!(chip(&m), said(Pulse::Running, "Working"));
+        // A request waits: needs you, with what it asks for.
+        events(&mut m, &one, vec![card(1, false)]);
+        assert_eq!(chip(&m), said(Pulse::NeedsYou, "Needs you · git"));
+        // The new task in the drawer's place: no chip under it.
+        m.update(Action::OpenCompose { text: String::new() });
+        assert_eq!(chip(&m), None);
+        m.update(Action::CloseCompose);
+        assert_eq!(chip(&m), said(Pulse::NeedsYou, "Needs you · git"));
+        // Its process gone: ended. Workspace has no conversation: no chip.
+        m.update(Action::AgentExited { task: one.clone() }.sent_by(Origin::System));
+        assert_eq!(chip(&m).map(|(_, line)| line), Some("Ended".to_string()));
+        m.update(Action::SpaceSelect { index: 0 });
+        assert_eq!((chip(&m), m.talk.as_ref()), (None, None));
+    }
+
+    /// With no transcript of its own (in a terminal), the chip goes by the task and its process.
+    #[test]
+    fn the_agent_chip_of_a_conversation_in_a_terminal_goes_by_its_task() {
+        use crate::activity::Pulse;
+        let mut m = Model::default();
+        m.update(Action::SetAgents { claude: vec![], codex: vec![], default: None, shows: View::Terminal });
+        add(&mut m, "fix login");
+        let (one, id) = (first(&m), m.tasks.list[0].id);
+        let chip = |m: &Model| m.agent_chip().map(|chip| (chip.state, chip.line));
+        let said = |state, line: &str| Some((state, line.to_string()));
+        m.update(Action::TaskTalk { id });
+        m.update(Action::TalkToggle);
+        assert_eq!(chip(&m), said(Pulse::Ended, "Ended"), "not started");
+        m.update(Action::TalkToggle);
+        m.update(Action::TalkStart);
+        m.update(Action::AgentStarted { task: one.clone(), session: None, at: 1 }.sent_by(Origin::System));
+        m.update(Action::TalkToggle);
+        m.update(Action::TaskSetState { id, state: State::Triaged }.sent_by(Origin::System));
+        assert_eq!(chip(&m), said(Pulse::Idle, "Idle"));
+        m.update(Action::TaskSetState { id, state: State::Running }.sent_by(Origin::System));
+        assert_eq!(chip(&m), said(Pulse::Running, "Working"));
+        m.update(Action::TaskSetState { id, state: State::NeedsYou }.sent_by(Origin::System));
+        assert_eq!(chip(&m), said(Pulse::NeedsYou, "Needs you"));
+    }
+
+    /// The user's click on the selected space (or the chip) opens its closed conversation, as
+    /// ⌘⇧L does. A client's click only selects, and so does a click on another space.
+    #[test]
+    fn a_click_on_the_selected_space_opens_its_closed_conversation() {
+        let mut m = two_live();
+        let open = |m: &Model| m.talk.as_ref().map(|talk| (talk.task.clone(), talk.open, talk.keys));
+        let (one, two) = (first(&m), second(&m));
+        m.update(Action::TalkToggle);
+        let at = m.agent_chip().map(|chip| chip.space).unwrap();
+        assert_eq!(m.shown_spaces()[at].of, crate::model::spaces::Owner::of(&one));
+        for origin in [Origin::Socket, Origin::System] {
+            assert_eq!(m.update(Action::SpaceClick { index: at }.sent_by(origin)), []);
+            assert_eq!(open(&m), Some((one.clone(), false, false)), "{origin:?}'s click opens nothing");
+        }
+        // The user's: open, the keyboard in it, exactly as the key.
+        let mut key = two_live();
+        key.update(Action::TalkToggle);
+        key.update(Action::TalkToggle);
+        m.update(Action::SpaceClick { index: at });
+        assert_eq!(open(&m), Some((one.clone(), true, true)));
+        assert_eq!(format!("{m:?}"), format!("{key:?}"));
+        // Open already: a click changes nothing. It closes nothing.
+        m.update(Action::SpaceClick { index: at });
+        assert_eq!(format!("{m:?}"), format!("{key:?}"));
+        // Another space: selected, the drawer as it was; closed, it stays closed.
+        let other = m.shown_spaces().iter().position(|space| space.of == crate::model::spaces::Owner::of(&two));
+        m.update(Action::TalkToggle);
+        m.update(Action::SpaceClick { index: other.unwrap() });
+        assert_eq!(open(&m), Some((two.clone(), false, false)));
+        // Under the user's keys in the chat a client's click on another space waits, as its select.
+        m.update(Action::SpaceClick { index: other.unwrap() });
+        assert_eq!(open(&m), Some((two, true, true)));
+        let theirs = Action::SpaceClick { index: at };
+        assert_eq!(m.refusal(&theirs, Origin::Socket), Some(crate::model::spaces::CHAT_TYPING));
+        let before = format!("{m:?}");
+        m.update(theirs.sent_by(Origin::Socket));
+        assert_eq!(format!("{m:?}"), before);
     }
 
     #[test]

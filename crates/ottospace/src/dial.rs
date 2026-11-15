@@ -10,7 +10,7 @@ use gpui::{
     prelude::*, px, rgb, size,
 };
 use ottospace_core::activity::{self, Dial, Pulse, Station};
-use ottospace_core::talk::Subject;
+use ottospace_core::talk::{Chip, Subject};
 use ottospace_core::{Action, theme};
 
 use crate::{Tooltip, Workspace};
@@ -18,6 +18,9 @@ use crate::{Tooltip, Workspace};
 /// The dial's side, and the marker's.
 const SIDE: f32 = 96.;
 const MARK: f32 = 18.;
+/// The agent chip: its height, and the most its line takes.
+const CHIP: f32 = 24.;
+const CHIP_LINE: f32 = 220.;
 /// Radii in the dial: the centre, the context ring, where the spokes start and end, the stations.
 const CENTRE: f32 = 12.;
 const RING: f32 = 17.;
@@ -157,6 +160,101 @@ impl Workspace {
             .child(glyph)
     }
 
+    /// The marker as drawn: the ring, the dots, the runner's glyph in the state's colour.
+    fn marker_face(&self, subject: &Subject, dial: &Dial) -> Div {
+        let drawn = dial.clone();
+        let rings = canvas(|_, _, _| {}, move |bounds, _, window, _| paint_marker(&drawn, bounds, window));
+        let face = div().relative().flex_none().size(px(MARK));
+        face.child(rings.absolute().size_full()).child(self.glyph(subject, dial, 9.))
+    }
+
+    /// The agent chip (`Model::agent_chip`) at the end of a row `height` tall. It takes the room
+    /// the row has left and moves nothing: short of room for its line, it is the badge alone.
+    pub(crate) fn agent_chip(&self, height: f32, cx: &Context<Self>) -> Option<Div> {
+        let chip = self.model.agent_chip()?;
+        let needs = chip.state == Pulse::NeedsYou;
+        let colour = if needs || chip.state == Pulse::Error { theme::pulse(chip.state) } else { theme::MUTED };
+        let tip: gpui::SharedString = format!("{}\nOpen the conversation (⌘⇧L)", chip.line).into();
+        let pill = |name: &'static str| {
+            let marker = self.dial_of(&chip.task).map(|dial| self.marker_face(&chip.task, &dial));
+            // A task's badge; a session's, or one drawn in a terminal, its state's dot.
+            let badge = chip.task.task().and_then(|id| self.task_badge(id, MARK));
+            let dot = (badge.is_none() && marker.is_none()).then(|| crate::home::dot(theme::pulse(chip.state)));
+            let (tip, space) = (tip.clone(), chip.space);
+            div()
+                .id(name)
+                .relative()
+                .flex_none()
+                .h(px(CHIP))
+                .px_1()
+                .flex()
+                .items_center()
+                .gap_1()
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(if needs { colour } else { theme::BORDER }))
+                .bg(rgb(theme::BACKGROUND))
+                .text_xs()
+                .text_color(rgb(colour))
+                .cursor_pointer()
+                .hover(|s| s.bg(rgb(theme::SELECTED)))
+                .children(badge)
+                .children(marker)
+                .children(dot)
+                .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone()))))
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    drop(this.dispatch(Action::SpaceClick { index: space }, this.input, window, cx))
+                }))
+        };
+        // The badge alone, always at the row's end, under the whole chip when that fits.
+        let short = pill("agent-chip").child(self.controls.mark("agent-chip"));
+        let short = div().absolute().top_0().bottom_0().right_0().flex().items_center().child(short);
+        // The whole chip is second in a row that wraps: with no room, it goes to a line not drawn.
+        let seen = self.chip_line.clone();
+        let note = move |bounds: Bounds<Pixels>, window: &mut Window, _: &mut gpui::App| {
+            let shown = bounds.intersect(&window.content_mask().bounds);
+            seen.set((shown.size.height > px(1.)).then_some(bounds));
+        };
+        let line = div().max_w(px(CHIP_LINE)).pr_1().truncate().child(chip.line.clone());
+        let full = pill("agent-chip-line").child(line).child(canvas(note, |_, _, _, _| {}).absolute().size_full());
+        let full = div().flex_none().h(px(height)).flex().items_center().child(full);
+        Some(
+            div()
+                .relative()
+                .flex_1()
+                .min_w(px(self.chip_short(&chip)))
+                .h(px(height))
+                .ml_1()
+                .mr_2()
+                .flex()
+                .flex_wrap()
+                .content_start()
+                .justify_end()
+                .overflow_hidden()
+                .child(short)
+                .child(div().w_0().h(px(height)))
+                .child(full),
+        )
+    }
+
+    /// How wide the chip is as its badge alone: the badge, and the marker of a native one.
+    fn chip_short(&self, chip: &Chip) -> f32 {
+        let both = chip.task.task().is_some() && self.dial_of(&chip.task).is_some();
+        10. + MARK + if both { MARK + 4. } else { 0. }
+    }
+
+    /// What the state reply says of the agent chip: the core's, and where it was drawn (`rect`,
+    /// the whole chip or the badge alone: `short`).
+    pub(crate) fn chip_snapshot(&self) -> serde_json::Value {
+        let Some(chip) = self.model.agent_chip() else { return serde_json::Value::Null };
+        let (line, badge) = (self.chip_line.get(), self.controls.bounds("agent-chip"));
+        let mut value = serde_json::to_value(&chip).unwrap_or_default();
+        value["rect"] = line.or(badge).map(crate::rect).into();
+        value["short"] = line.is_none().into();
+        value
+    }
+
     /// The marker beside the header's badge while the dial is collapsed; a click opens it.
     pub(crate) fn dial_marker(&self, subject: &Subject, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
         let dial = self.dial_of(subject).filter(|_| self.model.dial_collapsed(subject))?;
@@ -166,17 +264,10 @@ impl Workspace {
             .collect::<Vec<_>>()
             .join("\n")
             .into();
-        let drawn = dial.clone();
-        let rings = canvas(|_, _, _| {}, move |bounds, _, window, _| paint_marker(&drawn, bounds, window));
         Some(
-            div()
+            self.marker_face(subject, &dial)
                 .id("dial-marker")
-                .relative()
-                .flex_none()
-                .size(px(MARK))
                 .cursor_pointer()
-                .child(rings.absolute().size_full())
-                .child(self.glyph(subject, &dial, 9.))
                 .child(self.controls.mark("talk:dial-marker".to_string()))
                 .when(!tip.is_empty(), |d| d.tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))))
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
