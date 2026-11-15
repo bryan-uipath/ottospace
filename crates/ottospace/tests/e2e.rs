@@ -6957,9 +6957,18 @@ fn the_calendar_section_goes_back_and_on_a_day_by_click_or_key_and_the_band_stay
     let otto = Otto::launch_with("calendar-days", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
     calendar_read(&otto);
     let calendar = |o: &Otto| o.call(json!({"cmd": "state"}))["calendar"].clone();
-    let today = otto.call(json!({"cmd": "section", "section": "calendar"}))["calendar"].clone();
+    let opened = otto.call(json!({"cmd": "section", "section": "calendar"}));
+    let today = opened["calendar"].clone();
     // Today: every timed entry of the busy day is a row; no Today control.
     assert_eq!((&today["day"], &today["rows"], &today["nav"]["today"]), (&json!(0), &json!(16), &Value::Null));
+    // At the top on open, under the header: the all-day line whole, then the first row.
+    let r = |v: &Value| -> Vec<f64> { v.as_array().expect("a rect").iter().filter_map(Value::as_f64).collect() };
+    let header = r(&opened["bar_header"]);
+    let at_top = |c: &Value| {
+        let (line, row) = (r(&c["all_day_line"]), r(&c["first_row"]));
+        line[1] >= header[1] + header[3] - 0.5 && line[3] >= 10. && row[1] >= line[1] + line[3]
+    };
+    assert!(at_top(&today), "{today} under {header:?}");
     let day = |c: &Value| c["day"].as_i64().unwrap();
     let start = |c: &Value| c["day_start"].as_f64().unwrap();
     // The user's click on › shows tomorrow, and Today comes.
@@ -6969,8 +6978,14 @@ fn the_calendar_section_goes_back_and_on_a_day_by_click_or_key_and_the_band_stay
     assert!(on["nav"]["today"].is_array(), "{on}");
     // The band stays on the real today.
     assert_eq!(on["band"]["span"], today["band"]["span"]);
+    // Scrolled down, then back to today: at the top again.
+    let row = r(&today["first_row"]);
+    otto.call(
+        json!({"cmd": "mouse", "action": "wheel", "x": row[0] + 20., "y": row[1] + 10., "dy": -20, "as": "user"}),
+    );
     otto.user_click(centre(&on["nav"]["today"]));
-    otto.wait_for("today again", |o| (day(&calendar(o)) == 0).then_some(()));
+    let again = otto.wait_for("today again", |o| Some(calendar(o)).filter(|c| day(c) == 0));
+    assert!(at_top(&again), "{again}");
     // In list mode: left and right a day, t today; never more than 7 back.
     otto.call(json!({"cmd": "key", "keys": "cmd-ctrl-e", "as": "user"}));
     for _ in 0..9 {

@@ -1524,6 +1524,8 @@ function calendar(value: unknown, at: string): Snapshot["calendar"] {
     rail: railMark(o.rail, `${at}.rail`),
     day: num(o.day, `${at}.day`),
     day_start: num(o.day_start, `${at}.day_start`),
+    all_day_line: orNull(rect)(o.all_day_line, `${at}.all_day_line`),
+    first_row: orNull(rect)(o.first_row, `${at}.first_row`),
     nav: nav(o.nav, `${at}.nav`),
   };
 }

@@ -1191,6 +1191,9 @@ export interface Snapshot {
     /** The day shown, from today (0; -1 yesterday, 7 back to 7 on), and its local midnight (ms). */
     day: number;
     day_start: number;
+    /** Where its all-day line and first row are drawn (null when there is none, or it is closed). */
+    all_day_line: Rect | null;
+    first_row: Rect | null;
     /** Its header's ‹ and ›, and Today while on another day. */
     nav: { back: Rect | null; forward: Rect | null; today: Rect | null };
   };

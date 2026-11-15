@@ -313,7 +313,10 @@ impl Workspace {
     /// a tick for now, a dot for all-day events and for blocks outside the band. Hover only: a
     /// card for each, no click.
     pub(crate) fn render_timeline(&self) -> Option<AnyElement> {
-        self.marks.borrow_mut().retain(|m, _| !matches!(m, Mark::BandBlock(_) | Mark::BandOut(_)));
+        let gone = |m: &Mark| {
+            matches!(m, Mark::BandBlock(_) | Mark::BandOut(_) | Mark::CalendarAllDay | Mark::CalendarFirstRow)
+        };
+        self.marks.borrow_mut().retain(|m, _| !gone(m));
         let calendar = &self.model.calendar;
         // Not before the first read: there is no day yet.
         if !calendar.on || calendar.span(0).1 == 0 {
@@ -558,6 +561,9 @@ impl Workspace {
             },
             "day": calendar.day,
             "day_start": calendar.span(calendar.day).0,
+            // Where its all-day line and first row are drawn, and the open section's header.
+            "all_day_line": drawn(Mark::CalendarAllDay),
+            "first_row": drawn(Mark::CalendarFirstRow),
             "nav": serde_json::json!({
                 "back": at("calendar-day:back".into()),
                 "forward": at("calendar-day:forward".into()),
@@ -599,7 +605,9 @@ impl Workspace {
         if !all_day.is_empty() {
             let titles: Vec<&str> = all_day.iter().map(|e| e.title.as_str()).collect();
             let tip = all_day.iter().map(|e| calendar::describe(e, offset)).collect::<Vec<_>>().join("\n");
-            let line = div().id("meetings-all-day").px_2().pb_1().truncate().text_xs().text_color(rgb(theme::MUTED));
+            // Not shrunk away when the rows overflow: its text is cut, so it has no height of its own.
+            let line = div().id("meetings-all-day").flex_none().relative().px_2().pb_1().truncate();
+            let line = line.text_xs().text_color(rgb(theme::MUTED)).child(mark(&self.marks, Mark::CalendarAllDay));
             let line = line.child(format!("All day · {}", titles.join(", ")));
             children.push(
                 line.tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone().into())))).into_any_element(),
@@ -612,11 +620,20 @@ impl Workspace {
         for (index, row) in rows.iter().enumerate() {
             let ListRow::Meeting(id) = row else { continue };
             let Some(event) = calendar.events.iter().find(|e| e.id == *id) else { continue };
-            children.push(self.meeting_row(event, (index, self.model.list == Some(index)), now, cx));
+            let row = self.meeting_row(event, (index, self.model.list == Some(index)), now, cx);
+            let first = (index == 0).then(|| mark(&self.marks, Mark::CalendarFirstRow));
+            children.push(div().flex_none().relative().children(first).child(row).into_any_element());
         }
+        // Its own scroll, at the top when the section opens (it was not drawn the frame before)
+        // or its day changes; never another section's.
+        let (frame, day) = self.calendar_shown.get();
+        if frame + 1 != self.renders || day != calendar.day {
+            self.calendar_scroll.set_offset(gpui::point(px(0.), px(0.)));
+        }
+        self.calendar_shown.set((self.renders, calendar.day));
         let list = div().id("calendar").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
-        let list = list.track_scroll(&self.list_scroll).children(children);
-        div().flex_1().min_h_0().flex().flex_col().child(self.bars.tracked("calendar", list, &self.list_scroll))
+        let list = list.track_scroll(&self.calendar_scroll).children(children);
+        div().flex_1().min_h_0().flex().flex_col().child(self.bars.tracked("calendar", list, &self.calendar_scroll))
     }
 
     /// The header's day: `‹ Today ›`, `‹ Mon 16 Nov ›`, and Today while on another day. Its

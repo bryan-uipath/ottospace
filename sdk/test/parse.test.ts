@@ -133,6 +133,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       },
       banner: { join: [0, 28, 40, 20], dismiss: [44, 28, 60, 20] }, alerts: 1, joins: null,
       rows: 4, rail: "near", day: -1, day_start: 1794470400000,
+      all_day_line: [70, 66, 236, 20], first_row: [70, 90, 236, 30],
       nav: { back: [140, 38, 14, 19], forward: [232, 38, 14, 19], today: [252, 38, 42, 19] },
     },
     drawer: {

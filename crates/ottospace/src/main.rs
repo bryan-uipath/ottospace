@@ -598,6 +598,9 @@ enum Mark {
     BandNow,
     BandBlock(usize),
     BandOut(usize),
+    /// The Calendar section's all-day line and its first row.
+    CalendarAllDay,
+    CalendarFirstRow,
     /// The status bar.
     Status,
 }
@@ -785,6 +788,10 @@ struct Workspace {
     kept_layout: layout_file::Kept,
     /// Scroll position of the bar's list, so list mode can bring the selected row into view.
     list_scroll: ScrollHandle,
+    /// The Calendar section's own: at the top when it opens and when its day changes. The frame
+    /// it was last drawn in and the day it showed (`calendar::render_calendar`).
+    calendar_scroll: ScrollHandle,
+    calendar_shown: std::cell::Cell<(u64, i32)>,
     /// Every scroll area's bar.
     bars: scrollbar::Bars,
     /// The minute of the last look at the clock: the Tasks section's ages are drawn again when it changes.
@@ -1137,6 +1144,8 @@ impl Workspace {
             installed: apps::Scan::default(),
             icons: HashMap::new(),
             list_scroll: ScrollHandle::new(),
+            calendar_scroll: ScrollHandle::new(),
+            calendar_shown: std::cell::Cell::new((0, 0)),
             bars: scrollbar::Bars::default(),
             minute: 0,
             tags: tags::Reader::start(),
@@ -3490,7 +3499,8 @@ impl Workspace {
         };
         self.dispatch(action, self.input, window, cx);
         if let Some(child) = self.selected_child() {
-            self.list_scroll.scroll_to_item(child);
+            let calendar = self.model.sidebar == Some(Section::Calendar);
+            (if calendar { &self.calendar_scroll } else { &self.list_scroll }).scroll_to_item(child);
         }
         cx.notify();
     }

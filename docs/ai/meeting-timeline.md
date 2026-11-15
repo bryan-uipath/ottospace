@@ -116,6 +116,9 @@ and one quiet fact (`Calendar::row_fact`: `now`, or `in 12m` for the next within
 today only). Place, length and link kind are on the hover card, `calendar::describe`, the band's.
 All-day events are one line above the rows, no row. "No meetings" when empty; no footer (when the
 feed was read is on the date's tooltip). The "Tomorrow" fold went: the day changes instead.
+The section scrolls by itself (`calendar_scroll`), at the top when it opens and when its day
+changes; the bar's other sections share one. Its all-day line is `flex_none`: a cut line has no
+height of its own, so a day whose rows overflow had shrunk it away.
 
 - **The day**: `Calendar::day`, from today, -7 to 7 (`DayStep` Back, Forward, Today), by
   `Action::CalendarDay` (‹ › and Today in the header, ← → and `t` in list mode, three palette and
