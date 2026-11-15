@@ -168,8 +168,24 @@ export interface Tab {
   /** Stable. Requests take the index in `tabs`, not this. */
   id: number;
   title: string;
-  /** The task this tab belongs to, or null. */
-  task: TaskId | null;
+  /** The space it is of. */
+  space: Owner;
+}
+
+/** Whose a space of the top row is: Workspace (always first), a task's, a session's that is no task's, a workbook's. */
+export type Owner =
+  | { kind: "workspace" }
+  | { kind: "task"; id: TaskId }
+  | { kind: "session"; runner: string; id: string }
+  | { kind: "workbook"; id: number };
+
+/** A space of the top row: its tabs as places in `state.tabs`. Exactly one is `selected`: the tab on show is its. */
+export interface SpaceRow {
+  of: Owner;
+  /** Off the top row: its tabs, panes and agent go on. */
+  hidden: boolean;
+  selected: boolean;
+  tabs: number[];
 }
 
 /** The active tab's split tree. `ratio`: the share of the split that `a` (left or top) takes. */
@@ -607,7 +623,7 @@ export interface Palette {
   query: string;
   /** An index into `palette_rows`. */
   selected: number;
-  /** Move Tab to Task…: the tasks it lists (task null: no task), in order; null while it lists commands. */
+  /** Move Tab to Task…: the spaces it lists (Workspace, the live tasks, the workbooks), in order; null while it lists commands. */
   tasks: PaletteTask[] | null;
   /** Features…: the flags it lists, each with whether it is on; null while it lists commands. */
   features: PaletteFeature[] | null;
@@ -619,9 +635,9 @@ export interface PaletteFeature {
   on: boolean;
 }
 
-/** A task Move Tab to Task… may move the tab on show to. */
+/** A space Move Tab to Task… may move the tab on show to. */
 export interface PaletteTask {
-  task: TaskId | null;
+  to: Owner;
   title: string;
 }
 
@@ -1110,9 +1126,9 @@ export interface Snapshot {
     dir: string | null;
     brief: { task: TaskId; dir: string | null } | null;
   };
-  /** The right drawer: where its conversation is drawn, each agent by task id (a session's: `<runner>:<id>`), the workspace ⌘↵ goes to, and why no agent runs for the conversation on show. */
-  /** The tab bar's groups in order: each task's tabs (places in `state.tabs`), the tabs of no task (`task` null) last. */
-  groups: { task: TaskId | null; tabs: number[] }[];
+  /** The right drawer: where its conversation is drawn, each agent by task id (a session's: `<runner>:<id>`), and why no agent runs for the conversation on show. */
+  /** The top row's spaces in order, hidden ones too: Workspace first. */
+  spaces: SpaceRow[];
   /** Each live task's badge letters, by task id: the same on the bar, its panes, its row and the rail. */
   badges: Record<string, string>;
   drawer: {
@@ -1127,8 +1143,6 @@ export interface Snapshot {
      * kinds of link the user opened (a test run opens none).
      */
     native: { chats: Record<string, NativeChat>; opened: ("web" | "file")[] };
-    /** What the header's go word (⌘↵) does: `tabs` (go to its tabs), `claim` (the tab on show becomes its), `new` (a new tab of it). */
-    goes_to: "tabs" | "claim" | "new" | null;
     /**
      * Of the conversation the drawer is on: `foot`, the line at its foot (the model in short, and
      * a mode that lets the agent act unasked: `haiku-5.5 · auto`), `bypass` (that mode asks for
@@ -1187,10 +1201,17 @@ export interface Snapshot {
     banner: { join: Rect | null; dismiss: Rect | null } | null;
     alerts: number;
     joins: number | null;
-    /** The Calendar section's rows, its rail cell's mark, and whether "Tomorrow" is unfolded. */
+    /** The Calendar section's rows (the timed meetings of its day), its rail cell's mark. */
     rows: number;
     rail: "none" | "near" | "alert";
-    tomorrow_open: boolean;
+    /** The day shown, from today (0; -1 yesterday, 7 back to 7 on), and its local midnight (ms). */
+    day: number;
+    day_start: number;
+    /** Where its all-day line and first row are drawn (null when there is none, or it is closed). */
+    all_day_line: Rect | null;
+    first_row: Rect | null;
+    /** Its header's ‹ and ›, and Today while on another day. */
+    nav: { back: Rect | null; forward: Rect | null; today: Rect | null };
   };
   /**
    * Frames drawn (`number`), actions dispatched (`seq`) and how many of them the last frame drew
@@ -1475,7 +1496,7 @@ export interface WaitArgs {
   timeout_ms?: number;
 }
 export interface CalendarArgs {
-  /** `today` (the default), `tomorrow` or `YYYY-MM-DD`: today or one of the next 7 days. */
+  /** `today` (the default), `tomorrow`, `yesterday` or `YYYY-MM-DD`: a day from 7 back to 7 on. */
   day?: string;
   /** Days from `day`, 1 to 7 (default 1), within the days held. */
   days?: number;

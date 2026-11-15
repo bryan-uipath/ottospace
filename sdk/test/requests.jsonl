@@ -19,6 +19,11 @@
 {"cmd":"new_tab"}
 {"cmd":"select_tab","index":0}
 {"cmd":"cycle_tab","delta":1}
+{"cmd":"select_space","index":1}
+{"cmd":"hide_space"}
+{"cmd":"hide_space","index":1}
+{"cmd":"open_space","space":{"kind":"task","id":1}}
+{"cmd":"open_space","space":{"kind":"workspace"}}
 {"cmd":"close_tab","index":1}
 {"cmd":"picker_query","query":"term"}
 {"cmd":"picker_move","delta":1}
@@ -67,6 +72,7 @@
 {"cmd":"record_start","dir":"/tmp/rec"}
 {"cmd":"record_stop"}
 {"cmd":"calendar","day":"tomorrow","days":2}
+{"cmd":"calendar","day":"yesterday"}
 {"cmd":"marks"}
 {"cmd":"mark_add","pane":1,"name":"notes","key":"n"}
 {"cmd":"mark_go","name":"notes","axis":"down"}

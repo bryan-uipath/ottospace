@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::layout::{Axis, MIN_SHARE, Node};
 use crate::list::ListRow;
-use crate::model::{Effect, Kind, Mode, Model, Pane, PaneId};
+use crate::model::{Effect, Kind, Mode, Model, Owner, Pane, PaneId};
 use crate::tasks::{Moved, NOTICE_MS, Notice, TaskId};
 use crate::workbook::WorkbookId;
 
@@ -850,7 +850,7 @@ impl Model {
                 if panes.iter().all(|pane| pane.kind == RecordKind::Empty) {
                     return Err("a tab with nothing in it has nothing to mark".into());
                 }
-                let (title, task, layout) = (kept_title(&tab.title, 256), tab.task, layout.clone());
+                let (title, task, layout) = (kept_title(&tab.title, 256), tab.space.task(), layout.clone());
                 let record = TabRecord { title: title.clone(), task, focused, layout, panes, extra: Extra::new() };
                 if let Some(wrong) = record.unsound() {
                     return Err(format!("tab {} cannot be marked: {wrong}", tab.id));
@@ -991,7 +991,10 @@ impl Model {
             }
             Target::Pane(_) => {}
             Target::Tab(record) => {
-                let tab = self.rebuild_tab(record, effects);
+                // A task's tab goes to its space, while the task is live; else to Workspace.
+                let task = record.task.filter(|task| self.tasks.live(*task).is_some());
+                let of = task.map_or(Owner::Workspace, |id| Owner::Task { id });
+                let tab = self.rebuild_tab(record, of, effects);
                 self.marks.bind(id, tab);
             }
         }
@@ -1007,17 +1010,14 @@ impl Model {
         }
     }
 
-    /// A new tab from a record, on show: its splits, a terminal in each recorded directory, and
-    /// an empty pane for each app window, which the shell fills. A pane whose directory is gone
-    /// or whose app is not installed stays empty and says so. Returns the tab's `id`.
-    pub(crate) fn rebuild_tab(&mut self, record: &TabRecord, effects: &mut Vec<Effect>) -> u32 {
+    /// A new tab of space `of` from a record, on show: its splits, a terminal in each recorded
+    /// directory, and an empty pane for each app window, which the shell fills. A pane whose
+    /// directory is gone or whose app is not installed stays empty and says so. Returns the tab's `id`.
+    pub(crate) fn rebuild_tab(&mut self, record: &TabRecord, of: Owner, effects: &mut Vec<Effect>) -> u32 {
         self.list = None;
         self.leave(effects);
-        self.remember_tab();
         self.park_active();
-        // A task that is gone: a tab of no task.
-        let task = record.task.filter(|task| self.tasks.live(*task).is_some());
-        self.push_tab_of(task);
+        self.push_tab_of(of);
         let mut ids = Vec::new();
         for pane in record.shown() {
             self.next_id += 1;
@@ -1575,10 +1575,10 @@ mod tests {
             tab: None,
             assign: Default::default(),
         });
-        m.update(Action::NewTabOf { task: Some(1) });
+        m.update(Action::SpaceOpen { space: Owner::Task { id: 1 } });
         open(&mut m, Kind::Terminal);
         mark(&mut m, MarkOf::Tab(None), &[]);
-        m.update(Action::SelectTab { index: 1 });
+        m.update(Action::SelectTab { index: 0 });
         assert_eq!(m.tab_task(), None);
         // Open in the background: going there shows its tab, the task's.
         go(&mut m, "fix zoom");

@@ -33,7 +33,6 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
             name: "File".into(),
             items: vec![
                 item("New Tab", NewTab),
-                item("New Tab outside the Task", NewTabOutside),
                 item("Remove Tab from Task", RemoveTabFromTask),
                 item("Move Tab to Task…", MoveTabToTask),
                 item("Save Tab as Workbook", SaveWorkbook),
@@ -67,6 +66,10 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
                 item("Label the Controls", SneakMode),
                 item("Fill the Screen", Zoom),
                 item("Command Palette…", commands::CommandPalette),
+                MenuItem::separator(),
+                item("Previous Day in Calendar", commands::CalendarBack),
+                item("Next Day in Calendar", commands::CalendarForward),
+                item("Today in Calendar", commands::CalendarToday),
             ]
             .into_iter()
             .chain(mark_tab.into_iter().filter(|_| marks))
@@ -116,7 +119,6 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
                 // The conversation in the drawer.
                 item("Type in the Conversation", TalkFocus),
                 item("Open or Close the Conversation", TalkToggle),
-                item("Go to Its Tabs", TalkGo),
                 item("Stop the Agent", StopAgent),
             ],
         },
