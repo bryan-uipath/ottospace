@@ -655,16 +655,31 @@ Set `calendar_ics` to your calendar's feed (an `https://` link, such as a calend
 address in iCal format", or a file's path) and ottospace shows your day's meetings, never in
 the way.
 
-- **The band**: 8 points high, directly above the status bar, the window's width; panes give up
-  that height. It is the workday (`calendar_workday`, 09:00 to 17:00), fixed through the day: a
-  small mark at its start and one at its end, each meeting a flat block at its clock place (past
-  ones faint), and a bright tick for now that moves along it (pinned to an end before or after
-  hours). A meeting outside the workday widens the band to hold it, never past midnight (one over
-  midnight is cut there). Meetings that overlap share two half-height lanes; all-day events are
-  one small dot at the left end. Blocks are at least 3 points wide. Hover only, no click: a block
-  shows its title, time, length, place and whether it has a Zoom, Meet or Teams link; a mark its
-  time; now the time, the next meeting (`Design review · 15:00`, `· now` while it runs) and when
-  the feed was last read (`calendar not updated since 09:40` when the last read failed).
+- **The band**: 12 points high, directly above the status bar, the window's width, with a
+  hairline along its top as the status bar has; panes give up that height. It is the workday
+  (`calendar_workday`, 09:00 to 17:00), fixed through the day: a small mark at its start and one
+  at its end, and a bright tick for now that moves along it (pinned to an end before or after
+  hours). A **call** (an entry with a Zoom, Meet or Teams link) is a solid block at its clock
+  place; calls that overlap split the height into as many lanes as overlap (up to 4; a fifth at
+  once is named in a lane's hover card, `+1 more: …`), and a call alone takes the full height. A
+  **block** (an entry with no call link: focus time, a reminder, a room booking) is a faint layer
+  the full height under the calls, so a 4-hour block under three calls takes no lane. A call
+  outside the workday widens the band to hold it, never past midnight (one over midnight is cut
+  there); a block never does: one wholly outside the band (a reminder at 00:00) is a small dot at
+  that end, its details on hover. All-day events are one small dot at the left end's top. Blocks
+  are at least 3 points wide. Hover only, no click: a block shows its title, time, length, place
+  (links taken out), whether it has a Zoom, Meet or Teams link and whether it is tentative, free
+  or out of office; a mark its time; now the time, the next meeting (`Design review · 15:00`,
+  `· now` while it runs) and when the feed was last read (`calendar not updated since 09:40` when
+  the last read failed).
+- **Colours**: calls in the meeting amber, blocks a muted grey, out of office (Outlook's OOF) a
+  quiet slate. Tentative entries are lighter, free ones (Outlook's FREE, or `TRANSP:TRANSPARENT`)
+  faint, past ones faded and the one that runs at full strength. `calendar_colors` colours by
+  title: `[{"match": "1:1", "color": "teal"}, {"match": "focus", "color": "lime"}]`, the first
+  rule whose `match` the title holds (case ignored) giving the hue; tentative, free and past
+  still lighten it. A colour is one of `red`, `indigo`, `orange`, `pink`, `lime`, `purple`, `tan`,
+  `teal` (the tasks' own colours); `match` is plain text, not a pattern: titles are other
+  people's text, and a pattern of yours run over them is risk for no gain.
 - **The pulse**: from 10 minutes before a meeting its block glows (its opacity) softly, slowly;
   from 2 minutes, faster; while it runs, steadily. With Reduce motion (System Settings,
   Accessibility, Display) the colour steps up instead, with no movement. Nothing else in
@@ -698,8 +713,11 @@ the way.
 - **Declined meetings**: set `calendar_email` to your address as the feed lists you among a
   meeting's attendees, and a meeting (or one occurrence) you declined is left out everywhere: the
   band, the section and the alerts. A feed published with limited detail (free/busy
-  only, or without attendees) does not say who declined; then nothing is left out. The address
-  stays in `settings.json`: it is not sent with the feed's request, shown, logged or in the state.
+  only, or without attendees, as Outlook's published calendars are) does not say who declined;
+  then nothing is left out, and `calendar_email` does nothing. Outlook removes a meeting you
+  decline from your calendar, so it is usually not in the feed at all; one kept is marked free,
+  and `calendar_hide_free: true` leaves every free entry out. The address stays in
+  `settings.json`: it is not sent with the feed's request, shown, logged or in the state.
 - **The Calendar section** (its rail cell, second, is there only while `calendar_ics` is set):
   today's meetings, all-day ones first, then by start: the time, the title, and the place (or the
   link's host) below. The meeting that runs is outlined in amber, past ones are dimmed, and a thin
@@ -712,7 +730,8 @@ the way.
 - **Agents**: the `calendar` request gives an agent the meetings of a day, or of up to 7 from
   it (`{"cmd":"calendar","day":"tomorrow","days":2}`; today and the next 7 days are held): start
   and end (RFC 3339 with your offset), all day or not, title, place, whether it has a Zoom, Meet
-  or Teams link, tentative; busy time (meetings merged) and free time (the gaps in each day's
+  or Teams link, `status` (`tentative`, `free` or `away`; none when busy); busy time (meetings
+  merged, free ones left out) and free time (the gaps in each day's
   `calendar_workday`); when the feed was read and whether you are in a call. It reads only what the app holds and never makes it fetch.
 - **Privacy**: titles and places are other people's text. They are shown, and given to an agent
   only by the `calendar` request, with links taken out; never sent anywhere, never in the trace
@@ -827,7 +846,7 @@ first. Again while that tab is open brings it forward; quitting the editor close
 you open it: a socket client's ⌘, does nothing. Open at quit, it comes back at the next start,
 the editor running again ([Restoring the layout](#restoring-the-layout)).
 
-A change is read when the file is saved: what is wrong in it is said in the status bar (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify`, `calendar_notify_for`, `paste_confirm` and `features` apply at once; any other key changed says "restart to apply" with its name, in muted text: information, not an error (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
+A change is read when the file is saved: what is wrong in it is said in the status bar (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify`, `calendar_notify_for`, `calendar_hide_free`, `calendar_colors`, `paste_confirm` and `features` apply at once; any other key changed says "restart to apply" with its name, in muted text: information, not an error (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
 
 
 ```json
@@ -885,7 +904,9 @@ A change is read when the file is saved: what is wrong in it is said in the stat
 | `calendar_refresh_minutes` | How often the feed is read again, at least 1 | `5` |
 | `calendar_notify` | A meeting that starts while you are in no call, or in another call, shows the banner, a notification and a sound | `true` |
 | `calendar_notify_for` | Which meetings alert: `all`, or only those with a Zoom, Meet or Teams `links` | `all` |
-| `calendar_email` | Your address among a meeting's attendees in the feed: a meeting you declined is left out. Kept on this machine, never shown | none: nothing is left out |
+| `calendar_email` | Your address among a meeting's attendees in the feed: a meeting you declined is left out. Kept on this machine, never shown. A feed with no attendees (Outlook's published calendars) cannot say who declined: use `calendar_hide_free` | none: nothing is left out |
+| `calendar_hide_free` | Leave out entries that keep the time free (Outlook's FREE, `TRANSP:TRANSPARENT`): the band, the section, the alerts and the `calendar` request | `false` |
+| `calendar_colors` | Colours by title, first match wins: `[{"match": "1:1", "color": "teal"}]`. `match`: plain text the title holds, case ignored (not a pattern); `color`: `red`, `indigo`, `orange`, `pink`, `lime`, `purple`, `tan` or `teal`. At most 64 | none: colours by kind |
 | `suggest_dock_apps` | List the Dock's apps that are not running under "Not running". `false`: only pinned apps are listed there, and the Dock is not read | `true` |
 | `features` | [Feature flags](#features), by name: `true` or `false`. A name that is no flag is a mistake, named in the status bar with the flags there are; the others still apply | each flag's default |
 | `paste_confirm` | When ⌘V into a terminal asks first: `multiline` (text with a line break, even a last one, bracketed paste or not: a shell may run each line) or `never` | `multiline` |

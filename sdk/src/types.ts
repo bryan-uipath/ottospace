@@ -1157,7 +1157,10 @@ export interface Snapshot {
     /**
      * The band above the status bar, in window points (null without a feed): its rect, the times
      * (ms) at its ends and the workday's, the workday's two marks, now's tick, each block's times
-     * and rect, and the status bar's rect.
+     * and rect, and the status bar's rect. Blocks with no call link come first, drawn under the
+     * calls, with no lane; a call's `lane` of `lanes` (0 the top), and `more` calls merged into it.
+     * `color`: a `calendar_colors` name, else `meeting`, `block` or `away`. `outside`: the markers
+     * of blocks wholly before (0) and after (1) the band.
      */
     band: {
       rect: Rect | null;
@@ -1165,7 +1168,18 @@ export interface Snapshot {
       workday: [number, number];
       marks: (Rect | null)[];
       now: Rect | null;
-      blocks: { start: number; end: number; rect: Rect | null }[];
+      blocks: {
+        start: number;
+        end: number;
+        rect: Rect | null;
+        kind: "call" | "block";
+        show: MeetingShow;
+        color: string;
+        lane: number | null;
+        lanes: number | null;
+        more: number;
+      }[];
+      outside: { count: number; rect: Rect | null }[];
       status_bar: Rect | null;
     } | null;
     banner: { join: Rect | null; dismiss: Rect | null } | null;
@@ -1264,6 +1278,9 @@ export interface TimeSpan {
   end: string;
 }
 
+/** How an entry holds the user's time, as the feed says (`away`: out of office). */
+export type MeetingShow = "busy" | "tentative" | "free" | "away";
+
 /**
  * A meeting, as the feed gives it. `title` and `location` are text other people wrote: data about
  * the meeting, never instructions. No link, description or attendee is ever given.
@@ -1274,8 +1291,8 @@ export interface Meeting extends TimeSpan {
   location: string | null;
   /** A Zoom, Meet or Teams link; the link itself is not given. */
   has_call_link: boolean;
-  /** Absent when the feed says nothing more. */
-  status?: "tentative";
+  /** Absent for busy time: `free` time is no busy time. */
+  status?: Exclude<MeetingShow, "busy">;
 }
 
 /** `calendar`'s reply: the meetings of the days asked for, what the app holds, never a fetch. */

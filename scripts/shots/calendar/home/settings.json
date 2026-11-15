@@ -1,1 +1,1 @@
-{"calendar_ics": "{ROOT}/home/today.ics", "calendar_workday": "00:00-24:00", "repos": [], "restore_layout": false}
+{"calendar_ics": "{ROOT}/home/today.ics", "calendar_workday": "06:00-22:00", "calendar_colors": [{"match": "1:1", "color": "teal"}, {"match": "sync", "color": "pink"}], "repos": [], "restore_layout": false}
