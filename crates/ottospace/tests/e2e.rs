@@ -7321,7 +7321,11 @@ fn the_dial_counts_calls_by_station_and_keeps_the_users_collapse() {
     });
     drop(otto);
     let again = launch_env("dial-2", &env);
-    again.user_start();
+    // Resume session shows once its session is read.
+    let start = again.wait_for("Resume session", |o| {
+        o.controls().into_iter().find(|(id, _)| id == "talk:talk-start").map(|(_, frame)| frame)
+    });
+    again.user_click(at(start, 0.5, 0.5));
     let resumed = again.wait_for("the resumed chat", |o| Some(dial(o)).filter(|d| d.is_object()));
     assert_eq!(resumed["collapsed"], true, "{resumed}");
     again.control("talk:dial-marker");
