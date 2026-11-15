@@ -420,7 +420,14 @@ impl Workspace {
             ("unfilled-open", _) => number.map(|pane| Action::UnfilledOpen { pane }),
             ("meeting-join", _) => name.parse().ok().map(|id| Action::CalendarJoin { id }),
             ("meeting-dismiss", _) => name.parse().ok().map(|id| Action::CalendarDismiss { id }),
-            ("meetings-tomorrow", _) => Some(Action::CalendarTomorrow),
+            ("calendar-day", _) => {
+                let step = match name {
+                    "back" => ottospace_core::calendar::DayStep::Back,
+                    "forward" => ottospace_core::calendar::DayStep::Forward,
+                    _ => ottospace_core::calendar::DayStep::Today,
+                };
+                Some(Action::CalendarDay { step })
+            }
             ("meeting-row-join", _) => name.parse().ok().map(|id| Action::CalendarJoin { id }),
             _ => {
                 match (kind, number) {

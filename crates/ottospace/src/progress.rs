@@ -52,6 +52,28 @@ fn fact(name: &'static str, value: String) -> Div {
     div().flex().gap_2().text_xs().child(name).child(div().min_w_0().truncate().child(value))
 }
 
+/// A meeting's hover card, on the band and on a Calendar row: its title, a dot in its colour and
+/// its time, then its place, link, status and the calls merged into it. Other people's text.
+pub struct MeetingCard(pub ottospace_core::calendar::Facts, pub u32);
+
+impl Render for MeetingCard {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let (facts, color) = (&self.0, self.1);
+        frame(facts.title.clone(), color, facts.when.clone())
+            .children(facts.place.clone().map(|place| fact("Place", place)))
+            .children(facts.link.map(|link| fact("Link", link.to_string())))
+            .children(facts.status.map(|status| fact("Shows as", status.to_string())))
+            .when(!facts.more.is_empty(), |d| d.child(fact("Also", facts.more.join(", "))))
+    }
+}
+
+/// A tooltip that shows a meeting's card.
+pub type MeetingTip = Box<dyn Fn(&mut Window, &mut gpui::App) -> AnyView + 'static>;
+
+pub fn meeting_tip(facts: ottospace_core::calendar::Facts, color: u32) -> MeetingTip {
+    Box::new(move |_, cx| AnyView::from(cx.new(|_| MeetingCard(facts.clone(), color))))
+}
+
 /// A task's hover card: shown as a tooltip, after the tooltip's own delay.
 pub struct CardView(pub Card);
 

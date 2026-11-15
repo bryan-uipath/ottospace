@@ -27,7 +27,7 @@ pub const MAX_OCCURRENCES: usize = 500;
 const MAX_DURATION: i64 = 14 * DAY;
 /// Days a rule with COUNT is followed from its start, and all rules of a feed together.
 const MAX_SCAN: i64 = 7_400;
-const SCAN_BUDGET: i64 = 2_000_000;
+pub const SCAN_BUDGET: i64 = 2_000_000;
 /// STANDARD and DAYLIGHT parts read of one VTIMEZONE, and changes of offset in one zone's table.
 const MAX_PARTS: usize = 16;
 const MAX_CHANGES: usize = 1_000;
@@ -311,7 +311,13 @@ pub fn expand(feed: &Feed, from: i64, to: i64, zones: &Zones) -> Vec<Occurrence>
 /// As `expand`, and the work it took: days looked at, for zones and rules together. Never more
 /// than `SCAN_BUDGET` and a little: a feed is other people's text.
 pub fn expand_counted(feed: &Feed, from: i64, to: i64, zones: &Zones) -> (Vec<Occurrence>, i64) {
-    let mut budget = SCAN_BUDGET;
+    expand_within(feed, (from, to), zones, SCAN_BUDGET)
+}
+
+/// As `expand_counted`, with at most `budget` of work: what is left of one after an expansion
+/// before it, so two together cost no more than one.
+pub fn expand_within(feed: &Feed, (from, to): (i64, i64), zones: &Zones, budget: i64) -> (Vec<Occurrence>, i64) {
+    let (start, mut budget) = (budget, budget);
     let years = year_of(from.saturating_sub(DAY))..=year_of(to.saturating_add(DAY));
     // Only the zones an event names: a feed may define hundreds it never uses.
     let named: Vec<&str> = feed
@@ -484,7 +490,7 @@ pub fn expand_counted(feed: &Feed, from: i64, to: i64, zones: &Zones) -> (Vec<Oc
         }
     }
     earliest(&mut out);
-    (out, SCAN_BUDGET - budget)
+    (out, start - budget)
 }
 
 /// The first `MAX_OCCURRENCES`, by start.
@@ -499,10 +505,10 @@ fn day_end(start: &When, duration: i64, local: &Table) -> i64 {
     local.to_utc(day.saturating_mul(DAY) + duration.max(DAY))
 }
 
-/// Local midnight of the day `now` is in, of the next and of the one after: UTC seconds.
-pub fn days(now: i64, local: &Table) -> [i64; 3] {
-    let day = local_day(now, local);
-    [0, 1, 2].map(|n| local.to_utc((day + n) * DAY))
+/// `N` local midnights from `back` days before the day `now` is in: UTC seconds.
+pub fn days<const N: usize>(now: i64, local: &Table, back: i64) -> [i64; N] {
+    let day = local_day(now, local) - back;
+    std::array::from_fn(|n| local.to_utc((day + n as i64) * DAY))
 }
 
 /// The local day `now` (UTC seconds) is in, as days since 1970.
