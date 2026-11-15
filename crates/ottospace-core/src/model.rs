@@ -129,6 +129,9 @@ pub struct Confirm {
     pub dismiss: Option<TaskId>,
     /// Not the quit question: "Paste 4 lines?" in that pane (`clip::asks`).
     pub paste: Option<clip::PasteAsk>,
+    /// Not the quit question: "Unlist this repository?" for the one at this path, which a live
+    /// task works in. Nothing on disk changes either way.
+    pub unlist: Option<String>,
 }
 
 impl Confirm {
@@ -152,6 +155,9 @@ impl Confirm {
     pub fn title(&self) -> String {
         if self.dismiss.is_some() {
             return "Stop its agent and dismiss?".into();
+        }
+        if self.unlist.is_some() {
+            return "Unlist this repository?".into();
         }
         if let Some(ask) = self.paste {
             return ask.title();
@@ -537,7 +543,7 @@ pub enum Action {
     ClosePicker,
     /// Open the command palette. Only the user's: it runs any command as theirs.
     PaletteOpen,
-    /// Move Tab to Task…: the palette, listing the tasks (and no task) to move the tab on show
+    /// Move Tab to…: the palette, listing the spaces to move the tab on show
     /// to. Only the user's, as is which task a tab is of.
     PaletteTasks,
     /// Features…: the palette, listing the flags to turn on or off. Only the user's.
@@ -631,6 +637,40 @@ pub enum Action {
         path: String,
         axis: Axis,
     },
+    /// A click on a repository's or worktree's row: the space of the live task working there (the
+    /// one started last), else `OpenRepo`.
+    RepoClick {
+        path: String,
+        axis: Axis,
+    },
+    /// Fold a repository's rows under its name (`fold`: `None` toggles what is shown).
+    RepoFold {
+        path: String,
+        fold: Option<bool>,
+    },
+    /// The user's + on a repository's name: a field in its rows for a new worktree's branch.
+    /// `MarkSubmit` asks the shell to make it (`Effect::AddWorktree`).
+    WorktreeEdit {
+        repo: String,
+    },
+    /// The shell made the worktree at `path` of the repository at `repo`: `repos` as read after.
+    /// It opens as its row's click would. A failure is the shell's to say.
+    WorktreeAdded {
+        repo: String,
+        path: String,
+        repos: Vec<Repo>,
+    },
+    /// The open pull requests of the repository at `repo`, as gh last told them, and its checkouts'
+    /// branches as git did (the shell's read).
+    SetPrs {
+        repo: String,
+        prs: Vec<crate::prs::Pr>,
+        branches: Vec<crate::prs::Branch>,
+    },
+    /// The user's click on a row's pull request: its link opens in the browser.
+    PrOpen {
+        path: String,
+    },
     /// Start from the tasks kept on disk. `floor`: new ids start above it (see `Tasks::restore`).
     RestoreTasks {
         tasks: Vec<Task>,
@@ -700,7 +740,7 @@ pub enum Action {
     TaskGo {
         id: Option<TaskId>,
     },
-    /// Select a tab by its place among the tabs of the spaces on the top row.
+    /// Select a tab by its place among the selected space's tabs (⌘1…⌘9).
     SelectVisibleTab {
         index: usize,
     },
@@ -1237,6 +1277,19 @@ pub enum Action {
     TalkView {
         shows: crate::transcript::View,
     },
+    /// ⌃G in a composer or the new-task box: its text in the user's editor, in the drawer; while
+    /// that runs, the keyboard back to it. Only the user's.
+    EditorOpen,
+    /// The keyboard to the drawer's editor (`on`), or to the card shown above it. Only the user's.
+    EditorKeys {
+        on: bool,
+    },
+    /// The editor exited: `saved` is what its file held, if it exited 0 and the file could be
+    /// read; `more`: the file held more than that. Only the shell's.
+    EditorDone {
+        saved: Option<String>,
+        more: bool,
+    },
     /// A click or ↵ on a task: its conversation opens in the right drawer, with the keyboard.
     /// Its agent is started if it never ran, or its session gone on with if no terminal of it
     /// is live. The workspace stays as it is. Only the user's.
@@ -1283,7 +1336,7 @@ pub enum Action {
     TaskStop {
         id: Subject,
     },
-    /// Close the drawer to the right rail, or open it again on the same conversation.
+    /// Close the chat, or open it again on the same conversation.
     TalkToggle,
     /// The keyboard goes into the conversation, or back to the workspace.
     TalkKeys {
@@ -1295,11 +1348,6 @@ pub enum Action {
     },
     /// Widen the drawer to half the window, or back.
     TalkWide,
-    /// A click on a conversation's cell of the right rail (or ⌘⌃1…9): its space, and the drawer on
-    /// it, as `TaskTalk`; on the one the drawer shows, the drawer closes. Only the user's.
-    TalkPick {
-        id: Subject,
-    },
     /// Start the shown conversation's agent, or go on with its session: the drawer's Resume
     /// session (Start agent), Take over, ↵ in an ended composer. Selecting a conversation (its
     /// row, its rail cell, its tab) never starts one. Only the user's.
@@ -1393,6 +1441,7 @@ impl Action {
             self,
             Action::Split { .. }
                 | Action::OpenRepo { .. }
+                | Action::RepoClick { .. }
                 | Action::TaskGo { .. }
                 | Action::FocusList
                 | Action::AppsFilter { .. }
@@ -1438,7 +1487,6 @@ impl Action {
                 | Action::WorkbookEdit { .. }
                 | Action::TaskTalk { .. }
                 | Action::SessionOpen { .. }
-                | Action::TalkPick { .. }
                 | Action::TalkStart
                 | Action::TalkToggle
                 | Action::TalkKeys { .. }
@@ -1474,10 +1522,11 @@ impl Action {
             // A new workbook's name is typed in its row.
             | Action::WorkbookSave { .. }
             | Action::WorkbookSaveAll { .. }
-            | Action::WorkbookEdit { .. } => true,
+            | Action::WorkbookEdit { .. }
+            // So is a new worktree's branch.
+            | Action::WorktreeEdit { .. } => true,
             | Action::TaskTalk { .. }
             | Action::SessionOpen { .. }
-            | Action::TalkPick { .. }
             | Action::TalkStart
             | Action::TalkKeys { on: true } => true,
             Action::Split { .. }
@@ -1529,6 +1578,11 @@ impl Action {
             | Action::RepoAdd { .. }
             | Action::RepoRemove { .. }
             | Action::OpenRepo { .. }
+            | Action::RepoClick { .. }
+            | Action::RepoFold { .. }
+            | Action::WorktreeAdded { .. }
+            | Action::SetPrs { .. }
+            | Action::PrOpen { .. }
             | Action::RestoreTasks { .. }
             | Action::TaskAdd { .. }
             | Action::SetKnown { .. }
@@ -1675,6 +1729,9 @@ impl Action {
             | Action::TalkEscape
             | Action::TalkInterrupt
             | Action::TalkView { .. }
+            | Action::EditorOpen
+            | Action::EditorKeys { .. }
+            | Action::EditorDone { .. }
             | Action::SetFeatures { .. } => false,
         }
     }
@@ -1781,6 +1838,12 @@ impl Action {
             | Action::RepoAdd { .. }
             | Action::RepoRemove { .. }
             | Action::OpenRepo { .. }
+            | Action::RepoClick { .. }
+            | Action::RepoFold { .. }
+            | Action::WorktreeEdit { .. }
+            | Action::WorktreeAdded { .. }
+            | Action::SetPrs { .. }
+            | Action::PrOpen { .. }
             | Action::RestoreTasks { .. }
             | Action::TaskAdd { .. }
             | Action::SetKnown { .. }
@@ -1896,7 +1959,6 @@ impl Action {
             | Action::TalkKeys { .. }
             | Action::TalkResize { .. }
             | Action::TalkWide
-            | Action::TalkPick { .. }
             | Action::TalkStart
             | Action::SetCalendar { .. }
             | Action::CalendarRead { .. }
@@ -1908,6 +1970,9 @@ impl Action {
             | Action::SettingsRead { .. }
             | Action::Copied { .. }
             | Action::Paste { .. }
+            | Action::EditorOpen
+            | Action::EditorKeys { .. }
+            | Action::EditorDone { .. }
             | Action::SetFeatures { .. } => None,
         }
     }
@@ -2032,6 +2097,22 @@ pub enum Effect {
     SaveRepos {
         changes: Vec<crate::settings::ListChange>,
     },
+    /// Say `text` in the status bar as information: what the user's own step did.
+    Told {
+        text: String,
+    },
+    /// Open a pull request's link (`prs::openable`) in the browser.
+    OpenPr {
+        url: String,
+    },
+    /// The user asked for a worktree of the repository at `repo` on `branch` (checked) at `path`,
+    /// inside `root` (`worktrees_dir`): `git worktree add`, then `Action::WorktreeAdded`.
+    AddWorktree {
+        repo: String,
+        branch: String,
+        path: String,
+        root: String,
+    },
     /// Pane `pane` was just opened (`Opened`) for the user's editor on `settings.json`: its
     /// terminal runs that, not a shell. Carried out with the pane's `Opened`.
     EditSettings {
@@ -2153,6 +2234,15 @@ pub enum Effect {
     AgentInterrupt {
         task: Subject,
     },
+    /// The user's editor on `text`, in the drawer: write it to a private file, run the editor on
+    /// it, and answer `EditorDone` once it exits.
+    OpenEditor {
+        text: String,
+    },
+    /// Put `text` on the clipboard: what the editor saved, whose draft is gone.
+    Clip {
+        text: String,
+    },
     /// Read this one session now, off the main thread, and answer `SessionRead`.
     ReadSession {
         runner: String,
@@ -2206,19 +2296,13 @@ pub enum TabAt {
     Before(u32),
 }
 
-/// One space's tabs, side by side on the bar: `tabs` index into `Model::tabs`.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct Group {
-    pub space: Owner,
-    pub tabs: Vec<usize>,
-}
-
 pub mod zones;
 
 pub mod spaces;
 pub use spaces::{Owner, Space};
 
 pub mod chat;
+pub mod editor;
 
 #[derive(Debug, Serialize)]
 pub struct Model {
@@ -2265,6 +2349,18 @@ pub struct Model {
     pub repos: Vec<Repo>,
     /// The directories it is read from.
     pub repo_dirs: repos::RepoDirs,
+    /// Repositories whose rows are folded under their name, by path. Kept in `layout.json`; how
+    /// each is drawn: `repo_folded`.
+    #[serde(skip)]
+    pub repos_folded: Vec<String>,
+    /// Of those, the ones folded while a task there ran or needed the user: shown folded all
+    /// the same, until that ends.
+    #[serde(skip)]
+    repos_held: Vec<String>,
+    /// Each GitHub repository's open pull requests, by its path, as gh last told them. Other
+    /// people's text: never in the state (`checkout_pr` gives what may be).
+    #[serde(skip)]
+    pub prs: Vec<(String, Vec<crate::prs::Pr>, Vec<crate::prs::Branch>)>,
     pub tasks: Tasks,
     /// What the new-task box's tags may name, as the shell last read it.
     #[serde(skip)]
@@ -2386,7 +2482,7 @@ pub struct Model {
     pub back_to: Option<PaneId>,
     /// The task whose brief the right bar shows.
     pub brief: Option<TaskId>,
-    /// The conversation the right drawer is on. `None`: no drawer and no right rail.
+    /// The conversation the right drawer is on. `None`: no drawer.
     pub talk: Option<Talk>,
     /// The drawer's width in points, and whether it is widened to half the window.
     pub talk_width: f32,
@@ -2458,6 +2554,12 @@ pub struct Model {
     /// What the status bar says of `settings.json` (`settings_line`).
     #[serde(skip)]
     settings_file: crate::settings::Watch,
+    /// The user's editor on a draft, while it runs. Not in the state: it holds the draft.
+    #[serde(skip)]
+    pub editing: Option<editor::Editing>,
+    /// What the status bar says of the editor's last text, and when (`editor_note`).
+    #[serde(skip)]
+    editor_note: Option<(String, u64)>,
 }
 
 impl Default for Model {
@@ -2478,6 +2580,9 @@ impl Default for Model {
             apps: Vec::new(),
             repos: Vec::new(),
             repo_dirs: repos::RepoDirs::default(),
+            repos_folded: Vec::new(),
+            repos_held: Vec::new(),
+            prs: Vec::new(),
             tasks: Tasks::default(),
             known: compose::Known::default(),
             known_line: None,
@@ -2556,6 +2661,8 @@ impl Default for Model {
             features: if cfg!(test) { Features::all() } else { Features::default() },
             settings_pane: None,
             settings_file: crate::settings::Watch::default(),
+            editing: None,
+            editor_note: None,
         };
         model.push_tab();
         model
@@ -2697,19 +2804,41 @@ impl Model {
             {
                 Some(workbook::USERS_ALONE)
             }
+            // A new worktree runs git in the user's repository: only their +, keys and ↵ make one,
+            // and only the shell says it is made.
+            Action::WorktreeEdit { .. } => Some(repos::USERS_ALONE),
+            Action::WorktreeAdded { .. } if origin == Origin::Socket => Some(repos::USERS_ALONE),
+            // A link opens in the user's browser; only ottospace tells what gh said.
+            Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
+            Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
+            Action::FieldEdit { .. }
+            | Action::MarkSubmit
+            | Action::MarkType { .. }
+            | Action::MarkBackspace
+            | Action::MarkCancel
+            | Action::MarkPrefix
+            | Action::MarkEdit { .. }
+                if matches!(self.mark_input, Some(MarkInput::Worktree { .. })) =>
+            {
+                Some(repos::USERS_ALONE)
+            }
             // An agent runs with the user's rights: no client's request, key or label starts
             // or stops one. A client's ↵ in the box files the task and starts none (`start`).
-            Action::TaskTalk { .. }
-            | Action::SessionOpen { .. }
-            | Action::TalkPick { .. }
-            | Action::TalkStart
-            | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
+            Action::TaskTalk { .. } | Action::SessionOpen { .. } | Action::TalkStart | Action::TaskStop { .. } => {
+                Some(agents::USERS_ALONE)
+            }
             // A paste is of the user's clipboard: only their ⌘V and their answer to "Paste 4 lines?".
             Action::Paste { .. } => Some(clip::USERS_ALONE),
             Action::QuitConfirm | Action::QuitCancel
                 if self.confirm.as_ref().is_some_and(|confirm| confirm.paste.is_some()) =>
             {
                 Some(clip::USERS_ALONE)
+            }
+            // So is "Unlist this repository?": it writes the settings.
+            Action::QuitConfirm | Action::QuitCancel
+                if self.confirm.as_ref().is_some_and(|confirm| confirm.unlist.is_some()) =>
+            {
+                Some(apps::USERS_ALONE)
             }
             // "Stop its agent and dismiss?" is the user's to answer yes to.
             Action::QuitConfirm | Action::QuitCancel
@@ -2752,6 +2881,10 @@ impl Model {
             | Action::TalkEscape
             | Action::TalkInterrupt
             | Action::TalkView { .. } => Some(chat::USERS_ALONE),
+            // The editor writes what ↵ will send, and has the keyboard: only the user opens it or
+            // moves to it; only the shell says what it saved.
+            Action::EditorOpen | Action::EditorKeys { .. } => Some(editor::USERS_ALONE),
+            Action::EditorDone { .. } if origin == Origin::Socket => Some(editor::SHELLS_ALONE),
             // So is the composer's text: what ↵ sends must be the user's own words.
             Action::FieldEdit { .. } if self.field().is_some_and(|(of, _)| of == "talk") => Some(chat::USERS_ALONE),
             // Only the shell's runner reports events (System); a client never does.
@@ -2880,8 +3013,7 @@ impl Model {
         let opens = matches!(action, Action::OpenCompose { .. } | Action::CaptureTitle | Action::CaptureEdit { .. });
         let over_other = ((modal || self.palette.is_some()) && picker) || (boxed && opens);
         // A conversation the user opens takes the drawer from the new task being written.
-        let talks = matches!(action, Action::TaskTalk { .. } | Action::SessionOpen { .. } | Action::TalkPick { .. })
-            && self.picker.is_none();
+        let talks = matches!(action, Action::TaskTalk { .. } | Action::SessionOpen { .. }) && self.picker.is_none();
         if (boxed && for_panes && !named_close && !talks) || over_other {
             return Some(match (self.picker.is_some(), self.palette.is_some()) {
                 (true, _) => "the picker is open",
@@ -2927,6 +3059,7 @@ impl Model {
             self.end_peek(&mut effects);
         }
         self.tasks.finished(&states, self.now);
+        self.repo_unhold();
         // Only the user's own undo links a dismissed task's tabs again.
         self.settle_tasks(undo && origin == Origin::User);
         self.settle_spaces();
@@ -3126,7 +3259,6 @@ impl Model {
                 | Action::CaptureBack
                 | Action::TaskTalk { .. }
                 | Action::SessionOpen { .. }
-                | Action::TalkPick { .. }
                 | Action::TalkStart
                 | Action::TalkKeys { on: true }
         );
@@ -3240,7 +3372,9 @@ impl Model {
                 Some(id) => self.agent_runs(&Subject::Task(id)),
                 // "Paste 4 lines?" goes with its pane.
                 None if let Some(ask) = confirm.paste => panes.iter().any(|p| p.id == ask.pane),
-                None => !confirm.running.is_empty() || discards || !self.agents.is_empty(),
+                // "Unlist this repository?" goes once it is not listed.
+                None if let Some(path) = &confirm.unlist => self.repos.iter().any(|r| r.path == *path),
+                None => !confirm.running.is_empty() || discards || !self.agents.is_empty() || self.editing.is_some(),
             };
             if !asks {
                 self.confirm = None;
@@ -3268,10 +3402,38 @@ impl Model {
                 effects.push(Effect::Opened(id));
             }
             Action::Open { kind, axis, beside } => drop(self.open(kind, axis, beside, effects)),
-            Action::SetRepos { repos } => self.repos = repos::arrange(repos),
+            Action::SetRepos { repos } => {
+                self.repos = repos::arrange(repos);
+                self.repo_field_gone();
+            }
             Action::SetRepoDirs { dirs } => self.repo_dirs = dirs,
             Action::RepoAdd { dir, found } => self.repo_add(dir, found, effects),
+            // A repository a live task works in: asked first (the trash is one hover away).
+            Action::RepoRemove { path } if self.repo_worked_in(&path) && self.repo_dirs.to_remove(&path).is_ok() => {
+                self.leave(effects);
+                self.confirm = Some(Confirm { running: Vec::new(), dismiss: None, paste: None, unlist: Some(path) });
+            }
             Action::RepoRemove { path } => self.repo_remove(&path, effects),
+            Action::RepoFold { path, fold } => self.repo_fold(&path, fold),
+            Action::WorktreeEdit { repo } => self.worktree_edit(repo, effects),
+            Action::SetPrs { repo, prs, branches } => {
+                // None to match (gh off, or a failed read): the repository has no marks.
+                self.prs.retain(|(of, ..)| *of != repo);
+                if !branches.is_empty() {
+                    self.prs.push((repo, prs, branches));
+                }
+            }
+            Action::PrOpen { path } => {
+                if let Some(url) = self.checkout_pr(&path).and_then(crate::prs::Pr::link) {
+                    effects.push(Effect::OpenPr { url: url.to_string() });
+                }
+            }
+            Action::WorktreeAdded { repo, path, repos } => {
+                self.repos = repos::arrange(repos);
+                self.repo_field_gone();
+                self.repos_folded.retain(|folded| *folded != repo);
+                self.act(Action::OpenRepo { path, axis: Axis::Right }, effects);
+            }
             Action::RestoreTasks { tasks, floor } => {
                 self.tasks.restore(tasks, floor);
                 // A tab of a task that is not among them is a tab of no task: `update` unlinks it.
@@ -3332,11 +3494,14 @@ impl Model {
                 }
             }
             Action::SelectVisibleTab { index } => {
-                let shown: Vec<usize> = (0..self.tabs.len()).filter(|at| !self.tab_hidden(*at)).collect();
-                if let Some(at) = shown.get(index) {
-                    self.select_tab(*at, effects);
+                if let Some(at) = self.visible_tab(index) {
+                    self.select_tab(at, effects);
                 }
             }
+            Action::RepoClick { path, axis } => match self.repo_task(&path) {
+                Some(id) => self.open_space(Owner::Task { id }, effects),
+                None => self.act(Action::OpenRepo { path, axis }, effects),
+            },
             Action::OpenRepo { path, axis } => {
                 // Only a listed path: the list is what the user sees and can choose from. Its
                 // terminal is in a tab of Workspace of its own: the one on show if it is empty or
@@ -3401,9 +3566,9 @@ impl Model {
                 self.workbook_open(id, None, self.home.clone(), effects)
             }
             Action::SpaceOpen { space: of } => self.open_space(of, effects),
-            // Along the tabs of the spaces on the row, as the one bar draws them.
+            // Within the selected space.
             Action::CycleTab { delta } => {
-                let tabs: Vec<usize> = (0..self.tabs.len()).filter(|at| !self.tab_hidden(*at)).collect();
+                let tabs = self.space_tabs(self.space());
                 let at = tabs.iter().position(|at| *at == self.active).unwrap_or(0) as i64;
                 let to = tabs[(at + delta as i64).rem_euclid(tabs.len() as i64) as usize];
                 self.select_tab(to, effects);
@@ -3552,7 +3717,7 @@ impl Model {
             // To the field that has the keyboard: more than one can be open (the draft's title in
             // the right bar beside a note, a filter or a mark's name).
             Action::FieldEdit { edit } => match self.field().map(|(of, _)| of) {
-                Some("mark" | "workbook") => {
+                Some("mark" | "workbook" | "worktree") => {
                     if let Some(text) = self.mark_input.as_mut().and_then(MarkInput::text_mut) {
                         text.apply(edit);
                     }
@@ -3832,7 +3997,9 @@ impl Model {
             Action::ListChoose { axis } => match self.list.and_then(|at| self.list_rows().into_iter().nth(at)) {
                 // The shell hosts the window, then opens the pane; the list keeps the keys if it fails.
                 Some(ListRow::App(name)) => effects.push(Effect::HostApp { name, axis, new_tab: false }),
-                Some(ListRow::Repo(path)) => self.act(Action::OpenRepo { path, axis }, effects),
+                Some(ListRow::Repo(path)) => self.act(Action::RepoClick { path, axis }, effects),
+                // The selection stays on the name: the same key unfolds it again.
+                Some(ListRow::RepoHead(path)) => self.repo_fold(&path, None),
                 // The user's ↵ on a task is a click on it: its conversation. A client's goes to its tabs.
                 Some(ListRow::Task(id)) if self.by_user => self.talk_to(Subject::Task(id), false, effects),
                 Some(ListRow::Task(id)) => {
@@ -3953,14 +4120,11 @@ impl Model {
                 self.leave(effects);
                 // Workspace, the live tasks in their order, then the workbooks.
                 let tasks = matches!(action, Action::PaletteTasks).then(|| {
-                    let workspace = TaskChoice { to: Owner::Workspace, title: "Workspace".into() };
                     let live = self.tasks.list.iter().filter(|task| !task.dismissed);
-                    let live =
-                        live.map(|task| TaskChoice { to: Owner::Task { id: task.id }, title: task.title.clone() });
-                    let books = self.workbooks.list.iter();
-                    let books =
-                        books.map(|book| TaskChoice { to: Owner::Workbook { id: book.id }, title: book.name.clone() });
-                    std::iter::once(workspace).chain(live).chain(books).collect()
+                    let live = live.map(|task| Owner::Task { id: task.id });
+                    let books = self.workbooks.list.iter().map(|book| Owner::Workbook { id: book.id });
+                    let all = std::iter::once(Owner::Workspace).chain(live).chain(books);
+                    all.map(|to| TaskChoice { title: self.space_title(&to), to }).collect()
                 });
                 let features = matches!(action, Action::PaletteFeatures).then(|| {
                     let choice = |feature| FeatureChoice { feature, on: self.features.on(feature) };
@@ -4201,18 +4365,19 @@ impl Model {
             Action::LeaveSneak => self.sneak = None,
             // Nothing to lose: no terminal runs anything, and no draft holds a capture.
             Action::QuitAsked { running }
-                if (running.is_empty() && self.quit_discards() == 0 && self.agents.is_empty())
+                // The user's editor on a message is asked about too: its unsaved text would go.
+                if (running.is_empty() && self.quit_discards() == 0 && self.agents.is_empty() && self.editing.is_none())
                     || self
                         .confirm
                         .as_ref()
-                        .is_some_and(|confirm| confirm.dismiss.is_none() && confirm.paste.is_none()) =>
+                        .is_some_and(|confirm| confirm.dismiss.is_none() && confirm.paste.is_none() && confirm.unlist.is_none()) =>
             {
                 effects.push(Effect::Quit)
             }
             Action::QuitAsked { running } => {
                 // The question is ottospace's own UI: a live window would cover it.
                 self.leave(effects);
-                self.confirm = Some(Confirm { running, dismiss: None, paste: None });
+                self.confirm = Some(Confirm { running, dismiss: None, paste: None, unlist: None });
             }
             // Yes to "Paste 4 lines?": into its pane, if that is still a terminal.
             Action::QuitConfirm if let Some(ask) = self.confirm.as_ref().and_then(|confirm| confirm.paste) => {
@@ -4227,6 +4392,7 @@ impl Model {
                             running: Vec::new(),
                             dismiss: None,
                             paste: Some(clip::PasteAsk { pane, amount }),
+                            unlist: None,
                         })
                     }
                     false => self.pasted(pane, amount, effects),
@@ -4241,6 +4407,11 @@ impl Model {
                 self.confirm = None;
                 self.act(Action::TaskStop { id: Subject::Task(id) }, effects);
                 self.row_move(id, Moved::Dismissed, |tasks| tasks.dismiss(id));
+            }
+            // Yes to "Unlist this repository?".
+            Action::QuitConfirm if let Some(path) = self.confirm.as_ref().and_then(|confirm| confirm.unlist.clone()) => {
+                self.confirm = None;
+                self.repo_remove(&path, effects);
             }
             Action::QuitConfirm if self.confirm.is_some() => effects.push(Effect::Quit),
             Action::QuitConfirm | Action::QuitCancel => {}
@@ -4287,7 +4458,7 @@ impl Model {
             }
             Action::MarkType { text } => self.mark_type(&text, effects),
             Action::MarkBackspace => self.mark_backspace(),
-            Action::MarkSubmit => self.mark_submit(),
+            Action::MarkSubmit => self.mark_submit(effects),
             Action::MarkCancel => self.mark_input = None,
             Action::ListMarkEdit { field } => {
                 if let Some(id) = self.selected_mark() {
@@ -4425,21 +4596,17 @@ impl Model {
             | Action::TalkEscape
             | Action::TalkInterrupt
             | Action::TalkView { .. }) => self.chat_act(action, effects),
+            Action::EditorOpen => self.editor_open(effects),
+            Action::EditorKeys { on } => self.editor_keys_to(on, effects),
+            // The shell's report alone: a key or click of the user's is none.
+            Action::EditorDone { .. } if self.by_user => {}
+            Action::EditorDone { saved, more } => self.editor_done(saved, more, effects),
             Action::TaskTalk { id } => self.talk_to(Subject::Task(id), false, effects),
             Action::TalkStart => {
                 if let Some(subject) = self.talk.as_ref().filter(|talk| talk.open).map(|talk| talk.task.clone()) {
                     self.talk_to(subject, true, effects);
                 }
             }
-            // Under the inspector the rail's cell shows its conversation, as on a closed drawer.
-            Action::TalkPick { id }
-                if self.talk.as_ref().is_some_and(|talk| talk.open && talk.task == id) && self.inspector.is_none() =>
-            {
-                if let Some(talk) = &mut self.talk {
-                    (talk.open, talk.keys) = (false, false);
-                }
-            }
-            Action::TalkPick { id } => self.talk_to(id, false, effects),
             Action::ComposeEnter => {
                 if let Some(row) = self.dropdown().and_then(|menu| menu.selected) {
                     self.accept(row);
@@ -4559,7 +4726,7 @@ impl Model {
                 let found = found.and_then(|found| sessions::kept(vec![found]).pop());
                 let found = found.filter(|found| (&found.runner, &found.id) == (&runner, &id));
                 self.read_sessions.retain(|(r, i, _)| (r, i) != (&runner, &id));
-                self.read_sessions.truncate(talk::RAIL);
+                self.read_sessions.truncate(talk::KEPT);
                 self.read_sessions.insert(0, (runner.clone(), id.clone(), found));
                 // The resumes the user asked for go on, now that it is known where and if.
                 let key = Some((runner, id));
@@ -4654,7 +4821,7 @@ impl Model {
         {
             self.rail_focus = Some(zones::RailFocus::Left(Section::Tasks));
         }
-        let marking = !matches!(self.mark_input, None | Some(MarkInput::Workbook { .. }));
+        let marking = !matches!(self.mark_input, None | Some(MarkInput::Workbook { .. } | MarkInput::Worktree { .. }));
         if marking && !self.features.on(Feature::Marks) {
             self.mark_input = None;
         }
@@ -4852,127 +5019,19 @@ impl Model {
         }
     }
 
-    /// The right rail's conversations, in order: those that need the user, then those whose agent
-    /// runs, in the order they started, then the rest, the last opened first. At most
-    /// `talk::RAIL`: past it the oldest idle ones drop off. A session's shows while it is listed
-    /// or its agent runs.
-    pub fn rail(&self) -> Vec<talk::Cell> {
-        let mut ids: Vec<Subject> = self.opened.iter().rev().cloned().collect();
-        let live = self.agents.iter().chain(self.starting.iter().map(|(id, _)| id));
-        for id in live {
-            if !ids.contains(id) {
-                ids.push(id.clone());
-            }
-        }
-        // A task's while it is not dismissed; once done, while it is shown or its agent runs.
-        let shown = self.talk.as_ref().filter(|talk| talk.open).map(|talk| &talk.task);
-        let shows = |subject: &Subject| match subject {
-            Subject::Task(id) => self.tasks.get(*id).is_some_and(|task| {
-                let done = matches!(task.state, State::Done | State::Cleaned);
-                !task.dismissed && (!done || shown == Some(subject) || self.agent_runs(subject))
-            }),
-            Subject::Session { runner, id } => self.agent_runs(subject) || self.session(runner, id).is_some(),
-        };
-        let needs = |subject: &Subject| {
-            subject
-                .task()
-                .and_then(|id| self.tasks.get(id))
-                .is_some_and(|task| task.group() == Some(tasks::Group::NeedsYou))
-        };
-        let rank = |subject: &Subject, recent: usize| match self.agents.iter().position(|id| id == subject) {
-            _ if needs(subject) => (0, recent),
-            Some(started) => (1, started),
-            None if self.agent_runs(subject) => (1, usize::MAX),
-            None => (2, recent),
-        };
-        let mut listed: Vec<(usize, Subject)> = ids.into_iter().filter(shows).enumerate().collect();
-        listed.sort_by_key(|(recent, subject)| rank(subject, *recent));
-        listed.truncate(talk::RAIL);
-        // A task's badge is its own (`badges`); a session's is told apart from those too.
-        let sessions: Vec<(Subject, String)> = listed
-            .iter()
-            .filter_map(|(_, subject)| match subject {
-                Subject::Session { runner, id } => Some((subject.clone(), self.session_title(runner, id))),
-                Subject::Task(_) => None,
-            })
-            .collect();
-        let badges = self.badges(&sessions);
-        let badge = |subject: &Subject| badges.iter().find(|(of, _)| of == subject).map(|(_, mono)| mono.clone());
-        let monos: Vec<String> = listed.iter().map(|(_, subject)| badge(subject).unwrap_or_default()).collect();
-        let shown = self.talk.as_ref().filter(|talk| talk.open).map(|talk| &talk.task);
-        let cells = listed.into_iter().zip(monos).map(|((_, subject), mono)| {
-            let (runner, id) = match &subject {
-                Subject::Task(id) => match self.tasks.get(*id).and_then(|task| task.session.as_ref()) {
-                    Some(link) => (link.runner.as_str(), link.id.as_str()),
-                    None => ("", ""),
-                },
-                Subject::Session { runner, id } => (runner.as_str(), id.as_str()),
-            };
-            let found = self.found.iter().find(|found| (found.runner.as_str(), found.id.as_str()) == (runner, id));
-            let active = found.is_some_and(|found| found.active);
-            let (group, working, tip) = match subject.task().and_then(|id| self.tasks.get(id)) {
-                Some(task) => {
-                    let runs = self.agent_runs(&subject) && task.state == State::Running;
-                    // A native agent's call is known from its stream before its file says it.
-                    let native = self.chat(&subject).and_then(|chat| chat.transcript.live_label());
-                    let live = native.or(found.and_then(|found| found.label.as_deref()));
-                    (task.group(), runs || active, self.rail_tip(task, live))
-                }
-                None => {
-                    let group = active.then_some(tasks::Group::Running);
-                    (group, active, self.session_tip(&subject, runner, found))
-                }
-            };
-            talk::Cell { shown: shown == Some(&subject), task: subject, mono, group, working, tip }
-        });
-        cells.collect()
-    }
-
-    /// A rail cell's tooltip: the title; what its agent does now, else its state; and where,
-    /// with which agent, how old.
-    fn rail_tip(&self, task: &Task, live: Option<&str>) -> String {
-        let state = task.group().map_or("Not listed", tasks::Group::title);
-        let shown = self.talk.as_ref().is_some_and(|t| t.task == Subject::Task(task.id));
-        let line = match (self.talk_note().filter(|_| shown), live) {
-            (Some(note), _) => note,
-            (None, Some(live)) => live.to_string(),
-            (None, None) => state.to_string(),
-        };
-        let place = task.dir().map(String::as_str).map_or_else(
-            || "home folder".to_string(),
-            |path| self.repo_name(path).unwrap_or_else(|| path.rsplit('/').next().unwrap_or(path).to_string()),
-        );
-        let default = self.default_agent();
-        let agent = task.agent.as_deref().unwrap_or(default);
-        let age = task.created.map(|created| format!(" · {}", tasks::age(created, self.now))).unwrap_or_default();
-        format!("{}\n{line}\n{place} · @{agent}{age}", task.title)
-    }
-
-    /// A session cell's tooltip: its title; what it does now, else whether it is at work; where,
-    /// with which runner, how long ago it was last at work.
-    fn session_tip(&self, subject: &Subject, runner: &str, found: Option<&Found>) -> String {
-        let Subject::Session { id, .. } = subject else { return String::new() };
-        let shown = self.talk.as_ref().is_some_and(|t| t.task == *subject);
-        let state = if found.is_some_and(|s| s.active) { "Session at work" } else { "Session" };
-        let line = match (self.talk_note().filter(|_| shown), found.and_then(|s| s.label.as_deref())) {
-            (Some(note), _) => note,
-            (None, Some(live)) => live.to_string(),
-            (None, None) => state.to_string(),
-        };
-        let place = found.map_or_else(String::new, |s| format!("{} · ", self.session_name(s)));
-        let age = found.and_then(|s| s.last_activity).map(|at| format!(" · {}", tasks::age(at, self.now)));
-        format!("{}\n{line}\n{place}@{runner}{}", self.session_title(runner, id), age.unwrap_or_default())
+    /// A conversation's agent is at work: a task's runs, or a session's file is being written.
+    pub fn talk_working(&self, subject: &Subject) -> bool {
+        let found = self.session_of(subject).and_then(|(runner, id)| self.session(&runner, &id).cloned());
+        let runs = subject.task().and_then(|id| self.tasks.get(id)).is_some_and(|task| task.state == State::Running);
+        (runs && self.agent_runs(subject)) || found.is_some_and(|found| found.active)
     }
 
     /// Each live (not dismissed) task's badge letters, by `talk::monograms`, oldest task first
-    /// so a new task's letters give way; then those of `sessions` (a session's title), told
-    /// apart from them. The same letters on the tab bar, the panes, the rows and the rail.
-    pub fn badges(&self, sessions: &[(Subject, String)]) -> Vec<(Subject, String)> {
+    /// so a new task's letters give way. The same letters on the top row, the rows and the drawer.
+    pub fn badges(&self) -> Vec<(Subject, String)> {
         let live: Vec<&Task> = self.tasks.list.iter().filter(|task| !task.dismissed).collect();
-        let subjects = live.iter().map(|task| Subject::Task(task.id)).chain(sessions.iter().map(|(s, _)| s.clone()));
-        let titles: Vec<&str> =
-            live.iter().map(|task| task.title.as_str()).chain(sessions.iter().map(|(_, t)| t.as_str())).collect();
-        subjects.zip(talk::monograms(&titles)).collect()
+        let titles: Vec<&str> = live.iter().map(|task| task.title.as_str()).collect();
+        live.iter().map(|task| Subject::Task(task.id)).zip(talk::monograms(&titles)).collect()
     }
 
     /// Opens a conversation's space and the drawer on it, with the keyboard if its agent runs.
@@ -5689,7 +5748,7 @@ impl Model {
 
     /// The row list mode starts on: the first that is not a heading.
     fn first_row(&self) -> usize {
-        self.list_rows().iter().position(|row| !matches!(row, ListRow::Heading(_))).unwrap_or(0)
+        self.list_rows().iter().position(|row| !matches!(row, ListRow::Heading(_) | ListRow::RepoHead(_))).unwrap_or(0)
     }
 
     /// The paste goes to terminal `pane`, and its notice says so. A pane closed since: nothing.
@@ -5715,7 +5774,7 @@ impl Model {
         if self.agent_runs(&Subject::Task(id)) && self.tasks.live(id).is_some() {
             // The question is ottospace's own UI: a live window would cover it.
             self.leave(effects);
-            self.confirm = Some(Confirm { running: Vec::new(), dismiss: Some(id), paste: None });
+            self.confirm = Some(Confirm { running: Vec::new(), dismiss: Some(id), paste: None, unlist: None });
             return;
         }
         match moved {
@@ -6092,6 +6151,7 @@ impl Model {
         match &self.mark_input {
             Some(MarkInput::Rename { text, .. }) => return Some(("mark", text)),
             Some(MarkInput::Workbook { text, .. }) => return Some(("workbook", text)),
+            Some(MarkInput::Worktree { text, .. }) => return Some(("worktree", text)),
             _ => {}
         }
         let picker = self.picker.as_ref().map(|picker| ("picker", &picker.query));
@@ -6119,6 +6179,10 @@ impl Model {
                 Some(MarkInput::Rename { text, .. }) => Some(text),
                 _ => None,
             },
+            "worktree" => match &self.mark_input {
+                Some(MarkInput::Worktree { text, .. }) => Some(text),
+                _ => None,
+            },
             "workbook" => match &self.mark_input {
                 Some(MarkInput::Workbook { text, .. }) => Some(text),
                 _ => None,
@@ -6135,10 +6199,13 @@ impl Model {
         // letter is over the filter, not in it.
         let of = match self.mode() {
             Mode::Mark if matches!(self.mark_input, Some(MarkInput::Workbook { .. })) => "workbook",
+            Mode::Mark if matches!(self.mark_input, Some(MarkInput::Worktree { .. })) => "worktree",
             Mode::Mark => "mark",
             Mode::Pick => "picker",
             Mode::Palette => "palette",
             Mode::Inspect => "inspector",
+            // The editor has the box's line: nothing types in it meanwhile.
+            Mode::Compose if self.edits_compose() => return None,
             Mode::Compose => "compose",
             Mode::Annotate => "note",
             Mode::Talk if self.talk_typing() => "talk",
@@ -6157,9 +6224,8 @@ impl Model {
     pub fn list_rows(&self) -> Vec<ListRow> {
         match self.sidebar {
             Some(Section::Apps) => self.app_rows(),
-            Some(Section::Repos) => {
-                self.repos.iter().flat_map(Repo::checkouts).map(|checkout| ListRow::Repo(checkout.path)).collect()
-            }
+            // Each repository's name, then its rows unless it is folded.
+            Some(Section::Repos) => self.repos.iter().flat_map(|repo| self.repo_rows(repo)).collect(),
             Some(Section::Tasks) => self.task_list_rows(self.tasks_view, false),
             Some(Section::Marks) => self.marks.list.iter().map(|mark| ListRow::Mark(mark.id)).collect(),
             Some(Section::Calendar) => self.calendar.agenda(),
@@ -6287,18 +6353,6 @@ impl Model {
     /// The task of the selected space, if it is a task's.
     pub fn tab_task(&self) -> Option<TaskId> {
         self.space().task()
-    }
-
-    /// The tab at `at` is of a space off the row.
-    pub(crate) fn tab_hidden(&self, at: usize) -> bool {
-        let of = self.tabs.get(at).map(|tab| &tab.space);
-        self.spaces.iter().any(|space| Some(&space.of) == of && space.hidden)
-    }
-
-    /// The tab bar's groups in order, one a space on the row: its tabs side by side.
-    pub fn groups(&self) -> Vec<Group> {
-        let group = |space: &&Space| Group { space: space.of.clone(), tabs: self.space_tabs(&space.of) };
-        self.shown_spaces().iter().map(group).filter(|group| !group.tabs.is_empty()).collect()
     }
 
     /// Moves a tab into a space, or before a tab, taking that one's space. The tab on show stays
@@ -6493,7 +6547,9 @@ impl Model {
     /// The home screen, while it is on show: the tab on show has no panes.
     /// `keep_out`: where the shell draws text over the lattice (see `home::home`).
     pub fn home(&self, keep_out: &[Rect]) -> Option<Home<'_>> {
-        self.layout.is_none().then(|| home::home(&self.tasks, keep_out))
+        // A task's empty tab is its own, not the home screen: the shell says what goes in it.
+        let workspace = *self.space() == Owner::Workspace;
+        (self.layout.is_none() && workspace).then(|| home::home(&self.tasks, keep_out))
     }
 
     /// Pane ids of each tab, in tab order. The state dump uses it to show which tab holds a pane.
@@ -6513,6 +6569,12 @@ impl Model {
             std::iter::once((&r.path, &r.name)).chain(worktrees)
         });
         listed.find(|(p, _)| *p == path).map(|(_, name)| name.clone())
+    }
+
+    /// The live task working in `path`, the one started last (else filed last): what its row's click selects.
+    pub fn repo_task(&self, path: &str) -> Option<TaskId> {
+        let there = self.tasks.list.iter().filter(|task| !task.dismissed && task.dir().is_some_and(|dir| dir == path));
+        there.max_by_key(|task| (task.started_at, task.created, task.id)).map(|task| task.id)
     }
 
     /// True if `path` is a repository or worktree in the Repos list.
@@ -6538,8 +6600,129 @@ impl Model {
         }
         self.leave(effects);
         self.sidebar = Some(Section::Repos);
+        self.repos_folded.retain(|folded| !wanted.contains(folded));
         let row = |row: &ListRow| matches!(row, ListRow::Repo(path) if wanted.contains(path));
         self.list = self.list_rows().iter().position(row);
+    }
+
+    /// A repository's rows in list mode: its name, then its checkouts unless it is folded.
+    fn repo_rows(&self, repo: &Repo) -> Vec<ListRow> {
+        let folded = self.repo_folded(repo);
+        let rows = repo.checkouts().into_iter().filter(|_| !folded).map(|checkout| ListRow::Repo(checkout.path));
+        std::iter::once(ListRow::RepoHead(repo.path.clone())).chain(rows).collect()
+    }
+
+    /// True if a live task in one of `repo`'s checkouts runs or needs the user.
+    fn repo_busy(&self, repo: &Repo) -> bool {
+        let paths: Vec<&String> = std::iter::once(&repo.path).chain(repo.worktrees.iter().map(|w| &w.path)).collect();
+        let busy = |task: &&Task| !task.dismissed && matches!(task.state, State::Running | State::NeedsYou);
+        self.tasks.list.iter().filter(busy).any(|task| task.dir().is_some_and(|dir| paths.contains(&dir)))
+    }
+
+    /// Whether `repo`'s rows are drawn folded under its name: the user folded them, and no task
+    /// there runs or needs them (then they show until that ends), unless folded while one did.
+    pub fn repo_folded(&self, repo: &Repo) -> bool {
+        self.repos_folded.contains(&repo.path) && (self.repos_held.contains(&repo.path) || !self.repo_busy(repo))
+    }
+
+    /// Folds or unfolds a repository's rows, as shown now: `None` toggles. List mode's selection
+    /// stays on its row, or goes to the repository's name when that row is folded away.
+    fn repo_fold(&mut self, path: &str, fold: Option<bool>) {
+        let Some(repo) = self.repos.iter().find(|repo| repo.path == path).cloned() else { return };
+        let selected = self.list.and_then(|at| self.list_rows().into_iter().nth(at));
+        let folded = self.repo_folded(&repo);
+        match fold.unwrap_or(!folded) {
+            true if !folded => {
+                self.repos_folded.retain(|p| p != path);
+                self.repos_folded.push(path.to_string());
+                if self.repo_busy(&repo) {
+                    self.repos_held.push(path.to_string());
+                }
+            }
+            false => {
+                self.repos_folded.retain(|p| p != path);
+                self.repos_held.retain(|p| p != path);
+            }
+            true => {}
+        }
+        if let (Some(row), Some(_)) = (selected, self.list) {
+            let rows = self.list_rows();
+            let head = ListRow::RepoHead(path.to_string());
+            self.list = rows.iter().position(|r| *r == row).or_else(|| rows.iter().position(|r| *r == head));
+        }
+    }
+
+    /// The branch being typed is for a repository no longer listed: the field closes.
+    fn repo_field_gone(&mut self) {
+        if matches!(&self.mark_input, Some(MarkInput::Worktree { repo, .. }) if !self.repos.iter().any(|r| r.path == *repo))
+        {
+            self.mark_input = None;
+        }
+    }
+
+    /// A folded repository is held folded only while a task there runs or needs the user.
+    fn repo_unhold(&mut self) {
+        if self.repos_held.is_empty() {
+            return;
+        }
+        let busy: Vec<String> =
+            self.repos.iter().filter(|repo| self.repo_busy(repo)).map(|repo| repo.path.clone()).collect();
+        self.repos_held.retain(|path| busy.contains(path));
+    }
+
+    /// True if a live task works in one of the checkouts of the repository at `path`.
+    fn repo_worked_in(&self, path: &str) -> bool {
+        let repo = self.repos.iter().find(|repo| repo.path == path);
+        repo.is_some_and(|repo| repo.checkouts().iter().any(|c| self.repo_task(&c.path).is_some()))
+    }
+
+    /// The open pull request of the branch checked out at `path`, by `prs::pick`.
+    pub fn checkout_pr(&self, path: &str) -> Option<&crate::prs::Pr> {
+        // The branch read with the pull requests must be the one listed now: none after a switch.
+        let now = self.repos.iter().flat_map(Repo::checkouts).find(|c| c.path == path)?.branch;
+        let (_, prs, branches) = self.prs.iter().find(|(_, _, branches)| branches.iter().any(|b| b.path == path))?;
+        crate::prs::pick(prs, branches.iter().find(|b| b.path == path).filter(|b| b.name == now)?)
+    }
+
+    /// The repository whose rows list mode's selection is on: its name or one of its checkouts.
+    pub fn selected_repo(&self) -> Option<String> {
+        let row = self.list.and_then(|at| self.list_rows().into_iter().nth(at))?;
+        let of = |repo: &&Repo| match &row {
+            ListRow::RepoHead(path) => repo.path == *path,
+            ListRow::Repo(path) => repo.checkouts().iter().any(|checkout| checkout.path == *path),
+            _ => false,
+        };
+        self.repos.iter().find(of).map(|repo| repo.path.clone())
+    }
+
+    /// The user's +: a field in the repository's rows for the branch of a new worktree. None
+    /// while no folder is set for worktrees (a test run with no folder of its own).
+    fn worktree_edit(&mut self, repo: String, effects: &mut Vec<Effect>) {
+        if !self.repos.iter().any(|r| r.path == repo) || !self.mark_input_may_start() {
+            return;
+        }
+        if self.repo_dirs.worktrees.is_none() {
+            return effects.push(Effect::Notice { text: repos::WORKTREES_NONE.into() });
+        }
+        self.repo_fold(&repo, Some(false));
+        let text = Field::new("", repos::MAX_BRANCH);
+        self.mark_input = Some(MarkInput::Worktree { repo, text });
+    }
+
+    /// ↵ in the field: a branch name git takes asks the shell for the worktree, and the field
+    /// closes; one it does not is said in the status bar, and the field stays to fix it.
+    pub(crate) fn worktree_submit(&mut self, repo: String, branch: String, effects: &mut Vec<Effect>) {
+        let listed = self.repos.iter().any(|r| r.path == repo);
+        let Some(root) = self.repo_dirs.worktrees.clone().filter(|_| listed) else {
+            self.mark_input = None;
+            return;
+        };
+        if let Err(text) = repos::check_branch(&branch) {
+            return effects.push(Effect::Notice { text });
+        }
+        let path = repos::worktree_dir(&root, &repo, &self.repos, &branch);
+        self.mark_input = None;
+        effects.push(Effect::AddWorktree { repo, branch, path, root });
     }
 
     /// "Remove" on a repository's name: its directory comes off the settings, or a notice says
@@ -6553,6 +6736,9 @@ impl Model {
                 self.repo_dirs.dirs.retain(|d| *d != dir);
                 let held = self.repo_dirs.holder(path).is_some();
                 self.repos.retain(|repo| held || repo.path != path);
+                self.repo_field_gone();
+                let text = format!("Unlisted {} · nothing on disk changed", repos::name_of(path));
+                effects.push(Effect::Told { text });
             }
         }
     }
@@ -7044,6 +7230,12 @@ mod tests {
         Action::RepoAdd { .. },
         Action::RepoRemove { .. },
         Action::OpenRepo { .. },
+        Action::RepoClick { .. },
+        Action::RepoFold { .. },
+        Action::WorktreeEdit { .. },
+        Action::WorktreeAdded { .. },
+        Action::SetPrs { .. },
+        Action::PrOpen { .. },
         Action::RestoreTasks { .. },
         Action::TaskAdd { .. },
         Action::SetKnown { .. },
@@ -7189,7 +7381,6 @@ mod tests {
         Action::TalkKeys { .. },
         Action::TalkResize { .. },
         Action::TalkWide,
-        Action::TalkPick { .. },
         Action::TalkStart,
         Action::SetCalendar { .. },
         Action::CalendarRead { .. },
@@ -7205,6 +7396,9 @@ mod tests {
         Action::TalkEscape,
         Action::TalkInterrupt,
         Action::TalkView { .. },
+        Action::EditorOpen,
+        Action::EditorKeys { .. },
+        Action::EditorDone { .. },
         Action::WorkbookFold { .. },
         Action::SetFeatures { .. }
     );
@@ -7275,6 +7469,12 @@ mod tests {
             Action::RepoAdd { dir: text(), found: Vec::new() },
             Action::RepoRemove { path: text() },
             Action::OpenRepo { path: text(), axis: Right },
+            Action::RepoClick { path: text(), axis: Right },
+            Action::RepoFold { path: text(), fold: None },
+            Action::WorktreeEdit { repo: text() },
+            Action::WorktreeAdded { repo: text(), path: text(), repos: Vec::new() },
+            Action::SetPrs { repo: text(), prs: Vec::new(), branches: Vec::new() },
+            Action::PrOpen { path: text() },
             Action::RestoreTasks { tasks: Vec::new(), floor: 0 },
             Action::TaskAdd { title: text(), priority: 3, state: State::Running, tab: None, assign: Assign::default() },
             Action::SetKnown { line: text(), typing: None, names: None, paths: Vec::new(), entries: Vec::new() },
@@ -7423,7 +7623,6 @@ mod tests {
             Action::TalkKeys { on: true },
             Action::TalkResize { width: 400. },
             Action::TalkWide,
-            Action::TalkPick { id: Subject::Task(1) },
             Action::TalkStart,
             Action::SetCalendar { on: true, notify: true, links_only: false, hide_free: false, colors: Vec::new() },
             Action::CalendarRead { events: None, days: [0; calendar::DAYS], at: 0, held_from: 0 },
@@ -7439,6 +7638,9 @@ mod tests {
             Action::TalkEscape,
             Action::TalkInterrupt,
             Action::TalkView { shows: View::Terminal },
+            Action::EditorOpen,
+            Action::EditorKeys { on: false },
+            Action::EditorDone { saved: None, more: false },
             Action::TasksView { view: TasksView::Project },
             Action::ToggleProject { project: None, done: false },
             Action::SessionWork { work: progress::Work::default() },
@@ -7591,7 +7793,6 @@ mod tests {
                     _ if of_workbooks(action) => Some(workbook::USERS_ALONE),
                     Action::TaskTalk { .. }
                     | Action::SessionOpen { .. }
-                    | Action::TalkPick { .. }
                     | Action::TalkStart
                     | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
                     Action::TabPlace { .. } => Some(TABS_USERS),
@@ -7613,6 +7814,12 @@ mod tests {
                     Action::SettingsRead { .. } if origin == Origin::Socket => {
                         Some("only ottospace reads settings.json")
                     }
+                    Action::EditorOpen | Action::EditorKeys { .. } => Some(editor::USERS_ALONE),
+                    Action::EditorDone { .. } if origin == Origin::Socket => Some(editor::SHELLS_ALONE),
+                    Action::WorktreeEdit { .. } => Some(crate::repos::USERS_ALONE),
+                    Action::WorktreeAdded { .. } if origin == Origin::Socket => Some(crate::repos::USERS_ALONE),
+                    Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
+                    Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
                     _ => action.takes_keyboard().then_some("sneak mode is on"),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");
@@ -8215,14 +8422,18 @@ mod tests {
         m.update(Action::NewTab.sent_by(Origin::Socket));
         assert_eq!((m.active, m.space()), (1, &Owner::Workspace));
         assert_eq!(row(&m), [(Owner::Workspace, false, vec![0, 1]), (task_space(1), false, vec![2, 3])]);
-        // Cycling goes along the bar's tabs; a space shows the tab it showed last.
+        // ⌘1… (and ⌘⇧⌥1…) count the selected space's tabs only.
+        assert_eq!((m.visible_tab(1), m.visible_tab(2)), (Some(1), None));
+        // Cycling stays in the space; a space shows the tab it showed last.
         m.update(Action::CycleTab { delta: 1 });
         m.update(Action::CycleTab { delta: 1 });
-        assert_eq!(m.active, 3);
-        m.update(Action::SpaceSelect { index: 0 });
         assert_eq!(m.active, 1);
         m.update(Action::SpaceSelect { index: 1 });
-        assert_eq!(m.active, 3);
+        m.update(Action::CycleTab { delta: -1 });
+        assert_eq!(m.active, 2);
+        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::SpaceSelect { index: 1 });
+        assert_eq!(m.active, 2);
         // Going to a task opens its space; a task there is not opens none.
         m.update(Action::TaskGo { id: Some(2) });
         assert_eq!((m.space(), m.tabs.len()), (&task_space(2), 5));
@@ -8490,6 +8701,32 @@ mod tests {
     }
 
     #[test]
+    fn a_click_on_a_worktree_a_task_works_in_selects_that_task_and_its_terminal_word_does_not() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        let click = |path: &str| Action::RepoClick { path: path.into(), axis: Right };
+        // No task there: a terminal in a Workspace tab of its own.
+        m.update(click("/code/app-2"));
+        assert_eq!((m.space(), m.pane(1).and_then(|p| p.cwd.as_deref())), (&Owner::Workspace, Some("/code/app-2")));
+        // Two tasks there, one dismissed: the live one's space is selected, its agent not started.
+        for line in ["older >app-2", "newer >app-2"] {
+            m.update(Action::TaskFromLine { line: line.into(), known: Default::default(), open: false });
+        }
+        m.update(Action::TaskDismiss { id: 2 });
+        assert_eq!(m.repo_task("/code/app-2"), Some(1));
+        let effects = m.update(click("/code/app-2"));
+        assert!(!effects.iter().any(|e| matches!(e, Effect::StartAgent { .. })), "{effects:?}");
+        assert_eq!((m.space(), m.panes.len()), (&task_space(1), 1));
+        // Again from its hidden space: it comes back.
+        m.update(Action::SpaceHide { index: None });
+        m.update(click("/code/app-2"));
+        assert_eq!(m.space(), &task_space(1));
+        // The row's Terminal word: a terminal there anyway, in Workspace.
+        m.update(Action::OpenRepo { path: "/code/app-2".into(), axis: Right });
+        assert_eq!((m.space(), m.panes.len()), (&Owner::Workspace, 2));
+    }
+
+    #[test]
     fn the_drawer_is_only_ever_on_the_selected_spaces_agent() {
         let mut m = Model::default();
         term(&mut m);
@@ -8559,7 +8796,7 @@ mod tests {
     }
 
     #[test]
-    fn a_dismissed_task_leaves_the_rail_the_drawer_and_the_row_and_undo_brings_its_tabs_back() {
+    fn a_dismissed_task_leaves_the_drawer_and_the_row_and_undo_brings_its_tabs_back() {
         let mut m = Model::default();
         term(&mut m);
         let (a, b) = (add_task(&mut m, "a", State::Captured), add_task(&mut m, "b", State::Captured));
@@ -8568,22 +8805,12 @@ mod tests {
         m.update(Action::AgentExited { task: Subject::Task(b) }.sent_by(Origin::System));
         started(&mut m, Action::TaskTalk { id: a });
         m.update(Action::AgentExited { task: Subject::Task(a) }.sent_by(Origin::System));
-        let rail = |m: &Model| m.rail().iter().map(|cell| cell.task.clone()).collect::<Vec<_>>();
-        assert_eq!(rail(&m), [Subject::Task(a), Subject::Task(b)]);
-        // Dismissed: off the rail and the row, the drawer shows nothing, its tab is Workspace's.
+        // Dismissed: off the row, the drawer shows nothing, its tab is Workspace's.
         m.update(Action::RowDismiss { id: a });
-        assert_eq!((rail(&m), m.talk.is_none(), m.space()), (vec![Subject::Task(b)], true, &Owner::Workspace));
-        assert_eq!(m.spaces().len(), 2);
+        assert_eq!((m.talk.is_none(), m.space(), m.spaces().len()), (true, &Owner::Workspace, 2));
         // Taken back: its tab is its space's again.
         m.update(Action::TaskUndo);
         assert_eq!((m.tab_task(), m.spaces().len()), (Some(a), 3));
-        // Done: off the rail unless shown or its agent runs.
-        started(&mut m, Action::TaskTalk { id: b });
-        m.update(Action::AgentExited { task: Subject::Task(b) }.sent_by(Origin::System));
-        m.update(Action::TaskSetState { id: b, state: State::Done });
-        assert!(rail(&m).contains(&Subject::Task(b)), "shown");
-        m.update(Action::TalkToggle);
-        assert!(!rail(&m).contains(&Subject::Task(b)));
     }
 
     #[test]
@@ -8627,7 +8854,7 @@ mod tests {
         m.update(Action::RowDismiss { id: a });
         assert_eq!(m.update(Action::QuitConfirm), [Effect::StopAgent { task: Subject::Task(a) }]);
         m.update(Action::AgentExited { task: Subject::Task(a) }.sent_by(Origin::System));
-        assert_eq!((m.tasks.get(a).map(|t| t.dismissed), m.rail().len(), m.confirm.is_none()), (Some(true), 0, true));
+        assert_eq!((m.tasks.get(a).map(|t| t.dismissed), m.spaces().len(), m.confirm.is_none()), (Some(true), 1, true));
     }
 
     #[test]
@@ -8640,10 +8867,16 @@ mod tests {
         m.update(Action::FocusList);
         m.update(Action::ToggleSection { section: Section::Repos });
         m.update(Action::FocusList);
-        assert_eq!((m.mode(), m.sidebar, m.list), (Mode::List, Some(Section::Repos), Some(0)));
-        assert_eq!(m.list_rows(), [ListRow::Repo("/code/app".into()), ListRow::Repo("/code/app-2".into())]);
-        m.update(Action::ListMove { delta: -1 }); // wraps to the last row
-        assert_eq!(m.list, Some(1));
+        // The repository's name is a row, over its checkouts; the list starts on the first checkout.
+        assert_eq!((m.mode(), m.sidebar, m.list), (Mode::List, Some(Section::Repos), Some(1)));
+        let rows = [
+            ListRow::RepoHead("/code/app".into()),
+            ListRow::Repo("/code/app".into()),
+            ListRow::Repo("/code/app-2".into()),
+        ];
+        assert_eq!(m.list_rows(), rows);
+        m.update(Action::ListMove { delta: -2 }); // wraps to the last row
+        assert_eq!(m.list, Some(2));
         // Opening the row: a terminal in the worktree, and the keyboard goes to it.
         assert_eq!(m.update(Action::ListChoose { axis: Down }), [Effect::Opened(1)]);
         assert_eq!((m.pane(1).unwrap().cwd.as_deref(), m.mode()), (Some("/code/app-2"), Mode::Normal));
@@ -10237,10 +10470,9 @@ mod tests {
         assert_eq!(open(&mut m, "claude", IDLE), []);
         m.update(Action::AgentStarted { task: idle.clone(), session: None, at: 1 }.sent_by(Origin::System));
         assert_eq!((open(&mut m, "claude", IDLE), m.agents.clone()), (vec![], vec![idle.clone()]));
-        // On the rail like a task's: its title's badge, a ring only while at work, no task.
-        let cell = &m.rail()[0];
-        assert_eq!((&cell.task, cell.mono.as_str(), cell.group, cell.shown), (&idle, "FT", None, true));
-        assert_eq!(cell.tip, "Fix the login\nSession\napp · @claude · 2h");
+        // Its own space on the top row, as a task's; it is at work only while its file says so.
+        assert_eq!(m.space(), &Owner::of(&idle));
+        assert!(!m.talk_working(&idle));
         // Stop ends it; a click goes on with it again.
         assert_eq!(m.update(Action::TaskStop { id: idle.clone() }), [Effect::StopAgent { task: idle.clone() }]);
         m.update(Action::AgentExited { task: idle.clone() }.sent_by(Origin::System));
@@ -10360,8 +10592,6 @@ mod tests {
         );
         m.update(Action::SetSessions { found: Vec::new(), day: 0 }.sent_by(Origin::System));
         assert_eq!(m.session_title("claude", IDLE), "Fix the login");
-        assert_eq!(m.rail()[0].mono, "FT");
-        assert!(m.rail()[0].tip.starts_with("Fix the login\n"), "{}", m.rail()[0].tip);
     }
 
     #[test]
@@ -10394,7 +10624,6 @@ mod tests {
         );
         // The session's space is the task's now: its one empty tab, no shell.
         assert_eq!((m.panes.len(), m.tabs.len(), m.tab_task()), (0, 2, Some(1)), "no shell tab");
-        assert_eq!(m.rail().iter().map(|cell| cell.task.clone()).collect::<Vec<_>>(), [Subject::Task(1)]);
         // Not open: the task's conversation, gone on with where the session started.
         m.update(Action::SetSessions {
             found: vec![Found { repo: "/code/app".into(), ..session("claude", HELD, "/code/app/web", false, 2_000) }],
@@ -10866,7 +11095,7 @@ mod tests {
         );
         // A second click starts no second agent.
         assert_eq!(started(&mut m, Action::TaskTalk { id: 1 }), []);
-        // The keyboard goes back to the workspace and in again; closing to the rail takes it out.
+        // The keyboard goes back to the workspace and in again; closing the chat takes it out.
         m.update(Action::TalkKeys { on: false });
         assert_eq!((m.mode(), m.talk.as_ref().map(|talk| talk.open)), (Mode::Normal, Some(true)));
         m.update(Action::TalkKeys { on: true });
@@ -10942,51 +11171,6 @@ mod tests {
         assert_eq!((m.talk_width, m.talk_wide), (talk::MAX_WIDTH, true));
         // Shown, its space is selected.
         assert_eq!(m.tab_task(), Some(1));
-    }
-
-    #[test]
-    fn the_right_rail_lists_open_conversations_needs_you_then_running_then_the_last_opened() {
-        let system = |m: &mut Model, action: Action| m.update(action.sent_by(Origin::System));
-        let mut m = Model::default();
-        m.update(Action::SetRepos { repos: listed() });
-        for i in 1..=12 {
-            m.update(Action::TaskFromLine { line: format!("task {i} >app"), known: Default::default(), open: false });
-        }
-        let order = |m: &Model| m.rail().iter().filter_map(|cell| cell.task.task()).collect::<Vec<_>>();
-        assert!(order(&m).is_empty(), "nothing opened: the rail has only its +");
-        // Opened and started: 1, 2 and 3 run, in the order they started.
-        for id in [1, 2, 3] {
-            started(&mut m, Action::TaskTalk { id });
-            system(&mut m, Action::AgentStarted { task: Subject::Task(id), session: None, at: 0 });
-        }
-        assert_eq!(order(&m), [1, 2, 3]);
-        // 2 needs the user: first. 3 ends while at work, so it needs the user too: the last
-        // opened first.
-        system(&mut m, Action::TaskSetState { id: 2, state: State::NeedsYou });
-        system(&mut m, Action::AgentExited { task: Subject::Task(3) });
-        assert_eq!(order(&m), [3, 2, 1]);
-        // Opened and never started (a saved agent's, or one that failed): idle, the last opened first.
-        for id in 4..=12 {
-            started(&mut m, Action::TaskTalk { id });
-            system(&mut m, Action::AgentExited { task: Subject::Task(id) });
-        }
-        // At most eight: the oldest idle ones drop off; what needs the user and what runs stay.
-        assert_eq!(order(&m), [3, 2, 1, 12, 11, 10, 9, 8]);
-        let rail = m.rail();
-        assert_eq!((rail[3].shown, rail[0].shown), (true, false));
-        // `task 12` would be `T1`, as `task 1` is; `T2` is taken too: among every live task its place tells it apart.
-        assert_eq!((rail[0].mono.as_str(), rail[2].mono.as_str(), rail[3].mono.as_str()), ("T3", "T1", "T12"));
-        assert_eq!(rail[1].tip, "task 2\nNeeds you\napp · @claude");
-        // A click on the shown cell closes the drawer; on another, that one shows. Only the user's.
-        m.update(Action::TalkPick { id: Subject::Task(12) });
-        assert_eq!(m.talk.clone(), Some(Talk { task: Subject::Task(12), open: false, keys: false }));
-        assert!(m.rail().iter().all(|cell| !cell.shown));
-        assert_eq!(m.refusal(&Action::TalkPick { id: Subject::Task(2) }, Origin::Socket), Some(agents::USERS_ALONE));
-        m.update(Action::TalkPick { id: Subject::Task(2) });
-        assert_eq!(m.talk.as_ref().map(|talk| (talk.task.task(), talk.open)), Some((Some(2), true)));
-        // A task that goes is off the rail.
-        m.update(Action::RestoreTasks { tasks: Vec::new(), floor: 12 });
-        assert!(order(&m).is_empty());
     }
 
     #[test]
@@ -11157,7 +11341,9 @@ mod tests {
         let change = |add: bool, text: &str| crate::settings::ListChange { key: "repos", add, text: text.into() };
         let notice = |text: &str| vec![Effect::Notice { text: text.into() }];
         let mut m = Model::default();
-        m.update(Action::SetRepoDirs { dirs: repos::RepoDirs { dirs: vec![dir("~/code", "/code")], fixed: false } });
+        m.update(Action::SetRepoDirs {
+            dirs: repos::RepoDirs { dirs: vec![dir("~/code", "/code")], fixed: false, worktrees: None },
+        });
         m.update(Action::SetRepos { repos: listed() });
         let add = |dir: &str, found: Vec<Repo>| Action::RepoAdd { dir: dir.into(), found };
         // A client writes no settings: refused, and nothing changes.
@@ -11169,19 +11355,46 @@ mod tests {
         let saved = vec![Effect::SaveRepos { changes: vec![change(true, "/src/zed")] }];
         assert_eq!(m.update(add("/src/zed", vec![repo("/src/zed")])), saved);
         assert_eq!(m.repo_dirs.dirs[1], dir("/src/zed", "/src/zed"));
-        assert_eq!((m.sidebar, m.mode(), m.list), (Some(Section::Repos), Mode::List, Some(2)));
-        assert_eq!(m.list_rows()[2], ListRow::Repo("/src/zed".into()));
+        assert_eq!((m.sidebar, m.mode(), m.list), (Some(Section::Repos), Mode::List, Some(4)));
+        assert_eq!(m.list_rows()[4], ListRow::Repo("/src/zed".into()));
         // Listed already, as itself or through `~/code`: selected, nothing written.
         m.update(Action::LeaveList);
-        assert_eq!((m.update(add("/src/zed", vec![repo("/src/zed")])), m.list), (vec![], Some(2)));
-        assert_eq!((m.update(add("/code/app", vec![repo("/code/app")])), m.list), (vec![], Some(0)));
+        assert_eq!((m.update(add("/src/zed", vec![repo("/src/zed")])), m.list), (vec![], Some(4)));
+        assert_eq!((m.update(add("/code/app", vec![repo("/code/app")])), m.list), (vec![], Some(1)));
         assert_eq!(m.repo_dirs.dirs.len(), 2);
         // Remove: only a directory named as itself. One held by `~/code` is the user's to edit.
         let through = "app is listed through ~/code: take that directory out of `repos` in settings.json";
         assert_eq!(m.update(Action::RepoRemove { path: "/code/app".into() }), notice(through));
-        let saved = vec![Effect::SaveRepos { changes: vec![change(false, "/src/zed")] }];
+        // Unlisted: said, as information, so nobody wonders whether files went.
+        let told = Effect::Told { text: "Unlisted zed · nothing on disk changed".into() };
+        let saved = vec![Effect::SaveRepos { changes: vec![change(false, "/src/zed")] }, told];
         assert_eq!(m.update(Action::RepoRemove { path: "/src/zed".into() }), saved);
         assert_eq!((m.repo_dirs.dirs.len(), m.repos.len(), m.repo_listed("/src/zed")), (1, 1, false));
+    }
+
+    #[test]
+    fn the_trash_asks_before_unlisting_a_repository_a_live_task_works_in() {
+        let dir = |text: &str| repos::RepoDir { text: text.into(), path: text.into() };
+        let mut m = Model::default();
+        m.update(Action::SetRepoDirs { dirs: repos::RepoDirs { dirs: vec![dir("/code/app")], ..Default::default() } });
+        m.update(Action::SetRepos { repos: listed() });
+        m.update(Action::TaskFromLine { line: "zoom >app-2".into(), known: Default::default(), open: false });
+        let remove = Action::RepoRemove { path: "/code/app".into() };
+        // Asked, and nothing written yet; Esc keeps it listed.
+        assert_eq!((m.update(remove.clone()), m.mode()), (vec![], Mode::Confirm));
+        assert_eq!(m.confirm.as_ref().map(Confirm::title).as_deref(), Some("Unlist this repository?"));
+        // Only the user answers: a client's ↵ is refused.
+        assert_eq!(m.refusal(&Action::QuitConfirm, Origin::Socket), Some(apps::USERS_ALONE));
+        m.update(Action::QuitCancel);
+        assert!(m.confirm.is_none() && m.repo_listed("/code/app"));
+        // ↵: unlisted, said, and the settings written.
+        m.update(remove);
+        let effects = m.update(Action::QuitConfirm);
+        assert!(
+            effects.contains(&Effect::Told { text: "Unlisted app · nothing on disk changed".into() }),
+            "{effects:?}"
+        );
+        assert!(!m.repo_listed("/code/app") && m.confirm.is_none());
     }
 
     #[test]
@@ -11202,6 +11415,159 @@ mod tests {
     fn listed() -> Vec<Repo> {
         let worktree = repos::Worktree { name: "app-2".into(), path: "/code/app-2".into(), branch: None };
         vec![Repo { name: "app".into(), path: "/code/app".into(), branch: None, worktrees: vec![worktree] }]
+    }
+
+    #[test]
+    fn a_repository_folds_under_its_name_and_shows_while_a_task_there_runs_or_needs_the_user() {
+        let mut m = Model::default();
+        let zed = Repo { name: "zed".into(), path: "/code/zed".into(), branch: None, worktrees: vec![] };
+        m.update(Action::SetRepos { repos: [listed(), vec![zed]].concat() });
+        m.update(Action::ToggleSection { section: Section::Repos });
+        let folded = |m: &Model| m.repos.iter().map(|repo| m.repo_folded(repo)).collect::<Vec<_>>();
+        let fold = |fold| Action::RepoFold { path: "/code/app".into(), fold };
+        // Anyone may fold: it changes what is drawn, not what runs. Folded, its rows are not list rows.
+        m.update(fold(None).sent_by(Origin::Socket));
+        assert_eq!(folded(&m), [true, false]);
+        let head = |path: &str| ListRow::RepoHead(path.into());
+        assert_eq!(m.list_rows(), [head("/code/app"), head("/code/zed"), ListRow::Repo("/code/zed".into())]);
+        m.update(fold(Some(true)));
+        assert_eq!(folded(&m), [true, false], "folding a folded one again leaves it folded");
+        // A task in its worktree runs: it shows, and is folded again once the task waits for later.
+        m.update(Action::TaskFromLine { line: "zoom >app-2".into(), known: Default::default(), open: false });
+        assert_eq!(folded(&m), [true, false], "a task filed for later shows nothing");
+        m.update(Action::TaskSetState { id: 1, state: State::Running });
+        assert_eq!(folded(&m), [false, false]);
+        m.update(Action::TaskSetState { id: 1, state: State::NeedsYou });
+        assert_eq!(folded(&m), [false, false]);
+        // The user folds it while the task needs them: it stays folded, until that ends; then
+        // a task that runs there again shows it again.
+        m.update(fold(None));
+        assert_eq!(folded(&m), [true, false]);
+        m.update(Action::TaskSetState { id: 1, state: State::Captured });
+        m.update(Action::TaskSetState { id: 1, state: State::Running });
+        assert_eq!(folded(&m), [false, false]);
+        // Unfolded for good: a task's end leaves it open.
+        m.update(fold(Some(false)));
+        m.update(Action::TaskSetState { id: 1, state: State::Captured });
+        assert_eq!(folded(&m), [false, false]);
+        assert!(m.repos_folded.is_empty());
+    }
+
+    #[test]
+    fn list_mode_folds_a_repository_on_its_name_and_keeps_the_selection_on_it() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        m.update(Action::ToggleSection { section: Section::Repos });
+        m.update(Action::FocusList);
+        m.update(Action::ListMove { delta: 1 }); // the worktree's row
+        assert_eq!((m.list, m.selected_repo().as_deref()), (Some(2), Some("/code/app")));
+        // ← folds the repository of the row: the selection goes to its name, and ↵ there unfolds.
+        m.update(Action::RepoFold { path: "/code/app".into(), fold: Some(true) });
+        assert_eq!((m.list_rows().len(), m.list), (1, Some(0)));
+        assert_eq!((m.update(Action::ListChoose { axis: Right }), m.list_rows().len(), m.list), (vec![], 3, Some(0)));
+        assert_eq!(m.selected_repo().as_deref(), Some("/code/app"));
+    }
+
+    #[test]
+    fn the_users_plus_takes_a_branch_and_asks_for_a_worktree_in_the_repositorys_folder() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        let edit = Action::WorktreeEdit { repo: "/code/app".into() };
+        // No folder for worktrees (a test run with no folder of its own): said, and no field.
+        assert_eq!(m.update(edit.clone()), [Effect::Notice { text: repos::WORKTREES_NONE.into() }]);
+        let dirs = repos::RepoDirs { worktrees: Some("/home/.ottospace/worktrees".into()), ..Default::default() };
+        m.update(Action::SetRepoDirs { dirs });
+        // A client's +, keys and ↵ do nothing with it.
+        assert_eq!(m.refusal(&edit, Origin::Socket), Some(repos::USERS_ALONE));
+        m.update(edit.clone().sent_by(Origin::Socket));
+        assert_eq!(m.mark_input, None);
+        m.update(Action::RepoFold { path: "/code/app".into(), fold: Some(true) });
+        m.update(edit);
+        // The field opens in the repository's rows, unfolded, and has the keyboard.
+        assert_eq!(
+            (m.mode(), m.field().map(|(of, _)| of), m.repo_folded(&m.repos[0])),
+            (Mode::Mark, Some("worktree"), false)
+        );
+        for origin in [Origin::Socket, Origin::System] {
+            let keys = Action::FieldEdit { edit: Edit::Insert("x".into()) };
+            assert_eq!(m.refusal(&keys, origin), Some(repos::USERS_ALONE));
+            assert_eq!(m.refusal(&Action::MarkSubmit, origin), Some(repos::USERS_ALONE));
+        }
+        // A name git would not take is said, and the field stays to fix it.
+        m.update(Action::FieldEdit { edit: Edit::Insert("-f".into()) });
+        let refused = m.update(Action::MarkSubmit);
+        assert_eq!(refused, [Effect::Notice { text: "A branch name cannot start with -".into() }]);
+        assert_eq!(m.field().map(|(_, field)| field.text()), Some("-f"));
+        m.update(Action::FieldEdit { edit: Edit::SelectAll });
+        m.update(Action::FieldEdit { edit: Edit::Insert("fix/zoom".into()) });
+        let path = "/home/.ottospace/worktrees/app/fix-zoom";
+        let asked = Effect::AddWorktree {
+            repo: "/code/app".into(),
+            branch: "fix/zoom".into(),
+            path: path.into(),
+            root: "/home/.ottospace/worktrees".into(),
+        };
+        assert_eq!((m.update(Action::MarkSubmit), &m.mark_input), (vec![asked], &None));
+        // Made: the list as read again, and a terminal there in a Workspace tab of its own.
+        let mut repos = listed();
+        repos[0].worktrees.push(repos::Worktree { name: "fix-zoom".into(), path: path.into(), branch: None });
+        let made = Action::WorktreeAdded { repo: "/code/app".into(), path: path.into(), repos };
+        assert_eq!(m.refusal(&made, Origin::Socket), Some(repos::USERS_ALONE));
+        assert_eq!(m.update(made.sent_by(Origin::System)), [Effect::Opened(1)]);
+        assert_eq!((m.pane(1).and_then(|p| p.cwd.as_deref()), m.space()), (Some(path), &Owner::Workspace));
+    }
+
+    #[test]
+    fn a_rows_pull_request_is_its_branch_s_and_only_the_users_click_opens_it() {
+        let mut m = Model::default();
+        let mut repos = listed();
+        repos[0].worktrees[0].branch = Some("fix/zoom".into());
+        m.update(Action::SetRepos { repos });
+        let pr = |number: u32, branch: &str, url: &str| crate::prs::Pr {
+            number,
+            head_ref_name: Some(branch.into()),
+            head_repository_owner: Some(crate::prs::Login { login: "o".into() }),
+            head_repository: Some(crate::prs::Named { name: "app".into() }),
+            url: Some(url.into()),
+            ..Default::default()
+        };
+        let prs = vec![pr(7, "fix/zoom", "https://github.com/o/app/pull/7"), pr(8, "main", "javascript:x")];
+        let branch = |path: &str, name: &str| crate::prs::Branch {
+            path: path.into(),
+            name: name.into(),
+            slug: Some("o/app".into()),
+            ..Default::default()
+        };
+        let branches = vec![branch("/code/app", "main"), branch("/code/app-2", "fix/zoom")];
+        let set = Action::SetPrs { repo: "/code/app".into(), prs, branches };
+        assert_eq!(m.refusal(&set, Origin::Socket), Some("only ottospace reads pull requests"));
+        m.update(set.sent_by(Origin::System));
+        assert_eq!(m.checkout_pr("/code/app-2").map(|pr| pr.number), Some(7));
+        assert_eq!(m.checkout_pr("/code/elsewhere"), None);
+        let open = |path: &str| Action::PrOpen { path: path.into() };
+        assert_eq!(m.refusal(&open("/code/app-2"), Origin::Socket), Some(crate::prs::USERS_ALONE));
+        assert_eq!(m.update(open("/code/app-2")), [Effect::OpenPr { url: "https://github.com/o/app/pull/7".into() }]);
+        // A link that is not a plain GitHub pull request's never opens.
+        assert_eq!(m.update(open("/code/app")), []);
+        // Switched to another branch since the read: not that pull request's row any more.
+        let mut switched = listed();
+        switched[0].worktrees[0].branch = Some("other".into());
+        m.update(Action::SetRepos { repos: switched });
+        assert_eq!(m.checkout_pr("/code/app-2"), None);
+        // A read with nothing to match (gh off, or failed) leaves no marks, and nothing kept.
+        m.update(Action::SetPrs { repo: "/code/app".into(), prs: Vec::new(), branches: Vec::new() });
+        assert!(m.prs.is_empty());
+    }
+
+    #[test]
+    fn the_branch_field_closes_when_its_repository_is_no_longer_listed() {
+        let mut m = Model::default();
+        m.update(Action::SetRepoDirs { dirs: repos::RepoDirs { worktrees: Some("/w".into()), ..Default::default() } });
+        m.update(Action::SetRepos { repos: listed() });
+        m.update(Action::WorktreeEdit { repo: "/code/app".into() });
+        assert_eq!(m.field().map(|(of, _)| of), Some("worktree"));
+        m.update(Action::SetRepos { repos: Vec::new() }.sent_by(Origin::System));
+        assert_eq!(m.mark_input, None);
     }
 
     #[test]
@@ -11847,7 +12213,10 @@ mod tests {
         assert_eq!(m.update(Action::QuitConfirm), [], "no question, no answer");
         assert_eq!(m.update(Action::QuitAsked { running: vec![running(1, "sleep")] }), []);
         assert_eq!(m.mode(), Mode::Confirm);
-        assert_eq!(m.confirm, Some(Confirm { running: vec![running(1, "sleep")], dismiss: None, paste: None }));
+        assert_eq!(
+            m.confirm,
+            Some(Confirm { running: vec![running(1, "sleep")], dismiss: None, paste: None, unlist: None })
+        );
         assert_eq!(m.update(Action::QuitConfirm), [Effect::Quit]);
     }
 
@@ -11991,7 +12360,10 @@ mod tests {
         m.update(Action::Close { pane: Some(3) });
         assert_eq!(m.confirm.as_ref().map(|c| c.running.len()), Some(2), "pane 3 ran nothing");
         m.update(Action::Close { pane: Some(1) });
-        assert_eq!(m.confirm, Some(Confirm { running: vec![running(2, "vim")], dismiss: None, paste: None }));
+        assert_eq!(
+            m.confirm,
+            Some(Confirm { running: vec![running(2, "vim")], dismiss: None, paste: None, unlist: None })
+        );
         // Nothing left to ask about: no question, and no quit either.
         let effects = m.update(Action::Close { pane: Some(2) });
         assert!(!effects.contains(&Effect::Quit), "{effects:?}");
@@ -12044,7 +12416,6 @@ mod tests {
                     _ if of_workbooks(action) => Some(workbook::USERS_ALONE),
                     Action::TaskTalk { .. }
                     | Action::SessionOpen { .. }
-                    | Action::TalkPick { .. }
                     | Action::TalkStart
                     | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
                     Action::TabPlace { .. } => Some(TABS_USERS),
@@ -12066,6 +12437,12 @@ mod tests {
                     Action::SettingsRead { .. } if origin == Origin::Socket => {
                         Some("only ottospace reads settings.json")
                     }
+                    Action::EditorOpen | Action::EditorKeys { .. } => Some(editor::USERS_ALONE),
+                    Action::EditorDone { .. } if origin == Origin::Socket => Some(editor::SHELLS_ALONE),
+                    Action::WorktreeEdit { .. } => Some(crate::repos::USERS_ALONE),
+                    Action::WorktreeAdded { .. } if origin == Origin::Socket => Some(crate::repos::USERS_ALONE),
+                    Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
+                    Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
                     _ => action.takes_keyboard().then_some(CONFIRM_UP),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");
@@ -12109,7 +12486,10 @@ mod tests {
         assert_eq!((m.mode(), ids(&m)), (Mode::Confirm, vec![1, 2]));
         // A shell exits: its pane drops off the list.
         m.update(Action::Close { pane: Some(1) }.sent_by(Origin::System));
-        assert_eq!(m.confirm, Some(Confirm { running: vec![running(2, "vim")], dismiss: None, paste: None }));
+        assert_eq!(
+            m.confirm,
+            Some(Confirm { running: vec![running(2, "vim")], dismiss: None, paste: None, unlist: None })
+        );
         // A client may not take the keyboard from under it, nor ask again as the user's yes.
         for taking in [Action::ToggleKeys, Action::Enter { pane: 2 }, ask.clone()] {
             assert_eq!(m.refusal(&taking, Origin::Socket), Some(CONFIRM_UP), "{taking:?}");
@@ -12145,16 +12525,22 @@ mod tests {
             running: vec![Running { pane: 4, program: None, background: false }],
             dismiss: None,
             paste: None,
+            unlist: None,
         };
         assert_eq!((one.title().as_str(), one.lines()), ("1 terminal is running", vec!["pane 4".to_string()]));
         let job = Confirm {
             running: vec![Running { pane: 2, program: Some("sleep".into()), background: true }],
             dismiss: None,
             paste: None,
+            unlist: None,
         };
         assert_eq!(job.lines(), ["pane 2 · sleep (background)"]);
-        let seven =
-            Confirm { running: (1..=7).map(|pane| running(pane, "claude")).collect(), dismiss: None, paste: None };
+        let seven = Confirm {
+            running: (1..=7).map(|pane| running(pane, "claude")).collect(),
+            dismiss: None,
+            paste: None,
+            unlist: None,
+        };
         assert_eq!(seven.title(), "7 terminals are running");
         let lines = seven.lines();
         assert_eq!((lines.len(), lines[0].as_str(), lines[5].as_str()), (6, "pane 1 · claude", "and 2 more"));

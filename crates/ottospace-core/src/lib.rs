@@ -31,6 +31,7 @@ pub mod marks;
 pub mod model;
 pub mod palette;
 pub mod progress;
+pub mod prs;
 pub mod repos;
 pub mod restore;
 pub mod rules;

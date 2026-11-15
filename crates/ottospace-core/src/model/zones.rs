@@ -1,6 +1,6 @@
 //! Directional focus across the window's zones: left of the panes the section list, then the
-//! left rail; right of them the drawer, then the right rail. The user's alone: a client's
-//! focus move stops at the panes, as before.
+//! left rail; right of them the drawer. The user's alone: a client's focus move stops at the
+//! panes, as before.
 
 use serde::Serialize;
 
@@ -13,14 +13,11 @@ use crate::model::PaneId;
 pub const SECTIONS: [Section; 6] =
     [Section::Tasks, Section::Calendar, Section::Apps, Section::Workbook, Section::Repos, Section::Marks];
 
-/// A rail that has the keyboard, in list mode as the section list does.
+/// The rail when it has the keyboard, in list mode as the section list does: a section's cell.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RailFocus {
-    /// A section's cell on the left rail.
     Left(Section),
-    /// A cell of the right rail, by place: its conversations (`Model::rail`), then `+`.
-    Right(usize),
 }
 
 /// Where the keyboard is, for the state reply and the property test.
@@ -35,7 +32,6 @@ pub enum Target {
     Drawer,
     /// The accessibility inspector in the drawer's place: its rows.
     Inspector,
-    Right(usize),
     /// No pane, and nothing else has it.
     Nothing,
 }
@@ -59,7 +55,6 @@ impl Model {
     pub fn focus_target(&self) -> Target {
         match self.rail_focus {
             Some(RailFocus::Left(section)) => Target::Rail(section),
-            Some(RailFocus::Right(at)) => Target::Right(at),
             None if self.list.is_some() => Target::List(self.list.unwrap_or_default()),
             None if self.inspector.as_ref().is_some_and(|inspector| inspector.filtering) => Target::Inspector,
             None if self.talk.as_ref().is_some_and(|talk| talk.keys) || self.drawer_compose() => Target::Drawer,
@@ -79,18 +74,9 @@ impl Model {
                 Dir::Right => self.open_section(section, effects),
                 Dir::Left => {}
             },
-            (Action::FocusDir { dir }, Some(RailFocus::Right(at))) => match dir {
-                Dir::Up | Dir::Down => self.rail_move(if *dir == Dir::Up { -1 } else { 1 }),
-                Dir::Left => self.show_cell(at, effects),
-                Dir::Right => {}
-            },
             (Action::ListMove { delta }, Some(_)) => self.rail_move(*delta),
             (Action::ListChoose { .. }, Some(RailFocus::Left(section))) => self.open_section(section, effects),
-            (Action::ListChoose { .. }, Some(RailFocus::Right(at))) => self.show_cell(at, effects),
-            (Action::LeaveList, Some(focus)) => {
-                let side = if matches!(focus, RailFocus::Right(_)) { Dir::Right } else { Dir::Left };
-                self.back_to_pane(side, effects)
-            }
+            (Action::LeaveList, Some(_)) => self.back_to_pane(Dir::Left, effects),
             // Other list keys (Tab, s, h, x) do nothing on a rail.
             (Action::ListSection { .. } | Action::ListSnooze { .. } | Action::ListHold, Some(_)) => {}
             (Action::ListDismiss | Action::ListUndo | Action::ListPin | Action::ListReorder { .. }, Some(_)) => {}
@@ -101,10 +87,8 @@ impl Model {
             (Action::FocusDir { dir: Dir::Right }, None) if self.list.is_some() => {
                 self.back_to_pane(Dir::Left, effects)
             }
-            (Action::FocusDir { dir: Dir::Right }, None) if self.in_right_zone() => {
-                self.leave_right_zone(effects);
-                self.rail_focus = Some(RailFocus::Right(self.shown_cell()));
-            }
+            // The drawer is the last zone on the right.
+            (Action::FocusDir { dir: Dir::Right }, None) if self.in_right_zone() => {}
             (Action::FocusDir { dir: Dir::Left }, None) if self.in_right_zone() => {
                 self.leave_right_zone(effects);
                 self.back_to_pane(Dir::Right, effects);
@@ -121,8 +105,6 @@ impl Model {
                     self.act(Action::InspectorFilter { on: true }, effects);
                 } else if self.talk.as_ref().is_some_and(|talk| talk.open && self.agent_runs(&talk.task)) {
                     self.talk_keys(true, effects);
-                } else {
-                    self.rail_focus = Some(RailFocus::Right(self.shown_cell()));
                 }
             }
             _ => return false,
@@ -165,12 +147,7 @@ impl Model {
         }
     }
 
-    /// The right rail's cell of the conversation the drawer shows, else its first.
-    fn shown_cell(&self) -> usize {
-        self.rail().iter().position(|cell| cell.shown).unwrap_or(0)
-    }
-
-    /// Up (negative) or down a rail, wrapping. The right rail's last place is its `+`.
+    /// Up (negative) or down the rail, wrapping.
     fn rail_move(&mut self, delta: i32) {
         let step = |at: usize, len: usize| (at as i64 + i64::from(delta)).rem_euclid(len as i64) as usize;
         self.rail_focus = match self.rail_focus {
@@ -179,7 +156,6 @@ impl Model {
                 let at = sections.iter().position(|s| *s == section).unwrap_or(0);
                 Some(RailFocus::Left(sections[step(at, sections.len())]))
             }
-            Some(RailFocus::Right(at)) => Some(RailFocus::Right(step(at, self.rail().len() + 1))),
             None => None,
         };
     }
@@ -191,24 +167,6 @@ impl Model {
         let kept = self.list_kept.0.filter(|(of, _)| *of == section).map(|(_, row)| row);
         let rows = self.list_rows().len();
         self.list = Some(kept.filter(|row| *row < rows).unwrap_or_else(|| self.first_row()));
-    }
-
-    /// The right rail's cell at `at`: its conversation in the drawer, with the keyboard; `+`
-    /// opens the new task.
-    fn show_cell(&mut self, at: usize, effects: &mut Vec<Effect>) {
-        self.rail_focus = None;
-        match self.rail().get(at) {
-            Some(cell) if cell.shown => {
-                if let Some(talk) = &mut self.talk {
-                    talk.open = true;
-                }
-                // The conversation takes its place back from the inspector, as a pick of it does.
-                self.inspector = None;
-                self.talk_keys(true, effects);
-            }
-            Some(cell) => self.act(Action::TalkPick { id: cell.task.clone() }, effects),
-            None => self.act(Action::OpenCompose { text: String::new() }, effects),
-        }
     }
 
     /// Back from a zone to the focused pane, the one it was entered from (nothing in a zone
@@ -235,9 +193,6 @@ impl Model {
             || self.mark_input.is_some();
         if taken {
             self.rail_focus = None;
-        }
-        if let Some(RailFocus::Right(at)) = self.rail_focus {
-            self.rail_focus = Some(RailFocus::Right(at.min(self.rail().len())));
         }
     }
 }
@@ -285,31 +240,13 @@ mod tests {
         assert_eq!((rail, m.focus_target()), (Target::Rail(Section::Apps), Target::Pane(1)));
     }
 
-    #[test]
-    fn right_goes_to_the_right_rail_and_left_comes_back() {
-        let mut m = Model::default();
-        m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
-        m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
-        // No conversation runs: the right rail, on its `+`.
-        assert_eq!(user(&mut m, Dir::Right), Target::Right(0));
-        m.update(Action::ListMove { delta: 1 }.sent_by(Origin::User));
-        assert_eq!(m.focus_target(), Target::Right(0), "one place: it wraps onto itself");
-        // ← on `+`: the new task, in the drawer. ← again: back to the pane.
-        assert_eq!(user(&mut m, Dir::Left), Target::Drawer);
-        assert_eq!(user(&mut m, Dir::Left), Target::Pane(2));
-        // → from the drawer: the right rail.
-        m.update(Action::OpenCompose { text: "half".into() });
-        assert_eq!(user(&mut m, Dir::Right), Target::Right(0));
-        assert_eq!(m.compose, None, "the line is put aside");
-    }
-
     /// A click on a pane while a rail had the keyboard left the keys with the rail.
     #[test]
     fn a_pane_taken_another_way_takes_the_keyboard_from_the_rail() {
         let mut m = Model::default();
         m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
         m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
-        user(&mut m, Dir::Right);
+        user(&mut m, Dir::Left);
         m.update(Action::Focus { pane: 1 }.sent_by(Origin::User));
         assert_eq!((m.focus_target(), m.mode()), (Target::Pane(1), Mode::Normal));
         // A list left by Esc comes back on its row.
@@ -334,24 +271,20 @@ mod tests {
         assert_eq!((first, user(&mut m, Dir::Left)), (Target::List(1), Target::List(2)));
         m.update(Action::LeaveList.sent_by(Origin::User));
         m.update(Action::CloseSidebar.sent_by(Origin::User));
-        // Esc on the right rail goes back to a pane on the right: the one focused.
+        // Esc on the rail goes back to the pane focused.
         assert_eq!(user(&mut m, Dir::Left), Target::Rail(Section::Tasks));
         m.update(Action::LeaveList.sent_by(Origin::User));
         assert_eq!(m.focus_target(), Target::Pane(1));
     }
 
     #[test]
-    fn with_the_inspector_open_right_goes_into_its_rows_then_the_right_rail() {
+    fn with_the_inspector_open_right_goes_into_its_rows_and_left_comes_back() {
         let mut m = Model::default();
         m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
         m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
         m.update(Action::InspectorOpen { pane: 2, app: "Notes".into() });
         assert_eq!((user(&mut m, Dir::Right), m.mode()), (Target::Inspector, Mode::Inspect));
-        assert_eq!(user(&mut m, Dir::Right), Target::Right(0));
-        assert!(m.inspector.as_ref().is_some_and(|inspector| !inspector.filtering));
-        // Back: the inspector's rows, then the pane.
-        user(&mut m, Dir::Right);
-        m.update(Action::LeaveList.sent_by(Origin::User));
+        // Nothing lies beyond it.
         assert_eq!(user(&mut m, Dir::Right), Target::Inspector);
         assert_eq!(user(&mut m, Dir::Left), Target::Pane(2));
     }

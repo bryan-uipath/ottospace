@@ -45,9 +45,7 @@ use ottospace_core::scrollbar::{Extent, key_step};
 use ottospace_core::settings::{Installed, Level};
 use ottospace_core::sneak::{SneakKey, sneak_key};
 use ottospace_core::tasks::{Assign, Group, Heading, MAX_TITLE, State, Task, TaskId, TaskRow};
-use ottospace_core::terminal::{
-    CellPoint, VisualKey, cell_at, clears_selection, edge_scroll, press, scroll_key, visual_key,
-};
+use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, clears_selection, edge_scroll, press, visual_key};
 use ottospace_core::{
     Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Origin, Pane, PaneId, PickItem, Picker, Rect, Section, Zone,
     theme,
@@ -62,6 +60,7 @@ mod app_wheel;
 mod apps;
 mod ax_debug;
 mod calendar;
+mod child;
 mod clipboard;
 mod collect;
 mod commands;
@@ -70,6 +69,7 @@ mod confirm;
 mod control;
 mod conversation;
 mod dialog;
+mod editor;
 mod features;
 mod field;
 mod give_back;
@@ -82,6 +82,7 @@ mod marks;
 mod menus;
 mod new_task;
 mod progress;
+mod prs;
 mod record;
 mod repos;
 mod running;
@@ -97,6 +98,7 @@ mod terminal;
 mod trace;
 mod words;
 mod workbook;
+mod worktree;
 use control::{Call, MouseAction, PaneKind, Request};
 use terminal::Terminal;
 
@@ -382,6 +384,7 @@ impl AssetSource for Assets {
             "icons/split-down.svg" => Some(include_bytes!("../assets/icons/split-down.svg")),
             "icons/plus.svg" => Some(include_bytes!("../assets/icons/plus.svg")),
             "icons/dismiss.svg" => Some(include_bytes!("../assets/icons/dismiss.svg")),
+            "icons/trash.svg" => Some(include_bytes!("../assets/icons/trash.svg")),
             _ => None,
         };
         Ok(bytes.map(Into::into))
@@ -401,7 +404,17 @@ static RETURN_KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// Height of the top bar (the native title strip, so all of it drags the window), and the width
 /// it keeps clear on the left for the traffic lights.
-const TOP_BAR: f32 = 28.;
+const TOP_BAR: f32 = 40.;
+/// The second row: the selected space's tabs.
+const SPACE_TABS: f32 = 30.;
+/// How narrow a space of the top row gets before the row clips, and how wide.
+const MIN_SPACE: f32 = 72.;
+/// What a space wants with its title: past the row's room for that many, the others are badges.
+const TITLED_SPACE: f32 = 150.;
+const MAX_SPACE: f32 = 220.;
+/// A space drawn as its badge alone, and Workspace with its name.
+const BADGE_SPACE: f32 = 36.;
+const NAMED_WORKSPACE: f32 = 96.;
 const TRAFFIC_LIGHTS: f32 = 80.;
 /// The narrowest a tab shrinks to when the strip is full: a few letters of its title and its ×.
 const MIN_TAB: f32 = 80.;
@@ -491,6 +504,8 @@ enum Mark {
     Header(PaneId),
     Close(PaneId),
     Tab(usize),
+    /// A space of the top row, by its place there.
+    Space(usize),
     /// A repository's name in the Repos section, by its place in `model.repos`.
     Repo(usize),
     /// A checkout's row in the Repos section, by its place in the list.
@@ -539,6 +554,8 @@ actions!(
 );
 // The picker for a pane below the focused one.
 actions!(ottospace, [PickPaneDown]);
+// The top row: the next or previous space, and hiding the selected one.
+actions!(ottospace, [NextSpace, PrevSpace, HideSpace]);
 // Pane arrangement.
 actions!(
     ottospace,
@@ -556,10 +573,10 @@ actions!(ottospace, [SaveWorkbook, AddTabToWorkbook, SaveAllWorkbook]);
 actions!(ottospace, [StartFresh]);
 // What the capture key does, from the menu.
 actions!(ottospace, [CapturePane]);
-// The right drawer: the keyboard in or out, closed to the rail or open, the task's workspace.
-actions!(ottospace, [TalkFocus, TalkToggle, TalkGo, StopAgent]);
+// The right drawer: the keyboard in or out, closed or open, the task's workspace.
+actions!(ottospace, [TalkFocus, TalkToggle, TalkGo, StopAgent, EditMessage]);
 // A tab of no task, and the tab on show taken out of its task or moved to another.
-actions!(ottospace, [RemoveTabFromTask, MoveTabToTask]);
+actions!(ottospace, [MoveTabToTask]);
 // App menu.
 actions!(ottospace, [Quit, Hide, About]);
 
@@ -612,6 +629,10 @@ fn keymap() -> Vec<KeyBinding> {
         // Tabs. ⌘1..⌘9 select one (handled in `key_down`).
         KeyBinding::new("cmd-t", NewTab, None),
         KeyBinding::new("cmd-}", NextTab, None),
+        // The top row: ⌘⌃1..⌘⌃9 select a space (`key_down`).
+        KeyBinding::new("cmd-ctrl-]", NextSpace, None),
+        KeyBinding::new("cmd-ctrl-[", PrevSpace, None),
+        KeyBinding::new("cmd-ctrl-w", HideSpace, None),
         KeyBinding::new("cmd-{", PrevTab, None),
         KeyBinding::new("ctrl-tab", NextTab, None),
         KeyBinding::new("ctrl-shift-tab", PrevTab, None),
@@ -793,6 +814,15 @@ struct Workspace {
     tags: Option<tags::Reader>,
     /// The repository the agents and skills were last asked for, while the new-task box is open.
     tags_repo: Option<Option<String>>,
+    /// Worktrees asked for (`Effect::AddWorktree`) and made, or not, off the main thread.
+    worktrees: (Sender<worktree::Made>, Receiver<worktree::Made>),
+    /// What the user's last step did, said for a few seconds as information (`Effect::Told`).
+    told: Option<(String, Instant)>,
+    /// Pull requests read with gh; why none are, when the settings say `"repos_prs": "on"`; how many
+    /// the user opened (a test run counts them and opens none).
+    prs: prs::Reader,
+    pr_note: Option<&'static str>,
+    pr_opens: u32,
     /// Socket calls that file a task and wait for the reader: (the call's number, what to file, where to reply).
     filing: Vec<(u64, Filing, Sender<String>)>,
     /// How many such calls there were: each has its own number.
@@ -867,6 +897,8 @@ const E2E_SLIVER: f32 = 12.;
 
 /// How long the `s` key snoozes a task: one hour.
 const SNOOZE_MS: u64 = 3_600_000;
+/// How long a step's information (`Effect::Told`) stays in the status bar.
+const TOLD_FOR: Duration = Duration::from_secs(8);
 
 /// Longest a `wait` request may run: 10 minutes.
 const MAX_WAIT_MS: u64 = 600_000;
@@ -1035,6 +1067,8 @@ impl Workspace {
                             this.check_peek(window, cx);
                         }
                         this.tick_timeline(window, cx);
+                        this.take_worktrees(window, cx);
+                        this.tick_prs(window, cx);
                     });
                     this.take_snapshots(window, cx);
                     if this.hosted.values().any(|h| h.latest.dirty.swap(false, Relaxed)) {
@@ -1088,6 +1122,8 @@ impl Workspace {
         // The first problem found at start, for the status bar: settings, the font, then tasks.
         let unread = (unread > 0).then(|| format!("tasks: {unread} file(s) in the tasks folder could not be read"));
         let notice = config::get().error.clone().or(terminal::choose_font(window)).or(kept.error).or(unread);
+        // A crashed run's drafts are deleted, not restored.
+        editor::sweep();
         // What `settings.json` says at start: what is wrong in it stays in the status bar until mended.
         let settings_read = config::settings_stamp();
         if let Some(text) = config::get().home.as_ref().map(|_| config::settings_text().unwrap_or_default()) {
@@ -1154,6 +1190,11 @@ impl Workspace {
             minute: 0,
             tags: tags::Reader::start(),
             tags_repo: None,
+            worktrees: std::sync::mpsc::channel(),
+            told: None,
+            prs: prs::Reader::new(),
+            pr_note: None,
+            pr_opens: 0,
             filing: Vec::new(),
             calls: 0,
             sessions: sessions::Poller::start(),
@@ -1410,8 +1451,32 @@ impl Workspace {
                         self.error = Some(format!("{}{why}", Self::NOT_WRITTEN));
                     }
                 }
-                Effect::SaveRepos { changes } => self.save_apps(changes),
+                // Later reads of the list look where the model now does (also after "Unlist?" is
+                // answered); a file not written leaves them as the settings are.
+                Effect::SaveRepos { changes } => {
+                    let said = self.error.take();
+                    self.save_apps(changes);
+                    let failed = self.error.as_ref().is_some_and(|error| error.starts_with(Self::NOT_WRITTEN));
+                    self.error = self.error.take().or(said);
+                    if failed {
+                        self.model.update(Action::SetRepoDirs { dirs: config::repo_dirs() }.sent_by(Origin::System));
+                        self.model.update(Action::SetRepos { repos: repos::scan() }.sent_by(Origin::System));
+                    } else {
+                        config::set_repo_roots(&self.model.repo_dirs);
+                    }
+                }
+                Effect::OpenPr { url } if ottospace_core::prs::openable(url) => match std::env::var_os("OTTOSPACE_E2E")
+                {
+                    Some(_) => self.pr_opens += 1,
+                    None => drop(ottospace_mac::meeting::open_url(url)),
+                },
+                Effect::OpenPr { .. } => {}
+                Effect::AddWorktree { repo, branch, path, root } => {
+                    let done = self.worktrees.0.clone();
+                    worktree::start(repo.clone(), branch.clone(), path.clone(), root.clone(), done);
+                }
                 Effect::Notice { text } => self.error = Some(text.clone()),
+                Effect::Told { text } => self.told = Some((text.clone(), Instant::now())),
                 // A picture of the pane is asked for: the cursor's going scrolls the terminal to
                 // its bottom, so it waits until the picture of what is on show is taken.
                 Effect::Visual { pane, on: false } if self.snapshot_pending(*pane) => self.visual_after.push(*pane),
@@ -1440,6 +1505,13 @@ impl Workspace {
                 }
                 // Carried out with its pane's `Opened`, before the shell starts.
                 Effect::History { .. } | Effect::EditSettings { .. } => {}
+                Effect::OpenEditor { text } => {
+                    if let Err(why) = self.open_editor(text) {
+                        self.error = Some(why);
+                        agents.push(Action::EditorDone { saved: None, more: false });
+                    }
+                }
+                Effect::Clip { text } => self.copy_text(text.clone(), None, Verb::Copied, cx),
                 Effect::ApplySettings { settings } => {
                     self.apply_features(settings, cx);
                     config::set_live(settings.as_ref().clone())
@@ -1626,7 +1698,10 @@ impl Workspace {
         let start = start.or(error(self.kept_layout.notice.clone()));
         let unsaved = self.unsaved.clone().or(self.kept_marks.unsaved.clone()).or(self.kept_workbooks.unsaved.clone());
         let unsaved = unsaved.or(self.kept_layout.unsaved.clone());
-        error(self.error.clone()).or(error(unsaved)).or(start)
+        let editor = self.model.editor_note().map(|text| (text.to_string(), Level::Info));
+        let told =
+            self.told.as_ref().filter(|(_, at)| at.elapsed() < TOLD_FOR).map(|(text, _)| (text.clone(), Level::Info));
+        error(self.error.clone()).or(error(unsaved)).or(told).or(start).or(editor)
     }
 
     /// Reads `settings.json` again once a change to it has held for one look: a file an editor
@@ -2263,22 +2338,27 @@ impl Workspace {
         self.model.tasks.inbox().into_iter().map(row).collect()
     }
 
-    /// The Repos section as laid out: each repository's `name` and `path` with its `header`, and
-    /// its `rows` (a checkout's `path`, `branch`, `default`, `label`) each with its `row`. Rects
-    /// are in window points, scrolled out of view or not; null while the section is not drawn.
+    /// The Repos section as laid out: each repository's `name` and `path` with its `header`,
+    /// whether it is drawn `folded`, and its `rows` (a checkout's `path`, `branch`, `default`,
+    /// `label`) each with its `row`. Rects are in window points, scrolled out of view or not; null
+    /// while the section is not drawn (a folded repository's rows too).
     fn repos_bar(&self) -> Vec<serde_json::Value> {
         let marks = self.marks.borrow();
         let drawn = |mark: Mark| marks.get(&mark).copied().map(rect);
         let mut index = 0;
         let group = |(n, repo): (usize, &Repo)| {
             let row = |checkout: Checkout| {
+                // Its pull request by numbers and kinds: no title, name or link.
+                let pr = self.model.checkout_pr(&checkout.path).map(ottospace_core::prs::Pr::summary);
                 let mut row = serde_json::json!(checkout);
+                row["pr"] = serde_json::json!(pr);
                 row["row"] = serde_json::json!(drawn(Mark::Checkout(index)));
                 index += 1;
                 row
             };
             let rows: Vec<serde_json::Value> = repo.checkouts().into_iter().map(row).collect();
-            serde_json::json!({ "name": repo.name, "path": repo.path, "header": drawn(Mark::Repo(n)), "rows": rows })
+            let (header, folded) = (drawn(Mark::Repo(n)), self.model.repo_folded(repo));
+            serde_json::json!({ "name": repo.name, "path": repo.path, "header": header, "folded": folded, "rows": rows })
         };
         self.model.repos.iter().enumerate().map(group).collect()
     }
@@ -2653,8 +2733,12 @@ impl Workspace {
         let marked = |key: fn(PaneId) -> Mark| -> BTreeMap<PaneId, [f32; 4]> {
             drawn.iter().filter_map(|id| Some((*id, rect(*marks.get(&key(*id))?)))).collect()
         };
-        let tabs: Vec<[f32; 4]> =
-            (0..self.model.tabs.len()).filter_map(|place| marks.get(&Mark::Tab(place)).copied().map(rect)).collect();
+        // By place in `state.tabs`: null for a tab not drawn (one row shows one space's tabs).
+        let tabs: Vec<Option<[f32; 4]>> =
+            (0..self.model.tabs.len()).map(|place| marks.get(&Mark::Tab(place)).copied().map(rect)).collect();
+        let spaces: Vec<Option<[f32; 4]>> = (0..self.model.shown_spaces().len())
+            .map(|place| marks.get(&Mark::Space(place)).copied().map(rect))
+            .collect();
         let previews = self.hosted.iter().map(|(id, h)| (*id, h.preview.clone())).collect();
         let shown = drawn_rects(&previews);
         let terminals: BTreeMap<PaneId, serde_json::Value> = self
@@ -2694,6 +2778,8 @@ impl Workspace {
             "titles": drawn.iter().filter_map(|id| Some((*id, self.pane_title(self.model.pane(*id)?)))).collect::<BTreeMap<_, _>>(),
             "closes": marked(Mark::Close),
             "tabs": tabs,
+            // Each space of the top row, by its place there.
+            "space_rects": spaces,
             // The left column's title strip, and the open section's header (null: none open).
             "strip": marks.get(&Mark::Strip).copied().map(rect),
             "bar_header": marks.get(&Mark::BarHeader).copied().map(rect),
@@ -2725,6 +2811,8 @@ impl Workspace {
             "notice_level": status.as_ref().map(|(_, level)| level),
             // How many problems the last read of `settings.json` found.
             "settings_errors": self.model.settings_errors(),
+            // The user's editor on a draft (⌃G): what it edits, never the text. Null: none runs.
+            "editor": self.editor_snapshot(),
             // Each hosted window's real frame, in the same global coordinates as `parking`.
             "hosted": hosted,
             // Each hosted pane's title-bar crop in points (0: none).
@@ -2812,6 +2900,8 @@ impl Workspace {
             // layout sync read a hosted window's frame over accessibility.
             "counts": std::env::var_os("OTTOSPACE_E2E").map(|_| serde_json::json!({
                 "live": self.went_live,
+                // Pull requests the user's click opened (a test run opens none).
+                "pr_opens": self.pr_opens,
                 "frame_reads": self.hosted.values().map(|h| h.frame_reads).sum::<u64>(),
                 // Scrolls over an app pane's picture, peeks they started, and the one on now (its pane; 0:
                 // none).
@@ -2859,7 +2949,7 @@ impl Workspace {
             // The top row's spaces, hidden ones too: whose (`of`), `hidden`, `selected`, and
             // `tabs` as places; and each live task's badge letters.
             "spaces": self.model.space_rows(),
-            "badges": self.model.badges(&[]).into_iter().filter_map(|(subject, mono)| Some((subject.task()?.to_string(), serde_json::Value::from(mono)))).collect::<serde_json::Map<String, serde_json::Value>>(),
+            "badges": self.model.badges().into_iter().filter_map(|(subject, mono)| Some((subject.task()?.to_string(), serde_json::Value::from(mono)))).collect::<serde_json::Map<String, serde_json::Value>>(),
             // The meeting timeline: counts, times and stages only, never a title or a place.
             "calendar": self.calendar_snapshot(),
             // Frames drawn (`number`), actions dispatched (`seq`) and how many of them the last
@@ -3281,14 +3371,16 @@ impl Workspace {
             cx.stop_propagation();
             return;
         }
-        // ⌘⇧⌥1..9 move the focused pane to a tab. GPUI gives no physical key, so the shifted
-        // characters are trusted on a US layout only (see `move_to_tab_key`).
+        // ⌘⇧⌥1..9 move the focused pane to a tab of the selected space, as ⌘1..9 count them. GPUI
+        // gives no physical key, so the shifted characters are trusted on a US layout only.
         let m = key.modifiers;
         let us_layout = matches!(cx.keyboard_layout().id(), "com.apple.keylayout.US" | "com.apple.keylayout.ABC");
         let place = keys::move_to_tab_key(&key.key, m.shift, us_layout);
-        if let Some(tab) = place.filter(|_| m.platform && m.alt && !m.control) {
+        if let Some(place) = place.filter(|_| m.platform && m.alt && !m.control) {
             self.key_used(Binding::MoveToTab);
-            self.dispatch(Action::MovePane { pane: None, tab }, self.input, window, cx);
+            if let Some(tab) = self.model.visible_tab(place) {
+                self.dispatch(Action::MovePane { pane: None, tab }, self.input, window, cx);
+            }
             cx.stop_propagation();
             return;
         }
@@ -3301,14 +3393,14 @@ impl Workspace {
             cx.stop_propagation();
             return;
         }
-        // ⌘⌃1..⌘⌃9 show one of the right rail's conversations.
+        // ⌘⌃1..⌘⌃9 select a space of the top row.
         if let Some(digit) = digit.filter(|_| m.platform && m.control && !m.alt && !m.shift) {
-            self.key_used(Binding::RailNumber);
-            self.rail_key(digit - 1, window, cx);
+            self.key_used(Binding::SpaceNumber);
+            self.dispatch(Action::SpaceSelect { index: digit - 1 }, self.input, window, cx);
             cx.stop_propagation();
             return;
         }
-        // ⌘1..⌘9 select a tab.
+        // ⌘1..⌘9 select a tab of the selected space.
         if key.modifiers.platform
             && let Some(digit) = key.key.parse::<usize>().ok().filter(|d| (1..=9).contains(d))
         {
@@ -3336,6 +3428,10 @@ impl Workspace {
         if self.model.mode() == Mode::Inspect {
             self.inspector_key(event, window, cx);
             return;
+        }
+        // The drawer's editor has the keyboard: every key but a ⌘ shortcut is its.
+        if self.model.editor_keys() {
+            return self.editor_key(event, cx);
         }
         if self.model.compose_keys() {
             self.compose_key(event, window, cx);
@@ -3366,16 +3462,7 @@ impl Workspace {
             cx.stop_propagation();
             return;
         }
-        if let Some(scroll) = scroll_key(&key.key, mods, terminal.alt_screen()) {
-            terminal.scroll(scroll);
-            cx.notify();
-            cx.stop_propagation();
-            return;
-        }
-        if let Some(bytes) = keys::encode(&key.key, key.key_char.as_deref(), mods, terminal.app_cursor()) {
-            terminal.write(bytes);
-            cx.stop_propagation();
-        }
+        terminal::send_key(terminal, event, cx);
     }
 
     /// The wheel or trackpad over a terminal pane.
@@ -3487,6 +3574,13 @@ impl Workspace {
                 };
                 return self.click_workbook(control, id, tab, window, cx);
             }
+            // In Repos: a new worktree of the selected row's repository.
+            Some(ListKey::Add) if self.model.sidebar == Some(Section::Repos) => {
+                if let Some(path) = self.model.selected_repo() {
+                    self.add_worktree(&path, window, cx);
+                }
+                return cx.notify();
+            }
             Some(ListKey::Add) => match self.model.selected_workbook() {
                 Some((id, _)) => return self.click_workbook("workbook-add", id, None, window, cx),
                 None => return,
@@ -3517,6 +3611,11 @@ impl Workspace {
                 let step = if side < 0 { DayStep::Back } else { DayStep::Forward };
                 Action::CalendarDay { step }
             }
+            // In Repos ← folds the selected row's repository under its name, → unfolds it.
+            Some(ListKey::Side(side)) if self.model.sidebar == Some(Section::Repos) => {
+                let Some(path) = self.model.selected_repo() else { return };
+                Action::RepoFold { path, fold: Some(side < 0) }
+            }
             Some(ListKey::Today) if self.model.sidebar == Some(Section::Calendar) => {
                 Action::CalendarDay { step: DayStep::Today }
             }
@@ -3536,15 +3635,16 @@ impl Workspace {
         let at = self.model.list?;
         match self.model.sidebar {
             Some(Section::Tasks) => {}
-            // A heading before each repository's rows.
+            // Each repository's name is a row; the new worktree's field, under one, is not.
             Some(Section::Repos) => {
-                let mut rows = 0;
-                let headings = self.model.repos.iter().take_while(|repo| {
-                    let starts_before = rows <= at;
-                    rows += repo.checkouts().len();
-                    starts_before
-                });
-                return Some(at + headings.count());
+                let typed = match &self.model.mark_input {
+                    Some(MarkInput::Worktree { repo, .. }) => {
+                        Some(ottospace_core::list::ListRow::RepoHead(repo.clone()))
+                    }
+                    _ => None,
+                };
+                let field = typed.and_then(|head| self.model.list_rows().iter().position(|row| *row == head));
+                return Some(at + usize::from(field.is_some_and(|field| at > field)));
             }
             Some(Section::Apps) => return Some(self.apps_child(at)),
             // The offer to put a mark back, if it shows, is above the rows.
@@ -3646,7 +3746,7 @@ impl Workspace {
             return;
         }
         let text = self.clipboard.text(cx);
-        if self.talk_paste(text.clone()) {
+        if self.editor_paste(text.as_deref()) || self.talk_paste(text.clone()) {
             return;
         }
         let (Some(pane), Some(text)) = (self.model.keyboard_terminal(), text) else { return };
@@ -3937,7 +4037,7 @@ impl Workspace {
                         .when(active, |d| {
                             // Amber on Tasks while a task needs the user, as its dot is.
                             let tasks = section == Section::Tasks && needs_you;
-                            raised_cell(d, if tasks { theme::SNEAK } else { theme::PRIMARY }, false)
+                            raised_cell(d, if tasks { theme::SNEAK } else { theme::PRIMARY })
                         })
                         .when(self.model.rail_focus == Some(RailFocus::Left(section)), |d| focus_ring(d.relative()))
                         .child(svg().path(*icon).size(px(20.)).text_color(rgb(if active {
@@ -4077,6 +4177,70 @@ impl Workspace {
         };
         let found = repos::found_in(Path::new(dir));
         self.change_repos(Action::RepoAdd { dir: dir.into(), found }, origin, window, cx);
+    }
+
+    /// Worktrees git made, or did not: the list is read again; a made one opens, a failure is said.
+    fn take_worktrees(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let made: Vec<worktree::Made> = self.worktrees.1.try_iter().collect();
+        for worktree::Made { repo, result } in made {
+            let repos = repos::scan();
+            match result {
+                // Made from a repository listed only as a worktree of another: not in the list to open.
+                Ok(path) if !repos.iter().any(|r| r.worktrees.iter().any(|w| w.path == path)) => {
+                    self.error = Some(format!("Made {path}: its repository is not listed"));
+                    self.dispatch(Action::SetRepos { repos }, Origin::System, window, cx);
+                }
+                Ok(path) => {
+                    drop(self.dispatch(Action::WorktreeAdded { repo, path, repos }, Origin::System, window, cx))
+                }
+                Err(why) => {
+                    self.error = Some(why);
+                    self.dispatch(Action::SetRepos { repos }, Origin::System, window, cx);
+                }
+            }
+            cx.notify();
+        }
+    }
+
+    /// Pull requests: asked for while the Repos section is open (`prs::due`), and what gh said, to
+    /// the core. `"repos_prs": "off"`: none read, and none shown.
+    fn tick_prs(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let setting = config::live().repos_prs.unwrap_or_default();
+        if setting == ottospace_core::prs::Setting::Off {
+            for repo in self.model.prs.iter().map(|(repo, ..)| repo.clone()).collect::<Vec<_>>() {
+                let none = Action::SetPrs { repo, prs: Vec::new(), branches: Vec::new() };
+                self.dispatch(none, Origin::System, window, cx);
+            }
+            self.pr_note = None;
+            return;
+        }
+        let checkouts = |repo: &Repo| repo.checkouts().into_iter().map(|c| (c.path, c.branch)).collect();
+        let open = self.model.sidebar == Some(Section::Repos);
+        let repos = self.model.repos.iter().filter(|_| open).map(|repo| (repo.path.clone(), checkouts(repo))).collect();
+        self.prs.ask(open, repos, now_ms());
+        let reads: Vec<prs::Read> = self.prs.reads.try_iter().collect();
+        for prs::Read { repo, result } in reads {
+            match result {
+                Ok((prs, branches)) => {
+                    self.pr_note = None;
+                    self.dispatch(Action::SetPrs { repo, prs, branches }, Origin::System, window, cx);
+                }
+                // No marks from a read that failed; quiet unless asked for: a line only for an explicit `on`.
+                Err(why) => {
+                    self.pr_note = (setting == ottospace_core::prs::Setting::On).then_some(why);
+                    let none = Action::SetPrs { repo, prs: Vec::new(), branches: Vec::new() };
+                    self.dispatch(none, Origin::System, window, cx);
+                }
+            }
+            cx.notify();
+        }
+    }
+
+    /// The user's + on a repository's name: the field for a new worktree's branch, with the
+    /// worktrees folder as the settings say now.
+    pub(crate) fn add_worktree(&mut self, repo: &str, window: &Window, cx: &mut Context<Self>) {
+        self.model.update(Action::SetRepoDirs { dirs: config::repo_dirs() }.sent_by(Origin::System));
+        self.dispatch(Action::WorktreeEdit { repo: repo.into() }, self.input, window, cx);
     }
 
     /// "Remove" on a repository's name in the Repos section.
@@ -4465,50 +4629,78 @@ impl Workspace {
     /// Repositories, each with its worktrees under it. A click opens a terminal there: it fills
     /// the focused pane if that is empty, else splits it (right, or down with shift).
     fn render_repos(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        // One checkout: the branch it is on; under it "Default", or a linked worktree's directory.
-        let row = |index: usize, checkout: Checkout| {
-            let place = if checkout.default { theme::PRIMARY } else { theme::MUTED };
-            let icon = svg().path("icons/repos.svg").size(px(12.)).text_color(rgb(theme::MUTED));
-            let label = div().truncate().text_xs().line_height(px(15.)).text_color(rgb(place));
-            list_row(("repo", index), self.model.list == Some(index))
-                // Beside the lines, not in a flex row with them: text in a flex row's cell is
-                // first measured with no width, and is then never cut.
-                .child(icon.absolute().left(px(8.)).top(px(5.)))
+        // One checkout, on one line: its branch, cut short before the marks at its end. The
+        // repository's own folder has a dot in the gutter; the path is in the tooltip.
+        let row = |index: usize, at: usize, checkout: Checkout, cx: &mut Context<Self>| {
+            let selected = self.model.list == Some(at);
+            // The task working there: its badge; a click selects it, and a word opens a terminal anyway.
+            let task = self.model.repo_task(&checkout.path);
+            let terminal = task.map(|_| {
+                let path = checkout.path.clone();
+                let click = move |this: &mut Self, window: &Window, cx: &mut Context<Self>| {
+                    this.dispatch(Action::OpenRepo { path: path.clone(), axis: Axis::Right }, this.input, window, cx);
+                };
+                let tip = ("Terminal", "A terminal here, in Workspace");
+                words::words("repo-row", selected).child(self.word(
+                    format!("repo-terminal:{}", checkout.path),
+                    tip,
+                    click,
+                    cx,
+                ))
+            });
+            let badge = task.and_then(|id| self.task_badge(id, 16.));
+            // At its end, in this order: the pull request's mark, the task's badge. The branch is given
+            // the room left, so it never runs under them.
+            let badge_room = if badge.is_some() { 22. } else { 0. };
+            let pr = self.pr_marker(&checkout.path, cx);
+            let pr_room = pr.as_ref().map_or(0., |(_, width)| width + 6.);
+            let room = 8. + badge_room + pr_room;
+            let dot = checkout.default.then(|| {
+                div().absolute().left(px(12.)).top(px(11.)).size(px(5.)).rounded_full().bg(rgb(theme::PRIMARY))
+            });
+            let tip = match checkout.default {
+                true => format!("{} · the repository's own folder", checkout.path),
+                false => checkout.path.clone(),
+            };
+            list_row(("repo", index), selected)
+                .group("repo-row")
+                .py_1()
+                .pr(px(room))
+                .children(dot)
+                .children(badge.map(|badge| badge.absolute().right(px(8.)).top(px(5.))))
+                .children(pr.map(|(marker, _)| marker.absolute().right(px(8. + badge_room)).top(px(4.))))
                 .child(div().truncate().child(checkout.branch))
-                .child(label.child(checkout.label))
+                // Left of the marks at its end, so the pull request stays there to click.
+                .children(terminal.map(|words| words.top(px(4.)).right(px(room - 2.))))
                 .child(mark(&self.marks, Mark::Checkout(index)))
                 .child(self.controls.mark(format!("repo:{}", checkout.path)))
+                .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone().into()))))
                 .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                     let axis = if e.modifiers().shift { Axis::Down } else { Axis::Right };
-                    this.dispatch(Action::OpenRepo { path: checkout.path.clone(), axis }, this.input, window, cx);
+                    this.dispatch(Action::RepoClick { path: checkout.path.clone(), axis }, this.input, window, cx);
                 }))
         };
-        // The repository's name as a heading, then its checkouts: its own directory first.
+        // Each repository's name (a list row of its own), then its checkouts unless folded: its
+        // own folder first. `index` counts checkouts, drawn or not; `at` the list's rows.
         let mut items: Vec<AnyElement> = Vec::new();
-        let mut index = 0;
+        let (mut index, mut at) = (0, 0);
         for (n, repo) in self.model.repos.iter().enumerate() {
-            // `flex_none`: a heading that may shrink is squeezed to nothing once the list overflows.
-            let name = div().flex_none().px_2().pb_0p5().text_xs().font_weight(FontWeight::SEMIBOLD);
-            let name = name.text_color(rgb(theme::MUTED)).map(|d| if n == 0 { d.pt_1() } else { d.pt_3() });
-            let name = name.child(mark(&self.marks, Mark::Repo(n))).child(div().truncate().child(repo.name.clone()));
-            // Under the pointer: a word that stops listing the repository. Not while
-            // `OTTOSPACE_REPOS` names the directories: there is no setting to take it from.
-            let path = repo.path.clone();
-            let remove = (!self.model.repo_dirs.fixed).then(|| {
-                let click =
-                    move |this: &mut Self, window: &Window, cx: &mut Context<Self>| this.remove_repo(&path, window, cx);
-                let tip = ("Remove", "Stop listing this repository");
-                let word = self.word(format!("repo-remove:{}", repo.path), tip, click, cx);
-                // On the heading's colour, not a row's; the heading's weight would make it bold.
-                words::words("repo-name", false)
-                    .bottom(px(1.))
-                    .bg(rgb(theme::RAISED))
-                    .font_weight(FontWeight::NORMAL)
-                    .child(word)
-            });
-            items.push(name.group("repo-name").relative().children(remove).into_any_element());
-            for checkout in repo.checkouts() {
-                items.push(row(index, checkout).into_any_element());
+            let checkouts = repo.checkouts();
+            let folded = self.model.repo_folded(repo);
+            items.push(self.repo_heading(n, at, repo, folded, checkouts.len(), cx).into_any_element());
+            at += 1;
+            let typing =
+                matches!(&self.model.mark_input, Some(MarkInput::Worktree { repo: of, .. }) if *of == repo.path);
+            if typing {
+                let field = self.render_field("Branch (new ones from HEAD)", cx);
+                let line = div().flex_none().pl(px(26.)).pr_2().py_0p5().rounded_md().border_1();
+                items.push(line.border_color(rgb(theme::MARK)).text_size(px(13.)).child(field).into_any_element());
+            }
+            for checkout in checkouts {
+                if !folded {
+                    items.push(row(index, at, checkout, cx).into_any_element());
+                    at += 1;
+                }
                 index += 1;
             }
         }
@@ -4523,9 +4715,115 @@ impl Workspace {
         let list = div().id("repos").flex_1().flex().flex_col().p_2().overflow_y_scroll();
         self.bars.tracked(
             "repos",
-            list.track_scroll(&self.list_scroll).children(empty).children(items),
+            list.track_scroll(&self.list_scroll).children(empty).children(items).children(self.pr_note.map(|note| {
+                div().px_2().pt_2().text_xs().text_color(rgb(theme::MUTED)).child(format!("Pull requests: {note}"))
+            })),
             &self.list_scroll,
         )
+    }
+
+    /// The open pull request of the checkout at `path`, as one small mark: `#131`, muted for a
+    /// draft, then a green tick (ready to merge), an amber dot (waiting) or a red dot (failing).
+    /// Hover: its card; the user's click opens it. Its drawn width, for the row to leave room.
+    fn pr_marker(&self, path: &str, cx: &mut Context<Self>) -> Option<(Stateful<Div>, f32)> {
+        use ottospace_core::prs::Look;
+        let pr = self.model.checkout_pr(path)?;
+        let (summary, card) = (pr.summary(), pr.card());
+        let number = format!("#{}", summary.number);
+        let (sign, color) = match summary.look {
+            Look::Ready => (Some("✓"), theme::PICK),
+            Look::Pending => (Some("●"), theme::SNEAK),
+            Look::Failing => (Some("●"), theme::ERROR),
+            Look::Draft | Look::Open => (None, theme::MUTED),
+        };
+        let width = 7. * number.len() as f32 + if sign.is_some() { 12. } else { 0. };
+        let path = path.to_string();
+        let marker = div()
+            .id(ElementId::Name(format!("repo-pr:{path}").into()))
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_0p5()
+            .rounded_sm()
+            .text_xs()
+            .line_height(px(17.))
+            .text_color(rgb(if summary.draft { theme::MUTED } else { theme::TEXT }))
+            .hover(|s| s.bg(rgb(theme::BORDER_STRONG)))
+            .child(number)
+            .children(sign.map(|sign| div().text_size(px(9.)).text_color(rgb(color)).child(sign)))
+            .child(self.controls.mark(format!("repo-pr:{path}")))
+            .tooltip(move |_, cx| AnyView::from(cx.new(|_| progress::PrCard(card.clone(), color))))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                cx.stop_propagation(); // not a click on the row
+                this.dispatch(Action::PrOpen { path: path.clone() }, this.input, window, cx);
+            }));
+        Some((marker, width))
+    }
+
+    /// A repository's name: a chevron that folds its rows (a click anywhere on the line does),
+    /// the name, the number of its checkouts while folded; under the pointer, + (a worktree) and
+    /// the trash (stop listing it). `at`: its place among the list's rows.
+    fn repo_heading(
+        &self,
+        n: usize,
+        at: usize,
+        repo: &Repo,
+        folded: bool,
+        count: usize,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let selected = self.model.list == Some(at);
+        let path = repo.path.clone();
+        let add = {
+            let path = path.clone();
+            let click =
+                move |this: &mut Self, window: &Window, cx: &mut Context<Self>| this.add_worktree(&path, window, cx);
+            self.icon_word(format!("repo-add:{path}", path = repo.path), ("icons/plus.svg", "New worktree…"), click, cx)
+        };
+        // Not while `OTTOSPACE_REPOS` names the directories: there is no setting to take it from.
+        let remove = (!self.model.repo_dirs.fixed).then(|| {
+            let path = path.clone();
+            let click =
+                move |this: &mut Self, window: &Window, cx: &mut Context<Self>| this.remove_repo(&path, window, cx);
+            let tip = ("icons/trash.svg", "Stop listing this repository (nothing on disk is touched)");
+            self.icon_word(format!("repo-remove:{}", repo.path), tip, click, cx)
+        });
+        let count = folded.then(|| {
+            let badge = div().flex_none().px_1p5().rounded_full().bg(rgb(theme::BORDER)).text_xs();
+            badge.text_color(rgb(theme::MUTED)).line_height(px(15.)).child(count.to_string())
+        });
+        // A checkout row's look (hover, selection), on one line of its own height.
+        list_row(("repo-head", n), selected)
+            .group("repo-name")
+            .when(n > 0, |d| d.mt_2())
+            .h(px(26.))
+            .px_2()
+            .py_0()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .child(div().flex_none().w(px(10.)).text_xs().text_color(rgb(theme::MUTED)).child(if folded {
+                "▸"
+            } else {
+                "▾"
+            }))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(rgb(theme::TEXT))
+                    .child(repo.name.clone()),
+            )
+            .children(count)
+            .child(words::words("repo-name", selected).top(px(3.)).child(add).children(remove))
+            .child(mark(&self.marks, Mark::Repo(n)))
+            .child(self.controls.mark(format!("repo-fold:{path}")))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.dispatch(Action::RepoFold { path: path.clone(), fold: None }, this.input, window, cx);
+            }))
     }
 
     fn render_pane(&self, pane: &Pane, cx: &mut Context<Self>) -> impl IntoElement {
@@ -4631,12 +4929,6 @@ impl Workspace {
                     .children(hint)
                     .children(word)
                     .children(strip)
-                    .children(
-                        self.model
-                            .tab_of(id)
-                            .and_then(|tab| self.model.tabs.iter().find(|t| t.id == tab)?.space.task())
-                            .and_then(|task| self.task_badge(task, 16.)),
-                    )
                     .child(
                         div()
                             .id(("close", id))
@@ -4866,7 +5158,168 @@ impl Workspace {
 
     /// Top bar, drawn where the system title bar was: tabs on the left, new-tab and split
     /// buttons on the right.
-    fn render_top(&self, left: f32, cx: &mut Context<Self>) -> impl IntoElement {
+    /// `room`: the points the top row has for its spaces.
+    /// The colour a space is drawn in: its task's, else the accent.
+    fn space_colour(&self, of: &Owner) -> u32 {
+        let task = of.task().and_then(|id| self.model.tasks.get(id));
+        task.map_or(theme::PRIMARY, |task| theme::identity(task.colour))
+    }
+
+    /// What a space is called on the top row.
+    /// The top row, in the window bar beside the traffic lights: a tab a space, the selected one
+    /// raised with a line in its colour along its top; a quiet × hides one. They shrink, then
+    /// clip: the + and the buttons on the right always show.
+    fn render_spaces(&self, left: f32, room: f32, cx: &mut Context<Self>) -> impl IntoElement {
+        let selected = self.model.space().clone();
+        let shown = self.model.shown_spaces();
+        // Short of room, a space not selected is its badge alone, its title on hover. Shorter
+        // still, Workspace too, and the badges that do not fit after the selected one give way to
+        // a count: the selected space always shows.
+        let compact = shown.len() as f32 * TITLED_SPACE > room;
+        let tight = compact && room < NAMED_WORKSPACE + TITLED_SPACE + BADGE_SPACE;
+        let workspace = if tight { BADGE_SPACE } else { NAMED_WORKSPACE };
+        let selected_width = if tight { MIN_SPACE } else { TITLED_SPACE };
+        let others = shown.iter().filter(|space| space.of != selected && space.of != Owner::Workspace).count();
+        let fits = |n: usize| workspace + selected_width + n as f32 * BADGE_SPACE <= room;
+        let badges =
+            if !compact || fits(others) { others } else { (0..others).rev().find(|n| fits(n + 1)).unwrap_or(0) };
+        let mut room_for = badges;
+        let shown: Vec<_> = shown
+            .into_iter()
+            .enumerate()
+            .filter(|(_, space)| {
+                let keep = space.of == selected || space.of == Owner::Workspace || room_for > 0;
+                if keep && space.of != selected && space.of != Owner::Workspace {
+                    room_for -= 1;
+                }
+                keep
+            })
+            .collect();
+        let more = others - badges;
+        let spaces = shown.into_iter().map(|(place, space)| {
+            let of = space.of.clone();
+            let on = of == selected;
+            let small = compact && !on && (of != Owner::Workspace || tight);
+            let tip: SharedString = self.model.space_title(&of).into();
+            let colour = self.space_colour(&of);
+            let count = self.model.space_tabs(&of).len();
+            // A task's badge, a workbook's glyph; Workspace and a session's chat a dot.
+            let lead = match &of {
+                Owner::Task { id } => self.task_badge(*id, 18.).map(IntoElement::into_any_element),
+                Owner::Workbook { .. } => Some(
+                    svg()
+                        .path("icons/workbook.svg")
+                        .size(px(14.))
+                        .flex_none()
+                        .text_color(rgb(theme::MUTED))
+                        .into_any_element(),
+                ),
+                Owner::Session { .. } if small => {
+                    Some(div().child(ottospace_core::talk::monogram(&self.model.space_title(&of))).into_any_element())
+                }
+                Owner::Workspace if small => Some(div().child("W").into_any_element()),
+                Owner::Workspace | Owner::Session { .. } => None,
+            };
+            let hide = (of != Owner::Workspace).then(|| {
+                div()
+                    .id(("space-hide", place))
+                    .flex_none()
+                    .px_1()
+                    .rounded_sm()
+                    .text_color(rgb(theme::MUTED))
+                    .opacity(if on { 0.8 } else { 0.0 })
+                    .group_hover("space", |s| s.opacity(0.8))
+                    .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
+                    .child("×")
+                    .child(self.controls.mark(format!("space-hide:{place}")))
+                    .tooltip(|_, cx| AnyView::from(cx.new(|_| Tooltip("Hide (⌘⌃W): nothing in it stops".into()))))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.dispatch(Action::SpaceHide { index: Some(place) }, this.input, window, cx);
+                    }))
+            });
+            let to = of.clone();
+            div()
+                .id(("space", place))
+                .group("space")
+                .relative()
+                .h_full()
+                // Workspace and the selected space keep their names; the others give way first.
+                .when(!small, |d| d.min_w(px(MIN_SPACE)).max_w(px(MAX_SPACE)).flex_shrink())
+                .when(of == Owner::Workspace, |d| d.flex_none())
+                .when(on && compact, |d| d.min_w(px(selected_width)))
+                .when(small, |d| d.flex_none().tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))))
+                .overflow_hidden()
+                .pl_3()
+                .pr_1()
+                .flex()
+                .items_center()
+                .gap_2()
+                .border_r_1()
+                .border_color(rgb(theme::BORDER))
+                .cursor_pointer()
+                .text_sm()
+                .when(on, |d| {
+                    let line = div().absolute().top_0().left_0().right_0().h(px(2.)).bg(rgb(colour));
+                    d.bg(rgb(theme::RAISED)).text_color(rgb(theme::TEXT)).child(line)
+                })
+                .hover(|s| s.text_color(rgb(theme::TEXT)))
+                .child(mark(&self.marks, Mark::Space(place)))
+                .children(lead)
+                .children((!small).then(|| div().flex_1().min_w_0().truncate().child(self.model.space_title(&of))))
+                .children(
+                    (count > 1 && !small)
+                        .then(|| div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(count.to_string())),
+                )
+                .children(hide.filter(|_| !small))
+                .child(self.controls.mark(format!("space:{place}")))
+                // A tab dropped on a space moves there.
+                .drag_over::<DraggedTab>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
+                .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                    let at = TabAt::End(to.clone());
+                    this.dispatch(Action::TabPlace { tab: Some(dragged.0), at }, this.input, window, cx);
+                }))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.dispatch(Action::SpaceSelect { index: place }, this.input, window, cx);
+                }))
+        });
+        // The spaces left off for room: their count; a click goes on to the next space.
+        let more = (more > 0).then(|| {
+            div()
+                .id("more-spaces")
+                .flex_none()
+                .px_2()
+                .h_full()
+                .flex()
+                .items_center()
+                .text_xs()
+                .cursor_pointer()
+                .hover(|s| s.text_color(rgb(theme::TEXT)))
+                .child(format!("+{more}"))
+                .tooltip(move |_, cx| {
+                    AnyView::from(cx.new(|_| Tooltip(format!("{more} more: ⌘⌃] and ⌘⌃[ go along the row").into())))
+                })
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.dispatch(Action::SpaceCycle { delta: 1 }, this.input, window, cx);
+                }))
+        });
+        let new_task = div()
+            .id("new-task")
+            .flex_none()
+            .w(px(28.))
+            .h(px(24.))
+            .mx_1()
+            .rounded_md()
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .text_color(rgb(theme::MUTED))
+            .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
+            .child("+")
+            .child(self.controls.mark("top:new_task"))
+            .tooltip(|_, cx| AnyView::from(cx.new(|_| Tooltip("New task (⌘N)".into()))))
+            .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)));
         // The traffic lights sit over the left column: room for them only where it is narrower.
         div()
             .h(px(TOP_BAR))
@@ -4876,7 +5329,6 @@ impl Workspace {
             .items_center()
             .border_b_1()
             .border_color(rgb(theme::BORDER))
-            .text_xs()
             .text_color(rgb(theme::MUTED))
             .on_mouse_down(
                 MouseButton::Left,
@@ -4889,157 +5341,129 @@ impl Workspace {
                     }
                 }),
             )
-            // Each task's tabs side by side behind its badge, the tabs of no task last. They shrink
-            // to `MIN_TAB`, then clip: the buttons on the right always show.
-            .child(div().flex_auto().min_w_0().h_full().flex().overflow_hidden().children(
-                self.model.groups().into_iter().flat_map(|group| {
-                    let task = group.space.task().and_then(|id| self.model.tasks.get(id));
-                    let shown = task.is_some_and(|task| self.talk_names(task.id));
-                    let underline = task.map(|task| (theme::identity(task.colour), shown));
-                    let done = task.is_some_and(|task| matches!(task.state, State::Done | State::Cleaned));
-                    // Its badge: a click shows its conversation; a tab dropped on it joins the group.
-                    let head =
-                        group.space.task().and_then(|id| Some((id, self.task_badge(id, 18.)?))).map(|(id, badge)| {
-                            div()
-                                .id(("group", id))
-                                .h_full()
-                                .flex_none()
-                                .pl_2()
-                                .flex()
-                                .items_center()
-                                .cursor_pointer()
-                                .child(badge)
-                                .child(self.controls.mark(format!("group:{id}")))
-                                .drag_over::<DraggedTab>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
-                                .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
-                                    let at = TabAt::End(Owner::Task { id });
-                                    this.dispatch(
-                                        Action::TabPlace { tab: Some(dragged.0), at },
-                                        this.input,
-                                        window,
-                                        cx,
-                                    );
-                                }))
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.dispatch(Action::TaskTalk { id }, this.input, window, cx);
-                                }))
-                                .into_any_element()
-                        });
-                    let tabs = group
-                        .tabs
-                        .into_iter()
-                        .filter_map(|index| Some((index, self.model.tabs.get(index)?)))
-                        .map(|(place, tab)| {
-                            let (active, id) = (place == self.model.active, tab.id);
-                            let title = SharedString::from(tab.title.clone());
-                            div()
-                                .id(("tab", tab.id))
-                                // A pane dropped on a tab moves there; a tab dropped on one goes before it, in its group.
-                                .drag_over::<DraggedPane>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
-                                .drag_over::<DraggedTab>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
-                                .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
-                                    // Dropped on itself: a click that moved a few points (GPUI drags past 2).
-                                    if dragged.0 == id {
-                                        return this.select_tab(id, window, cx);
-                                    }
-                                    let at = TabAt::Before(id);
-                                    this.dispatch(
-                                        Action::TabPlace { tab: Some(dragged.0), at },
-                                        this.input,
-                                        window,
-                                        cx,
-                                    );
-                                }))
-                                .on_drag(DraggedTab(id), move |_, offset, _, cx| {
-                                    cx.new(|_| DragChip { label: title.clone(), offset })
-                                })
-                                .on_drop(cx.listener(move |this, dragged: &DraggedPane, window, cx| {
-                                    this.dispatch(
-                                        Action::MovePane { pane: Some(dragged.0), tab: place },
-                                        this.input,
-                                        window,
-                                        cx,
-                                    );
-                                }))
-                                .h_full()
-                                .min_w(px(MIN_TAB))
-                                // At its narrowest it clips, never paints over the next tab.
-                                .overflow_hidden()
-                                .pl_3()
-                                .pr_1()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .border_r_1()
-                                .border_color(rgb(theme::BORDER))
-                                .cursor_pointer()
-                                .when(active, |d| d.bg(rgb(theme::RAISED)).text_color(rgb(theme::TEXT)))
-                                // A task's tab is underlined in its colour, brighter while the drawer shows it.
-                                .relative()
-                                .when_some(underline, |d, (colour, shown)| {
-                                    let line = div().absolute().left_0().right_0().bottom_0().h(px(2.)).bg(rgb(colour));
-                                    d.child(line.when(!shown, |d| d.opacity(0.6)))
-                                })
-                                .hover(|s| s.text_color(rgb(theme::TEXT)))
-                                .child(mark(&self.marks, Mark::Tab(place)))
-                                .children(
-                                    self.model
-                                        .mark_of(MarkOf::Tab(Some(id)))
-                                        .filter(|_| self.on(Feature::Marks))
-                                        .map(|_| div().text_color(rgb(theme::MARK)).child("◆")),
-                                )
-                                // A tab of a workbook: its icon, and the workbook's name on hover.
-                                .when_some(self.workbook_of(id), |d, book| {
-                                    let icon = svg().path("icons/workbook.svg").size(px(12.)).flex_none();
-                                    d.child(icon.text_color(rgb(theme::MUTED))).tooltip(move |_, cx| {
-                                        AnyView::from(cx.new(|_| Tooltip(format!("Workbook: {book}").into())))
-                                    })
-                                })
-                                .child(div().flex_1().min_w_0().truncate().child(tab.title.clone()))
-                                .child(self.controls.mark(format!("tab:{}", tab.id)))
-                                .child(
-                                    div()
-                                        .id(("tab-close", tab.id))
-                                        .flex_none()
-                                        .px_1()
-                                        .rounded_sm()
-                                        .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::ERROR)))
-                                        .child("×")
-                                        .child(self.controls.mark(format!("tab-close:{}", tab.id)))
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            // Do not also select the tab that is going away.
-                                            cx.stop_propagation();
-                                            this.close_tab(id, window, cx);
-                                        })),
-                                )
-                                .on_click(cx.listener(move |this, _, window, cx| this.select_tab(id, window, cx)))
-                                .when(done, |d| d.opacity(0.5))
-                                .into_any_element()
-                        });
-                    let tabs: Vec<_> = tabs.collect();
-                    head.into_iter().chain(tabs).collect::<Vec<_>>()
-                }),
-            ))
-            // New tab and split buttons: a new empty tab, or the picker for that split.
-            .child(div().flex_none().ml_auto().mr_2().flex().gap_1().children(SPLITS.iter().enumerate().map(
-                |(i, (name, icon, tip, axis, new_tab))| {
-                    let (tip, axis, new_tab) = (*tip, *axis, *new_tab);
-                    div()
-                        .id(("split", i))
-                        .w(px(28.))
-                        .h(px(22.))
-                        .rounded_md()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .cursor_pointer()
-                        .hover(|s| s.bg(rgb(theme::SELECTED)))
-                        .child(svg().path(*icon).size(px(16.)).text_color(rgb(theme::MUTED)))
-                        .child(self.controls.mark(format!("top:{name}")))
-                        .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
-                        .on_click(cx.listener(move |this, _, window, cx| this.top_button(axis, new_tab, window, cx)))
-                },
-            )))
+            .child(div().flex_shrink().min_w_0().h_full().flex().overflow_hidden().children(spaces))
+            .children(more)
+            .child(new_task)
+            .child(self.render_top_buttons(cx))
+    }
+
+    /// New tab and split buttons: a new empty tab, or the picker for that split.
+    fn render_top_buttons(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div().flex_none().ml_auto().mr_2().flex().gap_1().children(SPLITS.iter().enumerate().map(
+            |(i, (name, icon, tip, axis, new_tab))| {
+                let (tip, axis, new_tab) = (*tip, *axis, *new_tab);
+                div()
+                    .id(("split", i))
+                    .w(px(28.))
+                    .h(px(22.))
+                    .rounded_md()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(rgb(theme::SELECTED)))
+                    .child(svg().path(*icon).size(px(16.)).text_color(rgb(theme::MUTED)))
+                    .child(self.controls.mark(format!("top:{name}")))
+                    .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
+                    .on_click(cx.listener(move |this, _, window, cx| this.top_button(axis, new_tab, window, cx)))
+            },
+        ))
+    }
+
+    /// The second row: the selected space's tabs, only while it has more than one. The one on
+    /// show is underlined in the space's colour. A tab drags onto another tab or a space.
+    fn render_space_tabs(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let of = self.model.space().clone();
+        let places = self.model.space_tabs(&of);
+        if places.len() < 2 {
+            return None;
+        }
+        let colour = self.space_colour(&of);
+        let tabs =
+            places.into_iter().filter_map(|place| Some((place, self.model.tabs.get(place)?))).map(|(place, tab)| {
+                let (active, id) = (place == self.model.active, tab.id);
+                let title = SharedString::from(tab.title.clone());
+                div()
+                    .id(("tab", tab.id))
+                    // A pane dropped on a tab moves there; a tab dropped on one goes before it.
+                    .drag_over::<DraggedPane>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
+                    .drag_over::<DraggedTab>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
+                    .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                        // Dropped on itself: a click that moved a few points (GPUI drags past 2).
+                        if dragged.0 == id {
+                            return this.select_tab(id, window, cx);
+                        }
+                        let at = TabAt::Before(id);
+                        this.dispatch(Action::TabPlace { tab: Some(dragged.0), at }, this.input, window, cx);
+                    }))
+                    .on_drag(DraggedTab(id), move |_, offset, _, cx| {
+                        cx.new(|_| DragChip { label: title.clone(), offset })
+                    })
+                    .on_drop(cx.listener(move |this, dragged: &DraggedPane, window, cx| {
+                        this.dispatch(Action::MovePane { pane: Some(dragged.0), tab: place }, this.input, window, cx);
+                    }))
+                    .relative()
+                    .h_full()
+                    .min_w(px(MIN_TAB))
+                    .max_w(px(MAX_SPACE))
+                    // At its narrowest it clips, never paints over the next tab.
+                    .overflow_hidden()
+                    .pl_3()
+                    .pr_1()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .cursor_pointer()
+                    .when(active, |d| {
+                        let line = div().absolute().left_0().right_0().bottom_0().h(px(2.)).bg(rgb(colour));
+                        d.text_color(rgb(theme::TEXT)).child(line)
+                    })
+                    .hover(|s| s.text_color(rgb(theme::TEXT)))
+                    .child(mark(&self.marks, Mark::Tab(place)))
+                    .children(
+                        self.model
+                            .mark_of(MarkOf::Tab(Some(id)))
+                            .filter(|_| self.on(Feature::Marks))
+                            .map(|_| div().text_color(rgb(theme::MARK)).child("◆")),
+                    )
+                    // A tab of a workbook: its icon, and the workbook's name on hover.
+                    .when_some(self.workbook_of(id), |d, book| {
+                        let icon = svg().path("icons/workbook.svg").size(px(12.)).flex_none();
+                        d.child(icon.text_color(rgb(theme::MUTED))).tooltip(move |_, cx| {
+                            AnyView::from(cx.new(|_| Tooltip(format!("Workbook: {book}").into())))
+                        })
+                    })
+                    .child(div().flex_1().min_w_0().truncate().child(tab.title.clone()))
+                    .child(self.controls.mark(format!("tab:{}", tab.id)))
+                    .child(
+                        div()
+                            .id(("tab-close", tab.id))
+                            .flex_none()
+                            .px_1()
+                            .rounded_sm()
+                            .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::ERROR)))
+                            .child("×")
+                            .child(self.controls.mark(format!("tab-close:{}", tab.id)))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                // Do not also select the tab that is going away.
+                                cx.stop_propagation();
+                                this.close_tab(id, window, cx);
+                            })),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| this.select_tab(id, window, cx)))
+            });
+        Some(
+            div()
+                .h(px(SPACE_TABS))
+                .flex_none()
+                .flex()
+                .border_b_1()
+                .border_color(rgb(theme::BORDER))
+                .text_xs()
+                .text_color(rgb(theme::MUTED))
+                .overflow_hidden()
+                .children(tabs),
+        )
     }
 
     /// Bottom bar: who has the keyboard when it is not normal, and what needs saying.
@@ -5071,6 +5495,7 @@ impl Workspace {
             }
             Mode::Sneak => ("SNEAK", "esc"),
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.dismiss.is_some()) => ("DISMISS?", ""),
+            Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.unlist.is_some()) => ("UNLIST?", ""),
             Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.paste.is_some()) => ("PASTE?", ""),
             Mode::Confirm => ("QUIT?", ""),
             // The capture bar lists the annotate keys.
@@ -5080,6 +5505,7 @@ impl Workspace {
                 Some(MarkInput::Rename { .. }) => ("MARK", ""),
                 Some(MarkInput::SetKey { .. }) => ("MARK", "a letter for the mark · ⌫ for none · esc cancels"),
                 Some(MarkInput::Workbook { .. }) => ("WORKBOOK", ""),
+                Some(MarkInput::Worktree { .. }) => ("WORKTREE", "↵ add · esc cancels"),
                 _ => ("MARK?", "a mark's letter · esc cancels"),
             },
         };
@@ -5204,18 +5630,16 @@ fn title_shadow() -> Div {
     }])
 }
 
-/// A rail's open cell, raised: the panel's background, a soft shadow below it, and an accent bar
-/// at the window's edge (`right`: the right rail's). No line or shadow above: every cell reads
-/// as the first one does, under one border.
-pub(crate) fn raised_cell(cell: Stateful<Div>, accent: u32, right: bool) -> Stateful<Div> {
+/// The rail's open cell, raised: the panel's background, a soft shadow below it, and an accent bar
+/// at the window's edge. No line or shadow above: every cell reads as the first one does, under one border.
+pub(crate) fn raised_cell(cell: Stateful<Div>, accent: u32) -> Stateful<Div> {
     let shadow = BoxShadow {
         color: black().opacity(0.85),
         offset: point(px(0.), px(7.)),
         blur_radius: px(9.),
         spread_radius: px(-6.),
     };
-    let bar = div().absolute().top_0().w(px(2.)).h_full().bg(rgb(accent));
-    let bar = if right { bar.right_0() } else { bar.left_0() };
+    let bar = div().absolute().top_0().left_0().w(px(2.)).h_full().bg(rgb(accent));
     cell.relative().bg(rgb(theme::RAISED)).shadow(vec![shadow]).child(bar)
 }
 
@@ -5390,7 +5814,7 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
         // Every task's letters, worked out once a frame for each badge drawn (`task_badge`).
-        *self.badges.borrow_mut() = self.model.badges(&[]);
+        *self.badges.borrow_mut() = self.model.badges();
         // This frame draws every action so far: the replies held for it can go (`settle`).
         self.drawn_seq = self.seq;
         self.frame_start.set(Some(Instant::now()));
@@ -5400,9 +5824,13 @@ impl Render for Workspace {
         }
         self.controls.begin();
         self.bars.begin();
-        // The Repos list and ⌘/'s Known are noted again only while they are drawn.
-        let drawn_anew =
-            |mark: &Mark| matches!(mark, Mark::Repo(_) | Mark::Checkout(_) | Mark::BarHeader | Mark::KeysKnown);
+        // The Repos list, the tabs and spaces, and ⌘/'s Known are noted again only while drawn.
+        let drawn_anew = |mark: &Mark| {
+            matches!(
+                mark,
+                Mark::Repo(_) | Mark::Checkout(_) | Mark::BarHeader | Mark::Tab(_) | Mark::Space(_) | Mark::KeysKnown
+            )
+        };
         self.marks.borrow_mut().retain(|mark, _| !drawn_anew(mark));
         // The pane drag is over, however it ended (a drop, Esc, a release outside the window):
         // no drop zone may stay drawn.
@@ -5413,16 +5841,30 @@ impl Render for Workspace {
         // Only while the tab on show has no panes. Its lines are built once and kept: a frame
         // that moves nothing (a terminal printing in another tab) only paints them again.
         let keep_out = self.home.borrow().keep_out();
-        let home = self.model.home(&keep_out).map(|home| self.render_home(home, cx));
+        let home = self.model.home(&keep_out).map(|home| self.render_home(home, cx).into_any_element());
+        // An empty tab of a task, a session or a workbook: what goes in it.
+        let empty = (self.model.layout.is_none() && home.is_none()).then(|| {
+            let line = "An empty tab: ⌘E picks what goes in it, ⌘D opens a terminal";
+            let hint = div().text_sm().text_color(rgb(theme::MUTED)).child(line);
+            div().size_full().flex().items_center().justify_center().child(hint).into_any_element()
+        });
+        let home = home.or(empty);
         // The left column's width, and the drawer's: as dragged, or half the window when widened.
         let left = RAIL + if self.model.sidebar.is_some() { SECTION } else { 0. };
         let half = f32::from(window.viewport_size().width) / 2.;
         let drawer = if self.model.talk_wide { half } else { self.model.talk_width.min(half.max(MIN_DRAWER)) };
+        // The editor gets its columns: a narrower drawer widens while it shows, up to half the window.
+        let columns = ottospace_core::model::editor::COLUMNS as f32 * f32::from(self.cell.width) + 10.;
+        let drawer = if self.model.editor_shown() { drawer.max(columns.min(half.max(MIN_DRAWER))) } else { drawer };
         self.drawer.width = drawer;
         // The inspector takes the drawer's place while it is open; the drawer keeps its state.
         let right = self.render_inspector(drawer, cx);
         let right = right.or_else(|| self.render_draft(cx)).or_else(|| self.render_drawer(drawer, cx));
-        let right_width = talk::RAIL + if right.is_some() { drawer } else { 0. };
+        let right_width = if right.is_some() { drawer } else { 0. };
+        // The top row's room for its spaces: over the centre and the drawer, less the lights, the +
+        // and the buttons.
+        let centre = f32::from(window.viewport_size().width) - left;
+        let room = centre - (TRAFFIC_LIGHTS - left).max(0.) - 140.;
         div()
             .size_full()
             .flex()
@@ -5509,6 +5951,10 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &TalkToggle, window, cx| {
                 this.dispatch(Action::TalkToggle, this.input, window, cx);
             }))
+            // ⌃G's, from the menu or the palette: the draft shown, or the new-task line, in the editor.
+            .on_action(cx.listener(|this, _: &EditMessage, window, cx| {
+                this.dispatch(Action::EditorOpen, this.input, window, cx);
+            }))
             // The drawer's Stop, for the conversation it shows.
             .on_action(cx.listener(|this, _: &StopAgent, window, cx| {
                 if let Some(id) = this.model.talk.as_ref().filter(|talk| talk.open).map(|talk| talk.task.clone()) {
@@ -5574,11 +6020,17 @@ impl Render for Workspace {
                 }
             }))
             .on_action(cx.listener(|this, _: &NewTab, window, cx| this.top_button(Axis::Right, true, window, cx)))
-            .on_action(cx.listener(|this, _: &RemoveTabFromTask, window, cx| {
-                this.dispatch(Action::TabPlace { tab: None, at: TabAt::End(Owner::Workspace) }, this.input, window, cx);
-            }))
             .on_action(cx.listener(|this, _: &MoveTabToTask, window, cx| {
                 this.dispatch(Action::PaletteTasks, this.input, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NextSpace, window, cx| {
+                this.dispatch(Action::SpaceCycle { delta: 1 }, this.input, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &PrevSpace, window, cx| {
+                this.dispatch(Action::SpaceCycle { delta: -1 }, this.input, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &HideSpace, window, cx| {
+                this.dispatch(Action::SpaceHide { index: None }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| {
                 this.dispatch(Action::CycleTab { delta: 1 }, this.input, window, cx);
@@ -5661,26 +6113,47 @@ impl Render for Workspace {
                                     .children(self.model.sidebar.map(|section| self.render_bar(section, cx))),
                             ),
                     )
-                    // Center: the tab strip over the workspace, from the section list to the drawer.
+                    // The top row of spaces from the section list over the drawer; under it the
+                    // selected space's tabs over the workspace, and the drawer beside them.
                     .child(
-                        div().flex_1().min_w_0().h_full().flex().flex_col().child(self.render_top(left, cx)).child(
-                            div()
-                                .flex_1()
-                                // Let the canvas shrink below its content, so a wide image cannot
-                                // push it past the window; it scales down instead.
-                                .min_w_0()
-                                .min_h_0()
-                                .w_full()
-                                .flex()
-                                .overflow_hidden()
-                                .children(home)
-                                .children(tree),
-                        ),
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .flex()
+                            .flex_col()
+                            .child(self.render_spaces(left, room, cx))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .flex()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .h_full()
+                                            .flex()
+                                            .flex_col()
+                                            .children(self.render_space_tabs(cx))
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    // Let the canvas shrink below its content, so a wide
+                                                    // image cannot push it past the window; it scales down.
+                                                    .min_w_0()
+                                                    .min_h_0()
+                                                    .w_full()
+                                                    .flex()
+                                                    .overflow_hidden()
+                                                    .children(home)
+                                                    .children(tree),
+                                            ),
+                                    )
+                                    // The drawer (the draft being collected, a conversation, or a brief).
+                                    .children(right),
+                            ),
                     )
-                    // Right: the drawer (the draft being collected, a conversation, or a brief),
-                    // then its rail.
-                    .children(right)
-                    .child(self.render_right_rail(cx))
                     // The side zones sit above the workspace: each casts a soft shadow onto it.
                     // Drawn last, so it lies over the panes. A live app's window is above it all.
                     .child(zone_shadow(left, true))
@@ -5881,7 +6354,7 @@ fn main() {
         let titlebar = TitlebarOptions {
             title: Some("ottospace".into()),
             appears_transparent: true,
-            traffic_light_position: Some(point(px(10.), px(7.))),
+            traffic_light_position: Some(point(px(10.), px(13.))),
         };
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),

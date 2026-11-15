@@ -1,5 +1,5 @@
 //! Shell half of the right drawer: a task's agent in a terminal of its own, beside the
-//! workspace and in no tab, and the 48 pt rail at the window's right edge. The core says which
+//! workspace and in no tab. The core says which
 //! conversation shows and who has the keyboard (`Model::talk`); this file starts the agent the
 //! core asks for (`Effect::StartAgent`) and draws it. See `docs/ai/task-conversation.md`.
 
@@ -8,21 +8,16 @@ use std::time::Instant;
 
 use gpui::{
     AnyElement, AnyView, Bounds, Context, CursorStyle, Div, EmptyView, KeyDownEvent, MouseButton, MouseDownEvent,
-    Pixels, ScrollWheelEvent, Stateful, Window, canvas, div, prelude::*, px, rgb, svg,
+    Pixels, ScrollWheelEvent, Stateful, Window, canvas, div, prelude::*, px, rgb,
 };
 use ottospace_core::agents::{self, Command, Start};
-use ottospace_core::keys;
 use ottospace_core::runner::RunnerId;
 use ottospace_core::talk::{self, Subject};
 use ottospace_core::tasks::{Group, TaskId};
-use ottospace_core::terminal::scroll_key;
 use ottospace_core::{Action, Axis, Kind, Mode, Origin, theme};
 
 use crate::terminal::{self, Terminal};
 use crate::{Tooltip, Workspace, collect, home};
-
-/// The right rail's width, in points.
-pub const RAIL: f32 = 48.;
 
 /// A task's agent, running in a terminal of the drawer's or ended there.
 pub struct Agent {
@@ -66,6 +61,8 @@ pub struct Drawer {
     /// The end of each ended native agent's stderr, cleaned and its tokens hidden
     /// (`transcript::details`): drawn on the user's click only, never in the state or a log.
     pub details: HashMap<Subject, String>,
+    /// The user's editor on a draft (⌃G), while it runs (`editor`).
+    pub editor: Option<crate::editor::Editor>,
 }
 
 /// A new session's id: a random (version 4) UUID. `None`: no random bytes could be read.
@@ -90,20 +87,12 @@ pub(crate) fn program(name: &str) -> Result<String, String> {
     Ok(std::path::Path::new(&dir).join(name).to_string_lossy().into_owned())
 }
 
-/// How a conversation is named in the state reply and on its rail cell's control: a task's id,
+/// How a conversation is named in the state reply: a task's id,
 /// or `<runner>:<session id>`.
 pub fn key(subject: &Subject) -> String {
     match subject {
         Subject::Task(id) => id.to_string(),
         Subject::Session { runner, id } => format!("{runner}:{id}"),
-    }
-}
-
-/// The conversation a `key` names.
-fn subject(key: &str) -> Option<Subject> {
-    match key.split_once(':') {
-        Some((runner, id)) => Some(Subject::Session { runner: runner.into(), id: id.into() }),
-        None => key.parse().ok().map(Subject::Task),
     }
 }
 
@@ -277,6 +266,7 @@ impl Workspace {
             self.dispatch(action, Origin::System, window, cx);
         }
         self.sync_native(window, cx);
+        self.sync_editor(window, cx);
         if redraw {
             cx.notify();
         }
@@ -294,27 +284,16 @@ impl Workspace {
             return self.chat_key(event, window, cx);
         }
         let Some(agent) = self.model.talk.as_ref().and_then(|talk| self.drawer.agents.get(&talk.task)) else { return };
-        let terminal = &agent.terminal;
-        let (key, m) = (&event.keystroke, event.keystroke.modifiers);
-        let mods = crate::mods(m);
-        if let Some(scroll) = scroll_key(&key.key, mods, terminal.alt_screen()) {
-            terminal.scroll(scroll);
-            cx.notify();
-            return cx.stop_propagation();
-        }
-        if let Some(bytes) = keys::encode(&key.key, key.key_char.as_deref(), mods, terminal.app_cursor()) {
-            terminal.write(bytes);
-            cx.stop_propagation();
-        }
+        terminal::send_key(&agent.terminal, event, cx);
     }
 
-    /// A label typed in sneak mode on one of the drawer's, the right rail's or the empty
+    /// A label typed in sneak mode on one of the drawer's or the empty
     /// workspace's controls: what a click on it does. False: not one of theirs.
     pub(crate) fn activate_drawer(&mut self, kind: &str, name: &str, window: &Window, cx: &mut Context<Self>) -> bool {
         let shown = self.model.talk.as_ref().map(|talk| talk.task.clone());
         let task = shown.as_ref().and_then(Subject::task);
         let action = match (kind, name, task) {
-            ("rail", "new-task", _) | ("drawer", "new_task", _) => {
+            ("drawer", "new_task", _) => {
                 self.new_task(window, cx);
                 return true;
             }
@@ -341,13 +320,14 @@ impl Workspace {
                 }
             }
             ("talk", "chat-deny-note", _) => Action::TalkDenyNote,
+            // The editor and the card under it: the keyboard goes there.
+            ("talk", "editor-terminal" | "editor-card", _) => {
+                self.editor_click(name == "editor-terminal", window, cx);
+                return true;
+            }
             ("talk", "chat-stop", _) => Action::TalkInterrupt,
             ("talk", "view-chat", _) => Action::TalkView { shows: ottospace_core::transcript::View::Native },
             ("talk", "view-terminal", _) => Action::TalkView { shows: ottospace_core::transcript::View::Terminal },
-            ("rail-talk", id, _) => match subject(id) {
-                Some(id) => Action::TalkPick { id },
-                None => return true,
-            },
             ("talk", "", _) => Action::TalkKeys { on: true },
             ("drawer", "close", _) => Action::CloseCompose,
             ("home", "open_app", _) => {
@@ -370,11 +350,6 @@ impl Workspace {
         true
     }
 
-    /// True if the open drawer is on this task: its header names it.
-    pub(crate) fn talk_names(&self, task: TaskId) -> bool {
-        self.model.talk.as_ref().is_some_and(|talk| talk.open && talk.task == Subject::Task(task))
-    }
-
     /// A task's badge as drawn everywhere: its letters (`Model::badges`), its identity colour,
     /// its state's dot. `None`: no such task, or it is dismissed.
     pub(crate) fn task_badge(&self, id: TaskId, size: f32) -> Option<Div> {
@@ -386,7 +361,7 @@ impl Workspace {
 }
 
 /// A badge: `mono` in a rounded square bordered in an identity colour, and a state's dot at
-/// its corner. The one look of a task on the tab bar, its panes, its row, the rail and the drawer.
+/// its corner. The one look of a task on the top row, its row and the drawer.
 pub(crate) fn badge(mono: &str, colour: u32, state: Option<u32>, size: f32) -> Div {
     let dot = (size * 0.36).max(7.);
     let square = div()
@@ -418,7 +393,7 @@ pub(crate) fn badge(mono: &str, colour: u32, state: Option<u32>, size: f32) -> D
 }
 
 impl Workspace {
-    /// A small button of the drawer's header or the rail, named for sneak mode and tests.
+    /// A small button of the drawer's header, named for sneak mode and tests.
     pub(crate) fn talk_button(&self, name: &'static str, label: &str, tip: &'static str) -> Stateful<Div> {
         div()
             .id(name)
@@ -499,7 +474,7 @@ impl Workspace {
         let (title, color) = match (shown, subject) {
             (Some(task), _) => (task.title.clone(), theme::task(task.group().unwrap_or(Group::Captured))),
             (None, Subject::Session { runner, id }) => {
-                let at_work = self.model.rail().iter().any(|cell| cell.task == *subject && cell.working);
+                let at_work = self.model.talk_working(subject);
                 let color = if at_work { theme::task(Group::Running) } else { theme::BORDER_STRONG };
                 (self.model.session_title(runner, id), color)
             }
@@ -542,11 +517,11 @@ impl Workspace {
                     this.dispatch(Action::TaskStop { id: id.clone() }, this.input, window, cx);
                 }))
         });
-        let close = self.talk_button("talk-close", "×", "Close to the rail (⌘⇧L); the agent goes on").on_click(
+        let close = self.talk_button("talk-close", "×", "Close the chat (⌘⇧L); the agent goes on").on_click(
             cx.listener(|this, _, window, cx| drop(this.dispatch(Action::TalkToggle, this.input, window, cx))),
         );
         Some(
-            // As high as the tab strip: one title strip runs across the window.
+            // As high as the top row above it.
             div()
                 .h(px(crate::TOP_BAR))
                 .flex_none()
@@ -675,7 +650,9 @@ impl Workspace {
     pub(crate) fn render_talk(&self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
         let talk = self.model.talk.as_ref().filter(|talk| talk.open)?;
         let header = self.talk_header(&talk.task, cx)?;
+        // The user's editor takes the conversation's place while it has its draft.
         let body = match self.model.brief.is_some() && self.model.brief == talk.task.task() {
+            _ if self.model.editor_shown() => self.editor_body(cx),
             true => self.brief_content(cx).unwrap_or_else(|| div().into_any_element()),
             false => self.talk_body(&talk.task, cx),
         };
@@ -713,7 +690,9 @@ impl Workspace {
     /// to write), else the conversation, else a task's brief beside its tabs. Its left edge
     /// drags to set its width.
     pub(crate) fn render_drawer(&self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let drawer = if self.model.compose.is_some() || self.model.welcome() {
+        let drawer = if self.model.editor_shown() && self.model.compose.is_some() {
+            self.render_compose_editor(width, cx)
+        } else if self.model.compose.is_some() || self.model.welcome() {
             self.render_new_task(width, cx).into_any_element()
         } else {
             self.render_talk(width, cx).or_else(|| self.render_brief(cx))?
@@ -723,94 +702,10 @@ impl Workspace {
         Some(div().relative().flex_none().h_full().flex().child(drawer).child(edge).into_any_element())
     }
 
-    /// The drawer's edge dragged to `x` in the window: its width is what lies right of it, less the rail.
+    /// The drawer's edge dragged to `x` in the window: its width is what lies right of it.
     pub(crate) fn drawer_edge_moved(&mut self, x: f32, window: &mut Window, cx: &mut Context<Self>) {
-        let width = f32::from(window.viewport_size().width) - x - RAIL;
+        let width = f32::from(window.viewport_size().width) - x;
         self.dispatch(Action::TalkResize { width }, self.input, window, cx);
-    }
-
-    /// The rail at the right edge: a cell per open conversation (`Model::rail`), then `+`.
-    /// A click on a cell shows its conversation; on the one shown, closes the drawer.
-    pub(crate) fn render_right_rail(&self, cx: &mut Context<Self>) -> Stateful<Div> {
-        // The cell the keyboard is on, when the right rail has it (`zones`).
-        let focused = match self.model.rail_focus {
-            Some(ottospace_core::model::zones::RailFocus::Right(at)) => Some(at),
-            _ => None,
-        };
-        let cells = self.model.rail().into_iter().enumerate().map(|(at, cell)| {
-            let (name, tip) = (key(&cell.task), gpui::SharedString::from(cell.tip.clone()));
-            // Its identity colour (a session's grey) and its state's dot, as on the bar and the rows.
-            // Not `task_badge`: a session's cell has no task, and its dot is lit while it works.
-            let task_colour = cell.task.task().and_then(|id| self.model.tasks.get(id)).and_then(|task| task.colour);
-            let ring = theme::identity(task_colour);
-            let state = cell.group.map(theme::task).or(cell.working.then(|| theme::task(Group::Running)));
-            let badge = badge(&cell.mono, ring, state, 30.);
-            let (task, cell_task) = (cell.task.clone(), cell.task.task());
-            div()
-                .id(gpui::ElementId::Name(format!("rail-talk:{name}").into()))
-                .relative()
-                .flex_none()
-                .w(px(RAIL))
-                .h(px(crate::RAIL_CELL))
-                .flex()
-                .items_center()
-                .justify_center()
-                .cursor_pointer()
-                .hover(|s| s.bg(rgb(theme::SELECTED)))
-                .when(cell.shown, |d| crate::raised_cell(d, ring, true))
-                .when(focused == Some(at), crate::focus_ring)
-                .child(badge)
-                .child(self.controls.mark(format!("rail-talk:{name}")))
-                // The task's hover card; the short tip only if the task is gone.
-                .map(|d| match cell_task.and_then(|task| crate::progress::card_tip(self, task)) {
-                    Some(card) => d.tooltip(card),
-                    None => d.tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))),
-                })
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.dispatch(Action::TalkPick { id: task.clone() }, this.input, window, cx);
-                }))
-        });
-        let cells: Vec<_> = cells.collect();
-        let divider = (!cells.is_empty()).then(|| div().mx_3().my_1().h(px(1.)).bg(rgb(theme::BORDER_STRONG)));
-        let new = div()
-            .id("new-task")
-            .relative()
-            .flex_none()
-            .w(px(RAIL))
-            .h(px(crate::RAIL_CELL))
-            .flex()
-            .items_center()
-            .justify_center()
-            .cursor_pointer()
-            .hover(|s| s.bg(rgb(theme::SELECTED)))
-            .tooltip(|_, cx| AnyView::from(cx.new(|_| Tooltip("New task (⌘N)".into()))))
-            .child(self.controls.mark("rail:new-task"))
-            .child(svg().path("icons/plus.svg").size(px(16.)).text_color(rgb(theme::MUTED)))
-            .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)));
-        let new = new.when(focused.is_some_and(|at| at == cells.len()), crate::focus_ring);
-        div()
-            .id("right-rail")
-            // The raised cell's shadow falls on its neighbours, never over the drawer.
-            .overflow_hidden()
-            .flex_none()
-            .w(px(RAIL))
-            .h_full()
-            .flex()
-            .flex_col()
-            .border_l_1()
-            .border_color(rgb(theme::BORDER))
-            // The title strip runs on over the rail.
-            .child(div().h(px(crate::TOP_BAR)).flex_none().border_b_1().border_color(rgb(theme::BORDER)))
-            .children(cells)
-            .children(divider)
-            .child(new)
-    }
-
-    /// ⌘⌃1 … ⌘⌃9: the nth conversation of the right rail, as a click on its cell.
-    pub(crate) fn rail_key(&mut self, n: usize, window: &Window, cx: &mut Context<Self>) {
-        if let Some(cell) = self.model.rail().into_iter().nth(n) {
-            self.dispatch(Action::TalkPick { id: cell.task }, self.input, window, cx);
-        }
     }
 
     /// About once a second while an agent's session is not known (`Model::seeking`): reads, on a
@@ -900,8 +795,6 @@ impl Workspace {
             "native": self.chats_snapshot(),
             // The shown conversation's foot, header folder and title hover (`talk::agent_line`).
             "line": self.model.talk.as_ref().map(|talk| self.agent_line(&talk.task)),
-            // The right rail's conversations, in order: task, badge, state, at work, shown, tooltip.
-            "rail": self.model.rail(),
             "note": self.model.talk_note(),
         })
     }

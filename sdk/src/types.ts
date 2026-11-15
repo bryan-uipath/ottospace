@@ -32,6 +32,8 @@ export interface NativeChat {
   /** Each reply's blocks by kind, and its links that open. */
   replies: { blocks: Record<string, number>; links: { web: number; file: number } }[];
   draft_chars: number;
+  /** The user's editor has the draft (⌃G): the composer takes no typing. */
+  editing: boolean;
   /** The draft is the message of a Deny. */
   deny: boolean;
   /** Esc pressed once while a turn runs. */
@@ -100,11 +102,10 @@ export type Focus =
   | { rail: Section }
   | "drawer"
   | "inspector"
-  | { right: number }
   | "nothing";
 
-/** A rail that has the keyboard (in list mode): a left-rail section, or a right-rail place. */
-export type RailFocus = { left: Section } | { right: number };
+/** The rail cell that has the keyboard (in list mode): a section. */
+export type RailFocus = { left: Section };
 
 /** A heading of the Tasks section, in the order drawn. `open`: tasks with tabs open that do not need the user. */
 export type Heading = "needs_you" | "running" | "later" | "done" | "sessions";
@@ -465,6 +466,8 @@ export interface ReposGroup {
   path: string;
   /** Where the heading was laid out, scrolled out of view or not. Null while the section is not drawn. */
   header: Rect | null;
+  /** Its checkouts are folded under its name: not drawn, not rows of list mode. */
+  folded: boolean;
   rows: CheckoutRow[];
 }
 
@@ -476,10 +479,25 @@ export interface CheckoutRow {
   branch: string;
   /** True for the repository's own directory; false for a linked worktree. */
   default: boolean;
-  /** The line under the branch: `Default`, or a linked worktree's directory name. */
+  /** Its directory's name (the row's tooltip has its path). */
   label: string;
+  /** Its open pull request (read with gh), by numbers and kinds only; null if none. */
+  pr: PullRequest | null;
   /** Where the row was laid out, scrolled out of view or not. Null while the section is not drawn. */
   row: Rect | null;
+}
+
+/** A checkout's pull request as the state tells it: no title, name or link. */
+export interface PullRequest {
+  number: number;
+  draft: boolean;
+  /** The row's mark, by precedence: `failing` (a check failed, changes requested, a conflict), `draft`, `pending` (checks running, review required), `ready` (approved, checks passing, clean), else `open`. */
+  look: "failing" | "draft" | "pending" | "ready" | "open";
+  checks: "none" | "passing" | "running" | "failing";
+  /** How many checks failed. */
+  failed: number;
+  review: "none" | "approved" | "changes_requested" | "required";
+  merge: "clean" | "conflicts" | "behind" | "blocked" | "unknown";
 }
 
 /** A row of the Tasks section, as drawn. */
@@ -594,7 +612,7 @@ export type PickItem =
 /** The text field that has the keyboard. Offsets are UTF-16 units: JavaScript string indexes. */
 export interface Field {
   /** Whose it is: the new-task line, the picker's or the Apps section's filter, a mark's name, a note on a capture, or a native conversation's composer (`talk`). */
-  of: "compose" | "picker" | "palette" | "inspector" | "apps" | "mark" | "workbook" | "note" | "talk";
+  of: "compose" | "picker" | "palette" | "inspector" | "apps" | "mark" | "workbook" | "worktree" | "note" | "talk";
   text: string;
   cursor: number;
   /** Start and end, in text order. Equal: only a cursor. */
@@ -623,7 +641,7 @@ export interface Palette {
   query: string;
   /** An index into `palette_rows`. */
   selected: number;
-  /** Move Tab to Task…: the spaces it lists (Workspace, the live tasks, the workbooks), in order; null while it lists commands. */
+  /** Move Tab to…: the spaces it lists (Workspace, the live tasks, the workbooks), in order; null while it lists commands. */
   tasks: PaletteTask[] | null;
   /** Features…: the flags it lists, each with whether it is on; null while it lists commands. */
   features: PaletteFeature[] | null;
@@ -635,7 +653,7 @@ export interface PaletteFeature {
   on: boolean;
 }
 
-/** A space Move Tab to Task… may move the tab on show to. */
+/** A space Move Tab to… may move the tab on show to. */
 export interface PaletteTask {
   to: Owner;
   title: string;
@@ -663,6 +681,18 @@ export interface InspectorRow {
   focused: boolean;
   children: number;
   folded: boolean;
+}
+
+/** The top-level `editor`: the user's editor on a draft (⌃G), never its text. */
+export interface Editor {
+  /** A conversation's key (`"1"`, `"claude:<id>"`), or `"compose"` for the new-task box. */
+  target: string;
+  /** It has the keyboard (not the card under it). */
+  keys: boolean;
+  /** The drawer shows it. */
+  shown: boolean;
+  /** Its program has not exited yet. */
+  running: boolean;
 }
 
 /** The top-level `inspector`: counts and roles of the inspected tree. */
@@ -741,6 +771,8 @@ export interface Confirm {
   dismiss: TaskId | null;
   /** Not the quit question: "Paste 4 lines?" over that terminal pane. Only the user answers it. */
   paste: PasteAsk | null;
+  /** Not the quit question: "Unlist this repository?" for the one at this path, which a task works in. Only the user answers it. */
+  unlist: string | null;
 }
 
 /** What a mark waits for while it has the keyboard (`mode` is `mark`). */
@@ -750,7 +782,9 @@ export type MarkInput =
   | { type: "rename"; mark: number; text: string }
   | { type: "set_key"; mark: number }
   /** A workbook's name is being typed in its row; with `tab`, the title of that tab of it. */
-  | { type: "workbook"; workbook: number; tab?: number; text: string };
+  | { type: "workbook"; workbook: number; tab?: number; text: string }
+  /** A new worktree's branch is being typed in the rows of the repository at `repo` (the user's alone). */
+  | { type: "worktree"; repo: string; text: string };
 
 /** A pane of a workbook's tab. `app`: an app pane's app, by name. A terminal's `lines` and
  * `has_command` count the history it kept; the text is never in the state. */
@@ -866,7 +900,7 @@ export interface Model {
   /** The task whose brief the right bar shows. */
   brief: TaskId | null;
   /**
-   * The conversation the right drawer is on, or null. `open` false: closed to the right rail.
+   * The conversation the right drawer is on, or null. `open` false: closed.
    * `keys`: the keyboard is in it, and keys go to its agent.
    */
   talk: { task: Subject; open: boolean; keys: boolean } | null;
@@ -1006,7 +1040,7 @@ export interface AppEntry {
 export interface Snapshot {
   ok: true;
   mode: Mode;
-  /** Where the keyboard is: a pane, a row of the section list, a left-rail cell, the drawer, a right-rail place (its `+` last), or nothing. */
+  /** Where the keyboard is: a pane, a row of the section list, a rail cell, the drawer, or nothing. */
   focus: Focus;
   state: Model;
   /** Where each pane of the active tab is drawn, by pane id. */
@@ -1018,8 +1052,10 @@ export interface Snapshot {
   closes: Record<string, Rect>;
   /** Each drawn pane's header text: a terminal's directory and program (`app-api · cargo test`), an app's window title, "" for an empty pane. */
   titles: Record<string, string>;
-  /** Each tab on the bar, by place. */
-  tabs: Rect[];
+  /** Each tab by its place in `state.tabs`: null for one not drawn (the second row shows the selected space's, when it has more than one). */
+  tabs: (Rect | null)[];
+  /** Each space of the top row, by its place there. */
+  space_rects: (Rect | null)[];
   /** The left column's title strip, and the open section's header (null: none open). */
   strip: Rect | null;
   bar_header: Rect | null;
@@ -1047,6 +1083,8 @@ export interface Snapshot {
   notice_level: "info" | "error" | null;
   /** How many problems the last read of `settings.json` found: the first is in `notice`. */
   settings_errors: number;
+  /** The user's editor on a draft, or null while none runs. */
+  editor: Editor | null;
   /** Each hosted window's real frame, by pane id. */
   hosted: Record<string, Rect>;
   /** Each hosted pane's title-bar crop in points, by pane id. */
@@ -1162,8 +1200,6 @@ export interface Snapshot {
      */
     line: AgentLine | null;
     note: string | null;
-    /** The right rail's conversations, in order: badge, state, at work, shown, and the tooltip's text. */
-    rail: { task: Subject; mono: string; group: Group | null; working: boolean; shown: boolean; tip: string }[];
   };
   /**
    * The meeting timeline, if `calendar_ics` is set: counts, times (ms) and stages only. No title or

@@ -102,6 +102,25 @@ impl Workspace {
                 .justify_center()
                 .child(panel);
         }
+        // "Unlist this repository?": which, that a task works there, and that no file goes.
+        if let Some(path) = &confirm.unlist {
+            let name = ottospace_core::repos::name_of(path);
+            let panel = dialog::floating(320.)
+                .child(div().px_3().pt_3().text_sm().text_color(rgb(theme::TEXT)).child(format!("Unlist {name}?")))
+                .child(
+                    div()
+                        .p_3()
+                        .text_xs()
+                        .text_color(rgb(theme::MUTED))
+                        .child("A task works in it. It leaves the Repos list; nothing on disk changes."),
+                )
+                .child(dialog::hint("↵ unlist · esc cancel"));
+            return dialog::backdrop("confirm-backdrop", 0.5, Action::QuitCancel, cx)
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(panel);
+        }
         // A draft in the right bar goes with the app: its captures are named with the terminals.
         let draft = match self.model.quit_discards() {
             0 => None,
@@ -114,7 +133,9 @@ impl Workspace {
             1 => Some("1 task's agent will be stopped".to_string()),
             n => Some(format!("{n} tasks' agents will be stopped")),
         };
-        let lines = confirm.lines().into_iter().chain(draft).chain(agents).map(|line| div().child(line));
+        // And the user's editor on a message: what it has not saved.
+        let editor = self.model.editing.as_ref().map(|_| "your editor's unsaved message".to_string());
+        let lines = confirm.lines().into_iter().chain(draft).chain(agents).chain(editor).map(|line| div().child(line));
         let panel = dialog::floating(320.)
             .child(
                 div()

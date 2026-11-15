@@ -53,6 +53,11 @@ fn read(dir: &Path) -> Option<Repo> {
 
 /// A small regular file's text. Not a pipe or device (reading one would hang), and not a huge file.
 fn text(file: &Path) -> Option<String> {
+    small_text(file, 4096)
+}
+
+/// As `text`, up to `most` bytes.
+pub(crate) fn small_text(file: &Path, most: u64) -> Option<String> {
     let meta = fs::metadata(file).ok()?;
-    (meta.is_file() && meta.len() < 4096).then(|| fs::read_to_string(file).ok()).flatten()
+    (meta.is_file() && meta.len() < most).then(|| fs::read_to_string(file).ok()).flatten()
 }

@@ -320,12 +320,24 @@ impl Workspace {
                 self.click_apps_control(kind, window, cx);
                 None
             }
-            ("repo", _) => Some(Action::OpenRepo { path: name.into(), axis: Axis::Right }),
+            ("repo", _) => Some(Action::RepoClick { path: name.into(), axis: Axis::Right }),
+            ("repo-fold", _) => Some(Action::RepoFold { path: name.into(), fold: None }),
+            ("repo-add", _) => {
+                self.add_worktree(name, window, cx);
+                None
+            }
+            ("repo-terminal", _) => Some(Action::OpenRepo { path: name.into(), axis: Axis::Right }),
             // The one verb, as a click: the user's starts the conversation, a client's shows the tabs.
-            ("task" | "home-row" | "home-node" | "group", _) if self.input == ottospace_core::Origin::User => {
+            ("task" | "home-row" | "home-node", _) if self.input == ottospace_core::Origin::User => {
                 number.map(|id| Action::TaskTalk { id })
             }
-            ("task" | "home-row" | "home-node" | "group", _) => number.map(|id| Action::TaskGo { id: Some(id) }),
+            ("task" | "home-row" | "home-node", _) => number.map(|id| Action::TaskGo { id: Some(id) }),
+            ("space", _) => name.parse().ok().map(|index| Action::SpaceSelect { index }),
+            ("space-hide", _) => name.parse().ok().map(|index| Action::SpaceHide { index: Some(index) }),
+            ("top", "new_task") => {
+                self.new_task(window, cx);
+                None
+            }
             ("tasks-view", _) => {
                 if let Ok(view) = serde_json::from_value(serde_json::json!(name)) {
                     self.click_tasks_view(view, window, cx);

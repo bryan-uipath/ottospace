@@ -37,7 +37,9 @@ pub enum Binding {
     NextTask,
     TalkFocus,
     TalkToggle,
-    RailNumber,
+    SpaceNumber,
+    NextSpace,
+    HideSpace,
     MarkPane,
     MarkJump,
     MarkNumber,
@@ -78,7 +80,9 @@ pub const ALL: &[Binding] = &[
     Binding::NextTask,
     Binding::TalkFocus,
     Binding::TalkToggle,
-    Binding::RailNumber,
+    Binding::SpaceNumber,
+    Binding::NextSpace,
+    Binding::HideSpace,
     Binding::MarkPane,
     Binding::MarkJump,
     Binding::MarkNumber,
@@ -120,6 +124,8 @@ impl Binding {
             Binding::NextTask => &[C::NextTask],
             Binding::TalkFocus => &[C::TalkFocus],
             Binding::TalkToggle => &[C::TalkToggle],
+            Binding::NextSpace => &[C::NextSpace, C::PrevSpace],
+            Binding::HideSpace => &[C::HideSpace],
             Binding::MarkPane => &[C::MarkPane, C::MarkTab],
             Binding::MarkJump => &[C::MarkJump],
             Binding::VisualMode => &[C::VisualMode],
@@ -132,7 +138,7 @@ impl Binding {
             Binding::Quit => &[C::Quit],
             Binding::MoveToTab
             | Binding::TabNumber
-            | Binding::RailNumber
+            | Binding::SpaceNumber
             | Binding::MarkNumber
             | Binding::Copy
             | Binding::Paste
@@ -163,7 +169,10 @@ impl Binding {
             | B::FitPane
             | B::Swap
             | B::MoveToTab => Group::Panes,
-            B::NewTab
+            B::SpaceNumber
+            | B::NextSpace
+            | B::HideSpace
+            | B::NewTab
             | B::TabNumber
             | B::NextTab
             | B::CloseTab
@@ -171,7 +180,7 @@ impl Binding {
             | B::MarkPane
             | B::MarkJump
             | B::MarkNumber => Group::Tabs,
-            B::NewTask | B::NextTask | B::TalkFocus | B::TalkToggle | B::RailNumber | B::CaptureKey => Group::Tasks,
+            B::NewTask | B::NextTask | B::TalkFocus | B::TalkToggle | B::CaptureKey => Group::Tasks,
             B::Copy | B::Paste => Group::Text,
             B::VisualMode | B::ListMode | B::SneakMode => Group::Modes,
             B::Palette | B::ShowKeys | B::EditSettings | B::Zoom | B::ReturnKey | B::Hide | B::Quit => Group::App,
@@ -205,7 +214,9 @@ impl Binding {
             B::NextTask => "Next that needs you",
             B::TalkFocus => "Type to the agent",
             B::TalkToggle => "Open / close chat",
-            B::RailNumber => "Show a rail's agent",
+            B::SpaceNumber => "Go to tab group",
+            B::NextSpace => "Next / previous tab group",
+            B::HideSpace => "Hide tab group",
             B::CaptureKey => "Capture, from any app",
             B::Copy => "Copy",
             B::Paste => "Paste",
@@ -228,7 +239,7 @@ impl Binding {
             Binding::TabNumber => "⌘1–9",
             Binding::MoveToTab => "⌘⇧⌥1–9",
             Binding::MarkNumber => "⌘⌥1–9",
-            Binding::RailNumber => "⌘⌃1–9",
+            Binding::SpaceNumber => "⌘⌃1–9",
             _ => return None,
         })
     }
@@ -275,7 +286,7 @@ impl Group {
     fn notes(self) -> &'static [(&'static str, &'static str)] {
         match self {
             Group::Panes => &[("Drag a header", "Split, swap, move")],
-            Group::Text => &[("⇧PgUp ⇧PgDn", "Scroll a page")],
+            Group::Text => &[("⇧PgUp ⇧PgDn", "Scroll a page"), ("⌃G", "Write the line in your editor")],
             Group::List => &[
                 ("J K ↓ ↑", "Move"),
                 ("↵ ⇧↵", "Open / open below"),
@@ -285,6 +296,7 @@ impl Group {
                 ("A space", "Workbook: add tab, list tabs"),
                 ("P /", "Apps: pin, filter"),
                 ("← → T", "Calendar: day back, on, today"),
+                ("← → A", "Repos: fold, unfold, new worktree"),
             ],
             Group::Visual => &[
                 ("H J K L", "Move"),

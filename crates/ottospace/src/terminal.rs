@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io;
 use std::os::fd::AsFd;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Acquire, Ordering::Relaxed, Ordering::Release};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -82,6 +82,8 @@ struct Shared {
     /// How often the user scrolled the history: the scrollbar shows on a change.
     scrolls: AtomicU32,
     input: OnceLock<EventLoopSender>,
+    /// How the program ended: its exit code, or `None` for a signal. Set before `exited`.
+    status: OnceLock<Option<i32>>,
 }
 
 #[derive(Clone)]
@@ -97,7 +99,12 @@ impl EventListener for Listener {
                     let _ = input.send(Msg::Input(text.into_bytes().into()));
                 }
             }
-            Event::Exit | Event::ChildExit(_) => self.0.exited.store(true, Relaxed),
+            Event::ChildExit(status) => {
+                let _ = self.0.status.set(status.code());
+                // Release: whoever sees `exited` sees the status.
+                self.0.exited.store(true, Release)
+            }
+            Event::Exit => self.0.exited.store(true, Release),
             _ => {}
         }
     }
@@ -194,10 +201,11 @@ impl Terminal {
     /// Runs the user's editor on `file`, as `run` runs a program: `$VISUAL`, else `$EDITOR`,
     /// else `vi`, as the login shell sets them. The shell splits the variable itself, so
     /// `code -w` works (zsh is told to split as POSIX shells do, and none expands a glob).
+    /// Open Settings and ⌃G's message both run it.
     pub fn edit(file: &str, vars: &[(&str, String)]) -> io::Result<Self> {
         const EDIT: &str = "if [ -n \"$ZSH_VERSION\" ]; then setopt shwordsplit noglob; else set -f; fi; \
                             exec ${VISUAL:-${EDITOR:-vi}} \"$1\"";
-        Self::script(EDIT, "ottospace-settings", vec![file.to_string()], vars, None)
+        Self::script(EDIT, "ottospace-editor", vec![file.to_string()], vars, None)
     }
 
     /// `$SHELL -lic <script> <name> <args…>`: the script is fixed text, the arguments its
@@ -551,7 +559,18 @@ impl Terminal {
     }
 
     pub fn exited(&self) -> bool {
-        self.shared.exited.load(Relaxed)
+        self.shared.exited.load(Acquire)
+    }
+
+    /// The name of the program the terminal started, as it runs now (`nvim` once the shell
+    /// exec'd it). `None` once it has exited.
+    pub fn program(&self) -> Option<String> {
+        (!self.exited()).then(|| process::name(self.child as i32)).flatten()
+    }
+
+    /// True once the program has exited with status 0. A signal, or no status heard, is not.
+    pub fn exited_ok(&self) -> bool {
+        self.exited() && self.shared.status.get() == Some(&Some(0))
     }
 
     /// True while the program asked for application-cursor arrow keys.
@@ -716,6 +735,21 @@ fn colour(color: Color) -> u32 {
         Color::Named(name) => {
             u8::try_from(name as usize).ok().filter(|i| *i < 16).map_or(palette::FOREGROUND, palette::xterm)
         }
+    }
+}
+
+/// A key for a terminal's program, as a pane's, the drawer agent's and the editor's go: a scroll
+/// key scrolls its history, else it is encoded and written. A ⌘ shortcut encodes to nothing.
+pub fn send_key<T: 'static>(terminal: &Terminal, event: &gpui::KeyDownEvent, cx: &mut gpui::Context<T>) {
+    let (key, mods) = (&event.keystroke, crate::mods(event.keystroke.modifiers));
+    if let Some(scroll) = ottospace_core::terminal::scroll_key(&key.key, mods, terminal.alt_screen()) {
+        terminal.scroll(scroll);
+        cx.notify();
+        return cx.stop_propagation();
+    }
+    if let Some(bytes) = ottospace_core::keys::encode(&key.key, key.key_char.as_deref(), mods, terminal.app_cursor()) {
+        terminal.write(bytes);
+        cx.stop_propagation();
     }
 }
 

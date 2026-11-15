@@ -106,9 +106,24 @@ impl Model {
         self.spaces.iter().map(row).collect()
     }
 
+    /// A space's name: its task's title, its session's, its workbook's.
+    pub fn space_title(&self, of: &Owner) -> String {
+        match of {
+            Owner::Workspace => "Workspace".into(),
+            Owner::Task { id } => self.tasks.get(*id).map(|task| task.title.clone()).unwrap_or_default(),
+            Owner::Session { runner, id } => self.session_title(runner, id),
+            Owner::Workbook { id } => self.workbooks.get(*id).map(|book| book.name.clone()).unwrap_or_default(),
+        }
+    }
+
     /// The places in `tabs` of a space's tabs.
     pub fn space_tabs(&self, of: &Owner) -> Vec<usize> {
         (0..self.tabs.len()).filter(|at| self.tabs[*at].space == *of).collect()
+    }
+
+    /// The place in `tabs` of the selected space's `n`th tab, as the second row draws them (⌘1…).
+    pub fn visible_tab(&self, n: usize) -> Option<usize> {
+        self.space_tabs(self.space()).get(n).copied()
     }
 
     /// The place in `tabs` of the tab a space shows when selected: its last, else its first.
@@ -238,7 +253,7 @@ impl Model {
             Action::SpaceHide { index } => index.or(selected) == selected && *self.space() != Owner::Workspace,
             Action::SpaceOpen { space: of } => other(Some(of)),
             Action::TaskGo { id } => id.is_none_or(|id| other(Some(&Owner::Task { id }))),
-            Action::OpenRepo { .. } => *self.space() != Owner::Workspace,
+            Action::OpenRepo { .. } | Action::RepoClick { .. } => *self.space() != Owner::Workspace,
             // The selected space's last tab closed: the space goes.
             Action::CloseTab { index } => {
                 let at = index.unwrap_or(self.active);

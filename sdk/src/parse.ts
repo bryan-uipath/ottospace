@@ -15,6 +15,7 @@ import type {
   AxNode,
   AxOverlay,
   AxSource,
+  Editor,
   AxTarget,
   AxTreeReply,
   Axis,
@@ -88,6 +89,7 @@ import type {
   ReposGroup,
   RepoDirs,
   CheckoutRow,
+  PullRequest,
   AppsBar,
   ClosedApp,
   Sneak,
@@ -215,14 +217,12 @@ function focus(value: unknown, at: string): Focus {
   const o = fields(value, at);
   if (o.pane !== undefined) return { pane: num(o.pane, `${at}.pane`) };
   if (o.list !== undefined) return { list: num(o.list, `${at}.list`) };
-  if (o.rail !== undefined) return { rail: section(o.rail, `${at}.rail`) };
-  return { right: num(o.right, `${at}.right`) };
+  return { rail: section(o.rail, `${at}.rail`) };
 }
 
 function railFocus(value: unknown, at: string): RailFocus {
   const o = fields(value, at);
-  if (o.left !== undefined) return { left: section(o.left, `${at}.left`) };
-  return { right: num(o.right, `${at}.right`) };
+  return { left: section(o.left, `${at}.left`) };
 }
 
 function heading(value: unknown, at: string): Heading {
@@ -671,18 +671,6 @@ function composePicks(value: unknown, at: string): Snapshot["compose_picks"] {
   return { wheres: list(str)(o.wheres, `${at}.wheres`), whos: list(str)(o.whos, `${at}.whos`) };
 }
 
-function railCell(value: unknown, at: string): Snapshot["drawer"]["rail"][number] {
-  const o = fields(value, at);
-  return {
-    task: subject(o.task, `${at}.task`),
-    mono: str(o.mono, `${at}.mono`),
-    group: orNull(group)(o.group, `${at}.group`),
-    working: bool(o.working, `${at}.working`),
-    shown: bool(o.shown, `${at}.shown`),
-    tip: str(o.tip, `${at}.tip`),
-  };
-}
-
 function noticeLevel(value: unknown, at: string): "info" | "error" {
   if (value === "info" || value === "error") return value;
   throw new Error(`${at}: not a level: ${JSON.stringify(value)}`);
@@ -761,6 +749,7 @@ function nativeChat(value: unknown, at: string): NativeChat {
     },
     replies: list(reply)(o.replies, `${at}.replies`),
     draft_chars: num(o.draft_chars, `${at}.draft_chars`),
+    editing: bool(o.editing, `${at}.editing`),
     deny: bool(o.deny, `${at}.deny`),
     armed: bool(o.armed, `${at}.armed`),
     away: bool(o.away, `${at}.away`),
@@ -798,7 +787,6 @@ function drawerDrawn(value: unknown, at: string): Snapshot["drawer"] {
     native: native(o.native, `${at}.native`),
     line: orNull(agentLine)(o.line, `${at}.line`),
     note: orNull(str)(o.note, `${at}.note`),
-    rail: list(railCell)(o.rail, `${at}.rail`),
   };
 }
 
@@ -847,6 +835,7 @@ function reposGroup(value: unknown, at: string): ReposGroup {
     name: str(o.name, `${at}.name`),
     path: str(o.path, `${at}.path`),
     header: orNull(rect)(o.header, `${at}.header`),
+    folded: bool(o.folded, `${at}.folded`),
     rows: list(checkoutRow)(o.rows, `${at}.rows`),
   };
 }
@@ -858,7 +847,29 @@ function checkoutRow(value: unknown, at: string): CheckoutRow {
     branch: str(o.branch, `${at}.branch`),
     default: bool(o.default, `${at}.default`),
     label: str(o.label, `${at}.label`),
+    pr: orNull(pullRequest)(o.pr, `${at}.pr`),
     row: orNull(rect)(o.row, `${at}.row`),
+  };
+}
+
+/** One of `kinds`, or a parse error. */
+function oneOf<T extends string>(kinds: readonly T[], what: string): Parse<T> {
+  return (value, at) => {
+    if (typeof value === "string" && (kinds as readonly string[]).includes(value)) return value as T;
+    throw wrong(at, what, value);
+  };
+}
+
+function pullRequest(value: unknown, at: string): PullRequest {
+  const o = fields(value, at);
+  return {
+    number: num(o.number, `${at}.number`),
+    draft: bool(o.draft, `${at}.draft`),
+    look: oneOf(["failing", "draft", "pending", "ready", "open"] as const, "a pull request's look")(o.look, `${at}.look`),
+    checks: oneOf(["none", "passing", "running", "failing"] as const, "checks")(o.checks, `${at}.checks`),
+    failed: num(o.failed, `${at}.failed`),
+    review: oneOf(["none", "approved", "changes_requested", "required"] as const, "a review")(o.review, `${at}.review`),
+    merge: oneOf(["clean", "conflicts", "behind", "blocked", "unknown"] as const, "a merge state")(o.merge, `${at}.merge`),
   };
 }
 
@@ -925,7 +936,7 @@ function pickItem(value: unknown, at: string): PickItem {
 
 function field(value: unknown, at: string): Field {
   const o = fields(value, at);
-  const owners = ["compose", "picker", "palette", "inspector", "apps", "mark", "workbook", "note", "talk"];
+  const owners = ["compose", "picker", "palette", "inspector", "apps", "mark", "workbook", "worktree", "note", "talk"];
   if (typeof o.of !== "string" || !owners.includes(o.of)) {
     throw wrong(`${at}.of`, "compose, picker, apps, mark, workbook, note or talk", o.of);
   }
@@ -1002,6 +1013,16 @@ function inspectorRow(value: unknown, at: string): InspectorRow {
   };
 }
 
+function editor(value: unknown, at: string): Editor {
+  const o = fields(value, at);
+  return {
+    target: str(o.target, `${at}.target`),
+    keys: bool(o.keys, `${at}.keys`),
+    shown: bool(o.shown, `${at}.shown`),
+    running: bool(o.running, `${at}.running`),
+  };
+}
+
 function inspector(value: unknown, at: string): Inspector {
   const o = fields(value, at);
   const c = fields(o.counts, `${at}.counts`);
@@ -1075,6 +1096,7 @@ function confirm(value: unknown, at: string): Confirm {
     running: list(running)(o.running, `${at}.running`),
     dismiss: orNull(num)(o.dismiss, `${at}.dismiss`),
     paste: orNull(pasteAsk)(o.paste, `${at}.paste`),
+    unlist: orNull(str)(o.unlist, `${at}.unlist`),
   };
 }
 
@@ -1087,6 +1109,7 @@ function markInput(value: unknown, at: string): MarkInput {
     const typing = { type: "workbook" as const, workbook: num(o.workbook, `${at}.workbook`), text: str(o.text, `${at}.text`) };
     return o.tab === undefined ? typing : { ...typing, tab: num(o.tab, `${at}.tab`) };
   }
+  if (o.type === "worktree") return { type: "worktree", repo: str(o.repo, `${at}.repo`), text: str(o.text, `${at}.text`) };
   throw wrong(`${at}.type`, "what a mark waits for", o.type);
 }
 
@@ -1402,7 +1425,8 @@ export function snapshot(value: unknown): Snapshot {
     headers: map(rect)(o.headers, "headers"),
     closes: map(rect)(o.closes, "closes"),
     titles: map(str)(o.titles, "titles"),
-    tabs: list(rect)(o.tabs, "tabs"),
+    tabs: list(orNull(rect))(o.tabs, "tabs"),
+    space_rects: list(orNull(rect))(o.space_rects, "space_rects"),
     strip: orNull(rect)(o.strip, "strip"),
     bar_header: orNull(rect)(o.bar_header, "bar_header"),
     drag: orNull(drag)(o.drag, "drag"),
@@ -1418,6 +1442,7 @@ export function snapshot(value: unknown): Snapshot {
     notice: orNull(str)(o.notice, "notice"),
     notice_level: orNull(noticeLevel)(o.notice_level, "notice_level"),
     settings_errors: num(o.settings_errors, "settings_errors"),
+    editor: orNull(editor)(o.editor, "editor"),
     hosted: map(rect)(o.hosted, "hosted"),
     crop: map(num)(o.crop, "crop"),
     terminals: map(terminal)(o.terminals, "terminals"),
