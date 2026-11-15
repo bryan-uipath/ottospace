@@ -15,6 +15,7 @@ import type {
   AxNode,
   AxOverlay,
   AxSource,
+  Editor,
   AxTarget,
   AxTreeReply,
   Axis,
@@ -214,14 +215,12 @@ function focus(value: unknown, at: string): Focus {
   const o = fields(value, at);
   if (o.pane !== undefined) return { pane: num(o.pane, `${at}.pane`) };
   if (o.list !== undefined) return { list: num(o.list, `${at}.list`) };
-  if (o.rail !== undefined) return { rail: section(o.rail, `${at}.rail`) };
-  return { right: num(o.right, `${at}.right`) };
+  return { rail: section(o.rail, `${at}.rail`) };
 }
 
 function railFocus(value: unknown, at: string): RailFocus {
   const o = fields(value, at);
-  if (o.left !== undefined) return { left: section(o.left, `${at}.left`) };
-  return { right: num(o.right, `${at}.right`) };
+  return { left: section(o.left, `${at}.left`) };
 }
 
 function heading(value: unknown, at: string): Heading {
@@ -670,18 +669,6 @@ function composePicks(value: unknown, at: string): Snapshot["compose_picks"] {
   return { wheres: list(str)(o.wheres, `${at}.wheres`), whos: list(str)(o.whos, `${at}.whos`) };
 }
 
-function railCell(value: unknown, at: string): Snapshot["drawer"]["rail"][number] {
-  const o = fields(value, at);
-  return {
-    task: subject(o.task, `${at}.task`),
-    mono: str(o.mono, `${at}.mono`),
-    group: orNull(group)(o.group, `${at}.group`),
-    working: bool(o.working, `${at}.working`),
-    shown: bool(o.shown, `${at}.shown`),
-    tip: str(o.tip, `${at}.tip`),
-  };
-}
-
 function noticeLevel(value: unknown, at: string): "info" | "error" {
   if (value === "info" || value === "error") return value;
   throw new Error(`${at}: not a level: ${JSON.stringify(value)}`);
@@ -760,6 +747,7 @@ function nativeChat(value: unknown, at: string): NativeChat {
     },
     replies: list(reply)(o.replies, `${at}.replies`),
     draft_chars: num(o.draft_chars, `${at}.draft_chars`),
+    editing: bool(o.editing, `${at}.editing`),
     deny: bool(o.deny, `${at}.deny`),
     armed: bool(o.armed, `${at}.armed`),
     away: bool(o.away, `${at}.away`),
@@ -797,7 +785,6 @@ function drawerDrawn(value: unknown, at: string): Snapshot["drawer"] {
     native: native(o.native, `${at}.native`),
     line: orNull(agentLine)(o.line, `${at}.line`),
     note: orNull(str)(o.note, `${at}.note`),
-    rail: list(railCell)(o.rail, `${at}.rail`),
   };
 }
 
@@ -998,6 +985,16 @@ function inspectorRow(value: unknown, at: string): InspectorRow {
     focused: bool(o.focused, `${at}.focused`),
     children: num(o.children, `${at}.children`),
     folded: bool(o.folded, `${at}.folded`),
+  };
+}
+
+function editor(value: unknown, at: string): Editor {
+  const o = fields(value, at);
+  return {
+    target: str(o.target, `${at}.target`),
+    keys: bool(o.keys, `${at}.keys`),
+    shown: bool(o.shown, `${at}.shown`),
+    running: bool(o.running, `${at}.running`),
   };
 }
 
@@ -1387,7 +1384,8 @@ export function snapshot(value: unknown): Snapshot {
     headers: map(rect)(o.headers, "headers"),
     closes: map(rect)(o.closes, "closes"),
     titles: map(str)(o.titles, "titles"),
-    tabs: list(rect)(o.tabs, "tabs"),
+    tabs: list(orNull(rect))(o.tabs, "tabs"),
+    space_rects: list(orNull(rect))(o.space_rects, "space_rects"),
     strip: orNull(rect)(o.strip, "strip"),
     bar_header: orNull(rect)(o.bar_header, "bar_header"),
     drag: orNull(drag)(o.drag, "drag"),
@@ -1403,6 +1401,7 @@ export function snapshot(value: unknown): Snapshot {
     notice: orNull(str)(o.notice, "notice"),
     notice_level: orNull(noticeLevel)(o.notice_level, "notice_level"),
     settings_errors: num(o.settings_errors, "settings_errors"),
+    editor: orNull(editor)(o.editor, "editor"),
     hosted: map(rect)(o.hosted, "hosted"),
     crop: map(num)(o.crop, "crop"),
     terminals: map(terminal)(o.terminals, "terminals"),

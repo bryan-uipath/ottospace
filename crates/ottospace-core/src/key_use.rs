@@ -37,7 +37,9 @@ pub enum Binding {
     NextTask,
     TalkFocus,
     TalkToggle,
-    RailNumber,
+    SpaceNumber,
+    NextSpace,
+    HideSpace,
     MarkPane,
     MarkJump,
     MarkNumber,
@@ -78,7 +80,9 @@ pub const ALL: &[Binding] = &[
     Binding::NextTask,
     Binding::TalkFocus,
     Binding::TalkToggle,
-    Binding::RailNumber,
+    Binding::SpaceNumber,
+    Binding::NextSpace,
+    Binding::HideSpace,
     Binding::MarkPane,
     Binding::MarkJump,
     Binding::MarkNumber,
@@ -120,6 +124,8 @@ impl Binding {
             Binding::NextTask => &[C::NextTask],
             Binding::TalkFocus => &[C::TalkFocus],
             Binding::TalkToggle => &[C::TalkToggle],
+            Binding::NextSpace => &[C::NextSpace, C::PrevSpace],
+            Binding::HideSpace => &[C::HideSpace],
             Binding::MarkPane => &[C::MarkPane, C::MarkTab],
             Binding::MarkJump => &[C::MarkJump],
             Binding::VisualMode => &[C::VisualMode],
@@ -132,7 +138,7 @@ impl Binding {
             Binding::Quit => &[C::Quit],
             Binding::MoveToTab
             | Binding::TabNumber
-            | Binding::RailNumber
+            | Binding::SpaceNumber
             | Binding::MarkNumber
             | Binding::Copy
             | Binding::Paste

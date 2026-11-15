@@ -9,7 +9,7 @@ ottospace            # opens on the Repos list
 ```
 
 - First run: grant your terminal Accessibility (ottospace will not start without it) and Screen Recording (for app panes), in System Settings ▸ Privacy & Security.
-- Repos lists each repository's name over its checkouts: the branch, then `Default` (its own directory) or a worktree's directory. Click one: a terminal opens there, in the empty pane or else in a split to the right (⇧-click: below).
+- Repos lists each repository's name over its checkouts: the branch, then `Default` (its own directory) or a worktree's directory. Click one: a terminal opens there, in a Workspace tab of its own. A row a task works in carries the task's badge, and its click shows that task (Terminal, on hover, opens a terminal anyway).
 - The status bar (bottom left) shows who has the keyboard when it is not the focused pane's: `APP`, `PICK`, `COMMAND`, `INSPECT`, `LIST`, `TASK`, `VISUAL`, `SNEAK`, `QUIT?`. Nothing there: normal. Its right end shows `● 2` when two tasks need you; the version is under About ottospace (⌘P, or the app menu) and the hover of the bar's empty middle.
 - Stuck in an app? Click ottospace's rail or top bar. Or press the return key: F18, which most keyboards lack, so map Caps Lock to it (see [the return key](reference.md#the-return-key)) or start with `OTTOSPACE_RETURN_KEY=f13` (f13 to f20). The status bar names the key in use.
 
@@ -21,7 +21,7 @@ ottospace            # opens on the Repos list
 | Choose what goes in a new pane (terminal or app) | ⌘E (right) or ⌘⇧E (below), type to filter, ↵. Typing also offers installed apps that are not running |
 | Edit the picker's filter or the new-task line | As any Mac text field: ⌥←/→ words, ⌘←/→ line, ⇧ selects, ⌘A, ⌘C/⌘X/⌘V, ⌘Z/⇧⌘Z, ⌥⌫ a word, ⌘⌫ the line; click, drag, double click |
 | Move between panes | ⌘⌃ arrows or ⌘⌃ H J K L · ⌘] ⌘[ cycle |
-| Move to the rails and back | The keys of the row above, on past the panes: left to the section list, then the left rail; right to the conversation, then the right rail. On a rail ↑↓ move, ↵ opens, Esc goes back |
+| Move to the rails and back | The keys of the row above, on past the panes: left to the section list, then the rail; right to the conversation. On the rail ↑↓ move, ↵ opens, Esc goes back |
 | Resize the pane | ⌘⌥ arrows or ⌘⌥ H J K L: the split moves that way · ⌘⌃= evens all out |
 | Give an app the room its window needs | ⌘⌃0, or `fit` in the pane header: shown when the app refused the pane's size and a split can move |
 | Swap the pane with its neighbour | ⌘⇧⌥ arrows or ⌘⇧⌥ H J K L |
@@ -36,7 +36,9 @@ ottospace            # opens on the Repos list
 | Find an action by name | ⌘P: type part of its name, ↵ runs it. Or the menu bar |
 | Edit the settings | ⌘, (Open Settings): `settings.json` in your editor, in a tab of its own |
 | See what an app exposes to accessibility | Focus its pane, ⌘P, "inspector": its tree in a panel on the right, counted by role. Click a row to outline it |
-| Switch tab | ⌘1 … ⌘9 · ⌘⇧] ⌘⇧[ · ⌃Tab |
+| Switch tab (of the task on show) | ⌘1 … ⌘9 · ⌘⇧] ⌘⇧[ · ⌃Tab |
+| Switch task (top row) | ⌘⌃1 … ⌘⌃9 · ⌘⌃] ⌘⌃[ |
+| Hide the task on show | ⌘⌃W, or its × on the top row. Its row in Tasks opens it again |
 | Close the tab and its panes | ⌘⇧W |
 | Save the tab as a workbook | ⌘⇧S |
 | Fill the screen | ⌘⌃F (again to restore) |
@@ -118,11 +120,12 @@ Key Counts forgets it.
 
 | I want to | Do |
 |---|---|
-| Start a task | ⌘N, type a line, ↵: its agent starts in the drawer on the right, beside your workspace. The + on the Tasks bar or the right rail opens the same box; its picks set where and who |
+| Start a task | ⌘N, type a line, ↵: its agent starts in the drawer on the right, beside your workspace. The + on the Tasks bar or the top row opens the same box; its picks set where and who |
 | Add a task for later | ⌘N, type a line, ⇧↵ |
-| Talk to a task's agent | Click the task (or ↵ on it): its conversation shows in the drawer. Not running: Start agent, or Resume session once it ended (a click never starts one). ⌘L moves the keyboard in and out; ⌘⇧L closes the drawer to the right rail; Stop ends the agent (natively: Stop the Agent in the palette); drag its left edge to resize |
+| Write a message in your editor | ⌃G in the composer or the new-task box: `$VISUAL`/`$EDITOR` opens in the drawer on the text. Save and quit puts it back (not sent; ↵ sends); quit with an error keeps it as it was. A permission card meanwhile shows under the editor: click it to answer, ⌃G back |
+| Talk to a task's agent | Click the task (or ↵ on it): its conversation shows in the drawer. Not running: Start agent, or Resume session once it ended (a click never starts one). ⌘L moves the keyboard in and out; ⌘⇧L closes the chat, or opens it again; Stop ends the agent (natively: Stop the Agent in the palette); drag its left edge to resize |
 | Chat with Claude Code in the drawer | ↵ send, ⇧↵ new line, Esc leaves; Esc Esc, or Stop at the composer's right while a turn runs, stops the turn. Once the agent ended, ↵ or Resume session (at the composer's right) goes on with its session; an ended agent says why, a stop and its resume are one thin divider, and Show details opens what its program printed. Hover a message: Copy, Copy as Markdown; a code block has its own Copy. An edit shows its diff under its call. A link opens on your click only. A permission card: `a` allow (this one request), `d` deny, `m` deny with a message, `s` show all (needed before `a` on a long one); ↵ does nothing there. `Chat \| Terminal` in the header switches to the CLI's TUI and back (`conversation_view` sets the default). The model is at the drawer's foot (with a mode that acts unasked: `haiku-5.5 · auto`); hover the title for mode, time and folder |
-| Switch between running agents | Click a badge on the right rail, or ⌘⌃1 … ⌘⌃9. Hover a badge for what it is doing |
+| Switch between running agents | Click its task on the top row, or ⌘⌃1 … ⌘⌃9 |
 | See a task's tabs | Click its row, or ⌘⇧N for the next that needs you: its space |
 | Point at something for a task ("this message", "this error") | ⌃⌥⌘Space, from any app: the pane in use freezes as a picture and a draft opens on the right. Drag to circle, ⇧-drag a box, ⌥-drag a line, click to type a note. ↵, type what you want, ↵ starts it (⇧↵ for later). Esc leaves the picture; Esc in the title cancels the draft. The task keeps the pictures and the text under what you circled as its brief: [Capture](reference.md#capture) |
 | Capture a second pane into the same draft | While drawing, click the other pane. Or press ⌃⌥⌘Space again |
@@ -131,12 +134,12 @@ Key Counts forgets it.
 | Add files to the task | Drag them from Finder onto the box, ⌘O, or copy in Finder and ⌘V: each becomes a `/path` |
 | Run the agent in a folder | Type `~/`, `/` or (with a `>repo`) `./`, and take a folder from the dropdown: "runs in ~/notes/ ×" shows it. The path stays in the title |
 | Point the task at a tab, a pane, a mark or an app | `^name` in the line, or ⌥-click the tab or pane while the box is open |
-| A task's tabs | Its space, behind its badge on the bar. Starting a task opens it with one empty tab (or takes the Repos tab it was started from); ⌘T joins the space on show; drag a tab onto another space; palette: Remove Tab from Task, Move Tab to Task… |
+| A task's tabs | Its space, behind its badge on the bar. Starting a task opens it with one empty tab (or takes the Repos tab it was started from); ⌘T joins the space on show; drag a tab onto another space; palette: Move Tab to… |
 | The next task that needs me | ⌘⇧N: its space and chat |
 | See what needs me at a glance | A tab with no panes is the home screen: what goes there (Open an app ⌘E, Terminal ⌘D), up to three tasks under Needs you, and a node for each of the first 12 listed tasks. Left to right is the project; within a project the older task is farther; the colour is the state. No node sits under the text, so a small window shows fewer. Hover a node for its title; click a node or a row to open its conversation |
 | See the inbox | Tasks on the rail: Needs you, Running, Later, Done (folded). Click a heading to fold it, or ⌘⌃E, move to it, ↵ or space |
 | See tasks by project | Project in the Tasks header (State goes back): a group a `#project` with a bar of its states, then "no project". Today's work is under the list |
-| See a task's time and tokens | Hover its row, or its badge on the right rail: started, agent time, workspace, tokens by model |
+| See a task's time and tokens | Hover its row: started, agent time, workspace, tokens by model |
 | See agent sessions that are no task (a Claude Code or Codex started by hand) | Tasks on the rail, under Elsewhere (folded at first: click its heading; the last 7 days, `sessions_range` for another): one line a row, its title (else repository) and runner; hover for what it does now, the model, when last active. A click shows its conversation in the drawer: Resume session goes on with it, unless it is at work in another terminal (then watched: its calls and edits, a message at a time). Hover a row: Track makes it a task (its conversation too), Hide removes it until the next start. [More](reference.md#sessions) |
 | Snooze 1 hour / hold / dismiss / undo | ⌘⌃E on Tasks, then `s` / `h` / `x` / `u`. By mouse: Snooze and Done on a row you hover (hold is `h` only); "Undo" then shows at the top for 6 seconds |
 

@@ -101,11 +101,15 @@ commands! {
     CloseTab: "Close Tab", Tabs;
     NewTask: "New Task", Tasks;
     // After New Task: a query of a name ranks a later tie lower.
-    RemoveTabFromTask: "Remove Tab from Task", Tabs;
-    MoveTabToTask: "Move Tab to Task…", Tabs;
+    MoveTabToTask: "Move Tab to…", Tabs;
     NextTask: "Next Task", Tasks;
+    // After Next Task: a query of its name ranks a later tie lower.
+    NextSpace: "Next Tab Group", Tabs;
+    PrevSpace: "Previous Tab Group", Tabs;
+    HideSpace: "Hide", Tabs;
     CapturePane: "Capture the Pane", Tasks;
     TalkFocus: "Type in the Conversation", Tasks;
+    EditMessage: "Edit Message in Editor", Tasks;
     TalkToggle: "Open or Close the Conversation", Tasks;
     StopAgent: "Stop the Agent", Tasks;
     SaveWorkbook: "Save Tab as Workbook", Workbook;
@@ -146,7 +150,7 @@ pub struct Palette {
     pub query: Field,
     /// Index into `matches()`, or `task_matches()` while it lists tasks.
     pub selected: usize,
-    /// Move Tab to Task…: the tasks to move the tab on show to, not commands.
+    /// Move Tab to…: the spaces to move the tab on show to, not commands.
     pub tasks: Option<Vec<TaskChoice>>,
     /// Features…: the flags, each with whether it is on, not commands.
     pub features: Option<Vec<FeatureChoice>>,

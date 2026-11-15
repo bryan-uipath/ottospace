@@ -56,6 +56,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     closes: {},
     titles: {},
     tabs: [],
+    space_rects: [],
     strip: [0, 0, 316, 28],
     bar_header: null,
     drag: null,
@@ -71,6 +72,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     notice: null,
     notice_level: null,
     settings_errors: 0,
+    editor: null,
     hosted: {},
     crop: {},
     terminals: {},
@@ -171,6 +173,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
             },
             replies: [{ blocks: { para: 2, code: 1 }, links: { web: 1, file: 0 } }],
             draft_chars: 0,
+            editing: false,
             deny: false,
             armed: false,
             away: false,
@@ -183,11 +186,6 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       },
       line: null,
       note: null,
-      rail: [
-        { task: 1, mono: "FL", group: "running", working: true, shown: true, tip: "fix login\nRunning\napp · @claude · now" },
-        // A session no task owns, by its runner and id.
-        { task: { runner: "claude", id: "8f14e45f-ceea-467f-a8d3-0242ac130003" }, mono: "GT", group: null, working: false, shown: false, tip: "Greet the user\nSession\napp · @claude · 2h" },
-      ],
     },
     frame: { number: 3, seq: 2, drawn: 2, waited_ms: 0, window: 41 },
   };
