@@ -176,8 +176,11 @@ answers in a test run only. Made-up content only.
 - `.github/workflows/build.yml`, on pushes to `main` and on pull requests with the label
   `pr-build`: tests the installer and packages a build. On `main` it publishes the `main-latest`
   prerelease. `osi install pr <n>` adds the label.
-- `.github/workflows/scripts.yml`, on pull requests that change `scripts/` or `install.sh`: tests
-  the installer.
+- `.github/workflows/scripts.yml`, on pull requests that change `install.sh`, `scripts/osi`,
+  `scripts/test-osi.sh` or `scripts/package.sh`: tests the installer.
+- The Rust build cache: the `e2e` job of `ci.yml` saves one, on `main` only; `app-windows.yml`,
+  `shots.yml` and `reliability.yml` read it (`shared-key: e2e`) and save none. `check` and
+  `build` keep their own.
 - `.github/workflows/shots.yml`, on pull requests that change the app's or core's sources or the
   scenarios: before and after pictures, an artifact (see "Screenshots and recordings").
 - `.github/workflows/release.yml`, on a `v*` tag: the GitHub Release.
