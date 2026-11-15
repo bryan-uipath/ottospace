@@ -109,7 +109,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⇧] / ⌘⇧[ or ⌃Tab / ⌃⇧Tab | Next / previous tab of the selected task |
 | ⌘⌃1 … ⌘⌃9 | Select a space of the top row: Workspace, then each open task and workbook. Not ⌥1…⌥9: ⌥ is Meta in a terminal |
 | ⌘⌃] / ⌘⌃[ | Next / previous space of the top row |
-| ⌘⌃W | Hide the selected task or workbook (Hide Task): it leaves the top row and nothing in it stops; its row in Tasks or Workbook opens it again |
+| ⌘⌃W | Hide the selected task or workbook (Hide): it leaves the top row and nothing in it stops; its row in Tasks or Workbook opens it again |
 | ⌘⇧W | Close the tab and its panes |
 | ⌘⇧S | Save the tab on show as a [workbook](#workbooks). On a tab that came from one, or was saved into one: update its tab there |
 | ⌘Q | Quit. While a terminal runs something (a program in front of its shell, or a background or stopped job) it asks first, and lists them: ↵, Q or ⌘Q again quits; Esc, any other key or any other shortcut cancels and does nothing else |

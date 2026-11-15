@@ -104,9 +104,9 @@ commands! {
     MoveTabToTask: "Move Tab to…", Tabs;
     NextTask: "Next Task", Tasks;
     // After Next Task: a query of its name ranks a later tie lower.
-    NextSpace: "Next Task Tab", Tabs;
-    PrevSpace: "Previous Task Tab", Tabs;
-    HideSpace: "Hide Task", Tabs;
+    NextSpace: "Next Tab Group", Tabs;
+    PrevSpace: "Previous Tab Group", Tabs;
+    HideSpace: "Hide", Tabs;
     CapturePane: "Capture the Pane", Tasks;
     TalkFocus: "Type in the Conversation", Tasks;
     EditMessage: "Edit Message in Editor", Tasks;
