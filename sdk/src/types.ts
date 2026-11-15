@@ -967,6 +967,14 @@ export interface Terminal {
 /** `[x, y, w, h]` in points. */
 export type Rect = [number, number, number, number];
 
+/** The key reference as a test run's state gives it: ids only, no counts. */
+export interface KeyReference {
+  groups: { group: string; rows: string[] }[];
+  known: string[];
+  known_open: boolean;
+  known_header: Rect | null;
+}
+
 /** How near the next meeting is. */
 export type MeetingStage = "far" | "approaching" | "imminent" | "running" | "past";
 
@@ -1194,6 +1202,9 @@ export interface Snapshot {
   app_presses: [PaneId, number[]][] | null;
   /** Test runs only: the ids of the key bindings the user knows. Else null. */
   keys_known: string[] | null;
+  /** Test runs only, while the key reference shows: its groups' rows (binding ids, notes' keys),
+   * the known ids, whether they are open, and where `Known · n` is drawn. Else null. */
+  key_reference: KeyReference | null;
   /** The marks, in the user's order. */
   marks: Mark[];
   /** The name of the mark just taken off, while the Marks section offers to put it back. */

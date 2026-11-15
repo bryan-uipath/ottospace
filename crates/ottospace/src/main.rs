@@ -33,7 +33,7 @@ use ottospace_core::compose;
 use ottospace_core::edit::{self, Edit};
 use ottospace_core::features::Feature;
 use ottospace_core::hosted::{self as hosting, Click};
-use ottospace_core::key_use::Binding;
+use ottospace_core::key_use::{Binding, Line};
 use ottospace_core::keys::{self, FilterKey, Mods};
 use ottospace_core::list::{ListKey, list_key};
 use ottospace_core::marks::{Field, MarkInput, MarkOf, MarkRef, letter};
@@ -442,106 +442,6 @@ const SPLITS: [(&str, &str, &str, Axis, bool); 3] = [
     ("split_down", "icons/split-down.svg", "Split down…  ⌘⇧E", Axis::Down, false),
 ];
 
-/// The key reference, by group: keys and what they do. Keep in step with the bindings in `main`.
-const KEYS_PANES: &[(&str, &str)] = &[
-    ("⌘E / ⌘⇧E", "Pick what opens in a new pane: right / below"),
-    ("⌘D", "Terminal to the right"),
-    ("⌘⇧D", "Terminal below"),
-    ("⌘W", "Close the pane"),
-];
-const KEYS_MOVE: &[(&str, &str)] = &[
-    ("⌘] / ⌘[", "Next / previous pane"),
-    ("⌘⌃ arrows", "Pane in that direction"),
-    ("⌘⌃ H J K L", "The same, on the home row"),
-];
-const KEYS_ARRANGE: &[(&str, &str)] = &[
-    ("⌘⌥ arrows / H J K L", "Resize: move the split that way"),
-    ("⌘⌃=", "Even out the splits"),
-    ("⌘⌃0", "Fit the pane to its app's window"),
-    ("⌘⇧⌥ arrows / H J K L", "Swap with the pane that way"),
-    ("⌘⇧⌥1 … ⌘⇧⌥9", "Move the pane to a tab (US layout)"),
-];
-const KEYS_DRAG: &[(&str, &str)] = &[
-    ("Drag a pane's header", "Onto a pane's edge: split there"),
-    ("", "Onto its centre: swap the two"),
-    ("", "Onto a tab: move it there · Esc cancels"),
-    ("", "A live app is parked: click it to go back in"),
-];
-const KEYS_TABS: &[(&str, &str)] = &[
-    ("⌘T", "New tab, with an empty pane: ⌘E picks what goes in it"),
-    ("⌘1 … ⌘9", "Go to a tab of the task on show"),
-    ("⌘⇧] / ⌘⇧[", "Next / previous tab"),
-    ("⌃Tab / ⌃⇧Tab", "Next / previous tab"),
-    ("⌘⌃1 … ⌘⌃9", "Go to a task (Workspace is the first) on the top row"),
-    ("⌘⌃] / ⌘⌃[", "Next / previous task on the top row"),
-    ("⌘⌃W", "Hide the task on show: nothing in it stops; its row opens it again"),
-    ("⌘⇧W", "Close the tab and its panes"),
-    ("⌘⇧S", "Save the tab as a workbook; again updates it"),
-    ("File menu", "Add the tab to a workbook · save all tabs as one"),
-];
-const KEYS_MARKS: &[(&str, &str)] = &[
-    ("⌘B / ⌘⇧B", "Mark the pane / the tab; again unmarks"),
-    ("⌘' then a letter", "Go to the mark with that letter"),
-    ("⌘⌥1 … ⌘⌥9", "Go to one of the first nine marks"),
-];
-const KEYS_TERMINAL: &[(&str, &str)] = &[
-    ("Wheel / trackpad", "Scroll back through history"),
-    ("⇧PageUp / ⇧PageDown", "Scroll a page"),
-    ("⇧Home / ⇧End", "Top / bottom of history"),
-    ("Drag / 2× / 3× click", "Select text, a word, a line"),
-    ("⌘C", "Copy the selection"),
-    ("⌘V", "Paste"),
-    ("⌘⇧C", "Visual mode: select with the keyboard"),
-    ("⌘⌃E", "List mode: keys for the bar's sections. ↵ or space on a heading folds it"),
-    ("⌘; or ⌘⌃G", "Sneak mode: a letter label on every control"),
-    ("⌘N", "New task: type a line, ↵ adds it. ↑↓ ↵ pick from its list; ⌘O adds files"),
-    ("⌘⇧N", "Next task: show the tabs of the first that needs you"),
-    ("⌘H", "Hide ottospace"),
-    ("⌘Q", "Quit: asks first while a terminal runs"),
-];
-const KEYS_LIST: &[(&str, &str)] = &[
-    ("J K / ↓ ↑", "Move the selection"),
-    ("↵ / ⇧↵", "Open the row / open it below"),
-    ("Tab / ⇧Tab", "Next / previous section"),
-    ("S", "Task: snooze one hour"),
-    ("H", "Task: put on hold"),
-    ("X", "Task: dismiss from the inbox"),
-    ("U", "Task: undo the last of these"),
-    ("R / M / X / U", "Mark: rename / letter / remove / put back"),
-    ("⇧J ⇧K", "Mark: move down / up"),
-    ("R / X / U", "Workbook: rename / delete / undo; on a tab's row, that tab"),
-    ("A / space", "Workbook: add this tab / list its tabs"),
-    ("P / X / U", "App not running: pin or unpin / hide a suggestion / undo"),
-    ("/", "Apps: filter all apps"),
-    ("← → / A", "Repos: fold / unfold a repository / new worktree"),
-    ("Esc", "Leave"),
-];
-const KEYS_VISUAL: &[(&str, &str)] = &[
-    ("H J K L / arrows", "Move the cursor"),
-    ("W B E · 0 ^ $", "Word · line start, text, end"),
-    ("⇧H ⇧M ⇧L", "Top, middle, bottom of the screen"),
-    ("V / ⇧V", "Select from here / whole lines; again clears"),
-    ("Y or ↵", "Copy and leave"),
-    ("Esc", "Leave"),
-];
-
-/// The new-task line and the picker's filter.
-const KEYS_FIELD: &[(&str, &str)] = &[
-    ("⌥←/→ · ⌘←/→", "Move by word / to the line's ends"),
-    ("⇧ + a move · ⌘A", "Select / select all"),
-    ("⌥⌫ · ⌘⌫", "Delete a word / to the start"),
-    ("⌘C ⌘X ⌘V", "Copy, cut, paste"),
-    ("⌘Z / ⇧⌘Z", "Undo / redo"),
-    ("Drag / 2× / 3× click", "Select text, a word, the line"),
-    ("⌃G", "The new-task line or a message in your editor; save and quit puts it back"),
-];
-
-const KEYS_SNEAK: &[(&str, &str)] = &[
-    ("A S D F …", "Type a label: it does what a click would"),
-    ("⌫", "Take a letter back"),
-    ("Esc", "Leave; so does a letter of no label"),
-];
-
 /// Rail sections in order, with their icon and label.
 const SECTIONS: [(Section, &str, &str); 6] = [
     (Section::Tasks, "icons/tasks.svg", "Tasks"),
@@ -632,6 +532,8 @@ enum Mark {
     Notice,
     NoticeClose,
     NoticeOffer,
+    /// The key reference's `Known · n`.
+    KeysKnown,
 }
 
 type Marks = Rc<RefCell<HashMap<Mark, Bounds<Pixels>>>>;
@@ -3033,6 +2935,12 @@ impl Workspace {
             // The bindings the user knows (`key_use`), by id. Null outside a test run: what the
             // user's keys are used for is never on the socket.
             "keys_known": std::env::var_os("OTTOSPACE_E2E").map(|_| self.keys_known()),
+            // While the key reference shows, in a test run: its groups' binding ids in order, the
+            // known ones and whether they are open, and where `Known · n` is drawn. Else null.
+            "key_reference": std::env::var_os("OTTOSPACE_E2E").filter(|_| self.model.keys).map(|_| {
+                let reference = self.key_reference(cx).0;
+                key_use::snapshot(&reference, marks.get(&Mark::KeysKnown).copied().map(rect))
+            }),
             // The marks in the user's order: name, key, kind, whether its pane or tab is open
             // now, and whether it can be opened. `row` and `buttons`: where the Marks section
             // drew it, or null.
@@ -3463,6 +3371,8 @@ impl Workspace {
             let plain = !(key.modifiers.platform || key.modifiers.control || key.modifiers.alt);
             if key.key == "escape" {
                 self.dispatch(Action::CloseKeys, self.input, window, cx);
+            } else if key.key == "enter" && plain {
+                self.dispatch(Action::KeysKnown, self.input, window, cx);
             } else if let Some(step) = key_step(&key.key, key.modifiers.shift).filter(|_| plain) {
                 // The list is longer than a small window: these keys scroll it.
                 self.bars.step("keys", step);
@@ -3914,84 +3824,79 @@ impl Workspace {
         self.filtered_list_key(event, action, window, cx);
     }
 
-    /// The key reference: every shortcut, grouped. ⌘/ or Esc or a click closes it.
+    /// The key reference, from the keymap: the keys not yet known first, each with a bar of its
+    /// recent use, and the known ones folded under `Known · n`. ⌘/ or Esc or a click closes it.
     fn render_keys(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let return_key = RETURN_KEY.get().cloned().unwrap_or_else(|| "off".into());
-        let capture_key = collect::KEY.get().map_or_else(|| "off".into(), |key| collect::key_label(key));
-        let group = |title: &'static str, rows: Vec<(String, &'static str)>| {
+        let (reference, texts) = self.key_reference(cx);
+        let line = |line: &Line| {
+            let (keys, what, fill) = match line {
+                Line::Key { binding, fill } => {
+                    (texts.get(binding).cloned().unwrap_or_default(), binding.label(), *fill)
+                }
+                Line::Note { keys, what } => (keys.to_string(), *what, 0.),
+            };
+            div()
+                .flex()
+                .gap_3()
+                .text_sm()
+                .child(
+                    div()
+                        .w(px(112.))
+                        .flex_none()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .child(div().text_color(rgb(theme::TEXT)).child(keys))
+                        .child(key_use::bar(fill)),
+                )
+                // A long line wraps in a narrow window.
+                .child(div().min_w_0().text_color(rgb(theme::MUTED)).child(what))
+        };
+        let group = |title: String, lines: &[Line]| {
             div()
                 .flex()
                 .flex_col()
                 .gap_1()
                 .child(div().text_xs().text_color(rgb(theme::PRIMARY)).child(title))
-                .children(rows.into_iter().map(|(keys, what)| {
-                    div()
-                        .flex()
-                        .gap_3()
-                        .text_sm()
-                        .child(div().w(px(150.)).flex_none().text_color(rgb(theme::TEXT)).child(keys))
-                        // A long line wraps in a narrow window.
-                        .child(div().min_w_0().text_color(rgb(theme::MUTED)).child(what))
-                }))
+                .children(lines.iter().map(line))
         };
-        // A row of a feature that is off is not listed: "Mark: …" with marks off, "Apps: …" with the section off.
-        let (marks, apps) = (self.on(Feature::Marks), self.on(Feature::AppsSection));
-        let shown = |what: &str| {
-            (marks || !what.starts_with("Mark:"))
-                && (apps || !what.starts_with("Apps:") && !what.starts_with("App not"))
-        };
-        let rows = |list: &[(&str, &'static str)]| {
-            list.iter().filter(|(_, w)| shown(w)).map(|(k, w)| (k.to_string(), *w)).collect::<Vec<_>>()
-        };
-        let columns = div()
-            .p_4()
-            .flex()
-            .gap_8()
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_4()
-                    .child(group("PANES", rows(KEYS_PANES)))
-                    .child(group("MOVE", rows(KEYS_MOVE)))
-                    .child(group("ARRANGE", rows(KEYS_ARRANGE)))
-                    .child(group("MOUSE", rows(KEYS_DRAG))),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_4()
-                    .child(group("TABS", rows(KEYS_TABS)))
-                    .children(self.on(Feature::Marks).then(|| group("MARKS", rows(KEYS_MARKS))))
-                    .child(group(
-                        "WINDOW",
-                        vec![
-                            (return_key, "From any app: back to ottospace"),
-                            ("⌘⌃F".into(), "Zoom the window"),
-                            (capture_key, "From any app: capture the pane in use"),
-                            ("⌘⌃A".into(), "Accessibility overlay (debug)"),
-                            ("⌘P".into(), "Command palette: any command by name"),
-                            ("⌘/".into(), "This list"),
-                        ],
-                    ))
-                    .child(group("TEXT FIELDS", rows(KEYS_FIELD))),
-            )
-            .child(
-                div()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .gap_4()
-                    .child(group("TERMINAL", rows(KEYS_TERMINAL)))
-                    .child(group("VISUAL", rows(KEYS_VISUAL)))
-                    .child(group("LIST", rows(KEYS_LIST)))
-                    .child(group("SNEAK", rows(KEYS_SNEAK))),
-            );
+        let groups: Vec<(String, &[Line])> =
+            reference.groups.iter().map(|(of, lines)| (of.label().to_uppercase(), &lines[..])).collect();
+        let columns = key_use::columns(&groups, 3).into_iter().map(|column| {
+            div().w(px(280.)).flex().flex_col().gap_4().children(column.into_iter().map(|(t, l)| group(t.clone(), l)))
+        });
+        let columns = div().flex().gap_8().children(columns);
+        let known = (!reference.known.is_empty()).then(|| {
+            let open = reference.known_open;
+            let header = div()
+                .id("keys-known")
+                .relative()
+                .text_xs()
+                .text_color(rgb(theme::MUTED))
+                .hover(|d| d.text_color(rgb(theme::TEXT)))
+                .cursor_pointer()
+                .child(format!("{} Known · {}", if open { "▾" } else { "▸" }, reference.known.len()))
+                .child(mark(&self.marks, Mark::KeysKnown))
+                // Not the backdrop's: a click anywhere else closes the reference.
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.dispatch(Action::KeysKnown, this.input, window, cx);
+                    }),
+                );
+            let lines =
+                key_use::columns(&reference.known.iter().map(|l| ((), std::slice::from_ref(l))).collect::<Vec<_>>(), 3);
+            let rows = lines.into_iter().map(|column| {
+                div().w(px(280.)).flex().flex_col().gap_1().children(column.into_iter().map(|(_, l)| line(&l[0])))
+            });
+            div().flex().flex_col().gap_2().child(header).when(open, |d| d.child(div().flex().gap_8().children(rows)))
+        });
+        let body = div().p_4().flex().flex_col().gap_6().child(columns).children(known);
         // No taller than the window: the list scrolls inside the panel.
         let panel = dialog::panel(theme::BORDER_STRONG).min_h_0().max_w_full().flex().flex_col().overflow_hidden();
         // The columns keep their height inside the list: a flex row would stretch them to its own.
-        let list = div().id("keys-rows").flex_1().overflow_y_scroll().child(columns);
+        let list = div().id("keys-rows").flex_1().overflow_y_scroll().child(body);
         let panel = panel.child(self.bars.area("keys", list));
         dialog::backdrop("keys-backdrop", 0.5, Action::CloseKeys, cx)
             .p_6()
@@ -5954,11 +5859,14 @@ impl Render for Workspace {
         self.move_notice_bar(window);
         // The notice bar's room: everything under the top row starts this much lower.
         let split = || div().h(px(self.bar.height)).flex_none();
-        // The Repos list is noted again only while it is drawn.
-        // So are the tabs and spaces: a tab of another space is not drawn.
-        self.marks.borrow_mut().retain(|mark, _| {
-            !matches!(mark, Mark::Repo(_) | Mark::Checkout(_) | Mark::BarHeader | Mark::Tab(_) | Mark::Space(_))
-        });
+        // The Repos list, the tabs and spaces, and ⌘/'s Known are noted again only while drawn.
+        let drawn_anew = |mark: &Mark| {
+            matches!(
+                mark,
+                Mark::Repo(_) | Mark::Checkout(_) | Mark::BarHeader | Mark::Tab(_) | Mark::Space(_) | Mark::KeysKnown
+            )
+        };
+        self.marks.borrow_mut().retain(|mark, _| !drawn_anew(mark));
         // The pane drag is over, however it ended (a drop, Esc, a release outside the window):
         // no drop zone may stay drawn.
         if !cx.has_active_drag() {

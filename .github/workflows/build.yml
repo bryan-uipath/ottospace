@@ -31,7 +31,7 @@ env:
 jobs:
   scripts:
     # install.sh and osi against fixture builds in a temp directory. No network.
-    # On a pull request, with the label only; scripts.yml tests a change to the scripts.
+    # On a pull request, with the label only; scripts.yml tests a change to what the test reads.
     if: github.event_name == 'push' || (contains(github.event.pull_request.labels.*.name, 'pr-build') && (github.event.action != 'labeled' || github.event.label.name == 'pr-build'))
     runs-on: macos-26
     timeout-minutes: 10

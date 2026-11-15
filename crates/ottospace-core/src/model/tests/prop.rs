@@ -756,6 +756,7 @@ const MAKERS: &[Make] = &[
     |_| Action::CloseKeys,
     |g| Action::KeyUsed { binding: g.rng.pick(crate::key_use::ALL), at: g.key_time() },
     |_| Action::ResetKeyUse,
+    |_| Action::KeysKnown,
     |g| {
         use crate::notice::Kind::*;
         let kinds = [Failed, Refused, Unsaved, Told, SettingsProblem, SettingsRetired, SettingsRestart, Start, Keys];
@@ -1341,6 +1342,14 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(!m.app_lists.filtering, "the Apps filter has the keyboard with the section off");
     }
     ensure!(m.sections().iter().all(|s| s.feature().is_none_or(|f| m.features.on(f))), "a rail cell of a feature off");
+    // The key reference lists every binding that is on once: in its group, or known.
+    let reference = m.key_reference(|_| true);
+    let keys =
+        reference.groups.iter().flat_map(|(_, lines)| lines).filter(|l| matches!(l, crate::key_use::Line::Key { .. }));
+    ensure!(
+        keys.count() + reference.known.len() == crate::key_use::ALL.iter().filter(|b| m.binding_on(**b)).count(),
+        "the key reference: {reference:?}"
+    );
     // The Calendar is open, or has the rail's keyboard, only while a feed is set.
     let calendar_shown =
         m.sidebar == Some(Section::Calendar) || m.rail_focus == Some(zones::RailFocus::Left(Section::Calendar));
