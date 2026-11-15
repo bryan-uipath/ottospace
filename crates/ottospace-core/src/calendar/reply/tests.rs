@@ -28,7 +28,7 @@ fn event(id: u64, start: u64, minutes: u64) -> Event {
         title: format!("Meeting {id}"),
         location: String::new(),
         link: None,
-        tentative: false,
+        show: crate::ics::Show::Busy,
     }
 }
 
@@ -167,7 +167,7 @@ fn meetings_are_cleaned_capped_and_carry_no_link() {
         title: "Design\nreview\u{202e}\u{7} https://example.zoom.us/j/1?pwd=s3cret".into(),
         location: "Room 4 zoom.us/j/9?pwd=s3cret".into(),
         link: Some("https://example.zoom.us/j/1?pwd=s3cret".into()),
-        tentative: true,
+        show: crate::ics::Show::Tentative,
         ..event(1, day + 9 * H, 30)
     };
     let link_only = Event {
@@ -261,7 +261,7 @@ fn a_reply_serializes_as_the_sdk_fixture_says() {
             link: Some("https://example.zoom.us/j/1".into()),
             ..event(2, day + 9 * H, 30)
         },
-        Event { title: "Planning".into(), tentative: true, ..event(3, day + 9 * H + 30 * M, 60) },
+        Event { title: "Planning".into(), show: crate::ics::Show::Tentative, ..event(3, day + 9 * H + 30 * M, 60) },
     ]);
     c.call_seen(Some(false), day);
     let fixture: serde_json::Value =
@@ -285,6 +285,12 @@ fn free_time_only_where_the_calendar_is_known() {
     assert_eq!(a.known_until, Some(rfc3339(last, &utc())));
     let free: Vec<(&str, &str)> = a.free.iter().map(|s| (&s.start[..], &s.end[..])).collect();
     assert_eq!(free, [("2026-11-16T09:00:00+00:00", &rfc3339(last, &utc())[..])], "and none on Tuesday");
+    // Free entries hidden: still cut where the read was, not at the last one shown.
+    let mut hidden = c.clone();
+    hidden.received[0].show = crate::ics::Show::Free;
+    hidden.options(true, Vec::new());
+    assert_eq!(hidden.events.len(), MAX_EVENTS - 1);
+    assert_eq!(answer(&hidden, (from, to), Workday::default(), &utc()).known_until, Some(rfc3339(last, &utc())));
     // Fewer: all known.
     assert_eq!(answer(&calendar(vec![]), (from, to), Workday::default(), &utc()).known_until, None);
 }

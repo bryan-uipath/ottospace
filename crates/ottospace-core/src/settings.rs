@@ -127,12 +127,28 @@ pub struct Settings {
     /// machine: never in the state, a log or the feed's request.
     #[serde(default)]
     pub calendar_email: Option<String>,
+    /// Leave out entries that keep the time free (Outlook's FREE, `TRANSP:TRANSPARENT`).
+    /// Default: false.
+    #[serde(default)]
+    pub calendar_hide_free: Option<bool>,
+    /// Colours by title, first match wins: `[{"match": "1:1", "color": "teal"}]`.
+    #[serde(default)]
+    pub calendar_colors: Option<Vec<ColorSetting>>,
     /// Feature flags by name, e.g. `{ "marks": true }`: see `features`. One not named keeps its default.
     #[serde(default)]
     pub features: std::collections::BTreeMap<String, bool>,
     /// When ⌘V into a terminal asks first: `multiline` (default: text with a line break) or `never`.
     #[serde(default)]
     pub paste_confirm: Option<crate::clip::PasteConfirm>,
+}
+
+/// One of `calendar_colors`: a title that holds `match` (case ignored) takes `color`.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ColorSetting {
+    #[serde(rename = "match")]
+    pub text: String,
+    pub color: String,
 }
 
 /// Which meetings alert when they start (`calendar_notify_for`).
@@ -285,6 +301,12 @@ impl Settings {
                 return Err("calendar_email must be an e-mail address, as me@example.com".into());
             }
         }
+        if let Some(rules) = settings.calendar_colors.as_deref() {
+            if rules.len() > crate::calendar::MAX_RULES {
+                return Err(format!("at most {} rules", crate::calendar::MAX_RULES));
+            }
+            rules.iter().try_for_each(|r| crate::calendar::ColorRule::new(&r.text, &r.color).map(drop))?;
+        }
         // A flag no feature has is a mistake; one retired is ignored (`read` warns of it).
         let retired = |name: &String| crate::features::RETIRED.contains(&name.as_str());
         let unknown = settings.features.keys().filter(|name| !retired(name));
@@ -351,6 +373,12 @@ impl Settings {
             Ok(settings) => (settings, wrong),
             Err(err) => (Self::default(), vec![err]),
         }
+    }
+
+    /// `calendar_colors` as rules, those that are right, in order.
+    pub fn color_rules(&self) -> Vec<crate::calendar::ColorRule> {
+        let rules = self.calendar_colors.iter().flatten().take(crate::calendar::MAX_RULES);
+        rules.filter_map(|r| crate::calendar::ColorRule::new(&r.text, &r.color).ok()).collect()
     }
 
     /// `calendar_workday`, else 09:00 to 17:00.
@@ -518,6 +546,9 @@ fn restart_keys(started: &Settings, now: &Settings) -> Vec<&'static str> {
         calendar_notify: _,
         calendar_notify_for: _,
         calendar_email,
+        // Told to the core again on each good read.
+        calendar_hide_free: _,
+        calendar_colors: _,
         // Told to the core again on each good read, as Features… writes them.
         features: _,
         paste_confirm: _,
@@ -964,6 +995,36 @@ mod tests {
             assert!(settings.calendar_email.is_none() && wrong.len() == 1, "{bad:?}");
             assert!(wrong[0].starts_with("calendar_email: ") && !wrong[0].contains("s3"), "{wrong:?}");
         }
+    }
+
+    #[test]
+    fn calendar_colors_name_a_palette_colour_and_free_entries_may_be_hidden() {
+        let read = |text: &str| Settings::read(text);
+        let (ok, wrong) = read(
+            r#"{"calendar_hide_free": true, "calendar_colors": [{"match": "1:1", "color": "teal"}, {"match": "Focus", "color": "Lime"}]}"#,
+        );
+        assert_eq!((ok.calendar_hide_free, wrong.len()), (Some(true), 0));
+        let rules = ok.color_rules();
+        assert_eq!(rules.iter().map(|r| (r.text.as_str(), r.color)).collect::<Vec<_>>(), [("1:1", 7), ("focus", 4)]);
+        let table = [
+            (r#"[{"match": "x", "color": "blue"}]"#, "calendar_colors: color is one of red, indigo, orange, pink"),
+            (r#"[{"match": "", "color": "red"}]"#, "calendar_colors: match must be 1 to 100 characters"),
+            (r#"[{"match": "x", "color": "red", "regex": true}]"#, "calendar_colors: unknown field `regex`"),
+            (r#"{"match": "x", "color": "red"}"#, "calendar_colors: invalid type"),
+        ];
+        for (colors, said) in table {
+            let (settings, wrong) = read(&format!(r#"{{"calendar_colors": {colors}}}"#));
+            assert!(settings.calendar_colors.is_none() && wrong.len() == 1, "{colors}: {wrong:?}");
+            assert!(wrong[0].starts_with(said), "{colors}: {wrong:?}");
+        }
+        let many =
+            serde_json::json!({ "calendar_colors": vec![serde_json::json!({"match": "x", "color": "red"}); 65] });
+        assert_eq!(read(&many.to_string()).1, ["calendar_colors: at most 64 rules"]);
+        // Both apply as the app runs: no restart asked.
+        let mut watch = Watch::default();
+        watch.read("{}", false);
+        assert!(watch.read(r#"{"calendar_hide_free": true, "calendar_colors": []}"#, false).is_some());
+        assert_eq!(watch.line(), None);
     }
 
     #[test]
