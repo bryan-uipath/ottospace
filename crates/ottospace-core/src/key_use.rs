@@ -183,7 +183,7 @@ impl Binding {
             | B::MarkPane
             | B::MarkJump
             | B::MarkNumber => Group::Tabs,
-            B::NewTask | B::NextTask | B::TalkFocus | B::TalkToggle | B::CaptureKey => Group::Tasks,
+            B::NewTask | B::NextTask | B::TalkFocus | B::TalkToggle | B::DialToggle | B::CaptureKey => Group::Tasks,
             B::Copy | B::Paste => Group::Text,
             B::VisualMode | B::ListMode | B::SneakMode => Group::Modes,
             B::Palette | B::ShowKeys | B::EditSettings | B::Zoom | B::ReturnKey | B::Hide | B::Quit => Group::App,
@@ -217,8 +217,9 @@ impl Binding {
             B::NextTask => "Next that needs you",
             B::TalkFocus => "Type to the agent",
             B::TalkToggle => "Open / close chat",
+            B::DialToggle => "Open / close agent dial",
             B::SpaceNumber => "Go to tab group",
-            B::NextSpace => "Next / previous tab group",
+            B::NextSpace => "Next / previous group",
             B::HideSpace => "Hide tab group",
             B::CaptureKey => "Capture, from any app",
             B::Copy => "Copy",
@@ -289,7 +290,7 @@ impl Group {
     fn notes(self) -> &'static [(&'static str, &'static str)] {
         match self {
             Group::Panes => &[("Drag a header", "Split, swap, move")],
-            Group::Text => &[("⇧PgUp ⇧PgDn", "Scroll a page"), ("⌃G", "Write the line in your editor")],
+            Group::Text => &[("⇧PgUp ⇧PgDn", "Scroll a page"), ("⌃G", "Compose in your editor")],
             Group::List => &[
                 ("J K ↓ ↑", "Move"),
                 ("↵ ⇧↵", "Open / open below"),
