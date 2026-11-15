@@ -21,6 +21,7 @@ pub mod home;
 pub mod hosted;
 pub mod ics;
 pub mod inspect;
+pub mod key_use;
 pub mod keys;
 pub mod layout;
 pub mod layout_file;

@@ -141,6 +141,9 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
                 item("Bring All Windows Back", commands::BringBack),
             ],
         },
-        Menu { name: "Help".into(), items: vec![item("Keys", ShowKeys)] },
+        Menu {
+            name: "Help".into(),
+            items: vec![item("Keys", ShowKeys), item("Reset Key Counts", commands::ResetKeyCounts)],
+        },
     ]
 }

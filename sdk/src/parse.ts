@@ -1463,6 +1463,7 @@ export function snapshot(value: unknown): Snapshot {
     sneak: orNull(sneak)(o.sneak, "sneak"),
     counts: orNull(map(num))(o.counts, "counts"),
     app_presses: orNull(list(appPress))(o.app_presses, "app_presses"),
+    keys_known: orNull(list(str))(o.keys_known, "keys_known"),
     marks: list(mark)(o.marks, "marks"),
     mark_removed: orNull(str)(o.mark_removed, "mark_removed"),
     workbooks: list(workbook)(o.workbooks, "workbooks"),

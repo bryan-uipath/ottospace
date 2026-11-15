@@ -17,6 +17,7 @@ use crate::features::{Feature, Features};
 use crate::home::{self, Home};
 use crate::hosted::{self, Fit, Stuck};
 use crate::inspect::{self, Inspector};
+use crate::key_use::{self, Binding, KeyUse};
 use crate::keys::Mods;
 use crate::layout::{Axis, Dir, Node, Rect, Zone};
 use crate::list::ListRow;
@@ -593,6 +594,18 @@ pub enum Action {
     /// Show or hide the key reference.
     ToggleKeys,
     CloseKeys,
+    /// A key the user pressed ran `binding`, at `at` (ms): one more use of it. No input to a
+    /// mode or a view. Only the user's own keys count, never the palette or a menu.
+    KeyUsed {
+        binding: Binding,
+        at: u64,
+    },
+    /// Reset Key Counts: every key unused again. The user's alone.
+    ResetKeyUse,
+    /// `keys.json` as the shell read it at start.
+    RestoreKeyUse {
+        uses: KeyUse,
+    },
     /// Enter visual mode on the focused terminal, or leave it.
     ToggleVisual,
     LeaveVisual,
@@ -1553,6 +1566,9 @@ impl Action {
             | Action::InspectorMove { .. }
             | Action::InspectorFilter { on: false }
             | Action::CloseKeys
+            | Action::KeyUsed { .. }
+            | Action::ResetKeyUse
+            | Action::RestoreKeyUse { .. }
             | Action::LeaveVisual
             | Action::SetRepos { .. }
             | Action::SetRepoDirs { .. }
@@ -1807,6 +1823,9 @@ impl Action {
             | Action::InspectorFilter { .. }
             | Action::ToggleKeys
             | Action::CloseKeys
+            | Action::KeyUsed { .. }
+            | Action::ResetKeyUse
+            | Action::RestoreKeyUse { .. }
             | Action::ToggleVisual
             | Action::LeaveVisual
             | Action::ToggleAxOverlay
@@ -2432,6 +2451,9 @@ pub struct Model {
     pub paste_confirm: clip::PasteConfirm,
     /// The key reference overlay is showing.
     pub keys: bool,
+    /// How much the user uses each key. Never in the snapshot: it describes the user's habits.
+    #[serde(skip)]
+    pub key_use: KeyUse,
     /// The terminal pane in visual mode.
     pub visual: Option<PaneId>,
     /// The accessibility debug overlay is showing.
@@ -2590,6 +2612,7 @@ impl Default for Model {
             clip: None,
             paste_confirm: clip::PasteConfirm::default(),
             keys: false,
+            key_use: KeyUse::default(),
             visual: None,
             ax_overlay: false,
             sneak: None,
@@ -2716,6 +2739,9 @@ impl Model {
         let boxed = self.picker.is_some() || self.compose_keys();
         match action {
             _ if origin == Origin::User => None,
+            // What the user's keys are used for is theirs: no client adds to it or clears it.
+            Action::KeyUsed { .. } | Action::ResetKeyUse => Some(key_use::USERS_ALONE),
+            Action::RestoreKeyUse { .. } if origin == Origin::Socket => Some(key_use::READ_ALONE),
             // So does a scroll in another app.
             Action::AppWheel { .. } => Some(crate::app_wheel::USERS_ALONE),
             // A label in another app presses there: only the user's own letters spell one.
@@ -3010,6 +3036,13 @@ impl Model {
         // A capture draft's title is in the bar, not the drawer.
         let boxed = self.composing() && self.compose_host() == Some(Host::Drawer);
         let drawer_keys = self.talk.as_ref().is_some_and(|talk| talk.open && talk.keys) || boxed;
+        // A count of keys is no input: it ends no mode and changes nothing on show.
+        if let Some(uses) = self.key_use_step(&sent) {
+            if self.refusal(&sent.action, origin).is_none() {
+                self.key_use = uses;
+            }
+            return Vec::new();
+        }
         let mut effects = self.step(sent);
         // A peek ends when what it was over changes: the tab, the tree, the mode.
         if let Some(peek) = &self.peek
@@ -4202,6 +4235,8 @@ impl Model {
                 }
             }
             Action::CloseKeys => self.keys = false,
+            // Taken by `update` before any step.
+            Action::KeyUsed { .. } | Action::ResetKeyUse | Action::RestoreKeyUse { .. } => {}
             Action::ToggleVisual => {
                 if self.visual.is_some() {
                     self.leave_visual(effects);
@@ -5958,6 +5993,33 @@ impl Model {
         self.now
     }
 
+    /// The counts after a key count's action (`KeyUsed`, `ResetKeyUse`, `RestoreKeyUse`); `None`
+    /// for any other action.
+    fn key_use_step(&self, sent: &Envelope) -> Option<KeyUse> {
+        Some(match &sent.action {
+            Action::KeyUsed { binding, at } => {
+                let mut uses = self.key_use.clone();
+                if self.binding_on(*binding) {
+                    uses.press(*binding, *at);
+                }
+                uses
+            }
+            Action::ResetKeyUse => KeyUse::default(),
+            Action::RestoreKeyUse { uses } => uses.clone(),
+            _ => return None,
+        })
+    }
+
+    /// Whether `binding`'s keys are on: counted, and listed. Not while its feature is off.
+    pub fn binding_on(&self, binding: Binding) -> bool {
+        // ⌘⌥1–9 go to marks, and are no command's.
+        let feature = match binding {
+            Binding::MarkNumber => Some(Feature::Marks),
+            _ => binding.commands().iter().find_map(|command| command.feature()),
+        };
+        feature.is_none_or(|feature| self.features.on(feature))
+    }
+
     /// The sessions whose work the shell reads (`SessionWork`), as (runner, id, the task's
     /// repository): of the tasks that are listed and not done, or done in the last
     /// `progress::LAST_READ_MS` (what came after the last read). Those that need you or run come
@@ -7119,6 +7181,9 @@ mod tests {
         Action::InspectorFilter { .. },
         Action::ToggleKeys,
         Action::CloseKeys,
+        Action::KeyUsed { .. },
+        Action::ResetKeyUse,
+        Action::RestoreKeyUse { .. },
         Action::ToggleVisual,
         Action::LeaveVisual,
         Action::ToggleAxOverlay,
@@ -7354,6 +7419,9 @@ mod tests {
             Action::InspectorFilter { on: true },
             Action::ToggleKeys,
             Action::CloseKeys,
+            Action::KeyUsed { binding: Binding::Copy, at: 1 },
+            Action::ResetKeyUse,
+            Action::RestoreKeyUse { uses: KeyUse::default() },
             Action::ToggleVisual,
             Action::LeaveVisual,
             Action::ToggleAxOverlay,
@@ -7698,6 +7766,8 @@ mod tests {
                         Some(inspect::USERS_ALONE)
                     }
                     Action::AppWheel { .. } => Some(crate::app_wheel::USERS_ALONE),
+                    Action::KeyUsed { .. } | Action::ResetKeyUse => Some(key_use::USERS_ALONE),
+                    Action::RestoreKeyUse { .. } if origin == Origin::Socket => Some(key_use::READ_ALONE),
                     Action::RestoreLayout { .. } if origin == Origin::Socket => Some(crate::layout_file::USERS_ALONE),
                     Action::StartFresh | Action::UnfilledOpen { .. } => Some(crate::layout_file::USERS_ALONE),
                     Action::Paste { .. } => Some(clip::USERS_ALONE),
@@ -7724,6 +7794,8 @@ mod tests {
                     | Action::SneakBackspace
                     | Action::SneakApp { .. }
                     | Action::AppWheel { .. } => false,
+                    // A count of the key that turned it on, say: no input to it.
+                    Action::KeyUsed { .. } | Action::ResetKeyUse | Action::RestoreKeyUse { .. } => false,
                     _ => origin == Origin::User,
                 };
                 assert_eq!(m.sneak.is_none(), ends, "{action:?} from {origin:?}");
@@ -12317,6 +12389,8 @@ mod tests {
                         Some(inspect::USERS_ALONE)
                     }
                     Action::AppWheel { .. } => Some(crate::app_wheel::USERS_ALONE),
+                    Action::KeyUsed { .. } | Action::ResetKeyUse => Some(key_use::USERS_ALONE),
+                    Action::RestoreKeyUse { .. } if origin == Origin::Socket => Some(key_use::READ_ALONE),
                     Action::RestoreLayout { .. } if origin == Origin::Socket => Some(crate::layout_file::USERS_ALONE),
                     Action::StartFresh | Action::UnfilledOpen { .. } => Some(crate::layout_file::USERS_ALONE),
                     Action::Paste { .. } => Some(clip::USERS_ALONE),

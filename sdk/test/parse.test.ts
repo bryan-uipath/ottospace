@@ -113,6 +113,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     sneak: null,
     counts: { live: 0 },
     app_presses: null,
+    keys_known: null,
     marks: [],
     mark_removed: null,
     workbooks: [],

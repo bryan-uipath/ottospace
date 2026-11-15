@@ -125,6 +125,7 @@ commands! {
     VisualMode: "Select with the Keyboard", View;
     Zoom: "Fill the Screen", View;
     ShowKeys: "Keys", View;
+    ResetKeyCounts: "Reset Key Counts", View;
     CalendarBack: "Previous Day in Calendar", View;
     CalendarForward: "Next Day in Calendar", View;
     CalendarToday: "Today in Calendar", View;
