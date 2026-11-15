@@ -106,9 +106,24 @@ impl Model {
         self.spaces.iter().map(row).collect()
     }
 
+    /// A space's name: its task's title, its session's, its workbook's.
+    pub fn space_title(&self, of: &Owner) -> String {
+        match of {
+            Owner::Workspace => "Workspace".into(),
+            Owner::Task { id } => self.tasks.get(*id).map(|task| task.title.clone()).unwrap_or_default(),
+            Owner::Session { runner, id } => self.session_title(runner, id),
+            Owner::Workbook { id } => self.workbooks.get(*id).map(|book| book.name.clone()).unwrap_or_default(),
+        }
+    }
+
     /// The places in `tabs` of a space's tabs.
     pub fn space_tabs(&self, of: &Owner) -> Vec<usize> {
         (0..self.tabs.len()).filter(|at| self.tabs[*at].space == *of).collect()
+    }
+
+    /// The place in `tabs` of the selected space's `n`th tab, as the second row draws them (⌘1…).
+    pub fn visible_tab(&self, n: usize) -> Option<usize> {
+        self.space_tabs(self.space()).get(n).copied()
     }
 
     /// The place in `tabs` of the tab a space shows when selected: its last, else its first.

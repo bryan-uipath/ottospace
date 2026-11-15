@@ -3271,13 +3271,15 @@ impl Workspace {
             cx.stop_propagation();
             return;
         }
-        // ⌘⇧⌥1..9 move the focused pane to a tab. GPUI gives no physical key, so the shifted
-        // characters are trusted on a US layout only (see `move_to_tab_key`).
+        // ⌘⇧⌥1..9 move the focused pane to a tab of the selected space, as ⌘1..9 count them. GPUI
+        // gives no physical key, so the shifted characters are trusted on a US layout only.
         let m = key.modifiers;
         let us_layout = matches!(cx.keyboard_layout().id(), "com.apple.keylayout.US" | "com.apple.keylayout.ABC");
         let place = keys::move_to_tab_key(&key.key, m.shift, us_layout);
-        if let Some(tab) = place.filter(|_| m.platform && m.alt && !m.control) {
-            self.dispatch(Action::MovePane { pane: None, tab }, self.input, window, cx);
+        if let Some(place) = place.filter(|_| m.platform && m.alt && !m.control) {
+            if let Some(tab) = self.model.visible_tab(place) {
+                self.dispatch(Action::MovePane { pane: None, tab }, self.input, window, cx);
+            }
             cx.stop_propagation();
             return;
         }
@@ -4859,15 +4861,6 @@ impl Workspace {
     }
 
     /// What a space is called on the top row.
-    fn space_title(&self, of: &Owner) -> String {
-        match of {
-            Owner::Workspace => "Workspace".into(),
-            Owner::Task { id } => self.model.tasks.get(*id).map(|task| task.title.clone()).unwrap_or_default(),
-            Owner::Session { runner, id } => self.model.session_title(runner, id),
-            Owner::Workbook { id } => self.model.workbooks.get(*id).map(|book| book.name.clone()).unwrap_or_default(),
-        }
-    }
-
     /// The top row, in the window bar beside the traffic lights: a tab a space, the selected one
     /// raised with a line in its colour along its top; a quiet × hides one. They shrink, then
     /// clip: the + and the buttons on the right always show.
@@ -4880,7 +4873,7 @@ impl Workspace {
             let of = space.of.clone();
             let on = of == selected;
             let small = compact && !on && of != Owner::Workspace;
-            let tip: SharedString = self.space_title(&of).into();
+            let tip: SharedString = self.model.space_title(&of).into();
             let colour = self.space_colour(&of);
             let count = self.model.space_tabs(&of).len();
             // A task's badge, a workbook's glyph; Workspace and a session's chat a dot.
@@ -4895,7 +4888,7 @@ impl Workspace {
                         .into_any_element(),
                 ),
                 Owner::Session { .. } if small => {
-                    Some(div().child(ottospace_core::talk::monogram(&self.space_title(&of))).into_any_element())
+                    Some(div().child(ottospace_core::talk::monogram(&self.model.space_title(&of))).into_any_element())
                 }
                 Owner::Workspace | Owner::Session { .. } => None,
             };
@@ -4945,7 +4938,7 @@ impl Workspace {
                 .hover(|s| s.text_color(rgb(theme::TEXT)))
                 .child(mark(&self.marks, Mark::Space(place)))
                 .children(lead)
-                .children((!small).then(|| div().flex_1().min_w_0().truncate().child(self.space_title(&of))))
+                .children((!small).then(|| div().flex_1().min_w_0().truncate().child(self.model.space_title(&of))))
                 .children(
                     (count > 1 && !small)
                         .then(|| div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(count.to_string())),

@@ -1193,8 +1193,7 @@ fn the_new_task_box_files_a_line() {
         (&state["active"], &state["tabs"][2]["space"]["id"], &state["tabs"][2]["title"]),
         (&json!(2), &json!(1), &json!("flow-app"))
     );
-    // The user's new tab joins the selected space; a client's is Workspace's. ⌘1… count the tabs
-    // of the spaces on the row.
+    // The user's new tab joins the selected space; a client's is Workspace's.
     let reply = otto.user_key("cmd-t");
     assert_eq!((&reply["state"]["tabs"][3]["space"]["id"], &reply["state"]["active"]), (&json!(1), &json!(3)));
     let reply = otto.call(json!({"cmd": "new_tab"}));

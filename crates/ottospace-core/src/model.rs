@@ -3275,8 +3275,8 @@ impl Model {
                 }
             }
             Action::SelectVisibleTab { index } => {
-                if let Some(at) = self.space_tabs(self.space()).get(index) {
-                    self.select_tab(*at, effects);
+                if let Some(at) = self.visible_tab(index) {
+                    self.select_tab(at, effects);
                 }
             }
             Action::OpenRepo { path, axis } => {
@@ -3896,14 +3896,11 @@ impl Model {
                 self.leave(effects);
                 // Workspace, the live tasks in their order, then the workbooks.
                 let tasks = matches!(action, Action::PaletteTasks).then(|| {
-                    let workspace = TaskChoice { to: Owner::Workspace, title: "Workspace".into() };
                     let live = self.tasks.list.iter().filter(|task| !task.dismissed);
-                    let live =
-                        live.map(|task| TaskChoice { to: Owner::Task { id: task.id }, title: task.title.clone() });
-                    let books = self.workbooks.list.iter();
-                    let books =
-                        books.map(|book| TaskChoice { to: Owner::Workbook { id: book.id }, title: book.name.clone() });
-                    std::iter::once(workspace).chain(live).chain(books).collect()
+                    let live = live.map(|task| Owner::Task { id: task.id });
+                    let books = self.workbooks.list.iter().map(|book| Owner::Workbook { id: book.id });
+                    let all = std::iter::once(Owner::Workspace).chain(live).chain(books);
+                    all.map(|to| TaskChoice { title: self.space_title(&to), to }).collect()
                 });
                 let features = matches!(action, Action::PaletteFeatures).then(|| {
                     let choice = |feature| FeatureChoice { feature, on: self.features.on(feature) };
@@ -8056,6 +8053,8 @@ mod tests {
         m.update(Action::NewTab.sent_by(Origin::Socket));
         assert_eq!((m.active, m.space()), (1, &Owner::Workspace));
         assert_eq!(row(&m), [(Owner::Workspace, false, vec![0, 1]), (task_space(1), false, vec![2, 3])]);
+        // ⌘1… (and ⌘⇧⌥1…) count the selected space's tabs only.
+        assert_eq!((m.visible_tab(1), m.visible_tab(2)), (Some(1), None));
         // Cycling stays in the space; a space shows the tab it showed last.
         m.update(Action::CycleTab { delta: 1 });
         m.update(Action::CycleTab { delta: 1 });
