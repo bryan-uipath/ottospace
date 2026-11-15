@@ -269,7 +269,7 @@ impl Workspace {
         let id = self.model.marks.find(&mark).ok_or("no such mark")?;
         let action = Action::MarkGo { mark: MarkRef::Id(id), axis };
         // The core would drop it for who sent it, or behind what has the keyboard: say which.
-        if let Some(why) = self.model.refusal(&action, self.input).or(self.model.waits(&action)) {
+        if let Some(why) = self.model.refusal(&action, self.input).or(self.model.waits_for(&action, self.input)) {
             return Err(why.into());
         }
         self.sync_titles();

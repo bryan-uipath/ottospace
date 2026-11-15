@@ -92,7 +92,7 @@ impl Workspace {
     /// Sends a workbook action as whoever is acting. `false`: the core would drop it, for who
     /// sent it or behind what has the keyboard, and the status bar says which.
     fn workbook_act(&mut self, action: Action, window: &Window, cx: &mut Context<Self>) -> bool {
-        if let Some(why) = self.model.refusal(&action, self.input).or(self.model.waits(&action)) {
+        if let Some(why) = self.model.refusal(&action, self.input).or(self.model.waits_for(&action, self.input)) {
             self.error = Some(why.into());
             cx.notify();
             return false;

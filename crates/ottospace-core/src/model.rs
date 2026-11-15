@@ -3027,6 +3027,43 @@ impl Model {
         no_box_now.then_some("the key reference or visual mode is in the way")
     }
 
+    /// The new task is drawn in the drawer, beside the bar, the tabs and the panes, not over
+    /// them: the user's own click there is not behind it. `Some(false)`: only the bar changes,
+    /// and the box keeps its line and the keyboard. `Some(true)`: the keyboard goes where the
+    /// click says (a tab, a pane, a row's field), so the line is put aside for the box's next
+    /// opening, as a conversation opened puts it (`follow_space`). `None`: the rest waits, as
+    /// keys for panes do; and all of it under the key reference.
+    fn beside_box(&self, action: &Action) -> Option<bool> {
+        if !(self.compose_modal() && self.mode() == Mode::Compose && !self.keys) {
+            return None;
+        }
+        match action {
+            Action::ToggleSection { .. } | Action::CloseSidebar | Action::WorkbookAddTab { .. } => Some(false),
+            Action::SelectTab { .. }
+            | Action::SpaceSelect { .. }
+            | Action::SpaceCycle { .. }
+            | Action::SpaceHide { .. }
+            | Action::SpaceOpen { .. }
+            | Action::OpenRepo { .. }
+            | Action::RepoClick { .. }
+            | Action::MarkGo { .. }
+            | Action::WorkbookOpen { .. }
+            | Action::AppsFilter { on: true }
+            | Action::MarkEdit { .. }
+            | Action::WorkbookEdit { .. }
+            | Action::WorktreeEdit { .. }
+            // A click on a pane, an app's among them.
+            | Action::Focus { .. }
+            | Action::Enter { .. } => Some(true),
+            _ => None,
+        }
+    }
+
+    /// `waits`, for who sent it: the user's own click beside the new task does not (`beside_box`).
+    pub fn waits_for(&self, action: &Action, origin: Origin) -> Option<&'static str> {
+        self.waits(action).filter(|_| origin != Origin::User || self.beside_box(action).is_none())
+    }
+
     /// The feature that is off which `action` is of: it does nothing, whoever sent it.
     pub fn disabled(&self, action: &Action) -> Option<Feature> {
         action.feature().filter(|feature| !self.features.on(*feature))
@@ -3206,20 +3243,11 @@ impl Model {
         // From the new task in the drawer, focus moves on, as the box waits pane actions.
         let across = matches!(action, Action::FocusDir { dir: Dir::Left | Dir::Right });
         let drawer = across && self.in_right_zone();
-        // The user's own pick of a tab is not behind the new task in the drawer: the line is
-        // put aside, kept for the box's next opening, and the tab shows.
-        let picks_tab = matches!(
-            action,
-            Action::SelectTab { .. }
-                | Action::SpaceSelect { .. }
-                | Action::SpaceCycle { .. }
-                | Action::SpaceHide { .. }
-                | Action::SpaceOpen { .. }
-        );
-        if user && picks_tab && self.compose_host() == Some(Host::Drawer) && self.capture.is_none() {
+        // The user's click that takes the keyboard from the new task puts its line aside first.
+        if user && self.beside_box(&action) == Some(true) {
             self.put_compose_aside();
         }
-        if self.waits(&action).is_some() && !(user && drawer) {
+        if self.waits_for(&action, origin).is_some() && !(user && drawer) {
             return effects;
         }
         // Focus past the panes' edge, and keys over a rail: the user's alone.
@@ -8673,6 +8701,70 @@ mod tests {
         }
         m.update(Action::NewTab.sent_by(Origin::Socket));
         assert_eq!((line(&m), m.tasks.list.len(), m.active), ("mine", 0, 0));
+    }
+
+    #[test]
+    fn the_users_click_on_the_bar_is_not_behind_the_new_task() {
+        let boxed = || {
+            let mut m = Model::default();
+            m.update(Action::SetRepos { repos: listed() });
+            term(&mut m);
+            m.update(Action::OpenCompose { text: String::new() });
+            keys(&mut m, "mine");
+            m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::Left, select: false } });
+            m
+        };
+        let cursor = |m: &Model| m.compose.as_ref().map(Field::cursor);
+        let toggle = || Action::ToggleSection { section: Section::Repos };
+        let open = || Action::OpenRepo { path: "/code/app".into(), axis: Right };
+        const WHY: &str = "the new-task box is open";
+        // Only the bar changes: the box keeps its line, its cursor and the keyboard.
+        let mut m = boxed();
+        m.update(toggle());
+        assert_eq!((m.sidebar, line(&m), cursor(&m), m.mode()), (Some(Section::Repos), "mine", Some(3), Mode::Compose));
+        m.update(Action::RepoFold { path: "/code/app".into(), fold: Some(true) });
+        assert_eq!((m.repo_folded(&listed()[0]), line(&m), m.mode()), (true, "mine", Mode::Compose));
+        keys(&mut m, "!");
+        assert_eq!(line(&m), "min!e");
+        m.update(Action::CloseSidebar);
+        assert_eq!((m.sidebar, line(&m), m.mode()), (None, "min!e", Mode::Compose));
+        // A client's waits, and is told why.
+        for origin in [Origin::Socket, Origin::System] {
+            assert_eq!(m.waits_for(&toggle(), origin), Some(WHY));
+            m.update(toggle().sent_by(origin));
+            assert_eq!((m.sidebar, m.mode()), (None, Mode::Compose), "{origin:?}");
+        }
+        // The keyboard goes where the click says: the line is put aside, and comes back.
+        let click = Action::RepoClick { path: "/code/app-2".into(), axis: Right };
+        for action in [open(), click, Action::SelectTab { index: 0 }, Action::Focus { pane: 1 }] {
+            let mut m = boxed();
+            assert_eq!(m.waits_for(&action, Origin::User), None, "{action:?}");
+            m.update(action.clone());
+            assert_eq!((line(&m), m.mode()), ("<closed>", Mode::Normal), "{action:?}");
+            m.update(Action::OpenCompose { text: String::new() });
+            assert_eq!((line(&m), cursor(&m)), ("mine", Some(3)), "{action:?}");
+        }
+        let mut m = boxed();
+        m.update(open());
+        assert_eq!((m.tabs.len(), m.pane(2).and_then(|p| p.cwd.as_deref())), (2, Some("/code/app")));
+        // A field in a row takes the keyboard the same way: a new worktree's branch.
+        let mut m = boxed();
+        let dirs = repos::RepoDirs { worktrees: Some("/wt".into()), ..Default::default() };
+        m.update(Action::SetRepoDirs { dirs }.sent_by(Origin::System));
+        m.update(Action::WorktreeEdit { repo: "/code/app".into() });
+        assert_eq!((line(&m), m.mode()), ("<closed>", Mode::Mark));
+        // A key for panes still waits, and so does the bar under the key reference.
+        let mut m = boxed();
+        for action in [Action::Split { axis: Right, kind: Kind::Terminal }, Action::NewTab, Action::FocusList] {
+            assert_eq!(m.waits_for(&action, Origin::User), Some(WHY), "{action:?}");
+            m.update(action);
+            assert_eq!((m.panes.len(), m.tabs.len(), line(&m), m.mode()), (1, 1, "mine", Mode::Compose));
+        }
+        m.update(Action::ToggleKeys);
+        for action in [toggle(), open()] {
+            m.update(action);
+            assert_eq!((m.sidebar, m.tabs.len(), line(&m)), (None, 1, "mine"));
+        }
     }
 
     #[test]

@@ -2213,8 +2213,53 @@ impl Run {
         let listed_flags: Vec<(Feature, bool)> =
             m.palette.iter().flat_map(|p| p.feature_matches()).map(|c| (c.feature, c.on)).collect();
         let key_use = m.key_use.clone();
+        // The new task in the drawer with the keyboard, the bar beside it, and the line written.
+        let beside = (m.compose_modal() && m.mode() == Mode::Compose && !m.keys && gated.is_none())
+            .then(|| (m.sidebar, m.compose.clone().filter(|field| !field.text().is_empty())));
         let effects = m.update(sent);
         check(m)?;
+        // The user's click on a rail icon or the bar's × acts beside the new task, which keeps its
+        // line, its cursor and the keyboard; anyone else's waits. No click beside it loses the
+        // line: it stays, or is put aside for the box's next opening.
+        if let Some((sidebar, field)) = beside {
+            let asked = match &action {
+                Action::ToggleSection { section: Section::Calendar } if !m.calendar.on => Some(sidebar),
+                Action::ToggleSection { section } => Some((sidebar != Some(*section)).then_some(*section)),
+                Action::CloseSidebar => Some(None),
+                _ => None,
+            };
+            if let Some(asked) = asked {
+                let user = origin == Origin::User;
+                let kept = m.mode() == Mode::Compose && (field.is_none() || m.compose == field);
+                ensure!(
+                    !user || (m.sidebar == asked && kept),
+                    "the user's {action:?} beside the new task: {:?}",
+                    m.sidebar
+                );
+                ensure!(user || m.sidebar == sidebar, "{origin:?}'s {action:?} changed the bar behind the new task");
+            }
+            let clicks = matches!(
+                action,
+                Action::OpenRepo { .. }
+                    | Action::RepoClick { .. }
+                    | Action::MarkGo { .. }
+                    | Action::WorkbookOpen { .. }
+                    | Action::WorkbookAddTab { .. }
+                    | Action::AppsFilter { .. }
+                    | Action::MarkEdit { .. }
+                    | Action::WorkbookEdit { .. }
+                    | Action::WorktreeEdit { .. }
+                    | Action::Focus { .. }
+                    | Action::Enter { .. }
+            );
+            if let Some(field) = field.filter(|_| clicks) {
+                let aside = m.compose_kept.as_ref().is_some_and(|kept| kept.line == field);
+                ensure!(
+                    m.compose.as_ref() == Some(&field) || aside,
+                    "{origin:?}'s {action:?} lost the new task's line"
+                );
+            }
+        }
         // The counts are the user's keys: only their count and reset change them, and the shell's
         // read of keys.json. A count changes nothing else: no effect.
         let counts = matches!(action, Action::KeyUsed { .. } | Action::ResetKeyUse) && origin == Origin::User;
