@@ -7274,7 +7274,7 @@ fn a_focus_block_has_its_own_colour_and_a_call_or_a_rule_keeps_its_own() {
         "calendar-focus",
         &feed(&[
             ("a", "Focus time", -6_000, -2_400, ""),
-            ("b", "Focus sync", -5_400, -3_600, zoom),
+            ("b", "Focus sync", -5_400, -2_400, zoom), // ends with a: both leave the band together
             ("c", "Lunch and learn", -1_800, -600, ""),
             ("d", "Deep Work - parser", 600, 2_400, ""),
             ("e", "Focusing workshop", 3_000, 4_200, ""),
