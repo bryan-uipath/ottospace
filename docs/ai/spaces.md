@@ -54,7 +54,7 @@ session's space is not kept: its tabs come back in Workspace.
 
 ## Workbooks
 
-Opening a workbook builds its closed tabs into its space and selects it; tabs of it already open
-elsewhere stay where they are and the first is selected. Saving a tab (⌘⇧S) or all tabs leaves
-the tabs where they are: a workbook is a file; its space is what opening it makes. Save All Tabs
-saves the selected space's tabs as one workbook.
+Opening a workbook builds its closed tabs into its space and selects it; its tabs open in
+Workspace (one saved from there) come into its space too, and one of a task's stays the task's.
+Saving a tab (⌘⇧S) or all tabs leaves the tabs where they are: a workbook is a file; its space
+is what opening it makes. Save All Tabs saves the selected space's tabs as one workbook.
