@@ -5463,10 +5463,10 @@ fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_works
     assert_eq!(space, (&json!(1), &json!({"kind": "task", "id": 1})));
     let mine = |s: &Value| json!([s["state"]["tabs"][0], s["state"]["panes"]]);
     assert_eq!(mine(&state), mine(&before));
-    // The top row ends where the drawer begins.
+    // The drawer sits under the top row, which spans the window.
     let body = state["drawer"]["body"].as_array().expect("the drawer is drawn");
     let tab = state["space_rects"][1].as_array().expect("a space");
-    assert!(tab[0].as_f64().unwrap() + tab[2].as_f64().unwrap() <= body[0].as_f64().unwrap(), "{tab:?} {body:?}");
+    assert!(tab[1].as_f64().unwrap() + tab[3].as_f64().unwrap() <= body[1].as_f64().unwrap(), "{tab:?} {body:?}");
 
     // Its space on the top row, with its badge.
     assert_eq!(state["badges"]["1"], "FL");
