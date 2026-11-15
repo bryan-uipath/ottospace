@@ -1,0 +1,4 @@
+#!/bin/sh
+# The agents crate's stand-in, writing its session file so a stopped agent can be resumed.
+export FAKE_SESSIONS="{ROOT}/sessions/claude"
+exec "{REPO}/crates/ottospace-agents/tests/fakes/claude" "$@"

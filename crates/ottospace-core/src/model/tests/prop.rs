@@ -1088,6 +1088,19 @@ const MAKERS: &[Make] = &[
     |_| Action::TalkEscape,
     |_| Action::TalkInterrupt,
     |g| Action::TalkView { shows: g.rng.pick(&[View::Native, View::Terminal]) },
+    |_| Action::EditorOpen,
+    |g| Action::EditorKeys { on: g.rng.coin() },
+    |g| {
+        // Nothing (an error), the draft as given, another text, or a hostile one.
+        let given = g.m.editing.as_ref().map(|editing| format!("{}\n", editing.given));
+        let saved = match g.rng.below(4) {
+            0 => None,
+            1 => given.or(Some(String::new())),
+            2 => Some("two\nlines\n".into()),
+            _ => Some(g.text()),
+        };
+        Action::EditorDone { saved, more: g.rng.one_in(5) }
+    },
     |g| Action::TaskTalk { id: g.task() },
     |_| Action::TalkStart,
     |g| {
@@ -1464,7 +1477,9 @@ fn check(m: &Model) -> Result<(), String> {
     let has_keys = !m.keys
         && match m.mode() {
             Mode::Mark => renaming.is_some(),
-            Mode::Pick | Mode::Palette | Mode::Inspect | Mode::Compose => true,
+            Mode::Pick | Mode::Palette | Mode::Inspect => true,
+            // The new-task box's line, unless the user's editor has it.
+            Mode::Compose => !m.edits_compose(),
             Mode::Annotate => m.note().is_some(),
             Mode::List => m.app_lists.filtering,
             // A native conversation's composer, while no card has the keys.
@@ -1472,6 +1487,8 @@ fn check(m: &Model) -> Result<(), String> {
             _ => false,
         };
     ensure!(m.field().is_some() == has_keys, "a text field has the keyboard in {:?} mode", m.mode());
+    // The drawer's editor has the keyboard: no text field does, and it is on show.
+    ensure!(!m.editor_keys() || (m.field().is_none() && m.editor_shown()), "the editor has keys it cannot");
     // The new-task box: its dropdown, what its line points at, and what it says.
     let menu = m.dropdown();
     ensure!(menu.is_none() || m.field().is_some_and(|(of, _)| of == "compose"), "a dropdown with no line to finish");
@@ -1565,9 +1582,12 @@ fn check(m: &Model) -> Result<(), String> {
         let loses = match confirm.dismiss {
             Some(id) => m.agent_runs(&Subject::Task(id)),
             None if let Some(ask) = confirm.paste => m.pane(ask.pane).is_some(),
-            None => !confirm.running.is_empty() || m.quit_discards() > 0 || !m.agents.is_empty(),
+            None => !confirm.running.is_empty() || m.quit_discards() > 0 || !m.agents.is_empty() || m.editing.is_some(),
         };
-        ensure!(loses, "the quit question names no terminal, no draft holds a capture, and no agent runs");
+        ensure!(
+            loses,
+            "the quit question names no terminal, no draft holds a capture, no agent runs, and no editor has a message"
+        );
         ensure!(
             confirm.running.iter().all(|r| m.pane(r.pane).is_some()),
             "the quit question names a pane that is gone"
@@ -2029,6 +2049,7 @@ impl Run {
         let chats_before = m.chats.clone();
         let drafts: Vec<(Subject, String)> =
             m.chats.iter().map(|chat| (chat.subject.clone(), chat.draft.text().to_string())).collect();
+        let editing_before = m.editing.clone();
         let panes: Vec<PaneId> = m.panes.iter().map(|p| p.id).collect();
         let sneak = m.sneak.as_ref().map(|sneak| sneak.typed.clone());
         let labelled: Vec<String> =
@@ -2282,10 +2303,36 @@ impl Run {
         // Only the shell's runner reports what an agent said.
         let reports = matches!(action, Action::AgentEvents { .. }) && origin != Origin::System;
         ensure!(!reports || m.chats == chats_before, "{origin:?} reported an agent's events");
-        // A composer's draft is the user's words alone: it starts empty, and only the user changes it.
-        for chat in m.chats.iter().filter(|_| !user) {
+        // A composer's draft is the user's words alone: it starts empty, and only the user changes
+        // it, or the user's editor it was given to, as the shell reports it ended.
+        let saved = matches!(action, Action::EditorDone { .. }) && origin == Origin::System;
+        let edited = |subject: &Subject| {
+            saved && editing_before.as_ref().is_some_and(|e| e.target == editor::Target::Chat(subject.clone()))
+        };
+        for chat in m.chats.iter().filter(|chat| !user && !edited(&chat.subject)) {
             let before = drafts.iter().find(|(subject, _)| *subject == chat.subject).map(|(_, text)| text.as_str());
             ensure!(before.unwrap_or("") == chat.draft.text(), "{origin:?} changed the draft of {:?}", chat.subject);
+        }
+        // What the user types to is theirs to move: no one else opens the editor, moves the keyboard
+        // to it or from it, or ends it, but the shell's report that it exited. An adopted session's
+        // draft is its task's, the editor's with it.
+        if !user && m.editing != editing_before {
+            let ended = saved && m.editing.is_none();
+            let renamed = match (&editing_before, &m.editing) {
+                (Some(was), Some(now)) => {
+                    let moved = matches!(
+                        (&was.target, &now.target),
+                        (editor::Target::Chat(Subject::Session { .. }), editor::Target::Chat(Subject::Task(_)))
+                    );
+                    moved && (&was.given, was.keys) == (&now.given, now.keys)
+                }
+                _ => false,
+            };
+            ensure!(
+                ended || renamed,
+                "{origin:?}'s {action:?} changed the editor: {editing_before:?} to {:?}",
+                m.editing
+            );
         }
         let sneak_own = matches!(
             action,
@@ -2462,6 +2509,17 @@ impl Run {
                         opened && terminal && (users || restored) && m.settings_pane == Some(*pane),
                         "{origin:?} ran the editor in pane {pane}: {action:?}"
                     );
+                }
+                // The editor opens only on the user's ⌃G, on the draft it then edits, one at a time.
+                Effect::OpenEditor { text } => {
+                    let given = m.editing.as_ref().map(|editing| editing.given.as_str());
+                    let opened = user && matches!(action, Action::EditorOpen) && editing_before.is_none();
+                    ensure!(opened && given == Some(text.as_str()), "{origin:?}'s {action:?} opened the editor");
+                }
+                // Only what the editor saved goes to the clipboard, when the shell says it ended.
+                Effect::Clip { .. } => {
+                    let ended = editing_before.is_some() && m.editing.is_none();
+                    ensure!(saved && ended, "{origin:?}'s {action:?} wrote the clipboard");
                 }
                 // Only the shell's read of the file applies settings, and only one with no problem.
                 Effect::ApplySettings { .. } => {

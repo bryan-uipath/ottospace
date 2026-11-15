@@ -109,6 +109,7 @@ commands! {
     HideSpace: "Hide Task", Tabs;
     CapturePane: "Capture the Pane", Tasks;
     TalkFocus: "Type in the Conversation", Tasks;
+    EditMessage: "Edit Message in Editor", Tasks;
     TalkToggle: "Open or Close the Conversation", Tasks;
     StopAgent: "Stop the Agent", Tasks;
     SaveWorkbook: "Save Tab as Workbook", Workbook;

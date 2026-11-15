@@ -1,0 +1,21 @@
+# ⌃G: the composer's draft in the user's editor (a stand-in that shows it with line numbers),
+# in the drawer; ↵ there saves and quits, and the edited text is back in the composer, unsent.
+{"env":{"OTTOSPACE_AGENTS_DIR":"{ROOT}/bin","VISUAL":"{ROOT}/bin/edit"}}
+{"cmd":"split","kind":"empty"}
+{"cmd":"task_new","line":"fix the login loop >app"}
+{"cmd":"section","section":"tasks"}
+{"click":"task:1","at":[0.3,0.3]}
+{"click":"talk:talk-start"}
+{"until":"drawer.native.chats.1.replies","len":1}
+{"click":"talk"}
+{"cmd":"key","keys":"d r o p space t h e space s e c o n d space r e d i r e c t","as":"user"}
+{"settle":500}
+{"shot":"draft"}
+{"cmd":"key","keys":"ctrl-g","as":"user"}
+{"until":"editor.shown","is":true}
+{"settle":1000}
+{"shot":"editing"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"until":"drawer.native.chats.1.editing","is":false}
+{"settle":500}
+{"shot":"returned"}

@@ -1091,7 +1091,7 @@ impl Workspace {
     /// The first permission request: what it would do, as the CLI asked it, one labelled line
     /// per field; the agent's own words apart; Allow and Deny. Allow waits for "Show all" on a
     /// cut request. ↵ does nothing here.
-    fn chat_card(&self, subject: &Subject, chat: &chat::Chat, cx: &mut Context<Self>) -> Option<Div> {
+    pub(crate) fn chat_card(&self, subject: &Subject, chat: &chat::Chat, cx: &mut Context<Self>) -> Option<Div> {
         let card = chat.transcript.cards.front()?;
         let full = card.expanded.then(|| self.drawer.native.get(subject).and_then(|n| n.full(card.ticket))).flatten();
         let payload = full.unwrap_or_else(|| card.detail.text().to_string());
@@ -1188,11 +1188,15 @@ impl Workspace {
 
     /// The composer: the draft, what ↵ does now, and at its right the one button the core
     /// names (`composer_button`): Stop while a turn runs, Resume or Start once the agent ended.
-    fn chat_composer(&self, subject: &Subject, chat: &chat::Chat, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn chat_composer(&self, subject: &Subject, chat: &chat::Chat, cx: &mut Context<Self>) -> Div {
         let card = !chat.transcript.cards.is_empty();
         let ending = self.model.is_ending(subject);
+        // The user's editor has the draft: the composer says so, and takes no typing.
+        let editing = self.model.edits(subject).then(|| muted(self.editing_words()).text_sm().py_0p5());
         // Only what is not how every text box works: the card's buttons show their own keys.
         let (placeholder, hint): (&'static str, &'static str) = match () {
+            _ if editing.is_some() && self.model.editor_keys() => ("", "save and quit puts it back here, unsent"),
+            _ if editing.is_some() => ("", "⌃G back to the editor"),
             // ↵ meanwhile: sent once the session is gone on with, after the process is gone.
             _ if ending => ("Stopping…", ""),
             _ if card && chat.deny => ("Why deny it?", "↵ denies with this message · esc back to the request"),
@@ -1207,7 +1211,8 @@ impl Workspace {
             _ => ("Message", ""),
         };
         let open = chat.transcript.live || self.model.shown_draft_chat().is_some();
-        let field = (open && (!card || chat.deny)).then(|| self.render_field_of("talk", placeholder, cx));
+        let field =
+            (open && (!card || chat.deny) && editing.is_none()).then(|| self.render_field_of("talk", placeholder, cx));
         let button = self.model.composer_button().and_then(|primary| match primary {
             Primary::Stop => Some(
                 self.talk_button("chat-stop", "Stop", "Stop this turn; the session goes on (esc esc)")
@@ -1219,7 +1224,7 @@ impl Workspace {
             Primary::Resume | Primary::Start => self.start_button(cx),
         });
         // A card waits and no turn to stop: nothing to write and nothing to say, so no empty strip.
-        if field.is_none() && hint.is_empty() && button.is_none() {
+        if field.is_none() && editing.is_none() && hint.is_empty() && button.is_none() {
             return div();
         }
         div()
@@ -1236,7 +1241,7 @@ impl Workspace {
                     .flex()
                     .items_end()
                     .gap_2()
-                    .child(div().flex_1().min_w_0().text_sm().children(field))
+                    .child(div().flex_1().min_w_0().text_sm().children(field).children(editing))
                     .children(button.map(|button| button.flex_none())),
             )
             .children((!hint.is_empty()).then(|| div().text_xs().text_color(rgb(theme::MUTED)).child(hint)))
@@ -1291,6 +1296,8 @@ impl Workspace {
                     "transcript": chat.transcript.summary(),
                     "replies": blocks,
                     "draft_chars": chat.draft.text().chars().count(),
+                    // The user's editor has its draft (⌃G).
+                    "editing": self.model.edits(&subject),
                     "deny": chat.deny,
                     "armed": chat.armed,
                     "away": look.is_some_and(|look| look.away),

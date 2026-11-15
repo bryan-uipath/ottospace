@@ -114,7 +114,9 @@ impl Workspace {
             1 => Some("1 task's agent will be stopped".to_string()),
             n => Some(format!("{n} tasks' agents will be stopped")),
         };
-        let lines = confirm.lines().into_iter().chain(draft).chain(agents).map(|line| div().child(line));
+        // And the user's editor on a message: what it has not saved.
+        let editor = self.model.editing.as_ref().map(|_| "your editor's unsaved message".to_string());
+        let lines = confirm.lines().into_iter().chain(draft).chain(agents).chain(editor).map(|line| div().child(line));
         let panel = dialog::floating(320.)
             .child(
                 div()

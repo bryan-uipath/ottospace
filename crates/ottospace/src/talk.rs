@@ -11,11 +11,9 @@ use gpui::{
     Pixels, ScrollWheelEvent, Stateful, Window, canvas, div, prelude::*, px, rgb,
 };
 use ottospace_core::agents::{self, Command, Start};
-use ottospace_core::keys;
 use ottospace_core::runner::RunnerId;
 use ottospace_core::talk::{self, Subject};
 use ottospace_core::tasks::{Group, TaskId};
-use ottospace_core::terminal::scroll_key;
 use ottospace_core::{Action, Axis, Kind, Mode, Origin, theme};
 
 use crate::terminal::{self, Terminal};
@@ -63,6 +61,8 @@ pub struct Drawer {
     /// The end of each ended native agent's stderr, cleaned and its tokens hidden
     /// (`transcript::details`): drawn on the user's click only, never in the state or a log.
     pub details: HashMap<Subject, String>,
+    /// The user's editor on a draft (⌃G), while it runs (`editor`).
+    pub editor: Option<crate::editor::Editor>,
 }
 
 /// A new session's id: a random (version 4) UUID. `None`: no random bytes could be read.
@@ -266,6 +266,7 @@ impl Workspace {
             self.dispatch(action, Origin::System, window, cx);
         }
         self.sync_native(window, cx);
+        self.sync_editor(window, cx);
         if redraw {
             cx.notify();
         }
@@ -283,18 +284,7 @@ impl Workspace {
             return self.chat_key(event, window, cx);
         }
         let Some(agent) = self.model.talk.as_ref().and_then(|talk| self.drawer.agents.get(&talk.task)) else { return };
-        let terminal = &agent.terminal;
-        let (key, m) = (&event.keystroke, event.keystroke.modifiers);
-        let mods = crate::mods(m);
-        if let Some(scroll) = scroll_key(&key.key, mods, terminal.alt_screen()) {
-            terminal.scroll(scroll);
-            cx.notify();
-            return cx.stop_propagation();
-        }
-        if let Some(bytes) = keys::encode(&key.key, key.key_char.as_deref(), mods, terminal.app_cursor()) {
-            terminal.write(bytes);
-            cx.stop_propagation();
-        }
+        terminal::send_key(&agent.terminal, event, cx);
     }
 
     /// A label typed in sneak mode on one of the drawer's or the empty
@@ -330,6 +320,11 @@ impl Workspace {
                 }
             }
             ("talk", "chat-deny-note", _) => Action::TalkDenyNote,
+            // The editor and the card under it: the keyboard goes there.
+            ("talk", "editor-terminal" | "editor-card", _) => {
+                self.editor_click(name == "editor-terminal", window, cx);
+                return true;
+            }
             ("talk", "chat-stop", _) => Action::TalkInterrupt,
             ("talk", "view-chat", _) => Action::TalkView { shows: ottospace_core::transcript::View::Native },
             ("talk", "view-terminal", _) => Action::TalkView { shows: ottospace_core::transcript::View::Terminal },
@@ -655,7 +650,9 @@ impl Workspace {
     pub(crate) fn render_talk(&self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
         let talk = self.model.talk.as_ref().filter(|talk| talk.open)?;
         let header = self.talk_header(&talk.task, cx)?;
+        // The user's editor takes the conversation's place while it has its draft.
         let body = match self.model.brief.is_some() && self.model.brief == talk.task.task() {
+            _ if self.model.editor_shown() => self.editor_body(cx),
             true => self.brief_content(cx).unwrap_or_else(|| div().into_any_element()),
             false => self.talk_body(&talk.task, cx),
         };
@@ -693,7 +690,9 @@ impl Workspace {
     /// to write), else the conversation, else a task's brief beside its tabs. Its left edge
     /// drags to set its width.
     pub(crate) fn render_drawer(&self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let drawer = if self.model.compose.is_some() || self.model.welcome() {
+        let drawer = if self.model.editor_shown() && self.model.compose.is_some() {
+            self.render_compose_editor(width, cx)
+        } else if self.model.compose.is_some() || self.model.welcome() {
             self.render_new_task(width, cx).into_any_element()
         } else {
             self.render_talk(width, cx).or_else(|| self.render_brief(cx))?

@@ -1228,6 +1228,19 @@ pub enum Action {
     TalkView {
         shows: crate::transcript::View,
     },
+    /// ⌃G in a composer or the new-task box: its text in the user's editor, in the drawer; while
+    /// that runs, the keyboard back to it. Only the user's.
+    EditorOpen,
+    /// The keyboard to the drawer's editor (`on`), or to the card shown above it. Only the user's.
+    EditorKeys {
+        on: bool,
+    },
+    /// The editor exited: `saved` is what its file held, if it exited 0 and the file could be
+    /// read; `more`: the file held more than that. Only the shell's.
+    EditorDone {
+        saved: Option<String>,
+        more: bool,
+    },
     /// A click or ↵ on a task: its conversation opens in the right drawer, with the keyboard.
     /// Its agent is started if it never ran, or its session gone on with if no terminal of it
     /// is live. The workspace stays as it is. Only the user's.
@@ -1657,6 +1670,9 @@ impl Action {
             | Action::TalkEscape
             | Action::TalkInterrupt
             | Action::TalkView { .. }
+            | Action::EditorOpen
+            | Action::EditorKeys { .. }
+            | Action::EditorDone { .. }
             | Action::SetFeatures { .. } => false,
         }
     }
@@ -1886,6 +1902,9 @@ impl Action {
             | Action::SettingsRead { .. }
             | Action::Copied { .. }
             | Action::Paste { .. }
+            | Action::EditorOpen
+            | Action::EditorKeys { .. }
+            | Action::EditorDone { .. }
             | Action::SetFeatures { .. } => None,
         }
     }
@@ -2131,6 +2150,15 @@ pub enum Effect {
     AgentInterrupt {
         task: Subject,
     },
+    /// The user's editor on `text`, in the drawer: write it to a private file, run the editor on
+    /// it, and answer `EditorDone` once it exits.
+    OpenEditor {
+        text: String,
+    },
+    /// Put `text` on the clipboard: what the editor saved, whose draft is gone.
+    Clip {
+        text: String,
+    },
     /// Read this one session now, off the main thread, and answer `SessionRead`.
     ReadSession {
         runner: String,
@@ -2190,6 +2218,7 @@ pub mod spaces;
 pub use spaces::{Owner, Space};
 
 pub mod chat;
+pub mod editor;
 
 #[derive(Debug, Serialize)]
 pub struct Model {
@@ -2423,6 +2452,12 @@ pub struct Model {
     /// What the status bar says of `settings.json` (`settings_line`).
     #[serde(skip)]
     settings_file: crate::settings::Watch,
+    /// The user's editor on a draft, while it runs. Not in the state: it holds the draft.
+    #[serde(skip)]
+    pub editing: Option<editor::Editing>,
+    /// What the status bar says of the editor's last text, and when (`editor_note`).
+    #[serde(skip)]
+    editor_note: Option<(String, u64)>,
 }
 
 impl Default for Model {
@@ -2519,6 +2554,8 @@ impl Default for Model {
             features: if cfg!(test) { Features::all() } else { Features::default() },
             settings_pane: None,
             settings_file: crate::settings::Watch::default(),
+            editing: None,
+            editor_note: None,
         };
         model.push_tab();
         model
@@ -2710,6 +2747,10 @@ impl Model {
             | Action::TalkEscape
             | Action::TalkInterrupt
             | Action::TalkView { .. } => Some(chat::USERS_ALONE),
+            // The editor writes what ↵ will send, and has the keyboard: only the user opens it or
+            // moves to it; only the shell says what it saved.
+            Action::EditorOpen | Action::EditorKeys { .. } => Some(editor::USERS_ALONE),
+            Action::EditorDone { .. } if origin == Origin::Socket => Some(editor::SHELLS_ALONE),
             // So is the composer's text: what ↵ sends must be the user's own words.
             Action::FieldEdit { .. } if self.field().is_some_and(|(of, _)| of == "talk") => Some(chat::USERS_ALONE),
             // Only the shell's runner reports events (System); a client never does.
@@ -3189,7 +3230,7 @@ impl Model {
                 Some(id) => self.agent_runs(&Subject::Task(id)),
                 // "Paste 4 lines?" goes with its pane.
                 None if let Some(ask) = confirm.paste => panes.iter().any(|p| p.id == ask.pane),
-                None => !confirm.running.is_empty() || discards || !self.agents.is_empty(),
+                None => !confirm.running.is_empty() || discards || !self.agents.is_empty() || self.editing.is_some(),
             };
             if !asks {
                 self.confirm = None;
@@ -4141,7 +4182,8 @@ impl Model {
             Action::LeaveSneak => self.sneak = None,
             // Nothing to lose: no terminal runs anything, and no draft holds a capture.
             Action::QuitAsked { running }
-                if (running.is_empty() && self.quit_discards() == 0 && self.agents.is_empty())
+                // The user's editor on a message is asked about too: its unsaved text would go.
+                if (running.is_empty() && self.quit_discards() == 0 && self.agents.is_empty() && self.editing.is_none())
                     || self
                         .confirm
                         .as_ref()
@@ -4365,6 +4407,11 @@ impl Model {
             | Action::TalkEscape
             | Action::TalkInterrupt
             | Action::TalkView { .. }) => self.chat_act(action, effects),
+            Action::EditorOpen => self.editor_open(effects),
+            Action::EditorKeys { on } => self.editor_keys_to(on, effects),
+            // The shell's report alone: a key or click of the user's is none.
+            Action::EditorDone { .. } if self.by_user => {}
+            Action::EditorDone { saved, more } => self.editor_done(saved, more, effects),
             Action::TaskTalk { id } => self.talk_to(Subject::Task(id), false, effects),
             Action::TalkStart => {
                 if let Some(subject) = self.talk.as_ref().filter(|talk| talk.open).map(|talk| talk.task.clone()) {
@@ -5913,6 +5960,8 @@ impl Model {
             Mode::Pick => "picker",
             Mode::Palette => "palette",
             Mode::Inspect => "inspector",
+            // The editor has the box's line: nothing types in it meanwhile.
+            Mode::Compose if self.edits_compose() => return None,
             Mode::Compose => "compose",
             Mode::Annotate => "note",
             Mode::Talk if self.talk_typing() => "talk",
@@ -6971,6 +7020,9 @@ mod tests {
         Action::TalkEscape,
         Action::TalkInterrupt,
         Action::TalkView { .. },
+        Action::EditorOpen,
+        Action::EditorKeys { .. },
+        Action::EditorDone { .. },
         Action::WorkbookFold { .. },
         Action::SetFeatures { .. }
     );
@@ -7201,6 +7253,9 @@ mod tests {
             Action::TalkEscape,
             Action::TalkInterrupt,
             Action::TalkView { shows: View::Terminal },
+            Action::EditorOpen,
+            Action::EditorKeys { on: false },
+            Action::EditorDone { saved: None, more: false },
             Action::TasksView { view: TasksView::Project },
             Action::ToggleProject { project: None, done: false },
             Action::SessionWork { work: progress::Work::default() },
@@ -7372,6 +7427,8 @@ mod tests {
                     Action::SettingsRead { .. } if origin == Origin::Socket => {
                         Some("only ottospace reads settings.json")
                     }
+                    Action::EditorOpen | Action::EditorKeys { .. } => Some(editor::USERS_ALONE),
+                    Action::EditorDone { .. } if origin == Origin::Socket => Some(editor::SHELLS_ALONE),
                     _ => action.takes_keyboard().then_some("sneak mode is on"),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");
@@ -11791,6 +11848,8 @@ mod tests {
                     Action::SettingsRead { .. } if origin == Origin::Socket => {
                         Some("only ottospace reads settings.json")
                     }
+                    Action::EditorOpen | Action::EditorKeys { .. } => Some(editor::USERS_ALONE),
+                    Action::EditorDone { .. } if origin == Origin::Socket => Some(editor::SHELLS_ALONE),
                     _ => action.takes_keyboard().then_some(CONFIRM_UP),
                 };
                 assert_eq!(m.refusal(action, origin), refused, "{action:?} from {origin:?}");

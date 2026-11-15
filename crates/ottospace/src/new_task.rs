@@ -33,7 +33,7 @@ pub fn tag_color(mark: char) -> u32 {
 
 impl Workspace {
     /// The box's keys. ↵ takes the dropdown's highlighted row, else adds the task and starts
-    /// its agent; ⇧↵ adds it for later; ⌘↵ adds and starts it; Tab takes a row; ↑ ↓ (⌃P ⌃N) move over the rows; Esc closes the dropdown,
+    /// its agent; ⇧↵ adds it for later; ⌘↵ adds and starts it; Tab takes a row; ↑ ↓ (⌃P ⌃N) move over the rows; ⌃G edits the line in the user's editor; Esc closes the dropdown,
     /// then the box; ⌘O picks files. The rest edit the line. ⌘ shortcuts the line does not use
     /// still reach their bindings; pane ones wait.
     pub fn compose_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
@@ -51,6 +51,8 @@ impl Workspace {
             "down" if plain && !m.control => Action::ComposeMove { delta: 1 },
             "p" if plain && m.control => Action::ComposeMove { delta: -1 },
             "n" if plain && m.control => Action::ComposeMove { delta: 1 },
+            // The line in the user's editor.
+            "g" if plain && m.control => Action::EditorOpen,
             "o" if m.platform && !m.shift && !m.alt && !m.control => {
                 self.pick_files(window, cx);
                 return cx.stop_propagation();
