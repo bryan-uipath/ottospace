@@ -733,10 +733,12 @@ the way.
   `· now` while it runs) and when the feed was last read (`calendar not updated since 09:40` when
   the last read failed).
 - **Colours**: calls in the meeting amber, blocks a muted grey, out of office (Outlook's OOF) a
-  quiet slate. Tentative entries are lighter, free ones (Outlook's FREE, or `TRANSP:TRANSPARENT`)
+  quiet slate, focus blocks green: a block with no Zoom, Meet or Teams link whose title starts
+  with `Focus` or `Deep Work` (case ignored, whole words: `Focus: writing`, not `Focusing`). Tentative entries are lighter, free ones (Outlook's FREE, or `TRANSP:TRANSPARENT`)
   faint, past ones faded and the one that runs at full strength. `calendar_colors` colours by
   title: `[{"match": "1:1", "color": "teal"}, {"match": "focus", "color": "lime"}]`, the first
-  rule whose `match` the title holds (case ignored) giving the hue; tentative, free and past
+  rule whose `match` the title holds (case ignored) giving the hue, over a focus block's green
+  too; tentative, free and past
   still lighten it. A colour is one of `red`, `indigo`, `orange`, `pink`, `lime`, `purple`, `tan`,
   `teal` (the tasks' own colours); `match` is plain text, not a pattern: titles are other
   people's text, and a pattern of yours run over them is risk for no gain.
@@ -986,7 +988,7 @@ A change is read when the file is saved: what is wrong in it is said in the stat
 | `calendar_notify_for` | Which meetings alert: `all`, or only those with a Zoom, Meet or Teams `links` | `all` |
 | `calendar_email` | Your address among a meeting's attendees in the feed: a meeting you declined is left out. Kept on this machine, never shown. A feed with no attendees (Outlook's published calendars) cannot say who declined: use `calendar_hide_free` | none: nothing is left out |
 | `calendar_hide_free` | Leave out entries that keep the time free (Outlook's FREE, `TRANSP:TRANSPARENT`): the band, the section, the alerts and the `calendar` request | `false` |
-| `calendar_colors` | Colours by title, first match wins: `[{"match": "1:1", "color": "teal"}]`. `match`: plain text the title holds, case ignored (not a pattern); `color`: `red`, `indigo`, `orange`, `pink`, `lime`, `purple`, `tan` or `teal`. At most 64 | none: colours by kind |
+| `calendar_colors` | Colours by title, first match wins: `[{"match": "1:1", "color": "teal"}]`. `match`: plain text the title holds, case ignored (not a pattern); `color`: `red`, `indigo`, `orange`, `pink`, `lime`, `purple`, `tan` or `teal`. At most 64. A rule wins over a focus block's green | none: colours by kind |
 | `suggest_dock_apps` | List the Dock's apps that are not running under "Not running". `false`: only pinned apps are listed there, and the Dock is not read | `true` |
 | `features` | [Feature flags](#features), by name: `true` or `false`. A name that is no flag is a mistake, named in the status bar with the flags there are; the others still apply | each flag's default |
 | `paste_confirm` | When ⌘V into a terminal asks first: `multiline` (text with a line break, even a last one, bracketed paste or not: a shell may run each line) or `never` | `multiline` |

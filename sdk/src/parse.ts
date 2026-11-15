@@ -1573,6 +1573,7 @@ function band(value: unknown, at: string): NonNullable<Snapshot["calendar"]["ban
       kind: blockKind(b.kind, `${at}.kind`),
       show: meetingShow(b.show, `${at}.show`),
       color: str(b.color, `${at}.color`),
+      focus: bool(b.focus, `${at}.focus`),
       lane: orNull(num)(b.lane, `${at}.lane`),
       lanes: orNull(num)(b.lanes, `${at}.lanes`),
       more: num(b.more, `${at}.more`),
