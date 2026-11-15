@@ -50,6 +50,14 @@ export type TaskId = number;
 /** Whose a conversation is: a task's id, or a session no task owns, by its runner and id. */
 export type Subject = TaskId | { runner: string; id: string };
 
+/** What the drawer says of its agent apart from the title (`drawer.line`). */
+export interface AgentLine {
+  foot: string | null;
+  bypass: boolean;
+  folder: string | null;
+  facts: [string, string][];
+}
+
 export type Axis = "right" | "down";
 export type Dir = "left" | "right" | "up" | "down";
 export type Section = "apps" | "workbook" | "tasks" | "repos" | "marks" | "calendar";
@@ -104,7 +112,7 @@ export type Heading = "needs_you" | "running" | "later" | "done" | "sessions";
 /** How the Tasks section groups its tasks. */
 export type TasksView = "state" | "project";
 
-/** Which sessions Other sessions lists: since the local day began, 7 or 30 days back, or all. */
+/** Which sessions Elsewhere lists: since the local day began, 7 (the default) or 30 days back, or all. */
 export type SessionsRange = "today" | "week" | "month" | "all";
 
 /** Tokens of one model, summed. `input` counts every prompt token, cached or not. */
@@ -433,7 +441,7 @@ export interface AppsBar {
   undo: string | null;
 }
 
-/** The Other sessions group of the Tasks section. */
+/** The Elsewhere group of the Tasks section. */
 export interface SessionsBar {
   /** Sessions in `range`, and listed in all. A session at work is always in range. */
   count: number;
@@ -478,16 +486,12 @@ export interface CheckoutRow {
 export interface TaskRow {
   id: TaskId;
   group: Group;
-  /** Tabs and panes the task has open. */
-  tabs: number;
-  panes: number;
   /** Its tabs are the ones on show. */
   current: boolean;
-  /** The muted line: tags, what is open, age. */
-  detail: string;
-  /** What its session does now (`shell · cargo test`), while it works, and its model in short. */
+  /** The one fact at its right: how long it has run, waited or been done (`3h`). Null for needs you. */
+  fact: string | null;
+  /** What its session does now (`shell · cargo test`), while it works. */
   live: string | null;
-  model: string | null;
 }
 
 /** A project's tasks by state: its bar's segments, in this order. */
@@ -514,11 +518,15 @@ export interface ProjectGroup {
 export interface Card {
   id: TaskId;
   title: string;
+  /** 1 is most urgent. */
+  priority: number;
+  /** How long ago it was filed: `3h`. */
+  filed: string | null;
   state: string;
   group: Group | null;
   live: string | null;
   model: string | null;
-  /** `#project`, `>repo`, `@agent`. */
+  /** `#project`, `>repo`, `@agent`, then counts: `2 paths`, `1 skill`, `1 reference`, `1 capture`. */
   tags: string[];
   /** How long ago its agent first started: `3h`. */
   started: string | null;
@@ -1029,6 +1037,8 @@ export interface Snapshot {
   cell: [number, number];
   /** The problem the status bar shows. Not an error of this request. */
   notice: string | null;
+  /** How the status bar draws `notice`: `info` (muted) or `error`. */
+  notice_level: "info" | "error" | null;
   /** How many problems the last read of `settings.json` found: the first is in `notice`. */
   settings_errors: number;
   /** Each hosted window's real frame, by pane id. */
@@ -1133,6 +1143,13 @@ export interface Snapshot {
      * kinds of link the user opened (a test run opens none).
      */
     native: { chats: Record<string, NativeChat>; opened: ("web" | "file")[] };
+    /**
+     * Of the conversation the drawer is on: `foot`, the line at its foot (the model in short, and
+     * a mode that lets the agent act unasked: `haiku-5.5 · auto`), `bypass` (that mode asks for
+     * nothing), `folder` (in the header only when not its task's own) and `facts`, the title's
+     * hover as [name, value] pairs. `model` and `mode` are untrusted labels.
+     */
+    line: AgentLine | null;
     note: string | null;
     /** The right rail's conversations, in order: badge, state, at work, shown, and the tooltip's text. */
     rail: { task: Subject; mono: string; group: Group | null; working: boolean; shown: boolean; tip: string }[];
