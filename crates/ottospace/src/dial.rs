@@ -287,6 +287,8 @@ impl Workspace {
         };
         let mut value = serde_json::to_value(&dial).unwrap_or_default();
         value["collapsed"] = self.model.dial_collapsed(subject).into();
+        // To three places: an f32 widened would say 0.9200000166893004.
+        value["context"] = dial.context.map(|used| (f64::from(used) * 1000.).round() / 1000.).into();
         value
     }
 }
