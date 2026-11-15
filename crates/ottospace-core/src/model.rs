@@ -3858,8 +3858,10 @@ impl Model {
                 Some(ListRow::Closed(path)) => self.app_launch(&path, axis, effects),
                 Some(ListRow::MoreApps) => self.apps_toggle(apps::Group::More),
                 Some(ListRow::AllApps) => self.apps_toggle(apps::Group::All),
-                // ↵ on a meeting is its Join: the user's alone (`refusal`).
-                Some(ListRow::Meeting(id)) => self.act(Action::CalendarJoin { id }, effects),
+                // ↵ on a meeting is its Join (shown on the selected row): the user's alone, here as
+                // in `refusal`. Its link only if `joinable` allows it.
+                Some(ListRow::Meeting(id)) if self.by_user => self.act(Action::CalendarJoin { id }, effects),
+                Some(ListRow::Meeting(_)) => {}
                 None => {}
             },
             Action::ListSnooze { until } => {

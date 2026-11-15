@@ -2127,6 +2127,9 @@ impl Run {
         let line_before = m.compose_line().cloned();
         let composing = m.composing();
         let palette_typing = m.field().is_some_and(|(of, _)| of == "palette");
+        // ↵ in list mode on a meeting row of the Calendar section: that row's Join.
+        let on_meeting = m.sidebar == Some(Section::Calendar)
+            && matches!(m.list.and_then(|at| m.list_rows().into_iter().nth(at)), Some(ListRow::Meeting(_)));
         let tab_before = m.tabs[m.active].id;
         let tabs_before: Vec<u32> = m.tabs.iter().map(|tab| tab.id).collect();
         let talks = matches!(
@@ -2307,10 +2310,12 @@ impl Run {
             _ => false,
         };
         ensure!(!inspector_own || refused.is_some(), "a client's {action:?} reached the inspector");
-        // A meeting's link opens only on the user's own Join, and only one the allow-function passes.
+        // A meeting's link opens only on the user's own Join (its button, or ↵ on its selected row,
+        // which shows Join), and only one the allow-function passes.
         for effect in &effects {
             if let Effect::OpenLink { url } = effect {
-                let joins = matches!(action, Action::CalendarJoin { .. }) && origin == Origin::User;
+                let chose = matches!(action, Action::ListChoose { .. }) && on_meeting;
+                let joins = (matches!(action, Action::CalendarJoin { .. }) || chose) && origin == Origin::User;
                 ensure!(joins && calendar::joinable(url), "{origin:?}'s {action:?} opened {url:?}");
             }
         }
@@ -4295,6 +4300,84 @@ fn a_brief_goes_with_its_tab() {
         Action::SessionAdopt { runner: "claude".into(), id: "s2".into() }.sent_by(Origin::User),
         Action::TaskGo { id: Some(1) }.sent_by(Origin::User),
         Action::CloseTab { index: None }.sent_by(Origin::System),
+    ])
+    .unwrap();
+}
+
+/// ↵ on a meeting row is that row's Join: the user's opens its link, if `joinable` allows one;
+/// a client's or the system's opens nothing, nor does ↵ on a meeting with no allowed link.
+#[test]
+fn enter_on_a_meeting_row_is_the_users_join_alone() {
+    let days =
+        [0, 0, 0, 0, 0, 0, 0, 0, 86400000, 172800000, 259200000, 345600000, 432000000, 518400000, 604800000, 691200000];
+    let on_row = |link: Option<&str>| {
+        let mut m = Model::default();
+        let set = Action::SetCalendar { on: true, notify: true, links_only: false, hide_free: false, colors: vec![] };
+        m.update(set);
+        let event = Event {
+            id: 1,
+            start: 0,
+            end: 1_800_000,
+            all_day: false,
+            title: "standup".into(),
+            location: String::new(),
+            link: link.map(str::to_string),
+            show: Show::Busy,
+        };
+        let read = Action::CalendarRead { events: Some(vec![event]), days, at: 1_000, held_from: 0 };
+        m.update(read.sent_by(Origin::System));
+        m.update(Action::FocusList);
+        m.update(Action::CalendarDay { step: DayStep::Today });
+        let row = m.list.and_then(|at| m.list_rows().into_iter().nth(at));
+        assert_eq!((m.sidebar, row), (Some(Section::Calendar), Some(ListRow::Meeting(1))));
+        m
+    };
+    let enter = Action::ListChoose { axis: Axis::Right };
+    for origin in [Origin::Socket, Origin::System] {
+        let mut m = on_row(Some("https://example.zoom.us/j/1"));
+        assert_eq!(m.refusal(&enter, origin), Some(calendar::USERS_ALONE));
+        assert_eq!(m.update(enter.clone().sent_by(origin)), [], "{origin:?}");
+    }
+    let opened = on_row(Some("https://example.zoom.us/j/1")).update(enter.clone());
+    assert_eq!(opened, [Effect::OpenLink { url: "https://example.zoom.us/j/1".into() }]);
+    for link in [None, Some("http://example.zoom.us/j/1"), Some("javascript:alert(1)")] {
+        assert_eq!(on_row(link).update(enter.clone()), [], "{link:?}");
+    }
+}
+
+/// Seed 30549: the user's ↵ on a meeting row opened its link, and the rule allowed only the Join
+/// button's `CalendarJoin`. ↵ on the selected row is its Join (the row shows Join): the rule was wrong.
+#[test]
+fn seed_30549_the_users_enter_on_a_meeting_row_is_its_join() {
+    let meeting = |id, start, end, title: &str, location: String, show| Event {
+        id,
+        start,
+        end,
+        all_day: false,
+        title: title.into(),
+        location,
+        link: Some("https://example.zoom.us/j/1".into()),
+        show,
+    };
+    replay(&[
+        Action::SetCalendar { on: true, notify: true, links_only: true, hide_free: false, colors: vec![] }
+            .sent_by(Origin::User),
+        Action::CalendarRead {
+            events: Some(vec![
+                meeting(2, 600000, 2400000, "", "مرحبا/🏳\u{fe0f}\u{200d}🌈#123".into(), Show::Tentative),
+                meeting(3, 0, 1800000, "#x../..$", "a".repeat(1139), Show::Away),
+            ]),
+            days: [
+                0, 0, 0, 0, 0, 0, 0, 0, 86400000, 172800000, 259200000, 345600000, 432000000, 518400000, 604800000,
+                691200000,
+            ],
+            at: u64::MAX,
+            held_from: 0,
+        }
+        .sent_by(Origin::User),
+        Action::FocusList.sent_by(Origin::Socket),
+        Action::CalendarDay { step: DayStep::Today }.sent_by(Origin::System),
+        Action::ListChoose { axis: Axis::Right }.sent_by(Origin::User),
     ])
     .unwrap();
 }
