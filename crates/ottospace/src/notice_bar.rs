@@ -80,6 +80,13 @@ impl Workspace {
         match kind {
             Kind::Failed | Kind::Refused => self.error = None,
             Kind::Told => self.told = None,
+            // Said again by the next save that fails.
+            Kind::Unsaved => {
+                self.unsaved = None;
+                self.kept_marks.unsaved = None;
+                self.kept_workbooks.unsaved = None;
+                self.kept_layout.unsaved = None;
+            }
             Kind::Keys => self.key_notice = None,
             _ => {}
         }

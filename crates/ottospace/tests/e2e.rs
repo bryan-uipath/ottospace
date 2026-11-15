@@ -838,8 +838,12 @@ fn a_directory_is_added_to_the_repos_list_and_removed_in_the_settings() {
     // Each name is a row of the list too: app 0-1, web 2-3, zed 4-5.
     assert_eq!((reply["mode"].as_str(), reply["state"]["list"].as_u64()), (Some("list"), Some(5)));
     // What the last try said is gone: the notice bar is back to what it said at start.
-    assert!(reply["notice"].as_str().is_some_and(|notice| notice.starts_with("settings.json: colour")), "{reply}");
-    otto.dismiss_notice();
+    // (Dismissed, unless the file that did not read as settings was read meanwhile.)
+    let line = reply["notice"].as_str();
+    assert!(line.is_none_or(|notice| notice.starts_with("settings.json: colour")), "{reply}");
+    if line.is_some() {
+        otto.dismiss_notice();
+    }
     // It is still listed when the list is read again.
     assert_eq!(names(&otto.call(json!({"cmd": "repos"}))), ["app", "web", "zed"]);
     // Listed already, as itself or through `code`: its row is selected and nothing is written.

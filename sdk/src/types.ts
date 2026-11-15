@@ -1070,7 +1070,6 @@ export interface AppEntry {
   icon: boolean;
 }
 
-/** The reply to most requests: the full state after the request. */
 /** A notice's level, least pressing first. */
 export type NoticeLevel = "info" | "warning" | "error";
 
@@ -1090,6 +1089,7 @@ export interface NoticeBar {
   height: number;
 }
 
+/** The reply to most requests: the full state after the request. */
 export interface Snapshot {
   ok: true;
   mode: Mode;

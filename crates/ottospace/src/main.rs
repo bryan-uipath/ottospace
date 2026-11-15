@@ -1776,7 +1776,7 @@ impl Workspace {
     /// Replies with the state. In a test run, not before a frame has drawn every action so far,
     /// so the bounds in the reply are of the new layout, never the one before it.
     fn answer(&mut self, reply: Sender<String>, window: &Window, cx: &mut Context<Self>) {
-        if self.settles && (self.drawn_seq < self.seq || self.bar.moves()) {
+        if self.settles && (self.drawn_seq < self.seq || self.bar.moves() || self.notice_changed()) {
             self.settling.push((Instant::now(), reply));
             cx.notify();
         } else {
@@ -1790,7 +1790,7 @@ impl Workspace {
     /// `"stale":true` if undrawn: the window drew no frame (hidden, or stuck).
     fn settle(&mut self, now: bool, window: &Window, cx: &mut Context<Self>) {
         // Nor while the notice bar opens or closes: the bounds are of the layout at rest.
-        let drawn = self.drawn_seq >= self.seq && !self.bar.moves();
+        let drawn = self.drawn_seq >= self.seq && !self.bar.moves() && !self.notice_changed();
         let (due, waiting) = std::mem::take(&mut self.settling)
             .into_iter()
             .partition(|(since, _)| drawn || now || since.elapsed() >= SETTLE_LIMIT);
@@ -2163,12 +2163,14 @@ impl Workspace {
                 Request::OpenRepo { path, axis } => Some(Action::OpenRepo { path, axis }),
                 // A test run only (refused above otherwise): the folder the user's picker would give.
                 Request::RepoAdd { path } => {
-                    self.add_repo(Path::new(&path), Origin::User, window, cx);
+                    // All of it the user's, what it says too.
+                    self.with_origin(Origin::User, |this| this.add_repo(Path::new(&path), Origin::User, window, cx));
                     None
                 }
                 // A test run only (refused above otherwise): the user's capture key, pressed by the test.
                 Request::CaptureStart { pane } => {
-                    failure = self.capture_pane(pane, Origin::User, window, cx).err();
+                    failure =
+                        self.with_origin(Origin::User, |this| this.capture_pane(pane, Origin::User, window, cx)).err();
                     None
                 }
                 Request::InspectorFixture { pane, app, tree } => match pane.or(self.model.focused) {
@@ -2567,7 +2569,7 @@ impl Workspace {
             }
             // Gone: the reply is dropped with the closure, and the client is told the app is closing.
             let _ = this.update(cx, |this, cx| {
-                this.input = before.unwrap_or(Origin::User);
+                this.swap_origin(before.unwrap_or(Origin::User));
                 match refused {
                     Some(why) => drop(reply.send(control::error(why))),
                     None => this.answer(reply, window, cx),
@@ -2623,7 +2625,7 @@ impl Workspace {
                     break;
                 }
             }
-            let _ = this.update(cx, |this, _| this.input = before.unwrap_or(Origin::User));
+            let _ = this.update(cx, |this, _| drop(this.swap_origin(before.unwrap_or(Origin::User))));
             match refused {
                 Some(why) => drop(reply.send(control::error(&why))),
                 None => drop(this.update_in(cx, |this, window, cx| this.answer(reply, window, cx))),
@@ -2704,7 +2706,7 @@ impl Workspace {
             let _ = cx.update(|window, cx| window.draw(cx).clear());
             let _ = this.update(cx, |this, _| {
                 this.injected = false;
-                this.input = before.unwrap_or(Origin::User);
+                this.swap_origin(before.unwrap_or(Origin::User));
             });
             match made {
                 true => drop(this.update_in(cx, |this, window, cx| this.answer(reply, window, cx))),
@@ -3169,16 +3171,17 @@ impl Workspace {
             if hosted {
                 continue;
             }
-            if launch.since.elapsed() > LAUNCH_WAIT {
-                let seconds = LAUNCH_WAIT.as_secs();
-                let why = format!("{} did not open a window in {seconds} seconds", launch.app.name);
-                // A rebuilt tab's pane that waited for it says so.
-                if let Some(pane) = launch.wanted.as_ref().and_then(|wanted| wanted.into) {
-                    self.model.update(Action::Unfilled { pane, why: why.clone() }.sent_by(Origin::System));
-                }
-                self.error = Some(why);
-            } else {
-                self.error = None; // a try that was too early is not a failure yet
+            let late = launch.since.elapsed() > LAUNCH_WAIT;
+            let seconds = LAUNCH_WAIT.as_secs();
+            let why = late.then(|| format!("{} did not open a window in {seconds} seconds", launch.app.name));
+            // A rebuilt tab's pane that waited for it says so.
+            if let Some((pane, why)) = launch.wanted.as_ref().and_then(|wanted| wanted.into).zip(why.clone()) {
+                self.model.update(Action::Unfilled { pane, why }.sent_by(Origin::System));
+            }
+            // A try that was too early is not a failure yet. Said as the launch's sender: a
+            // client's wait neither clears nor covers what the user's step said.
+            self.with_origin(launch.origin, |this| this.error.clone_from(&why));
+            if !late {
                 self.launching.push(launch);
             }
         }

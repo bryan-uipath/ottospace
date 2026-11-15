@@ -59,10 +59,11 @@ impl Kind {
         }
     }
 
-    /// The shell holds it in a slot and empties the slot on a dismissal; the others stay
-    /// until fixed, so the core remembers them as dismissed (`Model::notice_hidden`).
+    /// It is held in a slot, emptied on a dismissal: said again, it shows again. The others (the
+    /// settings' line, what was found at start) stay as they are until fixed, so the core
+    /// remembers them as dismissed (`Model::notice_hidden`).
     pub fn held(self) -> bool {
-        matches!(self, Kind::Failed | Kind::Refused | Kind::Told | Kind::Keys)
+        !matches!(self, Kind::SettingsProblem | Kind::SettingsRetired | Kind::SettingsRestart | Kind::Start)
     }
 }
 
@@ -141,14 +142,14 @@ mod tests {
         let table = [
             (Failed, Level::Error, None, true),
             (Refused, Level::Warning, None, true),
-            (Unsaved, Level::Error, None, false),
+            (Unsaved, Level::Error, None, true),
             (Told, Level::Info, None, true),
             (SettingsProblem, Level::Error, Some(Offer::OpenSettings), false),
             (SettingsRetired, Level::Warning, Some(Offer::OpenSettings), false),
             (SettingsRestart, Level::Info, None, false),
             (Start, Level::Error, None, false),
             (Keys, Level::Warning, None, true),
-            (Editor, Level::Info, None, false),
+            (Editor, Level::Info, None, true),
         ];
         for (kind, level, offer, held) in table {
             assert_eq!((kind.level(), kind.offer(), kind.held()), (level, offer, held), "{kind:?}");

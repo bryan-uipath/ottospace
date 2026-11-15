@@ -3085,6 +3085,9 @@ impl Model {
             if self.refusal(&sent.action, origin).is_some() {
                 return Vec::new();
             }
+            if *kind == crate::notice::Kind::Editor {
+                self.editor_note = None;
+            }
             if !kind.held() {
                 self.notice_hidden.retain(|hidden| hidden.kind != *kind);
                 self.notice_hidden.push(crate::notice::Notice { kind: *kind, text: text.clone() });
