@@ -37,6 +37,21 @@ fn calendar(events: Vec<Event>) -> Calendar {
 }
 
 #[test]
+fn a_meeting_just_after_midnight_is_near_alerts_and_is_watched_from_the_day_before() {
+    // 00:02 tomorrow, seen at 23:58 and at 00:03, before the day's next read moves `days`.
+    let midnight = DAY.1;
+    let mut c = calendar(vec![event(1, midnight + 2 * M, 30)]);
+    let before = midnight - 2 * M;
+    assert_eq!(c.next(before).map(|(e, s)| (e.id, s)), Some((1, Stage::Approaching)));
+    assert_eq!(c.rail(midnight + M), RailMark::Near, "imminent at 00:01");
+    assert!(c.watching(midnight + M), "the call is looked for from a minute before");
+    c.call_seen(Some(false), midnight + M);
+    assert_eq!(c.tick(midnight + 3 * M).len(), 1, "it alerts at its start, in the new day");
+    // Far off tomorrow is not near today.
+    assert_eq!(calendar(vec![event(2, midnight + 9 * H, 30)]).next(before), None);
+}
+
+#[test]
 fn every_stage_boundary() {
     let e = event(1, NINE, 30);
     assert_eq!(stage(&e, NINE - APPROACHING - 1), Stage::Far);

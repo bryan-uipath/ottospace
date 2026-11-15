@@ -6592,7 +6592,8 @@ fn the_meeting_timeline_alerts_and_only_the_user_joins_or_dismisses() {
     let counted = read["events_today"].as_u64().unwrap() + read["events_tomorrow"].as_u64().unwrap();
     assert_eq!(counted, 4, "{read}");
     assert_eq!((&read["stage"], &read["soon"], &read["chip"]), (&json!("approaching"), &Value::Null, &Value::Null));
-    assert!(read["bars"].as_u64() >= Some(3), "{read}");
+    // Planning is 4 minutes off: on the band unless that is past midnight.
+    assert!(read["bars"].as_u64() >= Some(2), "{read}");
     // No title or link reaches a client.
     let state = otto.call(json!({"cmd": "state"})).to_string();
     assert!(!state.contains("Design review") && !state.contains("example.zoom.us"), "{state}");
