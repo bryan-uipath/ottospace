@@ -8496,6 +8496,9 @@ fn the_notice_bar_splits_the_top_row_from_the_rest_and_only_the_user_dismisses_i
     otto.click(close, 1);
     otto.call(json!({"cmd": "key", "keys": "escape"}));
     otto.user_key("escape");
+    // Nor by its sneak label, nor does a client's label on the offer open the settings.
+    sneak_to(&otto, "notice:close");
+    assert_eq!(sneak_to(&otto, "notice:offer")["state"]["tabs"].as_array().map(Vec::len), Some(2));
     assert_eq!(bar(Some("error"))["notice_bar"]["text"], shown["notice"]);
     // The user's click on ×: the bar closes and the rest is back where it was.
     otto.user_click(close);
@@ -8523,7 +8526,9 @@ fn the_notice_bar_splits_the_top_row_from_the_rest_and_only_the_user_dismisses_i
     assert!(failed["error"].is_string(), "{failed}");
     assert_eq!(bar(Some("warning"))["notice"], warned["notice"]);
     // Dismissed, the information it covered shows again; an error covers both.
-    otto.user_click(at(rect(&warned["notice_bar"]["close"]), 0.5, 0.5));
+    // By the user's own sneak label on ×.
+    let (_, labels) = sneak(&otto);
+    otto.user_key(&letters(&labels["notice:close"]));
     assert_eq!(bar(Some("info"))["notice"], info["notice"]);
     std::fs::write(&file, "{ not json").unwrap();
     assert_eq!(bar(Some("error"))["notice_bar"]["kind"], "settings_problem");

@@ -152,13 +152,16 @@ impl Workspace {
                 .underline()
                 .child(offer.label())
                 .child(mark(&self.marks, Mark::NoticeOffer))
+                .child(self.controls.mark("notice:offer"))
                 .on_click(click)
         });
-        let close = button("notice-close").child("×").child(mark(&self.marks, Mark::NoticeClose)).on_click(
-            cx.listener(|this, _, window, cx| {
+        let close = button("notice-close")
+            .child("×")
+            .child(mark(&self.marks, Mark::NoticeClose))
+            .child(self.controls.mark("notice:close"))
+            .on_click(cx.listener(|this, _, window, cx| {
                 this.dismiss_notice(window, cx);
-            }),
-        );
+            }));
         let line = div()
             .absolute()
             .top_0()
