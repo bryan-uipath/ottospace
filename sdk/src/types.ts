@@ -466,6 +466,8 @@ export interface ReposGroup {
   path: string;
   /** Where the heading was laid out, scrolled out of view or not. Null while the section is not drawn. */
   header: Rect | null;
+  /** Its checkouts are folded under its name: not drawn, not rows of list mode. */
+  folded: boolean;
   rows: CheckoutRow[];
 }
 
@@ -477,7 +479,7 @@ export interface CheckoutRow {
   branch: string;
   /** True for the repository's own directory; false for a linked worktree. */
   default: boolean;
-  /** The line under the branch: `Default`, or a linked worktree's directory name. */
+  /** Its directory's name (the row's tooltip has its path). */
   label: string;
   /** Where the row was laid out, scrolled out of view or not. Null while the section is not drawn. */
   row: Rect | null;
@@ -595,7 +597,7 @@ export type PickItem =
 /** The text field that has the keyboard. Offsets are UTF-16 units: JavaScript string indexes. */
 export interface Field {
   /** Whose it is: the new-task line, the picker's or the Apps section's filter, a mark's name, a note on a capture, or a native conversation's composer (`talk`). */
-  of: "compose" | "picker" | "palette" | "inspector" | "apps" | "mark" | "workbook" | "note" | "talk";
+  of: "compose" | "picker" | "palette" | "inspector" | "apps" | "mark" | "workbook" | "worktree" | "note" | "talk";
   text: string;
   cursor: number;
   /** Start and end, in text order. Equal: only a cursor. */
@@ -763,7 +765,9 @@ export type MarkInput =
   | { type: "rename"; mark: number; text: string }
   | { type: "set_key"; mark: number }
   /** A workbook's name is being typed in its row; with `tab`, the title of that tab of it. */
-  | { type: "workbook"; workbook: number; tab?: number; text: string };
+  | { type: "workbook"; workbook: number; tab?: number; text: string }
+  /** A new worktree's branch is being typed in the rows of the repository at `repo` (the user's alone). */
+  | { type: "worktree"; repo: string; text: string };
 
 /** A pane of a workbook's tab. `app`: an app pane's app, by name. A terminal's `lines` and
  * `has_command` count the history it kept; the text is never in the state. */

@@ -307,7 +307,7 @@ impl Gen<'_> {
     fn repo_dirs(&mut self) -> RepoDirs {
         let dir = |g: &mut Self| g.name(DIRS);
         let dirs = (0..self.rng.below(3)).map(|_| dir(self)).map(|path| RepoDir { text: path.clone(), path }).collect();
-        RepoDirs { dirs, fixed: self.rng.below(4) == 0 }
+        RepoDirs { dirs, fixed: self.rng.below(4) == 0, worktrees: self.rng.coin().then(|| "/w".into()) }
     }
 
     fn repo_path(&mut self) -> String {
@@ -733,6 +733,9 @@ const MAKERS: &[Make] = &[
     |g| Action::RepoRemove { path: g.name(DIRS) },
     |g| Action::OpenRepo { path: g.repo_path(), axis: g.axis() },
     |g| Action::RepoClick { path: g.repo_path(), axis: g.axis() },
+    |g| Action::RepoFold { path: g.repo_path(), fold: g.rng.pick(&[None, Some(true), Some(false)]) },
+    |g| Action::WorktreeEdit { repo: g.repo_path() },
+    |g| Action::WorktreeAdded { repo: g.repo_path(), path: g.repo_path(), repos: g.repos() },
     |g| {
         let tasks = (0..g.rng.below(4)).map(|_| g.kept_task()).collect();
         Action::RestoreTasks { tasks, floor: g.rng.pick(&[0, 5, tasks::MAX_ID, u32::MAX]) }
@@ -1226,6 +1229,7 @@ fn selects_tab(action: &Action) -> bool {
             | Action::TaskFromLine { .. }
             | Action::OpenRepo { .. }
             | Action::RepoClick { .. }
+            | Action::WorktreeAdded { .. }
             | Action::EditSettings
             | Action::TaskGo { .. }
             | Action::DropPane { .. }
@@ -1263,7 +1267,7 @@ fn check(m: &Model) -> Result<(), String> {
     let shown = |section| m.sidebar == Some(section) || m.rail_focus == Some(zones::RailFocus::Left(section));
     if !m.features.on(Feature::Marks) {
         ensure!(!shown(Section::Marks), "the Marks section with marks off");
-        let waits = !matches!(m.mark_input, None | Some(MarkInput::Workbook { .. }));
+        let waits = !matches!(m.mark_input, None | Some(MarkInput::Workbook { .. } | MarkInput::Worktree { .. }));
         ensure!(!waits, "a mark waits with marks off: {:?}", m.mark_input);
         let listed = m.palette.iter().flat_map(Palette::matches).any(|c| c.feature() == Some(Feature::Marks));
         ensure!(!listed, "the palette lists a mark command with marks off");
@@ -1461,7 +1465,7 @@ fn check(m: &Model) -> Result<(), String> {
     let note = m.note().filter(|_| !m.compose_keys());
     let apps = m.app_lists.filtering && !m.compose_modal() && !m.compose_keys();
     let whose = match (m.open_field(), renaming, &m.picker, note, &m.compose) {
-        (Some(("mark" | "workbook", field)), Some(name), ..) => std::ptr::eq(field, name),
+        (Some(("mark" | "workbook" | "worktree", field)), Some(name), ..) => std::ptr::eq(field, name),
         (Some(("picker", field)), None, Some(picker), ..) => std::ptr::eq(field, &picker.query),
         (Some(("palette", field)), None, None, ..) => m.palette.as_ref().is_some_and(|p| std::ptr::eq(field, &p.query)),
         (Some(("inspector", field)), None, None, ..) => {
@@ -1531,6 +1535,7 @@ fn check(m: &Model) -> Result<(), String> {
         let most = match of {
             "compose" => MAX_TITLE,
             "mark" | "workbook" => marks::MAX_NAME,
+            "worktree" => crate::repos::MAX_BRANCH,
             "note" => capture::MAX_NOTE,
             _ => MAX_FILTER,
         };
@@ -1614,6 +1619,10 @@ fn check(m: &Model) -> Result<(), String> {
         }
         Some(MarkInput::Workbook { workbook, .. }) => {
             ensure!(m.workbooks.get(*workbook).is_some(), "a name is typed for workbook {workbook}, which is gone")
+        }
+        Some(MarkInput::Worktree { repo, text }) => {
+            ensure!(m.repos.iter().any(|r| r.path == *repo), "a branch is typed for {repo:?}, which is not listed");
+            ensure!(text.text().len() <= crate::repos::MAX_BRANCH, "a typed branch has {} bytes", text.text().len());
         }
         Some(MarkInput::Jump) | None => {}
     }
@@ -1925,6 +1934,7 @@ fn check_layout(m: &Model) -> Result<(), String> {
         Action::SetCalendar { on, notify, links_only, hide_free, colors },
         Action::RestoreTasks { tasks: m.tasks.list.clone(), floor },
         Action::RestoreWorkbooks { workbooks: m.workbooks.list.clone() },
+        Action::SetRepos { repos: m.repos.clone() },
         Action::RestoreMarks { marks: m.marks.list.clone(), extra: m.marks.extra.clone() },
         Action::RestoreLayout { layout: Box::new(read), gone: Vec::new(), home: None, launch: false },
     ] {
@@ -2689,6 +2699,16 @@ impl Run {
                     let named = |change: &ListChange| change.key == "repos" && !change.text.is_empty();
                     ensure!(changes.len() == 1 && changes.iter().all(named), "not one directory: {changes:?}");
                     ensure!(m.repo_dirs.dirs.len() <= MAX_DIRS, "more directories than the settings may name");
+                }
+                // A worktree is the user's own ↵ in its field: a branch git takes, in a folder of `root`.
+                Effect::AddWorktree { repo, branch, path, root } => {
+                    ensure!(user && matches!(action, Action::MarkSubmit), "{origin:?}'s {action:?} made a worktree");
+                    ensure!(crate::repos::check_branch(branch).is_ok(), "a worktree on {branch:?}");
+                    ensure!(m.repos.iter().any(|r| r.path == *repo), "a worktree of {repo:?}, not listed");
+                    let rest = path.strip_prefix(root.as_str()).and_then(|rest| rest.strip_prefix('/'));
+                    let parts: Vec<&str> = rest.map(|rest| rest.split('/').collect()).unwrap_or_default();
+                    let plain = |part: &&str| !matches!(*part, "" | "." | "..");
+                    ensure!(parts.len() == 2 && parts.iter().all(plain), "a worktree at {path:?}, outside {root:?}");
                 }
                 Effect::Notice { text } => ensure!(user && !text.is_empty(), "{origin:?} is told {text:?}"),
                 // The settings file is the user's.
@@ -3531,7 +3551,7 @@ fn one_key_never_presses_in_an_app() {
 fn a_directory_with_no_text_is_not_removed() {
     replay(&[
         Action::SetRepoDirs {
-            dirs: RepoDirs { dirs: vec![RepoDir { text: "".into(), path: "".into() }], fixed: false },
+            dirs: RepoDirs { dirs: vec![RepoDir { text: "".into(), path: "".into() }], fixed: false, worktrees: None },
         }
         .sent_by(Origin::Socket),
         Action::RepoRemove { path: "".into() }.sent_by(Origin::User),
@@ -4066,6 +4086,7 @@ fn a_repository_is_never_removed_by_a_path_that_is_no_directory() {
                     RepoDir { text: "  S'".into(), path: "  S'".into() },
                 ],
                 fixed: false,
+                worktrees: None,
             },
         }
         .sent_by(Origin::User),

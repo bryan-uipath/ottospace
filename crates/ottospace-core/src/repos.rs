@@ -37,6 +37,10 @@ pub struct RepoDirs {
     pub dirs: Vec<RepoDir>,
     /// `OTTOSPACE_REPOS` names them, not the settings: none is added or removed.
     pub fixed: bool,
+    /// Where a new worktree goes (`worktrees_dir`, absolute). `None`: none is made, e.g. a test
+    /// run with no folder of its own. Not in the state.
+    #[serde(skip)]
+    pub worktrees: Option<String>,
 }
 
 const FIXED: &str = "OTTOSPACE_REPOS names the repositories: the settings are not read";
@@ -89,22 +93,85 @@ pub struct Checkout {
     pub branch: String,
     /// True for the repository's own directory. A linked worktree is not the default.
     pub default: bool,
-    /// The line under the branch: `Default`, or a linked worktree's directory name.
+    /// Its directory's name, for the row's tooltip.
     pub label: String,
 }
 
 impl Repo {
     /// The repository's rows: its own directory first, then its worktrees in their order.
     pub fn checkouts(&self) -> Vec<Checkout> {
-        let row = |path: &str, branch: &Option<String>, worktree: Option<&str>| Checkout {
+        let row = |path: &str, branch: &Option<String>, name: &str, default: bool| Checkout {
             path: path.to_string(),
             branch: branch.clone().unwrap_or_else(|| "(no branch)".into()),
-            default: worktree.is_none(),
-            label: worktree.unwrap_or("Default").to_string(),
+            default,
+            label: name.to_string(),
         };
-        let linked = self.worktrees.iter().map(|w| row(&w.path, &w.branch, Some(&w.name)));
-        std::iter::once(row(&self.path, &self.branch, None)).chain(linked).collect()
+        let linked = self.worktrees.iter().map(|w| row(&w.path, &w.branch, &w.name, false));
+        std::iter::once(row(&self.path, &self.branch, &self.name, true)).chain(linked).collect()
     }
+}
+
+/// Why a client's request adds no worktree: it runs git in the user's repository.
+pub const USERS_ALONE: &str = "only the user adds a worktree";
+/// Why the + makes none: no `worktrees_dir`, and no ottospace folder to put one in.
+pub const WORKTREES_NONE: &str = "No folder for worktrees in this run";
+
+/// The longest branch name a new worktree takes, in bytes.
+pub const MAX_BRANCH: usize = 200;
+
+/// Why `branch` cannot name a new worktree's branch, by `git check-ref-format --branch`'s rules,
+/// and stricter: no space, nothing git would read as an option (`-x`) or a revision (`@{-1}`).
+pub fn check_branch(branch: &str) -> Result<(), String> {
+    const BAD: &[char] = &[' ', '~', '^', ':', '?', '*', '[', '\\'];
+    const NOT_GITS: &str = "Not a branch name git takes";
+    let bad_part = |p: &str| p.is_empty() || p.starts_with('.') || p.ends_with(".lock");
+    let why = match () {
+        _ if branch.is_empty() => "Name a branch",
+        _ if branch.len() > MAX_BRANCH => "That branch name is too long",
+        _ if branch.starts_with('-') => "A branch name cannot start with -",
+        _ if branch.chars().any(|c| c.is_control() || BAD.contains(&c)) => {
+            "A branch name cannot hold a space, a control character or ~ ^ : ? * [ \\"
+        }
+        _ if branch.contains("..") || branch.contains("@{") || branch == "@" || branch == "HEAD" => NOT_GITS,
+        _ if branch.ends_with('.') || branch.split('/').any(bad_part) => NOT_GITS,
+        _ => return Ok(()),
+    };
+    Err(why.into())
+}
+
+/// Where a new worktree of the repository at `repo` on `branch` goes: `<worktrees>/<repo>/<branch>`,
+/// slashes in the branch as `-` (`fix/zoom` → `fix-zoom`). `<repo>` is the repository's folder
+/// name; when another of `listed` has that name too, with a short hash of its path (`app-1f2e3d`).
+pub fn worktree_dir(worktrees: &str, repo: &str, listed: &[Repo], branch: &str) -> String {
+    let name = Some(name_of(repo)).filter(|name| !matches!(name.as_str(), "" | "." | "..")).unwrap_or("repo".into());
+    let shared = listed.iter().any(|other| other.path != repo && name_of(&other.path) == name);
+    let folder = if shared { format!("{name}-{}", short_hash(repo)) } else { name };
+    format!("{}/{folder}/{}", worktrees.trim_end_matches('/'), branch.replace('/', "-"))
+}
+
+/// The most of git's message the status bar shows, in characters.
+const MAX_SAID: usize = 200;
+
+/// What git's standard error says, for the status bar: cleaned as any text is, its `fatal:` and
+/// `error:` lines (else every line) on one line, cut short. e.g. `git: 'x' is already used by worktree`.
+pub fn git_said(stderr: &str) -> String {
+    let text = crate::transcript::clean(stderr);
+    let lines: Vec<&str> = text.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+    let said = |line: &&str| line.starts_with("fatal:") || line.starts_with("error:");
+    let picked: Vec<&str> = if lines.iter().any(said) { lines.into_iter().filter(said).collect() } else { lines };
+    let bare = |line: &str| line.trim_start_matches("fatal:").trim_start_matches("error:").trim().to_string();
+    let joined = picked.into_iter().map(bare).collect::<Vec<_>>().join("; ");
+    let mut out: String = joined.chars().take(MAX_SAID).collect();
+    if joined.chars().count() > MAX_SAID {
+        out.push('…');
+    }
+    if out.is_empty() { "git failed".into() } else { format!("git: {out}") }
+}
+
+/// 24 bits of FNV-1a of `text`, as 6 hex digits: the same on every run and build.
+fn short_hash(text: &str) -> String {
+    let hash = text.bytes().fold(0x811c_9dc5_u32, |hash, byte| (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193));
+    format!("{:06x}", hash & 0xff_ffff)
 }
 
 /// What a `HEAD` file says is checked out: `ref: refs/heads/fix/zoom` → `fix/zoom`; a bare
@@ -198,7 +265,7 @@ mod tests {
         };
         // A worktree whose directory is named `Default` is still not the default: the flag says which.
         let expected = [
-            row("/code/app", "main", true, "Default"),
+            row("/code/app", "main", true, "app"),
             row("/code/app-2", "fix/zoom", false, "app-2"),
             row("/code/Default", "(no branch)", false, "Default"),
         ];
@@ -206,10 +273,61 @@ mod tests {
     }
 
     #[test]
+    fn a_branch_name_is_refused_as_git_would_and_for_anything_that_reads_as_an_option() {
+        for good in ["main", "fix/zoom", "feat/map-2", "v1.2", "ü-umlaut", "a@b"] {
+            assert_eq!(check_branch(good), Ok(()), "{good}");
+        }
+        let long = "x".repeat(MAX_BRANCH + 1);
+        let bad = [
+            "", "-f", "--force", "a b", "a\tb", "a\nb", "a..b", "../up", "a/../b", "a~1", "a^", "a:b", "a?", "a*",
+            "a[b", "a\\b", "@", "HEAD", "a@{1}", "a.", "a/", "/a", "a//b", ".hidden", "a/.b", "a.lock", "a.lock/b",
+            &long,
+        ];
+        for name in bad {
+            assert!(check_branch(name).is_err(), "{name:?} passed");
+        }
+        assert_eq!(check_branch("-x"), Err("A branch name cannot start with -".into()));
+    }
+
+    #[test]
+    fn what_git_said_is_one_clean_short_line() {
+        let said = "Preparing worktree (new branch 'x')\nfatal: 'x' is already used by worktree at '/w/x'\n";
+        assert_eq!(git_said(said), "git: 'x' is already used by worktree at '/w/x'");
+        assert_eq!(git_said("warning: one\nhint: two\n"), "git: warning: one; hint: two");
+        assert_eq!(git_said("fatal: \u{1b}[31mred\u{1b}[0m\u{7}"), "git: red");
+        assert_eq!(git_said(""), "git failed");
+        let long = git_said(&format!("fatal: {}", "x".repeat(500)));
+        assert_eq!(long.chars().count(), "git: ".len() + MAX_SAID + 1);
+    }
+
+    #[test]
+    fn a_worktree_goes_in_its_repositorys_folder_with_slashes_as_dashes() {
+        let listed = [repo("app", &[]), repo("web", &[])];
+        assert_eq!(worktree_dir("/w/", "/code/app", &listed, "fix/zoom"), "/w/app/fix-zoom");
+        // Two repositories named `app`: each folder takes a short hash of its path, the same each run.
+        let other = Repo { path: "/work/app".into(), ..repo("app", &[]) };
+        let listed = [repo("app", &[]), other];
+        let (one, two) = (worktree_dir("/w", "/code/app", &listed, "x"), worktree_dir("/w", "/work/app", &listed, "x"));
+        assert_ne!(one, two);
+        assert!(one.starts_with("/w/app-") && one.ends_with("/x") && one.len() == "/w/app-123456/x".len(), "{one}");
+        assert_eq!(one, worktree_dir("/w", "/code/app", &listed, "x"));
+        assert_eq!(short_hash("/code/app"), short_hash("/code/app"));
+        // A checked name never leaves its folder: no `..`, no part that starts with a dot, no `/` kept.
+        for branch in ["a/b/c", "feat/x.y"] {
+            assert!(check_branch(branch).is_ok());
+            let dir = worktree_dir("/w", "/code/app", &[], branch);
+            assert_eq!(dir.matches('/').count(), 3, "{dir}");
+        }
+    }
+
+    #[test]
     fn a_directory_is_added_once_and_only_one_listed_as_itself_is_removed() {
         let dir = |text: &str, path: &str| RepoDir { text: text.into(), path: path.into() };
-        let mut dirs =
-            RepoDirs { dirs: vec![dir("~/code", "/home/code"), dir("/work/app", "/work/app")], fixed: false };
+        let mut dirs = RepoDirs {
+            dirs: vec![dir("~/code", "/home/code"), dir("/work/app", "/work/app")],
+            fixed: false,
+            worktrees: None,
+        };
         assert_eq!(dirs.may_add("/tmp/new", 2, false), Ok(true));
         assert_eq!(dirs.may_add("/tmp/empty", 0, false), Err("No repository in /tmp/empty".into()));
         // Listed already: a directory of the settings, or a repository found through one.
@@ -222,7 +340,7 @@ mod tests {
         assert_eq!(dirs.to_remove("/home/code/app"), Err(through.into()));
         assert_eq!(dirs.to_remove("/else/app"), Err("app is not listed by the settings".into()));
         // An entry that did not resolve (`"repos": [""]`) is no repository's: not removed for one.
-        let unresolved = RepoDirs { dirs: vec![dir("", "")], fixed: false };
+        let unresolved = RepoDirs { dirs: vec![dir("", "")], fixed: false, worktrees: None };
         assert_eq!(unresolved.to_remove(""), Err("Not a directory: ".into()));
         // No more than the settings may hold; and none while the environment names them.
         dirs.dirs = (0..MAX_DIRS).map(|n| dir(&format!("/d{n}"), &format!("/d{n}"))).collect();

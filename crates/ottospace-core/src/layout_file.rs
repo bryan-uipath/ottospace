@@ -20,6 +20,8 @@ pub const MAX_FILE_BYTES: usize = workbook::MAX_FILE_BYTES;
 pub const MAX_TABS: usize = 8 * workbook::MAX_TABS;
 /// The most marks one tab names.
 const MAX_LINKS: usize = 64;
+/// The most folded repositories kept.
+const MAX_FOLDED: usize = 256;
 
 /// Why a client's request does nothing: Start Fresh, or an app a restored pane names.
 pub const USERS_ALONE: &str = "only the user starts fresh or opens a restored pane's app";
@@ -43,6 +45,9 @@ pub struct Layout {
     /// their `task`, the others to Workspace.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spaces: Vec<SavedSpace>,
+    /// The Repos section's repositories folded under their name, by path.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repos_folded: Vec<String>,
     #[serde(flatten)]
     pub extra: Extra,
 }
@@ -182,6 +187,11 @@ pub fn write(layout: &Layout) -> String {
 }
 
 /// A mark's id for good as the file may name it: short and one line.
+/// A folded repository's path as kept: absolute, one line, not huge.
+fn folded_path(path: &str) -> bool {
+    path.starts_with('/') && path.len() <= 4096 && !path.chars().any(char::is_control)
+}
+
 fn plain_uid(uid: &str) -> bool {
     !uid.is_empty() && marks::plain(uid, 64)
 }
@@ -197,6 +207,9 @@ impl Layout {
         }
         if self.spaces.len() > MAX_TABS + 1 {
             return Some("it has too many spaces");
+        }
+        if self.repos_folded.len() > MAX_FOLDED || !self.repos_folded.iter().all(|p| folded_path(p)) {
+            return Some("it folds too many repositories, or one by what is not a path");
         }
         if self.spaces.iter().any(|space| space.workbook.as_ref().is_some_and(|uid| !workbook::valid_uid(uid))) {
             return Some("a space names a workbook by what is not an id");
@@ -317,7 +330,11 @@ impl Model {
         };
         // Not the Calendar: a build without it could not read the file back.
         let section = self.sidebar.filter(|s| *s != Section::Calendar);
-        let mut layout = Layout { version: VERSION, selected, section, drawer, tabs, spaces, extra: Extra::new() };
+        // Of listed repositories only: one gone from the list takes its fold with it.
+        let listed = |path: &&String| folded_path(path) && self.repos.iter().any(|repo| repo.path == **path);
+        let repos_folded = self.repos_folded.iter().filter(listed).take(MAX_FOLDED).cloned().collect();
+        let mut layout =
+            Layout { version: VERSION, selected, section, drawer, tabs, spaces, repos_folded, extra: Extra::new() };
         // What is written always reads back: the last histories go first, then the last tabs.
         while write(&layout).len() > MAX_FILE_BYTES {
             let held = layout.tabs.iter_mut().flat_map(|saved| saved.tab.panes.iter_mut()).rev();
@@ -369,6 +386,7 @@ impl Model {
         if !self.fresh() || layout.unsound().is_some() {
             return;
         }
+        self.repos_folded.clone_from(&layout.repos_folded);
         let owners: Vec<Owner> = layout.spaces.iter().map(|saved| self.owner_of(saved)).collect();
         let task_of = |model: &Model, saved: &SavedTab| {
             let task = saved.tab.task.filter(|id| model.tasks.live(*id).is_some());

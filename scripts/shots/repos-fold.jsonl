@@ -1,0 +1,17 @@
+# The Repos section's names: a chevron folds a repository (a count while folded); under the
+# pointer, + (a new worktree) and the trash (stop listing it); the field for a new worktree's branch.
+{"cmd":"section","section":"repos"}
+{"until":"repos_bar.2"}
+{"cmd":"task_new","line":"Rework zoom and pan >canvas-app-3"}
+{"click":"repo-fold:{ROOT}/repos/design-system"}
+{"click":"repo-fold:{ROOT}/repos/notes"}
+{"until":"repos_bar.1.folded","is":true}
+{"cmd":"mouse","action":"move","x":-50,"y":-50,"as":"user"}
+{"shot":"folded"}
+{"hover":"repo-fold:{ROOT}/repos/canvas-app","at":[0.3,0.5]}
+{"shot":"hover"}
+{"click":"repo-add:{ROOT}/repos/canvas-app"}
+{"until":"state.mark_input.type","is":"worktree"}
+{"shot":"new-worktree"}
+{"cmd":"key","keys":"f i x / p a n","as":"user"}
+{"shot":"new-worktree-typed"}

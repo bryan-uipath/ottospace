@@ -36,6 +36,10 @@ pub struct Settings {
     /// The directory tasks are kept in. Default: `tasks` beside the settings file.
     #[serde(default)]
     pub tasks: Option<String>,
+    /// Where the Repos section's + makes worktrees, as `<dir>/<repo>/<branch>`. Default: `worktrees`
+    /// beside the settings file (`~/.ottospace/worktrees`).
+    #[serde(default)]
+    pub worktrees_dir: Option<String>,
     /// Windows to leave alone: `[{ "app": "us.zoom.xos", "title": "zoom share*", "do": "ignore" }]`.
     /// See `rules`. They come before the rules that ship with ottospace.
     #[serde(default)]
@@ -520,6 +524,7 @@ fn restart_keys(started: &Settings, now: &Settings) -> Vec<&'static str> {
         tasks,
         // Read each time they are used.
         windows: _,
+        worktrees_dir: _,
         apps,
         apps_hidden,
         suggest_dock_apps,

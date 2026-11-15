@@ -1,7 +1,7 @@
 //! The words at the end of a list row (Open, Adopt, Snooze, Pin, Rename…), shown on hover or
 //! while list mode selects the row.
 
-use gpui::{AnyView, Context, Div, ElementId, Stateful, Window, div, prelude::*, px, rgb};
+use gpui::{AnyView, Context, Div, ElementId, Stateful, Window, div, prelude::*, px, rgb, svg};
 use ottospace_core::theme;
 
 use crate::{Tooltip, Workspace};
@@ -29,16 +29,35 @@ impl Workspace {
         click: impl Fn(&mut Self, &Window, &mut Context<Self>) + 'static,
         cx: &Context<Self>,
     ) -> Stateful<Div> {
+        self.row_button(control, tip, click, cx).px_1().text_xs().text_color(rgb(theme::TEXT)).child(label)
+    }
+
+    /// A word drawn as an icon (`icons/plus.svg`), as `word` otherwise.
+    pub fn icon_word(
+        &self,
+        control: String,
+        (icon, tip): (&'static str, &'static str),
+        click: impl Fn(&mut Self, &Window, &mut Context<Self>) + 'static,
+        cx: &Context<Self>,
+    ) -> Stateful<Div> {
+        let icon = svg().path(icon).size(px(12.)).text_color(rgb(theme::TEXT));
+        self.row_button(control, tip, click, cx).size(px(18.)).flex().items_center().justify_center().child(icon)
+    }
+
+    /// What a word and an icon share: its id and sneak mark, the hover, the tooltip and the click.
+    fn row_button(
+        &self,
+        control: String,
+        tip: &'static str,
+        click: impl Fn(&mut Self, &Window, &mut Context<Self>) + 'static,
+        cx: &Context<Self>,
+    ) -> Stateful<Div> {
         div()
             .id(ElementId::Name(control.clone().into()))
             .relative()
             .child(self.controls.mark(control))
-            .px_1()
             .rounded_sm()
-            .text_xs()
-            .text_color(rgb(theme::TEXT))
             .hover(|s| s.bg(rgb(theme::BORDER_STRONG)))
-            .child(label)
             .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
             .on_click(cx.listener(move |this, _, window, cx| {
                 cx.stop_propagation(); // not a click on the row

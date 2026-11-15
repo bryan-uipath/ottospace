@@ -321,6 +321,11 @@ impl Workspace {
                 None
             }
             ("repo", _) => Some(Action::RepoClick { path: name.into(), axis: Axis::Right }),
+            ("repo-fold", _) => Some(Action::RepoFold { path: name.into(), fold: None }),
+            ("repo-add", _) => {
+                self.add_worktree(name, window, cx);
+                None
+            }
             ("repo-terminal", _) => Some(Action::OpenRepo { path: name.into(), axis: Axis::Right }),
             // The one verb, as a click: the user's starts the conversation, a client's shows the tabs.
             ("task" | "home-row" | "home-node", _) if self.input == ottospace_core::Origin::User => {

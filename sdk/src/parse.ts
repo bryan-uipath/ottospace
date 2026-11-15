@@ -833,6 +833,7 @@ function reposGroup(value: unknown, at: string): ReposGroup {
     name: str(o.name, `${at}.name`),
     path: str(o.path, `${at}.path`),
     header: orNull(rect)(o.header, `${at}.header`),
+    folded: bool(o.folded, `${at}.folded`),
     rows: list(checkoutRow)(o.rows, `${at}.rows`),
   };
 }
@@ -911,7 +912,7 @@ function pickItem(value: unknown, at: string): PickItem {
 
 function field(value: unknown, at: string): Field {
   const o = fields(value, at);
-  const owners = ["compose", "picker", "palette", "inspector", "apps", "mark", "workbook", "note", "talk"];
+  const owners = ["compose", "picker", "palette", "inspector", "apps", "mark", "workbook", "worktree", "note", "talk"];
   if (typeof o.of !== "string" || !owners.includes(o.of)) {
     throw wrong(`${at}.of`, "compose, picker, apps, mark, workbook, note or talk", o.of);
   }
@@ -1083,6 +1084,7 @@ function markInput(value: unknown, at: string): MarkInput {
     const typing = { type: "workbook" as const, workbook: num(o.workbook, `${at}.workbook`), text: str(o.text, `${at}.text`) };
     return o.tab === undefined ? typing : { ...typing, tab: num(o.tab, `${at}.tab`) };
   }
+  if (o.type === "worktree") return { type: "worktree", repo: str(o.repo, `${at}.repo`), text: str(o.text, `${at}.text`) };
   throw wrong(`${at}.type`, "what a mark waits for", o.type);
 }
 
