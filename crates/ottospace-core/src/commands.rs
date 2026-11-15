@@ -107,6 +107,7 @@ commands! {
     NextTask: "Next Task", Tasks;
     CapturePane: "Capture the Pane", Tasks;
     TalkFocus: "Type in the Conversation", Tasks;
+    EditMessage: "Edit Message in Editor", Tasks;
     TalkToggle: "Open or Close the Conversation", Tasks;
     TalkGo: "Go to Its Tabs", Tasks;
     StopAgent: "Stop the Agent", Tasks;

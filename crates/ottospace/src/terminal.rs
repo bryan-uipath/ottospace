@@ -82,6 +82,8 @@ struct Shared {
     /// How often the user scrolled the history: the scrollbar shows on a change.
     scrolls: AtomicU32,
     input: OnceLock<EventLoopSender>,
+    /// How the program ended: its exit code, or `None` for a signal. Set before `exited`.
+    status: OnceLock<Option<i32>>,
 }
 
 #[derive(Clone)]
@@ -97,7 +99,11 @@ impl EventListener for Listener {
                     let _ = input.send(Msg::Input(text.into_bytes().into()));
                 }
             }
-            Event::Exit | Event::ChildExit(_) => self.0.exited.store(true, Relaxed),
+            Event::ChildExit(status) => {
+                let _ = self.0.status.set(status.code());
+                self.0.exited.store(true, Relaxed)
+            }
+            Event::Exit => self.0.exited.store(true, Relaxed),
             _ => {}
         }
     }
@@ -194,10 +200,11 @@ impl Terminal {
     /// Runs the user's editor on `file`, as `run` runs a program: `$VISUAL`, else `$EDITOR`,
     /// else `vi`, as the login shell sets them. The shell splits the variable itself, so
     /// `code -w` works (zsh is told to split as POSIX shells do, and none expands a glob).
+    /// Open Settings and ⌃G's message both run it.
     pub fn edit(file: &str, vars: &[(&str, String)]) -> io::Result<Self> {
         const EDIT: &str = "if [ -n \"$ZSH_VERSION\" ]; then setopt shwordsplit noglob; else set -f; fi; \
                             exec ${VISUAL:-${EDITOR:-vi}} \"$1\"";
-        Self::script(EDIT, "ottospace-settings", vec![file.to_string()], vars, None)
+        Self::script(EDIT, "ottospace-editor", vec![file.to_string()], vars, None)
     }
 
     /// `$SHELL -lic <script> <name> <args…>`: the script is fixed text, the arguments its
@@ -552,6 +559,17 @@ impl Terminal {
 
     pub fn exited(&self) -> bool {
         self.shared.exited.load(Relaxed)
+    }
+
+    /// The name of the program the terminal started, as it runs now (`nvim` once the shell
+    /// exec'd it). `None` once it has exited.
+    pub fn program(&self) -> Option<String> {
+        (!self.exited()).then(|| process::name(self.child as i32)).flatten()
+    }
+
+    /// True once the program has exited with status 0. A signal, or no status heard, is not.
+    pub fn exited_ok(&self) -> bool {
+        self.exited() && self.shared.status.get() == Some(&Some(0))
     }
 
     /// True while the program asked for application-cursor arrow keys.

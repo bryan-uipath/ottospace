@@ -69,6 +69,7 @@ mod confirm;
 mod control;
 mod conversation;
 mod dialog;
+mod editor;
 mod features;
 mod field;
 mod give_back;
@@ -511,6 +512,7 @@ const KEYS_FIELD: &[(&str, &str)] = &[
     ("⌘C ⌘X ⌘V", "Copy, cut, paste"),
     ("⌘Z / ⇧⌘Z", "Undo / redo"),
     ("Drag / 2× / 3× click", "Select text, a word, the line"),
+    ("⌃G", "The new-task line or a message in your editor; save and quit puts it back"),
 ];
 
 const KEYS_SNEAK: &[(&str, &str)] = &[
@@ -648,7 +650,7 @@ actions!(ottospace, [StartFresh]);
 // What the capture key does, from the menu.
 actions!(ottospace, [CapturePane]);
 // The right drawer: the keyboard in or out, closed to the rail or open, the task's workspace.
-actions!(ottospace, [TalkFocus, TalkToggle, TalkGo, StopAgent]);
+actions!(ottospace, [TalkFocus, TalkToggle, TalkGo, StopAgent, EditMessage]);
 // A tab of no task, and the tab on show taken out of its task or moved to another.
 actions!(ottospace, [NewTabOutside, RemoveTabFromTask, MoveTabToTask]);
 // App menu.
@@ -1084,6 +1086,8 @@ impl Workspace {
         // The first problem found at start, for the status bar: settings, the font, then tasks.
         let unread = (unread > 0).then(|| format!("tasks: {unread} file(s) in the tasks folder could not be read"));
         let notice = config::get().error.clone().or(terminal::choose_font(window)).or(kept.error).or(unread);
+        // A crashed run's drafts are deleted, not restored.
+        editor::sweep();
         // What `settings.json` says at start: what is wrong in it stays in the status bar until mended.
         let settings_read = config::settings_stamp();
         if let Some(text) = config::get().home.as_ref().map(|_| config::settings_text().unwrap_or_default()) {
@@ -1434,6 +1438,13 @@ impl Workspace {
                 }
                 // Carried out with its pane's `Opened`, before the shell starts.
                 Effect::History { .. } | Effect::EditSettings { .. } => {}
+                Effect::OpenEditor { text } => {
+                    if let Err(why) = self.open_editor(text) {
+                        self.error = Some(why);
+                        agents.push(Action::EditorDone { saved: None, more: false });
+                    }
+                }
+                Effect::Clip { text } => self.copy_text(text.clone(), None, Verb::Copied, cx),
                 Effect::ApplySettings { settings } => {
                     self.apply_features(settings, cx);
                     config::set_live(settings.as_ref().clone())
@@ -1620,7 +1631,8 @@ impl Workspace {
         let start = start.or(error(self.kept_layout.notice.clone()));
         let unsaved = self.unsaved.clone().or(self.kept_marks.unsaved.clone()).or(self.kept_workbooks.unsaved.clone());
         let unsaved = unsaved.or(self.kept_layout.unsaved.clone());
-        error(self.error.clone()).or(error(unsaved)).or(start)
+        let editor = self.model.editor_note().map(|text| (text.to_string(), Level::Info));
+        error(self.error.clone()).or(error(unsaved)).or(start).or(editor)
     }
 
     /// Reads `settings.json` again once a change to it has held for one look: a file an editor
@@ -2716,6 +2728,8 @@ impl Workspace {
             "notice_level": status.as_ref().map(|(_, level)| level),
             // How many problems the last read of `settings.json` found.
             "settings_errors": self.model.settings_errors(),
+            // The user's editor on a draft (⌃G): what it edits, never the text. Null: none runs.
+            "editor": self.editor_snapshot(),
             // Each hosted window's real frame, in the same global coordinates as `parking`.
             "hosted": hosted,
             // Each hosted pane's title-bar crop in points (0: none).
@@ -3312,6 +3326,10 @@ impl Workspace {
             self.inspector_key(event, window, cx);
             return;
         }
+        // The drawer's editor has the keyboard: every key but a ⌘ shortcut is its.
+        if self.model.editor_keys() {
+            return self.editor_key(event, cx);
+        }
         if self.model.compose_keys() {
             self.compose_key(event, window, cx);
             return;
@@ -3621,7 +3639,7 @@ impl Workspace {
             return;
         }
         let text = self.clipboard.text(cx);
-        if self.talk_paste(text.clone()) {
+        if self.editor_paste(text.as_deref()) || self.talk_paste(text.clone()) {
             return;
         }
         let (Some(pane), Some(text)) = (self.model.keyboard_terminal(), text) else { return };
@@ -5390,6 +5408,9 @@ impl Render for Workspace {
         let left = RAIL + if self.model.sidebar.is_some() { SECTION } else { 0. };
         let half = f32::from(window.viewport_size().width) / 2.;
         let drawer = if self.model.talk_wide { half } else { self.model.talk_width.min(half.max(MIN_DRAWER)) };
+        // The editor gets its columns: a narrower drawer widens while it shows, up to half the window.
+        let columns = ottospace_core::model::editor::COLUMNS as f32 * f32::from(self.cell.width) + 10.;
+        let drawer = if self.model.editor_shown() { drawer.max(columns.min(half.max(MIN_DRAWER))) } else { drawer };
         self.drawer.width = drawer;
         // The inspector takes the drawer's place while it is open; the drawer keeps its state.
         let right = self.render_inspector(drawer, cx);
@@ -5480,6 +5501,10 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &TalkToggle, window, cx| {
                 this.dispatch(Action::TalkToggle, this.input, window, cx);
+            }))
+            // ⌃G's, from the menu or the palette: the draft shown, or the new-task line, in the editor.
+            .on_action(cx.listener(|this, _: &EditMessage, window, cx| {
+                this.dispatch(Action::EditorOpen, this.input, window, cx);
             }))
             // The drawer's Stop, for the conversation it shows.
             .on_action(cx.listener(|this, _: &StopAgent, window, cx| {
