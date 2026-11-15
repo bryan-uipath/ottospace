@@ -188,7 +188,7 @@ impl Workspace {
             .text_xs()
             .text_color(rgb(theme::MUTED))
             .truncate()
-            .child(format!("{what} · save and quit to put it back, unsent; quit without saving to keep it as it was"));
+            .child(format!("{what} · save and quit puts it back, unsent"));
         // A card of the conversation edited: shown, and answered only once the user moves to it.
         let card = chat.as_ref().and_then(|(subject, chat)| {
             let card = self.chat_card(subject, chat, cx)?;
