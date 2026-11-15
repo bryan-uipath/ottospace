@@ -42,7 +42,11 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
+      # Same dependencies as ci.yml's e2e job: reads the cache it saves on main, saves none.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: e2e
+          save-if: false
       # What the runner image grants, read-only: which programs may use Accessibility and
       # Screen Recording. Tells us why the run below passes or fails.
       - name: Permissions the runner has

@@ -139,8 +139,12 @@ Rules:
   and `scripts/package.sh` (release binary, `.app` zip, `BUILD`, `SHA256SUMS`) uploaded as a workflow
   artifact. On `main` a third job, the only one with a write token, replaces the assets of the
   `main-latest` prerelease and moves its tag. Not a required check.
-- `.github/workflows/scripts.yml`, on pull requests that change `scripts/**` or `install.sh`:
-  `scripts/test-osi.sh`.
+- `.github/workflows/scripts.yml`, on pull requests that change what `scripts/test-osi.sh` reads
+  (`install.sh`, `scripts/osi`, `scripts/test-osi.sh`, `scripts/package.sh`): `scripts/test-osi.sh`.
+  A file the test starts to read is added to its `paths`.
+- One Rust cache for the dev build: `ci.yml`'s `e2e` job saves it, on `main` only (`shared-key: e2e`);
+  `app-windows.yml`, `shots.yml` and `reliability.yml` restore it and save none (`save-if: false`).
+  A job that builds the same dependencies joins it; one that saves from a pull request does not.
 - `.github/workflows/shots.yml`, on pull requests that change `crates/ottospace/src/**`,
   `crates/ottospace-core/src/**`, `scripts/shot`, `scripts/shots/**` or `scripts/test-shot.sh`:
   `scripts/test-shot.sh`, then `scripts/shot --compare` of every scenario against the merge base;
