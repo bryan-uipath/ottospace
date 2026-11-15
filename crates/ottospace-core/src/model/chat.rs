@@ -87,7 +87,8 @@ pub enum Key {
 /// written) or not.
 /// On a card ↵ does nothing, so an Allow is never a reflex: `a` allows, `d` denies, `s` shows
 /// all, `m` writes a message for the Deny. In the composer ↵ sends (or denies with the message),
-/// ⇧↵ starts a new line, Esc leaves, or stops a turn when pressed twice.
+/// ⇧↵ starts a new line, Esc leaves, or stops a turn when pressed twice. ⌃G, card or not: the
+/// draft in the user's editor, or back to the editor that has it.
 pub fn key(key: &str, mods: crate::keys::Mods, card: Option<u64>) -> Key {
     if mods.cmd {
         return Key::Pass;
@@ -95,6 +96,7 @@ pub fn key(key: &str, mods: crate::keys::Mods, card: Option<u64>) -> Key {
     let bare = !mods.ctrl && !mods.alt && !mods.shift;
     match key {
         "escape" => Key::Act(Action::TalkEscape),
+        "g" if mods.ctrl && !mods.alt && !mods.shift => Key::Act(Action::EditorOpen),
         _ if let Some(ticket) = card => match key {
             "a" if bare => Key::Act(Action::TalkAnswer { allow: true, ticket }),
             "d" if bare => Key::Act(Action::TalkAnswer { allow: false, ticket }),
@@ -113,7 +115,7 @@ impl Model {
         self.chats.iter().find(|chat| chat.subject == *subject)
     }
 
-    fn chat_mut(&mut self, subject: &Subject) -> Option<&mut Chat> {
+    pub(super) fn chat_mut(&mut self, subject: &Subject) -> Option<&mut Chat> {
         self.chats.iter_mut().find(|chat| chat.subject == *subject)
     }
 
@@ -149,11 +151,12 @@ impl Model {
         self.talk_live(subject) || (shown && self.shown_draft_chat().is_some())
     }
 
-    /// The composer takes keys: the shown native conversation has the keyboard, and no card
-    /// waits (or the user writes a Deny's message).
+    /// The composer takes keys: the shown native conversation has the keyboard, no card waits
+    /// (or the user writes a Deny's message), and the user's editor does not have its draft.
     pub fn talk_typing(&self) -> bool {
         let keys = self.talk.as_ref().is_some_and(|talk| talk.keys);
-        keys && self.shown_draft_chat().is_some_and(|chat| chat.transcript.cards.is_empty() || chat.deny)
+        let free = |chat: &Chat| (chat.transcript.cards.is_empty() || chat.deny) && !self.edits(&chat.subject);
+        keys && self.shown_draft_chat().is_some_and(free)
     }
 
     pub(super) fn talk_draft(&self) -> Option<&Field> {
@@ -289,6 +292,7 @@ impl Model {
         self.chats.iter_mut().for_each(|chat| rename(&mut chat.subject));
         self.views.iter_mut().for_each(|(subject, _)| rename(subject));
         self.switching.iter_mut().for_each(rename);
+        self.editor_moves(from, to);
     }
 
     /// The repository a listed session is of: its links and images may be there.
@@ -433,6 +437,8 @@ impl Model {
                     self.chat_state(&subject);
                 }
             }
+            // ↵ while the user's editor has the draft: nothing is sent.
+            Action::TalkSend if shown.as_ref().is_some_and(|subject| self.edits(subject)) => {}
             // ↵ while its agent stops: the message waits; once the process is gone the session is
             // gone on with and it is sent (`AgentExited`). Never sent to the one stopping.
             Action::TalkSend if self.talk.as_ref().is_some_and(|talk| talk.open && self.is_ending(&talk.task)) => {
@@ -493,6 +499,8 @@ impl Model {
                     chat.transcript.expand();
                 }
             }
+            // Not while the editor has the draft: the message would have nowhere to be typed.
+            Action::TalkDenyNote if shown.as_ref().is_some_and(|subject| self.edits(subject)) => {}
             Action::TalkDenyNote => {
                 if let Some(chat) = self.shown_chat_mut().filter(|chat| !chat.transcript.cards.is_empty()) {
                     chat.deny = true;
@@ -769,6 +777,9 @@ mod tests {
         assert_eq!(key("enter", none, None), Key::Act(Action::TalkSend));
         assert_eq!(key("enter", shift, None), Key::Newline);
         assert_eq!((key("a", none, None), key("l", cmd, card)), (Key::Field, Key::Pass));
+        let ctrl = Mods { ctrl: true, ..Mods::default() };
+        let edit = Key::Act(Action::EditorOpen);
+        assert_eq!((key("g", ctrl, None), key("g", ctrl, card)), (edit.clone(), edit));
     }
 
     #[test]

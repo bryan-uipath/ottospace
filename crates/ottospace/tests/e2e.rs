@@ -5180,6 +5180,11 @@ impl Otto {
         found.unwrap_or_else(|| panic!("no {id} in {drawn:?}"))
     }
 
+    /// The frame of the control `id`, if it is drawn.
+    fn control_opt(&self, id: &str) -> Option<[f64; 4]> {
+        self.controls().into_iter().find(|(i, _)| i == id).map(|(_, frame)| frame)
+    }
+
     /// Every labelled control's id and drawn frame `[x, y, w, h]`, from one pass of sneak mode.
     fn controls(&self) -> Vec<(String, [f64; 4])> {
         let reply = self.call(json!({"cmd": "sneak"}));
@@ -7477,6 +7482,192 @@ fn a_stopped_agent_resumes_as_one_conversation() {
         "{last}"
     );
     assert_eq!(resumed["transcript"]["not_understood"], 0, "hook lines are quiet");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A stand-in for the user's editor in `dir`: it keeps the path it was given and the file as
+/// it was, shows the file with line numbers, then waits for `go` (its exit code), copies `new`
+/// (if there is one) over the file and exits with that code.
+fn stand_in_editor(dir: &Path) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    let editor = dir.join("edit");
+    let script = format!(
+        "#!/bin/sh\nctl='{0}'\nprintf '%s\\n' \"$1\" >\"$ctl/path\"\ncp \"$1\" \"$ctl/given\"\n\
+         printf 'stand-in editor\\n'\ncat -n \"$1\"\n\
+         while [ ! -e \"$ctl/go\" ]; do sleep 0.1; done\ncode=$(cat \"$ctl/go\")\nrm -f \"$ctl/go\" \"$ctl/path\"\n\
+         [ -f \"$ctl/new\" ] && cp \"$ctl/new\" \"$1\"\nexit \"$code\"\n",
+        dir.display()
+    );
+    std::fs::write(&editor, script).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o700)).unwrap();
+    editor
+}
+
+/// The stand-in editor saves `new` and exits with `code`, once it has the file.
+fn editor_quits(ctl: &Path, new: Option<&str>, code: i32) {
+    let _ = std::fs::remove_file(ctl.join("new"));
+    if let Some(new) = new {
+        std::fs::write(ctl.join("new"), new).unwrap();
+    }
+    std::fs::write(ctl.join("go"), code.to_string()).unwrap();
+}
+
+/// The files left in the drafts folder.
+fn drafts(home: &Path) -> Vec<String> {
+    let entries = std::fs::read_dir(home.join("drafts")).map(|dir| dir.flatten().collect::<Vec<_>>());
+    entries.unwrap_or_default().iter().map(|e| e.file_name().to_string_lossy().into_owned()).collect()
+}
+
+/// ⌃G in the composer: the draft in the user's editor (a stand-in), in the drawer; saved and
+/// quit, the text is back in the composer and nothing is sent; quit with an error, the draft
+/// stays. A client's ⌃G opens nothing, and its keys reach neither the editor nor a card. A
+/// card that arrives meanwhile shows under the editor, which keeps the keyboard: a keystroke
+/// meant for the editor answers nothing; a click on the card gives it the keys. The drafts
+/// folder is private and empty afterwards.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn ctrl_g_edits_the_draft_in_the_users_editor_and_sends_nothing() {
+    let card = r#"{"type":"control_request","request_id":"9","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"git status","description":"made-up"},"tool_use_id":"toolu_9"}}"#;
+    let fixtures = [("turn1.jsonl", recorded("real-2.1.325-turn.jsonl")), ("turn2-denied.jsonl", String::new())];
+    let (root, record, mut env) = native_setup("ctrl-g", &fixtures, &[("EDITOR", "/usr/bin/false")]);
+    let ctl = root.join("editor");
+    let editor = stand_in_editor(&ctl);
+    env.push(("VISUAL".into(), editor.to_str().unwrap().into()));
+    // The second turn's reply waits on a pipe: the test writes its card while the editor runs.
+    let pipe = root.join("fixtures/turn2.jsonl");
+    let made = Command::new("/usr/bin/mkfifo").arg(&pipe).status().unwrap();
+    assert!(made.success());
+    let home = PathBuf::from(&env.iter().find(|(k, _)| k == "OTTOSPACE_HOME").unwrap().1);
+    let otto = launch_env("ctrl-g", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "plan the week >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let state = |o: &Otto| o.call(json!({"cmd": "state"}));
+    let chat = |o: &Otto| state(o)["drawer"]["native"]["chats"]["1"].clone();
+    let stdin = || std::fs::read_to_string(record.join("stdin")).unwrap_or_default();
+    let given = || std::fs::read_to_string(ctl.join("given")).ok();
+    otto.start_task(1);
+    otto.wait_for("the reply", |o| {
+        let chat = chat(o);
+        (chat["transcript"]["turn"].is_null() && chat["replies"].as_array()?.len() == 1).then_some(())
+    });
+    otto.user_click(at(otto.control("talk"), 0.5, 0.5));
+    otto.user_key("f i x space i t");
+    // A client's ⌃G opens nothing.
+    otto.call(json!({"cmd": "key", "keys": "ctrl-g"}));
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!((state(&otto)["editor"].clone(), given()), (Value::Null, None));
+
+    // The user's: the editor on a private file holding exactly the draft.
+    otto.user_key("ctrl-g");
+    let path = otto.wait_for("the editor", |_| std::fs::read_to_string(ctl.join("path")).ok());
+    let path = PathBuf::from(path.trim_end());
+    assert_eq!(given().as_deref(), Some("fix it"));
+    assert!(path.starts_with(home.join("drafts")) && path.extension().is_some_and(|e| e == "md"), "{path:?}");
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!((mode(&home.join("drafts")), mode(&path)), (0o700, 0o600));
+    let reply = state(&otto);
+    assert_eq!(reply["editor"], json!({"target": "1", "keys": true, "shown": true, "running": true}), "{reply}");
+    assert_eq!(reply["drawer"]["native"]["chats"]["1"]["editing"], true);
+    // The drawer shows the editor, with what it drew.
+    otto.wait_for("the editor drawn", |o| o.control_opt("talk:editor-terminal"));
+    // Keys while it runs are its own: a client's reach nothing, ↵ sends nothing.
+    otto.call(json!({"cmd": "key", "keys": "x enter"}));
+    otto.user_key("enter");
+    assert_eq!(chat(&otto)["draft_chars"], 6);
+    // Saved, a second line and a trailing newline: back in the composer, which has the keyboard; nothing sent.
+    editor_quits(&ctl, Some("fix it\nand test it\n"), 0);
+    let back = otto.wait_for("the editor's end", |o| Some(state(o)).filter(|s| s["editor"].is_null()));
+    let chat_now = &back["drawer"]["native"]["chats"]["1"];
+    assert_eq!((&chat_now["draft_chars"], &chat_now["editing"]), (&json!(18), &json!(false)), "{chat_now}");
+    assert_eq!(back["field"]["of"], "talk", "{}", back["field"]);
+    assert!(!stdin().contains("fix it"), "nothing is sent: {}", stdin());
+    assert!(drafts(&home).is_empty(), "{:?}", drafts(&home));
+    // The user's ↵ sends exactly what the editor saved.
+    otto.user_key("enter");
+    otto.wait_for("the message", |_| stdin().contains(r#""text":"fix it\nand test it""#).then_some(()));
+
+    // While that turn runs: the next message in the editor, and its card arrives meanwhile.
+    otto.user_key("n e x t");
+    otto.user_key("ctrl-g");
+    otto.wait_for("the editor again", |_| given().filter(|g| g == "next"));
+    std::fs::write(&pipe, format!("{card}\n")).unwrap();
+    let carded = otto.wait_for("the card", |o| {
+        let reply = state(o);
+        (reply["drawer"]["native"]["chats"]["1"]["transcript"]["cards"].as_array()?.len() == 1).then_some(reply)
+    });
+    assert_eq!((&carded["editor"]["keys"], &carded["editor"]["shown"]), (&json!(true), &json!(true)));
+    otto.wait_for("the card drawn", |o| o.control_opt("talk:editor-card"));
+    // `a` and `d` are the editor's: no answer. Nor does a client's key or click answer.
+    otto.user_key("a d");
+    otto.call(json!({"cmd": "key", "keys": "d"}));
+    otto.click(at(otto.control("talk:chat-deny"), 0.5, 0.5), 1);
+    otto.click(at(otto.control("talk:editor-card"), 0.5, 0.2), 1);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!stdin().contains("behavior"), "{}", stdin());
+    assert_eq!(state(&otto)["editor"]["keys"], true, "a client's click moves no keyboard");
+    // The user's click on the card: it has the keys, and `d` denies it.
+    otto.user_click(at(otto.control("talk:editor-card"), 0.5, 0.2));
+    assert_eq!(state(&otto)["editor"]["keys"], false);
+    otto.user_key("d");
+    otto.wait_for("the deny", |_| stdin().contains(r#""behavior":"deny""#).then_some(()));
+    // ⌃G: back to the same editor, none opened again.
+    assert_eq!(otto.user_key("ctrl-g")["editor"]["keys"], true);
+    // Quit with an error: the draft as it was.
+    editor_quits(&ctl, Some("changed"), 1);
+    let back = otto.wait_for("the editor's end", |o| Some(state(o)).filter(|s| s["editor"].is_null()));
+    assert_eq!(back["drawer"]["native"]["chats"]["1"]["draft_chars"], 4);
+    assert!(drafts(&home).is_empty(), "{:?}", drafts(&home));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// ⌃G in the new-task box: its line in the editor, in the drawer; saved, the line is the
+/// editor's text as one line, and no task is filed.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn ctrl_g_edits_the_new_task_line_in_the_users_editor() {
+    let root = support::temp(&format!("ottospace-e2e-ctrl-g-box-{}", std::process::id()));
+    let (ctl, home) = (root.join("editor"), root.join("home"));
+    std::fs::create_dir_all(&home).unwrap();
+    let editor = stand_in_editor(&ctl);
+    // A draft a crash left: gone at start.
+    std::fs::create_dir_all(home.join("drafts")).unwrap();
+    std::fs::write(home.join("drafts/999999999-left.md"), "old").unwrap();
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap()), ("VISUAL", editor.to_str().unwrap())];
+    let otto = Otto::launch_with("ctrl-g-box", &env);
+    assert!(drafts(&home).is_empty(), "{:?}", drafts(&home));
+    let state = |o: &Otto| o.call(json!({"cmd": "state"}));
+    otto.user_key("cmd-n");
+    otto.user_key("f i x space z o o m");
+    otto.call(json!({"cmd": "key", "keys": "ctrl-g"}));
+    assert_eq!(state(&otto)["editor"], Value::Null, "a client's ⌃G opens nothing");
+    let given = || std::fs::read_to_string(ctl.join("given")).ok();
+    let reply = otto.user_key("ctrl-g");
+    assert_eq!(reply["editor"]["target"], "compose");
+    otto.wait_for("the editor", |_| given().filter(|g| g == "fix zoom"));
+    // Sneak mode does not start over the box: the state says the drawer shows the editor.
+    let reply = state(&otto);
+    assert_eq!((&reply["field"], &reply["editor"]["shown"]), (&Value::Null, &json!(true)), "nothing types in the box");
+    // Quit with an error: the line as it was, and the status bar says so, as information.
+    editor_quits(&ctl, Some("changed"), 1);
+    let back = otto.wait_for("the editor's end", |o| Some(state(o)).filter(|s| s["editor"].is_null()));
+    assert_eq!(back["state"]["compose"], "fix zoom");
+    assert_eq!(back["notice_level"], "info", "{}", back["notice"]);
+    assert!(back["notice"].as_str().is_some_and(|n| n.contains("error")), "{}", back["notice"]);
+    // Again: saved, a second line, and it comes back.
+    let _ = std::fs::remove_file(ctl.join("given"));
+    otto.user_key("ctrl-g");
+    otto.wait_for("the editor again", |_| given().filter(|g| g == "fix zoom"));
+    editor_quits(&ctl, Some("fix zoom\nin the canvas\n"), 0);
+    let back = otto.wait_for("the editor's end", |o| Some(state(o)).filter(|s| s["editor"].is_null()));
+    assert_eq!(back["state"]["compose"], "fix zoom in the canvas");
+    assert_eq!(back["state"]["tasks"]["list"].as_array().map(Vec::len), Some(0), "nothing filed");
+    assert_eq!(back["field"]["of"], "compose");
+    assert!(drafts(&home).is_empty(), "{:?}", drafts(&home));
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
 }

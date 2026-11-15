@@ -124,6 +124,7 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
                 MenuItem::separator(),
                 // The conversation in the drawer.
                 item("Type in the Conversation", TalkFocus),
+                item("Edit Message in Editor", EditMessage),
                 item("Open or Close the Conversation", TalkToggle),
                 item("Stop the Agent", StopAgent),
             ],

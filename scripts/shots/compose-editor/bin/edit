@@ -1,0 +1,9 @@
+#!/bin/sh
+# A stand-in for $VISUAL: shows the draft with line numbers, waits for ↵, then saves a
+# longer message (with the trailing newline an editor adds) and quits with 0.
+printf '\033[7m  stand-in editor · message.md  \033[0m\n\n'
+cat -n "$1"
+printf '\n\n\033[2m(↵ saves and quits)\033[0m\n'
+read -r _
+printf 'Drop the second redirect in auth.rs:\n\n- keep the session cookie\n- add a test for the loop\n' >"$1"
+exit 0

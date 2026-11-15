@@ -122,6 +122,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘V | Paste into the terminal, or into the open text field. Into a terminal: line breaks become ↵, other control characters are dropped, bracketed when the program asks for it. Text with a line break asks first in the pane ("Paste 4 lines?", ↵ pastes, Esc cancels; `paste_confirm`). The pane pulses and says "Pasted 4 lines". Only your own ⌘V pastes: a socket client's is refused |
 | ⌘N | New task, in the drawer. Type what needs doing, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `^reference`, `p1` to `p9`; a dropdown finishes the one at the cursor. ↵ adds the task and starts its agent; ⇧↵ adds it for later; Esc closes. [Its keys](#keys) |
 | ⌘L | The keyboard into the drawer's conversation, or back to the workspace |
+| ⌃G | In the composer or the new-task box: its text in your editor (`$VISUAL`, else `$EDITOR`, else `vi`, as Open Settings runs it), in the drawer: the editor takes the conversation's place (the drawer widens to 60 columns if it is narrower). Save and quit: the text is back in the composer (one trailing newline dropped; the new-task line takes it as one line), nothing sent; quit with an error, or save nothing new: as it was. ⌃G again while it runs goes back to it. A permission card that arrives meanwhile shows under the editor, which keeps the keyboard: click the card to answer it (`a`, `d`), ⌃G to go back. The text goes back to the conversation it came from, wherever you went; its task dismissed, it is put on the clipboard and the status bar says so. Also Edit Message in Editor (Tasks, the palette). Only yours: a socket client's ⌃G opens nothing, and its keys reach neither the editor nor a card. See [Compose in your editor](#compose-in-your-editor) |
 | ⌘⇧L | Close the drawer to the right rail, or open it again. The agent goes on |
 | ⌘⇧N | Next task: the space and chat of the first task that needs you |
 | ⌃⌥⌘Space | Capture, from any app: the pane in use (a hosted app you are in, else the focused pane) is frozen as a picture to draw on, and a draft opens in the drawer on the right, with the new-task line as its title. A live app is parked first; "↩ back to …" in the bar returns to it. On the picture: drag circles, ⇧-drag draws a box, ⌥-drag a freehand line, a click places a note to type (↵ keeps it). ⌘Z and ⇧⌘Z go over the steps; a click on a shape's line selects it and ⌫ removes it. ↵ goes to the title, Esc leaves the picture; a click on another pane captures that one too. In the title ↵ adds the task and starts its agent, ⇧↵ adds it for later; × or Esc cancels, after a question if anything was captured. The workspace stays in use beside the drawer, and ⌘N goes to the draft's title. See [Capture](#capture) |
@@ -349,8 +350,8 @@ refused while it is open), and pane requests wait behind it as they do behind th
 key of ottospace's, so it does nothing while a hosted app has the keyboard (`APP` mode). Not ⌘K:
 in a terminal it clears the screen, and is kept for that.
 
-The Tasks group also holds the drawer's commands: Type in the Conversation (⌘L), Open or Close the
-Conversation (⌘⇧L) and Stop the Agent (the drawer's Stop), each for
+The Tasks group also holds the drawer's commands: Type in the Conversation (⌘L), Edit Message in
+Editor (⌃G), Open or Close the Conversation (⌘⇧L) and Stop the Agent (the drawer's Stop), each for
 the conversation the drawer shows. ⌘P while you type in the conversation opens the palette over
 it: the agent gets no key while it is open, and when it closes the keyboard goes back to it.
 
@@ -842,6 +843,17 @@ hidutil property --set '{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x70
 
 After this, Caps Lock no longer toggles capitals anywhere. The command replaces any key mapping
 you already have. To undo it: `hidutil property --set '{"UserKeyMapping":[]}'`.
+
+## Compose in your editor
+
+⌃G in a conversation's composer or the new-task box writes its text to a file of its own in
+`drafts/` in the ottospace folder (the folder 0700, the file 0600, a random name ending `.md`, never
+under `/tmp`) and runs your editor on it, with the same command line as Open Settings, in a terminal
+in the drawer. The file is removed when the editor exits. At start, files a crashed run left there
+are deleted, not restored: a draft lives in the app while the editor runs, and nowhere else after.
+Up to 100000 characters come back (the new-task line: its own limit); more, the first part is kept
+and the status bar says so. Control characters other than a line break go, as a paste's do; a tab
+is four spaces.
 
 ## Settings
 

@@ -320,6 +320,16 @@ impl Field {
         self.put(range, &self.cleaned(text, false));
     }
 
+    /// Replaces all the text with `text`, cleaned as a paste is, as one undo step; the cursor at
+    /// its end. False if not all of it fit.
+    pub fn replace_all(&mut self, text: &str) -> bool {
+        let text = self.cleaned(text, true);
+        let whole = self.fits(0..self.text.len(), &text);
+        self.record(false);
+        self.put(0..self.text.len(), &text);
+        whole
+    }
+
     /// Replaces `range` with as much of `text` as fits; the cursor goes after it.
     fn put(&mut self, range: Range<usize>, text: &str) -> Range<usize> {
         let kept = self.text.chars().count() - self.text[range.clone()].chars().count();
