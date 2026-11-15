@@ -32,6 +32,8 @@ export interface NativeChat {
   /** Each reply's blocks by kind, and its links that open. */
   replies: { blocks: Record<string, number>; links: { web: number; file: number } }[];
   draft_chars: number;
+  /** The user's editor has the draft (⌃G): the composer takes no typing. */
+  editing: boolean;
   /** The draft is the message of a Deny. */
   deny: boolean;
   /** Esc pressed once while a turn runs. */
@@ -665,6 +667,18 @@ export interface InspectorRow {
   folded: boolean;
 }
 
+/** The top-level `editor`: the user's editor on a draft (⌃G), never its text. */
+export interface Editor {
+  /** A conversation's key (`"1"`, `"claude:<id>"`), or `"compose"` for the new-task box. */
+  target: string;
+  /** It has the keyboard (not the card under it). */
+  keys: boolean;
+  /** The drawer shows it. */
+  shown: boolean;
+  /** Its program has not exited yet. */
+  running: boolean;
+}
+
 /** The top-level `inspector`: counts and roles of the inspected tree. */
 export interface Inspector {
   pane: PaneId;
@@ -1039,6 +1053,8 @@ export interface Snapshot {
   notice_level: "info" | "error" | null;
   /** How many problems the last read of `settings.json` found: the first is in `notice`. */
   settings_errors: number;
+  /** The user's editor on a draft, or null while none runs. */
+  editor: Editor | null;
   /** Each hosted window's real frame, by pane id. */
   hosted: Record<string, Rect>;
   /** Each hosted pane's title-bar crop in points, by pane id. */

@@ -15,6 +15,7 @@ import type {
   AxNode,
   AxOverlay,
   AxSource,
+  Editor,
   AxTarget,
   AxTreeReply,
   Axis,
@@ -760,6 +761,7 @@ function nativeChat(value: unknown, at: string): NativeChat {
     },
     replies: list(reply)(o.replies, `${at}.replies`),
     draft_chars: num(o.draft_chars, `${at}.draft_chars`),
+    editing: bool(o.editing, `${at}.editing`),
     deny: bool(o.deny, `${at}.deny`),
     armed: bool(o.armed, `${at}.armed`),
     away: bool(o.away, `${at}.away`),
@@ -998,6 +1000,16 @@ function inspectorRow(value: unknown, at: string): InspectorRow {
     focused: bool(o.focused, `${at}.focused`),
     children: num(o.children, `${at}.children`),
     folded: bool(o.folded, `${at}.folded`),
+  };
+}
+
+function editor(value: unknown, at: string): Editor {
+  const o = fields(value, at);
+  return {
+    target: str(o.target, `${at}.target`),
+    keys: bool(o.keys, `${at}.keys`),
+    shown: bool(o.shown, `${at}.shown`),
+    running: bool(o.running, `${at}.running`),
   };
 }
 
@@ -1403,6 +1415,7 @@ export function snapshot(value: unknown): Snapshot {
     notice: orNull(str)(o.notice, "notice"),
     notice_level: orNull(noticeLevel)(o.notice_level, "notice_level"),
     settings_errors: num(o.settings_errors, "settings_errors"),
+    editor: orNull(editor)(o.editor, "editor"),
     hosted: map(rect)(o.hosted, "hosted"),
     crop: map(num)(o.crop, "crop"),
     terminals: map(terminal)(o.terminals, "terminals"),

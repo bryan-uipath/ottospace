@@ -70,6 +70,7 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::NextTask => Box::new(NextTask),
         Command::CapturePane => Box::new(CapturePane),
         Command::TalkFocus => Box::new(TalkFocus),
+        Command::EditMessage => Box::new(EditMessage),
         Command::TalkToggle => Box::new(TalkToggle),
         Command::StopAgent => Box::new(StopAgent),
         Command::SaveWorkbook => Box::new(SaveWorkbook),
