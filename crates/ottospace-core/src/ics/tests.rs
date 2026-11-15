@@ -300,7 +300,8 @@ fn an_unsupported_rule_gives_its_first_occurrence_only() {
 fn days_are_local_midnights() {
     let local = Table::fixed(-5 * H);
     let now = at(2026, 11, 13, 3, 0); // 22:00 on the 12th, local
-    assert_eq!(days(now, &local), [at(2026, 11, 12, 5, 0), at(2026, 11, 13, 5, 0), at(2026, 11, 14, 5, 0)]);
+    assert_eq!(days(now, &local, 0), [at(2026, 11, 12, 5, 0), at(2026, 11, 13, 5, 0), at(2026, 11, 14, 5, 0)]);
+    assert_eq!(days::<2>(now, &local, 7), [at(2026, 11, 5, 5, 0), at(2026, 11, 6, 5, 0)]);
 }
 
 #[test]

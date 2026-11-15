@@ -320,12 +320,24 @@ impl Workspace {
                 self.click_apps_control(kind, window, cx);
                 None
             }
-            ("repo", _) => Some(Action::OpenRepo { path: name.into(), axis: Axis::Right }),
+            ("repo", _) => Some(Action::RepoClick { path: name.into(), axis: Axis::Right }),
+            ("repo-fold", _) => Some(Action::RepoFold { path: name.into(), fold: None }),
+            ("repo-add", _) => {
+                self.add_worktree(name, window, cx);
+                None
+            }
+            ("repo-terminal", _) => Some(Action::OpenRepo { path: name.into(), axis: Axis::Right }),
             // The one verb, as a click: the user's starts the conversation, a client's shows the tabs.
-            ("task" | "home-row" | "home-node" | "group", _) if self.input == ottospace_core::Origin::User => {
+            ("task" | "home-row" | "home-node", _) if self.input == ottospace_core::Origin::User => {
                 number.map(|id| Action::TaskTalk { id })
             }
-            ("task" | "home-row" | "home-node" | "group", _) => number.map(|id| Action::TaskGo { id: Some(id) }),
+            ("task" | "home-row" | "home-node", _) => number.map(|id| Action::TaskGo { id: Some(id) }),
+            ("space", _) => name.parse().ok().map(|index| Action::SpaceSelect { index }),
+            ("space-hide", _) => name.parse().ok().map(|index| Action::SpaceHide { index: Some(index) }),
+            ("top", "new_task") => {
+                self.new_task(window, cx);
+                None
+            }
             ("tasks-view", _) => {
                 if let Ok(view) = serde_json::from_value(serde_json::json!(name)) {
                     self.click_tasks_view(view, window, cx);
@@ -344,7 +356,7 @@ impl Workspace {
                 }
                 None
             }
-            ("task-snooze" | "task-hold" | "task-dismiss" | "task-claim", _) => {
+            ("task-snooze" | "task-hold" | "task-dismiss", _) => {
                 if let Some(id) = number {
                     self.click_row_button(kind, id, window, cx);
                 }
@@ -413,7 +425,14 @@ impl Workspace {
             ("unfilled-open", _) => number.map(|pane| Action::UnfilledOpen { pane }),
             ("meeting-join", _) => name.parse().ok().map(|id| Action::CalendarJoin { id }),
             ("meeting-dismiss", _) => name.parse().ok().map(|id| Action::CalendarDismiss { id }),
-            ("meetings-tomorrow", _) => Some(Action::CalendarTomorrow),
+            ("calendar-day", _) => {
+                let step = match name {
+                    "back" => ottospace_core::calendar::DayStep::Back,
+                    "forward" => ottospace_core::calendar::DayStep::Forward,
+                    _ => ottospace_core::calendar::DayStep::Today,
+                };
+                Some(Action::CalendarDay { step })
+            }
             ("meeting-row-join", _) => name.parse().ok().map(|id| Action::CalendarJoin { id }),
             _ => {
                 match (kind, number) {

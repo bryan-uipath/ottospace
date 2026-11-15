@@ -10,7 +10,7 @@ macOS agent multiplexer: terminals and real app windows tiled in one workspace. 
 | `ottospace-mac` | macOS calls: AX, ScreenCaptureKit, displays, input | system APIs |
 | `ottospace-sessions` | Reads Claude Code and Codex session files: sessions of a directory, events, snapshot. A `SessionReader` per `RunnerId` | std, serde, read-only files, `ottospace-core` (pure: for `runner::RunnerId`, `activity::Station`). No network, clock, writes |
 | `ottospace-agents` | Speaks to agent CLIs in their structured modes: starts, sends, reads events. A `Wire` per `RunnerId` | std, serde_json, the two crates above; spawns child processes. No network of its own, clock decisions, or reading other apps |
-| `ottospace` | Shell: GPUI views, control socket. Turns input into `Action`s, carries out `Effect`s | everything; the network only to read the calendar feed (`calendar_ics`), through `/usr/bin/curl`, `https:` only |
+| `ottospace` | Shell: GPUI views, control socket. Turns input into `Action`s, carries out `Effect`s | everything; the network only to read the calendar feed (`calendar_ics`), through `/usr/bin/curl`, `https:` only, and the open pull requests of listed GitHub repositories, through the user's `gh` (`repos_prs`; `prs.rs`), read-only, a fixed argv |
 
 Rules:
 
@@ -69,6 +69,9 @@ Rules:
   An E2E run that names none lists none, and never starts an app. `OTTOSPACE_DOCK_APPS` (bundle
   paths, `:` between them) stands for the Dock's apps; a test run that names none has none, and
   never reads the user's Dock.
+- `OTTOSPACE_GH` (a program) stands for `gh` in a test run: a stand-in script with fixture JSON. A test run
+  that names none runs no gh, and never the user's. The state's `counts.pr_opens` (test runs only) counts
+  the pull requests the user's click opened; a test run opens none.
 - Feature flags (`ottospace-core/src/features.rs`) are off in an E2E run, as for a new user. A test
   of a feature behind one names it: `OTTOSPACE_FEATURES=marks,apps_section` (read only under
   `OTTOSPACE_E2E`; it wins over `settings.json`), `MARKS`, `APPS_SECTION` or `BOTH` in `e2e.rs`. In

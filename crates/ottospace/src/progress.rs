@@ -22,8 +22,8 @@ fn ago(age: String) -> String {
     if age == "now" { age } else { format!("{age} ago") }
 }
 
-/// A hover card's frame: its title, then a dot and its state. The task's and the session's.
-fn frame(title: String, color: u32, state: String) -> Div {
+/// A hover card's frame: its title, then a dot and its state. The task's, the session's and a pull request's.
+pub(crate) fn frame(title: String, color: u32, state: String) -> Div {
     div()
         .w(px(330.))
         .p_3()
@@ -47,9 +47,31 @@ fn frame(title: String, color: u32, state: String) -> Div {
 }
 
 /// A named fact of a hover card: `Started  3h ago`.
-fn fact(name: &'static str, value: String) -> Div {
+pub(crate) fn fact(name: &'static str, value: String) -> Div {
     let name = div().w(px(72.)).text_color(rgb(theme::MUTED)).child(name);
     div().flex().gap_2().text_xs().child(name).child(div().min_w_0().truncate().child(value))
+}
+
+/// A meeting's hover card, on the band and on a Calendar row: its title, a dot in its colour and
+/// its time, then its place, link, status and the calls merged into it. Other people's text.
+pub struct MeetingCard(pub ottospace_core::calendar::Facts, pub u32);
+
+impl Render for MeetingCard {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let (facts, color) = (&self.0, self.1);
+        frame(facts.title.clone(), color, facts.when.clone())
+            .children(facts.place.clone().map(|place| fact("Place", place)))
+            .children(facts.link.map(|link| fact("Link", link.to_string())))
+            .children(facts.status.map(|status| fact("Shows as", status.to_string())))
+            .when(!facts.more.is_empty(), |d| d.child(fact("Also", facts.more.join(", "))))
+    }
+}
+
+/// A tooltip that shows a meeting's card.
+pub type MeetingTip = Box<dyn Fn(&mut Window, &mut gpui::App) -> AnyView + 'static>;
+
+pub fn meeting_tip(facts: ottospace_core::calendar::Facts, color: u32) -> MeetingTip {
+    Box::new(move |_, cx| AnyView::from(cx.new(|_| MeetingCard(facts.clone(), color))))
 }
 
 /// A task's hover card: shown as a tooltip, after the tooltip's own delay.
@@ -122,6 +144,20 @@ impl Render for CardView {
 pub fn card_tip(workspace: &Workspace, id: u32) -> Option<impl Fn(&mut Window, &mut gpui::App) -> AnyView + 'static> {
     let card = workspace.model.card(id, crate::now_ms())?;
     Some(move |_: &mut Window, cx: &mut gpui::App| AnyView::from(cx.new(|_| CardView(card.clone()))))
+}
+
+/// A pull request's hover card, in its mark's colour: title, `Draft → main`, checks, review,
+/// merge. Other people's text, cleaned (`prs::Pr::card`), never a link.
+pub struct PrCard(pub ottospace_core::prs::Card, pub u32);
+
+impl Render for PrCard {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let card = &self.0;
+        frame(card.title.clone(), self.1, card.state.clone())
+            .child(fact("Checks", card.checks.clone()))
+            .child(fact("Review", card.review.clone()))
+            .child(fact("Merge", card.merge.clone()))
+    }
 }
 
 /// An Elsewhere row's hover card: what its one line leaves out. Its title is quoted text.

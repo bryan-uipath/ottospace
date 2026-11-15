@@ -106,7 +106,8 @@ pub fn repo_dirs() -> RepoDirs {
     };
     if let Some(list) = std::env::var_os("OTTOSPACE_REPOS") {
         let named = std::env::split_paths(&list).filter(|p| !p.as_os_str().is_empty());
-        return RepoDirs { dirs: named.map(|p| resolved(p.to_string_lossy().into_owned(), p)).collect(), fixed: true };
+        let dirs = named.map(|p| resolved(p.to_string_lossy().into_owned(), p)).collect();
+        return RepoDirs { dirs, fixed: true, worktrees: worktrees_dir() };
     }
     let changed = NAMED.lock().ok().and_then(|named| named.clone());
     let settings = || get().settings.repos.clone().unwrap_or_else(|| DEFAULT_REPOS.map(String::from).to_vec());
@@ -114,7 +115,16 @@ pub fn repo_dirs() -> RepoDirs {
         let path = PathBuf::from(expand_home(&text, &user_home()));
         resolved(text, path)
     });
-    RepoDirs { dirs: dirs.collect(), fixed: false }
+    RepoDirs { dirs: dirs.collect(), fixed: false, worktrees: worktrees_dir() }
+}
+
+/// Where the Repos section's + makes worktrees: `worktrees_dir` (`~` expanded), else `worktrees` in
+/// the ottospace folder; a relative path is inside it. `None` in a test run with no folder of its own.
+fn worktrees_dir() -> Option<String> {
+    let home = get().home.as_ref()?;
+    let named = live().worktrees_dir.as_ref().map(|dir| home.join(expand_home(dir, &user_home())));
+    let dir = named.unwrap_or_else(|| home.join("worktrees"));
+    dir.is_absolute().then(|| dir.to_string_lossy().into_owned())
 }
 
 /// The settings' `repos` as the Repos section last changed them, by name.
@@ -344,6 +354,20 @@ pub fn read_marks() -> Result<Option<String>, String> {
 pub fn save_marks(text: &str) -> io::Result<()> {
     let Some(home) = get().home.as_ref() else { return Ok(()) };
     write_whole(home, "marks.json", text)
+}
+
+/// `keys.json`: how much each key is used. `None`: no file, nothing is kept, or not a small
+/// plain file of text.
+pub fn read_keys() -> Option<String> {
+    let file = get().home.as_ref()?.join("keys.json");
+    let most = ottospace_core::key_use::MAX_FILE_BYTES as u64;
+    String::from_utf8(crate::collect::read_plain(&file, most)?).ok()
+}
+
+/// Writes `keys.json`, as `save_task` writes a task. Nothing in a test run that named no folder.
+pub fn save_keys(text: &str) -> io::Result<()> {
+    let Some(home) = get().home.as_ref() else { return Ok(()) };
+    write_whole(home, "keys.json", text)
 }
 
 /// The most workbook files read, and the largest one read: a folder is input, not trusted text.

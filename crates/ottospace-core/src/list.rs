@@ -11,6 +11,8 @@ pub enum ListRow {
     App(String),
     /// A repository or worktree, by path.
     Repo(String),
+    /// A repository's name over its rows, by path. Opening it folds or unfolds them.
+    RepoHead(String),
     Task(TaskId),
     /// A heading of the Tasks section. Opening it folds or unfolds it.
     Heading(Heading),
@@ -30,8 +32,6 @@ pub enum ListRow {
     AllApps,
     /// A meeting of the Calendar section, by its id. Opening it joins it.
     Meeting(u64),
-    /// The folded "Tomorrow · n" group. Opening it folds or unfolds it.
-    MeetingsTomorrow,
 }
 
 /// What a key does in list mode.
@@ -61,8 +61,10 @@ pub enum ListKey {
     Filter,
     /// Add the tab on show to the selected workbook.
     Add,
-    /// ← or →: across zones, from a rail (`model::zones`).
+    /// ← or →: across zones, from a rail (`model::zones`); in the Calendar, a day back or on.
     Side(i32),
+    /// `t`: the Calendar's today.
+    Today,
     Leave,
 }
 
@@ -70,7 +72,7 @@ pub enum ListKey {
 /// heading that folds), Tab changes section, `s` `h` `x` `u` act on a task, Esc leaves. On a mark: `x` removes it, `r` renames
 /// it, `m` gives it a letter, ⇧J ⇧K (or ⇧↓ ⇧↑) move it. On an app that is not running: `p` pins or
 /// unpins it, `x` hides a suggestion, `u` takes that back; `/` types in the filter of "All apps".
-/// On a workbook: `a` adds the tab on show to it.
+/// On a workbook: `a` adds the tab on show to it. In the Calendar: ← and → a day, `t` today.
 pub fn list_key(key: &str, shift: bool) -> Option<ListKey> {
     Some(match key {
         "down" | "j" if shift => ListKey::Reorder(1),
@@ -89,6 +91,7 @@ pub fn list_key(key: &str, shift: bool) -> Option<ListKey> {
         "p" => ListKey::Pin,
         "/" => ListKey::Filter,
         "a" => ListKey::Add,
+        "t" => ListKey::Today,
         "escape" => ListKey::Leave,
         "left" => ListKey::Side(-1),
         "right" => ListKey::Side(1),

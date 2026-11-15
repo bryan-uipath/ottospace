@@ -812,7 +812,7 @@ fn a_refused_size_is_named_in_the_pane_header_and_fit_gives_the_window_room() {
     };
     let ratio = |path: &[&str]| path.iter().fold(state()["state"]["layout"].clone(), |at, key| at[*key].clone());
     // The Repos section, open at start, closes: on a CI runner's small screen the panes need
-    // its room beside the right rail.
+    // its room.
     otto.call(json!({"cmd": "section", "section": "repos"}));
 
     // Three panes side by side, 1 | (2 | 3): ordinary, fixed size, a minimum width.
@@ -890,10 +890,19 @@ fn a_refused_size_is_named_in_the_pane_header_and_fit_gives_the_window_room() {
     // it was on show: pane 3 is made 100 pt too narrow first.
     otto.call(json!({"cmd": "focus", "pane": 3}));
     let before = wait("pane 3", &|| pane(3));
-    otto.call(json!({"cmd": "key", "keys": "cmd-alt-l"}));
-    otto.call(json!({"cmd": "key", "keys": "cmd-alt-l"}));
-    let cut = wait("pane 3 to be narrower", &|| pane(3).filter(|b| b[2] < before[2] - 20.0));
-    wait("its hint", &|| fit(3)["hint"].as_str().is_some_and(|h| h.starts_with("needs ")).then_some(cut));
+    // A step at a time until its window is cut off: how far a step goes depends on the screen.
+    let hinted = || fit(3)["hint"].as_str().is_some_and(|h| h.starts_with("needs "));
+    let mut cut = before;
+    for _ in 0..6 {
+        otto.call(json!({"cmd": "key", "keys": "cmd-alt-l"}));
+        let was = cut[2];
+        cut = wait("pane 3 to be narrower", &|| pane(3).filter(|b| b[2] < was - 1.0));
+        std::thread::sleep(Duration::from_millis(1200));
+        if hinted() {
+            break;
+        }
+    }
+    wait("its hint", &|| hinted().then_some(cut));
     let inner = ratio(&["split", "b", "split", "ratio"]);
     otto.call(json!({"cmd": "new_tab"}));
     assert_eq!(state()["state"]["active"], 1);
@@ -1108,7 +1117,9 @@ fn a_hosted_window_is_captured_with_the_part_of_its_tree_under_the_circle() {
     // The way back to the app is still offered, and takes it.
     assert_eq!(state()["state"]["back_to"], 1);
 
-    // The window takes a title the rules say to leave alone: it is not captured again.
+    // The window takes a title the rules say to leave alone: it is not captured again. (The task
+    // started in its own space: back to Workspace, where the pane is.)
+    key("cmd-ctrl-1");
     canary.call(json!({"cmd": "retitle", "index": 0, "title": "Private notes"}));
     let refused = wait_for("the capture to be refused", || {
         let mut stream = UnixStream::connect(&otto.socket).ok()?;

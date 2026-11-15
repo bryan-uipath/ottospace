@@ -21,8 +21,8 @@ pub const DIAL_USERS: &str = "only the user collapses or opens a conversation's 
 /// The most characters a composer draft holds.
 pub const MAX_DRAFT: usize = 100_000;
 
-/// The most conversations whose transcript is kept: those of the rail, and as many ended.
-const KEPT: usize = crate::talk::RAIL * 2;
+/// The most conversations whose transcript is kept: twice the sessions whose reads are kept.
+const KEPT: usize = crate::talk::KEPT * 2;
 
 /// One conversation drawn natively.
 #[derive(Clone, Debug, PartialEq)]
@@ -89,7 +89,8 @@ pub enum Key {
 /// written) or not.
 /// On a card ↵ does nothing, so an Allow is never a reflex: `a` allows, `d` denies, `s` shows
 /// all, `m` writes a message for the Deny. In the composer ↵ sends (or denies with the message),
-/// ⇧↵ starts a new line, Esc leaves, or stops a turn when pressed twice.
+/// ⇧↵ starts a new line, Esc leaves, or stops a turn when pressed twice. ⌃G, card or not: the
+/// draft in the user's editor, or back to the editor that has it.
 pub fn key(key: &str, mods: crate::keys::Mods, card: Option<u64>) -> Key {
     if mods.cmd {
         return Key::Pass;
@@ -97,6 +98,7 @@ pub fn key(key: &str, mods: crate::keys::Mods, card: Option<u64>) -> Key {
     let bare = !mods.ctrl && !mods.alt && !mods.shift;
     match key {
         "escape" => Key::Act(Action::TalkEscape),
+        "g" if mods.ctrl && !mods.alt && !mods.shift => Key::Act(Action::EditorOpen),
         _ if let Some(ticket) = card => match key {
             "a" if bare => Key::Act(Action::TalkAnswer { allow: true, ticket }),
             "d" if bare => Key::Act(Action::TalkAnswer { allow: false, ticket }),
@@ -115,7 +117,7 @@ impl Model {
         self.chats.iter().find(|chat| chat.subject == *subject)
     }
 
-    fn chat_mut(&mut self, subject: &Subject) -> Option<&mut Chat> {
+    pub(super) fn chat_mut(&mut self, subject: &Subject) -> Option<&mut Chat> {
         self.chats.iter_mut().find(|chat| chat.subject == *subject)
     }
 
@@ -151,11 +153,12 @@ impl Model {
         self.talk_live(subject) || (shown && self.shown_draft_chat().is_some())
     }
 
-    /// The composer takes keys: the shown native conversation has the keyboard, and no card
-    /// waits (or the user writes a Deny's message).
+    /// The composer takes keys: the shown native conversation has the keyboard, no card waits
+    /// (or the user writes a Deny's message), and the user's editor does not have its draft.
     pub fn talk_typing(&self) -> bool {
         let keys = self.talk.as_ref().is_some_and(|talk| talk.keys);
-        keys && self.shown_draft_chat().is_some_and(|chat| chat.transcript.cards.is_empty() || chat.deny)
+        let free = |chat: &Chat| (chat.transcript.cards.is_empty() || chat.deny) && !self.edits(&chat.subject);
+        keys && self.shown_draft_chat().is_some_and(free)
     }
 
     pub(super) fn talk_draft(&self) -> Option<&Field> {
@@ -293,6 +296,7 @@ impl Model {
         self.views.iter_mut().for_each(|(subject, _)| rename(subject));
         self.dials.iter_mut().for_each(|(subject, _)| rename(subject));
         self.switching.iter_mut().for_each(rename);
+        self.editor_moves(from, to);
     }
 
     /// The repository a listed session is of: its links and images may be there.
@@ -461,7 +465,10 @@ impl Model {
                 });
                 let front = chat.transcript.cards.front().map(|card| card.ticket);
                 for event in events {
-                    chat.transcript.fold(event, at);
+                    // An agent that exited in this batch asks nothing: no card waits on it.
+                    if chat.transcript.live || !matches!(event, Event::Permission { .. }) {
+                        chat.transcript.fold(event, at);
+                    }
                 }
                 chat.armed &= chat.transcript.turn.is_some();
                 // A Deny's message is for the card it was written under: another one in front ends it.
@@ -470,6 +477,8 @@ impl Model {
                     self.chat_state(&subject);
                 }
             }
+            // ↵ while the user's editor has the draft: nothing is sent.
+            Action::TalkSend if shown.as_ref().is_some_and(|subject| self.edits(subject)) => {}
             // ↵ while its agent stops: the message waits; once the process is gone the session is
             // gone on with and it is sent (`AgentExited`). Never sent to the one stopping.
             Action::TalkSend if self.talk.as_ref().is_some_and(|talk| talk.open && self.is_ending(&talk.task)) => {
@@ -530,6 +539,8 @@ impl Model {
                     chat.transcript.expand();
                 }
             }
+            // Not while the editor has the draft: the message would have nowhere to be typed.
+            Action::TalkDenyNote if shown.as_ref().is_some_and(|subject| self.edits(subject)) => {}
             Action::TalkDenyNote => {
                 if let Some(chat) = self.shown_chat_mut().filter(|chat| !chat.transcript.cards.is_empty()) {
                     chat.deny = true;
@@ -845,6 +856,9 @@ mod tests {
         assert_eq!(key("enter", none, None), Key::Act(Action::TalkSend));
         assert_eq!(key("enter", shift, None), Key::Newline);
         assert_eq!((key("a", none, None), key("l", cmd, card)), (Key::Field, Key::Pass));
+        let ctrl = Mods { ctrl: true, ..Mods::default() };
+        let edit = Key::Act(Action::EditorOpen);
+        assert_eq!((key("g", ctrl, None), key("g", ctrl, card)), (edit.clone(), edit));
     }
 
     #[test]
@@ -881,13 +895,13 @@ mod tests {
         assert!(!m.talk_typing(), "the card has the keys");
         assert_eq!(m.tasks.get(one.task().unwrap_or_default()).map(|t| t.state), Some(State::NeedsYou));
         // The other conversation, shown mid-stream: its composer is free, and answers are its own.
-        m.update(Action::TalkPick { id: two.clone() });
+        m.update(Action::TaskTalk { id: m.tasks.list[1].id });
         m.update(Action::TalkKeys { on: true });
         assert!(m.talk_typing());
         assert_eq!(m.update(Action::TalkAnswer { allow: false, ticket: 1 }), [], "no card here");
         typed(&mut m, "draft two");
         events(&mut m, &one, vec![Event::TextDelta { text: Text::new("more") }]);
-        m.update(Action::TalkPick { id: one.clone() });
+        m.update(Action::TaskTalk { id: m.tasks.list[0].id });
         m.update(Action::TalkKeys { on: true });
         assert_eq!(m.chat(&two).map(|chat| chat.draft.text()), Some("draft two"), "its draft is kept");
         assert_eq!(m.update(Action::TalkAnswer { allow: true, ticket: 1 }), [], "cut: Show all first");
@@ -973,8 +987,8 @@ mod tests {
         let before = entries(&m);
         for _ in 0..3 {
             assert_eq!(m.update(Action::TaskTalk { id }), []);
-            assert_eq!(m.update(Action::TalkPick { id: second(&m) }), []);
-            assert_eq!(m.update(Action::TalkPick { id: one.clone() }), []);
+            assert_eq!(m.update(Action::TaskTalk { id: m.tasks.list[1].id }), []);
+            assert_eq!(m.update(Action::TaskTalk { id: m.tasks.list[0].id }), []);
         }
         assert_eq!((entries(&m), m.agent_runs(&one), m.talk_resumes()), (before, false, Some(false)));
         // Never written: a new session, its prompt once.

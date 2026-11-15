@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::ax::{Frame, Source};
-use crate::calendar::{ColorRule, Event};
+use crate::calendar::{ColorRule, DayStep, Event};
 use crate::clip::{Amount, Verb};
 use crate::compose::{Known, Names, PathFound};
 use crate::features::{self, Feature, Features};
@@ -159,6 +159,19 @@ impl Gen<'_> {
         }
     }
 
+    /// Whose a space is: Workspace, a task's, a session's, a workbook's.
+    fn owner(&mut self) -> Owner {
+        match self.rng.below(4) {
+            0 => Owner::Workspace,
+            1 => Owner::Task { id: self.task() },
+            2 => Owner::Workbook { id: self.workbook() },
+            _ => {
+                let (runner, id) = self.session();
+                Owner::Session { runner, id }
+            }
+        }
+    }
+
     /// A conversation's subject: a task's, or a session's.
     fn subject(&mut self) -> Subject {
         if self.rng.coin() {
@@ -296,7 +309,23 @@ impl Gen<'_> {
     fn repo_dirs(&mut self) -> RepoDirs {
         let dir = |g: &mut Self| g.name(DIRS);
         let dirs = (0..self.rng.below(3)).map(|_| dir(self)).map(|path| RepoDir { text: path.clone(), path }).collect();
-        RepoDirs { dirs, fixed: self.rng.below(4) == 0 }
+        RepoDirs { dirs, fixed: self.rng.below(4) == 0, worktrees: self.rng.coin().then(|| "/w".into()) }
+    }
+
+    /// Pull requests on the listed branches and others, with links good and bad.
+    fn prs(&mut self) -> Vec<crate::prs::Pr> {
+        let branches: Vec<String> = self.m.repos.iter().flat_map(|r| r.checkouts()).map(|c| c.branch).collect();
+        let pr = |g: &mut Self| crate::prs::Pr {
+            number: g.rng.below(200) as u32,
+            is_draft: g.rng.coin(),
+            head_ref_name: Some(g.one_of(&branches, |g| g.text())),
+            url: Some(g.rng.pick(&["https://github.com/o/r/pull/1", "javascript:x", ""]).to_string()),
+            head_repository_owner: Some(crate::prs::Login { login: "o".into() }),
+            head_repository: Some(crate::prs::Named { name: "r".into() }),
+            title: Some(g.text()),
+            ..Default::default()
+        };
+        (0..self.rng.below(3)).map(|_| pr(self)).collect()
     }
 
     fn repo_path(&mut self) -> String {
@@ -603,6 +632,18 @@ impl Gen<'_> {
         crate::sneak_apps::AppRead { window, crop, content: Frame { x: 50., y: 30., w: 300., h: 200. }, root }
     }
 
+    /// When a key is pressed: about now, a day or weeks on, or a clock set back.
+    fn key_time(&mut self) -> u64 {
+        const DAY: u64 = 24 * 60 * 60 * 1000;
+        let now = self.m.now();
+        match self.rng.below(4) {
+            0 => now.saturating_sub(DAY),
+            1 => now.saturating_add(self.rng.below(60) as u64 * 60_000),
+            2 => now.saturating_add(DAY),
+            _ => now.saturating_add(self.rng.below(40) as u64 * DAY),
+        }
+    }
+
     fn letters(&mut self) -> String {
         // After a first letter, often the rest of a label it starts.
         let typed = self.m.sneak.as_ref().map_or(String::new(), |s| s.typed.clone());
@@ -713,6 +754,15 @@ const MAKERS: &[Make] = &[
     |g| Action::InspectorFilter { on: g.rng.coin() },
     |_| Action::ToggleKeys,
     |_| Action::CloseKeys,
+    |g| Action::KeyUsed { binding: g.rng.pick(crate::key_use::ALL), at: g.key_time() },
+    |_| Action::ResetKeyUse,
+    |g| {
+        let mut uses = KeyUse::default();
+        for _ in 0..g.rng.below(12) {
+            uses.press(g.rng.pick(crate::key_use::ALL), g.key_time());
+        }
+        Action::RestoreKeyUse { uses }
+    },
     |_| Action::ToggleVisual,
     |_| Action::LeaveVisual,
     |_| Action::ToggleAxOverlay,
@@ -721,6 +771,20 @@ const MAKERS: &[Make] = &[
     |g| Action::RepoAdd { dir: g.name(DIRS), found: g.repos() },
     |g| Action::RepoRemove { path: g.name(DIRS) },
     |g| Action::OpenRepo { path: g.repo_path(), axis: g.axis() },
+    |g| Action::RepoClick { path: g.repo_path(), axis: g.axis() },
+    |g| Action::RepoFold { path: g.repo_path(), fold: g.rng.pick(&[None, Some(true), Some(false)]) },
+    |g| Action::WorktreeEdit { repo: g.repo_path() },
+    |g| Action::WorktreeAdded { repo: g.repo_path(), path: g.repo_path(), repos: g.repos() },
+    |g| {
+        let branches = g.m.repos.iter().flat_map(|r| r.checkouts()).map(|c| crate::prs::Branch {
+            path: c.path,
+            name: c.branch,
+            slug: Some("o/r".into()),
+            ..Default::default()
+        });
+        Action::SetPrs { repo: g.repo_path(), branches: branches.collect(), prs: g.prs() }
+    },
+    |g| Action::PrOpen { path: g.repo_path() },
     |g| {
         let tasks = (0..g.rng.below(4)).map(|_| g.kept_task()).collect();
         Action::RestoreTasks { tasks, floor: g.rng.pick(&[0, 5, tasks::MAX_ID, u32::MAX]) }
@@ -756,11 +820,14 @@ const MAKERS: &[Make] = &[
     |g| Action::RowHold { id: g.task() },
     |g| Action::RowDismiss { id: g.task() },
     |g| Action::TaskGo { id: g.rng.coin().then(|| g.task()) },
-    |g| Action::NewTabOf { task: g.rng.coin().then(|| g.task()) },
     |g| {
-        let at = if g.rng.coin() { TabAt::End(g.rng.coin().then(|| g.task())) } else { TabAt::Before(g.tab_id()) };
+        let at = if g.rng.coin() { TabAt::End(g.owner()) } else { TabAt::Before(g.tab_id()) };
         Action::TabPlace { tab: g.rng.coin().then(|| g.tab_id()), at }
     },
+    |g| Action::SpaceSelect { index: g.index(g.m.shown_spaces().len()) },
+    |g| Action::SpaceCycle { delta: g.delta() },
+    |g| Action::SpaceHide { index: g.rng.coin().then(|| g.index(g.m.shown_spaces().len())) },
+    |g| Action::SpaceOpen { space: g.owner() },
     |g| Action::SelectVisibleTab { index: g.index(g.m.tabs.len()) },
     |g| Action::Tick { now: g.time() },
     |g| Action::OpenCompose { text: g.line() },
@@ -1073,8 +1140,20 @@ const MAKERS: &[Make] = &[
     |_| Action::TalkEscape,
     |_| Action::TalkInterrupt,
     |g| Action::TalkView { shows: g.rng.pick(&[View::Native, View::Terminal]) },
+    |_| Action::EditorOpen,
+    |g| Action::EditorKeys { on: g.rng.coin() },
+    |g| {
+        // Nothing (an error), the draft as given, another text, or a hostile one.
+        let given = g.m.editing.as_ref().map(|editing| format!("{}\n", editing.given));
+        let saved = match g.rng.below(4) {
+            0 => None,
+            1 => given.or(Some(String::new())),
+            2 => Some("two\nlines\n".into()),
+            _ => Some(g.text()),
+        };
+        Action::EditorDone { saved, more: g.rng.one_in(5) }
+    },
     |g| Action::TaskTalk { id: g.task() },
-    |g| Action::TalkPick { id: g.subject() },
     |_| Action::TalkStart,
     |g| {
         let (runner, id) = g.session();
@@ -1113,7 +1192,6 @@ const MAKERS: &[Make] = &[
     |g| Action::SessionMissing { task: g.task(), id: g.session_id() },
     |g| Action::TaskStop { id: g.subject() },
     |_| Action::TalkToggle,
-    |_| Action::TalkGo,
     |g| Action::TalkKeys { on: g.rng.coin() },
     |g| Action::TalkResize { width: g.rng.pick(&[0., 400., 9e9, f32::NAN]) },
     |_| Action::TalkWide,
@@ -1126,12 +1204,14 @@ const MAKERS: &[Make] = &[
     |g| {
         let events = g.rng.coin().then(|| (0..g.rng.below(4)).map(|_| g.meeting()).collect());
         let day = g.m.now - g.m.now % 86_400_000;
-        Action::CalendarRead { events, days: [0, 1, 2].map(|n: u64| day.saturating_add(n * 86_400_000)), at: g.time() }
+        let days = std::array::from_fn(|n| day.saturating_add(n as u64 * 86_400_000).saturating_sub(7 * 86_400_000));
+        let held_from = g.rng.pick(&[0, days[7], days[3]]);
+        Action::CalendarRead { events, days, at: g.time(), held_from }
     },
     |g| Action::CallSeen { in_call: g.rng.pick(&[None, Some(true), Some(false)]), at: g.time() },
     |g| Action::CalendarDismiss { id: g.meeting_id() },
     |g| Action::CalendarJoin { id: g.meeting_id() },
-    |_| Action::CalendarTomorrow,
+    |g| Action::CalendarDay { step: g.rng.pick(&[DayStep::Back, DayStep::Forward, DayStep::Today]) },
     // Random flags: what a feature turned off shows goes, and its actions do nothing (`Run::step`).
     |g| {
         let on: Vec<&str> = features::ALL.into_iter().filter(|_| g.rng.coin()).map(Feature::name).collect();
@@ -1175,10 +1255,10 @@ macro_rules! ensure {
 }
 
 /// The moves that may change the tab on show: selecting, cycling or closing a tab, a new tab,
-/// going to a task's tabs (`TaskGo`, `TalkGo`), the user's drag of a pane or a click into one,
-/// and what goes to a mark, a workbook, a picked app or a capture's pane.
-fn selects_tab(action: &Action, origin: Origin) -> bool {
-    let _ = origin;
+/// selecting, opening or hiding a space (a task's by its row, `TaskGo`, a conversation shown or
+/// started), the user's drag of a pane or a click into one, and what goes to a mark, a
+/// workbook, a picked app or a capture's pane.
+fn selects_tab(action: &Action) -> bool {
     matches!(
         action,
         Action::SelectTab { .. }
@@ -1187,10 +1267,21 @@ fn selects_tab(action: &Action, origin: Origin) -> bool {
             | Action::CloseTab { .. }
             | Action::NewTab
             | Action::NewEmptyTab
-            | Action::NewTabOf { .. }
+            | Action::SpaceSelect { .. }
+            | Action::SpaceCycle { .. }
+            | Action::SpaceHide { .. }
+            | Action::SpaceOpen { .. }
+            | Action::TaskTalk { .. }
+            | Action::SessionOpen { .. }
+            | Action::SessionAdopt { .. }
+            | Action::ComposeSubmit { .. }
+            | Action::ComposeEnter
+            | Action::TaskFromLine { .. }
+            | Action::OpenRepo { .. }
+            | Action::RepoClick { .. }
+            | Action::WorktreeAdded { .. }
             | Action::EditSettings
             | Action::TaskGo { .. }
-            | Action::TalkGo
             | Action::DropPane { .. }
             | Action::MovePane { .. }
             | Action::Focus { .. }
@@ -1222,11 +1313,15 @@ fn drawn(material: &crate::capture::Material) -> Vec<crate::capture::Shape> {
 }
 
 fn check(m: &Model) -> Result<(), String> {
+    // A key's score is between none and the ceiling, however its clock went.
+    let scored =
+        |used: &crate::key_use::Use| used.score.is_finite() && (0.0..=crate::key_use::MOST).contains(&used.score);
+    ensure!(m.key_use.uses().all(|(_, used)| scored(&used)), "key counts out of range: {:?}", m.key_use);
     // A feature that is off is absent: no section, rail cell, wait, filter or command of it.
     let shown = |section| m.sidebar == Some(section) || m.rail_focus == Some(zones::RailFocus::Left(section));
     if !m.features.on(Feature::Marks) {
         ensure!(!shown(Section::Marks), "the Marks section with marks off");
-        let waits = !matches!(m.mark_input, None | Some(MarkInput::Workbook { .. }));
+        let waits = !matches!(m.mark_input, None | Some(MarkInput::Workbook { .. } | MarkInput::Worktree { .. }));
         ensure!(!waits, "a mark waits with marks off: {:?}", m.mark_input);
         let listed = m.palette.iter().flat_map(Palette::matches).any(|c| c.feature() == Some(Feature::Marks));
         ensure!(!listed, "the palette lists a mark command with marks off");
@@ -1240,9 +1335,11 @@ fn check(m: &Model) -> Result<(), String> {
     let calendar_shown =
         m.sidebar == Some(Section::Calendar) || m.rail_focus == Some(zones::RailFocus::Left(Section::Calendar));
     ensure!(!calendar_shown || m.calendar.on, "the Calendar section with no feed");
+    ensure!((-7..=7).contains(&m.calendar.day), "the Calendar's day {} is not held", m.calendar.day);
+    ensure!(m.calendar.day >= m.calendar.first_day(), "the Calendar shows day {}, cut by the cap", m.calendar.day);
     // "Paste 4 lines?" is a question of its own, and only of text with a line break.
     if let Some(confirm) = m.confirm.as_ref().filter(|c| c.paste.is_some()) {
-        let alone = confirm.running.is_empty() && confirm.dismiss.is_none();
+        let alone = confirm.running.is_empty() && confirm.dismiss.is_none() && confirm.unlist.is_none();
         ensure!(alone && confirm.paste.is_some_and(|ask| ask.amount.newline), "a paste asks with {confirm:?}");
     }
     // The meeting banner is of an event that runs, with no call on.
@@ -1275,16 +1372,32 @@ fn check(m: &Model) -> Result<(), String> {
     ensure!(unique(&tab_ids), "two tabs share an id: {tab_ids:?}");
     let on_show = &m.tabs[m.active];
     ensure!(on_show.layout.is_none() && on_show.focused.is_none(), "the tab on show keeps a second tree or focus");
-    // Each task's tabs side by side, groups in order of their first tab, no task's last; each
-    // tab of a task there is, not dismissed.
-    let groups = m.groups();
-    let tasks_of: Vec<Option<TaskId>> = groups.iter().map(|group| group.task).collect();
-    ensure!(unique(&tasks_of), "a task's tabs are apart: {tasks_of:?}");
-    ensure!(groups.iter().rev().skip(1).all(|group| group.task.is_some()), "tabs of no task before a task's");
-    for tab in &m.tabs {
-        let live = tab.task.is_none_or(|id| m.tasks.get(id).is_some_and(|task| !task.dismissed));
-        ensure!(live, "tab {} is of task {:?}, gone or dismissed", tab.id, tab.task);
+    // The spaces: Workspace first and shown, each once; each tab of exactly one space on the row,
+    // each space's tabs side by side in row order; no space without a tab; exactly one selected
+    // (the tab on show's), shown; a task's space of a live task, a workbook's of one kept.
+    let owners: Vec<&Owner> = m.spaces.iter().map(|space| &space.of).collect();
+    ensure!(owners.first() == Some(&&Owner::Workspace) && !m.spaces[0].hidden, "Workspace is not first: {owners:?}");
+    ensure!(unique(&owners), "a space twice: {owners:?}");
+    let rank = |of: &Owner| owners.iter().position(|o| *o == of);
+    let ranks: Vec<Option<usize>> = m.tabs.iter().map(|tab| rank(&tab.space)).collect();
+    ensure!(ranks.iter().all(Option::is_some), "a tab of a space not on the row: {ranks:?}");
+    ensure!(ranks.is_sorted(), "a space's tabs are apart, or out of row order: {ranks:?}");
+    for space in &m.spaces {
+        let tabs = m.space_tabs(&space.of);
+        ensure!(!tabs.is_empty(), "space {:?} has no tab", space.of);
+        ensure!(m.owner_valid(&space.of), "space {:?} is of a task gone or dismissed, or a workbook gone", space.of);
+        let last = space.last.is_none_or(|id| tabs.iter().any(|at| m.tabs[*at].id == id));
+        ensure!(last, "space {:?} last showed tab {:?}, not its", space.of, space.last);
     }
+    let selected: Vec<&Space> = m.spaces.iter().filter(|space| space.of == *m.space()).collect();
+    ensure!(selected.len() == 1 && !selected[0].hidden, "the selected space is hidden or not one: {selected:?}");
+    // One selection: the drawer is only ever on the selected space's conversation.
+    ensure!(
+        m.talk.as_ref().is_none_or(|talk| Some(&talk.task) == m.space().subject().as_ref()),
+        "the drawer is on {:?}, the selected space is {:?}",
+        m.talk,
+        m.space()
+    );
     let mut held: Vec<PaneId> = Vec::new();
     for (i, tab) in m.tabs.iter().enumerate() {
         let (tree, focused) = if i == m.active { (&m.layout, m.focused) } else { (&tab.layout, tab.focused) };
@@ -1296,12 +1409,6 @@ fn check(m: &Model) -> Result<(), String> {
         if let Some(tree) = tree {
             tree.sound_ratios().map_err(|why| format!("tab {}: {why}", tab.id))?;
         }
-        ensure!(
-            tab.task.is_none_or(|id| m.tasks.get(id).is_some()),
-            "tab {} is of task {:?}, which is gone",
-            tab.id,
-            tab.task
-        );
         held.extend(leaves);
     }
     let mut ids: Vec<PaneId> = m.panes.iter().map(|p| p.id).collect();
@@ -1319,9 +1426,6 @@ fn check(m: &Model) -> Result<(), String> {
         }
         m.fit_refusal(Some(pane.id));
     }
-    for (_, tab) in &m.last_tab {
-        ensure!(tab_ids.contains(tab), "tab {tab} is remembered and gone");
-    }
     // At most one peek, of a parked app pane on show, with no mode over the panes.
     if let Some(peek) = &m.peek {
         let app = m.pane(peek.pane).is_some_and(|p| matches!(p.kind, Kind::App { .. }));
@@ -1337,11 +1441,11 @@ fn check(m: &Model) -> Result<(), String> {
     // The drawer is on a task there is; the keyboard is in it only while it is open, its agent
     // runs (or its native composer can go on with it), and no app, list or visual mode has it.
     let gone = |subject: &Subject| subject.task().is_some_and(|id| m.tasks.get(id).is_none());
-    let dismissed = |subject: &Subject| subject.task().is_some_and(|id| m.tasks.get(id).is_some_and(|t| t.dismissed));
     if let Some(talk) = &m.talk {
         ensure!(!gone(&talk.task), "the drawer is on task {:?}, which is gone", talk.task);
         let free = m.live.is_none() && m.list.is_none() && m.visual.is_none() && m.annotated().is_none();
         ensure!(
+            // An ended native chat's composer takes keys too: sending goes on with it.
             !talk.keys || (talk.open && m.talk_writable(&talk.task) && free),
             "the keyboard is in a conversation that is closed, has no agent, or under another: {talk:?}"
         );
@@ -1415,7 +1519,7 @@ fn check(m: &Model) -> Result<(), String> {
     let note = m.note().filter(|_| !m.compose_keys());
     let apps = m.app_lists.filtering && !m.compose_modal() && !m.compose_keys();
     let whose = match (m.open_field(), renaming, &m.picker, note, &m.compose) {
-        (Some(("mark" | "workbook", field)), Some(name), ..) => std::ptr::eq(field, name),
+        (Some(("mark" | "workbook" | "worktree", field)), Some(name), ..) => std::ptr::eq(field, name),
         (Some(("picker", field)), None, Some(picker), ..) => std::ptr::eq(field, &picker.query),
         (Some(("palette", field)), None, None, ..) => m.palette.as_ref().is_some_and(|p| std::ptr::eq(field, &p.query)),
         (Some(("inspector", field)), None, None, ..) => {
@@ -1431,7 +1535,9 @@ fn check(m: &Model) -> Result<(), String> {
     let has_keys = !m.keys
         && match m.mode() {
             Mode::Mark => renaming.is_some(),
-            Mode::Pick | Mode::Palette | Mode::Inspect | Mode::Compose => true,
+            Mode::Pick | Mode::Palette | Mode::Inspect => true,
+            // The new-task box's line, unless the user's editor has it.
+            Mode::Compose => !m.edits_compose(),
             Mode::Annotate => m.note().is_some(),
             Mode::List => m.app_lists.filtering,
             // A native conversation's composer, while no card has the keys.
@@ -1439,6 +1545,8 @@ fn check(m: &Model) -> Result<(), String> {
             _ => false,
         };
     ensure!(m.field().is_some() == has_keys, "a text field has the keyboard in {:?} mode", m.mode());
+    // The drawer's editor has the keyboard: no text field does, and it is on show.
+    ensure!(!m.editor_keys() || (m.field().is_none() && m.editor_shown()), "the editor has keys it cannot");
     // The new-task box: its dropdown, what its line points at, and what it says.
     let menu = m.dropdown();
     ensure!(menu.is_none() || m.field().is_some_and(|(of, _)| of == "compose"), "a dropdown with no line to finish");
@@ -1481,6 +1589,7 @@ fn check(m: &Model) -> Result<(), String> {
         let most = match of {
             "compose" => MAX_TITLE,
             "mark" | "workbook" => marks::MAX_NAME,
+            "worktree" => crate::repos::MAX_BRANCH,
             "note" => capture::MAX_NOTE,
             _ => MAX_FILTER,
         };
@@ -1532,9 +1641,13 @@ fn check(m: &Model) -> Result<(), String> {
         let loses = match confirm.dismiss {
             Some(id) => m.agent_runs(&Subject::Task(id)),
             None if let Some(ask) = confirm.paste => m.pane(ask.pane).is_some(),
-            None => !confirm.running.is_empty() || m.quit_discards() > 0 || !m.agents.is_empty(),
+            None if let Some(path) = &confirm.unlist => m.repos.iter().any(|r| r.path == *path),
+            None => !confirm.running.is_empty() || m.quit_discards() > 0 || !m.agents.is_empty() || m.editing.is_some(),
         };
-        ensure!(loses, "the quit question names no terminal, no draft holds a capture, and no agent runs");
+        ensure!(
+            loses,
+            "the quit question names no terminal, no draft holds a capture, no agent runs, and no editor has a message"
+        );
         ensure!(
             confirm.running.iter().all(|r| m.pane(r.pane).is_some()),
             "the quit question names a pane that is gone"
@@ -1561,6 +1674,10 @@ fn check(m: &Model) -> Result<(), String> {
         }
         Some(MarkInput::Workbook { workbook, .. }) => {
             ensure!(m.workbooks.get(*workbook).is_some(), "a name is typed for workbook {workbook}, which is gone")
+        }
+        Some(MarkInput::Worktree { repo, text }) => {
+            ensure!(m.repos.iter().any(|r| r.path == *repo), "a branch is typed for {repo:?}, which is not listed");
+            ensure!(text.text().len() <= crate::repos::MAX_BRANCH, "a typed branch has {} bytes", text.text().len());
         }
         Some(MarkInput::Jump) | None => {}
     }
@@ -1631,24 +1748,12 @@ fn check(m: &Model) -> Result<(), String> {
         "the way back leads to pane {:?}, which is gone",
         m.back_to
     );
-    // The right rail: at most its cap, each cell a task there is, told apart by its badge; the
-    // drawer's conversation is the one cell shown.
-    let rail = m.rail();
-    let mut badges: Vec<&str> = rail.iter().map(|cell| cell.mono.as_str()).collect();
+    // Each live task's badge is told apart from the others'.
+    let mut badges: Vec<String> = m.badges().into_iter().map(|(_, mono)| mono).collect();
+    let count = badges.len();
     badges.sort_unstable();
     badges.dedup();
-    ensure!(rail.len() <= talk::RAIL && badges.len() == rail.len(), "the rail: {rail:?}");
-    ensure!(
-        !rail.iter().any(|cell| gone(&cell.task) || dismissed(&cell.task)),
-        "a rail cell for a task that is gone or dismissed"
-    );
-    let listed = |subject: &Subject| match subject {
-        Subject::Task(_) => true,
-        Subject::Session { runner, id } => m.session(runner, id).is_some() || m.agent_runs(subject),
-    };
-    ensure!(rail.iter().all(|cell| listed(&cell.task)), "a rail cell for a session not listed: {rail:?}");
-    let open = m.talk.as_ref().filter(|talk| talk.open).map(|talk| &talk.task);
-    ensure!(rail.iter().all(|cell| cell.shown == (open == Some(&cell.task))), "the rail shows another cell: {rail:?}");
+    ensure!(badges.len() == count, "two tasks share a badge: {badges:?}");
     let shown =
         |id: TaskId| m.tab_task() == Some(id) || m.talk.as_ref().is_some_and(|talk| talk.task.task() == Some(id));
     let briefed = |id: TaskId| shown(id) && m.tasks.get(id).is_some_and(|task| !task.materials.is_empty());
@@ -1767,11 +1872,10 @@ fn check(m: &Model) -> Result<(), String> {
 
 /// The keyboard is on one place there is: a pane on show, a row of the list, a rail's cell.
 fn check_zones(m: &Model) -> Result<(), String> {
-    use crate::model::zones::{RailFocus, Target};
+    use crate::model::zones::Target;
     let leaves = m.layout.as_ref().map(Node::leaves).unwrap_or_default();
     match m.focus_target() {
         Target::Pane(pane) => ensure!(leaves.contains(&pane), "the keyboard is on pane {pane}, not on show"),
-        Target::Right(at) => ensure!(at <= m.rail().len(), "right rail cell {at} of {}", m.rail().len()),
         Target::Nothing => {
             ensure!(leaves.is_empty() || m.mode() != Mode::Normal, "panes on show, and the keyboard on none")
         }
@@ -1779,9 +1883,6 @@ fn check_zones(m: &Model) -> Result<(), String> {
     }
     if m.rail_focus.is_some() {
         ensure!(m.list.is_none() && m.mode() == Mode::List, "a rail and {:?} have the keyboard", m.mode());
-    }
-    if let Some(RailFocus::Right(at)) = m.rail_focus {
-        ensure!(at <= m.rail().len(), "right rail place {at}");
     }
     Ok(())
 }
@@ -1888,6 +1989,7 @@ fn check_layout(m: &Model) -> Result<(), String> {
         Action::SetCalendar { on, notify, links_only, hide_free, colors },
         Action::RestoreTasks { tasks: m.tasks.list.clone(), floor },
         Action::RestoreWorkbooks { workbooks: m.workbooks.list.clone() },
+        Action::SetRepos { repos: m.repos.clone() },
         Action::RestoreMarks { marks: m.marks.list.clone(), extra: m.marks.extra.clone() },
         Action::RestoreLayout { layout: Box::new(read), gone: Vec::new(), home: None, launch: false },
     ] {
@@ -1898,9 +2000,12 @@ fn check_layout(m: &Model) -> Result<(), String> {
     if ids(&fresh) != ids(m) {
         return Ok(());
     }
-    // As text: a ratio is kept to three places. Each task's tabs together, no task's last.
-    let mut was = m.layout_file(&[], &[], 0);
-    layout_file::grouped(&mut was);
+    // A session's space is not kept: its tabs come back in Workspace.
+    if m.spaces.iter().any(|space| matches!(space.of, Owner::Session { .. })) {
+        return Ok(());
+    }
+    // As text: a ratio is kept to three places.
+    let was = m.layout_file(&[], &[], 0);
     let (was, now) = (layout_file::write(&was), layout_file::write(&fresh.layout_file(&[], &[], 0)));
     ensure!(was == now, "restored, the layout is another:\n{was}\nthen\n{now}");
     ensure!(fresh.tab_task() == m.tab_task(), "the tab on show is of another task");
@@ -2009,6 +2114,7 @@ impl Run {
         let chats_before = m.chats.clone();
         let drafts: Vec<(Subject, String)> =
             m.chats.iter().map(|chat| (chat.subject.clone(), chat.draft.text().to_string())).collect();
+        let editing_before = m.editing.clone();
         let panes: Vec<PaneId> = m.panes.iter().map(|p| p.id).collect();
         let sneak = m.sneak.as_ref().map(|sneak| sneak.typed.clone());
         let labelled: Vec<String> =
@@ -2067,28 +2173,36 @@ impl Run {
         let line_before = m.compose_line().cloned();
         let composing = m.composing();
         let palette_typing = m.field().is_some_and(|(of, _)| of == "palette");
+        // ↵ in list mode on a meeting row of the Calendar section: that row's Join.
+        let on_meeting = matches!(m.list.and_then(|at| m.list_rows().into_iter().nth(at)), Some(ListRow::Meeting(_)));
         let tab_before = m.tabs[m.active].id;
         let tabs_before: Vec<u32> = m.tabs.iter().map(|tab| tab.id).collect();
-        let talks = matches!(
-            action,
-            Action::TaskTalk { .. }
-                | Action::SessionOpen { .. }
-                | Action::SessionAdopt { .. }
-                | Action::TalkPick { .. }
-        );
+        let talks =
+            matches!(action, Action::TaskTalk { .. } | Action::SessionOpen { .. } | Action::SessionAdopt { .. });
 
-        // Selecting a conversation, a tab or a row only shows: never an agent, never a transcript.
+        // Selecting a conversation, a tab, a space or a row, hiding or opening a space, only
+        // shows: never an agent, never a transcript.
         let selects = matches!(
             action,
             Action::TaskTalk { .. }
-                | Action::TalkPick { .. }
                 | Action::SessionOpen { .. }
                 | Action::TaskGo { .. }
                 | Action::ListChoose { .. }
                 | Action::SelectTab { .. }
                 | Action::SelectVisibleTab { .. }
                 | Action::CycleTab { .. }
+                | Action::SpaceSelect { .. }
+                | Action::SpaceCycle { .. }
+                | Action::SpaceHide { .. }
+                | Action::SpaceOpen { .. }
         );
+        let hides = matches!(action, Action::SpaceHide { .. });
+        let owners_before: Vec<(u32, Owner)> = m.tabs.iter().map(|tab| (tab.id, tab.space.clone())).collect();
+        let typing_to = m.talk.clone().filter(|talk| talk.keys && origin != Origin::User);
+        let written = m.compose_line().is_some_and(|line| !line.is_empty());
+        let composing_before = m.composing() && written && !m.compose_theirs && origin != Origin::User;
+        let agents_before = (m.agents.clone(), m.starting.clone());
+        let spaces_before: Vec<Owner> = m.spaces.iter().map(|space| space.of.clone()).collect();
 
         let peek_before = m.peek.as_ref().map(|peek| peek.pane);
         // An action of a feature that is off changes nothing at all, whoever sent it.
@@ -2098,8 +2212,16 @@ impl Run {
         let stored = serde_json::to_string(&m.marks.list).unwrap_or_default();
         let listed_flags: Vec<(Feature, bool)> =
             m.palette.iter().flat_map(|p| p.feature_matches()).map(|c| (c.feature, c.on)).collect();
+        let key_use = m.key_use.clone();
         let effects = m.update(sent);
         check(m)?;
+        // The counts are the user's keys: only their count and reset change them, and the shell's
+        // read of keys.json. A count changes nothing else: no effect.
+        let counts = matches!(action, Action::KeyUsed { .. } | Action::ResetKeyUse) && origin == Origin::User;
+        let read = matches!(action, Action::RestoreKeyUse { .. }) && origin != Origin::Socket;
+        ensure!(counts || read || m.key_use == key_use, "{origin:?} changed the key counts: {action:?}");
+        let keyed = matches!(action, Action::KeyUsed { .. } | Action::ResetKeyUse | Action::RestoreKeyUse { .. });
+        ensure!(!keyed || effects.is_empty(), "a key count made {effects:?}");
         if let Some(before) = &gated {
             ensure!(
                 effects.is_empty() && format!("{m:?}") == *before,
@@ -2139,6 +2261,53 @@ impl Run {
             let same = was.is_none_or(|was| was.transcript.activity == chat.transcript.activity);
             ensure!(same, "{origin:?}'s {action:?} moved the dial of {:?}", chat.subject);
         }
+        // Hiding ends nothing: no agent, no pane, no tab.
+        let ends = |e: &Effect| matches!(e, Effect::StopAgent { .. } | Effect::Closed(_));
+        ensure!(!hides || !effects.iter().any(ends), "{action:?} ended something: {effects:?}");
+        ensure!(!hides || (m.agents.clone(), m.starting.clone()) == agents_before, "{action:?} changed an agent");
+        let tabs_kept = m.tabs.iter().map(|tab| tab.id).collect::<Vec<_>>() == tabs_before;
+        let row_kept = m.spaces.iter().map(|space| space.of.clone()).collect::<Vec<_>>() == spaces_before;
+        ensure!(!hides || (tabs_kept && row_kept), "{action:?} changed the tabs or the spaces");
+        // Nobody but the user moves what the user types to: not the chat (its agent may end), not
+        // the new-task box.
+        if let Some(was) = &typing_to {
+            let now = m.talk.as_ref();
+            let gone = was.task.task().is_some_and(|id| m.tasks.live(id).is_none());
+            let kept = now.is_some_and(|t| t.task == was.task);
+            ensure!(kept || gone, "{origin:?}'s {action:?} moved the chat typed in: {now:?}");
+            let ended = gone || !m.talk_live(&was.task);
+            ensure!(now.is_some_and(|t| t.keys) || ended, "{origin:?}'s {action:?} took the keys from the chat");
+        }
+        ensure!(
+            !composing_before || m.compose.is_some(),
+            "{origin:?}'s {action:?} took the new-task box from the user"
+        );
+        // A tab changes space only by a move of the user's, a task started from it, its space
+        // gone (Workspace's then), an undo of a dismissal, or a session made a task.
+        for (id, was) in &owners_before {
+            let Some(now) = m.tabs.iter().find(|tab| tab.id == *id).map(|tab| &tab.space) else { continue };
+            if now == was {
+                continue;
+            }
+            let moved =
+                origin == Origin::User && matches!(action, Action::TabPlace { .. } | Action::PaletteChoose { .. });
+            let bound = origin == Origin::User
+                && *was == Owner::Workspace
+                && matches!(now, Owner::Task { id } if !task_ids.contains(id))
+                && matches!(action, Action::ComposeSubmit { .. } | Action::ComposeEnter | Action::TaskFromLine { .. });
+            let gone = *now == Owner::Workspace && !m.owner_valid(was);
+            let undone = matches!(action, Action::TaskUndo | Action::ListUndo) && *was == Owner::Workspace;
+            let adopted =
+                matches!((was, now, &action), (Owner::Session { .. }, Owner::Task { .. }, Action::SessionAdopt { .. }));
+            // Opening a workbook gathers its tabs from Workspace.
+            let gathered = *was == Owner::Workspace
+                && matches!(now, Owner::Workbook { .. })
+                && matches!(action, Action::WorkbookOpen { .. } | Action::SpaceOpen { .. } | Action::ListChoose { .. });
+            ensure!(
+                moved || bound || gone || undone || adopted || gathered,
+                "{origin:?}'s {action:?} moved tab {id} from {was:?} to {now:?}"
+            );
+        }
         check_zones(m)?;
         if !self.sparse || self.steps.len().is_multiple_of(8) {
             check_state(m)?;
@@ -2156,15 +2325,17 @@ impl Run {
         // Only a move to a tab changes the tab on show, or its closing.
         let tab_now = m.tabs[m.active].id;
         ensure!(
-            tab_now == tab_before || !m.tabs.iter().any(|tab| tab.id == tab_before) || selects_tab(&action, origin),
+            tab_now == tab_before || !m.tabs.iter().any(|tab| tab.id == tab_before) || selects_tab(&action),
             "{origin:?}'s {action:?} changed the tab on show from {tab_before} to {tab_now}"
         );
-        // Starting, going on with, adopting or clicking a conversation makes, closes or shows no tab.
+        // Starting, going on with, adopting or clicking a conversation closes no tab, and makes at
+        // most one: the first of its space, new.
         let tabs_now: Vec<u32> = m.tabs.iter().map(|tab| tab.id).collect();
-        let mut sorted = (tabs_before.clone(), tabs_now.clone());
-        sorted.0.sort_unstable();
-        sorted.1.sort_unstable();
-        ensure!(!talks || (sorted.0 == sorted.1 && tab_now == tab_before), "{action:?} changed the tabs");
+        let made: Vec<u32> = tabs_now.iter().copied().filter(|id| !tabs_before.contains(id)).collect();
+        let closed = tabs_before.iter().any(|id| !tabs_now.contains(id));
+        let first =
+            |id: &u32| m.tabs.iter().find(|tab| tab.id == *id).is_some_and(|tab| !spaces_before.contains(&tab.space));
+        ensure!(!talks || (!closed && made.len() <= 1 && made.iter().all(first)), "{action:?} changed the tabs");
         let held = m.capture.as_ref().map_or(0, |draft| draft.materials.len());
         ensure!(unasked == 0 || held == unasked, "a draft's {unasked} captures went with no question");
         // Only the user starts a capture: a client's or a timer's is refused, whatever the mode.
@@ -2196,10 +2367,12 @@ impl Run {
             _ => false,
         };
         ensure!(!inspector_own || refused.is_some(), "a client's {action:?} reached the inspector");
-        // A meeting's link opens only on the user's own Join, and only one the allow-function passes.
+        // A meeting's link opens only on the user's own Join (its button, or ↵ on its selected row,
+        // which shows Join), and only one the allow-function passes.
         for effect in &effects {
             if let Effect::OpenLink { url } = effect {
-                let joins = matches!(action, Action::CalendarJoin { .. }) && origin == Origin::User;
+                let chose = matches!(action, Action::ListChoose { .. }) && on_meeting;
+                let joins = (matches!(action, Action::CalendarJoin { .. }) || chose) && origin == Origin::User;
                 ensure!(joins && calendar::joinable(url), "{origin:?}'s {action:?} opened {url:?}");
             }
         }
@@ -2217,11 +2390,39 @@ impl Run {
         // Only the shell's runner reports what an agent said.
         let reports = matches!(action, Action::AgentEvents { .. }) && origin != Origin::System;
         ensure!(!reports || m.chats == chats_before, "{origin:?} reported an agent's events");
-        // A composer's draft is the user's words alone: it starts empty, and only the user changes it.
-        for chat in m.chats.iter().filter(|_| !user) {
+        // A composer's draft is the user's words alone: it starts empty, and only the user changes
+        // it, or the user's editor it was given to, as the shell reports it ended.
+        let saved = matches!(action, Action::EditorDone { .. }) && origin == Origin::System;
+        let edited = |subject: &Subject| {
+            saved && editing_before.as_ref().is_some_and(|e| e.target == editor::Target::Chat(subject.clone()))
+        };
+        for chat in m.chats.iter().filter(|chat| !user && !edited(&chat.subject)) {
             let before = drafts.iter().find(|(subject, _)| *subject == chat.subject).map(|(_, text)| text.as_str());
             ensure!(before.unwrap_or("") == chat.draft.text(), "{origin:?} changed the draft of {:?}", chat.subject);
         }
+        // What the user types to is theirs to move: no one else opens the editor, moves the keyboard
+        // to it or from it, or ends it, but the shell's report that it exited. An adopted session's
+        // draft is its task's, the editor's with it.
+        if !user && m.editing != editing_before {
+            let ended = saved && m.editing.is_none();
+            let renamed = match (&editing_before, &m.editing) {
+                (Some(was), Some(now)) => {
+                    let moved = matches!(
+                        (&was.target, &now.target),
+                        (editor::Target::Chat(Subject::Session { .. }), editor::Target::Chat(Subject::Task(_)))
+                    );
+                    moved && (&was.given, was.keys) == (&now.given, now.keys)
+                }
+                _ => false,
+            };
+            ensure!(
+                ended || renamed,
+                "{origin:?}'s {action:?} changed the editor: {editing_before:?} to {:?}",
+                m.editing
+            );
+        }
+        // A count of a key is no input: it ends no mode or wait.
+        let counted = matches!(action, Action::KeyUsed { .. } | Action::ResetKeyUse | Action::RestoreKeyUse { .. });
         let sneak_own = matches!(
             action,
             Action::Sneak { .. }
@@ -2232,10 +2433,11 @@ impl Run {
                 | Action::LeaveSneak
                 | Action::SneakApp { .. }
                 | Action::AppWheel { .. }
-        );
-        let mark_own = matches!(
-            action,
-            Action::MarkPrefix
+        ) || counted;
+        let mark_own = counted
+            || matches!(
+                action,
+                Action::MarkPrefix
                 | Action::MarkEdit { .. }
                 | Action::ListMarkEdit { .. }
                 | Action::MarkType { .. }
@@ -2247,7 +2449,7 @@ impl Run {
                 | Action::WorkbookSave { .. }
                 | Action::WorkbookSaveAll { .. }
                 | Action::WorkbookEdit { .. }
-        );
+            );
         // A name being typed is a text field: an edit of it is the wait's own, whoever sends it.
         let typing = mark_input.as_ref().is_some_and(|input| input.text().is_some());
         let mark_own = mark_own || (typing && matches!(action, Action::FieldEdit { .. }));
@@ -2397,6 +2599,17 @@ impl Run {
                         opened && terminal && (users || restored) && m.settings_pane == Some(*pane),
                         "{origin:?} ran the editor in pane {pane}: {action:?}"
                     );
+                }
+                // The editor opens only on the user's ⌃G, on the draft it then edits, one at a time.
+                Effect::OpenEditor { text } => {
+                    let given = m.editing.as_ref().map(|editing| editing.given.as_str());
+                    let opened = user && matches!(action, Action::EditorOpen) && editing_before.is_none();
+                    ensure!(opened && given == Some(text.as_str()), "{origin:?}'s {action:?} opened the editor");
+                }
+                // Only what the editor saved goes to the clipboard, when the shell says it ended.
+                Effect::Clip { .. } => {
+                    let ended = editing_before.is_some() && m.editing.is_none();
+                    ensure!(saved && ended, "{origin:?}'s {action:?} wrote the clipboard");
                 }
                 // Only the shell's read of the file applies settings, and only one with no problem.
                 Effect::ApplySettings { .. } => {
@@ -2563,7 +2776,23 @@ impl Run {
                     ensure!(changes.len() == 1 && changes.iter().all(named), "not one directory: {changes:?}");
                     ensure!(m.repo_dirs.dirs.len() <= MAX_DIRS, "more directories than the settings may name");
                 }
+                // A worktree is the user's own ↵ in its field: a branch git takes, in a folder of `root`.
+                Effect::AddWorktree { repo, branch, path, root } => {
+                    ensure!(user && matches!(action, Action::MarkSubmit), "{origin:?}'s {action:?} made a worktree");
+                    ensure!(crate::repos::check_branch(branch).is_ok(), "a worktree on {branch:?}");
+                    ensure!(m.repos.iter().any(|r| r.path == *repo), "a worktree of {repo:?}, not listed");
+                    let rest = path.strip_prefix(root.as_str()).and_then(|rest| rest.strip_prefix('/'));
+                    let parts: Vec<&str> = rest.map(|rest| rest.split('/').collect()).unwrap_or_default();
+                    let plain = |part: &&str| !matches!(*part, "" | "." | "..");
+                    ensure!(parts.len() == 2 && parts.iter().all(plain), "a worktree at {path:?}, outside {root:?}");
+                }
                 Effect::Notice { text } => ensure!(user && !text.is_empty(), "{origin:?} is told {text:?}"),
+                Effect::Told { text } => {
+                    ensure!(
+                        user && matches!(action, Action::RepoRemove { .. } | Action::QuitConfirm),
+                        "{origin:?} is told {text:?}"
+                    )
+                }
                 // The settings file is the user's.
                 Effect::SaveTasksView { view } => {
                     ensure!(user && m.tasks_view == *view, "{origin:?} wrote tasks_view {view:?}")
@@ -2581,6 +2810,11 @@ impl Run {
                     ensure!(matches!(action, Action::Tick { .. }) && *started <= m.now, "an alert by {action:?}")
                 }
                 Effect::OpenLink { .. } => {}
+                // A pull request opens by the user's click alone, and only a plain GitHub link.
+                Effect::OpenPr { url } => {
+                    ensure!(user && matches!(action, Action::PrOpen { .. }), "{origin:?}'s {action:?} opened {url}");
+                    ensure!(crate::prs::openable(url), "{url} is opened");
+                }
                 // The settings file is the user's: only their choice in Features… writes a flag.
                 Effect::SaveFeature { feature, on } => {
                     let listed = listed_flags.iter().any(|(f, was)| f == feature && was != on);
@@ -2774,7 +3008,7 @@ const BASES: &[(&str, Setup)] = &[
                 assign: Assign::default(),
             },
             |_| Action::TaskFromLine { line: "fix zoom #canvas >app p1".into(), known: Known::default(), open: false },
-            |_| Action::NewTabOf { task: Some(3) },
+            |_| Action::SpaceOpen { space: Owner::Task { id: 3 } },
             |_| Action::Split { axis: Axis::Down, kind: Kind::Terminal },
             |_| Action::TaskSnooze { id: 1, until: 2_000_000 },
             |_| Action::RowHold { id: 2 },
@@ -2968,6 +3202,11 @@ fn code(sent: &Envelope) -> String {
         "RepoDir",
         "RepoDirs",
         "Worktree",
+        "Pr",
+        "Check",
+        "Branch",
+        "Login",
+        "Named",
         "Task",
         "Assign",
         "Names",
@@ -3017,11 +3256,14 @@ fn code(sent: &Envelope) -> String {
         ("view", "TasksView"),
         ("range", "sessions::Range"),
         ("runner", "RunnerId"),
-        // A conversation's: `TalkPick { id: Task(1) }`.
+        // A conversation's: `TaskStop { id: Task(1) }`.
         ("task", "Subject"),
         ("id", "Subject"),
         ("shows", "View"),
+        ("binding", "Binding"),
+        ("space", "Owner"),
         ("show", "Show"),
+        ("step", "DayStep"),
     ];
     // A mark is long, and half of it is JSON already: it is given as its file's text.
     if let Action::RestoreMarks { marks, extra } = &sent.action {
@@ -3033,6 +3275,10 @@ fn code(sent: &Envelope) -> String {
     if let Action::RestoreTasks { tasks, floor } = &sent.action {
         let tasks = serde_json::to_string(tasks).unwrap_or_default();
         return format!("restore_tasks({tasks:?}, {floor}).sent_by(Origin::{:?})", sent.origin);
+    }
+    // Key counts as keys.json has them.
+    if let Action::RestoreKeyUse { uses } = &sent.action {
+        return format!("restore_key_use({:?}).sent_by(Origin::{:?})", uses.write(), sent.origin);
     }
     if let Action::SessionWork { work } = &sent.action {
         let work = serde_json::to_string(work).unwrap_or_default();
@@ -3200,6 +3446,10 @@ fn restore_tasks(tasks: &str, floor: TaskId) -> Action {
     Action::RestoreTasks { tasks: serde_json::from_str(tasks).expect("a regression's tasks are JSON"), floor }
 }
 
+fn restore_key_use(text: &str) -> Action {
+    Action::RestoreKeyUse { uses: KeyUse::parse(text).expect("a regression's key counts are keys.json") }
+}
+
 fn session_work(work: &str) -> Action {
     Action::SessionWork { work: serde_json::from_str(work).expect("a regression's work is JSON") }
 }
@@ -3330,6 +3580,58 @@ fn split(axis: Axis, kind: Kind) -> Envelope {
     Action::Split { axis, kind }.into()
 }
 
+/// A permission in the same batch as its agent's exit put a card up with no agent to answer it.
+#[test]
+fn a_permission_after_its_agent_exited_puts_up_no_card() {
+    let permission = Said::Permission {
+        ticket: 0,
+        tool: "Bash".into(),
+        label: "deploy".into(),
+        detail: Text::new("xxxxxx"),
+        len: 9,
+        cut: true,
+        claim: Text::new(""),
+    };
+    replay(&[
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.into(),
+        Action::CaptureStart {
+            pane: None,
+            draft: "d1".into(),
+            word: "k3f9a2c41b7d".into(),
+            facts: vec![],
+            images: true,
+        }
+        .into(),
+        Action::ComposeEnter.into(),
+        by(Origin::Socket, Action::AgentStarted { task: Subject::Task(1), session: None, at: 49 }),
+        by(
+            Origin::System,
+            Action::AgentEvents {
+                task: Subject::Task(1),
+                events: vec![
+                    Said::Exited { code: None, signal: None, details: false },
+                    Said::MessageElsewhere,
+                    permission,
+                ],
+                at: 5000,
+            },
+        ),
+    ])
+    .unwrap();
+}
+
+/// Key counts read back from keys.json are the user's again; a client's count adds nothing.
+#[test]
+fn key_counts_read_back_and_a_clients_count_adds_nothing() {
+    let read = r#"{"version":1,"keys":{"copy":{"score":4,"at":1000,"known":false}}}"#;
+    replay(&[
+        by(Origin::System, restore_key_use(read)),
+        by(Origin::Socket, Action::KeyUsed { binding: Binding::Copy, at: 1000 }),
+        Action::KeyUsed { binding: Binding::Copy, at: 1000 }.into(),
+    ])
+    .unwrap();
+}
+
 /// ← from the right rail's cell of the conversation on show gave the keyboard to the drawer
 /// under the inspector, which still covered it.
 #[test]
@@ -3403,7 +3705,7 @@ fn one_key_never_presses_in_an_app() {
 fn a_directory_with_no_text_is_not_removed() {
     replay(&[
         Action::SetRepoDirs {
-            dirs: RepoDirs { dirs: vec![RepoDir { text: "".into(), path: "".into() }], fixed: false },
+            dirs: RepoDirs { dirs: vec![RepoDir { text: "".into(), path: "".into() }], fixed: false, worktrees: None },
         }
         .sent_by(Origin::Socket),
         Action::RepoRemove { path: "".into() }.sent_by(Origin::User),
@@ -3885,7 +4187,7 @@ fn a_workbook_whose_file_names_a_task_opens_as_a_tab_of_no_task() {
     let effects = m.update(Action::WorkbookOpen { workbook: 1, tab: None, home: None });
     // A terminal and nothing typed into it: no effect carries a command.
     assert_eq!(effects, vec![Effect::Opened(1)]);
-    assert_eq!((m.tabs[m.active].task, m.tabs[m.active].title.as_str()), (None, "dri"));
+    assert_eq!((&m.tabs[m.active].space, m.tabs[m.active].title.as_str()), (&Owner::Workbook { id: 1 }, "dri"));
 }
 
 /// A system `CloseTab` took the capture's pane off show, which ends annotate mode and keeps the
@@ -3938,6 +4240,7 @@ fn a_repository_is_never_removed_by_a_path_that_is_no_directory() {
                     RepoDir { text: "  S'".into(), path: "  S'".into() },
                 ],
                 fixed: false,
+                worktrees: None,
             },
         }
         .sent_by(Origin::User),
@@ -4011,6 +4314,48 @@ fn marks_turned_off_take_the_jumps_wait_with_them() {
     replay(&[Action::MarkPrefix.into(), by(Origin::System, set_features(&[]))]).unwrap();
 }
 
+/// Seed 29399: a dismissal taken back put the task's tab back in its space, and the drawer's
+/// open-or-closed was noted only on the next step, a refused one.
+#[test]
+fn a_space_back_from_an_undo_notes_its_drawer_in_the_same_step() {
+    let task = Action::TaskAdd {
+        title: "x".into(),
+        priority: 1,
+        state: State::Captured,
+        tab: None,
+        assign: Assign::default(),
+    };
+    replay(&[
+        by(Origin::Socket, task),
+        by(Origin::Socket, Action::TaskGo { id: Some(1) }),
+        Action::TalkToggle.into(),
+        Action::RowDismiss { id: 1 }.into(),
+        Action::TaskUndo.into(),
+        by(Origin::System, Action::TaskStop { id: Subject::Task(1) }),
+    ])
+    .unwrap();
+}
+
+/// Seed 21259: the user's keys over the right rail show a cell's conversation, and so its space.
+#[test]
+fn a_rail_cell_reached_by_keys_shows_its_space() {
+    let task = Action::TaskAdd {
+        title: "x".into(),
+        priority: 1,
+        state: State::Captured,
+        tab: None,
+        assign: Assign::default(),
+    };
+    replay(&[
+        task.into(),
+        Action::TaskTalk { id: 1 }.into(),
+        by(Origin::System, Action::NewEmptyTab),
+        Action::FocusDir { dir: Dir::Right }.into(),
+        Action::FocusDir { dir: Dir::Left }.into(),
+    ])
+    .unwrap();
+}
+
 /// Seed 1247 (long run): the drawer's native agent ended while it had the keyboard; its composer
 /// can go on with it (#130), so the keyboard may stay. The check asked for a running agent.
 #[test]
@@ -4021,7 +4366,7 @@ fn an_ended_agent_lets_the_keyboard_go() {
         Action::TaskAdd { title: "a".into(), priority: 2, state: State::Running, tab: None, assign: none() }.into(),
         Action::TaskAdd { title: "b".into(), priority: 1, state: State::NeedsYou, tab: None, assign: none() }.into(),
         Action::TaskFromLine { line: "fix zoom #canvas >app p1".into(), known, open: false }.into(),
-        Action::NewTabOf { task: Some(3) }.into(),
+        Action::SpaceOpen { space: Owner::Task { id: 3 } }.into(),
         Action::Split { axis: Axis::Down, kind: Kind::Terminal }.into(),
         Action::NewTab.into(),
         Action::CycleTab { delta: 2 }.into(),
@@ -4102,9 +4447,86 @@ fn a_brief_goes_with_its_tab() {
         .sent_by(Origin::User),
         Action::ComposeEnter.sent_by(Origin::User),
         Action::SessionAdopt { runner: "claude".into(), id: "s2".into() }.sent_by(Origin::User),
-        Action::TalkGo.sent_by(Origin::User),
         Action::TaskGo { id: Some(1) }.sent_by(Origin::User),
         Action::CloseTab { index: None }.sent_by(Origin::System),
+    ])
+    .unwrap();
+}
+
+/// ↵ on a meeting row is that row's Join: the user's opens its link, if `joinable` allows one;
+/// a client's or the system's opens nothing, nor does ↵ on a meeting with no allowed link.
+#[test]
+fn enter_on_a_meeting_row_is_the_users_join_alone() {
+    let days =
+        [0, 0, 0, 0, 0, 0, 0, 0, 86400000, 172800000, 259200000, 345600000, 432000000, 518400000, 604800000, 691200000];
+    let on_row = |link: Option<&str>| {
+        let mut m = Model::default();
+        let set = Action::SetCalendar { on: true, notify: true, links_only: false, hide_free: false, colors: vec![] };
+        m.update(set);
+        let event = Event {
+            id: 1,
+            start: 0,
+            end: 1_800_000,
+            all_day: false,
+            title: "standup".into(),
+            location: String::new(),
+            link: link.map(str::to_string),
+            show: Show::Busy,
+        };
+        let read = Action::CalendarRead { events: Some(vec![event]), days, at: 1_000, held_from: 0 };
+        m.update(read.sent_by(Origin::System));
+        m.update(Action::FocusList);
+        m.update(Action::CalendarDay { step: DayStep::Today });
+        let row = m.list.and_then(|at| m.list_rows().into_iter().nth(at));
+        assert_eq!((m.sidebar, row), (Some(Section::Calendar), Some(ListRow::Meeting(1))));
+        m
+    };
+    let enter = Action::ListChoose { axis: Axis::Right };
+    for origin in [Origin::Socket, Origin::System] {
+        let mut m = on_row(Some("https://example.zoom.us/j/1"));
+        assert_eq!(m.refusal(&enter, origin), Some(calendar::USERS_ALONE));
+        assert_eq!(m.update(enter.clone().sent_by(origin)), [], "{origin:?}");
+    }
+    let opened = on_row(Some("https://example.zoom.us/j/1")).update(enter.clone());
+    assert_eq!(opened, [Effect::OpenLink { url: "https://example.zoom.us/j/1".into() }]);
+    for link in [None, Some("http://example.zoom.us/j/1"), Some("javascript:alert(1)")] {
+        assert_eq!(on_row(link).update(enter.clone()), [], "{link:?}");
+    }
+}
+
+/// Seed 30549: the user's ↵ on a meeting row opened its link, and the rule allowed only the Join
+/// button's `CalendarJoin`. ↵ on the selected row is its Join (the row shows Join): the rule was wrong.
+#[test]
+fn seed_30549_the_users_enter_on_a_meeting_row_is_its_join() {
+    let meeting = |id, start, end, title: &str, location: String, show| Event {
+        id,
+        start,
+        end,
+        all_day: false,
+        title: title.into(),
+        location,
+        link: Some("https://example.zoom.us/j/1".into()),
+        show,
+    };
+    replay(&[
+        Action::SetCalendar { on: true, notify: true, links_only: true, hide_free: false, colors: vec![] }
+            .sent_by(Origin::User),
+        Action::CalendarRead {
+            events: Some(vec![
+                meeting(2, 600000, 2400000, "", "مرحبا/🏳\u{fe0f}\u{200d}🌈#123".into(), Show::Tentative),
+                meeting(3, 0, 1800000, "#x../..$", "a".repeat(1139), Show::Away),
+            ]),
+            days: [
+                0, 0, 0, 0, 0, 0, 0, 0, 86400000, 172800000, 259200000, 345600000, 432000000, 518400000, 604800000,
+                691200000,
+            ],
+            at: u64::MAX,
+            held_from: 0,
+        }
+        .sent_by(Origin::User),
+        Action::FocusList.sent_by(Origin::Socket),
+        Action::CalendarDay { step: DayStep::Today }.sent_by(Origin::System),
+        Action::ListChoose { axis: Axis::Right }.sent_by(Origin::User),
     ])
     .unwrap();
 }

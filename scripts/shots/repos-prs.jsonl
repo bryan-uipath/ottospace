@@ -1,0 +1,12 @@
+{"env":{"OTTOSPACE_GH":"{ROOT}/gh"}}
+# Each worktree's open pull request, from a stand-in gh: ready (✓), failing (red), draft (muted),
+# waiting (amber); a task's badge after the mark on the long branch. Then a card on hover.
+{"cmd":"task_new","line":"Rework zoom and pan >canvas-app-3"}
+{"cmd":"section","section":"repos"}
+{"until":"repos_bar.0.rows.1.pr.look","is":"ready"}
+{"until":"repos_bar.2.rows.0.pr.look","is":"pending"}
+{"cmd":"mouse","action":"move","x":-50,"y":-50,"as":"user"}
+{"shot":"marks"}
+{"hover":"repo-pr:{ROOT}/repos/canvas-app-3"}
+{"settle":1500}
+{"shot":"card"}

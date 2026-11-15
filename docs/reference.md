@@ -32,15 +32,14 @@ running, and the rest of the design is not built: see the
 | Sessions in the Tasks section: the Claude Code and Codex sessions of the listed repositories that are no task's (one you started by hand in a terminal). Under Elsewhere, each row is one line: a dot lit while it works, its title (else its repository) and its runner; hover it for its card (repository, what it does now, model, when last active, its pane). Listed: the last 7 days. A click opens its conversation in the drawer (`claude --resume`, `codex resume`), unless it is at work in another terminal; Track makes a task of one; Hide removes it until the next start | Works today |
 | A task's agent in the right drawer: ↵ in the new-task box, or Start agent in the drawer, starts its agent (`claude` or `codex`, by its `@agent`, else `default_agent`) beside the workspace, which stays as it is. A click on a task only shows its conversation; Resume session goes on with one that ended. See [Flow of a task](#flow-of-a-task) | Works today |
 | Native conversation for Claude Code: the drawer drives `claude -p` (stream-json) and draws the reply itself: markdown (headings, emphasis, lists, quotes, tables), code blocks with Copy, links that open only on your click (web pages in the browser; files of the task's repository revealed in Finder), local images of the repository as thumbnails, tool calls as compact rows, a file edit's change as a diff card under its call, a working row while a turn runs, Copy and Copy as Markdown on each message, and a composer (↵ send, ⇧↵ new line). Permission requests are cards: Allow this one request as shown, or Deny (with a message if you like); a request too long to show is opened in full before Allow is offered. `Chat \| Terminal` in the header switches to the CLI's own TUI and back on the same session. A session at work in another terminal is watched read-only (what it calls and edits, not what it says; "Watching · updates per message" in the header), with Take over once it is idle. Codex stays in a terminal. No text selection by dragging yet: copy by message or block | Works today |
-| Right rail: a badge per open conversation of a live task (needs you first, then running, then the last opened; at most 8), and `+` for a new task. A dismissed task leaves it; a done one stays only while shown or its agent runs | Works today |
 | New task (⌘N), in the drawer: one line, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `p1`–`p9`, picks for where and who, and a line that says what ↵ will do when it is not the default. A `/path` stays in the title the agent reads, and a folder taken from its dropdown is where the agent runs; `$skill` is stored and shown, nothing acts on it yet | Works today |
 | Home screen: a tab with no panes says what goes there (Open an app ⌘E, Terminal ⌘D), the tasks that need you, and each listed task as a node on a lattice (left to right by project; within a project the older task is farther). A click on a node or a row opens its conversation. With nothing open at all, the drawer shows a new task by itself | Works today |
-| Task groups on the one tab bar: a tab may be a task's, and each task's tabs sit side by side behind its badge (its two letters, bordered in its own colour, its state as a dot), underlined in its colour; the tabs of no task last. Starting a task takes the tab on show if that is no task's; ⌘T joins the task on show; drag a tab onto a group to move it there. The same badge on its panes, its row, the rail and the drawer. Selecting a task's tab shows its conversation in the open drawer | Works today |
+| Two rows of tabs: the top row holds Workspace, then each open task (its badge and title) and workbook; under it, the selected one's tabs, when it has more than one. One selection: the drawer shows the selected task's chat. × hides a task (nothing stops); its row opens it again. Short of room, the tasks not selected are their badges alone; shorter still, those that do not fit are a count (+3), and the selected one always shows. Drag a tab onto a task to move it there | Works today |
 | Tabs, each with its own split tree | Works today |
 | Pane picker: choose a terminal, a running app, or (once you type) any installed app for a new pane or tab | Works today |
 | Icon rail with a secondary bar | Works today |
 | The Apps section: the Dock's apps, pins, "Not running" and "All apps" | Works today, behind the `apps_section` [flag](#features), off by default |
-| Repos: each repository's name over its checkouts (the branch, then `Default` or a linked worktree's directory); open a terminal in one. + in the header adds a directory to `repos` in the settings; Remove on a name takes it off | Works today |
+| Repos: each repository's name over its checkouts, one line each (the branch; a dot for the repository's own folder; its open pull request's mark; a task's badge). The chevron folds a repository (a count while folded; kept in `layout.json`; shown while a task there runs or needs you). Open a terminal in one. + in the bar's header adds a directory to `repos`; on a name under the pointer, + makes a worktree (`worktrees_dir`) and the trash stops listing it (asked first while a task works there; the status bar says nothing on disk changed) | Works today |
 | List mode (⌘⌃E): drive the bar with the keyboard | Works today |
 | Sneak mode (⌘; or ⌘⌃G): a letter label on each of ottospace's own controls, and on the buttons and text fields of the focused app pane; typing it clicks the control, presses the app's button, or focuses its text field | Works today |
 | The wheel over an app pane you are not in brings its window up for the scroll (a peek): `PEEK` in the status bar, parked again when the pointer leaves or the wheel is quiet | Partly verified: on CI the window comes up, the app is in front and the scrolls after the first reach it. The first scroll is lost. The window parking again by itself is unit-tested, not yet seen on CI |
@@ -91,7 +90,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⇧D | Split down, new terminal |
 | ⌘E / ⌘⇧E | Pick what goes in a new pane, right of / below the focused one: a terminal or a running app. Type to filter: then every installed app that matches is offered too, under "Not running" (those of the `apps` setting first); choosing one starts it in the background. ↑/↓ or ⌃N/⌃P move, ↵ opens, Esc closes |
 | ⌘W | Close the focused pane |
-| ⌘⌃←/→/↑/↓ or ⌘⌃H/L/K/J | Focus the pane in that direction. Past the leftmost pane, ← goes to the open section's list (on the row it was left on), then to the left rail; with no section open, straight to the rail. Past the rightmost pane, → goes into the drawer's conversation (as ⌘L), or the accessibility inspector's rows while it has the drawer's place, then to the right rail; with no conversation, straight to the right rail. On a rail ↑/↓ move (its cell gets a pink ring), → (left rail) or ← (right rail) and ↵ open it; the other way, or Esc, goes back to the pane you came from. Only your own keys cross: a client's move stops at the panes |
+| ⌘⌃←/→/↑/↓ or ⌘⌃H/L/K/J | Focus the pane in that direction. Past the leftmost pane, ← goes to the open section's list (on the row it was left on), then to the left rail; with no section open, straight to the rail. Past the rightmost pane, → goes into the drawer's conversation (as ⌘L), or the accessibility inspector's rows while it has the drawer's place. On the rail ↑/↓ move (its cell gets a pink ring), → and ↵ open it; ←, or Esc, goes back to the pane you came from. Only your own keys cross: a client's move stops at the panes |
 | ⌘] / ⌘[ | Focus the next / previous pane |
 | ⌘⌥←/→/↑/↓ or ⌘⌥H/L/K/J | Resize: move the focused pane's split that way |
 | ⌘⌃= | Even out the splits of the tab |
@@ -106,8 +105,11 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘, | Open Settings: `settings.json` in your editor, in a tab of its own (see [Settings](#settings)) |
 | F18 | From any app: take the keyboard back and bring ottospace forward |
 | ⌘T | New tab, with an empty pane: ⌘E picks what goes in it |
-| ⌘1 … ⌘9 | Select a tab on the bar |
-| ⌘⇧] / ⌘⇧[ or ⌃Tab / ⌃⇧Tab | Next / previous tab |
+| ⌘1 … ⌘9 | Select a tab of the selected task (the second row) |
+| ⌘⇧] / ⌘⇧[ or ⌃Tab / ⌃⇧Tab | Next / previous tab of the selected task |
+| ⌘⌃1 … ⌘⌃9 | Select a space of the top row: Workspace, then each open task and workbook. Not ⌥1…⌥9: ⌥ is Meta in a terminal |
+| ⌘⌃] / ⌘⌃[ | Next / previous space of the top row |
+| ⌘⌃W | Hide the selected task or workbook (Hide): it leaves the top row and nothing in it stops; its row in Tasks or Workbook opens it again |
 | ⌘⇧W | Close the tab and its panes |
 | ⌘⇧S | Save the tab on show as a [workbook](#workbooks). On a tab that came from one, or was saved into one: update its tab there |
 | ⌘Q | Quit. While a terminal runs something (a program in front of its shell, or a background or stopped job) it asks first, and lists them: ↵, Q or ⌘Q again quits; Esc, any other key or any other shortcut cancels and does nothing else |
@@ -119,17 +121,16 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘V | Paste into the terminal, or into the open text field. Into a terminal: line breaks become ↵, other control characters are dropped, bracketed when the program asks for it. Text with a line break asks first in the pane ("Paste 4 lines?", ↵ pastes, Esc cancels; `paste_confirm`). The pane pulses and says "Pasted 4 lines". Only your own ⌘V pastes: a socket client's is refused |
 | ⌘N | New task, in the drawer. Type what needs doing, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `^reference`, `p1` to `p9`; a dropdown finishes the one at the cursor. ↵ adds the task and starts its agent; ⇧↵ adds it for later; Esc closes. [Its keys](#keys) |
 | ⌘L | The keyboard into the drawer's conversation, or back to the workspace |
-| ⌘⇧L | Close the drawer to the right rail, or open it again. The agent goes on |
+| ⌃G | In the composer or the new-task box: its text in your editor (`$VISUAL`, else `$EDITOR`, else `vi`, as Open Settings runs it), in the drawer: the editor takes the conversation's place (the drawer widens to 60 columns if it is narrower). Save and quit: the text is back in the composer (one trailing newline dropped; the new-task line takes it as one line), nothing sent; quit with an error, or save nothing new: as it was. ⌃G again while it runs goes back to it. A permission card that arrives meanwhile shows under the editor, which keeps the keyboard: click the card to answer it (`a`, `d`), ⌃G to go back. The text goes back to the conversation it came from, wherever you went; its task dismissed, it is put on the clipboard and the status bar says so. Also Edit Message in Editor (Tasks, the palette). Only yours: a socket client's ⌃G opens nothing, and its keys reach neither the editor nor a card. See [Compose in your editor](#compose-in-your-editor) |
+| ⌘⇧L | Close the chat, or open it again. The agent goes on |
 | ⌘⇧A | Collapse the conversation's [dial](#the-agent-dial) to its marker beside the badge, or open it again (a click on either does the same). Kept per task |
-| ⌘↵ | With a task's conversation open: Go to its tabs (the one shown last); with none, Claim this tab (the tab on show, if it is no task's) or a New tab of it |
-| ⌘⌃1 … ⌘⌃9 | Show the nth conversation of the right rail; on the one shown, close the drawer. Not ⌥1…⌥9: ⌥ is Meta in a terminal |
-| ⌘⇧N | Next task: the conversation of the first task that needs you. The tab on show stays |
+| ⌘⇧N | Next task: the space and chat of the first task that needs you |
 | ⌃⌥⌘Space | Capture, from any app: the pane in use (a hosted app you are in, else the focused pane) is frozen as a picture to draw on, and a draft opens in the drawer on the right, with the new-task line as its title. A live app is parked first; "↩ back to …" in the bar returns to it. On the picture: drag circles, ⇧-drag draws a box, ⌥-drag a freehand line, a click places a note to type (↵ keeps it). ⌘Z and ⇧⌘Z go over the steps; a click on a shape's line selects it and ⌫ removes it. ↵ goes to the title, Esc leaves the picture; a click on another pane captures that one too. In the title ↵ adds the task and starts its agent, ⇧↵ adds it for later; × or Esc cancels, after a question if anything was captured. The workspace stays in use beside the drawer, and ⌘N goes to the draft's title. See [Capture](#capture) |
 | ⌘B / ⌘⇧B | With the `marks` [flag](#features) on (so for the next two rows): mark the focused pane / the tab on show; on one that is marked, take the mark off (the Marks section offers it back for six seconds, and ⌘B again within them puts the same mark back). The mark is named for the app, the terminal's directory or the tab's title. It records what to open, not a window or a process: a terminal's directory as it is then, an app's bundle id, name and window title, a tab's title, task and split tree. A marked pane or tab shows ◆ and its letter |
 | ⌘' then a letter | Go to the mark with that letter. The status bar shows `MARK?` while it waits; Esc, or a letter of no mark, ends the wait and nothing else happens. If the mark's pane or tab is open, its tab comes forward and the pane takes focus (an app pane is focused, not entered). Else it is opened: a terminal in the recorded directory, the app's window in a pane (the one with the recorded title, else its only window, else its main one; an app that is not running is started), or the tab with its splits. A tab opens with what can be opened: a pane whose directory is gone or whose window could not be hosted is empty and says why, and going to the tab again tries it again |
 | ⌘⌥1 … ⌘⌥9 | Go to one of the first nine marks, in the order of the Marks section |
-| ⌘⌃E | List mode: the bar (Tasks, Calendar while a feed is set, Apps, Workbook, Repos, Marks; Apps and Marks only while their [flags](#features) are on) takes the keyboard, on the open section, or Apps if none is (with Apps off, the first). On a workbook ↵ opens its tabs, space lists them under it, `a` adds the tab on show to it, `r` renames it, `x` deletes it and `u` takes the last delete or update back; on one of its tabs ↵ opens that tab, `r` renames it and `x` takes it out. On a mark `x` removes it, `r` renames it, `m` gives it a letter, ⇧J / ⇧K move it down / up, and `u` puts the last removed mark back. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); in Tasks a heading is a row too, and ↵ or space on it folds or unfolds it; Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; on an app that is not running `p` pins or unpins it, `x` hides a suggestion and `u` takes the last of these back; in Apps `/` types in the filter of "All apps" (↵, ↓ or Esc gives the keys back to the rows); Esc or ⌘⌃E leaves |
-| ⌘; or ⌘⌃G | Sneak mode: every control ottospace draws (rail icons, bar rows, tabs and their ×, top-bar buttons, pane headers and their ×, each pane, the drawer's buttons and picks, the right rail's badges, the home screen's buttons, rows and nodes) gets a short label, home-row letters first. Type a label and the control does what a click does; a pane's label focuses it, or gives an app pane the keyboard. A × (pane or tab) always has a two-letter label. Two-letter labels narrow on the first letter; ⌫ takes it back. Esc, a click, a letter that goes on with no label, or any ⌘ shortcut leaves; the shortcut then runs (⌘C copies, ⌘V pastes). Other keys do nothing. The labels follow what is drawn: if a control moves its label moves, and if it goes its label goes. What happens by itself (a shell exits, an agent files a task) does not end the mode. Starting it hides the accessibility overlay (⌘⌃A). Not ⌃G alone: a terminal needs that key. On a keyboard layout with no Latin letters, the keys type the letters they have under ⌘. From `APP` mode return first. The focused app pane's elements get labels too, in orange (APP mode's colour), always two letters or more so one stray key presses nothing in another app: those its accessibility tree says can be pressed (`AXPress`) or typed in (text fields), enabled, at least 4 points each way where the pane shows them, the innermost of nested ones, at most 150 (nearest the pane's top left). Their labels start with the letters ottospace's own leave free, 19 two-letter labels to each such letter (e.g. `ta`, `ts`, `td`); the first letter only narrows. Only when those letters run out do they go under a × label's first letter, or take three letters. They appear once the app's tree is read, a moment after ottospace's own, and follow it while the mode is on (read again each second); the status bar says how many, e.g. `12 controls in Calculator`. An orange label presses that element (`AXPress`) and the pane stays parked; a text field's label focuses the field and gives the app the keyboard, so you type there. Before it presses, ottospace finds the element again and checks it is the same (role, enabled, place in its window within 2 points); if not, nothing is pressed and the status bar says the control moved. Sneak sets no value, opens no menu and scrolls nothing in the app, and only your own typed letter presses: a socket client's letter of an orange label is refused. Apps that build their accessibility tree only on request (Electron, Chrome's pages, Spotify) show few elements, and get few labels: ottospace does not switch their fuller mode on. Entering an app pane raises its window, as a click on the pane does |
+| ⌘⌃E | List mode: the bar (Tasks, Calendar while a feed is set, Apps, Workbook, Repos, Marks; Apps and Marks only while their [flags](#features) are on) takes the keyboard, on the open section, or Apps if none is (with Apps off, the first). On a workbook ↵ opens its tabs, space lists them under it, `a` adds the tab on show to it, `r` renames it, `x` deletes it and `u` takes the last delete or update back; on one of its tabs ↵ opens that tab, `r` renames it and `x` takes it out. On a mark `x` removes it, `r` renames it, `m` gives it a letter, ⇧J / ⇧K move it down / up, and `u` puts the last removed mark back. `j`/`k` or arrows move; ↵ opens the row (⇧↵ splits down); in Tasks a heading is a row too, and ↵ or space on it folds or unfolds it; in Repos so is a repository's name: ↵ or space folds or unfolds it, ← folds the selected row's repository and → unfolds it, `a` makes a worktree of it; Tab changes section; on a task `s` snoozes one hour, `h` holds, `x` dismisses, `u` undoes; on an app that is not running `p` pins or unpins it, `x` hides a suggestion and `u` takes the last of these back; in Apps `/` types in the filter of "All apps" (↵, ↓ or Esc gives the keys back to the rows); in Calendar ← and → go a day back and on, `t` to today; Esc or ⌘⌃E leaves |
+| ⌘; or ⌘⌃G | Sneak mode: every control ottospace draws (rail icons, bar rows, tabs and their ×, top-bar buttons, pane headers and their ×, each pane, the drawer's buttons and picks, the top row's spaces and their ×, the home screen's buttons, rows and nodes) gets a short label, home-row letters first. Type a label and the control does what a click does; a pane's label focuses it, or gives an app pane the keyboard. A × (pane or tab) always has a two-letter label. Two-letter labels narrow on the first letter; ⌫ takes it back. Esc, a click, a letter that goes on with no label, or any ⌘ shortcut leaves; the shortcut then runs (⌘C copies, ⌘V pastes). Other keys do nothing. The labels follow what is drawn: if a control moves its label moves, and if it goes its label goes. What happens by itself (a shell exits, an agent files a task) does not end the mode. Starting it hides the accessibility overlay (⌘⌃A). Not ⌃G alone: a terminal needs that key. On a keyboard layout with no Latin letters, the keys type the letters they have under ⌘. From `APP` mode return first. The focused app pane's elements get labels too, in orange (APP mode's colour), always two letters or more so one stray key presses nothing in another app: those its accessibility tree says can be pressed (`AXPress`) or typed in (text fields), enabled, at least 4 points each way where the pane shows them, the innermost of nested ones, at most 150 (nearest the pane's top left). Their labels start with the letters ottospace's own leave free, 19 two-letter labels to each such letter (e.g. `ta`, `ts`, `td`); the first letter only narrows. Only when those letters run out do they go under a × label's first letter, or take three letters. They appear once the app's tree is read, a moment after ottospace's own, and follow it while the mode is on (read again each second); the status bar says how many, e.g. `12 controls in Calculator`. An orange label presses that element (`AXPress`) and the pane stays parked; a text field's label focuses the field and gives the app the keyboard, so you type there. Before it presses, ottospace finds the element again and checks it is the same (role, enabled, place in its window within 2 points); if not, nothing is pressed and the status bar says the control moved. Sneak sets no value, opens no menu and scrolls nothing in the app, and only your own typed letter presses: a socket client's letter of an orange label is refused. Apps that build their accessibility tree only on request (Electron, Chrome's pages, Spotify) show few elements, and get few labels: ottospace does not switch their fuller mode on. Entering an app pane raises its window, as a click on the pane does |
 | ⌘⇧C | Visual mode on the terminal: `hjkl`/arrows, `w b e 0 ^ $`, `H M L` move; `v` / `V` select; `y` or ↵ copies and leaves; Esc leaves |
 
 **Text fields.** The new-task box's line and the picker's filter are the same field, with the
@@ -150,7 +151,7 @@ Typed text replaces the selection. Movement and deletion go by whole characters 
 A line wider than the field scrolls with the cursor. The picker's filter holds 200 characters.
 While the quit question is over a field, nothing edits it.
 
-**The new-task box.** ⌘N, the Tasks section's `+` and the right rail's `+` open it in the drawer,
+**The new-task box.** ⌘N, the Tasks section's `+` and the top row's `+` open it in the drawer,
 beside the workspace. Over it: picks for where (the first listed repositories, "no repository")
 and who (the default agent, then each runner and its models), which set the line's `>repo` and
 `@agent`, and, unless ↵ would start the default agent in your home folder, a line that says what
@@ -233,8 +234,8 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    task with captures is told where its brief is. The workspace stays as it was: the same tab,
    panes and focus. That tab, if it is no task's and has panes, becomes the task's and gains its
    badge; on a tab of another task, or with nothing open, the task starts with no tab.
-3. **Selecting shows; starting is a button.** A click or ↵ on a task, its rail cell or its tab
-   shows its conversation and starts nothing. Not running, the drawer offers Start agent (it
+3. **Selecting shows; starting is a button.** A click or ↵ on a task, or on its space on the
+   top row, shows its space and conversation and starts nothing. Not running, the drawer offers Start agent (it
    never ran: its task is sent once) or Resume session (it has a session: gone on with, nothing
    sent again; a session never written starts afresh). ↵ in an ended conversation's composer
    resumes it and sends the message. A session is gone on with in the folder it started in, which may be below the repository; with the Tasks
@@ -244,26 +245,29 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    A saved agent cannot be started yet: the drawer says so too.
 4. **The drawer.** Its header: the task's badge and title (hover it for the model, the
    permission mode, how long the agent has run and its folder), the folder itself only when it
-   is not the task's repository; Go to its tabs (⌘↵)
-   shows the one of them shown last; a task with none offers Claim this tab (the tab on show is
-   no task's) or New tab (a shell in its repository); Brief (when it has captures); Stop ends the agent (in the terminal view; drawn natively, "Stop the Agent" in the palette or the menu);
-   × (⌘⇧L) closes the drawer to the right rail and the agent goes on. ⌘L moves the keyboard in
+   is not the task's repository; Brief (when it has captures); Stop ends the agent (in the terminal view; drawn natively, "Stop the Agent" in the palette or the menu);
+   × (⌘⇧L) closes the chat and the agent goes on. ⌘L moves the keyboard in
    and out. At its foot, muted, the model in short, and a permission mode that lets the agent
    act without asking (`auto`, `accept edits`; `bypass` in the warning colour): `haiku-5.5 ·
    auto`. It stays once the agent ended. Under the header of a native conversation, its
    [dial](#the-agent-dial). Drag its left edge to make it wider or narrower. Opening a conversation, or a click on a tab, while a new
    task is half written puts the line aside: the box gets it back when it opens again.
-5. **The right rail.** The task's badge per open conversation: its border in the task's own
-   colour, its state as the corner dot; hover for its card. A click shows it, and the tab stays;
-   on the one shown, closes the drawer. A dismissed task leaves the rail and the drawer (the
-   drawer shows nothing, not another conversation); a done one stays only while it is shown or its
-   agent runs. Dismissing a task whose agent runs asks first: Stop its agent and dismiss?
-6. **Tabs and the drawer.** Selecting a tab of a task shows that task's conversation in the
-   open drawer, starting nothing and leaving the keyboard where it was; a closed drawer stays
-   closed, and a tab of no task leaves it as it is. ⌘T makes a tab in the group on show; New Tab
-   outside the Task, one of no task. Drag a tab onto another group's tab or badge to move it
-   there, onto a tab of no task to unlink it; Remove Tab from Task does that from the palette,
-   and Move Tab to Task… lists the tasks (and No task) to move the tab on show to.
+5. **Dismissing.** A dismissed task leaves the top row and the drawer (the drawer shows
+   nothing, not another conversation); its tabs go to Workspace. Dismissing a task whose agent
+   runs asks first: Stop its agent and dismiss?
+6. **Spaces and the drawer.** Workspace, then each open task (and session, and workbook) is a
+   space with its own tabs; one is selected, and the drawer is only ever on its agent: a task's
+   chat, none for Workspace. Selecting starts nothing; a closed drawer stays closed. A task
+   started (↵ in the box, or its row clicked) opens its space with one empty tab; started from a
+   Workspace tab a Repos row opened for its folder, that tab moves into it. ⌘T makes a tab in the
+   space on show. Drag a tab onto another space's tab or badge to move it there; Move Tab to…
+   lists Workspace, the tasks and the workbooks.
+   Closing a space's last tab closes the space. A click on a Repos row opens a terminal there in
+   a Workspace tab of its own; a row a live task works in carries its badge, and its click selects
+   that task (Terminal, on hover, opens a terminal anyway). See `docs/ai/spaces.md`. A
+   repository's + (on its name, under the pointer) asks for a branch: a local one is checked out, one only a remote has is
+   tracked, a new name is made from the repository's HEAD, in `<worktrees_dir>/<repo>/<branch>`; the
+   new worktree opens the same way. See `docs/ai/repos.md`.
 7. **Following.** The task runs while its agent works. Claude is given the session's id; Codex
    names its own, and ottospace finds it where Codex wrote it: the one session that started in
    the task's folder after the agent did and before the next agent there, that nothing else
@@ -334,9 +338,9 @@ tab titled Settings; see [Settings](#settings).
 About ottospace (App, also ottospace ▸ About ottospace) shows the version and build in the Mac's
 About panel. The hover of the status bar's empty middle shows them too.
 
-Move Tab to Task… (Tabs, also File ▸ Move Tab to Task…) turns the box into a list of the tasks
-not dismissed, in their order, then No task. Type to filter by title; ↵ or a click moves the
-tab on show to the end of that task's group, or out of any task.
+Move Tab to… (Tabs, also File ▸ Move Tab to…) turns the box into a list of Workspace, the
+tasks not dismissed, in their order, then the workbooks. Type to filter by title; ↵ or a click
+moves the tab on show to the end of that space's tabs.
 
 The Developer group, also the Developer menu: Accessibility Overlay (⌘⌃A), [Accessibility
 Inspector](#accessibility-inspector), Copy State as JSON
@@ -349,9 +353,19 @@ refused while it is open), and pane requests wait behind it as they do behind th
 key of ottospace's, so it does nothing while a hosted app has the keyboard (`APP` mode). Not ⌘K:
 in a terminal it clears the screen, and is kept for that.
 
-The Tasks group also holds the drawer's commands: Type in the Conversation (⌘L), Open or Close the
-Conversation (⌘⇧L), Go to Its Tabs (⌘↵), Stop the Agent (the drawer's Stop) and Toggle Agent
-Dial (⌘⇧A), each for the conversation the drawer shows. ⌘P while you type in the conversation opens the palette over
+Reset Key Counts (View, also Help ▸ Reset Key Counts) forgets which keys you use. ottospace
+counts each key you press that runs a binding (⌘D, ⌘⌃ arrows, ⌘1–9 …), never the palette, a menu
+item or a socket client's key, and a press within a second of the last (a held key) is the same
+use. Each key has a score that halves in a week without use. A key is known from a
+score of 4.5 (five uses within a day or two), and again unknown once it decays below 2 (about eight
+idle days). The counts are kept in `~/.ottospace/keys.json`, readable by you alone: per key's id
+its score, when it was last used and whether it is known; no key text and nothing typed. Never on
+the socket. A test run keeps none unless it names `OTTOSPACE_HOME`.
+
+The Tasks group also holds the drawer's commands: Type in the Conversation (⌘L), Edit Message in
+Editor (⌃G), Open or Close the Conversation (⌘⇧L), Stop the Agent (the drawer's Stop) and Toggle
+Agent Dial (⌘⇧A), each for
+the conversation the drawer shows. ⌘P while you type in the conversation opens the palette over
 it: the agent gets no key while it is open, and when it closes the keyboard goes back to it.
 
 ## The agent dial
@@ -384,8 +398,8 @@ A native conversation has a dial under its header: where its agent's calls go, a
 Developer ▸ Accessibility Inspector, or "inspector" in the [command palette](#command-palette),
 with an app pane focused: that app's accessibility tree, as ottospace reads it, in the right
 drawer's place. The drawer (a conversation, the new-task box, a draft, a brief) is covered, not
-closed, and comes back as it was when the inspector closes; the right rail stays. Showing
-something in the drawer (⌘N, a conversation from the rail, a capture) closes the inspector.
+closed, and comes back as it was when the inspector closes. Showing
+something in the drawer (⌘N, a conversation, a capture) closes the inspector.
 Again, ×, or closing the pane closes it. "Filter the Accessibility Inspector" and "Read the
 Inspected App Again" are in the palette and the Developer menu too.
 
@@ -733,7 +747,7 @@ the way.
   through `/usr/bin/curl`: `https:` only, no redirects (a feed that has moved is not read: the
   status bar asks for its final address), only from a host on the internet (looked up once,
   checked, and curl pinned to that address), at most 5 MB, 30 seconds. A proxy set in your
-  environment (`https_proxy`) applies. It is ottospace's only network access. The link is handed to curl on its standard input, not in
+  environment (`https_proxy`) applies. With `gh` for pull requests (`repos_prs`), it is ottospace's only network access. The link is handed to curl on its standard input, not in
   its arguments, and is never shown, logged or put in the state. A read that fails keeps the
   events of the last one. Recurring meetings, time zones, cancelled meetings and moved
   occurrences are followed; see [meeting-timeline.md](ai/meeting-timeline.md) for what is not.
@@ -746,16 +760,23 @@ the way.
   and `calendar_hide_free: true` leaves every free entry out. The address stays in
   `settings.json`: it is not sent with the feed's request, shown, logged or in the state.
 - **The Calendar section** (its rail cell, second, is there only while `calendar_ics` is set):
-  today's meetings, all-day ones first, then by start: the time, the title, and the place (or the
-  link's host) below. The meeting that runs is outlined in amber, past ones are dimmed, and a thin
-  amber line marks now. `Join` shows on hover or selection for a meeting with an `https:` link.
-  Below, a folded "Tomorrow · n". "Nothing today" when the day is empty; at the foot, when the feed
-  was last read. The rail cell shows a steady amber dot while a meeting is 2 minutes off or runs,
-  and a filled amber badge while the banner is up. In list mode (⌘⌃E) `j`/`k` move and ↵ joins
-  (or folds "Tomorrow"). The open Calendar is not kept in the restored layout: a build without
-  the section could not read the file.
+  one day's meetings, its all-day events on one line at the top, then one row a meeting as the
+  Tasks section's rows: a dot and a faint tint in the meeting's colour (the band's), its start, its
+  title, and at most one quiet fact at the end (`now`, or `in 12m` for the next within the hour).
+  Hover a row for the band's card. Past meetings are faded; the one that runs is stronger, with a
+  white bar at its edge, as now's tick. `Join` shows on hover or selection for a meeting with an
+  `https:` link. "No meetings" when the day is empty. The header: `‹ Today ›`, or `‹ Mon 16 Nov ›`
+  and `Today` on another day, from 7 days back to 7 on; its date's tooltip says when the feed was
+  read. The section goes back to today when the day turns and at start; the band, the alerts and
+  now's tick are always of today. The rail cell shows a steady amber dot while a meeting is 2
+  minutes off or runs, and a filled amber badge while the banner is up. In list mode (⌘⌃E)
+  `j`/`k` move, ↵ joins, ← and → go a day back and on, `t` back to today; the View menu and the
+  palette have the same (`Previous Day in Calendar`, `Next Day in Calendar`, `Today in
+  Calendar`). The open Calendar is not kept in the restored layout: a build without the section
+  could not read the file.
 - **Agents**: the `calendar` request gives an agent the meetings of a day, or of up to 7 from
-  it (`{"cmd":"calendar","day":"tomorrow","days":2}`; today and the next 7 days are held): start
+  it (`{"cmd":"calendar","day":"tomorrow","days":2}`; the 7 days before today, today and the next
+  7 are held, `yesterday` names the day before): start
   and end (RFC 3339 with your offset), all day or not, title, place, whether it has a Zoom, Meet
   or Teams link, `status` (`tentative`, `free` or `away`; none when busy); busy time (meetings
   merged, free ones left out) and free time (the gaps in each day's
@@ -861,6 +882,17 @@ hidutil property --set '{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x70
 After this, Caps Lock no longer toggles capitals anywhere. The command replaces any key mapping
 you already have. To undo it: `hidutil property --set '{"UserKeyMapping":[]}'`.
 
+## Compose in your editor
+
+⌃G in a conversation's composer or the new-task box writes its text to a file of its own in
+`drafts/` in the ottospace folder (the folder 0700, the file 0600, a random name ending `.md`, never
+under `/tmp`) and runs your editor on it, with the same command line as Open Settings, in a terminal
+in the drawer. The file is removed when the editor exits. At start, files a crashed run left there
+are deleted, not restored: a draft lives in the app while the editor runs, and nowhere else after.
+Up to 100000 characters come back (the new-task line: its own limit); more, the first part is kept
+and the status bar says so. Control characters other than a line break go, as a paste's do; a tab
+is four spaces.
+
 ## Settings
 
 ottospace keeps its files in `~/.ottospace` (another folder: set `OTTOSPACE_HOME`). It reads
@@ -873,7 +905,7 @@ first. Again while that tab is open brings it forward; quitting the editor close
 you open it: a socket client's ⌘, does nothing. Open at quit, it comes back at the next start,
 the editor running again ([Restoring the layout](#restoring-the-layout)).
 
-A change is read when the file is saved: what is wrong in it is said in the status bar (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify`, `calendar_notify_for`, `calendar_hide_free`, `calendar_colors`, `paste_confirm` and `features` apply at once; any other key changed says "restart to apply" with its name, in muted text: information, not an error (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
+A change is read when the file is saved: what is wrong in it is said in the status bar (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `worktrees_dir`, `repos_prs`, `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify`, `calendar_notify_for`, `calendar_hide_free`, `calendar_colors`, `paste_confirm` and `features` apply at once; any other key changed says "restart to apply" with its name, in muted text: information, not an error (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
 
 
 ```json
@@ -908,6 +940,8 @@ A change is read when the file is saved: what is wrong in it is said in the stat
 | `terminal.font_size` | In points, 6 to 72 | `13` |
 | `repos` | Directories that are repositories or hold them, for the Repos section. `OTTOSPACE_REPOS` (`:` between directories) wins over it. The section's + adds the folder you pick (a repository, or one that holds some), by its full path; if the file named none, `~/code` and `~/notes` are written with it. Remove, on a repository's name under the pointer, takes off a directory listed as itself; one that comes from a folder holding several is yours to edit. At most 64 through + | `~/code`, `~/notes` |
 | `tasks` | Where tasks are kept, one JSON file each. A relative path is inside `~/.ottospace` | `tasks` |
+| `worktrees_dir` | Where + on a repository's name makes worktrees: `<dir>/<repo>/<branch>`, slashes in the branch as `-`; a repository whose folder name another listed one shares gets a short hash of its path after it (`app-1f2e3d`). A relative path is inside `~/.ottospace`. Read each time | `worktrees` in `~/.ottospace` |
+| `repos_prs` | Each worktree's open pull request, read with your `gh` (`gh pr list`, read-only) while Repos is open: every 5 minutes, and on opening at most once a minute. `auto`: when gh is installed and logged in, silently otherwise; `on`: as `auto`, and the pane says why when it cannot; `off`: gh never runs. A pull request is a worktree's only if it is of its branch and from the repository the branch pushes to (a fork's of the same name is not) | `auto` |
 | `sessions` | List agent sessions that are no task's under Elsewhere in the Tasks section. `false`: no session file is ever read | `true` |
 | `session_dirs` | Where the runners keep their sessions: `claude` is a list of Claude Code config directories (one for each account), `codex` is Codex's home. A runner left out keeps its default. An app started from the Dock does not see `CLAUDE_CONFIG_DIR` or `CODEX_HOME`: name other directories here | `~/.claude`, `~/.codex` |
 | `session_quiet_minutes` | A task adopted from a session moves to Needs you once the session has been quiet this many minutes. `0`: a quiet session never moves its task | `3` |
@@ -1085,6 +1119,8 @@ first brainstorm:
 [agent-runners.md](ai/agent-runners.md): a native (non-terminal) agent conversation: driving Claude Code and Codex in their structured modes, permission prompts, trust rules. Not wired in yet.
 
 [meeting-timeline.md](ai/meeting-timeline.md): the meeting timeline as built, how a call is detected, the network decision, and what the calendar reader does not follow.
+
+[repos.md](ai/repos.md): the Repos section: folding, the default folder's dot, and how + makes a worktree (the git it runs, what it refuses).
 
 [`docs/ai/backlog.md`](ai/backlog.md) is an older backlog. `docs/ideas/` holds the owner's own
 notes.

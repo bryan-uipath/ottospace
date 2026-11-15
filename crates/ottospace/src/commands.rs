@@ -5,6 +5,7 @@ use gpui::{
     Context, InteractiveElement, IntoElement, KeyDownEvent, Keymap, Keystroke, ParentElement, Styled, Window, actions,
     div, px, rgb,
 };
+use ottospace_core::calendar::DayStep;
 use ottospace_core::commands::{Command, FeatureChoice, Palette, TaskChoice};
 use ottospace_core::keys::FilterKey;
 use ottospace_core::{Action, theme};
@@ -28,7 +29,11 @@ actions!(
         AxInspector,
         InspectorFilter,
         InspectorRefresh,
-        BringBack
+        BringBack,
+        ResetKeyCounts,
+        CalendarBack,
+        CalendarForward,
+        CalendarToday
     ]
 );
 
@@ -57,18 +62,19 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::SwapUp => Box::new(SwapUp),
         Command::SwapDown => Box::new(SwapDown),
         Command::NewTab => Box::new(NewTab),
-        Command::NewTabOutside => Box::new(NewTabOutside),
-        Command::RemoveTabFromTask => Box::new(RemoveTabFromTask),
         Command::MoveTabToTask => Box::new(MoveTabToTask),
         Command::NextTab => Box::new(NextTab),
+        Command::NextSpace => Box::new(NextSpace),
+        Command::PrevSpace => Box::new(PrevSpace),
+        Command::HideSpace => Box::new(HideSpace),
         Command::PrevTab => Box::new(PrevTab),
         Command::CloseTab => Box::new(CloseTab),
         Command::NewTask => Box::new(NewTask),
         Command::NextTask => Box::new(NextTask),
         Command::CapturePane => Box::new(CapturePane),
         Command::TalkFocus => Box::new(TalkFocus),
+        Command::EditMessage => Box::new(EditMessage),
         Command::TalkToggle => Box::new(TalkToggle),
-        Command::TalkGo => Box::new(TalkGo),
         Command::StopAgent => Box::new(StopAgent),
         Command::DialToggle => Box::new(DialToggle),
         Command::SaveWorkbook => Box::new(SaveWorkbook),
@@ -84,11 +90,15 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::VisualMode => Box::new(VisualMode),
         Command::Zoom => Box::new(Zoom),
         Command::ShowKeys => Box::new(ShowKeys),
+        Command::ResetKeyCounts => Box::new(ResetKeyCounts),
         Command::AxOverlay => Box::new(AxOverlay),
         Command::AxInspector => Box::new(AxInspector),
         Command::InspectorFilter => Box::new(InspectorFilter),
         Command::InspectorRefresh => Box::new(InspectorRefresh),
         Command::CopyState => Box::new(CopyState),
+        Command::CalendarBack => Box::new(CalendarBack),
+        Command::CalendarForward => Box::new(CalendarForward),
+        Command::CalendarToday => Box::new(CalendarToday),
         Command::OpenSettings => Box::new(OpenSettings),
         Command::OpenFolder => Box::new(OpenFolder),
         Command::BringBack => Box::new(BringBack),
@@ -124,6 +134,11 @@ fn key_text(stroke: &Keystroke) -> String {
 }
 
 impl Workspace {
+    /// The Calendar's day, from the palette or the View menu.
+    fn calendar_step(&mut self, step: DayStep, window: &Window, cx: &mut Context<Self>) {
+        self.dispatch(Action::CalendarDay { step }, self.input, window, cx);
+    }
+
     /// The palette's actions and the Developer menu's, on the workspace's root element.
     pub fn command_actions<E: InteractiveElement>(&self, root: E, cx: &mut Context<Self>) -> E {
         root.on_action(cx.listener(|this, _: &CommandPalette, window, cx| this.toggle_palette(window, cx)))
@@ -139,6 +154,14 @@ impl Workspace {
                 this.dispatch(Action::PaletteFeatures, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &EditSettings, window, cx| this.edit_settings(window, cx)))
+            .on_action(cx.listener(|this, _: &ResetKeyCounts, window, cx| this.reset_key_use(window, cx)))
+            .on_action(cx.listener(|this, _: &CalendarBack, window, cx| this.calendar_step(DayStep::Back, window, cx)))
+            .on_action(
+                cx.listener(|this, _: &CalendarForward, window, cx| this.calendar_step(DayStep::Forward, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &CalendarToday, window, cx| this.calendar_step(DayStep::Today, window, cx)),
+            )
             .on_action(cx.listener(|this, _: &AxInspector, window, cx| this.toggle_inspector(window, cx)))
             .on_action(
                 cx.listener(|this, _: &InspectorFilter, window, cx| this.inspector_command("filter", window, cx)),
@@ -195,7 +218,7 @@ impl Workspace {
     }
 
     /// The rows as drawn, for the state snapshot: each command's id, name, group and key. While
-    /// it lists tasks: Move Tab to Task's id, the task's title, "Move to" and no key.
+    /// it lists spaces: Move Tab to…'s id, the space's title, "Move to" and no key.
     pub fn palette_rows(&self, cx: &App) -> Option<serde_json::Value> {
         let palette = self.model.palette.as_ref()?;
         let keymap = cx.key_bindings();
@@ -257,7 +280,7 @@ impl Workspace {
 }
 
 /// The palette's rows: (command, group, name, key). While it lists tasks, each task is a row of
-/// Move Tab to Task, under "Move to".
+/// Move Tab to…, under "Move to".
 fn palette_items(palette: &Palette, keymap: &Keymap) -> Vec<(Command, &'static str, String, Option<String>)> {
     if palette.tasks.is_some() {
         let task = |choice: &TaskChoice| (Command::MoveTabToTask, "Move to", choice.title.clone(), None);

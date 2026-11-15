@@ -110,6 +110,29 @@ feed (Outlook's published ICS) has no attendees, descriptions or categories, but
 
 ## The Calendar section
 
+Since the design pass: one line a meeting as the Tasks section's rows (`list_row`): a dot and a
+faint tint in its colour (`calendar::paint`, the band's), its start in a fixed column, its title,
+and one quiet fact (`Calendar::row_fact`: `now`, or `in 12m` for the next within the hour, on
+today only). Place, length and link kind are on the hover card, `calendar::describe`, the band's.
+All-day events are one line above the rows, no row. "No meetings" when empty; no footer (when the
+feed was read is on the date's tooltip). The "Tomorrow" fold went: the day changes instead.
+The section scrolls by itself (`calendar_scroll`), at the top when it opens and when its day
+changes; the bar's other sections share one. Its all-day line is `flex_none`: a cut line has no
+height of its own, so a day whose rows overflow had shrunk it away.
+
+- **The day**: `Calendar::day`, from today, -7 to 7 (`DayStep` Back, Forward, Today), by
+  `Action::CalendarDay` (‹ › and Today in the header, ← → and `t` in list mode, three palette and
+  View menu commands). Any origin, as list keys are: it changes what is shown, nothing else. It
+  opens the section if closed, and selects the day's first row in list mode. A read whose today
+  differs from the last (the day turned) puts it back to today; so does a start.
+- **The days held**: the feed thread expands the 7 days before today too, after today on, within
+  one expansion's work (`ics::expand_within` gets what the first left) and the 500 kept: today on
+  first, then the week back a whole day at a time, yesterday first, until a day does not fit. The
+  first day held whole is `held_from` (in `CalendarRead`): the section does not go back past it,
+  and the `calendar` request refuses a day before it. `known_until` counts only today on. The model
+  holds 16 local midnights (`calendar::DAYS`, `days[BACK]` today). ← to a day with no meeting
+  keeps list mode (the selection on no row), so the next key still moves the day.
+
 A second pull request. `Section::Calendar`, second on the rail, exists only while a feed is set:
 `Model::sections()` drops it otherwise, and every place that walks the sections asks it (the rail,
 ⌘⌃E's section cycling and the rails' focus, a restored layout, `ToggleSection`). It is never
@@ -261,7 +284,8 @@ description is long untrusted text.
 
 - **Span**: `day` is `today` (default), `tomorrow` or `YYYY-MM-DD`; `days` 1 to 7 (default 1).
   Local midnight to local midnight. The feed thread now expands today and the next 7 days
-  (`reply::HELD_DAYS`, 8 days); the hairline and the section still show today and tomorrow
+  (`reply::HELD_DAYS`, 8 days), and since the design pass the 7 before (`reply::BACK_DAYS`); the
+  band shows today, the section any of those days
   only. A span outside those days is refused, not fetched: no client can make the app read the
   feed. The reply is built on the UI thread from the model (a few hundred events at most).
 - **Reply**: `configured` (false and nothing else with no `calendar_ics`), `updated` (RFC 3339)

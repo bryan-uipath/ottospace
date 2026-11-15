@@ -1,13 +1,14 @@
-//! The layout file, `layout.json`: the tabs in bar order (each with its task, if any), their
-//! splits and panes, the tab on show, the section and the drawer, kept between runs. Session restore's layer 1 (`docs/ai/session-restore.md`). A pane is kept as a workbook
+//! The layout file, `layout.json`: the top row's spaces (hidden ones too), the tabs in row order
+//! (each with its space, and its task, if any), their splits and panes, the tab on show, the
+//! section and the drawer, kept between runs. Session restore's layer 1 (`docs/ai/session-restore.md`). A pane is kept as a workbook
 //! keeps one (`marks::PaneRecord`, `workbook::History`), by the same rules. The shell reads and
 //! writes the file; read, it is untrusted input and is checked here.
 
 use serde::{Deserialize, Serialize};
 
 use crate::marks::{self, Extra, RecordKind, TabRecord, Target};
-use crate::model::{Effect, Kind, Model, PaneId, Section};
-use crate::talk::{self, Subject, Talk};
+use crate::model::{Effect, Kind, Model, Owner, PaneId, Section, Space};
+use crate::talk::{self, Talk};
 use crate::tasks::TaskId;
 use crate::workbook::{self, History};
 
@@ -19,6 +20,8 @@ pub const MAX_FILE_BYTES: usize = workbook::MAX_FILE_BYTES;
 pub const MAX_TABS: usize = 8 * workbook::MAX_TABS;
 /// The most marks one tab names.
 const MAX_LINKS: usize = 64;
+/// The most folded repositories kept.
+const MAX_FOLDED: usize = 256;
 
 /// Why a client's request does nothing: Start Fresh, or an app a restored pane names.
 pub const USERS_ALONE: &str = "only the user starts fresh or opens a restored pane's app";
@@ -35,11 +38,36 @@ pub struct Layout {
     pub section: Option<Section>,
     #[serde(default)]
     pub drawer: Drawer,
-    /// The tabs, in bar order. A task with no tab has none here: that is normal.
+    /// The tabs, in row order. A task with no tab has none here: that is normal.
     #[serde(default)]
     pub tabs: Vec<SavedTab>,
+    /// The top row in order, hidden spaces too. None in an older build's file: its tabs go by
+    /// their `task`, the others to Workspace.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spaces: Vec<SavedSpace>,
+    /// The Repos section's repositories folded under their name, by path.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repos_folded: Vec<String>,
     #[serde(flatten)]
     pub extra: Extra,
+}
+
+/// A space of the top row. A `kind` this build does not know, or a task or workbook gone, is
+/// Workspace's: its tabs go there. A session's is not kept: its tabs are Workspace's.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedSpace {
+    /// `workspace`, `task` or `workbook`.
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<TaskId>,
+    /// A workbook's id for good (`Workbook::uid`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workbook: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
+    /// Its tab shown last, by place in `tabs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab: Option<usize>,
 }
 
 /// The right drawer. Its conversation is never started again here: it is shown, to go on with.
@@ -87,6 +115,9 @@ pub struct SavedTab {
     /// the editor on `settings.json` again. A mark, not a command: the shell builds the command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings: Option<u32>,
+    /// Its space, by place in `spaces`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -159,6 +190,11 @@ pub fn write(layout: &Layout) -> String {
 }
 
 /// A mark's id for good as the file may name it: short and one line.
+/// A folded repository's path as kept: absolute, one line, not huge.
+fn folded_path(path: &str) -> bool {
+    path.starts_with('/') && path.len() <= 4096 && !path.chars().any(char::is_control)
+}
+
 fn plain_uid(uid: &str) -> bool {
     !uid.is_empty() && marks::plain(uid, 64)
 }
@@ -171,6 +207,15 @@ impl Layout {
         }
         if self.tabs.len() > MAX_TABS {
             return Some("it has too many tabs");
+        }
+        if self.spaces.len() > MAX_TABS + 1 {
+            return Some("it has too many spaces");
+        }
+        if self.repos_folded.len() > MAX_FOLDED || !self.repos_folded.iter().all(|p| folded_path(p)) {
+            return Some("it folds too many repositories, or one by what is not a path");
+        }
+        if self.spaces.iter().any(|space| space.workbook.as_ref().is_some_and(|uid| !workbook::valid_uid(uid))) {
+            return Some("a space names a workbook by what is not an id");
         }
         self.tabs.iter().find_map(|saved| {
             let links = saved.marks.len() > MAX_LINKS || !saved.marks.iter().all(|link| plain_uid(&link.id));
@@ -196,14 +241,6 @@ impl Layout {
     }
 }
 
-/// The tabs in the order the bar keeps them (`model::bar_order`); `selected` follows its tab.
-pub fn grouped(layout: &mut Layout) {
-    let order = crate::model::bar_order(&layout.tabs.iter().map(|saved| saved.tab.task).collect::<Vec<_>>());
-    layout.selected = layout.selected.and_then(|was| order.iter().position(|at| *at == was));
-    let mut tabs: Vec<Option<SavedTab>> = std::mem::take(&mut layout.tabs).into_iter().map(Some).collect();
-    layout.tabs = order.into_iter().filter_map(|at| tabs[at].take()).collect();
-}
-
 impl Model {
     /// The layout file of the model as it is. `cwds` and `histories`: each terminal's directory
     /// and text as the shell read them; `lines`: how many lines a terminal keeps (the
@@ -219,10 +256,24 @@ impl Model {
         // An editor's screen is not history: the Settings pane keeps none.
         let histories: Vec<(PaneId, History)> =
             histories.into_iter().filter(|(pane, _)| Some(*pane) != self.settings_pane).collect();
+        // The row as kept. A session's space is not: its tabs are Workspace's, the first.
+        let kept = |space: &Space| {
+            let (kind, task, workbook) = match &space.of {
+                Owner::Workspace => ("workspace", None, None),
+                Owner::Task { id } => ("task", Some(known(Some(*id))?), None),
+                Owner::Workbook { id } => ("workbook", None, Some(self.workbooks.get(*id)?.uid.clone())),
+                Owner::Session { .. } => return None,
+            };
+            let saved = SavedSpace { kind: kind.into(), task, workbook, hidden: space.hidden, tab: None };
+            Some((space.of.clone(), space.last, saved))
+        };
+        let mut spaces: Vec<(Owner, Option<u32>, SavedSpace)> = self.spaces.iter().filter_map(kept).collect();
         let (mut records, mut links, mut selected) = (Vec::new(), Vec::new(), None);
         for (index, tab) in self.tabs.iter().enumerate().take(MAX_TABS) {
             let Some(mut record) = self.tab_record(index, cwds, &histories) else { continue };
-            record.task = known(tab.task);
+            let space = spaces.iter().position(|(of, ..)| *of == tab.space).unwrap_or(0);
+            // An older build reads a tab's task from the record.
+            record.task = known(spaces.get(space).and_then(|(of, ..)| of.task()));
             // A pane the file would not read back is kept as what it can be: no directory, or empty.
             for pane in record.panes.iter_mut().filter(|pane| pane.unsound().is_some()) {
                 pane.cwd = None;
@@ -260,12 +311,18 @@ impl Model {
             }
             marked.truncate(MAX_LINKS);
             let settings = self.settings_pane.and_then(new_id);
+            if let Some((_, last, saved)) = spaces.get_mut(space).filter(|(_, last, _)| *last == Some(tab.id)) {
+                (saved.tab, *last) = (Some(records.len()), None);
+            }
             records.push(record);
-            links.push((book, marked, settings));
+            links.push((book, marked, settings, Some(space)));
         }
         workbook::fit_history(&mut records);
         let tabs = records.into_iter().zip(links);
-        let tabs = tabs.map(|(tab, (workbook, marks, settings))| SavedTab { tab, workbook, marks, settings }).collect();
+        let tabs = tabs
+            .map(|(tab, (workbook, marks, settings, space))| SavedTab { tab, workbook, marks, settings, space })
+            .collect();
+        let spaces: Vec<SavedSpace> = spaces.into_iter().map(|(.., saved)| saved).collect();
         let drawer = Drawer {
             task: self.talk.as_ref().and_then(|talk| known(talk.task.task())),
             open: self.talk.as_ref().is_some_and(|talk| talk.open && known(talk.task.task()).is_some()),
@@ -277,7 +334,11 @@ impl Model {
         };
         // Not the Calendar: a build without it could not read the file back.
         let section = self.sidebar.filter(|s| *s != Section::Calendar);
-        let mut layout = Layout { version: VERSION, selected, section, drawer, tabs, extra: Extra::new() };
+        // Of listed repositories only: one gone from the list takes its fold with it.
+        let listed = |path: &&String| folded_path(path) && self.repos.iter().any(|repo| repo.path == **path);
+        let repos_folded = self.repos_folded.iter().filter(listed).take(MAX_FOLDED).cloned().collect();
+        let mut layout =
+            Layout { version: VERSION, selected, section, drawer, tabs, spaces, repos_folded, extra: Extra::new() };
         // What is written always reads back: the last histories go first, then the last tabs.
         while write(&layout).len() > MAX_FILE_BYTES {
             let held = layout.tabs.iter_mut().flat_map(|saved| saved.tab.panes.iter_mut()).rev();
@@ -287,21 +348,37 @@ impl Model {
             }
         }
         layout.selected = layout.selected.filter(|at| *at < layout.tabs.len());
+        let count = layout.tabs.len();
+        layout.spaces.iter_mut().for_each(|space| space.tab = space.tab.filter(|at| *at < count));
         layout
     }
 
-    /// True while the model is as it starts: one empty tab of no task. Only that is restored into.
+    /// True while the model is as it starts: one empty tab of Workspace. Only that is restored into.
     fn fresh(&self) -> bool {
-        let empty = |tab: &crate::model::Tab| tab.task.is_none() && tab.layout.is_none();
-        self.panes.is_empty() && self.layout.is_none() && self.tabs.iter().all(empty)
+        let empty = |tab: &crate::model::Tab| tab.space == Owner::Workspace && tab.layout.is_none();
+        self.panes.is_empty() && self.layout.is_none() && self.tabs.iter().all(empty) && self.spaces.len() == 1
     }
 
-    /// Builds the tabs of `layout` in bar order, each as a workbook's (`rebuild_tab`), and puts
-    /// back the tab on show, the section, the drawer and what
-    /// marks and workbooks stood for. A tab whose task is gone is a tab of no task. Terminals in
-    /// a directory of `gone` start in `home`; each shows its history, its command typed and not
-    /// run. App panes ask for their windows; `launch`: an app that is not running may be started.
-    /// No conversation starts. Only into a fresh model, and only a sound file.
+    /// Whose a kept space is now: Workspace's, if its task is gone or its workbook not kept.
+    fn owner_of(&self, saved: &SavedSpace) -> Owner {
+        let task = saved.task.filter(|id| saved.kind == "task" && self.tasks.live(*id).is_some());
+        let book = saved.workbook.as_ref().filter(|_| saved.kind == "workbook");
+        let book = book.and_then(|uid| self.workbooks.list.iter().find(|book| book.uid == *uid));
+        match (task, book) {
+            (Some(id), _) => Owner::Task { id },
+            (_, Some(book)) => Owner::Workbook { id: book.id },
+            _ => Owner::Workspace,
+        }
+    }
+
+    /// Builds the spaces of `layout` in row order, hidden ones hidden, and their tabs, each as a
+    /// workbook's (`rebuild_tab`); then puts back the tab on show, each space's last, the
+    /// section, the drawer and what marks and workbooks stood for. A file with no spaces (an
+    /// older build's) puts a tab in its task's space, the others in Workspace; a tab whose task
+    /// is gone is Workspace's. Terminals in a directory of `gone` start in `home`; each shows
+    /// its history, its command typed and not run. App panes ask for their windows; `launch`:
+    /// an app that is not running may be started. No conversation starts. Only into a fresh
+    /// model, and only a sound file.
     pub(crate) fn layout_restore(
         &mut self,
         layout: Layout,
@@ -313,23 +390,30 @@ impl Model {
         if !self.fresh() || layout.unsound().is_some() {
             return;
         }
-        let exists = |model: &Model, task: Option<TaskId>| task.filter(|id| model.tasks.live(*id).is_some());
-        let mut layout = layout;
-        // A tab whose task is gone or dismissed is a tab of no task; then each task's tabs go together.
-        for saved in &mut layout.tabs {
-            saved.tab.task = exists(self, saved.tab.task);
-        }
-        grouped(&mut layout);
+        self.repos_folded.clone_from(&layout.repos_folded);
+        let owners: Vec<Owner> = layout.spaces.iter().map(|saved| self.owner_of(saved)).collect();
+        let task_of = |model: &Model, saved: &SavedTab| {
+            let task = saved.tab.task.filter(|id| model.tasks.live(*id).is_some());
+            task.map_or(Owner::Workspace, |id| Owner::Task { id })
+        };
+        let of_tab: Vec<Owner> = layout
+            .tabs
+            .iter()
+            .map(|saved| saved.space.and_then(|at| owners.get(at).cloned()).unwrap_or_else(|| task_of(self, saved)))
+            .collect();
         if !layout.tabs.is_empty() {
             // The empty tabs go: nothing may stand for them (a workbook saved from one), as on close.
             for tab in std::mem::take(&mut self.tabs) {
                 self.marks.forget_tab(tab.id);
                 self.workbooks.forget_tab(tab.id);
             }
-            (self.last_tab, self.active) = (Vec::new(), 0);
+            self.active = 0;
+        }
+        for of in &owners {
+            self.add_space(of);
         }
         let mut built: Vec<(u32, Vec<PaneId>)> = Vec::new();
-        for saved in &layout.tabs {
+        for (saved, of) in layout.tabs.iter().zip(of_tab) {
             let mut record = saved.tab.clone();
             for pane in record.panes.iter_mut().filter(|pane| pane.kind == RecordKind::Terminal) {
                 if pane.cwd.as_ref().is_some_and(|dir| gone.contains(dir)) {
@@ -337,7 +421,7 @@ impl Model {
                 }
             }
             let (base, at) = (self.next_id, effects.len());
-            let tab = self.rebuild_tab(&record, effects);
+            let tab = self.rebuild_tab(&record, of, effects);
             for effect in &mut effects[at..] {
                 if let Effect::HostWindow { launch: may, .. } = effect {
                     *may = launch;
@@ -360,23 +444,36 @@ impl Model {
             }
             built.push((tab, panes));
         }
+        // Each space's last tab, as kept, else it shows its first; and hidden as it was.
+        for space in &mut self.spaces {
+            space.last = None;
+        }
+        for (of, saved) in owners.iter().zip(&layout.spaces) {
+            if let Some(space) = self.spaces.iter_mut().find(|space| space.of == *of && *of != Owner::Workspace) {
+                space.hidden = saved.hidden;
+            }
+            let id = saved.tab.and_then(|at| built.get(at)).map(|(id, _)| *id);
+            let id = id.filter(|id| self.tabs.iter().any(|tab| tab.id == *id && tab.space == *of));
+            if let Some(space) = self.spaces.iter_mut().find(|space| space.of == *of).filter(|_| id.is_some()) {
+                space.last = id;
+            }
+        }
         self.restore_selected(layout.selected, &built, effects);
-        // Building each tab noted it as its task's last: none is, so each task shows its first.
-        self.last_tab.clear();
         // A Calendar left open by a run that had a feed: none without one.
         // Not a section that is not on the rail: Calendar with no feed, one behind a flag that is off.
         self.sidebar = layout.section.filter(|s| self.sections().contains(s));
         self.talk_width = talk::width(layout.drawer.width);
         self.talk_wide = layout.drawer.wide;
-        let views = layout.drawer.views.iter().filter_map(|(task, view)| Some((exists(self, Some(*task))?, *view)));
+        let live = |task: &TaskId| self.tasks.live(*task).is_some();
+        let views = layout.drawer.views.iter().filter(|(task, _)| live(task)).map(|(task, view)| (*task, *view));
         let views: Vec<_> = views.collect();
-        self.restore_views(views);
-        let dials = layout.drawer.dials.iter().filter_map(|(task, c)| Some((exists(self, Some(*task))?, *c)));
+        let dials = layout.drawer.dials.iter().filter(|(task, _)| live(task)).map(|(task, c)| (*task, *c));
         let dials: Vec<_> = dials.collect();
+        self.restore_views(views);
         self.restore_dials(dials);
-        // Shown to go on with, as a click on its task offers: never started here.
-        if let Some(task) = exists(self, layout.drawer.task) {
-            let subject = Subject::Task(task);
+        // The selected space's conversation, shown to go on with: never started here.
+        self.drawer_open = layout.drawer.open;
+        if let Some(subject) = self.space().subject() {
             self.talk = Some(Talk { task: subject.clone(), open: layout.drawer.open, keys: false });
             // Once: the user may have opened it already this run.
             self.opened.retain(|opened| *opened != subject);
@@ -459,6 +556,7 @@ mod tests {
     use crate::layout::{Dir, Node};
     use crate::marks::MarkOf;
     use crate::model::{Action, Origin, Tab};
+    use crate::talk::Subject;
     use crate::tasks::{Assign, State};
 
     fn task(m: &mut Model, title: &str) {
@@ -474,7 +572,8 @@ mod tests {
         Action::RestoreLayout { layout: Box::new(layout), gone: Vec::new(), home: None, launch: false }
     }
 
-    /// Two tabs of no task with splits, a task's tab, the drawer on the task, the Tasks section.
+    /// Two tabs of Workspace with splits, a task's space of one tab, selected, the drawer on its
+    /// chat, the Tasks section.
     fn workspace() -> Model {
         let mut m = Model::default();
         task(&mut m, "fix zoom");
@@ -486,11 +585,9 @@ mod tests {
         let title = "alice: the plan".to_string();
         let slack = Kind::App { window: 9, title, bundle: Some("com.slack".into()), name: "Slack".into() };
         m.update(Action::Open { kind: slack, axis: Right, beside: None });
-        m.update(Action::NewTabOf { task: Some(1) });
-        split(&mut m, Right, Kind::Terminal);
-        m.update(Action::SelectTab { index: 1 });
+        m.update(Action::TaskTalk { id: 1 });
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
         m.update(Action::ToggleSection { section: Section::Tasks });
-        m.talk = Some(Talk { task: Subject::Task(1), open: true, keys: true });
         m
     }
 
@@ -504,12 +601,15 @@ mod tests {
         (fresh, effects)
     }
 
-    fn titles(m: &Model) -> Vec<(String, Option<TaskId>)> {
-        m.tabs.iter().map(|tab: &Tab| (tab.title.clone(), tab.task)).collect()
+    fn titles(m: &Model) -> Vec<(String, Owner)> {
+        m.tabs.iter().map(|tab: &Tab| (tab.title.clone(), tab.space.clone())).collect()
     }
 
     #[test]
-    fn each_tasks_tabs_go_together_and_no_tasks_last_and_the_selected_one_follows() {
+    fn an_older_files_tabs_go_to_their_tasks_spaces_and_the_rest_to_workspace_first() {
+        let mut m = Model::default();
+        task(&mut m, "one");
+        task(&mut m, "two");
         let mut file = Model::default().layout_file(&[], &[], 0);
         let tab = |title: &str, task| SavedTab {
             tab: TabRecord {
@@ -523,12 +623,40 @@ mod tests {
             workbook: None,
             marks: Vec::new(),
             settings: None,
+            space: None,
         };
-        file.tabs = vec![tab("a", None), tab("b", Some(2)), tab("c", Some(1)), tab("d", Some(2)), tab("e", None)];
-        file.selected = Some(3);
-        grouped(&mut file);
-        let order: Vec<&str> = file.tabs.iter().map(|saved| saved.tab.title.as_str()).collect();
-        assert_eq!((order, file.selected), (vec!["b", "d", "c", "a", "e"], Some(1)));
+        file.tabs = vec![tab("b", Some(2)), tab("c", Some(1)), tab("d", Some(2)), tab("a", None), tab("e", Some(7))];
+        (file.spaces, file.selected) = (Vec::new(), Some(2));
+        let (r, _) = restored(&m, file, &[], false);
+        let order: Vec<&str> = r.tabs.iter().map(|tab| tab.title.as_str()).collect();
+        assert_eq!((order, r.tabs[r.active].title.as_str()), (vec!["a", "e", "b", "d", "c"], "d"));
+        let row: Vec<(Owner, Vec<usize>)> = r.space_rows().into_iter().map(|row| (row.of, row.tabs)).collect();
+        let (one, two) = (Owner::Task { id: 1 }, Owner::Task { id: 2 });
+        assert_eq!(row, [(Owner::Workspace, vec![0, 1]), (two, vec![2, 3]), (one, vec![4])]);
+    }
+
+    #[test]
+    fn the_row_comes_back_with_its_hidden_spaces_and_each_ones_last_tab() {
+        let mut m = workspace();
+        m.update(Action::NewTab); // the task's second tab
+        m.update(Action::SelectTab { index: 2 });
+        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::SpaceHide { index: Some(1) });
+        let file = parse(&write(&m.layout_file(&[], &[], 0))).unwrap();
+        let kinds: Vec<(&str, bool, Option<usize>)> =
+            file.spaces.iter().map(|space| (space.kind.as_str(), space.hidden, space.tab)).collect();
+        assert_eq!(kinds, [("workspace", false, Some(1)), ("task", true, Some(2))]);
+        let (mut r, _) = restored(&m, file.clone(), &[], false);
+        assert_eq!(write(&r.layout_file(&[], &[], 0)), write(&file));
+        assert_eq!((r.shown_spaces().len(), r.talk.is_none()), (1, true));
+        // Opened again, it shows the tab it showed last, its chat as the drawer was.
+        r.update(Action::TaskTalk { id: 1 });
+        assert_eq!((r.active, r.talk.as_ref().map(|talk| talk.open)), (2, Some(true)));
+        // A space of a kind this build does not know, or a task gone: its tabs are Workspace's.
+        let mut odd = file;
+        odd.spaces[1].kind = "garden".into();
+        let (r, _) = restored(&m, odd, &[], false);
+        assert_eq!((r.spaces().len(), r.tabs.len()), (1, 4));
     }
 
     #[test]
@@ -536,20 +664,20 @@ mod tests {
         let m = workspace();
         let cwds = vec![(1, "/code/app".to_string()), (2, "/code/web".to_string())];
         let file = parse(&write(&m.layout_file(&cwds, &[], 500))).unwrap();
-        assert_eq!((file.tabs.len(), file.selected, file.section), (3, Some(1), Some(Section::Tasks)));
+        assert_eq!((file.tabs.len(), file.selected, file.section), (3, Some(2), Some(Section::Tasks)));
         assert_eq!(file.drawer.task, Some(1));
         let (r, effects) = restored(&m, file, &[], false);
-        // The task's tab first: each task's tabs go together, no task's last.
-        let bar = |m: &Model| m.tabs.iter().map(|tab: &Tab| (tab.title.clone(), tab.task)).collect::<Vec<_>>();
-        let tab = |title: &str, task| (title.to_string(), task);
-        assert_eq!(bar(&r), [tab("fix zoom", Some(1)), tab("Tab 1", None), tab("Tab 2", None)]);
-        assert_eq!((r.tab_task(), r.active, r.sidebar), (None, 1, Some(Section::Tasks)));
-        let mut was = m.layout_file(&cwds, &[], 0);
-        grouped(&mut was);
-        assert_eq!(write(&r.layout_file(&[], &[], 0)), write(&was));
+        // Workspace's tabs first, then the task's space.
+        let tab = |title: &str, of| (title.to_string(), of);
+        let bar =
+            [tab("Tab 1", Owner::Workspace), tab("Tab 2", Owner::Workspace), tab("fix zoom", Owner::Task { id: 1 })];
+        assert_eq!(titles(&r), bar);
+        assert_eq!((r.tab_task(), r.active, r.sidebar), (Some(1), 2, Some(Section::Tasks)));
+        assert_eq!(write(&r.layout_file(&[], &[], 0)), write(&m.layout_file(&cwds, &[], 0)));
         // The split's ratio, and each terminal's directory.
-        assert!(matches!(r.layout, Some(Node::Split { ratio, .. }) if (ratio - 0.5).abs() > 0.01), "{:?}", r.layout);
-        let dirs: Vec<Option<&str>> = r.panes.iter().skip(1).take(2).map(|pane| pane.cwd.as_deref()).collect();
+        let first = r.tabs[0].layout.as_ref();
+        assert!(matches!(first, Some(Node::Split { ratio, .. }) if (ratio - 0.5).abs() > 0.01), "{first:?}");
+        let dirs: Vec<Option<&str>> = r.panes.iter().take(2).map(|pane| pane.cwd.as_deref()).collect();
         assert_eq!(dirs, [Some("/code/app"), Some("/code/web")]);
         // The drawer shows the task's conversation, without the keyboard and with no agent.
         let talk = r.talk.as_ref().unwrap();
@@ -592,11 +720,11 @@ mod tests {
         let history = History { lines: vec!["built".into()], command: Some("npm run dev".into()), saved: 1 };
         let file = m.layout_file(&[(1, "/gone".into())], &[(1, history)], 500);
         let (r, effects) = restored(&m, file, &["/gone"], false);
-        // The task's tab comes first: the first terminal of no task's is pane 2.
-        assert_eq!(r.pane(2).and_then(|pane| pane.cwd.as_deref()), Some("/Users/me"));
-        let at = effects.iter().position(|effect| *effect == Effect::Opened(2)).unwrap();
+        // Workspace's tabs come first: its first terminal is pane 1.
+        assert_eq!(r.pane(1).and_then(|pane| pane.cwd.as_deref()), Some("/Users/me"));
+        let at = effects.iter().position(|effect| *effect == Effect::Opened(1)).unwrap();
         let shown = effects[at..].iter().find_map(|effect| match effect {
-            Effect::History { pane: 2, history } => Some(history.command.clone()),
+            Effect::History { pane: 1, history } => Some(history.command.clone()),
             _ => None,
         });
         assert_eq!(shown, Some(Some("npm run dev".into())));
@@ -631,7 +759,7 @@ mod tests {
         let file = m.layout_file(&[], &[], 0);
         let mut fresh = Model::default();
         fresh.update(restore(file.clone()).sent_by(Origin::System));
-        assert_eq!(fresh.tabs.iter().filter(|tab| tab.task.is_some()).count(), 0);
+        assert_eq!(fresh.tabs.iter().filter(|tab| tab.space != Owner::Workspace).count(), 0);
         assert_eq!((fresh.tabs.len(), fresh.talk.is_none()), (3, true));
         // Not over a workspace in use, nor from a client.
         let mut used = workspace();
@@ -647,11 +775,11 @@ mod tests {
     fn a_task_with_no_tab_gets_none_and_the_tab_on_show_comes_back() {
         let mut m = workspace();
         task(&mut m, "later");
-        m.update(Action::SelectTab { index: 2 });
+        m.update(Action::SelectTab { index: 1 });
         let file = m.layout_file(&[], &[], 0);
         let (r, _) = restored(&m, file, &[], false);
-        assert_eq!((r.tabs.len(), r.tabs.iter().any(|tab| tab.task == Some(2))), (3, false));
-        assert_eq!((r.tabs[r.active].title.as_str(), r.tabs[r.active].task), ("Tab 2", None));
+        assert_eq!((r.tabs.len(), r.tabs.iter().any(|tab| tab.space == Owner::Task { id: 2 })), (3, false));
+        assert_eq!((r.tabs[r.active].title.as_str(), &r.tabs[r.active].space), ("Tab 2", &Owner::Workspace));
     }
 
     /// ⌘T's tab (one empty pane) and the open section come back as they were.
@@ -685,7 +813,7 @@ mod tests {
         fresh.update(Action::RestoreMarks { marks: m.marks.list.clone(), extra: Extra::new() }.sent_by(Origin::System));
         fresh.update(restore(file).sent_by(Origin::System));
         let open: Vec<(bool, Option<PaneId>)> = fresh.mark_rows().iter().map(|row| (row.open, row.pane)).collect();
-        assert_eq!(open, [(true, None), (true, Some(3))]);
+        assert_eq!(open, [(true, None), (true, Some(2))]);
     }
 
     #[test]
