@@ -1,6 +1,7 @@
 //! Functional core: workspace state and the rules that change it. No I/O, no UI, no clock.
 //! The shell (`ottospace`) turns input into [`Action`]s and carries out the [`Effect`]s.
 
+pub mod activity;
 pub mod agents;
 pub mod app_wheel;
 pub mod apps;

@@ -67,6 +67,7 @@ mod config;
 mod confirm;
 mod control;
 mod conversation;
+mod dial;
 mod dialog;
 mod features;
 mod field;
@@ -642,7 +643,7 @@ actions!(ottospace, [StartFresh]);
 // What the capture key does, from the menu.
 actions!(ottospace, [CapturePane]);
 // The right drawer: the keyboard in or out, closed to the rail or open, the task's workspace.
-actions!(ottospace, [TalkFocus, TalkToggle, TalkGo, StopAgent]);
+actions!(ottospace, [TalkFocus, TalkToggle, TalkGo, StopAgent, DialToggle]);
 // A tab of no task, and the tab on show taken out of its task or moved to another.
 actions!(ottospace, [NewTabOutside, RemoveTabFromTask, MoveTabToTask]);
 // App menu.
@@ -973,9 +974,10 @@ impl Workspace {
                                 cx.notify();
                             }
                             // An age shown ("5m") changes at most once a minute: draw again then,
-                            // while the Tasks section is open to show one.
+                            // while the Tasks section or the drawer is open to show one.
                             let minute = now / 60_000;
-                            if minute != this.minute && this.model.sidebar == Some(Section::Tasks) {
+                            let shown = this.model.sidebar == Some(Section::Tasks) || this.model.talk.is_some();
+                            if minute != this.minute && shown {
                                 cx.notify();
                             }
                             this.minute = minute;
@@ -1007,6 +1009,10 @@ impl Workspace {
                         // The header's time goes on while an agent runs.
                         let runs = this.model.talk.as_ref().is_some_and(|t| t.open && this.model.agent_runs(&t.task));
                         if runs && tick % 30 == 0 {
+                            cx.notify();
+                        }
+                        // A dial lit or fading is drawn again each second; at rest only on a change.
+                        if tick % 60 == 0 && this.dial_moves() {
                             cx.notify();
                         }
                         if tick % 60 == 0 {
@@ -5456,6 +5462,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &TalkToggle, window, cx| {
                 this.dispatch(Action::TalkToggle, this.input, window, cx);
             }))
+            .on_action(cx.listener(|this, _: &DialToggle, window, cx| {
+                this.dispatch(Action::DialToggle, this.input, window, cx);
+            }))
             // The drawer's Stop, for the conversation it shows.
             .on_action(cx.listener(|this, _: &StopAgent, window, cx| {
                 if let Some(id) = this.model.talk.as_ref().filter(|talk| talk.open).map(|talk| talk.task.clone()) {
@@ -5877,6 +5886,7 @@ fn main() {
             KeyBinding::new("cmd-l", TalkFocus, None),
             KeyBinding::new("cmd-shift-l", TalkToggle, None),
             KeyBinding::new("cmd-enter", TalkGo, None),
+            KeyBinding::new("cmd-shift-a", DialToggle, None),
             // Marks: ⌘' waits for a mark's letter. ⌘⌥1..9 go to the first nine (`key_down`).
             KeyBinding::new("cmd-b", MarkPane, None),
             KeyBinding::new("cmd-shift-b", MarkTab, None),

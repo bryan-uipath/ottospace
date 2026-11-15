@@ -43,6 +43,40 @@ export interface NativeChat {
   details_open: boolean;
   /** The kinds of the lines not understood are shown. */
   unread_open: boolean;
+  dial: AgentDial;
+}
+
+/** Where an agent's work goes: `other` is any other tool ("Tools"). */
+export type Station =
+  | "you"
+  | "model"
+  | "memory"
+  | "files"
+  | "shell"
+  | "network"
+  | "browser"
+  | "agents"
+  | "skills"
+  | "hooks"
+  | "other";
+
+/** A conversation's dial: structure and counts, never a command, path or label. */
+export interface AgentDial {
+  pulse: "running" | "needs_you" | "idle" | "ended" | "error";
+  /** Every station, clockwise from the top: uses, failures (`failing`: since the user's last message), lit now. */
+  stations: { station: Station; calls: number; failed: number; failing: number; lit: boolean }[];
+  /** The context used, 0 to 1. */
+  context: number | null;
+  level: "calm" | "amber" | "red";
+  /** A call failed since the user's last message: the red dot. */
+  failed: boolean;
+  lit: boolean;
+  /** The last stations gone to within a minute, oldest first. */
+  route: { station: Station }[];
+  /** False for a watched session: it steps a message at a time, with no clocks. */
+  timed: boolean;
+  /** Shown as the header's marker, by the user's choice or because its agent ended. */
+  collapsed: boolean;
 }
 
 export type PaneId = number;

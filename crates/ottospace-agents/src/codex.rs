@@ -7,9 +7,10 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use ottospace_core::activity::Station;
 use ottospace_core::runner::RunnerId;
 use ottospace_core::transcript::Outcome;
-use ottospace_sessions::station::{self, Station};
+use ottospace_sessions::station;
 use serde_json::{Value, json};
 
 use crate::payload::Payload;

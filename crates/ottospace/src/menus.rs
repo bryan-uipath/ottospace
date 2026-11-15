@@ -118,6 +118,7 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
                 item("Open or Close the Conversation", TalkToggle),
                 item("Go to Its Tabs", TalkGo),
                 item("Stop the Agent", StopAgent),
+                item("Toggle Agent Dial", DialToggle),
             ],
         },
         Menu {

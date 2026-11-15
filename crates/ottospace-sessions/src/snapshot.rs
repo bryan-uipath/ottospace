@@ -2,8 +2,8 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use crate::station::Station;
 use crate::{Event, What};
+use ottospace_core::activity::Station;
 
 /// How many finished calls a snapshot keeps.
 const RECENT: usize = 16;

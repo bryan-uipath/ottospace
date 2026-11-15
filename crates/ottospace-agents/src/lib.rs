@@ -17,9 +17,9 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 
+use ottospace_core::activity::Station;
 use ottospace_core::runner::RunnerId;
 use ottospace_core::transcript::Outcome;
-use ottospace_sessions::station::Station;
 use serde_json::Value;
 
 /// Text a model, a tool or the CLI wrote: a reply, a command line, a path, stderr. Shown to the

@@ -117,7 +117,8 @@ impl Gen<'_> {
         let text = Text::new(&self.name(WORDS));
         let id = self.rng.pick(&["a", "b"]).to_string();
         let (tool, label) = ("Bash".to_string(), self.name(WORDS));
-        match self.rng.below(14) {
+        match self.rng.below(15) {
+            14 => Said::Hook,
             12 => Said::MessageElsewhere,
             13 => Said::WatchFromStart,
             0 | 1 => Said::TurnStarted,
@@ -126,7 +127,8 @@ impl Gen<'_> {
             4 => {
                 let input = serde_json::json!({"file_path": "/w/a", "old_string": "x", "new_string": text.text()});
                 let diff = self.rng.coin().then(|| crate::diff::claude("Edit", &input)).flatten();
-                Said::ToolStart { id, sub: self.rng.coin(), tool, label, detail: text, diff }
+                let station = self.rng.pick(&crate::activity::Station::DIAL);
+                Said::ToolStart { id, sub: self.rng.coin(), tool, station, label, detail: text, diff }
             }
             5 => Said::ToolEnd { id, failed: self.rng.coin() },
             6 | 7 => {
@@ -1114,6 +1116,7 @@ const MAKERS: &[Make] = &[
     |g| Action::TalkKeys { on: g.rng.coin() },
     |g| Action::TalkResize { width: g.rng.pick(&[0., 400., 9e9, f32::NAN]) },
     |_| Action::TalkWide,
+    |_| Action::DialToggle,
     |g| Action::SetCalendar { on: g.rng.coin(), notify: g.rng.coin(), links_only: g.rng.coin() },
     |g| {
         let events = g.rng.coin().then(|| (0..g.rng.below(4)).map(|_| g.meeting()).collect());
@@ -2120,6 +2123,16 @@ impl Run {
             |e: &Effect| matches!(e, Effect::StartAgent { .. } | Effect::ReadSession { .. } | Effect::AgentSend { .. });
         ensure!(!selects || !effects.iter().any(acts), "{origin:?}'s {action:?} started an agent: {effects:?}");
         ensure!(!selects || m.chats == chats_before, "{origin:?}'s {action:?} changed a transcript");
+        // A dial moves only on what its agent did, a message sent, or its process starting or ending.
+        let moves = matches!(
+            action,
+            Action::AgentEvents { .. } | Action::TalkSend | Action::AgentStarted { .. } | Action::AgentExited { .. }
+        );
+        for chat in m.chats.iter().filter(|_| !moves) {
+            let was = chats_before.iter().find(|was| was.subject == chat.subject);
+            let same = was.is_none_or(|was| was.transcript.activity == chat.transcript.activity);
+            ensure!(same, "{origin:?}'s {action:?} moved the dial of {:?}", chat.subject);
+        }
         check_zones(m)?;
         if !self.sparse || self.steps.len().is_multiple_of(8) {
             check_state(m)?;
@@ -3114,9 +3127,9 @@ fn event_code(event: &Said) -> String {
         Said::TurnStarted => "Said::TurnStarted".into(),
         Said::TextDelta { text: t } => format!("Said::TextDelta {{ text: {} }}", text(t)),
         Said::Text { text: t } => format!("Said::Text {{ text: {} }}", text(t)),
-        Said::ToolStart { id, sub, tool, label, detail, diff } => format!(
-            "Said::ToolStart {{ id: {id:?}.into(), sub: {sub}, tool: {tool:?}.into(), label: {label:?}.into(), detail: {}, \
-             diff: {} }}",
+        Said::ToolStart { id, sub, tool, station, label, detail, diff } => format!(
+            "Said::ToolStart {{ id: {id:?}.into(), sub: {sub}, tool: {tool:?}.into(), \
+             station: crate::activity::Station::{station:?}, label: {label:?}.into(), detail: {}, diff: {} }}",
             text(detail),
             match diff {
                 Some(_) =>
@@ -3154,6 +3167,7 @@ fn event_code(event: &Said) -> String {
             format!("Said::Exited {{ code: {code:?}, signal: {signal:?}, details: {details} }}")
         }
         Said::Unknown { kind } => format!("Said::Unknown {{ kind: {kind:?}.into() }}"),
+        Said::Hook => "Said::Hook".into(),
         Said::MessageElsewhere => "Said::MessageElsewhere".into(),
         Said::WatchFromStart => "Said::WatchFromStart".into(),
     }

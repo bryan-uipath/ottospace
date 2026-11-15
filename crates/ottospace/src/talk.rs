@@ -573,6 +573,7 @@ impl Workspace {
                     Some(badge) => badge,
                     None => home::dot(color),
                 })
+                .children(self.dial_marker(subject, cx))
                 // Model, mode, time and folder are on its hover; the model is at the drawer's foot too.
                 .child(
                     div()
@@ -688,7 +689,9 @@ impl Workspace {
     pub(crate) fn render_talk(&self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
         let talk = self.model.talk.as_ref().filter(|talk| talk.open)?;
         let header = self.talk_header(&talk.task, cx)?;
-        let body = match self.model.brief.is_some() && self.model.brief == talk.task.task() {
+        let brief = self.model.brief.is_some() && self.model.brief == talk.task.task();
+        let dial = (!brief).then(|| self.dial_section(&talk.task, width, cx)).flatten();
+        let body = match brief {
             true => self.brief_content(cx).unwrap_or_else(|| div().into_any_element()),
             false => self.talk_body(&talk.task, cx),
         };
@@ -717,6 +720,7 @@ impl Workspace {
                     .talk_note()
                     .map(|note| div().px_3().py_1().text_xs().text_color(rgb(theme::ERROR)).child(note)),
             )
+            .children(dial)
             .child(body)
             .children(self.agent_foot(&talk.task));
         Some(drawer.into_any_element())

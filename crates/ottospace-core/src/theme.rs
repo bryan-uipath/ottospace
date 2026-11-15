@@ -1,5 +1,6 @@
 //! UI colours as `0xRRGGBB`: the apollo-ui future-dark scheme, plus one accent per key mode.
 
+use crate::activity::{Level, Pulse, Station};
 use crate::model::Mode;
 use crate::tasks::Group;
 
@@ -46,6 +47,42 @@ pub fn task(group: Group) -> u32 {
         Group::Captured => 0x71717a,
         Group::OnHold => 0x52525c,
         Group::Done => PICK,
+    }
+}
+
+/// A dial's centre, as a task of that state: idle as captured, ended as on hold.
+pub fn pulse(pulse: Pulse) -> u32 {
+    match pulse {
+        Pulse::Running => task(Group::Running),
+        Pulse::NeedsYou => task(Group::NeedsYou),
+        Pulse::Idle => task(Group::Captured),
+        Pulse::Ended => task(Group::OnHold),
+        Pulse::Error => ERROR,
+    }
+}
+
+/// A dial's context ring: muted, then amber, then red.
+pub fn level(level: Level) -> u32 {
+    match level {
+        Level::Calm => MUTED,
+        Level::Amber => SNEAK,
+        Level::Red => ERROR,
+    }
+}
+
+/// A dial's stations, each its own hue from the tokens above; the ones that are not tools grey.
+pub fn station(station: Station) -> u32 {
+    match station {
+        Station::You => TEXT,
+        Station::Model => VISUAL,
+        Station::Files => PICK,
+        Station::Shell => APP,
+        Station::Network => PRIMARY,
+        Station::Browser => INSPECT,
+        Station::Agents => COMMAND,
+        Station::Skills => COMPOSE,
+        Station::Memory => LIST,
+        Station::Hooks | Station::Other => MUTED,
     }
 }
 

@@ -8,6 +8,7 @@ use std::fmt;
 
 use serde::Serialize;
 
+use crate::activity::{Activity, Dial, Is, Station};
 use crate::diff::{Diff, DiffShape};
 
 /// Text a model, a tool or the CLI wrote. Never `Serialize`; `Debug` prints its length only.
@@ -126,10 +127,12 @@ pub enum Event {
         text: Text,
     },
     /// `diff`: an edit's change, from the call's input (`diff::claude`, `diff::codex_*`).
+    /// `station`: where it goes (`ottospace_sessions::station::classify`).
     ToolStart {
         id: String,
         sub: bool,
         tool: String,
+        station: Station,
         label: String,
         detail: Text,
         diff: Option<Diff>,
@@ -182,6 +185,8 @@ pub enum Event {
     Unknown {
         kind: String,
     },
+    /// One of the user's hooks ran (`system.hook_started`): the dial's Hooks station.
+    Hook,
     /// A watched session's file says a message was sent there: its words stay in the file.
     MessageElsewhere,
     /// A watched session's file is read again from its start: what was built from it goes.
@@ -369,6 +374,8 @@ pub struct Transcript {
     pub unread: Vec<(String, usize)>,
     /// The user asked its process to stop: its end is theirs, not an error.
     pub stopping: bool,
+    /// What its dial draws (`dial`).
+    pub activity: Activity,
 }
 
 /// The most kinds of line not understood kept apart; past it they count under the last.
@@ -426,6 +433,15 @@ impl Transcript {
         self.settle();
         self.push(Entry::User { text: Text::new(text) });
         self.turn = Some(Turn { since: at, tool: None });
+        self.activity.message(at);
+    }
+
+    /// Its dial at `now` (ms since 1970). A watched one steps a message at a time: no clocks.
+    pub fn dial(&self, now: u64) -> Dial {
+        let asking = self.cards.front().map(|card| card.label.as_str());
+        let (live, watched, turn) = (self.live, self.watched && !self.live, self.turn.is_some());
+        let is = Is { live, watched, turn, asking, context: self.context, window: self.window, timed: !watched };
+        self.activity.dial(now, &is)
     }
 
     /// A process for this conversation started (again). A resume with its earlier turns on show
@@ -484,6 +500,10 @@ impl Transcript {
         ) {
             self.replied = true;
         }
+        // The model writes: one request on the dial.
+        if matches!(event, Event::TextDelta { .. } | Event::Text { .. }) {
+            self.activity.step(at);
+        }
         match event {
             Event::Started { session, model, mode } => {
                 self.session = session.or(self.session.take());
@@ -491,6 +511,9 @@ impl Transcript {
                 self.mode = mode.or(self.mode.take());
             }
             Event::TurnStarted => {
+                if self.turn.is_none() {
+                    self.activity.turn(at);
+                }
                 self.turn.get_or_insert(Turn { since: at, tool: None });
             }
             Event::TextDelta { text } => match self.streaming() {
@@ -510,14 +533,16 @@ impl Transcript {
                 }
                 _ => self.push(Entry::Assistant { text, streaming: false }),
             },
-            Event::ToolStart { id, sub, tool, label, detail, diff } => {
+            Event::ToolStart { id, sub, tool, station, label, detail, diff } => {
                 self.settle();
+                self.activity.start(&id, station, &label, at);
                 if let Some(turn) = &mut self.turn {
                     turn.tool = Some(label.clone());
                 }
                 self.push(Entry::Tool { id, sub, tool, label, detail, state: Call::Running, diff });
             }
             Event::ToolEnd { id, failed } => {
+                self.activity.end(&id, failed, at);
                 let call = self.items.iter_mut().rev().find_map(|item| match &mut item.entry {
                     Entry::Tool { id: of, state, .. } if *of == id => Some(state),
                     _ => None,
@@ -540,6 +565,10 @@ impl Transcript {
                 self.push(Entry::AutoDenied { tool, label, reason, detail })
             }
             Event::Usage { context, window, cost_micro_usd } => {
+                // A model request's usage: a step, when no reply or call said so first (watched).
+                if context.is_some() {
+                    self.activity.step(at);
+                }
                 self.context = context.or(self.context);
                 self.window = window.or(self.window);
                 self.cost_micro_usd = cost_micro_usd.or(self.cost_micro_usd);
@@ -549,18 +578,35 @@ impl Transcript {
                 self.settle();
                 self.end_calls();
                 (self.turn, self.cards) = (None, VecDeque::new());
+                let failed = match &outcome {
+                    Outcome::Failed { kind } => Some(kind.clone()),
+                    _ => None,
+                };
+                self.activity.settle(failed, at);
                 match outcome {
                     Outcome::Completed => {}
                     Outcome::Interrupted => self.push(Entry::Notice(Notice::Interrupted)),
                     Outcome::Failed { kind } => self.push(Entry::Notice(Notice::Failed { kind })),
                 }
             }
-            Event::Error { kind, retrying } => self.push(Entry::Notice(Notice::Error { kind, retrying })),
+            Event::Error { kind, retrying } => {
+                if !retrying {
+                    self.activity.failed(&kind);
+                }
+                self.push(Entry::Notice(Notice::Error { kind, retrying }))
+            }
             Event::Exited { code, signal, details } => {
                 self.settle();
                 self.end_calls();
                 (self.turn, self.cards, self.live) = (None, VecDeque::new(), false);
                 let by_user = std::mem::take(&mut self.stopping);
+                // An end the user did not ask for, by a code or a signal, is the dial's error.
+                let fault = match (code, signal) {
+                    (_, Some(signal)) => Some(format!("signal {signal}")),
+                    (Some(code), None) if code != 0 => Some(format!("exit {code}")),
+                    _ => None,
+                };
+                self.activity.settle(fault.filter(|_| !by_user), at);
                 self.push(Entry::Notice(Notice::Ended { code, signal, replied: self.replied, details, by_user }));
             }
             Event::Unknown { kind } => {
@@ -573,7 +619,9 @@ impl Transcript {
             // Only a watched transcript is rebuilt; a live one is the stream's.
             Event::WatchFromStart if !self.live => *self = Transcript { watched: true, ..Transcript::default() },
             Event::WatchFromStart => {}
+            Event::Hook => self.activity.hook(at),
             Event::MessageElsewhere => {
+                self.activity.message(at);
                 self.settle();
                 self.push(Entry::Notice(Notice::MessageElsewhere));
             }
@@ -714,6 +762,7 @@ mod tests {
             id: "a".into(),
             sub: false,
             tool: "Bash".into(),
+            station: crate::activity::Station::Shell,
             label: "git".into(),
             detail: text("git status"),
             diff: None,
@@ -738,6 +787,7 @@ mod tests {
             id: "a".into(),
             sub: true,
             tool: "Read".into(),
+            station: crate::activity::Station::Files,
             label: "a.rs".into(),
             detail: text("/a.rs"),
             diff: None,
@@ -880,6 +930,7 @@ mod tests {
             id: "e".into(),
             sub: false,
             tool: "Edit".into(),
+            station: crate::activity::Station::Files,
             label: "secret.rs".into(),
             detail: Text::default(),
             diff,

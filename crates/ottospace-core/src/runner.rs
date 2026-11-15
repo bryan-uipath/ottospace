@@ -45,6 +45,8 @@ pub struct RunnerSpec {
     pub name: &'static str,
     /// As a person reads it: `Claude Code`.
     pub display: &'static str,
+    /// One character for its kind, at the centre of its conversation's dial.
+    pub glyph: &'static str,
     /// The models offered when the settings name none, as its CLI takes them.
     pub models: &'static [&'static str],
     /// Its model ids start with its name, so a tag is the id itself: `claude-opus-5-5`.
@@ -158,6 +160,7 @@ const CLAUDE: RunnerSpec = RunnerSpec {
     id: RunnerId::Claude,
     name: "claude",
     display: "Claude Code",
+    glyph: "✳",
     models: &["claude-fable-5-2", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"],
     ids_named: true,
     terminal: Terminal {
@@ -182,6 +185,7 @@ const CODEX: RunnerSpec = RunnerSpec {
     id: RunnerId::Codex,
     name: "codex",
     display: "Codex",
+    glyph: "◇",
     models: &["gpt-6-astra"],
     ids_named: false,
     terminal: Terminal {

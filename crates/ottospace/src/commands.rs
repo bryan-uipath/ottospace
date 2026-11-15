@@ -70,6 +70,7 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::TalkToggle => Box::new(TalkToggle),
         Command::TalkGo => Box::new(TalkGo),
         Command::StopAgent => Box::new(StopAgent),
+        Command::DialToggle => Box::new(DialToggle),
         Command::SaveWorkbook => Box::new(SaveWorkbook),
         Command::AddTabToWorkbook => Box::new(AddTabToWorkbook),
         Command::SaveAllWorkbook => Box::new(SaveAllWorkbook),

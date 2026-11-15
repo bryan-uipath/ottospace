@@ -120,6 +120,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘N | New task, in the drawer. Type what needs doing, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `^reference`, `p1` to `p9`; a dropdown finishes the one at the cursor. ↵ adds the task and starts its agent; ⇧↵ adds it for later; Esc closes. [Its keys](#keys) |
 | ⌘L | The keyboard into the drawer's conversation, or back to the workspace |
 | ⌘⇧L | Close the drawer to the right rail, or open it again. The agent goes on |
+| ⌘⇧A | Collapse the conversation's [dial](#the-agent-dial) to its marker beside the badge, or open it again (a click on either does the same). Kept per task |
 | ⌘↵ | With a task's conversation open: Go to its tabs (the one shown last); with none, Claim this tab (the tab on show, if it is no task's) or a New tab of it |
 | ⌘⌃1 … ⌘⌃9 | Show the nth conversation of the right rail; on the one shown, close the drawer. Not ⌥1…⌥9: ⌥ is Meta in a terminal |
 | ⌘⇧N | Next task: the conversation of the first task that needs you. The tab on show stays |
@@ -249,7 +250,8 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    × (⌘⇧L) closes the drawer to the right rail and the agent goes on. ⌘L moves the keyboard in
    and out. At its foot, muted, the model in short, and a permission mode that lets the agent
    act without asking (`auto`, `accept edits`; `bypass` in the warning colour): `haiku-5.5 ·
-   auto`. It stays once the agent ended. Drag its left edge to make it wider or narrower. Opening a conversation, or a click on a tab, while a new
+   auto`. It stays once the agent ended. Under the header of a native conversation, its
+   [dial](#the-agent-dial). Drag its left edge to make it wider or narrower. Opening a conversation, or a click on a tab, while a new
    task is half written puts the line aside: the box gets it back when it opens again.
 5. **The right rail.** The task's badge per open conversation: its border in the task's own
    colour, its state as the corner dot; hover for its card. A click shows it, and the tab stays;
@@ -348,9 +350,34 @@ key of ottospace's, so it does nothing while a hosted app has the keyboard (`APP
 in a terminal it clears the screen, and is kept for that.
 
 The Tasks group also holds the drawer's commands: Type in the Conversation (⌘L), Open or Close the
-Conversation (⌘⇧L), Go to Its Tabs (⌘↵) and Stop the Agent (the drawer's Stop), each for
-the conversation the drawer shows. ⌘P while you type in the conversation opens the palette over
+Conversation (⌘⇧L), Go to Its Tabs (⌘↵), Stop the Agent (the drawer's Stop) and Toggle Agent
+Dial (⌘⇧A), each for the conversation the drawer shows. ⌘P while you type in the conversation opens the palette over
 it: the agent gets no key while it is open, and when it closes the keyboard goes back to it.
+
+## The agent dial
+
+A native conversation has a dial under its header: where its agent's calls go, at a glance.
+
+- **Centre**: the agent's kind (✳ Claude Code), coloured by its state: running, needs you, idle,
+  ended, or an error (a failed turn, an end you did not ask for) until your next message.
+- **Ring**: the context used (tokens in the context over the window); amber from 70%, red from 90%.
+- **Stations**, clockwise from the top: You, Model, Files, Shell, Network, Browser, Agents,
+  Skills, Memory, Hooks, Tools (any other tool). A spoke is heavier for more use, the older uses
+  counting less (half after ten minutes). A station is lit while a call there runs (Model while
+  the model has the turn, You while a request waits), with two arcs for its time: the inner fills
+  in a minute, the outer in ten. A red dot: a call there failed since your last message.
+- **Dashes**: the route of the last calls, fading out over a minute.
+- Beside it, when the drawer is wide enough: what it does now (`Shell · cargo test · 0:14`), or
+  the last thing and when; the context used (`62% of context`); turns and how long.
+- Hover a station for its name and counts, the ring for the tokens.
+- A click on it (or ⌘⇧A, or Toggle Agent Dial) collapses it to an 18-point marker beside the
+  badge (the ring, a white dot while a call runs, a red one for a failure); a click on the marker
+  opens it. It is open while the agent runs and collapsed once it ended, unless you left it the
+  other way: that is kept per task, with the layout.
+- A watched session's dial steps a message at a time, with no time arcs. With Reduce motion on,
+  nothing fades: the route shows until it expires.
+- The state reply has its stations, counts, what is lit, the context used and `collapsed`, never
+  a command, path or label. Design: [docs/ai/agent-dial.md](ai/agent-dial.md).
 
 ## Accessibility inspector
 
@@ -1031,6 +1058,8 @@ first brainstorm:
 [routines.md](ai/routines.md): routines and agents from ottobot, in stages, toward ottospace subsuming it.
 
 [e2e-reliability.md](ai/e2e-reliability.md): replies that wait for the frame that draws them, failure folders, the trace, and repeated runs to find flaky tests.
+
+[agent-dial.md](ai/agent-dial.md): the agent dial over a native conversation: its model, the station table.
 
 [agent-runners.md](ai/agent-runners.md): a native (non-terminal) agent conversation: driving Claude Code and Codex in their structured modes, permission prompts, trust rules. Not wired in yet.
 

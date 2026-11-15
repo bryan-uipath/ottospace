@@ -10,8 +10,9 @@ use ottospace_core::runner::RunnerId;
 use serde_json::Value;
 
 use crate::cache::Cache;
-use crate::station::{self, Station};
+use crate::station;
 use crate::{Batch, Cursor, Event, SessionReader, SessionRef, Usage, What, jsonl, opaque, recorded_cwd, track};
+use ottospace_core::activity::Station;
 
 /// The values of an API-error record's `error` field. Seen in transcripts: the first five.
 /// The rest are the API's other error types. Anything else is shown as `api_error`.

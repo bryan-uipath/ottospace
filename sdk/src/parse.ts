@@ -3,6 +3,7 @@
 // Keys the types do not name are dropped, so a test can compare the result with the raw reply.
 
 import type {
+  AgentDial,
   AgentLine,
   AppEntry,
   Feature,
@@ -92,6 +93,7 @@ import type {
   Sneak,
   SneakApp,
   Snapshot,
+  Station,
   Tab,
   Task,
   TaskPopReply,
@@ -747,6 +749,49 @@ function nativeChat(value: unknown, at: string): NativeChat {
     details: bool(o.details, `${at}.details`),
     details_open: bool(o.details_open, `${at}.details_open`),
     unread_open: bool(o.unread_open, `${at}.unread_open`),
+    dial: agentDial(o.dial, `${at}.dial`),
+  };
+}
+
+function station(value: unknown, at: string): Station {
+  if (value === "you" || value === "model" || value === "memory" || value === "files") return value;
+  if (value === "shell" || value === "network" || value === "browser" || value === "agents") return value;
+  if (value === "skills" || value === "hooks" || value === "other") return value;
+  throw wrong(at, "a station", value);
+}
+
+function agentDial(value: unknown, at: string): AgentDial {
+  const o = fields(value, at);
+  const pulse = (value: unknown, at: string): AgentDial["pulse"] => {
+    if (value === "running" || value === "needs_you" || value === "idle" || value === "ended") return value;
+    if (value === "error") return value;
+    throw wrong(at, "a dial's state", value);
+  };
+  const level = (value: unknown, at: string): AgentDial["level"] => {
+    if (value === "calm" || value === "amber" || value === "red") return value;
+    throw wrong(at, "calm, amber or red", value);
+  };
+  const spot = (value: unknown, at: string) => {
+    const s = fields(value, at);
+    return {
+      station: station(s.station, `${at}.station`),
+      calls: num(s.calls, `${at}.calls`),
+      failed: num(s.failed, `${at}.failed`),
+      failing: num(s.failing, `${at}.failing`),
+      lit: bool(s.lit, `${at}.lit`),
+    };
+  };
+  const leg = (value: unknown, at: string) => ({ station: station(fields(value, at).station, `${at}.station`) });
+  return {
+    pulse: pulse(o.pulse, `${at}.pulse`),
+    stations: list(spot)(o.stations, `${at}.stations`),
+    context: orNull(num)(o.context, `${at}.context`),
+    level: level(o.level, `${at}.level`),
+    failed: bool(o.failed, `${at}.failed`),
+    lit: bool(o.lit, `${at}.lit`),
+    route: list(leg)(o.route, `${at}.route`),
+    timed: bool(o.timed, `${at}.timed`),
+    collapsed: bool(o.collapsed, `${at}.collapsed`),
   };
 }
 

@@ -110,6 +110,7 @@ commands! {
     TalkToggle: "Open or Close the Conversation", Tasks;
     TalkGo: "Go to Its Tabs", Tasks;
     StopAgent: "Stop the Agent", Tasks;
+    DialToggle: "Toggle Agent Dial", Tasks;
     SaveWorkbook: "Save Tab as Workbook", Workbook;
     AddTabToWorkbook: "Add Tab to Workbook…", Workbook;
     SaveAllWorkbook: "Save All Tabs as Workbook", Workbook;

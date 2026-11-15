@@ -15,6 +15,8 @@ use crate::transcript::{Event, Transcript, View};
 pub const USERS_ALONE: &str = "only the user sends to, answers or interrupts a conversation's agent";
 /// Why a client's report of an agent's events is refused: only ottospace's own runner reports.
 pub const RUNNERS_ALONE: &str = "only ottospace's own runner reports an agent's events";
+/// Why a client's collapse of a dial is refused: it is how the user keeps their drawer.
+pub const DIAL_USERS: &str = "only the user collapses or opens a conversation's dial";
 
 /// The most characters a composer draft holds.
 pub const MAX_DRAFT: usize = 100_000;
@@ -281,6 +283,7 @@ impl Model {
     pub(super) fn chat_moves(&mut self, from: &Subject, to: &Subject) {
         self.chats.retain(|chat| chat.subject != *to);
         self.views.retain(|(subject, _)| subject != to);
+        self.dials.retain(|(subject, _)| subject != to);
         let rename = |subject: &mut Subject| {
             if subject == from {
                 *subject = to.clone();
@@ -288,6 +291,7 @@ impl Model {
         };
         self.chats.iter_mut().for_each(|chat| rename(&mut chat.subject));
         self.views.iter_mut().for_each(|(subject, _)| rename(subject));
+        self.dials.iter_mut().for_each(|(subject, _)| rename(subject));
         self.switching.iter_mut().for_each(rename);
     }
 
@@ -362,6 +366,38 @@ impl Model {
         }
     }
 
+    /// True if the conversation's dial shows as its marker in the header: as the user left it,
+    /// else open while its agent runs (or is watched) and collapsed once it has ended.
+    pub fn dial_collapsed(&self, subject: &Subject) -> bool {
+        let picked = self.dials.iter().find(|(of, _)| of == subject).map(|(_, collapsed)| *collapsed);
+        let watched = self.chat(subject).is_some_and(|chat| chat.transcript.watched);
+        picked.unwrap_or(!self.agent_runs(subject) && !watched)
+    }
+
+    /// The shown conversation's dial, the other way: the user's pick, kept for its task.
+    pub(super) fn dial_toggle(&mut self) {
+        let Some(subject) = self.talk.as_ref().filter(|talk| talk.open).map(|talk| talk.task.clone()) else { return };
+        if self.chat(&subject).is_none() {
+            return;
+        }
+        let collapsed = !self.dial_collapsed(&subject);
+        self.dials.retain(|(of, _)| *of != subject);
+        self.dials.push((subject, collapsed));
+    }
+
+    /// The dials the user collapsed or opened, by task, for the layout file.
+    pub(crate) fn saved_dials(&self) -> Vec<(crate::tasks::TaskId, bool)> {
+        self.dials.iter().filter_map(|(subject, collapsed)| Some((subject.task()?, *collapsed))).collect()
+    }
+
+    pub(crate) fn restore_dials(&mut self, dials: Vec<(crate::tasks::TaskId, bool)>) {
+        for (task, collapsed) in dials {
+            let subject = Subject::Task(task);
+            self.dials.retain(|(of, _)| *of != subject);
+            self.dials.push((subject, collapsed));
+        }
+    }
+
     /// The conversations gone with their tasks take their transcripts with them. A message that
     /// waited on a start that did not come (it failed, was stopped, or its session was busy when
     /// read) goes back to its composer.
@@ -377,6 +413,7 @@ impl Model {
         let gone = |subject: &Subject| subject.task().is_some_and(|id| tasks.get(id).is_none());
         self.chats.retain(|chat| !gone(&chat.subject));
         self.views.retain(|(subject, _)| !gone(subject));
+        self.dials.retain(|(subject, _)| !gone(subject));
         self.switching.retain(|subject| !gone(subject));
     }
 
@@ -599,6 +636,45 @@ mod tests {
     fn card(ticket: u64, cut: bool) -> Event {
         let (tool, label, detail) = ("Bash".into(), "git".into(), Text::new("command: git"));
         Event::Permission { ticket, tool, label, detail, len: 12, cut, claim: Text::default() }
+    }
+
+    /// The dial follows its agent's calls and the user's message; it is open while the agent
+    /// runs and collapsed once it ended, unless the user left it otherwise.
+    #[test]
+    fn a_dial_follows_calls_and_folds_away_once_its_agent_ended() {
+        use crate::activity::{Pulse, Station};
+        let mut m = two_live();
+        let one = first(&m);
+        let call = |id: &str, station| Event::ToolStart {
+            id: id.into(),
+            sub: false,
+            tool: "Bash".into(),
+            station,
+            label: "cargo test".into(),
+            detail: Text::default(),
+            diff: None,
+        };
+        let run = vec![Event::TurnStarted, call("a", Station::Shell), Event::ToolEnd { id: "a".into(), failed: true }];
+        events(&mut m, &one, [run, vec![Event::Hook, call("b", Station::Network)]].concat());
+        let dial = m.chat(&one).map(|chat| chat.transcript.dial(6)).unwrap();
+        let count = |s| dial.spot(s).map(|spot| (spot.calls, spot.failing, spot.lit));
+        assert_eq!([count(Station::Shell), count(Station::Network)], [Some((1, 1, false)), Some((1, 0, true))]);
+        assert_eq!((count(Station::Hooks), count(Station::You)), (Some((1, 0, false)), Some((1, 0, false))));
+        assert_eq!((dial.pulse, dial.failed, dial.lit), (Pulse::Running, true, true));
+        assert!(!m.dial_collapsed(&one), "open while it runs");
+        // The user's next message clears the red.
+        events(&mut m, &one, vec![Event::TurnFinished { outcome: Outcome::Completed }]);
+        typed(&mut m, "again");
+        m.update(Action::TalkSend);
+        assert!(!m.chat(&one).map(|chat| chat.transcript.dial(7)).unwrap().failed);
+        // Toggled: the user's alone, until toggled again; an ended one is collapsed by default.
+        assert_eq!(m.refusal(&Action::DialToggle, Origin::Socket), Some(super::DIAL_USERS));
+        m.update(Action::DialToggle);
+        assert!(m.dial_collapsed(&one));
+        m.update(Action::AgentExited { task: second(&m) }.sent_by(Origin::System));
+        assert!(m.dial_collapsed(&second(&m)), "ended: collapsed");
+        m.update(Action::DialToggle);
+        assert!(!m.dial_collapsed(&one) && m.dial_collapsed(&second(&m)), "only the shown one");
     }
 
     #[test]
