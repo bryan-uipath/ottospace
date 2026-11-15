@@ -64,15 +64,20 @@ fn disc(window: &mut Window, centre: Point<Pixels>, r: f32, colour: Hsla) {
 fn paint_dial(dial: &Dial, bounds: Bounds<Pixels>, calm: bool, window: &mut Window) {
     let c = bounds.center();
     let at_rest = !dial.lit && dial.pulse != Pulse::NeedsYou;
-    // The route of the last calls, under everything: dashes that fade over a minute.
+    // The route of the last calls, under everything: dashes along the rim, the short way from
+    // station to station, fading over a minute. Never across the centre.
     for pair in dial.route.windows(2) {
-        let (from, to) = (at(c, STATIONS, angle(pair[0].station)), at(c, STATIONS, angle(pair[1].station)));
+        let (from, to) = (angle(pair[0].station), angle(pair[1].station));
+        let sweep = (to - from + PI).rem_euclid(TAU) - PI;
         let fade = 1. - pair[1].age_ms as f32 / activity::ROUTE_MS as f32;
-        let alpha = if calm { 0.45 } else { 0.55 * fade.clamp(0., 1.) };
-        let bend = c + (((from + to) / 2.) - c) * 0.35;
-        let mut path = PathBuilder::stroke(px(1.)).dash_array(&[px(2.), px(2.)]);
-        path.move_to(from);
-        path.curve_to(to, bend);
+        let alpha = if calm { 0.45 } else { 0.6 * fade.clamp(0., 1.) };
+        let dashes = ((sweep.abs() * STATIONS / 2.5) as usize).max(1);
+        let mut path = PathBuilder::stroke(px(1.));
+        for i in (0..dashes).step_by(2) {
+            let step = |i: usize| from + sweep * i as f32 / dashes as f32;
+            path.move_to(at(c, STATIONS, step(i)));
+            path.line_to(at(c, STATIONS, step(i + 1)));
+        }
         stroke(window, path, colour(theme::station(pair[1].station)).opacity(alpha));
     }
     // Spokes: heavier for more use, decayed. Quieter at rest.
@@ -111,6 +116,7 @@ fn paint_dial(dial: &Dial, bounds: Bounds<Pixels>, calm: bool, window: &mut Wind
         stroke(window, arc(2.5, c, RING, 0., TAU * used), colour(theme::level(dial.level)));
     }
     // The centre: the agent, in its state's colour.
+    disc(window, c, CENTRE, colour(theme::BACKGROUND));
     disc(window, c, CENTRE, colour(theme::pulse(dial.pulse)).opacity(0.16));
 }
 

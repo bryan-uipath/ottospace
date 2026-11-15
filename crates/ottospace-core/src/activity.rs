@@ -146,7 +146,10 @@ impl Activity {
         while self.route.len() > ROUTE {
             self.route.pop_front();
         }
-        self.last = Some(Last { station, label: label.to_string(), at });
+        // The idle line says the last call or message: a model step is no news after it.
+        if station != Station::Model {
+            self.last = Some(Last { station, label: label.to_string(), at });
+        }
     }
 
     /// The user's message (or one sent elsewhere, watched): a turn, and the red dots go.
