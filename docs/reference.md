@@ -122,7 +122,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘N | New task, in the drawer. Type what needs doing, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `^reference`, `p1` to `p9`; a dropdown finishes the one at the cursor. ↵ adds the task and starts its agent; ⇧↵ adds it for later; Esc closes. [Its keys](#keys) |
 | ⌘L | The keyboard into the drawer's conversation, or back to the workspace |
 | ⌃G | In the composer or the new-task box: its text in your editor (`$VISUAL`, else `$EDITOR`, else `vi`, as Open Settings runs it), in the drawer: the editor takes the conversation's place (the drawer widens to 60 columns if it is narrower). Save and quit: the text is back in the composer (one trailing newline dropped; the new-task line takes it as one line), nothing sent; quit with an error, or save nothing new: as it was. ⌃G again while it runs goes back to it. A permission card that arrives meanwhile shows under the editor, which keeps the keyboard: click the card to answer it (`a`, `d`), ⌃G to go back. The text goes back to the conversation it came from, wherever you went; its task dismissed, it is put on the clipboard and the status bar says so. Also Edit Message in Editor (Tasks, the palette). Only yours: a socket client's ⌃G opens nothing, and its keys reach neither the editor nor a card. See [Compose in your editor](#compose-in-your-editor) |
-| ⌘⇧L | Close the chat, or open it again. The agent goes on |
+| ⌘⇧L | Close the chat, or open it again. The agent goes on. Closed, the [agent chip](#the-agent-chip) at the row's end opens it too |
 | ⌘⇧A | Collapse the conversation's [dial](#the-agent-dial) to its marker beside the badge, or open it again (a click on either does the same). Kept per task |
 | ⌘⇧N | Next task: the space and chat of the first task that needs you |
 | ⌃⌥⌘Space | Capture, from any app: the pane in use (a hosted app you are in, else the focused pane) is frozen as a picture to draw on, and a draft opens in the drawer on the right, with the new-task line as its title. A live app is parked first; "↩ back to …" in the bar returns to it. On the picture: drag circles, ⇧-drag draws a box, ⌥-drag a freehand line, a click places a note to type (↵ keeps it). ⌘Z and ⇧⌘Z go over the steps; a click on a shape's line selects it and ⌫ removes it. ↵ goes to the title, Esc leaves the picture; a click on another pane captures that one too. In the title ↵ adds the task and starts its agent, ⇧↵ adds it for later; × or Esc cancels, after a question if anything was captured. The workspace stays in use beside the drawer, and ⌘N goes to the draft's title. See [Capture](#capture) |
@@ -368,6 +368,26 @@ Editor (⌃G), Open or Close the Conversation (⌘⇧L), Stop the Agent (the dra
 Agent Dial (⌘⇧A), each for
 the conversation the drawer shows. ⌘P while you type in the conversation opens the palette over
 it: the agent gets no key while it is open, and when it closes the keyboard goes back to it.
+
+## The agent chip
+
+A conversation you closed is one click away. While the selected space has a conversation (a
+task's, or a session's) and the drawer is closed, a chip sits at the right end of the tab row;
+a space with one tab has no tab row, so it sits on the top row, left of the split buttons.
+
+- It shows the task's badge, the [dial](#the-agent-dial)'s marker for a native conversation
+  (the context ring, a dot while a call runs, a red one for a failure) and one line of what the
+  agent does: `Working · cargo test`, `Needs you · git push`, `Needs you` (its turn is over:
+  your word next), `Idle`, `Ended`, `Failed`.
+- While it needs you it is drawn in the needs-you colour: a permission request shows with the
+  chat closed.
+- A click opens the conversation, as ⌘⇧L does. So does a click on the selected space on the top
+  row; a click on another space only selects it. Its hover names the key.
+- It takes the room the row has left and moves nothing: short of room for the line it is the
+  badge alone, and on a full tab row the badge lies over the row's end. It is not there while the drawer's place shows something else (a new task, a
+  draft, a brief, the inspector).
+- Only your own click opens the conversation: a socket client's click on the chip or on the
+  selected space does not. The state reply has it as `agent_chip`.
 
 ## The agent dial
 
