@@ -100,7 +100,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | Drag a pane's header | Onto another pane's edge: split there. Onto its centre: swap. Onto a tab: move there. Esc cancels. An app you are in is parked: click it to go back in |
 | ⌘⌃F | Zoom the window to fill the screen; again to restore |
 | ⌘⌃A | Debug: outline the focused app pane's accessibility targets (parked panes only) |
-| ⌘/ | Show every key. In a small window the list scrolls: J / K or the arrows, space or Page Down / Page Up, Home / End |
+| ⌘/ | The keys, by what you are doing, the ones you have not learned first; in list or visual mode that mode's own keys come first. A bar under a key shows how much you use it. Keys you use often fold into `Known · n` at the bottom: a click or ↵ opens it. A key unused for about eight days comes back up. In a small window the list scrolls: J / K or the arrows, space or Page Down / Page Up, Home / End |
 | ⌘P | [Command palette](#command-palette): run any command of the menu bar by name. Type to filter, ↑/↓ or ⌃N/⌃P move, ↵ runs, Esc or ⌘P closes |
 | ⌘, | Open Settings: `settings.json` in your editor, in a tab of its own (see [Settings](#settings)) |
 | F18 | From any app: take the keyboard back and bring ottospace forward |

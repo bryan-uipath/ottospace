@@ -157,9 +157,207 @@ impl Binding {
         ALL.iter().copied().find(|binding| binding.commands().contains(&command))
     }
 
+    /// Where the key reference lists it.
+    pub fn group(self) -> Group {
+        use Binding as B;
+        match self {
+            B::SplitRight
+            | B::SplitDown
+            | B::PickPane
+            | B::ClosePane
+            | B::FocusNext
+            | B::FocusDir
+            | B::Resize
+            | B::Equalize
+            | B::FitPane
+            | B::Swap
+            | B::MoveToTab => Group::Panes,
+            B::SpaceNumber
+            | B::NextSpace
+            | B::HideSpace
+            | B::NewTab
+            | B::TabNumber
+            | B::NextTab
+            | B::CloseTab
+            | B::SaveWorkbook
+            | B::MarkPane
+            | B::MarkJump
+            | B::MarkNumber => Group::Tabs,
+            B::NewTask | B::NextTask | B::TalkFocus | B::TalkToggle | B::DialToggle | B::CaptureKey => Group::Tasks,
+            B::Copy | B::Paste => Group::Text,
+            B::VisualMode | B::ListMode | B::SneakMode => Group::Modes,
+            B::Palette | B::ShowKeys | B::EditSettings | B::Zoom | B::ReturnKey | B::Hide | B::Quit => Group::App,
+        }
+    }
+
+    /// What it does, as the key reference says it.
+    pub fn label(self) -> &'static str {
+        use Binding as B;
+        match self {
+            B::SplitRight => "Terminal right",
+            B::SplitDown => "Terminal below",
+            B::PickPane => "New pane, right / below",
+            B::ClosePane => "Close pane",
+            B::FocusNext => "Next / previous pane",
+            B::FocusDir => "Focus that way",
+            B::Resize => "Resize that way",
+            B::Equalize => "Even out splits",
+            B::FitPane => "Fit pane to its app",
+            B::Swap => "Swap that way",
+            B::MoveToTab => "Move pane to tab",
+            B::NewTab => "New tab",
+            B::TabNumber => "Go to tab",
+            B::NextTab => "Next / previous tab",
+            B::CloseTab => "Close tab",
+            B::SaveWorkbook => "Save tab as workbook",
+            B::MarkPane => "Mark pane / tab",
+            B::MarkJump => "Go to mark by letter",
+            B::MarkNumber => "Go to mark",
+            B::NewTask => "New task",
+            B::NextTask => "Next that needs you",
+            B::TalkFocus => "Type to the agent",
+            B::TalkToggle => "Open / close chat",
+            B::DialToggle => "Open / close agent dial",
+            B::SpaceNumber => "Go to tab group",
+            B::NextSpace => "Next / previous group",
+            B::HideSpace => "Hide tab group",
+            B::CaptureKey => "Capture, from any app",
+            B::Copy => "Copy",
+            B::Paste => "Paste",
+            B::VisualMode => "Select text with keys",
+            B::ListMode => "Drive the sidebar",
+            B::SneakMode => "Click by letter",
+            B::Palette => "Any command by name",
+            B::ShowKeys => "This list",
+            B::EditSettings => "Settings",
+            B::Zoom => "Fill the screen",
+            B::ReturnKey => "Back here, from any app",
+            B::Hide => "Hide",
+            B::Quit => "Quit",
+        }
+    }
+
+    /// Its keys, where no binding of the keymap says them: a numbered family, read in `key_down`.
+    pub fn keys(self) -> Option<&'static str> {
+        Some(match self {
+            Binding::TabNumber => "⌘1–9",
+            Binding::MoveToTab => "⌘⇧⌥1–9",
+            Binding::MarkNumber => "⌘⌥1–9",
+            Binding::SpaceNumber => "⌘⌃1–9",
+            _ => return None,
+        })
+    }
+
     /// Its id in `keys.json`, e.g. `split_right`.
     pub fn id(self) -> String {
         serde_json::to_value(self).ok().and_then(|id| id.as_str().map(str::to_string)).unwrap_or_default()
+    }
+}
+
+/// A group of the key reference: what the user is doing. `List` and `Visual` are a mode's own
+/// keys, listed first while that mode is on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Group {
+    List,
+    Visual,
+    Panes,
+    Tabs,
+    Tasks,
+    Text,
+    Modes,
+    App,
+}
+
+/// The groups of every mode, in order.
+const GROUPS: [Group; 6] = [Group::Panes, Group::Tabs, Group::Tasks, Group::Text, Group::Modes, Group::App];
+
+impl Group {
+    pub fn label(self) -> &'static str {
+        match self {
+            Group::List => "List",
+            Group::Visual => "Visual",
+            Group::Panes => "Panes",
+            Group::Tabs => "Tabs",
+            Group::Tasks => "Tasks",
+            Group::Text => "Text",
+            Group::Modes => "Modes",
+            Group::App => "App",
+        }
+    }
+
+    /// Lines with no binding of their own: a gesture, a mode's keys. Never counted.
+    fn notes(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Group::Panes => &[("Drag a header", "Split, swap, move")],
+            Group::Text => &[("⇧PgUp ⇧PgDn", "Scroll a page"), ("⌃G", "Compose in your editor")],
+            Group::List => &[
+                ("J K ↓ ↑", "Move"),
+                ("↵ ⇧↵", "Open / open below"),
+                ("Tab ⇧Tab", "Next / previous section"),
+                ("S H X U", "Task: snooze, hold, dismiss, undo"),
+                ("R M ⇧J ⇧K", "Mark: rename, letter, move"),
+                ("A space", "Workbook: add tab, list tabs"),
+                ("P /", "Apps: pin, filter"),
+                ("← → T", "Calendar: day back, on, today"),
+                ("← → A", "Repos: fold, unfold, new worktree"),
+            ],
+            Group::Visual => &[
+                ("H J K L", "Move"),
+                ("W B E 0 ^ $", "Word, line"),
+                ("⇧H ⇧M ⇧L", "Top, middle, bottom"),
+                ("V ⇧V", "Select / lines"),
+                ("Y ↵", "Copy and leave"),
+            ],
+            Group::Tabs | Group::Tasks | Group::Modes | Group::App => &[],
+        }
+    }
+}
+
+/// One line of the key reference.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Line {
+    /// A binding, and how full its bar is: its score toward `KNOWN_AT`, 0 never used (no bar).
+    Key { binding: Binding, fill: f32 },
+    /// Keys and what they do, with no count.
+    Note { keys: &'static str, what: &'static str },
+}
+
+/// The key reference, as the core lays it out: each group with the keys not yet known first,
+/// least used first; then every known key, folded under `Known · n` unless `known_open`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Reference {
+    pub groups: Vec<(Group, Vec<Line>)>,
+    /// Key lines, in `ALL`'s order.
+    pub known: Vec<Line>,
+    pub known_open: bool,
+}
+
+impl KeyUse {
+    /// The key reference at `now`. `mode`: a mode's group to list first (`List`, `Visual`).
+    /// `listed`: whether a binding is there to list (it has a key, its feature is on).
+    pub fn reference(
+        &self,
+        now: u64,
+        mode: Option<Group>,
+        listed: impl Fn(Binding) -> bool,
+        known_open: bool,
+    ) -> Reference {
+        let listed: Vec<Binding> = ALL.iter().copied().filter(|b| listed(*b)).collect();
+        let known: Vec<Binding> = listed.iter().copied().filter(|b| self.known(*b, now)).collect();
+        let fill = |binding: Binding| (self.score(binding, now) / KNOWN_AT).min(1.0) as f32;
+        let line = |binding: Binding| Line::Key { binding, fill: fill(binding) };
+        let group = |group: Group| {
+            let mut keys: Vec<Binding> =
+                listed.iter().copied().filter(|b| b.group() == group && !known.contains(b)).collect();
+            // Least used first; a tie keeps the order of `ALL`.
+            keys.sort_by(|a, b| self.score(*a, now).total_cmp(&self.score(*b, now)));
+            let keys = keys.into_iter().map(line);
+            let notes = group.notes().iter().map(|(keys, what)| Line::Note { keys, what });
+            (group, keys.chain(notes).collect::<Vec<Line>>())
+        };
+        let groups = mode.into_iter().chain(GROUPS).map(group).filter(|(_, lines)| !lines.is_empty()).collect();
+        Reference { groups, known: known.into_iter().map(line).collect(), known_open }
     }
 }
 
@@ -424,6 +622,124 @@ mod tests {
         assert!(m.key_use.is_empty());
         m.update(restore.sent_by(Origin::System));
         assert_eq!(m.key_use, read);
+    }
+
+    fn line(binding: Binding, fill: f32) -> Line {
+        Line::Key { binding, fill }
+    }
+
+    fn lines(reference: &Reference, group: Group) -> Vec<String> {
+        let found = reference.groups.iter().find(|(of, _)| *of == group);
+        let line = |line: &Line| match line {
+            Line::Key { binding, fill: 0.0 } => binding.id(),
+            Line::Key { binding, fill } => format!("{} {fill:.1}", binding.id()),
+            Line::Note { keys, .. } => keys.to_string(),
+        };
+        found.map(|(_, lines)| lines.iter().map(line).collect()).unwrap_or_default()
+    }
+
+    #[test]
+    fn the_reference_lists_unknown_keys_least_used_first_and_folds_known_ones() {
+        let mut uses = KeyUse::default();
+        // Terminal right is known; Close pane used twice, Terminal below once.
+        burst(5).iter().for_each(|at| uses.press(Binding::SplitRight, T0 + at));
+        burst(2).iter().for_each(|at| uses.press(Binding::ClosePane, T0 + at));
+        uses.press(Binding::SplitDown, T0);
+        let now = T0 + 60_000;
+        let all = |_: Binding| true;
+        let reference = uses.reference(now, None, all, false);
+        let panes = lines(&reference, Group::Panes);
+        assert_eq!(
+            panes,
+            [
+                "pick_pane",
+                "focus_next",
+                "focus_dir",
+                "resize",
+                "equalize",
+                "fit_pane",
+                "swap",
+                "move_to_tab",
+                "split_down 0.2",
+                "close_pane 0.4",
+                "Drag a header",
+            ]
+        );
+        assert_eq!((&reference.known[..], reference.known_open), (&[line(Binding::SplitRight, 1.0)][..], false));
+        let groups: Vec<Group> = reference.groups.iter().map(|(group, _)| *group).collect();
+        assert_eq!(groups, GROUPS);
+        // Once a known key is forgotten it is back in its group, its bar nearly empty.
+        let later = uses.reference(now + 10 * DAY, None, all, false);
+        assert!(later.known.is_empty() && lines(&later, Group::Panes).iter().any(|l| l == "split_right 0.4"));
+    }
+
+    #[test]
+    fn a_modes_keys_come_first_and_a_key_that_is_not_there_is_not_listed() {
+        let uses = KeyUse::default();
+        let reference = uses.reference(T0, Some(Group::List), |b| b != Binding::ReturnKey, true);
+        assert_eq!(reference.groups[0].0, Group::List);
+        assert!(lines(&reference, Group::List).iter().all(|line| !line.contains('_')), "notes only");
+        assert!(!lines(&reference, Group::App).contains(&"return_key".to_string()));
+        assert!(lines(&reference, Group::App).contains(&"quit".to_string()));
+        // A group with nothing to list is not drawn.
+        let none = uses.reference(T0, None, |b| b.group() != Group::Tabs, true);
+        assert!(none.groups.iter().all(|(group, _)| *group != Group::Tabs));
+        // Every binding once: in its group or known.
+        let mut every = KeyUse::default();
+        ALL.iter().step_by(2).for_each(|b| burst(5).iter().for_each(|at| every.press(*b, T0 + at)));
+        let reference = every.reference(T0 + 10_000, None, |_| true, false);
+        let lines = reference.groups.iter().flat_map(|(_, lines)| lines).chain(&reference.known);
+        let mut seen: Vec<Binding> = lines
+            .filter_map(|line| match line {
+                Line::Key { binding, .. } => Some(*binding),
+                Line::Note { .. } => None,
+            })
+            .collect();
+        let mut all = ALL.to_vec();
+        seen.sort();
+        all.sort();
+        assert_eq!(seen, all);
+    }
+
+    /// `Known` opens only over something known, and only while the reference shows.
+    #[test]
+    fn known_opens_only_with_something_known() {
+        use crate::model::{Action, Model};
+        let mut m = Model::default();
+        m.update(Action::ToggleKeys);
+        m.update(Action::KeysKnown);
+        assert!(!m.keys_known_open, "nothing known");
+        let read = KeyUse::parse(r#"{"version":1,"keys":{"copy":{"score":5,"at":0,"known":true}}}"#).unwrap();
+        m.update(Action::RestoreKeyUse { uses: read }.sent_by(crate::model::Origin::System));
+        m.update(Action::KeysKnown);
+        assert!(m.keys_known_open);
+        m.update(Action::KeysKnown);
+        assert!(!m.keys_known_open);
+    }
+
+    /// List mode's keys of marks and the Apps section are listed only while those are on.
+    #[test]
+    fn a_modes_keys_of_a_feature_that_is_off_are_not_listed() {
+        use crate::features::Features;
+        use crate::model::{Action, Model, Origin};
+        let notes = |m: &Model| {
+            let reference = m.key_reference(|_| true);
+            let list = reference.groups.into_iter().find(|(group, _)| *group == Group::List);
+            let what = |line: Line| match line {
+                Line::Note { what, .. } => Some(what),
+                Line::Key { .. } => None,
+            };
+            list.map(|(_, lines)| lines.into_iter().filter_map(what).collect::<Vec<_>>()).unwrap_or_default()
+        };
+        let mut m = Model::default();
+        m.update(Action::ToggleSection { section: crate::model::Section::Tasks });
+        m.update(Action::FocusList);
+        assert_eq!(m.mode(), crate::model::Mode::List);
+        m.update(Action::SetFeatures { features: Features::default() }.sent_by(Origin::System));
+        let off = notes(&m);
+        assert!(!off.is_empty() && off.iter().all(|w| !w.starts_with("Mark:") && !w.starts_with("Apps:")), "{off:?}");
+        m.update(Action::SetFeatures { features: Features::all() }.sent_by(Origin::System));
+        assert!(notes(&m).iter().any(|w| w.starts_with("Mark:")) && notes(&m).iter().any(|w| w.starts_with("Apps:")));
     }
 
     /// A key of a feature that is off is not counted.
