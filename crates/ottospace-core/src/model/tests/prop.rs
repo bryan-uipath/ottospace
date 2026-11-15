@@ -826,6 +826,7 @@ const MAKERS: &[Make] = &[
         Action::TabPlace { tab: g.rng.coin().then(|| g.tab_id()), at }
     },
     |g| Action::SpaceSelect { index: g.index(g.m.shown_spaces().len()) },
+    |g| Action::SpaceClick { index: g.index(g.m.shown_spaces().len()) },
     |g| Action::SpaceCycle { delta: g.delta() },
     |g| Action::SpaceHide { index: g.rng.coin().then(|| g.index(g.m.shown_spaces().len())) },
     |g| Action::SpaceOpen { space: g.owner() },
@@ -1270,6 +1271,7 @@ fn selects_tab(action: &Action) -> bool {
             | Action::NewTab
             | Action::NewEmptyTab
             | Action::SpaceSelect { .. }
+            | Action::SpaceClick { .. }
             | Action::SpaceCycle { .. }
             | Action::SpaceHide { .. }
             | Action::SpaceOpen { .. }
@@ -1409,6 +1411,29 @@ fn check(m: &Model) -> Result<(), String> {
         m.talk,
         m.space()
     );
+    // The agent chip is there exactly while the selected space has a conversation and nothing
+    // is in the drawer's place: no conversation open, new task, draft, brief or inspector. It
+    // is that conversation's, and names its space's place on the row.
+    let busy = m.talk.as_ref().is_some_and(|talk| talk.open) || m.compose.is_some() || m.capture.is_some();
+    let busy = busy || m.brief.is_some() || m.inspector.is_some();
+    let chip = m.agent_chip();
+    ensure!(
+        chip.is_some() == (m.space().subject().is_some() && !busy),
+        "the agent chip is {chip:?}: the selected space is {:?}, the drawer {:?}",
+        m.space(),
+        m.talk
+    );
+    if let Some(chip) = &chip {
+        let its = m.shown_spaces().get(chip.space).map(|space| &space.of);
+        ensure!(
+            Some(&chip.task) == m.space().subject().as_ref(),
+            "the agent chip is not the selected space's: {chip:?}"
+        );
+        ensure!(
+            its == Some(m.space()) && !chip.line.is_empty(),
+            "the agent chip names no space or says nothing: {chip:?}"
+        );
+    }
     let mut held: Vec<PaneId> = Vec::new();
     for (i, tab) in m.tabs.iter().enumerate() {
         let (tree, focused) = if i == m.active { (&m.layout, m.focused) } else { (&tab.layout, tab.focused) };
@@ -2204,6 +2229,7 @@ impl Run {
                 | Action::SelectVisibleTab { .. }
                 | Action::CycleTab { .. }
                 | Action::SpaceSelect { .. }
+                | Action::SpaceClick { .. }
                 | Action::SpaceCycle { .. }
                 | Action::SpaceHide { .. }
                 | Action::SpaceOpen { .. }
@@ -2212,6 +2238,9 @@ impl Run {
         let owners_before: Vec<(u32, Owner)> = m.tabs.iter().map(|tab| (tab.id, tab.space.clone())).collect();
         let books_before: Vec<String> = m.workbooks.list.iter().map(workbook::write).collect();
         let typing_to = m.talk.clone().filter(|talk| talk.keys && origin != Origin::User);
+        // A click on a space that is not the user's opens no conversation.
+        let clicked = matches!(action, Action::SpaceClick { .. }) && origin != Origin::User;
+        let closed_to = m.talk.clone().filter(|talk| !talk.open && clicked);
         let written = m.compose_line().is_some_and(|line| !line.is_empty());
         let composing_before = m.composing() && written && !m.compose_theirs && origin != Origin::User;
         let agents_before = (m.agents.clone(), m.starting.clone());
@@ -2228,6 +2257,10 @@ impl Run {
         let key_use = m.key_use.clone();
         let effects = m.update(sent);
         check(m)?;
+        if let Some(before) = closed_to {
+            let opened = m.talk.as_ref().is_some_and(|talk| talk.task == before.task && talk.open);
+            ensure!(!opened, "{origin:?}'s click on a space opened its conversation");
+        }
         // The counts are the user's keys: only their count and reset change them, and the shell's
         // read of keys.json. A count changes nothing else: no effect.
         let counts = matches!(action, Action::KeyUsed { .. } | Action::ResetKeyUse) && origin == Origin::User;
@@ -2477,6 +2510,8 @@ impl Run {
                 | Action::WorkbookSave { .. }
                 | Action::WorkbookSaveAll { .. }
                 | Action::WorkbookEdit { .. }
+                // And of a worktree's branch.
+                | Action::WorktreeEdit { .. }
             );
         // A name being typed is a text field: an edit of it is the wait's own, whoever sends it.
         let typing = mark_input.as_ref().is_some_and(|input| input.text().is_some());
@@ -4575,6 +4610,24 @@ fn seed_953_a_branch_being_typed_goes_with_its_repository() {
             .sent_by(Origin::User),
         Action::WorktreeEdit { repo: "/code/app".into() }.sent_by(Origin::User),
         Action::SetRepos { repos: vec![] }.sent_by(Origin::System),
+    ])
+    .unwrap();
+}
+
+/// Seed 1392: the user's + on a repository under a mark's wait for a letter started the typing
+/// of a branch, and the rule took it for a wait that had not ended. It is a wait of its own,
+/// as a workbook's name is: the rule was wrong.
+#[test]
+fn seed_1392_a_branch_typed_under_a_marks_wait_is_its_own_wait() {
+    replay(&[
+        Action::SetRepoDirs { dirs: RepoDirs { dirs: vec![], fixed: false, worktrees: Some("/w".into()) } }
+            .sent_by(Origin::User),
+        Action::SetRepos {
+            repos: vec![Repo { name: "app".into(), path: "/code/app".into(), branch: None, worktrees: vec![] }],
+        }
+        .sent_by(Origin::User),
+        Action::MarkPrefix.sent_by(Origin::Socket),
+        Action::WorktreeEdit { repo: "/code/app".into() }.sent_by(Origin::User),
     ])
     .unwrap();
 }
