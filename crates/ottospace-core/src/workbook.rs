@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::edit::{Edit, Field};
 use crate::layout::Node;
 use crate::marks::{self, Extra, MAX_NAME, MarkInput, Need, PaneRecord, RecordKind, TabRecord};
-use crate::model::{Effect, Kind, Model, Owner, PaneId, Section};
+use crate::model::{Effect, Kind, Model, Owner, PaneId, Section, Space, Tab};
 use crate::tasks::NOTICE_MS;
 
 pub type WorkbookId = u32;
@@ -22,11 +22,11 @@ pub const MAX_TABS: usize = 32;
 /// terminal history, as JSON.
 pub const MAX_FILE_BYTES: usize = 4 * 1024 * 1024;
 
-const TOO_LARGE: &str = "the workbook would be too large to read back";
+const TOO_LARGE: &str = "the workspace would be too large to read back";
 const EMPTY: &str = "a tab with nothing in it has nothing to save";
 
 /// Why a client's workbook action does nothing: they are the user's files and apps.
-pub const USERS_ALONE: &str = "only the user saves, opens, renames or deletes a workbook";
+pub const USERS_ALONE: &str = "only the user makes, saves, opens, renames or deletes a workspace";
 
 /// What the shell read of its terminals at a save: each one's directory, and its history.
 type Read<'a> = (&'a [(PaneId, String)], &'a [(PaneId, History)]);
@@ -297,8 +297,8 @@ impl Workbook {
         if self.name.is_empty() {
             return Some("it has no name");
         }
+        // No tab: a new one (+), nothing saved into it yet.
         match self.tabs.len() {
-            0 => Some("it has no tab"),
             n if n > MAX_TABS => Some("it has too many tabs"),
             _ => self.tabs.iter().find_map(TabRecord::unsound),
         }
@@ -351,7 +351,7 @@ pub enum Change {
 impl Change {
     pub fn title(self) -> &'static str {
         match self {
-            Change::Deleted => "Workbook deleted",
+            Change::Deleted => "Workspace deleted",
             Change::Updated => "Updated",
         }
     }
@@ -406,7 +406,7 @@ pub struct WorkbookRow {
     pub panes: Vec<RowPane>,
     /// e.g. "3 tabs · 4 terminals · Chrome, Slack"; one tab: "2 terminals · Chrome, Slack".
     pub summary: String,
-    /// One of its tabs is open now: `tab` is the first open one's `id`.
+    /// Its space is on the top row, or one of its tabs is open: `tab` is the first open one's `id`.
     pub open: bool,
     pub tab: Option<u32>,
     pub tabs: Vec<RowTab>,
@@ -436,7 +436,7 @@ impl Workbooks {
     /// `name`, or `name 2`, `name 3`: no two workbooks share a name.
     fn unique_name(&self, name: &str, but: Option<WorkbookId>) -> String {
         let taken = |name: &str| self.list.iter().any(|book| Some(book.id) != but && book.name == name);
-        marks::unique_name(name, "workbook", taken)
+        marks::unique_name(name, "workspace", taken)
     }
 
     /// Adds a workbook, with a name no other has. `id` 0: a new id.
@@ -537,6 +537,7 @@ impl Model {
             let tabs: Vec<RowTab> = book.tabs.iter().enumerate().map(tab).collect();
             let panes: Vec<RowPane> = tabs.iter().flat_map(|tab| tab.panes.clone()).collect();
             let summary = match tabs.len() {
+                0 => "no saved tabs".into(),
                 1 => summary(&panes),
                 n => format!("{n} tabs · {}", summary(&panes)),
             };
@@ -545,7 +546,8 @@ impl Model {
             let summary = if held { format!("{summary} · history") } else { summary };
             let tab = tabs.iter().find_map(|tab| tab.tab);
             let (id, name, unfolded) = (book.id, book.name.clone(), self.workbooks.unfolded(book.id));
-            WorkbookRow { id, name, panes, summary, open: tab.is_some(), tab, tabs, unfolded }
+            let shown = self.spaces.iter().any(|space| space.of == Owner::Workbook { id } && !space.hidden);
+            WorkbookRow { id, name, panes, summary, open: tab.is_some() || shown, tab, tabs, unfolded }
         };
         self.workbooks.list.iter().map(row).collect()
     }
@@ -647,8 +649,8 @@ impl Model {
             Err(why) => return Some(why),
         };
         let tab = self.tabs.get(self.active)?;
-        match self.workbooks.entry_of(tab.id) {
-            Some((id, at)) => self.workbook_with(id, Some(at), record).err(),
+        match self.workbook_to_save(tab) {
+            Some((id, at)) => self.workbook_with(id, at, record).err(),
             None => {
                 let mut book = Workbook::new(String::new(), tab.title.clone(), vec![record]);
                 fit(&mut book);
@@ -685,7 +687,7 @@ impl Model {
         }
         match tabs.len() {
             0 => Err("no tab of this space has anything to save".into()),
-            n if n > MAX_TABS => Err(format!("{n} tabs in this space; a workbook keeps {MAX_TABS} at most")),
+            n if n > MAX_TABS => Err(format!("{n} tabs in this space; a workspace keeps {MAX_TABS} at most")),
             _ => {
                 let mut book =
                     Workbook::new(String::new(), String::new(), tabs.iter().map(|(_, r)| r.clone()).collect());
@@ -698,7 +700,7 @@ impl Model {
     /// Workbook `id` with its tab at `at` (`None`: a new one at the end) replaced by `record`,
     /// or why it cannot be.
     fn workbook_with(&self, id: WorkbookId, at: Option<usize>, record: TabRecord) -> Result<Workbook, String> {
-        let mut book = self.workbooks.get(id).cloned().ok_or("no such workbook")?;
+        let mut book = self.workbooks.get(id).cloned().ok_or("no such workspace")?;
         match at.filter(|at| *at < book.tabs.len()) {
             Some(at) => {
                 // The tab's keys this build does not know stay.
@@ -712,7 +714,7 @@ impl Model {
                 }
                 book.tabs.push(record);
             }
-            None => return Err(format!("a workbook keeps {MAX_TABS} tabs at most")),
+            None => return Err(format!("a workspace keeps {MAX_TABS} tabs at most")),
         }
         fit(&mut book);
         sized(&book).map(|_| book)
@@ -743,15 +745,45 @@ impl Model {
         self.workbooks.offer = Some(Offer { change: Change::Updated, before, until });
     }
 
+    /// Where a save of `tab` goes: its tab of the workbook it stands for, else a new tab (`None`)
+    /// of the workbook whose space it is in. Neither: a new workbook.
+    fn workbook_to_save(&self, tab: &Tab) -> Option<(WorkbookId, Option<usize>)> {
+        let space = match &tab.space {
+            Owner::Workbook { id } => Some((*id, None)),
+            _ => None,
+        };
+        self.workbooks.entry_of(tab.id).map(|(id, at)| (id, Some(at))).or(space)
+    }
+
+    /// The lowest "Workspace n" from 2 that no workbook has: "Workspace" is the first space's.
+    fn free_name(&self) -> String {
+        let taken = |n: &u32| self.workbooks.list.iter().any(|book| book.name == format!("Workspace {n}"));
+        format!("Workspace {}", (2..).find(|n| !taken(n)).unwrap_or(2))
+    }
+
+    /// +: a new workbook of no tab, its space after the selected one with one empty tab,
+    /// selected. Nothing of the tab on show is taken or recorded.
+    pub(crate) fn workbook_make(&mut self, uid: String, effects: &mut Vec<Effect>) {
+        if !valid_uid(&uid) || self.workbooks.list.iter().any(|book| book.uid == uid) {
+            return;
+        }
+        let id = self.workbooks.add(Workbook::new(uid, self.free_name(), Vec::new()));
+        let after = self.spaces.iter().position(|space| space.of == *self.space());
+        let space = Space { of: Owner::Workbook { id }, hidden: false, last: None };
+        self.spaces.insert(after.map_or(self.spaces.len(), |at| at + 1), space);
+        self.list = None;
+        self.open_space(Owner::Workbook { id }, effects);
+    }
+
     /// Saves the tab on show: updates its tab of the workbook it came from (the old one is
-    /// offered back), else adds a workbook of that tab, named for it, and starts typing its
-    /// name. `uid`: a new one's file name.
+    /// offered back), or adds it to the workbook whose space it is in, else adds a workbook of
+    /// that tab, named for it, and starts typing its name. `uid`: a new one's file name.
     pub(crate) fn workbook_save(&mut self, uid: String, read: Read, effects: &mut Vec<Effect>) {
         let Ok(record) = self.workbook_record(self.active, read.0, read.1) else { return };
         let Some((tab, title)) = self.tabs.get(self.active).map(|tab| (tab.id, tab.title.clone())) else { return };
-        let saved = match self.workbooks.entry_of(tab) {
+        let saved = match self.tabs.get(self.active).and_then(|tab| self.workbook_to_save(tab)) {
             Some((id, at)) => {
-                self.workbook_put(id, Some(at), record, tab);
+                self.workbook_put(id, at, record, tab);
                 id
             }
             None => match self.workbook_new(uid, title, vec![(tab, record)], effects) {
@@ -775,7 +807,7 @@ impl Model {
     /// Saves every tab on the bar that has something in it as one new workbook, in bar order.
     pub(crate) fn workbook_save_all(&mut self, uid: String, read: Read, effects: &mut Vec<Effect>) {
         let Ok(tabs) = self.workbook_all_records(read) else { return };
-        if let Some(id) = self.workbook_new(uid, "Workbook".into(), tabs, effects) {
+        if let Some(id) = self.workbook_new(uid, self.free_name(), tabs, effects) {
             self.show_workbook(id);
         }
     }
@@ -843,7 +875,11 @@ impl Model {
             Some(_) => return,
             None => (0..book.tabs.len()).collect(),
         };
-        let Some(&first) = places.first() else { return };
+        // No tab saved in it: its space as it is, else with one empty tab.
+        let Some(&first) = places.first() else {
+            self.list = None;
+            return self.open_space(Owner::Workbook { id }, effects);
+        };
         let was_open = self.open_tab(book.live(first)).is_some();
         let missing = self.marks.missing().to_vec();
         let closed: Vec<usize> = places.into_iter().filter(|at| self.open_tab(book.live(*at)).is_none()).collect();
@@ -1227,6 +1263,79 @@ mod tests {
         assert!(!write(&m.workbooks.list[0]).contains("https://x"));
     }
 
+    /// The owner's report: + took the tab on show, and a second + said "Updated".
+    #[test]
+    fn plus_makes_a_new_empty_workspace_each_time_and_takes_no_tab() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        let before = (m.tabs[0].id, m.layout.clone(), m.panes.clone());
+        let space = |m: &Model| (m.space().clone(), m.layout.is_none(), m.space_tabs(m.space()).len());
+        assert_eq!(m.update(Action::WorkbookNew { uid: UID.into() }), []);
+        assert_eq!(space(&m), (Owner::Workbook { id: 1 }, true, 1));
+        // Again, from the new one: another, after it on the row. Nothing is "Updated".
+        m.update(Action::WorkbookNew { uid: UID_2.into() });
+        assert_eq!((space(&m), m.workbooks.offered()), ((Owner::Workbook { id: 2 }, true, 1), None));
+        assert_eq!((names(&m), m.mark_input.is_none()), (vec!["Workspace 2", "Workspace 3"], true));
+        let row: Vec<String> = m.spaces().iter().map(|space| m.space_title(&space.of)).collect();
+        assert_eq!(row, ["Workspace", "Workspace 2", "Workspace 3"]);
+        // No tab was taken or recorded: the first space's is as it was, and neither file holds one.
+        assert!(m.workbooks.list.iter().all(|book| book.tabs.is_empty() && book.live.is_empty()));
+        m.update(Action::SpaceSelect { index: 0 });
+        assert_eq!((m.tabs[0].id, m.layout.clone(), m.panes.clone()), before);
+        // The lowest number free; a file's name used again, or one that is no file name: nothing.
+        m.update(Action::WorkbookRemove { workbook: 1, tab: None });
+        m.update(Action::WorkbookNew { uid: UID.into() });
+        m.update(Action::WorkbookNew { uid: UID.into() });
+        m.update(Action::WorkbookNew { uid: "../x".into() });
+        assert_eq!(names(&m), ["Workspace 2", "Workspace 3"]);
+        // Its file reads back with no tab.
+        let book = &m.workbooks.list[0];
+        assert_eq!(parse(&write(book), &book.uid).map(|read| read.tabs.len()), Ok(0));
+    }
+
+    #[test]
+    fn a_new_workspace_is_the_users_alone_and_hidden_or_closed_it_stays_listed_and_opens_again() {
+        let mut m = Model::default();
+        let theirs = Action::WorkbookNew { uid: UID.into() };
+        assert_eq!(m.refusal(&theirs, Origin::Socket), Some(USERS_ALONE));
+        m.update(theirs.clone().sent_by(Origin::Socket));
+        assert_eq!((m.workbooks.list.len(), m.spaces().len()), (0, 1));
+        m.update(theirs);
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        // × takes it off the row: its pane stays, and its row opens it as it was.
+        m.update(Action::SpaceHide { index: None });
+        assert_eq!((m.space(), m.shown_spaces().len(), m.panes.len()), (&Owner::Workspace, 1, 1));
+        assert_eq!(m.workbook_rows().iter().map(|row| row.summary.as_str()).collect::<Vec<_>>(), ["no saved tabs"]);
+        m.update(Action::WorkbookOpen { workbook: 1, tab: None, home: None });
+        assert_eq!((m.space(), m.focused, m.tabs.len()), (&Owner::Workbook { id: 1 }, Some(1), 2));
+        // Its last tab closed: off the row, still listed; opened, it has one empty tab.
+        m.update(Action::CloseTab { index: None });
+        assert_eq!((m.space(), names(&m), m.panes.len()), (&Owner::Workspace, vec!["Workspace 2"], 0));
+        m.update(Action::WorkbookOpen { workbook: 1, tab: None, home: None });
+        assert_eq!((m.space(), m.layout.is_none(), m.tabs.len()), (&Owner::Workbook { id: 1 }, true, 2));
+    }
+
+    #[test]
+    fn saving_a_tab_in_a_workspaces_space_adds_it_to_that_workspace() {
+        let mut m = Model::default();
+        m.update(Action::WorkbookNew { uid: UID.into() });
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        assert_eq!(m.workbook_save_refusal(), None);
+        save(&mut m, UID_2, &[(1, "/code/app")]);
+        let kept =
+            |m: &Model| m.workbooks.list.iter().map(|book| (book.name.clone(), book.tabs.len())).collect::<Vec<_>>();
+        assert_eq!(
+            (kept(&m), m.workbook_of_tab(), m.mark_input.is_none()),
+            (vec![("Workspace 2".into(), 1)], Some(1), true)
+        );
+        // Again: updated in place. A second tab of the space: its second.
+        save(&mut m, UID_2, &[(1, "/code/app")]);
+        m.update(Action::NewTab);
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        save(&mut m, UID_2, &[]);
+        assert_eq!(kept(&m), [("Workspace 2".into(), 2)]);
+    }
+
     #[test]
     fn a_terminal_whose_directory_is_gone_starts_in_the_users_folder() {
         let mut m = saved();
@@ -1488,7 +1597,7 @@ mod tests {
         m.workbooks.list[0].tabs = vec![m.workbooks.list[0].tabs[0].clone(); MAX_TABS];
         m.update(Action::NewTab);
         m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
-        let full = format!("a workbook keeps {MAX_TABS} tabs at most");
+        let full = format!("a workspace keeps {MAX_TABS} tabs at most");
         assert_eq!(m.workbook_add_refusal(1), Some(full));
         m.update(Action::WorkbookAddTab { workbook: 1, cwds: vec![], histories: Vec::new() });
         assert_eq!(m.workbooks.list[0].tabs.len(), MAX_TABS);
@@ -1749,7 +1858,7 @@ mod tests {
             m.update(Action::NewTab);
             m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
         }
-        let refused = Some(format!("{} tabs in this space; a workbook keeps {MAX_TABS} at most", MAX_TABS + 1));
+        let refused = Some(format!("{} tabs in this space; a workspace keeps {MAX_TABS} at most", MAX_TABS + 1));
         assert_eq!(m.workbook_save_all_refusal(), refused);
         m.update(Action::WorkbookSaveAll { uid: UID.into(), cwds: vec![], histories: Vec::new() });
         assert_eq!(names(&m), Vec::<&str>::new());

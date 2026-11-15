@@ -1,0 +1,15 @@
+# + makes a new, empty workspace: on the top row, then in the Workspaces section. Neither takes
+# the tab on show (a task's here). A terminal in the second; closed with ×, it stays listed.
+{"cmd":"split"}
+{"cmd":"task_new","line":"Fix the login loop #auth p1"}
+{"cmd":"open_space","space":{"kind":"task","id":1}}
+{"cmd":"section","section":"workbook"}
+{"shot":"none-yet"}
+{"click":"top:new_workspace"}
+{"shot":"one"}
+{"click":"bar:add"}
+{"shot":"two"}
+{"cmd":"key","keys":"cmd-d","as":"user"}
+{"shot":"a-terminal-in-it"}
+{"click":"space-hide:3"}
+{"shot":"closed-still-listed"}
