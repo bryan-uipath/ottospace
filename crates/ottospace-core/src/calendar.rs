@@ -848,11 +848,19 @@ impl Calendar {
         };
     }
 
+    /// Today's events, and those about to start or running though the day has turned since the
+    /// last read: a meeting at 00:02 is near at 23:58, and runs at 00:01 before the next read.
+    pub fn near(&self, now: u64) -> impl Iterator<Item = &Event> {
+        let (start, end) = self.span(0);
+        let end = end.max(now.saturating_add(APPROACHING + 1));
+        self.events.iter().filter(move |e| overlaps(e, start, end))
+    }
+
     /// The event the now marker's card names: one that starts within `APPROACHING`, else one that
     /// runs, else the next today. `None` when nothing is left today.
     pub fn next(&self, now: u64) -> Option<(&Event, Stage)> {
         let timed: Vec<(&Event, Stage)> = self
-            .today()
+            .near(now)
             .filter(|e| !e.all_day)
             .map(|e| (e, stage(e, now)))
             .filter(|(_, s)| *s != Stage::Past)
@@ -886,7 +894,7 @@ impl Calendar {
     /// The rail cell's mark: the alert's badge, else a dot while a meeting is imminent or runs.
     pub fn rail(&self, now: u64) -> RailMark {
         let near = |e: &&Event| !e.all_day && matches!(stage(e, now), Stage::Imminent | Stage::Running);
-        match (self.on, self.banner(now).is_some(), self.today().any(|e| near(&e))) {
+        match (self.on, self.banner(now).is_some(), self.near(now).any(|e| near(&e))) {
             (false, ..) => RailMark::None,
             (true, true, _) => RailMark::Alert,
             (true, false, true) => RailMark::Near,
@@ -926,7 +934,7 @@ impl Calendar {
         self.on
             && self.notify
             && (self.in_call == Some(true)
-                || self.today().any(|e| !e.all_day && e.start <= now.saturating_add(WATCH_BEFORE) && now < e.end))
+                || self.near(now).any(|e| !e.all_day && e.start <= now.saturating_add(WATCH_BEFORE) && now < e.end))
     }
 
     /// A call is on that the user was in before `event` came near: not this meeting. Either first
@@ -948,7 +956,7 @@ impl Calendar {
         let wanted = |e: &&Event| {
             (!self.links_only || has_meeting_link(e)) && (self.in_call == Some(false) || self.in_other_call(e))
         };
-        let running = self.today().filter(|e| !e.all_day && stage(e, now) == Stage::Running).filter(wanted);
+        let running = self.near(now).filter(|e| !e.all_day && stage(e, now) == Stage::Running).filter(wanted);
         // Both alerts only in the first minutes: a meeting left early is no missed one.
         let early = |e: &&Event| now < e.start.saturating_add(ALERT_WINDOW);
         running

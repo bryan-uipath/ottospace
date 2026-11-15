@@ -278,7 +278,8 @@ impl Workspace {
             self.timeline.motion_read = now;
             self.timeline.reduce_motion = meeting::reduce_motion();
         }
-        let pulses = calendar.today().any(|e| matches!(calendar::stage(e, now), Stage::Approaching | Stage::Imminent));
+        let pulses =
+            calendar.near(now).any(|e| matches!(calendar::stage(e, now), Stage::Approaching | Stage::Imminent));
         let pulse = pulses && !self.timeline.reduce_motion;
         if pulse || now.saturating_sub(self.timeline.slid) >= 20_000 {
             self.timeline.slid = now;
