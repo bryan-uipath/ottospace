@@ -3338,9 +3338,9 @@ impl Model {
                 self.workbook_open(id, None, self.home.clone(), effects)
             }
             Action::SpaceOpen { space: of } => self.open_space(of, effects),
-            // Along the tabs of the spaces on the row, as the one bar draws them.
+            // Within the selected space.
             Action::CycleTab { delta } => {
-                let tabs: Vec<usize> = (0..self.tabs.len()).filter(|at| !self.tab_hidden(*at)).collect();
+                let tabs = self.space_tabs(self.space());
                 let at = tabs.iter().position(|at| *at == self.active).unwrap_or(0) as i64;
                 let to = tabs[(at + delta as i64).rem_euclid(tabs.len() as i64) as usize];
                 self.select_tab(to, effects);
@@ -8033,14 +8033,16 @@ mod tests {
         m.update(Action::NewTab.sent_by(Origin::Socket));
         assert_eq!((m.active, m.space()), (1, &Owner::Workspace));
         assert_eq!(row(&m), [(Owner::Workspace, false, vec![0, 1]), (task_space(1), false, vec![2, 3])]);
-        // Cycling goes along the bar's tabs; a space shows the tab it showed last.
+        // Cycling stays in the space; a space shows the tab it showed last.
         m.update(Action::CycleTab { delta: 1 });
         m.update(Action::CycleTab { delta: 1 });
-        assert_eq!(m.active, 3);
-        m.update(Action::SpaceSelect { index: 0 });
         assert_eq!(m.active, 1);
         m.update(Action::SpaceSelect { index: 1 });
-        assert_eq!(m.active, 3);
+        m.update(Action::CycleTab { delta: -1 });
+        assert_eq!(m.active, 2);
+        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::SpaceSelect { index: 1 });
+        assert_eq!(m.active, 2);
         // Going to a task opens its space; a task there is not opens none.
         m.update(Action::TaskGo { id: Some(2) });
         assert_eq!((m.space(), m.tabs.len()), (&task_space(2), 5));
