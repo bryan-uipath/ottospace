@@ -85,23 +85,26 @@ pub fn bar(fill: f32) -> Div {
     bar.bg(rgb(theme::BORDER)).child(filled)
 }
 
-/// `groups` in `n` columns, in order, each column about as long as the others.
+/// `groups` in at most `n` columns, in order, cut where the longest column is shortest.
 pub fn columns<'a, T: Clone, L>(groups: &[(T, &'a [L])], n: usize) -> Vec<Vec<(T, &'a [L])>> {
     // A heading counts as a line.
-    let total: usize = groups.iter().map(|(_, lines)| lines.len() + 1).sum();
-    let per = total.div_ceil(n.max(1));
-    let mut columns: Vec<Vec<(T, &'a [L])>> = vec![Vec::new()];
-    let mut length = 0;
-    for (title, lines) in groups {
-        if length >= per && columns.len() < n {
-            columns.push(Vec::new());
-            length = 0;
-        }
-        length += lines.len() + 1;
-        if let Some(column) = columns.last_mut() {
-            column.push((title.clone(), *lines));
-        }
+    let size = |from: usize, to: usize| groups[from..to].iter().map(|(_, lines)| lines.len() + 1).sum::<usize>();
+    // best[k][i]: the longest column, and the last cut, of the first `i` groups in `k + 1` columns.
+    let mut best = vec![(0..=groups.len()).map(|i| (size(0, i), 0)).collect::<Vec<_>>()];
+    for k in 1..n.max(1).min(groups.len().max(1)) {
+        let last = &best[k - 1];
+        let row =
+            (0..=groups.len()).map(|i| (0..=i).map(|cut| (last[cut].0.max(size(cut, i)), cut)).min().unwrap_or((0, 0)));
+        best.push(row.collect());
     }
+    let mut columns = Vec::new();
+    let mut end = groups.len();
+    for row in best.iter().rev() {
+        let start = row[end].1;
+        columns.push(groups[start..end].iter().map(|(title, lines)| (title.clone(), *lines)).collect());
+        end = start;
+    }
+    columns.reverse();
     columns
 }
 
@@ -231,6 +234,11 @@ mod tests {
         let titles: Vec<Vec<&str>> = cut.iter().map(|column| column.iter().map(|(t, _)| *t).collect()).collect();
         assert_eq!(titles, [vec!["a"], vec!["b", "c"]]);
         assert_eq!(columns::<&str, u8>(&[], 3).len(), 1);
+        // A long group is alone rather than with the next: 12 | 8 6 | 5 4 7, not 12 8 | 6 5 4 | 7.
+        let sizes: [&[u8]; 6] = [&[0; 11], &[0; 7], &[0; 5], &[0; 4], &[0; 3], &[0; 6]];
+        let groups: Vec<(usize, &[u8])> = sizes.iter().copied().enumerate().collect();
+        let cut: Vec<Vec<usize>> = columns(&groups, 3).iter().map(|c| c.iter().map(|(t, _)| *t).collect()).collect();
+        assert_eq!(cut, [vec![0], vec![1, 2], vec![3, 4, 5]]);
     }
 
     #[test]
