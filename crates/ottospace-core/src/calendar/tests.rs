@@ -30,9 +30,14 @@ fn bars(events: &[Event], day: (u64, u64), band: &Band, now: u64) -> Vec<Bar> {
     layout(events, day, *band, now).calls
 }
 
+/// Local midnights from a week before the day of `nine` (UTC as local).
+fn days_of(nine: u64) -> [u64; DAYS] {
+    std::array::from_fn(|n| nine - 9 * H + n as u64 * 24 * H - BACK as u64 * 24 * H)
+}
+
 fn calendar(events: Vec<Event>) -> Calendar {
     let mut c = Calendar { on: true, notify: true, ..Calendar::default() };
-    c.read(Some(events), [NINE - 9 * H, NINE + 15 * H, NINE + 39 * H], NINE - H);
+    c.read(Some(events), days_of(NINE), NINE - H);
     c
 }
 
@@ -283,10 +288,24 @@ fn blocks_go_under_the_calls_and_never_widen_the_band() {
 }
 
 #[test]
-fn a_call_card_names_the_calls_merged_into_it() {
-    let (one, two, three) = (event(1, NINE, 30), event(2, NINE, 30), event(3, NINE, 30));
-    assert_eq!(card(&one, &[], 0), describe(&one, 0));
-    assert_eq!(card(&one, &[&two, &three], 0), format!("{}\n+2 more: Meeting 2, Meeting 3", describe(&one, 0)));
+fn a_cards_facts_name_the_place_without_links_the_link_the_status_and_the_calls_merged() {
+    let one = Event {
+        location: "Room 4 https://example.zoom.us/j/1?pwd=x".into(),
+        show: Show::Tentative,
+        ..event(1, NINE, 30)
+    };
+    let (two, three) = (event(2, NINE, 30), event(3, NINE, 30));
+    let f = facts(&one, &[&two, &three], 0);
+    assert_eq!(
+        (f.title.as_str(), f.when.as_str(), f.place.as_deref()),
+        ("Meeting 1", "09:00–09:30 · 30m", Some("Room 4"))
+    );
+    assert_eq!(
+        (f.link, f.status, f.more),
+        (Some("Zoom"), Some("tentative"), vec!["Meeting 2".to_string(), "Meeting 3".into()])
+    );
+    let all_day = Event { all_day: true, link: None, ..event(4, NINE, 0) };
+    assert_eq!((facts(&all_day, &[], 0).when.as_str(), facts(&all_day, &[], 0).link), ("all day", None));
 }
 
 #[test]
@@ -726,6 +745,15 @@ fn a_failed_read_keeps_the_last_events() {
 }
 
 #[test]
+fn a_day_is_named_by_its_weekday_date_and_month() {
+    // NINE is 2026-11-13, a Friday, 09:00 UTC.
+    assert_eq!(day_name(NINE, 0), "Fri 13 Nov");
+    assert_eq!(day_name(NINE + 3 * 24 * H, 0), "Mon 16 Nov");
+    assert_eq!(day_name(NINE, -10 * 3_600), "Thu 12 Nov", "23:00 the day before, ten hours west");
+    assert_eq!(day_name(NINE + 50 * 24 * H, 0), "Sat 2 Jan");
+}
+
+#[test]
 fn clock_times_and_the_banner_line() {
     assert_eq!(clock(NINE, 0), "09:00");
     assert_eq!(clock(NINE + 5 * M, -5 * 3_600), "04:05");
@@ -769,23 +797,74 @@ fn spans_round_up_to_the_minute() {
 }
 
 #[test]
-fn the_agenda_lists_all_day_first_then_by_start_then_a_folded_tomorrow() {
-    use crate::list::ListRow::{Meeting, MeetingsTomorrow};
+fn the_agenda_lists_the_days_timed_meetings_by_start() {
+    use crate::list::ListRow::Meeting;
     let all_day = Event { all_day: true, ..event(1, NINE - 9 * H, 24 * 60) };
     let tomorrow = [event(4, NINE + 24 * H, 30), Event { all_day: true, ..event(5, NINE + 15 * H, 24 * 60) }];
+    let yesterday = event(6, NINE - 24 * H, 30);
     let mut c = calendar(vec![
         event(2, NINE, 30),
         event(3, NINE - 2 * H, 30),
         all_day,
         tomorrow[0].clone(),
         tomorrow[1].clone(),
+        yesterday,
     ]);
-    assert_eq!(c.agenda(), [Meeting(1), Meeting(3), Meeting(2), MeetingsTomorrow]);
-    c.tomorrow_open = true;
-    assert_eq!(c.agenda(), [Meeting(1), Meeting(3), Meeting(2), MeetingsTomorrow, Meeting(5), Meeting(4)]);
-    // No tomorrow: no group. Nothing at all: no rows.
-    assert_eq!(calendar(vec![event(2, NINE, 30)]).agenda(), [Meeting(2)]);
+    // All-day events are no rows: one line above them.
+    assert_eq!(c.agenda(), [Meeting(3), Meeting(2)]);
+    assert_eq!(c.on(c.day).filter(|e| e.all_day).map(|e| e.id).collect::<Vec<_>>(), [1]);
+    c.step(DayStep::Forward);
+    assert_eq!((c.day, c.agenda()), (1, vec![Meeting(4)]));
+    c.step(DayStep::Back);
+    c.step(DayStep::Back);
+    assert_eq!((c.day, c.agenda()), (-1, vec![Meeting(6)]));
     assert!(calendar(Vec::new()).agenda().is_empty());
+}
+
+#[test]
+fn the_sections_day_stays_within_the_days_held_and_comes_back_when_the_day_turns() {
+    let mut c = calendar(vec![event(1, NINE, 30)]);
+    // (step, how many times, the day after)
+    let table = [(DayStep::Back, 3, -3), (DayStep::Back, 10, -7), (DayStep::Today, 1, 0), (DayStep::Forward, 20, 7)];
+    for (step, times, want) in table {
+        (0..times).for_each(|_| c.step(step));
+        assert_eq!(c.day, want, "{step:?} x{times}");
+    }
+    // A week on, the last day held still has its span; a read of the same day keeps the day shown.
+    assert!(c.span(7).1 > c.span(7).0);
+    c.read(None, c.days, NINE);
+    assert_eq!(c.day, 7);
+    // The day turns: back to today.
+    c.read(None, days_of(NINE + 24 * H), NINE + 24 * H);
+    assert_eq!(c.day, 0);
+    // A past day the read could not hold whole is not shown: back stops at the first held whole.
+    c.held_from = c.span(-3).0;
+    (0..9).for_each(|_| c.step(DayStep::Back));
+    assert_eq!(c.day, -3);
+    // Before the first read there is no day to move to.
+    let mut unread = Calendar { on: true, ..Calendar::default() };
+    unread.step(DayStep::Forward);
+    assert_eq!(unread.day, 0);
+}
+
+#[test]
+fn a_rows_fact_is_now_or_the_next_within_the_hour() {
+    let (one, two, later) = (event(1, NINE, 30), event(2, NINE + 45 * M, 30), event(3, NINE + 3 * H, 30));
+    let mut c = calendar(vec![one.clone(), two.clone(), later.clone()]);
+    // (now, the fact of each)
+    let table: [(u64, [Option<&str>; 3]); 4] = [
+        (NINE - 20 * M, [Some("in 20m"), None, None]),
+        (NINE + 10 * M, [Some("now"), Some("in 35m"), None]),
+        (NINE + H + 30 * M, [None, None, None]),
+        (NINE + 2 * H + 15 * M, [None, None, Some("in 45m")]),
+    ];
+    for (now, want) in table {
+        let facts: Vec<Option<String>> = [&one, &two, &later].map(|e| c.row_fact(e, now)).into();
+        assert_eq!(facts, want.map(|f| f.map(String::from)), "at {}", clock(now, 0));
+    }
+    // On another day: nothing.
+    c.step(DayStep::Forward);
+    assert_eq!(c.row_fact(&one, NINE + 10 * M), None);
 }
 
 #[test]
@@ -836,8 +915,9 @@ fn enter_on_a_meeting_joins_it_for_the_user_only() {
         Action::SetCalendar { on: true, notify: true, links_only: false, hide_free: false, colors: Vec::new() }
             .sent_by(Origin::System),
     );
-    let days = [NINE - 9 * H, NINE + 15 * H, NINE + 39 * H];
-    m.update(Action::CalendarRead { events: Some(vec![event(7, NINE, 30)]), days, at: NINE }.sent_by(Origin::System));
+    let days = days_of(NINE);
+    let read = Action::CalendarRead { events: Some(vec![event(7, NINE, 30)]), days, at: NINE, held_from: 0 };
+    m.update(read.sent_by(Origin::System));
     m.update(Action::ToggleSection { section: Section::Calendar });
     m.update(Action::FocusList);
     assert_eq!(m.list, Some(0));
@@ -845,4 +925,32 @@ fn enter_on_a_meeting_joins_it_for_the_user_only() {
     assert!(client.is_empty(), "a client's ↵ opens nothing");
     let user = m.update(Action::ListChoose { axis: crate::Axis::Right });
     assert_eq!(user, [Effect::OpenLink { url: "https://example.zoom.us/j/123".into() }]);
+}
+
+#[test]
+fn the_sections_day_moves_by_key_or_click_from_anyone_and_opens_the_section() {
+    use crate::model::{Action, Model, Origin, Section};
+    let mut m = Model::default();
+    let step = |step| Action::CalendarDay { step };
+    // No feed: nothing moves, nothing opens.
+    m.update(step(DayStep::Back));
+    assert_eq!((m.calendar.day, m.sidebar), (0, None));
+    m.update(
+        Action::SetCalendar { on: true, notify: true, links_only: false, hide_free: false, colors: Vec::new() }
+            .sent_by(Origin::System),
+    );
+    let events = vec![event(1, NINE, 30), event(2, NINE + H, 30), event(3, NINE - 24 * H, 30)];
+    let read = Action::CalendarRead { events: Some(events), days: days_of(NINE), at: NINE, held_from: 0 };
+    m.update(read.sent_by(Origin::System));
+    // From the palette, with the section closed: it opens on the day before.
+    m.update(step(DayStep::Back));
+    assert_eq!((m.calendar.day, m.sidebar), (-1, Some(Section::Calendar)));
+    // In list mode the first row of the day shown is selected; a client's key moves as the user's.
+    m.update(Action::FocusList);
+    m.update(step(DayStep::Today).sent_by(Origin::Socket));
+    assert_eq!((m.calendar.day, m.list), (0, Some(0)));
+    m.update(Action::ListMove { delta: 1 });
+    m.update(step(DayStep::Forward));
+    assert_eq!((m.calendar.day, m.list), (1, Some(0)), "no meeting tomorrow: still in list mode");
+    assert!(m.calendar.agenda().is_empty());
 }

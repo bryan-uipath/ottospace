@@ -132,7 +132,9 @@ function replyWith(overlay: unknown): Record<string, unknown> {
         outside: [{ count: 1, rect: [1, 870.5, 4, 4] }, { count: 0, rect: null }], status_bar: [0, 877, 1400, 23],
       },
       banner: { join: [0, 28, 40, 20], dismiss: [44, 28, 60, 20] }, alerts: 1, joins: null,
-      rows: 4, rail: "near", tomorrow_open: false,
+      rows: 4, rail: "near", day: -1, day_start: 1794470400000,
+      all_day_line: [70, 66, 236, 20], first_row: [70, 90, 236, 30],
+      nav: { back: [140, 38, 14, 19], forward: [232, 38, 14, 19], today: [252, 38, 42, 19] },
     },
     drawer: {
       body: [880, 40, 470, 820],
