@@ -61,8 +61,8 @@ ottospace ctl '{"cmd":"state"}'
 | `focus` | Where the keyboard is: `{"pane": id}`, `{"list": row}`, `{"rail": section}` (a left-rail cell, in `list` mode; `state.rail_focus`), `"drawer"`, `"inspector"` (the accessibility inspector's rows, in the drawer's place), `{"right": n}` (a right-rail place, its `+` last) or `"nothing"`. Only the user's focus keys move past the panes: yours stop at them, and your list keys do nothing while a rail has the keyboard |
 | `state.list` | Null, or the index of the selected row of the open section: the secondary bar has the keyboard (`mode` is `list`, or `pick` while the picker is open over it) |
 | `state.panes` | Every pane of every tab: `id`, `kind`, `cwd` for a terminal opened by `open_repo`, and `fit` for an app pane whose window kept another size than the pane's: `wants` (`[width, height]` in points, the size the window kept) `hint` (what the pane header says, e.g. `needs 120 pt more width` or `fixed size 232×320`) and, only when a `fit` request would move nothing, `stuck`: `no_split` (the pane spans the tab on that axis) or `at_limit` (the splits are at their 10%). No `fit`: the window has the pane's size, or is less than 24 pt smaller (an app that snaps its size), or the layout changed and the pane has not been measured since (within a second). `kind` is an object: `{"type":"terminal"}`, `{"type":"empty"}` or `{"type":"app","window":N,"title":"...","bundle":"com.apple.Safari","name":"Safari"}` (`bundle` is left out for an app that has none) |
-| `state.tabs`, `state.active` | Every tab (`id`, `title`, and `task`: the id of the task it belongs to, or null) and the index of the one showing. Requests take the index, not the `id` |
-| `groups`, `badges` | The tab bar in groups, in order: each task's tabs side by side (`task`, `tabs` as indexes into `state.tabs`), the tabs of no task (`task` null) last. Every tab is on the bar. `badges`: each live task's two letters by id, as its badge shows them on the bar, its panes, its row and the rail; a task's identity colour is `colour` on the task (an index into a palette of 8) |
+| `state.tabs`, `state.active` | Every tab (`id`, `title`, and `space`: whose it is, as in `spaces`) and the index of the one showing. Requests take the index, not the `id` |
+| `spaces`, `badges` | The top row in order, hidden spaces too: each `of` (`{"kind":"workspace"}` first, `{"kind":"task","id":3}`, `{"kind":"session","runner":..,"id":..}`, `{"kind":"workbook","id":1}`), `hidden`, `selected` (exactly one: the tab on show's) and `tabs` (indexes into `state.tabs`, side by side). `badges`: each live task's two letters by id; a task's identity colour is `colour` on the task (an index into a palette of 8) |
 | `tab_panes` | Pane ids of each tab, in tab order |
 | `state.focused` | The pane that splits and keys act on |
 | `state.layout` | The active tab's split tree, or null: `{"leaf":3}` or `{"split":{"axis":"right","ratio":0.5,"a":..,"b":..}}`. `ratio` is the share of the split that `a` (the left or top side) takes |
@@ -90,7 +90,7 @@ ottospace ctl '{"cmd":"state"}'
 | `state.compose` | Null, or the text in the new-task box while it is open |
 | `compose_host` | Null, `drawer` (the box is in the right drawer, beside the workspace) or `bar` (it is the title of the draft being collected: `state.capture`) |
 | `compose_plan`, `compose_plan_line`, `compose_hint`, `compose_picks`, `welcome` | What the user's ↵ would do (`agent`, `starts`, `dir`, `branch`), the line the drawer says it in over the box (null when it is the default), the tag hint under it (null once something is typed), the drawer's repository and agent picks, and whether nothing is open yet |
-| `state.talk`, `state.agents`, `drawer` | The conversation the right drawer shows (`task`, `open`, `keys`), the conversations whose agent runs there, and what is drawn: `agents` by task (`model`, `ended`, `lines`), `rail` (its conversations in order, each with `tip`: a task's while it is not dismissed, and once done only while shown or its agent runs), `goes_to` (what the header's ⌘↵ does: `tabs`, `claim` the tab on show, a `new` tab, or null), `line` (of the conversation shown: `foot`, the model in short and a mode that lets the agent act unasked, `haiku-5.5 · auto`; `bypass`; `folder`, in the header only when not its task's own; `facts`, the title's hover as [name, value] pairs; `model` and `mode` are untrusted labels), `note`. A conversation is a task's id, or `{"runner","id"}` for a session the user opened that is no task's (in `drawer.agents` keyed `<runner>:<id>`). Only the user starts, stops or types to an agent |
+| `state.talk`, `state.agents`, `drawer` | The conversation the right drawer shows (`task`, `open`, `keys`), the conversations whose agent runs there, and what is drawn: `agents` by task (`model`, `ended`, `lines`), `rail` (its conversations in order, each with `tip`: a task's while it is not dismissed, and once done only while shown or its agent runs), `line` (of the conversation shown: `foot`, the model in short and a mode that lets the agent act unasked, `haiku-5.5 · auto`; `bypass`; `folder`, in the header only when not its task's own; `facts`, the title's hover as [name, value] pairs; `model` and `mode` are untrusted labels), `note`. The drawer is only ever on the selected space's conversation: a task's or a session's space shows its agent, Workspace and a workbook's none. A conversation is a task's id, or `{"runner","id"}` for a session the user opened that is no task's (in `drawer.agents` keyed `<runner>:<id>`). Only the user starts, stops or types to an agent |
 | `drawer.native` | Conversations the drawer draws natively (Claude Code's structured mode, or a session watched read-only): by the same keys, each one's `view` (`native` or `terminal`), whether its process runs, and the shape of its `transcript` (`entries` by `kind`, an edit call's `diff` by counts, permission `cards` waiting, the `turn` running, `model`, `mode`, `watched`), `replies` (block and link counts) and `draft_chars`. Never what the model, a tool or the user wrote; `tool`, `label`, `model` and `mode` are untrusted labels. Only the user sends a message, answers a card (Allow or Deny), stops a turn or switches the view: no request does |
 | `compose_menu` | Null, or the dropdown for the tag at the cursor: `mark`, `typed`, `rows` (each `name`, `kind`, `detail`, `matched`), `selected` (the highlighted row, or null) and `note` (`no match`, `new project`, `… 12 more` under a folder's rows, or null). While `selected` is not null, ↵ takes that row instead of adding the task, unless the word is that name already. `compose_menu_bounds`: where it was drawn, or null |
 | `compose_folder` | Null, or the folder the user took from a path's dropdown, as the line has it (`~/notes/`): the task's agent will run there. Only the user's own Tab, ↵ or click sets it |
@@ -245,8 +245,10 @@ ottospace ctl '{"cmd":"open_repo","path":"/Users/me/code/app-2","axis":"down"}'
 repositories in the directories named by `$OTTOSPACE_REPOS`, else by `repos` in the user's
 `~/.ottospace/settings.json` (default `~/code` and `~/notes`), each
 with its git worktrees. `open_repo` opens a terminal whose shell starts in a repository or
-worktree: it fills the focused pane if that is empty, else splits it. `path` must be a `path` from
-`state.repos`; any other path is refused. A tab with no panes takes the repository's name.
+worktree, in a tab of Workspace: the tab on show if it is Workspace's and empty (or its focused
+pane is), else a new one, selected, named for the repository. `path` must be a `path` from
+`state.repos`; any other path is refused. A task the user starts from that tab, for that folder,
+takes the tab into its space.
 
 Tasks (the inbox in the Tasks section):
 
@@ -273,11 +275,11 @@ ottospace ctl '{"cmd":"session_click","runner":"claude","id":"11111111-1111-4111
 ottospace ctl '{"cmd":"sessions_range","range":"week"}'
 ```
 
-A task has a `title`, a `priority` (1 is most urgent, default 3) and a `state`. A tab may be
-a task's: `state.tabs[].task` says which, and `groups` keeps each task's tabs side by side.
-Only the user links a tab to a task (starting a task takes the tab on show if it is no task's;
-a drag or a palette command): a client's task has no tab, and `"tab"` on
-`task_add` links none (a tab that is gone, or another task's, is still refused).
+A task has a `title`, a `priority` (1 is most urgent, default 3) and a `state`. A task opened
+(`task_open`, the user's click on its row, a task the user starts) is a space of the top row with
+its own tabs; `task_pop` opens the first that needs the user. Only the user moves a tab into a
+task's space (a drag, a palette command): a client's task has no tab, and `"tab"` on `task_add`
+links none (a tab that is gone, or another space's, is still refused).
 `$OTTOSPACE_TAB` is the tab your shell started in; the pane may have been moved since, so read
 the tab that holds `$OTTOSPACE_PANE` now (below).
 States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stale`, `parked`,
@@ -517,14 +519,33 @@ the app's own bindings, so it acts on the focused pane: check `state.focused` fi
 `cmd-c` copies the selection to the user's clipboard; `cmd-v` into a terminal fails (`only the user
 pastes their clipboard`): send text with `type`.
 
-Tabs:
+Spaces and tabs:
 
 ```sh
+ottospace ctl '{"cmd":"select_space","index":1}'
+ottospace ctl '{"cmd":"hide_space"}'
+ottospace ctl '{"cmd":"hide_space","index":1}'
+ottospace ctl '{"cmd":"open_space","space":{"kind":"task","id":3}}'
 ottospace ctl '{"cmd":"new_tab"}'
 ottospace ctl '{"cmd":"select_tab","index":0}'
 ottospace ctl '{"cmd":"cycle_tab","delta":1}'
 ottospace ctl '{"cmd":"close_tab","index":1}'
 ```
+
+The top row is a row of spaces: Workspace first (the tabs of no task or workbook, never hidden),
+then each open task, session the user opened and workbook, each holding its own tabs. One space is
+selected: its tab on show is drawn, and the drawer shows its agent's chat (none for Workspace or a
+workbook). `select_space` takes a place on the row (hidden spaces are not counted) and shows the
+tab that space showed last; `select_tab` takes an index in `state.tabs` and selects its space too.
+`cycle_tab` stays in the selected space. `hide_space` takes a space off the row: its tabs, panes,
+terminals and agent go on, and `open_space` (or the user's row in Tasks or Workbook) brings it back
+where it was. `new_tab` from you is Workspace's. While the user types in the chat (`mode` `talk`),
+a request that would select another space, take the keyboard, open the list or close the drawer
+fails with `the user is typing in the chat`, and nothing else you send moves their keys. While the
+user writes a new task, your `escape`, ↵ and close of the box fail with `the user is writing a new
+task` (a line you put or typed in is yours to file). Closing a
+space's last tab closes the space; Workspace gets an empty tab. A workbook's space opens from the
+user's Workbook section only.
 
 Apps:
 

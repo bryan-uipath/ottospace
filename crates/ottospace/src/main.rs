@@ -37,7 +37,7 @@ use ottospace_core::keys::{self, FilterKey, Mods};
 use ottospace_core::list::{ListKey, list_key};
 use ottospace_core::marks::{Field, MarkInput, MarkOf, MarkRef, letter};
 use ottospace_core::model::zones::RailFocus;
-use ottospace_core::model::{CONFIRM_UP, TabAt};
+use ottospace_core::model::{CONFIRM_UP, Owner, TabAt};
 use ottospace_core::repos::{Checkout, Repo};
 use ottospace_core::rules::{self, Facts};
 use ottospace_core::scrollbar::{Extent, key_step};
@@ -650,7 +650,7 @@ actions!(ottospace, [CapturePane]);
 // The right drawer: the keyboard in or out, closed to the rail or open, the task's workspace.
 actions!(ottospace, [TalkFocus, TalkToggle, TalkGo, StopAgent]);
 // A tab of no task, and the tab on show taken out of its task or moved to another.
-actions!(ottospace, [NewTabOutside, RemoveTabFromTask, MoveTabToTask]);
+actions!(ottospace, [RemoveTabFromTask, MoveTabToTask]);
 // App menu.
 actions!(ottospace, [Quit, Hide, About]);
 
@@ -1342,7 +1342,7 @@ impl Workspace {
                         let mut vars = vec![("OTTOSPACE_PANE", id.to_string())];
                         vars.extend(tab.map(|tab| ("OTTOSPACE_TAB", tab.to_string())));
                         // A terminal opened for a task names it: an agent there can ask for its brief.
-                        let task = self.model.tabs.iter().find(|t| Some(t.id) == tab).and_then(|t| t.task);
+                        let task = self.model.tabs.iter().find(|t| Some(t.id) == tab).and_then(|t| t.space.task());
                         vars.extend(task.map(|task| ("OTTOSPACE_TASK", task.to_string())));
                         let cwd = self.model.pane(*id).and_then(|pane| pane.cwd.as_deref());
                         // A workbook's terminal shows what it showed when saved: the core says so next.
@@ -1892,6 +1892,9 @@ impl Workspace {
                 Request::NewTab => Some(Action::NewTab),
                 Request::SelectTab { index } => Some(Action::SelectTab { index }),
                 Request::CycleTab { delta } => Some(Action::CycleTab { delta }),
+                Request::SelectSpace { index } => Some(Action::SpaceSelect { index }),
+                Request::HideSpace { index } => Some(Action::SpaceHide { index }),
+                Request::OpenSpace { space } => Some(Action::SpaceOpen { space }),
                 Request::CloseTab { index } => Some(Action::CloseTab { index }),
                 Request::PickerQuery { query } => Some(Action::PickerQuery { query }),
                 Request::PickerMove { delta } => Some(Action::PickerMove { delta }),
@@ -1986,7 +1989,7 @@ impl Workspace {
                     None
                 }
                 Request::TaskAdd { tab: Some(tab), .. }
-                    if self.model.tabs.iter().any(|t| t.id == tab && t.task.is_some()) =>
+                    if self.model.tabs.iter().any(|t| t.id == tab && t.space != Owner::Workspace) =>
                 {
                     failure =
                         Some(format!("tab {tab} belongs to another task; leave out `tab` to file a task without one"));
@@ -2838,8 +2841,9 @@ impl Workspace {
             // (`model`, `ended`, its terminal's `lines`), the workspace ⌘↵ goes to, and why no
             // agent runs for the task on show (`note`).
             "drawer": self.talk_snapshot(),
-            // The tab bar's groups (`task`, `tabs` as places), and each live task's badge letters.
-            "groups": self.model.groups(),
+            // The top row's spaces, hidden ones too: whose (`of`), `hidden`, `selected`, and
+            // `tabs` as places; and each live task's badge letters.
+            "spaces": self.model.space_rows(),
             "badges": self.model.badges(&[]).into_iter().filter_map(|(subject, mono)| Some((subject.task()?.to_string(), serde_json::Value::from(mono)))).collect::<serde_json::Map<String, serde_json::Value>>(),
             // The meeting timeline: counts, times and stages only, never a title or a place.
             "calendar": self.calendar_snapshot(),
@@ -4614,7 +4618,7 @@ impl Workspace {
                     .children(
                         self.model
                             .tab_of(id)
-                            .and_then(|tab| self.model.tabs.iter().find(|t| t.id == tab)?.task)
+                            .and_then(|tab| self.model.tabs.iter().find(|t| t.id == tab)?.space.task())
                             .and_then(|task| self.task_badge(task, 16.)),
                     )
                     .child(
@@ -4873,32 +4877,38 @@ impl Workspace {
             // to `MIN_TAB`, then clip: the buttons on the right always show.
             .child(div().flex_auto().min_w_0().h_full().flex().overflow_hidden().children(
                 self.model.groups().into_iter().flat_map(|group| {
-                    let task = group.task.and_then(|id| self.model.tasks.get(id));
+                    let task = group.space.task().and_then(|id| self.model.tasks.get(id));
                     let shown = task.is_some_and(|task| self.talk_names(task.id));
                     let underline = task.map(|task| (theme::identity(task.colour), shown));
                     let done = task.is_some_and(|task| matches!(task.state, State::Done | State::Cleaned));
                     // Its badge: a click shows its conversation; a tab dropped on it joins the group.
-                    let head = group.task.and_then(|id| Some((id, self.task_badge(id, 18.)?))).map(|(id, badge)| {
-                        div()
-                            .id(("group", id))
-                            .h_full()
-                            .flex_none()
-                            .pl_2()
-                            .flex()
-                            .items_center()
-                            .cursor_pointer()
-                            .child(badge)
-                            .child(self.controls.mark(format!("group:{id}")))
-                            .drag_over::<DraggedTab>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
-                            .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
-                                let at = TabAt::End(Some(id));
-                                this.dispatch(Action::TabPlace { tab: Some(dragged.0), at }, this.input, window, cx);
-                            }))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.dispatch(Action::TaskTalk { id }, this.input, window, cx);
-                            }))
-                            .into_any_element()
-                    });
+                    let head =
+                        group.space.task().and_then(|id| Some((id, self.task_badge(id, 18.)?))).map(|(id, badge)| {
+                            div()
+                                .id(("group", id))
+                                .h_full()
+                                .flex_none()
+                                .pl_2()
+                                .flex()
+                                .items_center()
+                                .cursor_pointer()
+                                .child(badge)
+                                .child(self.controls.mark(format!("group:{id}")))
+                                .drag_over::<DraggedTab>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
+                                .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                                    let at = TabAt::End(Owner::Task { id });
+                                    this.dispatch(
+                                        Action::TabPlace { tab: Some(dragged.0), at },
+                                        this.input,
+                                        window,
+                                        cx,
+                                    );
+                                }))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.dispatch(Action::TaskTalk { id }, this.input, window, cx);
+                                }))
+                                .into_any_element()
+                        });
                     let tabs = group
                         .tabs
                         .into_iter()
@@ -5487,12 +5497,10 @@ impl Render for Workspace {
                     this.dispatch(Action::TaskStop { id }, this.input, window, cx);
                 }
             }))
-            // ⌘↵ is the new-task box's "start" while it has the keyboard: the binding comes first.
+            // ⌘↵ is the new-task box's "start" while it has the keyboard.
             .on_action(cx.listener(|this, _: &TalkGo, window, cx| {
                 if this.model.compose_keys() {
                     this.dispatch(Action::ComposeSubmit { open: true }, this.input, window, cx);
-                } else {
-                    this.dispatch(Action::TalkGo, this.input, window, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &CapturePane, window, cx| {
@@ -5548,11 +5556,8 @@ impl Render for Workspace {
                 }
             }))
             .on_action(cx.listener(|this, _: &NewTab, window, cx| this.top_button(Axis::Right, true, window, cx)))
-            .on_action(cx.listener(|this, _: &NewTabOutside, window, cx| {
-                this.dispatch(Action::NewTabOf { task: None }, this.input, window, cx);
-            }))
             .on_action(cx.listener(|this, _: &RemoveTabFromTask, window, cx| {
-                this.dispatch(Action::TabPlace { tab: None, at: TabAt::End(None) }, this.input, window, cx);
+                this.dispatch(Action::TabPlace { tab: None, at: TabAt::End(Owner::Workspace) }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &MoveTabToTask, window, cx| {
                 this.dispatch(Action::PaletteTasks, this.input, window, cx);

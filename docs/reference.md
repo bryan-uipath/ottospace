@@ -120,9 +120,8 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘N | New task, in the drawer. Type what needs doing, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `^reference`, `p1` to `p9`; a dropdown finishes the one at the cursor. ↵ adds the task and starts its agent; ⇧↵ adds it for later; Esc closes. [Its keys](#keys) |
 | ⌘L | The keyboard into the drawer's conversation, or back to the workspace |
 | ⌘⇧L | Close the drawer to the right rail, or open it again. The agent goes on |
-| ⌘↵ | With a task's conversation open: Go to its tabs (the one shown last); with none, Claim this tab (the tab on show, if it is no task's) or a New tab of it |
-| ⌘⌃1 … ⌘⌃9 | Show the nth conversation of the right rail; on the one shown, close the drawer. Not ⌥1…⌥9: ⌥ is Meta in a terminal |
-| ⌘⇧N | Next task: the conversation of the first task that needs you. The tab on show stays |
+| ⌘⌃1 … ⌘⌃9 | Show the nth conversation of the right rail (its task's space); on the one shown, close the drawer. Not ⌥1…⌥9: ⌥ is Meta in a terminal |
+| ⌘⇧N | Next task: the space and chat of the first task that needs you |
 | ⌃⌥⌘Space | Capture, from any app: the pane in use (a hosted app you are in, else the focused pane) is frozen as a picture to draw on, and a draft opens in the drawer on the right, with the new-task line as its title. A live app is parked first; "↩ back to …" in the bar returns to it. On the picture: drag circles, ⇧-drag draws a box, ⌥-drag a freehand line, a click places a note to type (↵ keeps it). ⌘Z and ⇧⌘Z go over the steps; a click on a shape's line selects it and ⌫ removes it. ↵ goes to the title, Esc leaves the picture; a click on another pane captures that one too. In the title ↵ adds the task and starts its agent, ⇧↵ adds it for later; × or Esc cancels, after a question if anything was captured. The workspace stays in use beside the drawer, and ⌘N goes to the draft's title. See [Capture](#capture) |
 | ⌘B / ⌘⇧B | With the `marks` [flag](#features) on (so for the next two rows): mark the focused pane / the tab on show; on one that is marked, take the mark off (the Marks section offers it back for six seconds, and ⌘B again within them puts the same mark back). The mark is named for the app, the terminal's directory or the tab's title. It records what to open, not a window or a process: a terminal's directory as it is then, an app's bundle id, name and window title, a tab's title, task and split tree. A marked pane or tab shows ◆ and its letter |
 | ⌘' then a letter | Go to the mark with that letter. The status bar shows `MARK?` while it waits; Esc, or a letter of no mark, ends the wait and nothing else happens. If the mark's pane or tab is open, its tab comes forward and the pane takes focus (an app pane is focused, not entered). Else it is opened: a terminal in the recorded directory, the app's window in a pane (the one with the recorded title, else its only window, else its main one; an app that is not running is started), or the tab with its splits. A tab opens with what can be opened: a pane whose directory is gone or whose window could not be hosted is empty and says why, and going to the tab again tries it again |
@@ -243,25 +242,26 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    A saved agent cannot be started yet: the drawer says so too.
 4. **The drawer.** Its header: the task's badge and title (hover it for the model, the
    permission mode, how long the agent has run and its folder), the folder itself only when it
-   is not the task's repository; Go to its tabs (⌘↵)
-   shows the one of them shown last; a task with none offers Claim this tab (the tab on show is
-   no task's) or New tab (a shell in its repository); Brief (when it has captures); Stop ends the agent (in the terminal view; drawn natively, "Stop the Agent" in the palette or the menu);
+   is not the task's repository; Brief (when it has captures); Stop ends the agent (in the terminal view; drawn natively, "Stop the Agent" in the palette or the menu);
    × (⌘⇧L) closes the drawer to the right rail and the agent goes on. ⌘L moves the keyboard in
    and out. At its foot, muted, the model in short, and a permission mode that lets the agent
    act without asking (`auto`, `accept edits`; `bypass` in the warning colour): `haiku-5.5 ·
    auto`. It stays once the agent ended. Drag its left edge to make it wider or narrower. Opening a conversation, or a click on a tab, while a new
    task is half written puts the line aside: the box gets it back when it opens again.
 5. **The right rail.** The task's badge per open conversation: its border in the task's own
-   colour, its state as the corner dot; hover for its card. A click shows it, and the tab stays;
-   on the one shown, closes the drawer. A dismissed task leaves the rail and the drawer (the
+   colour, its state as the corner dot; hover for its card. A click shows it and its task's
+   space; on the one shown, closes the drawer. A dismissed task leaves the rail and the drawer (the
    drawer shows nothing, not another conversation); a done one stays only while it is shown or its
    agent runs. Dismissing a task whose agent runs asks first: Stop its agent and dismiss?
-6. **Tabs and the drawer.** Selecting a tab of a task shows that task's conversation in the
-   open drawer, starting nothing and leaving the keyboard where it was; a closed drawer stays
-   closed, and a tab of no task leaves it as it is. ⌘T makes a tab in the group on show; New Tab
-   outside the Task, one of no task. Drag a tab onto another group's tab or badge to move it
-   there, onto a tab of no task to unlink it; Remove Tab from Task does that from the palette,
-   and Move Tab to Task… lists the tasks (and No task) to move the tab on show to.
+6. **Spaces and the drawer.** Workspace, then each open task (and session, and workbook) is a
+   space with its own tabs; one is selected, and the drawer is only ever on its agent: a task's
+   chat, none for Workspace. Selecting starts nothing; a closed drawer stays closed. A task
+   started (↵ in the box, or its row clicked) opens its space with one empty tab; started from a
+   Workspace tab a Repos row opened for its folder, that tab moves into it. ⌘T makes a tab in the
+   space on show. Drag a tab onto another space's tab or badge to move it there; Remove Tab from
+   Task moves it to Workspace, and Move Tab to Task… lists Workspace, the tasks and the workbooks.
+   Closing a space's last tab closes the space. A click on a Repos row opens a terminal there in
+   a Workspace tab of its own. See `docs/ai/spaces.md`.
 7. **Following.** The task runs while its agent works. Claude is given the session's id; Codex
    names its own, and ottospace finds it where Codex wrote it: the one session that started in
    the task's folder after the agent did and before the next agent there, that nothing else
@@ -348,7 +348,7 @@ key of ottospace's, so it does nothing while a hosted app has the keyboard (`APP
 in a terminal it clears the screen, and is kept for that.
 
 The Tasks group also holds the drawer's commands: Type in the Conversation (⌘L), Open or Close the
-Conversation (⌘⇧L), Go to Its Tabs (⌘↵) and Stop the Agent (the drawer's Stop), each for
+Conversation (⌘⇧L) and Stop the Agent (the drawer's Stop), each for
 the conversation the drawer shows. ⌘P while you type in the conversation opens the palette over
 it: the agent gets no key while it is open, and when it closes the keyboard goes back to it.
 
