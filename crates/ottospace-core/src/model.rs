@@ -607,6 +607,8 @@ pub enum Action {
     },
     /// Reset Key Counts: every key unused again. The user's alone.
     ResetKeyUse,
+    /// Open or fold the key reference's `Known` group.
+    KeysKnown,
     /// `keys.json` as the shell read it at start.
     RestoreKeyUse {
         uses: KeyUse,
@@ -1577,6 +1579,7 @@ impl Action {
             | Action::KeyUsed { .. }
             | Action::ResetKeyUse
             | Action::RestoreKeyUse { .. }
+            | Action::KeysKnown
             | Action::LeaveVisual
             | Action::SetRepos { .. }
             | Action::SetRepoDirs { .. }
@@ -1837,6 +1840,7 @@ impl Action {
             | Action::KeyUsed { .. }
             | Action::ResetKeyUse
             | Action::RestoreKeyUse { .. }
+            | Action::KeysKnown
             | Action::ToggleVisual
             | Action::LeaveVisual
             | Action::ToggleAxOverlay
@@ -2466,6 +2470,9 @@ pub struct Model {
     /// How much the user uses each key. Never in the snapshot: it describes the user's habits.
     #[serde(skip)]
     pub key_use: KeyUse,
+    /// The key reference's `Known` group is open.
+    #[serde(skip)]
+    pub keys_known_open: bool,
     /// The terminal pane in visual mode.
     pub visual: Option<PaneId>,
     /// The accessibility debug overlay is showing.
@@ -2628,6 +2635,7 @@ impl Default for Model {
             paste_confirm: clip::PasteConfirm::default(),
             keys: false,
             key_use: KeyUse::default(),
+            keys_known_open: false,
             visual: None,
             ax_overlay: false,
             sneak: None,
@@ -4250,12 +4258,19 @@ impl Model {
             Action::ToggleKeys => {
                 self.keys = !self.keys;
                 if self.keys {
+                    // It opens with what is known folded.
+                    self.keys_known_open = false;
                     // One overlay at a time, and the overlay needs the keyboard to be dismissed.
                     (self.picker, self.palette) = (None, None);
                     self.leave(effects);
                 }
             }
             Action::CloseKeys => self.keys = false,
+            // Only while there is something known to show.
+            Action::KeysKnown => {
+                let known = self.key_use.uses().any(|(binding, _)| self.key_use.known(binding, self.now));
+                self.keys_known_open = self.keys && known && !self.keys_known_open;
+            }
             // Taken by `update` before any step.
             Action::KeyUsed { .. } | Action::ResetKeyUse | Action::RestoreKeyUse { .. } => {}
             Action::ToggleVisual => {
@@ -6032,6 +6047,28 @@ impl Model {
         })
     }
 
+    /// The key reference as it lists the keys now: the mode's own first (list, visual mode), then
+    /// each group's keys not yet known, least used first, then the known ones. `has_key`: whether a
+    /// binding has a key in this run (the return key may be unset).
+    pub fn key_reference(&self, has_key: impl Fn(Binding) -> bool) -> key_use::Reference {
+        let mode = match self.mode() {
+            Mode::List => Some(key_use::Group::List),
+            Mode::Visual => Some(key_use::Group::Visual),
+            _ => None,
+        };
+        let listed = |binding| has_key(binding) && self.binding_on(binding);
+        let mut reference = self.key_use.reference(self.now, mode, listed, self.keys_known_open);
+        // A mode's keys of a feature that is off are not listed: "Mark: …", "Apps: …".
+        let on = |what: &str| {
+            (self.features.on(Feature::Marks) || !what.starts_with("Mark:"))
+                && (self.features.on(Feature::AppsSection) || !what.starts_with("Apps:"))
+        };
+        for (_, lines) in &mut reference.groups {
+            lines.retain(|line| !matches!(line, key_use::Line::Note { what, .. } if !on(what)));
+        }
+        reference
+    }
+
     /// Whether `binding`'s keys are on: counted, and listed. Not while its feature is off.
     pub fn binding_on(&self, binding: Binding) -> bool {
         // ⌘⌥1–9 go to marks, and are no command's.
@@ -7206,6 +7243,7 @@ mod tests {
         Action::KeyUsed { .. },
         Action::ResetKeyUse,
         Action::RestoreKeyUse { .. },
+        Action::KeysKnown,
         Action::ToggleVisual,
         Action::LeaveVisual,
         Action::ToggleAxOverlay,
@@ -7446,6 +7484,7 @@ mod tests {
             Action::KeyUsed { binding: Binding::Copy, at: 1 },
             Action::ResetKeyUse,
             Action::RestoreKeyUse { uses: KeyUse::default() },
+            Action::KeysKnown,
             Action::ToggleVisual,
             Action::LeaveVisual,
             Action::ToggleAxOverlay,
