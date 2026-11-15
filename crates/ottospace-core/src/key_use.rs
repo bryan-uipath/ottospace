@@ -171,9 +171,7 @@ impl Binding {
             | B::MarkPane
             | B::MarkJump
             | B::MarkNumber => Group::Tabs,
-            B::NewTask | B::NextTask | B::TalkFocus | B::TalkToggle | B::TalkGo | B::RailNumber | B::CaptureKey => {
-                Group::Tasks
-            }
+            B::NewTask | B::NextTask | B::TalkFocus | B::TalkToggle | B::RailNumber | B::CaptureKey => Group::Tasks,
             B::Copy | B::Paste => Group::Text,
             B::VisualMode | B::ListMode | B::SneakMode => Group::Modes,
             B::Palette | B::ShowKeys | B::EditSettings | B::Zoom | B::ReturnKey | B::Hide | B::Quit => Group::App,
@@ -207,7 +205,6 @@ impl Binding {
             B::NextTask => "Next that needs you",
             B::TalkFocus => "Type to the agent",
             B::TalkToggle => "Open / close chat",
-            B::TalkGo => "Go to its tabs",
             B::RailNumber => "Show a rail's agent",
             B::CaptureKey => "Capture, from any app",
             B::Copy => "Copy",
@@ -287,6 +284,7 @@ impl Group {
                 ("R M ⇧J ⇧K", "Mark: rename, letter, move"),
                 ("A space", "Workbook: add tab, list tabs"),
                 ("P /", "Apps: pin, filter"),
+                ("← → T", "Calendar: day back, on, today"),
             ],
             Group::Visual => &[
                 ("H J K L", "Move"),
