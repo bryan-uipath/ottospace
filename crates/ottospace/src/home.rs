@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, Bounds, Context, Div, EntityId, FontWeight, Hsla, Path, PathBuilder, Pixels, Point, SharedString,
-    Window, canvas, div, point, prelude::*, px, relative, rgb,
+    AnyElement, App, Bounds, Context, Div, EntityId, FontWeight, Hsla, Modifiers, Path, PathBuilder, Pixels, Point,
+    SharedString, Window, canvas, div, point, prelude::*, px, relative, rgb,
 };
 use ottospace_core::home::{HOME, Home, NEAR, View};
 use ottospace_core::tasks::{Group, TaskId};
@@ -274,8 +274,8 @@ pub fn empty_pane(hint: SharedString, pane: PaneId, drawn: &Shared) -> impl Into
 
 impl Workspace {
     /// The home screen: the lattice with a node for each listed task, what the workspace is
-    /// for with the tasks that need the user under it, and a legend.
-    pub(crate) fn render_home(&self, home: Home<'_>, cx: &mut Context<Self>) -> AnyElement {
+    /// for with the tasks that need the user under it, and a legend. `held`: the modifiers down now.
+    pub(crate) fn render_home(&self, home: Home<'_>, held: Modifiers, cx: &mut Context<Self>) -> AnyElement {
         let (counts, view, drawn) = (home.counts, cx.entity_id(), &self.home);
         let any = counts.total() > 0;
         let muted = || div().text_xs().text_color(rgb(theme::MUTED));
@@ -331,35 +331,6 @@ impl Workspace {
             .collect();
 
         // What the workspace is for, and the two ways to fill it. New tasks are the drawer's.
-        let button = |id: &'static str, label: &'static str, key: &'static str| {
-            div()
-                .id(id)
-                .relative()
-                .px_3()
-                .py_1p5()
-                .flex()
-                .gap_2()
-                .rounded_md()
-                .border_1()
-                .border_color(rgb(theme::BORDER_STRONG))
-                .bg(rgb(theme::RAISED))
-                .text_sm()
-                .cursor_pointer()
-                .hover(|s| s.bg(rgb(theme::SELECTED)))
-                .child(label)
-                .child(div().text_color(rgb(theme::MUTED)).child(key))
-                .child(self.controls.mark(format!("home:{id}")))
-        };
-        let open_app = button("open_app", "Open an app", "⌘E").on_click(cx.listener(|this, _, window, cx| {
-            this.open_picker(ottospace_core::Axis::Right, false, window, cx);
-        }));
-        let terminal = button("terminal", "Terminal", "⌘D").on_click(cx.listener(|this, _, window, cx| {
-            let split = ottospace_core::Action::Split {
-                axis: ottospace_core::Axis::Right,
-                kind: ottospace_core::Kind::Terminal,
-            };
-            this.dispatch(split, this.input, window, cx);
-        }));
         let line = div()
             .id("home-workspace")
             .occlude()
@@ -369,7 +340,7 @@ impl Workspace {
             .gap_2()
             .child(div().text_xs().text_color(rgb(theme::MUTED)).child("WORKSPACE"))
             .child(div().text_base().child("Your windows, apps and terminals go here"))
-            .child(div().pt_2().flex().gap_2().child(open_app).child(terminal));
+            .child(div().pt_2().child(self.fill_list(held, cx)));
 
         let rows: Vec<_> = (home.needs_you.iter().enumerate())
             .map(|(i, task)| {

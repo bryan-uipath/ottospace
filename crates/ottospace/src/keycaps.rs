@@ -1,0 +1,112 @@
+//! Key caps: a key from the keymap as one small box per key, and the two ways to fill an
+//! empty tab listed with them. The same list on the home screen and in an empty tab.
+
+use gpui::{Context, Div, Keystroke, Modifiers, Stateful, div, prelude::*, px, rgb};
+use ottospace_core::commands::Command;
+use ottospace_core::{Action, Axis, Kind, theme};
+
+use crate::{Workspace, commands, key_use};
+
+/// A key as caps, each with whether it is lit: ⌘E with ⌘ held is [("⌘", true), ("E", false)].
+/// A modifier's cap is lit while it is held and the keys held are all the chord's; `fired`
+/// (the whole chord was pressed) lights every cap.
+fn caps(stroke: &Keystroke, held: Modifiers, fired: bool) -> Vec<(String, bool)> {
+    let (signs, key) = commands::key_parts(stroke);
+    let on = |m: Modifiers| [(m.platform, '⌘'), (m.control, '⌃'), (m.alt, '⌥'), (m.shift, '⇧')];
+    let within = on(held).iter().zip(on(stroke.modifiers)).all(|(held, chord)| !held.0 || chord.0);
+    let lit = |sign: char| fired || (within && on(held).contains(&(true, sign)));
+    signs.chars().map(|sign| (sign.to_string(), lit(sign))).chain([(key, fired)]).collect()
+}
+
+/// One cap: a small rounded box. Lit: a lighter fill, never the primary colour.
+fn cap(text: String, lit: bool) -> Div {
+    let (fill, edge, ink) = match lit {
+        true => (theme::BORDER_STRONG, theme::SCROLL_THUMB_HELD, theme::TEXT),
+        false => (theme::RAISED, theme::BORDER_STRONG, theme::MUTED),
+    };
+    div()
+        .min_w(px(22.))
+        .h(px(22.))
+        .px_1()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(5.))
+        .border_1()
+        .border_color(rgb(edge))
+        .bg(rgb(fill))
+        .text_xs()
+        .text_color(rgb(ink))
+        .child(text)
+}
+
+/// A key's caps in a row, e.g. [⌘] [E]. `held`: the modifiers down now.
+pub fn key_caps(stroke: &Keystroke, held: Modifiers, fired: bool) -> Div {
+    div().flex().gap_1().children(caps(stroke, held, fired).into_iter().map(|(text, lit)| cap(text, lit)))
+}
+
+impl Workspace {
+    /// The two ways to fill an empty tab, a row each: its key's caps, then what it does. A click
+    /// does what the key does. `held`: the modifiers down now, whose caps are lit.
+    pub(crate) fn fill_list(&self, held: Modifiers, cx: &mut Context<Self>) -> Div {
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        let row = |id: &'static str, command: Command, label: &'static str, fired: bool| -> Stateful<Div> {
+            let stroke = key_use::first_stroke(&keymap, commands::action(command).as_ref());
+            // Their room also with no key, so the labels line up.
+            let keys = div().min_w(px(48.)).children(stroke.map(|stroke| key_caps(&stroke, held, fired)));
+            div()
+                .id(id)
+                .relative()
+                .px_2()
+                .py_1()
+                .flex()
+                .items_center()
+                .gap_3()
+                .rounded_md()
+                .text_sm()
+                .cursor_pointer()
+                .hover(|s| s.bg(rgb(theme::SELECTED)))
+                .child(keys)
+                .child(label)
+                .child(self.controls.mark(format!("home:{id}")))
+        };
+        // The picker open is this row's chord, pressed: its caps stay lit. A terminal fills the
+        // tab at once, so its row has nothing to show.
+        let picking = self.model.picker.is_some();
+        let open_app = row("open_app", Command::PickPane, "Open an app", picking);
+        let open_app = open_app.on_click(cx.listener(|this, _, window, cx| {
+            this.open_picker(Axis::Right, false, window, cx);
+        }));
+        let terminal = row("terminal", Command::SplitRight, "Terminal", false);
+        let terminal = terminal.on_click(cx.listener(|this, _, window, cx| {
+            let split = Action::Split { axis: Axis::Right, kind: Kind::Terminal };
+            this.dispatch(split, this.input, window, cx);
+        }));
+        div().flex().flex_col().gap_1().child(open_app).child(terminal)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lit(keys: &str, held: &str) -> Vec<(String, bool)> {
+        let held = Keystroke::parse(&format!("{held}x")).unwrap().modifiers;
+        caps(&Keystroke::parse(keys).unwrap(), held, false)
+    }
+
+    #[test]
+    fn a_key_is_a_cap_each_and_a_held_modifier_of_the_chord_is_lit() {
+        let cap = |text: &str, lit: bool| (text.to_string(), lit);
+        assert_eq!(lit("cmd-e", ""), [cap("⌘", false), cap("E", false)]);
+        assert_eq!(lit("cmd-e", "cmd-"), [cap("⌘", true), cap("E", false)]);
+        assert_eq!(lit("cmd-shift-e", "cmd-"), [cap("⌘", true), cap("⇧", false), cap("E", false)]);
+        // ⌘⇧ starts no ⌘E, and ⌥ no chord here.
+        assert_eq!(lit("cmd-e", "cmd-shift-"), [cap("⌘", false), cap("E", false)]);
+        assert_eq!(lit("cmd-e", "alt-"), [cap("⌘", false), cap("E", false)]);
+        // The whole chord, pressed: every cap.
+        let fired = caps(&Keystroke::parse("cmd-e").unwrap(), Modifiers::default(), true);
+        assert_eq!(fired, [cap("⌘", true), cap("E", true)]);
+    }
+}
