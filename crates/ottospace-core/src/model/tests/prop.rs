@@ -757,6 +757,12 @@ const MAKERS: &[Make] = &[
     |g| Action::KeyUsed { binding: g.rng.pick(crate::key_use::ALL), at: g.key_time() },
     |_| Action::ResetKeyUse,
     |g| {
+        use crate::notice::Kind::*;
+        let kinds = [Failed, Refused, Unsaved, Told, SettingsProblem, SettingsRetired, SettingsRestart, Start, Keys];
+        let said = g.m.settings_line().filter(|_| g.rng.coin());
+        Action::NoticeDismiss { notice: g.rng.pick(&kinds), text: said.unwrap_or_else(|| g.text()) }
+    },
+    |g| {
         let mut uses = KeyUse::default();
         for _ in 0..g.rng.below(12) {
             uses.press(g.rng.pick(crate::key_use::ALL), g.key_time());
@@ -1313,6 +1319,10 @@ fn drawn(material: &crate::capture::Material) -> Vec<crate::capture::Shape> {
 }
 
 fn check(m: &Model) -> Result<(), String> {
+    // A dismissed notice is kept only of a kind that stays until fixed, one of each.
+    let kinds: Vec<crate::notice::Kind> = m.notice_hidden.iter().map(|n| n.kind).collect();
+    let once = kinds.iter().enumerate().all(|(i, kind)| !kind.held() && !kinds[..i].contains(kind));
+    ensure!(once, "dismissed notices: {:?}", m.notice_hidden);
     // A key's score is between none and the ceiling, however its clock went.
     let scored =
         |used: &crate::key_use::Use| used.score.is_finite() && (0.0..=crate::key_use::MOST).contains(&used.score);
@@ -2213,8 +2223,22 @@ impl Run {
         let listed_flags: Vec<(Feature, bool)> =
             m.palette.iter().flat_map(|p| p.feature_matches()).map(|c| (c.feature, c.on)).collect();
         let key_use = m.key_use.clone();
+        let hidden = m.notice_hidden.clone();
         let effects = m.update(sent);
         check(m)?;
+        // A notice is said to the user: only their dismissal takes one off the bar, and only a
+        // read of the settings (their line fixed or changed) puts one back. No input: one effect.
+        let dismisses = matches!(action, Action::NoticeDismiss { .. });
+        let reads = matches!(action, Action::SettingsRead { .. }) && origin != Origin::Socket;
+        ensure!(
+            (dismisses && origin == Origin::User) || reads || m.notice_hidden == hidden,
+            "{origin:?} changed the dismissed notices: {action:?}"
+        );
+        ensure!(!reads || m.notice_hidden.iter().all(|n| hidden.contains(n)), "a read dismissed a notice");
+        if let Action::NoticeDismiss { notice, .. } = &action {
+            let told = if origin == Origin::User { vec![Effect::NoticeDismissed { kind: *notice }] } else { vec![] };
+            ensure!(effects == told, "a notice's dismissal by {origin:?} made {effects:?}");
+        }
         // The counts are the user's keys: only their count and reset change them, and the shell's
         // read of keys.json. A count changes nothing else: no effect.
         let counts = matches!(action, Action::KeyUsed { .. } | Action::ResetKeyUse) && origin == Origin::User;
@@ -2423,6 +2447,8 @@ impl Run {
         }
         // A count of a key is no input: it ends no mode or wait.
         let counted = matches!(action, Action::KeyUsed { .. } | Action::ResetKeyUse | Action::RestoreKeyUse { .. });
+        // Nor is a notice dismissed: the bar is outside every mode.
+        let counted = counted || dismisses;
         let sneak_own = matches!(
             action,
             Action::Sneak { .. }
@@ -2790,6 +2816,7 @@ impl Run {
                     ensure!(parts.len() == 2 && parts.iter().all(plain), "a worktree at {path:?}, outside {root:?}");
                 }
                 Effect::Notice { text } => ensure!(user && !text.is_empty(), "{origin:?} is told {text:?}"),
+                Effect::NoticeDismissed { .. } => ensure!(user, "{origin:?} dismissed a notice"),
                 Effect::Told { text } => {
                     ensure!(
                         user && matches!(action, Action::RepoRemove { .. } | Action::QuitConfirm),
@@ -3264,6 +3291,7 @@ fn code(sent: &Envelope) -> String {
         ("id", "Subject"),
         ("shows", "View"),
         ("binding", "Binding"),
+        ("notice", "crate::notice::Kind"),
         ("space", "Owner"),
         ("show", "Show"),
         ("step", "DayStep"),

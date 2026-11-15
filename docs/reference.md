@@ -21,6 +21,7 @@ running, and the rest of the design is not built: see the
 |---|---|
 | Split panes mixing terminals and real app windows | Works today |
 | Key bindings and a status bar showing the mode (`APP`, `PICK`…; none when normal) | Works today |
+| [Notice bar](#notice-bar): one app-level message, full width under the top row, red, amber or blue by level (error, warning, information) | Works today |
 | Control socket and `ottospace ctl` for agents and tests | Works today |
 | Terminal scrollback, mouse selection, copy and paste | Works today |
 | Scrollbars on every list that scrolls, the key reference and a terminal's scrollback: drag the thumb, click the track to page (in a terminal a click beside the thumb is the terminal's). They follow the system's "Show scroll bars" setting | Works today |
@@ -622,7 +623,7 @@ tab of dashboards, a tab of docs. It is not a task: no agent works it and it is 
   first is selected; a tab of it that is open already is kept, not opened twice. A workbook of
   one tab opens under the workbook's name; of several, each tab under its own title. Each
   terminal starts a new shell in its directory; if the directory is gone it starts in your home
-  folder, and the status bar says so. Above its prompt, in grey, are the lines it kept, then
+  folder, and the notice bar says so. Above its prompt, in grey, are the lines it kept, then
   `── saved <date> ──`. A command it kept is typed on the prompt, not run: ↵ runs it, or edit or
   clear it first. The divider names it too (`↵ runs: npm run dev`). The program itself did not
   survive: this is not session restore. Each app pane gets a window of its app as a tab's mark does: one no
@@ -642,11 +643,11 @@ tab of dashboards, a tab of docs. It is not a task: no agent works it and it is 
   passwords, `user:pass@` URLs, `Authorization:` headers; a private key block is left out), and
   a command holding any is not kept. This is best effort: a secret of another shape is kept as
   printed. Set `workbook_scrollback_lines` to `0` and no terminal text is saved at all. The save
-  says what it kept in the status bar, and the row says `history` while a workbook holds any;
+  says what it kept in the notice bar, and the row says `history` while a workbook holds any;
   deleting the workbook deletes its file. Never in the control socket's state (it counts them:
   `lines`, `has_command`).
 - Kept in `~/.ottospace/workbooks`, one file each, readable by you alone. A file there that
-  ottospace cannot read is counted in the status bar and left as it is.
+  ottospace cannot read is counted in the notice bar and left as it is.
 - Only you save, open, rename or delete a workbook: a socket client's key, click or label is
   refused. The state lists them (`workbooks`: names, tabs and pane kinds, no directories).
 
@@ -665,7 +666,7 @@ written a second after a change and at quit, readable by you alone.
   its badge colour is in the task's file. A tab of a task that is gone or dismissed comes back as
   a tab of no task.
 - **Terminals** start a new shell in the folder they were in (one that is gone: your home folder,
-  and the status bar says so). As a [workbook](#workbooks)'s do, they show their last lines in
+  and the notice bar says so). As a [workbook](#workbooks)'s do, they show their last lines in
   grey above the prompt, and a program that ran in front is typed on the prompt, not run: ↵ runs
   it. The same setting (`workbook_scrollback_lines`; `0` keeps no terminal text) and the same
   cleaning apply: escape sequences taken out, credential-shaped text hidden, capped. The program
@@ -745,7 +746,7 @@ the way.
   when you click it or choose it, and only an `https:` link. Never by itself.
 - **The feed** is read at start and every `calendar_refresh_minutes` (5), off the main thread,
   through `/usr/bin/curl`: `https:` only, no redirects (a feed that has moved is not read: the
-  status bar asks for its final address), only from a host on the internet (looked up once,
+  notice bar asks for its final address), only from a host on the internet (looked up once,
   checked, and curl pinned to that address), at most 5 MB, 30 seconds. A proxy set in your
   environment (`https_proxy`) applies. With `gh` for pull requests (`repos_prs`), it is ottospace's only network access. The link is handed to curl on its standard input, not in
   its arguments, and is never shown, logged or put in the state. A read that fails keeps the
@@ -825,7 +826,7 @@ it is still among all apps. Each of these writes `~/.ottospace/settings.json` (`
 - The file is read again at each write, and one entry is added to or taken off the list as it is
   then: a line you added by hand since ottospace started, or one another ottospace wrote, stays.
 - Only the list changed is touched: every other key and the file's spacing stay.
-- Not written, with a notice in the status bar, and the pin then lasts until ottospace quits:
+- Not written, with a notice in the notice bar, and the pin then lasts until ottospace quits:
   a file that is not a JSON object; a list that is not a list of names (`"apps": ["Slack", 3]`):
   nothing in it is dropped for not being understood; a `settings.json` that is a link to a file
   that is not there.
@@ -842,7 +843,7 @@ every way out: see [Getting a window back](#getting-a-window-back).
 
 The wheel or trackpad over an app pane you are not in brings its real window up over the pane
 for the scroll (a peek, `wheel_to_apps`). The window is placed as on entering, and the app is
-activated, because macOS shows an inactive app's window under ottospace's. The status bar says
+activated, because macOS shows an inactive app's window under ottospace's. The notice bar says
 `PEEK <App>`, and keys go to the app. The scroll that started the peek reached ottospace and is
 lost; the ones after it go to the window. The window parks again, and ottospace takes the
 keyboard back, when the pointer leaves the pane or 1.5 s pass with no scroll. A click or a key in
@@ -890,8 +891,29 @@ under `/tmp`) and runs your editor on it, with the same command line as Open Set
 in the drawer. The file is removed when the editor exits. At start, files a crashed run left there
 are deleted, not restored: a draft lives in the app while the editor runs, and nowhere else after.
 Up to 100000 characters come back (the new-task line: its own limit); more, the first part is kept
-and the status bar says so. Control characters other than a line break go, as a paste's do; a tab
+and the notice bar says so. Control characters other than a line break go, as a paste's do; a tab
 is four spaces.
+
+## Notice bar
+
+What ottospace has to say about itself (a settings file it cannot read, a file not saved, a
+shell that did not start, why a move of yours did nothing, a key that needs a restart) shows in
+one bar, the window's width, between the top row and everything under it. It opens by pushing
+the rest down, and at once under the system's Reduce Motion.
+
+- **Level**: red for an error, amber for a warning (a move that did nothing, a retired setting, a
+  global key not registered), blue for information. A glyph says the level too.
+- **One at a time**: the most pressing, and of those the newest. An error is not replaced by
+  information; when it goes, what it covered shows.
+- **One line**: text too long is cut with an ellipsis, and the hover shows all of it. A settings
+  problem offers **Open settings**.
+- **Dismiss**: × on the bar, or Esc when no mode and no terminal takes it. Only you dismiss a
+  notice: a socket client cannot, and its failure never takes the place of what your own step
+  said. A dismissed settings line comes back when it says something else.
+- **How long**: as before. What a step did goes after 8 seconds; a settings problem stays until
+  the file is right; a failure stays until the next one, or until dismissed.
+
+A copy's "Copied 3 lines", the mode and the count of tasks that need you stay in the status bar.
 
 ## Settings
 
@@ -905,7 +927,7 @@ first. Again while that tab is open brings it forward; quitting the editor close
 you open it: a socket client's ⌘, does nothing. Open at quit, it comes back at the next start,
 the editor running again ([Restoring the layout](#restoring-the-layout)).
 
-A change is read when the file is saved: what is wrong in it is said in the status bar (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `worktrees_dir`, `repos_prs`, `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify`, `calendar_notify_for`, `calendar_hide_free`, `calendar_colors`, `paste_confirm` and `features` apply at once; any other key changed says "restart to apply" with its name, in muted text: information, not an error (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
+A change is read when the file is saved: what is wrong in it is said in the notice bar (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `worktrees_dir`, `repos_prs`, `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify`, `calendar_notify_for`, `calendar_hide_free`, `calendar_colors`, `paste_confirm` and `features` apply at once; any other key changed says "restart to apply" with its name, in muted text: information, not an error (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
 
 
 ```json
@@ -969,11 +991,11 @@ A change is read when the file is saved: what is wrong in it is said in the stat
 | `calendar_hide_free` | Leave out entries that keep the time free (Outlook's FREE, `TRANSP:TRANSPARENT`): the band, the section, the alerts and the `calendar` request | `false` |
 | `calendar_colors` | Colours by title, first match wins: `[{"match": "1:1", "color": "teal"}]`. `match`: plain text the title holds, case ignored (not a pattern); `color`: `red`, `indigo`, `orange`, `pink`, `lime`, `purple`, `tan` or `teal`. At most 64 | none: colours by kind |
 | `suggest_dock_apps` | List the Dock's apps that are not running under "Not running". `false`: only pinned apps are listed there, and the Dock is not read | `true` |
-| `features` | [Feature flags](#features), by name: `true` or `false`. A name that is no flag is a mistake, named in the status bar with the flags there are; the others still apply | each flag's default |
+| `features` | [Feature flags](#features), by name: `true` or `false`. A name that is no flag is a mistake, named in the notice bar with the flags there are; the others still apply | each flag's default |
 | `paste_confirm` | When ⌘V into a terminal asks first: `multiline` (text with a line break, even a last one, bracketed paste or not: a shell may run each line) or `never` | `multiline` |
 
 A mistake in the file (a key that does not exist, a wrong value, a font that is not installed) is
-shown in the status bar. That key takes its default and the others still apply. If the file is
+shown in the notice bar. That key takes its default and the others still apply. If the file is
 not a JSON object, every default applies.
 
 ## Features
@@ -986,7 +1008,7 @@ Palette ▸ Features… lists each flag with its stage and whether it is on; cho
 other way, writes it to `settings.json` and applies at once.
 
 A flag is temporary and about readiness: it goes when its feature is stable, and a setting of it
-then does nothing (the status bar says so). A preference is a normal setting.
+then does nothing (the notice bar says so). A preference is a normal setting.
 
 | Feature | Stage | Default | What it is |
 | --- | --- | --- | --- |
@@ -1077,7 +1099,7 @@ A window goes back to its original frame, read back to be sure. If it would not 
 there (at least 120×60 points of its top inside a screen's visible area: an original on a display
 since unplugged, say) or the app refuses, it goes to the middle of the main screen, at its own size
 or the screen's. A window found already off screen when hosted is recorded at the middle of the
-main screen, and the status bar says so. If an app replaced its window while hosted, its windows
+main screen, and the notice bar says so. If an app replaced its window while hosted, its windows
 left in the parking spot come back instead. ottospace only moves and sizes windows: it never
 minimises or hides them, nor moves them to another Space.
 

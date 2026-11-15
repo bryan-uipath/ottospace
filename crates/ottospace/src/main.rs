@@ -39,10 +39,11 @@ use ottospace_core::list::{ListKey, list_key};
 use ottospace_core::marks::{Field, MarkInput, MarkOf, MarkRef, letter};
 use ottospace_core::model::zones::RailFocus;
 use ottospace_core::model::{CONFIRM_UP, Owner, TabAt};
+use ottospace_core::notice::{self, Notice};
 use ottospace_core::repos::{Checkout, Repo};
 use ottospace_core::rules::{self, Facts};
 use ottospace_core::scrollbar::{Extent, key_step};
-use ottospace_core::settings::{Installed, Level};
+use ottospace_core::settings::Installed;
 use ottospace_core::sneak::{SneakKey, sneak_key};
 use ottospace_core::tasks::{Assign, Group, Heading, MAX_TITLE, State, Task, TaskId, TaskRow};
 use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, clears_selection, edge_scroll, press, visual_key};
@@ -82,6 +83,7 @@ mod markdown;
 mod marks;
 mod menus;
 mod new_task;
+mod notice_bar;
 mod progress;
 mod prs;
 mod record;
@@ -626,6 +628,10 @@ enum Mark {
     CalendarFirstRow,
     /// The status bar.
     Status,
+    /// The notice bar, its × and what it offers.
+    Notice,
+    NoticeClose,
+    NoticeOffer,
 }
 
 type Marks = Rc<RefCell<HashMap<Mark, Bounds<Pixels>>>>;
@@ -837,7 +843,7 @@ struct Workspace {
     /// Pictures asked for and not taken yet, and the terminals whose visual cursor goes after one.
     pending: Vec<collect::Pending>,
     visual_after: Vec<PaneId>,
-    /// A global key that could not be registered, for the status bar.
+    /// A global key that could not be registered, for the notice bar.
     key_notice: Option<String>,
     /// A test run's recording of its own window (`record_start`).
     recording: Option<record::Recording>,
@@ -952,6 +958,12 @@ struct Workspace {
     /// that can be done.
     wanted: Option<PaneId>,
     error: Option<String>,
+    /// The last `Effect::Notice`: while `error` says it, it is a refusal, not a failure.
+    refused: Option<String>,
+    /// `error` as last settled and whose step set it (`swap_origin`): a client's never covers the user's.
+    error_was: (Option<String>, Option<Origin>),
+    /// The notice bar's height as it opens and closes.
+    bar: notice_bar::Bar,
     /// False in e2e runs, which must never move the user's real windows.
     hosting: bool,
     /// Test runs: the pid of the one app that may be hosted.
@@ -997,7 +1009,7 @@ const E2E_SLIVER: f32 = 12.;
 
 /// How long the `s` key snoozes a task: one hour.
 const SNOOZE_MS: u64 = 3_600_000;
-/// How long a step's information (`Effect::Told`) stays in the status bar.
+/// How long a step's information (`Effect::Told`) stays in the notice bar.
 const TOLD_FOR: Duration = Duration::from_secs(8);
 
 /// Longest a `wait` request may run: 10 minutes.
@@ -1151,6 +1163,10 @@ impl Workspace {
                             cx.notify();
                         }
                         this.sync_agents(window, cx);
+                        // A notice whose time is up, or one that came with no frame asked for.
+                        if tick % 6 == 0 && this.notice_changed() {
+                            cx.notify();
+                        }
                         // The header's time goes on while an agent runs.
                         let runs = this.model.talk.as_ref().is_some_and(|t| t.open && this.model.agent_runs(&t.task));
                         if runs && tick % 30 == 0 {
@@ -1224,12 +1240,12 @@ impl Workspace {
         // A folder that could not be listed is left alone: writing could replace tasks it holds.
         let keeping = kept.error.is_none();
         model.update(Action::RestoreTasks { tasks: kept.tasks, floor: kept.highest }.sent_by(Origin::System));
-        // The first problem found at start, for the status bar: settings, the font, then tasks.
+        // The first problem found at start, for the notice bar: settings, the font, then tasks.
         let unread = (unread > 0).then(|| format!("tasks: {unread} file(s) in the tasks folder could not be read"));
         let notice = config::get().error.clone().or(terminal::choose_font(window)).or(kept.error).or(unread);
         // A crashed run's drafts are deleted, not restored.
         editor::sweep();
-        // What `settings.json` says at start: what is wrong in it stays in the status bar until mended.
+        // What `settings.json` says at start: what is wrong in it stays in the notice bar until mended.
         let settings_read = config::settings_stamp();
         if let Some(text) = config::get().home.as_ref().map(|_| config::settings_text().unwrap_or_default()) {
             model.update(Action::SettingsRead { text, written: false }.sent_by(Origin::System));
@@ -1314,6 +1330,9 @@ impl Workspace {
             front_hosted: None,
             wanted: None,
             error: None,
+            refused: None,
+            error_was: (None, None),
+            bar: notice_bar::Bar::default(),
             notice,
             settings_looked: settings_read,
             settings_read,
@@ -1356,6 +1375,15 @@ impl Workspace {
     /// back. For where the handlers run outside any one call (an injected key or pointer event);
     /// everywhere else `with_origin`.
     fn swap_origin(&mut self, origin: Origin) -> Origin {
+        // What failed since the last swap was the step of the sender now left: a client's
+        // neither covers nor clears what the user's step said (`notice::replaces`).
+        if self.error != self.error_was.0 {
+            if self.error_was.0.is_some() && !notice::replaces(self.input, self.error_was.1) {
+                self.error.clone_from(&self.error_was.0);
+            } else {
+                self.error_was = (self.error.clone(), Some(self.input));
+            }
+        }
         std::mem::replace(&mut self.input, origin)
     }
 
@@ -1363,7 +1391,7 @@ impl Workspace {
     fn with_origin<R>(&mut self, origin: Origin, f: impl FnOnce(&mut Self) -> R) -> R {
         let before = self.swap_origin(origin);
         let result = f(self);
-        self.input = before;
+        self.swap_origin(before);
         result
     }
 
@@ -1388,7 +1416,7 @@ impl Workspace {
             self.refresh_apps();
             self.offer_installed(cx);
         }
-        // A client's key, click or label at the user's draft: the status bar says why it did nothing.
+        // A client's key, click or label at the user's draft: the notice bar says why it did nothing.
         let draft = ottospace_core::capture::DRAFT_USERS;
         if origin == Origin::Socket && self.model.refusal(&action, origin) == Some(draft) {
             self.error = Some(draft.into());
@@ -1580,7 +1608,8 @@ impl Workspace {
                     let done = self.worktrees.0.clone();
                     worktree::start(repo.clone(), branch.clone(), path.clone(), root.clone(), done);
                 }
-                Effect::Notice { text } => self.error = Some(text.clone()),
+                Effect::Notice { text } => (self.error, self.refused) = (Some(text.clone()), Some(text.clone())),
+                Effect::NoticeDismissed { kind } => self.notice_dismissed(*kind),
                 Effect::Told { text } => self.told = Some((text.clone(), Instant::now())),
                 // A picture of the pane is asked for: the cursor's going scrolls the terminal to
                 // its bottom, so it waits until the picture of what is on show is taken.
@@ -1655,7 +1684,7 @@ impl Workspace {
         if asked {
             self.error = (!unhosted.is_empty()).then(|| unhosted.join("; "));
         }
-        // The app wrote `settings.json`: the status bar speaks of the file as written.
+        // The app wrote `settings.json`: the notice bar speaks of the file as written.
         let wrote = effects.iter().any(|effect| {
             matches!(effect, Effect::SaveApps { .. } | Effect::SaveRepos { .. } | Effect::SaveTasksView { .. })
         });
@@ -1788,27 +1817,6 @@ impl Workspace {
         (self.stored, self.unsaved) = (stored, failed);
     }
 
-    /// What the status bar says is wrong, most pressing first: the last request that failed, a
-    /// task that is not saved, then a problem found at start.
-    /// The problem the status bar shows, and how it is drawn: the settings' line by its own level (a restart to ask
-    /// for is information), anything else as an error.
-    fn status_line(&self) -> Option<(String, Level)> {
-        // What is wrong with `settings.json` and `marks.json` has its own place beside a notice from the start.
-        let others: Vec<String> = [self.notice.clone(), self.kept_marks.notice.clone()].into_iter().flatten().collect();
-        let level = if others.is_empty() { self.model.settings_level() } else { Level::Error };
-        let start: Vec<String> = self.model.settings_line().into_iter().chain(others).collect();
-        let start = (!start.is_empty()).then(|| (start.join(" · "), level));
-        let error = |text: Option<String>| text.map(|text| (text, Level::Error));
-        let start = start.or(error(self.key_notice.clone())).or(error(self.kept_workbooks.notice.clone()));
-        let start = start.or(error(self.kept_layout.notice.clone()));
-        let unsaved = self.unsaved.clone().or(self.kept_marks.unsaved.clone()).or(self.kept_workbooks.unsaved.clone());
-        let unsaved = unsaved.or(self.kept_layout.unsaved.clone());
-        let editor = self.model.editor_note().map(|text| (text.to_string(), Level::Info));
-        let told =
-            self.told.as_ref().filter(|(_, at)| at.elapsed() < TOLD_FOR).map(|(text, _)| (text.clone(), Level::Info));
-        error(self.error.clone()).or(error(unsaved)).or(told).or(start).or(editor)
-    }
-
     /// Reads `settings.json` again once a change to it has held for one look: a file an editor
     /// is still writing, or has briefly renamed away, is not read.
     fn watch_settings(&mut self, window: &Window, cx: &mut Context<Self>) {
@@ -1866,7 +1874,7 @@ impl Workspace {
     /// Replies with the state. In a test run, not before a frame has drawn every action so far,
     /// so the bounds in the reply are of the new layout, never the one before it.
     fn answer(&mut self, reply: Sender<String>, window: &Window, cx: &mut Context<Self>) {
-        if self.settles && self.drawn_seq < self.seq {
+        if self.settles && (self.drawn_seq < self.seq || self.bar.moves()) {
             self.settling.push((Instant::now(), reply));
             cx.notify();
         } else {
@@ -1879,7 +1887,8 @@ impl Workspace {
     /// waited `SETTLE_LIMIT`, or all of them with `now` (the app quits), goes as it is, marked
     /// `"stale":true` if undrawn: the window drew no frame (hidden, or stuck).
     fn settle(&mut self, now: bool, window: &Window, cx: &mut Context<Self>) {
-        let drawn = self.drawn_seq >= self.seq;
+        // Nor while the notice bar opens or closes: the bounds are of the layout at rest.
+        let drawn = self.drawn_seq >= self.seq && !self.bar.moves();
         let (due, waiting) = std::mem::take(&mut self.settling)
             .into_iter()
             .partition(|(since, _)| drawn || now || since.elapsed() >= SETTLE_LIMIT);
@@ -2866,7 +2875,7 @@ impl Workspace {
                 (*id, terminal)
             })
             .collect();
-        let status = self.status_line();
+        let status = self.notice_shown();
         serde_json::json!({
             "ok": true,
             "mode": self.model.mode(),
@@ -2910,10 +2919,12 @@ impl Workspace {
             // The terminal font in use, and the size of one character cell in points.
             "font": terminal::font_in_use(),
             "cell": [f32::from(self.cell.width), f32::from(self.cell.height)],
-            // The problem the status bar shows, or null. Not `error`: that key means the request failed.
-            "notice": status.as_ref().map(|(text, _)| text),
-            // How the status bar draws it: `info` (muted: a restart to ask for, a retired key) or `error`.
-            "notice_level": status.as_ref().map(|(_, level)| level),
+            // What the notice bar says, or null. Not `error`: that key means the request failed.
+            "notice": status.as_ref().map(|notice| &notice.text),
+            // Its level: `info` (a restart to ask for), `warning` (a move that did nothing) or `error`.
+            "notice_level": status.as_ref().map(Notice::level),
+            // The bar as drawn: its rect, and its height while it opens or closes. Null: no bar.
+            "notice_bar": self.notice_snapshot(),
             // How many problems the last read of `settings.json` found.
             "settings_errors": self.model.settings_errors(),
             // The user's editor on a draft (⌃G): what it edits, never the text. Null: none runs.
@@ -3549,7 +3560,13 @@ impl Workspace {
         if self.model.mode() == Mode::Talk {
             return self.talk_key(event, window, cx);
         }
-        let Some(terminal) = self.model.focused.and_then(|id| self.terminals.get(&id)) else { return };
+        let Some(terminal) = self.model.focused.and_then(|id| self.terminals.get(&id)) else {
+            // Esc that nothing else takes (no mode, no terminal to type it in) dismisses the notice.
+            if key.key == "escape" && !key.modifiers.modified() && self.dismiss_notice(window, cx) {
+                cx.stop_propagation();
+            }
+            return;
+        };
         let key = &event.keystroke;
         let m = key.modifiers;
         let mods = crate::mods(m);
@@ -4354,7 +4371,7 @@ impl Workspace {
     /// listed already is known, and after, from the directories as they then are. If the
     /// settings were not written the directories are as before: the next try writes again.
     fn change_repos(&mut self, action: Action, origin: Origin, window: &Window, cx: &mut Context<Self>) {
-        // A refused one (a client's) leaves the status bar and the list alone.
+        // A refused one (a client's) leaves the notice bar and the list alone.
         if self.model.refusal(&action, origin).is_some() {
             self.dispatch(action, origin, window, cx);
             return;
@@ -5666,10 +5683,6 @@ impl Workspace {
                     .filter(|clip| clip.shows(now_ms()))
                     .map(|clip| div().flex_none().text_color(rgb(theme::PRIMARY)).child(clip.text.clone())),
             )
-            .children(self.status_line().map(|(text, level)| {
-                let color = if level == Level::Info { theme::MUTED } else { theme::ERROR };
-                div().min_w_0().truncate().text_color(rgb(color)).child(text)
-            }))
     }
 }
 
@@ -5730,6 +5743,18 @@ fn title_shadow() -> Div {
         blur_radius: px(14.),
         spread_radius: px(-8.),
     }])
+}
+
+/// `inner` as if it lay under the app, seen through a gap: a shadow falls on its top and bottom
+/// edges, `depth` points deep. The shadows take no room and no clicks; the caller sizes the result.
+pub(crate) fn recessed(inner: impl IntoElement, depth: f32) -> Div {
+    let (dark, clear) = (black().opacity(0.6), black().opacity(0.));
+    let edge = |from, to| {
+        let shade = gpui::linear_gradient(180., gpui::linear_color_stop(from, 0.), gpui::linear_color_stop(to, 1.));
+        div().absolute().left_0().right_0().h(px(depth)).bg(shade)
+    };
+    let (top, bottom) = (edge(dark, clear).top_0(), edge(clear, dark).bottom_0());
+    div().relative().overflow_hidden().child(inner).child(top).child(bottom)
 }
 
 /// The rail's open cell, raised: the panel's background, a soft shadow below it, and an accent bar
@@ -5926,6 +5951,9 @@ impl Render for Workspace {
         }
         self.controls.begin();
         self.bars.begin();
+        self.move_notice_bar(window);
+        // The notice bar's room: everything under the top row starts this much lower.
+        let split = || div().h(px(self.bar.height)).flex_none();
         // The Repos list is noted again only while it is drawn.
         // So are the tabs and spaces: a tab of another space is not drawn.
         self.marks.borrow_mut().retain(|mark, _| {
@@ -6206,6 +6234,7 @@ impl Render for Workspace {
                             .flex_col()
                             .when(self.model.live.is_some(), |d| d.opacity(0.5))
                             .child(self.render_lights(cx))
+                            .child(split())
                             .child(
                                 div()
                                     .flex_1()
@@ -6225,6 +6254,7 @@ impl Render for Workspace {
                             .flex()
                             .flex_col()
                             .child(self.render_spaces(left, room, cx))
+                            .child(split())
                             .child(
                                 div()
                                     .flex_1()
@@ -6262,6 +6292,8 @@ impl Render for Workspace {
                     .child(zone_shadow(right_width, false))
                     // Highest, the title strip: its shadow falls on all three zones.
                     .child(title_shadow())
+                    // Over the zones' shadows and the title strip's: its own edges are shaded.
+                    .children(self.render_notice_bar(cx))
                     .children(self.render_meeting_banner(cx)),
             )
             // The meeting timeline, directly above the status bar.
@@ -6491,7 +6523,7 @@ fn main() {
             let registered = hotkey::key_code(&name)
                 .ok_or_else(|| "it is not one of f13-f20".to_string())
                 .and_then(hotkey::register);
-            // A key another app holds is said in the status bar too: stderr is seen by nobody.
+            // A key another app holds is said in the notice bar too: stderr is seen by nobody.
             let returns = registered.err().map(|err| format!("return key {} is off: {err}", name.to_uppercase()));
             if returns.is_none() {
                 let _ = RETURN_KEY.set(name.to_uppercase());

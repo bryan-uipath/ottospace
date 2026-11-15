@@ -39,6 +39,16 @@ pub const SELECTION: u32 = 0x155e75;
 /// Sneak labels: a solid amber pill with dark text, readable over any app.
 pub const SNEAK: u32 = 0xffb900;
 
+/// The notice bar by level, `(background, text)`: apollo-ui's future-dark semantic tokens
+/// `--color-{error,warning,info}-background` and `--color-{error,warning,info}-text`.
+pub fn notice(level: crate::notice::Level) -> (u32, u32) {
+    match level {
+        crate::notice::Level::Error => (0x460809, ERROR),
+        crate::notice::Level::Warning => (0x461901, SNEAK),
+        crate::notice::Level::Info => (0x053345, 0x00d3f2),
+    }
+}
+
 /// A task's colour by its inbox heading: its node on the home screen.
 pub fn task(group: Group) -> u32 {
     match group {

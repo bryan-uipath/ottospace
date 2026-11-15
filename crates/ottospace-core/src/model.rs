@@ -606,6 +606,12 @@ pub enum Action {
     RestoreKeyUse {
         uses: KeyUse,
     },
+    /// × on the notice bar, or Esc when nothing else takes it: the notice of kind `notice` that says
+    /// `text` goes. The user's alone.
+    NoticeDismiss {
+        notice: crate::notice::Kind,
+        text: String,
+    },
     /// Enter visual mode on the focused terminal, or leave it.
     ToggleVisual,
     LeaveVisual,
@@ -1571,6 +1577,7 @@ impl Action {
             | Action::KeyUsed { .. }
             | Action::ResetKeyUse
             | Action::RestoreKeyUse { .. }
+            | Action::NoticeDismiss { .. }
             | Action::LeaveVisual
             | Action::SetRepos { .. }
             | Action::SetRepoDirs { .. }
@@ -1829,6 +1836,7 @@ impl Action {
             | Action::KeyUsed { .. }
             | Action::ResetKeyUse
             | Action::RestoreKeyUse { .. }
+            | Action::NoticeDismiss { .. }
             | Action::ToggleVisual
             | Action::LeaveVisual
             | Action::ToggleAxOverlay
@@ -2097,7 +2105,7 @@ pub enum Effect {
     SaveRepos {
         changes: Vec<crate::settings::ListChange>,
     },
-    /// Say `text` in the status bar as information: what the user's own step did.
+    /// Say `text` in the notice bar as information: what the user's own step did.
     Told {
         text: String,
     },
@@ -2123,9 +2131,13 @@ pub enum Effect {
     ApplySettings {
         settings: Box<crate::settings::Settings>,
     },
-    /// Say this in the status bar: why a move of the user's did nothing.
+    /// Say this in the notice bar, as a warning: why a move of the user's did nothing.
     Notice {
         text: String,
+    },
+    /// The user dismissed the notice of `kind`: a slot the shell holds it in is emptied.
+    NoticeDismissed {
+        kind: crate::notice::Kind,
     },
     /// The user picked an installed app that is not running: start the bundle at `path` in the
     /// background and host its window when it has one.
@@ -2458,6 +2470,10 @@ pub struct Model {
     /// How much the user uses each key. Never in the snapshot: it describes the user's habits.
     #[serde(skip)]
     pub key_use: KeyUse,
+    /// Notices the user dismissed that stay until fixed: at most one of a kind. The shell
+    /// leaves them out of the bar (`notice::shown`).
+    #[serde(skip)]
+    pub notice_hidden: Vec<crate::notice::Notice>,
     /// The terminal pane in visual mode.
     pub visual: Option<PaneId>,
     /// The accessibility debug overlay is showing.
@@ -2620,6 +2636,7 @@ impl Default for Model {
             paste_confirm: clip::PasteConfirm::default(),
             keys: false,
             key_use: KeyUse::default(),
+            notice_hidden: Vec::new(),
             visual: None,
             ax_overlay: false,
             sneak: None,
@@ -2750,6 +2767,8 @@ impl Model {
             // What the user's keys are used for is theirs: no client adds to it or clears it.
             Action::KeyUsed { .. } | Action::ResetKeyUse => Some(key_use::USERS_ALONE),
             Action::RestoreKeyUse { .. } if origin == Origin::Socket => Some(key_use::READ_ALONE),
+            // A notice is said to the user: no client takes it off the bar.
+            Action::NoticeDismiss { .. } => Some(crate::notice::USERS_ALONE),
             // So does a scroll in another app.
             Action::AppWheel { .. } => Some(crate::app_wheel::USERS_ALONE),
             // A label in another app presses there: only the user's own letters spell one.
@@ -3052,6 +3071,17 @@ impl Model {
                 self.key_use = uses;
             }
             return Vec::new();
+        }
+        // Nor is a notice's dismissal: the bar is outside every mode.
+        if let Action::NoticeDismiss { notice: kind, text } = &sent.action {
+            if self.refusal(&sent.action, origin).is_some() {
+                return Vec::new();
+            }
+            if !kind.held() {
+                self.notice_hidden.retain(|hidden| hidden.kind != *kind);
+                self.notice_hidden.push(crate::notice::Notice { kind: *kind, text: text.clone() });
+            }
+            return vec![Effect::NoticeDismissed { kind: *kind }];
         }
         let mut effects = self.step(sent);
         // A peek ends when what it was over changes: the tab, the tree, the mode.
@@ -4246,7 +4276,7 @@ impl Model {
             }
             Action::CloseKeys => self.keys = false,
             // Taken by `update` before any step.
-            Action::KeyUsed { .. } | Action::ResetKeyUse | Action::RestoreKeyUse { .. } => {}
+            Action::KeyUsed { .. } | Action::ResetKeyUse | Action::RestoreKeyUse { .. } | Action::NoticeDismiss { .. } => {}
             Action::ToggleVisual => {
                 if self.visual.is_some() {
                     self.leave_visual(effects);
@@ -6476,9 +6506,15 @@ impl Model {
     }
 
     /// `settings.json` read again: right, what applies as the app runs is told again; wrong,
-    /// the last good settings stay. The status bar says which (`settings_line`).
+    /// the last good settings stay. The notice bar says which (`settings_line`).
     fn settings_read(&mut self, text: &str, written: bool, effects: &mut Vec<Effect>) {
-        let Some(settings) = self.settings_file.read(text, written) else { return };
+        let settings = self.settings_file.read(text, written);
+        // A dismissed line that is fixed, or says something else now, is dismissed no more.
+        let line = self.settings_file.line();
+        let stale =
+            |n: &crate::notice::Notice| n.kind.offer().is_some() || n.kind == crate::notice::Kind::SettingsRestart;
+        self.notice_hidden.retain(|n| !stale(n) || Some(&n.text) == line.as_ref());
+        let Some(settings) = settings else { return };
         self.act(Action::TasksView { view: settings.tasks_view.unwrap_or_default() }, effects);
         self.act(Action::SessionsRange { range: settings.sessions_range.unwrap_or_default() }, effects);
         self.act(Action::SessionQuiet { ms: settings.quiet_ms() }, effects);
@@ -6495,14 +6531,14 @@ impl Model {
         effects.push(Effect::ApplySettings { settings: Box::new(settings) });
     }
 
-    /// What the status bar says of `settings.json`: its first problem, or the keys that need a restart.
+    /// What the notice bar says of `settings.json`: its first problem, or the keys that need a restart.
     pub fn settings_line(&self) -> Option<String> {
         self.settings_file.line()
     }
 
-    /// How the status bar draws `settings_line`.
-    pub fn settings_level(&self) -> crate::settings::Level {
-        self.settings_file.level()
+    /// What kind of notice `settings_line` is.
+    pub fn settings_kind(&self) -> crate::notice::Kind {
+        self.settings_file.kind()
     }
 
     /// How many problems the last read of `settings.json` found.
@@ -7195,6 +7231,7 @@ mod tests {
         Action::KeyUsed { .. },
         Action::ResetKeyUse,
         Action::RestoreKeyUse { .. },
+        Action::NoticeDismiss { .. },
         Action::ToggleVisual,
         Action::LeaveVisual,
         Action::ToggleAxOverlay,
@@ -7434,6 +7471,7 @@ mod tests {
             Action::KeyUsed { binding: Binding::Copy, at: 1 },
             Action::ResetKeyUse,
             Action::RestoreKeyUse { uses: KeyUse::default() },
+            Action::NoticeDismiss { notice: crate::notice::Kind::Failed, text: text() },
             Action::ToggleVisual,
             Action::LeaveVisual,
             Action::ToggleAxOverlay,
@@ -7755,6 +7793,37 @@ mod tests {
     /// Every action from every origin. The origin decides, not the action: only the user's own
     /// move ends sneak mode, and only the user takes the keyboard from under its labels.
     #[test]
+    fn only_the_user_dismisses_a_notice_and_a_fixed_settings_line_shows_again() {
+        use crate::notice::{Kind, Notice};
+        let dismiss = |notice, text: &str| Action::NoticeDismiss { notice, text: text.into() };
+        let mut m = Model::default();
+        m.update(Action::SettingsRead { text: "{,}".into(), written: false }.sent_by(Origin::System));
+        let line = m.settings_line().expect("a problem");
+        let said = Notice { kind: Kind::SettingsProblem, text: line.clone() };
+        // A client's and the system's are refused: nothing hidden, no effect.
+        for origin in [Origin::Socket, Origin::System] {
+            let sent = dismiss(Kind::SettingsProblem, &line);
+            assert_eq!(m.refusal(&sent, origin), Some(crate::notice::USERS_ALONE));
+            assert_eq!((m.update(sent.sent_by(origin)), m.notice_hidden.len()), (vec![], 0));
+        }
+        // The user's: one that stays until fixed is remembered, one of a kind; it ends no mode.
+        m.update(Action::ToggleKeys);
+        let gone = vec![Effect::NoticeDismissed { kind: Kind::SettingsProblem }];
+        assert_eq!(m.update(dismiss(Kind::SettingsProblem, "old")), gone);
+        assert_eq!(m.update(dismiss(Kind::SettingsProblem, &line)), gone);
+        assert_eq!((&m.notice_hidden, m.keys), (&vec![said.clone()], true));
+        assert_eq!(crate::notice::shown(std::slice::from_ref(&said), &m.notice_hidden), None);
+        // One the shell holds in a slot is not remembered: said again, it shows again.
+        assert_eq!(m.update(dismiss(Kind::Failed, "x")), [Effect::NoticeDismissed { kind: Kind::Failed }]);
+        assert_eq!(m.notice_hidden, [said.clone()]);
+        // The same problem read again stays dismissed; fixed, then wrong again, it shows.
+        m.update(Action::SettingsRead { text: "{,}".into(), written: false }.sent_by(Origin::System));
+        assert_eq!(m.notice_hidden, [said]);
+        m.update(Action::SettingsRead { text: "{}".into(), written: false }.sent_by(Origin::System));
+        assert_eq!((m.notice_hidden.len(), m.settings_line()), (0, None));
+    }
+
+    #[test]
     fn only_the_users_own_move_ends_sneak_whatever_the_action() {
         for action in &samples() {
             for origin in [Origin::User, Origin::Socket, Origin::System] {
@@ -7782,6 +7851,7 @@ mod tests {
                     Action::AppWheel { .. } => Some(crate::app_wheel::USERS_ALONE),
                     Action::KeyUsed { .. } | Action::ResetKeyUse => Some(key_use::USERS_ALONE),
                     Action::RestoreKeyUse { .. } if origin == Origin::Socket => Some(key_use::READ_ALONE),
+                    Action::NoticeDismiss { .. } => Some(crate::notice::USERS_ALONE),
                     Action::RestoreLayout { .. } if origin == Origin::Socket => Some(crate::layout_file::USERS_ALONE),
                     Action::StartFresh | Action::UnfilledOpen { .. } => Some(crate::layout_file::USERS_ALONE),
                     Action::Paste { .. } => Some(clip::USERS_ALONE),
@@ -7810,6 +7880,7 @@ mod tests {
                     | Action::AppWheel { .. } => false,
                     // A count of the key that turned it on, say: no input to it.
                     Action::KeyUsed { .. } | Action::ResetKeyUse | Action::RestoreKeyUse { .. } => false,
+                    Action::NoticeDismiss { .. } => false,
                     _ => origin == Origin::User,
                 };
                 assert_eq!(m.sneak.is_none(), ends, "{action:?} from {origin:?}");
@@ -12408,6 +12479,7 @@ mod tests {
                     Action::AppWheel { .. } => Some(crate::app_wheel::USERS_ALONE),
                     Action::KeyUsed { .. } | Action::ResetKeyUse => Some(key_use::USERS_ALONE),
                     Action::RestoreKeyUse { .. } if origin == Origin::Socket => Some(key_use::READ_ALONE),
+                    Action::NoticeDismiss { .. } => Some(crate::notice::USERS_ALONE),
                     Action::RestoreLayout { .. } if origin == Origin::Socket => Some(crate::layout_file::USERS_ALONE),
                     Action::StartFresh | Action::UnfilledOpen { .. } => Some(crate::layout_file::USERS_ALONE),
                     Action::Paste { .. } => Some(clip::USERS_ALONE),

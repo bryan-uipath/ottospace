@@ -71,6 +71,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     cell: [7.82666015625, 18],
     notice: null,
     notice_level: null,
+    notice_bar: null,
     settings_errors: 0,
     editor: null,
     hosted: {},

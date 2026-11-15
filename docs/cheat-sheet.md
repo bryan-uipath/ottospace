@@ -11,6 +11,7 @@ ottospace            # opens on the Repos list
 - First run: grant your terminal Accessibility (ottospace will not start without it) and Screen Recording (for app panes), in System Settings ▸ Privacy & Security.
 - Repos lists each repository's name over its checkouts, one line each: the branch, a dot on the repository's own folder. The chevron (or a click on the name) folds a repository; a count shows while folded. Point at a name: + makes a worktree (an existing branch, or a new one from HEAD), the trash stops listing it. Click a row: a terminal opens there, in a Workspace tab of its own. A row a task works in carries the task's badge, and its click shows that task (Terminal, on hover, opens a terminal anyway).
 - The status bar (bottom left) shows who has the keyboard when it is not the focused pane's: `APP`, `PICK`, `COMMAND`, `INSPECT`, `LIST`, `TASK`, `VISUAL`, `SNEAK`, `QUIT?`. Nothing there: normal. Its right end shows `● 2` when two tasks need you; the version is under About ottospace (⌘P, or the app menu) and the hover of the bar's empty middle.
+- A coloured bar under the top row is a notice: red an error, amber a warning, blue information. × or Esc dismisses it; a settings problem offers Open settings.
 - Stuck in an app? Click ottospace's rail or top bar. Or press the return key: F18, which most keyboards lack, so map Caps Lock to it (see [the return key](reference.md#the-return-key)) or start with `OTTOSPACE_RETURN_KEY=f13` (f13 to f20). The status bar names the key in use.
 
 ## Panes and tabs
@@ -191,7 +192,7 @@ ottospace ctl '{"cmd":"state"}' | jq --argjson pane "$OTTOSPACE_PANE" '.state.ta
 ## Settings
 
 `~/.ottospace/settings.json`, read at start. ⌘, (Open Settings) edits it in `$VISUAL`/`$EDITOR`; on
-save the status bar says what is wrong (`settings.json:3:1 trailing comma`) or which keys need a
+save the notice bar says what is wrong (`settings.json:3:1 trailing comma`) or which keys need a
 restart, and the rest applies at once:
 
 ```json
@@ -213,7 +214,7 @@ restart, and the rest applies at once:
 }
 ```
 
-A mistake in a key (one that does not exist, or a wrong value) shows in the status bar: that key
+A mistake in a key (one that does not exist, or a wrong value) shows in the notice bar: that key
 takes its default and the others still apply. If the file is not a JSON object at all, every
 setting takes its default.
 

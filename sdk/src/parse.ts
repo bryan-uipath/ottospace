@@ -5,6 +5,8 @@
 import type {
   AgentDial,
   AgentLine,
+  NoticeBar,
+  NoticeLevel,
   AppEntry,
   Feature,
   CalendarReply,
@@ -672,9 +674,23 @@ function composePicks(value: unknown, at: string): Snapshot["compose_picks"] {
   return { wheres: list(str)(o.wheres, `${at}.wheres`), whos: list(str)(o.whos, `${at}.whos`) };
 }
 
-function noticeLevel(value: unknown, at: string): "info" | "error" {
-  if (value === "info" || value === "error") return value;
+function noticeLevel(value: unknown, at: string): NoticeLevel {
+  if (value === "info" || value === "warning" || value === "error") return value;
   throw new Error(`${at}: not a level: ${JSON.stringify(value)}`);
+}
+
+function noticeBar(value: unknown, at: string): NoticeBar {
+  const o = fields(value, at);
+  return {
+    kind: str(o.kind, `${at}.kind`),
+    level: noticeLevel(o.level, `${at}.level`),
+    text: str(o.text, `${at}.text`),
+    offer: orNull(str)(o.offer, `${at}.offer`),
+    offer_rect: orNull(rect)(o.offer_rect, `${at}.offer_rect`),
+    close: orNull(rect)(o.close, `${at}.close`),
+    rect: orNull(rect)(o.rect, `${at}.rect`),
+    height: num(o.height, `${at}.height`),
+  };
 }
 
 function agentLine(value: unknown, at: string): AgentLine {
@@ -1471,6 +1487,7 @@ export function snapshot(value: unknown): Snapshot {
     cell: pair(o.cell, "cell"),
     notice: orNull(str)(o.notice, "notice"),
     notice_level: orNull(noticeLevel)(o.notice_level, "notice_level"),
+    notice_bar: orNull(noticeBar)(o.notice_bar, "notice_bar"),
     settings_errors: num(o.settings_errors, "settings_errors"),
     editor: orNull(editor)(o.editor, "editor"),
     hosted: map(rect)(o.hosted, "hosted"),
