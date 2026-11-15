@@ -5547,7 +5547,9 @@ impl Model {
         // Only the user's own ↵ starts an agent, in the drawer. A client's "open" starts nothing,
         // and a new task has no tab to go to.
         if open && self.by_user {
-            self.bind_tab(id);
+            if self.agent_start(&Subject::Task(id)).is_some() {
+                self.bind_tab(id);
+            }
             self.talk_to(Subject::Task(id), true, effects);
         } else if open {
             self.list = None;
@@ -6006,7 +6008,7 @@ impl Model {
     /// Where a tab joining space `of` goes: after its last tab, else before the tabs of the
     /// spaces after it on the row.
     fn space_end(&self, of: &Owner) -> usize {
-        let rank = |space: &Owner| self.spaces.iter().position(|s| s.of == *space).unwrap_or(usize::MAX);
+        let rank = |space: &Owner| self.space_rank(space);
         let end = self.tabs.iter().rposition(|t| t.space == *of).map(|at| at + 1);
         let later = || self.tabs.iter().position(|t| rank(&t.space) > rank(of));
         end.or_else(later).unwrap_or(self.tabs.len())
@@ -6050,8 +6052,7 @@ impl Model {
 
     /// Keeps each space's tabs side by side, in row order. The tab on show stays on show.
     pub(crate) fn regroup(&mut self) {
-        let rank = |space: &Owner| self.spaces.iter().position(|s| s.of == *space).unwrap_or(usize::MAX);
-        let ranks: Vec<usize> = self.tabs.iter().map(|tab| rank(&tab.space)).collect();
+        let ranks: Vec<usize> = self.tabs.iter().map(|tab| self.space_rank(&tab.space)).collect();
         if ranks.is_sorted() {
             return;
         }

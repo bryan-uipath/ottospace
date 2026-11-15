@@ -201,18 +201,23 @@ impl Model {
         let Some(of) = shown.get(at).map(|space| space.of.clone()).filter(|of| *of != Owner::Workspace) else {
             return;
         };
-        if *self.space() == of {
-            let next = shown.get(at + 1).or(shown.get(at.wrapping_sub(1))).map(|space| space.of.clone());
-            if let Some(tab) = next.and_then(|next| self.space_tab(&next)) {
-                self.select_tab(tab, effects);
-            }
+        if *self.space() == of
+            && let Some(tab) = self.space_after(&of)
+        {
+            self.select_tab(tab, effects);
         }
         if let Some(space) = self.spaces.iter_mut().find(|space| space.of == of) {
             space.hidden = true;
         }
     }
 
-    /// After a tab of space `of` closed with none left: the space to show instead, as a hide.
+    /// A space's place on the row: the order tabs keep. One not on the row goes last.
+    pub(crate) fn space_rank(&self, of: &Owner) -> usize {
+        self.spaces.iter().position(|space| space.of == *of).unwrap_or(usize::MAX)
+    }
+
+    /// The tab to show instead of space `of`, hidden or left with no tab: its right neighbour's
+    /// on the row, else its left one's.
     pub(crate) fn space_after(&self, of: &Owner) -> Option<usize> {
         let shown = self.shown_spaces();
         let at = shown.iter().position(|space| space.of == *of)?;

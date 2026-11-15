@@ -2180,8 +2180,12 @@ impl Run {
             let undone = matches!(action, Action::TaskUndo | Action::ListUndo) && *was == Owner::Workspace;
             let adopted =
                 matches!((was, now, &action), (Owner::Session { .. }, Owner::Task { .. }, Action::SessionAdopt { .. }));
+            // Opening a workbook gathers its tabs from Workspace.
+            let gathered = *was == Owner::Workspace
+                && matches!(now, Owner::Workbook { .. })
+                && matches!(action, Action::WorkbookOpen { .. } | Action::SpaceOpen { .. } | Action::ListChoose { .. });
             ensure!(
-                moved || bound || gone || undone || adopted,
+                moved || bound || gone || undone || adopted || gathered,
                 "{origin:?}'s {action:?} moved tab {id} from {was:?} to {now:?}"
             );
         }
