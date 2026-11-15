@@ -10,6 +10,7 @@ import type {
   Meeting,
   TimeSpan,
   NativeChat,
+  MeetingShow,
   MeetingStage,
   AxNode,
   AxOverlay,
@@ -1465,11 +1466,35 @@ function railMark(value: unknown, at: string): Snapshot["calendar"]["rail"] {
   throw wrong(at, "none, near or alert", value);
 }
 
+function blockKind(value: unknown, at: string): "call" | "block" {
+  if (value === "call" || value === "block") return value;
+  throw wrong(at, "call or block", value);
+}
+
+function meetingShow(value: unknown, at: string): MeetingShow {
+  if (value === "busy" || value === "tentative" || value === "free" || value === "away") return value;
+  throw wrong(at, "busy, tentative, free or away", value);
+}
+
 function band(value: unknown, at: string): NonNullable<Snapshot["calendar"]["band"]> {
   const o = fields(value, at);
   const block = (v: unknown, at: string) => {
     const b = fields(v, at);
-    return { start: num(b.start, `${at}.start`), end: num(b.end, `${at}.end`), rect: orNull(rect)(b.rect, `${at}.rect`) };
+    return {
+      start: num(b.start, `${at}.start`),
+      end: num(b.end, `${at}.end`),
+      rect: orNull(rect)(b.rect, `${at}.rect`),
+      kind: blockKind(b.kind, `${at}.kind`),
+      show: meetingShow(b.show, `${at}.show`),
+      color: str(b.color, `${at}.color`),
+      lane: orNull(num)(b.lane, `${at}.lane`),
+      lanes: orNull(num)(b.lanes, `${at}.lanes`),
+      more: num(b.more, `${at}.more`),
+    };
+  };
+  const outside = (v: unknown, at: string) => {
+    const b = fields(v, at);
+    return { count: num(b.count, `${at}.count`), rect: orNull(rect)(b.rect, `${at}.rect`) };
   };
   return {
     rect: orNull(rect)(o.rect, `${at}.rect`),
@@ -1478,6 +1503,7 @@ function band(value: unknown, at: string): NonNullable<Snapshot["calendar"]["ban
     marks: list(orNull(rect))(o.marks, `${at}.marks`),
     now: orNull(rect)(o.now, `${at}.now`),
     blocks: list(block)(o.blocks, `${at}.blocks`),
+    outside: list(outside)(o.outside, `${at}.outside`),
     status_bar: orNull(rect)(o.status_bar, `${at}.status_bar`),
   };
 }
@@ -1601,14 +1627,15 @@ function timeSpan(value: unknown, at: string): TimeSpan {
 
 function meeting(value: unknown, at: string): Meeting {
   const o = fields(value, at);
-  if (o.status !== undefined && o.status !== "tentative") throw wrong(`${at}.status`, "tentative", o.status);
+  const status = o.status === undefined ? undefined : meetingShow(o.status, `${at}.status`);
+  if (status === "busy") throw wrong(`${at}.status`, "tentative, free or away", o.status);
   return {
     ...timeSpan(value, at),
     all_day: bool(o.all_day, `${at}.all_day`),
     title: str(o.title, `${at}.title`),
     location: orNull(str)(o.location, `${at}.location`),
     has_call_link: bool(o.has_call_link, `${at}.has_call_link`),
-    ...(o.status === "tentative" ? { status: o.status } : {}),
+    ...(status === undefined ? {} : { status }),
   };
 }
 
