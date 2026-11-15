@@ -936,9 +936,9 @@ fn tasks_are_listed_as_an_inbox_and_pop_opens_the_next() {
     assert_eq!(otto.call(json!({"cmd": "task_add", "title": "idea"}))["task"]["id"], 1);
     otto.call(json!({"cmd": "task_add", "title": "build", "state": "running"}));
     otto.call(json!({"cmd": "task_add", "title": "question", "priority": 1, "state": "needs_you"}));
-    // The user's click on "question" makes the first tab its own.
+    // The user's click on "question" opens its space, after Workspace's two tabs.
     otto.call(json!({"cmd": "select_tab", "index": 0}));
-    assert_eq!(otto.claim(3)["state"]["tabs"][0]["task"], 3);
+    assert_eq!(otto.claim(3)["state"]["tabs"][2]["space"], json!({"kind": "task", "id": 3}));
     otto.call(json!({"cmd": "select_tab", "index": 1}));
     let inbox = |o: &Otto| -> Vec<(String, String)> {
         let rows = o.call(json!({"cmd": "task_list"}))["inbox"].as_array().unwrap().clone();
@@ -948,12 +948,17 @@ fn tasks_are_listed_as_an_inbox_and_pop_opens_the_next() {
     assert_eq!(inbox(&otto), [row("needs_you", "question"), row("running", "build"), row("captured", "idea")]);
     assert_eq!(otto.call(json!({"cmd": "state"}))["needs_you"], 1);
 
-    // Pop next: the tab of the task that needs the user comes forward.
+    // Pop next: the space of the task that needs the user is selected.
     let state = otto.call(json!({"cmd": "state"}));
-    assert_eq!((&state["state"]["active"], &state["groups"][0]["task"]), (&json!(1), &json!(3)), "{}", state["groups"]);
+    assert_eq!(
+        (&state["state"]["active"], &state["spaces"][1]["of"]["id"]),
+        (&json!(1), &json!(3)),
+        "{}",
+        state["spaces"]
+    );
     let popped = otto.call(json!({"cmd": "task_pop"}));
     assert_eq!((&popped["task"]["title"], &popped["opened"]), (&json!("question"), &json!(true)));
-    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["active"], 0);
+    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["active"], 2);
 
     // Snoozed: out of the inbox, and pop finds nothing. Undo brings it back.
     otto.call(json!({"cmd": "task_snooze", "id": 3, "seconds": 3600}));
@@ -974,11 +979,11 @@ fn tasks_are_listed_as_an_inbox_and_pop_opens_the_next() {
     otto.call(json!({"cmd": "task_dismiss", "id": 1}));
     otto.call(json!({"cmd": "task_set_state", "id": 2, "state": "needs_you"}));
     assert_eq!(inbox(&otto), [row("needs_you", "build"), row("on_hold", "question")]);
-    // A dismissed task that starts to need the user comes back. It has no tab: pop shows none.
+    // A dismissed task that starts to need the user comes back. It has no space: pop makes one.
     otto.call(json!({"cmd": "task_set_state", "id": 2, "state": "done"}));
     otto.call(json!({"cmd": "task_set_state", "id": 1, "state": "needs_you"}));
     let popped = otto.call(json!({"cmd": "task_pop"}));
-    assert_eq!((&popped["task"]["title"], &popped["opened"]), (&json!("idea"), &json!(false)));
+    assert_eq!((&popped["task"]["title"], &popped["opened"]), (&json!("idea"), &json!(true)));
     assert_eq!(otto.raw(r#"{"cmd":"task_hold","id":9}"#)["ok"], false, "no such task");
     assert_eq!(otto.raw(r#"{"cmd":"task_add","title":"x","state":"sleeping"}"#)["ok"], false, "no such state");
 }
@@ -1009,21 +1014,20 @@ fn the_tasks_section_lists_what_needs_you_then_what_runs_then_what_waits() {
     // A client's ⌘↵ in the new-task box adds the task, with no tab and no agent: it waits, under Later.
     otto.call(json!({"cmd": "compose", "text": "fix zoom #canvas"}));
     let reply = key("cmd-enter");
-    assert_eq!((reply["mode"].as_str(), &reply["state"]["tabs"][0]["task"]), (Some("normal"), &json!(null)));
+    assert_eq!((reply["mode"].as_str(), reply["state"]["tabs"].as_array().map(Vec::len)), (Some("normal"), Some(1)));
     assert_eq!(bar(&reply), [section("needs_you", &[1]), section("running", &[2]), section("later", &[3, 4])]);
     assert!(reply["state"]["tasks"]["list"][3]["created"].as_u64().is_some(), "{reply}");
     // The same from the socket: its task has no tab to show.
     let filed = otto.call(json!({"cmd": "task_new", "line": "write the notes", "open": true}));
     assert_eq!((&filed["task"]["id"], &filed["opened"]), (&json!(5), &json!(false)));
-    // A task that needs you stays under Needs you when its tab is on show; its card says what it has
-    // open. Its row's one fact: none for needs you (the dot says it), how long it waited under Later.
-    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    // A task that needs you stays under Needs you when its space is on show; its card says what it
+    // has open. Its row's one fact: none for needs you (the dot says it), how long it waited under Later.
     let reply = otto.claim(1);
     assert_eq!(bar(&reply)[..3], [section("needs_you", &[1]), section("running", &[2]), section("later", &[3, 4, 5])]);
     let row = &reply["tasks_bar"]["sections"][0]["rows"][0];
     assert_eq!((&row["current"], &row["fact"]), (&json!(true), &Value::Null), "{row}");
     assert_eq!(reply["tasks_bar"]["sections"][2]["rows"][0]["fact"], "now");
-    assert_eq!(reply["tasks_progress"]["cards"]["1"]["workspace"], "1 tab · 1 pane");
+    assert_eq!(reply["tasks_progress"]["cards"]["1"]["workspace"], "1 tab · 0 panes");
 
     // Where a control is drawn: sneak mode's targets give each one's frame. Then a real click
     // there, through the window's own handlers.
@@ -1065,10 +1069,10 @@ fn the_tasks_section_lists_what_needs_you_then_what_runs_then_what_waits() {
     assert!(drawn("task-snooze:1") && drawn("task-dismiss:1") && !drawn("task-hold:1"));
     // The same moves from the socket (an agent's) offer nothing.
     assert_eq!(otto.call(json!({"cmd": "task_dismiss", "id": 3}))["tasks_bar"]["undo"], json!(null));
-    // A client's click on a row goes to the task's tabs: only the user's starts an agent.
+    // A client's click on a row opens the task's space: only the user's starts an agent.
     otto.call(json!({"cmd": "new_tab"}));
     let reply = press("task:1");
-    assert_eq!((&reply["state"]["active"], &reply["state"]["agents"]), (&json!(0), &json!([])));
+    assert_eq!((&reply["state"]["active"], &reply["state"]["agents"]), (&json!(2), &json!([])));
 
     // `task_new` with `open` while the new-task box is open: the task is added, the tabs on show
     // stay, and the reply says so.
@@ -1076,7 +1080,7 @@ fn the_tasks_section_lists_what_needs_you_then_what_runs_then_what_waits() {
     let filed = otto.call(json!({"cmd": "task_new", "line": "theirs", "open": true}));
     assert_eq!((&filed["opened"], filed["task"]["title"].as_str()), (&json!(false), Some("theirs")));
     let state = otto.call(json!({"cmd": "state"}));
-    assert_eq!((&state["state"]["active"], state["mode"].as_str()), (&json!(0), Some("compose")));
+    assert_eq!((&state["state"]["active"], state["mode"].as_str()), (&json!(2), Some("compose")));
 }
 
 #[test]
@@ -1176,42 +1180,44 @@ fn the_new_task_box_files_a_line() {
     assert_eq!((filed["task"]["id"].as_u64(), filed["task"]["project"].as_str()), (Some(2), Some("support")));
     assert_eq!(otto.raw(r##"{"cmd":"task_new","line":"#support p1"}"##)["ok"], false);
 
-    // The user's click on a task that never ran makes the tab on show its own.
-    assert_eq!(otto.claim(2)["state"]["tabs"][0]["task"], 2);
-    // On another task's tab, a task with no tab is offered a new one (⌘↵): named after its
-    // repository, with a shell there, its group before the tabs of no task.
-    otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
-    assert_eq!(otto.call(json!({"cmd": "state"}))["drawer"]["goes_to"], "new");
-    let reply = otto.user_key("cmd-enter");
+    // The user's click on a task opens its space: one empty tab after Workspace's.
+    let reply = otto.claim(2);
+    assert_eq!(
+        (&reply["state"]["tabs"][1]["space"], &reply["state"]["active"]),
+        (&json!({"kind": "task", "id": 2}), &json!(1))
+    );
+    // Named after its repository, when it has one.
+    let reply = otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
     let state = &reply["state"];
     assert_eq!(
-        (&state["active"], &state["tabs"][1]["task"], &state["tabs"][1]["title"]),
-        (&json!(1), &json!(1), &json!("flow-app"))
+        (&state["active"], &state["tabs"][2]["space"]["id"], &state["tabs"][2]["title"]),
+        (&json!(2), &json!(1), &json!("flow-app"))
     );
-    let pane = state["focused"].as_u64().unwrap();
-    otto.call(json!({"cmd": "type", "pane": pane, "text": "pwd\r"}));
-    let here = format!("^{}$", regex::escape(repo.to_str().unwrap()));
-    otto.call(json!({"cmd": "wait", "pane": pane, "pattern": here, "timeout_ms": 40000}));
-    // The user's new tab joins the task on show; a client's is of no task. ⌘1… count every tab.
+    // The user's new tab joins the selected space; a client's is Workspace's. ⌘1… count the tabs
+    // of the spaces on the row.
     let reply = otto.user_key("cmd-t");
-    assert_eq!((&reply["state"]["tabs"][2]["task"], &reply["state"]["active"]), (&json!(1), &json!(2)));
+    assert_eq!((&reply["state"]["tabs"][3]["space"]["id"], &reply["state"]["active"]), (&json!(1), &json!(3)));
     let reply = otto.call(json!({"cmd": "new_tab"}));
-    assert_eq!((&reply["state"]["tabs"][3]["task"], &reply["state"]["active"]), (&json!(null), &json!(3)));
-    let groups: Vec<Value> = reply["groups"].as_array().unwrap().iter().map(|g| g["task"].clone()).collect();
-    assert_eq!(groups, [json!(2), json!(1), json!(null)]);
-    let reply = key("cmd-2");
-    assert_eq!((&reply["state"]["active"], &reply["state"]["focused"]), (&json!(1), &json!(pane)));
+    assert_eq!(
+        (&reply["state"]["tabs"][1]["space"]["kind"], &reply["state"]["active"]),
+        (&json!("workspace"), &json!(1))
+    );
+    let spaces: Vec<Value> = reply["spaces"].as_array().unwrap().iter().map(|g| g["of"].clone()).collect();
+    assert_eq!(
+        spaces,
+        [json!({"kind": "workspace"}), json!({"kind": "task", "id": 2}), json!({"kind": "task", "id": 1})]
+    );
     assert_eq!(key("cmd-4")["state"]["active"], 3);
-    assert_eq!(key("cmd-5")["state"]["active"], 3, "four tabs: ⌘5 does nothing");
-    // A tab that is gone is refused; one named is ignored: only the user links a tab to a task.
+    assert_eq!(key("cmd-6")["state"]["active"], 3, "five tabs: ⌘6 does nothing");
+    // A tab that is gone is refused; one named is ignored: only the user moves a tab to a task.
     assert_eq!(otto.raw(r#"{"cmd":"task_add","title":"x","tab":99}"#)["ok"], false);
 
-    // ⌘⇧N shows the conversation of the task that needs the user; the tab on show stays.
+    // ⌘⇧N opens the space of the task that needs the user, its chat in the drawer.
     otto.call(json!({"cmd": "task_add", "title": "waits", "state": "needs_you"}));
     let reply = otto.user_key("cmd-shift-n");
     assert_eq!(
         (&reply["state"]["talk"]["task"], &reply["state"]["active"]),
-        (&json!(3), &json!(3)),
+        (&json!(3), &json!(5)),
         "{}",
         reply["state"]["talk"]
     );
@@ -3372,9 +3378,11 @@ fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
     assert!(sneak(&otto).1.contains_key("task:1"));
     assert_eq!(sneak_to(&otto, "bar:close")["state"]["sidebar"], Value::Null);
 
-    // A client's label on the task's row or node on the home screen goes to its tabs: it has none.
-    assert_eq!(sneak_to(&otto, "home-row:1")["state"]["active"], 0);
-    assert_eq!(sneak_to(&otto, "home-node:1")["state"]["active"], 0);
+    // A client's label on the task's row or node on the home screen opens its space.
+    assert_eq!(sneak_to(&otto, "home-row:1")["state"]["active"], 1);
+    otto.call(json!({"cmd": "select_space", "index": 0}));
+    assert_eq!(sneak_to(&otto, "home-node:1")["state"]["active"], 1);
+    otto.call(json!({"cmd": "select_space", "index": 0}));
     // The rail's + opens the box, a top-bar button the picker. Neither lets sneak mode start.
     assert_eq!(sneak_to(&otto, "rail:new-task")["mode"], "compose");
     let refused = otto.raw(r#"{"cmd":"sneak"}"#);
@@ -3393,9 +3401,10 @@ fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
     //   | 3
     otto.call(json!({"cmd": "split", "axis": "right", "kind": "empty"}));
     otto.call(json!({"cmd": "split", "axis": "down", "kind": "empty"}));
-    // The task has a tab too, off the bar: the new tab is the last of three.
-    let tabs = otto.call(json!({"cmd": "new_tab"}))["state"]["tabs"].clone();
-    let (place, tab) = (tabs.as_array().unwrap().len() - 1, tabs.as_array().unwrap().last().unwrap()["id"].clone());
+    // The task has a space too: the new tab is Workspace's second, before it.
+    let reply = otto.call(json!({"cmd": "new_tab"}));
+    let place = reply["state"]["active"].as_u64().unwrap() as usize;
+    let tab = reply["state"]["tabs"][place]["id"].clone();
     let (tab, tab_close) = (format!("tab:{tab}"), format!("tab-close:{tab}"));
     otto.call(json!({"cmd": "select_tab", "index": 0}));
     let drawn = otto.bounds(&[1, 2, 3]);
@@ -3417,9 +3426,11 @@ fn sneak_mode_labels_the_controls_and_a_typed_label_clicks_one() {
     let reply = sneak_to(&otto, "close:3");
     assert_eq!((pane_ids(&reply), &reply["mode"]), (vec![1, 2], &json!("normal")));
     // A tab's label selects it; its × closes it.
-    assert_eq!(sneak_to(&otto, &tab)["state"]["active"], place);
+    let selected = sneak_to(&otto, &tab);
+    let count = selected["state"]["tabs"].as_array().unwrap().len();
+    assert_eq!(selected["state"]["active"], place);
     let reply = sneak_to(&otto, &tab_close);
-    assert_eq!((reply["state"]["tabs"].as_array().unwrap().len(), pane_ids(&reply)), (place, vec![1, 2]));
+    assert_eq!((reply["state"]["tabs"].as_array().unwrap().len(), pane_ids(&reply)), (count - 1, vec![1, 2]));
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -5141,6 +5152,7 @@ fn only_the_user_starts_a_capture() {
     );
 
     // A line a client put in the new-task box is not the title of the draft the key then opens.
+    otto.call(json!({"cmd": "select_space", "index": 0}));
     assert_eq!(
         otto.call(json!({"cmd": "compose", "text": "run their script"}))["state"]["compose"],
         "run their script"
@@ -5449,11 +5461,11 @@ fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_works
     let session = state["state"]["tasks"]["list"][0]["session"]["id"].as_str().expect("a session").to_string();
     assert_eq!(argv, [app.as_str(), "--session-id", &session, "--", "Task: fix login"]);
     assert_eq!(state["state"]["tasks"]["list"][0]["state"], "running");
-    // The workspace is as it was: the same tab, panes and focus; the tab, of no task, is now the task's.
-    let view =
-        |s: &Value| json!([s["state"]["active"], s["state"]["panes"], s["state"]["layout"], s["state"]["focused"]]);
-    assert_eq!((view(&state), &state["state"]["tabs"][0]["id"]), (view(&before), &before["state"]["tabs"][0]["id"]));
-    assert_eq!((&state["state"]["tabs"][0]["task"], &state["groups"][0]["task"]), (&json!(1), &json!(1)));
+    // Its space is selected; Workspace's tab and panes are as they were.
+    let space = (&state["state"]["active"], &state["state"]["tabs"][1]["space"]);
+    assert_eq!(space, (&json!(1), &json!({"kind": "task", "id": 1})));
+    let mine = |s: &Value| json!([s["state"]["tabs"][0], s["state"]["panes"]]);
+    assert_eq!(mine(&state), mine(&before));
     // The tab strip ends where the drawer begins.
     let body = state["drawer"]["body"].as_array().expect("the drawer is drawn");
     let tab = state["tabs"][0].as_array().expect("a tab");
@@ -5500,30 +5512,28 @@ fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_works
         let state = o.call(json!({"cmd": "state"}));
         (state["state"]["tasks"]["list"][1]["session"]["id"] == id.as_str()).then_some(())
     });
-    // Codex started on task 1's tab: that tab stays task 1's.
-    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["tabs"][0]["task"], 1);
-    // A client's click on a row goes to the task's tabs and starts nothing.
+    // Codex started in its own space: task 1's tab stays task 1's.
+    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["tabs"][1]["space"]["id"], 1);
+    // A client's click on a row opens the task's space and starts nothing: once the user's keys
+    // are out of the chat (while they type there, it waits).
+    otto.user_key("cmd-l");
     otto.call(json!({"cmd": "new_tab"}));
     let theirs = otto.click(at(otto.control("task:1"), 0.3, 0.3), 1);
-    assert_eq!((&theirs["state"]["active"], &theirs["state"]["agents"]), (&json!(0), &json!([2])), "{theirs}");
-    // The user's click on it: its conversation; Resume session goes on with it; the tab stays.
+    assert_eq!((&theirs["state"]["active"], &theirs["state"]["agents"]), (&json!(2), &json!([2])), "{theirs}");
+    // The user's click on it: its space and chat; Resume session goes on with it.
     otto.call(json!({"cmd": "select_tab", "index": 1}));
     otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
     let reply = otto.user_start();
-    assert_eq!(reply["state"]["active"], 1);
+    assert_eq!(reply["state"]["active"], 2);
     let argv = otto.wait_for("claude --resume", |_| agent_argv(&bin, "claude").filter(|argv| argv[1] == "--resume"));
     assert_eq!(argv[1..], ["--resume", session.as_str()]);
-    // The header offers its tabs; ⌘↵ goes there.
-    assert_eq!(otto.call(json!({"cmd": "state"}))["drawer"]["goes_to"], "tabs");
-    let gone = otto.user_key("cmd-enter");
-    assert_eq!((&gone["state"]["active"], &gone["drawer"]["goes_to"]), (&json!(0), &Value::Null), "{}", gone["drawer"]);
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&home);
 }
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn a_new_task_takes_the_tab_on_show_and_the_drawer_follows_the_tab() {
+fn a_new_task_opens_its_space_and_takes_the_repos_tab_it_was_started_from() {
     let root = support::temp(&format!("ottospace-e2e-groups-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let (bin, repos, sessions) = (root.join("bin"), root.join("repos"), root.join("sessions"));
@@ -5534,86 +5544,77 @@ fn a_new_task_takes_the_tab_on_show_and_the_drawer_follows_the_tab() {
     let home = user_folder("groups", &settings.to_string());
     let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
     let otto = Otto::launch_with("groups", &env);
-    // What the workspace shows: the tab, its panes and the focus.
-    let view = |reply: &Value| {
-        let s = &reply["state"];
-        json!([s["active"], s["tabs"][0]["id"], s["panes"], s["layout"], s["focused"]])
+    let owners = |reply: &Value| -> Vec<Value> {
+        reply["spaces"].as_array().unwrap().iter().map(|g| json!([g["of"], g["tabs"], g["selected"]])).collect()
     };
-    let groups = |reply: &Value| -> Vec<Value> {
-        reply["groups"].as_array().unwrap().iter().map(|g| json!([g["task"], g["tabs"]])).collect()
-    };
-    // Two of the user's panes, in a tab of no task.
+    let workspace = json!({"kind": "workspace"});
+    let task = |id: u64| json!({"kind": "task", "id": id});
+    // Two of the user's panes, in Workspace.
     otto.call(json!({"cmd": "split"}));
     let before = otto.call(json!({"cmd": "split"}));
-    assert_eq!(pane_ids(&before).len(), 2);
+    let mine = (before["state"]["tabs"][0].clone(), before["state"]["panes"].clone());
 
-    // The user's ↵ in the box: filed and started in the drawer; the same tab, now the task's.
-    otto.call(json!({"cmd": "compose", "text": "fix zoom >app"}));
+    // The user's ↵ in the box: filed, started in the drawer, its space opened with one empty tab.
+    otto.call(json!({"cmd": "compose", "text": "fix zoom"}));
     let filed = otto.user_key("enter");
     assert_eq!((&filed["mode"], &filed["state"]["talk"]["task"]), (&json!("talk"), &json!(1)), "{filed}");
-    assert_eq!(view(&filed), view(&before));
-    assert_eq!((groups(&filed), &filed["badges"]["1"]), (vec![json!([1, [0]])], &json!("FZ")), "{}", filed["groups"]);
+    assert_eq!(owners(&filed), [json!([workspace, [0], false]), json!([task(1), [1], true])]);
+    assert_eq!(
+        (filed["state"]["tabs"][0].clone(), filed["state"]["panes"].clone()),
+        mine,
+        "nothing the user had moved"
+    );
     otto.wait_for("the agent in the drawer", |o| {
         let state = o.call(json!({"cmd": "state"}));
         state["drawer"]["agents"]["1"]["lines"].as_array()?.iter().any(|l| l == "fake claude ready").then_some(())
     });
-    // Its badge heads its group on the bar, and its colour is kept on the task.
-    assert!(sneak(&otto).1.contains_key("group:1"));
-    assert!(otto.call(json!({"cmd": "state"}))["state"]["tasks"]["list"][0]["colour"].is_u64());
 
-    // ⌘T joins the task's group; "outside the task" (the palette, a client's `new_tab`) does not.
-    otto.user_key("cmd-l");
-    let joined = otto.user_key("cmd-t");
-    assert_eq!(groups(&joined), [json!([1, [0, 1]])]);
-    let outside = otto.call(json!({"cmd": "new_tab"}));
-    assert_eq!(groups(&outside), [json!([1, [0, 1]]), json!([null, [2]])]);
-
-    // A second task, started on the tab of no task: that tab becomes its own.
-    otto.call(json!({"cmd": "split"}));
-    otto.call(json!({"cmd": "compose", "text": "second"}));
+    // A click on a repository's row: a terminal there, in a Workspace tab of its own, selected.
+    otto.call(json!({"cmd": "section", "section": "repos"}));
+    let row = format!("repo:{}", app.display());
+    let opened = otto.user_click(at(otto.control(&row), 0.5, 0.5));
+    let tab = opened["state"]["tabs"][1].clone();
+    assert_eq!((&tab["space"], &tab["title"], &opened["state"]["active"]), (&workspace, &json!("app"), &json!(1)));
+    let pane = opened["state"]["focused"].clone();
+    // A task started from that tab, for that folder, takes it: it leaves Workspace as the task's.
+    otto.call(json!({"cmd": "compose", "text": "second >app"}));
     let second = otto.user_key("enter");
-    assert_eq!(groups(&second), [json!([1, [0, 1]]), json!([2, [2]])]);
+    assert_eq!(
+        owners(&second),
+        [json!([workspace, [0], false]), json!([task(1), [1], false]), json!([task(2), [2], true])]
+    );
+    assert_eq!((&second["state"]["tabs"][2]["id"], &second["state"]["focused"]), (&tab["id"], &pane));
     otto.user_key("cmd-l");
 
-    // Selecting a tab of another task: the open drawer shows that task's conversation.
-    let followed = otto.user_key("cmd-1");
-    assert_eq!((&followed["state"]["active"], &followed["state"]["talk"]["task"]), (&json!(0), &json!(1)));
+    // One selection: the drawer is on the selected space's agent, none on Workspace's.
+    let shown = otto.user_key("cmd-1");
+    assert_eq!((&shown["state"]["active"], &shown["state"]["talk"]), (&json!(0), &Value::Null));
+    let shown = otto.user_key("cmd-2");
+    assert_eq!((&shown["state"]["talk"]["task"], &shown["state"]["talk"]["open"]), (&json!(1), &json!(true)));
     // Closed, it stays closed.
     otto.user_key("cmd-shift-l");
     let closed = otto.user_key("cmd-3");
-    assert_eq!((&closed["state"]["talk"]["open"], &closed["state"]["talk"]["task"]), (&json!(false), &json!(1)));
-    otto.user_key("cmd-shift-l");
-    // A click on a task's row: its conversation; the tab stays.
+    assert_eq!((&closed["state"]["talk"]["open"], &closed["state"]["talk"]["task"]), (&json!(false), &json!(2)));
+    // A click on a task's row: its space, and the drawer on it.
     otto.call(json!({"cmd": "section", "section": "tasks"}));
     let clicked = otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
-    assert_eq!((&clicked["state"]["active"], &clicked["state"]["talk"]["task"]), (&json!(2), &json!(1)));
-    // Go to its tabs (⌘↵): the one it showed last.
-    assert_eq!(clicked["drawer"]["goes_to"], "tabs");
-    otto.user_key("cmd-l");
-    let gone = otto.user_key("cmd-enter");
-    assert_eq!(gone["state"]["active"], 0, "{}", gone["drawer"]);
+    assert_eq!((&clicked["state"]["active"], &clicked["state"]["talk"]["task"]), (&json!(1), &json!(1)));
 
-    // The user's drag of a tab onto another group: it takes that task. A client's is refused.
-    // The section and the drawer closed: a small window's strip shows every tab, none clipped.
-    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    // The user's drag of a tab onto a task's badge moves it there; Workspace gets an empty tab.
     otto.user_key("cmd-shift-l");
-    let tab = |place: usize| {
-        otto.drawn()["tabs"][place]
-            .as_array()
-            .map(|r| [r[0].as_f64().unwrap(), r[1].as_f64().unwrap(), r[2].as_f64().unwrap(), r[3].as_f64().unwrap()])
-            .expect("a tab")
-    };
-    let (from, onto) = (tab(1), tab(2));
-    let dragged = otto.user_drag(at(from, 0.5, 0.5), at(onto, 0.3, 0.5));
-    assert_eq!(groups(&dragged), [json!([1, [0]]), json!([2, [1, 2]])], "{}", dragged["groups"]);
-    // Remove Tab from Task, from the palette's command: it is a tab of no task, at the end.
-    otto.user_key("cmd-2");
-    otto.user_key("cmd-p");
-    otto.user_key("r e m o v e space t a b");
-    let unlinked = otto.user_key("enter");
-    assert_eq!(groups(&unlinked), [json!([1, [0]]), json!([2, [1]]), json!([null, [2]])], "{}", unlinked["groups"]);
-    // Task 1's tab still has a shell, in its repository as the user's own panes are where they were.
-    let _ = app;
+    let from = otto.drawn()["tabs"][0]
+        .as_array()
+        .map(|r| [r[0].as_f64().unwrap(), r[1].as_f64().unwrap(), r[2].as_f64().unwrap(), r[3].as_f64().unwrap()])
+        .expect("a tab");
+    let dragged = otto.user_drag(at(from, 0.5, 0.5), at(otto.control("group:2"), 0.5, 0.5));
+    let moved = dragged["state"]["tabs"].as_array().unwrap().iter().find(|t| t["id"] == mine.0["id"]).cloned();
+    assert_eq!(moved.map(|t| t["space"].clone()), Some(task(2)), "{}", dragged["spaces"]);
+    assert_eq!(dragged["spaces"][0]["tabs"].as_array().map(Vec::len), Some(1));
+    // Hidden, a space leaves the row and its agent goes on; its row in Tasks brings it back.
+    let hidden = otto.call(json!({"cmd": "hide_space", "index": 1}));
+    assert_eq!((&hidden["spaces"][1]["hidden"], &hidden["state"]["agents"]), (&json!(true), &json!([1, 2])));
+    let back = otto.user_click(at(otto.control("task:1"), 0.3, 0.3));
+    assert_eq!((&back["spaces"][1]["hidden"], &back["spaces"][1]["selected"]), (&json!(false), &json!(true)));
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&home);
 }
@@ -5676,7 +5677,8 @@ fn a_click_shows_a_session_and_resume_goes_on_with_it_in_the_drawer() {
     let reply = otto.user_start();
     let talk = json!({"runner": "claude", "id": idle});
     assert_eq!((&reply["mode"], &reply["state"]["talk"]["task"]), (&json!("talk"), &talk), "{reply}");
-    let argv = otto.wait_for("claude --resume", |_| agent_argv(&bin, "claude"));
+    // The fake writes its argv as it goes: wait for all of it.
+    let argv = otto.wait_for("claude --resume", |_| agent_argv(&bin, "claude").filter(|argv| argv.len() >= 3));
     assert_eq!(argv, [below.to_str().unwrap(), "--resume", idle]);
     let key = format!("claude:{idle}");
     let state = otto.wait_for("the agent to say it is ready", |o| {
@@ -5685,10 +5687,9 @@ fn a_click_shows_a_session_and_resume_goes_on_with_it_in_the_drawer() {
         lines.iter().any(|l| l == "fake claude ready").then_some(state)
     });
     assert_eq!(state["state"]["tasks"]["list"], json!([]), "no task is made");
-    assert_eq!(
-        (&state["state"]["tabs"], &state["state"]["focused"]),
-        (&before["state"]["tabs"], &before["state"]["focused"])
-    );
+    // Its space, after Workspace's tab as it was, holds one empty tab.
+    let tabs = state["state"]["tabs"].as_array().unwrap();
+    assert_eq!((&tabs[0], tabs[1]["space"]["kind"].as_str()), (&before["state"]["tabs"][0], Some("session")));
     // On the right rail like a task's conversation: its title's badge, named by runner and id.
     let cell = &state["drawer"]["rail"][0];
     assert_eq!((&cell["task"], &cell["mono"], &cell["shown"]), (&talk, &json!("GT"), &json!(true)), "{cell}");
@@ -5724,7 +5725,12 @@ fn a_click_shows_a_session_and_resume_goes_on_with_it_in_the_drawer() {
             .as_array()
             .is_some_and(|l| l.iter().any(|l| l == "fake claude ready"))
     );
-    assert_eq!(adopted["state"]["tabs"], before["state"]["tabs"], "no shell tab");
+    // Its space is the task's now; no shell opened.
+    let shown = &adopted["state"]["tabs"][adopted["state"]["active"].as_u64().unwrap() as usize];
+    assert_eq!(
+        (&shown["space"], &adopted["state"]["panes"]),
+        (&json!({"kind": "task", "id": 1}), &before["state"]["panes"])
+    );
     std::thread::sleep(Duration::from_millis(300));
     assert!(agent_argv(&bin, "claude").is_none(), "the same program, not a second one");
 
@@ -6175,20 +6181,22 @@ fn move_tab_to_task_in_the_palette_lists_the_tasks_and_moves_the_tab() {
     };
     let listed =
         |o: &Otto| Some(o.call(json!({"cmd": "state"}))).filter(|r| r["palette_rows"][0]["group"] == "Move to");
-    // The command opens the palette again on the tasks, then no task.
+    // The command opens the palette again on Workspace, then the tasks.
     otto.user_key("cmd-p m o v e space t a b space t o enter");
     let reply = otto.wait_for("the tasks listed", listed);
-    let all = vec![json!("fix login"), json!("docs"), json!("No task")];
+    let all = vec![json!("Workspace"), json!("fix login"), json!("docs")];
     assert_eq!((names(&reply), &reply["mode"]), (all.clone(), &json!("palette")));
-    // Typing narrows them; ↵ moves the tab on show to that task.
+    // Typing narrows them; ↵ moves the tab on show to that task's space. Workspace gets an empty tab.
     otto.user_key("d o c");
     let reply = otto.user_key("enter");
-    assert_eq!((tab_titles(&reply), &reply["mode"]), (vec![("Tab 1".to_string(), json!(2))], &json!("normal")));
-    // And back to no task.
+    let moved = vec![("Tab 2".to_string(), Value::Null), ("Tab 1".to_string(), json!(2))];
+    assert_eq!((tab_titles(&reply), &reply["mode"]), (moved, &json!("normal")));
+    // And back to Workspace: the task's space, with no tab left, goes.
     otto.user_key("cmd-p m o v e space t a b space t o enter");
     assert_eq!(names(&otto.wait_for("the tasks listed", listed)), all);
-    let reply = otto.user_key("n o space t a s k enter");
-    assert_eq!(tab_titles(&reply), [("Tab 1".to_string(), Value::Null)]);
+    let reply = otto.user_key("w o r k s p a c e enter");
+    assert_eq!(tab_titles(&reply), [("Tab 2".to_string(), Value::Null), ("Tab 1".to_string(), Value::Null)]);
+    assert_eq!(reply["spaces"].as_array().map(Vec::len), Some(1));
 }
 
 #[test]
@@ -6314,7 +6322,8 @@ fn the_tab_strip_ends_where_the_panes_end_and_its_buttons_stay_in_view() {
 /// The tabs as the bar has them: each one's title and task.
 fn tab_titles(reply: &Value) -> Vec<(String, Value)> {
     let tabs = reply["state"]["tabs"].as_array().cloned().unwrap_or_default();
-    tabs.iter().map(|tab| (tab["title"].as_str().unwrap_or_default().to_string(), tab["task"].clone())).collect()
+    // A task's tab by its task's id, Workspace's by null.
+    tabs.iter().map(|tab| (tab["title"].as_str().unwrap_or_default().to_string(), tab["space"]["id"].clone())).collect()
 }
 
 /// The split tree on show with its leaves' ids left out, its ratios to two places.
@@ -6369,13 +6378,14 @@ fn tabs_and_layout_come_back_after_quitting_and_no_agent_starts() {
     otto.call(json!({"cmd": "split"}));
     otto.call(json!({"cmd": "split", "axis": "down"}));
     let second = tree_shape(&otto.call(json!({"cmd": "state"}))["state"]["layout"]);
-    // A task whose agent the user started once: it has a session, and took the tab on show.
+    // A task whose agent the user started once: it has a session, and its space is selected.
     otto.call(json!({"cmd": "task_new", "line": "fix login >app"}));
     otto.call(json!({"cmd": "section", "section": "tasks"}));
     otto.start_task(1);
     otto.wait_for("the agent to start", |_| agent_argv(&bin, "claude"));
     let before = otto.call(json!({"cmd": "state"}));
-    let on_show = |s: &Value| s["state"]["tabs"][s["state"]["active"].as_u64().unwrap_or(0) as usize]["task"].clone();
+    let on_show =
+        |s: &Value| s["state"]["tabs"][s["state"]["active"].as_u64().unwrap_or(0) as usize]["space"]["id"].clone();
     assert_eq!((on_show(&before), &before["state"]["talk"]["task"]), (json!(1), &json!(1)));
     otto.call(json!({"cmd": "quit"}));
     exits(&mut otto);
@@ -6393,25 +6403,21 @@ fn tabs_and_layout_come_back_after_quitting_and_no_agent_starts() {
         let state = o.call(json!({"cmd": "state"}));
         (state["terminals"].as_object()?.len() == 4).then_some(state)
     });
-    // Each task's tabs together, then no task's, in their order; the task's tab on show.
-    let task_tab = tab_titles(&before).into_iter().find(|(_, task)| *task == json!(1)).unwrap();
-    let none = |tabs: Vec<(String, Value)>| tabs.into_iter().filter(|(_, task)| task.is_null()).collect::<Vec<_>>();
-    assert_eq!(tab_titles(&after)[0], task_tab);
-    assert_eq!(none(tab_titles(&after)), none(tab_titles(&before)));
+    // Workspace's tabs, then the task's space, in their order; the task's tab on show.
+    assert_eq!(tab_titles(&after), tab_titles(&before));
     assert_eq!((on_show(&after), &after["state"]["sidebar"]), (json!(1), &json!("tasks")));
-    assert_eq!(after["groups"], before["groups"]);
+    assert_eq!(after["spaces"], before["spaces"]);
     // The drawer shows the task's conversation to go on with; no agent was started.
     let talk = &after["state"]["talk"];
     assert_eq!((&talk["task"], &talk["open"], &talk["keys"]), (&json!(1), &json!(true), &json!(false)), "{talk}");
     assert_eq!((&after["state"]["agents"], &after["drawer"]["agents"]), (&json!([]), &json!({})));
     // The splits, ratios within a point, and each terminal in its folder.
-    let tab = otto.call(json!({"cmd": "select_tab", "index": 1}));
+    let tab = otto.call(json!({"cmd": "select_tab", "index": 0}));
     assert_eq!(tree_shape(&tab["state"]["layout"]), first);
-    assert_eq!(pane_dirs(&after)[2..4], [json!(one), json!(two)]);
-    otto.call(json!({"cmd": "type", "pane": 3, "text": "pwd\r"}));
-    otto.call(json!({"cmd": "wait", "pane": 3, "pattern": format!("^{one}$"), "timeout_ms": 30000}));
-    // The task's tab, first on the bar, is the second tab made.
-    assert_eq!(tree_shape(&otto.call(json!({"cmd": "select_tab", "index": 0}))["state"]["layout"]), second);
+    assert_eq!(pane_dirs(&after)[0..2], [json!(one), json!(two)]);
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "pwd\r"}));
+    otto.call(json!({"cmd": "wait", "pane": 1, "pattern": format!("^{one}$"), "timeout_ms": 30000}));
+    assert_eq!(tree_shape(&otto.call(json!({"cmd": "select_tab", "index": 1}))["state"]["layout"]), second);
     assert!(agent_argv(&bin, "claude").is_none(), "an agent was started at start");
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
@@ -7664,12 +7670,20 @@ fn a_click_on_a_tab_switches_with_the_drawer_open() {
     otto.call(json!({"cmd": "task_new", "line": "plan the week >app"}));
     otto.call(json!({"cmd": "section", "section": "tasks"}));
     otto.start_task(1);
+    // Out of the chat: a client's new tab is not shown under the user's typing.
+    otto.user_key("cmd-l");
     otto.call(json!({"cmd": "new_tab"}));
     otto.call(json!({"cmd": "split", "kind": "empty"}));
     let state = otto.call(json!({"cmd": "state"}));
-    let tasks: Vec<Value> = state["state"]["tabs"].as_array().unwrap().iter().map(|t| t["task"].clone()).collect();
-    assert_eq!((tasks, &state["state"]["active"]), (vec![json!(1), json!(null)], &json!(1)), "{}", state["state"]);
-    // The Tasks section closed: a small window's strip shows both tabs whole, none clipped
+    let tasks: Vec<Value> =
+        state["state"]["tabs"].as_array().unwrap().iter().map(|t| t["space"]["id"].clone()).collect();
+    assert_eq!(
+        (tasks, &state["state"]["active"]),
+        (vec![json!(null), json!(null), json!(1)], &json!(1)),
+        "{}",
+        state["state"]
+    );
+    // The Tasks section closed: a small window's strip shows the tabs whole, none clipped
     // under the drawer. Each is clicked near its left edge, where its title is.
     otto.call(json!({"cmd": "section", "section": "tasks"}));
     let tab = |place: usize| {
@@ -7678,11 +7692,11 @@ fn a_click_on_a_tab_switches_with_the_drawer_open() {
     };
     let active = |reply: &Value| reply["state"]["active"].clone();
 
-    // The task's conversation open: the task's tab, then the other, and back.
-    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["talk"]["open"], true);
-    assert_eq!(active(&otto.user_click(at(tab(0), 0.5, 0.5))), 0);
+    // The task's conversation open: the task's tab, then Workspace's, and back.
+    let clicked = otto.user_click(at(tab(2), 0.5, 0.5));
+    assert_eq!((active(&clicked), &clicked["state"]["talk"]["open"]), (json!(2), &json!(true)));
     assert_eq!(active(&otto.user_click(at(tab(1), 0.5, 0.5))), 1);
-    assert_eq!(active(&otto.user_click(at(tab(0), 0.5, 0.5))), 0);
+    assert_eq!(active(&otto.user_click(at(tab(2), 0.5, 0.5))), 2);
 
     // The new-task box open in the drawer, half written: a click on a tab goes there and the
     // line is kept for the box's next opening.
@@ -7695,8 +7709,8 @@ fn a_click_on_a_tab_switches_with_the_drawer_open() {
     otto.user_key("escape");
 
     // A press that moves 3 points before it is let go: still that tab.
-    let from = at(tab(0), 0.5, 0.5);
-    assert_eq!(active(&otto.user_drag(from, [from[0] + 3.0, from[1]])), 0);
+    let from = at(tab(2), 0.5, 0.5);
+    assert_eq!(active(&otto.user_drag(from, [from[0] + 3.0, from[1]])), 2);
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
 }

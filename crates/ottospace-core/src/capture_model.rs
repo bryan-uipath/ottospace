@@ -293,6 +293,11 @@ impl Model {
             bar.stop_annotating();
         }
         self.back_to = self.back_to.filter(|pane| self.pane(*pane).is_some());
+        self.settle_brief();
+    }
+
+    /// A brief shows while its task has captures and is on show: its space, or its chat.
+    pub(crate) fn settle_brief(&mut self) {
         let briefed = |id: &TaskId| self.tasks.get(*id).is_some_and(|task| !task.materials.is_empty());
         let shown = |id: &TaskId| {
             self.tab_task() == Some(*id) || self.talk.as_ref().is_some_and(|talk| talk.task.task() == Some(*id))
@@ -681,14 +686,14 @@ mod tests {
         assert_eq!((m.capture.is_none(), m.compose.is_none(), m.mode()), (true, true, Mode::Normal));
         assert_eq!(m.tasks.get(1).map(|task| task.title_generated), Some(false), "its title was typed");
         // Going to the task's tab shows its brief; with no tab of it on show the brief goes too.
-        m.update(Action::TabPlace { tab: None, at: crate::model::TabAt::End(Some(1)) });
+        m.update(Action::TabPlace { tab: None, at: crate::model::TabAt::End(crate::model::Owner::Task { id: 1 }) });
         m.update(Action::NewTab);
         m.update(Action::TaskGo { id: Some(1) });
         assert_eq!(m.brief, Some(1));
         m.update(Action::BriefClose);
         m.update(Action::BriefShow { id: 1 });
         assert_eq!(m.brief, Some(1));
-        m.update(Action::TabPlace { tab: None, at: crate::model::TabAt::End(None) });
+        m.update(Action::TabPlace { tab: None, at: crate::model::TabAt::End(crate::model::Owner::Workspace) });
         assert_eq!(m.brief, None);
         m.update(Action::BriefShow { id: 1 });
         assert_eq!(m.brief, None, "its tabs are not on show");

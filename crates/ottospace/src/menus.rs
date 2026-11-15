@@ -33,7 +33,6 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
             name: "File".into(),
             items: vec![
                 item("New Tab", NewTab),
-                item("New Tab outside the Task", NewTabOutside),
                 item("Remove Tab from Task", RemoveTabFromTask),
                 item("Move Tab to Task…", MoveTabToTask),
                 item("Save Tab as Workbook", SaveWorkbook),
@@ -121,7 +120,6 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
                 item("Type in the Conversation", TalkFocus),
                 item("Edit Message in Editor", EditMessage),
                 item("Open or Close the Conversation", TalkToggle),
-                item("Go to Its Tabs", TalkGo),
                 item("Stop the Agent", StopAgent),
             ],
         },

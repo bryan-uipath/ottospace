@@ -94,6 +94,8 @@ import type {
   Sneak,
   SneakApp,
   Snapshot,
+  SpaceRow,
+  Owner,
   Tab,
   Task,
   TaskPopReply,
@@ -389,7 +391,23 @@ function pane(value: unknown, at: string): Pane {
 
 function tab(value: unknown, at: string): Tab {
   const o = fields(value, at);
-  return { id: num(o.id, `${at}.id`), title: str(o.title, `${at}.title`), task: orNull(num)(o.task, `${at}.task`) };
+  return { id: num(o.id, `${at}.id`), title: str(o.title, `${at}.title`), space: owner(o.space, `${at}.space`) };
+}
+
+function owner(value: unknown, at: string): Owner {
+  const o = fields(value, at);
+  switch (o.kind) {
+    case "workspace":
+      return { kind: "workspace" };
+    case "task":
+      return { kind: "task", id: num(o.id, `${at}.id`) };
+    case "session":
+      return { kind: "session", runner: str(o.runner, `${at}.runner`), id: str(o.id, `${at}.id`) };
+    case "workbook":
+      return { kind: "workbook", id: num(o.id, `${at}.id`) };
+    default:
+      throw new Error(`${at}.kind: not a space: ${JSON.stringify(o.kind)}`);
+  }
 }
 
 function layout(value: unknown, at: string): Layout {
@@ -670,11 +688,6 @@ function noticeLevel(value: unknown, at: string): "info" | "error" {
   throw new Error(`${at}: not a level: ${JSON.stringify(value)}`);
 }
 
-function goWord(value: unknown, at: string): "tabs" | "claim" | "new" {
-  if (value === "tabs" || value === "claim" || value === "new") return value;
-  throw new Error(`${at}: not a go word: ${JSON.stringify(value)}`);
-}
-
 function agentLine(value: unknown, at: string): AgentLine {
   const o = fields(value, at);
   const pair = (v: unknown, p: string): [string, string] => {
@@ -690,9 +703,14 @@ function agentLine(value: unknown, at: string): AgentLine {
   };
 }
 
-function tabGroup(value: unknown, at: string): Snapshot["groups"][number] {
+function spaceRow(value: unknown, at: string): SpaceRow {
   const o = fields(value, at);
-  return { task: orNull(num)(o.task, `${at}.task`), tabs: list(num)(o.tabs, `${at}.tabs`) };
+  return {
+    of: owner(o.of, `${at}.of`),
+    hidden: bool(o.hidden, `${at}.hidden`),
+    selected: bool(o.selected, `${at}.selected`),
+    tabs: list(num)(o.tabs, `${at}.tabs`),
+  };
 }
 
 function nativeChat(value: unknown, at: string): NativeChat {
@@ -779,7 +797,6 @@ function drawerDrawn(value: unknown, at: string): Snapshot["drawer"] {
     width: num(o.width, `${at}.width`),
     agents: map(agent)(o.agents, `${at}.agents`),
     native: native(o.native, `${at}.native`),
-    goes_to: orNull(goWord)(o.goes_to, `${at}.goes_to`),
     line: orNull(agentLine)(o.line, `${at}.line`),
     note: orNull(str)(o.note, `${at}.note`),
     rail: list(railCell)(o.rail, `${at}.rail`),
@@ -958,7 +975,7 @@ function feature(value: unknown, at: string): Feature {
 
 function paletteTask(value: unknown, at: string): PaletteTask {
   const o = fields(value, at);
-  return { task: orNull(num)(o.task, `${at}.task`), title: str(o.title, `${at}.title`) };
+  return { to: owner(o.to, `${at}.to`), title: str(o.title, `${at}.title`) };
 }
 
 function inspectorState(value: unknown, at: string): InspectorState {
@@ -1440,7 +1457,7 @@ export function snapshot(value: unknown): Snapshot {
     workbook_offer: orNull(workbookOffer)(o.workbook_offer, "workbook_offer"),
     scrollbars: map(scrollbar)(o.scrollbars, "scrollbars"),
     capture: captureDrawn(o.capture, "capture"),
-    groups: list(tabGroup)(o.groups, "groups"),
+    spaces: list(spaceRow)(o.spaces, "spaces"),
     badges: map(str)(o.badges, "badges"),
     drawer: drawerDrawn(o.drawer, "drawer"),
     calendar: calendar(o.calendar, "calendar"),

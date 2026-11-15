@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::edit::Field;
 use crate::features::Feature;
-use crate::tasks::TaskId;
+use crate::model::Owner;
 
 /// Why a client's request to the palette is refused.
 pub const USERS_ALONE: &str = "only the user runs the command palette";
@@ -101,7 +101,6 @@ commands! {
     CloseTab: "Close Tab", Tabs;
     NewTask: "New Task", Tasks;
     // After New Task: a query of a name ranks a later tie lower.
-    NewTabOutside: "New Tab outside the Task", Tabs;
     RemoveTabFromTask: "Remove Tab from Task", Tabs;
     MoveTabToTask: "Move Tab to Task…", Tabs;
     NextTask: "Next Task", Tasks;
@@ -109,7 +108,6 @@ commands! {
     TalkFocus: "Type in the Conversation", Tasks;
     EditMessage: "Edit Message in Editor", Tasks;
     TalkToggle: "Open or Close the Conversation", Tasks;
-    TalkGo: "Go to Its Tabs", Tasks;
     StopAgent: "Stop the Agent", Tasks;
     SaveWorkbook: "Save Tab as Workbook", Workbook;
     AddTabToWorkbook: "Add Tab to Workbook…", Workbook;
@@ -164,10 +162,10 @@ pub struct FeatureChoice {
     pub on: bool,
 }
 
-/// A task the tab may move to. `task` `None`: no task.
+/// A space the tab may move to: Workspace, a task's or a workbook's.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct TaskChoice {
-    pub task: Option<TaskId>,
+    pub to: Owner,
     pub title: String,
 }
 

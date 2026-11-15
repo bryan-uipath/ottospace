@@ -344,7 +344,7 @@ impl Workspace {
                 }
                 None
             }
-            ("task-snooze" | "task-hold" | "task-dismiss" | "task-claim", _) => {
+            ("task-snooze" | "task-hold" | "task-dismiss", _) => {
                 if let Some(id) = number {
                     self.click_row_button(kind, id, window, cx);
                 }
