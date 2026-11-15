@@ -407,6 +407,9 @@ const MIN_SPACE: f32 = 72.;
 /// What a space wants with its title: past the row's room for that many, the others are badges.
 const TITLED_SPACE: f32 = 150.;
 const MAX_SPACE: f32 = 220.;
+/// A space drawn as its badge alone, and Workspace with its name.
+const BADGE_SPACE: f32 = 36.;
+const NAMED_WORKSPACE: f32 = 96.;
 const TRAFFIC_LIGHTS: f32 = 80.;
 /// The narrowest a tab shrinks to when the strip is full: a few letters of its title and its ×.
 const MIN_TAB: f32 = 80.;
@@ -4889,12 +4892,6 @@ impl Workspace {
     /// Top bar, drawn where the system title bar was: tabs on the left, new-tab and split
     /// buttons on the right.
     /// `room`: the points the top row has for its spaces.
-    fn render_top(&self, left: f32, room: f32, cx: &mut Context<Self>) -> impl IntoElement {
-        // The spaces of the top row, then under them the selected space's tabs, when it has more than one.
-        let spaces = self.render_spaces(left, room, cx);
-        div().flex_none().flex().flex_col().child(spaces).children(self.render_space_tabs(cx))
-    }
-
     /// The colour a space is drawn in: its task's, else the accent.
     fn space_colour(&self, of: &Owner) -> u32 {
         let task = of.task().and_then(|id| self.model.tasks.get(id));
@@ -4908,12 +4905,34 @@ impl Workspace {
     fn render_spaces(&self, left: f32, room: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let selected = self.model.space().clone();
         let shown = self.model.shown_spaces();
-        // Short of room, a space not selected is its badge alone, its title on hover.
+        // Short of room, a space not selected is its badge alone, its title on hover. Shorter
+        // still, Workspace too, and the badges that do not fit after the selected one give way to
+        // a count: the selected space always shows.
         let compact = shown.len() as f32 * TITLED_SPACE > room;
-        let spaces = shown.into_iter().enumerate().map(|(place, space)| {
+        let tight = compact && room < NAMED_WORKSPACE + TITLED_SPACE + BADGE_SPACE;
+        let workspace = if tight { BADGE_SPACE } else { NAMED_WORKSPACE };
+        let selected_width = if tight { MIN_SPACE } else { TITLED_SPACE };
+        let others = shown.iter().filter(|space| space.of != selected && space.of != Owner::Workspace).count();
+        let fits = |n: usize| workspace + selected_width + n as f32 * BADGE_SPACE <= room;
+        let badges =
+            if !compact || fits(others) { others } else { (0..others).rev().find(|n| fits(n + 1)).unwrap_or(0) };
+        let mut room_for = badges;
+        let shown: Vec<_> = shown
+            .into_iter()
+            .enumerate()
+            .filter(|(_, space)| {
+                let keep = space.of == selected || space.of == Owner::Workspace || room_for > 0;
+                if keep && space.of != selected && space.of != Owner::Workspace {
+                    room_for -= 1;
+                }
+                keep
+            })
+            .collect();
+        let more = others - badges;
+        let spaces = shown.into_iter().map(|(place, space)| {
             let of = space.of.clone();
             let on = of == selected;
-            let small = compact && !on && of != Owner::Workspace;
+            let small = compact && !on && (of != Owner::Workspace || tight);
             let tip: SharedString = self.model.space_title(&of).into();
             let colour = self.space_colour(&of);
             let count = self.model.space_tabs(&of).len();
@@ -4931,6 +4950,7 @@ impl Workspace {
                 Owner::Session { .. } if small => {
                     Some(div().child(ottospace_core::talk::monogram(&self.model.space_title(&of))).into_any_element())
                 }
+                Owner::Workspace if small => Some(div().child("W").into_any_element()),
                 Owner::Workspace | Owner::Session { .. } => None,
             };
             let hide = (of != Owner::Workspace).then(|| {
@@ -4960,7 +4980,7 @@ impl Workspace {
                 // Workspace and the selected space keep their names; the others give way first.
                 .when(!small, |d| d.min_w(px(MIN_SPACE)).max_w(px(MAX_SPACE)).flex_shrink())
                 .when(of == Owner::Workspace, |d| d.flex_none())
-                .when(on && compact, |d| d.min_w(px(TITLED_SPACE)))
+                .when(on && compact, |d| d.min_w(px(selected_width)))
                 .when(small, |d| d.flex_none().tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))))
                 .overflow_hidden()
                 .pl_3()
@@ -4994,6 +5014,26 @@ impl Workspace {
                 }))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.dispatch(Action::SpaceSelect { index: place }, this.input, window, cx);
+                }))
+        });
+        // The spaces left off for room: their count; a click goes on to the next space.
+        let more = (more > 0).then(|| {
+            div()
+                .id("more-spaces")
+                .flex_none()
+                .px_2()
+                .h_full()
+                .flex()
+                .items_center()
+                .text_xs()
+                .cursor_pointer()
+                .hover(|s| s.text_color(rgb(theme::TEXT)))
+                .child(format!("+{more}"))
+                .tooltip(move |_, cx| {
+                    AnyView::from(cx.new(|_| Tooltip(format!("{more} more: ⌘⌃] and ⌘⌃[ go along the row").into())))
+                })
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.dispatch(Action::SpaceCycle { delta: 1 }, this.input, window, cx);
                 }))
         });
         let new_task = div()
@@ -5035,6 +5075,7 @@ impl Workspace {
                 }),
             )
             .child(div().flex_shrink().min_w_0().h_full().flex().overflow_hidden().children(spaces))
+            .children(more)
             .child(new_task)
             .child(self.render_top_buttons(cx))
     }
@@ -5545,8 +5586,9 @@ impl Render for Workspace {
         let right = self.render_inspector(drawer, cx);
         let right = right.or_else(|| self.render_draft(cx)).or_else(|| self.render_drawer(drawer, cx));
         let right_width = if right.is_some() { drawer } else { 0. };
-        // The top row's room for its spaces: the centre, less the lights, the + and the buttons.
-        let centre = f32::from(window.viewport_size().width) - left - right_width;
+        // The top row's room for its spaces: over the centre and the drawer, less the lights, the +
+        // and the buttons.
+        let centre = f32::from(window.viewport_size().width) - left;
         let room = centre - (TRAFFIC_LIGHTS - left).max(0.) - 140.;
         div()
             .size_full()
@@ -5792,7 +5834,8 @@ impl Render for Workspace {
                                     .children(self.model.sidebar.map(|section| self.render_bar(section, cx))),
                             ),
                     )
-                    // Center: the top rows over the workspace, from the section list to the drawer.
+                    // The top row of spaces from the section list over the drawer; under it the
+                    // selected space's tabs over the workspace, and the drawer beside them.
                     .child(
                         div()
                             .flex_1()
@@ -5800,24 +5843,38 @@ impl Render for Workspace {
                             .h_full()
                             .flex()
                             .flex_col()
-                            .child(self.render_top(left, room, cx))
+                            .child(self.render_spaces(left, room, cx))
                             .child(
                                 div()
                                     .flex_1()
-                                    // Let the canvas shrink below its content, so a wide image cannot
-                                    // push it past the window; it scales down instead.
-                                    .min_w_0()
                                     .min_h_0()
-                                    .w_full()
                                     .flex()
-                                    .overflow_hidden()
-                                    .children(home)
-                                    .children(tree),
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .h_full()
+                                            .flex()
+                                            .flex_col()
+                                            .children(self.render_space_tabs(cx))
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    // Let the canvas shrink below its content, so a wide
+                                                    // image cannot push it past the window; it scales down.
+                                                    .min_w_0()
+                                                    .min_h_0()
+                                                    .w_full()
+                                                    .flex()
+                                                    .overflow_hidden()
+                                                    .children(home)
+                                                    .children(tree),
+                                            ),
+                                    )
+                                    // The drawer (the draft being collected, a conversation, or a brief).
+                                    .children(right),
                             ),
                     )
-                    // Right: the drawer (the draft being collected, a conversation, or a brief),
-                    // then its rail.
-                    .children(right)
                     // The side zones sit above the workspace: each casts a soft shadow onto it.
                     // Drawn last, so it lies over the panes. A live app's window is above it all.
                     .child(zone_shadow(left, true))

@@ -488,7 +488,7 @@ impl Workspace {
             .children(plan)
             .children(open.then(|| self.new_task_content(cx)))
             .children(idle);
-        // Its header is as high as the tab strip: one title strip runs across the window.
+        // Its header is as high as the top row above it.
         let header = div()
             .h(px(crate::TOP_BAR))
             .flex_none()
