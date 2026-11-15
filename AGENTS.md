@@ -98,6 +98,9 @@ Rules:
   - `sneak_app_tree`: a fixture tree as if read from the focused pane's window while sneak mode
     is on (a test run hosts no window), so its elements get labels. The state's `app_presses`
     (null outside a test run) lists each press a label asked for.
+  - State fields `keys_known` (the ids of the key bindings the user knows) and `key_reference`
+    (while ⌘/ shows: its groups' row ids, the known ids, whether Known is open, its header's
+    rect). Null outside a test run: what the user's keys are used for is never on the socket.
   - `record_start` (`"dir"`) and `record_stop`: ScreenCaptureKit films ottospace's own window
     into `dir`, a raw BGRA file a change and `frames.jsonl` (`record.rs`), for
     `scripts/shot --record`. Outside a test run no client films the window.
@@ -139,8 +142,12 @@ Rules:
   and `scripts/package.sh` (release binary, `.app` zip, `BUILD`, `SHA256SUMS`) uploaded as a workflow
   artifact. On `main` a third job, the only one with a write token, replaces the assets of the
   `main-latest` prerelease and moves its tag. Not a required check.
-- `.github/workflows/scripts.yml`, on pull requests that change `scripts/**` or `install.sh`:
-  `scripts/test-osi.sh`.
+- `.github/workflows/scripts.yml`, on pull requests that change what `scripts/test-osi.sh` reads
+  (`install.sh`, `scripts/osi`, `scripts/test-osi.sh`, `scripts/package.sh`): `scripts/test-osi.sh`.
+  A file the test starts to read is added to its `paths`.
+- One Rust cache for the dev build: `ci.yml`'s `e2e` job saves it, on `main` only (`shared-key: e2e`);
+  `app-windows.yml`, `shots.yml` and `reliability.yml` restore it and save none (`save-if: false`).
+  A job that builds the same dependencies joins it; one that saves from a pull request does not.
 - `.github/workflows/shots.yml`, on pull requests that change `crates/ottospace/src/**`,
   `crates/ottospace-core/src/**`, `scripts/shot`, `scripts/shots/**` or `scripts/test-shot.sh`:
   `scripts/test-shot.sh`, then `scripts/shot --compare` of every scenario against the merge base;

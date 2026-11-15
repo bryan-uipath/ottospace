@@ -1,6 +1,6 @@
 # ottospace cheat sheet
 
-One page for daily use. ⌘/ shows the keys inside the app (J / K, space, Home / End scroll them). Full detail: [reference.md](reference.md). Install and update: [install.md](install.md).
+One page for daily use. ⌘/ shows the keys inside the app, the ones you have not learned first; those you know fold into `Known` (↵ opens it). Full detail: [reference.md](reference.md). Install and update: [install.md](install.md).
 
 ## Start
 
