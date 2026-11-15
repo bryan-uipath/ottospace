@@ -95,6 +95,7 @@ import type {
   ClosedApp,
   Sneak,
   SneakApp,
+  KeyReference,
   Snapshot,
   Station,
   SpaceRow,
@@ -1358,6 +1359,20 @@ function appPress(value: unknown, at: string): [PaneId, number[]] {
   return [num(value[0], `${at}[0]`), list(num)(value[1], `${at}[1]`)];
 }
 
+function keyReference(value: unknown, at: string): KeyReference {
+  const o = fields(value, at);
+  const group = (g: unknown, where: string) => {
+    const f = fields(g, where);
+    return { group: str(f.group, `${where}.group`), rows: list(str)(f.rows, `${where}.rows`) };
+  };
+  return {
+    groups: list(group)(o.groups, `${at}.groups`),
+    known: list(str)(o.known, `${at}.known`),
+    known_open: bool(o.known_open, `${at}.known_open`),
+    known_header: orNull(rect)(o.known_header, `${at}.known_header`),
+  };
+}
+
 function sneakApp(value: unknown, at: string): SneakApp {
   const o = fields(value, at);
   return { pane: num(o.pane, `${at}.pane`), controls: num(o.controls, `${at}.controls`), found: num(o.found, `${at}.found`) };
@@ -1509,6 +1524,7 @@ export function snapshot(value: unknown): Snapshot {
     counts: orNull(map(num))(o.counts, "counts"),
     app_presses: orNull(list(appPress))(o.app_presses, "app_presses"),
     keys_known: orNull(list(str))(o.keys_known, "keys_known"),
+    key_reference: orNull(keyReference)(o.key_reference, "key_reference"),
     marks: list(mark)(o.marks, "marks"),
     mark_removed: orNull(str)(o.mark_removed, "mark_removed"),
     workbooks: list(workbook)(o.workbooks, "workbooks"),
