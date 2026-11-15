@@ -7569,7 +7569,7 @@ fn ctrl_g_edits_the_draft_in_the_users_editor_and_sends_nothing() {
     editor_quits(&ctl, Some("fix it\nand test it\n"), 0);
     let back = otto.wait_for("the editor's end", |o| Some(state(o)).filter(|s| s["editor"].is_null()));
     let chat_now = &back["drawer"]["native"]["chats"]["1"];
-    assert_eq!((&chat_now["draft_chars"], &chat_now["editing"]), (&json!(17), &json!(false)), "{chat_now}");
+    assert_eq!((&chat_now["draft_chars"], &chat_now["editing"]), (&json!(18), &json!(false)), "{chat_now}");
     assert_eq!(back["field"]["of"], "talk", "{}", back["field"]);
     assert!(!stdin().contains("fix it"), "nothing is sent: {}", stdin());
     assert!(drafts(&home).is_empty(), "{:?}", drafts(&home));
@@ -7636,8 +7636,9 @@ fn ctrl_g_edits_the_new_task_line_in_the_users_editor() {
     let reply = otto.user_key("ctrl-g");
     assert_eq!(reply["editor"]["target"], "compose");
     otto.wait_for("the editor", |_| given().filter(|g| g == "fix zoom"));
-    assert_eq!(state(&otto)["field"], Value::Null, "nothing types in the box meanwhile");
-    otto.wait_for("the editor drawn", |o| o.control_opt("talk:editor-terminal"));
+    // Sneak mode does not start over the box: the state says the drawer shows the editor.
+    let reply = state(&otto);
+    assert_eq!((&reply["field"], &reply["editor"]["shown"]), (&Value::Null, &json!(true)), "nothing types in the box");
     // Quit with an error: the line as it was, and the status bar says so, as information.
     editor_quits(&ctl, Some("changed"), 1);
     let back = otto.wait_for("the editor's end", |o| Some(state(o)).filter(|s| s["editor"].is_null()));

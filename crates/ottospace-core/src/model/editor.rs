@@ -104,13 +104,12 @@ impl Model {
     /// ⌃G: the editor on what the user writes. Open already: the keyboard goes back to it, if
     /// the drawer shows it; else the user is told where it is.
     pub(super) fn editor_open(&mut self, effects: &mut Vec<Effect>) {
-        if let Some(editing) = &self.editing {
+        if self.editing.is_some() {
             if !self.editor_shown() {
                 let text = "your editor is open on another message: finish it there first".into();
                 return effects.push(Effect::Notice { text });
             }
-            let chat = matches!(editing.target, Target::Chat(_));
-            return self.editor_keys_to(true, chat, effects);
+            return self.editor_keys_to(true, effects);
         }
         let Some(target) = self.editor_target() else { return };
         let given = match &target {
@@ -127,10 +126,11 @@ impl Model {
     }
 
     /// The keyboard to the editor (`on`), or to the card above it. Either way it is in the drawer.
-    pub(super) fn editor_keys_to(&mut self, on: bool, chat: bool, effects: &mut Vec<Effect>) {
+    pub(super) fn editor_keys_to(&mut self, on: bool, effects: &mut Vec<Effect>) {
         if !self.editor_shown() {
             return;
         }
+        let chat = self.editing.as_ref().is_some_and(|editing| matches!(editing.target, Target::Chat(_)));
         if let Some(editing) = &mut self.editing {
             editing.keys = on;
         }
@@ -390,6 +390,17 @@ mod tests {
         m.update(Action::EditorOpen);
         m.update(Action::CloseCompose);
         assert_eq!(finished(&mut m, Some("kept"), false), [Effect::Clip { text: "kept".into() }]);
+    }
+
+    /// ⌘Q while the editor runs asks first: its unsaved text would go with the app.
+    #[test]
+    fn quitting_with_the_editor_open_asks() {
+        let (mut m, _) = live();
+        m.update(Action::EditorOpen);
+        m.update(Action::TaskStop { id: Subject::Task(m.tasks.list[0].id) });
+        m.update(Action::AgentExited { task: Subject::Task(m.tasks.list[0].id) }.sent_by(Origin::System));
+        assert_eq!(m.update(Action::QuitAsked { running: Vec::new() }), []);
+        assert!(m.confirm.is_some());
     }
 
     /// A card waits: ⌃G opens nothing (the composer is not on show).

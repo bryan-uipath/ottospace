@@ -1585,9 +1585,12 @@ fn check(m: &Model) -> Result<(), String> {
         let loses = match confirm.dismiss {
             Some(id) => m.agent_runs(&Subject::Task(id)),
             None if let Some(ask) = confirm.paste => m.pane(ask.pane).is_some(),
-            None => !confirm.running.is_empty() || m.quit_discards() > 0 || !m.agents.is_empty(),
+            None => !confirm.running.is_empty() || m.quit_discards() > 0 || !m.agents.is_empty() || m.editing.is_some(),
         };
-        ensure!(loses, "the quit question names no terminal, no draft holds a capture, and no agent runs");
+        ensure!(
+            loses,
+            "the quit question names no terminal, no draft holds a capture, no agent runs, and no editor has a message"
+        );
         ensure!(
             confirm.running.iter().all(|r| m.pane(r.pane).is_some()),
             "the quit question names a pane that is gone"

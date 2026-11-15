@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io;
 use std::os::fd::AsFd;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Acquire, Ordering::Relaxed, Ordering::Release};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -101,9 +101,10 @@ impl EventListener for Listener {
             }
             Event::ChildExit(status) => {
                 let _ = self.0.status.set(status.code());
-                self.0.exited.store(true, Relaxed)
+                // Release: whoever sees `exited` sees the status.
+                self.0.exited.store(true, Release)
             }
-            Event::Exit => self.0.exited.store(true, Relaxed),
+            Event::Exit => self.0.exited.store(true, Release),
             _ => {}
         }
     }
@@ -558,7 +559,7 @@ impl Terminal {
     }
 
     pub fn exited(&self) -> bool {
-        self.shared.exited.load(Relaxed)
+        self.shared.exited.load(Acquire)
     }
 
     /// The name of the program the terminal started, as it runs now (`nvim` once the shell
@@ -734,6 +735,21 @@ fn colour(color: Color) -> u32 {
         Color::Named(name) => {
             u8::try_from(name as usize).ok().filter(|i| *i < 16).map_or(palette::FOREGROUND, palette::xterm)
         }
+    }
+}
+
+/// A key for a terminal's program, as a pane's, the drawer agent's and the editor's go: a scroll
+/// key scrolls its history, else it is encoded and written. A ⌘ shortcut encodes to nothing.
+pub fn send_key<T: 'static>(terminal: &Terminal, event: &gpui::KeyDownEvent, cx: &mut gpui::Context<T>) {
+    let (key, mods) = (&event.keystroke, crate::mods(event.keystroke.modifiers));
+    if let Some(scroll) = ottospace_core::terminal::scroll_key(&key.key, mods, terminal.alt_screen()) {
+        terminal.scroll(scroll);
+        cx.notify();
+        return cx.stop_propagation();
+    }
+    if let Some(bytes) = ottospace_core::keys::encode(&key.key, key.key_char.as_deref(), mods, terminal.app_cursor()) {
+        terminal.write(bytes);
+        cx.stop_propagation();
     }
 }
 

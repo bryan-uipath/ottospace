@@ -44,9 +44,7 @@ use ottospace_core::scrollbar::{Extent, key_step};
 use ottospace_core::settings::{Installed, Level};
 use ottospace_core::sneak::{SneakKey, sneak_key};
 use ottospace_core::tasks::{Assign, Group, Heading, MAX_TITLE, State, Task, TaskId, TaskRow};
-use ottospace_core::terminal::{
-    CellPoint, VisualKey, cell_at, clears_selection, edge_scroll, press, scroll_key, visual_key,
-};
+use ottospace_core::terminal::{CellPoint, VisualKey, cell_at, clears_selection, edge_scroll, press, visual_key};
 use ottospace_core::{
     Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Origin, Pane, PaneId, PickItem, Picker, Rect, Section, Zone,
     theme,
@@ -3363,16 +3361,7 @@ impl Workspace {
             cx.stop_propagation();
             return;
         }
-        if let Some(scroll) = scroll_key(&key.key, mods, terminal.alt_screen()) {
-            terminal.scroll(scroll);
-            cx.notify();
-            cx.stop_propagation();
-            return;
-        }
-        if let Some(bytes) = keys::encode(&key.key, key.key_char.as_deref(), mods, terminal.app_cursor()) {
-            terminal.write(bytes);
-            cx.stop_propagation();
-        }
+        terminal::send_key(terminal, event, cx);
     }
 
     /// The wheel or trackpad over a terminal pane.

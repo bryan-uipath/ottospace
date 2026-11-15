@@ -10,9 +10,7 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use gpui::{AnyElement, Context, KeyDownEvent, MouseButton, MouseDownEvent, Window, canvas, div, prelude::*, rgb};
-use ottospace_core::keys;
 use ottospace_core::model::editor::Target;
-use ottospace_core::terminal::scroll_key;
 use ottospace_core::{Action, Origin, theme};
 
 use crate::terminal::{self, Terminal};
@@ -148,16 +146,8 @@ impl Workspace {
             self.error = Some(ottospace_core::model::editor::TYPES_ALONE.into());
             return cx.stop_propagation();
         }
-        let Some(terminal) = self.drawer.editor.as_ref().map(|editor| &editor.terminal) else { return };
-        let (key, mods) = (&event.keystroke, crate::mods(event.keystroke.modifiers));
-        if let Some(scroll) = scroll_key(&key.key, mods, terminal.alt_screen()) {
-            terminal.scroll(scroll);
-            cx.notify();
-            return cx.stop_propagation();
-        }
-        if let Some(bytes) = keys::encode(&key.key, key.key_char.as_deref(), mods, terminal.app_cursor()) {
-            terminal.write(bytes);
-            cx.stop_propagation();
+        if let Some(editor) = &self.drawer.editor {
+            terminal::send_key(&editor.terminal, event, cx);
         }
     }
 
@@ -317,31 +307,16 @@ impl Workspace {
 mod tests {
     use super::*;
 
-    /// A folder that goes when the test ends, pass or fail.
-    struct Temp(PathBuf);
-
-    impl Drop for Temp {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn temp(name: &str) -> Temp {
-        let dir = std::env::temp_dir().join(format!("ottospace-editor-{name}-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        Temp(dir)
-    }
-
     #[test]
     fn what_the_editor_saved_is_read_whole_up_to_the_limit_and_never_through_a_link() {
-        let dir = temp("read");
-        let file = dir.0.join("draft.md");
+        let dir = crate::scratch::Scratch::dir(&format!("ottospace-editor-read-{}", std::process::id()));
+        let file = dir.join("draft.md");
         fs::write(&file, b"two\nlines \xff\n").unwrap();
         assert_eq!(read_back(&file).unwrap(), ("two\nlines \u{fffd}\n".to_string(), false));
         fs::write(&file, vec![b'y'; MOST as usize + 3]).unwrap();
         let (text, more) = read_back(&file).unwrap();
         assert_eq!((text.len() as u64, more), (MOST, true));
-        let link = dir.0.join("link.md");
+        let link = dir.join("link.md");
         std::os::unix::fs::symlink(&file, &link).unwrap();
         assert!(read_back(&link).is_err(), "a link is not followed");
     }

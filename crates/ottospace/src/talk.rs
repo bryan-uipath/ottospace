@@ -11,11 +11,9 @@ use gpui::{
     Pixels, ScrollWheelEvent, Stateful, Window, canvas, div, prelude::*, px, rgb, svg,
 };
 use ottospace_core::agents::{self, Command, Start};
-use ottospace_core::keys;
 use ottospace_core::runner::RunnerId;
 use ottospace_core::talk::{self, Subject};
 use ottospace_core::tasks::{Group, TaskId};
-use ottospace_core::terminal::scroll_key;
 use ottospace_core::{Action, Axis, Kind, Mode, Origin, theme};
 
 use crate::terminal::{self, Terminal};
@@ -297,18 +295,7 @@ impl Workspace {
             return self.chat_key(event, window, cx);
         }
         let Some(agent) = self.model.talk.as_ref().and_then(|talk| self.drawer.agents.get(&talk.task)) else { return };
-        let terminal = &agent.terminal;
-        let (key, m) = (&event.keystroke, event.keystroke.modifiers);
-        let mods = crate::mods(m);
-        if let Some(scroll) = scroll_key(&key.key, mods, terminal.alt_screen()) {
-            terminal.scroll(scroll);
-            cx.notify();
-            return cx.stop_propagation();
-        }
-        if let Some(bytes) = keys::encode(&key.key, key.key_char.as_deref(), mods, terminal.app_cursor()) {
-            terminal.write(bytes);
-            cx.stop_propagation();
-        }
+        terminal::send_key(&agent.terminal, event, cx);
     }
 
     /// A label typed in sneak mode on one of the drawer's, the right rail's or the empty

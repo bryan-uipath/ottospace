@@ -3240,7 +3240,7 @@ impl Model {
                 Some(id) => self.agent_runs(&Subject::Task(id)),
                 // "Paste 4 lines?" goes with its pane.
                 None if let Some(ask) = confirm.paste => panes.iter().any(|p| p.id == ask.pane),
-                None => !confirm.running.is_empty() || discards || !self.agents.is_empty(),
+                None => !confirm.running.is_empty() || discards || !self.agents.is_empty() || self.editing.is_some(),
             };
             if !asks {
                 self.confirm = None;
@@ -4192,7 +4192,8 @@ impl Model {
             Action::LeaveSneak => self.sneak = None,
             // Nothing to lose: no terminal runs anything, and no draft holds a capture.
             Action::QuitAsked { running }
-                if (running.is_empty() && self.quit_discards() == 0 && self.agents.is_empty())
+                // The user's editor on a message is asked about too: its unsaved text would go.
+                if (running.is_empty() && self.quit_discards() == 0 && self.agents.is_empty() && self.editing.is_none())
                     || self
                         .confirm
                         .as_ref()
@@ -4417,10 +4418,7 @@ impl Model {
             | Action::TalkInterrupt
             | Action::TalkView { .. }) => self.chat_act(action, effects),
             Action::EditorOpen => self.editor_open(effects),
-            Action::EditorKeys { on } => {
-                let chat = self.editing.as_ref().is_some_and(|e| matches!(e.target, editor::Target::Chat(_)));
-                self.editor_keys_to(on, chat, effects)
-            }
+            Action::EditorKeys { on } => self.editor_keys_to(on, effects),
             // The shell's report alone: a key or click of the user's is none.
             Action::EditorDone { .. } if self.by_user => {}
             Action::EditorDone { saved, more } => self.editor_done(saved, more, effects),
