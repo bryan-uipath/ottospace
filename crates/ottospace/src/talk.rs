@@ -541,7 +541,7 @@ impl Workspace {
             cx.listener(|this, _, window, cx| drop(this.dispatch(Action::TalkToggle, this.input, window, cx))),
         );
         Some(
-            // As high as the tab strip: one title strip runs across the window.
+            // As high as the top row above it.
             div()
                 .h(px(crate::TOP_BAR))
                 .flex_none()

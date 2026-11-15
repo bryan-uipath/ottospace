@@ -4876,12 +4876,6 @@ impl Workspace {
     /// Top bar, drawn where the system title bar was: tabs on the left, new-tab and split
     /// buttons on the right.
     /// `room`: the points the top row has for its spaces.
-    fn render_top(&self, left: f32, room: f32, cx: &mut Context<Self>) -> impl IntoElement {
-        // The spaces of the top row, then under them the selected space's tabs, when it has more than one.
-        let spaces = self.render_spaces(left, room, cx);
-        div().flex_none().flex().flex_col().child(spaces).children(self.render_space_tabs(cx))
-    }
-
     /// The colour a space is drawn in: its task's, else the accent.
     fn space_colour(&self, of: &Owner) -> u32 {
         let task = of.task().and_then(|id| self.model.tasks.get(id));
@@ -5578,8 +5572,9 @@ impl Render for Workspace {
         let right = self.render_inspector(drawer, cx);
         let right = right.or_else(|| self.render_draft(cx)).or_else(|| self.render_drawer(drawer, cx));
         let right_width = talk::RAIL + if right.is_some() { drawer } else { 0. };
-        // The top row's room for its spaces: the centre, less the lights, the + and the buttons.
-        let centre = f32::from(window.viewport_size().width) - left - right_width;
+        // The top row's room for its spaces: over the centre and the drawer, less the lights, the +
+        // and the buttons.
+        let centre = f32::from(window.viewport_size().width) - left - talk::RAIL;
         let room = centre - (TRAFFIC_LIGHTS - left).max(0.) - 140.;
         div()
             .size_full()
@@ -5828,7 +5823,8 @@ impl Render for Workspace {
                                     .children(self.model.sidebar.map(|section| self.render_bar(section, cx))),
                             ),
                     )
-                    // Center: the top rows over the workspace, from the section list to the drawer.
+                    // The top row of spaces from the section list over the drawer; under it the
+                    // selected space's tabs over the workspace, and the drawer beside them.
                     .child(
                         div()
                             .flex_1()
@@ -5836,24 +5832,38 @@ impl Render for Workspace {
                             .h_full()
                             .flex()
                             .flex_col()
-                            .child(self.render_top(left, room, cx))
+                            .child(self.render_spaces(left, room, cx))
                             .child(
                                 div()
                                     .flex_1()
-                                    // Let the canvas shrink below its content, so a wide image cannot
-                                    // push it past the window; it scales down instead.
-                                    .min_w_0()
                                     .min_h_0()
-                                    .w_full()
                                     .flex()
-                                    .overflow_hidden()
-                                    .children(home)
-                                    .children(tree),
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .h_full()
+                                            .flex()
+                                            .flex_col()
+                                            .children(self.render_space_tabs(cx))
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    // Let the canvas shrink below its content, so a wide
+                                                    // image cannot push it past the window; it scales down.
+                                                    .min_w_0()
+                                                    .min_h_0()
+                                                    .w_full()
+                                                    .flex()
+                                                    .overflow_hidden()
+                                                    .children(home)
+                                                    .children(tree),
+                                            ),
+                                    )
+                                    // The drawer (the draft being collected, a conversation, or a brief).
+                                    .children(right),
                             ),
                     )
-                    // Right: the drawer (the draft being collected, a conversation, or a brief),
-                    // then its rail.
-                    .children(right)
                     .child(self.render_right_rail(cx))
                     // The side zones sit above the workspace: each casts a soft shadow onto it.
                     // Drawn last, so it lies over the panes. A live app's window is above it all.
