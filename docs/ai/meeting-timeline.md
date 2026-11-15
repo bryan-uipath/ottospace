@@ -41,17 +41,19 @@ it a little simpler (just a mark for the beginning and start of the workday, and
 appointments. hover should show details about it. I'm thinking maybe it should go above the
 statusbar instead of at the top of the window too".
 
-- 8 points high, a flex child between the panes and the status bar, inset 6 points at the
-  sides so a mark at either end is drawn whole. The top of the window is as before the timeline.
-- No line, outline or hour ticks: two muted marks (the workday's start and end), flat blocks in
-  amber (opacity is the stage: faint when past, the pulse while near), a bright tick for now,
-  the all-day dot kept at the left end (the smaller change).
+- A flex child between the panes and the status bar, inset 6 points at the sides so a mark at
+  either end is drawn whole. The top of the window is as before the timeline. 12 points high
+  since the design pass (below), first 8.
+- No outline or hour ticks: two muted marks (the workday's start and end), flat blocks
+  (opacity is the stage: faint when past, the pulse while near), a bright tick for now, the
+  all-day dot kept at the left end (the smaller change).
 - The span is the workday (`calendar_workday`, `"HH:MM-HH:MM"`, default `09:00-17:00`), local
   wall time worked out with the zone's offset at that moment, so 09:00 stays 09:00 on a day the
   clocks change (`calendar::band`). `calendar_window_hours` is retired: still read (as
   `IgnoredAny`), so a file with it is not refused; the status bar asks to remove it.
-- Out of hours: the band widens to today's earliest start and latest end, never past midnight,
-  so no meeting is hidden; the workday's marks stay at its times. Chosen over clipping with a
+- Out of hours: the band widens to today's earliest call and latest (blocks never widen it,
+  since the design pass), never past midnight, so no call is hidden; the workday's marks stay at
+  its times. Chosen over clipping with a
   marker: simpler, and a meeting wholly outside the workday still shows. A meeting over midnight
   is cut there; its card says its whole time. Before or after the band, now pins to its end.
 - With a 16-hour workday a 30-minute meeting is about 45 points on a 1440-point window; any block
@@ -62,6 +64,49 @@ statusbar instead of at the top of the window too".
   one (`calendar::describe`); a mark `Workday starts 09:00`; now `14:05`, the next meeting
   (`Design review · 15:00`) or `No more meetings today`, and `calendar updated 14:00` (`not updated
   since` after a failed read) (`Calendar::now_card`). Drawn only: the state has bounds and times.
+
+## The design pass
+
+Bryan, 2026-11-14, after a day with it: "i wonder if we can color code meetings in the calendar
+bar"; "could we make it more consistent with the other panes? it might be worth having a subtle
+background that matches the bottom timeline"; "i'm also thinking we may need to revive the top
+border for the timeline on the bottom - it looks like just empty space right now in its new
+position". His week, measured through the app (shape only): 9 to 15 meetings a day, two thirds
+with a Zoom link, up to 3 at once on most days, the 2 to 4 hour entries mostly link-less blocks
+under real calls, half 30 minutes or less, one entry at 00:00, titles up to 65 characters. The
+feed (Outlook's published ICS) has no attendees, descriptions or categories, but `STATUS`,
+`TRANSP` and `X-MICROSOFT-CDO-BUSYSTATUS`.
+
+- **Kind** (`calendar::kind`): a call has a Zoom, Meet or Teams link; anything else is a block.
+  **How it holds the time** (`ics::Show`): Outlook's `X-MICROSOFT-CDO-BUSYSTATUS` (FREE,
+  TENTATIVE, BUSY, OOF; WORKINGELSEWHERE reads as busy), else `STATUS:TENTATIVE`, else
+  `TRANSP:TRANSPARENT` (free), else busy. `X-MICROSOFT-CDO-INTENDEDSTATUS` is the organiser's
+  intent for attendees, not the user's own: not read.
+- **Lanes** (`calendar::layout`): calls that overlap, one after another, form a cluster with as
+  many lanes as it needs, a lane freed taken again; at most 4, a fifth at once merged into the
+  call of the lane that frees first and named in its card (`+1 more: …`). A call alone is the
+  full height. Blocks take no lane: they are drawn under the calls, the band's full height,
+  faint. Captured against a strip along the bottom of the band (both in the pull request): the
+  layer reads as time held and keeps the calls' lanes the full height; the strip read as one
+  more line.
+- **Height**: 12 points, its 1-point top line included; calls between 2.5 points from the top
+  and 1 from the bottom of the 11 below the line, lanes 0.5 apart. Three lanes are 2.2 points each: thin, but each
+  distinct; 8 points gave three lanes of under 2.
+- **Out of hours**: a block wholly before or after the band (the 00:00 reminder) is a dot at that
+  end's bottom, its cards on hover; only calls widen the band.
+- **Colour** (`calendar::paint`, one function for the band and the section): a call in
+  `theme::MEETING` (the amber meetings have had since the first build), a block
+  `theme::MEETING_BLOCK` (muted), away `theme::MEETING_AWAY` (slate). Strength: tentative 0.55,
+  free 0.3; past 0.35, far 0.75, the pulse up to 1, running 1; a block drawn at 0.35 of that.
+  `calendar_colors`, read live (`SetCalendar`), gives the hue by title: plain text, case ignored,
+  first match. No regex: titles are other people's text, and a pattern of the user's run over
+  them gains nothing a substring does not. Names are `theme::IDENTITY_NAMES`, the tasks'
+  identity colours.
+- **Free entries**: `calendar_hide_free` leaves them out of everything (the model keeps what was
+  read and shows the rest, so the setting applies on save without a read).
+- **Edge**: a hairline along the band's top in `theme::BORDER`, as the status bar's own. A
+  variant that also tinted the workday's span (`theme::RAISED`) was captured for Bryan to choose;
+  not shipped.
 
 ## The Calendar section
 
@@ -146,6 +191,12 @@ trace or failure folder, and the curl config holds only the link.
   attendees with `PARTSTAT`. Outlook by default removes a meeting the user declines from their
   calendar, so its published feed should not hold one; a feed published with limited detail
   (free/busy, titles only) carries no attendees, and then nothing is hidden.
+- Bryan's feed is the second kind: no attendees, so `calendar_email` cannot work for it. What a
+  declined meeting looks like there was not verified (no Microsoft documentation was at hand and
+  his feed was not read for it). By RFC 5545 a cancelled one is `STATUS:CANCELLED` and is never
+  shown; Outlook deletes a declined meeting from the calendar unless told to keep it, and one
+  kept would be expected to carry `X-MICROSOFT-CDO-BUSYSTATUS:FREE`. So `calendar_hide_free`
+  is his working substitute: it leaves out every free entry, declined or not.
 
 ## The network
 
